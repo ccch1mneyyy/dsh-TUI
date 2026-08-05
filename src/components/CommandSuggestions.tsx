@@ -39,7 +39,7 @@ export function CommandSuggestions({
   const visible = commands.slice(startIndex, startIndex + maxVisible)
 
   return (
-    <>
+    <Box flexDirection="column">
       {visible.map(command => {
         const isSelected = command.name === commands[selectedIndex]?.name
         const padded =
@@ -67,6 +67,6 @@ export function CommandSuggestions({
           </Text>
         )
       })}
-    </>
+    </Box>
   )
 }

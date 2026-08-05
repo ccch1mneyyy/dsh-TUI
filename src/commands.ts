@@ -27,13 +27,15 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
 
 /** Commands that must not be sent to the model when typed alone. */
 export function isLocalCommandName(input: string): boolean {
-  const name = input.replace(/^\//, '')
+  // Trailing whitespace is legal (Tab completion leaves a space after the
+  // name so the user can type arguments).
+  const name = input.replace(/^\//, '').trim()
   return LOCAL_COMMANDS.some(command => command.name === name)
 }
 
 /** Filter commands by a `/…` input prefix (matches the CC overlay behavior). */
 export function filterCommands(input: string): LocalCommand[] {
-  const prefix = input.replace(/^\//, '').toLowerCase()
+  const prefix = input.replace(/^\//, '').trim().toLowerCase()
   return LOCAL_COMMANDS.filter(command =>
     command.name.toLowerCase().startsWith(prefix),
   )

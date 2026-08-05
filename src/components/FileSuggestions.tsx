@@ -28,7 +28,7 @@ export function FileSuggestions({
   const visible = files.slice(startIndex, startIndex + maxVisible)
 
   return (
-    <>
+    <Box flexDirection="column">
       {visible.map(file => {
         const isSelected = file === files[selectedIndex]
         const isDir = file.endsWith('/')
@@ -48,6 +48,6 @@ export function FileSuggestions({
           </Text>
         )
       })}
-    </>
+    </Box>
   )
 }
