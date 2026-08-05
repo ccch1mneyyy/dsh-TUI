@@ -222,12 +222,16 @@ The chat screen is a faithful port of the CC fullscreen layout (`src/screens/Cha
   persistence seam** — the leaf mounts `dsh-session-persistence-jsonl`
   (`~/.dsh-cc/sessions/`, one durable JSONL log per session), `/resume`
   opens a CC-style picker of `sessionPersistence.list()` results (title +
-  time, `✓` on the current session); choosing one marks it in
-  `~/.dsh-cc/resume.txt`, and `dsh-cc --resume` boots with
+  time, `✓` on the current session); titles are the session's **first user
+  message** (loaded for the newest 20 sessions; cwd basename otherwise).
+  Enter **switches the live agent to the persisted session immediately**
+  (`ctx.agents.resume()` + transcript replay) and refreshes
+  `~/.dsh-cc/resume.txt`; `dsh-cc --resume` boots with
   `DSH_CC_RESUME_SESSION`, which `ctx.agents.resume()` turns into a real
-  log-replay of the persisted transcript. A dedicated two-stage probe
+  log-replay of the persisted transcript. A dedicated three-stage probe
   (`scripts/pty-resume-probe.mjs`) boots the TUI, messages the agent, exits,
-  marks the session, reboots — and verifies the old transcript replays.
+  picks an older session in the picker, reboots — and verifies the old
+  transcript replays on both the picker and `--resume` paths.
 - **Compaction** (`/compact`, CC's `/compact`): calls the leaf's
   `ctx.compact.compactNow()` (the `dsh-compact-basic` service wired in the
   example leaf) to summarize and shrink the session history; busy turns are
