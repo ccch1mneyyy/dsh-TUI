@@ -18,10 +18,16 @@ function formatTimestamp(ms: number): string {
   })
 }
 
+/** Visible list window: the picker scrolls instead of dumping every session
+ *  (long histories would fill the whole screen otherwise). */
+const WINDOW = 8
+
 /**
  * `/resume` session picker in the CC ModelPicker style: a Pane with the
  * recent sessions as Select rows (title + time description, ✓ on the
- * current session), plus the Enter/Esc hint line.
+ * current session), plus the Enter/Esc hint line. Only WINDOW rows render;
+ * the window follows the focused row, with `↑ N more` / `↓ N more` markers
+ * at the edges.
  */
 export function ResumePicker({
   sessions,
@@ -32,6 +38,14 @@ export function ResumePicker({
   focusIndex: number
   currentSessionId: string
 }): React.ReactNode {
+  const start = Math.max(
+    0,
+    Math.min(focusIndex - Math.floor(WINDOW / 2), sessions.length - WINDOW),
+  )
+  const visible = sessions.slice(start, start + WINDOW)
+  const above = start
+  const below = Math.max(0, sessions.length - (start + WINDOW))
+
   return (
     <Pane color="permission">
       <Box flexDirection="column">
@@ -40,16 +54,26 @@ export function ResumePicker({
             Resume
           </Text>
         </Box>
-        {sessions.map((session, index) => (
+        {above > 0 && (
+          <Text dimColor italic>
+            ↑ {above} more
+          </Text>
+        )}
+        {visible.map(session => (
           <ListItem
             key={session.id}
-            isFocused={index === focusIndex}
+            isFocused={session.id === sessions[focusIndex]?.id}
             isSelected={session.id === currentSessionId}
             description={formatTimestamp(session.updatedAt)}
           >
             {session.title || session.id}
           </ListItem>
         ))}
+        {below > 0 && (
+          <Text dimColor italic>
+            ↓ {below} more
+          </Text>
+        )}
       </Box>
       <Text dimColor italic>
         <Byline>

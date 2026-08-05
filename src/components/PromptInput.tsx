@@ -207,9 +207,20 @@ export function PromptInput({
     if (selectionActive) return
 
     // Whole-line input from Windows ConPTY pipelines (cmd batch -> node):
-    // the trailing CR/LF marks a complete line to submit.
+    // the trailing CR/LF marks a complete line to submit. A `/`-prefixed
+    // line with a UNIQUE command match runs that command (the menu cannot
+    // appear mid-line here, so the unique-match rule stands in for the
+    // selected-command Enter semantics); ambiguous or unknown prefixes
+    // flow through the normal path.
     if (input.includes('\n') || input.includes('\r')) {
       const line = (value + input).trim()
+      if (line.startsWith('/')) {
+        const matches = filterCommands(line)
+        if (matches.length === 1) {
+          tryRunCommand(`/${matches[0]!.name}`)
+          return
+        }
+      }
       if (!tryRunCommand(line)) submitText(line)
       return
     }
@@ -222,6 +233,15 @@ export function PromptInput({
       return
     }
     if (key.return) {
+      // With the command menu open, Enter runs the SELECTED command (CC/pi
+      // semantics) — never sends a partial `/mo` to the model.
+      if (overlayOpen) {
+        const command = suggestions[selectedCommand]
+        if (command) {
+          tryRunCommand(`/${command.name}`)
+          return
+        }
+      }
       if (!tryRunCommand(value)) submitText(value)
       return
     }
@@ -379,6 +399,15 @@ export function PromptInput({
     if (key.escape) {
       if (helpOpen) {
         onToggleHelp()
+        return
+      }
+      // A single Esc closes the open command menu first (CC/pi behavior);
+      // the double-tap-clear semantics only apply to ordinary input.
+      if (overlayOpen || fileOverlayOpen) {
+        setValue('')
+        setCursor(0)
+        setSelectedCommand(0)
+        setFileSelected(0)
         return
       }
       // Double-tap Esc: clear the input when it has content; when empty,
