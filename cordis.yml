@@ -32,23 +32,83 @@
     cwd: !!js process.cwd()
     timeoutMs: 60000
 
-# Filesystem service: `@` completion lists the session cwd through it.
+# Filesystem service: `@` completion lists the session cwd through it, and
+# the model-facing fs tools resolve relative paths from the process cwd.
 - id: fs
   name: '@deepseek-ai/dsh-fs-local'
+  config:
+    cwd: !!js process.cwd()
+
+# Read/write/edit policy loads before the model-facing filesystem tools so
+# writes and edits require an observed file (DSH's own fs policy gate).
+- id: fs-policy
+  name: '@deepseek-ai/dsh-fs-policy'
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+# The todo_write tool replaces the logged whole list (DSH's todo tool).
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+
+# Subagents: the registry service, then the spawn/fork backends and the
+# delegation tools (max depth 1 keeps the TUI's tool cards shallow). The
+# core `dsh-subagent` service MUST be mounted before any provider.
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+
+- id: subagent-spawn
+  name: '@deepseek-ai/dsh-subagent-spawn'
+  config:
+    providerName: spawn
+
+- id: subagent-fork
+  name: '@deepseek-ai/dsh-subagent-fork'
+  config:
+    providerName: fork
+
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+    maxDepth: 1
+
+- id: tool-subagent-fork
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: continuable
+    maxDepth: 1
 
 - id: agent-spine
   name: '@deepseek-ai/dsh-agent-spine-demo'
   config:
     persona: !!js process.env.CC_TUI_PERSONA ?? 'You are a coding agent.'
-    workspaceContext: false
+    # Workspace context (AGENTS.md injection) at the standard 64KB cap;
+    # task tools stay at their DSH defaults (on).
+    workspaceContext:
+      maxBytes: 65536
+    # Skills on: the spine mounts the local skill provider (discovers
+    # SKILL.md catalogs under ~/.dsh, ~/.agents and project roots) plus the
+    # model-facing skill catalog/load tools.
     skills:
-      enabled: false
-    toolBash:
-      enableRunInBackground: false
-    toolTasks: false
+      enabled: true
+
+# Plan mode: the plan:policy prompt section, the /plan command and the
+# model-facing plan/exit tools (DSH's plan seam). `section` is REQUIRED and
+# non-empty — a bare mount fails validation and rolls the whole tree back.
+- id: plan-mode
+  name: '@deepseek-ai/dsh-plan-mode'
+  config:
+    section: |
+      You are in plan mode. Explore and design before presenting the
+      complete plan through exit_plan_mode.
 
 # Live working line for the status bar: thinking copy / running tool / turn
-# summary. dsh-cc consumes its log-only `activity/status` events; the
+# summary. dsh-cc consumes its log-only activity/status events; the
 # plugin's own TUI prompt slot is skipped without an official dsh-tui.
 # publishIntervalMs 500: live-phase snapshots republish every 500ms so the
 # cc-tui status-line elapsed timers tick smoothly (default 2000ms).

@@ -88,8 +88,13 @@ dsh --config ~/.dsh-cc/cordis.yml
 ```
 
 依赖官方插件（完整示例见仓库 `cordis.yml`）：llm-deepseek（thinking 开启）、
-agent-spine、bash-local、fs-local、session-persistence-jsonl（rewind/resume
-的数据底座）、compact-basic（`/compact`）、dsh-working-activity（工作状态行）。
+agent-spine、bash-local、fs-local、fs-policy、tool-fs（文件读写）、tool-todo、
+subagent（spawn/fork 子代理）、plan-mode（计划模式，`/plan` + 计划审批）、
+session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
+（`/compact`）、dsh-working-activity（工作状态行）。
+
+> 配置注意：`plan-mode` 的 `section` 为必填（空值会导致整树加载失败）；
+> `subagent` 核心服务必须先于 `subagent-spawn`/`subagent-fork` 挂载。
 
 ## 快捷键
 
