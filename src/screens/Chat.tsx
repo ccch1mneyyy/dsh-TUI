@@ -189,8 +189,14 @@ export function Chat({
     `${titlePrefix} 🐋 ${channel.sessionTitle ?? 'dsh-cc'}`,
   )
 
-  /** Dispatch a local command; false lets the input flow to the model. */
-  const runCommand = (name: string): boolean => {
+  /**
+   * Dispatch a slash command; false lets the input flow to the model.
+   * Built-in names run the local switch; anything registered by a DSH
+   * plugin (plan/goal/…) dispatches through the command registry, whose
+   * result text lands as a notification. `rawInput` carries the text after
+   * the command name (`/plan off` → ` off`).
+   */
+  const runCommand = (name: string, rawInput = ''): boolean => {
     switch (name) {
       case 'clear':
         channel.clear()
@@ -253,8 +259,27 @@ export function Chat({
       case 'exit':
         onExit()
         return true
-      default:
+      default: {
+        // Plugin-registered command (DSH command registry): dispatch through
+        // the channel, whose execution logs command/run + command/done (the
+        // plan-mode projection folds those records, so /plan state stays
+        // consistent). Unknown names fall through to the model.
+        const external = channel.commandList.find(
+          command => command.external && command.name === name,
+        )
+        if (external) {
+          setHelpOpen(false)
+          void channel.runExternalCommand(name, rawInput).then(text => {
+            if (text !== undefined && text !== '') {
+              channel.notify(text)
+            } else if (text === undefined) {
+              channel.notify(`/${name}: no such command`, { color: 'error' })
+            }
+          })
+          return true
+        }
         return false
+      }
     }
   }
 

@@ -52,6 +52,7 @@ link_pkg cordis vendor/cordis
 link_pkg cosmokit vendor/cosmokit
 link_pkg schemastery vendor/schemastery
 link_pkg @deepseek-ai/dsh-agent packages/core/agent
+link_pkg @deepseek-ai/dsh-commands packages/ui/commands
 link_pkg @deepseek-ai/dsh-llm packages/llm/llm
 link_pkg @deepseek-ai/dsh-session packages/core/session
 

@@ -19,9 +19,11 @@
 
 ## 为什么值得装
 
-- **颜值即生产力**：顶栏是半块像素渲染的 DeepSeek 鲸鱼（24×18 真彩色精灵），
-  旁边 `DEEPSEEK HARNESS` 是自绘 5 行块状大字——品牌蓝→冰蓝横向渐变，白色流光
-  窗口循环扫过；`探索未至之境！` 欢迎语带冰蓝流光。窄终端（<64 列）自动收起鲸鱼。
+- **颜值即生产力**：顶栏是半块像素渲染的 DeepSeek 鲸鱼（40×25 手绘精灵，
+  深蓝描边 + 品牌蓝身 + 冰蓝肚皮 + 白嘴），**启动播放手绘动画**（眨眼 →
+  喷水花绽放 → 摆尾），随后定格静态不再重绘；旁边 `DEEPSEEK HARNESS` 是
+  自绘 5 行块状大字——品牌蓝→冰蓝横向渐变，白色流光窗口循环扫过；
+  `探索未至之境！` 欢迎语带冰蓝流光。窄终端（<64 列）自动收起鲸鱼。
 - **实时工作状态行**（替代 CC 随机动词 spinner）：工作时输入框上方常驻模型的
   实时动态——俏皮思考文案（`嗯…让我捋捋`、深夜档、30s/1m/5m 分档轮换）、真正在跑
   的工具（`改改 src/channel.ts · 12s`）、`⏵` 模型自述，配 28 种动画指示器
@@ -90,11 +92,14 @@ dsh --config ~/.dsh-cc/cordis.yml
 依赖官方插件（完整示例见仓库 `cordis.yml`）：llm-deepseek（thinking 开启）、
 agent-spine、bash-local、fs-local、fs-policy、tool-fs（文件读写）、tool-todo、
 subagent（spawn/fork 子代理）、plan-mode（计划模式，`/plan` + 计划审批）、
+**commands（DSH 命令注册表）+ command-goal（`/goal`）**、
 session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 （`/compact`）、dsh-working-activity（工作状态行）。
 
 > 配置注意：`plan-mode` 的 `section` 为必填（空值会导致整树加载失败）；
-> `subagent` 核心服务必须先于 `subagent-spawn`/`subagent-fork` 挂载。
+> `subagent` 核心服务必须先于 `subagent-spawn`/`subagent-fork` 挂载；
+> `/plan`、`/goal` 需要挂 `@deepseek-ai/dsh-commands`（命令注册表），
+> `/goal` 还需 agent-spine 开 `goals: {}`（持久化目标域服务）。
 
 ## 快捷键
 
@@ -110,6 +115,11 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 | `?` | 快捷键菜单 |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
 | `/model` `/thinking` `/tokens` `/compact` `/resume` `/clear` `/exit` | 本地命令 |
+| `/plan` `/goal` | DSH 命令注册表命令（随插件自动并入 `/` 菜单） |
+
+> `/` 菜单 = 本地命令 + 注册表命令的并集（注册表描述来自插件本身）；
+> `/plan [off|消息]` 切换计划模式，`/goal [create/edit/pause/resume/clear 目标]`
+> 管理持久化目标。
 
 ## 技术要点
 
@@ -132,3 +142,5 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 - 注入上下文（plugin source 内容）未做独立展示，随系统提示词并入进度条统计。
 - `/model` 切换需重启 dsh 生效（模型由 cordis.yml 路由决定）。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
+- DSH 的 `/permission`（沙箱模式切换）未适配：需要 approval 服务 + 审批 UI，
+  当前 TUI 不消费审批流，刻意不挂。

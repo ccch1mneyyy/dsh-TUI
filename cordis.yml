@@ -96,6 +96,15 @@
     # model-facing skill catalog/load tools.
     skills:
       enabled: true
+    # Persisted goal stack: mounts the goal domain service + the model-facing
+    # goal tool; /goal (command-goal below) needs the service present.
+    goals: {}
+
+# Human-command registry: plan-mode's /plan and command-goal's /goal register
+# here; the TUI merges them into its slash menu and dispatches through the
+# registry (logs command/run + command/done). Must mount before the commands.
+- id: commands
+  name: '@deepseek-ai/dsh-commands'
 
 # Plan mode: the plan:policy prompt section, the /plan command and the
 # model-facing plan/exit tools (DSH's plan seam). `section` is REQUIRED and
@@ -106,6 +115,11 @@
     section: |
       You are in plan mode. Explore and design before presenting the
       complete plan through exit_plan_mode.
+
+# /goal — set or view the goal for a long-running task (needs the goal
+# domain service mounted by agent-spine's `goals` config above).
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
 
 # Live working line for the status bar: thinking copy / running tool / turn
 # summary. dsh-cc consumes its log-only activity/status events; the

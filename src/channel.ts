@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import type { Agent, AgentHandle, AgentStatus, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
+import type { CommandService } from '@deepseek-ai/dsh-commands'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import type { Context } from 'cordis'
 import { join } from 'node:path'
+import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { type SessionRecord, writeResumeTarget } from './sessionHistory.js'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
 
@@ -132,6 +134,21 @@ export interface Channel {
   readonly activityFrames: string | undefined
   /** Whether working-activity events are consumed (config.activity). */
   readonly activityEnabled: boolean
+  /**
+   * Effective slash commands: built-in locals plus plugin-registered
+   * commands (plan/goal/…) merged from the DSH command registry. The
+   * registry is the source of truth for external names — a plugin shadows
+   * nothing here; locals win on name collisions.
+   */
+  readonly commandList: readonly LocalCommand[]
+  /**
+   * Run a plugin-registered slash command against the live agent (DSH
+   * `dsh-commands` registry): logs `command/run`/`command/done` and returns
+   * the handler's result text — `''` when the handler succeeded silently,
+   * `undefined` when the registry has no such command (the caller falls
+   * back to sending the line to the model).
+   */
+  runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
   /** Estimated context segments by content type (pi-nano-context style bar). */
   readonly contextSegments: {
     system: number
@@ -202,6 +219,10 @@ export interface ChannelState {
   activityFrames: string | undefined
   /** Working-activity consumption switch (see the public Channel type). */
   activityEnabled: boolean
+  /** Effective slash commands (see the public Channel type). */
+  commandList: readonly LocalCommand[]
+  /** Run a plugin-registered command (see the public Channel type). */
+  runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
   /** Estimated context segments by content type (pi-nano-context style bar). */
   contextSegments: {
     system: number
@@ -305,6 +326,12 @@ export function createChannel(
 ): ChannelState {
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
+  // The DSH slash-command registry (optional service): /plan, /goal and
+  // friends register here; the TUI merges their descriptors into the slash
+  // menu and dispatches through `execute` (which logs the paired
+  // command/run + command/done records). Absent the service, only the
+  // built-in local commands exist.
+  const commandService = ctx.get('commands') as CommandService | undefined
   const listeners = new Set<() => void>()
   let nextNotificationId = 1
   /** One-shot context-low warning per session (CC's TokenWarning). */
@@ -345,6 +372,7 @@ export function createChannel(
     workingActivity: undefined,
     activityFrames: options.activityFrames,
     activityEnabled: options.activity !== false,
+    commandList: LOCAL_COMMANDS,
     lastUsage: undefined,
     tps: undefined,
     tpsSamples: [],
@@ -489,6 +517,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      refreshCommandList()
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       return row.text
@@ -558,6 +587,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      refreshCommandList()
       // Keep the `--resume` launcher contract pointing at the same session.
       writeResumeTarget(sessionId)
       state.emit()
@@ -702,7 +732,47 @@ export function createChannel(
           )
         })
     },
+    async runExternalCommand(name, rawInput) {
+      if (!commandService) return undefined
+      try {
+        const execution = await commandService.execute(
+          agent,
+          `/${name}${rawInput}`,
+          new AbortController().signal,
+        )
+        // `undefined` = not registered; a handler error surfaces as its
+        // message so the user sees why the command failed.
+        return execution?.result.text ?? ''
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    },
   }
+
+  /**
+   * Rebuild the merged slash-command list from the registry. Registry
+   * registrations are global or agent-scoped, so this runs on
+   * `commands/change` and again whenever the live agent is swapped
+   * (rewind/resume).
+   */
+  const refreshCommandList = (): void => {
+    const merged: LocalCommand[] = [...LOCAL_COMMANDS]
+    if (commandService) {
+      for (const descriptor of commandService.list(agent)) {
+        if (merged.some(command => command.name === descriptor.name)) continue
+        merged.push({
+          name: descriptor.name,
+          description: descriptor.description,
+          tag: descriptor.input?.hint,
+          external: true,
+        })
+      }
+    }
+    state.commandList = merged
+    state.emit()
+  }
+  ctx.on('commands/change', refreshCommandList)
+  refreshCommandList()
 
   let nextRowId = 0
 /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH

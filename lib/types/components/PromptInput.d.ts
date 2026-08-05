@@ -5,8 +5,11 @@ export interface PromptInputProps {
     /** Whether the `?` help menu is open (state lives in the Chat screen). */
     helpOpen: boolean;
     onToggleHelp(): void;
-    /** Execute a local command; returns false when the input should be sent to the model. */
-    onRunCommand(command: string): boolean;
+    /**
+     * Execute a slash command (built-in or plugin-registered) with its raw
+     * argument text; returns false when the input should be sent to the model.
+     */
+    onRunCommand(name: string, rawInput: string): boolean;
     /** Message-selection mode (Shift+↑): the input ignores keys while active. */
     selectionActive: boolean;
     /**

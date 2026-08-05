@@ -1,13 +1,19 @@
 import React from 'react'
 import Box from '../ink/components/Box.js'
 import Text from '../ink/components/Text.js'
-import { LOCAL_COMMANDS } from '../commands.js'
+import type { LocalCommand } from '../commands.js'
 
 /**
  * The `?` help menu, ported from the leak's `PromptInputHelpMenu.tsx`
  * (three-column shortcut layout, trimmed to the keys dsh-cc actually binds).
+ * The command column lists the merged slash-command surface: built-in
+ * commands plus plugin-registered ones from the DSH registry (plan/goal/…).
  */
-export function HelpMenu(): React.ReactNode {
+export function HelpMenu({
+  commands,
+}: {
+  commands: readonly LocalCommand[]
+}): React.ReactNode {
   return (
     <Box paddingX={2} flexDirection="row" gap={4}>
       <Box flexDirection="column" width={26} flexShrink={0}>
@@ -52,7 +58,7 @@ export function HelpMenu(): React.ReactNode {
       </Box>
       <Box flexDirection="column" flexShrink={1}>
         <Text dimColor>commands:</Text>
-        {LOCAL_COMMANDS.map(command => (
+        {commands.map(command => (
           <Box key={command.name}>
             <Text dimColor wrap="truncate-end">
               /{command.name} — {command.description}

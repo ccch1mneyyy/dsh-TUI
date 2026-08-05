@@ -1,6 +1,7 @@
 import type { Agent, AgentHandle, AgentStatus } from '@deepseek-ai/dsh-agent';
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm';
 import type { Context } from 'cordis';
+import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js';
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -128,6 +129,21 @@ export interface Channel {
     readonly activityFrames: string | undefined;
     /** Whether working-activity events are consumed (config.activity). */
     readonly activityEnabled: boolean;
+    /**
+     * Effective slash commands: built-in locals plus plugin-registered
+     * commands (plan/goal/…) merged from the DSH command registry. The
+     * registry is the source of truth for external names — a plugin shadows
+     * nothing here; locals win on name collisions.
+     */
+    readonly commandList: readonly LocalCommand[];
+    /**
+     * Run a plugin-registered slash command against the live agent (DSH
+     * `dsh-commands` registry): logs `command/run`/`command/done` and returns
+     * the handler's result text — `''` when the handler succeeded silently,
+     * `undefined` when the registry has no such command (the caller falls
+     * back to sending the line to the model).
+     */
+    runExternalCommand(name: string, rawInput: string): Promise<string | undefined>;
     /** Estimated context segments by content type (pi-nano-context style bar). */
     readonly contextSegments: {
         system: number;
@@ -206,6 +222,10 @@ export interface ChannelState {
     activityFrames: string | undefined;
     /** Working-activity consumption switch (see the public Channel type). */
     activityEnabled: boolean;
+    /** Effective slash commands (see the public Channel type). */
+    commandList: readonly LocalCommand[];
+    /** Run a plugin-registered command (see the public Channel type). */
+    runExternalCommand(name: string, rawInput: string): Promise<string | undefined>;
     /** Estimated context segments by content type (pi-nano-context style bar). */
     contextSegments: {
         system: number;

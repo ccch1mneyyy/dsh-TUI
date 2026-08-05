@@ -2,7 +2,7 @@ import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { Channel } from '../channel.js'
-import { filterCommands, isLocalCommandName } from '../commands.js'
+import { filterCommands, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
@@ -57,8 +57,11 @@ export interface PromptInputProps {
   /** Whether the `?` help menu is open (state lives in the Chat screen). */
   helpOpen: boolean
   onToggleHelp(): void
-  /** Execute a local command; returns false when the input should be sent to the model. */
-  onRunCommand(command: string): boolean
+  /**
+   * Execute a slash command (built-in or plugin-registered) with its raw
+   * argument text; returns false when the input should be sent to the model.
+   */
+  onRunCommand(name: string, rawInput: string): boolean
   /** Message-selection mode (Shift+↑): the input ignores keys while active. */
   selectionActive: boolean
   /**
@@ -124,7 +127,9 @@ export function PromptInput({
   }, [])
   const { columns } = useTerminalSize()
 
-  const suggestions = value.startsWith('/') ? filterCommands(value) : []
+  const suggestions = value.startsWith('/')
+    ? filterCommands(value, channel.commandList)
+    : []
   const overlayOpen =
     suggestions.length > 0 &&
     !helpOpen &&
@@ -167,23 +172,29 @@ export function PromptInput({
     channel.submit(trimmed)
   }
 
-  /** Execute a local command when the input matches one exactly. */
+  /**
+   * Execute a slash command (built-in or plugin-registered) when the input
+   * resolves to one: the name parses as the first token so `/plan off`
+   * dispatches `plan` with its argument text, and the merged command list
+   * (locals + registry) decides whether the line is a command at all.
+   */
   const tryRunCommand = (text: string): boolean => {
     if (!text.startsWith('/')) return false
-    if (isLocalCommandName(text)) {
-      const handled = onRunCommand(text.replace(/^\//, ''))
-      if (handled) {
-        history.current.push(text.trim())
-        if (history.current.length > HISTORY_LIMIT) history.current.shift()
-        historyIndex.current = -1
-        setValue('')
-        setCursor(0)
-        setSelectedCommand(0)
-        appendHistory(text.trim())
-      }
-      return handled
+    const parsed = parseCommandName(text)
+    if (parsed === undefined) return false
+    const known = channel.commandList.some(command => command.name === parsed.name)
+    if (!known) return false
+    const handled = onRunCommand(parsed.name, parsed.rawInput)
+    if (handled) {
+      history.current.push(text.trim())
+      if (history.current.length > HISTORY_LIMIT) history.current.shift()
+      historyIndex.current = -1
+      setValue('')
+      setCursor(0)
+      setSelectedCommand(0)
+      appendHistory(text.trim())
     }
-    return false
+    return handled
   }
 
   const setInput = (next: string, cursorOffset = next.length) => {
@@ -215,7 +226,7 @@ export function PromptInput({
     if (input.includes('\n') || input.includes('\r')) {
       const line = (value + input).trim()
       if (line.startsWith('/')) {
-        const matches = filterCommands(line)
+        const matches = filterCommands(line, channel.commandList)
         if (matches.length === 1) {
           tryRunCommand(`/${matches[0]!.name}`)
           return
@@ -530,7 +541,7 @@ export function PromptInput({
       )}
       {helpOpen && (
         <Box marginBottom={1}>
-          <HelpMenu />
+          <HelpMenu commands={channel.commandList} />
         </Box>
       )}
       {fileOverlayOpen && (
