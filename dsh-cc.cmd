@@ -26,5 +26,5 @@ if /i "%~1"=="--resume" (
   )
 )
 
-tsx --tsconfig "%WORKSPACE%\packages\ui\cc-tui\tsconfig.json" packages\ui\cc-tui\scripts\run.ts
+tsx --tsconfig "%WORKSPACE%\packages\ui\cc-tui\tsconfig.json" "%WORKSPACE%\packages\ui\cc-tui\scripts\run.ts"
 endlocal
