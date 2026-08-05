@@ -445,10 +445,17 @@ export function Chat({
       } else if (key.return) {
         const session = resumeSessions[resumeIndex]
         if (session) {
-          channel.setResumeTarget(session.id)
-          channel.notify(`Session marked · run dsh-cc --resume to open`)
+          // Enter switches the live agent to the persisted session right
+          // away (the history replays into the transcript); the resume.txt
+          // launcher marker is refreshed by resumeTo so `--resume` on the
+          // next launch opens the same session.
+          setResumePickerOpen(false)
+          void channel.resumeTo(session.id).then(ok => {
+            if (ok) channel.notify('Session resumed')
+          })
+        } else {
+          setResumePickerOpen(false)
         }
-        setResumePickerOpen(false)
       } else if (key.escape) {
         setResumePickerOpen(false)
       }

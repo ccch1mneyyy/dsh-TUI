@@ -144,6 +144,8 @@ export interface Channel {
      *  forks the session through that message, swaps in a fresh agent, and
      *  returns the message text for re-editing — or `null` when unwritable. */
     rewindTo(row: ChatRow): Promise<string | null>;
+    /** Switch the live agent to a persisted session, replaying its history. */
+    resumeTo(sessionId: string): Promise<boolean>;
     /** Reset the visible transcript (`/clear`). */
     clear(): void;
     /** Push a transient notification above the prompt input. */
@@ -218,6 +220,8 @@ export interface ChannelState {
     submit(text: string): void;
     cancel(): void;
     rewindTo(row: ChatRow): Promise<string | null>;
+    /** Switch the live agent to a persisted session, replaying its history. */
+    resumeTo(sessionId: string): Promise<boolean>;
     clear(): void;
     notify(text: string, options?: {
         color?: NotificationItem['color'];

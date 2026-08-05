@@ -148,6 +148,8 @@ export interface Channel {
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable. */
   rewindTo(row: ChatRow): Promise<string | null>
+  /** Switch the live agent to a persisted session, replaying its history. */
+  resumeTo(sessionId: string): Promise<boolean>
   /** Reset the visible transcript (`/clear`). */
   clear(): void
   /** Push a transient notification above the prompt input. */
@@ -214,6 +216,8 @@ export interface ChannelState {
   submit(text: string): void
   cancel(): void
   rewindTo(row: ChatRow): Promise<string | null>
+  /** Switch the live agent to a persisted session, replaying its history. */
+  resumeTo(sessionId: string): Promise<boolean>
   clear(): void
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
   listModels(): Promise<readonly LlmModelInfo[]>
@@ -475,6 +479,77 @@ export function createChannel(
       void oldHandle?.dispose().catch(() => {})
       return row.text
     },
+    async resumeTo(sessionId: string): Promise<boolean> {
+      // Switch the live agent to a persisted session: /resume picker Enter
+      // loads the history immediately (the `--resume` launcher path keeps
+      // resolving through DSH_CC_RESUME_SESSION at boot).
+      if (state.working) {
+        state.notify('Cannot resume while a turn is running', { color: 'warning' })
+        return false
+      }
+      const agents = ctx.get('agents') as
+        | {
+            resume(options: {
+              resumeSessionId: SessionId
+              agentOptions?: { provider?: string; model?: string }
+            }): Promise<AgentHandle>
+          }
+        | undefined
+      if (!agents) {
+        state.notify('Resume unavailable — agents service not loaded', { color: 'error' })
+        return false
+      }
+      let handle: AgentHandle
+      try {
+        handle = await agents.resume({
+          resumeSessionId: SessionId(sessionId),
+          agentOptions: { provider: options.provider, model: options.model },
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(`Resume failed · ${message}`, { color: 'error', timeoutMs: 8000 })
+        return false
+      }
+      // Replay the persisted history into a fresh transcript (same reset as
+      // rewindTo, plus the context window which the replay re-derives).
+      streaming = undefined
+      reasoning = undefined
+      toolCards.clear()
+      nextRowId = 0
+      state.rows.length = 0
+      state.tokens = { input: 0, output: 0 }
+      state.responseChars = 0
+      state.activeToolCount = 0
+      state.lastUserText = ''
+      state.working = false
+      state.spinnerMode = 'requesting'
+      state.status = handle.agent.status
+      state.agentId = handle.agent.id
+      state.tps = undefined
+      state.tpsSamples = []
+      state.lastUsage = undefined
+      state.workingActivity = undefined
+      state.contextWindow = undefined
+      state.contextSegments = {
+        system: 0,
+        prompt: 0,
+        assistant: 0,
+        thinking: 0,
+        tools: 0,
+      }
+      for (const event of handle.agent.session.events) renderEvent(event)
+      settleStreaming()
+      // Rebind subscriptions to the resumed agent, then free the old one.
+      const oldHandle = currentHandle
+      agent = handle.agent
+      currentHandle = handle
+      bindAgent()
+      // Keep the `--resume` launcher contract pointing at the same session.
+      writeResumeTarget(sessionId)
+      state.emit()
+      void oldHandle?.dispose().catch(() => {})
+      return true
+    },
     clear() {
       state.rows.length = 0
       nextRowId = 0
@@ -542,7 +617,9 @@ export function createChannel(
         return headers
           .map(header => ({
             id: header.id,
-            title: basename(header.cwd ?? '') || header.id,
+            // Session headers carry no title — the cwd basename stands in
+            // (matching the status line), with a short id when absent.
+            title: basename(header.cwd ?? '') || `session ${String(header.id).slice(0, 8)}`,
             cwd: header.cwd ?? '',
             createdAt: header.createdAt,
             updatedAt: header.createdAt,
