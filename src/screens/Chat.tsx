@@ -14,6 +14,7 @@ import { LogoHeader, MessageList } from '../components/MessageList.js'
 import { PromptInput } from '../components/PromptInput.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
+import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { ResumePicker } from '../components/ResumePicker.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
@@ -615,6 +616,10 @@ export function Chat({
     }
   })
 
+  // Working-activity line (spinner slot): context-pressure prefix shares the
+  // StatusLine thresholds (amber ≥ 80, red ≥ 95).
+  const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
+
   return (
     <Box flexDirection="column" flexGrow={1} width="100%">
       {!isSticky && channel.lastUserText && (
@@ -657,17 +662,37 @@ export function Chat({
           onClick={() => handle?.scrollToBottom()}
         />
       )}
-      {channel.working && (
-        <WorkingSpinner
-          mode={channel.spinnerMode}
-          hasActiveTools={channel.activeToolCount > 0}
-          responseLengthRef={responseLengthRef}
-          loadingStartTimeRef={loadingStartTimeRef}
-          totalPausedMsRef={totalPausedMsRef}
-          pauseStartTimeRef={pauseStartTimeRef}
-          thinkingStatus={thinkingStatus}
-        />
-      )}
+      {channel.working &&
+        (channel.activityEnabled &&
+        channel.workingActivity !== undefined &&
+        channel.workingActivity.line !== '' &&
+        channel.workingActivity.phase !== 'idle' ? (
+          // The working-activity line REPLACES the CC random-verb spinner
+          // while a turn runs: the plugin's live line (thinking copy /
+          // running tool / narration) is the status, with the spinner
+          // slot's token counter preserved as a suffix. Only real activity
+          // data replaces the spinner — before the first event, or with
+          // `activity: false`, the classic spinner still renders.
+          <Box marginTop={1} paddingLeft={2}>
+            <ActivityLine
+              activity={channel.workingActivity}
+              activityFrames={channel.activityFrames}
+              warnPct={activityWarnPct}
+              warnDanger={activityWarnPct !== undefined && activityWarnPct >= 95}
+              suffix={` · ↓ ${channel.responseChars} tokens`}
+            />
+          </Box>
+        ) : (
+          <WorkingSpinner
+            mode={channel.spinnerMode}
+            hasActiveTools={channel.activeToolCount > 0}
+            responseLengthRef={responseLengthRef}
+            loadingStartTimeRef={loadingStartTimeRef}
+            totalPausedMsRef={totalPausedMsRef}
+            pauseStartTimeRef={pauseStartTimeRef}
+            thinkingStatus={thinkingStatus}
+          />
+        ))}
       {thinkingOpen && (
         <ThinkingToggle
           currentValue={thinkingVisible}

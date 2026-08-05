@@ -126,6 +126,8 @@ export interface Channel {
     readonly workingActivity: ActivityStatus | undefined;
     /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
     readonly activityFrames: string | undefined;
+    /** Whether working-activity events are consumed (config.activity). */
+    readonly activityEnabled: boolean;
     /** Estimated context segments by content type (pi-nano-context style bar). */
     readonly contextSegments: {
         system: number;
@@ -200,6 +202,8 @@ export interface ChannelState {
     workingActivity: ActivityStatus | undefined;
     /** Working-activity indicator preset (see the public Channel type). */
     activityFrames: string | undefined;
+    /** Working-activity consumption switch (see the public Channel type). */
+    activityEnabled: boolean;
     /** Estimated context segments by content type (pi-nano-context style bar). */
     contextSegments: {
         system: number;
