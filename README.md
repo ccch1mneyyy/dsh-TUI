@@ -116,5 +116,3 @@ agent-spine、bash-local、fs-local、session-persistence-jsonl（rewind/resume
 - 注入上下文（plugin source 内容）未做独立展示，随系统提示词并入进度条统计。
 - `/model` 切换需重启 dsh 生效（模型由 cordis.yml 路由决定）。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
-- 交互细节**致敬** Claude Code 的设计（非官方关联）；BSD-3-Clause，
-  仅限 dsh-external 组织内测使用，禁止对外分发。
