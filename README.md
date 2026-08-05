@@ -6,6 +6,17 @@
 
 ![类型](https://img.shields.io/badge/type-cordis%20plugin-blue) ![内测](https://img.shields.io/badge/status-内测-yellow)
 
+## 界面预览
+
+![首屏：像素鲸鱼顶栏](screenshots/splash.png)
+
+![工作状态行](screenshots/working-line.png)
+
+![状态栏](screenshots/status-bar.png)
+
+> 截图放 `screenshots/` 目录，文件名与上面一致即可自动显示；建议 Windows
+> Terminal 全屏后截图（`Win+Shift+S`），窗口建议 ≥110 列。
+
 ## 为什么值得装
 
 - **颜值即生产力**：顶栏是半块像素渲染的 DeepSeek 鲸鱼（24×18 真彩色精灵），
