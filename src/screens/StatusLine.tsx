@@ -1,8 +1,13 @@
 import React from 'react'
-import { Box, Text, useTerminalSize } from '../ui.js'
+import { Box, Text, useTerminalSize, useAnimationFrame } from '../ui.js'
 import { formatTokens } from '../cc/format.js'
 import { Byline } from '../components/design-system/Byline.js'
 import { KeyboardShortcutHint } from '../components/design-system/KeyboardShortcutHint.js'
+import { resolvePreset } from '../components/activityFrames.js'
+import { BRAND, FLASH, ICE, sweep } from '../components/shimmer.js'
+import { getTheme } from '../theme.js'
+import { useTheme } from '../components/design-system/ThemeProvider.js'
+import { parseRGB } from '../components/Spinner/spinnerUtils.js'
 import type { Channel } from '../channel.js'
 import {
   renderContextBar,
@@ -119,9 +124,11 @@ export function StatusLine({
       : []),
   ]
 
-  // Segmented context bar (pi-nano-context): its own full-width row, so the
-  // usage readout never crowds the status fields.
-  // Row 3 is the mode hint; the startup tip lives in the header splash.
+  // Row 3: the mode hint — and, while dsh-working-activity publishes, the
+  // live working line (thinking copy / running tool / turn summary) on the
+  // left with the hint staying visible on the right. Phase colors: done
+  // summaries land in success green, running tools in brand blue, waiting/
+  // thinking in ice blue.
   const hint = selectionActive
     ? 'esc to return to input'
     : channel.working
@@ -129,11 +136,52 @@ export function StatusLine({
       : !helpOpen
         ? '? for shortcuts'
         : ''
+  const activity = channel.workingActivity
+  const activityLine =
+    activity !== undefined && activity.line !== '' && activity.phase !== 'idle'
+      ? activity.line
+      : undefined
+  const activityColor =
+    activity?.phase === 'done'
+      ? 'success'
+      : activity?.phase === 'tool'
+        ? 'claude'
+        : 'claudeBlue_FOR_SYSTEM_SPINNER'
+
+  // Animated working line (pi working-activity style): the indicator preset
+  // ticks on its own cadence and the line text carries a white shimmer
+  // sweep. Both share the same animation clock, driven by the ref below.
+  const [animationRef, time] = useAnimationFrame(200)
+  const [themeName] = useTheme()
+  const theme = getTheme(themeName)
+  const preset = React.useMemo(
+    () => resolvePreset(channel.activityFrames),
+    [channel.activityFrames],
+  )
+  const frameIndex = Math.floor(time / preset.intervalMs) % preset.frames.length
+  const frame = preset.frames[frameIndex] ?? '·'
+  const baseRGB =
+    activity?.phase === 'tool'
+      ? (parseRGB(theme.claude) ?? BRAND)
+      : (parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE)
+  const phase = activity?.phase
+
+  // Context pressure prefix (pi working-activity style): ⚠ 上下文N% · in
+  // amber ≥80%, red ≥95% — only while the working line is visible.
+  const occupied =
+    usage !== undefined ? usage.input + usage.cacheRead + usage.cacheWrite : 0
+  const contextPct =
+    activityLine !== undefined &&
+    channel.contextWindow !== undefined &&
+    channel.contextWindow > 0
+      ? Math.round((occupied / channel.contextWindow) * 100)
+      : undefined
+  const warnDanger = contextPct !== undefined && contextPct >= 95
+  const warnVisible = contextPct !== undefined && contextPct >= 80
+
   const barWidth = columns - 4
   let bar: string | null = null
   if (barWidth >= 14 && channel.contextWindow !== undefined) {
-    const occupied =
-      usage !== undefined ? usage.input + usage.cacheRead + usage.cacheWrite : 0
     bar = renderContextBar(
       channel.contextSegments,
       occupied,
@@ -143,7 +191,7 @@ export function StatusLine({
   }
 
   return (
-    <Box paddingX={2}>
+    <Box paddingX={2} ref={animationRef}>
       <Box flexDirection="column" width="100%">
         {/* Row 1: segmented context bar, its own line, first (pi-nano-context
             placement — the bar sits directly under the transcript). */}
@@ -161,9 +209,39 @@ export function StatusLine({
             </Text>
           </Box>
         </Box>
-        {/* Row 3: mode hint (one step above dim so it stays legible). */}
-        <Box height={1} overflow="hidden" justifyContent="flex-start">
-          {hint ? <Text color="inactiveShimmer">{hint}</Text> : null}
+        {/* Row 3: animated working-activity line (indicator + shimmer text +
+            context warning) with the mode hint staying visible on the right. */}
+        <Box
+          height={1}
+          overflow="hidden"
+          flexDirection="row"
+          justifyContent="space-between"
+          gap={2}
+        >
+          {activityLine !== undefined ? (
+            <Text wrap="truncate">
+              {phase !== 'done' && (
+                <Text color={activityColor}>{frame} </Text>
+              )}
+              {warnVisible && contextPct !== undefined && (
+                <Text color={warnDanger ? 'error' : 'warning'}>
+                  ⚠ 上下文{contextPct}% ·{' '}
+                </Text>
+              )}
+              {phase === 'done' ? (
+                <Text color={activityColor}>{activityLine}</Text>
+              ) : (
+                <Text>{sweep(activityLine, time, baseRGB, FLASH)}</Text>
+              )}
+            </Text>
+          ) : hint ? (
+            <Text color="inactiveShimmer">{hint}</Text>
+          ) : null}
+          {activityLine !== undefined && hint ? (
+            <Text color="inactiveShimmer" wrap="truncate">
+              {hint}
+            </Text>
+          ) : null}
         </Box>
       </Box>
     </Box>

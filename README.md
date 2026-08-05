@@ -14,6 +14,14 @@
   （系统/提示词/助手/思考/工具五段着色，右侧实时读数 `ctx 17k/1.0M 1.7% 983k`）；
   第二行 `模型 · 实时 TPS（流式 gauge / 历史 sparkline）· 思考深度 · 缓存命中率(一位小数) · 进出 tokens`，
   右侧 `git 分支 · 工作目录 · 会话标题`；第三行模式提示。
+- **实时工作状态行**（working-activity 集成）：第三行左侧常驻模型的实时动态——
+  等待/思考的俏皮文案（`嗯…让我捋捋`、深夜档、30s/1m/5m 分档）、真正在跑的工具
+  （`改改 src/channel.ts · 12s`）、`⏵` 模型自述、回合收尾统计
+  （`搞定 ✓ · 4 工具 · 想3s 干2s`），配 28 种动画指示器（默认 Claude 官方帧序列）、
+  白色流光扫过文案、上下文占用 ≥80% 亮黄 / ≥95% 亮红预警
+  （`⚠ 上下文85% · …`）。数据来自 dsh-working-activity 插件的 log-only
+  `activity/status` 事件——与 Web UI 共享同一数据源，cc-tui 只做渲染。
+  开关：`activity: false`；指示器：`activityFrames: moon`（或 `comet`/`dots`/`random`）。
 - **思考过程流式可见**：thinking 块边生成边展开，回合结束自动折叠成
   `∴ Thinking · 12s`，Ctrl+O 随时展开全文。
 - **双击 Esc 时间回溯（rewind）**：把对话回滚到任意一条历史消息，DSH 会话
@@ -25,6 +33,11 @@
 - **DSH 官方机制优先**：不走任何黑魔法——消息来自会话日志事件流，
   fork/resume/compact 全走官方服务（agents/sessions/sessionPersistence/compact），
   注入上下文与事件订阅均通过 cordis 生命周期管理，插件卸载即完全还原。
+- **working-activity 生态**：工作状态行消费
+  [dsh-working-activity](https://github.com/dsh-external/dsh-working-activity)
+  发布的 `activity/status` 事件（组织内插件，与 Web UI 同一数据源）。
+  安装 cc-tui 时请一并挂载该插件（见下方 cordis.yml 示例），
+  `activity/status` 为 log-only 事件，不进入模型上下文。
 
 ## 安装（组织内 · 私有仓库）
 
@@ -57,14 +70,22 @@ dsh --config ~/.dsh-cc/cordis.yml
     provider: deepseek-official   # LLM 路由
     model: deepseek-v4-flash      # 模型
     effort: max                   # 顶栏/状态栏启动显示的思考深度
+    activity: true                # 工作状态行开关（默认开）
+    activityFrames: claude        # 指示器预设：claude/moon/comet/dots/…/random
     cwd: !!js process.cwd()       # 工作目录
     fullscreen: true              # 备用屏幕全屏模式
     sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined  # --resume
+
+# 实时工作状态行数据源（组织内插件，与 Web UI 共享）
+- id: working-activity
+  name: '@deepseek-ai/dsh-working-activity'
+  config:
+    publishIntervalMs: 500        # 状态快照发布间隔（越小越跟手）
 ```
 
 依赖官方插件（完整示例见仓库 `cordis.yml`）：llm-deepseek（thinking 开启）、
 agent-spine、bash-local、fs-local、session-persistence-jsonl（rewind/resume
-的数据底座）、compact-basic（`/compact`）。
+的数据底座）、compact-basic（`/compact`）、dsh-working-activity（工作状态行）。
 
 ## 快捷键
 

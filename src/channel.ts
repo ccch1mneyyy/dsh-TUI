@@ -55,6 +55,24 @@ export interface TokenUsage {
   output: number
 }
 
+/**
+ * Latest `activity/status` snapshot (the log-only event appended by
+ * `@deepseek-ai/dsh-working-activity` for any UI consumer): the model's
+ * live working line — thinking copy, running tool, turn summary. cc-tui
+ * renders it on the status line; nothing here requires the plugin (absent
+ * events simply leave the slot empty).
+ */
+export interface ActivityStatus {
+  readonly phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
+  /** Human-readable status line (plain text, no ANSI). */
+  readonly line: string
+  readonly label?: string
+  readonly detail?: string
+  readonly phrase?: string
+  readonly toolCount: number
+  readonly turnElapsedMs: number
+}
+
 /** A transient status message shown above the prompt input. */
 export interface NotificationItem {
   id: number
@@ -107,6 +125,11 @@ export interface Channel {
   readonly tps: number | undefined
   /** Per-message tps samples (sparkline + μ/p95 readout), oldest first. */
   readonly tpsSamples: readonly { tps: number; at: number }[]
+  /** Latest working-activity snapshot (log-only `activity/status` event),
+   *  when the leaf mounts dsh-working-activity. */
+  readonly workingActivity: ActivityStatus | undefined
+  /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
+  readonly activityFrames: string | undefined
   /** Estimated context segments by content type (pi-nano-context style bar). */
   readonly contextSegments: {
     system: number
@@ -169,6 +192,10 @@ export interface ChannelState {
   tps: number | undefined
   /** Per-message tps samples (sparkline + μ/p95 readout), oldest first. */
   tpsSamples: { tps: number; at: number }[]
+  /** Latest working-activity snapshot (see the public Channel type). */
+  workingActivity: ActivityStatus | undefined
+  /** Working-activity indicator preset (see the public Channel type). */
+  activityFrames: string | undefined
   /** Estimated context segments by content type (pi-nano-context style bar). */
   contextSegments: {
     system: number
@@ -244,6 +271,12 @@ export function createChannel(
     /** Configured reasoning effort, shown from startup until the first
      *  request/header event reports the adapter's live value. */
     effort?: string
+    /** Consume `activity/status` session events (dsh-working-activity) into
+     *  the status line; default on. */
+    activity?: boolean
+    /** Indicator preset for the working-activity line (`claude`/`moon`/
+     *  `comet`/`dots`/… or `random`); default `claude`. */
+    activityFrames?: string
     /** Handle of the initial agent; disposed when a rewind replaces it. */
     handle?: AgentHandle
   },
@@ -287,6 +320,8 @@ export function createChannel(
     notifications: [],
     contextWindow: undefined,
     reasoningEffort: options.effort,
+    workingActivity: undefined,
+    activityFrames: options.activityFrames,
     lastUsage: undefined,
     tps: undefined,
     tpsSamples: [],
@@ -417,6 +452,7 @@ export function createChannel(
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
+      state.workingActivity = undefined
       state.contextSegments = {
         system: 0,
         prompt: 0,
@@ -922,6 +958,35 @@ ${output}
       }),
       ctx.on('session/event', (session, event) => {
         if (session !== agent.session) return
+        // Live working-activity snapshot (log-only event, appended by
+        // dsh-working-activity for UI consumers). Consumed here — NOT in
+        // renderEvent — so replayed history never resurrects a stale line
+        // (the renderEvent switch's default arm ignores it on replay).
+        if (
+          options.activity !== false &&
+          (event as { type: string }).type === 'activity/status'
+        ) {
+          const data = event.data as unknown as {
+            phase: string
+            line: string
+            toolCount?: number
+            turnElapsedMs?: number
+            label?: string
+            detail?: string
+            phrase?: string
+          }
+          state.workingActivity = {
+            phase: data.phase as ActivityStatus['phase'],
+            line: data.line,
+            toolCount: data.toolCount ?? 0,
+            turnElapsedMs: data.turnElapsedMs ?? 0,
+            ...(data.label === undefined ? {} : { label: data.label }),
+            ...(data.detail === undefined ? {} : { detail: data.detail }),
+            ...(data.phrase === undefined ? {} : { phrase: data.phrase }),
+          }
+          state.emit()
+          return
+        }
         renderEvent(event)
         state.emit()
       }),

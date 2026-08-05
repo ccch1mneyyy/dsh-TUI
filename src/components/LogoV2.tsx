@@ -1,48 +1,16 @@
 import React from 'react'
-import chalk from 'chalk'
 import { Box, Text, useAnimationFrame, useTerminalSize } from '../ui.js'
-import { stringWidth } from '../ink/stringWidth.js'
-import { getGraphemeSegmenter } from '../utils/intl.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
-import { interpolateColor, parseRGB } from './Spinner/spinnerUtils.js'
+import { parseRGB } from './Spinner/spinnerUtils.js'
 import { renderBigText } from './bigfont.js'
+import { BRAND, FLASH, ICE, PALE, sweep, type Rgb } from './shimmer.js'
 import { WhaleArt } from './Whale.js'
 
 const VERSION = '0.1.0'
 
 /** Below this width the whale hides and the header goes text-only. */
 const WHALE_MIN_COLUMNS = 64
-
-type Rgb = { r: number; g: number; b: number }
-
-/** Header blue-white ladder: brand → ice → pale → near-white flash. */
-const BRAND: Rgb = { r: 77, g: 107, b: 254 }
-const ICE: Rgb = { r: 147, g: 190, b: 255 }
-const PALE: Rgb = { r: 215, g: 228, b: 255 }
-const FLASH: Rgb = { r: 238, g: 244, b: 255 }
-
-/**
- * Paint `word` with a 10-column highlight window sweeping across it (CC's
- * useShimmerAnimation non-requesting cadence: one column per 200ms frame,
- * highlight brightness pulsing on a 400ms sine).
- */
-function sweep(word: string, time: number, base: Rgb, highlight: Rgb): string {
-  const width = stringWidth(word)
-  const cycle = width + 20
-  const glimmerStart = (Math.floor(time / 200) % cycle) - 10
-  let out = ''
-  let col = 0
-  for (const { segment } of getGraphemeSegmenter().segment(word)) {
-    const segWidth = stringWidth(segment)
-    const highlighted = col >= glimmerStart && col + segWidth <= glimmerStart + 10
-    const opacity = highlighted ? (Math.sin(time / 400) + 1) / 2 : 0
-    const rgb = highlighted ? interpolateColor(base, highlight, opacity) : base
-    out += chalk.rgb(rgb.r, rgb.g, rgb.b).bold(segment)
-    col += segWidth
-  }
-  return out
-}
 
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {

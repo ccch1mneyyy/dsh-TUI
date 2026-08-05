@@ -47,6 +47,23 @@ export interface TokenUsage {
     input: number;
     output: number;
 }
+/**
+ * Latest `activity/status` snapshot (the log-only event appended by
+ * `@deepseek-ai/dsh-working-activity` for any UI consumer): the model's
+ * live working line — thinking copy, running tool, turn summary. cc-tui
+ * renders it on the status line; nothing here requires the plugin (absent
+ * events simply leave the slot empty).
+ */
+export interface ActivityStatus {
+    readonly phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done';
+    /** Human-readable status line (plain text, no ANSI). */
+    readonly line: string;
+    readonly label?: string;
+    readonly detail?: string;
+    readonly phrase?: string;
+    readonly toolCount: number;
+    readonly turnElapsedMs: number;
+}
 /** A transient status message shown above the prompt input. */
 export interface NotificationItem {
     id: number;
@@ -104,6 +121,11 @@ export interface Channel {
         tps: number;
         at: number;
     }[];
+    /** Latest working-activity snapshot (log-only `activity/status` event),
+     *  when the leaf mounts dsh-working-activity. */
+    readonly workingActivity: ActivityStatus | undefined;
+    /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
+    readonly activityFrames: string | undefined;
     /** Estimated context segments by content type (pi-nano-context style bar). */
     readonly contextSegments: {
         system: number;
@@ -174,6 +196,10 @@ export interface ChannelState {
         tps: number;
         at: number;
     }[];
+    /** Latest working-activity snapshot (see the public Channel type). */
+    workingActivity: ActivityStatus | undefined;
+    /** Working-activity indicator preset (see the public Channel type). */
+    activityFrames: string | undefined;
     /** Estimated context segments by content type (pi-nano-context style bar). */
     contextSegments: {
         system: number;
@@ -208,6 +234,12 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     /** Configured reasoning effort, shown from startup until the first
      *  request/header event reports the adapter's live value. */
     effort?: string;
+    /** Consume `activity/status` session events (dsh-working-activity) into
+     *  the status line; default on. */
+    activity?: boolean;
+    /** Indicator preset for the working-activity line (`claude`/`moon`/
+     *  `comet`/`dots`/… or `random`); default `claude`. */
+    activityFrames?: string;
     /** Handle of the initial agent; disposed when a rewind replaces it. */
     handle?: AgentHandle;
 }): ChannelState;

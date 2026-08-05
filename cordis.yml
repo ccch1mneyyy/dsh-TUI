@@ -1,9 +1,9 @@
 # cc-tui interactive front door over the agent-spine bundle.
-# Run with: sh install.sh --full, then dsh --config ~/.dsh-cc/cordis.yml (or dsh-cc.cmd)
+# Run with: pnpm --filter @deepseek-ai/dsh-cc-tui run tui
 # Requires DEEPSEEK_API_KEY; a terminal TTY is mandatory.
 
 - id: cc-tui
-  name: '@dsh-external/dsh-cc-tui'
+  name: '@deepseek-ai/dsh-cc-tui'
   config:
     provider: deepseek-official
     # Startup display seed for the header/statusline; the live value from
@@ -46,6 +46,16 @@
     toolBash:
       enableRunInBackground: false
     toolTasks: false
+
+# Live working line for the status bar: thinking copy / running tool / turn
+# summary. dsh-cc consumes its log-only `activity/status` events; the
+# plugin's own TUI prompt slot is skipped without an official dsh-tui.
+# publishIntervalMs 500: live-phase snapshots republish every 500ms so the
+# cc-tui status-line elapsed timers tick smoothly (default 2000ms).
+- id: working-activity
+  name: '@deepseek-ai/dsh-working-activity'
+  config:
+    publishIntervalMs: 500
 
 # Durable session log (DSH's own persistence seam): /resume and rewind both
 # rely on this backend writing every session/event. Root defaults under the

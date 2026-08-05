@@ -32,6 +32,12 @@ export interface Config {
   /** Configured reasoning effort, displayed from startup (the live value
    *  from request headers replaces it once the first turn runs). */
   effort?: string
+  /** Show the dsh-working-activity live working line on the status bar
+   *  (consumes its log-only `activity/status` events; off hides it). */
+  activity?: boolean
+  /** Working-activity indicator preset: `claude`/`moon`/`comet`/`dots`/…
+   *  or `random` (see activityFrames.ts). */
+  activityFrames?: string
   /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
   fullscreen?: boolean
 }
@@ -42,6 +48,8 @@ export const Config: Schema<Config> = Schema.object({
   model: Schema.string().default('deepseek-v4-flash'),
   cwd: Schema.string().required(false),
   effort: Schema.string().required(false),
+  activity: Schema.boolean().default(true),
+  activityFrames: Schema.string().default('claude'),
   fullscreen: Schema.boolean().default(true),
 })
 
@@ -62,6 +70,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     cwd: config.cwd ?? process.cwd(),
     provider: config.provider ?? 'deepseek-official',
     effort: config.effort,
+    activity: config.activity,
+    activityFrames: config.activityFrames,
     handle,
   })
   const tree = (

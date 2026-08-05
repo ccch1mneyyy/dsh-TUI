@@ -11,6 +11,7 @@ import { InterruptedByUser } from './InterruptedByUser.js'
 import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
+import { stripNarration } from '../utils/narration.js'
 
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
@@ -109,7 +110,10 @@ export function MessageList({
                   <Text color="text">●</Text>
                 </Box>
                 <Box flexDirection="column">
-                  <StreamingMarkdown>{row.text}</StreamingMarkdown>
+                  {/* The ⏵ self-narration line (working-activity narrate
+                      contract) is stripped here: the live working line on
+                      the status bar already shows it. */}
+                  <StreamingMarkdown>{stripNarration(row.text)}</StreamingMarkdown>
                 </Box>
               </Box>
             ) : (
@@ -131,7 +135,7 @@ export function MessageList({
                   </Box>
                 )}
                 <AssistantTextMessage
-                  text={row.text}
+                  text={stripNarration(row.text)}
                   addMargin={addMargin}
                   isSelected={isSelected}
                   isExpanded={expandedRows.has(row.id)}
