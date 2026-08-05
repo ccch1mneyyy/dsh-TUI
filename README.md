@@ -2,7 +2,6 @@
 
 > DeepSeek Harness 的官方 cordis 插件：像素鲸鱼顶栏、双流光大字、思考流式展开、
 > 双击 Esc 时间回溯、蓝白上下文进度条 + 实时 TPS 仪表。零核心改动，纯插件挂载。
-![Uploading image.png…]()
 
 ![类型](https://img.shields.io/badge/type-cordis%20plugin-blue) ![内测](https://img.shields.io/badge/status-内测-yellow)
 
