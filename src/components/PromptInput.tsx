@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { Channel } from '../channel.js'
 import { filterCommands, parseCommandName } from '../commands.js'
@@ -511,6 +512,19 @@ export function PromptInput({
   const lastNotification =
     channel.notifications[channel.notifications.length - 1]
 
+  // Park the native terminal cursor at the input caret (via the renderer's
+  // cursor-declaration mechanism). Terminal emulators render IME preedit
+  // text and screen-reader focus at the physical cursor, so parking it at
+  // the caret makes CJK/IME composition appear inline at the input instead
+  // of at the screen's bottom row; in line-mode terminals the console echo
+  // of typed characters lands at the same spot. `line`/`column` are
+  // relative to the value box the ref attaches to.
+  const valueBoxRef = useDeclaredCursor({
+    line: caretVisualLine - windowStart,
+    column: caretVisualCol(),
+    active: !selectionActive,
+  })
+
   return (
     <Box flexDirection="column" marginTop={1}>
       {lastNotification && (
@@ -575,7 +589,7 @@ export function PromptInput({
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <Text dimColor={channel.working}>❯ </Text>
-          <Box flexGrow={1} flexShrink={1}>
+          <Box ref={valueBoxRef} flexGrow={1} flexShrink={1}>
             {value.length === 0 ? (
               <Text wrap="truncate-end">
                 <Text inverse>H</Text>
