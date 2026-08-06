@@ -670,9 +670,17 @@ export function Chat({
       } else if (key.return) {
         const model = models[modelIndex]
         if (model) {
-          channel.notify(`Model set to ${model.name} · restart dsh-cc to apply`)
+          // Enter switches the live model right away: the conversation is
+          // forked at its end and continued with an agent routed to the new
+          // model (history replays unchanged).
+          setModelPickerOpen(false)
+          channel.notify(`Switching model to ${model.name}…`)
+          void channel.switchModel(model.id).then(ok => {
+            if (ok) channel.notify(`Model switched to ${model.name}`)
+          })
+        } else {
+          setModelPickerOpen(false)
         }
-        setModelPickerOpen(false)
       } else if (key.escape) {
         setModelPickerOpen(false)
       }

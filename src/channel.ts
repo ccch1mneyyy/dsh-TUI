@@ -172,6 +172,10 @@ export interface Channel {
   /** Start a fresh conversation (`/new`): a brand-new agent + session, the
    *  transcript cleared, the resume marker forgotten. */
   newSession(): Promise<boolean>
+  /** Switch the live model (`/model` picker): forks the conversation at its
+   *  current end and continues it with a new agent routed to `model`. The
+   *  history replays unchanged; only the request model changes. */
+  switchModel(model: string): Promise<boolean>
   /** Reset the visible transcript (`/clear`). */
   clear(): void
   /** Push a transient notification above the prompt input. */
@@ -260,6 +264,8 @@ export interface ChannelState {
   resumeTo(sessionId: string): Promise<boolean>
   /** Start a fresh conversation (`/new`). */
   newSession(): Promise<boolean>
+  /** Switch the live model (`/model` picker). */
+  switchModel(model: string): Promise<boolean>
   clear(): void
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
   listModels(): Promise<readonly LlmModelInfo[]>
@@ -691,6 +697,93 @@ export function createChannel(
       bindAgent()
       refreshCommandList()
       clearResumeTarget()
+      state.emit()
+      void oldHandle?.dispose().catch(() => {})
+      return true
+    },
+    async switchModel(model: string): Promise<boolean> {
+      // `/model` picker Enter — switch the live model by forking the
+      // conversation at its current end and continuing with a new agent
+      // routed to the chosen model. Same reset shape as rewindTo/resumeTo;
+      // the history replays unchanged, only the request model changes.
+      if (state.working) {
+        state.notify('Cannot switch models while a turn is running', {
+          color: 'warning',
+        })
+        return false
+      }
+      const sessions = ctx.get('sessions') as
+        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
+        | undefined
+      const agents = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!sessions || !agents) {
+        state.notify('Model switch unavailable — session services not loaded', {
+          color: 'error',
+        })
+        return false
+      }
+      let seed: readonly SessionEvent[]
+      try {
+        // No boundary = fork the whole log (continue the conversation).
+        seed = sessions.fork(agent.session).events
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(`Cannot switch models · ${message}`, { color: 'error' })
+        return false
+      }
+      const childId = SessionId(randomUUID())
+      let handle: AgentHandle
+      try {
+        handle = await agents.create({
+          sessionId: childId,
+          seed,
+          meta: {
+            cwd: options.cwd,
+            parentSession: agent.session.id,
+            seedLength: seed.length,
+          },
+          agentOptions: { provider: options.provider, model },
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(`Model switch failed · ${message}`, { color: 'error', timeoutMs: 8000 })
+        return false
+      }
+      streaming = undefined
+      reasoning = undefined
+      toolCards.clear()
+      nextRowId = 0
+      state.rows.length = 0
+      state.tokens = { input: 0, output: 0 }
+      state.responseChars = 0
+      state.activeToolCount = 0
+      state.lastUserText = ''
+      state.working = false
+      state.spinnerMode = 'requesting'
+      state.status = handle.agent.status
+      state.agentId = handle.agent.id
+      state.model = model
+      state.tps = undefined
+      state.tpsSamples = []
+      state.lastUsage = undefined
+      state.workingActivity = undefined
+      state.contextWindow = undefined
+      state.contextSegments = {
+        system: 0,
+        prompt: 0,
+        assistant: 0,
+        thinking: 0,
+        tools: 0,
+      }
+      for (const event of seed) renderEvent(event)
+      settleStreaming()
+      const oldHandle = currentHandle
+      agent = handle.agent
+      currentHandle = handle
+      bindAgent()
+      refreshCommandList()
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       return true

@@ -165,6 +165,10 @@ export interface Channel {
     /** Start a fresh conversation (`/new`): a brand-new agent + session, the
      *  transcript cleared, the resume marker forgotten. */
     newSession(): Promise<boolean>;
+    /** Switch the live model (`/model` picker): forks the conversation at its
+     *  current end and continues it with a new agent routed to `model`. The
+     *  history replays unchanged; only the request model changes. */
+    switchModel(model: string): Promise<boolean>;
     /** Reset the visible transcript (`/clear`). */
     clear(): void;
     /** Push a transient notification above the prompt input. */
@@ -261,6 +265,8 @@ export interface ChannelState {
     resumeTo(sessionId: string): Promise<boolean>;
     /** Start a fresh conversation (`/new`). */
     newSession(): Promise<boolean>;
+    /** Switch the live model (`/model` picker). */
+    switchModel(model: string): Promise<boolean>;
     clear(): void;
     notify(text: string, options?: {
         color?: NotificationItem['color'];
