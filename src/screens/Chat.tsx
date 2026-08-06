@@ -107,6 +107,9 @@ export function Chat({
   const [resumePickerOpen, setResumePickerOpen] = React.useState(false)
   const [resumeSessions, setResumeSessions] = React.useState<readonly SessionRecord[]>([])
   const [resumeIndex, setResumeIndex] = React.useState(0)
+  /** `/new` confirmation: a conversation with content needs a second `/new`
+   *  (CC asks before discarding). Auto-disarms after a few seconds. */
+  const newConfirmRef = React.useRef(false)
   const [showAllMessages, setShowAllMessages] = React.useState(false)
   const [thinkingVisible, setThinkingVisible] = React.useState(true)
   const [thinkingOpen, setThinkingOpen] = React.useState(false)
@@ -218,12 +221,30 @@ export function Chat({
    */
   const runCommand = (name: string, rawInput = ''): boolean => {
     switch (name) {
-      case 'new':
+      case 'new': {
+        // CC confirms before discarding a conversation with content: the
+        // first /new arms, a second /new within 4s executes.
         setHelpOpen(false)
+        const hasContent = channel.rows.some(
+          row => row.kind === 'user' || row.kind === 'assistant',
+        )
+        if (hasContent && !newConfirmRef.current) {
+          newConfirmRef.current = true
+          channel.notify('Press /new again to confirm — this starts a fresh conversation', {
+            color: 'warning',
+            timeoutMs: 4000,
+          })
+          setTimeout(() => {
+            newConfirmRef.current = false
+          }, 4000)
+          return true
+        }
+        newConfirmRef.current = false
         void channel.newSession().then(ok => {
           if (ok) channel.notify('New session started')
         })
         return true
+      }
       case 'clear':
         channel.clear()
         // channel.clear() resets row ids to 0; stale expanded/selection
@@ -293,12 +314,15 @@ export function Chat({
             : Math.max(0, Math.min(100, Math.round((channel.tokens.input / channel.contextWindow) * 100)))
         const lines: string[] = [
           `模型   ${channel.model}${channel.reasoningEffort ? ` · ${capitalize(channel.reasoningEffort)} effort` : ''}`,
+          `状态   ${channel.working ? '工作中' : '空闲'}`,
           `会话   ${channel.agentId}`,
           `目录   ${channel.cwd}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
           `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
         ]
         if (usage !== undefined) {
-          lines.push(`缓存   ${formatTokens(usage.cacheRead)} 读 · ${formatTokens(usage.cacheWrite)} 写`)
+          const total = usage.input + usage.cacheRead + usage.cacheWrite
+          const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
+          lines.push(`缓存率 ${rate}% · ${formatTokens(usage.cacheRead)} 读 / ${formatTokens(usage.cacheWrite)} 写`)
         }
         if (pct !== undefined) lines.push(`上下文 ${pct}%`)
         if (channel.sessionTitle) lines.push(`标题   ${channel.sessionTitle}`)
