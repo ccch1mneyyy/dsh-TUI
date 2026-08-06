@@ -4,7 +4,9 @@
  * `DSH_CC_RESUME_SESSION`. Session *records* live in DSH's own persistence
  * backend (dsh-session-persistence-jsonl) — `/resume` lists those via
  * `sessionPersistence.list()`, this file only carries the id across
- * processes.
+ * processes. It also keeps a small `last-used.json` of session-id → epoch-ms
+ * touches so `/resume` can sort most-recently-used first (DSH session
+ * headers carry only `createdAt`).
  */
 import { homedir } from 'node:os'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -20,6 +22,7 @@ export interface SessionRecord {
 
 const DIR = join(homedir(), '.dsh-cc')
 const RESUME_FILE = join(DIR, 'resume.txt')
+const LAST_USED_FILE = join(DIR, 'last-used.json')
 
 function ensureDir(): void {
   mkdirSync(DIR, { recursive: true })
@@ -47,5 +50,37 @@ export function readResumeTarget(): string | undefined {
     return value || undefined
   } catch {
     return undefined
+  }
+}
+
+/** session-id → last-used epoch ms (best effort; missing file = empty). */
+export function readLastUsed(): Readonly<Record<string, number>> {
+  try {
+    const parsed = JSON.parse(readFileSync(LAST_USED_FILE, 'utf8')) as unknown
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+    const record = parsed as Record<string, unknown>
+    const result: Record<string, number> = {}
+    for (const [id, value] of Object.entries(record)) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        result[id] = value
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+/** Record that a session was just used (resumed or written to) so `/resume`
+ *  can sort most-recently-used first. Best effort — never throws. */
+export function touchSession(sessionId: string): void {
+  try {
+    ensureDir()
+    const lastUsed = { ...readLastUsed(), [sessionId]: Date.now() }
+    writeFileSync(LAST_USED_FILE, JSON.stringify(lastUsed))
+  } catch {
+    // Best effort — MRU ordering is a nicety.
   }
 }

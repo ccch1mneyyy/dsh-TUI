@@ -1,7 +1,7 @@
 import React from 'react';
 import type { ChatRow } from '../channel.js';
 import type { DOMElement } from '../ink/dom.js';
-export declare function MessageList({ rows, expanded, expandedRows, selectedId, onToggleRow, model, showAll, onToggleAll, thinkingVisible, registerRowRef, }: {
+export declare function MessageList({ rows, expanded, expandedRows, selectedId, onToggleRow, model, showAll, onToggleAll, onLoadOlder, thinkingVisible, registerRowRef, }: {
     rows: readonly ChatRow[];
     expanded: boolean;
     expandedRows: ReadonlySet<number>;
@@ -10,6 +10,9 @@ export declare function MessageList({ rows, expanded, expandedRows, selectedId, 
     model: string;
     showAll: boolean;
     onToggleAll(): void;
+    /** Restore folded-away older rows from the session log (CC-style "load
+     *  earlier messages" affordance; shown only when rows were folded). */
+    onLoadOlder?(): void;
     thinkingVisible?: boolean;
     /** Transcript search: register each row's DOM element for scroll-to-match. */
     registerRowRef?(rowId: number, el: DOMElement | null): void;

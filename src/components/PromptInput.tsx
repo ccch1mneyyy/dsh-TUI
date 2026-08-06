@@ -506,12 +506,6 @@ export function PromptInput({
   const inputWidth = Math.max(10, columns - 3)
   const visualLines = wrapToWidth(value, inputWidth)
   const caretVisualLine = wrapToWidth(value.slice(0, cursor), inputWidth).length - 1
-  const caretVisualCol = () => {
-    const before = value.slice(0, cursor)
-    const rows = wrapToWidth(before, inputWidth)
-    const last = rows[rows.length - 1] ?? ''
-    return last.length
-  }
   const windowStart = Math.max(
     0,
     Math.min(
@@ -524,6 +518,25 @@ export function PromptInput({
     windowStart + MAX_VISIBLE_LINES,
   )
 
+  // Caret position in the caret's visual row, in two units:
+  // - char index (for slicing the row's characters in the render below)
+  // - visual column (for the physical cursor declaration — CJK characters
+  //   occupy TWO terminal columns, so the raw char count would park the
+  //   cursor mid-character and Windows Terminal would paint the IME
+  //   preedit (pinyin) over the surrounding text).
+  const caretCharCol = () => {
+    const before = value.slice(0, cursor)
+    const rows = wrapToWidth(before, inputWidth)
+    const last = rows[rows.length - 1] ?? ''
+    return last.length
+  }
+  const caretVisualCol = () => {
+    const before = value.slice(0, cursor)
+    const rows = wrapToWidth(before, inputWidth)
+    const last = rows[rows.length - 1] ?? ''
+    return stringWidth(last)
+  }
+
   const rendered = visibleLines.map((line, index) => {
     const absoluteLine = windowStart + index
     if (absoluteLine !== caretVisualLine) {
@@ -534,7 +547,7 @@ export function PromptInput({
       )
     }
     // Caret row: invert the char at the caret column (solid block).
-    const col = caretVisualCol()
+    const col = caretCharCol()
     const before = line.slice(0, col)
     const at = line[col] ?? ' '
     const after = line.slice(col + 1)

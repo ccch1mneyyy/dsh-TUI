@@ -203,7 +203,7 @@ export function Chat({
     const interval = setInterval(() => {
       setTitleFrame(f => (f + 1) % TITLE_ANIMATION_FRAMES.length)
     }, 960)
-    return () => clearInterval(interval)
+    return () =>{  clearInterval(interval); }
   }, [channel.working, terminalFocused])
   const titlePrefix = channel.working
     ? (TITLE_ANIMATION_FRAMES[titleFrame] ?? '✦')
@@ -240,7 +240,7 @@ export function Chat({
           return true
         }
         newConfirmRef.current = false
-        void channel.newSession().then(ok => {
+        void channel.newSession().then((ok) => {
           if (ok) channel.notify('New session started')
         })
         return true
@@ -262,7 +262,7 @@ export function Chat({
       case 'model':
         setHelpOpen(false)
         setModelPickerOpen(true)
-        void channel.listModels().then(list => {
+        void channel.listModels().then((list) => {
           setModels(list)
           const index = list.findIndex(model => model.id === channel.model)
           setModelIndex(index >= 0 ? index : 0)
@@ -381,7 +381,7 @@ export function Chat({
       }
       case 'agents':
         setHelpOpen(false)
-        void channel.listSubagents().then(lines => {
+        void channel.listSubagents().then((lines) => {
           channel.pushLocal('/agents', lines)
         })
         return true
@@ -469,7 +469,7 @@ export function Chat({
         )
         if (external) {
           setHelpOpen(false)
-          void channel.runExternalCommand(name, rawInput).then(text => {
+          void channel.runExternalCommand(name, rawInput).then((text) => {
             if (text !== undefined && text !== '') {
               channel.notify(text)
             } else if (text === undefined) {
@@ -575,7 +575,7 @@ export function Chat({
     if (next) setSelectedId(next.id)
   }
   const toggleRowExpanded = (rowId: number) => {
-    setExpandedRows(previous => {
+    setExpandedRows((previous) => {
       const next = new Set(previous)
       if (next.has(rowId)) next.delete(rowId)
       else next.add(rowId)
@@ -675,7 +675,7 @@ export function Chat({
           // launcher marker is refreshed by resumeTo so `--resume` on the
           // next launch opens the same session.
           setResumePickerOpen(false)
-          void channel.resumeTo(session.id).then(ok => {
+          void channel.resumeTo(session.id).then((ok) => {
             if (ok) channel.notify('Session resumed')
           })
         } else {
@@ -699,7 +699,7 @@ export function Chat({
           // model (history replays unchanged).
           setModelPickerOpen(false)
           channel.notify(`Switching model to ${model.name}…`)
-          void channel.switchModel(model.id).then(ok => {
+          void channel.switchModel(model.id).then((ok) => {
             if (ok) channel.notify(`Model switched to ${model.name}`)
           })
         } else {
@@ -889,7 +889,8 @@ export function Chat({
           model={channel.model}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
-          onToggleAll={() => setShowAllMessages(previous => !previous)}
+          onToggleAll={() =>{  setShowAllMessages(previous => !previous); }}
+          onLoadOlder={() => channel.loadOlder()}
           registerRowRef={(rowId, el) => {
             if (el) rowRefsRef.current.set(rowId, el)
             else rowRefsRef.current.delete(rowId)
@@ -912,27 +913,29 @@ export function Chat({
           // running tool / narration) is the status, with the spinner
           // slot's token counter preserved as a suffix. Only real activity
           // data replaces the spinner — before the first event, or with
-          // `activity: false`, the classic spinner still renders.
-          <Box marginTop={1} paddingLeft={2}>
-            <ActivityLine
-              activity={channel.workingActivity}
-              activityFrames={channel.activityFrames}
-              warnPct={activityWarnPct}
-              warnDanger={activityWarnPct !== undefined && activityWarnPct >= 95}
-              suffix={` · ↓ ${channel.responseChars} tokens`}
+          // `activity: false`, the classic spinner still renders. The line
+          // hugs the left edge (no padding) so the self-narration reads as
+          // part of the transcript, aligned with the `❯` prompt below.
+            <Box marginTop={1}>
+              <ActivityLine
+                activity={channel.workingActivity}
+                activityFrames={channel.activityFrames}
+                warnPct={activityWarnPct}
+                warnDanger={activityWarnPct !== undefined && activityWarnPct >= 95}
+                suffix={` · ↓ ${channel.responseChars} tokens`}
+              />
+            </Box>
+          ) : (
+            <WorkingSpinner
+              mode={channel.spinnerMode}
+              hasActiveTools={channel.activeToolCount > 0}
+              responseLengthRef={responseLengthRef}
+              loadingStartTimeRef={loadingStartTimeRef}
+              totalPausedMsRef={totalPausedMsRef}
+              pauseStartTimeRef={pauseStartTimeRef}
+              thinkingStatus={thinkingStatus}
             />
-          </Box>
-        ) : (
-          <WorkingSpinner
-            mode={channel.spinnerMode}
-            hasActiveTools={channel.activeToolCount > 0}
-            responseLengthRef={responseLengthRef}
-            loadingStartTimeRef={loadingStartTimeRef}
-            totalPausedMsRef={totalPausedMsRef}
-            pauseStartTimeRef={pauseStartTimeRef}
-            thinkingStatus={thinkingStatus}
-          />
-        ))}
+          ))}
       {thinkingOpen && (
         <ThinkingToggle
           currentValue={thinkingVisible}
@@ -985,11 +988,11 @@ export function Chat({
       <PromptInput
         channel={channel}
         helpOpen={helpOpen}
-        onToggleHelp={() => setHelpOpen(previous => !previous)}
+        onToggleHelp={() =>{  setHelpOpen(previous => !previous); }}
         onRunCommand={runCommand}
         selectionActive={selectionActive || modelPickerOpen || resumePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen}
         fillText={historyFill}
-        onFillConsumed={() => setHistoryFill(null)}
+        onFillConsumed={() =>{  setHistoryFill(null); }}
         onRewindRequest={openRewind}
       />
       <StatusLine
@@ -1021,8 +1024,8 @@ function StickyPromptHeader({
       height={1}
       paddingRight={1}
       backgroundColor={hover ? 'userMessageBackgroundHover' : 'userMessageBackground'}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      onMouseEnter={() =>{  setHover(true); }}
+      onMouseLeave={() =>{  setHover(false); }}
       onClick={onClick}
     >
       <Text color="subtle" wrap="truncate-end">
@@ -1046,8 +1049,8 @@ function NewMessagesPill({
       <Box
         backgroundColor={hover ? 'userMessageBackgroundHover' : 'background'}
         onClick={onClick}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
+        onMouseEnter={() =>{  setHover(true); }}
+        onMouseLeave={() =>{  setHover(false); }}
       >
         <Text color="inverseText" bold>
           {' '}↓ {count === 1 ? '1 new message' : `${count} new messages`}{' '}

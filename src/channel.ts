@@ -7,7 +7,7 @@ import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/d
 import type { Context } from 'cordis'
 import { join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
-import { clearResumeTarget, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
+import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
@@ -18,8 +18,9 @@ export interface ToolRow {
   readonly name: string
   /** Raw JSON arguments as the model produced them (displayed truncated). */
   readonly argsText: string
-  /** Full arguments, shown when Ctrl+O verbose mode is on. */
-  readonly argsFull: string
+  /** Full arguments, shown when Ctrl+O verbose mode is on; dropped when the
+   *  row is folded (session log retains it). */
+  argsFull?: string
   status: 'running' | 'ok' | 'error'
   resultText?: string
   /** Full result text, shown when Ctrl+O verbose mode is on. */
@@ -50,8 +51,16 @@ export interface ChatRow {
   time?: number
   /** Present on `reasoning` rows once settled: thinking wall-clock duration. */
   durationMs?: number
-  /** Source session event seq (user rows) — the rewind fork anchor. */
+  /** Source session event seq — present on every log-derived row (rewind
+   *  fork anchor on user rows; window-floor bookkeeping for the rest). */
   seq?: number
+  /** True when the row's full text was folded to keep the transcript window
+   *  bounded (see MAX_ROWS); the session log still holds the full content
+   *  and loadOlder() restores it. */
+  folded?: boolean
+  /** True when loadOlder() restored this row from the log; restored rows are
+   *  exempt from the next fold pass so a restore is not instantly undone. */
+  restored?: boolean
 }
 
 export interface TokenUsage {
@@ -178,6 +187,13 @@ export interface Channel {
   switchModel(model: string): Promise<boolean>
   /** Reset the visible transcript (`/clear`). */
   clear(): void
+  /**
+   * Re-render rows older than the current in-memory window from the session
+   * log (rows beyond {@link ChannelState.rows}' cap are folded away; this
+   * restores them for review). Returns the number of rows restored, 0 when
+   * the whole log is already materialized.
+   */
+  loadOlder(): number
   /** Push a transient notification above the prompt input. */
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
   /** Advertised models for the configured provider route (empty when the LLM service is absent). */
@@ -267,6 +283,8 @@ export interface ChannelState {
   /** Switch the live model (`/model` picker). */
   switchModel(model: string): Promise<boolean>
   clear(): void
+  /** @internal older-row restoration (see the public Channel.loadOlder). */
+  loadOlder(): number
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
   listModels(): Promise<readonly LlmModelInfo[]>
   listFiles(): Promise<readonly string[]>
@@ -292,9 +310,147 @@ const RESULT_PREVIEW_LIMIT = 240
 /** Local `!`-command output cap (mirrors the result preview limit). */
 const LOCAL_OUTPUT_LIMIT = 240
 
+/**
+ * In-memory transcript window cap. Older rows beyond this count are FOLDED:
+ * their full-text fields (assistant/reasoning text, tool args/results) are
+ * dropped and only the preview/status metadata kept, so a long merge/deploy
+ * turn cannot grow the TUI's RAM without bound. The session log remains the
+ * complete source of truth (`/export` reads it, `/resume` replays it); the
+ * folded row keeps its kind/id so scrolling and selection stay stable.
+ */
+const MAX_ROWS = 600
+
 function preview(text: string, limit: number): string {
   const flat = text.replace(/\s+/g, ' ').trim()
   return flat.length <= limit ? flat : `${flat.slice(0, limit)}…`
+}
+
+/**
+ * Fold the oldest rows beyond the transcript window cap: drop each row's
+ * full-text fields (assistant/reasoning text, tool args/results) and keep
+ * only its preview text, kind, id, and seq. Bounds the TUI's retained text
+ * without touching the session log (the source of truth for /export and
+ * loadOlder). Small local/notice/interrupt rows are left intact (they hold
+ * terminal-local text the log cannot restore). Restored rows are exempt so
+ * a loadOlder() restore is not instantly undone. Returns the number of rows
+ * folded.
+ */
+function foldRows(rows: ChatRow[], cap: number): number {
+  const excess = rows.length - cap
+  if (excess <= 0) return 0
+  let folded = 0
+  for (const row of rows.slice(0, excess)) {
+    if (row.folded || row.restored) continue
+    if (row.kind !== 'user' && row.kind !== 'assistant' && row.kind !== 'reasoning' && row.kind !== 'tool') continue
+    row.folded = true
+    folded += 1
+    if (row.kind === 'tool' && row.tool) {
+      row.tool.argsFull = undefined
+      row.tool.resultFull = undefined
+      row.tool.errorText = undefined
+    } else if (row.text.length > 0) {
+      // Keep a short preview so the transcript reads naturally; the full
+      // text lives in the session log and is restored by loadOlder().
+      row.text = preview(row.text, 200)
+    }
+  }
+  return folded
+}
+
+/**
+ * Restore folded rows from the session log, newest folded batch first.
+ * Rebuilds each folded row's full text from its source events and clears
+ * the folded mark, keeping row ids, scroll anchors, and selection stable.
+ * Returns the number of rows restored.
+ */
+function foldBack(rows: ChatRow[], events: readonly SessionEvent[]): number {
+  const folded = rows.filter(row => row.folded)
+  if (folded.length === 0) return 0
+  const firstFoldedSeq = folded[0]?.seq ?? 0
+  const restoreEvents = events.filter(event => event.seq >= firstFoldedSeq)
+  // tool results are matched by callId, not seq, because the result event
+  // seq differs from the call event seq that anchored the row.
+  const resultsByCall = new Map<string, SessionEvent<'tool/result'>>()
+  for (const event of restoreEvents) {
+    if (event.type === 'tool/result') {
+      resultsByCall.set(event.data.message.source.callId, event)
+    }
+  }
+  let restored = 0
+  for (const row of folded) {
+    const rowSeq = row.seq
+    if (rowSeq === undefined) continue
+    if (row.kind === 'tool' && row.tool !== undefined) {
+      // The tool row is anchored on its tool/call seq; its result text comes
+      // from the matching tool/result event.
+      const call = restoreEvents.find(event => event.seq === rowSeq && event.type === 'tool/call')
+      if (call === undefined || call.type !== 'tool/call') continue
+      restoreRowFromEvent(row, call)
+      const result = resultsByCall.get(row.tool.callId)
+      if (result !== undefined) restoreToolResult(row, result)
+      row.folded = false
+      restored += 1
+      continue
+    }
+    // Text rows are anchored on their first delta chunk; the settled
+    // assistant/message at or after that seq carries the full text.
+    const message = restoreEvents.find(event => event.seq >= rowSeq && event.type === 'assistant/message')
+    if (message === undefined) continue
+    restoreRowFromEvent(row, message)
+    row.folded = false
+    restored += 1
+  }
+  return restored
+}
+
+/** Rebuild a folded row's full text from its source session event. */
+function restoreRowFromEvent(row: ChatRow, event: SessionEvent): void {
+  switch (row.kind) {
+    case 'user': {
+      if (event.type !== 'user/message' && event.type !== 'steering/message') break
+      const content = event.type === 'user/message' ? event.data.content : event.data.message.content
+      const text = content.map(block => block.type === 'text' ? block.text : '').join('').trim()
+      if (text) row.text = text
+      break
+    }
+    case 'assistant': {
+      if (event.type !== 'assistant/message') break
+      const text = event.data.message.content.map(block => block.type === 'text' ? block.text : '').join('').trim()
+      if (text) row.text = text
+      break
+    }
+    case 'reasoning': {
+      // Thinking text is carried by the assistant/message's reasoning
+      // blocks, not the (ephemeral) delta chunks, so the settled message
+      // restores it exactly.
+      if (event.type !== 'assistant/message') break
+      const text = event.data.message.content.map(block => block.type === 'reasoning' ? block.text : '').join('').trim()
+      if (text) row.text = text
+      break
+    }
+    case 'tool': {
+      if (event.type !== 'tool/call' || row.tool === undefined) break
+      row.tool.argsFull = event.data.arguments
+      break
+    }
+    default:
+      break
+  }
+}
+
+/** Restore a folded tool row's result text from its tool/result event. */
+function restoreToolResult(row: ChatRow, event: SessionEvent<'tool/result'>): void {
+  if (row.tool === undefined) return
+  const failure = event.data.error
+  if (failure !== undefined) {
+    row.tool.status = 'error'
+    row.tool.errorText = `${failure.name}: ${failure.code}`
+    return
+  }
+  row.tool.status = 'ok'
+  const block = event.data.message.content[0]
+  const result = block.content.map(b => b.type === 'text' ? b.text : '').join('').trim()
+  row.tool.resultFull = result || undefined
 }
 
 
@@ -368,7 +524,7 @@ export function createChannel(
   // menu and dispatches through `execute` (which logs the paired
   // command/run + command/done records). Absent the service, only the
   // built-in local commands exist.
-  const commandService = ctx.get('commands') as CommandService | undefined
+  const commandService = ctx.get('commands')
   const listeners = new Set<() => void>()
   let nextNotificationId = 1
   /** One-shot context-low warning per session (CC's TokenWarning). */
@@ -427,8 +583,18 @@ export function createChannel(
       }
     },
     emit() {
+      foldRows(state.rows, MAX_ROWS)
       state.version += 1
       for (const listener of listeners) listener()
+    },
+    loadOlder() {
+      // Restore folded-away full text from the session log, newest folded
+      // batch first, clearing the folded marks. The log is the authoritative
+      // source, so restored rows match a fresh replay; live streaming rows
+      // are never folded, so nothing here races a running turn.
+      const restored = foldBack(state.rows, agent.session.events)
+      if (restored > 0) state.emit()
+      return restored
     },
     submit(text) {
       const trimmed = text.trim()
@@ -444,6 +610,9 @@ export function createChannel(
         void runLocalCommand(trimmed.slice(1).trim(), false)
         return
       }
+      // The current session is being used — move it to the MRU front
+      // (/resume sorts by last-used).
+      touchSession(state.agentId)
       agent.followup(createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } }))
     },
     cancel() {
@@ -555,6 +724,8 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       refreshCommandList()
+      // The forked session (rewind) becomes the most recently used.
+      touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       return row.text
@@ -569,11 +740,11 @@ export function createChannel(
       }
       const agents = ctx.get('agents') as
         | {
-            resume(options: {
-              resumeSessionId: SessionId
-              agentOptions?: { provider?: string; model?: string }
-            }): Promise<AgentHandle>
-          }
+          resume(options: {
+            resumeSessionId: SessionId
+            agentOptions?: { provider?: string; model?: string }
+          }): Promise<AgentHandle>
+        }
         | undefined
       if (!agents) {
         state.notify('Resume unavailable — agents service not loaded', { color: 'error' })
@@ -627,6 +798,8 @@ export function createChannel(
       refreshCommandList()
       // Keep the `--resume` launcher contract pointing at the same session.
       writeResumeTarget(sessionId)
+      // The resumed session is now the most recently used.
+      touchSession(sessionId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       return true
@@ -697,6 +870,8 @@ export function createChannel(
       bindAgent()
       refreshCommandList()
       clearResumeTarget()
+      // The brand-new session becomes the most recently used.
+      touchSession(handle.agent.id)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       return true
@@ -784,6 +959,8 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       refreshCommandList()
+      // The model-switched fork becomes the most recently used.
+      touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       return true
@@ -831,15 +1008,15 @@ export function createChannel(
     listFiles() {
       const fs = ctx.get('fs') as
         | {
-            resolve(path: string): Promise<{ displayPath: string }>
-            listDir(target: { displayPath: string }): Promise<
-              Array<{
-                name: string
-                type: 'file' | 'directory' | 'other'
-                target: { displayPath: string }
-              }>
-            >
-          }
+          resolve(path: string): Promise<{ displayPath: string }>
+          listDir(target: { displayPath: string }): Promise<
+            Array<{
+              name: string
+              type: 'file' | 'directory' | 'other'
+              target: { displayPath: string }
+            }>
+          >
+        }
         | undefined
       return listFilesDeep(fs, state.cwd)
     },
@@ -848,13 +1025,17 @@ export function createChannel(
       // entry per durable session log (headers carry cwd + createdAt).
       const persistence = ctx.get('sessionPersistence') as
         | {
-            list(signal?: AbortSignal): Promise<readonly SessionHeader[]>
-            load(id: SessionId): Promise<{ events: readonly SessionEvent[] }>
-          }
+          list(signal?: AbortSignal): Promise<readonly SessionHeader[]>
+          load(id: SessionId): Promise<{ events: readonly SessionEvent[] }>
+        }
         | undefined
       if (!persistence) return []
       try {
         const headers = await persistence.list()
+        // MRU ordering: DSH headers carry only createdAt, so cc-tui keeps its
+        // own last-used timestamps (touchSession on resume/submit/new) and
+        // falls back to createdAt for sessions never touched in this install.
+        const lastUsed = readLastUsed()
         const records = headers
           .map(header => ({
             id: header.id,
@@ -864,7 +1045,7 @@ export function createChannel(
             title: basename(header.cwd ?? '') || `session ${String(header.id).slice(0, 8)}`,
             cwd: header.cwd ?? '',
             createdAt: header.createdAt,
-            updatedAt: header.createdAt,
+            updatedAt: lastUsed[header.id] ?? header.createdAt,
           }))
           .sort((a, b) => b.updatedAt - a.updatedAt)
         // Title = the session's FIRST user message — the picker's most
@@ -872,7 +1053,7 @@ export function createChannel(
         // only the newest sessions pay for it; older rows keep the
         // basename fallback. A load failure degrades silently.
         await Promise.all(
-          records.slice(0, SESSION_TITLE_DEPTH).map(async record => {
+          records.slice(0, SESSION_TITLE_DEPTH).map(async (record) => {
             try {
               const { events } = await persistence.load(SessionId(record.id))
               const first = events.find(event => event.type === 'user/message')
@@ -896,11 +1077,11 @@ export function createChannel(
     compact() {
       const compactService = ctx.get('compact') as
         | {
-            compactNow(
-              agent: unknown,
-              signal: AbortSignal,
-            ): Promise<{ summary?: string } | null>
-          }
+          compactNow(
+            agent: unknown,
+            signal: AbortSignal,
+          ): Promise<{ summary?: string } | null>
+        }
         | undefined
       if (!compactService) {
         state.notify('Compaction unavailable · no compaction service in this leaf', {
@@ -916,10 +1097,10 @@ export function createChannel(
       state.notify('Compacting conversation…')
       void compactService
         .compactNow(agent, signal)
-        .then(result => {
+        .then((result) => {
           state.notify(result ? 'Conversation compacted' : 'Nothing to compact')
         })
-        .catch(error => {
+        .catch((error) => {
           state.notify(
             `Compaction failed · ${error instanceof Error ? error.message : String(error)}`,
             { color: 'error', timeoutMs: 8000 },
@@ -953,28 +1134,51 @@ export function createChannel(
       state.emit()
     },
     exportSession() {
+      // Export from the session log — the authoritative, complete record —
+      // not the bounded transcript window (folded rows keep only previews).
       const parts: string[] = [
-        `# dsh-cc 会话导出`,
-        ``,
+        '# dsh-cc 会话导出',
+        '',
         `- 导出时间: ${new Date().toLocaleString()}`,
         `- 模型: ${state.model}`,
         `- 会话: ${state.agentId}`,
         `- 目录: ${state.cwd}`,
-        ``,
+        '',
       ]
-      for (const row of state.rows) {
-        if (!row.text) continue
-        const heading =
-          row.kind === 'user'
-            ? '## 用户'
-            : row.kind === 'assistant'
-              ? '## 助手'
-              : row.kind === 'reasoning'
-                ? '## 思考'
-                : row.kind === 'tool'
-                  ? `## 工具 · ${row.tool?.name ?? ''}`
-                  : `## ${row.kind}`
-        parts.push(`${heading}\n\n${row.text}\n`)
+      for (const event of agent.session.events) {
+        switch (event.type) {
+          case 'user/message': {
+            if (event.data.source.kind !== 'user') break
+            const text = textOf(event.data.content)
+            if (text) parts.push(`## 用户\n\n${text}\n`)
+            break
+          }
+          case 'assistant/message': {
+            const blocks = event.data.message.content
+            for (const block of blocks) {
+              if (block.type === 'reasoning' && block.text) {
+                parts.push(`## 思考\n\n${block.text}\n`)
+              } else if (block.type === 'text' && block.text) {
+                parts.push(`## 助手\n\n${block.text}\n`)
+              }
+            }
+            break
+          }
+          case 'tool/call': {
+            parts.push(`## 工具 · ${event.data.name}\n\n\`\`\`json\n${event.data.arguments}\n\`\`\`\n`)
+            break
+          }
+          case 'tool/result': {
+            const block = event.data.message.content[0]
+            if (block.type === 'tool-result') {
+              const text = textOf(block.content)
+              if (text) parts.push(`### 结果\n\n\`\`\`\n${text}\n\`\`\`\n`)
+            }
+            break
+          }
+          default:
+            break
+        }
       }
       const fileName = `dsh-cc-export-${Date.now()}.md`
       try {
@@ -1031,25 +1235,25 @@ export function createChannel(
     async listSubagents() {
       const subagents = ctx.get('subagents') as
         | {
-            listChildren(
-              sessionId: unknown,
-              signal?: AbortSignal,
-            ): Promise<
-              Array<{
-                kind: string
-                mode: string
-                label?: string
-                activity: string
-                id: string | { value?: string }
-              }>
-            >
-          }
+          listChildren(
+            sessionId: unknown,
+            signal?: AbortSignal,
+          ): Promise<
+            Array<{
+              kind: string
+              mode: string
+              label?: string
+              activity: string
+              id: string | { value?: string }
+            }>
+          >
+        }
         | undefined
       if (!subagents) return ['子代理服务未挂载（leaf 未启用 subagent）']
       try {
         const children = await subagents.listChildren(agent.session.id)
         if (children.length === 0) return ['当前会话暂无子代理']
-        return children.map(child => {
+        return children.map((child) => {
           const id =
             typeof child.id === 'string' ? child.id : (child.id.value ?? '')
           const label = child.label ? `「${child.label}」` : ''
@@ -1088,25 +1292,25 @@ export function createChannel(
   refreshCommandList()
 
   let nextRowId = 0
-/** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH
+  /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH
  *  execution seam for local `!` commands and the git status breadcrumb. */
   const bash = ctx.get('bash') as
     | {
-        resolve(request: {
-          command: string
-          workdir?: string
-          timeoutMs?: number
-        }): { command: string; timeoutMs: number }
-        run(spec: { command: string; timeoutMs: number }): Promise<{
-          exitCode: number | null
-          stdout: { text: string }
-          stderr: { text: string }
-          timedOut: boolean
-        }>
-      }
+      resolve(request: {
+        command: string
+        workdir?: string
+        timeoutMs?: number
+      }): { command: string; timeoutMs: number }
+      run(spec: { command: string; timeoutMs: number }): Promise<{
+        exitCode: number | null
+        stdout: { text: string }
+        stderr: { text: string }
+        timedOut: boolean
+      }>
+    }
     | undefined
 
-/** Claude Code's `!` mode: run a command on the user's machine and render its
+  /** Claude Code's `!` mode: run a command on the user's machine and render its
  *  output in the transcript as local rows (never sent to the model). */
   const runLocalCommand = async (
     command: string,
@@ -1165,19 +1369,19 @@ ${output}
   const textOf = (content: readonly ContentBlock[] | undefined): string =>
     (content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
 
-  const ensureStreaming = (): ChatRow => {
+  const ensureStreaming = (seq?: number): ChatRow => {
     if (streaming === undefined) {
-      streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true }
+      streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
       nextRowId += 1
       state.rows.push(streaming)
     }
     return streaming
   }
 
-  const ensureReasoning = (): ChatRow => {
+  const ensureReasoning = (seq?: number): ChatRow => {
     if (reasoning === undefined) {
       reasoningStart = Date.now()
-      reasoning = { id: nextRowId, kind: 'reasoning', text: '', streaming: true }
+      reasoning = { id: nextRowId, kind: 'reasoning', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
       nextRowId += 1
       state.rows.push(reasoning)
     }
@@ -1253,7 +1457,7 @@ ${output}
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
           if (chunk.text) {
-            ensureStreaming().text += chunk.text
+            ensureStreaming(event.seq).text += chunk.text
             state.responseChars += chunk.text.length
             // Live output-speed estimate (chars/4 ≈ tokens) from the first
             // output token of the turn.
@@ -1263,13 +1467,13 @@ ${output}
             if (elapsedSec > 0.5) state.tps = turnOutputTokens / elapsedSec
           }
         } else if (chunk.type === 'reasoning-delta') {
-          if (chunk.text) ensureReasoning().text += chunk.text
+          if (chunk.text) ensureReasoning(event.seq).text += chunk.text
         }
         updateSpinnerMode()
         break
       }
       case 'assistant/message': {
-        const row = ensureStreaming()
+        const row = ensureStreaming(event.seq)
         row.time = event.time
         const text = textOf(event.data.message.content)
         if (text) row.text = text
@@ -1322,6 +1526,7 @@ ${output}
           id: nextRowId,
           kind: 'tool',
           text: '',
+          seq: event.seq,
           tool: {
             callId: event.data.callId,
             name: event.data.name,
@@ -1453,7 +1658,7 @@ ${output}
         state.status = status
         state.emit()
       }),
-      ctx.on('agent/disposed', subject => {
+      ctx.on('agent/disposed', (subject) => {
         if (subject !== agent) return
         state.status = 'disposed'
         state.emit()
@@ -1505,7 +1710,7 @@ ${output}
           timeoutMs: 3000,
         }),
       )
-      .then(result => {
+      .then((result) => {
         const branch = result.stdout.text.trim()
         if (branch !== '') {
           state.gitBranch = branch

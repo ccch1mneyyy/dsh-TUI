@@ -10,8 +10,9 @@ export interface ToolRow {
     readonly name: string;
     /** Raw JSON arguments as the model produced them (displayed truncated). */
     readonly argsText: string;
-    /** Full arguments, shown when Ctrl+O verbose mode is on. */
-    readonly argsFull: string;
+    /** Full arguments, shown when Ctrl+O verbose mode is on; dropped when the
+     *  row is folded (session log retains it). */
+    argsFull?: string;
     status: 'running' | 'ok' | 'error';
     resultText?: string;
     /** Full result text, shown when Ctrl+O verbose mode is on. */
@@ -41,8 +42,16 @@ export interface ChatRow {
     time?: number;
     /** Present on `reasoning` rows once settled: thinking wall-clock duration. */
     durationMs?: number;
-    /** Source session event seq (user rows) — the rewind fork anchor. */
+    /** Source session event seq — present on every log-derived row (rewind
+     *  fork anchor on user rows; window-floor bookkeeping for the rest). */
     seq?: number;
+    /** True when the row's full text was folded to keep the transcript window
+     *  bounded (see MAX_ROWS); the session log still holds the full content
+     *  and loadOlder() restores it. */
+    folded?: boolean;
+    /** True when loadOlder() restored this row from the log; restored rows are
+     *  exempt from the next fold pass so a restore is not instantly undone. */
+    restored?: boolean;
 }
 export interface TokenUsage {
     input: number;
@@ -171,6 +180,13 @@ export interface Channel {
     switchModel(model: string): Promise<boolean>;
     /** Reset the visible transcript (`/clear`). */
     clear(): void;
+    /**
+     * Re-render rows older than the current in-memory window from the session
+     * log (rows beyond {@link ChannelState.rows}' cap are folded away; this
+     * restores them for review). Returns the number of rows restored, 0 when
+     * the whole log is already materialized.
+     */
+    loadOlder(): number;
     /** Push a transient notification above the prompt input. */
     notify(text: string, options?: {
         color?: NotificationItem['color'];
@@ -268,6 +284,8 @@ export interface ChannelState {
     /** Switch the live model (`/model` picker). */
     switchModel(model: string): Promise<boolean>;
     clear(): void;
+    /** @internal older-row restoration (see the public Channel.loadOlder). */
+    loadOlder(): number;
     notify(text: string, options?: {
         color?: NotificationItem['color'];
         timeoutMs?: number;

@@ -664,6 +664,11 @@ export default class Ink {
       y: rect.y + decl.relativeY
     } : null;
     const parked = this.displayCursor;
+    // Diagnostics: the resolved park target per frame (CC_TUI_DEBUG only).
+    // ConPTY's readback drops trailing cursor moves, so pty probes can't
+    // observe the park position — this trace is the ground truth of where
+    // the native cursor is being told to go.
+    logForDebugging(`park target=${target !== null ? target.x + ',' + target.y : 'null'} decl=${decl !== null} rect=${rect !== undefined} moved=${target !== null && (parked === null || parked.x !== target.x || parked.y !== target.y)}`);
 
     // Preserve the empty-diff zero-write fast path: skip all cursor writes
     // when nothing rendered AND the park target is unchanged.

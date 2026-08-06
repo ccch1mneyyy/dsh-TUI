@@ -34,6 +34,7 @@ export function MessageList({
   model,
   showAll,
   onToggleAll,
+  onLoadOlder,
   thinkingVisible = true,
   registerRowRef,
 }: {
@@ -45,6 +46,9 @@ export function MessageList({
   model: string
   showAll: boolean
   onToggleAll(): void
+  /** Restore folded-away older rows from the session log (CC-style "load
+   *  earlier messages" affordance; shown only when rows were folded). */
+  onLoadOlder?(): void
   thinkingVisible?: boolean
   /** Transcript search: register each row's DOM element for scroll-to-match. */
   registerRowRef?(rowId: number, el: DOMElement | null): void
@@ -65,6 +69,11 @@ export function MessageList({
 
   return (
     <>
+      {rows.some(row => row.folded) && (
+        <Box marginTop={1} onClick={onLoadOlder}>
+          <Divider title={' ↑ 加载更早消息（会话日志完整，/export 导出全文） '} />
+        </Box>
+      )}
       {!showAll && hiddenCount > 0 && (
         <Box marginTop={1} onClick={onToggleAll}>
           <Divider title={` ctrl+e to show ${hiddenCount} previous messages `} />
@@ -72,132 +81,132 @@ export function MessageList({
       )}
       {visibleRows
         .filter(row => thinkingVisible || row.kind !== 'reasoning')
-        .map(row => {
+        .map((row) => {
         // CC addMargin: every rendered block gets a 1-row top margin, so user
         // prompts, thinking, tool calls and assistant text all breathe apart.
         // (CC's MessageRow passes addMargin=true for every message in prompt
         // mode; only the first row has no preceding block.)
-        const prev = previousKind
-        previousKind = row.kind
-        const addMargin = prev !== undefined
-        const isSelected = selectedId === row.id
-        const isExpanded = expanded || expandedRows.has(row.id)
+          const prev = previousKind
+          previousKind = row.kind
+          const addMargin = prev !== undefined
+          const isSelected = selectedId === row.id
+          const isExpanded = expanded || expandedRows.has(row.id)
 
-        switch (row.kind) {
-          case 'user':
-            return (
-              <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
-                <UserPromptMessage
-                  text={row.text}
-                  addMargin={addMargin}
-                  isSelected={isSelected}
-                  isExpanded={expandedRows.has(row.id)}
-                  onClick={() => onToggleRow(row.id)}
-                />
-              </Box>
-            )
-          case 'assistant':
-            return row.streaming ? (
-              <Box
-                key={row.id}
-                alignItems="flex-start"
-                flexDirection="row"
-                marginTop={addMargin ? 1 : 0}
-                width="100%"
-                backgroundColor={rowBackground(row.id)}
-              >
-                <Box minWidth={2}>
-                  <Text color="text">●</Text>
+          switch (row.kind) {
+            case 'user':
+              return (
+                <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
+                  <UserPromptMessage
+                    text={row.text}
+                    addMargin={addMargin}
+                    isSelected={isSelected}
+                    isExpanded={expandedRows.has(row.id)}
+                    onClick={() =>{  onToggleRow(row.id); }}
+                  />
                 </Box>
-                <Box flexDirection="column">
-                  {/* The ⏵ self-narration line (working-activity narrate
+              )
+            case 'assistant':
+              return row.streaming ? (
+                <Box
+                  key={row.id}
+                  alignItems="flex-start"
+                  flexDirection="row"
+                  marginTop={addMargin ? 1 : 0}
+                  width="100%"
+                  backgroundColor={rowBackground(row.id)}
+                >
+                  <Box minWidth={2}>
+                    <Text color="text">●</Text>
+                  </Box>
+                  <Box flexDirection="column">
+                    {/* The ⏵ self-narration line (working-activity narrate
                       contract) is stripped here: the live working line on
                       the status bar already shows it. */}
-                  <StreamingMarkdown>{stripNarration(row.text)}</StreamingMarkdown>
-                </Box>
-              </Box>
-            ) : (
-              <Box
-                key={row.id}
-                width="100%"
-                flexDirection="column"
-                backgroundColor={rowBackground(row.id)}
-                ref={el => registerRowRef?.(row.id, el)}
-              >
-                {expanded && (
-                  <Box
-                    flexDirection="row"
-                    justifyContent="flex-end"
-                    gap={1}
-                    marginTop={1}
-                  >
-                    <MessageMetadata timestamp={row.time} model={model} />
+                    <StreamingMarkdown>{stripNarration(row.text)}</StreamingMarkdown>
                   </Box>
-                )}
-                <AssistantTextMessage
-                  text={stripNarration(row.text)}
-                  addMargin={addMargin}
-                  isSelected={isSelected}
-                  isExpanded={expandedRows.has(row.id)}
-                  onClick={() => onToggleRow(row.id)}
-                />
-              </Box>
-            )
-          case 'reasoning':
-            return (
-              <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
-                <AssistantThinkingMessage
-                  thinking={row.text}
-                  addMargin={addMargin}
-                  // Streaming reasoning shows expanded live, then folds
-                  // automatically once the turn settles (unless Ctrl+O or a
-                  // single-row expansion keeps it open).
-                  verbose={isExpanded || row.streaming === true}
-                  durationMs={row.durationMs}
-                  isSelected={isSelected}
-                  onClick={() => onToggleRow(row.id)}
-                />
-              </Box>
-            )
-          case 'tool':
-            return row.tool ? (
-              <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
-                <AssistantToolUseMessage
-                  tool={row.tool}
-                  addMargin={addMargin}
-                  verbose={isExpanded}
-                  isSelected={isSelected}
-                  isExpanded={expandedRows.has(row.id)}
-                />
-              </Box>
-            ) : null
-          case 'notice':
-            return (
-              <Box key={row.id} marginTop={1} ref={el => registerRowRef?.(row.id, el)}>
-                <Divider title={` ${row.text} `} />
-              </Box>
-            )
-          case 'interrupt':
-            return (
-              <Box key={row.id} marginTop={1} ref={el => registerRowRef?.(row.id, el)}>
-                <InterruptedByUser />
-              </Box>
-            )
-          case 'local':
+                </Box>
+              ) : (
+                <Box
+                  key={row.id}
+                  width="100%"
+                  flexDirection="column"
+                  backgroundColor={rowBackground(row.id)}
+                  ref={el => registerRowRef?.(row.id, el)}
+                >
+                  {expanded && (
+                    <Box
+                      flexDirection="row"
+                      justifyContent="flex-end"
+                      gap={1}
+                      marginTop={1}
+                    >
+                      <MessageMetadata timestamp={row.time} model={model} />
+                    </Box>
+                  )}
+                  <AssistantTextMessage
+                    text={stripNarration(row.text)}
+                    addMargin={addMargin}
+                    isSelected={isSelected}
+                    isExpanded={expandedRows.has(row.id)}
+                    onClick={() =>{  onToggleRow(row.id); }}
+                  />
+                </Box>
+              )
+            case 'reasoning':
+              return (
+                <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
+                  <AssistantThinkingMessage
+                    thinking={row.text}
+                    addMargin={addMargin}
+                    // Streaming reasoning shows expanded live, then folds
+                    // automatically once the turn settles (unless Ctrl+O or a
+                    // single-row expansion keeps it open).
+                    verbose={isExpanded || row.streaming === true}
+                    durationMs={row.durationMs}
+                    isSelected={isSelected}
+                    onClick={() =>{  onToggleRow(row.id); }}
+                  />
+                </Box>
+              )
+            case 'tool':
+              return row.tool ? (
+                <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
+                  <AssistantToolUseMessage
+                    tool={row.tool}
+                    addMargin={addMargin}
+                    verbose={isExpanded}
+                    isSelected={isSelected}
+                    isExpanded={expandedRows.has(row.id)}
+                  />
+                </Box>
+              ) : null
+            case 'notice':
+              return (
+                <Box key={row.id} marginTop={1} ref={el => registerRowRef?.(row.id, el)}>
+                  <Divider title={` ${row.text} `} />
+                </Box>
+              )
+            case 'interrupt':
+              return (
+                <Box key={row.id} marginTop={1} ref={el => registerRowRef?.(row.id, el)}>
+                  <InterruptedByUser />
+                </Box>
+              )
+            case 'local':
             // `!` mode command echo, like CC's UserBashInputMessage.
-            return (
-              <Box key={row.id} marginTop={1} backgroundColor={rowBackground(row.id)} ref={el => registerRowRef?.(row.id, el)}>
-                <Text color="bashBorder">! {row.text}</Text>
-              </Box>
-            )
-          case 'local-output':
-            return (
-              <Box key={row.id} paddingLeft={2} backgroundColor={rowBackground(row.id)} ref={el => registerRowRef?.(row.id, el)}>
-                <Text dimColor>{row.text}</Text>
-              </Box>
-            )
-        }
-      })}
+              return (
+                <Box key={row.id} marginTop={1} backgroundColor={rowBackground(row.id)} ref={el => registerRowRef?.(row.id, el)}>
+                  <Text color="bashBorder">! {row.text}</Text>
+                </Box>
+              )
+            case 'local-output':
+              return (
+                <Box key={row.id} paddingLeft={2} backgroundColor={rowBackground(row.id)} ref={el => registerRowRef?.(row.id, el)}>
+                  <Text dimColor>{row.text}</Text>
+                </Box>
+              )
+          }
+        })}
     </>
   )
 }

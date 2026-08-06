@@ -147,7 +147,9 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
   的 log-only `activity/status` 事件（与 Web UI 同一数据源，cc-tui 只做渲染）；
   `⏵` 自述行自动从聊天正文剥离。
 - **会话恢复**：`/resume` 列表标题 = 会话第一条 user 消息（最新 20 个会话），
-  8 行滚动窗口；Enter **立即切换**到该会话并回放历史；`--resume` 启动同链路。
+  8 行滚动窗口；**按最近使用排序**（发消息/恢复/切换都会把该会话提到最前，
+  记录在 `~/.dsh-cc/last-used.json`，缺失时退回按创建时间）；Enter **立即切换**
+  到该会话并回放历史；`--resume` 启动同链路。
 - **回滚语义**：fork 边界取消息所属 turn 的起点（DSH 事件序
   turn/start → user/message → turn/end），中断回合先等落盘再 fork。
 - **终端粘贴**：raw 模式下 Ctrl+V 由应用接管——PowerShell `Get-Clipboard`
@@ -160,6 +162,8 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 - 注入上下文（plugin source 内容）未做独立展示，随系统提示词并入进度条统计。
 - `/model` 实时切换走"会话 fork 续聊"（DSH 无原位换模型 API）：历史原样保留，
   新会话路由到新模型，旧会话仍留在 `/resume` 列表里。
+- `Ctrl+V` 读剪贴板依赖 PowerShell `Get-Clipboard`：剪贴板被其他进程
+  （如 Explorer）短暂锁定时自动重试，持续锁定时静默放弃（显示"剪贴板为空"提示）。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
 - DSH 的 `/permission`（沙箱模式切换）未适配：需要 approval 服务 + 审批 UI，
   当前 TUI 不消费审批流，刻意不挂（`/permissions` 仅说明现状）。
