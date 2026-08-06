@@ -8,6 +8,8 @@ import type { Context } from 'cordis'
 import { join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
+import { writeActivityFrames } from './activityPrefs.js'
+import { isPresetName } from './components/activityFrames.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { logForDebugging } from './utils/debug.js'
@@ -197,6 +199,11 @@ export interface Channel {
   loadOlder(): number
   /** Push a transient notification above the prompt input. */
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
+  /** Switch the working-activity indicator preset (`/activity`): validates
+   *  the name, persists it to `~/.dsh-cc/working-activity.json`, and
+   *  re-renders the indicator immediately; false when the name is unknown
+   *  or the preference cannot be written. */
+  setActivityFrames(name: string): boolean
   /** Advertised models for the configured provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
   /** Top-level entries of the session cwd for `@` file completion. */
@@ -287,6 +294,8 @@ export interface ChannelState {
   /** @internal older-row restoration (see the public Channel.loadOlder). */
   loadOlder(): number
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
+  /** Switch the working-activity indicator preset (see the public Channel). */
+  setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
   listFiles(): Promise<readonly string[]>
   listSessions(): Promise<readonly SessionRecord[]>
@@ -993,6 +1002,26 @@ export function createChannel(
           state.emit()
         }
       }, item.timeoutMs)
+    },
+    setActivityFrames(name) {
+      if (!isPresetName(name)) {
+        state.notify(`未知预设「${name}」· /activity frames 查看全部`, { color: 'error' })
+        return false
+      }
+      if (name === state.activityFrames) {
+        state.notify(`指示器已是：${name}`, { color: 'success' })
+        return true
+      }
+      // Persist first (pi behavior: a failed write refuses the switch) so a
+      // preference that cannot be saved never silently disappears.
+      if (!writeActivityFrames(name)) {
+        state.notify('无法写入 ~/.dsh-cc/working-activity.json，切换未保存', { color: 'error' })
+        return false
+      }
+      state.activityFrames = name
+      state.emit()
+      state.notify(`指示器已切换：${name}（已保存）`)
+      return true
     },
     listModels() {
       const llm = ctx.get('llm') as

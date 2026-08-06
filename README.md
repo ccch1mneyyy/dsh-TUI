@@ -143,6 +143,12 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
   雾蓝适配版（暖灰白 `#E8E6E0` 正文 + 柔雾蓝 accent）；终端不响应时回退
   深色。`CC_TUI_THEME=light|dark|dark-ansi` 可钉死配色并跳过检测。
 - **事件驱动渲染**：`session/event` 事件流 → 增量差分渲染，滚动状态独立维护。
+- **布局级虚拟化**：布局引擎是纯 JS 移植版 Yoga，每次提交都会全树重排——
+  长会话的每帧成本随记录线性增长（越用越卡的根因）。消息列表按可视窗口
+  挂载：屏幕外的行渲染为"量高占位符"（高度来自上一帧 Yoga 实测），其
+  子树完全不参与布局，单帧成本从 O(全会话) 降到 O(可视窗口)；滚动几何
+  （总高度/底部跟随/滚动条）、搜索跳转（未挂载行先强制挂载再寻址）保持
+  不变。
 - **上下文进度条**：参考 pi-nano-context 算法（最大余数法分段着色 + 右侧多级
   缩略读数），DeepSeek 蓝白配色。
 - **TPS 仪表**：参考 pi-tps-meter——流式 1/8 格 gauge、历史 min-max sparkline、

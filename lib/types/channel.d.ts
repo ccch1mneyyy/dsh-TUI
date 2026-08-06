@@ -192,6 +192,11 @@ export interface Channel {
         color?: NotificationItem['color'];
         timeoutMs?: number;
     }): void;
+    /** Switch the working-activity indicator preset (`/activity`): validates
+     *  the name, persists it to `~/.dsh-cc/working-activity.json`, and
+     *  re-renders the indicator immediately; false when the name is unknown
+     *  or the preference cannot be written. */
+    setActivityFrames(name: string): boolean;
     /** Advertised models for the configured provider route (empty when the LLM service is absent). */
     listModels(): Promise<readonly LlmModelInfo[]>;
     /** Top-level entries of the session cwd for `@` file completion. */
@@ -290,6 +295,8 @@ export interface ChannelState {
         color?: NotificationItem['color'];
         timeoutMs?: number;
     }): void;
+    /** Switch the working-activity indicator preset (see the public Channel). */
+    setActivityFrames(name: string): boolean;
     listModels(): Promise<readonly LlmModelInfo[]>;
     listFiles(): Promise<readonly string[]>;
     listSessions(): Promise<readonly SessionRecord[]>;

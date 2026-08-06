@@ -27,7 +27,9 @@ export interface Config {
      *  (consumes its log-only `activity/status` events; off hides it). */
     activity?: boolean;
     /** Working-activity indicator preset: `claude`/`moon`/`comet`/`dots`/…
-     *  or `random` (see activityFrames.ts). */
+     *  or `random` (see activityFrames.ts). When absent, the `/activity`
+     *  choice persisted in `~/.dsh-cc/working-activity.json` wins, then the
+     *  `claude` default. */
     activityFrames?: string;
     /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
     fullscreen?: boolean;

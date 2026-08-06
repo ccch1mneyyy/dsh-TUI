@@ -12,6 +12,18 @@ export interface FramePreset {
 export declare const FRAME_PRESETS: Record<string, FramePreset>;
 /** The pi extension's default preset. */
 export declare const DEFAULT_PRESET = "moon";
-/** Resolve a preset name (`random` picks one per process). */
+/** Every selectable preset name, `random` first (the pi selector order). */
+export declare const PRESET_NAMES: readonly string[];
+/**
+ * Whether `name` selects a known preset or `random`.
+ * @param name - Candidate preset name.
+ * @returns True when the name resolves to a preset.
+ */
+export declare function isPresetName(name: string): boolean;
+/**
+ * Resolve a preset name (`random` picks one per process).
+ * @param name - Preset name, or undefined for the default.
+ * @returns The matching preset; unknown or absent names fall back to the default.
+ */
 export declare function resolvePreset(name: string | undefined): FramePreset;
 //# sourceMappingURL=activityFrames.d.ts.map

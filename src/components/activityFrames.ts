@@ -64,12 +64,30 @@ export const FRAME_PRESETS: Record<string, FramePreset> = {
 /** The pi extension's default preset. */
 export const DEFAULT_PRESET = 'moon'
 
-/** Resolve a preset name (`random` picks one per process). */
+/** Every selectable preset name, `random` first (the pi selector order). */
+export const PRESET_NAMES: readonly string[] = ['random', ...Object.keys(FRAME_PRESETS)]
+
+/**
+ * Whether `name` selects a known preset or `random`.
+ * @param name - Candidate preset name.
+ * @returns True when the name resolves to a preset.
+ */
+export function isPresetName(name: string): boolean {
+  return name === 'random' || Object.hasOwn(FRAME_PRESETS, name)
+}
+
+/**
+ * Resolve a preset name (`random` picks one per process).
+ * @param name - Preset name, or undefined for the default.
+ * @returns The matching preset; unknown or absent names fall back to the default.
+ */
 export function resolvePreset(name: string | undefined): FramePreset {
   if (name === 'random') {
     const names = Object.keys(FRAME_PRESETS)
+    // FRAME_PRESETS is non-empty by construction, so any random index is in
+    // range and the lookup always lands on a preset.
     const pick = names[Math.floor(Math.random() * names.length)]
-    if (pick !== undefined) return FRAME_PRESETS[pick]!
+    return FRAME_PRESETS[pick]
   }
   return FRAME_PRESETS[name ?? ''] ?? FRAME_PRESETS[DEFAULT_PRESET]!
 }

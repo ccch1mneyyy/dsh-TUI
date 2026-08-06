@@ -17,6 +17,8 @@ import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { ResumePicker } from '../components/ResumePicker.js'
+import { ActivityPicker } from '../components/ActivityPicker.js'
+import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
@@ -107,6 +109,9 @@ export function Chat({
   const [resumePickerOpen, setResumePickerOpen] = React.useState(false)
   const [resumeSessions, setResumeSessions] = React.useState<readonly SessionRecord[]>([])
   const [resumeIndex, setResumeIndex] = React.useState(0)
+  /** `/activity` indicator picker (pi extension's interactive select). */
+  const [activityPickerOpen, setActivityPickerOpen] = React.useState(false)
+  const [activityIndex, setActivityIndex] = React.useState(0)
   /** `/new` confirmation: a conversation with content needs a second `/new`
    *  (CC asks before discarding). Auto-disarms after a few seconds. */
   const newConfirmRef = React.useRef(false)
@@ -221,6 +226,46 @@ export function Chat({
    */
   const runCommand = (name: string, rawInput = ''): boolean => {
     switch (name) {
+      case 'activity': {
+        // Ported from the pi working-activity extension: bare `/activity`
+        // opens the interactive indicator picker; `/activity frames <名>`
+        // switches directly; `/activity frames` lists presets; `/activity
+        // status` shows the current choice. The choice persists to
+        // ~/.dsh-cc/working-activity.json and survives restarts.
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        if (parts[0] === 'status') {
+          setHelpOpen(false)
+          channel.pushLocal('/activity', [
+            `当前预设  ${channel.activityFrames ?? 'claude'}`,
+            '切换      /activity（选择器）或 /activity frames <名>',
+            '持久化    ~/.dsh-cc/working-activity.json（重启后仍生效）',
+          ])
+          return true
+        }
+        if (parts[0] === 'frames') {
+          setHelpOpen(false)
+          if (parts[1]) {
+            channel.setActivityFrames(parts[1].toLowerCase())
+            return true
+          }
+          const current = channel.activityFrames
+          channel.pushLocal('/activity', [
+            `当前预设：${current ?? 'claude'} · /activity frames <名> 直接切换：`,
+            ...PRESET_NAMES.map(name =>
+              `${name.padEnd(10)} ${name === 'random' ? '每次随机' : FRAME_PRESETS[name].frames.slice(0, 5).join(' ')}${name === current ? '  ← 当前' : ''}`,
+            ),
+          ])
+          return true
+        }
+        if (parts.length > 0) {
+          channel.notify('用法：/activity | /activity frames <名> | /activity status', { color: 'warning' })
+          return true
+        }
+        setHelpOpen(false)
+        setActivityIndex(Math.max(0, PRESET_NAMES.indexOf(channel.activityFrames ?? 'random')))
+        setActivityPickerOpen(true)
+        return true
+      }
       case 'new': {
         // CC confirms before discarding a conversation with content: the
         // first /new arms, a second /new within 4s executes.
@@ -523,6 +568,27 @@ export function Chat({
     }
   }
 
+  // Row seeking under layout virtualization: a mounted row seeks directly;
+  // an unmounted one is force-mounted first, then sought by the completion
+  // effect below once its ref lands.
+  const [forceMountRowId, setForceMountRowId] = React.useState<number | null>(null)
+  const seekRow = (rowId: number): void => {
+    const el = rowRefsRef.current.get(rowId)
+    if (el) {
+      handle?.scrollToElement(el)
+      return
+    }
+    setForceMountRowId(rowId)
+  }
+  React.useLayoutEffect(() => {
+    if (forceMountRowId === null) return
+    const el = rowRefsRef.current.get(forceMountRowId)
+    if (el) {
+      handle?.scrollToElement(el)
+      setForceMountRowId(null)
+    }
+  })
+
   // `/` transcript search: rows whose searchable text contains the query.
   // Computed per render — `channel.rows` is a live in-place array (see
   // selectableRows); a useMemo would freeze the match list at mount.
@@ -545,8 +611,7 @@ export function Chat({
     setSearchCurrent(current)
     const target = searchMatches[current]
     if (target) {
-      const el = rowRefsRef.current.get(target.row.id)
-      if (el) handle?.scrollToElement(el)
+      seekRow(target.row.id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, searchOpen])
@@ -556,8 +621,7 @@ export function Chat({
     if (!searchOpen) return
     const target = searchMatches[searchCurrent]
     if (target) {
-      const el = rowRefsRef.current.get(target.row.id)
-      if (el) handle?.scrollToElement(el)
+      seekRow(target.row.id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchCurrent])
@@ -710,6 +774,20 @@ export function Chat({
       }
       return
     }
+    if (activityPickerOpen) {
+      if (key.upArrow) {
+        setActivityIndex(index => (index <= 0 ? PRESET_NAMES.length - 1 : index - 1))
+      } else if (key.downArrow) {
+        setActivityIndex(index => (index >= PRESET_NAMES.length - 1 ? 0 : index + 1))
+      } else if (key.return) {
+        const name = PRESET_NAMES[activityIndex]
+        setActivityPickerOpen(false)
+        if (name) channel.setActivityFrames(name)
+      } else if (key.escape) {
+        setActivityPickerOpen(false)
+      }
+      return
+    }
     if (historyOpen) {
       if (key.escape) {
         setHistoryOpen(false)
@@ -859,6 +937,10 @@ export function Chat({
   // Working-activity line (spinner slot): context-pressure prefix shares the
   // StatusLine thresholds (amber ≥ 80, red ≥ 95).
   const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
+  /** Prompt input is inert while a modal dialog owns the keyboard. */
+  const promptSelectionActive =
+    selectionActive || modelPickerOpen || resumePickerOpen || activityPickerOpen ||
+    thinkingOpen || historyOpen || rewindOpen || searchOpen
 
   return (
     <Box flexDirection="column" flexGrow={1} width="100%">
@@ -868,8 +950,7 @@ export function Chat({
           onClick={() => {
             // Click jumps back to the pinned prompt (CC's StickyPromptHeader).
             const lastUser = [...channel.rows].reverse().find(row => row.kind === 'user')
-            const el = lastUser ? rowRefsRef.current.get(lastUser.id) : undefined
-            if (el) handle?.scrollToElement(el)
+            if (lastUser) seekRow(lastUser.id)
             else handle?.scrollToBottom()
           }}
         />
@@ -895,6 +976,8 @@ export function Chat({
             if (el) rowRefsRef.current.set(rowId, el)
             else rowRefsRef.current.delete(rowId)
           }}
+          scrollHandle={handle}
+          forceMountRowId={forceMountRowId}
         />
       </ScrollBox>
       {showPill && (
@@ -965,6 +1048,14 @@ export function Chat({
           )}
         </Box>
       )}
+      {activityPickerOpen && (
+        <Box flexDirection="column" marginTop={1}>
+          <ActivityPicker
+            focusIndex={activityIndex}
+            currentPreset={channel.activityFrames}
+          />
+        </Box>
+      )}
       {historyOpen && (
         <Box flexDirection="column" marginTop={1}>
           <HistorySearchDialog
@@ -990,7 +1081,7 @@ export function Chat({
         helpOpen={helpOpen}
         onToggleHelp={() =>{  setHelpOpen(previous => !previous); }}
         onRunCommand={runCommand}
-        selectionActive={selectionActive || modelPickerOpen || resumePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen}
+        selectionActive={promptSelectionActive}
         fillText={historyFill}
         onFillConsumed={() =>{  setHistoryFill(null); }}
         onRewindRequest={openRewind}

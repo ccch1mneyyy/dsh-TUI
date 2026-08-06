@@ -1,7 +1,8 @@
 import React from 'react';
+import { type ScrollBoxHandle } from '../ui.js';
 import type { ChatRow } from '../channel.js';
 import type { DOMElement } from '../ink/dom.js';
-export declare function MessageList({ rows, expanded, expandedRows, selectedId, onToggleRow, model, showAll, onToggleAll, onLoadOlder, thinkingVisible, registerRowRef, }: {
+export declare function MessageList({ rows, expanded, expandedRows, selectedId, onToggleRow, model, showAll, onToggleAll, onLoadOlder, thinkingVisible, registerRowRef, scrollHandle, forceMountRowId, }: {
     rows: readonly ChatRow[];
     expanded: boolean;
     expandedRows: ReadonlySet<number>;
@@ -16,6 +17,10 @@ export declare function MessageList({ rows, expanded, expandedRows, selectedId, 
     thinkingVisible?: boolean;
     /** Transcript search: register each row's DOM element for scroll-to-match. */
     registerRowRef?(rowId: number, el: DOMElement | null): void;
+    /** Scroll viewport the list virtualizes against. */
+    scrollHandle?: ScrollBoxHandle | null;
+    /** Row that must be mounted this pass (seek target for scrollToElement). */
+    forceMountRowId?: number | null;
 }): React.JSX.Element;
 /**
  * The header block pinned above the transcript: the DeepSeek pixel whale

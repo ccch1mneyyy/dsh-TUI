@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ChatRow } from '../channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
@@ -25,6 +25,19 @@ import { stripNarration } from '../utils/narration.js'
  *  equivalent): older rows fold behind a Divider until Ctrl+E expands them. */
 const MAX_RENDERED_ROWS = 300
 
+// --- layout virtualization constants -------------------------------------
+// Offscreen rows render as fixed-height spacers whose heights come from the
+// previous commit's Yoga layout, so the pure-JS Yoga engine never walks
+// their subtrees. Spacers preserve the scroll geometry (content height,
+// sticky follow, scrollbar) of a fully-mounted list.
+/** Lines of extra content mounted above/below the visible window. */
+const OVERSCAN_LINES = 8
+/** Fallback row height before the first measurement (terminal lines). */
+const DEFAULT_ROW_HEIGHT = 2
+/** Cold-start estimate of the header block above the rows; corrected by the
+ *  first layout measurement. */
+const DEFAULT_HEADER_LINES = 14
+
 export function MessageList({
   rows,
   expanded,
@@ -37,6 +50,8 @@ export function MessageList({
   onLoadOlder,
   thinkingVisible = true,
   registerRowRef,
+  scrollHandle,
+  forceMountRowId,
 }: {
   rows: readonly ChatRow[]
   expanded: boolean
@@ -52,12 +67,28 @@ export function MessageList({
   thinkingVisible?: boolean
   /** Transcript search: register each row's DOM element for scroll-to-match. */
   registerRowRef?(rowId: number, el: DOMElement | null): void
+  /** Scroll viewport the list virtualizes against. */
+  scrollHandle?: ScrollBoxHandle | null
+  /** Row that must be mounted this pass (seek target for scrollToElement). */
+  forceMountRowId?: number | null
 }) {
   const hiddenCount = rows.length - MAX_RENDERED_ROWS
-  const visibleRows = showAll || hiddenCount <= 0
+  // The thinking filter runs BEFORE virtualization so window indices line up.
+  const visibleRows = (showAll || hiddenCount <= 0
     ? rows
     : rows.slice(hiddenCount)
-  let previousKind: ChatRow['kind'] | undefined
+  ).filter(row => thinkingVisible || row.kind !== 'reasoning')
+  // CC addMargin: every rendered block gets a 1-row top margin except the
+  // first. Pre-pass over the FULL list so a windowed row keeps the exact
+  // spacing it would have in a fully-mounted list.
+  const margins = new Map<number, boolean>()
+  {
+    let prev: ChatRow['kind'] | undefined
+    for (const row of visibleRows) {
+      margins.set(row.id, prev !== undefined)
+      prev = row.kind
+    }
+  }
   // CC's expanded rows keep a persistent hover-grey background (VirtualItem:
   // `expanded ? userMessageBackgroundHover : undefined`).
   const rowBackground = (rowId: number) => {
@@ -65,6 +96,105 @@ export function MessageList({
     if (isSelected) return 'messageActionsBackground'
     if (expandedRows.has(rowId)) return 'userMessageBackgroundHover'
     return undefined
+  }
+
+  // --- layout virtualization ---------------------------------------------
+  const { columns } = useTerminalSize()
+  const heightsRef = React.useRef(new Map<number, number>())
+  const localRefs = React.useRef(new Map<number, DOMElement>())
+  /** Content-space offset of visibleRows[0] (header + dividers), measured. */
+  const baseRef = React.useRef<number | null>(null)
+  const [, setMeasureTick] = React.useState(0)
+  const [, setScrollTick] = React.useState(0)
+
+  // A width change reflows every row — all measurements are stale.
+  const lastColumns = React.useRef(columns)
+  if (lastColumns.current !== columns) {
+    lastColumns.current = columns
+    heightsRef.current.clear()
+    baseRef.current = null
+  }
+
+  // Scrolling bypasses React (imperative DOM scrollTop): subscribe so the
+  // window follows the viewport.
+  React.useEffect(() => {
+    if (!scrollHandle) return
+    const tick = (): void => setScrollTick(t => t + 1)
+    return scrollHandle.subscribe(tick)
+  }, [scrollHandle])
+
+  const heightOf = (row: ChatRow): number =>
+    heightsRef.current.get(row.id) ?? DEFAULT_ROW_HEIGHT
+  const offsets: number[] = new Array<number>(visibleRows.length)
+  let total = 0
+  for (let i = 0; i < visibleRows.length; i++) {
+    offsets[i] = total
+    total += heightOf(visibleRows[i]!)
+  }
+
+  const scrollTop = scrollHandle?.getScrollTop() ?? 0
+  const pending = scrollHandle?.getPendingDelta() ?? 0
+  const viewport = scrollHandle?.getViewportHeight() ?? 24
+  const sticky = scrollHandle?.isSticky() ?? true
+  const base = baseRef.current ?? DEFAULT_HEADER_LINES
+
+  // Mount the union of the committed position and any in-flight pending
+  // delta, plus overscan; when sticky, always reach the tail (streaming row).
+  const relTop = Math.min(scrollTop, scrollTop + pending) - OVERSCAN_LINES - base
+  const relBottom = Math.max(scrollTop, scrollTop + pending) + viewport + OVERSCAN_LINES - base
+  let start = 0
+  while (start < visibleRows.length && offsets[start]! + heightOf(visibleRows[start]!) <= relTop) start++
+  let end = start
+  while (end < visibleRows.length && offsets[end]! < relBottom) end++
+  if (sticky || !scrollHandle) end = visibleRows.length
+  if (forceMountRowId !== undefined && forceMountRowId !== null) {
+    const idx = visibleRows.findIndex(row => row.id === forceMountRowId)
+    if (idx !== -1) {
+      start = Math.min(start, idx)
+      end = Math.max(end, idx + 1)
+    }
+  }
+  const topPad = offsets[start] ?? 0
+  const mountedBottom = end < visibleRows.length ? offsets[end]! : total
+  const bottomPad = total - mountedBottom
+
+  // Post-commit: measure mounted rows, derive the content-space base from
+  // the first mounted row's Yoga top, and clamp render-time scrollTop to the
+  // mounted coverage so burst scrolls never show blank spacer.
+  React.useLayoutEffect(() => {
+    let changed = false
+    for (const [id, el] of localRefs.current) {
+      const h = el.yogaNode?.getComputedHeight()
+      if (h !== undefined && h > 0 && heightsRef.current.get(id) !== h) {
+        heightsRef.current.set(id, h)
+        changed = true
+      }
+    }
+    const firstMounted = visibleRows[start]
+    const firstEl = firstMounted ? localRefs.current.get(firstMounted.id) : undefined
+    const top = firstEl?.yogaNode?.getComputedTop()
+    if (top !== undefined) {
+      const measured = top - (offsets[start] ?? 0)
+      if (baseRef.current !== measured) {
+        baseRef.current = measured
+        changed = true
+      }
+    }
+    if (scrollHandle) {
+      if (sticky || (start === 0 && end >= visibleRows.length)) {
+        scrollHandle.setClampBounds(undefined, undefined)
+      } else {
+        const min = Math.max(0, base + topPad - viewport)
+        scrollHandle.setClampBounds(min, Math.max(min, base + mountedBottom - viewport))
+      }
+    }
+    if (changed) setMeasureTick(t => t + 1)
+  })
+
+  const setRowRef = (rowId: number, el: DOMElement | null): void => {
+    if (el) localRefs.current.set(rowId, el)
+    else localRefs.current.delete(rowId)
+    registerRowRef?.(rowId, el)
   }
 
   return (
@@ -79,23 +209,20 @@ export function MessageList({
           <Divider title={` ctrl+e to show ${hiddenCount} previous messages `} />
         </Box>
       )}
+      {topPad > 0 && <Box height={topPad} flexShrink={0} />}
       {visibleRows
-        .filter(row => thinkingVisible || row.kind !== 'reasoning')
+        .slice(start, end)
         .map((row) => {
-        // CC addMargin: every rendered block gets a 1-row top margin, so user
-        // prompts, thinking, tool calls and assistant text all breathe apart.
-        // (CC's MessageRow passes addMargin=true for every message in prompt
-        // mode; only the first row has no preceding block.)
-          const prev = previousKind
-          previousKind = row.kind
-          const addMargin = prev !== undefined
+        // CC addMargin: pre-pass result keeps windowed rows at full-mount
+        // spacing; only the very first row of the whole list has none.
+        const addMargin = margins.get(row.id) === true
           const isSelected = selectedId === row.id
           const isExpanded = expanded || expandedRows.has(row.id)
 
           switch (row.kind) {
             case 'user':
               return (
-                <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
+                <Box key={row.id} flexDirection="column" ref={el => setRowRef(row.id, el)}>
                   <UserPromptMessage
                     text={row.text}
                     addMargin={addMargin}
@@ -131,7 +258,7 @@ export function MessageList({
                   width="100%"
                   flexDirection="column"
                   backgroundColor={rowBackground(row.id)}
-                  ref={el => registerRowRef?.(row.id, el)}
+                  ref={el => setRowRef(row.id, el)}
                 >
                   {expanded && (
                     <Box
@@ -154,7 +281,7 @@ export function MessageList({
               )
             case 'reasoning':
               return (
-                <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
+                <Box key={row.id} flexDirection="column" ref={el => setRowRef(row.id, el)}>
                   <AssistantThinkingMessage
                     thinking={row.text}
                     addMargin={addMargin}
@@ -170,7 +297,7 @@ export function MessageList({
               )
             case 'tool':
               return row.tool ? (
-                <Box key={row.id} flexDirection="column" ref={el => registerRowRef?.(row.id, el)}>
+                <Box key={row.id} flexDirection="column" ref={el => setRowRef(row.id, el)}>
                   <AssistantToolUseMessage
                     tool={row.tool}
                     addMargin={addMargin}
@@ -182,31 +309,32 @@ export function MessageList({
               ) : null
             case 'notice':
               return (
-                <Box key={row.id} marginTop={1} ref={el => registerRowRef?.(row.id, el)}>
+                <Box key={row.id} marginTop={1} ref={el => setRowRef(row.id, el)}>
                   <Divider title={` ${row.text} `} />
                 </Box>
               )
             case 'interrupt':
               return (
-                <Box key={row.id} marginTop={1} ref={el => registerRowRef?.(row.id, el)}>
+                <Box key={row.id} marginTop={1} ref={el => setRowRef(row.id, el)}>
                   <InterruptedByUser />
                 </Box>
               )
             case 'local':
             // `!` mode command echo, like CC's UserBashInputMessage.
               return (
-                <Box key={row.id} marginTop={1} backgroundColor={rowBackground(row.id)} ref={el => registerRowRef?.(row.id, el)}>
+                <Box key={row.id} marginTop={1} backgroundColor={rowBackground(row.id)} ref={el => setRowRef(row.id, el)}>
                   <Text color="bashBorder">! {row.text}</Text>
                 </Box>
               )
             case 'local-output':
               return (
-                <Box key={row.id} paddingLeft={2} backgroundColor={rowBackground(row.id)} ref={el => registerRowRef?.(row.id, el)}>
+                <Box key={row.id} paddingLeft={2} backgroundColor={rowBackground(row.id)} ref={el => setRowRef(row.id, el)}>
                   <Text dimColor>{row.text}</Text>
                 </Box>
               )
           }
         })}
+      {bottomPad > 0 && <Box height={bottomPad} flexShrink={0} />}
     </>
   )
 }

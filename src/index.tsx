@@ -5,6 +5,7 @@ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { Context } from 'cordis'
 import Schema from 'schemastery'
 import { createChannel } from './channel.js'
+import { readActivityFrames } from './activityPrefs.js'
 import { Chat } from './screens/Chat.js'
 import { AlternateScreen, render, ThemeProvider } from './ui.js'
 
@@ -36,7 +37,9 @@ export interface Config {
    *  (consumes its log-only `activity/status` events; off hides it). */
   activity?: boolean
   /** Working-activity indicator preset: `claude`/`moon`/`comet`/`dots`/…
-   *  or `random` (see activityFrames.ts). */
+   *  or `random` (see activityFrames.ts). When absent, the `/activity`
+   *  choice persisted in `~/.dsh-cc/working-activity.json` wins, then the
+   *  `claude` default. */
   activityFrames?: string
   /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
   fullscreen?: boolean
@@ -49,7 +52,7 @@ export const Config: Schema<Config> = Schema.object({
   cwd: Schema.string().required(false),
   effort: Schema.string().required(false),
   activity: Schema.boolean().default(true),
-  activityFrames: Schema.string().default('claude'),
+  activityFrames: Schema.string().required(false),
   fullscreen: Schema.boolean().default(true),
 })
 
@@ -71,7 +74,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     provider: config.provider ?? 'deepseek-official',
     effort: config.effort,
     activity: config.activity,
-    activityFrames: config.activityFrames,
+    // Explicit cordis.yml value (static deployment choice) wins over the
+    // runtime `/activity` preference, which wins over the default.
+    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
     handle,
   })
   const tree = (
