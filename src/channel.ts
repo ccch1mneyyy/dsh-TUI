@@ -464,6 +464,49 @@ function restoreToolResult(row: ChatRow, event: SessionEvent<'tool/result'>): vo
 }
 
 
+/**
+ * Coalesce runs of same-type assistant/chunk deltas into single synthetic
+ * events for REPLAY only. A streamed turn logs one event per token (~100k
+ * events in long sessions); replaying them one at a time costs per-chunk
+ * string growth on every row (quadratic in the turn's length). Merging is
+ * outcome-identical: ensureStreaming/ensureReasoning only read chunk.type
+ * and the concatenated text, and the row's seq comes from the run's FIRST
+ * chunk (the fork boundary rewindTo derives from it). Parts join once —
+ * no quadratic concat. Live events never go through this.
+ */
+function coalesceReplayEvents(events: readonly SessionEvent[]): SessionEvent[] {
+  type ChunkEvent = Extract<SessionEvent, { type: 'assistant/chunk' }>
+  const out: SessionEvent[] = []
+  let run: { event: ChunkEvent; type: string; parts: string[] } | null = null
+  const flush = (): void => {
+    if (run === null) return
+    const chunk = run.event.data.chunk
+    out.push({
+      ...run.event,
+      data: { ...run.event.data, chunk: { ...chunk, text: run.parts.join('') } },
+    } as ChunkEvent)
+    run = null
+  }
+  for (const event of events) {
+    if (
+      event.type === 'assistant/chunk' &&
+      (event.data.chunk.type === 'text-delta' || event.data.chunk.type === 'reasoning-delta')
+    ) {
+      if (run !== null && run.type === event.data.chunk.type) {
+        run.parts.push(event.data.chunk.text ?? '')
+        continue
+      }
+      flush()
+      run = { event, type: event.data.chunk.type, parts: [event.data.chunk.text ?? ''] }
+      continue
+    }
+    flush()
+    out.push(event)
+  }
+  flush()
+  return out
+}
+
 /** Buffer below the context window at which CC warns (autoCompact.ts). */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
 
@@ -722,7 +765,7 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of seed) renderEvent(event)
+      for (const event of coalesceReplayEvents(seed)) renderEvent(event)
       // Rebind subscriptions to the new agent, then free the old one.
       const oldHandle = currentHandle
       agent = handle.agent
@@ -793,7 +836,7 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of handle.agent.session.events) renderEvent(event)
+      for (const event of coalesceReplayEvents(handle.agent.session.events)) renderEvent(event)
       settleStreaming()
       // Rebind subscriptions to the resumed agent, then free the old one.
       const oldHandle = currentHandle
@@ -957,7 +1000,7 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of seed) renderEvent(event)
+      for (const event of coalesceReplayEvents(seed)) renderEvent(event)
       settleStreaming()
       const oldHandle = currentHandle
       agent = handle.agent
@@ -1681,7 +1724,7 @@ ${output}
   }
 
   // Replay the durable transcript first, then follow live events.
-  for (const event of agent.session.events) renderEvent(event)
+  for (const event of coalesceReplayEvents(agent.session.events)) renderEvent(event)
   settleStreaming()
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.
