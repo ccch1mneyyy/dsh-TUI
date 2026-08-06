@@ -10,8 +10,8 @@ import React from 'react';
  * the `✦ dsh-cc` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
  * the 5-row block font (brand-blue → ice gradient), the model/effort and
  * cwd in plain text (no brand-color highlight), the startup tip, and below
- * the block the `探索未至之境！` welcome line in ice blue. Narrow terminals
- * drop the whale and keep the text column.
+ * the whale the `探索未至之境！` welcome line, centered under the art, in ice
+ * blue. Narrow terminals drop the whale and keep the text column.
  */
 export declare function LogoV2({ model, effort, cwd, skipIntro, }: {
     model: string;

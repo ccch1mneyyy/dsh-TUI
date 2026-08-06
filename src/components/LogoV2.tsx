@@ -20,6 +20,15 @@ const WHALE_MIN_COLUMNS = 64
  */
 const FULL_WHALE_WIDTH = 40
 
+/**
+ * Leading spaces that center the welcome line under the drawn whale: the
+ * art's bounding box spans sprite columns 3..34 (center 18.5) of the
+ * 40-wide box, and the 7 full-width chars of `探索未至之境！` measure 14
+ * columns — 18.5 − 7 = 11.5 → 12. Centered on the full 40-column box
+ * instead would need 13, which reads one column right of the whale body.
+ */
+const WELCOME_PAD = 12
+
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
@@ -36,8 +45,8 @@ function capitalize(text: string): string {
  * the `✦ dsh-cc` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
  * the 5-row block font (brand-blue → ice gradient), the model/effort and
  * cwd in plain text (no brand-color highlight), the startup tip, and below
- * the block the `探索未至之境！` welcome line in ice blue. Narrow terminals
- * drop the whale and keep the text column.
+ * the whale the `探索未至之境！` welcome line, centered under the art, in ice
+ * blue. Narrow terminals drop the whale and keep the text column.
  */
 export function LogoV2({
   model,
@@ -56,8 +65,8 @@ export function LogoV2({
 
   // Opening clock: drives the shimmer sweep and big-text highlight only
   // while the intro plays; `null` afterwards unsubscribes so the settled
-  // header never repaints. 100ms frames keep the sweep lively.
-  const [ref, time] = useAnimationFrame(settled ? null : 100)
+  // header never repaints. 60ms frames keep the sweep lively.
+  const [ref, time] = useAnimationFrame(settled ? null : 60)
 
   // Frame chain: dwell per OPENING_SEQUENCE entry, then settle for good.
   React.useEffect(() => {
@@ -84,8 +93,8 @@ export function LogoV2({
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
 
-  const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 100)
-  const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 100)
+  const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 60)
+  const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 60)
 
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
@@ -93,7 +102,7 @@ export function LogoV2({
         {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
         <Box flexDirection="column" flexShrink={1}>
           <Text wrap="truncate-end">
-            {sweep('✦ dsh-cc', t, wordmarkRGB, wordmarkShimmerRGB, 100)}
+            {sweep('✦ dsh-cc', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
             <Text dimColor>{'  v' + VERSION}</Text>
           </Text>
           {bigDeepSeek.map((row, index) => (
@@ -124,8 +133,8 @@ export function LogoV2({
           </Text>
         </Box>
       </Box>
-      <Box marginTop={1} paddingLeft={2}>
-        <Text>{sweep('探索未至之境！', t, taglineRGB, FLASH, 100)}</Text>
+      <Box marginTop={1} paddingLeft={showWhale ? WELCOME_PAD : 2}>
+        <Text>{sweep('探索未至之境！', t, taglineRGB, FLASH, 60)}</Text>
       </Box>
     </Box>
   )

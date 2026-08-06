@@ -58,7 +58,7 @@ export function renderBigText(
   from: Rgb,
   to: Rgb,
   flash: Rgb,
-  stepMs = 200,
+  stepMs = 60,
 ): string[] {
   const width = text.length * ADVANCE + (text.includes(' ') ? WORD_GAP - 1 : 0)
   const cycle = width + SWEEP_WINDOW * 2

@@ -19,7 +19,7 @@ export declare const FLASH: Rgb;
  * Paint `word` with a 10-column highlight window sweeping across it. The
  * window advances one column per `stepMs` and the brightness pulse follows
  * the same cadence (period 2π·stepMs·... — one full sine per ~6 steps).
- * CC's original cadence was 200ms/column; callers pass 100 for a livelier
+ * CC's original cadence was 200ms/column; callers pass 60 for the lively
  * sweep.
  */
 export declare function sweep(word: string, time: number, base: Rgb, highlight: Rgb, stepMs?: number): string;

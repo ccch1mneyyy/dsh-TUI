@@ -45,9 +45,9 @@ export function ActivityLine({
   warnDanger?: boolean
   suffix?: string
 }): React.ReactNode {
-  // 100ms frames: the shimmer sweep advances one column per frame (2× the
+  // 60ms frames: the shimmer sweep advances one column per frame (3.3× the
   // ported 200ms cadence — the slow crawl read as lag).
-  const [ref, time] = useAnimationFrame(100)
+  const [ref, time] = useAnimationFrame(60)
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   const preset = React.useMemo(
@@ -78,7 +78,7 @@ export function ActivityLine({
       {activity.phase === 'done' ? (
         <Text color={color}>{activity.line}</Text>
       ) : (
-        <Text>{sweep(activity.line, time, baseRGB, FLASH, 100)}</Text>
+        <Text>{sweep(activity.line, time, baseRGB, FLASH, 60)}</Text>
       )}
       {suffix !== undefined && <Text dimColor>{suffix}</Text>}
     </Text>
