@@ -19,13 +19,45 @@ export interface LocalCommand {
 }
 
 export const LOCAL_COMMANDS: LocalCommand[] = [
+  // Conversation
+  { name: 'new', description: 'Start a new conversation' },
   { name: 'clear', description: 'Clear the conversation' },
   { name: 'compact', description: 'Compact the conversation history' },
-  { name: 'help', description: 'Show shortcuts and commands' },
+  { name: 'resume', description: 'Resume a previous session' },
+  { name: 'export', description: 'Export the conversation to a markdown file' },
+  // Session / environment
+  { name: 'status', description: 'Show session status' },
+  { name: 'cost', description: 'Show session token usage' },
+  { name: 'config', description: 'Show the dsh-cc configuration source' },
+  { name: 'doctor', description: 'Run environment checks' },
+  { name: 'init', description: 'Create AGENTS.md in the working directory' },
+  { name: 'agents', description: 'Show subagents of this session' },
+  // Model / display
   { name: 'model', description: 'Show the active model' },
   { name: 'thinking', description: 'Toggle extended thinking display' },
   { name: 'tokens', description: 'Show session token usage' },
-  { name: 'resume', description: 'Resume a previous session' },
+  // Account / policy
+  { name: 'login', description: 'Show API credential status' },
+  { name: 'logout', description: 'Clear the API credential' },
+  { name: 'permissions', description: 'Show permission policy status' },
+  { name: 'add-dir', description: 'Show the filesystem policy scope' },
+  { name: 'hooks', description: 'Show hooks status' },
+  { name: 'mcp', description: 'Show MCP status' },
+  { name: 'memory', description: 'Show memory status' },
+  // Built-in skills (CC's skill commands, driven through DSH skills)
+  { name: 'audit', description: 'Run a comprehensive code audit on this project' },
+  { name: 'bug', description: 'Capture a bug report' },
+  { name: 'practice', description: 'Practice programming with dsh-cc' },
+  { name: 'review', description: 'Run a comprehensive code review on this project' },
+  { name: 'pr_comments', description: 'Review pull request comments' },
+  { name: 'release-notes', description: 'Generate release notes' },
+  { name: 'vuln-check', description: 'Run a security vulnerability check' },
+  // Misc / not applicable on this leaf
+  { name: 'vim', description: 'Toggle vim mode' },
+  { name: 'terminal-setup', description: 'Show terminal setup instructions' },
+  { name: 'connect', description: 'Connect to a remote machine' },
+  // Help / exit
+  { name: 'help', description: 'Show shortcuts and commands' },
   { name: 'exit', description: 'Exit dsh-cc' },
 ]
 

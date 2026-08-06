@@ -193,6 +193,11 @@ export class InputEvent extends Event {
   readonly keypress: ParsedKey
   readonly key: Key
   readonly input: string
+  /** True when this input arrived as a bracketed paste (terminal paste —
+   *  Ctrl+Shift+V / right-click) rather than typed characters. Handlers use
+   *  this to insert paste content verbatim instead of treating newlines as
+   *  Enter/submit. */
+  readonly isPasted: boolean
 
   constructor(keypress: ParsedKey) {
     super()
@@ -201,5 +206,6 @@ export class InputEvent extends Event {
     this.keypress = keypress
     this.key = key
     this.input = input
+    this.isPasted = keypress.isPasted === true
   }
 }

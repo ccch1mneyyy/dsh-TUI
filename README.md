@@ -99,7 +99,8 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 > 配置注意：`plan-mode` 的 `section` 为必填（空值会导致整树加载失败）；
 > `subagent` 核心服务必须先于 `subagent-spawn`/`subagent-fork` 挂载；
 > `/plan`、`/goal` 需要挂 `@deepseek-ai/dsh-commands`（命令注册表），
-> `/goal` 还需 agent-spine 开 `goals: {}`（持久化目标域服务）。
+> `/goal` 还需 agent-spine 开 `goals: {}`（持久化目标域服务）；
+> `/agents` 需要 `@deepseek-ai/dsh-session-query`（子代理谱系查询）。
 
 ## 快捷键
 
@@ -112,14 +113,27 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 | `Ctrl+R` | 历史消息搜索 |
 | `/` | 会话内全文搜索（`n`/`N` 跳转） |
 | `Tab` | 命令 / `@` 文件补全 |
+| `Ctrl+V` | 粘贴：文本直接插入光标处；**Explorer 复制的文件/图片 → 插入文件路径** |
 | `?` | 快捷键菜单 |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
-| `/model` `/thinking` `/tokens` `/compact` `/resume` `/clear` `/exit` | 本地命令 |
-| `/plan` `/goal` | DSH 命令注册表命令（随插件自动并入 `/` 菜单） |
+
+**本地命令（CC 指令全集复刻，均走 DSH 官方链路）**
+
+| 分组 | 命令 |
+|---|---|
+| 会话 | `/new` 新会话 · `/resume` 恢复 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown |
+| 状态 | `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
+| 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 |
+| 账号/策略 | `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` · `/memory` |
+| 技能 | `/audit` 代码审计 · `/bug` bug 报告 · `/review` 代码评审 · `/practice` 编程练习 · `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查 |
+| 其它 | `/agents` 子代理列表 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` |
+| 注册表 | `/plan` `/goal`（DSH 命令注册表插件，随插件自动并入 `/` 菜单） |
 
 > `/` 菜单 = 本地命令 + 注册表命令的并集（注册表描述来自插件本身）；
 > `/plan [off|消息]` 切换计划模式，`/goal [create/edit/pause/resume/clear 目标]`
 > 管理持久化目标。
+> 技能命令通过 DSH 技能系统驱动：`install.sh` 会把对应的 SKILL.md 装进
+> `~/.dsh/skills`，命令只是把激活提示发给模型（模型用技能目录/加载工具取用）。
 
 ## 技术要点
 
@@ -136,6 +150,10 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
   8 行滚动窗口；Enter **立即切换**到该会话并回放历史；`--resume` 启动同链路。
 - **回滚语义**：fork 边界取消息所属 turn 的起点（DSH 事件序
   turn/start → user/message → turn/end），中断回合先等落盘再 fork。
+- **终端粘贴**：raw 模式下 Ctrl+V 由应用接管——PowerShell `Get-Clipboard`
+  读剪贴板：Explorer 复制的文件/图片返回 FileDropList → 插入文件路径（含空格
+  自动加引号）；纯文本按原文插入光标处（含换行，不会误提交）。终端原生粘贴
+  （Ctrl+Shift+V / 右键）走 bracketed paste，同样插入而非提交。
 
 ## 已知限制
 
@@ -143,4 +161,6 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 - `/model` 切换需重启 dsh 生效（模型由 cordis.yml 路由决定）。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
 - DSH 的 `/permission`（沙箱模式切换）未适配：需要 approval 服务 + 审批 UI，
-  当前 TUI 不消费审批流，刻意不挂。
+  当前 TUI 不消费审批流，刻意不挂（`/permissions` 仅说明现状）。
+- `/vim` `/connect` `/hooks` `/mcp` `/memory` 为 CC 同名占位：对应能力在 DSH
+  侧无等价机制或未在本 leaf 挂载，命令会给出明确说明而非静默。

@@ -162,6 +162,9 @@ export interface Channel {
     rewindTo(row: ChatRow): Promise<string | null>;
     /** Switch the live agent to a persisted session, replaying its history. */
     resumeTo(sessionId: string): Promise<boolean>;
+    /** Start a fresh conversation (`/new`): a brand-new agent + session, the
+     *  transcript cleared, the resume marker forgotten. */
+    newSession(): Promise<boolean>;
     /** Reset the visible transcript (`/clear`). */
     clear(): void;
     /** Push a transient notification above the prompt input. */
@@ -179,6 +182,20 @@ export interface Channel {
     setResumeTarget(sessionId: string): void;
     /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
     compact(): void;
+    /** Render a multi-line local report in the transcript (`/status`,
+     *  `/doctor`, …): a `local` row plus one `local-output` row per line. */
+    pushLocal(title: string, lines: readonly string[]): void;
+    /** Write the conversation transcript to `dsh-cc-export-<ts>.md` in the
+     *  session cwd; returns the written path, or null on failure. */
+    exportSession(): string | null;
+    /** Create `AGENTS.md` in the session cwd (DSH workspace-context file);
+     *  returns the path, `'exists'` when already present, or null on failure. */
+    initWorkspace(): string | null;
+    /** Environment diagnostics for `/doctor`. */
+    doctorInfo(): string[];
+    /** Subagent rows for `/agents` (DSH subagent service; empty message when
+     *  the service is absent). */
+    listSubagents(): Promise<string[]>;
 }
 /** @internal */
 export interface ChannelState {
@@ -242,6 +259,8 @@ export interface ChannelState {
     rewindTo(row: ChatRow): Promise<string | null>;
     /** Switch the live agent to a persisted session, replaying its history. */
     resumeTo(sessionId: string): Promise<boolean>;
+    /** Start a fresh conversation (`/new`). */
+    newSession(): Promise<boolean>;
     clear(): void;
     notify(text: string, options?: {
         color?: NotificationItem['color'];
@@ -253,6 +272,16 @@ export interface ChannelState {
     setResumeTarget(sessionId: string): void;
     /** Manually compact the session history (CC's /compact). */
     compact(): void;
+    /** Multi-line local report (`/status`, `/doctor`, …). */
+    pushLocal(title: string, lines: readonly string[]): void;
+    /** Export the transcript to a markdown file (CC's /export). */
+    exportSession(): string | null;
+    /** Create `AGENTS.md` in the session cwd (CC's /init). */
+    initWorkspace(): string | null;
+    /** Environment diagnostics (CC's /doctor). */
+    doctorInfo(): string[];
+    /** Subagent rows (CC's /agents). */
+    listSubagents(): Promise<string[]>;
 }
 /** @internal */
 export declare function createChannel(ctx: Context, initialAgent: Agent, options: {

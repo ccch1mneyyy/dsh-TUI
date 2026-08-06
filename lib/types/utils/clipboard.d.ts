@@ -1,0 +1,37 @@
+/**
+ * Windows clipboard access for Ctrl+V paste. The TUI runs in raw mode, so
+ * the console never performs its own paste for Ctrl+V — the key arrives at
+ * the app and the clipboard is read here. PowerShell `Get-Clipboard` is the
+ * zero-dependency route: file drops (Explorer copy) come back as a
+ * FileDropList (the user pastes a file → insert its path), anything else
+ * comes back as text. UTF-8 output is forced so CJK text survives the pipe.
+ */
+/**
+ * Read the Windows clipboard: file paths when Explorer copied files,
+ * otherwise the plain text. Returns null when the clipboard holds neither.
+ * Clipboard access is retried — another process (e.g. Explorer) briefly
+ * holding the clipboard open makes OpenClipboard fail with a transient
+ * error.
+ *
+ * @returns `{ kind: 'files'; paths: string[] }` for file drops,
+ *   `{ kind: 'text'; text: string }` for text, or null when empty/blocked.
+ */
+export declare function readClipboard(): Promise<{
+    kind: 'files';
+    paths: string[];
+} | {
+    kind: 'text';
+    text: string;
+} | null>;
+/**
+ * Render pasted clipboard content for insertion into the prompt: file paths
+ * quoted when they contain whitespace, joined with single spaces.
+ */
+export declare function formatClipboardInsert(content: {
+    kind: 'files';
+    paths: string[];
+} | {
+    kind: 'text';
+    text: string;
+}): string;
+//# sourceMappingURL=clipboard.d.ts.map

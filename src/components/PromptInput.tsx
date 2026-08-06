@@ -2,6 +2,7 @@ import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import type { Channel } from '../channel.js'
 import { filterCommands, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
@@ -121,6 +122,8 @@ export function PromptInput({
   // Double-tap Esc to clear (CC semantics).
   const escPendingRef = React.useRef(false)
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
+  const clipboardBusyRef = React.useRef(false)
   React.useEffect(() => {
     return () => {
       if (escTimerRef.current) clearTimeout(escTimerRef.current)
@@ -215,8 +218,43 @@ export function PromptInput({
     return line.length
   }
 
-  useInput((input, key) => {
+  useInput((input, key, event) => {
     if (selectionActive) return
+
+    /** Insert text at the caret (typing, paste) and dismiss overlays. */
+    const insertAtCaret = (text: string) => {
+      if (helpOpen) onToggleHelp()
+      const next = value.slice(0, cursor) + text + value.slice(cursor)
+      setValue(next)
+      setCursor(cursor + text.length)
+      setSelectedCommand(0)
+      setFileSelected(0)
+    }
+
+    // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click): insert
+    // verbatim at the caret. Paste content may contain newlines — that is
+    // NOT Enter — so this branch runs before the whole-line submit rule.
+    if (event?.isPasted && input.length > 0) {
+      insertAtCaret(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+      return
+    }
+
+    // Ctrl+V: raw mode hands the key to the app, so the clipboard is read
+    // here — text, or file paths when Explorer copied files (pasted files
+    // insert their paths).
+    if (key.ctrl && input === 'v') {
+      if (clipboardBusyRef.current) return
+      clipboardBusyRef.current = true
+      void readClipboard().then(content => {
+        clipboardBusyRef.current = false
+        if (content === null) {
+          channel.notify('剪贴板为空', { color: 'warning' })
+          return
+        }
+        insertAtCaret(formatClipboardInsert(content))
+      })
+      return
+    }
 
     // Whole-line input from Windows ConPTY pipelines (cmd batch -> node):
     // the trailing CR/LF marks a complete line to submit. A `/`-prefixed

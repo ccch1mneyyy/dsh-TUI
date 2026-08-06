@@ -33,7 +33,23 @@ if [ "${1:-}" = "--full" ]; then
   cp "$REPO_DIR/cordis.yml" "$DSH_CC_DIR/cordis.yml"
   echo "已生成 $DSH_CC_DIR/cordis.yml（完整 agent 树，含 cc-tui 挂载）。"
   echo "启动：dsh --config \"$DSH_CC_DIR/cordis.yml\"（Windows 可直接用 dsh-cc.cmd）"
-else
+fi
+
+# 4. 技能（CC 内置技能命令 /audit /bug /practice /review /pr_comments
+#    /release-notes /vuln-check 的 DSH 版）装到 ~/.dsh/skills，供 skill-local 发现。
+SKILLS_DST="${DSH_CC_SKILLS:-$HOME/.dsh/skills}"
+if [ -d "$REPO_DIR/skills" ]; then
+  mkdir -p "$SKILLS_DST"
+  for skill_dir in "$REPO_DIR"/skills/*/; do
+    [ -d "$skill_dir" ] || continue
+    name=$(basename "$skill_dir")
+    mkdir -p "$SKILLS_DST/$name"
+    cp "$skill_dir/SKILL.md" "$SKILLS_DST/$name/SKILL.md"
+  done
+  echo "已装入技能 → $SKILLS_DST（audit/bug/practice/review/pr_comments/release-notes/vuln-check）"
+fi
+
+if [ "${1:-}" != "--full" ]; then
   echo ""
   echo "已装入依赖链。在你的 DSH 配置树（cordis.yml / config.yaml）里挂载 cc-tui，"
   echo "最小片段（依赖官方 llm/bash/fs/persistence/compact/spine 插件）："

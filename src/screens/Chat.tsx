@@ -36,6 +36,26 @@ const SELECTABLE_KINDS = new Set<ChatRow['kind']>([
   'local-output',
 ])
 
+/** `max` → `Max` (effort levels arrive lower-case from the adapter). */
+function capitalize(text: string): string {
+  return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
+}
+
+/**
+ * CC's built-in skill commands, driven through the DSH skill system: each
+ * submits an activation prompt the model resolves via its skill catalog/load
+ * tools (the corresponding SKILL.md ships under ~/.dsh/skills with dsh-cc).
+ */
+const SKILL_PROMPTS: Readonly<Record<string, string>> = {
+  audit: '请使用 audit 技能对当前项目做一次全面的代码审计，找出安全、正确性与质量问题。',
+  bug: '请使用 bug 技能协助我记录一份完整的 bug 报告（现象、复现步骤、期望行为）。',
+  practice: '请使用 practice 技能陪我进行一轮编程练习。',
+  review: '请使用 review 技能对当前项目做一次全面的代码评审。',
+  pr_comments: '请使用 pr_comments 技能审查当前分支的拉取请求评论并给出改进建议。',
+  'release-notes': '请使用 release-notes 技能为当前项目生成发布说明。',
+  'vuln-check': '请使用 vuln-check 技能对当前项目做一次安全漏洞检查。',
+}
+
 /** Terminal-title spinner frames (CC's TITLE_ANIMATION_FRAMES). */
 const TITLE_ANIMATION_FRAMES = ['⠂', '⠐']
 
@@ -198,6 +218,12 @@ export function Chat({
    */
   const runCommand = (name: string, rawInput = ''): boolean => {
     switch (name) {
+      case 'new':
+        setHelpOpen(false)
+        void channel.newSession().then(ok => {
+          if (ok) channel.notify('New session started')
+        })
+        return true
       case 'clear':
         channel.clear()
         // channel.clear() resets row ids to 0; stale expanded/selection
@@ -259,6 +285,156 @@ export function Chat({
       case 'exit':
         onExit()
         return true
+      case 'status': {
+        const usage = channel.lastUsage
+        const pct =
+          channel.contextWindow === undefined
+            ? undefined
+            : Math.max(0, Math.min(100, Math.round((channel.tokens.input / channel.contextWindow) * 100)))
+        const lines: string[] = [
+          `模型   ${channel.model}${channel.reasoningEffort ? ` · ${capitalize(channel.reasoningEffort)} effort` : ''}`,
+          `会话   ${channel.agentId}`,
+          `目录   ${channel.cwd}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
+          `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
+        ]
+        if (usage !== undefined) {
+          lines.push(`缓存   ${formatTokens(usage.cacheRead)} 读 · ${formatTokens(usage.cacheWrite)} 写`)
+        }
+        if (pct !== undefined) lines.push(`上下文 ${pct}%`)
+        if (channel.sessionTitle) lines.push(`标题   ${channel.sessionTitle}`)
+        setHelpOpen(false)
+        channel.pushLocal('/status', lines)
+        return true
+      }
+      case 'cost': {
+        const usage = channel.lastUsage
+        const lines = [
+          `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
+        ]
+        if (usage !== undefined) {
+          const total = usage.input + usage.cacheRead + usage.cacheWrite
+          const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
+          lines.push(`缓存命中率 ${rate}% · 缓存 ${formatTokens(usage.cacheRead)} 读 / ${formatTokens(usage.cacheWrite)} 写`)
+        }
+        lines.push('注：DSH 不提供 API 费用计量，以上为 token 用量（按 provider 账单计费）')
+        setHelpOpen(false)
+        channel.pushLocal('/cost', lines)
+        return true
+      }
+      case 'config': {
+        const userHome = process.env.USERPROFILE ?? ''
+        const lines = [
+          `示例配置  ${channel.cwd}/examples/cc-tui-agent/cordis.yml`,
+          `用户配置  ${userHome}\\.dsh-cc\\cordis.yml（install.sh --full 生成）`,
+          '',
+          '启动方式  dsh-cc.cmd / dsh --config <上述任一配置>',
+          '模型路由  由 cordis.yml 的 llm-deepseek 段决定（/model 仅提示重启生效）',
+        ]
+        setHelpOpen(false)
+        channel.pushLocal('/config', lines)
+        return true
+      }
+      case 'doctor':
+        setHelpOpen(false)
+        channel.pushLocal('/doctor', channel.doctorInfo())
+        return true
+      case 'export': {
+        const target = channel.exportSession()
+        channel.notify(
+          target === null
+            ? '导出失败（无法写入工作目录）'
+            : `已导出: ${target}`,
+          target === null ? { color: 'error', timeoutMs: 8000 } : { timeoutMs: 8000 },
+        )
+        return true
+      }
+      case 'init': {
+        const result = channel.initWorkspace()
+        if (result === null) channel.notify('创建 AGENTS.md 失败', { color: 'error' })
+        else if (result === 'exists') channel.notify('AGENTS.md 已存在，未覆盖')
+        else channel.notify(`已创建 ${result}`)
+        return true
+      }
+      case 'agents':
+        setHelpOpen(false)
+        void channel.listSubagents().then(lines => {
+          channel.pushLocal('/agents', lines)
+        })
+        return true
+      case 'login': {
+        const key = process.env.DEEPSEEK_API_KEY
+        const lines = [
+          `API key: ${key ? key.slice(0, 6) + '…' + key.slice(-4) : '未配置（DEEPSEEK_API_KEY）'}`,
+          `Base URL: ${process.env.DEEPSEEK_BASE_URL ?? '官方端点'}`,
+          '来源：环境变量 → 工作区 .env（run.ts 兜底读取）',
+        ]
+        setHelpOpen(false)
+        channel.pushLocal('/login', lines)
+        return true
+      }
+      case 'logout':
+        channel.notify('DSH 凭证来自环境变量 DEEPSEEK_API_KEY — 删除该环境变量后重启 dsh-cc 即登出')
+        return true
+      case 'permissions':
+        setHelpOpen(false)
+        channel.pushLocal('/permissions', [
+          'DSH 权限策略由 fs-policy / bash-sandbox 配置决定（当前 leaf：workspace 内读写、写入需已读文件）。',
+          'DSH 的 /permission 预设切换需要 approval 服务 + 审批 UI，dsh-cc 未挂载。',
+        ])
+        return true
+      case 'add-dir':
+        setHelpOpen(false)
+        channel.pushLocal('/add-dir', [
+          `当前文件系统策略以工作目录为根：${channel.cwd}`,
+          '模型工具相对路径均解析自该目录；跨目录访问由 fs-policy 拦截。',
+        ])
+        return true
+      case 'hooks':
+        setHelpOpen(false)
+        channel.pushLocal('/hooks', [
+          'DSH hooks（dsh-hooks-claude / dsh-hooks-codex）未在本 leaf 挂载。',
+          '需要时可在 cordis.yml 挂载对应 hooks 插件。',
+        ])
+        return true
+      case 'mcp':
+        setHelpOpen(false)
+        channel.pushLocal('/mcp', ['DSH 暂无 MCP 服务支持。'])
+        return true
+      case 'memory':
+        setHelpOpen(false)
+        channel.pushLocal('/memory', [
+          'DSH 暂无持久记忆服务。',
+          '长期约定可写入 AGENTS.md（工作区上下文）或技能（~/.dsh/skills）。',
+        ])
+        return true
+      case 'vim':
+        channel.notify('vim 模式暂未实现')
+        return true
+      case 'terminal-setup':
+        setHelpOpen(false)
+        channel.pushLocal('/terminal-setup', [
+          '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。',
+          'Ctrl+V 粘贴文本/文件路径；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。',
+        ])
+        return true
+      case 'connect':
+        setHelpOpen(false)
+        channel.pushLocal('/connect', ['DSH 暂无远程连接机制（CC 的 /connect 对应能力未适配）。'])
+        return true
+      case 'audit':
+      case 'bug':
+      case 'practice':
+      case 'review':
+      case 'pr_comments':
+      case 'release-notes':
+      case 'vuln-check': {
+        // CC's skill commands: drive the DSH skill system by sending the
+        // activation prompt to the model (it loads the skill via its skill
+        // catalog/load tools when the SKILL.md ships in ~/.dsh/skills).
+        const prompt = SKILL_PROMPTS[name]
+        if (prompt) channel.submit(prompt)
+        return true
+      }
       default: {
         // Plugin-registered command (DSH command registry): dispatch through
         // the channel, whose execution logs command/run + command/done (the

@@ -139,6 +139,10 @@
   config:
     root: !!js process.env.DSH_CC_SESSION_ROOT ?? (process.env.USERPROFILE ?? process.env.HOME) + '/.dsh-cc/sessions'
 
+# Read-only session lineage — the subagent service's /agents listing reads it.
+- id: session-query
+  name: '@deepseek-ai/dsh-session-query'
+
 - id: session-checkpoints
   name: '@deepseek-ai/dsh-session-checkpoint-policy'
 

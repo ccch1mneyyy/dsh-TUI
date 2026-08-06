@@ -7,7 +7,9 @@ import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/d
 import type { Context } from 'cordis'
 import { join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
-import { type SessionRecord, writeResumeTarget } from './sessionHistory.js'
+import { clearResumeTarget, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
+import { existsSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -167,6 +169,9 @@ export interface Channel {
   rewindTo(row: ChatRow): Promise<string | null>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<boolean>
+  /** Start a fresh conversation (`/new`): a brand-new agent + session, the
+   *  transcript cleared, the resume marker forgotten. */
+  newSession(): Promise<boolean>
   /** Reset the visible transcript (`/clear`). */
   clear(): void
   /** Push a transient notification above the prompt input. */
@@ -181,6 +186,20 @@ export interface Channel {
   setResumeTarget(sessionId: string): void
   /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
   compact(): void
+  /** Render a multi-line local report in the transcript (`/status`,
+   *  `/doctor`, …): a `local` row plus one `local-output` row per line. */
+  pushLocal(title: string, lines: readonly string[]): void
+  /** Write the conversation transcript to `dsh-cc-export-<ts>.md` in the
+   *  session cwd; returns the written path, or null on failure. */
+  exportSession(): string | null
+  /** Create `AGENTS.md` in the session cwd (DSH workspace-context file);
+   *  returns the path, `'exists'` when already present, or null on failure. */
+  initWorkspace(): string | null
+  /** Environment diagnostics for `/doctor`. */
+  doctorInfo(): string[]
+  /** Subagent rows for `/agents` (DSH subagent service; empty message when
+   *  the service is absent). */
+  listSubagents(): Promise<string[]>
 }
 
 /** @internal */
@@ -239,6 +258,8 @@ export interface ChannelState {
   rewindTo(row: ChatRow): Promise<string | null>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<boolean>
+  /** Start a fresh conversation (`/new`). */
+  newSession(): Promise<boolean>
   clear(): void
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
   listModels(): Promise<readonly LlmModelInfo[]>
@@ -247,6 +268,16 @@ export interface ChannelState {
   setResumeTarget(sessionId: string): void
   /** Manually compact the session history (CC's /compact). */
   compact(): void
+  /** Multi-line local report (`/status`, `/doctor`, …). */
+  pushLocal(title: string, lines: readonly string[]): void
+  /** Export the transcript to a markdown file (CC's /export). */
+  exportSession(): string | null
+  /** Create `AGENTS.md` in the session cwd (CC's /init). */
+  initWorkspace(): string | null
+  /** Environment diagnostics (CC's /doctor). */
+  doctorInfo(): string[]
+  /** Subagent rows (CC's /agents). */
+  listSubagents(): Promise<string[]>
 }
 
 const ARGS_PREVIEW_LIMIT = 160
@@ -594,6 +625,76 @@ export function createChannel(
       void oldHandle?.dispose().catch(() => {})
       return true
     },
+    async newSession(): Promise<boolean> {
+      // `/new` — start a fresh conversation: brand-new agent + session, the
+      // transcript reset, the `--resume` marker forgotten (the old session
+      // stays persisted for /resume). Same reset shape as rewindTo/resumeTo.
+      if (state.working) {
+        state.notify('Cannot start a new session while a turn is running', {
+          color: 'warning',
+        })
+        return false
+      }
+      const agents = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!agents) {
+        state.notify('New session unavailable — agents service not loaded', {
+          color: 'error',
+        })
+        return false
+      }
+      const sessionId = SessionId(randomUUID())
+      let handle: AgentHandle
+      try {
+        handle = await agents.create({
+          sessionId,
+          meta: { cwd: options.cwd },
+          agentOptions: { provider: options.provider, model: options.model },
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(`New session failed · ${message}`, {
+          color: 'error',
+          timeoutMs: 8000,
+        })
+        return false
+      }
+      streaming = undefined
+      reasoning = undefined
+      toolCards.clear()
+      nextRowId = 0
+      state.rows.length = 0
+      state.tokens = { input: 0, output: 0 }
+      state.responseChars = 0
+      state.activeToolCount = 0
+      state.lastUserText = ''
+      state.working = false
+      state.spinnerMode = 'requesting'
+      state.status = handle.agent.status
+      state.agentId = handle.agent.id
+      state.tps = undefined
+      state.tpsSamples = []
+      state.lastUsage = undefined
+      state.workingActivity = undefined
+      state.contextWindow = undefined
+      state.contextSegments = {
+        system: 0,
+        prompt: 0,
+        assistant: 0,
+        thinking: 0,
+        tools: 0,
+      }
+      const oldHandle = currentHandle
+      agent = handle.agent
+      currentHandle = handle
+      bindAgent()
+      refreshCommandList()
+      clearResumeTarget()
+      state.emit()
+      void oldHandle?.dispose().catch(() => {})
+      return true
+    },
     clear() {
       state.rows.length = 0
       nextRowId = 0
@@ -745,6 +846,125 @@ export function createChannel(
         return execution?.result.text ?? ''
       } catch (error) {
         return error instanceof Error ? error.message : String(error)
+      }
+    },
+    pushLocal(title, lines) {
+      state.rows.push({ id: nextRowId++, kind: 'local', text: title })
+      for (const line of lines) {
+        state.rows.push({
+          id: nextRowId++,
+          kind: 'local-output',
+          text: preview(line, LOCAL_OUTPUT_LIMIT),
+        })
+      }
+      state.emit()
+    },
+    exportSession() {
+      const parts: string[] = [
+        `# dsh-cc 会话导出`,
+        ``,
+        `- 导出时间: ${new Date().toLocaleString()}`,
+        `- 模型: ${state.model}`,
+        `- 会话: ${state.agentId}`,
+        `- 目录: ${state.cwd}`,
+        ``,
+      ]
+      for (const row of state.rows) {
+        if (!row.text) continue
+        const heading =
+          row.kind === 'user'
+            ? '## 用户'
+            : row.kind === 'assistant'
+              ? '## 助手'
+              : row.kind === 'reasoning'
+                ? '## 思考'
+                : row.kind === 'tool'
+                  ? `## 工具 · ${row.tool?.name ?? ''}`
+                  : `## ${row.kind}`
+        parts.push(`${heading}\n\n${row.text}\n`)
+      }
+      const fileName = `dsh-cc-export-${Date.now()}.md`
+      try {
+        const target = join(state.cwd, fileName)
+        writeFileSync(target, parts.join('\n'), 'utf8')
+        return target
+      } catch {
+        return null
+      }
+    },
+    initWorkspace() {
+      const target = join(state.cwd, 'AGENTS.md')
+      if (existsSync(target)) return 'exists'
+      const template = [
+        '# AGENTS.md',
+        '',
+        '## 项目',
+        '',
+        '（在此描述项目的目标、结构与约定——这份文件会注入给每个 agent 作为工作区上下文。）',
+        '',
+        '## 约定',
+        '',
+        '- 改动前先阅读相关模块',
+        '- 保持与现有代码风格一致',
+        '',
+      ].join('\n')
+      try {
+        writeFileSync(target, template, 'utf8')
+        return target
+      } catch {
+        return null
+      }
+    },
+    doctorInfo() {
+      const lines: string[] = []
+      lines.push(`Node ${process.version} · ${process.platform} ${process.arch}`)
+      lines.push(`API key: ${process.env.DEEPSEEK_API_KEY ? '已配置' : '未配置（DEEPSEEK_API_KEY）'}`)
+      lines.push(`模型: ${state.model} · 提供方: ${options.provider}`)
+      lines.push(`工作目录: ${state.cwd}`)
+      lines.push(`上下文窗口: ${state.contextWindow ?? '未知'} tokens`)
+      lines.push(`会话: ${state.agentId}${state.sessionTitle ? ' · ' + state.sessionTitle : ''}`)
+      const userHome = process.env.USERPROFILE ?? homedir()
+      const configCandidates = [
+        join(userHome, '.dsh-cc/cordis.yml'),
+        join(state.cwd, 'examples/cc-tui-agent/cordis.yml'),
+      ]
+      for (const candidate of configCandidates) {
+        lines.push(`配置: ${candidate} ${existsSync(candidate) ? '✓' : '（不存在）'}`)
+      }
+      const sessionsDir = join(userHome, '.dsh-cc/sessions')
+      lines.push(`会话存储: ${sessionsDir} ${existsSync(sessionsDir) ? '✓' : '（未初始化）'}`)
+      return lines
+    },
+    async listSubagents() {
+      const subagents = ctx.get('subagents') as
+        | {
+            listChildren(
+              sessionId: unknown,
+              signal?: AbortSignal,
+            ): Promise<
+              Array<{
+                kind: string
+                mode: string
+                label?: string
+                activity: string
+                id: string | { value?: string }
+              }>
+            >
+          }
+        | undefined
+      if (!subagents) return ['子代理服务未挂载（leaf 未启用 subagent）']
+      try {
+        const children = await subagents.listChildren(agent.session.id)
+        if (children.length === 0) return ['当前会话暂无子代理']
+        return children.map(child => {
+          const id =
+            typeof child.id === 'string' ? child.id : (child.id.value ?? '')
+          const label = child.label ? `「${child.label}」` : ''
+          const mode = child.mode === 'continuable' ? '可续' : '一次性'
+          return `${mode} ${label}${child.activity === 'running' ? ' 运行中' : ' 已归档'} · ${id.slice(0, 8)}`
+        })
+      } catch (error) {
+        return [`查询失败 · ${error instanceof Error ? error.message : String(error)}`]
       }
     },
   }

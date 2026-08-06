@@ -31,6 +31,15 @@ export function writeResumeTarget(sessionId: string): void {
   writeFileSync(RESUME_FILE, sessionId)
 }
 
+/** Forget the resume marker (`/new` starts a fresh conversation). */
+export function clearResumeTarget(): void {
+  try {
+    writeFileSync(RESUME_FILE, '')
+  } catch {
+    // Best effort — the marker is a launcher nicety.
+  }
+}
+
 /** The session id requested by `dsh-cc --resume`, if any. */
 export function readResumeTarget(): string | undefined {
   try {
