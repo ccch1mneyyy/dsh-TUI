@@ -3,6 +3,8 @@ import { marked, type Token, type Tokens } from 'marked'
 import stripAnsi from 'strip-ansi'
 import { stringWidth } from '../ink/stringWidth.js'
 import { supportsHyperlinks } from '../ink/supports-hyperlinks.js'
+import { colorize } from '../ink/colorize.js'
+import { getActiveTheme } from '../theme.js'
 import type { CliHighlight } from './cliHighlight.js'
 import { logForDebugging } from '../utils/debug.js'
 import { createHyperlink } from './hyperlink.js'
@@ -13,8 +15,9 @@ import { createHyperlink } from './hyperlink.js'
 
 const BLOCKQUOTE_BAR = '\u258e' // ▎ - left one-quarter block
 const STRIPPED_TAGS_RE = /<(commit_analysis|context|function_analysis|pr_analysis)>.*?<\/\1>\n?/gs
-/** Inline code color: the Claude Code "permission" theme color (cyan). */
-const permissionColor = chalk.cyan
+/** Inline code color: the active theme's permission accent (Gentle Mist Blue). */
+const permissionColor = (text: string): string =>
+  colorize(text, getActiveTheme().permission, 'foreground')
 
 export function stripPromptXMLTags(content: string): string {
   return content.replace(STRIPPED_TAGS_RE, '').trim()

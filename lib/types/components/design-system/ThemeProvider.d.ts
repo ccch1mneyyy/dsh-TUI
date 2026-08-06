@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ThemeName } from '../../theme.js';
+import { type ThemeName } from '../../theme.js';
 export declare function ThemeProvider({ children, theme, }: {
     children: React.ReactNode;
     theme?: ThemeName;

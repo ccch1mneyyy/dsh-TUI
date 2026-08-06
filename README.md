@@ -137,6 +137,11 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 
 ## 技术要点
 
+- **Gentle Mist Blue 配色**：雾蓝只承担品牌、焦点、交互与高亮，正文保持
+  中性灰。启动时查询终端背景色（OSC 11）自动选色：浅色终端用严格的
+  Gentle Mist Blue 色卡（墨色 `#343945` 正文 + 暖米白家族），深色终端用
+  雾蓝适配版（暖灰白 `#E8E6E0` 正文 + 柔雾蓝 accent）；终端不响应时回退
+  深色。`CC_TUI_THEME=light|dark|dark-ansi` 可钉死配色并跳过检测。
 - **事件驱动渲染**：`session/event` 事件流 → 增量差分渲染，滚动状态独立维护。
 - **上下文进度条**：参考 pi-nano-context 算法（最大余数法分段着色 + 右侧多级
   缩略读数），DeepSeek 蓝白配色。

@@ -1,9 +1,13 @@
 /**
- * Claude Code theme, ported verbatim from the leaked source
- * (`src/utils/theme.ts`). Only the dark palettes are kept — the plugin is a
- * personal terminal tool and dark is the default everywhere it runs. The
- * `Theme` type is a structural copy so design-system components ported from
- * the leak (`ThemedText`, `ThemedBox`, `Spinner*`) keep compiling untouched.
+ * cc-tui color themes — Gentle Mist Blue (雾蓝) family.
+ *
+ * Two truecolor palettes share one identity: mist blues carry brand, focus,
+ * and interaction; body text stays neutral. `light` is the strict Gentle
+ * Mist Blue card (warm off-white background #F6F3ED, ink text #343945) for
+ * light terminals; `dark` is its dark-terminal adaptation (warm off-white
+ * text, accent-soft blues). `dark-ansi` is the 16-color fallback for
+ * terminals without truecolor. The active palette is chosen at startup by
+ * querying the terminal background (OSC 11) — see ThemeProvider.
  */
 
 export type Theme = {
@@ -84,85 +88,169 @@ export type Theme = {
   rainbow_violet_shimmer: string
 }
 
-export const THEME_NAMES = ['dark', 'dark-ansi'] as const
+export const THEME_NAMES = ['dark', 'dark-ansi', 'light'] as const
 
 /** A renderable theme. Always resolvable to a concrete color palette. */
 export type ThemeName = (typeof THEME_NAMES)[number]
 
+const rgb = (hex: string): string => {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgb(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255})`
+}
+
 /**
- * Dark theme using explicit RGB values to avoid inconsistencies from users'
- * custom terminal ANSI color definitions (verbatim from the leak).
+ * Gentle Mist Blue dark adaptation. The blues come straight from the card
+ * (#27478C–#ABC2EC); neutrals are warm (derived from #F6F3ED/#343945) so
+ * the palette reads calm rather than cyber-hard on a dark terminal.
  */
 const darkTheme: Theme = {
-  autoAccept: 'rgb(175,135,255)', // Electric violet
-  bashBorder: 'rgb(253,93,177)', // Bright pink
-  claude: 'rgb(77,107,254)', // DeepSeek blue (replaces Claude orange)
-  claudeShimmer: 'rgb(120,146,255)', // Lighter DeepSeek blue for shimmer effect
-  claudeBlue_FOR_SYSTEM_SPINNER: 'rgb(147,165,255)', // Blue for system spinner
-  claudeBlueShimmer_FOR_SYSTEM_SPINNER: 'rgb(177,195,255)',
-  permission: 'rgb(177,185,249)', // Light blue-purple
-  permissionShimmer: 'rgb(207,215,255)',
-  planMode: 'rgb(72,150,140)', // Muted sage green
-  ide: 'rgb(71,130,200)', // Muted blue
-  promptBorder: 'rgb(136,136,136)', // Medium gray
-  promptBorderShimmer: 'rgb(166,166,166)',
-  text: 'rgb(255,255,255)', // White
-  inverseText: 'rgb(0,0,0)', // Black
-  inactive: 'rgb(153,153,153)', // Light gray
-  inactiveShimmer: 'rgb(193,193,193)',
-  subtle: 'rgb(80,80,80)', // Dark gray
-  suggestion: 'rgb(177,185,249)', // Light blue-purple
-  remember: 'rgb(177,185,249)',
-  background: 'rgb(0,204,204)', // Bright cyan
-  success: 'rgb(78,186,101)', // Bright green
-  error: 'rgb(255,107,128)', // Bright red
-  warning: 'rgb(255,193,7)', // Bright amber
-  merged: 'rgb(175,135,255)', // Electric violet (matches autoAccept)
-  warningShimmer: 'rgb(255,223,57)',
-  diffAdded: 'rgb(34,92,43)',
-  diffRemoved: 'rgb(122,41,54)',
-  diffAddedDimmed: 'rgb(71,88,74)',
-  diffRemovedDimmed: 'rgb(105,72,77)',
-  diffAddedWord: 'rgb(56,166,96)',
-  diffRemovedWord: 'rgb(179,89,107)',
-  red_FOR_SUBAGENTS_ONLY: 'rgb(220,38,38)',
-  blue_FOR_SUBAGENTS_ONLY: 'rgb(37,99,235)',
-  green_FOR_SUBAGENTS_ONLY: 'rgb(22,163,74)',
-  yellow_FOR_SUBAGENTS_ONLY: 'rgb(202,138,4)',
-  purple_FOR_SUBAGENTS_ONLY: 'rgb(147,51,234)',
-  orange_FOR_SUBAGENTS_ONLY: 'rgb(234,88,12)',
-  pink_FOR_SUBAGENTS_ONLY: 'rgb(219,39,119)',
-  cyan_FOR_SUBAGENTS_ONLY: 'rgb(8,145,178)',
-  professionalBlue: 'rgb(106,155,204)',
-  chromeYellow: 'rgb(251,188,4)',
-  clawd_body: 'rgb(215,119,87)',
-  clawd_background: 'rgb(0,0,0)',
-  userMessageBackground: 'rgb(55, 55, 55)',
-  userMessageBackgroundHover: 'rgb(70, 70, 70)',
-  messageActionsBackground: 'rgb(44, 50, 62)',
-  selectionBg: 'rgb(38, 79, 120)',
-  bashMessageBackgroundColor: 'rgb(65, 60, 65)',
-  memoryBackgroundColor: 'rgb(55, 65, 70)',
-  rate_limit_fill: 'rgb(177,185,249)',
-  rate_limit_empty: 'rgb(80,83,112)',
-  fastMode: 'rgb(255,120,20)',
-  fastModeShimmer: 'rgb(255,165,70)',
-  briefLabelYou: 'rgb(122,180,232)',
-  briefLabelClaude: 'rgb(77,107,254)',
-  rainbow_red: 'rgb(235,95,87)',
-  rainbow_orange: 'rgb(245,139,87)',
-  rainbow_yellow: 'rgb(250,195,95)',
-  rainbow_green: 'rgb(145,200,130)',
-  rainbow_blue: 'rgb(130,170,220)',
-  rainbow_indigo: 'rgb(155,130,200)',
-  rainbow_violet: 'rgb(200,130,180)',
-  rainbow_red_shimmer: 'rgb(250,155,147)',
-  rainbow_orange_shimmer: 'rgb(255,185,137)',
-  rainbow_yellow_shimmer: 'rgb(255,225,155)',
-  rainbow_green_shimmer: 'rgb(185,230,180)',
-  rainbow_blue_shimmer: 'rgb(180,205,240)',
-  rainbow_indigo_shimmer: 'rgb(195,180,230)',
-  rainbow_violet_shimmer: 'rgb(230,180,210)',
+  autoAccept: rgb('#B3A0D4'), // Soft violet
+  bashBorder: rgb('#D194AE'), // Mist rose
+  claude: rgb('#7DA1DE'), // Accent Soft — mist brand blue
+  claudeShimmer: rgb('#ABC2EC'), // Border Blue for shimmer effect
+  claudeBlue_FOR_SYSTEM_SPINNER: rgb('#7DA1DE'),
+  claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#ABC2EC'),
+  permission: rgb('#ABC2EC'), // Border Blue — pane/dialog accent
+  permissionShimmer: rgb('#C9D7F2'),
+  planMode: rgb('#7FAE99'), // Muted sage green
+  ide: rgb('#5E88CC'), // Accent Blue
+  promptBorder: rgb('#55606F'), // Muted blue-gray
+  promptBorderShimmer: rgb('#7DA1DE'),
+  text: rgb('#E8E6E0'), // Warm off-white (from #F6F3ED)
+  inverseText: rgb('#22262E'), // Deep warm charcoal (from #343945)
+  inactive: rgb('#8D95A6'), // Mist gray-blue — feeds dimColor
+  inactiveShimmer: rgb('#AAB2C2'),
+  subtle: rgb('#5E6673'), // Dimmer blue-gray
+  suggestion: rgb('#ABC2EC'), // Border Blue — focus/selection
+  remember: rgb('#ABC2EC'),
+  background: rgb('#5E88CC'), // Accent Blue — badge fill
+  success: rgb('#82B89D'), // Mist green (from #4E9675)
+  error: rgb('#DA8A93'), // Soft rose
+  warning: rgb('#D8B270'), // Soft amber
+  merged: rgb('#B3A0D4'), // Soft violet (matches autoAccept)
+  warningShimmer: rgb('#E4C78E'),
+  diffAdded: rgb('#27392C'),
+  diffRemoved: rgb('#3E2A2C'),
+  diffAddedDimmed: rgb('#2B352C'),
+  diffRemovedDimmed: rgb('#362B2C'),
+  diffAddedWord: rgb('#57956B'),
+  diffRemovedWord: rgb('#B26671'),
+  red_FOR_SUBAGENTS_ONLY: rgb('#D4685E'),
+  blue_FOR_SUBAGENTS_ONLY: rgb('#7496D6'),
+  green_FOR_SUBAGENTS_ONLY: rgb('#66B285'),
+  yellow_FOR_SUBAGENTS_ONLY: rgb('#D1A94E'),
+  purple_FOR_SUBAGENTS_ONLY: rgb('#AC8CD2'),
+  orange_FOR_SUBAGENTS_ONLY: rgb('#DB8C50'),
+  pink_FOR_SUBAGENTS_ONLY: rgb('#D384A8'),
+  cyan_FOR_SUBAGENTS_ONLY: rgb('#6FAFB4'),
+  professionalBlue: rgb('#7DA1DE'),
+  chromeYellow: rgb('#D8B270'),
+  clawd_body: rgb('#D98A63'), // Warm mascot orange
+  clawd_background: rgb('#000000'),
+  userMessageBackground: rgb('#292D36'),
+  userMessageBackgroundHover: rgb('#343945'),
+  messageActionsBackground: rgb('#2E333D'),
+  selectionBg: rgb('#3B4A66'), // Mist-blue tint on dark
+  bashMessageBackgroundColor: rgb('#2C3038'),
+  memoryBackgroundColor: rgb('#30353D'),
+  rate_limit_fill: rgb('#7DA1DE'),
+  rate_limit_empty: rgb('#3C414B'),
+  fastMode: rgb('#E09A58'),
+  fastModeShimmer: rgb('#EAB478'),
+  briefLabelYou: rgb('#ABC2EC'),
+  briefLabelClaude: rgb('#7DA1DE'),
+  rainbow_red: rgb('#D98F8A'),
+  rainbow_orange: rgb('#D9A97E'),
+  rainbow_yellow: rgb('#D6BE78'),
+  rainbow_green: rgb('#93BBA0'),
+  rainbow_blue: rgb('#8FA9D6'),
+  rainbow_indigo: rgb('#A89CD4'),
+  rainbow_violet: rgb('#C29CC0'),
+  rainbow_red_shimmer: rgb('#E4AAAA'),
+  rainbow_orange_shimmer: rgb('#E4C09C'),
+  rainbow_yellow_shimmer: rgb('#E2D29C'),
+  rainbow_green_shimmer: rgb('#B0CEBA'),
+  rainbow_blue_shimmer: rgb('#AFBFE2'),
+  rainbow_indigo_shimmer: rgb('#BFB4DE'),
+  rainbow_violet_shimmer: rgb('#D1B4D1'),
+}
+
+/**
+ * Gentle Mist Blue light theme — the strict original card. Blue carries
+ * brand, focus, interaction, and highlight only; body text stays ink gray
+ * on the warm off-white family (background #F6F3ED, surface #EEE5D2,
+ * surface-alt #E4D9E5).
+ */
+const lightTheme: Theme = {
+  autoAccept: rgb('#9B86B8'), // Muted violet (from surface-alt pink-mist)
+  bashBorder: rgb('#C07A93'), // Muted rose (from surface-alt pink-mist)
+  claude: rgb('#3F6CC4'), // Primary Blue — brand
+  claudeShimmer: rgb('#5E88CC'), // Accent Blue for shimmer effect
+  claudeBlue_FOR_SYSTEM_SPINNER: rgb('#3F6CC4'),
+  claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#5E88CC'),
+  permission: rgb('#3F6CC4'), // Primary Blue — pane/dialog accent
+  permissionShimmer: rgb('#5E88CC'),
+  planMode: rgb('#4E9675'), // Sage green
+  ide: rgb('#5E88CC'), // Accent Blue
+  promptBorder: rgb('#ABC2EC'), // Border Blue
+  promptBorderShimmer: rgb('#7DA1DE'), // Accent Soft
+  text: rgb('#343945'), // Ink
+  inverseText: rgb('#F6F3ED'), // Warm off-white (on colored fills)
+  inactive: rgb('#8991A0'), // Text-muted — feeds dimColor
+  inactiveShimmer: rgb('#626978'), // Text-secondary
+  subtle: rgb('#A6ADBA'), // Lower contrast than inactive
+  suggestion: rgb('#3F6CC4'), // Primary Blue — focus/selection
+  remember: rgb('#27478C'), // Deep Outline — picker titles
+  background: rgb('#3F6CC4'), // Primary Blue — badge fill
+  success: rgb('#4E9675'),
+  error: rgb('#C65D6B'), // Muted rose-red
+  warning: rgb('#C08A3E'), // Muted amber
+  merged: rgb('#9B86B8'), // Muted violet (matches autoAccept)
+  warningShimmer: rgb('#D0A050'),
+  diffAdded: rgb('#DCEBDD'),
+  diffRemoved: rgb('#F2DEDE'),
+  diffAddedDimmed: rgb('#E4EFE5'),
+  diffRemovedDimmed: rgb('#F5E6E4'),
+  diffAddedWord: rgb('#A9D3B4'),
+  diffRemovedWord: rgb('#E5B3AE'),
+  red_FOR_SUBAGENTS_ONLY: rgb('#BE5A52'),
+  blue_FOR_SUBAGENTS_ONLY: rgb('#3F6CC4'),
+  green_FOR_SUBAGENTS_ONLY: rgb('#4E9675'),
+  yellow_FOR_SUBAGENTS_ONLY: rgb('#B98A34'),
+  purple_FOR_SUBAGENTS_ONLY: rgb('#9678B4'),
+  orange_FOR_SUBAGENTS_ONLY: rgb('#C97F4A'),
+  pink_FOR_SUBAGENTS_ONLY: rgb('#C06E97'),
+  cyan_FOR_SUBAGENTS_ONLY: rgb('#5698A0'),
+  professionalBlue: rgb('#5E88CC'),
+  chromeYellow: rgb('#C99A3F'),
+  clawd_body: rgb('#D98A63'), // Warm mascot orange
+  clawd_background: rgb('#F6F3ED'),
+  userMessageBackground: rgb('#EEE5D2'), // Surface
+  userMessageBackgroundHover: rgb('#E4D9E5'), // Surface Alt
+  messageActionsBackground: rgb('#E4D9E5'),
+  selectionBg: rgb('#D5DEF2'), // Mist-blue tint on warm white
+  bashMessageBackgroundColor: rgb('#EAE1D3'),
+  memoryBackgroundColor: rgb('#E4D9E5'),
+  rate_limit_fill: rgb('#7DA1DE'),
+  rate_limit_empty: rgb('#DDD5C7'),
+  fastMode: rgb('#D98E4A'),
+  fastModeShimmer: rgb('#E2A465'),
+  briefLabelYou: rgb('#5E88CC'),
+  briefLabelClaude: rgb('#3F6CC4'),
+  rainbow_red: rgb('#D98888'),
+  rainbow_orange: rgb('#D9A276'),
+  rainbow_yellow: rgb('#CEB264'),
+  rainbow_green: rgb('#8AB392'),
+  rainbow_blue: rgb('#87A3D3'),
+  rainbow_indigo: rgb('#9C92C8'),
+  rainbow_violet: rgb('#BB92B8'),
+  rainbow_red_shimmer: rgb('#E4A6A6'),
+  rainbow_orange_shimmer: rgb('#E4BB96'),
+  rainbow_yellow_shimmer: rgb('#DEC988'),
+  rainbow_green_shimmer: rgb('#A9C8AF'),
+  rainbow_blue_shimmer: rgb('#A9BCE0'),
+  rainbow_indigo_shimmer: rgb('#B7AFD8'),
+  rainbow_violet_shimmer: rgb('#CFB0CC'),
 }
 
 /**
@@ -209,7 +297,7 @@ const darkAnsiTheme: Theme = {
   orange_FOR_SUBAGENTS_ONLY: 'ansi:redBright',
   pink_FOR_SUBAGENTS_ONLY: 'ansi:magentaBright',
   cyan_FOR_SUBAGENTS_ONLY: 'ansi:cyanBright',
-  professionalBlue: 'rgb(106,155,204)',
+  professionalBlue: 'ansi:blueBright',
   chromeYellow: 'ansi:yellowBright',
   clawd_body: 'ansi:redBright',
   clawd_background: 'ansi:black',
@@ -243,9 +331,26 @@ const darkAnsiTheme: Theme = {
 
 export function getTheme(themeName: ThemeName): Theme {
   switch (themeName) {
+    case 'light':
+      return lightTheme
     case 'dark-ansi':
       return darkAnsiTheme
     default:
       return darkTheme
   }
+}
+
+/**
+ * The theme chosen at startup, mirrored module-level so non-React rendering
+ * (markdown inline code in cc/markdown.ts) can resolve palette colors
+ * without a context. ThemeProvider sets this once detection settles.
+ */
+let activeThemeName: ThemeName = 'dark'
+
+export function setActiveThemeName(name: ThemeName): void {
+  activeThemeName = name
+}
+
+export function getActiveTheme(): Theme {
+  return getTheme(activeThemeName)
 }

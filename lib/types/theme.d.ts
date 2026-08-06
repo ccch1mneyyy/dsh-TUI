@@ -1,9 +1,13 @@
 /**
- * Claude Code theme, ported verbatim from the leaked source
- * (`src/utils/theme.ts`). Only the dark palettes are kept — the plugin is a
- * personal terminal tool and dark is the default everywhere it runs. The
- * `Theme` type is a structural copy so design-system components ported from
- * the leak (`ThemedText`, `ThemedBox`, `Spinner*`) keep compiling untouched.
+ * cc-tui color themes — Gentle Mist Blue (雾蓝) family.
+ *
+ * Two truecolor palettes share one identity: mist blues carry brand, focus,
+ * and interaction; body text stays neutral. `light` is the strict Gentle
+ * Mist Blue card (warm off-white background #F6F3ED, ink text #343945) for
+ * light terminals; `dark` is its dark-terminal adaptation (warm off-white
+ * text, accent-soft blues). `dark-ansi` is the 16-color fallback for
+ * terminals without truecolor. The active palette is chosen at startup by
+ * querying the terminal background (OSC 11) — see ThemeProvider.
  */
 export type Theme = {
     autoAccept: string;
@@ -76,8 +80,10 @@ export type Theme = {
     rainbow_indigo_shimmer: string;
     rainbow_violet_shimmer: string;
 };
-export declare const THEME_NAMES: readonly ["dark", "dark-ansi"];
+export declare const THEME_NAMES: readonly ["dark", "dark-ansi", "light"];
 /** A renderable theme. Always resolvable to a concrete color palette. */
 export type ThemeName = (typeof THEME_NAMES)[number];
 export declare function getTheme(themeName: ThemeName): Theme;
+export declare function setActiveThemeName(name: ThemeName): void;
+export declare function getActiveTheme(): Theme;
 //# sourceMappingURL=theme.d.ts.map
