@@ -56,8 +56,8 @@ export function LogoV2({
 
   // Opening clock: drives the shimmer sweep and big-text highlight only
   // while the intro plays; `null` afterwards unsubscribes so the settled
-  // header never repaints.
-  const [ref, time] = useAnimationFrame(settled ? null : 200)
+  // header never repaints. 100ms frames keep the sweep lively.
+  const [ref, time] = useAnimationFrame(settled ? null : 100)
 
   // Frame chain: dwell per OPENING_SEQUENCE entry, then settle for good.
   React.useEffect(() => {
@@ -84,8 +84,8 @@ export function LogoV2({
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
 
-  const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH)
-  const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH)
+  const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 100)
+  const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 100)
 
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
@@ -93,7 +93,7 @@ export function LogoV2({
         {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
         <Box flexDirection="column" flexShrink={1}>
           <Text wrap="truncate-end">
-            {sweep('✦ dsh-cc', t, wordmarkRGB, wordmarkShimmerRGB)}
+            {sweep('✦ dsh-cc', t, wordmarkRGB, wordmarkShimmerRGB, 100)}
             <Text dimColor>{'  v' + VERSION}</Text>
           </Text>
           {bigDeepSeek.map((row, index) => (
@@ -125,7 +125,7 @@ export function LogoV2({
         </Box>
       </Box>
       <Box marginTop={1} paddingLeft={2}>
-        <Text>{sweep('探索未至之境！', t, taglineRGB, FLASH)}</Text>
+        <Text>{sweep('探索未至之境！', t, taglineRGB, FLASH, 100)}</Text>
       </Box>
     </Box>
   )

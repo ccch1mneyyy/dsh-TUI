@@ -10,6 +10,7 @@ import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { logForDebugging } from './utils/debug.js'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -453,11 +454,6 @@ function restoreToolResult(row: ChatRow, event: SessionEvent<'tool/result'>): vo
   row.tool.resultFull = result || undefined
 }
 
-
-/** True while a reasoning row is streaming (spinner mode = thinking). */
-function hasStreamingReasoning(rows: readonly ChatRow[]): boolean {
-  return rows.some(row => row.kind === 'reasoning' && row.streaming)
-}
 
 /** Buffer below the context window at which CC warns (autoCompact.ts). */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
@@ -1355,6 +1351,11 @@ ${output}
   let streaming: ChatRow | undefined
   /** The in-progress reasoning row; `undefined` when no reasoning is streaming. */
   let reasoning: ChatRow | undefined
+  /** Reasoning rows sealed by an assistant/message this turn. They stay
+   *  `streaming: true` — expanded in the transcript — until turn/end folds
+   *  them (WebUI AssistantMarkdown keepOpen parity: thinking holds open
+   *  through the whole in-flight turn, tool-call steps included). */
+  const sealedReasoning: ChatRow[] = []
   /** Wall-clock start of the current reasoning row (durationMs on settle). */
   let reasoningStart = 0
   /** First-output wall-clock + estimated output tokens of the current turn
@@ -1384,6 +1385,7 @@ ${output}
       reasoning = { id: nextRowId, kind: 'reasoning', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
       nextRowId += 1
       state.rows.push(reasoning)
+      logForDebugging('thinking: reasoning row open (expanded)')
     }
     return reasoning
   }
@@ -1391,18 +1393,24 @@ ${output}
   const settleStreaming = (): void => {
     if (streaming !== undefined) streaming.streaming = false
     streaming = undefined
+    const folded = sealedReasoning.length + (reasoning !== undefined ? 1 : 0)
+    for (const row of sealedReasoning) row.streaming = false
+    sealedReasoning.length = 0
     if (reasoning !== undefined) {
       reasoning.streaming = false
       reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
     }
     reasoning = undefined
+    if (folded > 0) logForDebugging(`thinking: folded ${folded} reasoning row(s) at turn settle`)
   }
 
   /** Recompute the spinner phase from live row/tool state. */
   const updateSpinnerMode = (): void => {
     if (state.activeToolCount > 0) {
       state.spinnerMode = 'tool-use'
-    } else if (hasStreamingReasoning(state.rows)) {
+    } else if (reasoning !== undefined) {
+      // Only LIVE reasoning counts — sealed rows stay streaming=true for
+      // transcript expansion until turn/end but the model is past thinking.
       state.spinnerMode = 'thinking'
     } else if (streaming !== undefined) {
       state.spinnerMode = 'responding'
@@ -1480,8 +1488,12 @@ ${output}
         row.streaming = false
         streaming = undefined
         if (reasoning !== undefined) {
-          reasoning.streaming = false
+          // Seal, don't fold: the per-step duration settles here, but the
+          // row keeps streaming=true (expanded) until turn/end — WebUI
+          // keepOpen parity. The next step's reasoning opens a fresh row.
           reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
+          sealedReasoning.push(reasoning)
+          logForDebugging(`thinking: step sealed (${reasoning.durationMs}ms), expanded until turn/end`)
         }
         reasoning = undefined
         updateSpinnerMode()

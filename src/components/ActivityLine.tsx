@@ -28,9 +28,9 @@ export function contextPressurePct(
  * The working-activity line, rendered either in the spinner slot (while a
  * turn runs — replacing the CC random-verb spinner) or on the status bar
  * (the turn-summary card once idle). pi working-activity style: an animated
- * indicator frame, a white shimmer sweep over the line, an amber/red
+ * indicator frame, an ice-blue shimmer sweep over the line, an amber/red
  * `⚠ 上下文N%` pressure prefix, and a trailing token suffix for the spinner
- * placement. Done summaries render statically in success green.
+ * placement. Done summaries render statically in the brand mist blue.
  */
 export function ActivityLine({
   activity,
@@ -45,7 +45,9 @@ export function ActivityLine({
   warnDanger?: boolean
   suffix?: string
 }): React.ReactNode {
-  const [ref, time] = useAnimationFrame(200)
+  // 100ms frames: the shimmer sweep advances one column per frame (2× the
+  // ported 200ms cadence — the slow crawl read as lag).
+  const [ref, time] = useAnimationFrame(100)
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   const preset = React.useMemo(
@@ -55,11 +57,9 @@ export function ActivityLine({
   const frameIndex = Math.floor(time / preset.intervalMs) % preset.frames.length
   const frame = preset.frames[frameIndex] ?? '·'
   const color =
-    activity.phase === 'done'
-      ? 'success'
-      : activity.phase === 'tool'
-        ? 'claude'
-        : 'claudeBlue_FOR_SYSTEM_SPINNER'
+    activity.phase === 'done' || activity.phase === 'tool'
+      ? 'claude'
+      : 'claudeBlue_FOR_SYSTEM_SPINNER'
   const baseRGB =
     activity.phase === 'tool'
       ? (parseRGB(theme.claude) ?? BRAND)
@@ -78,7 +78,7 @@ export function ActivityLine({
       {activity.phase === 'done' ? (
         <Text color={color}>{activity.line}</Text>
       ) : (
-        <Text>{sweep(activity.line, time, baseRGB, FLASH)}</Text>
+        <Text>{sweep(activity.line, time, baseRGB, FLASH, 100)}</Text>
       )}
       {suffix !== undefined && <Text dimColor>{suffix}</Text>}
     </Text>
