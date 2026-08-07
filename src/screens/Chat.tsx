@@ -39,6 +39,10 @@ const SELECTABLE_KINDS = new Set<ChatRow['kind']>([
   'local-output',
 ])
 
+/** Shared empty list for mode-gated derived rows (stable reference, so
+ *  downstream consumers never see a changing prop when the mode is off). */
+const NO_ROWS: readonly ChatRow[] = []
+
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
@@ -533,9 +537,12 @@ export function Chat({
   // NOTE: rows is a live in-place array on the channel (no new reference per
   // update), so derived lists must be computed per render — a useMemo keyed
   // on `channel.rows` would freeze at the first empty snapshot forever.
-  const selectableRows = channel.rows.filter(row =>
-    SELECTABLE_KINDS.has(row.kind),
-  )
+  // Both lists only feed their respective modes; computing them
+  // unconditionally cost an O(rows) scan + array allocation per render
+  // (every streamed chunk), so they are gated on the consuming mode.
+  const selectableRows = selectionActive
+    ? channel.rows.filter(row => SELECTABLE_KINDS.has(row.kind))
+    : NO_ROWS
 
   // ctrl+r history search: substring match on the query, newest first.
   const historyMatches = React.useMemo(() => {
@@ -545,13 +552,21 @@ export function Chat({
 
   // Double-Esc rewind: the user's own messages, newest first (CC lists the
   // selectable user turns; steering side-questions are excluded). Computed
-  // per render — `channel.rows` is a live in-place array (see selectableRows).
-  const rewindRows = channel.rows
-    .filter(row => row.kind === 'user' && row.label === undefined)
-    .reverse()
+  // per render while the picker is open — `channel.rows` is a live in-place
+  // array (see selectableRows).
+  const rewindRows = rewindOpen
+    ? channel.rows
+      .filter(row => row.kind === 'user' && row.label === undefined)
+      .reverse()
+    : NO_ROWS
   /** Open the rewind picker (from PromptInput's double-Esc on an empty input). */
   const openRewind = () => {
-    if (rewindRows.length === 0) {
+    // rewindOpen is still false this render, so rewindRows is empty — scan
+    // directly instead of reading the gated list.
+    const candidates = channel.rows
+      .filter(row => row.kind === 'user' && row.label === undefined)
+      .reverse()
+    if (candidates.length === 0) {
       channel.notify('Nothing to rewind yet')
       return
     }
@@ -641,14 +656,20 @@ export function Chat({
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index
     if (next) setSelectedId(next.id)
   }
-  const toggleRowExpanded = (rowId: number) => {
+  // useCallback: these feed MessageList → MemoRow's shallow compare; fresh
+  // closures each render would defeat every row's memo.
+  const toggleRowExpanded = React.useCallback((rowId: number) => {
     setExpandedRows((previous) => {
       const next = new Set(previous)
       if (next.has(rowId)) next.delete(rowId)
       else next.add(rowId)
       return next
     })
-  }
+  }, [])
+  const registerRowRef = React.useCallback((rowId: number, el: DOMElement | null) => {
+    if (el) rowRefsRef.current.set(rowId, el)
+    else rowRefsRef.current.delete(rowId)
+  }, [])
 
   useInput((input, key, event) => {
     if (searchOpen) {
@@ -965,10 +986,7 @@ export function Chat({
           thinkingVisible={thinkingVisible}
           onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}
           onLoadOlder={() => channel.loadOlder()}
-          registerRowRef={(rowId, el) => {
-            if (el) rowRefsRef.current.set(rowId, el)
-            else rowRefsRef.current.delete(rowId)
-          }}
+          registerRowRef={registerRowRef}
           scrollHandle={handle}
           forceMountRowId={forceMountRowId}
         />

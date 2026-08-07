@@ -27,7 +27,6 @@ export type ElementNames =
 
 export type NodeNames = ElementNames | TextName
 
-// eslint-disable-next-line @typescript-eslint/naming-convention
 export type DOMElement = {
   nodeName: ElementNames
   attributes: Record<string, DOMNodeAttribute>
@@ -95,7 +94,6 @@ export type TextNode = {
   nodeValue: string
 } & InkNode
 
-// eslint-disable-next-line @typescript-eslint/naming-convention
 export type DOMNode<T = { nodeName: NodeNames }> = T extends {
   nodeName: infer U
 }
@@ -104,7 +102,6 @@ export type DOMNode<T = { nodeName: NodeNames }> = T extends {
     : DOMElement
   : never
 
-// eslint-disable-next-line @typescript-eslint/naming-convention
 export type DOMNodeAttribute = boolean | string | number
 
 export const createNode = (nodeName: ElementNames): DOMElement => {
@@ -228,7 +225,7 @@ function collectRemovedRects(
   underAbsolute = false,
 ): void {
   if (removed.nodeName === '#text') return
-  const elem = removed as DOMElement
+  const elem = removed
   // If this node or any ancestor in the removed subtree was absolute,
   // its painted pixels may overlap non-siblings — flag for global blit
   // disable. Normal-flow removals only affect direct siblings, which
@@ -329,6 +326,35 @@ export const createTextNode = (text: string): TextNode => {
   return node
 }
 
+/**
+ * Per-node incremental wrap cache for measureTextNode. A streaming text
+ * node grows by append every chunk; without a cache each yoga pass re-wraps
+ * the full text (wrapAnsi tokenizes + measures every word — the dominant
+ * SLOW_YOGA cost at 20ms+ per frame on long code blocks).
+ *
+ * Greedy wrapping has no cross-line state, so a text's wrapped height equals
+ * the sum of its logical lines' wrapped heights. We therefore commit
+ * completed logical lines (everything before the last '\n') into `headHeight`
+ * and only re-wrap the growing tail line each pass — O(current line) instead
+ * of O(whole text). Cache validity requires same width/wrap mode and the
+ * cached text to be a pure prefix of the new text.
+ */
+type MeasureWrapCache = {
+  /** Full text as measured last time (post tab-expansion). */
+  text: string
+  width: number
+  wrap: NonNullable<Styles['textWrap']>
+  /** Wrapped height of text.slice(0, tailStart) — the committed head. */
+  headHeight: number
+  /** Start offset of the uncommitted tail (just past the last '\n'). */
+  tailStart: number
+  /** Wrapped height of text.slice(tailStart). */
+  tailHeight: number
+  /** Last returned dimensions. */
+  result: { width: number; height: number }
+}
+const measureWrapCache = new WeakMap<DOMNode, MeasureWrapCache>()
+
 const measureTextNode = function (
   node: DOMNode,
   width: number,
@@ -367,10 +393,70 @@ const measureTextNode = function (
     return measureText(text, effectiveWidth)
   }
 
-  const textWrap = node.style?.textWrap ?? 'wrap'
-  const wrappedText = wrapText(text, width, textWrap)
+  const textWrap = node.style.textWrap ?? 'wrap'
 
-  return measureText(wrappedText, width)
+  // Incremental path: same node, same width/wrap, text grew by append.
+  const cached = measureWrapCache.get(node)
+  if (cached !== undefined && cached.width === width && cached.wrap === textWrap) {
+    if (cached.text === text) {
+      // Same-frame repeat measure (yoga min/max probing) — free.
+      return cached.result
+    }
+    if (text.startsWith(cached.text)) {
+      const tail = text.slice(cached.tailStart)
+      const tailWrapped = wrapText(tail, width, textWrap)
+      const tailDim = measureText(tailWrapped, width)
+      // Commit fully-terminated logical lines into the head so the tail
+      // stays bounded at one line of source text.
+      const lastNewline = tail.lastIndexOf('\n')
+      let { headHeight, tailStart } = cached
+      let tailHeight = tailDim.height
+      if (lastNewline > 0) {
+        const committed = wrapText(tail.slice(0, lastNewline + 1), width, textWrap)
+        headHeight += measureText(committed, width).height
+        tailStart += lastNewline + 1
+        tailHeight = measureText(wrapText(tail.slice(lastNewline + 1), width, textWrap), width).height
+      }
+      const result = {
+        width: Math.max(cached.result.width, tailDim.width),
+        height: headHeight + tailHeight,
+      }
+      measureWrapCache.set(node, {
+        text,
+        width,
+        wrap: textWrap,
+        headHeight,
+        tailStart,
+        tailHeight,
+        result,
+      })
+      return result
+    }
+    // Text replaced or shrunk (node reuse for a different message): fall
+    // through to the full path and overwrite the cache below.
+  }
+
+  const wrappedText = wrapText(text, width, textWrap)
+  const fullResult = measureText(wrappedText, width)
+
+  // Seed the incremental cache: commit everything before the last newline.
+  const lastNewline = text.lastIndexOf('\n')
+  const tailStart = lastNewline === -1 ? 0 : lastNewline + 1
+  const headHeight =
+    tailStart === 0
+      ? 0
+      : measureText(wrapText(text.slice(0, tailStart), width, textWrap), width).height
+  measureWrapCache.set(node, {
+    text,
+    width,
+    wrap: textWrap,
+    headHeight,
+    tailStart,
+    tailHeight: fullResult.height - headHeight,
+    result: fullResult,
+  })
+
+  return fullResult
 }
 
 // ink-raw-ansi nodes hold pre-rendered ANSI strings with known dimensions.
@@ -396,7 +482,7 @@ export const markDirty = (node?: DOMNode): void => {
 
   while (current) {
     if (current.nodeName !== '#text') {
-      ;(current as DOMElement).dirty = true
+      ;(current).dirty = true
       // Only mark yoga dirty on leaf nodes that have measure functions
       if (
         !markedYoga &&
@@ -419,7 +505,7 @@ export const markDirty = (node?: DOMNode): void => {
 export const scheduleRenderFrom = (node?: DOMNode): void => {
   let cur: DOMNode | undefined = node
   while (cur?.parentNode) cur = cur.parentNode
-  if (cur && cur.nodeName !== '#text') (cur as DOMElement).onRender?.()
+  if (cur && cur.nodeName !== '#text') (cur).onRender?.()
 }
 
 export const setTextNodeValue = (node: TextNode, text: string): void => {

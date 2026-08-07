@@ -31,12 +31,12 @@ export function StreamingMarkdown({
 
   // Last non-space token is the growing block; everything before is final
   let lastContentIdx = tokens.length - 1
-  while (lastContentIdx >= 0 && tokens[lastContentIdx]!.type === 'space') {
+  while (lastContentIdx >= 0 && tokens[lastContentIdx].type === 'space') {
     lastContentIdx--
   }
   let advance = 0
   for (let i = 0; i < lastContentIdx; i++) {
-    advance += tokens[i]!.raw.length
+    advance += tokens[i].raw.length
   }
   if (advance > 0) {
     stablePrefixRef.current = stripped.substring(0, boundary + advance)
@@ -48,7 +48,7 @@ export function StreamingMarkdown({
   return (
     <Box flexDirection="column" gap={1}>
       {stablePrefix && <Markdown>{stablePrefix}</Markdown>}
-      {unstableSuffix && <Markdown>{unstableSuffix}</Markdown>}
+      {unstableSuffix && <Markdown cacheTokens={false}>{unstableSuffix}</Markdown>}
     </Box>
   )
 }

@@ -3,7 +3,6 @@ import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text } from '../ui.js'
 import { configureMarked, formatToken, stripPromptXMLTags } from '../cc/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../cc/cliHighlight.js'
-import { hashContent } from '../cc/hash.js'
 import { MarkdownTable } from './MarkdownTable.js'
 
 /**
@@ -18,6 +17,9 @@ type Props = {
   children: string
   /** When true, render all text content as dim */
   dimColor?: boolean
+  /** False for the streaming tail (its content changes every chunk, so a
+   *  cache entry would never hit and would only pollute the token cache). */
+  cacheTokens?: boolean
 }
 
 // Module-level token cache — marked.lexer is the hot cost on remounts.
@@ -43,7 +45,7 @@ function hasMarkdownSyntax(s: string): boolean {
   return MD_SYNTAX_RE.test(s.length > 500 ? s.slice(0, 500) : s)
 }
 
-function cachedLexer(content: string): Token[] {
+function cachedLexer(content: string, cache: boolean): Token[] {
   // Fast path: plain text with no markdown syntax → single paragraph token.
   if (!hasMarkdownSyntax(content)) {
     return [
@@ -52,15 +54,18 @@ function cachedLexer(content: string): Token[] {
         raw: content,
         text: content,
         tokens: [{ type: 'text', raw: content, text: content }],
-      } as Token,
+      },
     ]
   }
-  const key = hashContent(content)
-  const hit = tokenCache.get(key)
+  if (!cache) return marked.lexer(content)
+  // The content string itself is the key: V8 caches the string hash in the
+  // string header, so Map lookup is hash-free after the first insert, and
+  // unlike sha256 there is no per-call digest allocation or collision risk.
+  const hit = tokenCache.get(content)
   if (hit) {
     // Promote to MRU
-    tokenCache.delete(key)
-    tokenCache.set(key, hit)
+    tokenCache.delete(content)
+    tokenCache.set(content, hit)
     return hit
   }
   const tokens = marked.lexer(content)
@@ -72,7 +77,7 @@ function cachedLexer(content: string): Token[] {
     tokenCache.clear()
     tokenCacheChars = 0
   }
-  tokenCache.set(key, tokens)
+  tokenCache.set(content, tokens)
   tokenCacheChars += content.length
   return tokens
 }
@@ -82,12 +87,12 @@ function cachedLexer(content: string): Token[] {
  * - Tables are rendered as bordered flexbox components
  * - Other content is rendered as ANSI strings via formatToken
  */
-export function Markdown({ children, dimColor = false }: Props): React.ReactNode {
+export function Markdown({ children, dimColor = false, cacheTokens = true }: Props): React.ReactNode {
   const [highlight, setHighlight] = React.useState<CliHighlight | null>(null)
 
   React.useEffect(() => {
     let alive = true
-    void getCliHighlightPromise().then(loaded => {
+    void getCliHighlightPromise().then((loaded) => {
       if (alive) setHighlight(loaded)
     })
     return () => {
@@ -98,7 +103,7 @@ export function Markdown({ children, dimColor = false }: Props): React.ReactNode
   configureMarked()
 
   const elements = React.useMemo(() => {
-    const tokens = cachedLexer(stripPromptXMLTags(children))
+    const tokens = cachedLexer(stripPromptXMLTags(children), cacheTokens)
     const elements: React.ReactNode[] = []
     let nonTableContent = ''
 
@@ -130,7 +135,7 @@ export function Markdown({ children, dimColor = false }: Props): React.ReactNode
 
     flushNonTableContent()
     return elements
-  }, [children, dimColor, highlight])
+  }, [children, dimColor, highlight, cacheTokens])
 
   return (
     <Box flexDirection="column" gap={1}>

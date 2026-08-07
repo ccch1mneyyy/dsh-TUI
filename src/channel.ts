@@ -323,6 +323,10 @@ export interface ChannelState {
   subscribe: (listener: () => void) => () => void
   /** @internal event bump (the public `notify(text)` posts a notification). */
   emit(): void
+  /** @internal frame-aligned emit for high-frequency streaming deltas:
+   *  version bumps synchronously but listeners fire at most once per 16ms
+   *  window (trailing edge). */
+  emitStream(): void
   submit(text: string): void
   cancel(): void
   rewindTo(row: ChatRow): Promise<string | null>
@@ -617,6 +621,8 @@ export function createChannel(
   // built-in local commands exist.
   const commandService: CommandService | undefined = ctx.get('commands')
   const listeners = new Set<() => void>()
+  /** True while a frame-aligned stream notification is pending (emitStream). */
+  let streamNotifyScheduled = false
   let nextNotificationId = 1
   /** One-shot context-low warning per session (CC's TokenWarning). */
   let contextWarned = false
@@ -679,6 +685,24 @@ export function createChannel(
       foldRows(state.rows, MAX_ROWS)
       state.version += 1
       for (const listener of listeners) listener()
+    },
+    // Frame-aligned notification for streaming deltas. LLM chunks arrive at
+    // 100-300 events/s (one per token); waking React synchronously per event
+    // commits the whole tree per token — the render throttle only gates
+    // paint, not commits, so the event loop saturates and output stutters.
+    // Data + version stay synchronous (getSnapshot always reads fresh
+    // state); only the listener wakeup coalesces to paint cadence.
+    emitStream() {
+      state.version += 1
+      if (streamNotifyScheduled) return
+      streamNotifyScheduled = true
+      const timer = setTimeout(() => {
+        streamNotifyScheduled = false
+        foldRows(state.rows, MAX_ROWS)
+        for (const listener of listeners) listener()
+      }, 16)
+      // Never hold the process open for a pending UI wakeup.
+      timer.unref()
     },
     loadOlder() {
       // Restore folded-away full text from the session log, newest folded
@@ -1577,6 +1601,7 @@ ${output}
       return
     }
     const change = source.change
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may not match the static type
     if (change === undefined || change.kind !== 'goal/change') return
     if (change.operation === 'clear') {
       state.goal = undefined
@@ -1890,7 +1915,10 @@ ${output}
           return
         }
         renderEvent(event)
-        state.emit()
+        // Streaming deltas (one event per token) take the frame-aligned
+        // path; every other event keeps synchronous notification.
+        if (event.type === 'assistant/chunk') state.emitStream()
+        else state.emit()
       }),
     ]
   }

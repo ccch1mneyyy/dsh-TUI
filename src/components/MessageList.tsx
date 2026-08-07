@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
-import type { ChatRow } from '../channel.js'
+import type { ChatRow, ToolRow } from '../channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
@@ -203,11 +203,18 @@ export function MessageList({
     if (changed) setMeasureTick(t => t + 1)
   })
 
-  const setRowRef = (rowId: number, el: DOMElement | null): void => {
+  // useCallback: the reference feeds MemoRow's shallow compare; a fresh
+  // closure per render would defeat every row's memo.
+  const setRowRef = React.useCallback((rowId: number, el: DOMElement | null): void => {
     if (el) localRefs.current.set(rowId, el)
     else localRefs.current.delete(rowId)
     registerRowRef?.(rowId, el)
-  }
+  }, [registerRowRef])
+
+  // Second-resolution clock for the running tool card's live elapsed time.
+  // Computed per render (cheap) but only forwarded to running rows, so
+  // settled rows never see a changing prop.
+  const nowSec = Math.floor(Date.now() / 1000)
 
   return (
     <>
@@ -228,128 +235,259 @@ export function MessageList({
         // CC addMargin: pre-pass result keeps windowed rows at full-mount
         // spacing; only the very first row of the whole list has none.
           const addMargin = margins.get(row.id) === true
-          const isSelected = selectedId === row.id
-          const isExpanded = expanded || expandedRows.has(row.id)
-
-          switch (row.kind) {
-            case 'user':
-              return (
-                <Box key={row.id} flexDirection="column" ref={(el) =>{  setRowRef(row.id, el) }}>
-                  <UserPromptMessage
-                    text={row.text}
-                    addMargin={addMargin}
-                    isSelected={isSelected}
-                    isExpanded={expandedRows.has(row.id)}
-                    onClick={() =>{  onToggleRow(row.id) }}
-                  />
-                </Box>
-              )
-            case 'assistant':
-              return row.streaming ? (
-                <Box
-                  key={row.id}
-                  alignItems="flex-start"
-                  flexDirection="row"
-                  marginTop={addMargin ? 1 : 0}
-                  width="100%"
-                  backgroundColor={rowBackground(row.id)}
-                >
-                  <Box minWidth={2}>
-                    <Text color="text">●</Text>
-                  </Box>
-                  <Box flexDirection="column">
-                    {/* The ⏵ self-narration line (working-activity narrate
-                      contract) is stripped here: the live working line on
-                      the status bar already shows it. */}
-                    <StreamingMarkdown>{stripNarration(row.text)}</StreamingMarkdown>
-                  </Box>
-                </Box>
-              ) : (
-                <Box
-                  key={row.id}
-                  width="100%"
-                  flexDirection="column"
-                  backgroundColor={rowBackground(row.id)}
-                  ref={(el) =>{  setRowRef(row.id, el) }}
-                >
-                  {expanded && (
-                    <Box
-                      flexDirection="row"
-                      justifyContent="flex-end"
-                      gap={1}
-                      marginTop={1}
-                    >
-                      <MessageMetadata timestamp={row.time} model={model} />
-                    </Box>
-                  )}
-                  <AssistantTextMessage
-                    text={stripNarration(row.text)}
-                    addMargin={addMargin}
-                    isSelected={isSelected}
-                    isExpanded={expandedRows.has(row.id)}
-                    onClick={() =>{  onToggleRow(row.id) }}
-                  />
-                </Box>
-              )
-            case 'reasoning':
-              return (
-                <Box key={row.id} flexDirection="column" ref={(el) =>{  setRowRef(row.id, el) }}>
-                  <AssistantThinkingMessage
-                    thinking={row.text}
-                    addMargin={addMargin}
-                    // Streaming reasoning shows expanded live, then folds
-                    // automatically once the turn settles (unless Ctrl+O or a
-                    // single-row expansion keeps it open).
-                    verbose={isExpanded || row.streaming === true}
-                    durationMs={row.durationMs}
-                    isSelected={isSelected}
-                    onClick={() =>{  onToggleRow(row.id) }}
-                  />
-                </Box>
-              )
-            case 'tool':
-              return row.tool ? (
-                <Box key={row.id} flexDirection="column" ref={(el) =>{  setRowRef(row.id, el) }}>
-                  <AssistantToolUseMessage
-                    tool={row.tool}
-                    addMargin={addMargin}
-                    verbose={isExpanded}
-                    isSelected={isSelected}
-                    isExpanded={expandedRows.has(row.id)}
-                  />
-                </Box>
-              ) : null
-            case 'notice':
-              return (
-                <Box key={row.id} marginTop={1} ref={(el) =>{  setRowRef(row.id, el) }}>
-                  <Divider title={` ${row.text} `} />
-                </Box>
-              )
-            case 'interrupt':
-              return (
-                <Box key={row.id} marginTop={1} ref={(el) =>{  setRowRef(row.id, el) }}>
-                  <InterruptedByUser />
-                </Box>
-              )
-            case 'local':
-            // `!` mode command echo, like CC's UserBashInputMessage.
-              return (
-                <Box key={row.id} marginTop={1} backgroundColor={rowBackground(row.id)} ref={(el) =>{  setRowRef(row.id, el) }}>
-                  <Text color="bashBorder">! {row.text}</Text>
-                </Box>
-              )
-            case 'local-output':
-              return (
-                <Box key={row.id} paddingLeft={2} backgroundColor={rowBackground(row.id)} ref={(el) =>{  setRowRef(row.id, el) }}>
-                  <Text dimColor>{row.text}</Text>
-                </Box>
-              )
-          }
+          const tool = row.tool
+          return (
+            <MemoRow
+              key={row.id}
+              rowId={row.id}
+              kind={row.kind}
+              text={row.text}
+              streaming={row.streaming === true}
+              durationMs={row.durationMs}
+              time={row.time}
+              addMargin={addMargin}
+              isSelected={selectedId === row.id}
+              isExpanded={expandedRows.has(row.id)}
+              expanded={expanded}
+              model={model}
+              background={rowBackground(row.id)}
+              toolCallId={tool?.callId}
+              toolName={tool?.name}
+              toolArgsText={tool?.argsText}
+              toolArgsFull={tool?.argsFull}
+              toolStatus={tool?.status}
+              toolResultText={tool?.resultText}
+              toolResultFull={tool?.resultFull}
+              toolErrorText={tool?.errorText}
+              toolStartedAt={tool?.startedAt}
+              toolDurationMs={tool?.durationMs}
+              nowSec={tool?.status === 'running' ? nowSec : undefined}
+              onToggleRow={onToggleRow}
+              setRowRef={setRowRef}
+            />
+          )
         })}
       {bottomPad > 0 && <Box height={bottomPad} flexShrink={0} />}
     </>
   )
 }
+
+// --- per-row memoization ---------------------------------------------------
+// channel.ts mutates rows in place (`text += chunk`, `tool.status = ...`),
+// so row-object identity can never detect an update. MemoRow flattens every
+// rendered field into primitive props: React.memo's default shallow compare
+// then sees each mutation as a changed string/number, while an untouched
+// row compares equal in O(1) and skips render + reconciler diff entirely.
+// Before this, every streamed chunk re-rendered every mounted row (~30-40
+// in the virtualization window) and re-ran each row's markdown pipeline —
+// the dominant long-session jank source.
+type MemoRowProps = {
+  rowId: number
+  kind: ChatRow['kind']
+  text: string
+  streaming: boolean
+  durationMs: number | undefined
+  time: number | undefined
+  addMargin: boolean
+  isSelected: boolean
+  isExpanded: boolean
+  expanded: boolean
+  model: string
+  background: 'messageActionsBackground' | 'userMessageBackgroundHover' | undefined
+  // ToolRow, flattened: the channel writes status/result fields in place,
+  // so passing the object itself would make mutations invisible to memo.
+  toolCallId: string | undefined
+  toolName: string | undefined
+  toolArgsText: string | undefined
+  toolArgsFull: string | undefined
+  toolStatus: ToolRow['status'] | undefined
+  toolResultText: string | undefined
+  toolResultFull: string | undefined
+  toolErrorText: string | undefined
+  toolStartedAt: number | undefined
+  toolDurationMs: number | undefined
+  /** Second-resolution clock, forwarded only while the tool runs so the
+   *  live elapsed label ticks; settled rows never receive a changing prop. */
+  nowSec: number | undefined
+  onToggleRow: (rowId: number) => void
+  setRowRef: (rowId: number, el: DOMElement | null) => void
+}
+
+function TranscriptRow({
+  rowId,
+  kind,
+  text,
+  streaming,
+  durationMs,
+  time,
+  addMargin,
+  isSelected,
+  isExpanded,
+  expanded,
+  model,
+  background,
+  toolCallId,
+  toolName,
+  toolArgsText,
+  toolArgsFull,
+  toolStatus,
+  toolResultText,
+  toolResultFull,
+  toolErrorText,
+  toolStartedAt,
+  toolDurationMs,
+  onToggleRow,
+  setRowRef,
+}: MemoRowProps): React.ReactNode {
+  const ref = React.useCallback(
+    (el: DOMElement | null): void => {
+      setRowRef(rowId, el)
+    },
+    [setRowRef, rowId],
+  )
+  const onClick = React.useCallback((): void => {
+    onToggleRow(rowId)
+  }, [onToggleRow, rowId])
+
+  switch (kind) {
+    case 'user':
+      return (
+        <Box flexDirection="column" ref={ref}>
+          <UserPromptMessage
+            text={text}
+            addMargin={addMargin}
+            isSelected={isSelected}
+            isExpanded={isExpanded}
+            onClick={onClick}
+          />
+        </Box>
+      )
+    case 'assistant':
+      return streaming ? (
+        <Box
+          alignItems="flex-start"
+          flexDirection="row"
+          marginTop={addMargin ? 1 : 0}
+          width="100%"
+          backgroundColor={background}
+        >
+          <Box minWidth={2}>
+            <Text color="text">●</Text>
+          </Box>
+          <Box flexDirection="column">
+            {/* The ⏵ self-narration line (working-activity narrate contract)
+              is stripped here: the live working line on the status bar
+              already shows it. */}
+            <StreamingMarkdown>{stripNarration(text)}</StreamingMarkdown>
+          </Box>
+        </Box>
+      ) : (
+        <Box
+          width="100%"
+          flexDirection="column"
+          backgroundColor={background}
+          ref={ref}
+        >
+          {expanded && (
+            <Box
+              flexDirection="row"
+              justifyContent="flex-end"
+              gap={1}
+              marginTop={1}
+            >
+              <MessageMetadata timestamp={time} model={model} />
+            </Box>
+          )}
+          <AssistantTextMessage
+            text={stripNarration(text)}
+            addMargin={addMargin}
+            isSelected={isSelected}
+            isExpanded={isExpanded}
+            onClick={onClick}
+          />
+        </Box>
+      )
+    case 'reasoning':
+      return (
+        <Box flexDirection="column" ref={ref}>
+          <AssistantThinkingMessage
+            thinking={text}
+            addMargin={addMargin}
+            // Streaming reasoning shows expanded live, then folds
+            // automatically once the turn settles (unless Ctrl+O or a
+            // single-row expansion keeps it open).
+            verbose={isExpanded || expanded || streaming}
+            durationMs={durationMs}
+            isSelected={isSelected}
+            onClick={onClick}
+          />
+        </Box>
+      )
+    case 'tool': {
+      if (
+        toolCallId === undefined ||
+        toolName === undefined ||
+        toolArgsText === undefined ||
+        toolStatus === undefined ||
+        toolStartedAt === undefined
+      ) {
+        return null
+      }
+      // Rebuilt per render from the flattened props — cheap object literal,
+      // and AssistantToolUseMessage is only reached when memo let us through.
+      const tool: ToolRow = {
+        callId: toolCallId,
+        name: toolName,
+        argsText: toolArgsText,
+        argsFull: toolArgsFull,
+        status: toolStatus,
+        resultText: toolResultText,
+        resultFull: toolResultFull,
+        errorText: toolErrorText,
+        startedAt: toolStartedAt,
+        durationMs: toolDurationMs,
+      }
+      return (
+        <Box flexDirection="column" ref={ref}>
+          <AssistantToolUseMessage
+            tool={tool}
+            addMargin={addMargin}
+            verbose={isExpanded || expanded}
+            isSelected={isSelected}
+            isExpanded={isExpanded}
+          />
+        </Box>
+      )
+    }
+    case 'notice':
+      return (
+        <Box marginTop={1} ref={ref}>
+          <Divider title={` ${text} `} />
+        </Box>
+      )
+    case 'interrupt':
+      return (
+        <Box marginTop={1} ref={ref}>
+          <InterruptedByUser />
+        </Box>
+      )
+    case 'local':
+    // `!` mode command echo, like CC's UserBashInputMessage.
+      return (
+        <Box marginTop={1} backgroundColor={background} ref={ref}>
+          <Text color="bashBorder">! {text}</Text>
+        </Box>
+      )
+    case 'local-output':
+      return (
+        <Box paddingLeft={2} backgroundColor={background} ref={ref}>
+          <Text dimColor>{text}</Text>
+        </Box>
+      )
+  }
+}
+
+const MemoRow = React.memo(TranscriptRow)
 
 /**
  * The header block pinned above the transcript: the DeepSeek pixel whale
