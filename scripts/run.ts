@@ -18,6 +18,14 @@ if (!process.env.DSH_HOME?.endsWith('.dsh-cc')) {
   process.env.DSH_HOME = resolve(homedir(), '.dsh-cc')
 }
 
+// Force React's production build BEFORE boot() pulls in the plugin tree.
+// react-reconciler's CJS entry picks development vs production on first
+// require; the development build records one performance.measure() per
+// component render into Node's perf_hooks buffer, which is UNBOUNDED —
+// streaming frames accumulated 1,004,767 PerformanceMeasure objects and
+// OOM'd a real session at 4GB in under 20 minutes (heapsnapshot evidence).
+process.env.NODE_ENV ??= 'production'
+
 // app-boot is loaded through pnpm symlink → lib/index.js. Rebuild after
 // src/ changes (pnpm run build or tsc -b + tsdown -F @deepseek-ai/dsh-app-boot).
 import {
@@ -38,6 +46,39 @@ const rootConfig = join(profileDir, 'cordis.yml')
 const userPatch = join(profileDir, 'cordis.patch.yml')
 const homePatch = join(dshHome, 'cordis.patch.yml')
 const diagFile = join(dshHome, 'last-boot-diagnostic.txt')
+
+// --- Heap watchtower (leak forensics) ---------------------------------------
+// dsh-cc OOM'd twice in real long sessions (~4GB in 19-42min). The render
+// caches are bounded now, but something else still grows. This sampler logs
+// heapUsed/rss every 30s to ~/.dsh-cc/heap-watch.log and writes a full
+// heapsnapshot when crossing 3GB, so the next crash brings its own evidence.
+// Disable with DSH_CC_HEAP_WATCH=0.
+if (process.env.DSH_CC_HEAP_WATCH !== '0') {
+  const { appendFileSync, mkdirSync } = await import('node:fs')
+  const v8 = await import('node:v8')
+  const logFile = join(dshHome, 'heap-watch.log')
+  let snapLevel = 0
+  const SNAP_LEVELS_MB = [1024, 1536, 2048, 2560, 3072]
+  const t0 = Date.now()
+  const sample = (): void => {
+    try {
+      const mu = process.memoryUsage()
+      const line = `${new Date().toISOString()} t=${((Date.now() - t0) / 1000).toFixed(0)}s heap=${(mu.heapUsed / 1048576).toFixed(0)}MB rss=${(mu.rss / 1048576).toFixed(0)}MB ext=${(mu.external / 1048576).toFixed(0)}MB\n`
+      appendFileSync(logFile, line)
+      const heapMb = mu.heapUsed / 1048576
+      if (snapLevel < SNAP_LEVELS_MB.length && heapMb > SNAP_LEVELS_MB[snapLevel]) {
+        const snapFile = join(dshHome, `heap-${SNAP_LEVELS_MB[snapLevel]}mb-${Date.now()}.heapsnapshot`)
+        snapLevel += 1
+        appendFileSync(logFile, `>>> heap>${heapMb.toFixed(0)}MB, writing snapshot ${snapFile}\n`)
+        v8.writeHeapSnapshot(snapFile)
+        appendFileSync(logFile, `>>> snapshot written\n`)
+      }
+    } catch { /* sampler must never crash the app */ }
+  }
+  sample() // first sample immediately — short-lived boots still leave a trace
+  const timer = setInterval(sample, 15_000)
+  timer.unref()
+}
 
 // The installation anchor: apps/cli/package.json. healProfilesModuleFallback
 // BFS-traverses its dependency closure to build a flat node_modules at

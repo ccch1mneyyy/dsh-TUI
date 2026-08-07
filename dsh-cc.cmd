@@ -9,6 +9,7 @@ rem DEEPSEEK_API_KEY: user env (setx) wins; run.ts falls back to .env.
 rem dsh-cc --resume opens the session marked by /resume.
 rem DSH_HOME pins the profile root to .dsh-cc (existing sessions).
 setlocal
+set "NODE_ENV=production"
 set "WORKSPACE=D:\code\projects\test-ccch1mneyyy"
 set "DSH_HOME=%USERPROFILE%\.dsh-cc"
 cd /d "%WORKSPACE%"
