@@ -132,6 +132,10 @@ export function PromptInput({
    * turn boundary, so nothing here ever cuts the model off mid-response.
    */
   const [pendingQueue, setPendingQueue] = React.useState<string[]>([])
+  /** Guards flushPending against re-entrancy (`\r`+`\n` double events). */
+  const flushBusyRef = React.useRef(false)
+  /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
+  const lastEnterAtRef = React.useRef(0)
   React.useEffect(() => {
     return () => {
       if (escTimerRef.current) clearTimeout(escTimerRef.current)
@@ -208,14 +212,32 @@ export function PromptInput({
    * agent.followup, which joins the DSH inbox as its own turn: the running
    * response finishes first, then the queued messages are processed in
    * order. Never interrupts.
+   *
+   * The queue is cleared only after every submit succeeded; a failure puts
+   * the batch back and notifies instead of silently dropping the messages.
    */
   const flushPending = () => {
+    if (flushBusyRef.current) return
     if (pendingQueue.length === 0) return
+    flushBusyRef.current = true
     const items = pendingQueue
-    setPendingQueue([])
-    for (const item of items) {
-      appendHistory(item)
-      channel.submit(item)
+    try {
+      for (const item of items) {
+        appendHistory(item)
+        channel.submit(item)
+      }
+      setPendingQueue([])
+      channel.notify(
+        `已发送 ${items.length} 条排队消息，当前回合结束后按序处理`,
+        { timeoutMs: 4000 },
+      )
+    } catch (error: unknown) {
+      // Do not lose the batch on a partial failure: put it back and tell
+      // the user instead of vanishing silently.
+      setPendingQueue(previous => [...items, ...previous])
+      channel.notify(`发送排队消息失败：${String(error)}`, { color: 'error' })
+    } finally {
+      flushBusyRef.current = false
     }
   }
 
@@ -308,6 +330,12 @@ export function PromptInput({
      * - otherwise → submit directly (or run a unique command).
      */
     const handleEnter = () => {
+      // A single Enter can arrive as two events in cmd pipelines (`\r`
+      // parsed as return + a raw `\n` line): collapse them so the staged
+      // message is not flushed by the echo of the same keypress.
+      const now = Date.now()
+      if (now - lastEnterAtRef.current < 80) return
+      lastEnterAtRef.current = now
       if (overlayOpen) {
         const command = suggestions[selectedCommand]
         if (command) {

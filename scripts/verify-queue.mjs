@@ -174,7 +174,39 @@ async function run() {
     instance.unmount()
   }
 
-  // ---- Scenario 4: idle — Enter submits directly (unchanged behavior).
+  // ---- Scenario 4: working — CRLF Enter (`\r` then `\n`) must not double-fire.
+  {
+    const { stdout, stderr, stdin } = makeStreams()
+    const channel = makeChannel(true)
+    const instance = await render(
+      React.createElement(PromptInput, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand: () => false,
+        selectionActive: false,
+      }),
+      { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+    )
+    await sleep(600)
+    // A cmd-pipeline Enter often arrives as `\r` + `\n` in quick succession.
+    stdin.write('dup')
+    await sleep(150)
+    stdin.write('\r')
+    await sleep(50)
+    stdin.write('\n')
+    await sleep(300)
+    const last = toPlain(stdout.frames.at(-1) ?? '')
+    const joined = toPlain(stdout.frames.join(''))
+    check('CRLF Enter staged exactly once', joined.includes('条待发送') && !joined.includes('2 条') && channel.submitted.length === 0, JSON.stringify(joined.slice(-150)))
+    check('input cleared after CRLF stage', !/❯ dup/.test(last))
+    stdin.write('\r')
+    await sleep(300)
+    check('second Enter sends exactly once', channel.submitted.length === 1 && channel.submitted[0] === 'dup', JSON.stringify(channel.submitted))
+    instance.unmount()
+  }
+
+  // ---- Scenario 5: idle — Enter submits directly (unchanged behavior).
   {
     const { stdout, stderr, stdin } = makeStreams()
     const channel = makeChannel(false)
