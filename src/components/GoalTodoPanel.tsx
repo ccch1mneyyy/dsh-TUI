@@ -48,6 +48,15 @@ function TodoGlyph({ status }: { status: TodoPanelItem['status'] }): React.React
 }
 
 /**
+ * Mind-map style branch prefix: `├─` for every row but the last, which
+ * closes with `└─`. The whole panel reads as one tree — the goal is the
+ * root and each todo hangs off it.
+ */
+function BranchPrefix({ last }: { last: boolean }): React.ReactNode {
+  return <Text dimColor>{last ? '└─ ' : '├─ '}</Text>
+}
+
+/**
  * Live goal + todo panel above the prompt input. Data rides on the channel:
  * `channel.goal` is folded from `goal/change` context events and
  * `channel.todos` from `todo/write` whole-list snapshots, so every model
@@ -81,6 +90,7 @@ export function GoalTodoPanel({ channel }: { channel: Channel }): React.ReactNod
           </Box>
           {goal.phase === 'blocked' && goal.blockedReason !== undefined && (
             <Box flexDirection="row" marginTop={1}>
+              <Text dimColor>│ </Text>
               <Text color="error" wrap="truncate">
                 {goal.blockedReason.message}
               </Text>
@@ -90,15 +100,24 @@ export function GoalTodoPanel({ channel }: { channel: Channel }): React.ReactNod
       )}
       {todos.length > 0 && (
         <Box flexDirection="column">
-          {visible.map((todo, index) => (
-            <Box key={index} flexDirection="row">
-              <TodoGlyph status={todo.status} />
-              <Text wrap="truncate" dimColor={todo.status === 'completed'}>
-                {todo.content}
-              </Text>
+          {visible.map((todo, index) => {
+            const last = index === visible.length - 1 && hidden === 0
+            return (
+              <Box key={index} flexDirection="row">
+                <BranchPrefix last={last} />
+                <TodoGlyph status={todo.status} />
+                <Text wrap="truncate" dimColor={todo.status === 'completed'}>
+                  {todo.content}
+                </Text>
+              </Box>
+            )
+          })}
+          {hidden > 0 && (
+            <Box flexDirection="row">
+              <BranchPrefix last />
+              <Text dimColor>… {hidden} more</Text>
             </Box>
-          ))}
-          {hidden > 0 && <Text dimColor>… {hidden} more</Text>}
+          )}
         </Box>
       )}
     </Box>
