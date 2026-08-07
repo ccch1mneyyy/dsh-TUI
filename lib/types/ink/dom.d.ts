@@ -28,6 +28,7 @@ export type DOMElement = {
     scrollHeight?: number;
     scrollViewportHeight?: number;
     scrollViewportTop?: number;
+    scrollPrevMax?: number;
     stickyScroll?: boolean;
     scrollAnchor?: {
         el: DOMElement;

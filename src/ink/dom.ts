@@ -71,6 +71,13 @@ export type DOMElement = {
   scrollHeight?: number
   scrollViewportHeight?: number
   scrollViewportTop?: number
+  // maxScroll of the most recent TRUSTED (non-shrink) frame. Virtualization
+  // can transiently shrink scrollHeight; a positional at-bottom check must
+  // not compare against a maxScroll computed from such an artifact frame,
+  // or a mid-scroll position is mistaken for "at bottom" and yanked to the
+  // bottom/top. Shrink frames keep the last trusted value; only real
+  // growth (or a settled measurement) refreshes it.
+  scrollPrevMax?: number
   stickyScroll?: boolean
   // Set by ScrollBox.scrollToElement; render-node-to-output reads
   // el.yogaNode.getComputedTop() (FRESH — same Yoga pass as scrollHeight)

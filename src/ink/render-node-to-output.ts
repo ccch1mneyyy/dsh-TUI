@@ -756,7 +756,7 @@ function renderNodeToOutput(
         const scrollTopBeforeFollow = node.scrollTop ?? 0
         const sticky =
           node.stickyScroll ?? Boolean(node.attributes['stickyScroll'])
-        const prevMaxScroll = Math.max(0, prevScrollHeight - prevInnerHeight)
+        const prevMaxScroll = node.scrollPrevMax ?? Math.max(0, prevScrollHeight - prevInnerHeight)
         // Positional check only valid when content grew — virtualization can
         // transiently SHRINK scrollHeight (tail unmount + stale heightCache
         // spacer) making scrollTop >= prevMaxScroll true by artifact, not
@@ -768,6 +768,12 @@ function renderNodeToOutput(
         // transient measurement drops below the viewport. Freeze the
         // position for that frame; the next growth frame re-validates it.
         const shrunk = scrollHeight < prevScrollHeight
+        // Only real growth (or a settled measurement) refreshes the trusted
+        // maxScroll used by the positional at-bottom check — otherwise the
+        // frame AFTER an artifact shrink compares against the shrunken
+        // maxScroll and yanks a mid-scroll view to the bottom (opentui #709:
+        // content-size changes must not reset the manual-scroll state).
+        if (!shrunk) node.scrollPrevMax = maxScroll
         const atBottom =
           sticky || (grew && scrollTopBeforeFollow >= prevMaxScroll)
         if (atBottom && (node.pendingScrollDelta ?? 0) >= 0 && !shrunk) {

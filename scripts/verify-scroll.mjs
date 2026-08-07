@@ -115,6 +115,15 @@ async function run() {
   const midShrink = frameLog.filter(f => f.scrollHeight === 24).at(-1)
   check('mid-scroll shrink frame keeps the position', midShrink !== undefined && midShrink.scrollTop === 10, JSON.stringify(midShrink ?? frameLog.at(-1)))
 
+  // ---- the frame AFTER the shrink artifact must not pull the mid position
+  // to the bottom: the positional at-bottom check must not trust a maxScroll
+  // computed from the artifact frame (opentui #709: content-size changes
+  // must not reset the manual-scroll state).
+  instance.rerender(makeScroller(60))
+  await sleep(400)
+  const midGrown = frameLog.at(-1)
+  check('post-shrink grow frame keeps the mid position', midGrown.scrollTop === 10 && midGrown.scrollHeight === 60, JSON.stringify(midGrown))
+
   instance.unmount()
   process.exit(failed)
 }
