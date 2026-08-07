@@ -234,6 +234,10 @@ export class LogUpdate {
     const growing = heightDelta > 0
 
     // Handle shrinking: clear lines from the bottom
+    // When prevHadScrollback, add 1 for the cursor-restore LF that scrolled
+    // an additional row out of view at the end of the previous frame.
+    const cursorRestoreScroll = prevHadScrollback ? 1 : 0
+    let shrinkRepainted = false
     if (shrinking) {
       const linesToClear = prev.screen.height - next.screen.height
 
@@ -248,16 +252,47 @@ export class LogUpdate {
         )
       }
 
-      // clear(N) moves cursor UP by N-1 lines and to column 0
-      // This puts us at line prev.screen.height - N = next.screen.height
-      // But we want to be at next.screen.height - 1 (bottom of new screen)
-      screen.txn(prev => [
-        [
-          { type: 'clear', count: linesToClear },
-          { type: 'cursorMove', x: 0, y: -1 },
-        ],
-        { dx: -prev.x, dy: -linesToClear },
-      ])
+      // Main-screen mode + content taller than the viewport: the terminal
+      // viewport does NOT follow the content bottom when content shrinks —
+      // eraseLines + incremental diff would repaint rows at stale physical
+      // offsets, leaving old status rows behind and drawing the new
+      // bottom-pinned rows (status line, prompt) mid-screen. Scroll the
+      // terminal content up by linesToClear (viewport now aligned to the
+      // new content bottom; cursor stays put), then repaint the whole
+      // visible slice. No ESC[2J/ESC[3J → scrollback preserved, no
+      // Windows-Terminal viewport jump.
+      if (!altScreen && prev.screen.height > prev.viewport.height) {
+        screen.txn(() => [
+          [{ type: 'stdout', content: csiScrollUp(linesToClear) }],
+          { dx: 0, dy: 0 },
+        ])
+        const shrinkViewportY =
+          Math.max(prev.screen.height, next.screen.height) -
+          next.viewport.height +
+          cursorRestoreScroll
+        moveCursorTo(screen, 0, shrinkViewportY)
+        renderFrameSlice(
+          screen,
+          next,
+          shrinkViewportY,
+          next.screen.height,
+          stylePool,
+        )
+        // The visible slice was fully repainted above — skip the diff loop
+        // and the growing branch (frame.height < prev, so growing is false).
+        shrinkRepainted = true
+      } else {
+        // clear(N) moves cursor UP by N-1 lines and to column 0
+        // This puts us at line prev.screen.height - N = next.screen.height
+        // But we want to be at next.screen.height - 1 (bottom of new screen)
+        screen.txn(prev2 => [
+          [
+            { type: 'clear', count: linesToClear },
+            { type: 'cursorMove', x: 0, y: -1 },
+          ],
+          { dx: -prev2.x, dy: -linesToClear },
+        ])
+      }
     }
 
     // viewportY = number of rows in scrollback (not visible on terminal).
@@ -267,7 +302,6 @@ export class LogUpdate {
     // an additional row out of view at the end of the previous frame. Without
     // this, the diff loop treats that row as reachable — but the cursor clamps
     // at viewport top, causing writes to land 1 row off and garbling the output.
-    const cursorRestoreScroll = prevHadScrollback ? 1 : 0
     const viewportY = growing
       ? Math.max(
           0,
@@ -277,11 +311,33 @@ export class LogUpdate {
         next.viewport.height +
         cursorRestoreScroll
 
+    // Rows above viewportY live in terminal scrollback and are skipped by the
+    // diff loop (see below). Clip the damage region to the visible area so the
+    // loop doesn't scan scrollback rows cell-by-cell every frame — with a tall
+    // conversation that's a per-frame O(full screen) cost and stalls rendering.
+    // prev.damage participates in diffEach's region union, so clip it too
+    // (blit doesn't read damage — renderer.ts uses it only in comments).
+    if (viewportY > 0) {
+      for (const src of [next.screen, prev.screen]) {
+        const dmg = src.damage
+        if (dmg && dmg.y < viewportY) {
+          const overhang = viewportY - dmg.y
+          src.damage = {
+            x: dmg.x,
+            y: viewportY,
+            width: dmg.width,
+            height: Math.max(0, dmg.height - overhang),
+          }
+        }
+      }
+    }
+
     let currentStyleId = stylePool.none
     let currentHyperlink: Hyperlink = undefined
 
     // First pass: render changes to existing rows (rows < prev.screen.height)
-    diffEach(prev.screen, next.screen, (x, y, removed, added) => {
+    if (!shrinkRepainted) {
+      diffEach(prev.screen, next.screen, (x, y, removed, added) => {
       // Skip new rows - we'll render them directly after
       if (growing && y >= prev.screen.height) {
         return
@@ -357,7 +413,8 @@ export class LogUpdate {
           return [patches, { dx: 1, dy: 0 }]
         })
       }
-    })
+      })
+    }
 
     // Reset styles before rendering new rows (they'll set their own styles)
     currentStyleId = transitionStyle(
@@ -373,7 +430,7 @@ export class LogUpdate {
     )
 
     // Handle growth: render new rows directly (they naturally scroll the terminal)
-    if (growing) {
+    if (!shrinkRepainted && growing) {
       renderFrameSlice(
         screen,
         next,
