@@ -85,13 +85,11 @@ export interface PromptInputProps {
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
  * a complete line to submit.
  *
- * While the model is working, Enter does NOT submit: it stages the text into
- * a pending queue above the input (visible), and a second Enter on the
- * empty input formally sends the queue; Esc abandons the current input and
- * sends the staged queue right away. Sent messages
- * go through channel.submit → agent.followup, which is DSH's `next-turn`
- * inbox semantics — the running turn finishes first, then queued messages
- * are processed in order, so the model is never cut off mid-response.
+ * Enter submits immediately even while the model is streaming: messages go
+ * through channel.submit → agent.followup, which is DSH's `next-turn` inbox
+ * semantics — the running turn finishes first, then the message is
+ * processed, so the model is never cut off mid-response. A brief "已发送，
+ * 当前回合结束后处理" notice confirms the send.
  */
 export function PromptInput({
   channel,
@@ -124,16 +122,6 @@ export function PromptInput({
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
   const clipboardBusyRef = React.useRef(false)
-  /**
-   * Staged messages while the model is working: the first Enter only queues
-   * the input (never interrupts the running turn); with the input cleared, a
-   * second Enter formally sends the queue. DSH's `followup` is `next-turn`
-   * semantics — sent messages join the agent inbox and are claimed at the
-   * turn boundary, so nothing here ever cuts the model off mid-response.
-   */
-  const [pendingQueue, setPendingQueue] = React.useState<string[]>([])
-  /** Guards flushPending against re-entrancy (`\r`+`\n` double events). */
-  const flushBusyRef = React.useRef(false)
   /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
   const lastEnterAtRef = React.useRef(0)
   React.useEffect(() => {
@@ -186,58 +174,10 @@ export function PromptInput({
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.submit(trimmed)
-  }
-
-  /**
-   * Stage a message while the model is working (first Enter): push it onto
-   * the pending queue and clear the input. Nothing is sent — the model keeps
-   * streaming untouched. The staged text also enters the in-memory history
-   * so ↑ recalls it before it is sent.
-   */
-  const enqueuePending = (text: string) => {
-    const trimmed = text.trim()
-    if (!trimmed) return
-    history.current.push(trimmed)
-    if (history.current.length > HISTORY_LIMIT) history.current.shift()
-    historyIndex.current = -1
-    setPendingQueue(previous => [...previous, trimmed])
-    setValue('')
-    setCursor(0)
-    setSelectedCommand(0)
-  }
-
-  /**
-   * Formally send the staged queue (second Enter on an empty input, or Esc
-   * after abandoning the input). Each item goes through channel.submit →
-   * agent.followup, which joins the DSH inbox as its own turn: the running
-   * response finishes first, then the queued messages are processed in
-   * order. Never interrupts.
-   *
-   * The queue is cleared only after every submit succeeded; a failure puts
-   * the batch back and notifies instead of silently dropping the messages.
-   */
-  const flushPending = () => {
-    if (flushBusyRef.current) return
-    if (pendingQueue.length === 0) return
-    flushBusyRef.current = true
-    const items = pendingQueue
-    try {
-      for (const item of items) {
-        appendHistory(item)
-        channel.submit(item)
-      }
-      setPendingQueue([])
-      channel.notify(
-        `已发送 ${items.length} 条排队消息，当前回合结束后按序处理`,
-        { timeoutMs: 4000 },
-      )
-    } catch (error: unknown) {
-      // Do not lose the batch on a partial failure: put it back and tell
-      // the user instead of vanishing silently.
-      setPendingQueue(previous => [...items, ...previous])
-      channel.notify(`发送排队消息失败：${String(error)}`, { color: 'error' })
-    } finally {
-      flushBusyRef.current = false
+    // While the model is streaming, the message joins the DSH inbox and is
+    // processed after the current turn — say so, or it looks "lost".
+    if (channel.working) {
+      channel.notify('已发送，当前回合结束后处理', { timeoutMs: 2500 })
     }
   }
 
@@ -325,14 +265,15 @@ export function PromptInput({
      * Unified Enter semantics (both the parsed `return` key and the raw
      * CR/LF line from Windows cmd pipelines):
      * - command menu open → run the SELECTED command (never send `/mo`);
-     * - model working + non-empty input → stage into the pending queue;
-     * - empty input + queue non-empty → formally send the queue;
-     * - otherwise → submit directly (or run a unique command).
+     * - otherwise → submit directly (or run a unique command). While the
+     * model is streaming, submit is still immediate — channel.submit is
+     * agent.followup (`next-turn` inbox), so the message is processed
+     * after the current turn without ever interrupting it.
      */
     const handleEnter = () => {
       // A single Enter can arrive as two events in cmd pipelines (`\r`
-      // parsed as return + a raw `\n` line): collapse them so the staged
-      // message is not flushed by the echo of the same keypress.
+      // parsed as return + a raw `\n` line): collapse them so one keypress
+      // never sends the message twice.
       const now = Date.now()
       if (now - lastEnterAtRef.current < 80) return
       lastEnterAtRef.current = now
@@ -343,23 +284,14 @@ export function PromptInput({
           return
         }
       }
-      const trimmed = value.trim()
-      if (channel.working && trimmed !== '') {
-        enqueuePending(value)
-        return
-      }
-      if (trimmed === '' && pendingQueue.length > 0) {
-        flushPending()
-        return
-      }
       if (!tryRunCommand(value)) submitText(value)
     }
 
     // Whole-line input from Windows ConPTY pipelines (cmd batch -> node):
     // the trailing CR/LF marks a complete line to submit. A bare Enter
-    // arrives as `\r`/`\n`/`\r\n` — treat it as Enter (queue semantics),
-    // NOT a direct submit. Only real multi-char piped lines keep the
-    // legacy direct-submit path.
+    // arrives as `\r`/`\n`/`\r\n` — treat it as Enter, NOT a direct
+    // submit. Only real multi-char piped lines keep the legacy
+    // direct-submit path.
     if (input.includes('\n') || input.includes('\r')) {
       if (/^[\r\n]+$/.test(input)) {
         handleEnter()
@@ -553,16 +485,13 @@ export function PromptInput({
         setFileSelected(0)
         return
       }
-      // Esc abandons the current input; any staged queue is sent right
-      // away (the queue is a "send later", never a draft to cancel).
+      // A single Esc clears the current input (if any); the double-tap
+      // path below handles rewind/clear on an already-empty input.
       if (value.length > 0) {
         setValue('')
         setCursor(0)
         setSelectedCommand(0)
         setFileSelected(0)
-      }
-      if (pendingQueue.length > 0) {
-        flushPending()
         return
       }
       // Double-tap Esc: clear the input when it has content; when empty,
@@ -707,21 +636,6 @@ export function PromptInput({
               {lastNotification.text}
             </Text>
           </Box>
-        </Box>
-      )}
-      {pendingQueue.length > 0 && (
-        <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-          <Text dimColor>
-            ⏳ {pendingQueue.length} 条待发送 · Enter 发送 · Esc 发送
-          </Text>
-          {pendingQueue.map((item, index) => (
-            <Box key={index} flexDirection="row">
-              <Text dimColor>{index + 1}. </Text>
-              <Text dimColor wrap="truncate">
-                {item}
-              </Text>
-            </Box>
-          ))}
         </Box>
       )}
       {helpOpen && (
