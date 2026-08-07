@@ -178,6 +178,12 @@ export interface Channel {
      */
     readonly todos: readonly TodoPanelItem[];
     /**
+     * Messages submitted while the model was working and not yet claimed by a
+     * turn (`steer` → next step boundary of the running turn, `followup` →
+     * after the turn ends). Driven by agent inbox events.
+     */
+    readonly pending: readonly PendingMessage[];
+    /**
      * Effective slash commands: built-in locals plus plugin-registered
      * commands (plan/goal/…) merged from the DSH command registry. The
      * registry is the source of truth for external names — a plugin shadows
@@ -202,6 +208,13 @@ export interface Channel {
     };
     subscribe: (listener: () => void) => () => void;
     submit(text: string): void;
+    /**
+     * Steer a message into the running turn (Codex/pi semantics): injected at
+     * the next step boundary, the agent continues without aborting.
+     */
+    steer(text: string): void;
+    /** Pull a pending message back out of the inbox (Alt+Up) for re-editing. */
+    removePending(id: string): boolean;
     /** Abort the in-flight turn (`Ctrl+C` while working). */
     cancel(): void;
     /** Rewind the conversation to a past user message (CC's double-Esc rewind):
@@ -262,6 +275,14 @@ export interface Channel {
     listSubagents(): Promise<string[]>;
 }
 /** @internal */
+/** One user message submitted while the model was working, not yet claimed
+ *  by a turn. `steer` lands at the next step boundary of the running turn;
+ *  `followup` waits for the turn to end. */
+export interface PendingMessage {
+    id: string;
+    text: string;
+    placement: 'steer' | 'followup';
+}
 export interface ChannelState {
     version: number;
     rows: ChatRow[];
@@ -307,6 +328,9 @@ export interface ChannelState {
     goal: ChannelGoal | undefined;
     /** Latest todo-list snapshot (see the public Channel type). */
     todos: TodoPanelItem[];
+    /** Messages submitted while working, awaiting their turn/step boundary.
+     *  Driven by agent inbox events (inserted/claimed/discarded). */
+    pending: PendingMessage[];
     /** Effective slash commands (see the public Channel type). */
     commandList: readonly LocalCommand[];
     /** Run a plugin-registered command (see the public Channel type). */
@@ -322,7 +346,13 @@ export interface ChannelState {
     subscribe: (listener: () => void) => () => void;
     /** @internal event bump (the public `notify(text)` posts a notification). */
     emit(): void;
+    /** @internal frame-aligned emit for high-frequency streaming deltas:
+     *  version bumps synchronously but listeners fire at most once per 16ms
+     *  window (trailing edge). */
+    emitStream(): void;
     submit(text: string): void;
+    steer(text: string): void;
+    removePending(id: string): boolean;
     cancel(): void;
     rewindTo(row: ChatRow): Promise<string | null>;
     /** Switch the live agent to a persisted session, replaying its history. */

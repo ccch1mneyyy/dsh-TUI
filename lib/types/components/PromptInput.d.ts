@@ -42,11 +42,14 @@ export interface PromptInputProps {
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
  * a complete line to submit.
  *
- * Enter submits immediately even while the model is streaming: messages go
- * through channel.submit → agent.followup, which is DSH's `next-turn` inbox
- * semantics — the running turn finishes first, then the message is
- * processed, so the model is never cut off mid-response. A brief "已发送，
- * 当前回合结束后处理" notice confirms the send.
+ * Enter submits immediately even while the model is streaming — as a STEER
+ * (Codex/pi semantics): the message is injected at the next step boundary
+ * of the running turn and the agent continues without aborting; Tab instead
+ * queues the message for after the turn (followup). Both appear in a
+ * pending preview above the input until delivered. Alt+Up pulls the last
+ * pending message back for editing; Esc (with pending messages while
+ * working) interrupts the turn and delivers them right away; Ctrl+Enter
+ * aborts the turn and sends the current input immediately.
  */
 export declare function PromptInput({ channel, helpOpen, onToggleHelp, onRunCommand, selectionActive, fillText, onFillConsumed, onRewindRequest, }: PromptInputProps): React.JSX.Element;
 //# sourceMappingURL=PromptInput.d.ts.map

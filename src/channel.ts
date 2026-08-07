@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Agent, AgentHandle, AgentStatus, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { CommandService } from '@deepseek-ai/dsh-commands'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
-import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import type { Context } from 'cordis'
 import { join } from 'node:path'
@@ -187,6 +187,12 @@ export interface Channel {
    */
   readonly todos: readonly TodoPanelItem[]
   /**
+   * Messages submitted while the model was working and not yet claimed by a
+   * turn (`steer` → next step boundary of the running turn, `followup` →
+   * after the turn ends). Driven by agent inbox events.
+   */
+  readonly pending: readonly PendingMessage[]
+  /**
    * Effective slash commands: built-in locals plus plugin-registered
    * commands (plan/goal/…) merged from the DSH command registry. The
    * registry is the source of truth for external names — a plugin shadows
@@ -211,6 +217,13 @@ export interface Channel {
   }
   subscribe: (listener: () => void) => () => void
   submit(text: string): void
+  /**
+   * Steer a message into the running turn (Codex/pi semantics): injected at
+   * the next step boundary, the agent continues without aborting.
+   */
+  steer(text: string): void
+  /** Pull a pending message back out of the inbox (Alt+Up) for re-editing. */
+  removePending(id: string): boolean
   /** Abort the in-flight turn (`Ctrl+C` while working). */
   cancel(): void
   /** Rewind the conversation to a past user message (CC's double-Esc rewind):
@@ -269,6 +282,15 @@ export interface Channel {
 }
 
 /** @internal */
+/** One user message submitted while the model was working, not yet claimed
+ *  by a turn. `steer` lands at the next step boundary of the running turn;
+ *  `followup` waits for the turn to end. */
+export interface PendingMessage {
+  id: string
+  text: string
+  placement: 'steer' | 'followup'
+}
+
 export interface ChannelState {
   version: number
   rows: ChatRow[]
@@ -308,6 +330,9 @@ export interface ChannelState {
   goal: ChannelGoal | undefined
   /** Latest todo-list snapshot (see the public Channel type). */
   todos: TodoPanelItem[]
+  /** Messages submitted while working, awaiting their turn/step boundary.
+   *  Driven by agent inbox events (inserted/claimed/discarded). */
+  pending: PendingMessage[]
   /** Effective slash commands (see the public Channel type). */
   commandList: readonly LocalCommand[]
   /** Run a plugin-registered command (see the public Channel type). */
@@ -328,6 +353,8 @@ export interface ChannelState {
    *  window (trailing edge). */
   emitStream(): void
   submit(text: string): void
+  steer(text: string): void
+  removePending(id: string): boolean
   cancel(): void
   rewindTo(row: ChatRow): Promise<string | null>
   /** Switch the live agent to a persisted session, replaying its history. */
@@ -640,6 +667,14 @@ export function createChannel(
       { color: 'warning', timeoutMs: 8000 },
     )
   }
+  /**
+   * Register a submitted message as pending and notify the UI. The inbox
+   * events (claimed/discarded) retire it; nothing here guesses timing.
+   */
+  const trackPending = (message: { id: string; text: string }, placement: PendingMessage['placement']): void => {
+    state.pending = [...state.pending, { id: message.id, text: message.text, placement }]
+    state.emit()
+  }
   const state: ChannelState = {
     version: 0,
     rows: [],
@@ -664,6 +699,7 @@ export function createChannel(
     activityEnabled: options.activity !== false,
     goal: undefined,
     todos: [],
+    pending: [],
     commandList: LOCAL_COMMANDS,
     lastUsage: undefined,
     tps: undefined,
@@ -730,10 +766,38 @@ export function createChannel(
       // The current session is being used — move it to the MRU front
       // (/resume sorts by last-used).
       touchSession(state.agentId)
-      agent.followup(createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } }))
+      const message = createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } })
+      agent.followup(message)
+      trackPending({ id: message.id, text: trimmed }, 'followup')
+    },
+    /** Steer a message into the RUNNING turn (Codex/pi semantics): it is
+     *  injected at the next step boundary of the current turn and the agent
+     *  continues without stopping — faster than followup, never an abort. */
+    steer(text) {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      touchSession(state.agentId)
+      const message = createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } })
+      agent.steer(message)
+      trackPending({ id: message.id, text: trimmed }, 'steer')
+    },
+    /** Pull a pending message back out of the inbox (Alt+Up): it returns to
+     *  the input for editing instead of being delivered. */
+    removePending(id: string): boolean {
+      const index = state.pending.findIndex(item => item.id === id)
+      if (index === -1) return false
+      // The Agent interface carries `inbox` on the dev trunk; the released
+      // dsh-agent may lack it — removal is best-effort, the local preview
+      // clears either way.
+      ;(agent as { inbox?: { remove(itemId: unknown): void } }).inbox?.remove(MessageId(id))
+      state.pending = state.pending.filter(item => item.id !== id)
+      state.emit()
+      return true
     },
     cancel() {
-      agent.cancel({ kind: 'user' })
+      // Keep the staged queue: an interrupt aborts the running turn but the
+      // queued/steered messages are delivered as the next turn (web parity).
+      agent.cancel({ kind: 'user' }, { keepInbox: true })
     },
     async rewindTo(row: ChatRow): Promise<string | null> {
       if (row.seq === undefined) return null
@@ -1883,6 +1947,30 @@ ${output}
         state.status = 'disposed'
         state.emit()
       }),
+      // Pending delivery is driven by the agent inbox: a claimed message
+      // has landed in a turn (steer → step boundary, followup → next turn);
+      // a discarded one was dropped by a cancel. Retire from the preview.
+      // The dev-trunk dsh-agent emits `inserted/claimed/discarded`; the
+      // released package uses `enqueue/dequeue` — listen to both so the
+      // preview stays correct on either dependency (the unknown-event
+      // registrations are inert on the other side).
+      (() => {
+        const retirePending = ({ agent: subject, message }: { agent: unknown; message: { id: string } }): void => {
+          if (subject !== agent) return
+          state.pending = state.pending.filter(item => item.id !== message.id)
+          state.emit()
+        }
+        const disposers: Array<() => void> = []
+        const onAgentEvent = (event: string): void => {
+          disposers.push((ctx.on as (name: string, handler: (payload: { agent: unknown; message: { id: string } }) => void) => unknown)(event, retirePending) as () => void)
+        }
+        onAgentEvent('agent/inbox/claimed')
+        onAgentEvent('agent/inbox/discarded')
+        onAgentEvent('agent/inbox/dequeue')
+        return () => {
+          for (const dispose of disposers) dispose()
+        }
+      })(),
       ctx.on('session/event', (session, event) => {
         if (session !== agent.session) return
         // Live working-activity snapshot (log-only event, appended by

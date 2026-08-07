@@ -85,11 +85,14 @@ export interface PromptInputProps {
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
  * a complete line to submit.
  *
- * Enter submits immediately even while the model is streaming: messages go
- * through channel.submit → agent.followup, which is DSH's `next-turn` inbox
- * semantics — the running turn finishes first, then the message is
- * processed, so the model is never cut off mid-response. A brief "已发送，
- * 当前回合结束后处理" notice confirms the send.
+ * Enter submits immediately even while the model is streaming — as a STEER
+ * (Codex/pi semantics): the message is injected at the next step boundary
+ * of the running turn and the agent continues without aborting; Tab instead
+ * queues the message for after the turn (followup). Both appear in a
+ * pending preview above the input until delivered. Alt+Up pulls the last
+ * pending message back for editing; Esc (with pending messages while
+ * working) interrupts the turn and delivers them right away; Ctrl+Enter
+ * aborts the turn and sends the current input immediately.
  */
 export function PromptInput({
   channel,
@@ -163,7 +166,7 @@ export function PromptInput({
     : []
   const fileOverlayOpen = fileMatches.length > 0 && !helpOpen && !selectionActive
 
-  const submitText = (text: string) => {
+  const submitText = (text: string, notice?: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
     history.current.push(trimmed)
@@ -174,11 +177,79 @@ export function PromptInput({
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.submit(trimmed)
-    // While the model is streaming, the message joins the DSH inbox and is
-    // processed after the current turn — say so, or it looks "lost".
-    if (channel.working) {
+    if (notice) {
+      channel.notify(notice, { timeoutMs: 2500 })
+    } else if (channel.working) {
+      // While the model is streaming, the message joins the DSH inbox and is
+      // processed after the current turn — say so, or it looks "lost".
       channel.notify('已发送，当前回合结束后处理', { timeoutMs: 2500 })
     }
+  }
+
+  /**
+   * Enter while the model is working = STEER (Codex/pi semantics): the
+   * message is injected at the next step boundary of the RUNNING turn and
+   * the agent continues without aborting — the "immediate" send.
+   */
+  const steerSend = (text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    history.current.push(trimmed)
+    if (history.current.length > HISTORY_LIMIT) history.current.shift()
+    historyIndex.current = -1
+    setValue('')
+    setCursor(0)
+    setSelectedCommand(0)
+    appendHistory(trimmed)
+    channel.steer(trimmed)
+    channel.notify('已插话 · 下一步立即处理', { timeoutMs: 2500 })
+  }
+
+  /**
+   * Tab while the model is working = plain queue (followup): the message
+   * waits for the running turn to end, then is processed in order.
+   */
+  const queueSend = (text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    history.current.push(trimmed)
+    if (history.current.length > HISTORY_LIMIT) history.current.shift()
+    historyIndex.current = -1
+    setValue('')
+    setCursor(0)
+    setSelectedCommand(0)
+    appendHistory(trimmed)
+    channel.submit(trimmed)
+    channel.notify('已排队 · 回合结束后处理', { timeoutMs: 2500 })
+  }
+
+  /**
+   * Alt+Up: pull the last pending message back into the input for editing
+   * (never interrupts the running turn).
+   */
+  const pullBackLast = () => {
+    const item = channel.pending[channel.pending.length - 1]
+    if (!item) return
+    channel.removePending(item.id)
+    setValue(item.text)
+    setCursor(item.text.length)
+    setSelectedCommand(0)
+    setFileSelected(0)
+    channel.notify('已撤回，可编辑后重新发送', { timeoutMs: 2000 })
+  }
+
+  /**
+   * Ctrl+Enter: abort the running turn and send the input immediately — the
+   * model stops what it is doing and starts on this message right away.
+   */
+  const interruptSend = () => {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      channel.notify('输入为空，没有可发送的内容', { color: 'warning' })
+      return
+    }
+    channel.cancel()
+    submitText(value, '已打断当前回合，正在立即处理')
   }
 
   /**
@@ -265,10 +336,9 @@ export function PromptInput({
      * Unified Enter semantics (both the parsed `return` key and the raw
      * CR/LF line from Windows cmd pipelines):
      * - command menu open → run the SELECTED command (never send `/mo`);
-     * - otherwise → submit directly (or run a unique command). While the
-     * model is streaming, submit is still immediate — channel.submit is
-     * agent.followup (`next-turn` inbox), so the message is processed
-     * after the current turn without ever interrupting it.
+     * - model working → STEER into the running turn (next step boundary,
+     *   agent continues — the "immediate" send; Codex/pi semantics);
+     * - otherwise → submit directly (or run a unique command).
      */
     const handleEnter = () => {
       // A single Enter can arrive as two events in cmd pipelines (`\r`
@@ -283,6 +353,10 @@ export function PromptInput({
           tryRunCommand(`/${command.name}`)
           return
         }
+      }
+      if (channel.working && value.trim() !== '') {
+        steerSend(value)
+        return
       }
       if (!tryRunCommand(value)) submitText(value)
     }
@@ -308,6 +382,12 @@ export function PromptInput({
       if (!tryRunCommand(line)) submitText(line)
       return
     }
+    if (key.return && key.ctrl) {
+      // Ctrl+Enter: interrupt the running turn and process this message
+      // immediately (Windows Terminal sends CSI 13;5u / 13;1;5u).
+      interruptSend()
+      return
+    }
     if (key.return && key.shift) {
       // Insert a newline at the caret (multi-line input).
       const next = value.slice(0, cursor) + '\n' + value.slice(cursor)
@@ -328,6 +408,17 @@ export function PromptInput({
     if (key.tab && overlayOpen) {
       const command = suggestions[selectedCommand]
       if (command) setInput(`/${command.name} `)
+      return
+    }
+    // Tab while the model is working = queue for AFTER the turn (followup),
+    // distinct from Enter's steer (Codex's "tab to queue message").
+    if (key.tab && channel.working && value.trim() !== '') {
+      queueSend(value)
+      return
+    }
+    if (key.meta && key.upArrow) {
+      // Alt+Up: pull the last pending message back for editing (pi/Codex).
+      pullBackLast()
       return
     }
     if (key.upArrow) {
@@ -483,6 +574,16 @@ export function PromptInput({
         setCursor(0)
         setSelectedCommand(0)
         setFileSelected(0)
+        return
+      }
+      // With pending messages while working, Esc = interrupt and deliver
+      // them right away (Codex's "interrupt and send immediately"): the
+      // turn is aborted, the kept inbox starts the next turn immediately.
+      if (channel.working && channel.pending.length > 0) {
+        channel.cancel()
+        channel.notify(`已打断当前回合，${channel.pending.length} 条消息立即处理`, {
+          timeoutMs: 2500,
+        })
         return
       }
       // A single Esc clears the current input (if any); the double-tap
@@ -641,6 +742,35 @@ export function PromptInput({
       {helpOpen && (
         <Box marginBottom={1}>
           <HelpMenu commands={channel.commandList} />
+        </Box>
+      )}
+      {channel.pending.length > 0 && (
+        <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
+          {channel.pending.some(item => item.placement === 'steer') && (
+            <Box flexDirection="column">
+              <Text dimColor>⚡ 插话 · 下一步送达</Text>
+              {channel.pending
+                .filter(item => item.placement === 'steer')
+                .map(item => (
+                  <Text key={item.id} dimColor wrap="truncate">
+                    {'  '}↳ {item.text}
+                  </Text>
+                ))}
+            </Box>
+          )}
+          {channel.pending.some(item => item.placement === 'followup') && (
+            <Box flexDirection="column">
+              <Text dimColor>⏳ 排队 · 回合结束后送达</Text>
+              {channel.pending
+                .filter(item => item.placement === 'followup')
+                .map(item => (
+                  <Text key={item.id} dimColor wrap="truncate">
+                    {'  '}↳ {item.text}
+                  </Text>
+                ))}
+            </Box>
+          )}
+          <Text dimColor>Alt+↑ 撤回 · Esc 打断并立即发送</Text>
         </Box>
       )}
       {fileOverlayOpen && (
