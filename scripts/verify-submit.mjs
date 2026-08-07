@@ -195,4 +195,91 @@ rejectedChannel.steer('被拒绝的插话')
 await sleep(10)
 check('rejected steer untracked after outcome', rejectedChannel.pending.length === 0, JSON.stringify(rejectedChannel.pending))
 
+// ---- interruptAndDeliver: cancel + re-queue once the abort settles ----
+// The harness parks kept inbox work until an unrelated wake (official
+// cancel.spec: "keepInbox parks queued work after an active turn aborts"),
+// and a wake issued while the driver still runs is ignored — so delivery
+// is deferred to `whenIdle`, whose re-queue IS the wake that starts the
+// new turn.
+const interruptCalls = []
+const interruptFollowups = []
+let resolveIdle
+const interruptAgent = {
+  id: 'a1',
+  status: 'running',
+  session: { id: 's1', seq: 0, events: [] },
+  cancel(cause, options) {
+    interruptCalls.push({ cause, options })
+  },
+  whenIdle() {
+    return new Promise(resolve => { resolveIdle = resolve })
+  },
+  followup(message) {
+    interruptFollowups.push(message)
+  },
+}
+const interruptChannel = createChannel(ctx, interruptAgent, {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+})
+check('interruptAndDeliver trims and counts', interruptChannel.interruptAndDeliver(['插话一', '   ', '插话二']) === 2)
+check('interruptAndDeliver cancels without keepInbox', interruptCalls.length === 1 && interruptCalls[0].options === undefined, JSON.stringify(interruptCalls))
+check('delivery waits for the abort to settle', interruptFollowups.length === 0 && interruptChannel.pending.length === 0, JSON.stringify(interruptFollowups))
+resolveIdle()
+await sleep(10)
+check('re-queued after idle (all texts)', interruptFollowups.length === 2 && interruptChannel.pending.length === 2, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
+check('re-queued as followup', interruptChannel.pending.every(p => p.placement === 'followup'))
+
+// A second interrupt while the first abort is still settling must not
+// double-deliver: only the latest request's re-queue runs (both share the
+// same abort's whenIdle).
+let resolveIdle2
+const idlePromise2 = new Promise(resolve => { resolveIdle2 = resolve })
+const interruptAgent2 = {
+  id: 'a1',
+  status: 'running',
+  session: { id: 's1', seq: 0, events: [] },
+  cancel() {},
+  whenIdle() {
+    return idlePromise2
+  },
+  followup(message) {
+    interruptFollowups.push(message)
+  },
+}
+const interruptChannel2 = createChannel(ctx, interruptAgent2, {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+})
+interruptChannel2.interruptAndDeliver(['x'])
+interruptChannel2.interruptAndDeliver(['y'])
+resolveIdle2()
+await sleep(10)
+check('double interrupt does not double-deliver', interruptFollowups.filter(m => m.content?.[0]?.text === 'x').length === 0 && interruptFollowups.filter(m => m.content?.[0]?.text === 'y').length === 1, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
+
+// No whenIdle (defensive): the re-queue waits a beat for the abort.
+const fallbackCalls = []
+const fallbackAgent = {
+  id: 'a1',
+  status: 'running',
+  session: { id: 's1', seq: 0, events: [] },
+  cancel() {},
+  followup(message) {
+    fallbackCalls.push(message)
+  },
+}
+const fallbackChannel = createChannel(ctx, fallbackAgent, {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+})
+fallbackChannel.interruptAndDeliver(['兜底投递'])
+await sleep(300)
+check('no-whenIdle fallback delivers after a beat', fallbackCalls.length === 1 && fallbackChannel.pending.length === 1, JSON.stringify(fallbackCalls))
+
 process.exit(failed)

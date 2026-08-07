@@ -66,6 +66,14 @@ function makeChannel(working) {
     steer(text) { steered.push(text); pending = [...pending, { id: `s${++seq}`, text, placement: 'steer' }] },
     removePending(id) { pending = pending.filter(item => item.id !== id); return true },
     cancel() { cancelled.push('cancel') },
+    interruptAndDeliver(texts) {
+      cancelled.push('interruptAndDeliver')
+      pending = []
+      const trimmed = texts.map(text => text.trim()).filter(text => text !== '')
+      submitted.push(...trimmed)
+      pending = trimmed.map(text => ({ id: `i${++seq}`, text, placement: 'followup' }))
+      return trimmed.length
+    },
     listFiles: async () => [],
     submitted,
     steered,

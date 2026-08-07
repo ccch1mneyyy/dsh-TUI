@@ -226,6 +226,10 @@ export interface Channel {
   removePending(id: string): boolean
   /** Abort the in-flight turn (`Ctrl+C` while working). */
   cancel(): void
+  /** Abort the in-flight turn and process `texts` right away (Esc/Ctrl+Enter
+   *  with queued input): each text is re-queued as a followup once the abort
+   *  settles, so the new turn starts immediately. Returns the count queued. */
+  interruptAndDeliver(texts: readonly string[]): number
   /** Rewind the conversation to a past user message (CC's double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable. */
@@ -360,6 +364,8 @@ export interface ChannelState {
   steer(text: string): void
   removePending(id: string): boolean
   cancel(): void
+  /** @internal interrupt-and-deliver (see the public Channel type). */
+  interruptAndDeliver(texts: readonly string[]): number
   rewindTo(row: ChatRow): Promise<string | null>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<boolean>
@@ -687,6 +693,9 @@ export function createChannel(
     state.pending = state.pending.filter(item => item.id !== messageId)
     if (state.pending.length !== before) state.emit()
   }
+  /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
+   *  second interrupt while the abort settles cannot double-deliver. */
+  let interruptSeq = 0
   const state: ChannelState = {
     version: 0,
     rows: [],
@@ -848,6 +857,39 @@ export function createChannel(
       // Keep the staged queue: an interrupt aborts the running turn but the
       // queued/steered messages are delivered as the next turn (web parity).
       agent.cancel({ kind: 'user' }, { keepInbox: true })
+    },
+    interruptAndDeliver(texts: readonly string[]): number {
+      const queued = texts.map(text => text.trim()).filter(text => text !== '')
+      if (queued.length === 0) return 0
+      // No keepInbox: the parked copies are dropped (their discard events
+      // retire the preview), then each text is re-queued as a fresh
+      // followup. The harness parks kept inbox work until an unrelated wake
+      // (official cancel.spec: "keepInbox parks queued work after an active
+      // turn aborts"), and a wake issued while the driver is still aborting
+      // is ignored — so the re-queue happens on `whenIdle`, whose own wake
+      // starts the new turn.
+      agent.cancel({ kind: 'user' })
+      const token = ++interruptSeq
+      const whenIdle = (agent as { whenIdle?(): Promise<void> }).whenIdle
+      const deliver = (): void => {
+        // A second interrupt while the abort is still settling must not
+        // double-deliver: only the latest request's re-queue runs.
+        if (interruptSeq !== token) return
+        for (const text of queued) {
+          touchSession(state.agentId)
+          const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+          trackPending({ id: message.id, text }, 'followup')
+          agent.followup(message)
+        }
+      }
+      if (typeof whenIdle === 'function') {
+        void whenIdle.call(agent).then(deliver)
+      } else {
+        // Defensive: a wake while the driver still runs is ignored, so wait
+        // for the abort to settle before re-queueing.
+        setTimeout(deliver, 200)
+      }
+      return queued.length
     },
     async rewindTo(row: ChatRow): Promise<string | null> {
       if (row.seq === undefined) return null

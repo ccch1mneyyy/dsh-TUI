@@ -217,6 +217,10 @@ export interface Channel {
     removePending(id: string): boolean;
     /** Abort the in-flight turn (`Ctrl+C` while working). */
     cancel(): void;
+    /** Abort the in-flight turn and process `texts` right away (Esc/Ctrl+Enter
+     *  with queued input): each text is re-queued as a followup once the abort
+     *  settles, so the new turn starts immediately. Returns the count queued. */
+    interruptAndDeliver(texts: readonly string[]): number;
     /** Rewind the conversation to a past user message (CC's double-Esc rewind):
      *  forks the session through that message, swaps in a fresh agent, and
      *  returns the message text for re-editing — or `null` when unwritable. */
@@ -358,6 +362,8 @@ export interface ChannelState {
     steer(text: string): void;
     removePending(id: string): boolean;
     cancel(): void;
+    /** @internal interrupt-and-deliver (see the public Channel type). */
+    interruptAndDeliver(texts: readonly string[]): number;
     rewindTo(row: ChatRow): Promise<string | null>;
     /** Switch the live agent to a persisted session, replaying its history. */
     resumeTo(sessionId: string): Promise<boolean>;

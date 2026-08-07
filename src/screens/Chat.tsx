@@ -914,7 +914,16 @@ export function Chat({
     } else if (key.escape && channel.working) {
       // CC's chat:cancel — esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
-      channel.cancel()
+      // With messages queued for delivery, interrupt-and-deliver them right
+      // away (Codex behavior); otherwise a plain interrupt parks the queue.
+      if (channel.pending.length > 0) {
+        const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
+        if (count > 0) {
+          channel.notify(`已打断当前回合，${count} 条消息立即处理`, { timeoutMs: 2500 })
+        }
+      } else {
+        channel.cancel()
+      }
       event.stopImmediatePropagation()
     } else if (key.ctrl && input === 'o') {
       // Leaving transcript mode (Ctrl+O) — search was already handled above.
