@@ -762,9 +762,15 @@ function renderNodeToOutput(
         // spacer) making scrollTop >= prevMaxScroll true by artifact, not
         // because the user was at bottom.
         const grew = scrollHeight >= prevScrollHeight
+        // A shrink frame is a MEASUREMENT artifact, not real content loss:
+        // following it (or clamping to its smaller maxScroll) would yank an
+        // explicitly scrolled-away view up — all the way to 0 when the
+        // transient measurement drops below the viewport. Freeze the
+        // position for that frame; the next growth frame re-validates it.
+        const shrunk = scrollHeight < prevScrollHeight
         const atBottom =
           sticky || (grew && scrollTopBeforeFollow >= prevMaxScroll)
-        if (atBottom && (node.pendingScrollDelta ?? 0) >= 0) {
+        if (atBottom && (node.pendingScrollDelta ?? 0) >= 0 && !shrunk) {
           node.scrollTop = maxScroll
           node.pendingScrollDelta = undefined
           // Sync flag so useVirtualScroll's isSticky() agrees with positional
@@ -830,7 +836,10 @@ function renderNodeToOutput(
           // schedule an infinite loop of no-op drain frames.
           node.pendingScrollDelta = undefined
         }
-        let scrollTop = Math.max(0, Math.min(cur, maxScroll))
+        // Keep the pre-frame position on a shrink frame (measurement
+        // artifact) instead of clamping to the shrunken maxScroll — the
+        // clamp would persist the yank even after content grows back.
+        let scrollTop = shrunk ? cur : Math.max(0, Math.min(cur, maxScroll))
         // Virtual-scroll clamp: if scrollTop raced past the currently-mounted
         // range (burst PageUp before React re-renders), render at the EDGE of
         // the mounted children instead of blank spacer. Do NOT write back to
