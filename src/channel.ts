@@ -787,9 +787,12 @@ export function createChannel(
       const index = state.pending.findIndex(item => item.id === id)
       if (index === -1) return false
       // The Agent interface carries `inbox` on the dev trunk; the released
-      // dsh-agent may lack it — removal is best-effort, the local preview
-      // clears either way.
-      ;(agent as { inbox?: { remove(itemId: unknown): void } }).inbox?.remove(MessageId(id))
+      // dsh-agent may lack it. Without the inbox API a pull-back cannot
+      // actually withdraw the message — refuse instead of pretending, or
+      // the message would still be delivered (ghost send).
+      const inbox = (agent as { inbox?: { remove(itemId: unknown): void } }).inbox
+      if (!inbox) return false
+      inbox.remove(MessageId(id))
       state.pending = state.pending.filter(item => item.id !== id)
       state.emit()
       return true

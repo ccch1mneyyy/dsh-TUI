@@ -89,4 +89,29 @@ check('removePending → agent.inbox.remove', removed === true && inboxRemovals.
 check('removePending clears the item', channel.pending.length === 0)
 check('removePending unknown id is false', channel.removePending('nope') === false)
 
+// ---- released dsh-agent without the inbox API: pull-back is refused
+const legacyAgent = {
+  id: 'a1',
+  status: 'idle',
+  session: { id: 's1', seq: 0, events: [] },
+  followup(message) {
+    followupCalls.push(message)
+  },
+  steer(message) {
+    steerCalls.push(message)
+  },
+  // no `inbox` — released dsh-agent shape
+}
+const legacyChannel = createChannel(ctx, legacyAgent, {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+})
+legacyChannel.steer('旧版agent的消息')
+check('legacy agent steers fine', steerCalls.some(m => m.content?.[0]?.text === '旧版agent的消息'))
+check('legacy agent tracks pending', legacyChannel.pending.length === 1, JSON.stringify(legacyChannel.pending))
+check('legacy pull-back refused (no ghost send)', legacyChannel.removePending(legacyChannel.pending[0]?.id ?? '') === false)
+check('legacy pending kept after refusal', legacyChannel.pending.length === 1)
+
 process.exit(failed)
