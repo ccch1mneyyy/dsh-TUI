@@ -3,6 +3,7 @@ import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ChatRow, ToolRow } from '../channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
+import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
 import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
@@ -484,7 +485,36 @@ function TranscriptRow({
           <Text dimColor>{text}</Text>
         </Box>
       )
+    case 'compact':
+      // The post-compaction summary defaults to a folded one-liner with a
+      // text preview; Ctrl+O (global) or message-selection Enter reveals
+      // the full summary.
+      return (
+        <Box
+          marginTop={addMargin ? 1 : 0}
+          paddingLeft={2}
+          backgroundColor={background}
+          ref={ref}
+          onClick={onClick}
+        >
+          {expanded || isExpanded ? (
+            <Text dimColor>{text}</Text>
+          ) : (
+            <Text dimColor italic>
+              ∴ 摘要已折叠 · {compactPreview(text)}{' '}
+              <KeyboardShortcutHint shortcut="ctrl+o" action="expand" parens />
+            </Text>
+          )}
+        </Box>
+      )
   }
+}
+
+/** Folded compact-summary preview: whitespace flattened, capped with an
+ *  ellipsis so the fold line never wraps. */
+function compactPreview(text: string, limit = 60): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length <= limit ? flat : `${flat.slice(0, limit - 1)}…`
 }
 
 const MemoRow = React.memo(TranscriptRow)

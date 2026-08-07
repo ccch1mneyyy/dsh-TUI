@@ -37,6 +37,7 @@ const SELECTABLE_KINDS = new Set<ChatRow['kind']>([
   'interrupt',
   'local',
   'local-output',
+  'compact',
 ])
 
 /** Shared empty list for mode-gated derived rows (stable reference, so

@@ -30,7 +30,7 @@ export interface ToolRow {
  */
 export interface ChatRow {
     id: number;
-    kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output';
+    kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact';
     /** Extra label for non-human user rows (e.g. `steering`). */
     label?: string;
     text: string;
