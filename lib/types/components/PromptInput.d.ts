@@ -29,6 +29,10 @@ export interface PromptInputProps {
  * suggestion overlay (name column + description, selected row in the
  * `suggestion` color — ported from the leak's PromptInputFooterSuggestions).
  *
+ * Empty input: a solid block caret on a blank cell and nothing else — no
+ * placeholder text, so the terminal-painted IME preedit (pinyin) at the
+ * parked cursor can never be overlaid on anything.
+ *
  * Multi-line: Shift+Enter inserts a newline; ↑/↓ move between lines while
  * the input spans multiple lines (history/command selection otherwise); the
  * visible window scrolls to keep the caret row on screen past
@@ -37,6 +41,13 @@ export interface PromptInputProps {
  * help menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
  * a complete line to submit.
+ *
+ * While the model is working, Enter does NOT submit: it stages the text into
+ * a pending queue above the input (visible, cancellable with Esc), and a
+ * second Enter on the empty input formally sends the queue. Sent messages
+ * go through channel.submit → agent.followup, which is DSH's `next-turn`
+ * inbox semantics — the running turn finishes first, then queued messages
+ * are processed in order, so the model is never cut off mid-response.
  */
 export declare function PromptInput({ channel, helpOpen, onToggleHelp, onRunCommand, selectionActive, fillText, onFillConsumed, onRewindRequest, }: PromptInputProps): React.JSX.Element;
 //# sourceMappingURL=PromptInput.d.ts.map

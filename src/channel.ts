@@ -99,6 +99,31 @@ export interface NotificationItem {
   timeoutMs: number
 }
 
+/**
+ * Durable same-session goal projection surfaced on the channel (see
+ * {@link Channel['goal']}). Mirrors the goal domain's `GoalSnapshot` +
+ * replay counters; declared locally so the UI needs no dsh-goal dependency.
+ */
+export interface ChannelGoal {
+  id: string
+  revision: number
+  objective: string
+  phase: 'active' | 'paused' | 'blocked' | 'complete'
+  /** Total admitted goal-round cap. */
+  maxGoalRounds: number
+  /** Highest admitted continuation round so far. */
+  roundsStarted: number
+  /** Present exactly while `phase` is `blocked`. */
+  blockedReason?: { code: string; message: string }
+}
+
+/** One entry of the latest todo-list snapshot (mirrors the session domain's
+ *  `TodoItem`; declared locally for the same reason as {@link ChannelGoal}). */
+export interface TodoPanelItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
 export interface Channel {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
@@ -148,6 +173,19 @@ export interface Channel {
   readonly activityFrames: string | undefined
   /** Whether working-activity events are consumed (config.activity). */
   readonly activityEnabled: boolean
+  /**
+   * Current same-session goal projection, when a goal exists. Derived live
+   * from the durable `goal/change` context events (round-zero goal-sourced
+   * user messages) in the session log — every goal mutation appends one, so
+   * this snapshot tracks create/edit/pause/resume/complete/block/clear in
+   * real time and replays correctly on resume/rewind.
+   */
+  readonly goal: ChannelGoal | undefined
+  /**
+   * Latest todo-list snapshot (`todo/write` whole-list event, last write
+   * wins). Log-only UI state, updated live and on replay.
+   */
+  readonly todos: readonly TodoPanelItem[]
   /**
    * Effective slash commands: built-in locals plus plugin-registered
    * commands (plan/goal/…) merged from the DSH command registry. The
@@ -266,6 +304,10 @@ export interface ChannelState {
   activityFrames: string | undefined
   /** Working-activity consumption switch (see the public Channel type). */
   activityEnabled: boolean
+  /** Current same-session goal projection (see the public Channel type). */
+  goal: ChannelGoal | undefined
+  /** Latest todo-list snapshot (see the public Channel type). */
+  todos: TodoPanelItem[]
   /** Effective slash commands (see the public Channel type). */
   commandList: readonly LocalCommand[]
   /** Run a plugin-registered command (see the public Channel type). */
@@ -614,6 +656,8 @@ export function createChannel(
     workingActivity: undefined,
     activityFrames: options.activityFrames,
     activityEnabled: options.activity !== false,
+    goal: undefined,
+    todos: [],
     commandList: LOCAL_COMMANDS,
     lastUsage: undefined,
     tps: undefined,
@@ -1498,6 +1542,52 @@ ${output}
     }
   }
 
+  /**
+   * Fold one goal-sourced message into the channel's goal projection.
+   * Round-zero goal messages carry the full durable snapshot (or a clear
+   * tombstone) in their source; positive-round messages are admitted
+   * continuation prompts that only advance the rounds counter.
+   */
+  const applyGoalEvent = (event: SessionEvent<'user/message'>): void => {
+    const source = event.data.source as unknown as {
+      round: number
+      change?: {
+        kind: 'goal/change'
+        version: 1
+        operation:
+          | 'create'
+          | 'edit'
+          | 'pause'
+          | 'resume'
+          | 'complete'
+          | 'block'
+          | 'clear'
+        goal?: ChannelGoal
+        roundsStarted?: number
+      }
+    }
+    if (source.round > 0) {
+      // Admitted continuation round — the snapshot itself is unchanged.
+      if (state.goal !== undefined) {
+        state.goal = {
+          ...state.goal,
+          roundsStarted: Math.max(state.goal.roundsStarted, source.round),
+        }
+      }
+      return
+    }
+    const change = source.change
+    if (change === undefined || change.kind !== 'goal/change') return
+    if (change.operation === 'clear') {
+      state.goal = undefined
+    } else if (change.goal !== undefined) {
+      state.goal = {
+        ...change.goal,
+        roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
+      }
+    }
+  }
+
   const renderEvent = (event: SessionEvent): void => {
     switch (event.type) {
       case 'user/message': {
@@ -1516,6 +1606,14 @@ ${output}
             state.rows.push({ id: nextRowId, kind: 'local-output', text: summary })
             nextRowId += 1
           }
+          break
+        }
+        // Same-session goal domain: round-zero goal-sourced messages carry
+        // the durable goal snapshot (or clear tombstone) in their source.
+        // They are not transcript bubbles — they drive the goal panel's
+        // live projection (replayed on resume/rewind like every other event).
+        if ((event.data.source as { kind: string }).kind === 'goal') {
+          applyGoalEvent(event)
           break
         }
         // Injected context (plugin/skill source) is not a human bubble; v1
@@ -1726,6 +1824,10 @@ ${output}
       }
       case 'session/title':
         state.sessionTitle = event.data.title
+        break
+      case 'todo/write':
+        // Whole-list snapshot — latest write wins; log-only UI state.
+        state.todos = event.data.todos
         break
       default:
         break

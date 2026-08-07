@@ -4,8 +4,11 @@ import Text from '../ink/components/Text.js'
 
 /**
  * A single-line search input in the round-bordered box of the leak's
- * SearchBox: `⌕ ` prefix, block cursor at `cursorOffset` (inverse cell),
- * placeholder with its first character as the cursor when empty.
+ * SearchBox: `⌕ ` prefix, block cursor at `cursorOffset` (inverse cell).
+ * When empty and focused, a solid block caret sits at the start and the
+ * placeholder is right-aligned (dimmed) — kept off the caret's cell so the
+ * terminal-painted IME preedit (pinyin) can never be overlaid on it during
+ * CJK composition.
  */
 export function SearchBox({
   query,
@@ -30,6 +33,9 @@ export function SearchBox({
   const borderStyle = borderless ? undefined : 'round'
   const borderColor = isFocused ? 'suggestion' : undefined
   const borderDimColor = !isFocused
+  // Focused + empty + terminal focused: inline caret row (block caret at the
+  // start, placeholder right-aligned) instead of the inline placeholder.
+  const inlineCaret = isFocused && query === '' && isTerminalFocused
 
   let content: React.ReactNode
   if (isFocused) {
@@ -43,15 +49,8 @@ export function SearchBox({
       ) : (
         <Text>{query}</Text>
       )
-    } else {
-      content = isTerminalFocused ? (
-        <>
-          <Text inverse>{placeholder.charAt(0)}</Text>
-          <Text dimColor>{placeholder.slice(1)}</Text>
-        </>
-      ) : (
-        <Text dimColor>{placeholder}</Text>
-      )
+    } else if (!isTerminalFocused) {
+      content = <Text dimColor>{placeholder}</Text>
     }
   } else {
     content = query ? <Text>{query}</Text> : <Text>{placeholder}</Text>
@@ -66,9 +65,20 @@ export function SearchBox({
       paddingX={borderless ? 0 : 1}
       width={width}
     >
-      <Text dimColor={!isFocused}>
-        {prefix} {content}
-      </Text>
+      {inlineCaret ? (
+        <Box flexDirection="row" width="100%">
+          <Text>{prefix} </Text>
+          <Text inverse> </Text>
+          <Box flexGrow={1} />
+          <Text dimColor wrap="truncate">
+            {placeholder}
+          </Text>
+        </Box>
+      ) : (
+        <Text dimColor={!isFocused}>
+          {prefix} {content}
+        </Text>
+      )}
     </Box>
   )
 }

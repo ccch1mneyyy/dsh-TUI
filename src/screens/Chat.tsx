@@ -12,6 +12,7 @@ import { NoSelect } from '../ink/components/NoSelect.js'
 import instances from '../ink/instances.js'
 import { LogoHeader, MessageList } from '../components/MessageList.js'
 import { PromptInput } from '../components/PromptInput.js'
+import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
@@ -1068,6 +1069,7 @@ export function Chat({
         </Box>
       )}
       {searchOpen && <TranscriptSearchBar query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
+      <GoalTodoPanel channel={channel} />
       <PromptInput
         channel={channel}
         helpOpen={helpOpen}

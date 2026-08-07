@@ -83,6 +83,32 @@ export interface NotificationItem {
     /** Auto-dismiss after this many ms (default 4000). */
     timeoutMs: number;
 }
+/**
+ * Durable same-session goal projection surfaced on the channel (see
+ * {@link Channel['goal']}). Mirrors the goal domain's `GoalSnapshot` +
+ * replay counters; declared locally so the UI needs no dsh-goal dependency.
+ */
+export interface ChannelGoal {
+    id: string;
+    revision: number;
+    objective: string;
+    phase: 'active' | 'paused' | 'blocked' | 'complete';
+    /** Total admitted goal-round cap. */
+    maxGoalRounds: number;
+    /** Highest admitted continuation round so far. */
+    roundsStarted: number;
+    /** Present exactly while `phase` is `blocked`. */
+    blockedReason?: {
+        code: string;
+        message: string;
+    };
+}
+/** One entry of the latest todo-list snapshot (mirrors the session domain's
+ *  `TodoItem`; declared locally for the same reason as {@link ChannelGoal}). */
+export interface TodoPanelItem {
+    content: string;
+    status: 'pending' | 'in_progress' | 'completed';
+}
 export interface Channel {
     /** Monotonic version — bump on every mutation so screens can re-render. */
     readonly version: number;
@@ -138,6 +164,19 @@ export interface Channel {
     readonly activityFrames: string | undefined;
     /** Whether working-activity events are consumed (config.activity). */
     readonly activityEnabled: boolean;
+    /**
+     * Current same-session goal projection, when a goal exists. Derived live
+     * from the durable `goal/change` context events (round-zero goal-sourced
+     * user messages) in the session log — every goal mutation appends one, so
+     * this snapshot tracks create/edit/pause/resume/complete/block/clear in
+     * real time and replays correctly on resume/rewind.
+     */
+    readonly goal: ChannelGoal | undefined;
+    /**
+     * Latest todo-list snapshot (`todo/write` whole-list event, last write
+     * wins). Log-only UI state, updated live and on replay.
+     */
+    readonly todos: readonly TodoPanelItem[];
     /**
      * Effective slash commands: built-in locals plus plugin-registered
      * commands (plan/goal/…) merged from the DSH command registry. The
@@ -264,6 +303,10 @@ export interface ChannelState {
     activityFrames: string | undefined;
     /** Working-activity consumption switch (see the public Channel type). */
     activityEnabled: boolean;
+    /** Current same-session goal projection (see the public Channel type). */
+    goal: ChannelGoal | undefined;
+    /** Latest todo-list snapshot (see the public Channel type). */
+    todos: TodoPanelItem[];
     /** Effective slash commands (see the public Channel type). */
     commandList: readonly LocalCommand[];
     /** Run a plugin-registered command (see the public Channel type). */

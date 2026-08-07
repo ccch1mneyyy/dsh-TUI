@@ -30,25 +30,13 @@ function wordBoundaryRight(text: string, cursor: number): number {
 }
 
 /**
- * Idle placeholder in Claude Code's example-command style. CC generates a
- * context-aware example from git history; cc-tui picks one at random per
- * launch from the same spirit of prompts (stable for the process lifetime).
+ * The empty input deliberately shows NO placeholder text: terminal emulators
+ * paint the IME preedit (pinyin) at the physical cursor, which the app parks
+ * on the caret's cell, and the app receives no input events while a
+ * composition is active (Windows Terminal suppresses key events during TSF
+ * composition) — so it can never hide a placeholder in time. Keeping the row
+ * blank while empty is what guarantees the preedit has nothing to overlay.
  */
-const EXAMPLE_COMMANDS = [
-  'Summarize the changes in this branch',
-  'Explain the code in this repository',
-  'Find and fix the bug in this project',
-  'Write tests for the core module',
-  'Review my recent changes',
-  'What does this function do?',
-  'Refactor this to be more maintainable',
-  'Update the documentation',
-  'Help me debug this error',
-  'Add a feature to this project',
-]
-const PLACEHOLDER =
-  EXAMPLE_COMMANDS[Math.floor(Math.random() * EXAMPLE_COMMANDS.length)] ??
-  EXAMPLE_COMMANDS[0]
 
 /** Max input rows before the visible viewport starts scrolling (CC's
  *  maxVisibleLines behavior — the box keeps a stable height). */
@@ -84,6 +72,10 @@ export interface PromptInputProps {
  * suggestion overlay (name column + description, selected row in the
  * `suggestion` color — ported from the leak's PromptInputFooterSuggestions).
  *
+ * Empty input: a solid block caret on a blank cell and nothing else — no
+ * placeholder text, so the terminal-painted IME preedit (pinyin) at the
+ * parked cursor can never be overlaid on anything.
+ *
  * Multi-line: Shift+Enter inserts a newline; ↑/↓ move between lines while
  * the input spans multiple lines (history/command selection otherwise); the
  * visible window scrolls to keep the caret row on screen past
@@ -92,6 +84,13 @@ export interface PromptInputProps {
  * help menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
  * a complete line to submit.
+ *
+ * While the model is working, Enter does NOT submit: it stages the text into
+ * a pending queue above the input (visible, cancellable with Esc), and a
+ * second Enter on the empty input formally sends the queue. Sent messages
+ * go through channel.submit → agent.followup, which is DSH's `next-turn`
+ * inbox semantics — the running turn finishes first, then queued messages
+ * are processed in order, so the model is never cut off mid-response.
  */
 export function PromptInput({
   channel,
@@ -124,6 +123,14 @@ export function PromptInput({
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
   const clipboardBusyRef = React.useRef(false)
+  /**
+   * Staged messages while the model is working: the first Enter only queues
+   * the input (never interrupts the running turn); with the input cleared, a
+   * second Enter formally sends the queue. DSH's `followup` is `next-turn`
+   * semantics — sent messages join the agent inbox and are claimed at the
+   * turn boundary, so nothing here ever cuts the model off mid-response.
+   */
+  const [pendingQueue, setPendingQueue] = React.useState<string[]>([])
   React.useEffect(() => {
     return () => {
       if (escTimerRef.current) clearTimeout(escTimerRef.current)
@@ -174,6 +181,40 @@ export function PromptInput({
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.submit(trimmed)
+  }
+
+  /**
+   * Stage a message while the model is working (first Enter): push it onto
+   * the pending queue and clear the input. Nothing is sent — the model keeps
+   * streaming untouched. The staged text also enters the in-memory history
+   * so ↑ recalls it before it is sent.
+   */
+  const enqueuePending = (text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    history.current.push(trimmed)
+    if (history.current.length > HISTORY_LIMIT) history.current.shift()
+    historyIndex.current = -1
+    setPendingQueue(previous => [...previous, trimmed])
+    setValue('')
+    setCursor(0)
+    setSelectedCommand(0)
+  }
+
+  /**
+   * Formally send the staged queue (second Enter with an empty input). Each
+   * item goes through channel.submit → agent.followup, which joins the DSH
+   * inbox as its own turn: the running response finishes first, then the
+   * queued messages are processed in order. Never interrupts.
+   */
+  const flushPending = () => {
+    if (pendingQueue.length === 0) return
+    const items = pendingQueue
+    setPendingQueue([])
+    for (const item of items) {
+      appendHistory(item)
+      channel.submit(item)
+    }
   }
 
   /**
@@ -291,6 +332,17 @@ export function PromptInput({
           tryRunCommand(`/${command.name}`)
           return
         }
+      }
+      const trimmed = value.trim()
+      if (channel.working && trimmed !== '') {
+        // Model is streaming: first Enter stages the message (queue, no
+        // interruption). Second Enter on an empty input sends the queue.
+        enqueuePending(value)
+        return
+      }
+      if (trimmed === '' && pendingQueue.length > 0) {
+        flushPending()
+        return
       }
       if (!tryRunCommand(value)) submitText(value)
       return
@@ -460,6 +512,12 @@ export function PromptInput({
         setFileSelected(0)
         return
       }
+      // With an empty input, Esc cancels the whole staged queue at once
+      // (takes priority over the double-tap clear/rewind path).
+      if (value.length === 0 && pendingQueue.length > 0) {
+        setPendingQueue([])
+        return
+      }
       // Double-tap Esc: clear the input when it has content; when empty,
       // open the rewind picker (CC's "Double-tap esc to rewind the code
       // and/or conversation to a previous point in time").
@@ -604,6 +662,21 @@ export function PromptInput({
           </Box>
         </Box>
       )}
+      {pendingQueue.length > 0 && (
+        <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
+          <Text dimColor>
+            ⏳ {pendingQueue.length} 条待发送 · Enter 发送 · Esc 取消
+          </Text>
+          {pendingQueue.map((item, index) => (
+            <Box key={index} flexDirection="row">
+              <Text dimColor>{index + 1}. </Text>
+              <Text dimColor wrap="truncate">
+                {item}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )}
       {helpOpen && (
         <Box marginBottom={1}>
           <HelpMenu commands={channel.commandList} />
@@ -642,10 +715,10 @@ export function PromptInput({
           <Text dimColor={channel.working}>❯ </Text>
           <Box ref={valueBoxRef} flexGrow={1} flexShrink={1}>
             {value.length === 0 ? (
-              <Text wrap="truncate-end">
-                <Text inverse>H</Text>
-                <Text dimColor>{PLACEHOLDER.slice(1)}</Text>
-              </Text>
+              // Solid block caret on a BLANK cell: the terminal paints the
+              // IME preedit (pinyin) at the physical cursor, which is parked
+              // right here, so nothing else may occupy this cell.
+              <Text inverse> </Text>
             ) : (
               <Box flexDirection="column">{rendered}</Box>
             )}
