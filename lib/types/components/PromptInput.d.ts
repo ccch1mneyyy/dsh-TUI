@@ -43,8 +43,9 @@ export interface PromptInputProps {
  * a complete line to submit.
  *
  * While the model is working, Enter does NOT submit: it stages the text into
- * a pending queue above the input (visible, cancellable with Esc), and a
- * second Enter on the empty input formally sends the queue. Sent messages
+ * a pending queue above the input (visible), and a second Enter on the
+ * empty input formally sends the queue; Esc abandons the current input and
+ * sends the staged queue right away. Sent messages
  * go through channel.submit → agent.followup, which is DSH's `next-turn`
  * inbox semantics — the running turn finishes first, then queued messages
  * are processed in order, so the model is never cut off mid-response.

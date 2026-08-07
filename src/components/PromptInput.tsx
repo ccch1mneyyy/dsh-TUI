@@ -86,8 +86,9 @@ export interface PromptInputProps {
  * a complete line to submit.
  *
  * While the model is working, Enter does NOT submit: it stages the text into
- * a pending queue above the input (visible, cancellable with Esc), and a
- * second Enter on the empty input formally sends the queue. Sent messages
+ * a pending queue above the input (visible), and a second Enter on the
+ * empty input formally sends the queue; Esc abandons the current input and
+ * sends the staged queue right away. Sent messages
  * go through channel.submit → agent.followup, which is DSH's `next-turn`
  * inbox semantics — the running turn finishes first, then queued messages
  * are processed in order, so the model is never cut off mid-response.
@@ -202,10 +203,11 @@ export function PromptInput({
   }
 
   /**
-   * Formally send the staged queue (second Enter with an empty input). Each
-   * item goes through channel.submit → agent.followup, which joins the DSH
-   * inbox as its own turn: the running response finishes first, then the
-   * queued messages are processed in order. Never interrupts.
+   * Formally send the staged queue (second Enter on an empty input, or Esc
+   * after abandoning the input). Each item goes through channel.submit →
+   * agent.followup, which joins the DSH inbox as its own turn: the running
+   * response finishes first, then the queued messages are processed in
+   * order. Never interrupts.
    */
   const flushPending = () => {
     if (pendingQueue.length === 0) return
@@ -297,13 +299,44 @@ export function PromptInput({
       return
     }
 
+    /**
+     * Unified Enter semantics (both the parsed `return` key and the raw
+     * CR/LF line from Windows cmd pipelines):
+     * - command menu open → run the SELECTED command (never send `/mo`);
+     * - model working + non-empty input → stage into the pending queue;
+     * - empty input + queue non-empty → formally send the queue;
+     * - otherwise → submit directly (or run a unique command).
+     */
+    const handleEnter = () => {
+      if (overlayOpen) {
+        const command = suggestions[selectedCommand]
+        if (command) {
+          tryRunCommand(`/${command.name}`)
+          return
+        }
+      }
+      const trimmed = value.trim()
+      if (channel.working && trimmed !== '') {
+        enqueuePending(value)
+        return
+      }
+      if (trimmed === '' && pendingQueue.length > 0) {
+        flushPending()
+        return
+      }
+      if (!tryRunCommand(value)) submitText(value)
+    }
+
     // Whole-line input from Windows ConPTY pipelines (cmd batch -> node):
-    // the trailing CR/LF marks a complete line to submit. A `/`-prefixed
-    // line with a UNIQUE command match runs that command (the menu cannot
-    // appear mid-line here, so the unique-match rule stands in for the
-    // selected-command Enter semantics); ambiguous or unknown prefixes
-    // flow through the normal path.
+    // the trailing CR/LF marks a complete line to submit. A bare Enter
+    // arrives as `\r`/`\n`/`\r\n` — treat it as Enter (queue semantics),
+    // NOT a direct submit. Only real multi-char piped lines keep the
+    // legacy direct-submit path.
     if (input.includes('\n') || input.includes('\r')) {
+      if (/^[\r\n]+$/.test(input)) {
+        handleEnter()
+        return
+      }
       const line = (value + input).trim()
       if (line.startsWith('/')) {
         const matches = filterCommands(line, channel.commandList)
@@ -324,27 +357,7 @@ export function PromptInput({
       return
     }
     if (key.return) {
-      // With the command menu open, Enter runs the SELECTED command (CC/pi
-      // semantics) — never sends a partial `/mo` to the model.
-      if (overlayOpen) {
-        const command = suggestions[selectedCommand]
-        if (command) {
-          tryRunCommand(`/${command.name}`)
-          return
-        }
-      }
-      const trimmed = value.trim()
-      if (channel.working && trimmed !== '') {
-        // Model is streaming: first Enter stages the message (queue, no
-        // interruption). Second Enter on an empty input sends the queue.
-        enqueuePending(value)
-        return
-      }
-      if (trimmed === '' && pendingQueue.length > 0) {
-        flushPending()
-        return
-      }
-      if (!tryRunCommand(value)) submitText(value)
+      handleEnter()
       return
     }
     if (key.tab && fileOverlayOpen) {
@@ -512,10 +525,16 @@ export function PromptInput({
         setFileSelected(0)
         return
       }
-      // With an empty input, Esc cancels the whole staged queue at once
-      // (takes priority over the double-tap clear/rewind path).
-      if (value.length === 0 && pendingQueue.length > 0) {
-        setPendingQueue([])
+      // Esc abandons the current input; any staged queue is sent right
+      // away (the queue is a "send later", never a draft to cancel).
+      if (value.length > 0) {
+        setValue('')
+        setCursor(0)
+        setSelectedCommand(0)
+        setFileSelected(0)
+      }
+      if (pendingQueue.length > 0) {
+        flushPending()
         return
       }
       // Double-tap Esc: clear the input when it has content; when empty,
@@ -665,7 +684,7 @@ export function PromptInput({
       {pendingQueue.length > 0 && (
         <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
           <Text dimColor>
-            ⏳ {pendingQueue.length} 条待发送 · Enter 发送 · Esc 取消
+            ⏳ {pendingQueue.length} 条待发送 · Enter 发送 · Esc 发送
           </Text>
           {pendingQueue.map((item, index) => (
             <Box key={index} flexDirection="row">

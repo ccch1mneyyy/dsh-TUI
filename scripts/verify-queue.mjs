@@ -110,7 +110,7 @@ async function run() {
     instance.unmount()
   }
 
-  // ---- Scenario 2: working — Esc cancels the staged queue.
+  // ---- Scenario 2: working — Esc abandons the input and sends the queue.
   {
     const { stdout, stderr, stdin } = makeStreams()
     const channel = makeChannel(true)
@@ -130,17 +130,51 @@ async function run() {
     stdin.write('\r')
     await sleep(300)
     let last = toPlain(stdout.frames.at(-1) ?? '')
-    check('staged before cancel', last.includes('待发送'))
+    check('staged before Esc', last.includes('待发送'))
 
+    // Type a second draft, then Esc: input is abandoned, queue is sent.
+    stdin.write('draft2')
+    await sleep(200)
     stdin.write('\x1b')
     await sleep(300)
     last = toPlain(stdout.frames.at(-1) ?? '')
-    check('Esc cancels the queue', !last.includes('待发送'), JSON.stringify(last))
-    check('nothing submitted after cancel', channel.submitted.length === 0)
+    check('Esc sends the queue', channel.submitted.length === 1 && channel.submitted[0] === 'hi', JSON.stringify(channel.submitted))
+    check('Esc abandoned the draft', !/❯ draft2/.test(last), JSON.stringify(last))
+    check('queue cleared after Esc', !last.includes('待发送'), JSON.stringify(last))
     instance.unmount()
   }
 
-  // ---- Scenario 3: idle — Enter submits directly (unchanged behavior).
+  // ---- Scenario 3: working — ConPTY piped Enter (`\n`) uses queue too.
+  {
+    const { stdout, stderr, stdin } = makeStreams()
+    const channel = makeChannel(true)
+    const instance = await render(
+      React.createElement(PromptInput, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand: () => false,
+        selectionActive: false,
+      }),
+      { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+    )
+    await sleep(600)
+    // cmd batch -> node pipelines deliver Enter as a bare newline.
+    stdin.write('piped')
+    await sleep(200)
+    stdin.write('\n')
+    await sleep(300)
+    let last = toPlain(stdout.frames.at(-1) ?? '')
+    check('piped first Enter stages (not direct submit)', last.includes('待发送') && channel.submitted.length === 0, JSON.stringify(last))
+    stdin.write('\n')
+    await sleep(300)
+    last = toPlain(stdout.frames.at(-1) ?? '')
+    check('piped second Enter sends the queue', channel.submitted.length === 1 && channel.submitted[0] === 'piped')
+    check('queue cleared after piped flush', !last.includes('待发送'), JSON.stringify(last))
+    instance.unmount()
+  }
+
+  // ---- Scenario 4: idle — Enter submits directly (unchanged behavior).
   {
     const { stdout, stderr, stdin } = makeStreams()
     const channel = makeChannel(false)
