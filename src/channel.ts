@@ -289,6 +289,10 @@ export interface PendingMessage {
   id: string
   text: string
   placement: 'steer' | 'followup'
+  /** Released dsh-agent occurrence id (captured from `agent/inbox/enqueue`);
+   *  the pull-back key — the released `updateInbox` addresses occurrences,
+   *  not message ids. Absent on the dev-trunk agent. */
+  inboxItemId?: string
 }
 
 export interface ChannelState {
@@ -669,11 +673,19 @@ export function createChannel(
   }
   /**
    * Register a submitted message as pending and notify the UI. The inbox
-   * events (claimed/discarded) retire it; nothing here guesses timing.
+   * events (claimed/discarded/dequeue/discard) retire it; nothing here
+   * guesses timing.
    */
   const trackPending = (message: { id: string; text: string }, placement: PendingMessage['placement']): void => {
     state.pending = [...state.pending, { id: message.id, text: message.text, placement }]
     state.emit()
+  }
+  /** Remove one pending entry (rollback on a refused send, steering
+   *  rejection, or delivery races) and notify only when it existed. */
+  const untrackPending = (messageId: string): void => {
+    const before = state.pending.length
+    state.pending = state.pending.filter(item => item.id !== messageId)
+    if (state.pending.length !== before) state.emit()
   }
   const state: ChannelState = {
     version: 0,
@@ -767,8 +779,17 @@ export function createChannel(
       // (/resume sorts by last-used).
       touchSession(state.agentId)
       const message = createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } })
-      agent.followup(message)
+      // Track BEFORE the agent call: the released agent emits `enqueue`
+      // synchronously inside send(), and the capture handler needs the
+      // pending entry to attach the occurrence id. A synchronous throw
+      // rolls the preview back.
       trackPending({ id: message.id, text: trimmed }, 'followup')
+      try {
+        agent.followup(message)
+      } catch (error) {
+        untrackPending(message.id)
+        throw error
+      }
     },
     /** Steer a message into the RUNNING turn (Codex/pi semantics): it is
      *  injected at the next step boundary of the current turn and the agent
@@ -778,18 +799,44 @@ export function createChannel(
       if (!trimmed) return
       touchSession(state.agentId)
       const message = createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } })
-      agent.steer(message)
       trackPending({ id: message.id, text: trimmed }, 'steer')
+      try {
+        const receipt = agent.steer(message)
+        // Released dsh-agent: steer admission settles as `rejected` when
+        // lifecycle policy refuses (the promise always resolves) — roll the
+        // preview back so a refused steer never lingers. Dev-trunk returns
+        // void, so nothing to subscribe to there.
+        const outcome = (receipt as { outcome?: Promise<{ status: string }> } | undefined)?.outcome
+        if (outcome !== undefined) {
+          void outcome.then((result) => {
+            if (result.status === 'rejected') untrackPending(message.id)
+          })
+        }
+      } catch (error) {
+        untrackPending(message.id)
+        throw error
+      }
     },
     /** Pull a pending message back out of the inbox (Alt+Up): it returns to
      *  the input for editing instead of being delivered. */
     removePending(id: string): boolean {
       const index = state.pending.findIndex(item => item.id === id)
       if (index === -1) return false
-      // The Agent interface carries `inbox` on the dev trunk; the released
-      // dsh-agent may lack it. Without the inbox API a pull-back cannot
-      // actually withdraw the message — refuse instead of pretending, or
-      // the message would still be delivered (ghost send).
+      const pendingItem = state.pending[index]!
+      // Released dsh-agent: withdrawal goes through `updateInbox` by the
+      // occurrence id. Without the enqueue-captured id — or when the outcome
+      // is not `applied` (item already claimed) — refuse instead of
+      // pretending, or the message would still be delivered (ghost send).
+      const updateInbox = (agent as { updateInbox?(itemId: unknown, action: { kind: 'remove' }): unknown }).updateInbox
+      if (typeof updateInbox === 'function') {
+        if (pendingItem.inboxItemId === undefined) return false
+        if (updateInbox.call(agent, pendingItem.inboxItemId, { kind: 'remove' }) !== 'applied') return false
+        state.pending = state.pending.filter(item => item.id !== id)
+        state.emit()
+        return true
+      }
+      // The dev-trunk Agent interface carries `inbox` with message-id
+      // removal; a release without ANY inbox API cannot withdraw — refuse.
       const inbox = (agent as { inbox?: { remove(itemId: unknown): void } }).inbox
       if (!inbox) return false
       inbox.remove(MessageId(id))
@@ -1979,23 +2026,74 @@ ${output}
       // Pending delivery is driven by the agent inbox: a claimed message
       // has landed in a turn (steer → step boundary, followup → next turn);
       // a discarded one was dropped by a cancel. Retire from the preview.
-      // The dev-trunk dsh-agent emits `inserted/claimed/discarded`; the
-      // released package uses `enqueue/dequeue` — listen to both so the
-      // preview stays correct on either dependency (the unknown-event
-      // registrations are inert on the other side).
+      // The dev-trunk dsh-agent emits PAYLOAD events `inserted/claimed/
+      // discarded` as `{ agent, message }`; the released package emits
+      // POSITIONAL events `enqueue/update/dequeue/discard` as
+      // `(agent, item | item[])` where the item's `message.id` is the
+      // tracked id (the item's own `id` is an occurrence id). One
+      // normalizer handles both shapes; unknown-event registrations are
+      // inert on the other side.
       (() => {
-        const retirePending = ({ agent: subject, message }: { agent: unknown; message: { id: string } }): void => {
-          if (subject !== agent) return
-          state.pending = state.pending.filter(item => item.id !== message.id)
-          state.emit()
+        const normalizeInboxEvent = (...args: unknown[]): void => {
+          const first = args[0] as { agent?: unknown; message?: { id?: unknown } } | undefined
+          let subject: unknown
+          const ids: string[] = []
+          if (
+            first !== null &&
+            typeof first === 'object' &&
+            typeof first.message?.id === 'string'
+          ) {
+            // dev-trunk payload shape: { agent, message }
+            subject = first.agent
+            ids.push(first.message.id)
+          } else {
+            // released positional shape: (agent, item) / (agent, items)
+            subject = args[0]
+            const second = args[1] as
+              | { message?: { id?: unknown } }
+              | Array<{ message?: { id?: unknown } }>
+              | undefined
+            if (Array.isArray(second)) {
+              for (const item of second) {
+                if (typeof item.message?.id === 'string') ids.push(item.message.id)
+              }
+            } else if (second !== null && typeof second === 'object') {
+              if (typeof second.message?.id === 'string') ids.push(second.message.id)
+            }
+          }
+          if (subject !== agent || ids.length === 0) return
+          const before = state.pending.length
+          state.pending = state.pending.filter(item => !ids.includes(item.id))
+          if (state.pending.length !== before) state.emit()
+        }
+        /** Released `(agent, item)` only: remember the occurrence id on the
+         *  matching pending entry so Alt+Up can withdraw it via updateInbox. */
+        const captureInboxItem = (...args: unknown[]): void => {
+          if (args[0] !== agent) return
+          const item = args[1] as { id?: unknown; message?: { id?: unknown } } | undefined
+          if (item === null || typeof item !== 'object') return
+          const itemId = item.id
+          const messageId = item.message?.id
+          if (typeof itemId !== 'string' || typeof messageId !== 'string') return
+          let changed = false
+          state.pending = state.pending.map(entry => {
+            if (entry.id === messageId && entry.inboxItemId === undefined) {
+              changed = true
+              return { ...entry, inboxItemId: itemId }
+            }
+            return entry
+          })
+          if (changed) state.emit()
         }
         const disposers: Array<() => void> = []
-        const onAgentEvent = (event: string): void => {
-          disposers.push((ctx.on as (name: string, handler: (payload: { agent: unknown; message: { id: string } }) => void) => unknown)(event, retirePending) as () => void)
+        const onAgentEvent = (event: string, handler: (...args: unknown[]) => void): void => {
+          disposers.push((ctx.on as (name: string, handler: (...args: unknown[]) => void) => unknown)(event, handler) as () => void)
         }
-        onAgentEvent('agent/inbox/claimed')
-        onAgentEvent('agent/inbox/discarded')
-        onAgentEvent('agent/inbox/dequeue')
+        onAgentEvent('agent/inbox/claimed', normalizeInboxEvent)
+        onAgentEvent('agent/inbox/discarded', normalizeInboxEvent)
+        onAgentEvent('agent/inbox/dequeue', normalizeInboxEvent)
+        onAgentEvent('agent/inbox/discard', normalizeInboxEvent)
+        onAgentEvent('agent/inbox/enqueue', captureInboxItem)
         return () => {
           for (const dispose of disposers) dispose()
         }

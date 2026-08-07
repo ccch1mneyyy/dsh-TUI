@@ -232,7 +232,7 @@ export function PromptInput({
     const item = channel.pending[channel.pending.length - 1]
     if (!item) return
     if (!channel.removePending(item.id)) {
-      channel.notify('当前 dsh 版本不支持撤回', { color: 'warning', timeoutMs: 2500 })
+      channel.notify('无法撤回：消息可能已被处理，或当前版本不支持', { color: 'warning', timeoutMs: 2500 })
       return
     }
     setValue(item.text)

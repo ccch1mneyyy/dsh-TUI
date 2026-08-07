@@ -18,6 +18,8 @@ function check(name, ok, extra = '') {
   if (!ok) failed += 1
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
 const handlers = new Map()
 const ctx = {
   on(event, handler) {
@@ -113,5 +115,84 @@ check('legacy agent steers fine', steerCalls.some(m => m.content?.[0]?.text === 
 check('legacy agent tracks pending', legacyChannel.pending.length === 1, JSON.stringify(legacyChannel.pending))
 check('legacy pull-back refused (no ghost send)', legacyChannel.removePending(legacyChannel.pending[0]?.id ?? '') === false)
 check('legacy pending kept after refusal', legacyChannel.pending.length === 1)
+
+// ---- released dsh-agent: POSITIONAL inbox events (agent, item) ----
+// The released package emits `enqueue/update/dequeue/discard` as
+// `(agent, item | item[])` where `item.message.id` is the tracked id and
+// `item.id` is an occurrence id; pull-back goes through `updateInbox`.
+const releasedUpdateCalls = []
+const makeReleasedAgent = (options = {}) => {
+  const agent = {
+    id: 'a1',
+    status: 'idle',
+    session: { id: 's1', seq: 0, events: [] },
+    followup() {},
+    // Released agent emits `enqueue` synchronously inside steer().
+    steer(message) {
+      const enqueue = handlers.get('agent/inbox/enqueue')
+      enqueue?.(agent, { id: 'occ-1', message, placement: 'steering' })
+      return { outcome: Promise.resolve({ status: 'admitted', turn: 1, step: 1 }) }
+    },
+    updateInbox(id, action) {
+      releasedUpdateCalls.push({ id, action })
+      return 'applied'
+    },
+    ...options,
+  }
+  return agent
+}
+const releasedAgent = makeReleasedAgent()
+const releasedChannel = createChannel(ctx, releasedAgent, {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+})
+releasedChannel.steer('发布版消息')
+check('released steer tracked', releasedChannel.pending.length === 1, JSON.stringify(releasedChannel.pending))
+check('released enqueue captured occurrence id', releasedChannel.pending[0]?.inboxItemId === 'occ-1', JSON.stringify(releasedChannel.pending))
+
+// positional dequeue: (agent, item) — retires by item.message.id
+const dequeueHandler = handlers.get('agent/inbox/dequeue')
+if (dequeueHandler) {
+  dequeueHandler(releasedAgent, { id: 'occ-1', message: { id: releasedChannel.pending[0]?.id }, placement: 'steering' })
+  check('released positional dequeue retires the item', releasedChannel.pending.length === 0, JSON.stringify(releasedChannel.pending))
+}
+
+// positional discard: (agent, items[]) — retires every item's message id
+releasedChannel.steer('a')
+releasedChannel.steer('b')
+const discardHandler = handlers.get('agent/inbox/discard')
+if (discardHandler) {
+  discardHandler(releasedAgent, releasedChannel.pending.map(p => ({ id: 'occ', message: { id: p.id }, placement: 'queued' })))
+  check('released positional discard retires all', releasedChannel.pending.length === 0, JSON.stringify(releasedChannel.pending))
+}
+
+// pull-back via updateInbox (applied)
+releasedChannel.steer('撤回我')
+const releasePullId = releasedChannel.pending[0]?.id ?? ''
+check('released pull-back via updateInbox', releasedChannel.removePending(releasePullId) === true && releasedUpdateCalls.at(-1)?.action?.kind === 'remove', JSON.stringify(releasedUpdateCalls.at(-1)))
+check('released pending cleared after pull-back', releasedChannel.pending.length === 0)
+
+// updateInbox refuses ('not-found' = already claimed) → pending kept
+const refusedChannel = createChannel(ctx, makeReleasedAgent({ updateInbox() { return 'not-found' } }), {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+})
+refusedChannel.steer('已被认领')
+check('refused pull-back keeps pending', refusedChannel.removePending(refusedChannel.pending[0]?.id ?? '') === false && refusedChannel.pending.length === 1, JSON.stringify(refusedChannel.pending))
+
+// steer admission rejected → preview rolls back once the outcome settles
+const rejectedChannel = createChannel(ctx, makeReleasedAgent({ steer() { return { outcome: Promise.resolve({ status: 'rejected' }) } } }), {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+})
+rejectedChannel.steer('被拒绝的插话')
+await sleep(10)
+check('rejected steer untracked after outcome', rejectedChannel.pending.length === 0, JSON.stringify(rejectedChannel.pending))
 
 process.exit(failed)

@@ -282,6 +282,10 @@ export interface PendingMessage {
     id: string;
     text: string;
     placement: 'steer' | 'followup';
+    /** Released dsh-agent occurrence id (captured from `agent/inbox/enqueue`);
+     *  the pull-back key — the released `updateInbox` addresses occurrences,
+     *  not message ids. Absent on the dev-trunk agent. */
+    inboxItemId?: string;
 }
 export interface ChannelState {
     version: number;
