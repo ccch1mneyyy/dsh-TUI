@@ -218,34 +218,12 @@ export class LogUpdate {
       return fullResetSequence_CAUSES_FLICKER(next, 'offscreen', stylePool)
     }
 
-    if (
-      prev.screen.height >= prev.viewport.height &&
-      prev.screen.height > 0 &&
-      cursorAtBottom &&
-      !isGrowing
-    ) {
-      // viewportY = rows in scrollback from content overflow
-      // +1 for the row pushed by cursor-restore scroll
-      const viewportY = prev.screen.height - prev.viewport.height
-      const scrollbackRows = viewportY + 1
-
-      let scrollbackChangeY = -1
-      diffEach(prev.screen, next.screen, (_x, y) => {
-        if (y < scrollbackRows) {
-          scrollbackChangeY = y
-          return true // early exit
-        }
-      })
-      if (scrollbackChangeY >= 0) {
-        const prevLine = readLine(prev.screen, scrollbackChangeY)
-        const nextLine = readLine(next.screen, scrollbackChangeY)
-        return fullResetSequence_CAUSES_FLICKER(next, 'offscreen', stylePool, {
-          triggerY: scrollbackChangeY,
-          prevLine,
-          nextLine,
-        })
-      }
-    }
+    // Steady-state scrollback check removed: rows above the viewport used
+    // to force a full reset (ESC[2J+ESC[3J) whenever they changed, which
+    // wipes terminal scrollback and snaps the viewport to the top — firing
+    // on every streaming pause frame. The diff loop below now skips those
+    // rows instead (y < viewportY → skip), repainting them when they
+    // scroll back into view. Shrink and resize resets below are kept.
 
     const screen = new VirtualScreen(prev.cursor, next.viewport.width)
 
@@ -303,8 +281,6 @@ export class LogUpdate {
     let currentHyperlink: Hyperlink = undefined
 
     // First pass: render changes to existing rows (rows < prev.screen.height)
-    let needsFullReset = false
-    let resetTriggerY = -1
     diffEach(prev.screen, next.screen, (x, y, removed, added) => {
       // Skip new rows - we'll render them directly after
       if (growing && y >= prev.screen.height) {
@@ -340,12 +316,15 @@ export class LogUpdate {
         return
       }
 
-      // If the cell outside the viewport range has changed, we need to reset
-      // because we can't move the cursor there to draw.
+      // Rows above the viewport live in terminal scrollback — the cursor
+      // can't reach them, and the only way to repaint them is a full reset
+      // (ESC[2J+ESC[3J), which wipes the scrollback and snaps the terminal
+      // viewport back to the top (user scrolled up → jumps to the very
+      // first line). Skip updating them; they repaint normally when they
+      // scroll back into the viewport. Chat history is static content, so
+      // nothing visible is lost by leaving scrollback rows stale.
       if (y < viewportY) {
-        needsFullReset = true
-        resetTriggerY = y
-        return true // early exit
+        return
       }
 
       moveCursorTo(screen, x, y)
@@ -379,13 +358,6 @@ export class LogUpdate {
         })
       }
     })
-    if (needsFullReset) {
-      return fullResetSequence_CAUSES_FLICKER(next, 'offscreen', stylePool, {
-        triggerY: resetTriggerY,
-        prevLine: readLine(prev.screen, resetTriggerY),
-        nextLine: readLine(next.screen, resetTriggerY),
-      })
-    }
 
     // Reset styles before rendering new rows (they'll set their own styles)
     currentStyleId = transitionStyle(
