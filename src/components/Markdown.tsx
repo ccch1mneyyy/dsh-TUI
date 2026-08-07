@@ -22,8 +22,19 @@ type Props = {
 
 // Module-level token cache — marked.lexer is the hot cost on remounts.
 // Messages are immutable; same content → same tokens.
-const TOKEN_CACHE_MAX = 500
+//
+// Bounds: entry count alone was not enough. Token.raw/text values are
+// slices of the lexed input, so each entry pins its entire input string;
+// during streaming the input grows every frame, and the LRU kept 500
+// near-final snapshots ≈ 500 × message size resident (~500MB for a 1MB
+// message). A character budget caps retained bytes; oversized contents
+// skip the cache entirely (they are re-lexed on remount — rare, and
+// cheaper than the retention).
+const TOKEN_CACHE_MAX = 200
+const TOKEN_CACHE_MAX_CHARS = 200_000
+const TOKEN_CACHE_MAX_CONTENT = 20_000
 const tokenCache = new Map<string, Token[]>()
+let tokenCacheChars = 0
 
 // Characters that indicate markdown syntax. If none are present, skip the
 // ~3ms marked.lexer call entirely — render as a single paragraph.
@@ -53,11 +64,16 @@ function cachedLexer(content: string): Token[] {
     return hit
   }
   const tokens = marked.lexer(content)
-  if (tokenCache.size >= TOKEN_CACHE_MAX) {
-    const first = tokenCache.keys().next().value
-    if (first !== undefined) tokenCache.delete(first)
+  if (content.length > TOKEN_CACHE_MAX_CONTENT) return tokens
+  if (
+    tokenCache.size >= TOKEN_CACHE_MAX ||
+    tokenCacheChars + content.length > TOKEN_CACHE_MAX_CHARS
+  ) {
+    tokenCache.clear()
+    tokenCacheChars = 0
   }
   tokenCache.set(key, tokens)
+  tokenCacheChars += content.length
   return tokens
 }
 

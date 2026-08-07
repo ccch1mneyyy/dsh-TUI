@@ -66,7 +66,7 @@ export function ThemeProvider({
       logForDebugging(`theme: ${name} (${why})`)
       setDetected(name)
     }
-    const timer = setTimeout(() => finish('dark', 'detection timeout'), DETECT_TIMEOUT_MS)
+    const timer = setTimeout(() =>{  finish('dark', 'detection timeout') }, DETECT_TIMEOUT_MS)
     setRawMode(true)
     void Promise.all([querier.send(oscColor(11)), querier.flush()]).then(([r]) => {
       const color = r ? parseOscColor(r.data) : null
@@ -79,7 +79,6 @@ export function ThemeProvider({
         )
       }
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const active = forced ?? detected

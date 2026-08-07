@@ -40,6 +40,7 @@ export default class App extends PureComponent<Props, State> {
     internal_eventEmitter: EventEmitter;
     keyParseState: import("../parse-keypress.js").KeyParseState;
     incompleteEscapeTimer: NodeJS.Timeout | null;
+    xtversionProbe: NodeJS.Immediate | null;
     readonly NORMAL_TIMEOUT = 50;
     readonly PASTE_TIMEOUT = 500;
     querier: TerminalQuerier;

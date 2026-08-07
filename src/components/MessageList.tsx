@@ -57,16 +57,16 @@ export function MessageList({
   expanded: boolean
   expandedRows: ReadonlySet<number>
   selectedId: number | null
-  onToggleRow(rowId: number): void
+  onToggleRow: (rowId: number) => void
   model: string
   showAll: boolean
-  onToggleAll(): void
+  onToggleAll: () => void
   /** Restore folded-away older rows from the session log (CC-style "load
    *  earlier messages" affordance; shown only when rows were folded). */
-  onLoadOlder?(): void
+  onLoadOlder?: () => void
   thinkingVisible?: boolean
   /** Transcript search: register each row's DOM element for scroll-to-match. */
-  registerRowRef?(rowId: number, el: DOMElement | null): void
+  registerRowRef?: (rowId: number, el: DOMElement | null) => void
   /** Scroll viewport the list virtualizes against. */
   scrollHandle?: ScrollBoxHandle | null
   /** Row that must be mounted this pass (seek target for scrollToElement). */
@@ -100,6 +100,13 @@ export function MessageList({
 
   // --- layout virtualization ---------------------------------------------
   const { columns } = useTerminalSize()
+  // Measured row heights, remembered after a row unmounts so virtualization
+  // can compute total content height. Bounded: row ids grow monotonically
+  // and rows are never removed from the transcript (foldRows keeps the
+  // row), so without a cap this Map grew by one entry per row forever.
+  // Eviction is FIFO (oldest row first); a forgotten height falls back to
+  // DEFAULT_ROW_HEIGHT, which only perturbs deep scrollback estimates.
+  const HEIGHTS_CACHE_MAX = 5000
   const heightsRef = React.useRef(new Map<number, number>())
   const localRefs = React.useRef(new Map<number, DOMElement>())
   /** Content-space offset of visibleRows[0] (header + dividers), measured. */
@@ -119,7 +126,7 @@ export function MessageList({
   // window follows the viewport.
   React.useEffect(() => {
     if (!scrollHandle) return
-    const tick = (): void => setScrollTick(t => t + 1)
+    const tick = (): void =>{  setScrollTick(t => t + 1) }
     return scrollHandle.subscribe(tick)
   }, [scrollHandle])
 
@@ -129,7 +136,7 @@ export function MessageList({
   let total = 0
   for (let i = 0; i < visibleRows.length; i++) {
     offsets[i] = total
-    total += heightOf(visibleRows[i]!)
+    total += heightOf(visibleRows[i])
   }
 
   const scrollTop = scrollHandle?.getScrollTop() ?? 0
@@ -143,9 +150,9 @@ export function MessageList({
   const relTop = Math.min(scrollTop, scrollTop + pending) - OVERSCAN_LINES - base
   const relBottom = Math.max(scrollTop, scrollTop + pending) + viewport + OVERSCAN_LINES - base
   let start = 0
-  while (start < visibleRows.length && offsets[start]! + heightOf(visibleRows[start]!) <= relTop) start++
+  while (start < visibleRows.length && offsets[start] + heightOf(visibleRows[start]) <= relTop) start++
   let end = start
-  while (end < visibleRows.length && offsets[end]! < relBottom) end++
+  while (end < visibleRows.length && offsets[end] < relBottom) end++
   if (sticky || !scrollHandle) end = visibleRows.length
   if (forceMountRowId !== undefined && forceMountRowId !== null) {
     const idx = visibleRows.findIndex(row => row.id === forceMountRowId)
@@ -155,7 +162,7 @@ export function MessageList({
     }
   }
   const topPad = offsets[start] ?? 0
-  const mountedBottom = end < visibleRows.length ? offsets[end]! : total
+  const mountedBottom = end < visibleRows.length ? offsets[end] : total
   const bottomPad = total - mountedBottom
 
   // Post-commit: measure mounted rows, derive the content-space base from
@@ -166,11 +173,16 @@ export function MessageList({
     for (const [id, el] of localRefs.current) {
       const h = el.yogaNode?.getComputedHeight()
       if (h !== undefined && h > 0 && heightsRef.current.get(id) !== h) {
+        if (heightsRef.current.size >= HEIGHTS_CACHE_MAX) {
+          const oldest = heightsRef.current.keys().next().value
+          if (oldest !== undefined) heightsRef.current.delete(oldest)
+        }
         heightsRef.current.set(id, h)
         changed = true
       }
     }
     const firstMounted = visibleRows[start]
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: empty list window
     const firstEl = firstMounted ? localRefs.current.get(firstMounted.id) : undefined
     const top = firstEl?.yogaNode?.getComputedTop()
     if (top !== undefined) {
@@ -215,20 +227,20 @@ export function MessageList({
         .map((row) => {
         // CC addMargin: pre-pass result keeps windowed rows at full-mount
         // spacing; only the very first row of the whole list has none.
-        const addMargin = margins.get(row.id) === true
+          const addMargin = margins.get(row.id) === true
           const isSelected = selectedId === row.id
           const isExpanded = expanded || expandedRows.has(row.id)
 
           switch (row.kind) {
             case 'user':
               return (
-                <Box key={row.id} flexDirection="column" ref={el => setRowRef(row.id, el)}>
+                <Box key={row.id} flexDirection="column" ref={(el) =>{  setRowRef(row.id, el) }}>
                   <UserPromptMessage
                     text={row.text}
                     addMargin={addMargin}
                     isSelected={isSelected}
                     isExpanded={expandedRows.has(row.id)}
-                    onClick={() =>{  onToggleRow(row.id); }}
+                    onClick={() =>{  onToggleRow(row.id) }}
                   />
                 </Box>
               )
@@ -258,7 +270,7 @@ export function MessageList({
                   width="100%"
                   flexDirection="column"
                   backgroundColor={rowBackground(row.id)}
-                  ref={el => setRowRef(row.id, el)}
+                  ref={(el) =>{  setRowRef(row.id, el) }}
                 >
                   {expanded && (
                     <Box
@@ -275,13 +287,13 @@ export function MessageList({
                     addMargin={addMargin}
                     isSelected={isSelected}
                     isExpanded={expandedRows.has(row.id)}
-                    onClick={() =>{  onToggleRow(row.id); }}
+                    onClick={() =>{  onToggleRow(row.id) }}
                   />
                 </Box>
               )
             case 'reasoning':
               return (
-                <Box key={row.id} flexDirection="column" ref={el => setRowRef(row.id, el)}>
+                <Box key={row.id} flexDirection="column" ref={(el) =>{  setRowRef(row.id, el) }}>
                   <AssistantThinkingMessage
                     thinking={row.text}
                     addMargin={addMargin}
@@ -291,13 +303,13 @@ export function MessageList({
                     verbose={isExpanded || row.streaming === true}
                     durationMs={row.durationMs}
                     isSelected={isSelected}
-                    onClick={() =>{  onToggleRow(row.id); }}
+                    onClick={() =>{  onToggleRow(row.id) }}
                   />
                 </Box>
               )
             case 'tool':
               return row.tool ? (
-                <Box key={row.id} flexDirection="column" ref={el => setRowRef(row.id, el)}>
+                <Box key={row.id} flexDirection="column" ref={(el) =>{  setRowRef(row.id, el) }}>
                   <AssistantToolUseMessage
                     tool={row.tool}
                     addMargin={addMargin}
@@ -309,26 +321,26 @@ export function MessageList({
               ) : null
             case 'notice':
               return (
-                <Box key={row.id} marginTop={1} ref={el => setRowRef(row.id, el)}>
+                <Box key={row.id} marginTop={1} ref={(el) =>{  setRowRef(row.id, el) }}>
                   <Divider title={` ${row.text} `} />
                 </Box>
               )
             case 'interrupt':
               return (
-                <Box key={row.id} marginTop={1} ref={el => setRowRef(row.id, el)}>
+                <Box key={row.id} marginTop={1} ref={(el) =>{  setRowRef(row.id, el) }}>
                   <InterruptedByUser />
                 </Box>
               )
             case 'local':
             // `!` mode command echo, like CC's UserBashInputMessage.
               return (
-                <Box key={row.id} marginTop={1} backgroundColor={rowBackground(row.id)} ref={el => setRowRef(row.id, el)}>
+                <Box key={row.id} marginTop={1} backgroundColor={rowBackground(row.id)} ref={(el) =>{  setRowRef(row.id, el) }}>
                   <Text color="bashBorder">! {row.text}</Text>
                 </Box>
               )
             case 'local-output':
               return (
-                <Box key={row.id} paddingLeft={2} backgroundColor={rowBackground(row.id)} ref={el => setRowRef(row.id, el)}>
+                <Box key={row.id} paddingLeft={2} backgroundColor={rowBackground(row.id)} ref={(el) =>{  setRowRef(row.id, el) }}>
                   <Text dimColor>{row.text}</Text>
                 </Box>
               )

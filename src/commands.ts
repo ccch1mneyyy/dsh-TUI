@@ -76,7 +76,7 @@ export function parseCommandName(
 ): { name: string; rawInput: string } | undefined {
   const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/.exec(line)
   if (match === null) return undefined
-  return { name: match[1]!, rawInput: line.slice(match[0].length) }
+  return { name: match[1], rawInput: line.slice(match[0].length) }
 }
 
 /** Commands that must not be sent to the model when typed alone. */

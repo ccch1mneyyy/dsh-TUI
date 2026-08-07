@@ -43,6 +43,72 @@ type ClusteredChar = {
 }
 
 /**
+ * charCache bounds. The entry-count cap alone was not enough: a streaming
+ * line produces a NEW cache key on every frame, and each entry's cost is
+ * proportional to the line length (one object per character, plus the key
+ * string itself). A 16384-entry cache of 80KB-line entries is tens of GB —
+ * the process OOMs long before reaching the count cap. Two extra guards:
+ *
+ * 1. Lines longer than MAX_CACHEABLE_LINE are never cached. During
+ *    streaming the growing last line changes every frame, so a cached
+ *    entry would be used for exactly one frame — pure cost, zero hits.
+ *    Long lines are also rare in settled transcripts (minified code,
+ *    base64, URLs), so skipping them barely affects the hit rate.
+ * 2. A byte budget (total characters of cached keys) caps retained
+ *    memory regardless of the entry size distribution.
+ *
+ * Keys are detached from their parent string before caching: a line
+ * sliced out of a large streaming buffer is a V8 SlicedString that pins
+ * the whole parent, turning one 200-char entry into a 100KB retention.
+ */
+const MAX_CACHEABLE_LINE = 500
+const CHAR_CACHE_MAX_ENTRIES = 16384
+const CHAR_CACHE_MAX_CHARS = 100_000
+
+/** Copy a string into a fresh flat string with no parent references. */
+function detachString(s: string): string {
+  // Buffer round-trip guarantees a newly allocated flat string; cheaper
+  // tricks (' '+s).slice(1) are optimized back into SlicedStrings by V8.
+  return Buffer.from(s, 'utf8').toString('utf8')
+}
+
+/**
+ * Bounded cache of line → clustered characters. Enforces all three guards
+ * (line-length threshold, entry count, byte budget) at insertion time, so
+ * no caller can accidentally grow it unboundedly.
+ */
+export class CharCache {
+  private map = new Map<string, ClusteredChar[]>()
+  private chars = 0
+
+  get(line: string): ClusteredChar[] | undefined {
+    return this.map.get(line)
+  }
+
+  set(line: string, characters: ClusteredChar[]): void {
+    if (line.length > MAX_CACHEABLE_LINE) return
+    if (
+      this.map.size >= CHAR_CACHE_MAX_ENTRIES ||
+      this.chars + line.length > CHAR_CACHE_MAX_CHARS
+    ) {
+      this.map.clear()
+      this.chars = 0
+    }
+    this.map.set(detachString(line), characters)
+    this.chars += line.length
+  }
+
+  /** Retained-key character total, exposed for diagnostics/tests. */
+  get retainedChars(): number {
+    return this.chars
+  }
+
+  get size(): number {
+    return this.map.size
+  }
+}
+
+/**
  * Collects write/blit/clear/clip operations from the render tree, then
  * applies them to a Screen buffer in `get()`. The Screen is what gets
  * diffed against the previous frame to produce terminal updates.
@@ -175,7 +241,7 @@ export default class Output {
 
   private readonly operations: Operation[] = []
 
-  private charCache: Map<string, ClusteredChar[]> = new Map()
+  private charCache = new CharCache()
 
   constructor(options: Options) {
     const { width, height, stylePool, screen } = options
@@ -201,7 +267,9 @@ export default class Output {
     this.screen = screen
     this.operations.length = 0
     resetScreen(screen, width, height)
-    if (this.charCache.size > 16384) this.charCache.clear()
+    // Bounds are enforced at insertion time (CharCache.set); nothing to
+    // do here. The cache intentionally survives frames — most lines don't
+    // change between renders, so tokenize + clustering becomes a hit.
   }
 
   /**
@@ -637,7 +705,7 @@ function writeLineToScreen(
   y: number,
   screenWidth: number,
   stylePool: StylePool,
-  charCache: Map<string, ClusteredChar[]>,
+  charCache: CharCache,
 ): number {
   let characters = charCache.get(line)
   if (!characters) {

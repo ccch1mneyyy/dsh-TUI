@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text, useInput, useTerminalSize, ScrollBox, type ScrollBoxHandle } from '../ui.js'
+import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle } from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { formatTokens } from '../cc/format.js'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
@@ -70,7 +70,7 @@ function searchableText(row: ChatRow): string {
         ? `${row.tool.name} ${row.tool.argsText} ${row.tool.resultText ?? ''} ${row.tool.errorText ?? ''}`
         : ''
     default:
-      return row.text ?? ''
+      return row.text
   }
 }
 
@@ -91,7 +91,7 @@ export function Chat({
   onExit,
 }: {
   channel: Channel
-  onExit(): void
+  onExit: () => void
 }) {
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   React.useSyncExternalStore(channel.subscribe, () => channel.version)
@@ -208,13 +208,13 @@ export function Chat({
     const interval = setInterval(() => {
       setTitleFrame(f => (f + 1) % TITLE_ANIMATION_FRAMES.length)
     }, 960)
-    return () =>{  clearInterval(interval); }
+    return () =>{  clearInterval(interval) }
   }, [channel.working, terminalFocused])
   const titlePrefix = channel.working
     ? (TITLE_ANIMATION_FRAMES[titleFrame] ?? '✦')
     : '✦'
   useTerminalTitle(
-    `${titlePrefix} 🐋 ${channel.sessionTitle ?? 'dsh-cc'}`,
+    `${titlePrefix} 🐋 ${channel.sessionTitle}`,
   )
 
   /**
@@ -610,25 +610,26 @@ export function Chat({
     const current = Math.min(searchCurrent, Math.max(0, count - 1))
     setSearchCurrent(current)
     const target = searchMatches[current]
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty/filtered list
     if (target) {
       seekRow(target.row.id)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, searchOpen])
 
   // n/N navigation: move the current match into view.
   React.useEffect(() => {
     if (!searchOpen) return
     const target = searchMatches[searchCurrent]
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty/filtered list
     if (target) {
       seekRow(target.row.id)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchCurrent])
 
   const enterSelection = () => {
     setSelectionActive(true)
     const last = selectableRows[selectableRows.length - 1]
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: empty selectable list
     setSelectedId(last ? last.id : null)
   }
   const moveSelection = (delta: 1 | -1) => {
@@ -636,6 +637,7 @@ export function Chat({
     const index = selectableRows.findIndex(row => row.id === selectedId)
     if (index < 0) return
     const next = selectableRows[index + delta]
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index
     if (next) setSelectedId(next.id)
   }
   const toggleRowExpanded = (rowId: number) => {
@@ -681,7 +683,7 @@ export function Chat({
         setSearchQuery(next)
         setSearchCursor(searchCursor + input.length)
       }
-      event?.stopImmediatePropagation()
+      event.stopImmediatePropagation()
       return
     }
     // After Enter closed the search bar, n/N keep walking the matches
@@ -689,12 +691,12 @@ export function Chat({
     // Transcript mode only — in prompt mode n/N are ordinary input chars.
     if (expanded && input === 'n' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta) {
       setSearchCurrent(i => (i >= searchCount - 1 ? 0 : i + 1))
-      event?.stopImmediatePropagation()
+      event.stopImmediatePropagation()
       return
     }
     if (expanded && input === 'N' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta) {
       setSearchCurrent(i => (i <= 0 ? searchCount - 1 : i - 1))
-      event?.stopImmediatePropagation()
+      event.stopImmediatePropagation()
       return
     }
     if (thinkingOpen) {
@@ -733,6 +735,7 @@ export function Chat({
         setResumeIndex(index => (index >= resumeSessions.length - 1 ? 0 : index + 1))
       } else if (key.return) {
         const session = resumeSessions[resumeIndex]
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (session) {
           // Enter switches the live agent to the persisted session right
           // away (the history replays into the transcript); the resume.txt
@@ -757,6 +760,7 @@ export function Chat({
         setModelIndex(index => (index >= models.length - 1 ? 0 : index + 1))
       } else if (key.return) {
         const model = models[modelIndex]
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (model) {
           // Enter switches the live model right away: the conversation is
           // forked at its end and continued with an agent routed to the new
@@ -796,6 +800,7 @@ export function Chat({
         setHistoryOpen(false)
       } else if (key.return) {
         const entry = historyMatches[historyFocus]
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty match list
         if (entry) {
           setHistoryFill(entry.text)
           setHistoryOpen(false)
@@ -804,12 +809,8 @@ export function Chat({
         setHistoryFocus(index =>
           historyMatches.length === 0 ? 0 : (index <= 0 ? historyMatches.length - 1 : index - 1),
         )
-      } else if (key.downArrow) {
-        setHistoryFocus(index =>
-          historyMatches.length === 0 ? 0 : (index >= historyMatches.length - 1 ? 0 : index + 1),
-        )
-      } else if (key.ctrl && input === 'r') {
-        // CC's historySearch:next — repeat ctrl+r walks to the next match.
+      } else if (key.downArrow || (key.ctrl && input === 'r')) {
+        // CC's historySearch:next — ↓ and repeat ctrl+r walk to the next match.
         setHistoryFocus(index =>
           historyMatches.length === 0 ? 0 : (index >= historyMatches.length - 1 ? 0 : index + 1),
         )
@@ -858,6 +859,7 @@ export function Chat({
         setRewindIndex(index => (index >= rewindRows.length - 1 ? 0 : index + 1))
       } else if (key.return) {
         const row = rewindRows[rewindIndex]
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (row) setRewindConfirm(row)
       } else if (key.escape) {
         setRewindOpen(false)
@@ -865,7 +867,7 @@ export function Chat({
       }
       return
     }
-    if (key.ctrl && input === 'r' && !historyOpen && !helpOpen) {
+    if (key.ctrl && input === 'r' && !helpOpen) {
       setHistoryQuery('')
       setHistoryCursor(0)
       setHistoryFocus(0)
@@ -890,14 +892,9 @@ export function Chat({
       // CC's chat:cancel — esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
       channel.cancel()
-      event?.stopImmediatePropagation()
+      event.stopImmediatePropagation()
     } else if (key.ctrl && input === 'o') {
-      // Leaving transcript mode aborts an active search (CC: screen change
-      // clears highlights).
-      if (searchOpen) {
-        setSearchOpen(false)
-        setHighlight('')
-      }
+      // Leaving transcript mode (Ctrl+O) — search was already handled above.
       setExpanded(previous => !previous)
     } else if (input === '/' && !key.ctrl && !key.meta) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
@@ -909,16 +906,11 @@ export function Chat({
         setSearchCurrent(0)
         setSearchCount(0)
         setSearchOpen(true)
-        event?.stopImmediatePropagation()
+        event.stopImmediatePropagation()
       }
-    } else if (key.ctrl && input === 'c') {
-      if (channel.working) {
-        channel.cancel()
-      } else {
-        requestExit()
-      }
-    } else if (key.ctrl && input === 'd') {
-      // CC's app:exit — time-based double press like ctrl+c; idle-only.
+    } else if (key.ctrl && (input === 'c' || input === 'd')) {
+      // CC's app:exit — ctrl+c interrupts a running turn, or (idle-only)
+      // asks for a second press; ctrl+d is the time-based double press.
       if (channel.working) {
         channel.cancel()
       } else {
@@ -970,7 +962,7 @@ export function Chat({
           model={channel.model}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
-          onToggleAll={() =>{  setShowAllMessages(previous => !previous); }}
+          onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}
           onLoadOlder={() => channel.loadOlder()}
           registerRowRef={(rowId, el) => {
             if (el) rowRefsRef.current.set(rowId, el)
@@ -1079,11 +1071,11 @@ export function Chat({
       <PromptInput
         channel={channel}
         helpOpen={helpOpen}
-        onToggleHelp={() =>{  setHelpOpen(previous => !previous); }}
+        onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
         onRunCommand={runCommand}
         selectionActive={promptSelectionActive}
         fillText={historyFill}
-        onFillConsumed={() =>{  setHistoryFill(null); }}
+        onFillConsumed={() =>{  setHistoryFill(null) }}
         onRewindRequest={openRewind}
       />
       <StatusLine
@@ -1105,7 +1097,7 @@ function StickyPromptHeader({
   onClick,
 }: {
   text: string
-  onClick(): void
+  onClick: () => void
 }): React.ReactNode {
   const [hover, setHover] = React.useState(false)
   return (
@@ -1115,8 +1107,8 @@ function StickyPromptHeader({
       height={1}
       paddingRight={1}
       backgroundColor={hover ? 'userMessageBackgroundHover' : 'userMessageBackground'}
-      onMouseEnter={() =>{  setHover(true); }}
-      onMouseLeave={() =>{  setHover(false); }}
+      onMouseEnter={() =>{  setHover(true) }}
+      onMouseLeave={() =>{  setHover(false) }}
       onClick={onClick}
     >
       <Text color="subtle" wrap="truncate-end">
@@ -1140,8 +1132,8 @@ function NewMessagesPill({
       <Box
         backgroundColor={hover ? 'userMessageBackgroundHover' : 'background'}
         onClick={onClick}
-        onMouseEnter={() =>{  setHover(true); }}
-        onMouseLeave={() =>{  setHover(false); }}
+        onMouseEnter={() =>{  setHover(true) }}
+        onMouseLeave={() =>{  setHover(false) }}
       >
         <Text color="inverseText" bold>
           {' '}↓ {count === 1 ? '1 new message' : `${count} new messages`}{' '}

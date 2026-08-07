@@ -9,10 +9,18 @@
     ".": {
       "types": "./lib/types/index.d.ts",
       "import": "./lib/types/index.js"
-    }
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
   },
   "files": [
-    "lib"
+    "lib",
+    "lib/invariant.js",
+    "cordis.patch.yml"
   ],
   "engines": {
     "node": "^22.19 || >=24"
@@ -23,7 +31,8 @@
     "smoke": "node --import tsx/esm scripts/smoke.tsx"
   },
   "peerDependencies": {
-    "cordis": "^4.0.0-rc.7"
+    "cordis": "^4.0.0-rc.7",
+    "@deepseek-ai/dsh-invariants": "^0.0.1"
   },
   "dependencies": {
     "@alcalzone/ansi-tokenize": "^0.3.0",
@@ -54,7 +63,9 @@
     "supports-hyperlinks": "^3.0.0",
     "type-fest": "^4.0.0",
     "usehooks-ts": "^3.1.0",
-    "wrap-ansi": "^8.0.0 || ^9.0.0"
+    "wrap-ansi": "^8.0.0 || ^9.0.0",
+    "@deepseek-ai/dsh-session-persistence-sqlite": "workspace:^",
+    "@deepseek-ai/dsh-working-activity": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-agent-spine-demo": "workspace:^",
@@ -68,6 +79,12 @@
     "@types/react-reconciler": "^0.33.0",
     "@types/semver": "^7.0.0",
     "tsx": "^4.0.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "@deepseek-ai/dsh-invariants": "workspace:^"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

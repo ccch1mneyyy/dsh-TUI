@@ -1,0 +1,112 @@
+# The dsh-cc-tui bundle patch: the interactive terminal front door over the
+# dsh-base layer. Applied after dsh-base's insert; rows here override base
+# rows by id, with the profile's own cordis.patch.yml and any --patch
+# overlays still to come.
+#
+# A patch replaces the targeted row's whole `config`, so each row below
+# restates every key it owns (see the dsh-base patch for the shared
+# defaults). The dsh-base core rows that need no cc-tui value — tools,
+# sandbox/approval policy, skills, goal, plan mode, workspace context,
+# telemetry — are inherited unchanged.
+
+# ── surface-specific values over the dsh-base layer ─────────────────────────
+
+# The cc-tui deployment persona; CC_TUI_PERSONA overrides the coding-agent
+# default (the base persona is empty).
+- id: system-prompt
+  config:
+    persona: !!js process.env.CC_TUI_PERSONA ?? 'You are a coding agent.'
+
+# The native DeepSeek adapter, pinned to the harness defaults: full thinking
+# at max effort, key and base URL from the launching environment. The base
+# entry defers both to the `llm-deepseek:` settings section; the settings
+# document still overrides these entries per request when it carries one.
+- id: llm-deepseek
+  config:
+    apiKey: !!js process.env.DEEPSEEK_API_KEY
+    baseURL: !!js process.env.DEEPSEEK_BASE_URL
+    thinking: enabled
+    reasoningEffort: max
+
+# The TUI creates (or resumes) its agent at runtime through the agent
+# factory; no declarative agents are started at boot, and the configured
+# agent list stays the base's empty default.
+- id: agent-loop
+  config:
+    agents: []
+
+# Manual /compact at the cc-tui thresholds: 20% of the (advertised 1M-token)
+# window with a 5% retained tail; both overridable for tests and must keep
+# retainRatio < thresholdRatio (BasicCompactConfig validates this).
+- id: compact-basic
+  config:
+    thresholdRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RATIO ?? '0.2')
+    retainRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RETAIN ?? '0.05')
+
+# Delegation tools capped at depth 1 so the TUI's tool cards stay shallow
+# (the base default is depth 3).
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+    maxDepth: 1
+
+- id: tool-subagent-fork
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: continuable
+    maxDepth: 1
+
+# Windows has no sandbox confinement backend yet (sandbox-local's win32
+# chain is empty); use danger-full-access on Windows so bash commands can
+# run. Other platforms keep the base workspace-write default.
+- id: sandbox-policy
+  config:
+    mode: !!js "process.platform === 'win32' ? 'danger-full-access' : (process.env.DSH_PERMISSION_MODE ?? 'workspace-write')"
+    workspaceRoot: !!js process.cwd()
+
+# On Windows, skip approval prompts (no sandbox = the user's terminal trust
+# model, matching every other terminal coding agent).
+- id: approval
+  config:
+    policy: !!js "process.platform === 'win32' ? 'never' : ((process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask')"
+
+# Sessions are durable under the SQLite backend inserted below; the shared
+# JSONL backend is off so one write path owns every session.
+- id: session-persistence-jsonl
+  disabled: true
+
+# ── cc-tui rows ─────────────────────────────────────────────────────────────
+
+- insert:
+    # The interactive front door. The plugin creates/resumes its agent at
+    # runtime, seeds the startup status line, and disposes the whole app tree
+    # (exiting the process) when the TUI unmounts. `dsh-cc --resume` feeds
+    # the session id through DSH_CC_RESUME_SESSION.
+    - id: cc-tui
+      name: '@deepseek-ai/dsh-cc-tui'
+      config:
+        provider: deepseek-official
+        # Startup display seed for the header/statusline; the live value from
+        # request headers replaces it after the first turn. Keep in sync with
+        # the adapter's reasoningEffort below.
+        effort: max
+        sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
+
+    # Durable session log (DSH's own persistence seam): /resume and rewind
+    # both rely on this backend writing every session/event. Root defaults
+    # under the user home so sessions survive across terminals (Windows:
+    # USERPROFILE); DSH_CC_SESSION_ROOT overrides the path.
+    - id: sessions
+      name: '@deepseek-ai/dsh-session-persistence-sqlite'
+      config:
+        path: !!js process.env.DSH_CC_SESSION_ROOT ?? (process.env.USERPROFILE ?? process.env.HOME) + '/.dsh-cc/sessions.sqlite'
+
+# working-activity 的 cc-tui 特定配置：500ms 刷新（比默认 2000ms 快，
+# 让 status-line 计时器平滑）。working-activity bundle 先 insert 自己，
+# cc-tui 再 override 其 config。
+- id: working-activity
+  config:
+    publishIntervalMs: 500

@@ -14,6 +14,6 @@ import type { Channel } from '../channel.js';
  */
 export declare function Chat({ channel, onExit, }: {
     channel: Channel;
-    onExit(): void;
+    onExit: () => void;
 }): React.JSX.Element;
 //# sourceMappingURL=Chat.d.ts.map

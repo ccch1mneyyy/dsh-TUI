@@ -1,6 +1,36 @@
 import { type Rectangle } from './layout/geometry.js';
 import { type Screen, type StylePool } from './screen.js';
 /**
+ * A grapheme cluster with precomputed terminal width, styleId, and hyperlink.
+ * Built once per unique line (cached via charCache), so the per-char hot loop
+ * is just property reads + setCellAt — no stringWidth, no style interning,
+ * no hyperlink extraction per frame.
+ *
+ * styleId is safe to cache: StylePool is session-lived (never reset).
+ * hyperlink is stored as a string (not interned ID) since hyperlinkPool
+ * resets every 5 min; setCellAt interns it per-frame (cheap Map.get).
+ */
+type ClusteredChar = {
+    value: string;
+    width: number;
+    styleId: number;
+    hyperlink: string | undefined;
+};
+/**
+ * Bounded cache of line → clustered characters. Enforces all three guards
+ * (line-length threshold, entry count, byte budget) at insertion time, so
+ * no caller can accidentally grow it unboundedly.
+ */
+export declare class CharCache {
+    private map;
+    private chars;
+    get(line: string): ClusteredChar[] | undefined;
+    set(line: string, characters: ClusteredChar[]): void;
+    /** Retained-key character total, exposed for diagnostics/tests. */
+    get retainedChars(): number;
+    get size(): number;
+}
+/**
  * Collects write/blit/clear/clip operations from the render tree, then
  * applies them to a Screen buffer in `get()`. The Screen is what gets
  * diffed against the previous frame to produce terminal updates.

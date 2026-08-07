@@ -1,3 +1,9 @@
+/* oxlint-disable typescript/no-unsafe-argument, typescript/no-unsafe-assignment,
+   typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-return,
+   typescript/restrict-plus-operands, typescript/no-unnecessary-condition,
+   typescript/no-non-null-assertion, typescript/no-unnecessary-type-assertion,
+   sonarjs/no-duplicated-branches
+   -- ported Claude Code renderer (upstream src/utils/markdown.ts); historical lint debt kept with upstream idioms, like vendor/ */
 import chalk from 'chalk'
 import { marked, type Token, type Tokens } from 'marked'
 import stripAnsi from 'strip-ansi'
@@ -252,7 +258,7 @@ export function formatToken(
 
       // Add separator row
       tableOutput += '|'
-      columnWidths.forEach(width => {
+      columnWidths.forEach((width) => {
         // Always use dashes, don't show alignment colons in the output
         const separator = '-'.repeat(width + 2) // +2 for spaces on each side
         tableOutput += separator + '|'
@@ -260,7 +266,7 @@ export function formatToken(
       tableOutput += EOL
 
       // Format data rows
-      tableToken.rows.forEach(row => {
+      tableToken.rows.forEach((row) => {
         tableOutput += '| '
         row.forEach((cell, index) => {
           const content =

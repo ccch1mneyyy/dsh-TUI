@@ -1,6 +1,6 @@
 import React from 'react'
 import { Text, useAnimationFrame } from '../ui.js'
-import { resolvePreset, type FramePreset } from './activityFrames.js'
+import { resolvePreset } from './activityFrames.js'
 import { BRAND, FLASH, ICE, sweep } from './shimmer.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
@@ -47,7 +47,7 @@ export function ActivityLine({
 }): React.ReactNode {
   // 60ms frames: the shimmer sweep advances one column per frame (3.3× the
   // ported 200ms cadence — the slow crawl read as lag).
-  const [ref, time] = useAnimationFrame(60)
+  const [, time] = useAnimationFrame(60)
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   const preset = React.useMemo(

@@ -7,7 +7,7 @@ import Schema from 'schemastery'
 import { createChannel } from './channel.js'
 import { readActivityFrames } from './activityPrefs.js'
 import { Chat } from './screens/Chat.js'
-import { AlternateScreen, render, ThemeProvider } from './ui.js'
+import { render, ThemeProvider } from './ui.js'
 
 /**
  * Claude Code style interactive TUI front door for DeepSeek Harness agents.
@@ -81,14 +81,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
   const tree = (
     <ThemeProvider>
-      <Chat channel={channel} onExit={() => disposeRootAndExit(ctx, 0)} />
+      <Chat channel={channel} onExit={() =>{  disposeRootAndExit(ctx, 0) }} />
     </ThemeProvider>
   )
   const instance = await render(tree, { exitOnCtrlC: false })
 
   // If the surrounding tree goes down (reload, teardown), take the TUI with it.
   ctx.effect(() => () => {
-    void instance.unmount()
+    instance.unmount()
   })
 
   // The TUI is the front door: when it unmounts (Ctrl+C), dispose the app
@@ -131,7 +131,7 @@ async function resolveAgent(
     }
   }
   const sessionId = SessionId(randomUUID())
-  const created = await ctx.agents.create({ sessionId, meta, agentOptions }).catch(error => {
+  const created = await ctx.agents.create({ sessionId, meta, agentOptions }).catch((error: unknown) => {
     // Fail loud with the reason on stderr — a dead TUI with no message is
     // the worst outcome for a misconfigured leaf (unknown provider/model).
     const message = error instanceof Error ? error.message : String(error)

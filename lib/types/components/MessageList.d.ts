@@ -7,16 +7,16 @@ export declare function MessageList({ rows, expanded, expandedRows, selectedId, 
     expanded: boolean;
     expandedRows: ReadonlySet<number>;
     selectedId: number | null;
-    onToggleRow(rowId: number): void;
+    onToggleRow: (rowId: number) => void;
     model: string;
     showAll: boolean;
-    onToggleAll(): void;
+    onToggleAll: () => void;
     /** Restore folded-away older rows from the session log (CC-style "load
      *  earlier messages" affordance; shown only when rows were folded). */
-    onLoadOlder?(): void;
+    onLoadOlder?: () => void;
     thinkingVisible?: boolean;
     /** Transcript search: register each row's DOM element for scroll-to-match. */
-    registerRowRef?(rowId: number, el: DOMElement | null): void;
+    registerRowRef?: (rowId: number, el: DOMElement | null) => void;
     /** Scroll viewport the list virtualizes against. */
     scrollHandle?: ScrollBoxHandle | null;
     /** Row that must be mounted this pass (seek target for scrollToElement). */

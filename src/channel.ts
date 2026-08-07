@@ -171,7 +171,7 @@ export interface Channel {
     thinking: number
     tools: number
   }
-  subscribe(listener: () => void): () => void
+  subscribe: (listener: () => void) => () => void
   submit(text: string): void
   /** Abort the in-flight turn (`Ctrl+C` while working). */
   cancel(): void
@@ -278,7 +278,7 @@ export interface ChannelState {
     thinking: number
     tools: number
   }
-  subscribe(listener: () => void): () => void
+  subscribe: (listener: () => void) => () => void
   /** @internal event bump (the public `notify(text)` posts a notification). */
   emit(): void
   submit(text: string): void
@@ -417,9 +417,8 @@ function foldBack(rows: ChatRow[], events: readonly SessionEvent[]): number {
 function restoreRowFromEvent(row: ChatRow, event: SessionEvent): void {
   switch (row.kind) {
     case 'user': {
-      if (event.type !== 'user/message' && event.type !== 'steering/message') break
-      const content = event.type === 'user/message' ? event.data.content : event.data.message.content
-      const text = content.map(block => block.type === 'text' ? block.text : '').join('').trim()
+      if (event.type !== 'user/message') break
+      const text = event.data.content.map(block => block.type === 'text' ? block.text : '').join('').trim()
       if (text) row.text = text
       break
     }
@@ -493,10 +492,12 @@ function coalesceReplayEvents(events: readonly SessionEvent[]): SessionEvent[] {
       (event.data.chunk.type === 'text-delta' || event.data.chunk.type === 'reasoning-delta')
     ) {
       if (run !== null && run.type === event.data.chunk.type) {
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
         run.parts.push(event.data.chunk.text ?? '')
         continue
       }
       flush()
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
       run = { event, type: event.data.chunk.type, parts: [event.data.chunk.text ?? ''] }
       continue
     }
@@ -572,7 +573,7 @@ export function createChannel(
   // menu and dispatches through `execute` (which logs the paired
   // command/run + command/done records). Absent the service, only the
   // built-in local commands exist.
-  const commandService = ctx.get('commands')
+  const commandService: CommandService | undefined = ctx.get('commands')
   const listeners = new Set<() => void>()
   let nextNotificationId = 1
   /** One-shot context-low warning per session (CC's TokenWarning). */
@@ -701,6 +702,7 @@ export function createChannel(
       let boundary = row.seq
       for (let i = row.seq; i >= 0; i--) {
         const event = events[i]
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: seq may exceed events
         if (event === undefined) break
         if (event.type === 'turn/start') {
           boundary = event.seq - 1
@@ -1168,7 +1170,7 @@ export function createChannel(
         .then((result) => {
           state.notify(result ? 'Conversation compacted' : 'Nothing to compact')
         })
-        .catch((error) => {
+        .catch((error: unknown) => {
           state.notify(
             `Compaction failed · ${error instanceof Error ? error.message : String(error)}`,
             { color: 'error', timeoutMs: 8000 },
@@ -1238,6 +1240,7 @@ export function createChannel(
           }
           case 'tool/result': {
             const block = event.data.message.content[0]
+            // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may not match type
             if (block.type === 'tool-result') {
               const text = textOf(block.content)
               if (text) parts.push(`### 结果\n\n\`\`\`\n${text}\n\`\`\`\n`)
@@ -1388,16 +1391,20 @@ export function createChannel(
     state.emit()
     let output = '(no output)'
     if (bash) {
-      const spec = bash.resolve({
-        command,
-        workdir: state.cwd,
-        timeoutMs: 30000,
-      })
-      const result = await bash.run(spec)
-      output =
-        result.stdout.text.trim() ||
-        result.stderr.text.trim() ||
-        (result.timedOut ? '(timed out)' : '(no output)')
+      try {
+        const spec = bash.resolve({
+          command,
+          workdir: state.cwd,
+          timeoutMs: 30000,
+        })
+        const result = await bash.run(spec)
+        output =
+          result.stdout.text.trim() ||
+          result.stderr.text.trim() ||
+          (result.timedOut ? '(timed out)' : '(no output)')
+      } catch (error) {
+        output = error instanceof Error ? error.message : String(error)
+      }
     }
     state.rows.push({
       id: nextRowId++,
@@ -1523,16 +1530,6 @@ ${output}
         }
         break
       }
-      case 'steering/message': {
-        const text = textOf(event.data.message.content)
-        if (text) {
-          state.rows.push({ id: nextRowId, kind: 'user', label: 'steering', text, seq: event.seq })
-          state.lastUserText = text
-          state.contextSegments.prompt += estimateTokens(text)
-          nextRowId += 1
-        }
-        break
-      }
       case 'assistant/chunk': {
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
@@ -1571,13 +1568,17 @@ ${output}
         updateSpinnerMode()
         const usage = event.data.usage
         if (usage !== undefined) {
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
           state.tokens.input += usage.inputTokens ?? 0
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
           state.tokens.output += usage.outputTokens ?? 0
           // The most recent request's usage describes the CURRENT context:
           // input (uncached) + cache hits all occupy the window. Cache hits
           // also drive the status-line `cache N` readout.
           state.lastUsage = {
+            // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
             input: usage.inputTokens ?? 0,
+            // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
             output: usage.outputTokens ?? 0,
             cacheRead: usage.cacheReadTokens ?? 0,
             cacheWrite: usage.cacheWriteTokens ?? 0,
@@ -1587,6 +1588,7 @@ ${output}
           if (turnOutputStart !== 0) {
             const elapsedSec = (Date.now() - turnOutputStart) / 1000
             if (elapsedSec > 0.5) {
+              // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
               const exactTps = (usage.outputTokens ?? 0) / elapsedSec
               state.tps = exactTps
               state.tpsSamples.push({ tps: exactTps, at: Date.now() })
@@ -1643,12 +1645,18 @@ ${output}
           } else {
             card.tool.status = 'ok'
             const block = event.data.message.content[0]
+            // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may not match type
             const result = block !== undefined && block.type === 'tool-result' ? textOf(block.content) : ''
             card.tool.resultFull = result || undefined
             card.tool.resultText = result ? preview(result, RESULT_PREVIEW_LIMIT) : undefined
             state.contextSegments.tools += estimateTokens(result)
           }
           state.activeToolCount = Math.max(0, state.activeToolCount - 1)
+          // The card is settled: no later event looks it up by callId, so
+          // drop the index entry. The card itself stays in state.rows
+          // (bounded by MAX_ROWS + foldRows, which also drops the full
+          // args/result payloads of folded cards).
+          toolCards.delete(event.data.message.source.callId)
           updateSpinnerMode()
         }
         break
@@ -1686,7 +1694,7 @@ ${output}
           nextRowId += 1
           break
         }
-        const detail = 'failure' in reason && reason.failure ? reason.failure.message : ''
+        const detail = reason.kind === 'error' ? reason.error.message : ''
         state.rows.push({ id: nextRowId, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         nextRowId += 1
         state.notify(
@@ -1706,6 +1714,7 @@ ${output}
         // Reasoning effort readout (status line): the header carries the
         // conversation's call config (provider/model/effort/sampling). The
         // system prompt text seeds the context bar's system segment.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may lack header config
         const effort = event.data.header.config?.reasoningEffort
         if (typeof effort === 'string') {
           state.reasoningEffort = effort
@@ -1737,12 +1746,12 @@ ${output}
   const bindAgent = (): void => {
     for (const dispose of agentSubscriptions) dispose()
     agentSubscriptions = [
-      ctx.on('agent/status', (subject, status) => {
+      ctx.on('agent/status', ({ agent: subject, status }) => {
         if (subject !== agent) return
         state.status = status
         state.emit()
       }),
-      ctx.on('agent/disposed', (subject) => {
+      ctx.on('agent/disposed', ({ agent: subject }) => {
         if (subject !== agent) return
         state.status = 'disposed'
         state.emit()
@@ -1800,6 +1809,11 @@ ${output}
           state.gitBranch = branch
           state.emit()
         }
+      })
+      .catch(() => {
+        // Git branch detection is best-effort; on Windows the sandbox
+        // backend may be unavailable (no confinement yet) or the cwd may
+        // not be a git repo. Either way the statusline simply stays blank.
       })
   }
 
@@ -1862,6 +1876,7 @@ async function listFilesDeep(
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name
       if (entry.type === 'directory') {
         out.push(`${rel}/`)
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: symlink targets optional
         await walk(entry.target?.displayPath ?? join(dir, entry.name), rel, depth + 1)
       } else if (entry.type === 'file') {
         out.push(rel)

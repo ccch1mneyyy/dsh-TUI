@@ -1,0 +1,1 @@
+{"version":3,"file":"terminal-focus-event.js","sourceRoot":"","sources":["../../../../src/ink/events/terminal-focus-event.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,MAAM,YAAY,CAAA;AAIlC;;;;;;GAMG;AACH,MAAM,OAAO,kBAAmB,SAAQ,KAAK;IAClC,IAAI,CAAwB;IAErC,YAAY,IAA4B;QACtC,KAAK,EAAE,CAAA;QACP,IAAI,CAAC,IAAI,GAAG,IAAI,CAAA;IAClB,CAAC;CACF"}

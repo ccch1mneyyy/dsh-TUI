@@ -99,7 +99,7 @@ export function renderBigText(
         continue
       }
       const glyph = GLYPHS[ch] ?? FALLBACK
-      for (const cell of glyph[row]!) emit(cell)
+      for (const cell of glyph[row]) emit(cell)
       emit(' ')
     }
     if (current !== '') out += RESET

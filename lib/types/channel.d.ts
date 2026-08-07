@@ -161,7 +161,7 @@ export interface Channel {
         thinking: number;
         tools: number;
     };
-    subscribe(listener: () => void): () => void;
+    subscribe: (listener: () => void) => () => void;
     submit(text: string): void;
     /** Abort the in-flight turn (`Ctrl+C` while working). */
     cancel(): void;
@@ -276,7 +276,7 @@ export interface ChannelState {
         thinking: number;
         tools: number;
     };
-    subscribe(listener: () => void): () => void;
+    subscribe: (listener: () => void) => () => void;
     /** @internal event bump (the public `notify(text)` posts a notification). */
     emit(): void;
     submit(text: string): void;

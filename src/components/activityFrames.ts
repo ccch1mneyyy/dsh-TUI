@@ -89,5 +89,5 @@ export function resolvePreset(name: string | undefined): FramePreset {
     const pick = names[Math.floor(Math.random() * names.length)]
     return FRAME_PRESETS[pick]
   }
-  return FRAME_PRESETS[name ?? ''] ?? FRAME_PRESETS[DEFAULT_PRESET]!
+  return FRAME_PRESETS[name ?? ''] ?? FRAME_PRESETS[DEFAULT_PRESET]
 }

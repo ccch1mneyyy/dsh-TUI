@@ -1,0 +1,1 @@
+{"version":3,"file":"event.js","sourceRoot":"","sources":["../../../../src/ink/events/event.ts"],"names":[],"mappings":"AAAA,MAAM,OAAO,KAAK;IACR,4BAA4B,GAAG,KAAK,CAAA;IAE5C,2BAA2B;QACzB,OAAO,IAAI,CAAC,4BAA4B,CAAA;IAC1C,CAAC;IAED,wBAAwB;QACtB,IAAI,CAAC,4BAA4B,GAAG,IAAI,CAAA;IAC1C,CAAC;CACF"}
