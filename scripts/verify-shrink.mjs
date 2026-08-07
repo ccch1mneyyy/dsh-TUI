@@ -3,19 +3,21 @@
  *
  * Scenario (the user-reported bug): content taller than the viewport, then
  * the content shrinks. In main-screen mode the terminal viewport does NOT
- * follow the content bottom — the old eraseLines path repainted rows at
- * stale physical offsets, leaving old status rows behind and drawing the
- * bottom-pinned rows (status line) mid-screen.
+ * follow the content bottom — incremental paths (eraseLines or scroll-up +
+ * slice repaint) write rows at stale physical offsets, leaving old status
+ * rows behind and mixing old/new characters on the same lines.
  *
- * The fix: on shrink in main-screen mode, emit CSI <n> S (scroll up) so the
- * viewport aligns with the new content bottom, then repaint the visible
- * slice — without ESC[2J/ESC[3J (scrollback preserved, no WT viewport jump).
+ * The fix: on shrink in main-screen mode, full-repaint via a scroll-up-to-top
+ * clear sequence (CSI 10000 S) — no ESC[2J/ESC[3J (those snap the Windows
+ * Terminal viewport to the top inside DEC 2026 sync blocks, claude-code
+ * #35580), scrollback preserved.
  *
  * Checks:
- *  1. the shrink frame emits CSI <linesToClear> S;
+ *  1. the shrink frame emits the scroll-up clear (CSI 10000 S);
  *  2. the shrink frame emits NO ESC[2J / ESC[3J;
- *  3. the repainted slice contains the bottom-pinned marker text;
- *  4. the marker appears in the LAST rows of the emitted frame (bottom-pinned).
+ *  3. the repainted frame contains the bottom-pinned marker text;
+ *  4. the frame repaints ALL rows (full repaint, not a partial slice);
+ *  5. the marker is in the LAST rows of the emitted frame (bottom-pinned).
  * Run: node scripts/verify-shrink.mjs
  */
 process.env.FORCE_COLOR = '3'
@@ -83,12 +85,16 @@ function check(name, ok) {
   const first = stdout.frames.join('')
   check('initial frame has no clear sequence', !/\x1b\[2J\x1b\[3J/.test(first))
 
-  // Shrink: 60 -> 40 lines (linesToClear = 20, within the viewport height,
-  // so it must take the scroll-up repaint path, NOT the full reset).
+  // Shrink: 60 -> 40 lines. Main-screen shrink must FULLY repaint (partial
+  // paths write at stale physical offsets → duplicated/mixed rows) via the
+  // scroll-up clear sequence (no ESC[2J/3J → no WT viewport jump).
   instance.rerender(React.createElement(App, { lineCount: 40 }))
   await sleep(500)
   const shrink = stdout.frames[stdout.frames.length - 1]
-  check('shrink frame emits CSI <n> S (scroll up)', /\x1b\[20S|\x1b\[21S/.test(shrink))
+  check(
+    'shrink frame emits scroll-up-to-top clear',
+    /\x1b\[10000S/.test(shrink),
+  )
   check(
     'shrink frame emits NO ESC[2J/ESC[3J',
     !/\x1b\[2J|\x1b\[3J/.test(shrink),
@@ -106,6 +112,11 @@ function check(name, ok) {
       .replace(/\x1b\[(\d+)C/g, (_, n) => ' '.repeat(Number(n)))
       .replace(/\x1b\[[0-9;?>:]*[a-zA-Z]/g, '')
       .replace(/\x1b\]9;[^\x07]*\x07/g, '')
+  check(
+    'shrink frame repaints ALL rows (full repaint)',
+    toPlain(shrink).includes('line 0 padded content') &&
+      toPlain(shrink).includes('line 39 padded content'),
+  )
   const plain = toPlain(shrink)
   const linesOut = plain.split('\n')
   const markerIdx = linesOut.findIndex(l => l.includes('BOTTOM_PINNED_MARKER'))

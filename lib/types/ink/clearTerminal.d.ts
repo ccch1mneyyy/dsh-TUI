@@ -3,8 +3,15 @@
  * Detects modern terminals that support ESC[3J for clearing scrollback.
  */
 /**
- * Returns the ANSI escape sequence to clear the terminal including scrollback.
- * Automatically detects terminal capabilities.
+ * Returns the ANSI escape sequence to blank the screen while PRESERVING the
+ * scrollback (user-scrolled history).
+ *
+ * NOT using ESC[2J / ESC[3J: inside a DEC 2026 sync-output block (BSU/ESU)
+ * Windows Terminal snaps the viewport back to the top on those sequences
+ * (claude-code#35580), and dsh-cc's full resets run inside sync blocks.
+ * Scrolling the content far above the viewport (CSI <n> S) blanks the
+ * screen the same way — everything is pushed into the scrollback, the
+ * viewport shows empty rows — without moving the viewport.
  */
 export declare function getClearTerminalSequence(): string;
 /**
