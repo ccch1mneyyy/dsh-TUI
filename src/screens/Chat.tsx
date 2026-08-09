@@ -15,6 +15,7 @@ import instances from '../ink/instances.js'
 import { LogoHeader, MessageList } from '../components/MessageList.js'
 import { PromptInput } from '../components/PromptInput.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
+import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
@@ -1015,6 +1016,13 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.cwd}
         />
+        {/* The startup loaded-context panel: before the first message the
+            transcript is empty, so the collapsed summary of what this
+            conversation will load (system prompt, workspace instructions,
+            skills, tools) sits at the top; the first rows take over. */}
+        {channel.rows.length === 0 && channel.loadedContext !== undefined && (
+          <LoadedContextPanel context={channel.loadedContext} />
+        )}
         <MessageList
           rows={channel.rows}
           expanded={expanded}

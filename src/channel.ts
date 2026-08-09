@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import type { Agent, AgentHandle, AgentStatus, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
+import { assembleContextFor, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { CommandService } from '@deepseek-ai/dsh-commands'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-workspace-context'
 import type { Context } from 'cordis'
 import { join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
@@ -124,6 +126,52 @@ export interface TodoPanelItem {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
+/** One named prompt contribution with its model-visible text. */
+export interface LoadedContextEntry {
+  /** Provider-declared name (e.g. `harness:identity`, `deployment:persona`). */
+  readonly name: string
+  /** The interpolated text the model receives for this entry. */
+  readonly text: string
+}
+
+/** One discovered workspace instruction file (AGENTS.md-family). */
+export interface LoadedContextFile {
+  /** Model-facing path (e.g. `./AGENTS.md`). */
+  readonly displayPath: string
+}
+
+/** One model-invocable skill from the skill registry. */
+export interface LoadedContextSkill {
+  readonly name: string
+  readonly description: string
+}
+
+/** One model-visible tool from the prompt assembly. */
+export interface LoadedContextTool {
+  readonly name: string
+  readonly description: string
+}
+
+/**
+ * Snapshot of everything a fresh conversation for the current agent will
+ * load: the assembled system prompt (ordered sections, dynamic context,
+ * tools), the workspace instruction files baseline discovery would inject,
+ * and the skill catalog. Declared locally so screens and helpers consume a
+ * self-contained contract instead of the dsh-system-prompt/dsh-skill types.
+ */
+export interface LoadedContext {
+  /** Ordered system-prompt sections after strict variable interpolation. */
+  readonly sections: readonly LoadedContextEntry[]
+  /** Dynamic context contributions (runtime snapshot parts). */
+  readonly contexts: readonly LoadedContextEntry[]
+  /** Workspace instruction files (AGENTS.md-family) discovered for the cwd. */
+  readonly files: readonly LoadedContextFile[]
+  /** Model-invocable skills, when the skill registry is mounted. */
+  readonly skills: readonly LoadedContextSkill[]
+  /** Model-visible tools in assembly order. */
+  readonly tools: readonly LoadedContextTool[]
+}
+
 export interface Channel {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
@@ -186,6 +234,14 @@ export interface Channel {
    * wins). Log-only UI state, updated live and on replay.
    */
   readonly todos: readonly TodoPanelItem[]
+  /**
+   * Snapshot of the context a fresh conversation for this agent will load
+   * (system prompt sections, dynamic context, workspace instructions, skill
+   * catalog, tools), computed at boot and on every agent swap. `undefined`
+   * while loading or when the snapshot could not be assembled — the startup
+   * panel stays hidden until it lands.
+   */
+  readonly loadedContext: LoadedContext | undefined
   /**
    * Messages submitted while the model was working and not yet claimed by a
    * turn (`steer` → next step boundary of the running turn, `followup` →
@@ -338,6 +394,8 @@ export interface ChannelState {
   goal: ChannelGoal | undefined
   /** Latest todo-list snapshot (see the public Channel type). */
   todos: TodoPanelItem[]
+  /** Loaded-context snapshot (see the public Channel type). */
+  loadedContext: LoadedContext | undefined
   /** Messages submitted while working, awaiting their turn/step boundary.
    *  Driven by agent inbox events (inserted/claimed/discarded). */
   pending: PendingMessage[]
@@ -720,6 +778,7 @@ export function createChannel(
     activityEnabled: options.activity !== false,
     goal: undefined,
     todos: [],
+    loadedContext: undefined,
     pending: [],
     commandList: LOCAL_COMMANDS,
     lastUsage: undefined,
@@ -1003,6 +1062,7 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       refreshCommandList()
+      void refreshLoadedContext()
       // The forked session (rewind) becomes the most recently used.
       touchSession(childId)
       state.emit()
@@ -1080,6 +1140,7 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       refreshCommandList()
+      void refreshLoadedContext()
       // Keep the `--resume` launcher contract pointing at the same session.
       writeResumeTarget(sessionId)
       // The resumed session is now the most recently used.
@@ -1158,6 +1219,7 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       refreshCommandList()
+      void refreshLoadedContext()
       clearResumeTarget()
       // The brand-new session becomes the most recently used.
       touchSession(handle.agent.id)
@@ -1253,6 +1315,7 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       refreshCommandList()
+      void refreshLoadedContext()
       // The model-switched fork becomes the most recently used.
       touchSession(childId)
       state.emit()
@@ -1590,6 +1653,66 @@ export function createChannel(
   }
 
   /**
+   * Assemble the context a fresh conversation for the live agent will load,
+   * for the startup panel: the system prompt (sections + dynamic context +
+   * tools), the workspace instruction files baseline discovery would
+   * inject, and the skill catalog. Runs at boot and on every agent swap;
+   * every source degrades independently, and a total failure leaves the
+   * panel hidden instead of showing a broken snapshot. A snapshot computed
+   * for a previous agent is discarded (swaps rebind `agent` mid-flight).
+   */
+  const refreshLoadedContext = async (): Promise<void> => {
+    const target = agent
+    const sections: LoadedContextEntry[] = []
+    const contexts: LoadedContextEntry[] = []
+    const files: LoadedContextFile[] = []
+    const skills: LoadedContextSkill[] = []
+    const tools: LoadedContextTool[] = []
+    try {
+      const systemPrompt = ctx.get('systemPrompt')
+      if (systemPrompt !== undefined) {
+        const assembly = await systemPrompt.assemble(assembleContextFor(target))
+        if (target !== agent) return
+        // Render each section through the shared strict interpolator with
+        // this assembly's variables (renderPrompt joins; a single-section
+        // assembly renders exactly one section), keeping non-empty results.
+        for (const section of assembly.sections) {
+          const text = renderPrompt({
+            sections: [section],
+            contexts: [],
+            tools: [],
+            variables: assembly.variables,
+          })
+          if (text.length > 0) sections.push({ name: section.name, text })
+        }
+        contexts.push(...renderContextSections(assembly))
+        for (const tool of assembly.tools) {
+          tools.push({ name: tool.name, description: tool.description ?? '' })
+        }
+      }
+      const discovered = await discoverBaselineInstructionFiles({ cwd: options.cwd })
+      if (target !== agent) return
+      files.push(...discovered.map(file => ({ displayPath: file.displayPath })))
+      const skillsService = ctx.get('skills') as
+        | { list(options?: unknown): Promise<readonly { name: string; description: string }[]> }
+        | undefined
+      if (skillsService !== undefined) {
+        const catalog = await skillsService.list({})
+        if (target !== agent) return
+        skills.push(...catalog.map(skill => ({
+          name: skill.name,
+          description: skill.description,
+        })))
+      }
+    } catch (error) {
+      ctx.logger.warn('loaded-context snapshot failed: %o', error)
+      return
+    }
+    state.loadedContext = { sections, contexts, files, skills, tools }
+    state.emit()
+  }
+
+  /**
    * Rebuild the merged slash-command list from the registry. Registry
    * registrations are global or agent-scoped, so this runs on
    * `commands/change` and again whenever the live agent is swapped
@@ -1613,6 +1736,7 @@ export function createChannel(
   }
   ctx.on('commands/change', refreshCommandList)
   refreshCommandList()
+  void refreshLoadedContext()
 
   let nextRowId = 0
   /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH

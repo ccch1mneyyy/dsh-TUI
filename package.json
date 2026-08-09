@@ -67,7 +67,10 @@
     "usehooks-ts": "^3.1.0",
     "wrap-ansi": "^8.0.0 || ^9.0.0",
     "@deepseek-ai/dsh-session-persistence-sqlite": "workspace:^",
-    "@deepseek-ai/dsh-working-activity": "workspace:^"
+    "@deepseek-ai/dsh-skill": "workspace:^",
+    "@deepseek-ai/dsh-system-prompt": "workspace:^",
+    "@deepseek-ai/dsh-working-activity": "workspace:^",
+    "@deepseek-ai/dsh-workspace-context": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-agent-spine-demo": "workspace:^",

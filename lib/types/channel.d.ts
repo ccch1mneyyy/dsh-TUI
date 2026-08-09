@@ -1,4 +1,4 @@
-import type { Agent, AgentHandle, AgentStatus } from '@deepseek-ai/dsh-agent';
+import { type Agent, type AgentHandle, type AgentStatus } from '@deepseek-ai/dsh-agent';
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm';
 import type { Context } from 'cordis';
 import { type LocalCommand } from './commands.js';
@@ -109,6 +109,47 @@ export interface TodoPanelItem {
     content: string;
     status: 'pending' | 'in_progress' | 'completed';
 }
+/** One named prompt contribution with its model-visible text. */
+export interface LoadedContextEntry {
+    /** Provider-declared name (e.g. `harness:identity`, `deployment:persona`). */
+    readonly name: string;
+    /** The interpolated text the model receives for this entry. */
+    readonly text: string;
+}
+/** One discovered workspace instruction file (AGENTS.md-family). */
+export interface LoadedContextFile {
+    /** Model-facing path (e.g. `./AGENTS.md`). */
+    readonly displayPath: string;
+}
+/** One model-invocable skill from the skill registry. */
+export interface LoadedContextSkill {
+    readonly name: string;
+    readonly description: string;
+}
+/** One model-visible tool from the prompt assembly. */
+export interface LoadedContextTool {
+    readonly name: string;
+    readonly description: string;
+}
+/**
+ * Snapshot of everything a fresh conversation for the current agent will
+ * load: the assembled system prompt (ordered sections, dynamic context,
+ * tools), the workspace instruction files baseline discovery would inject,
+ * and the skill catalog. Declared locally so screens and helpers consume a
+ * self-contained contract instead of the dsh-system-prompt/dsh-skill types.
+ */
+export interface LoadedContext {
+    /** Ordered system-prompt sections after strict variable interpolation. */
+    readonly sections: readonly LoadedContextEntry[];
+    /** Dynamic context contributions (runtime snapshot parts). */
+    readonly contexts: readonly LoadedContextEntry[];
+    /** Workspace instruction files (AGENTS.md-family) discovered for the cwd. */
+    readonly files: readonly LoadedContextFile[];
+    /** Model-invocable skills, when the skill registry is mounted. */
+    readonly skills: readonly LoadedContextSkill[];
+    /** Model-visible tools in assembly order. */
+    readonly tools: readonly LoadedContextTool[];
+}
 export interface Channel {
     /** Monotonic version — bump on every mutation so screens can re-render. */
     readonly version: number;
@@ -177,6 +218,14 @@ export interface Channel {
      * wins). Log-only UI state, updated live and on replay.
      */
     readonly todos: readonly TodoPanelItem[];
+    /**
+     * Snapshot of the context a fresh conversation for this agent will load
+     * (system prompt sections, dynamic context, workspace instructions, skill
+     * catalog, tools), computed at boot and on every agent swap. `undefined`
+     * while loading or when the snapshot could not be assembled — the startup
+     * panel stays hidden until it lands.
+     */
+    readonly loadedContext: LoadedContext | undefined;
     /**
      * Messages submitted while the model was working and not yet claimed by a
      * turn (`steer` → next step boundary of the running turn, `followup` →
@@ -336,6 +385,8 @@ export interface ChannelState {
     goal: ChannelGoal | undefined;
     /** Latest todo-list snapshot (see the public Channel type). */
     todos: TodoPanelItem[];
+    /** Loaded-context snapshot (see the public Channel type). */
+    loadedContext: LoadedContext | undefined;
     /** Messages submitted while working, awaiting their turn/step boundary.
      *  Driven by agent inbox events (inserted/claimed/discarded). */
     pending: PendingMessage[];
