@@ -1346,20 +1346,18 @@ export function createChannel(
         // useful label. persistence.load reads the whole log (zstd), so
         // only the newest sessions pay for it; older rows keep the
         // basename fallback. A load failure degrades silently.
+        const empty = new Set<string>()
         await Promise.all(
           records.slice(0, SESSION_TITLE_DEPTH).map(async (record) => {
             try {
               const { events } = await persistence.load(SessionId(record.id))
               const first = events.find(event => event.type === 'user/message')
               if (first === undefined) {
-                // Empty session (no user message yet): fall back to the
-                // harness-generated session/title event, then a neutral
-                // "New session" label — never the cwd basename, which reads
-                // like a project folder instead of a conversation.
-                const titled = events.find(event => event.type === 'session/title')
-                record.title = titled !== undefined
-                  ? shortenTitle(String((titled.data as { title: string }).title))
-                  : 'New session'
+                // Launch artifact — a session with no user message holds no
+                // conversation to resume, so drop it from the picker (its
+                // createdAt-only updatedAt would otherwise pin it near the
+                // top forever, one per dsh-cc launch).
+                empty.add(record.id)
                 return
               }
               const data = first.data as { content?: readonly ContentBlock[] }
@@ -1370,7 +1368,7 @@ export function createChannel(
             }
           }),
         )
-        return records
+        return records.filter(record => !empty.has(record.id))
       } catch {
         return []
       }
