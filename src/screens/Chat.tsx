@@ -108,7 +108,7 @@ export function Chat({
   // The pending ask-user-question (DSH user-interaction seam): the model's
   // `ask_user_question` tool parks here until the panel is answered.
   const questionSnapshot = React.useSyncExternalStore(
-    questionStore.subscribe,
+    listener => questionStore.subscribe(listener),
     () => questionStore.getSnapshot(),
   )
   // When a questionnaire batch completes, fold a Q&A summary into the
