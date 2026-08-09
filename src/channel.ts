@@ -972,6 +972,11 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      // Goal/todo/title are session-scoped; the replay re-derives them for
+      // the session being entered (or leaves them empty).
+      state.todos = []
+      state.goal = undefined
+      state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -1042,6 +1047,11 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      // Goal/todo/title are session-scoped; the replay re-derives them for
+      // the session being entered (or leaves them empty).
+      state.todos = []
+      state.goal = undefined
+      state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -1118,6 +1128,11 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      // Goal/todo/title are session-scoped; the replay re-derives them for
+      // the session being entered (or leaves them empty).
+      state.todos = []
+      state.goal = undefined
+      state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -1205,6 +1220,11 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      // Goal/todo/title are session-scoped; the replay re-derives them for
+      // the session being entered (or leaves them empty).
+      state.todos = []
+      state.goal = undefined
+      state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
