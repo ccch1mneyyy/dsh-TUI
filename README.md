@@ -117,6 +117,16 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 | `?` | 快捷键菜单 |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
 
+**问卷（模型发起 `ask_user_question` 时）**
+
+| 键 | 功能 |
+|---|---|
+| `↑/↓` | 选择选项 |
+| `Space` | 多选题勾选/取消 |
+| `Tab` | 切到自定义回答（不选选项直接打字） |
+| `Enter` | 提交当前选择 |
+| `Esc` | 中断提问（模型收到 ASK_ABORTED，可继续对话） |
+
 **本地命令（CC 指令全集复刻，均走 DSH 官方链路）**
 
 | 分组 | 命令 |
@@ -167,6 +177,14 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
   读剪贴板：Explorer 复制的文件/图片返回 FileDropList → 插入文件路径（含空格
   自动加引号）；纯文本按原文插入光标处（含换行，不会误提交）。终端原生粘贴
   （Ctrl+Shift+V / 右键）走 bracketed paste，同样插入而非提交。
+
+- **问卷（ask_user_question）**：DSH user-interaction 生态的 TUI 适配——模型
+  调用 `ask_user_question` 时不再以工具卡片出现，而是弹出雾蓝风格问卷面板
+  （每题一屏：进度头 `第 x/N 题`、题头徽标、选项 + 描述、多选勾选、Tab 自定义
+  回答），按键流转走官方 dsh-tui 同款语义（↑/↓ 选择、Space 多选、Enter 提交、
+  Esc 中断 → `ASK_ABORTED`）。问答结束后把 Q&A 摘要折叠进会话记录；批内多题
+  与子代理并发提问按 FIFO 排队逐题呈现。服务行由 dsh-base 提供，插件在裸装
+  时自建服务并注册 provider、挂载模型侧工具。
 
 ## 已知限制
 

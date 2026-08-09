@@ -80,6 +80,14 @@
 
 # ── cc-tui rows ─────────────────────────────────────────────────────────────
 
+# The `user-interaction` service row comes from the dsh-base bundle layer
+# (mounted before this layer); do not insert it again — the include patch
+# semantics would create a duplicate row. cc-tui defensively creates the
+# service on its own context when no composition provides it (bare
+# `dsh --config cordis.yml` boots), then mounts the model-facing
+# ask_user_question tool and registers the questionnaire provider on
+# `ctx.userInteraction`.
+
 - insert:
     # The interactive front door. The plugin creates/resumes its agent at
     # runtime, seeds the startup status line, and disposes the whole app tree

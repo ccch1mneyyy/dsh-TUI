@@ -4,6 +4,8 @@ import { POINTER } from '../cc/figures.js'
 import { formatTokens } from '../cc/format.js'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Channel, ChatRow } from '../channel.js'
+import type { QuestionStore } from '../questions.js'
+import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
@@ -94,13 +96,33 @@ function searchableText(row: ChatRow): string {
  */
 export function Chat({
   channel,
+  questionStore,
   onExit,
 }: {
   channel: Channel
+  questionStore: QuestionStore
   onExit: () => void
 }) {
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   React.useSyncExternalStore(channel.subscribe, () => channel.version)
+  // The pending ask-user-question (DSH user-interaction seam): the model's
+  // `ask_user_question` tool parks here until the panel is answered.
+  const questionSnapshot = React.useSyncExternalStore(
+    questionStore.subscribe,
+    () => questionStore.getSnapshot(),
+  )
+  // When a questionnaire batch completes, fold a Q&A summary into the
+  // transcript (the tool card itself is hidden from the message list).
+  const questionOpenRef = React.useRef(questionSnapshot !== null)
+  React.useEffect(() => {
+    const wasOpen = questionOpenRef.current
+    questionOpenRef.current = questionSnapshot !== null
+    if (wasOpen && questionSnapshot === null) {
+      for (const summary of questionStore.takeSummaries()) {
+        channel.pushLocal(summary.title, summary.lines)
+      }
+    }
+  }, [channel, questionSnapshot, questionStore])
   const [expanded, setExpanded] = React.useState(false)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [handle, setHandle] = React.useState<ScrollBoxHandle | null>(null)
@@ -673,6 +695,10 @@ export function Chat({
   }, [])
 
   useInput((input, key, event) => {
+    // The questionnaire owns the keyboard while a question is pending (the
+    // panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc; the prompt
+    // input is unmounted, so nothing else should see these keys).
+    if (questionSnapshot !== null) return
     if (searchOpen) {
       // Transcript search bar (less-style): edit the query, Enter commits
       // (query persists for n/N), Esc/ctrl+c cancels back to the anchor.
@@ -1098,16 +1124,29 @@ export function Chat({
       )}
       {searchOpen && <TranscriptSearchBar query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
       <GoalTodoPanel channel={channel} />
-      <PromptInput
-        channel={channel}
-        helpOpen={helpOpen}
-        onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
-        onRunCommand={runCommand}
-        selectionActive={promptSelectionActive}
-        fillText={historyFill}
-        onFillConsumed={() =>{  setHistoryFill(null) }}
-        onRewindRequest={openRewind}
-      />
+      {questionSnapshot !== null && (
+        <AskUserQuestionPanel
+          key={questionSnapshot.key}
+          question={questionSnapshot.question}
+          position={questionSnapshot.position}
+          total={questionSnapshot.total}
+          answered={questionSnapshot.answered}
+          onAnswer={selection => questionStore.answerCurrent(selection)}
+          onCancel={() => questionStore.cancelCurrent()}
+        />
+      )}
+      {questionSnapshot === null && (
+        <PromptInput
+          channel={channel}
+          helpOpen={helpOpen}
+          onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
+          onRunCommand={runCommand}
+          selectionActive={promptSelectionActive}
+          fillText={historyFill}
+          onFillConsumed={() =>{  setHistoryFill(null) }}
+          onRewindRequest={openRewind}
+        />
+      )}
       <StatusLine
         channel={channel}
         selectionActive={selectionActive}

@@ -2,9 +2,12 @@ import { randomUUID } from 'node:crypto'
 import React from 'react'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+import UserInteractionService from '@deepseek-ai/dsh-user-interaction'
+import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import type { Context } from 'cordis'
 import Schema from 'schemastery'
 import { createChannel } from './channel.js'
+import { QuestionStore } from './questions.js'
 import { readActivityFrames } from './activityPrefs.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider } from './ui.js'
@@ -61,6 +64,26 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     throw new Error('cc-tui requires an interactive terminal (stdout must be a TTY).')
   }
 
+  // DSH user-interaction seam: the model's `ask_user_question` tool parks on
+  // `ctx.userInteraction` until a UI provider answers. Mount the service
+  // when the composition doesn't (the official dsh-base/`user-interaction`
+  // config row does; a bare plugin mount creates it on this context), expose
+  // the model-facing tool, and register this TUI's questionnaire as the
+  // provider. All three must be in place before the agent is resolved so
+  // the per-step tool assembly includes `ask_user_question`.
+  if (ctx.get('userInteraction') === undefined) {
+    // The service constructor registers itself on the context immediately
+    // (cordis `Service` semantics), so the provider below can bind right
+    // away without waiting for a child-plugin apply.
+    new UserInteractionService(ctx)
+  }
+  ctx.plugin(toolAskUser)
+  const questionStore = new QuestionStore()
+  ctx.userInteraction.registerProvider({
+    ask: request => questionStore.ask(request),
+  })
+  ctx.effect(() => () => questionStore.rejectAll())
+
   const agentOptions = {
     provider: config.provider,
     model: config.model,
@@ -81,7 +104,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
   const tree = (
     <ThemeProvider>
-      <Chat channel={channel} onExit={() =>{  disposeRootAndExit(ctx, 0) }} />
+      <Chat channel={channel} questionStore={questionStore} onExit={() =>{  disposeRootAndExit(ctx, 0) }} />
     </ThemeProvider>
   )
   const instance = await render(tree, { exitOnCtrlC: false })

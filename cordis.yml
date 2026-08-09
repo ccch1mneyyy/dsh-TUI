@@ -2,6 +2,13 @@
 # Run with: pnpm --filter @deepseek-ai/dsh-cc-tui run tui
 # Requires DEEPSEEK_API_KEY; a terminal TTY is mandatory.
 
+# The user-interaction service: hosts `ctx.userInteraction`, the seam behind
+# the model-facing ask_user_question tool. cc-tui registers its questionnaire
+# provider on it; the service must live at the root so the agent loop's tool
+# execution can reach it.
+- id: user-interaction
+  name: '@deepseek-ai/dsh-user-interaction'
+
 - id: cc-tui
   name: '@deepseek-ai/dsh-cc-tui'
   config:

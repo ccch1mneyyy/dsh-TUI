@@ -1913,6 +1913,13 @@ ${output}
         break
       }
       case 'tool/call': {
+        // The ask-user-question tool renders as the interactive questionnaire
+        // panel (DSH user-interaction seam), not as a tool card: the model is
+        // parked waiting for the human, so no running card, no active-tool
+        // spinner, no args noise in the transcript. The Q&A summary is pushed
+        // by the TUI once the batch is answered; tool/result for a call with
+        // no card is a no-op below.
+        if (event.data.name === 'ask_user_question') break
         const card: ChatRow = {
           id: nextRowId,
           kind: 'tool',
