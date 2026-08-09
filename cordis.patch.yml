@@ -35,13 +35,14 @@
   config:
     agents: []
 
-# Manual /compact at the cc-tui thresholds: 20% of the (advertised 1M-token)
-# window with a 5% retained tail; both overridable for tests and must keep
-# retainRatio < thresholdRatio (BasicCompactConfig validates this).
+# Compact at the standard 80% of the routed model's advertised context window
+# (compact-basic defaults; e.g. 800K of the 1M-token deepseek-v4-flash window)
+# with the standard 16% retained tail. Both remain overridable for tests and
+# must keep retainRatio < thresholdRatio (BasicCompactConfig validates this).
 - id: compact-basic
   config:
-    thresholdRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RATIO ?? '0.2')
-    retainRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RETAIN ?? '0.05')
+    thresholdRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RATIO ?? '0.8')
+    retainRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RETAIN ?? '0.16')
 
 # Delegation tools capped at depth 1 so the TUI's tool cards stay shallow
 # (the base default is depth 3).
