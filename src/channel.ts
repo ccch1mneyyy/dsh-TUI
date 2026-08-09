@@ -1351,7 +1351,17 @@ export function createChannel(
             try {
               const { events } = await persistence.load(SessionId(record.id))
               const first = events.find(event => event.type === 'user/message')
-              if (first === undefined) return
+              if (first === undefined) {
+                // Empty session (no user message yet): fall back to the
+                // harness-generated session/title event, then a neutral
+                // "New session" label — never the cwd basename, which reads
+                // like a project folder instead of a conversation.
+                const titled = events.find(event => event.type === 'session/title')
+                record.title = titled !== undefined
+                  ? shortenTitle(String((titled.data as { title: string }).title))
+                  : 'New session'
+                return
+              }
               const data = first.data as { content?: readonly ContentBlock[] }
               const text = textOf(data.content)
               if (text.length > 0) record.title = shortenTitle(text)

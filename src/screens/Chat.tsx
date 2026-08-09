@@ -365,14 +365,18 @@ export function Chat({
         setHelpOpen(false)
         void (async () => {
           const sessions = await channel.listSessions()
-          setResumeSessions(sessions)
-          if (sessions.length === 0) {
+          // The current session cannot be resumed into itself (agents.resume
+          // rejects a live session), so it is excluded from the picker —
+          // otherwise the fresh empty session of this launch always tops the
+          // list as an unopenable row.
+          const pickable = sessions.filter(session => session.id !== channel.agentId)
+          setResumeSessions(pickable)
+          if (pickable.length === 0) {
             channel.notify('No previous sessions found')
             return
           }
           setResumePickerOpen(true)
-          const index = sessions.findIndex(session => session.id === channel.agentId)
-          setResumeIndex(index >= 0 ? index : 0)
+          setResumeIndex(0)
         })()
         return true
       }
