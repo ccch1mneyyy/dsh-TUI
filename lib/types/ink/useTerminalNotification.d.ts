@@ -1,7 +1,6 @@
 import { type Progress } from './terminal.js';
-type WriteRaw = (data: string) => void;
-export declare const TerminalWriteContext: import("react").Context<WriteRaw | null>;
-export declare const TerminalWriteProvider: import("react").Provider<WriteRaw | null>;
+export declare const TerminalWriteContext: any;
+export declare const TerminalWriteProvider: any;
 export type TerminalNotification = {
     notifyITerm2: (opts: {
         message: string;
@@ -25,5 +24,4 @@ export type TerminalNotification = {
     progress: (state: Progress['state'] | null, percentage?: number) => void;
 };
 export declare function useTerminalNotification(): TerminalNotification;
-export {};
 //# sourceMappingURL=useTerminalNotification.d.ts.map

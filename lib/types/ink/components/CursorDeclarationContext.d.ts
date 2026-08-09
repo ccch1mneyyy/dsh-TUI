@@ -18,6 +18,6 @@ export type CursorDeclaration = {
  * newly-focused sibling's set depending on layout-effect order.
  */
 export type CursorDeclarationSetter = (declaration: CursorDeclaration | null, clearIfNode?: DOMElement | null) => void;
-declare const CursorDeclarationContext: import("react").Context<CursorDeclarationSetter>;
+declare const CursorDeclarationContext: any;
 export default CursorDeclarationContext;
 //# sourceMappingURL=CursorDeclarationContext.d.ts.map

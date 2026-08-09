@@ -1,4 +1,3 @@
-import React from 'react';
 /**
  * Component that parses ANSI escape codes and renders them using Text components.
  *
@@ -7,5 +6,5 @@ import React from 'react';
  *
  * Memoized to prevent re-renders when parent changes but children string is the same.
  */
-export declare const Ansi: React.MemoExoticComponent<(t0: any) => any>;
+export declare const Ansi: any;
 //# sourceMappingURL=Ansi.d.ts.map

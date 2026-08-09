@@ -1,4 +1,3 @@
-import React from 'react';
 import type { Channel } from '../channel.js';
 import type { QuestionStore } from '../questions.js';
 /**
@@ -17,5 +16,5 @@ export declare function Chat({ channel, questionStore, onExit, }: {
     channel: Channel;
     questionStore: QuestionStore;
     onExit: () => void;
-}): React.JSX.Element;
+}): any;
 //# sourceMappingURL=Chat.d.ts.map

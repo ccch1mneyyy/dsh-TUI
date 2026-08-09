@@ -1,4 +1,3 @@
-import React from 'react';
 import type { Channel } from '../channel.js';
 /**
  * The footer under the prompt input, in Claude Code's PromptInputFooter
@@ -12,5 +11,5 @@ export declare function StatusLine({ channel, selectionActive, helpOpen, }: {
     channel: Channel;
     selectionActive?: boolean;
     helpOpen?: boolean;
-}): React.JSX.Element;
+}): any;
 //# sourceMappingURL=StatusLine.d.ts.map

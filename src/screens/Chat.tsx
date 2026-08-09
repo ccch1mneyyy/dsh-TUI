@@ -161,6 +161,8 @@ export function Chat({
   const [rewindOpen, setRewindOpen] = React.useState(false)
   const [rewindIndex, setRewindIndex] = React.useState(0)
   const [rewindConfirm, setRewindConfirm] = React.useState<ChatRow | null>(null)
+  /** Startup `已加载上下文` panel: expanded by header click or Ctrl+T. */
+  const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -921,6 +923,11 @@ export function Chat({
       }
       return
     }
+    if (key.ctrl && input === 't') {
+      // Toggle the startup loaded-context panel (keyboard only — the
+      // ported ink core handles no mouse clicks).
+      setLoadedContextOpen(previous => !previous)
+    }
     if (key.ctrl && input === 'r' && !helpOpen) {
       setHistoryQuery('')
       setHistoryCursor(0)
@@ -1021,7 +1028,11 @@ export function Chat({
             conversation will load (system prompt, workspace instructions,
             skills, tools) sits at the top; the first rows take over. */}
         {channel.rows.length === 0 && channel.loadedContext !== undefined && (
-          <LoadedContextPanel context={channel.loadedContext} />
+          <LoadedContextPanel
+            context={channel.loadedContext}
+            open={loadedContextOpen}
+            onToggle={() => { setLoadedContextOpen(previous => !previous) }}
+          />
         )}
         <MessageList
           rows={channel.rows}

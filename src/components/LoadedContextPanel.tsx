@@ -35,24 +35,30 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * The startup `已加载上下文` panel: a collapsed one-line summary of what a
  * fresh conversation will load for the current agent (system prompt
  * sections, workspace instruction files, dynamic context, skill catalog,
- * tools). Click the header to expand into the grouped details; the panel
- * renders only while the transcript is still empty — the first message's
- * rows take over. Renders nothing for an empty snapshot.
+ * tools). Toggle with Ctrl+T (see HelpMenu; the ported ink core has no
+ * mouse-click handling, so the header is not clickable); the panel renders
+ * only while the transcript is still empty — the first message's rows take
+ * over. Renders nothing for an empty snapshot.
  * @param context - the channel's loaded-context snapshot.
+ * @param open - whether the grouped details are shown.
+ * @param onToggle - flips `open`; fired by the Ctrl+T keybinding.
  */
-export function LoadedContextPanel({ context }: { context: LoadedContext }): React.ReactNode {
-  const [open, setOpen] = React.useState(false)
+export function LoadedContextPanel({
+  context,
+  open,
+  onToggle,
+}: {
+  context: LoadedContext
+  open: boolean
+  onToggle: () => void
+}): React.ReactNode {
   const summary = summarizeLoadedContext(context)
   if (summary === '') return null
   return (
     <Box flexDirection="column" marginTop={1} marginBottom={1}>
-      <Box
-        paddingX={1}
-        backgroundColor={open ? 'userMessageBackground' : undefined}
-        onClick={() => { setOpen(value => !value) }}
-      >
+      <Box paddingX={1} backgroundColor={open ? 'userMessageBackground' : undefined}>
         <Text bold={open}>{open ? '▼' : '▶'} 已加载上下文 · {summary}</Text>
-        <Text dimColor> （点击{open ? '折叠' : '展开'}）</Text>
+        <Text dimColor> （Ctrl+T{open ? '折叠' : '展开'}）</Text>
       </Box>
       {open && (
         <Box flexDirection="column" paddingX={1} paddingTop={1}>

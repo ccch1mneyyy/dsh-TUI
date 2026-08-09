@@ -7,6 +7,6 @@ export type Props = {
 /**
  * `AppContext` is a React context, which exposes a method to manually exit the app (unmount).
  */
-declare const AppContext: import("react").Context<Props>;
+declare const AppContext: any;
 export default AppContext;
 //# sourceMappingURL=AppContext.d.ts.map
