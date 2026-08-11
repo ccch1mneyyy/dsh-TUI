@@ -36,7 +36,7 @@ import {
   watchUserPatches,
   type PatchOptions,
 } from '@deepseek-ai/dsh-app-boot'
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 const workspace = resolve(here, '../../../..')
@@ -259,9 +259,9 @@ try {
   if (app.current.get('loader') !== undefined) {
     if (app.current.get('hmr') === undefined) {
       if (app.current.get('timer') === undefined) {
-        await app.current.loader.create({ name: '@cordisjs/plugin-timer' })
+        await app.current.loader.create({ name: '@deepseek-ai/cordis-plugin-timer' })
       }
-      await app.current.loader.create({ name: '@cordisjs/plugin-hmr', config: { root: [] } })
+      await app.current.loader.create({ name: '@deepseek-ai/cordis-plugin-hmr', config: { root: [] } })
     }
     const composeLive = (): PatchOptions[] => structuredClone([
       ...basePatches,

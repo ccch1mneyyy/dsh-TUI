@@ -1,14 +1,13 @@
-import type { Context } from 'cordis';
-import Schema from 'schemastery';
 /**
- * Claude Code style interactive TUI front door for DeepSeek Harness agents.
- *
- * The plugin attaches to (or creates) one agent, renders a chat transcript
- * from the agent's session log and live `session/event` records, and submits
- * user turns through `Agent.followup`. It is a client-driver front door like
- * `dsh-jsonrpc`: the surrounding `cordis.yml` supplies the agent spine, the
- * LLM adapter, and the tool plugins.
+ * cc-tui plugin entry. The TUI implementation lives in `./plugin.tsx` (its
+ * render path is JSX); this module owns the plugin surface (`name`/`inject`/
+ * `Config`/`apply`) at the canonical `src/index.ts` location and delegates
+ * `apply` through a dynamic import so entry-scanning tooling and the Loader
+ * resolve a plain `.ts` module.
+ * @module @deepseek-ai/dsh-cc-tui
  */
+import type { Context } from '@deepseek-ai/cordis';
+import Schema from '@deepseek-ai/schemastery';
 export declare const name = "cc-tui";
 export declare const inject: string[];
 export interface Config {
@@ -35,5 +34,12 @@ export interface Config {
     fullscreen?: boolean;
 }
 export declare const Config: Schema<Config>;
+/**
+ * Start the interactive TUI front door, delegating to the JSX implementation
+ * in `./plugin.tsx` (see its module doc for the full contract).
+ * @param ctx - the plugin context.
+ * @param config - the validated cc-tui configuration.
+ * @returns a promise settling when the TUI teardown completes.
+ */
 export declare function apply(ctx: Context, config: Config): Promise<void>;
 //# sourceMappingURL=index.d.ts.map

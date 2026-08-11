@@ -1,4 +1,4 @@
-import { PureComponent, type ReactNode } from 'react';
+import React, { PureComponent, type ReactNode } from 'react';
 import { EventEmitter } from '../events/emitter.js';
 import { type ParsedKey, type ParsedMouse } from '../parse-keypress.js';
 import { type SelectionState } from '../selection.js';
@@ -53,7 +53,7 @@ export default class App extends PureComponent<Props, State> {
     lastHoverRow: number;
     lastStdinTime: number;
     isRawModeSupported(): boolean;
-    render(): any;
+    render(): React.JSX.Element;
     componentDidMount(): void;
     componentWillUnmount(): void;
     componentDidCatch(error: Error): void;

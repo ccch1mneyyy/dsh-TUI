@@ -340,7 +340,9 @@ export function Chat({
         setModelPickerOpen(true)
         void channel.listModels().then((list) => {
           setModels(list)
-          const index = list.findIndex(model => model.id === channel.model)
+          const index = list.findIndex(
+            model => model.provider === channel.provider && model.id === channel.model,
+          )
           setModelIndex(index >= 0 ? index : 0)
         })
         return true
@@ -823,7 +825,7 @@ export function Chat({
           // model (history replays unchanged).
           setModelPickerOpen(false)
           channel.notify(`Switching model to ${model.name}…`)
-          void channel.switchModel(model.id).then((ok) => {
+          void channel.switchModel(model.provider, model.id).then((ok) => {
             if (ok) channel.notify(`Model switched to ${model.name}`)
           })
         } else {
@@ -1113,7 +1115,7 @@ export function Chat({
             <ModelPicker
               models={models}
               focusIndex={modelIndex}
-              currentModel={channel.model}
+              currentModel={`${channel.provider}/${channel.model}`}
             />
           )}
         </Box>

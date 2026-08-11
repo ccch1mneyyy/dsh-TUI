@@ -4,7 +4,10 @@
  * the app and the clipboard is read here. PowerShell `Get-Clipboard` is the
  * zero-dependency route: file drops (Explorer copy) come back as a
  * FileDropList (the user pastes a file → insert its path), anything else
- * comes back as text. UTF-8 output is forced so CJK text survives the pipe.
+ * comes back as text. Text is base64-encoded on the PowerShell side so the
+ * line-oriented stdout parse survives multi-line clipboard content (a raw
+ * write would put every line on its own output line and drop all but the
+ * first); CJK survives because base64 is pure ASCII.
  */
 
 import { execFile } from 'node:child_process'
@@ -15,7 +18,7 @@ const PS_SCRIPT = [
   '$files=$null',
   'try { $files = Get-Clipboard -Format FileDropList -ErrorAction Stop } catch {}',
   'if($files){foreach($f in $files){Write-Output ("FILE:"+$f.FullName)}}',
-  'if(-not $files){$t=Get-Clipboard -Raw; if($null -ne $t){Write-Output ("TEXT:"+$t)}}',
+  'if(-not $files){$t=Get-Clipboard -Raw; if($null -ne $t){Write-Output ("TEXT64:"+[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($t)))}}',
 ].join('; ')
 
 /**
@@ -55,7 +58,9 @@ export function readClipboard(): Promise<
           const texts: string[] = []
           for (const line of stdout.split(/\r?\n/)) {
             if (line.startsWith('FILE:')) files.push(line.slice(5))
-            else if (line.startsWith('TEXT:')) texts.push(line.slice(5))
+            else if (line.startsWith('TEXT64:')) {
+              texts.push(Buffer.from(line.slice(7), 'base64').toString('utf8'))
+            }
           }
           if (files.length > 0) resolve({ kind: 'files', paths: files })
           else if (texts.length > 0) resolve({ kind: 'text', text: texts.join('\n') })

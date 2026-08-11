@@ -21,7 +21,7 @@ export declare function MessageList({ rows, expanded, expandedRows, selectedId, 
     scrollHandle?: ScrollBoxHandle | null;
     /** Row that must be mounted this pass (seek target for scrollToElement). */
     forceMountRowId?: number | null;
-}): any;
+}): React.JSX.Element;
 /**
  * The header block pinned above the transcript: the DeepSeek pixel whale
  * with the wordmark, tagline, model/effort and cwd (`LogoV2`), plus the

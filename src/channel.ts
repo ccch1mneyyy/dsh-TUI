@@ -6,7 +6,7 @@ import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/ds
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-workspace-context'
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 import { join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
@@ -181,6 +181,8 @@ export interface Channel {
   readonly agentId: string
   /** Resolved model id (from the plugin config). */
   readonly model: string
+  /** Provider route of the live agent. */
+  readonly provider: string
   /** Running token totals across the session's assistant messages. */
   readonly tokens: TokenUsage
   /** Working directory of the session. */
@@ -296,9 +298,9 @@ export interface Channel {
    *  transcript cleared, the resume marker forgotten. */
   newSession(): Promise<boolean>
   /** Switch the live model (`/model` picker): forks the conversation at its
-   *  current end and continues it with a new agent routed to `model`. The
-   *  history replays unchanged; only the request model changes. */
-  switchModel(model: string): Promise<boolean>
+   *  current end and continues it with a new agent routed to `provider`/`model`.
+   *  The history replays unchanged; only the request route changes. */
+  switchModel(provider: string, model: string): Promise<boolean>
   /** Reset the visible transcript (`/clear`). */
   clear(): void
   /**
@@ -315,7 +317,7 @@ export interface Channel {
    *  re-renders the indicator immediately; false when the name is unknown
    *  or the preference cannot be written. */
   setActivityFrames(name: string): boolean
-  /** Advertised models for the configured provider route (empty when the LLM service is absent). */
+  /** Advertised models across every registered provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
   /** Top-level entries of the session cwd for `@` file completion. */
   listFiles(): Promise<readonly string[]>
@@ -362,6 +364,7 @@ export interface ChannelState {
   sessionTitle: string
   agentId: string
   model: string
+  provider: string
   tokens: TokenUsage
   cwd: string
   gitBranch: string | undefined
@@ -430,7 +433,7 @@ export interface ChannelState {
   /** Start a fresh conversation (`/new`). */
   newSession(): Promise<boolean>
   /** Switch the live model (`/model` picker). */
-  switchModel(model: string): Promise<boolean>
+  switchModel(provider: string, model: string): Promise<boolean>
   clear(): void
   /** @internal older-row restoration (see the public Channel.loadOlder). */
   loadOlder(): number
@@ -761,6 +764,7 @@ export function createChannel(
     sessionTitle: '',
     agentId: agent.id,
     model: options.model,
+    provider: options.provider,
     tokens: { input: 0, output: 0 },
     cwd: options.cwd,
     gitBranch: undefined,
@@ -1227,7 +1231,7 @@ export function createChannel(
       void oldHandle?.dispose().catch(() => {})
       return true
     },
-    async switchModel(model: string): Promise<boolean> {
+    async switchModel(provider: string, model: string): Promise<boolean> {
       // `/model` picker Enter — switch the live model by forking the
       // conversation at its current end and continuing with a new agent
       // routed to the chosen model. Same reset shape as rewindTo/resumeTo;
@@ -1270,7 +1274,7 @@ export function createChannel(
             parentSession: agent.session.id,
             seedLength: seed.length,
           },
-          agentOptions: { provider: options.provider, model },
+          agentOptions: { provider, model },
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -1296,6 +1300,7 @@ export function createChannel(
       state.status = handle.agent.status
       state.agentId = handle.agent.id
       state.model = model
+      state.provider = provider
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
@@ -1377,10 +1382,15 @@ export function createChannel(
     },
     listModels() {
       const llm = ctx.get('llm') as
-        | { listModels(provider: string): Promise<readonly LlmModelInfo[]> }
+        | {
+          listProviders(): readonly { id: string }[]
+          listModels(provider: string): Promise<readonly LlmModelInfo[]>
+        }
         | undefined
       if (!llm) return Promise.resolve([])
-      return llm.listModels(options.provider).catch(() => [])
+      const providers = llm.listProviders()
+      return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
+        .then(lists => lists.flat())
     },
     listFiles() {
       const fs = ctx.get('fs') as

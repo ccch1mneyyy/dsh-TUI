@@ -4,7 +4,10 @@
  * the app and the clipboard is read here. PowerShell `Get-Clipboard` is the
  * zero-dependency route: file drops (Explorer copy) come back as a
  * FileDropList (the user pastes a file → insert its path), anything else
- * comes back as text. UTF-8 output is forced so CJK text survives the pipe.
+ * comes back as text. Text is base64-encoded on the PowerShell side so the
+ * line-oriented stdout parse survives multi-line clipboard content (a raw
+ * write would put every line on its own output line and drop all but the
+ * first); CJK survives because base64 is pure ASCII.
  */
 /**
  * Read the Windows clipboard: file paths when Explorer copied files,

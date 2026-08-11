@@ -27,6 +27,9 @@ export function HelpMenu({
           <Text dimColor>ctrl+o for verbose output</Text>
         </Box>
         <Box>
+          <Text dimColor>ctrl+t to toggle context</Text>
+        </Box>
+        <Box>
           <Text dimColor>ctrl+r to search history</Text>
         </Box>
         <Box>

@@ -1,3 +1,4 @@
+import React from 'react';
 import type { Channel } from '../channel.js';
 export interface PromptInputProps {
     channel: Channel;
@@ -50,5 +51,5 @@ export interface PromptInputProps {
  * working) interrupts the turn and delivers them right away; Ctrl+Enter
  * aborts the turn and sends the current input immediately.
  */
-export declare function PromptInput({ channel, helpOpen, onToggleHelp, onRunCommand, selectionActive, fillText, onFillConsumed, onRewindRequest, }: PromptInputProps): any;
+export declare function PromptInput({ channel, helpOpen, onToggleHelp, onRunCommand, selectionActive, fillText, onFillConsumed, onRewindRequest, }: PromptInputProps): React.JSX.Element;
 //# sourceMappingURL=PromptInput.d.ts.map

@@ -4,8 +4,8 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import UserInteractionService from '@deepseek-ai/dsh-user-interaction'
 import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
-import type { Context } from 'cordis'
-import Schema from 'schemastery'
+import type { Context } from '@deepseek-ai/cordis'
+import { Config } from './index.js'
 import { createChannel } from './channel.js'
 import { QuestionStore } from './questions.js'
 import { readActivityFrames } from './activityPrefs.js'
@@ -21,44 +21,6 @@ import { render, ThemeProvider } from './ui.js'
  * `dsh-jsonrpc`: the surrounding `cordis.yml` supplies the agent spine, the
  * LLM adapter, and the tool plugins.
  */
-export const name = 'cc-tui'
-export const inject = ['agents']
-
-export interface Config {
-  /** Existing session to attach; a fresh session is created when absent. */
-  sessionId?: string
-  /** LLM provider route; the harness `deepseek-official` route by default. */
-  provider?: string
-  /** Model override passed to the agent (adapter default when absent). */
-  model?: string
-  /** Session working directory; defaults to the invoking directory. */
-  cwd?: string
-  /** Configured reasoning effort, displayed from startup (the live value
-   *  from request headers replaces it once the first turn runs). */
-  effort?: string
-  /** Show the dsh-working-activity live working line on the status bar
-   *  (consumes its log-only `activity/status` events; off hides it). */
-  activity?: boolean
-  /** Working-activity indicator preset: `claude`/`moon`/`comet`/`dots`/…
-   *  or `random` (see activityFrames.ts). When absent, the `/activity`
-   *  choice persisted in `~/.dsh-cc/working-activity.json` wins, then the
-   *  `claude` default. */
-  activityFrames?: string
-  /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
-  fullscreen?: boolean
-}
-
-export const Config: Schema<Config> = Schema.object({
-  sessionId: Schema.string().required(false),
-  provider: Schema.string().default('deepseek-official'),
-  model: Schema.string().default('deepseek-v4-flash'),
-  cwd: Schema.string().required(false),
-  effort: Schema.string().required(false),
-  activity: Schema.boolean().default(true),
-  activityFrames: Schema.string().required(false),
-  fullscreen: Schema.boolean().default(true),
-})
-
 export async function apply(ctx: Context, config: Config): Promise<void> {
   if (!process.stdout.isTTY) {
     throw new Error('cc-tui requires an interactive terminal (stdout must be a TTY).')
@@ -99,10 +61,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
     handle,
   })
-  const tree = (
-    <ThemeProvider>
-      <Chat channel={channel} questionStore={questionStore} onExit={() =>{  disposeRootAndExit(ctx, 0) }} />
-    </ThemeProvider>
+  const tree = React.createElement(
+    ThemeProvider,
+    null,
+    React.createElement(Chat, {
+      channel,
+      questionStore,
+      onExit: () => { disposeRootAndExit(ctx, 0) },
+    }),
   )
   const instance = await render(tree, { exitOnCtrlC: false })
 

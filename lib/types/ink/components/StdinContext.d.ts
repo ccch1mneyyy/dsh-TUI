@@ -23,6 +23,6 @@ export type Props = {
 /**
  * `StdinContext` is a React context, which exposes input stream.
  */
-declare const StdinContext: any;
+declare const StdinContext: import("react").Context<Props>;
 export default StdinContext;
 //# sourceMappingURL=StdinContext.d.ts.map

@@ -6,7 +6,7 @@
  * subtree and must not spread to new code.
  * @module @deepseek-ai/dsh-cc-tui/invariant
  */
-import type { Context } from 'cordis';
+import type { Context } from '@deepseek-ai/cordis';
 /** Cordis companion plugin name. */
 export declare const name = "cc-tui-invariant";
 /** Service required before the companion can reserve package ownership. */

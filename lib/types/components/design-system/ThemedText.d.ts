@@ -6,7 +6,7 @@ import { type Theme } from '../../theme.js';
  * this > dimColor (ported from the leak's design-system, where message rows
  * set it to `text` on hover).
  */
-export declare const TextHoverColorContext: any;
+export declare const TextHoverColorContext: React.Context<keyof Theme | undefined>;
 export type Props = {
     /**
      * Change text color. Accepts a theme key or raw color value.

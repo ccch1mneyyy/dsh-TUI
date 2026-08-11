@@ -31,12 +31,12 @@ export function ModelPicker({
         </Box>
         {models.map((model, index) => (
           <ListItem
-            key={model.id}
+            key={`${model.provider}/${model.id}`}
             isFocused={index === focusIndex}
-            isSelected={model.id === currentModel}
+            isSelected={`${model.provider}/${model.id}` === currentModel}
             description={model.description}
           >
-            {model.name}
+            {model.provider} / {model.name}
           </ListItem>
         ))}
       </Box>

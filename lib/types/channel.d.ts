@@ -1,6 +1,6 @@
 import { type Agent, type AgentHandle, type AgentStatus } from '@deepseek-ai/dsh-agent';
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm';
-import type { Context } from 'cordis';
+import type { Context } from '@deepseek-ai/cordis';
 import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js';
@@ -159,6 +159,8 @@ export interface Channel {
     readonly agentId: string;
     /** Resolved model id (from the plugin config). */
     readonly model: string;
+    /** Provider route of the live agent. */
+    readonly provider: string;
     /** Running token totals across the session's assistant messages. */
     readonly tokens: TokenUsage;
     /** Working directory of the session. */
@@ -280,9 +282,9 @@ export interface Channel {
      *  transcript cleared, the resume marker forgotten. */
     newSession(): Promise<boolean>;
     /** Switch the live model (`/model` picker): forks the conversation at its
-     *  current end and continues it with a new agent routed to `model`. The
-     *  history replays unchanged; only the request model changes. */
-    switchModel(model: string): Promise<boolean>;
+     *  current end and continues it with a new agent routed to `provider`/`model`.
+     *  The history replays unchanged; only the request route changes. */
+    switchModel(provider: string, model: string): Promise<boolean>;
     /** Reset the visible transcript (`/clear`). */
     clear(): void;
     /**
@@ -302,7 +304,7 @@ export interface Channel {
      *  re-renders the indicator immediately; false when the name is unknown
      *  or the preference cannot be written. */
     setActivityFrames(name: string): boolean;
-    /** Advertised models for the configured provider route (empty when the LLM service is absent). */
+    /** Advertised models across every registered provider route (empty when the LLM service is absent). */
     listModels(): Promise<readonly LlmModelInfo[]>;
     /** Top-level entries of the session cwd for `@` file completion. */
     listFiles(): Promise<readonly string[]>;
@@ -347,6 +349,7 @@ export interface ChannelState {
     sessionTitle: string;
     agentId: string;
     model: string;
+    provider: string;
     tokens: TokenUsage;
     cwd: string;
     gitBranch: string | undefined;
@@ -421,7 +424,7 @@ export interface ChannelState {
     /** Start a fresh conversation (`/new`). */
     newSession(): Promise<boolean>;
     /** Switch the live model (`/model` picker). */
-    switchModel(model: string): Promise<boolean>;
+    switchModel(provider: string, model: string): Promise<boolean>;
     clear(): void;
     /** @internal older-row restoration (see the public Channel.loadOlder). */
     loadOlder(): number;
