@@ -5,9 +5,12 @@ type Output = {
   height: number
 }
 
-// Single-pass measurement: computes both width and height in one
-// iteration instead of two (widestLine + countVisualLines).
-// Uses indexOf to avoid array allocation from split('\n').
+/**
+ * Measure wrapped text dimensions in a single pass.
+ * @param text - the text to measure.
+ * @param maxWidth - the wrap width in columns; non-positive or infinite disables wrapping.
+ * @returns the widest line width and the number of visual lines.
+ */
 function measureText(text: string, maxWidth: number): Output {
   if (text.length === 0) {
     return {

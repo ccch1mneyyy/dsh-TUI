@@ -37,6 +37,13 @@ function truncate(
   return sliceFit(text, 0, columns - 1) + ELLIPSIS
 }
 
+/**
+ * Wrap or truncate text to a maximum width according to a textWrap style.
+ * @param text - the text to fit.
+ * @param maxWidth - the maximum display width in columns.
+ * @param wrapType - the textWrap style: wrap, wrap-trim, truncate, truncate-start, or truncate-middle.
+ * @returns the wrapped or truncated text, or `text` unchanged when no wrapping applies.
+ */
 export default function wrapText(
   text: string,
   maxWidth: number,

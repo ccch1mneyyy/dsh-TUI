@@ -55,7 +55,12 @@ const LOG_EVERY = 20
  *  for on-demand single-message rendering, pathological for render-all-
  *  8k-upfront. Cache per (msg, query, width) upstream.
  *
- *  Unmounts between calls. Root/container/pools persist for reuse. */
+ *  Unmounts between calls. Root/container/pools persist for reuse.
+ *
+ * @param el - the React element to render.
+ * @param width - the render width in columns.
+ * @returns the painted screen buffer and the yoga-computed content height.
+ */
 export function renderToScreen(
   el: ReactElement,
   width: number,
@@ -145,7 +150,12 @@ export function renderToScreen(
  *
  *  For the side-render use: this Screen is the FULL message (natural
  *  height, not viewport-clipped). Positions are stable — to highlight
- *  on the real screen, add the message's screen offset (lo). */
+ *  on the real screen, add the message's screen offset (lo).
+ *
+ * @param screen - the screen buffer to scan.
+ * @param query - the substring to search for, matched case-insensitively.
+ * @returns the match positions relative to the buffer, or an empty list.
+ */
 export function scanPositions(screen: Screen, query: string): MatchPosition[] {
   const lq = query.toLowerCase()
   if (!lq) return []
@@ -208,7 +218,15 @@ export function scanPositions(screen: Screen, query: string): MatchPosition[] {
  *  no-op (withInverse idempotent) but wasted work.
  *
  *  Positions are message-relative (row 0 = message top). rowOffset =
- *  message's current screen-top (lo). Clips outside [0, height). */
+ *  message's current screen-top (lo). Clips outside [0, height).
+ *
+ * @param screen - the screen buffer to style.
+ * @param stylePool - the style pool providing the current-match transform.
+ * @param positions - the message-relative match positions.
+ * @param rowOffset - the message's current screen-top row.
+ * @param currentIdx - index into positions of the match to highlight.
+ * @returns true when the highlight was written, false when out of range.
+ */
 export function applyPositionedHighlight(
   screen: Screen,
   stylePool: StylePool,

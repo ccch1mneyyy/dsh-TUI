@@ -19,8 +19,11 @@ export interface Rgb {
  *  FLASH stays visibly blue (never pure white) — the highlight reads as a
  *  mist-brightened crest, not a white strobe. */
 export const BRAND: Rgb = { r: 77, g: 107, b: 254 }
+/** Header ladder ice blue (`#93BEFF`). */
 export const ICE: Rgb = { r: 147, g: 190, b: 255 }
+/** Header ladder pale blue (`#D7E4FF`). */
 export const PALE: Rgb = { r: 215, g: 228, b: 255 }
+/** Soft ice flash blue (`#C6D8F8`); stays visibly blue, never pure white. */
 export const FLASH: Rgb = { r: 198, g: 216, b: 248 }
 
 /**
@@ -29,6 +32,12 @@ export const FLASH: Rgb = { r: 198, g: 216, b: 248 }
  * the same cadence (period 2π·stepMs·... — one full sine per ~6 steps).
  * CC's original cadence was 200ms/column; callers pass 60 for the lively
  * sweep.
+ * @param word - Text to paint.
+ * @param time - Elapsed time in milliseconds; drives the sweep position and the brightness pulse.
+ * @param base - Color for cells outside the highlight window.
+ * @param highlight - Color mixed into the sweeping highlight window.
+ * @param stepMs - Milliseconds per column of sweep advance (default 60).
+ * @returns The ANSI bold-colored word with the moving highlight.
  */
 export function sweep(word: string, time: number, base: Rgb, highlight: Rgb, stepMs = 60): string {
   const width = stringWidth(word)

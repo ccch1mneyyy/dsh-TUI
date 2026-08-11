@@ -9,6 +9,7 @@
 import { C0, ESC_TYPE, isEscFinal } from './ansi.js'
 import { isCSIFinal, isCSIIntermediate, isCSIParam } from './csi.js'
 
+/** A chunk of terminal input: plain text or a raw escape sequence. */
 export type Token =
   | { type: 'text'; value: string }
   | { type: 'sequence'; value: string }
@@ -23,6 +24,7 @@ type State =
   | 'dcs'
   | 'apc'
 
+/** Streaming tokenizer for terminal input, buffering incomplete sequences. */
 export type Tokenizer = {
   /** Feed input and get resulting tokens */
   feed(input: string): Token[]
@@ -53,6 +55,8 @@ type TokenizerOptions = {
  * const tokens2 = tokenizer.feed('A')  // completes the escape sequence
  * const remaining = tokenizer.flush()  // force output incomplete sequences
  * ```
+ * @param options - tokenizer options; when omitted all defaults apply.
+ * @returns the tokenizer instance.
  */
 export function createTokenizer(options?: TokenizerOptions): Tokenizer {
   let currentState: State = 'ground'

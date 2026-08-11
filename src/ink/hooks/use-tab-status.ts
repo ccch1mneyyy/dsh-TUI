@@ -8,6 +8,9 @@ import {
 import type { Color } from '../termio/types.js'
 import { TerminalWriteContext } from '../useTerminalNotification.js'
 
+/**
+ * The kind of tab-status indicator: 'idle', 'busy', or 'waiting'.
+ */
 export type TabStatusKind = 'idle' | 'busy' | 'waiting'
 
 const rgb = (r: number, g: number, b: number): Color => ({
@@ -49,6 +52,7 @@ const TAB_STATUS_PRESETS: Record<
  * Pass `null` to opt out. If a status was previously set, transitioning to
  * `null` emits CLEAR_TAB_STATUS so toggling off mid-session doesn't leave
  * a stale dot. Process-exit cleanup is handled by ink.tsx's unmount path.
+ * @param kind - the status kind to display, or null to opt out.
  */
 export function useTabStatus(kind: TabStatusKind | null): void {
   const writeRaw = useContext(TerminalWriteContext)

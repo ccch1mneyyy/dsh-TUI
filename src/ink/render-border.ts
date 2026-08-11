@@ -6,6 +6,7 @@ import type Output from './output.js'
 import { stringWidth } from './stringWidth.js'
 import type { Color } from './styles.js'
 
+/** Options for embedding a text label into a border line. */
 export type BorderTextOptions = {
   content: string // Pre-rendered string with ANSI color codes
   position: 'top' | 'bottom'
@@ -13,6 +14,7 @@ export type BorderTextOptions = {
   offset?: number // Only used with 'start' or 'end' alignment. Number of characters from the edge.
 }
 
+/** Built-in border styles beyond those provided by cli-boxes. */
 export const CUSTOM_BORDER_STYLES = {
   dashed: {
     top: '╌',
@@ -27,6 +29,7 @@ export const CUSTOM_BORDER_STYLES = {
   },
 } as const
 
+/** A border style: a cli-boxes key, a custom style key, or an explicit box style. */
 export type BorderStyle =
   | keyof Boxes
   | keyof typeof CUSTOM_BORDER_STYLES
@@ -79,6 +82,14 @@ function styleBorderLine(
   return styled
 }
 
+/**
+ * Render the node's border, including any embedded border text, into the
+ * output buffer when a border style is set.
+ * @param x - the border's left column.
+ * @param y - the border's top row.
+ * @param node - the node whose border style to render.
+ * @param output - the output buffer receiving the border writes.
+ */
 const renderBorder = (
   x: number,
   y: number,

@@ -1,6 +1,14 @@
 import { type Node as YogaNode } from '../../native-ts/yoga-layout/index.js';
 import { type LayoutAlign, LayoutDisplay, type LayoutEdge, type LayoutFlexDirection, type LayoutGutter, type LayoutJustify, type LayoutMeasureFunc, type LayoutNode, type LayoutOverflow, type LayoutPositionType, type LayoutWrap } from './node.js';
+/**
+ * Yoga-backed implementation of `LayoutNode`.
+ *
+ * Wraps a yoga-layout node, mapping layout enums to their Yoga counterparts
+ * and translating measure-mode values across the adapter boundary. The
+ * underlying Yoga instance is synchronous and available at import time.
+ */
 export declare class YogaLayoutNode implements LayoutNode {
+    /** The underlying Yoga node this adapter wraps. */
     readonly yoga: YogaNode;
     constructor(yoga: YogaNode);
     insertChild(child: LayoutNode, index: number): void;
@@ -53,5 +61,9 @@ export declare class YogaLayoutNode implements LayoutNode {
     free(): void;
     freeRecursive(): void;
 }
+/**
+ * Create a new layout node backed by a fresh Yoga node.
+ * @returns a `YogaLayoutNode` with no children, styles, or measure function.
+ */
 export declare function createYogaLayoutNode(): LayoutNode;
 //# sourceMappingURL=yoga.d.ts.map

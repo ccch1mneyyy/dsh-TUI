@@ -16,6 +16,10 @@ export interface LocalCommand {
     /** True when a DSH plugin registered this command (not built in). */
     external?: boolean;
 }
+/**
+ * The built-in slash commands (name + description pairs). Plugin-registered
+ * commands merge in at runtime; locals win on name collisions.
+ */
 export declare const LOCAL_COMMANDS: LocalCommand[];
 /**
  * Parse a slash-command line into its name and the verbatim input following
@@ -30,13 +34,22 @@ export declare function parseCommandName(line: string): {
     name: string;
     rawInput: string;
 } | undefined;
-/** Commands that must not be sent to the model when typed alone. */
+/**
+ * Whether the input names a local command. Local commands must never be sent
+ * to the model when typed alone; trailing whitespace is legal.
+ * @param input - Candidate command line (slash optional).
+ * @param list - Command list to match against; defaults to LOCAL_COMMANDS.
+ * @returns True when the trimmed input names a command in `list`.
+ */
 export declare function isLocalCommandName(input: string, list?: readonly LocalCommand[]): boolean;
 /**
  * Filter commands by a `/…` input prefix (matches the CC overlay behavior).
  * The prefix is the whole input after the slash, so `/plan off` matches
  * nothing and the overlay stays closed — Enter still dispatches through
  * `parseCommandName`.
+ * @param input - Slash-command input; the prefix is the whole text after the slash.
+ * @param list - Command list to filter; defaults to LOCAL_COMMANDS.
+ * @returns Commands whose name starts with the prefix, in list order.
  */
 export declare function filterCommands(input: string, list?: readonly LocalCommand[]): LocalCommand[];
 //# sourceMappingURL=commands.d.ts.map

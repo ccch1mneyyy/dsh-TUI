@@ -12,6 +12,7 @@
  * Scrolling the content far above the viewport (CSI <n> S) blanks the
  * screen the same way — everything is pushed into the scrollback, the
  * viewport shows empty rows — without moving the viewport.
+ * @returns the escape sequence that pushes content into the scrollback and homes the cursor.
  */
 export declare function getClearTerminalSequence(): string;
 /**

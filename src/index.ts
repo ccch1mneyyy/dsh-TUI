@@ -12,6 +12,10 @@ import Schema from '@deepseek-ai/schemastery'
 export const name = 'cc-tui'
 export const inject = ['agents']
 
+/**
+ * cc-tui plugin configuration: session attachment, model route, working
+ * directory, and display preferences.
+ */
 export interface Config {
   /** Existing session to attach; a fresh session is created when absent. */
   sessionId?: string

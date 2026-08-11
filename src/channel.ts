@@ -68,6 +68,7 @@ export interface ChatRow {
   restored?: boolean
 }
 
+/** Running token totals across the session's assistant messages. */
 export interface TokenUsage {
   input: number
   output: number
@@ -172,6 +173,13 @@ export interface LoadedContext {
   readonly tools: readonly LoadedContextTool[]
 }
 
+/**
+ * The public channel surface a screen renders: the full transcript and live
+ * status snapshot (tokens, spinner, working activity, goals, todos, loaded
+ * context) plus every action the TUI can take (submit, steer, cancel,
+ * rewind, resume, model switching, …). Implementations mutate internal state
+ * and bump `version` so subscribed screens re-render.
+ */
 export interface Channel {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
@@ -357,6 +365,12 @@ export interface PendingMessage {
   inboxItemId?: string
 }
 
+/**
+ * Mutable channel state owned by {@link createChannel}: the screen's
+ * reactive store. Screens subscribe and re-render on `version` bumps; the
+ * fields mirror the public {@link Channel} contract, and the `@internal`
+ * emit hooks belong to the implementation.
+ */
 export interface ChannelState {
   version: number
   rows: ChatRow[]
@@ -689,7 +703,17 @@ async function waitForTurnEnd(
   return false
 }
 
-/** @internal */
+/**
+ * Create the live channel state for one agent session: replay the durable
+ * transcript, subscribe to the agent's events, and expose every TUI action.
+ * @internal
+ * @param ctx - The plugin context; optional services are resolved via ctx.get.
+ * @param initialAgent - The agent whose session the channel renders; rewinds,
+ *   resumes, and model switches replace it.
+ * @param options - Boot options: model route, cwd, provider, and the
+ *   reasoning-effort / working-activity / agent-handle preferences.
+ * @returns The live channel state, subscribed and ready to render.
+ */
 export function createChannel(
   ctx: Context,
   initialAgent: Agent,

@@ -22,6 +22,10 @@ function filterStartCodes(codes: AnsiCode[]): AnsiCode[] {
  *
  * Unlike the slice-ansi package, this properly handles OSC 8 hyperlink
  * sequences because @alcalzone/ansi-tokenize tokenizes them correctly.
+ * @param str - The ANSI string to slice.
+ * @param start - Start offset in display cells.
+ * @param end - End offset in display cells; defaults to the end of `str`.
+ * @returns The sliced string with its ANSI styling preserved.
  */
 export default function sliceAnsi(
   str: string,

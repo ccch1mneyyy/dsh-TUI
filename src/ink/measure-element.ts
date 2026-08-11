@@ -13,7 +13,9 @@ type Output = {
 }
 
 /**
- * Measure the dimensions of a particular `<Box>` element.
+ * Measure the rendered dimensions of a Box element.
+ * @param node - the DOM element to measure.
+ * @returns the element's computed width and height, or zeros before layout.
  */
 const measureElement = (node: DOMElement): Output => ({
   width: node.yogaNode?.getComputedWidth() ?? 0,

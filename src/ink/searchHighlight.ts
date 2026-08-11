@@ -23,6 +23,10 @@ import {
  *
  * Returns true if any match was highlighted (damage gate — caller forces
  * full-frame damage when true).
+ * @param screen - the screen buffer to search and update.
+ * @param query - the case-insensitive search text; empty queries are a no-op.
+ * @param stylePool - the style pool providing the inverted style id.
+ * @returns true when at least one occurrence was highlighted.
  */
 export function applySearchHighlight(
   screen: Screen,

@@ -5,10 +5,20 @@ import { ITERM2, OSC, osc, PROGRESS, wrapForMultiplexer } from './termio/osc.js'
 
 type WriteRaw = (data: string) => void
 
+/**
+ * React context providing a raw terminal write function. Null until a
+ * TerminalWriteProvider is mounted.
+ */
 export const TerminalWriteContext = createContext<WriteRaw | null>(null)
 
+/**
+ * React provider component for TerminalWriteContext.
+ */
 export const TerminalWriteProvider = TerminalWriteContext.Provider
 
+/**
+ * Terminal notification API returned by useTerminalNotification.
+ */
 export type TerminalNotification = {
   notifyITerm2: (opts: { message: string; title?: string }) => void
   notifyKitty: (opts: { message: string; title: string; id: number }) => void
@@ -22,6 +32,12 @@ export type TerminalNotification = {
   progress: (state: Progress['state'] | null, percentage?: number) => void
 }
 
+/**
+ * Hook returning terminal notification helpers (iTerm2/kitty/Ghostty
+ * notifications, BEL, and OSC 9;4 progress). Throws when used outside a
+ * TerminalWriteProvider.
+ * @returns the terminal notification API bound to the current provider.
+ */
 export function useTerminalNotification(): TerminalNotification {
   const writeRaw = useContext(TerminalWriteContext)
   if (!writeRaw) {

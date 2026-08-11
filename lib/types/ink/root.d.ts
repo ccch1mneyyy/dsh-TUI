@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { FrameEvent } from './frame.js';
 import Ink from './ink.js';
+/** Options for mounting an Ink app. */
 export type RenderOptions = {
     /**
      * Output stream where app will be rendered.
@@ -36,6 +37,9 @@ export type RenderOptions = {
      */
     onFrame?: (event: FrameEvent) => void;
 };
+/**
+ * The handle returned by renderSync for an actively rendering Ink app.
+ */
 export type Instance = {
     /**
      * Replace previous root node with a new one or update props of the current root node.
@@ -63,13 +67,25 @@ export type Root = {
 };
 /**
  * Mount a component and render the output.
+ * @param node - the React element to render.
+ * @param options - the output stream or render options.
+ * @returns an instance handle for the running app.
  */
 export declare const renderSync: (node: ReactNode, options?: NodeJS.WriteStream | RenderOptions) => Instance;
+/**
+ * Asynchronous render entry point that preserves a microtask boundary
+ * before the first synchronous render, letting async startup work settle.
+ * @param node - the React element to render.
+ * @param options - the output stream or render options.
+ * @returns a promise resolving to the instance handle once mounted.
+ */
 declare const wrappedRender: (node: ReactNode, options?: NodeJS.WriteStream | RenderOptions) => Promise<Instance>;
 export default wrappedRender;
 /**
  * Create an Ink root without rendering anything yet.
  * Like react-dom's createRoot — call root.render() to mount a tree.
+ * @param options - the render options; defaults match renderSync defaults.
+ * @returns a promise resolving to the managed root.
  */
-export declare function createRoot({ stdout, stdin, stderr, exitOnCtrlC, patchConsole, onFrame, }?: RenderOptions): Promise<Root>;
+export declare function createRoot(options?: RenderOptions): Promise<Root>;
 //# sourceMappingURL=root.d.ts.map

@@ -23,11 +23,21 @@ import type { Action, TextStyle } from './types.js';
  */
 export declare class Parser {
     private tokenizer;
+    /** Current text style, updated as SGR sequences are applied. */
     style: TextStyle;
+    /** Whether the parser is currently inside an OSC 8 hyperlink. */
     inLink: boolean;
+    /** URL of the active OSC 8 hyperlink; undefined when not in a link. */
     linkUrl: string | undefined;
+    /**
+     * Reset all parser state: tokenizer buffer, text style, and link state.
+     */
     reset(): void;
-    /** Feed input and get resulting actions */
+    /**
+     * Feed input and get the resulting actions.
+     * @param input - the input chunk to process.
+     * @returns the semantic actions produced by this chunk.
+     */
     feed(input: string): Action[];
     private processToken;
     private processText;

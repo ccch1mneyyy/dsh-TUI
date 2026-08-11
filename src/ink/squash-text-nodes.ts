@@ -14,6 +14,11 @@ export type StyledSegment = {
 /**
  * Squash text nodes into styled segments, propagating styles down through the tree.
  * This allows structured styling without relying on ANSI string transforms.
+ * @param node - the subtree root whose text nodes are collected.
+ * @param inheritedStyles - styles inherited from ancestors, merged with the node's own.
+ * @param inheritedHyperlink - the hyperlink inherited from ancestor ink-link elements.
+ * @param out - the array segments are appended to; defaults to a fresh array.
+ * @returns `out` containing one segment per non-empty text node.
  */
 export function squashTextNodesToSegments(
   node: DOMElement,
@@ -65,6 +70,8 @@ export function squashTextNodesToSegments(
 /**
  * Squash text nodes into a plain string (without styles).
  * Used for text measurement in layout calculations.
+ * @param node - the subtree root whose text nodes are concatenated.
+ * @returns the concatenated text content of every text node in the subtree.
  */
 function squashTextNodes(node: DOMElement): string {
   let text = ''

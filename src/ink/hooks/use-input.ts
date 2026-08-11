@@ -38,8 +38,11 @@ type Options = {
  *   return …
  * };
  * ```
+ * @param inputHandler - called for each user input with the input string,
+ *   parsed key flags, and the originating event.
+ * @param options - hook options; `isActive: false` disables input capture.
  */
-const useInput = (inputHandler: Handler, options: Options = {}) => {
+const useInput = (inputHandler: Handler, options: Options = {}): void => {
   const { setRawMode, internal_exitOnCtrlC, internal_eventEmitter } = useStdin()
 
   // useLayoutEffect (not useEffect) so that raw mode is enabled synchronously

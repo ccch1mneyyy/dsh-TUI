@@ -18,6 +18,10 @@ export interface LocalCommand {
   external?: boolean
 }
 
+/**
+ * The built-in slash commands (name + description pairs). Plugin-registered
+ * commands merge in at runtime; locals win on name collisions.
+ */
 export const LOCAL_COMMANDS: LocalCommand[] = [
   // Conversation
   { name: 'new', description: 'Start a new conversation' },
@@ -79,7 +83,13 @@ export function parseCommandName(
   return { name: match[1], rawInput: line.slice(match[0].length) }
 }
 
-/** Commands that must not be sent to the model when typed alone. */
+/**
+ * Whether the input names a local command. Local commands must never be sent
+ * to the model when typed alone; trailing whitespace is legal.
+ * @param input - Candidate command line (slash optional).
+ * @param list - Command list to match against; defaults to LOCAL_COMMANDS.
+ * @returns True when the trimmed input names a command in `list`.
+ */
 export function isLocalCommandName(
   input: string,
   list: readonly LocalCommand[] = LOCAL_COMMANDS,
@@ -95,6 +105,9 @@ export function isLocalCommandName(
  * The prefix is the whole input after the slash, so `/plan off` matches
  * nothing and the overlay stays closed — Enter still dispatches through
  * `parseCommandName`.
+ * @param input - Slash-command input; the prefix is the whole text after the slash.
+ * @param list - Command list to filter; defaults to LOCAL_COMMANDS.
+ * @returns Commands whose name starts with the prefix, in list order.
  */
 export function filterCommands(
   input: string,

@@ -29,6 +29,9 @@ export declare function readClipboard(): Promise<{
 /**
  * Render pasted clipboard content for insertion into the prompt: file paths
  * quoted when they contain whitespace, joined with single spaces.
+ * @param content - Clipboard content as read by {@link readClipboard}.
+ * @returns The prompt-ready text: quoted, space-joined paths, or the text
+ *   with line endings normalized.
  */
 export declare function formatClipboardInsert(content: {
     kind: 'files';

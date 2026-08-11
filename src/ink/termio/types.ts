@@ -64,7 +64,10 @@ export type TextStyle = {
   underlineColor: Color
 }
 
-/** Create a default (reset) text style */
+/**
+ * Create a default (reset) text style.
+ * @returns a TextStyle with every attribute at its reset value.
+ */
 export function defaultStyle(): TextStyle {
   return {
     bold: false,
@@ -82,7 +85,12 @@ export function defaultStyle(): TextStyle {
   }
 }
 
-/** Check if two styles are equal */
+/**
+ * Check if two styles are equal.
+ * @param a - the first style.
+ * @param b - the second style.
+ * @returns true when every attribute and color of the two styles matches.
+ */
 export function stylesEqual(a: TextStyle, b: TextStyle): boolean {
   return (
     a.bold === b.bold &&
@@ -100,7 +108,12 @@ export function stylesEqual(a: TextStyle, b: TextStyle): boolean {
   )
 }
 
-/** Check if two colors are equal */
+/**
+ * Check if two colors are equal.
+ * @param a - the first color.
+ * @param b - the second color.
+ * @returns true when the two colors have the same type and value.
+ */
 export function colorsEqual(a: Color, b: Color): boolean {
   if (a.type !== b.type) return false
   switch (a.type) {
@@ -123,8 +136,10 @@ export function colorsEqual(a: Color, b: Color): boolean {
 // Cursor Actions
 // =============================================================================
 
+/** Direction of a relative cursor move. */
 export type CursorDirection = 'up' | 'down' | 'forward' | 'back'
 
+/** Cursor actions: relative moves, absolute position, visibility, style, save/restore, and line jumps. */
 export type CursorAction =
   | { type: 'move'; direction: CursorDirection; count: number }
   | { type: 'position'; row: number; col: number }
@@ -146,6 +161,7 @@ export type CursorAction =
 // Erase Actions
 // =============================================================================
 
+/** Erase actions targeting display regions, lines, or character counts. */
 export type EraseAction =
   | { type: 'display'; region: 'toEnd' | 'toStart' | 'all' | 'scrollback' }
   | { type: 'line'; region: 'toEnd' | 'toStart' | 'all' }
@@ -155,6 +171,7 @@ export type EraseAction =
 // Scroll Actions
 // =============================================================================
 
+/** Scroll actions: scroll up, scroll down, or set the scroll region. */
 export type ScrollAction =
   | { type: 'up'; count: number }
   | { type: 'down'; count: number }
@@ -164,6 +181,7 @@ export type ScrollAction =
 // Mode Actions
 // =============================================================================
 
+/** Terminal mode toggles: alternate screen, bracketed paste, mouse tracking, focus events. */
 export type ModeAction =
   | { type: 'alternateScreen'; enabled: boolean }
   | { type: 'bracketedPaste'; enabled: boolean }
@@ -174,6 +192,7 @@ export type ModeAction =
 // Link Actions (OSC 8)
 // =============================================================================
 
+/** OSC 8 hyperlink actions: start a link with a URL and optional params, or end the current link. */
 export type LinkAction =
   | { type: 'start'; url: string; params?: Record<string, string> }
   | { type: 'end' }
@@ -182,6 +201,7 @@ export type LinkAction =
 // Title Actions (OSC 0/1/2)
 // =============================================================================
 
+/** Window title actions from OSC 0/1/2: set window title, icon name, or both. */
 export type TitleAction =
   | { type: 'windowTitle'; title: string }
   | { type: 'iconName'; name: string }

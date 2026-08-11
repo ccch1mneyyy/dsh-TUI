@@ -14,6 +14,10 @@ type Point = {
     col: number;
     row: number;
 };
+/**
+ * Selection state for fullscreen mode: the anchor/focus cell pair plus
+ * the off-screen row accumulators captured during drag-to-scroll.
+ */
 export type SelectionState = {
     /** Where the mouse-down occurred. Null when no selection. */
     anchor: Point | null;
@@ -63,10 +67,41 @@ export type SelectionState = {
      *  and we'd never receive it. Used by the footer to show the right hint. */
     lastPressHadAlt: boolean;
 };
+/**
+ * Create a new selection state with no active selection.
+ * @returns the empty selection state.
+ */
 export declare function createSelectionState(): SelectionState;
+/**
+ * Begin a new drag selection at (col, row): set the anchor, mark the
+ * state as dragging, and clear every accumulator. Focus stays null until
+ * the first drag motion, so a bare click never highlights a cell.
+ * @param s - the selection state to mutate.
+ * @param col - anchor column in screen-buffer coordinates.
+ * @param row - anchor row in screen-buffer coordinates.
+ */
 export declare function startSelection(s: SelectionState, col: number, row: number): void;
+/**
+ * Track the drag position: update focus to (col, row). No-op while not
+ * dragging, and the first motion at the anchor cell is ignored so a bare
+ * click never becomes a one-cell selection.
+ * @param s - the selection state to mutate.
+ * @param col - current mouse column.
+ * @param row - current mouse row.
+ */
 export declare function updateSelection(s: SelectionState, col: number, row: number): void;
+/**
+ * End a drag: clear the dragging flag while keeping anchor/focus so the
+ * highlight stays visible and the text can be copied. Call
+ * clearSelection to drop the selection after copy or on Esc.
+ * @param s - the selection state to mutate.
+ */
 export declare function finishSelection(s: SelectionState): void;
+/**
+ * Reset the selection to the empty state: no anchor, focus, span, or
+ * scrolled-off accumulators.
+ * @param s - the selection state to mutate.
+ */
 export declare function clearSelection(s: SelectionState): void;
 /**
  * Select the word at (col, row) by scanning the screen buffer for the
@@ -74,6 +109,10 @@ export declare function clearSelection(s: SelectionState): void;
  * No-op if the click is out of bounds or lands on a noSelect cell.
  * Sets isDragging=true and anchorSpan so a subsequent drag extends the
  * selection word-by-word (native macOS behavior).
+ * @param s - the selection state to mutate.
+ * @param screen - the screen buffer to scan for word bounds.
+ * @param col - click column.
+ * @param row - click row.
  */
 export declare function selectWordAt(s: SelectionState, screen: Screen, col: number, row: number): void;
 /**
@@ -81,6 +120,11 @@ export declare function selectWordAt(s: SelectionState, screen: Screen, col: num
  * terminal's native Cmd+Click URL detection, which fullscreen mode's mouse
  * tracking intercepts. Called from getHyperlinkAt as a fallback when the
  * cell has no OSC 8 hyperlink.
+ * @param screen - the screen buffer to scan.
+ * @param col - click column.
+ * @param row - click row.
+ * @returns the URL at the click position, or undefined when the cell is
+ *   not part of a plain-text URL.
  */
 export declare function findPlainTextUrlAt(screen: Screen, col: number, row: number): string | undefined;
 /**
@@ -89,6 +133,9 @@ export declare function findPlainTextUrlAt(screen: Screen, col: number, row: num
  * span from col 0 to width-1; getSelectedText handles noSelect skipping
  * and trailing-whitespace trimming so the copied text is just the visible
  * line content.
+ * @param s - the selection state to mutate.
+ * @param screen - the screen buffer providing the row width.
+ * @param row - the row to select.
  */
 export declare function selectLineAt(s: SelectionState, screen: Screen, row: number): void;
 /**
@@ -97,6 +144,10 @@ export declare function selectLineAt(s: SelectionState, screen: Screen, row: num
  * selection grows from that span to the word/line at the current mouse
  * position. Word mode falls back to the raw cell when the mouse is over a
  * noSelect cell or out of bounds, so dragging into gutters still extends.
+ * @param s - the selection state to mutate.
+ * @param screen - the screen buffer to scan for word bounds.
+ * @param col - current mouse column.
+ * @param row - current mouse row.
  */
 export declare function extendSelection(s: SelectionState, screen: Screen, col: number, row: number): void;
 /** Semantic keyboard focus moves. See moveSelectionFocus in ink.tsx for
@@ -110,6 +161,9 @@ export type FocusMove = 'left' | 'right' | 'up' | 'down' | 'lineStart' | 'lineEn
  * extends char-by-char from the word edge, not word-by-word. Scrolled-off
  * accumulators are preserved: keyboard-extending a drag-scrolled selection
  * keeps the off-screen rows. Caller supplies coords already clamped/wrapped.
+ * @param s - the selection state to mutate.
+ * @param col - focus column.
+ * @param row - focus row.
  */
 export declare function moveFocus(s: SelectionState, col: number, row: number): void;
 /**
@@ -129,6 +183,11 @@ export declare function moveFocus(s: SelectionState, col: number, row: number): 
  * getSelectedText returns one unrelated char from that corner. Symmetric
  * with shiftSelectionForFollow's top-edge check, but bidirectional: keyboard
  * scroll can jump either way.
+ * @param s - the selection state to mutate.
+ * @param dRow - signed row offset to shift by.
+ * @param minRow - lowest allowed row (viewport top).
+ * @param maxRow - highest allowed row (viewport bottom).
+ * @param width - screen width, used for the clamp-edge column.
  */
 export declare function shiftSelection(s: SelectionState, dRow: number, minRow: number, maxRow: number, width: number): void;
 /**
@@ -136,6 +195,10 @@ export declare function shiftSelection(s: SelectionState, dRow: number, minRow: 
  * drag-to-scroll: when the ScrollBox scrolls by N rows, the content that
  * was under the anchor is now at a different viewport row, so the anchor
  * must follow it. Focus is left unchanged (it stays at the mouse position).
+ * @param s - the selection state to mutate.
+ * @param dRow - signed row offset to shift by.
+ * @param minRow - lowest allowed row (viewport top).
+ * @param maxRow - highest allowed row (viewport bottom).
  */
 export declare function shiftAnchor(s: SelectionState, dRow: number, minRow: number, maxRow: number): void;
 /**
@@ -158,12 +221,26 @@ export declare function shiftAnchor(s: SelectionState, dRow: number, minRow: num
  * selection was cleared so the caller can notify React-land subscribers
  * (useHasSelection) — the caller is inside onRender so it can't use
  * notifySelectionChange (recursion), must fire listeners directly.
+ * @param s - the selection state to mutate.
+ * @param dRow - signed row offset to shift by.
+ * @param minRow - lowest allowed row (viewport top).
+ * @param maxRow - highest allowed row (viewport bottom).
+ * @returns true when the selection was cleared because it scrolled
+ *   entirely off the top, false otherwise.
  */
 export declare function shiftSelectionForFollow(s: SelectionState, dRow: number, minRow: number, maxRow: number): boolean;
+/**
+ * True when a selection is active, meaning both anchor and focus are set.
+ * @param s - the selection state to inspect.
+ * @returns true when a selection is active.
+ */
 export declare function hasSelection(s: SelectionState): boolean;
 /**
  * Normalized selection bounds: start is always before end in reading order.
  * Returns null if no active selection.
+ * @param s - the selection state to inspect.
+ * @returns the normalized start/end cells, or null when there is no
+ *   active selection.
  */
 export declare function selectionBounds(s: SelectionState): {
     start: {
@@ -178,6 +255,10 @@ export declare function selectionBounds(s: SelectionState): {
 /**
  * Check if a cell at (col, row) is within the current selection range.
  * Used by the renderer to apply inverse style.
+ * @param s - the selection state to inspect.
+ * @param col - cell column.
+ * @param row - cell row.
+ * @returns true when the cell lies inside the selection range.
  */
 export declare function isCellSelected(s: SelectionState, col: number, row: number): boolean;
 /**
@@ -190,6 +271,10 @@ export declare function isCellSelected(s: SelectionState, col: number, row: numb
  * skipped. Rows that scrolled out of the viewport during drag-to-scroll
  * are joined back in from the scrolledOffAbove/Below accumulators along
  * with their captured softWrap bits.
+ * @param s - the selection state to read.
+ * @param screen - the screen buffer to extract from.
+ * @returns the selected text, or an empty string when no selection is
+ *   active.
  */
 export declare function getSelectedText(s: SelectionState, screen: Screen): string;
 /**
@@ -207,6 +292,11 @@ export declare function getSelectedText(s: SelectionState, screen: Screen): stri
  *
  * side='above': rows scrolling out the top (dragging down, anchor=start).
  * side='below': rows scrolling out the bottom (dragging up, anchor=end).
+ * @param s - the selection state to update.
+ * @param screen - the screen buffer to read rows from.
+ * @param firstRow - first viewport row that is about to scroll out.
+ * @param lastRow - last viewport row that is about to scroll out.
+ * @param side - which viewport edge the rows scroll out of.
  */
 export declare function captureScrolledRows(s: SelectionState, screen: Screen, firstRow: number, lastRow: number, side: 'above' | 'below'): void;
 /**
@@ -224,6 +314,9 @@ export declare function captureScrolledRows(s: SelectionState, screen: Screen, f
  *
  * Uses StylePool caches so on drag the only work per cell is a Map
  * lookup + packed-int write.
+ * @param screen - the screen buffer to restyle.
+ * @param selection - the selection whose range to highlight.
+ * @param stylePool - the style pool providing the selection background.
  */
 export declare function applySelectionOverlay(screen: Screen, selection: SelectionState, stylePool: StylePool): void;
 export {};

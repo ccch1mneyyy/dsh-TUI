@@ -1,5 +1,8 @@
 import { createContext } from 'react'
 
+/**
+ * The `AppContext` value: a function to manually exit (unmount) the Ink app.
+ */
 export type Props = {
   /**
    * Exit (unmount) the whole Ink app.

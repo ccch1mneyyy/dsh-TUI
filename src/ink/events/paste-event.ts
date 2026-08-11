@@ -5,6 +5,7 @@ import { Event } from './event.js'
  * ported core; declared for the event-handler props surface.
  */
 export class PasteEvent extends Event {
+  /** The pasted text content. */
   readonly data: string
   constructor(data: string) {
     super()

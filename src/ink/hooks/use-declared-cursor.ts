@@ -21,16 +21,17 @@ import type { DOMElement } from '../dom.js'
  * (no one-keystroke lag). Test env uses onImmediateRender (synchronous,
  * no microtask), so tests compensate by calling ink.onRender()
  * explicitly after render.
+ * @param options - the declared cursor target: `line` and `column` give the
+ *   position relative to the node, `active` controls whether the declaration
+ *   is set or cleared.
+ * @returns a ref callback to attach to the Box that contains the input.
  */
-export function useDeclaredCursor({
-  line,
-  column,
-  active,
-}: {
+export function useDeclaredCursor(options: {
   line: number
   column: number
   active: boolean
 }): (element: DOMElement | null) => void {
+  const { line, column, active } = options
   const setCursorDeclaration = useContext(CursorDeclarationContext)
   const nodeRef = useRef<DOMElement | null>(null)
 

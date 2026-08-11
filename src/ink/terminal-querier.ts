@@ -44,8 +44,12 @@ type XtversionResponse = Extract<TerminalResponse, { type: 'xtversion' }>
 
 // -- Query builders --
 
-/** DECRQM: request DEC private mode status (CSI ? mode $ p).
- *  Terminal replies with DECRPM (CSI ? mode ; status $ y) or ignores. */
+/**
+ * DECRQM: request DEC private mode status (CSI ? mode $ p).
+ * Terminal replies with DECRPM (CSI ? mode ; status $ y) or ignores.
+ * @param mode - the DEC private mode number to query.
+ * @returns a query whose response is the DECRPM reply for mode.
+ */
 export function decrqm(mode: number): TerminalQuery<DecrpmResponse> {
   return {
     request: csi(`?${mode}$p`),
@@ -53,9 +57,12 @@ export function decrqm(mode: number): TerminalQuery<DecrpmResponse> {
   }
 }
 
-/** Primary Device Attributes query (CSI c). Every terminal answers this —
- *  used internally by flush() as a universal sentinel. Call directly if
- *  you want the DA1 params. */
+/**
+ * Primary Device Attributes query (CSI c). Every terminal answers this —
+ * used internally by flush() as a universal sentinel. Call directly if
+ * you want the DA1 params.
+ * @returns a query whose response is the DA1 reply.
+ */
 export function da1(): TerminalQuery<Da1Response> {
   return {
     request: csi('c'),
@@ -63,7 +70,10 @@ export function da1(): TerminalQuery<Da1Response> {
   }
 }
 
-/** Secondary Device Attributes query (CSI > c). Returns terminal version. */
+/**
+ * Secondary Device Attributes query (CSI > c). Returns terminal version.
+ * @returns a query whose response is the DA2 reply.
+ */
 export function da2(): TerminalQuery<Da2Response> {
   return {
     request: csi('>c'),
@@ -71,8 +81,11 @@ export function da2(): TerminalQuery<Da2Response> {
   }
 }
 
-/** Query current Kitty keyboard protocol flags (CSI ? u).
- *  Terminal replies with CSI ? flags u or ignores. */
+/**
+ * Query current Kitty keyboard protocol flags (CSI ? u).
+ * Terminal replies with CSI ? flags u or ignores.
+ * @returns a query whose response is the Kitty keyboard reply.
+ */
 export function kittyKeyboard(): TerminalQuery<KittyResponse> {
   return {
     request: csi('?u'),
@@ -80,10 +93,13 @@ export function kittyKeyboard(): TerminalQuery<KittyResponse> {
   }
 }
 
-/** DECXCPR: request cursor position with DEC-private marker (CSI ? 6 n).
- *  Terminal replies with CSI ? row ; col R. The `?` marker is critical —
- *  the plain DSR form (CSI 6 n → CSI row;col R) is ambiguous with
- *  modified F3 keys (Shift+F3 = CSI 1;2 R, etc.). */
+/**
+ * DECXCPR: request cursor position with DEC-private marker (CSI ? 6 n).
+ * Terminal replies with CSI ? row ; col R. The `?` marker is critical —
+ * the plain DSR form (CSI 6 n → CSI row;col R) is ambiguous with
+ * modified F3 keys (Shift+F3 = CSI 1;2 R, etc.).
+ * @returns a query whose response is the cursor-position reply.
+ */
 export function cursorPosition(): TerminalQuery<CursorPosResponse> {
   return {
     request: csi('?6n'),
@@ -91,8 +107,12 @@ export function cursorPosition(): TerminalQuery<CursorPosResponse> {
   }
 }
 
-/** OSC dynamic color query (e.g. OSC 11 for bg color, OSC 10 for fg).
- *  The `?` data slot asks the terminal to reply with the current value. */
+/**
+ * OSC dynamic color query (e.g. OSC 11 for bg color, OSC 10 for fg).
+ * The `?` data slot asks the terminal to reply with the current value.
+ * @param code - the OSC color code to query (10 = fg, 11 = bg, etc.).
+ * @returns a query whose response is the OSC color reply.
+ */
 export function oscColor(code: number): TerminalQuery<OscResponse> {
   return {
     request: osc(code, '?'),
@@ -100,11 +120,14 @@ export function oscColor(code: number): TerminalQuery<OscResponse> {
   }
 }
 
-/** XTVERSION: request terminal name/version (CSI > 0 q).
- *  Terminal replies with DCS > | name ST (e.g. "xterm.js(5.5.0)") or ignores.
- *  This survives SSH — the query goes through the pty, not the environment,
- *  so it identifies the *client* terminal even when TERM_PROGRAM isn't
- *  forwarded. Used to detect xterm.js for wheel-scroll compensation. */
+/**
+ * XTVERSION: request terminal name/version (CSI > 0 q).
+ * Terminal replies with DCS > | name ST (e.g. "xterm.js(5.5.0)") or ignores.
+ * This survives SSH — the query goes through the pty, not the environment,
+ * so it identifies the *client* terminal even when TERM_PROGRAM isn't
+ * forwarded. Used to detect xterm.js for wheel-scroll compensation.
+ * @returns a query whose response is the XTVERSION reply.
+ */
 export function xtversion(): TerminalQuery<XtversionResponse> {
   return {
     request: csi('>0q'),
@@ -125,6 +148,10 @@ type Pending =
     }
   | { kind: 'sentinel'; resolve: () => void }
 
+/**
+ * Sends terminal queries to stdout and resolves their responses, using a
+ * flush() sentinel barrier so queries never time out.
+ */
 export class TerminalQuerier {
   /**
    * Interleaved queue of queries and sentinels in send order. Terminals
@@ -144,6 +171,9 @@ export class TerminalQuerier {
    *
    * Never rejects; never times out on its own. If you never call flush()
    * and the terminal doesn't respond, the promise remains pending.
+   * @param query - the query to send and await a response for.
+   * @returns the matched response, or undefined when the terminal did not
+   *   answer before the next flush() sentinel.
    */
   send<T extends TerminalResponse>(
     query: TerminalQuery<T>,
@@ -191,6 +221,7 @@ export class TerminalQuerier {
    *   sentinel keeps later batches intact when multiple callers have
    *   concurrent queries in flight.
    * - Unsolicited responses (no match, no sentinel) are silently dropped.
+   * @param r - the response parsed from stdin.
    */
   onResponse(r: TerminalResponse): void {
     const idx = this.queue.findIndex(p => p.kind === 'query' && p.match(r))

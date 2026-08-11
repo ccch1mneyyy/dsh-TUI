@@ -9,11 +9,13 @@
 /** Text-variant selector: keep symbols monochrome on Windows. */
 const TE = '\uFE0E'
 
+/** One working-activity preset: the frame sequence and the per-frame interval. */
 export interface FramePreset {
   readonly frames: readonly string[]
   readonly intervalMs: number
 }
 
+/** Named working-activity frame presets, keyed by preset name (`claude`, `moon`, `sand`, ...). */
 export const FRAME_PRESETS: Record<string, FramePreset> = {
   // Claude Code's real sequence: · ✢ * ✶ ✻ ✽ forward + backward.
   claude: {

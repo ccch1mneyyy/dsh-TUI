@@ -6,6 +6,7 @@
 
 import { ESC, ESC_TYPE, SEP } from './ansi.js'
 
+/** CSI introducer prefix: ESC followed by `[`. */
 export const CSI_PREFIX = ESC + String.fromCharCode(ESC_TYPE.CSI)
 
 /**
@@ -20,27 +21,42 @@ export const CSI_RANGE = {
   FINAL_END: 0x7e,
 } as const
 
-/** Check if a byte is a CSI parameter byte */
+/**
+ * Check if a byte is a CSI parameter byte.
+ * @param byte - the byte value to check.
+ * @returns true when the byte is in the parameter range (0x30-0x3F).
+ */
 export function isCSIParam(byte: number): boolean {
   return byte >= CSI_RANGE.PARAM_START && byte <= CSI_RANGE.PARAM_END
 }
 
-/** Check if a byte is a CSI intermediate byte */
+/**
+ * Check if a byte is a CSI intermediate byte.
+ * @param byte - the byte value to check.
+ * @returns true when the byte is in the intermediate range (0x20-0x2F).
+ */
 export function isCSIIntermediate(byte: number): boolean {
   return (
     byte >= CSI_RANGE.INTERMEDIATE_START && byte <= CSI_RANGE.INTERMEDIATE_END
   )
 }
 
-/** Check if a byte is a CSI final byte (@ through ~) */
+/**
+ * Check if a byte is a CSI final byte (@ through ~).
+ * @param byte - the byte value to check.
+ * @returns true when the byte is in the final range (0x40-0x7E).
+ */
 export function isCSIFinal(byte: number): boolean {
   return byte >= CSI_RANGE.FINAL_START && byte <= CSI_RANGE.FINAL_END
 }
 
 /**
- * Generate a CSI sequence: ESC [ p1;p2;...;pN final
- * Single arg: treated as raw body
- * Multiple args: last is final byte, rest are params joined by ;
+ * Generate a CSI sequence: ESC [ p1;p2;...;pN final.
+ * With a single argument it is treated as the raw body; with multiple
+ * arguments the last is the final byte and the rest are parameters joined
+ * by semicolons.
+ * @param args - the sequence parts.
+ * @returns the complete CSI sequence string.
  */
 export function csi(...args: (string | number)[]): string {
   if (args.length === 0) return CSI_PREFIX
@@ -113,6 +129,10 @@ export const ERASE_LINE_REGION = ['toEnd', 'toStart', 'all'] as const
  */
 export type CursorStyle = 'block' | 'underline' | 'bar'
 
+/**
+ * Cursor style lookup table for DECSCUSR parameter 0-6, pairing each cursor
+ * shape with its blinking flag.
+ */
 export const CURSOR_STYLES: Array<{ style: CursorStyle; blinking: boolean }> = [
   { style: 'block', blinking: true }, // 0 - default
   { style: 'block', blinking: true }, // 1
@@ -125,27 +145,47 @@ export const CURSOR_STYLES: Array<{ style: CursorStyle; blinking: boolean }> = [
 
 // Cursor movement generators
 
-/** Move cursor up n lines (CSI n A) */
+/**
+ * Move cursor up n lines (CSI n A).
+ * @param n - number of lines to move; defaults to 1.
+ * @returns the CSI sequence, or an empty string when n is 0.
+ */
 export function cursorUp(n = 1): string {
   return n === 0 ? '' : csi(n, 'A')
 }
 
-/** Move cursor down n lines (CSI n B) */
+/**
+ * Move cursor down n lines (CSI n B).
+ * @param n - number of lines to move; defaults to 1.
+ * @returns the CSI sequence, or an empty string when n is 0.
+ */
 export function cursorDown(n = 1): string {
   return n === 0 ? '' : csi(n, 'B')
 }
 
-/** Move cursor forward n columns (CSI n C) */
+/**
+ * Move cursor forward n columns (CSI n C).
+ * @param n - number of columns to move; defaults to 1.
+ * @returns the CSI sequence, or an empty string when n is 0.
+ */
 export function cursorForward(n = 1): string {
   return n === 0 ? '' : csi(n, 'C')
 }
 
-/** Move cursor back n columns (CSI n D) */
+/**
+ * Move cursor back n columns (CSI n D).
+ * @param n - number of columns to move; defaults to 1.
+ * @returns the CSI sequence, or an empty string when n is 0.
+ */
 export function cursorBack(n = 1): string {
   return n === 0 ? '' : csi(n, 'D')
 }
 
-/** Move cursor to column n (1-indexed) (CSI n G) */
+/**
+ * Move cursor to column n (1-indexed) (CSI n G).
+ * @param col - the 1-indexed target column.
+ * @returns the CSI sequence.
+ */
 export function cursorTo(col: number): string {
   return csi(col, 'G')
 }
@@ -153,7 +193,12 @@ export function cursorTo(col: number): string {
 /** Move cursor to column 1 (CSI G) */
 export const CURSOR_LEFT = csi('G')
 
-/** Move cursor to row, col (1-indexed) (CSI row ; col H) */
+/**
+ * Move cursor to row, col (1-indexed) (CSI row ; col H).
+ * @param row - the 1-indexed target row.
+ * @param col - the 1-indexed target column.
+ * @returns the CSI sequence.
+ */
 export function cursorPosition(row: number, col: number): string {
   return csi(row, col, 'H')
 }
@@ -162,9 +207,12 @@ export function cursorPosition(row: number, col: number): string {
 export const CURSOR_HOME = csi('H')
 
 /**
- * Move cursor relative to current position
- * Positive x = right, negative x = left
- * Positive y = down, negative y = up
+ * Move cursor relative to current position.
+ * Positive x = right, negative x = left.
+ * Positive y = down, negative y = up.
+ * @param x - horizontal delta in columns.
+ * @param y - vertical delta in rows.
+ * @returns the concatenated CSI sequences, or an empty string when both deltas are 0.
  */
 export function cursorMove(x: number, y: number): string {
   let result = ''
@@ -193,17 +241,26 @@ export const CURSOR_RESTORE = csi('u')
 
 // Erase generators
 
-/** Erase from cursor to end of line (CSI K) */
+/**
+ * Erase from cursor to end of line (CSI K).
+ * @returns the CSI sequence.
+ */
 export function eraseToEndOfLine(): string {
   return csi('K')
 }
 
-/** Erase from cursor to start of line (CSI 1 K) */
+/**
+ * Erase from cursor to start of line (CSI 1 K).
+ * @returns the CSI sequence.
+ */
 export function eraseToStartOfLine(): string {
   return csi(1, 'K')
 }
 
-/** Erase entire line (CSI 2 K) */
+/**
+ * Erase entire line (CSI 2 K).
+ * @returns the CSI sequence.
+ */
 export function eraseLine(): string {
   return csi(2, 'K')
 }
@@ -211,17 +268,26 @@ export function eraseLine(): string {
 /** Erase entire line - constant form */
 export const ERASE_LINE = csi(2, 'K')
 
-/** Erase from cursor to end of screen (CSI J) */
+/**
+ * Erase from cursor to end of screen (CSI J).
+ * @returns the CSI sequence.
+ */
 export function eraseToEndOfScreen(): string {
   return csi('J')
 }
 
-/** Erase from cursor to start of screen (CSI 1 J) */
+/**
+ * Erase from cursor to start of screen (CSI 1 J).
+ * @returns the CSI sequence.
+ */
 export function eraseToStartOfScreen(): string {
   return csi(1, 'J')
 }
 
-/** Erase entire screen (CSI 2 J) */
+/**
+ * Erase entire screen (CSI 2 J).
+ * @returns the CSI sequence.
+ */
 export function eraseScreen(): string {
   return csi(2, 'J')
 }
@@ -233,8 +299,11 @@ export const ERASE_SCREEN = csi(2, 'J')
 export const ERASE_SCROLLBACK = csi(3, 'J')
 
 /**
- * Erase n lines starting from cursor line, moving cursor up
- * This erases each line and moves up, ending at column 1
+ * Erase n lines starting from the cursor line, moving the cursor up.
+ * This erases each line and moves up, ending at column 1.
+ * @param n - the number of lines to erase.
+ * @returns the combined erase and cursor sequences, or an empty string when
+ *   n is 0 or negative.
  */
 export function eraseLines(n: number): string {
   if (n <= 0) return ''
@@ -251,17 +320,30 @@ export function eraseLines(n: number): string {
 
 // Scroll
 
-/** Scroll up n lines (CSI n S) */
+/**
+ * Scroll up n lines (CSI n S).
+ * @param n - number of lines to scroll; defaults to 1.
+ * @returns the CSI sequence, or an empty string when n is 0.
+ */
 export function scrollUp(n = 1): string {
   return n === 0 ? '' : csi(n, 'S')
 }
 
-/** Scroll down n lines (CSI n T) */
+/**
+ * Scroll down n lines (CSI n T).
+ * @param n - number of lines to scroll; defaults to 1.
+ * @returns the CSI sequence, or an empty string when n is 0.
+ */
 export function scrollDown(n = 1): string {
   return n === 0 ? '' : csi(n, 'T')
 }
 
-/** Set scroll region (DECSTBM, CSI top;bottom r). 1-indexed, inclusive. */
+/**
+ * Set scroll region (DECSTBM, CSI top;bottom r). 1-indexed, inclusive.
+ * @param top - the 1-indexed first row of the region.
+ * @param bottom - the 1-indexed last row of the region.
+ * @returns the CSI sequence.
+ */
 export function setScrollRegion(top: number, bottom: number): string {
   return csi(top, bottom, 'r')
 }

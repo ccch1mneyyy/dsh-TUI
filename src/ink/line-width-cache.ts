@@ -24,6 +24,13 @@ function detachString(s: string): string {
   return Buffer.from(s, 'utf8').toString('utf8')
 }
 
+/**
+ * Measure the display width of a line, cached per line across calls.
+ * Completed lines are immutable during streaming, so caching avoids
+ * re-measuring hundreds of unchanged lines on every token.
+ * @param line - the line to measure.
+ * @returns the display width in terminal cells.
+ */
 export function lineWidth(line: string): number {
   const cached = cache.get(line)
   if (cached !== undefined) return cached

@@ -1,6 +1,10 @@
 import { createContext } from 'react'
 import type { DOMElement } from '../dom.js'
 
+/**
+ * A declared cursor parking position: a node plus the line and column within
+ * it where the terminal cursor should sit.
+ */
 export type CursorDeclaration = {
   /** Display column (terminal cell width) within the declared node */
   readonly relativeX: number
@@ -25,6 +29,9 @@ export type CursorDeclarationSetter = (
   clearIfNode?: DOMElement | null,
 ) => void
 
+/**
+ * React context that provides the cursor-declaration setter to descendants.
+ */
 const CursorDeclarationContext = createContext<CursorDeclarationSetter>(
   () => {},
 )

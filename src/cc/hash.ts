@@ -6,6 +6,12 @@
  */
 import { createHash } from 'node:crypto'
 
+/**
+ * Compute the djb2 hash of a string: a fast non-cryptographic signed 32-bit hash.
+ * Deterministic across runtimes, unlike runtime-specific hashes.
+ * @param str - The string to hash.
+ * @returns The signed 32-bit hash value.
+ */
 export function djb2Hash(str: string): number {
   let hash = 0
   for (let i = 0; i < str.length; i++) {
@@ -19,6 +25,8 @@ export function djb2Hash(str: string): number {
  * sha256 and collision-resistant enough for diff detection (not crypto-safe).
  * The original used `require('crypto')`; cc-tui runs ESM so node:crypto is
  * imported statically and Bun.hash is skipped entirely.
+ * @param content - The content to hash.
+ * @returns The lowercase hex SHA-256 digest of `content`.
  */
 export function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex')
@@ -27,6 +35,9 @@ export function hashContent(content: string): string {
 /**
  * Hash two strings without allocating a concatenated temp string. Seed-chains
  * naturally disambiguate ("ts","code") vs ("tsc","ode") via the NUL separator.
+ * @param a - The first string.
+ * @param b - The second string.
+ * @returns The lowercase hex SHA-256 digest of the NUL-separated pair.
  */
 export function hashPair(a: string, b: string): string {
   return createHash('sha256').update(a).update('\0').update(b).digest('hex')

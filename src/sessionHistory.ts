@@ -12,6 +12,7 @@ import { homedir } from 'node:os'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+/** One persisted session as the `/resume` picker lists it. */
 export interface SessionRecord {
   id: string
   title: string
@@ -28,7 +29,10 @@ function ensureDir(): void {
   mkdirSync(DIR, { recursive: true })
 }
 
-/** Store the session to resume and report the launcher invocation. */
+/**
+ * Store the session to resume and report the launcher invocation.
+ * @param sessionId - Session id for `dsh-cc --resume` on the next launch.
+ */
 export function writeResumeTarget(sessionId: string): void {
   ensureDir()
   writeFileSync(RESUME_FILE, sessionId)
@@ -43,7 +47,10 @@ export function clearResumeTarget(): void {
   }
 }
 
-/** The session id requested by `dsh-cc --resume`, if any. */
+/**
+ * The session id requested by `dsh-cc --resume`, if any.
+ * @returns The stored session id, or undefined when none is set.
+ */
 export function readResumeTarget(): string | undefined {
   try {
     const value = readFileSync(RESUME_FILE, 'utf8').trim()
@@ -53,7 +60,10 @@ export function readResumeTarget(): string | undefined {
   }
 }
 
-/** session-id → last-used epoch ms (best effort; missing file = empty). */
+/**
+ * Session-id → last-used epoch ms map for MRU ordering.
+ * @returns The parsed map; best effort, an unreadable file yields {}.
+ */
 export function readLastUsed(): Readonly<Record<string, number>> {
   try {
     const parsed = JSON.parse(readFileSync(LAST_USED_FILE, 'utf8')) as unknown
@@ -73,8 +83,11 @@ export function readLastUsed(): Readonly<Record<string, number>> {
   }
 }
 
-/** Record that a session was just used (resumed or written to) so `/resume`
- *  can sort most-recently-used first. Best effort — never throws. */
+/**
+ * Record that a session was just used (resumed or written to) so `/resume`
+ * can sort most-recently-used first. Best effort — never throws.
+ * @param sessionId - Session id to touch.
+ */
 export function touchSession(sessionId: string): void {
   try {
     ensureDir()

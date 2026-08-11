@@ -15,6 +15,7 @@ export type CachedLayout = {
   top?: number
 }
 
+/** Layout bounds cached per rendered node, used for blitting and clearing. */
 export const nodeCache = new WeakMap<DOMElement, CachedLayout>()
 
 /** Rects of removed children that need clearing on next render */
@@ -31,6 +32,13 @@ export const pendingClears = new WeakMap<DOMElement, Rectangle[]>()
  */
 let absoluteNodeRemoved = false
 
+/**
+ * Register a removed child's rect for clearing on the next render, and
+ * flag the next frame when the removed node was absolutely positioned.
+ * @param parent - the parent whose removed child rect to record.
+ * @param rect - the removed child's last known bounds.
+ * @param isAbsolute - whether the removed child was absolutely positioned; disables blit next frame.
+ */
 export function addPendingClear(
   parent: DOMElement,
   rect: Rectangle,
@@ -47,6 +55,10 @@ export function addPendingClear(
   }
 }
 
+/**
+ * Read and clear the absolute-removal flag set by addPendingClear.
+ * @returns whether an absolutely positioned node was removed since the last render.
+ */
 export function consumeAbsoluteRemovedFlag(): boolean {
   const had = absoluteNodeRemoved
   absoluteNodeRemoved = false

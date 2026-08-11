@@ -41,8 +41,11 @@ export declare const C0: {
     readonly US: 31;
     readonly DEL: 127;
 };
+/** ESC control character (0x1B), the introducer of every escape sequence. */
 export declare const ESC = "\u001B";
+/** BEL control character (0x07), the common OSC sequence terminator. */
 export declare const BEL = "\u0007";
+/** Parameter separator used inside CSI and OSC sequences. */
 export declare const SEP = ";";
 /**
  * Escape sequence type introducers (byte after ESC)
@@ -56,11 +59,17 @@ export declare const ESC_TYPE: {
     readonly SOS: 88;
     readonly ST: 92;
 };
-/** Check if a byte is a C0 control character */
+/**
+ * Check if a byte is a C0 control character.
+ * @param byte - the byte value to check.
+ * @returns true when the byte is in the C0 range (0x00-0x1F) or is DEL (0x7F).
+ */
 export declare function isC0(byte: number): boolean;
 /**
- * Check if a byte is an ESC sequence final byte (0-9, :, ;, <, =, >, ?, @ through ~)
- * ESC sequences have a wider final byte range than CSI
+ * Check if a byte is an ESC sequence final byte (0-9, :, ;, <, =, >, ?, @ through ~).
+ * ESC sequences have a wider final byte range than CSI.
+ * @param byte - the byte value to check.
+ * @returns true when the byte is in the final-byte range (0x30-0x7E).
  */
 export declare function isEscFinal(byte: number): boolean;
 //# sourceMappingURL=ansi.d.ts.map

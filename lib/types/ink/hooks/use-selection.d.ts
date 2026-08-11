@@ -2,6 +2,8 @@ import { type FocusMove, type SelectionState } from '../selection.js';
 /**
  * Access to text selection operations on the Ink instance (fullscreen only).
  * Returns no-op functions when fullscreen mode is disabled.
+ * @returns an object of selection operations bound to the Ink instance:
+ *   copy, clear, query, subscribe, and scroll/keyboard manipulation.
  */
 export declare function useSelection(): {
     copySelection: () => string;
@@ -35,6 +37,8 @@ export declare function useSelection(): {
  * Reactive selection-exists state. Re-renders the caller when a text
  * selection is created or cleared. Always returns false outside
  * fullscreen mode (selection is only available in alt-screen).
+ * @returns true when a text selection currently exists; false outside
+ *   fullscreen mode.
  */
 export declare function useHasSelection(): boolean;
 //# sourceMappingURL=use-selection.d.ts.map

@@ -51,7 +51,15 @@ const GUTTER_MAP: Record<LayoutGutter, Gutter> = {
 // --
 // Yoga adapter
 
+/**
+ * Yoga-backed implementation of `LayoutNode`.
+ *
+ * Wraps a yoga-layout node, mapping layout enums to their Yoga counterparts
+ * and translating measure-mode values across the adapter boundary. The
+ * underlying Yoga instance is synchronous and available at import time.
+ */
 export class YogaLayoutNode implements LayoutNode {
+  /** The underlying Yoga node this adapter wraps. */
   readonly yoga: YogaNode
 
   constructor(yoga: YogaNode) {
@@ -303,6 +311,10 @@ export class YogaLayoutNode implements LayoutNode {
 // growth, so no preload/swap/reset machinery is needed. The Yoga instance is
 // just a plain JS object available at import time.
 
+/**
+ * Create a new layout node backed by a fresh Yoga node.
+ * @returns a `YogaLayoutNode` with no children, styles, or measure function.
+ */
 export function createYogaLayoutNode(): LayoutNode {
   return new YogaLayoutNode(Yoga.Node.create())
 }

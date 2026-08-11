@@ -18,6 +18,7 @@ const USED_SEGMENTS = [
   { key: 'tools', color: '#5A7CFF', labels: ['tools', 'tl', 'x'] }, // lighter blue
 ] as const
 
+/** Used tokens per context content type (system, prompt, assistant, thinking, tools). */
 export type ContextSegments = Record<(typeof USED_SEGMENTS)[number]['key'], number>
 
 const USED_SEGMENT_TEXT = '#FFFFFF'
@@ -40,7 +41,10 @@ function ansiColor(mode: 38 | 48, hex: string, text: string): string {
 const foreground = (hex: string, text: string): string => ansiColor(38, hex, text)
 const background = (hex: string, text: string): string => ansiColor(48, hex, text)
 
-/** Compact token count like pi's: `988`, `3.4k`, `12k`, `1.0M`. */
+/** Compact token count like pi's: `988`, `3.4k`, `12k`, `1.0M`.
+ * @param count - The raw token count; negative values clamp to zero.
+ * @returns The compact count string.
+ */
 export function formatTokens(count: number): string {
   const value = Math.max(0, Math.round(count))
   if (value < 1000) return String(value)
@@ -161,6 +165,11 @@ function allocateBarColumns(values: readonly number[], width: number): number[] 
  * The segmented context bar: used segments by content type, the remainder as
  * a light free segment whose right edge carries the usage readout
  * (`ctx 12.3k/1.0M 1.2% 988.9k`, shrinking as width allows).
+ * @param segments - Used tokens per content type.
+ * @param usedTokens - Total used tokens, driving the usage readout.
+ * @param contextWindow - The context window size in tokens.
+ * @param width - Total bar width in terminal columns.
+ * @returns The ANSI-styled segmented bar, or '' when `width` or `contextWindow` is non-positive.
  */
 export function renderContextBar(
   segments: ContextSegments,
@@ -192,7 +201,11 @@ const TRACK = '·'
 const FAST = 50
 const MED = 20
 
-/** Speed color: green ≥ 50, yellow ≥ 20, red below (pi-tps-meter). */
+/** Speed color: green ≥ 50, yellow ≥ 20, red below (pi-tps-meter).
+ * @param tps - Tokens per second; selects the color threshold.
+ * @param text - Text to color.
+ * @returns The ANSI 24-bit color-wrapped text.
+ */
 export function speedColor(tps: number, text: string): string {
   const color = tps >= FAST ? 'success' : tps >= MED ? 'warning' : 'error'
   return `\x1b[38;2;${colorHex(color)}m${text}\x1b[39m`
@@ -208,7 +221,11 @@ function colorHex(key: 'success' | 'warning' | 'error'): string {
   return palette[key] ?? '255;255;255'
 }
 
-/** Live 1/8-cell horizontal gauge: `▕███████▋···▏`. */
+/** Live 1/8-cell horizontal gauge: `▕███████▋···▏`.
+ * @param tps - Current tokens per second.
+ * @param peak - Scaling peak; values below 40 scale against the floor instead.
+ * @returns The ANSI gauge string.
+ */
 export function renderTpsGauge(tps: number, peak: number): string {
   const scale = Math.max(peak, GAUGE_FLOOR)
   const frac = Math.min(1, Math.max(0, scale > 0 ? tps / scale : 0))
@@ -223,7 +240,10 @@ export function renderTpsGauge(tps: number, peak: number): string {
   return `▕${speedColor(tps, fill)}${`\x1b[2m${track}\x1b[22m`}▏`
 }
 
-/** Min-max normalized 12-sample sparkline: `▁▄▇▅▂▁▇█▅▃▆▇`. */
+/** Min-max normalized 12-sample sparkline: `▁▄▇▅▂▁▇█▅▃▆▇`.
+ * @param samples - TPS samples; only the last 12 are rendered.
+ * @returns The ANSI sparkline string.
+ */
 export function renderTpsSparkline(samples: readonly { tps: number }[]): string {
   const vals = samples.slice(-12)
   if (vals.length === 0) return '\x1b[2m' + TRACK.repeat(12) + '\x1b[22m'
@@ -247,7 +267,11 @@ export function renderTpsSparkline(samples: readonly { tps: number }[]): string 
     .join('')
 }
 
-/** Rolling stats: 60s average, all-time mean and p95. */
+/** Rolling stats: 60s average, all-time mean and p95.
+ * @param samples - TPS samples with their timestamps in milliseconds.
+ * @param nowMs - Current time in milliseconds; the 60s rolling window keeps samples with `nowMs - at <= 60_000`.
+ * @returns The 60s average, all-time mean, and all-time p95 (all zero for an empty sample list).
+ */
 export function tpsStats(samples: readonly { tps: number; at: number }[], nowMs: number): {
   avg: number
   mean: number

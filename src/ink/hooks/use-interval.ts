@@ -9,6 +9,8 @@ import { ClockContext } from '../components/ClockContext.js'
  *
  * Use this to drive pure time-based computations (shimmer position,
  * frame index) from the shared clock.
+ * @param intervalMs - the minimum interval between updates, in milliseconds.
+ * @returns the current clock time in milliseconds.
  */
 export function useAnimationTimer(intervalMs: number): number {
   const clock = useContext(ClockContext)
@@ -39,6 +41,8 @@ export function useAnimationTimer(intervalMs: number): number {
  * Unlike `useInterval` from `usehooks-ts` (which creates its own setInterval),
  * this piggybacks on the single shared clock so all timers consolidate into
  * one wake-up. Pass `null` for intervalMs to pause.
+ * @param callback - invoked each time the interval elapses.
+ * @param intervalMs - the interval in milliseconds, or null to pause.
  */
 export function useInterval(
   callback: () => void,

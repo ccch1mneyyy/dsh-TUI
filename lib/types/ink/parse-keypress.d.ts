@@ -58,15 +58,35 @@ export type TerminalResponse =
     type: 'xtversion';
     name: string;
 };
+/**
+ * Parser state carried between parseMultipleKeypresses calls: paste mode,
+ * buffered incomplete input, and the internal tokenizer instance.
+ */
 export type KeyParseState = {
     mode: 'NORMAL' | 'IN_PASTE';
     incomplete: string;
     pasteBuffer: string;
     _tokenizer?: Tokenizer;
 };
+/** Initial `KeyParseState` for a fresh parser. */
 export declare const INITIAL_STATE: KeyParseState;
+/**
+ * Tokenize and parse a chunk of terminal input into parsed keys, mouse
+ * events, and terminal responses, maintaining paste-mode state.
+ * @param prevState - the state returned by the previous call, or INITIAL_STATE.
+ * @param input - the input chunk; null flushes the tokenizer's pending input.
+ * @returns the parsed inputs plus the state to pass to the next call.
+ */
 export declare function parseMultipleKeypresses(prevState: KeyParseState, input?: Buffer | string | null): [ParsedInput[], KeyParseState];
+/**
+ * Key names that never produce printable input (function keys, navigation,
+ * modifiers, mouse), used to filter parsed keypresses.
+ */
 export declare const nonAlphanumericKeys: string[];
+/**
+ * A parsed user keypress or paste: the key name, modifier flags, the raw
+ * escape sequence, and whether the input arrived via bracketed paste.
+ */
 export type ParsedKey = {
     kind: 'key';
     fn: boolean;

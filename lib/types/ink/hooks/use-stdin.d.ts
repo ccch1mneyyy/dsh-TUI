@@ -1,6 +1,8 @@
+import { type Props } from '../components/StdinContext.js';
 /**
- * `useStdin` is a React hook, which exposes stdin stream.
+ * React hook exposing the stdin stream and raw-mode helpers from `StdinContext`.
+ * @returns the `StdinContext` value.
  */
-declare const useStdin: () => import("../components/StdinContext.js").Props;
+declare const useStdin: () => Props;
 export default useStdin;
 //# sourceMappingURL=use-stdin.d.ts.map

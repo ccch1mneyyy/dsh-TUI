@@ -80,10 +80,25 @@ export type Theme = {
     rainbow_indigo_shimmer: string;
     rainbow_violet_shimmer: string;
 };
+/** The supported theme names, in display order. */
 export declare const THEME_NAMES: readonly ["dark", "dark-ansi", "light"];
 /** A renderable theme. Always resolvable to a concrete color palette. */
 export type ThemeName = (typeof THEME_NAMES)[number];
+/**
+ * Resolve a theme name to its concrete color palette.
+ * @param themeName - The theme to resolve.
+ * @returns The matching palette; unknown names fall back to `dark`.
+ */
 export declare function getTheme(themeName: ThemeName): Theme;
+/**
+ * Set the module-level active theme; ThemeProvider calls this once
+ * background detection settles.
+ * @param name - The theme to activate.
+ */
 export declare function setActiveThemeName(name: ThemeName): void;
+/**
+ * Resolve the currently active theme for non-React rendering.
+ * @returns The palette of the module-level active theme.
+ */
 export declare function getActiveTheme(): Theme;
 //# sourceMappingURL=theme.d.ts.map

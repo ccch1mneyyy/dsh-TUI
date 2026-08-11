@@ -179,6 +179,10 @@ function splitNumericParams(params: string): number[] {
   return params.split(';').map(p => parseInt(p, 10))
 }
 
+/**
+ * Parser state carried between parseMultipleKeypresses calls: paste mode,
+ * buffered incomplete input, and the internal tokenizer instance.
+ */
 export type KeyParseState = {
   mode: 'NORMAL' | 'IN_PASTE'
   incomplete: string
@@ -187,6 +191,7 @@ export type KeyParseState = {
   _tokenizer?: Tokenizer
 }
 
+/** Initial `KeyParseState` for a fresh parser. */
 export const INITIAL_STATE: KeyParseState = {
   mode: 'NORMAL',
   incomplete: '',
@@ -210,6 +215,13 @@ function inputToString(input: Buffer | string): string {
   }
 }
 
+/**
+ * Tokenize and parse a chunk of terminal input into parsed keys, mouse
+ * events, and terminal responses, maintaining paste-mode state.
+ * @param prevState - the state returned by the previous call, or INITIAL_STATE.
+ * @param input - the input chunk; null flushes the tokenizer's pending input.
+ * @returns the parsed inputs plus the state to pass to the next call.
+ */
 export function parseMultipleKeypresses(
   prevState: KeyParseState,
   input: Buffer | string | null = '',
@@ -405,6 +417,10 @@ const keyName: Record<string, string> = {
   '[Z': 'tab',
 }
 
+/**
+ * Key names that never produce printable input (function keys, navigation,
+ * modifiers, mouse), used to filter parsed keypresses.
+ */
 export const nonAlphanumericKeys = [
   // Filter out single-character values (digits, operators from numpad) since
   // those are printable characters that should produce input
@@ -540,6 +556,10 @@ function keycodeToName(keycode: number): string | undefined {
   }
 }
 
+/**
+ * A parsed user keypress or paste: the key name, modifier flags, the raw
+ * escape sequence, and whether the input arrived via bracketed paste.
+ */
 export type ParsedKey = {
   kind: 'key'
   fn: boolean

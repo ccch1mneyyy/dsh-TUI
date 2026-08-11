@@ -83,6 +83,12 @@ function buildSummary(pending: PendingQuestion): QuestionSummary {
   }
 }
 
+/**
+ * Ask-user-question store: parks asks from the harness's user-interaction
+ * seam, surfaces one question at a time to the TUI, and settles each ask
+ * when the user answers or the batch is interrupted. The TUI subscribes for
+ * re-renders and answers via {@link QuestionStore.answerCurrent}.
+ */
 export class QuestionStore {
   private readonly queue: PendingQuestion[] = []
   private active: PendingQuestion | undefined
@@ -96,6 +102,11 @@ export class QuestionStore {
    */
   private snapshotCache: QuestionSnapshot | null = null
 
+  /**
+   * Subscribe to store changes (useSyncExternalStore contract).
+   * @param listener - Called after every mutation that changes the snapshot.
+   * @returns An unsubscribe function removing the listener.
+   */
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => {
@@ -103,12 +114,18 @@ export class QuestionStore {
     }
   }
 
-  /** The question the TUI should render now, or null when idle. */
+  /**
+   * The question the TUI should render now, or null when idle.
+   * @returns The cached snapshot; the reference is stable between mutations.
+   */
   getSnapshot(): QuestionSnapshot | null {
     return this.snapshotCache
   }
 
-  /** Take (and clear) every completed batch summary for the transcript. */
+  /**
+   * Take (and clear) every completed batch summary for the transcript.
+   * @returns The summaries collected since the last take.
+   */
   takeSummaries(): QuestionSummary[] {
     const summaries = this.summaries
     this.summaries = []
@@ -139,6 +156,9 @@ export class QuestionStore {
   /**
    * Provider entry point — called by `ctx.userInteraction.ask()` when the
    * model runs the `ask_user_question` tool.
+   * @param request - The ask request: questions plus optional abort signal.
+   * @returns A promise settling with the collected answers when the user
+   *   submits the batch, or rejecting when the ask is interrupted.
    */
   ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
     return new Promise<AskUserQuestionAnswer>((resolve, reject) => {
@@ -177,7 +197,11 @@ export class QuestionStore {
     this.emit()
   }
 
-  /** The user submitted an answer for the current question. */
+  /**
+   * The user submitted an answer for the current question; advances the
+   * batch and settles it once every question is answered.
+   * @param selection - Selected option labels plus optional custom text.
+   */
   answerCurrent(selection: QuestionSelection): void {
     const pending = this.active
     const question = pending?.request.questions[pending.index]

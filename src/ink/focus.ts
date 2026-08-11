@@ -13,6 +13,7 @@ const MAX_FOCUS_STACK = 32
  * parentNode (like browser's `node.ownerDocument`).
  */
 export class FocusManager {
+  /** The element that currently has focus, or null when nothing is focused. */
   activeElement: DOMElement | null = null
   private dispatchFocusEvent: (target: DOMElement, event: FocusEvent) => boolean
   private enabled = true
@@ -24,6 +25,10 @@ export class FocusManager {
     this.dispatchFocusEvent = dispatchFocusEvent
   }
 
+  /**
+   * Move focus to a node.
+   * @param node - the element to focus.
+   */
   focus(node: DOMElement): void {
     if (node === this.activeElement) return
     if (!this.enabled) return
@@ -41,6 +46,7 @@ export class FocusManager {
     this.dispatchFocusEvent(node, new FocusEvent('focus', previous))
   }
 
+  /** Drop focus from the active element, dispatching a blur event. */
   blur(): void {
     if (!this.activeElement) return
 
@@ -53,6 +59,8 @@ export class FocusManager {
    * Called by the reconciler when a node is removed from the tree.
    * Handles both the exact node and any focused descendant within
    * the removed subtree. Dispatches blur and restores focus from stack.
+   * @param node - the removed element.
+   * @param root - the tree root used to test whether elements are still mounted.
    */
   handleNodeRemoved(node: DOMElement, root: DOMElement): void {
     // Remove the node and any descendants from the stack
@@ -81,28 +89,46 @@ export class FocusManager {
     }
   }
 
+  /**
+   * Focus a node on mount when it requests auto-focus.
+   * @param node - the element to focus.
+   */
   handleAutoFocus(node: DOMElement): void {
     this.focus(node)
   }
 
+  /**
+   * Focus a node when it is clicked, provided it carries a numeric `tabIndex`.
+   * @param node - the clicked element.
+   */
   handleClickFocus(node: DOMElement): void {
     const tabIndex = node.attributes['tabIndex']
     if (typeof tabIndex !== 'number') return
     this.focus(node)
   }
 
+  /** Re-enable focus tracking after a disable. */
   enable(): void {
     this.enabled = true
   }
 
+  /** Disable focus tracking: focus requests are ignored until re-enabled. */
   disable(): void {
     this.enabled = false
   }
 
+  /**
+   * Move focus to the next tabbable element within the tree.
+   * @param root - the tree root whose tabbable elements are cycled.
+   */
   focusNext(root: DOMElement): void {
     this.moveFocus(1, root)
   }
 
+  /**
+   * Move focus to the previous tabbable element within the tree.
+   * @param root - the tree root whose tabbable elements are cycled.
+   */
   focusPrevious(root: DOMElement): void {
     this.moveFocus(-1, root)
   }
@@ -162,6 +188,8 @@ function isInTree(node: DOMElement, root: DOMElement): boolean {
 /**
  * Walk up to root and return it. The root is the node that holds
  * the FocusManager — like browser's `node.getRootNode()`.
+ * @param node - the node to walk up from.
+ * @returns the nearest ancestor holding a FocusManager.
  */
 export function getRootNode(node: DOMElement): DOMElement {
   let current: DOMElement | undefined = node
@@ -175,6 +203,8 @@ export function getRootNode(node: DOMElement): DOMElement {
 /**
  * Walk up to root and return its FocusManager.
  * Like browser's `node.ownerDocument` — focus belongs to the root.
+ * @param node - the node to walk up from.
+ * @returns the root's FocusManager.
  */
 export function getFocusManager(node: DOMElement): FocusManager {
   return getRootNode(node).focusManager!

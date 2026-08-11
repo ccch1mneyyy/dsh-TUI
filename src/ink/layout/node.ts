@@ -1,6 +1,7 @@
 // --
 // Adapter interface for the layout engine (Yoga)
 
+/** Edge names accepted by the layout engine's style setters. */
 export const LayoutEdge = {
   All: 'all',
   Horizontal: 'horizontal',
@@ -12,30 +13,38 @@ export const LayoutEdge = {
   Start: 'start',
   End: 'end',
 } as const
+/** Union of `LayoutEdge` values. */
 export type LayoutEdge = (typeof LayoutEdge)[keyof typeof LayoutEdge]
 
+/** Gutter axes accepted by the layout engine's gap setter. */
 export const LayoutGutter = {
   All: 'all',
   Column: 'column',
   Row: 'row',
 } as const
+/** Union of `LayoutGutter` values. */
 export type LayoutGutter = (typeof LayoutGutter)[keyof typeof LayoutGutter]
 
+/** Display modes: flex lays out children, none hides the node. */
 export const LayoutDisplay = {
   Flex: 'flex',
   None: 'none',
 } as const
+/** Union of `LayoutDisplay` values. */
 export type LayoutDisplay = (typeof LayoutDisplay)[keyof typeof LayoutDisplay]
 
+/** Main-axis directions for flex layout. */
 export const LayoutFlexDirection = {
   Row: 'row',
   RowReverse: 'row-reverse',
   Column: 'column',
   ColumnReverse: 'column-reverse',
 } as const
+/** Union of `LayoutFlexDirection` values. */
 export type LayoutFlexDirection =
   (typeof LayoutFlexDirection)[keyof typeof LayoutFlexDirection]
 
+/** Cross-axis alignment values for flex items. */
 export const LayoutAlign = {
   Auto: 'auto',
   Stretch: 'stretch',
@@ -43,8 +52,10 @@ export const LayoutAlign = {
   Center: 'center',
   FlexEnd: 'flex-end',
 } as const
+/** Union of `LayoutAlign` values. */
 export type LayoutAlign = (typeof LayoutAlign)[keyof typeof LayoutAlign]
 
+/** Main-axis distribution values for flex containers. */
 export const LayoutJustify = {
   FlexStart: 'flex-start',
   Center: 'center',
@@ -53,43 +64,57 @@ export const LayoutJustify = {
   SpaceAround: 'space-around',
   SpaceEvenly: 'space-evenly',
 } as const
+/** Union of `LayoutJustify` values. */
 export type LayoutJustify = (typeof LayoutJustify)[keyof typeof LayoutJustify]
 
+/** Wrapping modes for flex lines. */
 export const LayoutWrap = {
   NoWrap: 'nowrap',
   Wrap: 'wrap',
   WrapReverse: 'wrap-reverse',
 } as const
+/** Union of `LayoutWrap` values. */
 export type LayoutWrap = (typeof LayoutWrap)[keyof typeof LayoutWrap]
 
+/** Positioning modes: relative keeps the node in flow, absolute takes it out. */
 export const LayoutPositionType = {
   Relative: 'relative',
   Absolute: 'absolute',
 } as const
+/** Union of `LayoutPositionType` values. */
 export type LayoutPositionType =
   (typeof LayoutPositionType)[keyof typeof LayoutPositionType]
 
+/** Overflow modes: visible lets children expand the node, hidden and scroll constrain it. */
 export const LayoutOverflow = {
   Visible: 'visible',
   Hidden: 'hidden',
   Scroll: 'scroll',
 } as const
+/** Union of `LayoutOverflow` values. */
 export type LayoutOverflow =
   (typeof LayoutOverflow)[keyof typeof LayoutOverflow]
 
+/** Measures a leaf node's content size given a width and its measure mode. */
 export type LayoutMeasureFunc = (
   width: number,
   widthMode: LayoutMeasureMode,
 ) => { width: number; height: number }
 
+/** Width constraints passed to a measure function. */
 export const LayoutMeasureMode = {
   Undefined: 'undefined',
   Exactly: 'exactly',
   AtMost: 'at-most',
 } as const
+/** Union of `LayoutMeasureMode` values. */
 export type LayoutMeasureMode =
   (typeof LayoutMeasureMode)[keyof typeof LayoutMeasureMode]
 
+/**
+ * Adapter interface for the layout engine (Yoga): tree manipulation, layout
+ * computation, computed-geometry reads, style setters, and lifecycle.
+ */
 export type LayoutNode = {
   // Tree
   insertChild(child: LayoutNode, index: number): void

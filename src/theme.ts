@@ -88,6 +88,7 @@ export type Theme = {
   rainbow_violet_shimmer: string
 }
 
+/** The supported theme names, in display order. */
 export const THEME_NAMES = ['dark', 'dark-ansi', 'light'] as const
 
 /** A renderable theme. Always resolvable to a concrete color palette. */
@@ -329,6 +330,11 @@ const darkAnsiTheme: Theme = {
   rainbow_violet_shimmer: 'ansi:magentaBright',
 }
 
+/**
+ * Resolve a theme name to its concrete color palette.
+ * @param themeName - The theme to resolve.
+ * @returns The matching palette; unknown names fall back to `dark`.
+ */
 export function getTheme(themeName: ThemeName): Theme {
   switch (themeName) {
     case 'light':
@@ -347,10 +353,19 @@ export function getTheme(themeName: ThemeName): Theme {
  */
 let activeThemeName: ThemeName = 'dark'
 
+/**
+ * Set the module-level active theme; ThemeProvider calls this once
+ * background detection settles.
+ * @param name - The theme to activate.
+ */
 export function setActiveThemeName(name: ThemeName): void {
   activeThemeName = name
 }
 
+/**
+ * Resolve the currently active theme for non-React rendering.
+ * @returns The palette of the module-level active theme.
+ */
 export function getActiveTheme(): Theme {
   return getTheme(activeThemeName)
 }

@@ -8,6 +8,7 @@
  *
  * On Windows, uses `process.title` (classic conhost doesn't support OSC).
  * Elsewhere, writes OSC 0 (set title+icon) via Ink's stdout.
+ * @param title - the title to set, or null to opt out.
  */
 export declare function useTerminalTitle(title: string | null): void;
 //# sourceMappingURL=use-terminal-title.d.ts.map

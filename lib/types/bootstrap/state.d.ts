@@ -4,7 +4,10 @@
  * original functions fed Claude Code's session-activity tracking; cc-tui does
  * not track interaction time.
  */
+/** No-op interaction-time flush stub; cc-tui does not track interaction time. */
 export declare function flushInteractionTime(): void;
+/** No-op interaction-time update stub; cc-tui does not track interaction time. */
 export declare function updateLastInteractionTime(): void;
+/** No-op scroll-activity stub; cc-tui does not track interaction time. */
 export declare function markScrollActivity(): void;
 //# sourceMappingURL=state.d.ts.map

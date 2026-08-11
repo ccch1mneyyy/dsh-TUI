@@ -12,9 +12,13 @@ import {
 } from './layout/node.js'
 import type { BorderStyle, BorderTextOptions } from './render-border.js'
 
+/** Template-literal type for rgb(r,g,b) color strings. */
 export type RGBColor = `rgb(${number},${number},${number})`
+/** Template-literal type for hex color strings like `#ff8800`. */
 export type HexColor = `#${string}`
+/** Template-literal type for 256-color strings like `ansi256(174)`. */
 export type Ansi256Color = `ansi256(${number})`
+/** Named ANSI color strings, optionally bright variants. */
 export type AnsiColor =
   | 'ansi:black'
   | 'ansi:red'
@@ -52,6 +56,11 @@ export type TextStyles = {
   readonly inverse?: boolean
 }
 
+/**
+ * Layout and text styles applied to an element: text wrapping, positioning,
+ * margins, padding, flex properties, dimensions, borders, gaps, and overflow.
+ * All properties are optional; unset ones keep their defaults.
+ */
 export type Styles = {
   readonly textWrap?:
     | 'wrap'
@@ -752,6 +761,14 @@ const applyGapStyles = (node: LayoutNode, style: Styles): void => {
   }
 }
 
+/**
+ * Apply a style diff to a layout node, delegating each property group to its
+ * Yoga setter. The node's styles must already be applied elsewhere; `style`
+ * may be a diff containing only changed properties.
+ * @param node - the layout node to style.
+ * @param style - the styles to apply; defaults to an empty object.
+ * @param resolvedStyle - the node's full current styles, used to resolve border side values.
+ */
 const styles = (
   node: LayoutNode,
   style: Styles = {},

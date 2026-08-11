@@ -1,3 +1,4 @@
+/** Spinner status verbs ("Accomplishing", "Actioning", ...) shown while the model works. */
 export const SPINNER_VERBS = [
   'Accomplishing',
   'Actioning',

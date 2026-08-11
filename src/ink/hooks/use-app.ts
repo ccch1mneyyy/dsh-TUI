@@ -1,8 +1,9 @@
 import { useContext } from 'react'
-import AppContext from '../components/AppContext.js'
+import AppContext, { type Props } from '../components/AppContext.js'
 
 /**
- * `useApp` is a React hook, which exposes a method to manually exit the app (unmount).
+ * React hook exposing the manual app-exit function from `AppContext`.
+ * @returns the `AppContext` value, whose `exit` function unmounts the app.
  */
-const useApp = () => useContext(AppContext)
+const useApp = (): Props => useContext(AppContext)
 export default useApp

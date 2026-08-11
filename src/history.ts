@@ -37,7 +37,11 @@ function loadRaw(): HistoryEntry[] {
   return entries
 }
 
-/** Append an input to the persisted history (dedupes the immediately-previous entry). */
+/**
+ * Append an input to the persisted history, deduping the immediately
+ * previous entry and capping the file at 200 entries.
+ * @param text - Input to persist; blank inputs are ignored.
+ */
 export function appendHistory(text: string): void {
   const trimmed = text.trim()
   if (!trimmed) return
@@ -63,12 +67,19 @@ export function appendHistory(text: string): void {
   }
 }
 
-/** Read the persisted history, newest first. */
+/**
+ * Read the persisted history, newest first.
+ * @returns The persisted entries in reverse-chronological order.
+ */
 export function loadHistory(): HistoryEntry[] {
   return loadRaw().reverse()
 }
 
-/** Stable id for a history entry (dedupe React keys across identical texts). */
+/**
+ * Stable id for a history entry (dedupes React keys across identical texts).
+ * @param entry - The history entry to hash.
+ * @returns A 12-char hex id derived from the entry text.
+ */
 export function historyEntryId(entry: HistoryEntry): string {
   return createHash('sha1').update(entry.text).digest('hex').slice(0, 12)
 }

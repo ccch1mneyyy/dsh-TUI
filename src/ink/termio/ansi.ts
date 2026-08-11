@@ -44,8 +44,14 @@ export const C0 = {
 } as const
 
 // String constants for output generation
+
+/** ESC control character (0x1B), the introducer of every escape sequence. */
 export const ESC = '\x1b'
+
+/** BEL control character (0x07), the common OSC sequence terminator. */
 export const BEL = '\x07'
+
+/** Parameter separator used inside CSI and OSC sequences. */
 export const SEP = ';'
 
 /**
@@ -61,14 +67,20 @@ export const ESC_TYPE = {
   ST: 0x5c, // \ - String Terminator
 } as const
 
-/** Check if a byte is a C0 control character */
+/**
+ * Check if a byte is a C0 control character.
+ * @param byte - the byte value to check.
+ * @returns true when the byte is in the C0 range (0x00-0x1F) or is DEL (0x7F).
+ */
 export function isC0(byte: number): boolean {
   return byte < 0x20 || byte === 0x7f
 }
 
 /**
- * Check if a byte is an ESC sequence final byte (0-9, :, ;, <, =, >, ?, @ through ~)
- * ESC sequences have a wider final byte range than CSI
+ * Check if a byte is an ESC sequence final byte (0-9, :, ;, <, =, >, ?, @ through ~).
+ * ESC sequences have a wider final byte range than CSI.
+ * @param byte - the byte value to check.
+ * @returns true when the byte is in the final-byte range (0x30-0x7E).
  */
 export function isEscFinal(byte: number): boolean {
   return byte >= 0x30 && byte <= 0x7e

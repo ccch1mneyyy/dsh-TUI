@@ -38,13 +38,28 @@ export type TextStyle = {
     bg: Color;
     underlineColor: Color;
 };
-/** Create a default (reset) text style */
+/**
+ * Create a default (reset) text style.
+ * @returns a TextStyle with every attribute at its reset value.
+ */
 export declare function defaultStyle(): TextStyle;
-/** Check if two styles are equal */
+/**
+ * Check if two styles are equal.
+ * @param a - the first style.
+ * @param b - the second style.
+ * @returns true when every attribute and color of the two styles matches.
+ */
 export declare function stylesEqual(a: TextStyle, b: TextStyle): boolean;
-/** Check if two colors are equal */
+/**
+ * Check if two colors are equal.
+ * @param a - the first color.
+ * @param b - the second color.
+ * @returns true when the two colors have the same type and value.
+ */
 export declare function colorsEqual(a: Color, b: Color): boolean;
+/** Direction of a relative cursor move. */
 export type CursorDirection = 'up' | 'down' | 'forward' | 'back';
+/** Cursor actions: relative moves, absolute position, visibility, style, save/restore, and line jumps. */
 export type CursorAction = {
     type: 'move';
     direction: CursorDirection;
@@ -78,6 +93,7 @@ export type CursorAction = {
     type: 'prevLine';
     count: number;
 };
+/** Erase actions targeting display regions, lines, or character counts. */
 export type EraseAction = {
     type: 'display';
     region: 'toEnd' | 'toStart' | 'all' | 'scrollback';
@@ -88,6 +104,7 @@ export type EraseAction = {
     type: 'chars';
     count: number;
 };
+/** Scroll actions: scroll up, scroll down, or set the scroll region. */
 export type ScrollAction = {
     type: 'up';
     count: number;
@@ -99,6 +116,7 @@ export type ScrollAction = {
     top: number;
     bottom: number;
 };
+/** Terminal mode toggles: alternate screen, bracketed paste, mouse tracking, focus events. */
 export type ModeAction = {
     type: 'alternateScreen';
     enabled: boolean;
@@ -112,6 +130,7 @@ export type ModeAction = {
     type: 'focusEvents';
     enabled: boolean;
 };
+/** OSC 8 hyperlink actions: start a link with a URL and optional params, or end the current link. */
 export type LinkAction = {
     type: 'start';
     url: string;
@@ -119,6 +138,7 @@ export type LinkAction = {
 } | {
     type: 'end';
 };
+/** Window title actions from OSC 0/1/2: set window title, icon name, or both. */
 export type TitleAction = {
     type: 'windowTitle';
     title: string;

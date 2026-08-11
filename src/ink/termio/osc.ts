@@ -8,13 +8,18 @@ import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
 import { BEL, ESC, ESC_TYPE, SEP } from './ansi.js'
 import type { Action, Color, TabStatusAction } from './types.js'
 
+/** OSC introducer prefix: ESC followed by `]`. */
 export const OSC_PREFIX = ESC + String.fromCharCode(ESC_TYPE.OSC)
 
 /** String Terminator (ESC \) - alternative to BEL for terminating OSC */
 export const ST = ESC + '\\'
 
-/** Generate an OSC sequence: ESC ] p1;p2;...;pN <terminator>
- * Uses ST terminator for Kitty (avoids beeps), BEL for others */
+/**
+ * Generate an OSC sequence: ESC ] p1;p2;...;pN <terminator>.
+ * Uses the ST terminator for Kitty (avoids beeps) and BEL for others.
+ * @param parts - the sequence parts, joined by semicolons.
+ * @returns the complete OSC sequence string.
+ */
 export function osc(...parts: (string | number)[]): string {
   const terminator = env.terminal === 'kitty' ? ST : BEL
   return `${OSC_PREFIX}${parts.join(SEP)}${terminator}`
@@ -31,6 +36,9 @@ export function osc(...parts: (string | number)[]): string {
  *
  * Do NOT wrap BEL: raw \x07 triggers tmux's bell-action (window flag);
  * wrapped \x07 is opaque DCS payload and tmux never sees the bell.
+ * @param sequence - the escape sequence to wrap.
+ * @returns the DCS-passthrough-wrapped sequence inside tmux or GNU screen,
+ *   or the sequence unchanged otherwise.
  */
 export function wrapForMultiplexer(sequence: string): string {
   if (process.env['TMUX']) {
@@ -61,6 +69,11 @@ export function wrapForMultiplexer(sequence: string): string {
  */
 export type ClipboardPath = 'native' | 'tmux-buffer' | 'osc52'
 
+/**
+ * Determine the clipboard path setClipboard() will take, based on env state.
+ * @returns 'native' when a local clipboard tool is available, 'tmux-buffer'
+ *   inside tmux, or 'osc52' otherwise.
+ */
 export function getClipboardPath(): ClipboardPath {
   const nativeAvailable =
     process.platform === 'darwin' && !process.env['SSH_CONNECTION']
@@ -85,7 +98,9 @@ function tmuxPassthrough(payload: string): string {
  * own OSC 52 emission. -w is dropped for iTerm2: tmux's OSC 52 emission
  * crashes the iTerm2 session over SSH.
  *
- * Returns true if the buffer was loaded successfully.
+ * @param text - the text to load into the tmux paste buffer.
+ * @returns true when the buffer was loaded successfully, false when not in
+ *   tmux or the tmux command failed.
  */
 export async function tmuxLoadBuffer(text: string): Promise<boolean> {
   if (!process.env['TMUX']) return false
@@ -132,8 +147,9 @@ export async function tmuxLoadBuffer(text: string): Promise<boolean> {
  * utilities (pbcopy/wl-copy/xclip/xsel/clip.exe) always work locally. Over
  * SSH these would write to the remote clipboard — OSC 52 is the right path there.
  *
- * Returns the sequence for the caller to write to stdout (raw OSC 52
- * outside tmux, DCS-wrapped inside).
+ * @param text - the text to place on the clipboard.
+ * @returns the sequence for the caller to write to stdout (raw OSC 52
+ *   outside tmux, DCS-wrapped inside).
  */
 export async function setClipboard(text: string): Promise<string> {
   const b64 = Buffer.from(text, 'utf8').toString('base64')
@@ -218,7 +234,11 @@ function copyNative(text: string): void {
   }
 }
 
-/** @internal test-only */
+/**
+ * Reset the cached Linux clipboard tool probe, forcing the next copy to
+ * re-probe wl-copy/xclip/xsel.
+ * @internal test-only
+ */
 export function _resetLinuxCopyCache(): void {
   linuxCopy = undefined
 }
@@ -249,9 +269,11 @@ export const OSC = {
 } as const
 
 /**
- * Parse an OSC sequence into an action
+ * Parse an OSC sequence into an action.
  *
- * @param content - The sequence content (without ESC ] and terminator)
+ * @param content - The sequence content (without ESC ] and terminator).
+ * @returns the parsed action; unrecognized commands yield an
+ *   unknown-sequence action.
  */
 export function parseOSC(content: string): Action | null {
   const semicolonIdx = content.indexOf(';')
@@ -313,6 +335,8 @@ export function parseOSC(content: string): Action | null {
  * Parse an XParseColor-style color spec into an RGB Color.
  * Accepts `#RRGGBB` and `rgb:R/G/B` (1–4 hex digits per component, scaled
  * to 8-bit). Returns null on parse failure.
+ * @param spec - the color spec string to parse.
+ * @returns the parsed RGB color, or null when the spec does not match.
  */
 export function parseOscColor(spec: string): Color | null {
   const hex = spec.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i)
@@ -395,11 +419,16 @@ function* splitTabStatusPairs(data: string): Generator<[string, string]> {
 
 // Output generators
 
-/** Start a hyperlink (OSC 8). Auto-assigns an id= param derived from the URL
- *  so terminals group wrapped lines of the same link together (the spec says
- *  cells with matching URI *and* nonempty id are joined; without an id each
- *  wrapped line is a separate link — inconsistent hover, partial tooltips).
- *  Empty url = close sequence (empty params per spec). */
+/**
+ * Start a hyperlink (OSC 8). Auto-assigns an id= param derived from the URL
+ * so terminals group wrapped lines of the same link together (the spec says
+ * cells with matching URI *and* nonempty id are joined; without an id each
+ * wrapped line is a separate link — inconsistent hover, partial tooltips).
+ * Empty url = close sequence (empty params per spec).
+ * @param url - the link target URL; an empty string emits the close sequence.
+ * @param params - optional OSC 8 parameters, merged over the auto-assigned id.
+ * @returns the OSC 8 sequence.
+ */
 export function link(url: string, params?: Record<string, string>): string {
   if (!url) return LINK_END
   const p = { id: osc8Id(url), ...params }
@@ -463,6 +492,8 @@ export const CLEAR_TAB_STATUS = osc(
  *
  * Callers must wrap output with wrapForMultiplexer() so tmux/screen
  * DCS-passthrough carries the sequence to the outer terminal.
+ * @returns true when the current user is Ant, the only environment emitting
+ *   OSC 21337 today.
  */
 export function supportsTabStatus(): boolean {
   return process.env.USER_TYPE === 'ant'
@@ -472,6 +503,9 @@ export function supportsTabStatus(): boolean {
  * Emit an OSC 21337 tab-status sequence. Omitted fields are left unchanged
  * by the receiving terminal; `null` sends an empty value to clear.
  * `;` and `\` in status text are escaped per the spec.
+ * @param fields - the tab-status fields to emit; omitted fields are left
+ *   unchanged by the terminal, null values clear the field.
+ * @returns the OSC 21337 sequence.
  */
 export function tabStatus(fields: TabStatusAction): string {
   const parts: string[] = []

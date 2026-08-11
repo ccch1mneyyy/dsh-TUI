@@ -155,6 +155,12 @@ type FiberLike = {
   return?: FiberLike | null
 }
 
+/**
+ * Walk a fiber's owner chain and return the names of the components that
+ * rendered it, skipping host elements.
+ * @param fiber - the fiber whose owner chain to walk.
+ * @returns the component display names, outermost first.
+ */
 export function getOwnerChain(fiber: unknown): string[] {
   const chain: string[] = []
   const seen = new Set<unknown>()
@@ -177,6 +183,10 @@ export function getOwnerChain(fiber: unknown): string[] {
 }
 
 let debugRepaints: boolean | undefined
+/**
+ * Read the CLAUDE_CODE_DEBUG_REPAINTS flag once and cache it.
+ * @returns whether repaint debugging is enabled.
+ */
 export function isDebugRepaintsEnabled(): boolean {
   if (debugRepaints === undefined) {
     debugRepaints = isEnvTruthy(process.env.CLAUDE_CODE_DEBUG_REPAINTS)
@@ -184,6 +194,7 @@ export function isDebugRepaintsEnabled(): boolean {
   return debugRepaints
 }
 
+/** The terminal event dispatcher that routes input events to registered handlers. */
 export const dispatcher = new Dispatcher()
 
 // --- COMMIT INSTRUMENTATION (temp debugging) ---
@@ -202,18 +213,32 @@ let _prepareAt = 0
 let _lastYogaMs = 0
 let _lastCommitMs = 0
 let _commitStart = 0
+/**
+ * Record the yoga layout duration of the current commit.
+ * @param ms - the layout duration in milliseconds.
+ */
 export function recordYogaMs(ms: number): void {
   _lastYogaMs = ms
 }
+/**
+ * The yoga layout duration recorded by recordYogaMs.
+ * @returns the layout duration in milliseconds.
+ */
 export function getLastYogaMs(): number {
   return _lastYogaMs
 }
+/** Mark the start of the current commit for commit-duration profiling. */
 export function markCommitStart(): void {
   _commitStart = performance.now()
 }
+/**
+ * The duration of the last commit, from markCommitStart to resetAfterCommit.
+ * @returns the commit duration in milliseconds.
+ */
 export function getLastCommitMs(): number {
   return _lastCommitMs
 }
+/** Reset all commit and layout profiling counters to zero. */
 export function resetProfileCounters(): void {
   _lastYogaMs = 0
   _lastCommitMs = 0
@@ -221,6 +246,10 @@ export function resetProfileCounters(): void {
 }
 // --- END ---
 
+/**
+ * The react-reconciler instance that renders React elements into the Ink
+ * DOM tree, wired to the event dispatcher for update priorities.
+ */
 const reconciler = createReconciler<
   ElementNames,
   Props,

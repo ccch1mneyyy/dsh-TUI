@@ -9,6 +9,11 @@ import { type EventTarget, TerminalEvent } from './terminal-event.js'
  * so parent components can observe descendant focus changes.
  */
 export class FocusEvent extends TerminalEvent {
+  /**
+   * The other element involved in the focus change: the previously focused
+   * element for 'focus' events, the newly focused element for 'blur' events,
+   * or null when there is none.
+   */
   readonly relatedTarget: EventTarget | null
 
   constructor(

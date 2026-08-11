@@ -159,14 +159,29 @@ type DiscreteUpdates = <A, B>(
  * to break the import cycle.
  */
 export class Dispatcher {
+  /**
+   * The terminal event currently being dispatched, or null between dispatches.
+   */
   currentEvent: TerminalEvent | null = null
+
+  /**
+   * The update priority currently applied to updates triggered by dispatch,
+   * or the default priority when none is set.
+   */
   currentUpdatePriority: number = DefaultEventPriority as number
+
+  /**
+   * The reconciler's `discreteUpdates` helper, injected after construction to
+   * break the import cycle, or null before injection.
+   */
   discreteUpdates: DiscreteUpdates | null = null
 
   /**
    * Infer event priority from the currently-dispatching event.
    * Called by the reconciler host config's resolveUpdatePriority
    * when no explicit priority has been set.
+   * @returns the current update priority, the dispatching event's mapped
+   *   priority, or the default priority.
    */
   resolveEventPriority(): number {
     if (this.currentUpdatePriority !== (NoEventPriority as number)) {
@@ -181,6 +196,9 @@ export class Dispatcher {
   /**
    * Dispatch an event through capture and bubble phases.
    * Returns true if preventDefault() was NOT called.
+   * @param target - the node the event is dispatched to.
+   * @param event - the event to dispatch.
+   * @returns true when `preventDefault()` was not called on the event.
    */
   dispatch(target: EventTarget, event: TerminalEvent): boolean {
     const previousEvent = this.currentEvent
@@ -203,6 +221,9 @@ export class Dispatcher {
   /**
    * Dispatch with discrete (sync) priority.
    * For user-initiated events: keyboard, click, focus, paste.
+   * @param target - the node the event is dispatched to.
+   * @param event - the event to dispatch.
+   * @returns true when `preventDefault()` was not called on the event.
    */
   dispatchDiscrete(target: EventTarget, event: TerminalEvent): boolean {
     if (!this.discreteUpdates) {
@@ -220,6 +241,9 @@ export class Dispatcher {
   /**
    * Dispatch with continuous priority.
    * For high-frequency events: resize, scroll, mouse move.
+   * @param target - the node the event is dispatched to.
+   * @param event - the event to dispatch.
+   * @returns true when `preventDefault()` was not called on the event.
    */
   dispatchContinuous(target: EventTarget, event: TerminalEvent): boolean {
     const previousPriority = this.currentUpdatePriority

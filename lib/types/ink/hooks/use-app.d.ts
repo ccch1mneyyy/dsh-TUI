@@ -1,6 +1,8 @@
+import { type Props } from '../components/AppContext.js';
 /**
- * `useApp` is a React hook, which exposes a method to manually exit the app (unmount).
+ * React hook exposing the manual app-exit function from `AppContext`.
+ * @returns the `AppContext` value, whose `exit` function unmounts the app.
  */
-declare const useApp: () => import("../components/AppContext.js").Props;
+declare const useApp: () => Props;
 export default useApp;
 //# sourceMappingURL=use-app.d.ts.map

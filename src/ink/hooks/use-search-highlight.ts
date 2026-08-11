@@ -14,6 +14,9 @@ import type { MatchPosition } from '../render-to-screen.js'
  * error messages) regardless of where it came from in the message tree. A
  * query that matched in source but got truncated/ellipsized in rendering
  * won't highlight; that's acceptable — we highlight what you see.
+ * @returns an object controlling the search highlight: `setQuery` sets the
+ *   query, `scanElement` scans a DOM subtree for matches, and `setPositions`
+ *   drives the position-based highlight.
  */
 export function useSearchHighlight(): {
   setQuery: (query: string) => void

@@ -1,5 +1,10 @@
 import { lineWidth } from './line-width-cache.js'
 
+/**
+ * Get the display width of the widest line in a string.
+ * @param string - the text to measure, possibly containing newlines.
+ * @returns the maximum display width across all lines.
+ */
 export function widestLine(string: string): number {
   let maxWidth = 0
   let start = 0

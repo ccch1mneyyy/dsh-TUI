@@ -5,6 +5,7 @@
  * Unlike the Parser which interprets sequences semantically, this just
  * identifies boundaries for use by keyboard input parsing.
  */
+/** A chunk of terminal input: plain text or a raw escape sequence. */
 export type Token = {
     type: 'text';
     value: string;
@@ -12,6 +13,7 @@ export type Token = {
     type: 'sequence';
     value: string;
 };
+/** Streaming tokenizer for terminal input, buffering incomplete sequences. */
 export type Tokenizer = {
     /** Feed input and get resulting tokens */
     feed(input: string): Token[];
@@ -40,6 +42,8 @@ type TokenizerOptions = {
  * const tokens2 = tokenizer.feed('A')  // completes the escape sequence
  * const remaining = tokenizer.flush()  // force output incomplete sequences
  * ```
+ * @param options - tokenizer options; when omitted all defaults apply.
+ * @returns the tokenizer instance.
  */
 export declare function createTokenizer(options?: TokenizerOptions): Tokenizer;
 export {};

@@ -11,6 +11,8 @@ import type { Diff } from './frame.js';
  * - Dedupe consecutive hyperlinks with same URI
  * - Cancel cursor hide/show pairs
  * - Remove clear patches with count 0
+ * @param diff - the patch list produced by the frame diff.
+ * @returns the optimized patch list, with no-ops removed and adjacent patches merged.
  */
 export declare function optimize(diff: Diff): Diff;
 //# sourceMappingURL=optimizer.d.ts.map

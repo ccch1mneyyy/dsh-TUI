@@ -4,7 +4,9 @@ import { supportsHyperlinks } from '../ink/supports-hyperlinks.js'
 // OSC 8 hyperlink escape sequences
 // Format: \e]8;;URL\e\\TEXT\e]8;;\e\\
 // Using \x07 (BEL) as terminator which is more widely supported
+/** OSC 8 hyperlink start sequence: `ESC ] 8 ; ;`, followed by the URL. */
 export const OSC8_START = '\x1b]8;;'
+/** OSC 8 hyperlink terminator: BEL (`\x07`), more widely supported than the ST variant. */
 export const OSC8_END = '\x07'
 
 type HyperlinkOptions = {
@@ -20,6 +22,7 @@ type HyperlinkOptions = {
  *                  If provided and hyperlinks are supported, this text is shown as a clickable link.
  *                  If hyperlinks are not supported, content is ignored and only the URL is shown.
  * @param options - Optional overrides for testing (supportsHyperlinks)
+ * @returns The OSC 8-wrapped blue link text, or the plain URL when the terminal lacks hyperlink support.
  */
 export function createHyperlink(
   url: string,

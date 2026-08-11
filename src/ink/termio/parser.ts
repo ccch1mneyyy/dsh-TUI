@@ -272,10 +272,18 @@ function identifySequence(
 export class Parser {
   private tokenizer: Tokenizer = createTokenizer()
 
+  /** Current text style, updated as SGR sequences are applied. */
   style: TextStyle = defaultStyle()
+
+  /** Whether the parser is currently inside an OSC 8 hyperlink. */
   inLink = false
+
+  /** URL of the active OSC 8 hyperlink; undefined when not in a link. */
   linkUrl: string | undefined
 
+  /**
+   * Reset all parser state: tokenizer buffer, text style, and link state.
+   */
   reset(): void {
     this.tokenizer.reset()
     this.style = defaultStyle()
@@ -283,7 +291,11 @@ export class Parser {
     this.linkUrl = undefined
   }
 
-  /** Feed input and get resulting actions */
+  /**
+   * Feed input and get the resulting actions.
+   * @param input - the input chunk to process.
+   * @returns the semantic actions produced by this chunk.
+   */
   feed(input: string): Action[] {
     const tokens = this.tokenizer.feed(input)
     const actions: Action[] = []

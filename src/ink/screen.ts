@@ -14,10 +14,12 @@ import * as warn from './warn.js'
 
 // --- Shared Pools (interning for memory efficiency) ---
 
-// Character string pool shared across all screens.
-// With a shared pool, interned char IDs are valid across screens,
-// so blitRegion can copy IDs directly (no re-interning) and
-// diffEach can compare IDs as integers (no string lookup).
+/**
+ * Pool of character strings shared across all screens.
+ * With a shared pool, interned char IDs are valid across screens, so
+ * blitRegion can copy IDs directly (no re-interning) and diffEach can
+ * compare IDs as integers (no string lookup).
+ */
 export class CharPool {
   private strings: string[] = [' ', ''] // Index 0 = space, 1 = empty (spacer)
   private stringMap = new Map<string, number>([
@@ -26,6 +28,11 @@ export class CharPool {
   ])
   private ascii: Int32Array = initCharAscii() // charCode → index, -1 = not interned
 
+  /**
+   * Intern a character string and return its stable pool index.
+   * @param char - the character string to intern.
+   * @returns the pool index for the string.
+   */
   intern(char: string): number {
     // ASCII fast-path: direct array lookup instead of Map.get
     if (char.length === 1) {
@@ -47,17 +54,30 @@ export class CharPool {
     return index
   }
 
+  /**
+   * Return the character string for a pool index, or a space for an
+   * out-of-range index.
+   * @param index - the pool index to look up.
+   * @returns the interned string.
+   */
   get(index: number): string {
     return this.strings[index] ?? ' '
   }
 }
 
-// Hyperlink string pool shared across all screens.
-// Index 0 = no hyperlink.
+/**
+ * Pool of hyperlink strings shared across all screens.
+ * Index 0 represents "no hyperlink".
+ */
 export class HyperlinkPool {
   private strings: string[] = [''] // Index 0 = no hyperlink
   private stringMap = new Map<string, number>()
 
+  /**
+   * Intern a hyperlink string and return its stable pool index.
+   * @param hyperlink - the hyperlink to intern; undefined or empty maps to 0.
+   * @returns the pool index for the hyperlink.
+   */
   intern(hyperlink: string | undefined): number {
     if (!hyperlink) return 0
     let id = this.stringMap.get(hyperlink)
@@ -69,6 +89,11 @@ export class HyperlinkPool {
     return id
   }
 
+  /**
+   * Return the hyperlink string for a pool index.
+   * @param id - the pool index to look up.
+   * @returns the interned hyperlink, or undefined for index 0.
+   */
   get(id: number): string | undefined {
     return id === 0 ? undefined : this.strings[id]
   }
@@ -109,10 +134,16 @@ const YELLOW_FG_CODE: AnsiCode = {
   endCode: '\x1b[39m',
 }
 
+/**
+ * Pool of interned ANSI style stacks. Each style maps to an ID whose bit 0
+ * encodes whether the style is visible on space characters; IDs are valid
+ * across all screens sharing this pool.
+ */
 export class StylePool {
   private ids = new Map<string, number>()
   private styles: AnsiCode[][] = []
   private transitionCache = new Map<number, string>()
+  /** Style ID of the empty style stack, used as the empty-cell style. */
   readonly none: number
 
   constructor() {
@@ -125,6 +156,8 @@ export class StylePool {
    * underline, etc.). Foreground-only styles get even IDs; styles visible
    * on spaces get odd IDs. This lets the renderer skip invisible spaces
    * with a single bitmask check on the packed word.
+   * @param styles - the ANSI code stack to intern.
+   * @returns the interned style ID.
    */
   intern(styles: AnsiCode[]): number {
     const key = styles.length === 0 ? '' : styles.map(s => s.code).join('\0')
@@ -140,7 +173,12 @@ export class StylePool {
     return id
   }
 
-  /** Recover styles from an encoded ID. Strips the bit-0 flag via >>> 1. */
+  /**
+   * Recover the style stack from an encoded ID. Strips the bit-0 flag via
+   * `>>> 1`.
+   * @param id - the encoded style ID.
+   * @returns the interned ANSI code stack, or an empty array for an unknown ID.
+   */
   get(id: number): AnsiCode[] {
     return this.styles[id >>> 1] ?? []
   }
@@ -149,6 +187,10 @@ export class StylePool {
    * Returns the pre-serialized ANSI string to transition from one style to
    * another. Cached by (fromId, toId) — zero allocations after first call
    * for a given pair.
+   * @param fromId - the style ID to transition from.
+   * @param toId - the style ID to transition to.
+   * @returns the ANSI escape sequence applying the difference, or an empty
+   *   string when both styles are equal.
    */
   transition(fromId: number, toId: number): string {
     if (fromId === toId) return ''
@@ -167,6 +209,12 @@ export class StylePool {
    * AnsiCode[] array. Used by the selection overlay.
    */
   private inverseCache = new Map<number, number>()
+  /**
+   * Intern a style that is `base + inverse`, reusing the base style when it
+   * is already inverted to avoid stacking SGR 7.
+   * @param baseId - the style ID to overlay inverse onto.
+   * @returns the ID of the inverted style.
+   */
   withInverse(baseId: number): number {
     let id = this.inverseCache.get(baseId)
     if (id === undefined) {
@@ -187,6 +235,13 @@ export class StylePool {
    *  overrides any existing fg (syntax highlighting) on those cells — fine,
    *  the "you are here" signal IS the point, syntax color can yield. */
   private currentMatchCache = new Map<number, number>()
+  /**
+   * Intern a style marking the current search match: inverse plus bold and
+   * a yellow background (via fg-then-inverse swap), distinct from the plain
+   * inverse used for other matches.
+   * @param baseId - the style ID to overlay match markers onto.
+   * @returns the ID of the match style.
+   */
   withCurrentMatch(baseId: number): number {
     let id = this.currentMatchCache.get(baseId)
     if (id === undefined) {
@@ -236,11 +291,23 @@ export class StylePool {
    */
   private selectionBgCode: AnsiCode | null = null
   private selectionBgCache = new Map<number, number>()
+  /**
+   * Set the background color used by the selection overlay and clear the
+   * overlay cache so the new color takes effect.
+   * @param bg - the background ANSI code, or null to fall back to inverse.
+   */
   setSelectionBg(bg: AnsiCode | null): void {
     if (this.selectionBgCode?.code === bg?.code) return
     this.selectionBgCode = bg
     this.selectionBgCache.clear()
   }
+  /**
+   * Intern a style with the selection background replacing the cell's own
+   * background and inverse, preserving foreground attributes. Falls back to
+   * withInverse() when no selection background is set.
+   * @param baseId - the style ID to overlay the selection background onto.
+   * @returns the ID of the selection style.
+   */
   withSelectionBg(baseId: number): number {
     const bg = this.selectionBgCode
     if (bg === null) return this.withInverse(baseId)
@@ -299,6 +366,9 @@ export const enum CellWidth {
   SpacerHead = 3,
 }
 
+/**
+ * A hyperlink URI carried by a cell, or undefined when the cell has none.
+ */
 export type Hyperlink = string | undefined
 
 /**
@@ -421,6 +491,14 @@ function isEmptyCellByIndex(screen: Screen, index: number): boolean {
   return screen.cells[ci] === 0 && screen.cells[ci | 1] === 0
 }
 
+/**
+ * Return whether the cell at a position is empty or unwritten, treating
+ * out-of-bounds positions as empty.
+ * @param screen - the screen to read.
+ * @param x - the cell column.
+ * @param y - the cell row.
+ * @returns true when the cell is empty or out of bounds.
+ */
 export function isEmptyCellAt(screen: Screen, x: number, y: number): boolean {
   if (x < 0 || y < 0 || x >= screen.width || y >= screen.height) return true
   return isEmptyCellByIndex(screen, y * screen.width + x)
@@ -428,6 +506,10 @@ export function isEmptyCellAt(screen: Screen, x: number, y: number): boolean {
 
 /**
  * Check if a Cell (view object) represents an empty cell.
+ * @param screen - the screen the cell belongs to, for its empty style ID.
+ * @param cell - the cell view to inspect.
+ * @returns true when the cell is a space with the empty style, narrow
+ *   width, and no hyperlink.
  */
 export function isCellEmpty(screen: Screen, cell: Cell): boolean {
   // Check if cell looks like an empty cell (space, empty style, narrow, no link).
@@ -448,6 +530,16 @@ function internHyperlink(screen: Screen, hyperlink: Hyperlink): number {
 
 // ---
 
+/**
+ * Create a new screen with packed cell storage backed by the given shared
+ * pools. Non-integer or negative dimensions are clamped to valid integers.
+ * @param width - the screen width in cells.
+ * @param height - the screen height in rows.
+ * @param styles - the shared style pool; its `none` ID becomes the empty style.
+ * @param charPool - the shared character pool.
+ * @param hyperlinkPool - the shared hyperlink pool.
+ * @returns the new empty screen.
+ */
 export function createScreen(
   width: number,
   height: number,
@@ -497,6 +589,9 @@ export function createScreen(
  *
  * For double-buffering, this allows swapping between front and back buffers
  * without allocating new Screen objects each frame.
+ * @param screen - the screen to reset and resize.
+ * @param width - the new width in cells.
+ * @param height - the new height in rows.
  */
 export function resetScreen(
   screen: Screen,
@@ -550,6 +645,9 @@ export function resetScreen(
  * can be GC'd.
  *
  * O(width * height) but only called occasionally (e.g., between conversation turns).
+ * @param screen - the screen whose char and hyperlink IDs to migrate.
+ * @param charPool - the new character pool.
+ * @param hyperlinkPool - the new hyperlink pool.
  */
 export function migrateScreenPools(
   screen: Screen,
@@ -589,6 +687,10 @@ export function migrateScreenPools(
 /**
  * Get a Cell view at the given position. Returns a new object each call -
  * this is intentional as cells are stored packed, not as objects.
+ * @param screen - the screen to read.
+ * @param x - the cell column.
+ * @param y - the cell row.
+ * @returns the cell view, or undefined when the position is out of bounds.
  */
 export function cellAt(screen: Screen, x: number, y: number): Cell | undefined {
   if (x < 0 || y < 0 || x >= screen.width || y >= screen.height)
@@ -598,6 +700,9 @@ export function cellAt(screen: Screen, x: number, y: number): Cell | undefined {
 /**
  * Get a Cell view by pre-computed array index. Skips bounds checks and
  * index computation — caller must ensure index is valid.
+ * @param screen - the screen to read.
+ * @param index - the linear cell index (row * width + column).
+ * @returns the cell view.
  */
 export function cellAtIndex(screen: Screen, index: number): Cell {
   const ci = index << 1
@@ -618,8 +723,13 @@ export function cellAtIndex(screen: Screen, index: number): Cell {
  * fg-only styled spaces that match lastRenderedStyleId (cursor-forward
  * produces an identical visual result, avoiding a Cell allocation).
  *
+ * @param cells - the packed cell words to read (2 Int32s per cell).
+ * @param charPool - the character pool to resolve char IDs.
+ * @param hyperlinkPool - the hyperlink pool to resolve hyperlink IDs.
+ * @param index - the linear cell index (row * width + column).
  * @param lastRenderedStyleId - styleId of the last rendered cell on this
  *   line, or -1 if none yet.
+ * @returns the cell view, or undefined when the cell has no visible content.
  */
 export function visibleCellAtIndex(
   cells: Int32Array,
@@ -663,6 +773,13 @@ function cellAtCI(screen: Screen, ci: number, out: Cell): void {
   out.hyperlink = hid === 0 ? undefined : screen.hyperlinkPool.get(hid)
 }
 
+/**
+ * Return the character at a position without building a Cell view.
+ * @param screen - the screen to read.
+ * @param x - the cell column.
+ * @param y - the cell row.
+ * @returns the character string, or undefined when out of bounds.
+ */
 export function charInCellAt(
   screen: Screen,
   x: number,
@@ -689,6 +806,10 @@ export function charInCellAt(
  * placed by the wrapping logic at line-end positions where wide characters
  * wrap to the next line. This function doesn't need to handle SpacerHead
  * automatically - it will be set directly by the wrapping code.
+ * @param screen - the screen to write into.
+ * @param x - the cell column.
+ * @param y - the cell row.
+ * @param cell - the cell data to write.
  */
 export function setCellAt(
   screen: Screen,
@@ -813,6 +934,10 @@ export function setCellAt(
  * Replace the styleId of a cell in-place without disturbing char, width,
  * or hyperlink. Preserves empty cells as-is (char stays ' '). Tracks damage
  * for the cell so diffEach picks up the change.
+ * @param screen - the screen to update.
+ * @param x - the cell column.
+ * @param y - the cell row.
+ * @param styleId - the new style ID.
  */
 export function setCellStyleId(
   screen: Screen,
@@ -854,6 +979,12 @@ function internCharString(screen: Screen, char: string): number {
  * Clamps negative regionX/regionY to 0 (matching clearRegion) — absolute-
  * positioned overlays in tiny terminals can compute negative screen coords.
  * maxX/maxY should already be clamped to both screen bounds by the caller.
+ * @param dst - the destination screen.
+ * @param src - the source screen.
+ * @param regionX - the source region's left column.
+ * @param regionY - the source region's top row.
+ * @param maxX - the exclusive right edge of the region.
+ * @param maxY - the exclusive bottom edge of the region.
  */
 export function blitRegion(
   dst: Screen,
@@ -955,6 +1086,11 @@ export function blitRegion(
  * Bulk-clear a rectangular region of the screen.
  * Uses BigInt64Array.fill() for fast row clears.
  * Handles wide character boundary cleanup at region edges.
+ * @param screen - the screen to clear.
+ * @param regionX - the region's left column.
+ * @param regionY - the region's top row.
+ * @param regionWidth - the region width in cells.
+ * @param regionHeight - the region height in rows.
  */
 export function clearRegion(
   screen: Screen,
@@ -1053,6 +1189,10 @@ export function clearRegion(
  * Vacated rows are cleared. Does NOT update damage. Both cells and the
  * noSelect bitmap are shifted so text-selection markers stay aligned when
  * this is applied to next.screen during scroll fast path.
+ * @param screen - the screen to shift.
+ * @param top - the first row of the shifted range (inclusive).
+ * @param bottom - the last row of the shifted range (inclusive).
+ * @param n - the shift in rows; positive shifts up, negative shifts down.
  */
 export function shiftRows(
   screen: Screen,
@@ -1093,9 +1233,17 @@ export function shiftRows(
 
 // Matches OSC 8 ; ; URI BEL
 const OSC8_REGEX = new RegExp(`^${ESC}\\]8${SEP}${SEP}([^${BEL}]*)${BEL}$`)
-// OSC8 prefix: ESC ] 8 ; — cheap check to skip regex for the vast majority of styles (SGR = ESC [)
+/**
+ * The OSC 8 hyperlink escape prefix (`ESC ] 8 ;`) used for cheap pre-checks
+ * before running the full OSC 8 regex.
+ */
 export const OSC8_PREFIX = `${ESC}]8${SEP}`
 
+/**
+ * Extract the hyperlink URI from the first OSC 8 style in a style stack.
+ * @param styles - the ANSI code stack to scan.
+ * @returns the hyperlink URI, or null when no OSC 8 style is present.
+ */
 export function extractHyperlinkFromStyles(
   styles: AnsiCode[],
 ): Hyperlink | null {
@@ -1110,6 +1258,11 @@ export function extractHyperlinkFromStyles(
   return null
 }
 
+/**
+ * Return the style stack with all OSC 8 hyperlink styles removed.
+ * @param styles - the ANSI code stack to filter.
+ * @returns a new stack without hyperlink styles.
+ */
 export function filterOutHyperlinkStyles(styles: AnsiCode[]): AnsiCode[] {
   return styles.filter(
     style =>
@@ -1122,6 +1275,10 @@ export function filterOutHyperlinkStyles(styles: AnsiCode[]): AnsiCode[] {
 /**
  * Returns an array of all changes between two screens. Used by tests.
  * Production code should use diffEach() to avoid allocations.
+ * @param prev - the previous screen state.
+ * @param next - the next screen state.
+ * @returns one entry per changed cell: the point plus the removed and added
+ *   cell views (undefined when that side has no cell).
  */
 export function diff(
   prev: Screen,
@@ -1152,6 +1309,10 @@ type DiffCallback = (
  * retain references to the Cell objects — their contents are overwritten each call.
  *
  * Returns true if the callback ever returned true (early exit signal).
+ * @param prev - the previous screen state.
+ * @param next - the next screen state.
+ * @param cb - the per-change callback; returning true stops iteration.
+ * @returns true when the callback requested an early exit.
  */
 export function diffEach(
   prev: Screen,
@@ -1467,6 +1628,11 @@ function diffDifferentWidth(
  * Clamps to screen bounds. Called from output.ts when a <NoSelect> box
  * renders. No damage tracking — noSelect doesn't affect terminal output,
  * only getSelectedText/applySelectionOverlay which read it directly.
+ * @param screen - the screen to update.
+ * @param x - the region's left column.
+ * @param y - the region's top row.
+ * @param width - the region width in cells.
+ * @param height - the region height in rows.
  */
 export function markNoSelectRegion(
   screen: Screen,

@@ -33,10 +33,15 @@ function isXtermJsHost(): boolean {
 // O(rows×cols).
 let layoutShifted = false
 
+/** Reset the per-frame layout-shift flag. */
 export function resetLayoutShifted(): void {
   layoutShifted = false
 }
 
+/**
+ * Whether any node's layout position or size shifted this frame, or a child was removed.
+ * @returns true when the full-damage path is needed this frame.
+ */
 export function didLayoutShift(): boolean {
   return layoutShifted
 }
@@ -46,6 +51,13 @@ export function didLayoutShift(): boolean {
 // hardware scroll (DECSTBM + SU/SD) instead of rewriting the whole
 // viewport. top/bottom are 0-indexed inclusive screen rows; delta > 0 =
 // content moved up (scrollTop increased, CSI n S).
+/**
+ * DECSTBM scroll optimization hint: when a ScrollBox's scrollTop changed
+ * between frames and nothing else moved, log-update.ts can emit a hardware
+ * scroll (DECSTBM + SU/SD) instead of rewriting the whole viewport.
+ * top/bottom are 0-indexed inclusive screen rows; delta > 0 means content
+ * moved up (scrollTop increased, CSI n S).
+ */
 export type ScrollHint = { top: number; bottom: number; delta: number }
 let scrollHint: ScrollHint | null = null
 
@@ -57,12 +69,17 @@ let scrollHint: ScrollHint | null = null
 let absoluteRectsPrev: Rectangle[] = []
 let absoluteRectsCur: Rectangle[] = []
 
+/** Reset the scroll hint for the next frame and rotate the absolute-rect buffers. */
 export function resetScrollHint(): void {
   scrollHint = null
   absoluteRectsPrev = absoluteRectsCur
   absoluteRectsCur = []
 }
 
+/**
+ * The scroll hint captured this frame, or null.
+ * @returns the scroll hint, or null when none was captured.
+ */
 export function getScrollHint(): ScrollHint | null {
   return scrollHint
 }
@@ -74,10 +91,15 @@ export function getScrollHint(): ScrollHint | null {
 // the next frame blits root and never reaches the scrollbox — drain stalls.
 let scrollDrainNode: DOMElement | null = null
 
+/** Clear the pending scroll drain node for the next frame. */
 export function resetScrollDrainNode(): void {
   scrollDrainNode = null
 }
 
+/**
+ * The ScrollBox node still draining pending scroll delta, or null.
+ * @returns the draining ScrollBox node, or null.
+ */
 export function getScrollDrainNode(): DOMElement | null {
   return scrollDrainNode
 }
@@ -90,6 +112,11 @@ export function getScrollDrainNode(): DOMElement | null {
 // scrolls, eventually clipping at the top). The frontFrame screen buffer
 // still holds the old content at that point — captureScrolledRows reads
 // from it before the front/back swap to preserve the text for copy.
+/**
+ * At-bottom follow scroll recorded this frame: the scroll delta and
+ * viewport bounds, consumed by ink.tsx to translate the active text
+ * selection so the highlight stays anchored to the text.
+ */
 export type FollowScroll = {
   delta: number
   viewportTop: number
@@ -97,6 +124,10 @@ export type FollowScroll = {
 }
 let followScroll: FollowScroll | null = null
 
+/**
+ * Read and clear the follow-scroll event recorded this frame.
+ * @returns the follow-scroll delta and viewport bounds, or null.
+ */
 export function consumeFollowScroll(): FollowScroll | null {
   const f = followScroll
   followScroll = null
@@ -188,6 +219,8 @@ function wrapWithOsc8Link(text: string, url: string): string {
 /**
  * Build a mapping from each character position in the plain text to its segment index.
  * Returns an array where charToSegment[i] is the segment index for character i.
+ * @param segments - the styled segments whose characters to map.
+ * @returns an array mapping each plain-text character index to its segment index.
  */
 function buildCharToSegmentMap(segments: StyledSegment[]): number[] {
   const map: number[] = []
@@ -203,10 +236,14 @@ function buildCharToSegmentMap(segments: StyledSegment[]): number[] {
 /**
  * Apply styles to wrapped text by mapping each character back to its original segment.
  * This preserves per-segment styles even when text wraps across lines.
- *
+ * @param wrappedPlain - the wrapped plain text to style.
+ * @param segments - the original styled segments.
+ * @param charToSegment - character-to-segment index map for the original plain text.
+ * @param originalPlain - the original unwrapped plain text.
  * @param trimEnabled - Whether whitespace trimming is enabled (wrap-trim mode).
  *   When true, we skip whitespace in the original that was trimmed from the output.
  *   When false (wrap mode), all whitespace is preserved so no skipping is needed.
+ * @returns the styled wrapped text.
  */
 function applyStylesToWrappedText(
   wrappedPlain: string,
@@ -383,17 +420,20 @@ function applyPaddingToText(
   return text
 }
 
-// After nodes are laid out, render each to output object, which later gets rendered to terminal
+/**
+ * Render a laid-out node subtree into the output buffer.
+ * After yoga lays out the tree, each node is painted to the output object,
+ * which later gets written to the terminal.
+ * @param node - the DOM node to render.
+ * @param output - the output buffer receiving paint operations.
+ * @param options - render options: the child coordinate offset, the
+ *   previous frame's screen for blitting, whether to skip the node's own
+ *   blit, and the inherited background color.
+ */
 function renderNodeToOutput(
   node: DOMElement,
   output: Output,
-  {
-    offsetX = 0,
-    offsetY = 0,
-    prevScreen,
-    skipSelfBlit = false,
-    inheritedBackgroundColor,
-  }: {
+  options: {
     offsetX?: number
     offsetY?: number
     prevScreen: Screen | undefined
@@ -406,6 +446,13 @@ function renderNodeToOutput(
     inheritedBackgroundColor?: Color
   },
 ): void {
+  const {
+    offsetX = 0,
+    offsetY = 0,
+    prevScreen,
+    skipSelfBlit = false,
+    inheritedBackgroundColor,
+  } = options
   const { yogaNode } = node
 
   if (yogaNode) {

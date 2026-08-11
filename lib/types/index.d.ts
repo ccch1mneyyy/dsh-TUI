@@ -10,6 +10,10 @@ import type { Context } from '@deepseek-ai/cordis';
 import Schema from '@deepseek-ai/schemastery';
 export declare const name = "cc-tui";
 export declare const inject: string[];
+/**
+ * cc-tui plugin configuration: session attachment, model route, working
+ * directory, and display preferences.
+ */
 export interface Config {
     /** Existing session to attach; a fresh session is created when absent. */
     sessionId?: string;

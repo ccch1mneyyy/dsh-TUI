@@ -49,6 +49,8 @@ function getBidi() {
  * bidi support (Windows Terminal, conhost, WSL).
  *
  * Returns the same array on bidi-capable terminals (no-op).
+ * @param characters - clustered chars in logical order.
+ * @returns the characters in visual order, or the same array when no reordering applies.
  */
 export function reorderBidi(characters: ClusteredChar[]): ClusteredChar[] {
   if (!needsBidi() || characters.length === 0) {

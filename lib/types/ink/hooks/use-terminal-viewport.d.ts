@@ -21,6 +21,8 @@ type ViewportEntry = {
  * @example
  * const [ref, entry] = useTerminalViewport()
  * return <Box ref={ref}><Animation enabled={entry.isVisible}>...</Animation></Box>
+ * @returns a tuple of a ref callback to attach to the tracked element and the
+ *   current viewport entry object.
  */
 export declare function useTerminalViewport(): [
     ref: (element: DOMElement | null) => void,

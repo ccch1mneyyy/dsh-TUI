@@ -1,5 +1,9 @@
 import { EventEmitter } from '../events/emitter.js';
 import type { TerminalQuerier } from '../terminal-querier.js';
+/**
+ * The `StdinContext` value: the stdin stream plus the raw-mode and Ctrl+C
+ * handling helpers Ink provides around it.
+ */
 export type Props = {
     /**
      * Stdin stream passed to `render()` in `options.stdin` or `process.stdin` by default. Useful if your app needs to handle user input.

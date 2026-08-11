@@ -14,6 +14,10 @@ import { nodeCache } from './node-cache.js'
  *
  * Returns the hit node even if it has no onClick — dispatchClick walks up
  * via parentNode to find handlers.
+ * @param node - the subtree root to test.
+ * @param col - the screen column to test.
+ * @param row - the screen row to test.
+ * @returns the deepest element whose rect contains (col, row), or null.
  */
 export function hitTest(
   node: DOMElement,
@@ -45,6 +49,11 @@ export function hitTest(
  * containing node up through parentNode. Only nodes with an onClick handler
  * fire. Stops when a handler calls stopImmediatePropagation(). Returns
  * true if at least one onClick handler fired.
+ * @param root - the tree root to hit-test.
+ * @param col - the screen column of the click.
+ * @param row - the screen row of the click.
+ * @param cellIsBlank - whether the clicked cell is blank, reported on the event.
+ * @returns true when at least one onClick handler fired.
  */
 export function dispatchClick(
   root: DOMElement,
@@ -98,6 +107,10 @@ export function dispatchClick(
  * Mutates `hovered` in place so the caller (App instance) can hold it
  * across calls. Clears the set when the hit is null (cursor moved into a
  * non-rendered gap or off the root rect).
+ * @param root - the tree root to hit-test.
+ * @param col - the screen column of the pointer.
+ * @param row - the screen row of the pointer.
+ * @param hovered - the previously hovered element set; updated in place.
  */
 export function dispatchHover(
   root: DOMElement,

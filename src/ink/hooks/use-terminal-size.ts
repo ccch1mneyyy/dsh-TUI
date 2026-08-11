@@ -4,7 +4,9 @@ import {
   TerminalSizeContext,
 } from '../components/TerminalSizeContext.js'
 
-/** Terminal dimensions from the Ink app shell (ported from the leak). */
+/** Terminal dimensions from the Ink app shell (ported from the leak).
+ * @returns the current terminal dimensions.
+ */
 export function useTerminalSize(): TerminalSize {
   const size = useContext(TerminalSizeContext)
 

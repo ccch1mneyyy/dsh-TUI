@@ -5,10 +5,12 @@
  * `\uFE0E` forces text rendering so Windows never paints the glyphs as
  * color emoji (the green-block problem).
  */
+/** One working-activity preset: the frame sequence and the per-frame interval. */
 export interface FramePreset {
     readonly frames: readonly string[];
     readonly intervalMs: number;
 }
+/** Named working-activity frame presets, keyed by preset name (`claude`, `moon`, `sand`, ...). */
 export declare const FRAME_PRESETS: Record<string, FramePreset>;
 /** The pi extension's default preset. */
 export declare const DEFAULT_PRESET = "moon";

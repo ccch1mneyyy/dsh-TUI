@@ -15,7 +15,13 @@ type InkNode = {
   style: Styles
 }
 
+/**
+ * Node name of a text node in the ink DOM.
+ */
 export type TextName = '#text'
+/**
+ * Names of the element node kinds the ink DOM supports.
+ */
 export type ElementNames =
   | 'ink-root'
   | 'ink-box'
@@ -25,8 +31,15 @@ export type ElementNames =
   | 'ink-progress'
   | 'ink-raw-ansi'
 
+/**
+ * Union of every node name in the ink DOM: element names plus `#text`.
+ */
 export type NodeNames = ElementNames | TextName
 
+/**
+ * An element node in the ink DOM: a named, styled container holding child
+ * nodes, attributes, layout state, and render hooks.
+ */
 export type DOMElement = {
   nodeName: ElementNames
   attributes: Record<string, DOMNodeAttribute>
@@ -96,11 +109,18 @@ export type DOMElement = {
   debugOwnerChain?: string[]
 } & InkNode
 
+/**
+ * A text leaf node in the ink DOM holding a single string value.
+ */
 export type TextNode = {
   nodeName: TextName
   nodeValue: string
 } & InkNode
 
+/**
+ * Discriminated union of ink DOM nodes, resolving a node-name-bearing type
+ * to TextNode for `#text` and DOMElement otherwise.
+ */
 export type DOMNode<T = { nodeName: NodeNames }> = T extends {
   nodeName: infer U
 }
@@ -109,8 +129,18 @@ export type DOMNode<T = { nodeName: NodeNames }> = T extends {
     : DOMElement
   : never
 
+/**
+ * Attribute values storable on an ink DOM element.
+ */
 export type DOMNodeAttribute = boolean | string | number
 
+/**
+ * Create an element node of the given kind, allocating its yoga layout node
+ * unless the kind renders without layout (`ink-virtual-text`, `ink-link`,
+ * `ink-progress`).
+ * @param nodeName - the element kind to create.
+ * @returns the new element node.
+ */
 export const createNode = (nodeName: ElementNames): DOMElement => {
   const needsYogaNode =
     nodeName !== 'ink-virtual-text' &&
@@ -135,6 +165,12 @@ export const createNode = (nodeName: ElementNames): DOMElement => {
   return node
 }
 
+/**
+ * Append a child element to a parent, moving it from its current parent if
+ * any and keeping the yoga tree in sync.
+ * @param node - the parent element.
+ * @param childNode - the element to append.
+ */
 export const appendChildNode = (
   node: DOMElement,
   childNode: DOMElement,
@@ -156,6 +192,15 @@ export const appendChildNode = (
   markDirty(node)
 }
 
+/**
+ * Insert a child before an existing sibling, moving it from its current
+ * parent if any and keeping the yoga tree in sync. Nodes without a yoga
+ * node do not affect yoga indices.
+ * @param node - the parent element.
+ * @param newChildNode - the node to insert.
+ * @param beforeChildNode - the sibling the new node is inserted before;
+ *   when absent from the parent, the new node is appended.
+ */
 export const insertBeforeNode = (
   node: DOMElement,
   newChildNode: DOMNode,
@@ -205,6 +250,12 @@ export const insertBeforeNode = (
   markDirty(node)
 }
 
+/**
+ * Remove a child node from a parent, clearing its yoga node, cached rects,
+ * and parent reference.
+ * @param node - the parent element.
+ * @param removeNode - the child node to remove.
+ */
 export const removeChildNode = (
   node: DOMElement,
   removeNode: DOMNode,
@@ -248,6 +299,13 @@ function collectRemovedRects(
   }
 }
 
+/**
+ * Set an attribute on an element, skipping `children` and unchanged values
+ * so unrelated renders do not mark the node dirty.
+ * @param node - the element to update.
+ * @param key - the attribute name.
+ * @param value - the attribute value.
+ */
 export const setAttribute = (
   node: DOMElement,
   key: string,
@@ -267,6 +325,12 @@ export const setAttribute = (
   markDirty(node)
 }
 
+/**
+ * Replace an element's style, skipping the write when the new style is
+ * shallow-equal to the current one to avoid needless dirty marks.
+ * @param node - the node to update.
+ * @param style - the new style object.
+ */
 export const setStyle = (node: DOMNode, style: Styles): void => {
   // Compare style properties to avoid marking dirty unnecessarily.
   // React creates new style objects on every render even when unchanged.
@@ -277,6 +341,12 @@ export const setStyle = (node: DOMNode, style: Styles): void => {
   markDirty(node)
 }
 
+/**
+ * Replace an element's text styles, skipping the write when the new styles
+ * are shallow-equal to the current ones to avoid needless dirty marks.
+ * @param node - the element to update.
+ * @param textStyles - the new text styles.
+ */
 export const setTextStyles = (
   node: DOMElement,
   textStyles: TextStyles,
@@ -319,6 +389,11 @@ function shallowEqual<T extends object>(
   return true
 }
 
+/**
+ * Create a text node holding the given string.
+ * @param text - the text content.
+ * @returns the new text node.
+ */
 export const createTextNode = (text: string): TextNode => {
   const node: TextNode = {
     nodeName: '#text',
@@ -482,6 +557,7 @@ const measureRawAnsiNode = function (node: DOMElement): {
 /**
  * Mark a node and all its ancestors as dirty for re-rendering.
  * Also marks yoga dirty for text remeasurement if this is a text node.
+ * @param node - the node whose dirty chain to mark; a no-op when undefined.
  */
 export const markDirty = (node?: DOMNode): void => {
   let current: DOMNode | undefined = node
@@ -505,16 +581,25 @@ export const markDirty = (node?: DOMNode): void => {
   }
 }
 
-// Walk to root and call its onRender (the throttled scheduleRender). Use for
-// DOM-level mutations (scrollTop changes) that should trigger an Ink frame
-// without going through React's reconciler. Pair with markDirty() so the
-// renderer knows which subtree to re-evaluate.
+/**
+ * Walk to the root and call its onRender (the throttled scheduleRender).
+ * Use for DOM-level mutations (scrollTop changes) that should trigger an
+ * Ink frame without going through React's reconciler. Pair with markDirty()
+ * so the renderer knows which subtree to re-evaluate.
+ * @param node - the node to walk up from; a no-op when undefined.
+ */
 export const scheduleRenderFrom = (node?: DOMNode): void => {
   let cur: DOMNode | undefined = node
   while (cur?.parentNode) cur = cur.parentNode
   if (cur && cur.nodeName !== '#text') (cur).onRender?.()
 }
 
+/**
+ * Replace a text node's value, skipping the write when unchanged and
+ * marking the node dirty otherwise.
+ * @param node - the text node to update.
+ * @param text - the new text value; non-strings are stringified.
+ */
 export const setTextNodeValue = (node: TextNode, text: string): void => {
   if (typeof text !== 'string') {
     text = String(text)
@@ -533,9 +618,12 @@ function isDOMElement(node: DOMElement | TextNode): node is DOMElement {
   return node.nodeName !== '#text'
 }
 
-// Clear yogaNode references recursively before freeing.
-// freeRecursive() frees the node and ALL its children, so we must clear
-// all yogaNode references to prevent dangling pointers.
+/**
+ * Clear yogaNode references on a node and its whole subtree before freeing.
+ * freeRecursive() frees the node and ALL its children, so every reference
+ * must be cleared to prevent dangling pointers.
+ * @param node - the node whose subtree to clear.
+ */
 export const clearYogaNodeReferences = (node: DOMElement | TextNode): void => {
   if ('childNodes' in node) {
     for (const child of node.childNodes) {
@@ -554,6 +642,10 @@ export const clearYogaNodeReferences = (node: DOMElement | TextNode): void => {
  *
  * Only useful when CLAUDE_CODE_DEBUG_REPAINTS is set (otherwise chains are
  * undefined and this returns []).
+ * @param root - the ink-root element to search from.
+ * @param y - the screen row to locate.
+ * @returns the debugOwnerChain of the deepest node containing `y`, or an
+ *   empty array when none is recorded.
  */
 export function findOwnerChainAtRow(root: DOMElement, y: number): string[] {
   let best: string[] = []
