@@ -9,6 +9,7 @@ import { Config } from './index.js'
 import { createChannel } from './channel.js'
 import { QuestionStore } from './questions.js'
 import { readActivityFrames } from './activityPrefs.js'
+import { writeResumeTarget } from './sessionHistory.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider } from './ui.js'
 
@@ -61,27 +62,55 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
     handle,
   })
+  // Single exit funnel: `/exit`, double Ctrl+C, and external teardown all
+  // land here. unmount() restores the terminal (cursor, raw mode, mouse
+  // tracking); the explicit newlines afterwards keep the shell prompt from
+  // overlapping the TUI's last line — the bare unmount left the cursor at
+  // the end of the final frame, so the prompt printed over it.
+  let instance: Awaited<ReturnType<typeof render>> | undefined
+  let exited = false
+  const handleExit = (): void => {
+    if (exited) return
+    exited = true
+    try {
+      writeResumeTarget(channel.agentId)
+    } catch {
+      // Best effort — the resume marker is a launcher nicety; a stale
+      // marker must never block a clean exit.
+    }
+    try {
+      instance?.unmount()
+    } catch {
+      // The terminal state may already be gone (broken pipe, alt session);
+      // the exit path must never throw.
+    }
+    if (process.stdout.isTTY) {
+      process.stdout.write(`\nResume with -c (or command below):\ndsh-cc --resume ${channel.agentId}\n\n`)
+    }
+    disposeRootAndExit(ctx, 0)
+  }
+
   const tree = React.createElement(
     ThemeProvider,
     null,
     React.createElement(Chat, {
       channel,
       questionStore,
-      onExit: () => { disposeRootAndExit(ctx, 0) },
+      onExit: handleExit,
     }),
   )
-  const instance = await render(tree, { exitOnCtrlC: false })
+  instance = await render(tree, { exitOnCtrlC: false })
 
   // If the surrounding tree goes down (reload, teardown), take the TUI with it.
   ctx.effect(() => () => {
-    instance.unmount()
+    instance?.unmount()
   })
 
   // The TUI is the front door: when it unmounts (Ctrl+C), dispose the app
-  // tree and exit the process.
-  void instance.waitUntilExit().then(() => {
-    disposeRootAndExit(ctx, 0)
-  })
+  // tree and exit the process. The rejection handler covers error-driven
+  // unmounts — without it a rejected exitPromise became an unhandled
+  // rejection instead of a clean exit.
+  void instance.waitUntilExit().then(handleExit, handleExit)
 }
 
 /**
