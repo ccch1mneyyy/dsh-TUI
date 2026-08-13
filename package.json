@@ -1,6 +1,6 @@
 {
   "name": "dsh-cc-tui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "BSD-3-Clause",
   "type": "module",
@@ -21,7 +21,6 @@
   },
   "files": [
     "lib",
-    "lib/invariant.js",
     "cordis.patch.yml",
     "cordis.yml"
   ],

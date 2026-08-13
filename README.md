@@ -45,31 +45,49 @@
 
 ## 安装
 
-前置：DSH 源码快照（`~/.dsh/source/current`）。
+前置：官方 `dsh` CLI（`npm install -g @deepseek-ai/dsh`）与 `pnpm`。
 
 ```sh
-# 1. 克隆
-git clone https://github.com/ccch1mneyyy/dsh-cc-tui.git
-cd dsh-cc-tui
+# 1. 安装官方 CLI（已装可跳过）
+npm install -g @deepseek-ai/dsh
 
-# 2. 一键装入 DSH 依赖链 + 生成完整可跑配置树
-sh install.sh --full
+# 2. 装入本插件（仓库根目录 install.sh 已封装这条命令，含 pnpm 预检）
+sh install.sh
+# 或手工执行：
+dsh plugin --profile cc-tui add dsh-cc-tui
 
-# 3. 重启 dsh 后启动
-dsh --config ~/.dsh-cc/cordis.yml
-# Windows 也可以直接用仓库里的 dsh-cc.cmd（支持 --resume 恢复上次会话）
+# 3. 启动
+#    Windows 也可用仓库里的 dsh-cc.cmd（等价，且 --resume 恢复上次会话）
+dsh --profile cc-tui
 ```
 
-已有自己配置树的用户：`sh install.sh` 后把输出里的最小片段合入你的 cordis.yml 即可。
+`add` 的语义（官方 app-boot / CLI 实现）：首次执行会在
+`$DSH_HOME/profiles/cc-tui/` 自动初始化 profile——manifest 的
+`dsh.profile.bundles` 首层为 `@deepseek-ai/dsh-base`——然后在 profile 内执行
+`pnpm add <包>`；安装成功后按「依赖是否声明 `dsh.bundle.patch`」自动把该包
+追加为 bundle 层，**无需手动改任何文件**。启动时按 bundle 顺序
+**dsh-base → 各 bundle → 你的 profile cordis.patch.yml** 叠加：base 提供
+llm/session/fs/工具/技能/审批等核心行，bundle patch 按 id 覆盖或插入自己的
+行。重复执行安全（已初始化的 profile 不会被改动）。
 
-> 构建产物 `lib/` 已入库，**安装无需构建**。开发者想改源码：`npm install`
-> 后 `sh scripts/build.sh`（自动定位 DSH 快照并链接依赖，tsc 6 编译）。
+工作状态行（随本包自动挂载）：`dsh-working-activity` 是本包的 npm 依赖，
+安装时自动带入 profile 的 node_modules；本包的 bundle patch 会直接 insert
+它的行（`publishIntervalMs: 500`），**无需单独 add**——对同一 profile 再
+单独 `add dsh-working-activity` 会产生重复行（wa 自带的自挂载补丁仅面向
+不含 cc-tui 的 profile，如纯 Web UI 场景）。
 
-## 配置（cordis.yml）
+> 构建产物 `lib/` 已打包进 npm 包，**安装无需构建**。开发者想改源码：从 git
+> 仓库 `npm install` 后 `npm run build`（tsc）即可。
+
+## 配置（profile cordis.patch.yml）
+
+官方 profile 模型下没有独立的 cordis.yml 启动文件：`$DSH_HOME/profiles/cc-tui/`
+下只有 `cordis.patch.yml`（你的补丁层，顶层 YAML 数组，`!!js` 可用）。
+以下是「想改什么怎么写」的示例，不是完整配置：
 
 ```yaml
+# 覆盖某行的 config：整段替换，想保留的 key 都要重写
 - id: cc-tui
-  name: 'dsh-cc-tui'
   config:
     provider: deepseek-official   # LLM 路由
     model: deepseek-v4-flash      # 模型
@@ -80,25 +98,24 @@ dsh --config ~/.dsh-cc/cordis.yml
     fullscreen: false             # 备用屏幕全屏模式（默认关）
     sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined  # --resume
 
-# 实时工作状态行数据源（与 Web UI 共享）
+# 调优实时工作状态行数据源（与 Web UI 共享）：随 add 已自动挂载（bundle
+# patch 自 insert），按 id 覆盖 config 即可——不要再 insert 同名行；
+# 500 让状态栏计时更跟手（先装 dsh-working-activity 时本包 patch 已带 500）
 - id: working-activity
-  name: 'dsh-working-activity'
   config:
-    publishIntervalMs: 500        # 状态快照发布间隔（越小越跟手）
+    publishIntervalMs: 500
 ```
 
-依赖官方插件（完整示例见仓库 `cordis.yml`）：llm-deepseek（thinking 开启）、
-agent-spine、bash-local、fs-local、fs-policy、tool-fs（文件读写）、tool-todo、
-subagent（spawn/fork 子代理）、plan-mode（计划模式，`/plan` + 计划审批）、
-**commands（DSH 命令注册表）+ command-goal（`/goal`）**、
-session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
-（`/compact`）、dsh-working-activity（工作状态行）。
+依赖（均由 dsh-base 层提供，无需手工挂载）：llm-deepseek（thinking 开启）、
+session（SQLite 持久化由本包 patch 插入 `sessions` 行）、bash、fs、tool-fs、
+tool-todo、subagent（spawn/fork）、plan-mode（`/plan`，`section` 由 base
+提供）、**commands（命令注册表）+ command-goal（`/goal`）**、token-meter、
+compaction-basic（`/compact`）以及 dsh-working-activity（工作状态行，随 add
+自动挂载，见上）。
 
-> 配置注意：`plan-mode` 的 `section` 为必填（空值会导致整树加载失败）；
-> `subagent` 核心服务必须先于 `subagent-spawn`/`subagent-fork` 挂载；
-> `/plan`、`/goal` 需要挂 `@deepseek-ai/dsh-commands`（命令注册表），
-> `/goal` 还需 agent-spine 开 `goals: {}`（持久化目标域服务）；
-> `/agents` 需要 `@deepseek-ai/dsh-session-query`（子代理谱系查询）。
+> 配置注意：覆盖 `plan-mode` 时 `section` 必须给非空值（空值会导致整树加载
+> 失败）；`subagent` 核心服务必须先于 spawn/fork 行挂载（base 层顺序已保证，
+> 在自己 insert 相关行时保持同样顺序）。
 
 ## 快捷键
 
@@ -140,8 +157,10 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 > `/` 菜单 = 本地命令 + 注册表命令的并集（注册表描述来自插件本身）；
 > `/plan [off|消息]` 切换计划模式，`/goal [create/edit/pause/resume/clear 目标]`
 > 管理持久化目标。
-> 技能命令通过 DSH 技能系统驱动：`install.sh` 会把对应的 SKILL.md 装进
-> `~/.dsh/skills`，命令只是把激活提示发给模型（模型用技能目录/加载工具取用）。
+> 技能命令通过 DSH 技能系统驱动：仓库 `skills/` 目录下的 SKILL.md 需自行
+> 放入技能发现目录（`~/.dsh/skills`、`~/.agents/skills` 或项目 `.dsh/skills`），
+> 命令只是把激活提示发给模型（模型用技能目录/加载工具取用）。npm 版
+> install.sh 不再自动安装技能。
 
 ## 技术要点
 

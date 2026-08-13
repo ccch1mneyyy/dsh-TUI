@@ -113,9 +113,13 @@
       config:
         path: !!js process.env.DSH_CC_SESSION_ROOT ?? (process.env.USERPROFILE ?? process.env.HOME) + '/.dsh-cc/sessions.sqlite'
 
-# working-activity 的 cc-tui 特定配置：500ms 刷新（比默认 2000ms 快，
-# 让 status-line 计时器平滑）。working-activity bundle 先 insert 自己，
-# cc-tui 再 override 其 config。
-- id: working-activity
-  config:
-    publishIntervalMs: 500
+    # Live working-line data source (thinking copy / running tool / turn
+    # summary). dsh-working-activity ships as a plain npm dependency of
+    # dsh-cc-tui — transitive deps never enter dsh.profile.bundles — so this
+    # layer inserts the row itself instead of relying on a separate bundle.
+    # publishIntervalMs 500 keeps the status-line timers ticking smoothly
+    # (default 2000ms).
+    - id: working-activity
+      name: 'dsh-working-activity'
+      config:
+        publishIntervalMs: 500

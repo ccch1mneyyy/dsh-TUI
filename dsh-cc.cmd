@@ -1,34 +1,41 @@
 @echo off
-rem dsh-cc: launch cc-tui through the official dsh profile boot.
-rem Profile: DSH_HOME/profiles/cc-tui composes dsh-base + dsh-cc-tui bundle.
-rem Requires: node >= 22.19 and a global tsx (npm install -g tsx).
-rem --tsconfig pins the ROOT tsconfig so tsx resolves workspace imports
-rem through source-plane paths. cc-tui loads via Loader exports to lib,
-rem so rebuild after src/ changes (pnpm run build).
-rem DEEPSEEK_API_KEY: user env (setx) wins; run.ts falls back to .env.
-rem dsh-cc --resume opens the session marked by /resume.
-rem DSH_HOME pins the profile root to .dsh-cc (existing sessions).
+rem dsh-cc: launch cc-tui through the official dsh CLI profile boot.
+rem Equivalent to: dsh --profile cc-tui <args>
+rem   --resume: read ~/.dsh-cc/resume.txt and feed it to the TUI as
+rem             DSH_CC_RESUME_SESSION (the TUI writes the chosen session
+rem             id there on /resume; see src/sessionHistory.ts).
+rem Prereq: dsh CLI on PATH (npm install -g @deepseek-ai/dsh). The profile
+rem         is created by `dsh plugin --profile cc-tui add dsh-cc-tui`
+rem         under $DSH_HOME/profiles/cc-tui (default ~/.dsh), so this
+rem         launcher must NOT pin DSH_HOME.
+rem NODE_ENV defaults to production: the React renderer's development build
+rem records unbounded performance.measure() entries and OOMs long sessions.
+rem WORKSPACE: 工作目录（默认当前目录；可用 DSH_CC_WORKSPACE 环境变量覆盖）。
 setlocal
-set "NODE_ENV=production"
-rem WORKSPACE: DSH 主仓库路径（默认当前目录；可用 DSH_CC_WORKSPACE 环境变量覆盖）
+if not defined NODE_ENV set "NODE_ENV=production"
 set "WORKSPACE=%DSH_CC_WORKSPACE%"
 if "%WORKSPACE%"=="" set "WORKSPACE=%CD%"
-set "DSH_HOME=%USERPROFILE%\.dsh-cc"
 cd /d "%WORKSPACE%"
 
-where node >nul 2>nul
-if %errorlevel% equ 0 (
-  set "NODE=node"
-) else (
-  rem 找不到 node：请确认 node 已加入 PATH，或把下面路径改成你自己的 node
-  set "NODE=%ProgramFiles%\nodejs\node.exe"
+where dsh >nul 2>nul
+if errorlevel 1 (
+  echo [dsh-cc] 未找到 dsh CLI。请先安装：npm install -g @deepseek-ai/dsh 1>&2
+  exit /b 1
 )
 
+set "ARGS="
+:parse
+if "%~1"=="" goto :run
 if /i "%~1"=="--resume" (
   if exist "%USERPROFILE%\.dsh-cc\resume.txt" (
     set /p DSH_CC_RESUME_SESSION=<"%USERPROFILE%\.dsh-cc\resume.txt"
   )
+) else (
+  set "ARGS=%ARGS% "%~1""
 )
+shift
+goto :parse
 
-tsx --tsconfig "%WORKSPACE%\tsconfig.json" "%WORKSPACE%\packages\ui\cc-tui\scripts\run.ts"
+:run
+@dsh --profile cc-tui %ARGS%
 endlocal
