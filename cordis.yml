@@ -1,16 +1,16 @@
 # cc-tui interactive front door over the agent-spine bundle.
-# Run with: pnpm --filter @deepseek-ai/dsh-cc-tui run tui
+# Run with: dsh --config cordis.yml (或 npm 安装后走 dsh plugin 机制)
 # Requires DEEPSEEK_API_KEY; a terminal TTY is mandatory.
 
-# The user-interaction service: hosts `ctx.userInteraction`, the seam behind
+# The user-interaction service: hosts `ctx.userQuestions`, the seam behind
 # the model-facing ask_user_question tool. cc-tui registers its questionnaire
 # provider on it; the service must live at the root so the agent loop's tool
 # execution can reach it.
-- id: user-interaction
-  name: '@deepseek-ai/dsh-user-interaction'
+- id: user-questions
+  name: '@deepseek-ai/dsh-user-questions'
 
 - id: cc-tui
-  name: '@deepseek-ai/dsh-cc-tui'
+  name: 'dsh-cc-tui'
   config:
     provider: deepseek-official
     # Startup display seed for the header/statusline; the live value from
@@ -49,7 +49,7 @@
 # Read/write/edit policy loads before the model-facing filesystem tools so
 # writes and edits require an observed file (DSH's own fs policy gate).
 - id: fs-policy
-  name: '@deepseek-ai/dsh-fs-policy'
+  name: '@deepseek-ai/dsh-fs-observation-policy'
 
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
@@ -65,12 +65,12 @@
   name: '@deepseek-ai/dsh-subagent'
 
 - id: subagent-spawn
-  name: '@deepseek-ai/dsh-subagent-spawn'
+  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
   config:
     providerName: spawn
 
 - id: subagent-fork
-  name: '@deepseek-ai/dsh-subagent-fork'
+  name: '@deepseek-ai/dsh-subagent-fork-in-process'
   config:
     providerName: fork
 
@@ -134,7 +134,7 @@
 # publishIntervalMs 500: live-phase snapshots republish every 500ms so the
 # cc-tui status-line elapsed timers tick smoothly (default 2000ms).
 - id: working-activity
-  name: '@deepseek-ai/dsh-working-activity'
+  name: 'dsh-working-activity'
   config:
     publishIntervalMs: 500
 
@@ -158,7 +158,7 @@
   name: '@deepseek-ai/dsh-token-meter'
 
 - id: compact
-  name: '@deepseek-ai/dsh-compact-basic'
+  name: '@deepseek-ai/dsh-compaction-basic'
   config:
     # DeepSeek advertises a 1M context window, so the 80% default threshold
     # would never make manual /compact useful. Default 20% (200k tokens)

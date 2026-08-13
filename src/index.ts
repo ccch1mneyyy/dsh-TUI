@@ -48,7 +48,7 @@ export const Config: Schema<Config> = Schema.object({
   effort: Schema.string().required(false),
   activity: Schema.boolean().default(true),
   activityFrames: Schema.string().required(false),
-  fullscreen: Schema.boolean().default(true),
+  fullscreen: Schema.boolean().default(false),
 })
 
 /**

@@ -39,7 +39,7 @@
 # (compact-basic defaults; e.g. 800K of the 1M-token deepseek-v4-flash window)
 # with the standard 16% retained tail. Both remain overridable for tests and
 # must keep retainRatio < thresholdRatio (BasicCompactConfig validates this).
-- id: compact-basic
+- id: compaction-basic
   config:
     thresholdRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RATIO ?? '0.8')
     retainRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RETAIN ?? '0.16')
@@ -87,7 +87,7 @@
 # service on its own context when no composition provides it (bare
 # `dsh --config cordis.yml` boots), then mounts the model-facing
 # ask_user_question tool and registers the questionnaire provider on
-# `ctx.userInteraction`.
+# `ctx.userQuestions`.
 
 - insert:
     # The interactive front door. The plugin creates/resumes its agent at
@@ -95,7 +95,7 @@
     # (exiting the process) when the TUI unmounts. `dsh-cc --resume` feeds
     # the session id through DSH_CC_RESUME_SESSION.
     - id: cc-tui
-      name: '@deepseek-ai/dsh-cc-tui'
+      name: 'dsh-cc-tui'
       config:
         provider: deepseek-official
         # Startup display seed for the header/statusline; the live value from

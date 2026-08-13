@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import type { CommandService } from '@deepseek-ai/dsh-commands'
+import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
-import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-workspace-context'
+import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
@@ -741,7 +741,7 @@ export function createChannel(
   // menu and dispatches through `execute` (which logs the paired
   // command/run + command/done records). Absent the service, only the
   // built-in local commands exist.
-  const commandService: CommandService | undefined = ctx.get('commands')
+  const commandService: CommandRuntime | undefined = ctx.get('commands')
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false

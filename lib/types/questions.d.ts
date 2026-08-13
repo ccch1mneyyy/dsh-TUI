@@ -1,7 +1,7 @@
 /**
  * Ask-user-question store — the UI-side half of the DSH user-interaction
- * seam (`ctx.userInteraction`). The harness's model-facing
- * `ask_user_question` tool calls `UserInteractionService.ask()`, which
+ * seam (`ctx.userQuestions`). The harness's model-facing
+ * `ask_user_question` tool calls `UserQuestionService.ask()`, which
  * forwards to the provider registered here; this store parks the request,
  * surfaces one question at a time to the TUI (Claude Code style
  * questionnaire), and settles the harness promise when the user answers,
@@ -11,7 +11,7 @@
  * arrive one at a time in practice (the tool blocks until answered), but
  * concurrent asks from subagents are drained FIFO.
  */
-import { type AskUserQuestionAnswer, type AskUserQuestionItem, type AskUserQuestionRequest } from '@deepseek-ai/dsh-user-interaction';
+import { type AskUserQuestionAnswer, type AskUserQuestionItem, type AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions';
 /** One answered question as the panel submits it: selected option labels
  *  plus optional free-text (the dsh protocol's "Other" answer). */
 export interface QuestionSelection {
@@ -73,7 +73,7 @@ export declare class QuestionStore {
     /** Rebuild the cached snapshot after any mutation of active/index. */
     private rebuildSnapshot;
     /**
-     * Provider entry point — called by `ctx.userInteraction.ask()` when the
+     * Provider entry point — called by `ctx.userQuestions.ask()` when the
      * model runs the `ask_user_question` tool.
      * @param request - The ask request: questions plus optional abort signal.
      * @returns A promise settling with the collected answers when the user

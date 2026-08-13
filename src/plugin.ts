@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import React from 'react'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
-import UserInteractionService from '@deepseek-ai/dsh-user-interaction'
+import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './index.js'
@@ -35,10 +35,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // agent is resolved so the per-step tool assembly includes
   // ask_user_question. Optional-service access goes through `ctx.get`, not
   // the inject proxy.
-  const userInteraction = ctx.get('userInteraction') ?? new UserInteractionService(ctx)
+  const userQuestions = ctx.get('userQuestions') ?? new UserQuestionService(ctx)
   ctx.plugin(toolAskUser)
   const questionStore = new QuestionStore()
-  userInteraction.registerProvider({
+  userQuestions.registerProvider({
     ask: request => questionStore.ask(request),
   })
   ctx.effect(() => () => questionStore.rejectAll())

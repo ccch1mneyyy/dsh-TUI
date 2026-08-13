@@ -69,7 +69,7 @@ dsh --config ~/.dsh-cc/cordis.yml
 
 ```yaml
 - id: cc-tui
-  name: '@deepseek-ai/dsh-cc-tui'
+  name: 'dsh-cc-tui'
   config:
     provider: deepseek-official   # LLM 路由
     model: deepseek-v4-flash      # 模型
@@ -77,12 +77,12 @@ dsh --config ~/.dsh-cc/cordis.yml
     activity: true                # 工作状态行开关（默认开）
     activityFrames: claude        # 指示器预设：claude/moon/comet/dots/…/random
     cwd: !!js process.cwd()       # 工作目录
-    fullscreen: true              # 备用屏幕全屏模式
+    fullscreen: false             # 备用屏幕全屏模式（默认关）
     sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined  # --resume
 
 # 实时工作状态行数据源（与 Web UI 共享）
 - id: working-activity
-  name: '@deepseek-ai/dsh-working-activity'
+  name: 'dsh-working-activity'
   config:
     publishIntervalMs: 500        # 状态快照发布间隔（越小越跟手）
 ```

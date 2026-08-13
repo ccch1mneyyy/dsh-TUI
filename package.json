@@ -1,5 +1,5 @@
 {
-  "name": "@deepseek-ai/dsh-cc-tui",
+  "name": "dsh-cc-tui",
   "version": "0.1.0",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "BSD-3-Clause",
@@ -22,7 +22,8 @@
   "files": [
     "lib",
     "lib/invariant.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "cordis.yml"
   ],
   "engines": {
     "node": "^22.19 || >=24"
@@ -33,23 +34,29 @@
     "smoke": "node --import tsx/esm scripts/smoke.tsx"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-invariants": "^0.0.1",
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
+    "@deepseek-ai/cordis": "^4.0.1"
   },
   "dependencies": {
     "@alcalzone/ansi-tokenize": "^0.3.0",
-    "@deepseek-ai/dsh-agent": "workspace:^",
-    "@deepseek-ai/dsh-commands": "workspace:^",
-    "@deepseek-ai/dsh-llm": "workspace:^",
-    "@deepseek-ai/dsh-session": "workspace:^",
-    "@deepseek-ai/dsh-tool-ask-user": "workspace:^",
-    "@deepseek-ai/dsh-user-interaction": "workspace:^",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-instructions": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-commands": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence-sqlite": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-ask-user": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "auto-bind": "^4.0.0 || ^5.0.0",
     "bidi-js": "^1.0.0",
     "chalk": "^5.0.0",
     "cli-boxes": "^3.0.0 || ^4.0.0",
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^3.0.0 || ^4.0.0",
+    "dsh-working-activity": "^0.1.0",
     "emoji-regex": "^10.0.0",
     "figures": "^6.1.0",
     "get-east-asian-width": "^1.0.0",
@@ -66,20 +73,9 @@
     "supports-hyperlinks": "^3.0.0",
     "type-fest": "^4.0.0",
     "usehooks-ts": "^3.1.0",
-    "wrap-ansi": "^8.0.0 || ^9.0.0",
-    "@deepseek-ai/dsh-session-persistence-sqlite": "workspace:^",
-    "@deepseek-ai/dsh-skill": "workspace:^",
-    "@deepseek-ai/dsh-system-prompt": "workspace:^",
-    "@deepseek-ai/dsh-working-activity": "workspace:^",
-    "@deepseek-ai/dsh-workspace-context": "workspace:^",
-    "@deepseek-ai/schemastery": "workspace:^"
+    "wrap-ansi": "^8.0.0 || ^9.0.0"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-agent-spine-demo": "workspace:^",
-    "@deepseek-ai/dsh-app-boot": "workspace:^",
-    "@deepseek-ai/dsh-bash-local": "workspace:^",
-    "@deepseek-ai/dsh-llm-deepseek": "workspace:^",
-    "@deepseek-ai/dsh-subprocess-local": "workspace:^",
     "@types/lodash-es": "^4.17.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
@@ -87,7 +83,8 @@
     "@types/semver": "^7.0.0",
     "tsx": "^4.0.0",
     "typescript": "^6.0.3",
-    "@deepseek-ai/dsh-invariants": "workspace:^"
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6"
   },
   "dsh": {
     "bundle": {
