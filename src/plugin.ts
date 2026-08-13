@@ -69,7 +69,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the end of the final frame, so the prompt printed over it.
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
-  const handleExit = (): void => {
+  const handleExit = (error?: unknown): void => {
     if (exited) return
     exited = true
     try {
@@ -84,6 +84,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       // The terminal state may already be gone (broken pipe, alt session);
       // the exit path must never throw.
     }
+    if (error !== undefined) {
+      // Error-driven unmount (render crash): stay loud and exit non-zero.
+      // A success code + resume hint here would tell wrappers/CI the
+      // session ended cleanly while the TUI actually crashed.
+      const message = error instanceof Error ? error.message : String(error)
+      ctx.logger.error(`cc-tui: exit after error: ${message}`)
+      if (process.stderr.isTTY) {
+        process.stderr.write(`\ncc-tui crashed: ${message}\n`)
+      }
+      disposeRootAndExit(ctx, 1)
+      return
+    }
     if (process.stdout.isTTY) {
       process.stdout.write(`\nResume with -c (or command below):\ndsh-cc --resume ${channel.agentId}\n\n`)
     }
@@ -96,7 +108,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     React.createElement(Chat, {
       channel,
       questionStore,
-      onExit: handleExit,
+      onExit: () => handleExit(),
     }),
   )
   instance = await render(tree, { exitOnCtrlC: false })
