@@ -137,6 +137,10 @@ async function run() {
       Buffer.from(osc52[1], 'base64').toString('utf8') === 'ello worl',
     osc52 ? Buffer.from(osc52[1], 'base64').toString('utf8') : 'no osc52',
   )
+  check(
+    'selection auto-clears after copy',
+    ink?.hasTextSelection() === false,
+  )
 
   // 3. Double-click word-select copies the word (multi-click path:
   // handleMultiClick → selectWordAt → same notify → same copy hook). The
@@ -160,11 +164,19 @@ async function run() {
     osc52Word ? Buffer.from(osc52Word[1], 'base64').toString('utf8') : 'no osc52',
   )
 
-  // 4. Esc clears the settled selection (CC precedence).
-  check('selection exists before Esc', ink?.hasTextSelection() === true)
-  stdin.write('\x1b')
+  // 4. Esc cancels an in-progress drag without copying (press+drag held,
+  // no release: the selection exists but has not settled).
+  stdin.write('\x1b[<0;2;3M')   // press on 'line two' row
+  await sleep(80)
+  stdin.write('\x1b[<32;6;3M')  // drag held
+  await sleep(150)
+  check('mid-drag selection exists', ink?.hasTextSelection() === true)
+  const before = stdout.frames.join('').match(/\x1b\]52;c;/g)?.length ?? 0
+  stdin.write('\x1b')           // Esc
   await sleep(300)
-  check('Esc clears the selection', ink?.hasTextSelection() === false)
+  const after2 = stdout.frames.join('').match(/\x1b\]52;c;/g)?.length ?? 0
+  check('Esc cancels the drag (selection gone)', ink?.hasTextSelection() === false)
+  check('Esc cancel copies nothing', after2 === before)
 
   instance.unmount()
   await sleep(100)

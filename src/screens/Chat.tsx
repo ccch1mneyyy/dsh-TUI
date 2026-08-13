@@ -239,7 +239,10 @@ export function Chat({
   // Mouse text selection auto-copy (CC's copy-on-select): active only in
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
   // subscription in inline mode, where selection belongs to the terminal.
-  useCopyOnSelect()
+  // The copy clears the highlight and posts a transient notification.
+  useCopyOnSelect(text =>
+    channel.notify(`已复制 ${text.length} 个字符`, { timeoutMs: 1500 }),
+  )
   const { clearSelection: clearMouseSelection, hasSelection: hasMouseSelection } =
     useSelection()
   React.useEffect(() => {

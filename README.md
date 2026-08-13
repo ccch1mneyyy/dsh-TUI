@@ -137,10 +137,10 @@ compaction-basic（`/compact`）以及 dsh-working-activity（工作状态行，
 
 | 操作 | 功能 |
 |---|---|
-| 拖拽选择 | 应用内文本选区，**松开即复制**（OSC 52 + `wl-copy`/`xclip`/`xsel` 原生兜底；tmux 内走 `load-buffer -w`） |
+| 拖拽选择 | 应用内文本选区，**松开即复制**（OSC 52 + `wl-copy`/`xclip`/`xsel` 原生兜底；tmux 内走 `load-buffer -w`），复制后自动取消选区并弹出「已复制 N 个字符」提示 |
 | 双击 / 三击 | 选词 / 选行，同样即选即复制 |
 | 滚轮 | 滚动消息列表 |
-| `Esc` | 清除选区高亮 |
+| `Esc` | 拖拽进行中取消选区（不复制） |
 
 > 全屏模式用 alt-screen 渲染（退出 TUI 后内容回主屏）；设 `fullscreen: false`
 > 退回 inline 模式，鼠标交还终端模拟器原生选择（"选择即复制"由终端自身
