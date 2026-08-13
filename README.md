@@ -158,8 +158,9 @@ compaction-basic（`/compact`）以及 dsh-working-activity（工作状态行，
 > `/` 菜单 = 本地命令 + 注册表命令的并集（注册表描述来自插件本身）；
 > `/plan [off|消息]` 切换计划模式，`/goal [create/edit/pause/resume/clear 目标]`
 > 管理持久化目标。
-> 技能命令通过 DSH 技能系统驱动：仓库 `skills/` 目录下的 SKILL.md 需自行
-> 放入技能发现目录（`~/.dsh/skills`、`~/.agents/skills` 或项目 `.dsh/skills`），
+> 技能命令通过 DSH 技能系统驱动：`skills/` 目录随 npm 包分发，插件启动时
+> 自动注册进技能注册表，**无需手动复制**。也可把 SKILL.md 放入
+> 技能发现目录（`~/.dsh/skills`、`~/.agents/skills` 或项目 `.dsh/skills`）覆盖同名技能，
 > 命令只是把激活提示发给模型（模型用技能目录/加载工具取用）。npm 版
 > install.sh 不再自动安装技能。
 

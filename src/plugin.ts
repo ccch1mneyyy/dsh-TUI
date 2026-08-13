@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
 import { QuestionStore } from './questions.js'
+import { registerPackagedSkills } from './packaged-skills.js'
 import { readActivityFrames } from './activityPrefs.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider } from './ui.js'
@@ -38,6 +39,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const userQuestions = ctx.get('userQuestions') ?? new UserQuestionService(ctx)
   ctx.plugin(toolAskUser)
   const questionStore = new QuestionStore()
+  // Packaged skills (/audit, /bug, …): contribute them through the host's
+  // skill registry so they resolve with zero manual copying.
+  registerPackagedSkills(ctx)
   userQuestions.registerProvider({
     ask: request => questionStore.ask(request),
   })
