@@ -4,7 +4,7 @@
 > 思考流式展开、双击 Esc 时间回溯、蓝白上下文进度条 + TPS 仪表。
 > 零核心改动，纯插件挂载。
 
-![类型](https://img.shields.io/badge/type-cordis%20plugin-blue) ![内测](https://img.shields.io/badge/status-内测-yellow)
+![类型](https://img.shields.io/badge/type-cordis%20plugin-blue) ![状态](https://img.shields.io/badge/status-公测-blue)
 
 ## 界面预览
 
@@ -45,12 +45,12 @@
 - **DSH 官方机制优先**：消息来自会话日志事件流，fork/resume/compact 全走官方
   服务（agents/sessions/sessionPersistence/compact），插件卸载即完全还原。
 
-## 安装（组织内 · 私有仓库）
+## 安装
 
-前置：DSH 源码快照（`~/.dsh/source/current`）+ 组织读权限。
+前置：DSH 源码快照（`~/.dsh/source/current`）。
 
 ```sh
-# 1. 克隆（私有仓库，仅 dsh-external 组织成员可读）
+# 1. 克隆
 git clone https://github.com/dsh-external/dsh-cc-tui.git
 cd dsh-cc-tui
 

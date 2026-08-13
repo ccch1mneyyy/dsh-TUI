@@ -10,7 +10,9 @@ rem dsh-cc --resume opens the session marked by /resume.
 rem DSH_HOME pins the profile root to .dsh-cc (existing sessions).
 setlocal
 set "NODE_ENV=production"
-set "WORKSPACE=D:\code\projects\test-ccch1mneyyy"
+rem WORKSPACE: DSH 主仓库路径（默认当前目录；可用 DSH_CC_WORKSPACE 环境变量覆盖）
+set "WORKSPACE=%DSH_CC_WORKSPACE%"
+if "%WORKSPACE%"=="" set "WORKSPACE=%CD%"
 set "DSH_HOME=%USERPROFILE%\.dsh-cc"
 cd /d "%WORKSPACE%"
 
@@ -18,7 +20,8 @@ where node >nul 2>nul
 if %errorlevel% equ 0 (
   set "NODE=node"
 ) else (
-  set "NODE=D:\node\node.exe"
+  rem 找不到 node：请确认 node 已加入 PATH，或把下面路径改成你自己的 node
+  set "NODE=%ProgramFiles%\nodejs\node.exe"
 )
 
 if /i "%~1"=="--resume" (
