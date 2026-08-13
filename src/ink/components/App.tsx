@@ -258,6 +258,17 @@ export default class App extends PureComponent<Props, State> {
         // init sequence completes — avoids interleaving with alt-screen/mouse
         // tracking enable writes that may happen in the same render cycle.
         this.xtversionProbe = setImmediate(() => {
+          this.xtversionProbe = null
+          // A short-lived raw-mode borrower (ThemeProvider's OSC 11 theme
+          // probe) can acquire and release raw mode entirely within this
+          // tick, so this deferred probe may fire after echo has already
+          // been restored — the terminal's replies would then echo onto
+          // the screen as visible garbage. Only query while raw mode is
+          // still held; if it was released, the next acquisition (count
+          // 0→1) queues a fresh probe.
+          if (this.rawModeEnabledCount === 0) {
+            return
+          }
           void Promise.all([this.querier.send(xtversion()), this.querier.flush()]).then(([r]) => {
             if (r) {
               setXtversionName(r.name)
