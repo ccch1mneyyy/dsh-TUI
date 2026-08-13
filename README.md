@@ -51,7 +51,7 @@
 
 ```sh
 # 1. 克隆
-git clone https://github.com/dsh-external/dsh-cc-tui.git
+git clone https://github.com/ccch1mneyyy/dsh-cc-tui.git
 cd dsh-cc-tui
 
 # 2. 一键装入 DSH 依赖链 + 生成完整可跑配置树
@@ -71,7 +71,7 @@ dsh --config ~/.dsh-cc/cordis.yml
 
 ```yaml
 - id: cc-tui
-  name: '@dsh-external/dsh-cc-tui'
+  name: '@deepseek-ai/dsh-cc-tui'
   config:
     provider: deepseek-official   # LLM 路由
     model: deepseek-v4-flash      # 模型
@@ -164,7 +164,7 @@ session-persistence-jsonl（rewind/resume 的数据底座）、compact-basic
 - **TPS 仪表**：参考 pi-tps-meter——流式 1/8 格 gauge、历史 min-max sparkline、
   速度语义色（≥50 绿 / ≥20 黄 / <20 红）。
 - **working-activity 生态**：工作状态行消费
-  [dsh-working-activity](https://github.com/dsh-external/dsh-working-activity)
+  [dsh-working-activity](https://github.com/ccch1mneyyy/dsh-working-activity)
   的 log-only `activity/status` 事件（与 Web UI 同一数据源，cc-tui 只做渲染）；
   `⏵` 自述行自动从聊天正文剥离。
 - **会话恢复**：`/resume` 列表标题 = 会话第一条 user 消息（最新 20 个会话），

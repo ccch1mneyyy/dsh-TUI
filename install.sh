@@ -56,7 +56,7 @@ if [ "${1:-}" != "--full" ]; then
   echo ""
   cat <<'EOF'
 - id: cc-tui
-  name: '@dsh-external/dsh-cc-tui'
+  name: '@deepseek-ai/dsh-cc-tui'
   config:
     provider: deepseek-official
     effort: max
