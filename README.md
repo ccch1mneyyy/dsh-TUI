@@ -82,7 +82,7 @@ dsh --config ~/.dsh-cc/cordis.yml
     fullscreen: true              # 备用屏幕全屏模式
     sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined  # --resume
 
-# 实时工作状态行数据源（组织内插件，与 Web UI 共享）
+# 实时工作状态行数据源（与 Web UI 共享）
 - id: working-activity
   name: '@deepseek-ai/dsh-working-activity'
   config:
