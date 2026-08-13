@@ -10,6 +10,8 @@ import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
+import { useCopyOnSelect } from '../ink/hooks/use-copy-on-select.js'
+import { useSelection } from '../ink/hooks/use-selection.js'
 import { NoSelect } from '../ink/components/NoSelect.js'
 import instances from '../ink/instances.js'
 import { LogoHeader, MessageList } from '../components/MessageList.js'
@@ -234,6 +236,12 @@ export function Chat({
   // `✦` otherwise. cc-tui brands the idle prefix with the DeepSeek whale.
   const [titleFrame, setTitleFrame] = React.useState(0)
   const terminalFocused = useTerminalFocus()
+  // Mouse text selection auto-copy (CC's copy-on-select): active only in
+  // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
+  // subscription in inline mode, where selection belongs to the terminal.
+  useCopyOnSelect()
+  const { clearSelection: clearMouseSelection, hasSelection: hasMouseSelection } =
+    useSelection()
   React.useEffect(() => {
     if (!channel.working || !terminalFocused) return
     const interval = setInterval(() => {
@@ -708,6 +716,24 @@ export function Chat({
     // panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc; the prompt
     // input is unmounted, so nothing else should see these keys).
     if (questionSnapshot !== null) return
+    // Mouse wheel scrolls the transcript — in fullscreen there is no
+    // terminal scrollback (alt-screen), so this is the only way back.
+    // Imperative scrollBy: no React re-render per notch (CC semantics).
+    // Events only arrive with mouse tracking on; inline mode never sees
+    // them, so this is a no-op there.
+    if (key.wheelUp || key.wheelDown) {
+      handle?.scrollBy(key.wheelUp ? -3 : 3)
+      event.stopImmediatePropagation()
+      return
+    }
+    // Esc clears a settled mouse selection first (CC precedence), ahead of
+    // every other Esc meaning below (close pickers, interrupt the turn).
+    // hasSelection() is an imperative read — no subscription needed.
+    if (key.escape && hasMouseSelection()) {
+      clearMouseSelection()
+      event.stopImmediatePropagation()
+      return
+    }
     if (searchOpen) {
       // Transcript search bar (less-style): edit the query, Enter commits
       // (query persists for n/N), Esc/ctrl+c cancels back to the anchor.

@@ -1,9 +1,9 @@
-import React, { PureComponent, type ReactNode } from 'react';
-import { EventEmitter } from '../events/emitter.js';
-import { type ParsedKey, type ParsedMouse } from '../parse-keypress.js';
-import { type SelectionState } from '../selection.js';
-import { TerminalQuerier } from '../terminal-querier.js';
-import { type CursorDeclarationSetter } from './CursorDeclarationContext.js';
+import React, { PureComponent, type ReactNode } from "react";
+import { EventEmitter } from "../events/emitter.js";
+import { type ParsedKey, type ParsedMouse } from "../parse-keypress.js";
+import { type SelectionState } from "../selection.js";
+import { TerminalQuerier } from "../terminal-querier.js";
+import { type CursorDeclarationSetter } from "./CursorDeclarationContext.js";
 type Props = {
     readonly children: ReactNode;
     readonly stdin: NodeJS.ReadStream;
@@ -52,6 +52,7 @@ export default class App extends PureComponent<Props, State> {
     lastHoverCol: number;
     lastHoverRow: number;
     lastStdinTime: number;
+    writeRaw: (data: string) => void;
     isRawModeSupported(): boolean;
     render(): React.JSX.Element;
     componentDidMount(): void;

@@ -13,6 +13,10 @@
   name: 'dsh-cc-tui'
   config:
     provider: deepseek-official
+    # Alt-screen fullscreen (CC 同款): 应用内鼠标选区（选择即复制, OSC 52 +
+    # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
+    # inline 渲染, 鼠标交给终端模拟器原生选择。
+    fullscreen: true
     # Startup display seed for the header/statusline; the live value from
     # request headers replaces it after the first turn. Keep in sync with
     # the adapter's reasoningEffort below.
