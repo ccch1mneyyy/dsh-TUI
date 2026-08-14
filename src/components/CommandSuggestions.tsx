@@ -4,6 +4,23 @@ import { stringWidth } from '../ink/stringWidth.js'
 import type { LocalCommand } from '../commands.js'
 
 /**
+ * Slice a string to at most `maxWidth` terminal cells, walking by code
+ * point so CJK wide characters never split mid-glyph. Assumes no ANSI in
+ * the description (LocalCommand descriptions are plain text).
+ */
+function truncateToWidth(text: string, maxWidth: number): string {
+  let width = 0
+  let out = ''
+  for (const char of text) {
+    const charWidth = stringWidth(char)
+    if (width + charWidth > maxWidth) break
+    width += charWidth
+    out += char
+  }
+  return out
+}
+
+/**
  * The slash-command suggestion overlay, ported from the leak's
  * `PromptInputFooterSuggestions.tsx` (command layout only): a name column
  * padded to a fixed width, optional `[tag]`, then a truncated description.
@@ -52,8 +69,8 @@ export function CommandSuggestions({
           columns - nameWidth - tagWidth - 4,
         )
         const description =
-          command.description.length > descriptionWidth
-            ? command.description.slice(0, descriptionWidth - 1) + '…'
+          stringWidth(command.description) > descriptionWidth
+            ? truncateToWidth(command.description, descriptionWidth - 1) + '…'
             : command.description
         return (
           <Text key={command.name} wrap="truncate">
