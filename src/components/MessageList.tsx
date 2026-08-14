@@ -551,7 +551,7 @@ function TranscriptRow({
             <Text dimColor>{text}</Text>
           ) : (
             <Text dimColor italic>
-              ∴ 摘要已折叠 · {compactPreview(text)}{' '}
+              ∴ {t('compact-summary-folded')} · {compactPreview(text)}{' '}
               <KeyboardShortcutHint shortcut="ctrl+o" action="expand" parens />
             </Text>
           )}

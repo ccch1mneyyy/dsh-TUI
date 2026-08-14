@@ -991,7 +991,7 @@ export function createChannel(
    *  on this channel (resume/model switch re-validate it per route). */
   const cycleEffort = async (): Promise<void> => {
     if (llmRuntime === undefined) {
-      state.notify('推理等级切换不可用（llm 服务未挂载）', { color: 'error' })
+      state.notify(t('effort-unavailable'), { color: 'error' })
       return
     }
     let efforts: ReadonlyArray<{ id: string; name: string }>
@@ -1001,7 +1001,7 @@ export function createChannel(
       efforts = info.reasoning?.efforts ?? []
       defaultEffort = info.reasoning?.defaultEffort
     } catch (error) {
-      state.notify(`推理等级读取失败 · ${error instanceof Error ? error.message : String(error)}`, {
+      state.notify(t('effort-read-failed', { error: error instanceof Error ? error.message : String(error) }), {
         color: 'error',
         timeoutMs: 8000,
       })
@@ -1010,8 +1010,8 @@ export function createChannel(
     if (efforts.length <= 1) {
       state.notify(
         efforts.length === 1
-          ? `当前模型只有一档推理等级（${efforts[0]!.name}）`
-          : '当前模型不支持推理等级切换',
+          ? t('effort-single-tier', { name: efforts[0]!.name })
+          : t('effort-unsupported'),
         { color: 'warning' },
       )
       return
@@ -1029,7 +1029,7 @@ export function createChannel(
     preferredEffort = next.id
     state.reasoningEffort = next.id
     writeEffortPref(next.id)
-    state.notify(`推理强度 → ${next.name}`)
+    state.notify(t('effort-switched', { name: next.name }))
     state.emit()
   }
 

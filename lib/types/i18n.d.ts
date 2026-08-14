@@ -550,6 +550,38 @@ declare const dict: {
         readonly zh: "⚠ 上下文";
         readonly en: "⚠ ctx ";
     };
+    readonly 'activity-random-each-preset': {
+        readonly zh: "每次随机一个预设";
+        readonly en: "random preset each time";
+    };
+    readonly 'preset-default-tag': {
+        readonly zh: "（默认）";
+        readonly en: " (default)";
+    };
+    readonly 'preset-broken-tag': {
+        readonly zh: "（无法加载）";
+        readonly en: " (failed to load)";
+    };
+    readonly 'effort-unavailable': {
+        readonly zh: "推理等级切换不可用（llm 服务未挂载）";
+        readonly en: "Reasoning effort switching unavailable (llm service not mounted)";
+    };
+    readonly 'effort-read-failed': {
+        readonly zh: "推理等级读取失败 · {{error}}";
+        readonly en: "Failed to read reasoning efforts · {{error}}";
+    };
+    readonly 'effort-single-tier': {
+        readonly zh: "当前模型只有一档推理等级（{{name}}）";
+        readonly en: "Current model has a single reasoning effort ({{name}})";
+    };
+    readonly 'effort-unsupported': {
+        readonly zh: "当前模型不支持推理等级切换";
+        readonly en: "Current model does not support reasoning effort switching";
+    };
+    readonly 'effort-switched': {
+        readonly zh: "推理强度 → {{name}}";
+        readonly en: "Reasoning effort → {{name}}";
+    };
     readonly 'logo-tagline': {
         readonly zh: "探索未至之境！";
         readonly en: "Explore the uncharted!";
@@ -597,6 +629,18 @@ declare const dict: {
     readonly 'input-clipboard-empty': {
         readonly zh: "剪贴板为空";
         readonly en: "Clipboard is empty";
+    };
+    readonly 'input-pending-steer-label': {
+        readonly zh: "插话 · 下一步送达";
+        readonly en: "Steer · delivered next";
+    };
+    readonly 'input-pending-queue-label': {
+        readonly zh: "排队 · 回合结束后送达";
+        readonly en: "Queued · delivered after the turn";
+    };
+    readonly 'input-pending-actions-hint': {
+        readonly zh: "撤回 · Esc 打断并立即发送";
+        readonly en: "Retract · Esc interrupts and sends immediately";
     };
     readonly 'frame-blink': {
         readonly zh: "眨眼";
@@ -653,6 +697,10 @@ declare const dict: {
     readonly 'resume-none-in-cwd': {
         readonly zh: "当前目录没有可恢复的历史会话";
         readonly en: "No resumable sessions in the current directory";
+    };
+    readonly 'compact-summary-folded': {
+        readonly zh: "摘要已折叠";
+        readonly en: "Summary folded";
     };
     readonly 'theme-builtin-base': {
         readonly zh: "内置 · {{name}} 基底";

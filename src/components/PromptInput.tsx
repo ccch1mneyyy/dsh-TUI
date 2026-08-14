@@ -846,7 +846,7 @@ export function PromptInput({
         <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
           {channel.pending.some(item => item.placement === 'steer') && (
             <Box flexDirection="column">
-              <Text dimColor>⚡ 插话 · 下一步送达</Text>
+              <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
               {channel.pending
                 .filter(item => item.placement === 'steer')
                 .map(item => (
@@ -858,7 +858,7 @@ export function PromptInput({
           )}
           {channel.pending.some(item => item.placement === 'followup') && (
             <Box flexDirection="column">
-              <Text dimColor>⏳ 排队 · 回合结束后送达</Text>
+              <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
               {channel.pending
                 .filter(item => item.placement === 'followup')
                 .map(item => (
@@ -868,7 +868,7 @@ export function PromptInput({
                 ))}
             </Box>
           )}
-          <Text dimColor>Alt+↑ 撤回 · Esc 打断并立即发送</Text>
+          <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
         </Box>
       )}
       {fileOverlayOpen && (

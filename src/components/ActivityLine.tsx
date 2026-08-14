@@ -73,7 +73,7 @@ export function ActivityLine({
       )}
       {warnPct !== undefined && warnPct >= 80 && (
         <Text color={warnDanger ? 'error' : 'warning'}>
-          ⚠ 上下文{warnPct}% ·{' '}
+          {t('activity-ctx-warn')}{warnPct}% ·{' '}
         </Text>
       )}
       {activity.phase === 'done' ? (
