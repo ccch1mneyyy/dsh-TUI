@@ -75,6 +75,8 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
   { name: 'exit', description: 'Exit dsh-tui' },
+  { name: 'quit', description: 'Exit dsh-tui', tag: 'alias of /exit' },
+  { name: 'q', description: 'Exit dsh-tui', tag: 'alias of /exit' },
 ]
 
 /**

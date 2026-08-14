@@ -544,6 +544,8 @@ export function Chat({
         openRewind()
         return true
       case 'exit':
+      case 'quit':
+      case 'q':
         onExit()
         return true
       case 'status': {
