@@ -81,3 +81,17 @@ jobs:
       # 斜杠命令描述 i18n 回归（issue #41）：/ 菜单与 ? 帮助菜单描述随
       # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
       - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx
+      # /effort API + Shift+Tab 会话模式循环回归：listEfforts/setEffort、
+      # 默认三档循环（/plan 注册表命令 + sandbox/approval 会话事件）、
+      # 自定义 modes、无 /plan 时整体中止。HOME 隔离避免污染真实
+      # ~/.dsh-cc/effort.json。
+      - run: HOME=$(mktemp -d) node scripts/verify-effort-mode.mjs
+
+      # Shift+Tab 键路回归：backtab（\x1b[Z）恰好触发一次 cycleMode，
+      # 不误触发送路径；plain Tab 不循环模式。
+      - run: node scripts/verify-shift-tab-mode.mjs
+
+      # /effort 滑杆 + 模式指示全应用回归（真实 Chat 渲染）：滑杆开/
+      # ←/→ 实时生效/Esc 关闭、状态栏 effort 段与模式段、三次 backtab
+      # 完整循环。
+      - run: node scripts/verify-effort-slider-ui.mjs
