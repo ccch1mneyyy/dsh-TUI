@@ -2,7 +2,7 @@
   <img src="screenshots/splash.png" alt="dsh-cc-tui — DeepSeek Harness 的 Claude Code 风格终端 TUI" width="100%">
 </p>
 
-# dsh-cc-tui — 仿Anthropic美学风格的全屏交互终端
+# dsh-TUI — 仿Anthropic美学风格的全屏交互终端
 
 > **DeepSeek Harness 官方目前还没有终端 TUI（只有 Web UI） 因此！我制作了这个dsh-cc-tui！：
 > 一个美观且实用的 Claude Code 风格 TUI 插件（cordis 挂载）：像素鲸鱼顶栏、双流光大字、
