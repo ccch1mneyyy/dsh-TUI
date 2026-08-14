@@ -69,3 +69,7 @@ jobs:
       # CJK 显示宽度截断回归（issue #41）：4 处描述按终端显示宽度处理，
       # CJK 不劈字、窄终端布局不破。
       - run: node --import tsx/esm scripts/verify-cjk-truncate.tsx
+
+      # thinking spinner 残影回归（issue #72）：text-default emoji（✳）
+      # 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
+      - run: node --import tsx/esm scripts/repro-thinking.tsx
