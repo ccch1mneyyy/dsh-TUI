@@ -1,6 +1,6 @@
 allowBuilds:
   esbuild: false
-  koffi: false
+  koffi: true
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-include@1.0.6'
   - '@deepseek-ai/cordis-plugin-loader@1.0.2'
