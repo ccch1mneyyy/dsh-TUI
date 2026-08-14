@@ -1,7 +1,7 @@
 import React from 'react';
 import type { LoadedContext } from '../channel.js';
 /**
- * The startup `已加载上下文` panel: a collapsed one-line summary of what a
+ * The startup context panel: a collapsed one-line summary of what a
  * fresh conversation will load for the current agent (system prompt
  * sections, workspace instruction files, dynamic context, skill catalog,
  * tools). Toggle with Ctrl+T (see HelpMenu; the ported ink core has no

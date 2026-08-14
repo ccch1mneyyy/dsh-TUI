@@ -13,6 +13,7 @@ import { readActivityFrames } from './activityPrefs.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
 import { writeResumeTarget } from './sessionHistory.js'
+import { isLang, resolveStartupLang, setLang } from './i18n.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
 
@@ -29,6 +30,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (!process.stdout.isTTY) {
     throw new Error('cc-tui requires an interactive terminal (stdout must be a TTY).')
   }
+
+  // UI language resolution: CC_TUI_LANG env var wins, then cordis.yml
+  // `lang`, then the persisted `/lang` choice, then `zh`. Must settle
+  // before the first render so every module resolves strings in the same
+  // language.
+  const envLang = process.env.CC_TUI_LANG
+  setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
 
   // DSH user-interaction seam: the model's ask_user_question tool parks on
   // the userInteraction service until a UI provider answers. Mount the

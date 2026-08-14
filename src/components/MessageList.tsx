@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ChatRow, ToolRow } from '../channel.js'
 import type { DOMElement } from '../ink/dom.js'
@@ -260,7 +261,7 @@ export function MessageList({
     <>
       {rows.some(row => row.folded) && (
         <Box marginTop={1} onClick={onLoadOlder}>
-          <Divider title={' ↑ 加载更早消息（会话日志完整，/export 导出全文） '} />
+          <Divider title={t('load-earlier')} />
         </Box>
       )}
       {!showAll && hiddenCount > 0 && (

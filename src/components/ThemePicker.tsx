@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import { Pane } from './design-system/Pane.js'
 import { Select, type SelectOption } from './Select.js'
@@ -50,14 +51,14 @@ function optionFor(name: string, displayName: string, theme: Theme, description:
 export function getThemeOptions(): SelectOption[] {
   const builtins = THEME_NAMES.map(name => {
     const theme = getTheme(name)
-    return optionFor(name, name, theme, `内置 · ${name} 基底`)
+    return optionFor(name, name, theme, t('theme-builtin-base', { name }))
   })
   const custom = listCustomThemes().map(spec =>
     optionFor(
       spec.name,
       spec.displayName,
       buildTheme(spec),
-      `${spec.base} 基底 · ~/.dsh-cc/themes/${spec.name}.json`,
+      t('theme-user-base', { base: spec.base, name: spec.name }),
     ),
   )
   return [...builtins, ...custom]

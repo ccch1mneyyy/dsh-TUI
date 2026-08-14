@@ -36,6 +36,9 @@ export interface Config {
     activityFrames?: string;
     /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
     fullscreen?: boolean;
+    /** UI language: `en` / `zh`. When absent, the `CC_TUI_LANG` env var wins,
+     *  then the `/lang` choice persisted in `~/.dsh-cc/lang.json`, then `zh`. */
+    lang?: string;
     /** Agent preset id new sessions compose from (standard/code/minimal/
      *  cordis/… when the roster is mounted). When absent, the `/preset` choice
      *  persisted in `~/.dsh-cc/agent-preset.json` wins, then the roster
