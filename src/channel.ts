@@ -1328,8 +1328,9 @@ export function createChannel(
     },
     async resumeTo(sessionId: string): Promise<boolean> {
       // Switch the live agent to a persisted session: /resume picker Enter
-      // loads the history immediately (the `--resume` launcher path keeps
-      // resolving through DSH_CC_RESUME_SESSION at boot).
+      // loads the history immediately (the launcher path — `--resume <id>` /
+      // `-c` / DSH_CC_RESUME_SESSION — re-enters through resolveAgent at
+      // boot instead).
       if (state.working) {
         state.notify('Cannot resume while a turn is running', { color: 'warning' })
         return false

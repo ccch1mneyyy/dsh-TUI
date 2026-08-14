@@ -24,6 +24,23 @@ echo
 echo "安装完成。启动：dsh --profile cc-tui"
 echo "Windows 也可以用仓库根目录的 dsh-cc.cmd（--resume 恢复上次会话）。"
 echo
+
+# macOS/Linux：装一个 dsh-cc 启动器到 PATH（等价 dsh --profile cc-tui，
+# 且 -c/--resume 恢复上次会话；与 scripts/deploy-profile.sh 默认目录一致，
+# 避免出现两个 dsh-cc 副本）。
+if [ "$(uname -s 2>/dev/null || echo Windows)" != "Windows" ] && [ -f "$(dirname "$0")/dsh-cc" ]; then
+  mkdir -p "$HOME/.local/bin"
+  if install -m 755 "$(dirname "$0")/dsh-cc" "$HOME/.local/bin/dsh-cc"; then
+    echo "已安装启动器 $HOME/.local/bin/dsh-cc（dsh-cc -c 恢复上次会话）"
+    case ":$PATH:" in
+      *":$HOME/.local/bin:"*) ;;
+      *) echo "提示：$HOME/.local/bin 不在 PATH，请自行加入（export PATH=\"\$HOME/.local/bin:\$PATH\"）" ;;
+    esac
+  else
+    echo "提示：可手动安装启动器：install -m 755 dsh-cc ~/.local/bin/dsh-cc"
+  fi
+fi
+echo
 echo "注意：不要再对同一 profile 单独 add dsh-working-activity——它已随"
 echo "cc-tui 的补丁层自动挂载，重复 add 会产生重复行。想调参（如"
 echo "publishIntervalMs）在 \$DSH_HOME/profiles/cc-tui/cordis.patch.yml 按 id 覆盖："

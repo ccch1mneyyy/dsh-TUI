@@ -8,7 +8,8 @@ export interface SessionRecord {
 }
 /**
  * Store the session to resume and report the launcher invocation.
- * @param sessionId - Session id for `dsh-cc --resume` on the next launch.
+ * @param sessionId - Session id for the next launch's `-c` / `--resume` /
+ *   `dsh-cc --resume` (the exit hint prints `dsh --profile cc-tui --resume <id>`).
  */
 export declare function writeResumeTarget(sessionId: string): void;
 /** Forget the resume marker (`/new` starts a fresh conversation). */

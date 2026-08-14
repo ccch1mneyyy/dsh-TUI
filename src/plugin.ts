@@ -13,8 +13,9 @@ import { readActivityFrames } from './activityPrefs.js'
 import { readModelPref } from './modelPrefs.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
-import { writeResumeTarget } from './sessionHistory.js'
-import { isLang, resolveStartupLang, setLang } from './i18n.js'
+import { readResumeTarget, writeResumeTarget } from './sessionHistory.js'
+import { CC_TUI_USAGE, parseCcTuiArgs } from './args.js'
+import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
 
@@ -28,6 +29,21 @@ import { render, ThemeProvider, AlternateScreen } from './ui.js'
  * LLM adapter, and the tool plugins.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  // The launcher's inner arguments (`dsh --profile cc-tui ...`) reach the
+  // tree through the optional `cmdlineArgs` service — absent under the dev
+  // runner (scripts/run.ts boots without a launcher). Explicit flags win
+  // over the DSH_CC_RESUME_SESSION env the legacy dsh-cc wrappers feed.
+  const cmdline = ctx.get('cmdlineArgs') as { get(): readonly string[] } | undefined
+  const parsed = cmdline !== undefined ? parseCcTuiArgs(cmdline.get()) : undefined
+  if (parsed?.help === true) {
+    // `-h` / `--help`: print usage and exit before any agent/session work
+    // (and before the TTY gate, so `--help` also works piped/redirected).
+    process.stdout.write(CC_TUI_USAGE)
+    const exit = ctx.get('appExit') as ((code: number) => void) | undefined
+    if (exit !== undefined) exit(0)
+    return
+  }
+
   if (!process.stdout.isTTY) {
     throw new Error('cc-tui requires an interactive terminal (stdout must be a TTY).')
   }
@@ -67,7 +83,30 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     model: config.model,
   }
   const meta = { cwd: config.cwd ?? process.cwd() }
-  const { agent, handle, agentPreset } = await resolveAgent(ctx, config.sessionId, agentOptions, meta, config.preset)
+
+  let sessionId = config.sessionId
+  let initialPrompt: string | undefined
+  if (parsed !== undefined) {
+    if (parsed.resumeId !== undefined) {
+      sessionId = parsed.resumeId
+    } else if (parsed.continueLast) {
+      // `-c` / bare `--resume`: the last session the TUI wrote to
+      // ~/.dsh-cc/resume.txt (fall back to the env-fed value, then fresh).
+      sessionId = readResumeTarget() ?? sessionId
+    }
+    initialPrompt = parsed.prompt
+  }
+  // Empty-string resume targets (e.g. a cleared ~/.dsh-cc/resume.txt fed
+  // through DSH_CC_RESUME_SESSION) mean "no resume", same as undefined —
+  // otherwise the fallback note below would fire for every fresh boot.
+  if (sessionId !== undefined && sessionId.trim() === '') sessionId = undefined
+  const requestedSessionId = sessionId
+
+  const { agent, handle, agentPreset } = await resolveAgent(ctx, sessionId, agentOptions, meta, config.preset)
+  // A resume request that fell back to a fresh session (missing artifact,
+  // persistence not mounted) deserves a visible note — silent fresh sessions
+  // look like the request was ignored.
+  const resumeFellBack = requestedSessionId !== undefined && String(agent.id) !== requestedSessionId
 
   // Status-line route: cordis.yml explicit keys win over the persisted
   // `/model` choice, which wins over the harness defaults.
@@ -127,7 +166,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       return
     }
     if (process.stdout.isTTY) {
-      process.stdout.write(`\nResume with -c (or command below):\ndsh-cc --resume ${channel.agentId}\n\n`)
+      process.stdout.write(`\nResume with -c (or command below):\ndsh --profile cc-tui --resume ${channel.agentId}\n\n`)
     }
     disposeRootAndExit(ctx, 0)
   }
@@ -148,6 +187,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   )
   instance = await render(tree, { exitOnCtrlC: false })
 
+  // `dsh --profile cc-tui "run the tests"` — submit the positional prompt as
+  // the first turn once the first frame paints (the TUI stays open for
+  // follow-ups). Best effort: a rejected followup must not kill the TUI.
+  if (initialPrompt !== undefined) {
+    setImmediate(() => {
+      try {
+        channel.submit(initialPrompt)
+      } catch (error) {
+        ctx.logger.warn(
+          `cc-tui: initial prompt submission failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    })
+  }
+  if (resumeFellBack) {
+    channel.notify(t('resume-fallback-new-session'), { color: 'warning', timeoutMs: 8000 })
+  }
+
   // If the surrounding tree goes down (reload, teardown), take the TUI with it.
   ctx.effect(() => () => {
     instance?.unmount()
@@ -161,8 +218,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
 }
 
 /**
- * Attach to an existing agent, resume a persisted session (`dsh-cc --resume`
- * feeds the id through `config.sessionId`), or create a fresh one. Resume
+ * Attach to an existing agent, resume a persisted session (`--resume <id>` /
+ * `-c` on the launch command line, or `DSH_CC_RESUME_SESSION` fed by the
+ * legacy dsh-cc wrappers, all through `config.sessionId`), or create a fresh
+ * one. Resume
  * goes through the DSH persistence seam (`ctx.agents.resume` reads the
  * session log written by dsh-session-persistence-jsonl); a missing artifact
  * or unmounted backend falls back to a fresh session, as does a plain boot

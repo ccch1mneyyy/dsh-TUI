@@ -707,6 +707,10 @@ declare const dict: {
         readonly zh: "摆尾巴3";
         readonly en: "tail3";
     };
+    readonly 'resume-fallback-new-session': {
+        readonly zh: "未能恢复指定会话，已新建会话";
+        readonly en: "Could not resume the requested session — started a new one";
+    };
     readonly 'load-earlier': {
         readonly zh: " ↑ 加载更早消息（会话日志完整，/export 导出全文） ";
         readonly en: " ↑ load earlier messages (full session log; /export for full text) ";

@@ -1,0 +1,66 @@
+#!/bin/sh
+# dsh-cc: launch cc-tui through the official dsh CLI profile boot (macOS/Linux).
+# Equivalent to: dsh --profile cc-tui <args>
+#   -c / --continue          resume the last session (~/.dsh-cc/resume.txt)
+#   --resume [<session-id>]  resume a specific persisted session (or the last one)
+#   "<prompt>"               submit the prompt as the first turn
+# The TUI itself understands these flags since this version; the wrapper still
+# translates them to DSH_CC_RESUME_SESSION so it also works with older
+# profile installs that only read the env var. Combined flags follow the TUI
+# semantics: an explicit <id> wins over -c, regardless of order. An empty
+# `--resume=` means the last session, same as the TUI.
+# Windows equivalent: dsh-cc.cmd
+set -eu
+
+resume_file="${HOME:?}/.dsh-cc/resume.txt"
+
+# Quote one argument for re-eval (portable single-quote escaping).
+quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# Resume the last session: read the marker the TUI writes on exit.
+resume_last() {
+  if [ -r "$resume_file" ]; then
+    DSH_CC_RESUME_SESSION="$(cat "$resume_file")"
+    export DSH_CC_RESUME_SESSION
+  fi
+}
+
+resume_id=""
+continue_last=""
+passthrough=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -c|--continue)
+      continue_last=1
+      ;;
+    --resume|-r)
+      if [ "$#" -ge 2 ] && ! printf '%s' "$2" | grep -q '^-'; then
+        resume_id="$2"
+        shift
+      else
+        continue_last=1
+      fi
+      ;;
+    --resume=*)
+      value="${1#--resume=}"
+      if [ -n "$value" ]; then resume_id="$value"; else continue_last=1; fi
+      ;;
+    *)
+      passthrough="$passthrough $(quote "$1")"
+      ;;
+  esac
+  shift
+done
+
+# Explicit id wins over -c (TUI precedence); empty means the last session.
+if [ -n "$resume_id" ]; then
+  DSH_CC_RESUME_SESSION="$resume_id"
+  export DSH_CC_RESUME_SESSION
+elif [ -n "$continue_last" ]; then
+  resume_last
+fi
+
+# shellcheck disable=SC2086 -- intentional: passthrough holds quoted args.
+eval "exec dsh --profile cc-tui $passthrough"

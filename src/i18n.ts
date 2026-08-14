@@ -224,6 +224,9 @@ const dict = {
   'frame-tail-2': { zh: '摆尾巴2', en: 'tail2' },
   'frame-tail-3': { zh: '摆尾巴3', en: 'tail3' },
 
+  // ── plugin.ts ───────────────────────────────────────────────────────
+  'resume-fallback-new-session': { zh: '未能恢复指定会话，已新建会话', en: 'Could not resume the requested session — started a new one' },
+
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },
   'resume-none-in-cwd': { zh: '当前目录没有可恢复的历史会话', en: 'No resumable sessions in the current directory' },

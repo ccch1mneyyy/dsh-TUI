@@ -61,8 +61,18 @@ sh install.sh
 # 或手工执行：
 dsh plugin --profile cc-tui add dsh-cc-tui
 
+# 2.5 本地改过源码（npm run build 后）想免发版立即生效：
+sh scripts/deploy-profile.sh
+
 # 3. 启动
 dsh --profile cc-tui
+#    带初始 prompt（TUI 打开后自动作为第一轮发出）：
+dsh --profile cc-tui "run the tests"
+#    恢复会话：-c 恢复上次（读 ~/.dsh-cc/resume.txt），--resume <id> 指定会话
+dsh --profile cc-tui -c
+dsh --profile cc-tui --resume 4aa10d99-1443-4ae8-8c69-593ac3e7dfd3
+#    等价启动器（macOS/Linux 仓库里的 dsh-cc，Windows 是 dsh-cc.cmd）：
+dsh-cc -c "接着上次继续"
 ```
 
 Windows 也可用仓库里的 `dsh-cc.cmd`（等价，且 `--resume` 恢复上次会话）。
@@ -174,7 +184,15 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
   速度语义色（≥50 绿 / ≥20 黄 / <20 红）。
 - **working-activity 生态**：工作状态行消费
   [dsh-working-activity](https://github.com/ccch1mneyyy/dsh-working-activity)
-  的 log-only `activity/status` 事件（与 Web UI 同一数据源）。
+- **会话恢复**：`/resume` 列表标题 = 会话第一条 user 消息（最新 20 个会话），
+  8 行滚动窗口；**按最近使用排序**（发消息/恢复/切换都会把该会话提到最前，
+  记录在 `~/.dsh-cc/last-used.json`，缺失时退回按创建时间）；Enter **立即切换**
+  到该会话并回放历史。启动时恢复同链路：`dsh --profile cc-tui -c`（读
+  `~/.dsh-cc/resume.txt`，退出时自动写入）、`--resume <id>`，或
+  `DSH_CC_RESUME_SESSION=<id> dsh --profile cc-tui`（旧 wrapper 契约，仍兼容）。
+  退出提示会打印当前会话的 `--resume <id>` 命令（本版起不再假设存在
+  `dsh-cc` 命令；macOS/Linux 想用 `dsh-cc --resume` 可装仓库根目录的
+  `dsh-cc` 启动器，install.sh 会自动装到 ~/.local/bin）。
 - **终端粘贴**：raw 模式下 Ctrl+V 由应用接管——PowerShell `Get-Clipboard` 读取，
   Explorer 复制的文件/图片插入文件路径，纯文本原样插入光标处。
 
