@@ -7,7 +7,8 @@
  *   1. `CC_TUI_LANG` env var (`en` / `zh`) — pinned at process start
  *   2. `lang` cordis.yml config key (see Config in index.ts)
  *   3. the persisted `/lang` choice in `~/.dsh-cc/lang.json`
- *   4. `zh` (the original hard-coded language)
+ *   4. the OS locale guess (`LC_ALL` / `LC_MESSAGES` / `LANG`)
+ *   5. `zh` (the original hard-coded language)
  *
  * `/lang` switches at runtime and hot-swaps the whole UI. The dictionary is
  * a flat key → per-language string map; `t(key, params)` substitutes
@@ -31,6 +32,7 @@ const dict = {
   'activity-indicator-already': { zh: '指示器已是：{{name}}', en: 'Indicator already set: {{name}}' },
   'activity-indicator-switched': { zh: '指示器已切换：{{name}}（已保存）', en: 'Indicator switched: {{name}} (saved)' },
   'activity-pref-write-failed': { zh: '无法写入 ~/.dsh-cc/working-activity.json，切换未保存', en: 'Cannot write ~/.dsh-cc/working-activity.json, switch not saved' },
+  'model-pref-write-failed': { zh: '无法写入 ~/.dsh-cc/model.json，模型选择不会保存到重启后', en: 'Cannot write ~/.dsh-cc/model.json, the model choice will not survive a restart' },
   'unknown-activity-preset': { zh: '未知预设「{{name}}」· /activity frames 查看全部', en: 'Unknown preset "{{name}}" · /activity frames to view all' },
   'preset-unavailable': { zh: 'Preset 不可用——当前组合未挂载 agent-presets 名册', en: 'Preset unavailable — the agent-presets roster is not mounted' },
   'preset-agent-running': { zh: 'Agent 运行中，无法切换 preset', en: 'Agent is running, cannot switch preset' },
@@ -351,10 +353,28 @@ export function writeLangPref(lang: Lang, dir: string = PREFS_DIR): boolean {
 }
 
 /**
- * Resolve the startup language from the persisted `/lang` choice, else `zh`.
- * The env var / config precedence lives in plugin.apply (see
- * {@link resolveStartupLang} consumers).
+ * Guess the user's language from the OS locale (`LC_ALL`, `LC_MESSAGES`,
+ * `LANG`), defaulting to `zh`. Only consulted when nothing else (env var,
+ * cordis.yml `lang`, persisted `/lang` choice) pinned a language.
+ */
+export function detectLocaleLang(): Lang {
+  const raw =
+    process.env.LC_ALL ??
+    process.env.LC_MESSAGES ??
+    process.env.LANG ??
+    ''
+  const locale = raw.split('.')[0]?.toLowerCase() ?? ''
+  if (locale.startsWith('zh')) return 'zh'
+  if (locale.startsWith('en')) return 'en'
+  return 'zh'
+}
+
+/**
+ * Resolve the startup language: the persisted `/lang` choice, else the OS
+ * locale guess, else `zh` (the original hard-coded language). The env var /
+ * config precedence lives in plugin.apply (see {@link resolveStartupLang}
+ * consumers).
  */
 export function resolveStartupLang(): Lang {
-  return readLangPref() ?? 'zh'
+  return readLangPref() ?? detectLocaleLang()
 }

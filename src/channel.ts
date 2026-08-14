@@ -1624,7 +1624,7 @@ export function createChannel(
       // contract as /preset and Shift+Tab effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
       if (!writeModelPref(provider, model)) {
-        state.notify('无法写入 ~/.dsh-cc/model.json，模型选择不会保存到重启后', {
+        state.notify(t('model-pref-write-failed'), {
           color: 'warning',
         })
       }

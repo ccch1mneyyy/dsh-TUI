@@ -7,7 +7,8 @@
  *   1. `CC_TUI_LANG` env var (`en` / `zh`) — pinned at process start
  *   2. `lang` cordis.yml config key (see Config in index.ts)
  *   3. the persisted `/lang` choice in `~/.dsh-cc/lang.json`
- *   4. `zh` (the original hard-coded language)
+ *   4. the OS locale guess (`LC_ALL` / `LC_MESSAGES` / `LANG`)
+ *   5. `zh` (the original hard-coded language)
  *
  * `/lang` switches at runtime and hot-swaps the whole UI. The dictionary is
  * a flat key → per-language string map; `t(key, params)` substitutes
@@ -29,6 +30,10 @@ declare const dict: {
     readonly 'activity-pref-write-failed': {
         readonly zh: "无法写入 ~/.dsh-cc/working-activity.json，切换未保存";
         readonly en: "Cannot write ~/.dsh-cc/working-activity.json, switch not saved";
+    };
+    readonly 'model-pref-write-failed': {
+        readonly zh: "无法写入 ~/.dsh-cc/model.json，模型选择不会保存到重启后";
+        readonly en: "Cannot write ~/.dsh-cc/model.json, the model choice will not survive a restart";
     };
     readonly 'unknown-activity-preset': {
         readonly zh: "未知预设「{{name}}」· /activity frames 查看全部";
@@ -857,9 +862,16 @@ export declare function readLangPref(dir?: string): Lang | undefined;
 /** Persist the chosen language (best effort). */
 export declare function writeLangPref(lang: Lang, dir?: string): boolean;
 /**
- * Resolve the startup language from the persisted `/lang` choice, else `zh`.
- * The env var / config precedence lives in plugin.apply (see
- * {@link resolveStartupLang} consumers).
+ * Guess the user's language from the OS locale (`LC_ALL`, `LC_MESSAGES`,
+ * `LANG`), defaulting to `zh`. Only consulted when nothing else (env var,
+ * cordis.yml `lang`, persisted `/lang` choice) pinned a language.
+ */
+export declare function detectLocaleLang(): Lang;
+/**
+ * Resolve the startup language: the persisted `/lang` choice, else the OS
+ * locale guess, else `zh` (the original hard-coded language). The env var /
+ * config precedence lives in plugin.apply (see {@link resolveStartupLang}
+ * consumers).
  */
 export declare function resolveStartupLang(): Lang;
 export {};
