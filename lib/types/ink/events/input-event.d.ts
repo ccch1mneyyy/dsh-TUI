@@ -27,6 +27,34 @@ export type Key = {
     super: boolean;
 };
 /**
+ * Resolve the effective `ctrl` flag for a keypress with OS adaptation.
+ *
+ * On macOS with extended key reporting (Kitty protocol / modifyOtherKeys),
+ * Cmd-qualified shortcuts are what `key.ctrl` bindings should respond to:
+ * Cmd arrives as `super: true` while bare Ctrl keeps its literal meaning.
+ * Outside that combination (non-macOS, or a terminal that never forwards
+ * Cmd), Ctrl stays the trigger so shortcuts remain reachable — Terminal.app
+ * and default iTerm2 do not deliver Cmd to the application at all.
+ *
+ * macOS keyboard-convention exceptions (muscle memory must not be violated):
+ *   - Reserved letters/arrows (CMD_RESERVED_KEYS) keep bare-Ctrl semantics
+ *     only; ⌘ does nothing there (e.g. ⌘C is handled by Chat as
+ *     copy-the-selection, never the interrupt path).
+ *   - `d`: Ctrl+D stays dual-triggered (Ctrl OR Cmd) as the exit hatch;
+ *     mapping it Cmd-only would strand users without a way out.
+ *
+ * Platform/capability inputs are parameters so regressions can exercise
+ * every branch deterministically.
+ */
+export declare function resolveCtrlFlag(name: string | undefined, ctrl: boolean, superKey: boolean, isMac?: boolean, extendedKeys?: boolean): boolean;
+/**
+ * macOS text-editing convention: ⌘←/⌘→ move to the start/end of the line
+ * (the Home/End meaning), not a word jump. Returns which named-key flag the
+ * Cmd-qualified arrow should carry, or null when the keypress keeps its
+ * literal meaning. Inputs are parameters for deterministic regressions.
+ */
+export declare function resolveCmdHomeEnd(name: string | undefined, superKey: boolean, isMac?: boolean, extendedKeys?: boolean): 'home' | 'end' | null;
+/**
  * Event fired for each input chunk received from stdin (a typed character or
  * a paste), carrying the parsed key flags and the text it produced.
  */
@@ -50,4 +78,3 @@ export declare class InputEvent extends Event {
     readonly isPasted: boolean;
     constructor(keypress: ParsedKey);
 }
-//# sourceMappingURL=input-event.d.ts.map

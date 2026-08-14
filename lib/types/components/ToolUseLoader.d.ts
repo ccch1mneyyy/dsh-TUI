@@ -10,4 +10,3 @@ type Props = {
  */
 export declare function ToolUseLoader({ isError, isUnresolved, shouldAnimate, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=ToolUseLoader.d.ts.map

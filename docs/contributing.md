@@ -51,8 +51,8 @@ DeepSeek Harness 拥有，TUI 只消费它们。
   被禁用的 host 行、insert/override 语义都很关键。
 - `cordis.yml`：直接 Cordis/DSH 启动的完整裸组合示例。
 - `scripts/`：无头回归、复现环境、探针与诊断。运行前先读脚本头部说明。
-- `lib/types/`：`tsc` 的入库产物（JavaScript、声明与声明映射），由 `src/`
-  生成并随 npm 分发。
+- `lib/types/`：`tsc` 的入库产物（JavaScript 与声明），由 `src/` 生成并随 npm
+  分发。不含声明映射（`.d.ts.map`）——`declarationMap` 已关闭，理由见下。
 - `lib/invariant.js`：`./invariant` 的独立打包运行时导出；普通 `pnpm build`
   不会重新生成它。
 - `README.md` 与 `README_EN.md`：中英文用户文档。行为、配置、快捷键与限制
@@ -108,8 +108,14 @@ Cordis config
 生成产物规则：
 
 - 改 `src/`，**绝不直接改 `lib/types/`**。
-- 任何源码改动后运行 `pnpm build`，并提交对应的 `lib/types/` JavaScript、
-  `.d.ts` 与 `.d.ts.map` 变更。
+- 任何源码改动后运行 `pnpm build`，并提交对应的 `lib/types/` JavaScript 与
+  `.d.ts` 变更。
+- `declarationMap` 保持关闭，不要重新打开。声明映射的唯一用途是让使用者在
+  编辑器里「转到定义」时跳进原始 `.ts`，而这要求源码随包分发；本包的 `files`
+  不含 `src/`（`npm pack` 实测：625 个文件中 `src/` 为 0），映射指向的路径不
+  在包里，跳转不成立。代价却是实打实的：`.d.ts.map` 是把整份文件压成一行的
+  坐标表，源码动一处它整行重写，而 git 按行合并——两个 PR 碰同一模块必然在
+  这一行冲突，且只能靠重建解决、无法手工合并。
 - `tsc` 不清理 `outDir`。重命名或删除源模块后，检查 `lib/types/` 并只删除该
   模块的过期输出。
 - 审查生成的 diff。意外变化通常意味着编译器/配置或依赖的意外漂移。

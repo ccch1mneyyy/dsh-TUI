@@ -19,4 +19,3 @@ export declare function WhaleArt({ frameIndex, width, }: {
     frameIndex?: number;
     width?: number;
 }): React.ReactNode;
-//# sourceMappingURL=Whale.d.ts.map

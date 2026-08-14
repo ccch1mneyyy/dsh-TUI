@@ -14,4 +14,3 @@ export declare function PresetPicker({ presets, focusIndex, currentPreset, }: {
     focusIndex: number;
     currentPreset: string | undefined;
 }): React.ReactNode;
-//# sourceMappingURL=PresetPicker.d.ts.map

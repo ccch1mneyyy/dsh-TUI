@@ -2,6 +2,7 @@ import React from 'react'
 import Box from '../ink/components/Box.js'
 import Text from '../ink/components/Text.js'
 import type { LocalCommand } from '../commands.js'
+import { isMacOS } from '../utils/platform.js'
 
 /**
  * The `?` help menu, ported from the leak's `PromptInputHelpMenu.tsx`
@@ -14,6 +15,12 @@ export function HelpMenu({
 }: {
   commands: readonly LocalCommand[]
 }): React.ReactNode {
+  // macOS shows ⌘ for the modifier that actually triggers the shortcuts
+  // (Cmd via kitty/modifyOtherKeys; Ctrl remains the fallback elsewhere).
+  const mod = isMacOS ? '⌘' : 'ctrl+'
+  // Word jump keeps its platform-native modifier: Option on macOS,
+  // Ctrl everywhere else (⌘←/⌘→ is line start/end on macOS).
+  const wordJumpMod = isMacOS ? 'opt+' : 'ctrl+'
   return (
     <Box paddingX={2} flexDirection="row" gap={4}>
       <Box flexDirection="column" width={26} flexShrink={0}>
@@ -24,22 +31,22 @@ export function HelpMenu({
           <Text dimColor>? for this help</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+o for verbose output</Text>
+          <Text dimColor>{mod}o for verbose output</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+t to toggle context</Text>
+          <Text dimColor>{mod}t to toggle context</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+r to search history</Text>
+          <Text dimColor>{mod}r to search history</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+c to interrupt</Text>
+          <Text dimColor>{mod}c to interrupt</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+d to exit</Text>
+          <Text dimColor>{mod}d to exit</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+l to redraw</Text>
+          <Text dimColor>{mod}l to redraw</Text>
         </Box>
       </Box>
       <Box flexDirection="column" width={24} flexShrink={0}>
@@ -53,7 +60,7 @@ export function HelpMenu({
           <Text dimColor>←/→ to move cursor</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+←/→ for word jumps</Text>
+          <Text dimColor>{wordJumpMod}←/→ for word jumps</Text>
         </Box>
         <Box>
           <Text dimColor>tab to complete command</Text>

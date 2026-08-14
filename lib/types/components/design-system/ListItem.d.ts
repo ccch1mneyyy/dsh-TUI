@@ -33,4 +33,3 @@ export type ListItemProps = {
  * green).
  */
 export declare function ListItem({ isFocused, isSelected, children, description, showScrollDown, showScrollUp, styled, disabled, declareCursor, }: ListItemProps): React.ReactNode;
-//# sourceMappingURL=ListItem.d.ts.map

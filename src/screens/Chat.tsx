@@ -13,6 +13,7 @@ import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { useCopyOnSelect } from '../ink/hooks/use-copy-on-select.js'
 import { useSelection } from '../ink/hooks/use-selection.js'
+import { isMacOS } from '../utils/platform.js'
 import { NoSelect } from '../ink/components/NoSelect.js'
 import instances from '../ink/instances.js'
 import { LogoHeader, MessageList } from '../components/MessageList.js'
@@ -267,8 +268,11 @@ export function Chat({
   useCopyOnSelect(text =>
     channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 }),
   )
-  const { clearSelection: clearMouseSelection, hasSelection: hasMouseSelection } =
-    useSelection()
+  const {
+    clearSelection: clearMouseSelection,
+    hasSelection: hasMouseSelection,
+    copySelection: copyMouseSelection,
+  } = useSelection()
   React.useEffect(() => {
     if (!channel.working || !terminalFocused) return
     const interval = setInterval(() => {
@@ -868,6 +872,19 @@ export function Chat({
       event.stopImmediatePropagation()
       return
     }
+    // macOS Cmd+C copies the active mouse selection (native muscle memory);
+    // resolveCtrlFlag deliberately keeps it off the interrupt path. Consumed
+    // here so the 'c' never falls through to text input.
+    if (isMacOS && key.super && input === 'c') {
+      if (hasMouseSelection()) {
+        const text = copyMouseSelection()
+        if (text) {
+          channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 })
+        }
+      }
+      event.stopImmediatePropagation()
+      return
+    }
     if (searchOpen) {
       // Transcript search bar (less-style): edit the query, Enter commits
       // (query persists for n/N), Esc/ctrl+c cancels back to the anchor.
@@ -896,7 +913,7 @@ export function Chat({
         setSearchCursor(0)
       } else if (key.end) {
         setSearchCursor(searchQuery.length)
-      } else if (!key.ctrl && !key.meta && input) {
+      } else if (!key.ctrl && !key.meta && input && !key.super) {
         const next = searchQuery.slice(0, searchCursor) + input + searchQuery.slice(searchCursor)
         setSearchQuery(next)
         setSearchCursor(searchCursor + input.length)
@@ -1087,7 +1104,7 @@ export function Chat({
         setHistoryCursor(0)
       } else if (key.end) {
         setHistoryCursor(historyQuery.length)
-      } else if (!key.ctrl && !key.meta && input) {
+      } else if (!key.ctrl && !key.meta && input && !key.super) {
         const next = historyQuery.slice(0, historyCursor) + input + historyQuery.slice(historyCursor)
         setHistoryQuery(next)
         setHistoryCursor(historyCursor + input.length)
@@ -1163,7 +1180,7 @@ export function Chat({
     } else if (key.ctrl && input === 'o') {
       // Leaving transcript mode (Ctrl+O) — search was already handled above.
       setExpanded(previous => !previous)
-    } else if (input === '/' && !key.ctrl && !key.meta) {
+    } else if (input === '/' && !key.ctrl && !key.meta && !key.super) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
       // search is active on the transcript screen where `/` isn't a command).
       if (expanded) {

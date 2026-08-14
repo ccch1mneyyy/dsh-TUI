@@ -22,4 +22,3 @@ export interface OpeningStep {
 }
 /** Startup sequence (~3.4s), ending on the standard pose. */
 export declare const OPENING_SEQUENCE: readonly OpeningStep[];
-//# sourceMappingURL=whaleFrames.d.ts.map

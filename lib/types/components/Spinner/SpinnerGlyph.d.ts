@@ -13,4 +13,3 @@ type Props = {
  */
 export declare function SpinnerGlyph({ frame, messageColor, stalledIntensity, reducedMotion, time, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=SpinnerGlyph.d.ts.map

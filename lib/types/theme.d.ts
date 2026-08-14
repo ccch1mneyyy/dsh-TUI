@@ -112,4 +112,3 @@ export declare function setActiveThemeName(name: ThemeName): void;
  * @returns The palette of the module-level active theme.
  */
 export declare function getActiveTheme(): Theme;
-//# sourceMappingURL=theme.d.ts.map

@@ -16,4 +16,3 @@ export declare class Event {
      */
     stopImmediatePropagation(): void;
 }
-//# sourceMappingURL=event.d.ts.map

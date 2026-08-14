@@ -20,4 +20,3 @@ export declare function LogoV2({ model, effort, cwd, skipIntro, }: {
     /** Test seam: mount straight into the settled header (probes skip the intro). */
     skipIntro?: boolean;
 }): React.ReactNode;
-//# sourceMappingURL=LogoV2.d.ts.map

@@ -34,4 +34,3 @@ export declare function readModelPref(dir?: string): ModelPref | undefined;
  * @returns True when the file was written, false on failure.
  */
 export declare function writeModelPref(provider: string, model: string, dir?: string): boolean;
-//# sourceMappingURL=modelPrefs.d.ts.map

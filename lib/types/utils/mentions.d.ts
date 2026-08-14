@@ -27,4 +27,3 @@ export declare function mentionAtCaret(value: string, cursor: number): {
     end: number;
     query: string;
 } | undefined;
-//# sourceMappingURL=mentions.d.ts.map

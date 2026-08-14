@@ -785,4 +785,3 @@ declare const YOGA_INSTANCE: Yoga;
  */
 export declare function loadYoga(): Promise<Yoga>;
 export default YOGA_INSTANCE;
-//# sourceMappingURL=index.d.ts.map

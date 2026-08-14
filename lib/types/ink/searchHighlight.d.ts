@@ -22,4 +22,3 @@ import { type Screen, type StylePool } from './screen.js';
  * @returns true when at least one occurrence was highlighted.
  */
 export declare function applySearchHighlight(screen: Screen, query: string, stylePool: StylePool): boolean;
-//# sourceMappingURL=searchHighlight.d.ts.map

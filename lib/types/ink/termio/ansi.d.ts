@@ -72,4 +72,3 @@ export declare function isC0(byte: number): boolean;
  * @returns true when the byte is in the final-byte range (0x30-0x7E).
  */
 export declare function isEscFinal(byte: number): boolean;
-//# sourceMappingURL=ansi.d.ts.map

@@ -19,4 +19,3 @@ export declare function ProgressBar({ ratio: inputRatio, width, fillColor, empty
     /** Optional color for the empty portion of the bar. */
     emptyColor?: keyof Theme;
 }): React.ReactNode;
-//# sourceMappingURL=ProgressBar.d.ts.map

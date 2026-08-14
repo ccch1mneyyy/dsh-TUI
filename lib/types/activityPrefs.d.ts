@@ -26,4 +26,3 @@ export declare function readActivityFrames(dir?: string): string | undefined;
  * @returns True when the file was written, false on failure.
  */
 export declare function writeActivityFrames(name: string, dir?: string): boolean;
-//# sourceMappingURL=activityPrefs.d.ts.map

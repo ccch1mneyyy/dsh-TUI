@@ -7,4 +7,3 @@ import type { Context } from '@deepseek-ai/cordis';
  * @param ctx - the plugin's cordis context
  */
 export declare function registerPackagedSkills(ctx: Context): void;
-//# sourceMappingURL=packaged-skills.d.ts.map

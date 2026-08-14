@@ -13,4 +13,3 @@ export declare function StatusLine({ channel, selectionActive, helpOpen, }: {
     selectionActive?: boolean;
     helpOpen?: boolean;
 }): React.JSX.Element;
-//# sourceMappingURL=StatusLine.d.ts.map

@@ -12,4 +12,3 @@ type Props = {
  */
 export declare function MessageMetadata({ timestamp, model, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=MessageMetadata.d.ts.map

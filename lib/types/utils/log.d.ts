@@ -4,4 +4,3 @@
  * @param error - The error to log; its stack trace when available.
  */
 export declare function logError(error: unknown): void;
-//# sourceMappingURL=log.d.ts.map

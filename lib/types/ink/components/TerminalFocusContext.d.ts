@@ -8,4 +8,3 @@ export type TerminalFocusContextProps = {
 declare const TerminalFocusContext: React.Context<TerminalFocusContextProps>;
 export declare function TerminalFocusProvider(t0: any): any;
 export default TerminalFocusContext;
-//# sourceMappingURL=TerminalFocusContext.d.ts.map

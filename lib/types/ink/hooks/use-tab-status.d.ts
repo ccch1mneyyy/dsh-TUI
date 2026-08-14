@@ -15,4 +15,3 @@ export type TabStatusKind = 'idle' | 'busy' | 'waiting';
  * @param kind - the status kind to display, or null to opt out.
  */
 export declare function useTabStatus(kind: TabStatusKind | null): void;
-//# sourceMappingURL=use-tab-status.d.ts.map

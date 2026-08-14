@@ -12,4 +12,3 @@ export declare function ctrlOToExpand(): string;
  * @returns The truncated text, or '' when `content` is blank after trimming.
  */
 export declare function renderTruncatedContent(content: string, terminalWidth: number, suppressExpandHint?: boolean): string;
-//# sourceMappingURL=terminal.d.ts.map

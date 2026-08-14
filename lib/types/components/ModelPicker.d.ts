@@ -11,4 +11,3 @@ export declare function ModelPicker({ models, focusIndex, currentModel, }: {
     focusIndex: number;
     currentModel: string;
 }): React.ReactNode;
-//# sourceMappingURL=ModelPicker.d.ts.map

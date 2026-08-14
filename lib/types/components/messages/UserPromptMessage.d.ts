@@ -16,4 +16,3 @@ type Props = {
  */
 export declare function UserPromptMessage({ text, addMargin, isSelected, isExpanded, onClick, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=UserPromptMessage.d.ts.map

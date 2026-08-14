@@ -19,4 +19,3 @@ export declare function readEffortPref(dir?: string): string | undefined;
  * @returns True when the file was written, false on failure.
  */
 export declare function writeEffortPref(effort: string, dir?: string): boolean;
-//# sourceMappingURL=effortPrefs.d.ts.map

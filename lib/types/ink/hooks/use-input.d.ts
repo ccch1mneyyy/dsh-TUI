@@ -38,4 +38,3 @@ type Options = {
  */
 declare const useInput: (inputHandler: Handler, options?: Options) => void;
 export default useInput;
-//# sourceMappingURL=use-input.d.ts.map

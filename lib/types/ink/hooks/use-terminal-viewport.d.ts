@@ -29,4 +29,3 @@ export declare function useTerminalViewport(): [
     entry: ViewportEntry
 ];
 export {};
-//# sourceMappingURL=use-terminal-viewport.d.ts.map

@@ -70,4 +70,3 @@ export default class App extends PureComponent<Props, State> {
 /** Exported for testing. Mutates app.props.selection and click/hover state. */
 export declare function handleMouseEvent(app: App, m: ParsedMouse): void;
 export {};
-//# sourceMappingURL=App.d.ts.map

@@ -20,4 +20,3 @@ type Props = {
  */
 export declare function AssistantThinkingMessage({ thinking, addMargin, verbose, durationMs, isSelected, onClick, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=AssistantThinkingMessage.d.ts.map

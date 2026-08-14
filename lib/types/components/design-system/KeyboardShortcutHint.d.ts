@@ -16,4 +16,3 @@ type Props = {
  */
 export declare function KeyboardShortcutHint({ shortcut, action, parens, bold, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=KeyboardShortcutHint.d.ts.map

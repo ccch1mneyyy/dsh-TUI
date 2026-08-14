@@ -53,4 +53,3 @@ export type Props = BaseProps & WeightProps;
  */
 export default function Text(t0: any): any;
 export {};
-//# sourceMappingURL=Text.d.ts.map

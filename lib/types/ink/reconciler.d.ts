@@ -40,4 +40,3 @@ export declare function resetProfileCounters(): void;
  */
 declare const reconciler: createReconciler.Reconciler<DOMElement, DOMElement, TextNode, DOMElement, unknown, DOMElement>;
 export default reconciler;
-//# sourceMappingURL=reconciler.d.ts.map

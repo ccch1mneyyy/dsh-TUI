@@ -197,4 +197,3 @@ export default class Output {
     get(): Screen;
 }
 export {};
-//# sourceMappingURL=output.d.ts.map

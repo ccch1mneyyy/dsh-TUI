@@ -4,4 +4,3 @@
  * @param name - the value's name, used in the warning message.
  */
 export declare function ifNotInteger(value: number | undefined, name: string): void;
-//# sourceMappingURL=warn.d.ts.map

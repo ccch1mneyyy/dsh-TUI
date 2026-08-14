@@ -17,4 +17,3 @@ export declare function getCliHighlightPromise(): Promise<CliHighlight | null>;
  * @returns The language display name, or 'unknown' when the extension is empty or unregistered.
  */
 export declare function getLanguageName(file_path: string): Promise<string>;
-//# sourceMappingURL=cliHighlight.d.ts.map

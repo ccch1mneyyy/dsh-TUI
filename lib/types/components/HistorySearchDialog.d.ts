@@ -13,4 +13,3 @@ export declare function HistorySearchDialog({ query, cursorOffset, matches, focu
     matches: readonly HistoryEntry[];
     focusIndex: number;
 }): React.ReactNode;
-//# sourceMappingURL=HistorySearchDialog.d.ts.map

@@ -27,4 +27,3 @@ export declare function squashTextNodesToSegments(node: DOMElement, inheritedSty
  */
 declare function squashTextNodes(node: DOMElement): string;
 export default squashTextNodes;
-//# sourceMappingURL=squash-text-nodes.d.ts.map

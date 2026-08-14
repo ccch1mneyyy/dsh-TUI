@@ -88,4 +88,3 @@ export default wrappedRender;
  * @returns a promise resolving to the managed root.
  */
 export declare function createRoot(options?: RenderOptions): Promise<Root>;
-//# sourceMappingURL=root.d.ts.map

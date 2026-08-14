@@ -1,4 +1,6 @@
 import { nonAlphanumericKeys, type ParsedKey } from '../parse-keypress.js'
+import { isMacOS } from '../../utils/platform.js'
+import { supportsExtendedKeys } from '../terminal.js'
 import { Event } from './event.js'
 
 /**
@@ -28,6 +30,68 @@ export type Key = {
   super: boolean
 }
 
+/**
+ * Keys whose Cmd-combo has a strong macOS system meaning that must not be
+ * hijacked by a terminal shortcut (⌘A select-all, ⌘C copy, ⌘E use-selection-
+ * for-find, ⌘T new-tab, ⌘U underline, ⌘W close-window, ⌘K clear-bar …).
+ * These keep their bare-Ctrl (readline) meaning on macOS and never map ⌘ to
+ * the Ctrl binding. Arrows are also excluded: on macOS, ⌘←/⌘→ is line
+ * start/end (see resolveCmdHomeEnd) and word jump is Option+←/→, while
+ * Ctrl+←/Ctrl+→ keeps the emacs word-jump meaning.
+ */
+const CMD_RESERVED_KEYS = new Set(['a', 'c', 'e', 't', 'u', 'w', 'left', 'right'])
+
+/**
+ * Resolve the effective `ctrl` flag for a keypress with OS adaptation.
+ *
+ * On macOS with extended key reporting (Kitty protocol / modifyOtherKeys),
+ * Cmd-qualified shortcuts are what `key.ctrl` bindings should respond to:
+ * Cmd arrives as `super: true` while bare Ctrl keeps its literal meaning.
+ * Outside that combination (non-macOS, or a terminal that never forwards
+ * Cmd), Ctrl stays the trigger so shortcuts remain reachable — Terminal.app
+ * and default iTerm2 do not deliver Cmd to the application at all.
+ *
+ * macOS keyboard-convention exceptions (muscle memory must not be violated):
+ *   - Reserved letters/arrows (CMD_RESERVED_KEYS) keep bare-Ctrl semantics
+ *     only; ⌘ does nothing there (e.g. ⌘C is handled by Chat as
+ *     copy-the-selection, never the interrupt path).
+ *   - `d`: Ctrl+D stays dual-triggered (Ctrl OR Cmd) as the exit hatch;
+ *     mapping it Cmd-only would strand users without a way out.
+ *
+ * Platform/capability inputs are parameters so regressions can exercise
+ * every branch deterministically.
+ */
+export function resolveCtrlFlag(
+  name: string | undefined,
+  ctrl: boolean,
+  superKey: boolean,
+  isMac = isMacOS,
+  extendedKeys = supportsExtendedKeys(),
+): boolean {
+  if (!isMac || !extendedKeys) return ctrl
+  if (name !== undefined && CMD_RESERVED_KEYS.has(name)) return ctrl
+  if (name === 'd') return ctrl || superKey
+  return !!superKey
+}
+
+/**
+ * macOS text-editing convention: ⌘←/⌘→ move to the start/end of the line
+ * (the Home/End meaning), not a word jump. Returns which named-key flag the
+ * Cmd-qualified arrow should carry, or null when the keypress keeps its
+ * literal meaning. Inputs are parameters for deterministic regressions.
+ */
+export function resolveCmdHomeEnd(
+  name: string | undefined,
+  superKey: boolean,
+  isMac = isMacOS,
+  extendedKeys = supportsExtendedKeys(),
+): 'home' | 'end' | null {
+  if (!isMac || !extendedKeys || !superKey) return null
+  if (name === 'left') return 'home'
+  if (name === 'right') return 'end'
+  return null
+}
+
 function parseKey(keypress: ParsedKey): [Key, string] {
   const key: Key = {
     upArrow: keypress.name === 'up',
@@ -43,7 +107,7 @@ function parseKey(keypress: ParsedKey): [Key, string] {
     return: keypress.name === 'return',
     escape: keypress.name === 'escape',
     fn: keypress.fn,
-    ctrl: keypress.ctrl,
+    ctrl: resolveCtrlFlag(keypress.name, keypress.ctrl, keypress.super),
     shift: keypress.shift,
     tab: keypress.name === 'tab',
     backspace: keypress.name === 'backspace',
@@ -57,6 +121,18 @@ function parseKey(keypress: ParsedKey): [Key, string] {
     // protocol CSI u sequences. Distinct from meta (Alt/Option) so
     // bindings like cmd+c can be expressed separately from opt+c.
     super: keypress.super,
+  }
+
+  // macOS ⌘←/⌘→ means line start/end (Home/End), not a word jump. Rewrite
+  // the arrow into its Home/End meaning and clear the arrow flag so cursor
+  // handlers don't also move by one cell.
+  const cmdHomeEnd = resolveCmdHomeEnd(keypress.name, keypress.super)
+  if (cmdHomeEnd === 'home') {
+    key.home = true
+    key.leftArrow = false
+  } else if (cmdHomeEnd === 'end') {
+    key.end = true
+    key.rightArrow = false
   }
 
   let input = keypress.ctrl ? keypress.name : keypress.sequence

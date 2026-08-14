@@ -10,4 +10,3 @@ export declare class ResizeEvent extends Event {
     readonly rows: number;
     constructor(columns: number, rows: number);
 }
-//# sourceMappingURL=resize-event.d.ts.map

@@ -54,4 +54,3 @@ export declare class LogUpdate {
     render(prev: Frame, next: Frame, altScreen?: boolean, decstbmSafe?: boolean): Diff;
 }
 export {};
-//# sourceMappingURL=log-update.d.ts.map

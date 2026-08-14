@@ -11,4 +11,3 @@
  * @param title - the title to set, or null to opt out.
  */
 export declare function useTerminalTitle(title: string | null): void;
-//# sourceMappingURL=use-terminal-title.d.ts.map

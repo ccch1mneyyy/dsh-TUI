@@ -5,4 +5,3 @@ export type Props = {
     readonly fallback?: ReactNode;
 };
 export default function Link(t0: any): any;
-//# sourceMappingURL=Link.d.ts.map

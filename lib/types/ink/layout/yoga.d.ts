@@ -66,4 +66,3 @@ export declare class YogaLayoutNode implements LayoutNode {
  * @returns a `YogaLayoutNode` with no children, styles, or measure function.
  */
 export declare function createYogaLayoutNode(): LayoutNode;
-//# sourceMappingURL=yoga.d.ts.map

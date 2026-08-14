@@ -19,4 +19,3 @@
  *   and never re-subscribes.
  */
 export declare function useCopyOnSelect(onCopied?: (text: string) => void): void;
-//# sourceMappingURL=use-copy-on-select.d.ts.map

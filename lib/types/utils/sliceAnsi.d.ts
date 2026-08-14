@@ -9,4 +9,3 @@
  * @returns The sliced string with its ANSI styling preserved.
  */
 export default function sliceAnsi(str: string, start: number, end?: number): string;
-//# sourceMappingURL=sliceAnsi.d.ts.map

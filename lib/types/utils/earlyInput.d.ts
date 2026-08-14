@@ -4,4 +4,3 @@
  * is a no-op.
  */
 export declare function stopCapturingEarlyInput(): void;
-//# sourceMappingURL=earlyInput.d.ts.map

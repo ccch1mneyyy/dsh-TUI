@@ -13,4 +13,3 @@ export declare function useStalledAnimation(time: number, currentResponseLength:
     isStalled: boolean;
     stalledIntensity: number;
 };
-//# sourceMappingURL=useStalledAnimation.d.ts.map

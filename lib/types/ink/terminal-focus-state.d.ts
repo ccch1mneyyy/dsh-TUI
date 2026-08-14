@@ -32,4 +32,3 @@ export declare function subscribeTerminalFocus(cb: () => void): () => void;
  * focus reporting is (re)initialized.
  */
 export declare function resetTerminalFocusState(): void;
-//# sourceMappingURL=terminal-focus-state.d.ts.map

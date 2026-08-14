@@ -15,4 +15,3 @@ type WrapAnsiOptions = {
  */
 declare const wrapAnsi: (input: string, columns: number, options?: WrapAnsiOptions) => string;
 export { wrapAnsi };
-//# sourceMappingURL=wrapAnsi.d.ts.map

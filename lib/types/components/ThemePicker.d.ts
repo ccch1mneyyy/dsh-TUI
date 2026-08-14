@@ -19,4 +19,3 @@ export declare function ThemePicker({ focusIndex, currentTheme, }: {
     focusIndex: number;
     currentTheme: string | undefined;
 }): React.ReactNode;
-//# sourceMappingURL=ThemePicker.d.ts.map

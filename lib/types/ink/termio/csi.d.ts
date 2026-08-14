@@ -250,4 +250,3 @@ export declare const ENABLE_MODIFY_OTHER_KEYS: string;
  * Disable xterm modifyOtherKeys (reset to default).
  */
 export declare const DISABLE_MODIFY_OTHER_KEYS: string;
-//# sourceMappingURL=csi.d.ts.map

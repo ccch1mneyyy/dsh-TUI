@@ -21,4 +21,3 @@ export declare function loadHistory(): HistoryEntry[];
  * @returns A 12-char hex id derived from the entry text.
  */
 export declare function historyEntryId(entry: HistoryEntry): string;
-//# sourceMappingURL=history.d.ts.map

@@ -23,4 +23,3 @@ export declare function WorkingSpinner({ mode, hasActiveTools, responseLengthRef
  * from the leak's SpinnerWithVerb effect.
  */
 export declare function useThinkingStatus(isThinking: boolean): 'thinking' | number | null;
-//# sourceMappingURL=WorkingSpinner.d.ts.map

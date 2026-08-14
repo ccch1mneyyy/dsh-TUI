@@ -28,4 +28,3 @@ export type SpinnerAnimationRowProps = {
  * stalled intensity, thinking shimmer).
  */
 export declare function SpinnerAnimationRow({ mode, reducedMotion, hasActiveTools, responseLengthRef, message, messageColor, shimmerColor, loadingStartTimeRef, totalPausedMsRef, pauseStartTimeRef, spinnerSuffix, verbose, columns, thinkingStatus, }: SpinnerAnimationRowProps): React.ReactNode;
-//# sourceMappingURL=SpinnerAnimationRow.d.ts.map

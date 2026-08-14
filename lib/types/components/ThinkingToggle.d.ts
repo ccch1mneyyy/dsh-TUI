@@ -14,4 +14,3 @@ export declare function ThinkingToggle({ currentValue, focusIndex, confirmationP
     /** Set while a mid-conversation toggle awaits Enter confirmation. */
     confirmationPending: boolean | null;
 }): React.ReactNode;
-//# sourceMappingURL=ThinkingToggle.d.ts.map

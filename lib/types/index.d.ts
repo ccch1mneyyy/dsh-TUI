@@ -67,4 +67,3 @@ export declare const Config: Schema<Config>;
  * @returns a promise settling when the TUI teardown completes.
  */
 export declare function apply(ctx: Context, config: Config): Promise<void>;
-//# sourceMappingURL=index.d.ts.map

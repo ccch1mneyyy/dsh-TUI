@@ -29,4 +29,3 @@ export declare function readLastUsed(): Readonly<Record<string, number>>;
  * @param sessionId - Session id to touch.
  */
 export declare function touchSession(sessionId: string): void;
-//# sourceMappingURL=sessionHistory.d.ts.map

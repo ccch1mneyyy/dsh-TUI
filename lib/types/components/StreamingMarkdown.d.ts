@@ -9,4 +9,3 @@ import React from 'react';
 export declare function StreamingMarkdown({ children, }: {
     children: string;
 }): React.ReactNode;
-//# sourceMappingURL=StreamingMarkdown.d.ts.map

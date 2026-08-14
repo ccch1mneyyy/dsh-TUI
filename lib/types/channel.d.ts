@@ -669,4 +669,3 @@ export interface MentionExpansion {
  * binary file degrades to `missing`, never a failed send.
  */
 export declare function expandMentions(fs: MentionFs | undefined, cwd: string, text: string): Promise<MentionExpansion>;
-//# sourceMappingURL=channel.d.ts.map
