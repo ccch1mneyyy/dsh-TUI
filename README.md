@@ -1,354 +1,134 @@
 <p align="center">
-  <strong>简体中文</strong> | <a href="README_EN.md">English</a>
+  <img src="docs/assets/logo.svg" alt="dsh-TUI - DeepSeek Harness terminal interface" width="560">
 </p>
 
 <p align="center">
-  <img src="screenshots/splash.png" alt="dsh-cc-tui — DeepSeek Harness 的 Claude Code 风格终端 TUI" width="100%">
+  <strong>简体中文</strong> · <a href="README_EN.md">English</a>
 </p>
-
-# dsh-TUI — 仿Anthropic美学风格的全屏交互终端
-
-> **DeepSeek Harness 官方目前还没有终端 TUI（只有 Web UI） 因此！我制作了这个dsh-cc-tui！：
-> 一个美观且实用的 Claude Code 风格 TUI 插件（cordis 挂载）：像素鲸鱼顶栏、双流光大字、
-> 实时工作状态行、思考流式展开、双击 Esc 时间回溯、蓝白上下文进度条 + TPS 仪表。
-> 零核心改动，纯插件挂载。
-
-![类型](https://img.shields.io/badge/type-cordis%20plugin-blue) ![状态](https://img.shields.io/badge/status-公测-blue) ![官方收录](https://img.shields.io/badge/DeepSeek%20Harness%20官方公众号-收录-brightgreen)
-
-## 🎉 官方收录
-
-本插件被 **DeepSeek Harness 官方公众号** 推文收录，作为"内测用户精选插件"展示：
 
 <p align="center">
-  <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-cc-tui" width="560">
+  <a href="https://www.npmjs.com/package/dsh-cc-tui"><img alt="npm" src="https://img.shields.io/npm/v/dsh-cc-tui?style=flat-square&color=4b6fff"></a>
+  <a href="https://github.com/yuxiaoLeeMarks/dsh-TUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yuxiaoLeeMarks/dsh-TUI/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
+  <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
 </p>
+
+# dsh-TUI
+
+`dsh-TUI` 是 DeepSeek Harness 的交互式终端前门：通过 Cordis 插件挂载，
+提供接近 Claude Code 的对话、工具调用、会话管理和全屏终端体验，同时继续使用
+DSH 官方的 Agent、模型、工具、会话与持久化服务。
+
+项目不修改 DeepSeek Harness 核心代码。安装插件即可启用，卸载后不会留下核心补丁。
+
+> 当前状态：公开测试版。适合日常使用与二次开发；涉及权限、终端兼容性和已知限制的
+> 部分请先阅读[架构与限制](docs/architecture.md)。
+
+## 核心能力
+
+- **终端原生交互**：流式 Markdown、结构化工具卡、命令与文件补全、历史搜索、
+  消息选择、inline/alternate-screen 两种渲染模式。
+- **可观察的 Agent 状态**：实时工作状态、上下文分段进度、TPS、缓存命中率、
+  推理等级、输入/输出 token 与 Git/会话信息。
+- **完整会话工作流**：`/resume`、`/new`、`/compact`、`/export`、模型切换，
+  以及双击 `Esc` 发起的会话 rewind/fork。
+- **DSH 官方能力接入**：Agent preset、Skills、MCP、Goals、Todos、子代理、
+  `ask_user_question` 问卷都通过现有服务或注册表连接。
+- **为长会话设计**：事件驱动投影、差分终端输出、消息虚拟化、回放合并与有界缓存，
+  避免渲染成本和内存随会话无限增长。
 
 ## 界面预览
 
-![首屏：像素鲸鱼顶栏](screenshots/splash.png)
+<p align="center">
+  <img src="screenshots/splash.png" alt="dsh-TUI 会话界面与像素鲸鱼顶栏" width="100%">
+</p>
 
-![工作状态行 + 上下文进度条](screenshots/working-line.png)
+实时工作状态、Goal/Todo 与上下文指标：
 
-## 为什么值得装
+<p align="center">
+  <img src="screenshots/working-line.png" alt="dsh-TUI 实时工作状态与上下文指标" width="100%">
+</p>
 
-- **颜值即生产力**：顶栏是半块像素渲染的 DeepSeek 鲸鱼（40×25 手绘精灵，
-  深蓝描边 + 品牌蓝身 + 冰蓝肚皮 + 白嘴），**启动播放手绘动画**（眨眼 →
-  喷水花绽放 → 摆尾），随后定格静态不再重绘；旁边 `DEEPSEEK HARNESS` 是
-  自绘 5 行块状大字——品牌蓝→冰蓝横向渐变，白色流光窗口循环扫过；
-  `探索未至之境！` 欢迎语带冰蓝流光。窄终端（<64 列）自动收起鲸鱼。
-- **实时工作状态行**（替代 CC 随机动词 spinner）：工作时输入框上方常驻模型的
-  实时动态——俏皮思考文案（`嗯…让我捋捋`、深夜档、30s/1m/5m 分档轮换）、真正在跑
-  的工具（`改改 src/channel.ts · 12s`）、`⏵` 模型自述，配 28 种动画指示器
-  （默认 Claude 官方帧序列）、白色流光扫过文案、上下文占用 ≥80% 亮黄 / ≥95% 亮红
-  预警（`⚠ 上下文85% · …`），行尾保留 `↓ N tokens` 计数。回合结束自动变成
-  `搞定 ✓ · N 工具 · 想Xs 干Ys` 收尾统计。
-- **一眼看穿模型状态**：底部状态栏——蓝白**上下文分段进度条**（系统/提示词/
-  助手/思考/工具五段着色 + 实时读数 `ctx 17k/1.0M 1.7% 983k`）、
-  `模型 · 实时 TPS（流式 gauge / 历史 sparkline）· 思考深度 · 缓存命中率(一位小数) · 进出 tokens`、
-  右侧 `git 分支 · 工作目录 · 会话标题`。
-- **思考过程流式可见**：thinking 块边生成边展开，回合结束自动折叠成
-  `∴ Thinking · 12s`，Ctrl+O 随时展开全文。
-- **双击 Esc 时间回溯（rewind）**：把对话回滚到任意一条历史消息，DSH 会话
-  fork 后原样重放，消息自动回到输入框可编辑重发。
-- **完整 Claude Code 交互细节**：`/` 命令菜单（竖排、Enter 执行选中项、Tab 补全）、
-  灰色气泡用户消息、`●` 助手正文 + Markdown 表格/代码高亮、工具调用卡片、
-  `?` 快捷键菜单、`/` 全文搜索、Ctrl+R 历史搜索、`@` 文件补全、Shift+Enter
-  多行输入、滚动时置顶的「当前提示词」栏与「↓ N 新消息」药丸。
-- **DSH 官方机制优先**：消息来自会话日志事件流，fork/resume/compact 全走官方
-  服务（agents/sessions/sessionPersistence/compact），插件卸载即完全还原。
+## 快速开始
 
-## 安装
-
-前置：官方 `dsh` CLI（`npm install -g @deepseek-ai/dsh`）与 `pnpm`。
+前置条件：可用的终端 TTY、官方 `dsh` CLI，以及 `pnpm`。运行模型还需要
+`DEEPSEEK_API_KEY`。
 
 ```sh
-# 1. 安装官方 CLI（已装可跳过）
+# 1. 安装 DeepSeek Harness CLI
 npm install -g @deepseek-ai/dsh
 
-# 2. 装入本插件（仓库根目录 install.sh 已封装这条命令，含 pnpm 预检）
-sh install.sh
-# 或手工执行：
+# 2. 安装 dsh-TUI profile 插件
 dsh plugin --profile cc-tui add dsh-cc-tui
 
 # 3. 启动
-#    Windows 也可用仓库里的 dsh-cc.cmd（等价，且 --resume 恢复上次会话）
 dsh --profile cc-tui
 ```
 
-`add` 的语义（官方 app-boot / CLI 实现）：首次执行会在
-`$DSH_HOME/profiles/cc-tui/` 自动初始化 profile——manifest 的
-`dsh.profile.bundles` 首层为 `@deepseek-ai/dsh-base`——然后在 profile 内执行
-`pnpm add <包>`；安装成功后按「依赖是否声明 `dsh.bundle.patch`」自动把该包
-追加为 bundle 层，**无需手动改任何文件**。启动时按 bundle 顺序
-**dsh-base → 各 bundle → 你的 profile cordis.patch.yml** 叠加：base 提供
-llm/session/fs/工具/技能/审批等核心行，bundle patch 按 id 覆盖或插入自己的
-行。重复执行安全（已初始化的 profile 不会被改动）。
+仓库中的 `sh install.sh` 封装了第 2 步并检查前置命令。Windows 用户也可以使用
+`dsh-cc.cmd`；传入 `--resume` 会恢复最近选择的会话。
 
-工作状态行（随本包自动挂载）：`dsh-working-activity` 是本包的 npm 依赖，
-安装时自动带入 profile 的 node_modules；本包的 bundle patch 会直接 insert
-它的行（`publishIntervalMs: 500`），**无需单独 add**——对同一 profile 再
-单独 `add dsh-working-activity` 会产生重复行（wa 自带的自挂载补丁仅面向
-不含 cc-tui 的 profile，如纯 Web UI 场景）。
+安装流程、profile 叠加机制、源码构建与常见问题见
+[安装与快速开始](docs/getting-started.md)。
 
-> 构建产物 `lib/` 已打包进 npm 包，**安装无需构建**。开发者想改源码：从 git
-> 仓库 `npm install` 后 `npm run build`（tsc）即可。
+## 文档
 
-## 配置（profile cordis.patch.yml）
+| 主题 | 内容 |
+| --- | --- |
+| [安装与快速开始](docs/getting-started.md) | 前置条件、安装、启动、profile 生命周期、源码开发 |
+| [配置参考](docs/configuration.md) | Cordis 覆盖、配置字段、Agent preset、MCP、环境变量 |
+| [主题系统](docs/themes.md) | 内置主题、自动检测、自定义 JSON 主题与校验规则 |
+| [交互与命令](docs/interaction.md) | 快捷键、鼠标、问卷、slash command 与会话工作流 |
+| [架构与限制](docs/architecture.md) | 运行链路、渲染与持久化设计、安全边界、已知限制 |
+| [开发约定](AGENTS.md) | 仓库结构、构建产物、验证矩阵与代码修改规则 |
 
-官方 profile 模型下没有独立的 cordis.yml 启动文件：`$DSH_HOME/profiles/cc-tui/`
-下只有 `cordis.patch.yml`（你的补丁层，顶层 YAML 数组，`!!js` 可用）。
-以下是「想改什么怎么写」的示例，不是完整配置：
+完整的中英文索引见 [`docs/README.md`](docs/README.md)。
 
-```yaml
-# 覆盖某行的 config：整段替换，想保留的 key 都要重写
-- id: cc-tui
-  config:
-    provider: deepseek-official   # LLM 路由
-    model: deepseek-v4-flash      # 模型
-    effort: max                   # 顶栏/状态栏启动显示的思考深度
-    activity: true                # 工作状态行开关（默认开）
-    activityFrames: claude        # 指示器预设：claude/moon/comet/dots/…/random
-    cwd: !!js process.cwd()       # 工作目录
-    fullscreen: false             # 备用屏幕全屏模式（默认关）
-    preset: !!js process.env.CC_TUI_PRESET ?? undefined  # Agent preset（见下节）
-    sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined  # --resume
+## 工作方式
 
-# 调优实时工作状态行数据源（与 Web UI 共享）：随 add 已自动挂载（bundle
-# patch 自 insert），按 id 覆盖 config 即可——不要再 insert 同名行；
-# 500 让状态栏计时更跟手（先装 dsh-working-activity 时本包 patch 已带 500）
-- id: working-activity
-  config:
-    publishIntervalMs: 500
+```text
+dsh profile
+  -> dsh-base
+  -> dsh-TUI Cordis patch
+  -> Agent preset + DSH services
+  -> session/event
+  -> Channel projection
+  -> React components
+  -> ported Ink/Yoga renderer
+  -> terminal
 ```
 
-依赖（除注明外均由 dsh-base 层提供，无需手工挂载）：llm-deepseek（thinking
-开启）、session（SQLite 持久化由本包 patch 插入 `sessions` 行）、bash、fs、
-**commands（命令注册表）+ command-goal（`/goal`）**、token-meter 以及
-dsh-working-activity（工作状态行，随 add 自动挂载，见上）。模型侧的工具/
-提示词行（tool-fs、tool-todo、subagent、plan-mode、compaction-basic 等）
-自 0.3 起由会话的 agent preset 组合提供（见下节），不再挂在 host 层。
+TUI 只负责交互与呈现。会话日志是对话真源，模型调用、工具执行、fork/resume、
+compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与性能设计见
+[架构文档](docs/architecture.md)。
 
-> 配置注意：覆盖 `plan-mode` 时 `section` 必须给非空值（空值会导致整树加载
-> 失败）；`subagent` 核心服务必须先于 spawn/fork 行挂载（base 层顺序已保证，
-> 在自己 insert 相关行时保持同样顺序）。
+## 开发
 
-## Agent preset（四种官方 Agent 模式）
+CI 使用 Node 24 与 pnpm 11；包声明支持 Node `^22.19 || >=24`。
 
-接入 DSH 官方的 preset 名册（`@deepseek-ai/dsh-agent-presets`）：每个会话的
-工具集/提示词段不再来自 host 组合，而是由四种官方 preset 之一组合——
-
-| id | 名称 | 说明 |
-|---|---|---|
-| `standard` | 标准模式（默认） | 功能完整的编码 Agent（编辑、Shell、检索、Skills、计划、目标、子代理、工作流） |
-| `code` | PTC 模式 | 标准能力 + Code Mode SDK 呈现工具，模型用一个 TypeScript 程序组合多步操作 |
-| `minimal` | 极简模式 | 仅持久 bash + str_replace_editor 双工具，无 compaction |
-| `cordis` | 创造模式 | 标准能力 + 运行时检查/插件实验工具，用于创作自定义 preset |
-
-用法：
-
-- `/preset` 打开选择器（显示中文名与说明，✓ 为当前会话 preset）；
-- `/preset <id>` 直接切换；`/preset status` 查看当前状态；
-- **锁定规则（官方）**：已经产生对话的会话不可切换——此时选择会保存为
-  默认 preset，`/new` 或下次启动生效；空白会话立即原地切换（工具集实时
-  变化，切换事实写入会话日志，resume/fork 后仍是新 preset）；
-- 默认 preset 持久化在 `~/.dsh-cc/agent-preset.json`；优先级：
-  cordis.yml 的 `preset` 键（或 `CC_TUI_PRESET` 环境变量）＞ 偏好文件 ＞
-  名册默认（standard）；
-- resume 旧会话总是恢复其自身日志记录的 preset，不受当前默认影响；
-- 用户自创 preset：把目录（含 `agent.cordis.yml`）放进
-  `~/.dsh/.agent-presets/`，名册即时发现，`/preset` 选择器直接可见。
-
-实现说明：preset 文件由官方 CLI 附带（profile-boot 发现组合里有
-`agent-presets` 行就自动注入 shipped 根目录），本包不自拷；原 host 层的
-模型侧行（tool-bash/tool-web/subagent 系/compaction-basic 等 24 行）随
-preset 化在 bundle patch 中禁用（与官方 dsh-web-app 同款处理），因此
-`CC_TUI_COMPACT_RATIO`/`CC_TUI_COMPACT_RETAIN` 与 subagent 深度 1 的
-cc-tui 定制随之退役（preset 拥有自己的 compaction/delegation 配置）。
-
-## 自定义主题
-
-除了内置的 `light` / `dark` / `dark-ansi` 三套 Gentle Mist Blue 调色板，
-还可以放 JSON 主题文件到 `~/.dsh-cc/themes/`，用任意 Theme 键覆盖基底色板：
-
-```json
-{
-  "name": "sakura",
-  "displayName": "樱花粉",
-  "base": "dark",
-  "colors": {
-    "claude": "#FF9EC7",
-    "claudeShimmer": "#FFC0D5",
-    "permission": "#FFB3CC",
-    "promptBorder": "#B08B99",
-    "text": "#E8E6E0",
-    "inactive": "#A99BA0",
-    "subtle": "#8A7A80",
-    "selectionBg": "#5C3A44",
-    "success": "#9CC7A8",
-    "error": "#E08591",
-    "warning": "#E0C08A"
-  }
-}
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+pnpm smoke
 ```
 
-- **目录**：`~/.dsh-cc/themes/<名字>.json`，每个文件一个主题；文件名即主题名
-  （除非文件内声明了 `name`，此时以 `name` 为准，文件名退化为加载别名）。
-- **字段**：`base` 必填（`light`/`dark`/`dark-ansi`，选定被覆盖的基底色板）；
-  `colors` 是 Theme 键的子集覆盖（全部键名见 `src/theme.ts` 的 `Theme` 类型）；
-  `displayName` 用于选择器显示，缺省取 `name`；`name` 缺省取文件名。
-- **校验规则**：颜色值接受 `#rgb` / `#rrggbb` / `#rrggbbaa`、`rgb(r,g,b)`、
-  `ansi256(n)` 与 16 个 `ansi:` 命名色（与内置色板及 Ink 色彩引擎同款格式）。
-  未知键、非法色值 → 跳过该键并警告（stderr），不影响文件其余部分；`base`
-  非法、JSON 损坏、`colors` 不是对象 → 整个文件跳过并警告，TUI 不会崩。
-- **启用**：`/theme` 打开选择器（内置在前、自定义在后，每行带 base 标注与
-  三个关键色块预览），Enter 选中即**立即热切换**并写入
-  `~/.dsh-cc/theme.json`；也可 `/theme <名字>` 直接切换、`/theme status`
-  查看当前主题。重启后持久化选择仍生效。
-- **优先级**：`CC_TUI_THEME`（环境变量，内置名或自定义名）> 持久化选择
-  `~/.dsh-cc/theme.json` > OSC 11 终端背景自动检测。环境变量或持久化指向
-  不存在的主题时警告并忽略，自动检测照常兜底；两者都未设置时保持原有
-  自动检测行为。
+`pnpm build` 会把 `src/` 编译到已提交的 `lib/types/`。修改源码时必须同步生成产物；
+渲染、问卷和工具卡还需运行对应回归脚本。完整要求见 [`AGENTS.md`](AGENTS.md)。
 
-## MCP
+## 权限与安全边界
 
-官方 [`@deepseek-ai/dsh-mcp-client`](https://deepseek-harness.github.io/deepseek-harness/reference/config-catalog#deepseek-ai-dsh-mcp-client) 已提供完整 MCP 能力：每个配置行挂载一个服务器，其工具以 `mcp__<服务器>__<工具>` 名字注册进工具运行时，模型自动可用。
-在 profile 补丁层（`~/.dsh/profiles/cc-tui/cordis.patch.yml`）里 insert 即可：
+`dsh-TUI` 不实现独立沙箱，而是使用当前 DSH profile 的文件、Shell、sandbox 与
+approval 策略。仓库提供的 profile 在非 Windows 平台默认采用工作区约束与审批；
+Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-access` 且不弹审批。
+在包含敏感凭证或不可信仓库的环境中启动前，请先检查 profile 配置。
 
-```yaml
-# stdio 服务器（本地命令）
-- insert:
-    - id: mcp-context7
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        transport: stdio
-        serverName: context7
-        command: npx
-        args: ['-y', '@upstash/context7-mcp']
+详见[权限边界与已知限制](docs/architecture.md#权限与安全边界)。
 
-# streamable-http 服务器（远程）
-- insert:
-    - id: mcp-remote
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        transport: streamable-http
-        serverName: remote
-        url: https://example.com/mcp
-        headers: { Authorization: !!js process.env.MCP_TOKEN }
-```
+## 官方收录
 
-`/mcp` 命令查看当前已连接服务器及其工具数。
+本插件曾被 DeepSeek Harness 官方公众号作为内测用户插件展示。
+[查看收录截图](screenshots/wechat-official.png)。
 
-## 快捷键
+## License
 
-| 键 | 功能 |
-|---|---|
-| `Enter` | 发送（`Shift+Enter` 换行）；命令菜单打开时执行选中项 |
-| `Ctrl+C` | 中断当前回合；空闲时连按两次退出 |
-| `Esc` | 关闭命令/文件菜单；空闲双击清空输入；**空输入双击 = 时间回溯** |
-| `Ctrl+O` | 展开/收起详情（思考全文、工具参数与输出） |
-| `Ctrl+R` | 历史消息搜索 |
-| `/` | 会话内全文搜索（`n`/`N` 跳转） |
-| `Tab` | 命令 / `@` 文件补全 |
-| `Ctrl+V` | 粘贴：文本直接插入光标处；**Explorer 复制的文件/图片 → 插入文件路径** |
-| `?` | 快捷键菜单 |
-| `Shift+↑` | 消息选择模式（Enter 展开单条） |
-
-**鼠标（`fullscreen: true` 全屏模式；默认关，profile 补丁层覆盖开启）**
-
-| 操作 | 功能 |
-|---|---|
-| 拖拽选择 | 应用内文本选区，**松开即复制**（OSC 52 + `wl-copy`/`xclip`/`xsel` 原生兜底；tmux 内走 `load-buffer -w`），复制后自动取消选区并弹出「已复制 N 个字符」提示 |
-| 双击 / 三击 | 选词 / 选行，同样即选即复制 |
-| 滚轮 | 滚动消息列表 |
-| `Esc` | 拖拽进行中取消选区（不复制） |
-
-> 全屏模式用 alt-screen 渲染（退出 TUI 后内容回主屏）；设 `fullscreen: false`
-> 退回 inline 模式，鼠标交还终端模拟器原生选择（"选择即复制"由终端自身
-> 设置决定，如 kitty `copy_on_select yes`）。`CC_TUI_DISABLE_MOUSE=1` 可在
-> 全屏模式下临时禁用鼠标点击处理。
-
-**问卷（模型发起 `ask_user_question` 时）**
-
-| 键 | 功能 |
-|---|---|
-| `↑/↓` | 选择选项 |
-| `Space` | 多选题勾选/取消 |
-| `Tab` | 切到自定义回答（不选选项直接打字） |
-| `Enter` | 提交当前选择 |
-| `Esc` | 中断提问（模型收到 ASK_ABORTED，可继续对话） |
-
-**本地命令（CC 指令全集复刻，均走 DSH 官方链路）**
-
-| 分组 | 命令 |
-|---|---|
-| 会话 | `/new` 新会话 · `/resume` 恢复 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown |
-| 状态 | `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
-| 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 |
-| 账号/策略 | `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` · `/memory` |
-| 技能 | `/audit` 代码审计 · `/bug` bug 报告 · `/review` 代码评审 · `/practice` 编程练习 · `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查 |
-| 其它 | `/agents` 子代理列表 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` |
-| 注册表 | `/plan` `/goal`（DSH 命令注册表插件，随插件自动并入 `/` 菜单） |
-
-> `/` 菜单 = 本地命令 + 注册表命令的并集（注册表描述来自插件本身）；
-> `/plan [off|消息]` 切换计划模式，`/goal [create/edit/pause/resume/clear 目标]`
-> 管理持久化目标。
-> 技能命令通过 DSH 技能系统驱动：`skills/` 目录随 npm 包分发，插件启动时
-> 自动注册进技能注册表，**无需手动复制**。也可把 SKILL.md 放入
-> 技能发现目录（`~/.dsh/skills`、`~/.agents/skills` 或项目 `.dsh/skills`）覆盖同名技能，
-> 命令只是把激活提示发给模型（模型用技能目录/加载工具取用）。npm 版
-> install.sh 不再自动安装技能。
-
-## 技术要点
-
-- **Gentle Mist Blue 配色**：雾蓝只承担品牌、焦点、交互与高亮，正文保持
-  中性灰。启动时查询终端背景色（OSC 11）自动选色：浅色终端用严格的
-  Gentle Mist Blue 色卡（墨色 `#343945` 正文 + 暖米白家族），深色终端用
-  雾蓝适配版（暖灰白 `#E8E6E0` 正文 + 柔雾蓝 accent）；终端不响应时回退
-  深色。`CC_TUI_THEME=light|dark|dark-ansi` 可钉死配色并跳过检测；也支持
-  `~/.dsh-cc/themes/` 下的用户自定义主题（见「自定义主题」章节）。
-- **事件驱动渲染**：`session/event` 事件流 → 增量差分渲染，滚动状态独立维护。
-- **布局级虚拟化**：布局引擎是纯 JS 移植版 Yoga，每次提交都会全树重排——
-  长会话的每帧成本随记录线性增长（越用越卡的根因）。消息列表按可视窗口
-  挂载：屏幕外的行渲染为"量高占位符"（高度来自上一帧 Yoga 实测），其
-  子树完全不参与布局，单帧成本从 O(全会话) 降到 O(可视窗口)；滚动几何
-  （总高度/底部跟随/滚动条）、搜索跳转（未挂载行先强制挂载再寻址）保持
-  不变。
-- **上下文进度条**：参考 pi-nano-context 算法（最大余数法分段着色 + 右侧多级
-  缩略读数），DeepSeek 蓝白配色。
-- **TPS 仪表**：参考 pi-tps-meter——流式 1/8 格 gauge、历史 min-max sparkline、
-  速度语义色（≥50 绿 / ≥20 黄 / <20 红）。
-- **working-activity 生态**：工作状态行消费
-  [dsh-working-activity](https://github.com/ccch1mneyyy/dsh-working-activity)
-  的 log-only `activity/status` 事件（与 Web UI 同一数据源，cc-tui 只做渲染）；
-  `⏵` 自述行自动从聊天正文剥离。
-- **会话恢复**：`/resume` 列表标题 = 会话第一条 user 消息（最新 20 个会话），
-  8 行滚动窗口；**按最近使用排序**（发消息/恢复/切换都会把该会话提到最前，
-  记录在 `~/.dsh-cc/last-used.json`，缺失时退回按创建时间）；Enter **立即切换**
-  到该会话并回放历史；`--resume` 启动同链路。
-- **回滚语义**：fork 边界取消息所属 turn 的起点（DSH 事件序
-  turn/start → user/message → turn/end），中断回合先等落盘再 fork。
-- **终端粘贴**：raw 模式下 Ctrl+V 由应用接管——PowerShell `Get-Clipboard`
-  读剪贴板：Explorer 复制的文件/图片返回 FileDropList → 插入文件路径（含空格
-  自动加引号）；纯文本按原文插入光标处（含换行，不会误提交）。终端原生粘贴
-  （Ctrl+Shift+V / 右键）走 bracketed paste，同样插入而非提交。
-
-- **问卷（ask_user_question）**：DSH user-interaction 生态的 TUI 适配——模型
-  调用 `ask_user_question` 时不再以工具卡片出现，而是弹出雾蓝风格问卷面板
-  （每题一屏：进度头 `第 x/N 题`、题头徽标、选项 + 描述、多选勾选、Tab 自定义
-  回答），按键流转走官方 dsh-tui 同款语义（↑/↓ 选择、Space 多选、Enter 提交、
-  Esc 中断 → `ASK_ABORTED`）。问答结束后把 Q&A 摘要折叠进会话记录；批内多题
-  与子代理并发提问按 FIFO 排队逐题呈现。服务行由 dsh-base 提供，插件在裸装
-  时自建服务并注册 provider、挂载模型侧工具。
-
-## 已知限制
-
-- 注入上下文（plugin source 内容）未做独立展示，随系统提示词并入进度条统计。
-- `/model` 实时切换走"会话 fork 续聊"（DSH 无原位换模型 API）：历史原样保留，
-  新会话路由到新模型，旧会话仍留在 `/resume` 列表里。
-- `Ctrl+V` 读剪贴板依赖 PowerShell `Get-Clipboard`：剪贴板被其他进程
-  （如 Explorer）短暂锁定时自动重试，持续锁定时静默放弃（显示"剪贴板为空"提示）。
-- 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
-- DSH 的 `/permission`（沙箱模式切换）未适配：需要 approval 服务 + 审批 UI，
-  当前 TUI 不消费审批流，刻意不挂（`/permissions` 仅说明现状）。
-- `/vim` `/connect` `/hooks` `/memory` 为 CC 同名占位：对应能力在 DSH
-  侧无等价机制或未在本 leaf 挂载，命令会给出明确说明而非静默。
+[MIT](LICENSE)
