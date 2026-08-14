@@ -145,7 +145,6 @@ visual TUI alone does not describe the effective policy.
 | stderr diagnostics | `CC_TUI_DEBUG=1 dsh --profile cc-tui` |
 | Raw ANSI frames | `DSH_CC_RENDER_LOG=/path/to/render.log dsh --profile cc-tui` |
 | Theme regression | `node --import tsx/esm scripts/verify-themes.mjs` |
-| Build and complete verification matrix | [AGENTS.md](../AGENTS.md) |
 
 `DSH_CC_RENDER_LOG` and session exports may contain sensitive content. Redact
 them before sharing.

@@ -136,8 +136,6 @@ inside a DeepSeek Harness monorepo with a `packages/*` layout. It is not a
 portable launcher for this standalone repository. For a real integration
 check, install the package into a profile and run it in a TTY.
 
-See [`AGENTS.md`](../AGENTS.md) for the full development workflow and the
-verification matrix by change area.
 
 ## Troubleshooting
 

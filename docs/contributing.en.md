@@ -1,4 +1,22 @@
-# Development Guide
+# Contributing
+
+[Documentation index](README.md) · [简体中文](contributing.md)
+
+Thanks for considering contributing to dsh-TUI! This guide is the shared
+development contract for humans and coding agents working on `dsh-cc-tui`.
+
+## How To Contribute
+
+- **Report bugs or request features** by opening an issue with a clear
+  reproduction and the terminal environment you use.
+- **Open a pull request** against `main`. Keep changes focused: one logical
+  change per PR, with a Chinese or bilingual title and a description that
+  covers motivation, what changed, and how it was verified.
+- **Run the verification matrix** below before requesting a review; CI runs
+  the same commands.
+- New features should include or extend a focused regression script.
+
+
 
 ## Scope
 

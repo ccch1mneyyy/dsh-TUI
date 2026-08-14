@@ -128,7 +128,6 @@ node --import tsx/esm scripts/repro-toolcards.tsx
 `packages/*` 布局中，不是本独立仓库的通用启动命令。独立仓库做真实集成测试时，
 应安装到 profile 后在 TTY 中启动。
 
-完整开发流程和按改动类型划分的验证矩阵见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 常见问题
 

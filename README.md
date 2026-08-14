@@ -128,8 +128,7 @@ TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提�
 | [主题系统](docs/themes.md) | 内置主题、自动检测、自定义 JSON 主题与校验规则 |
 | [交互与命令](docs/interaction.md) | 快捷键、鼠标、问卷、slash command 与会话工作流 |
 | [架构与限制](docs/architecture.md) | 运行链路、渲染与持久化设计、安全边界、已知限制 |
-| [开发约定](AGENTS.md) | 仓库结构、构建产物、验证矩阵与代码修改规则 |
-|  |  |
+| [贡献与开发约定](docs/contributing.md) | 贡献流程、仓库地图、构建产物、验证矩阵与修改规则 |
 
 完整的中英文索引见 [`docs/README.md`](docs/README.md)。
 
@@ -208,7 +207,7 @@ pnpm smoke
 ```
 
 `pnpm build` 会把 `src/` 编译到已提交的 `lib/types/`。修改源码时必须同步生成产物；
-渲染、问卷和工具卡还需运行对应回归脚本。完整要求见 [`AGENTS.md`](AGENTS.md)。
+渲染、问卷和工具卡还需运行对应回归脚本。
 
 ## 权限与安全边界
 

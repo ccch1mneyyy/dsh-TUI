@@ -95,7 +95,7 @@ never blocks the first frame and silently ignores offline or registry errors.
 | [Themes](docs/themes.en.md) | Built-in themes, background detection, custom JSON themes, validation |
 | [Interaction and commands](docs/interaction.en.md) | Keyboard, mouse, questionnaires, slash commands, session workflows |
 | [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
-| [Development guide](AGENTS.md) | Repository map, generated files, verification matrix, change rules |
+| [Contributing](docs/contributing.en.md) | Contribution workflow, repository map, build artifacts, verification matrix, change rules |
 
 The complete bilingual index is [`docs/README.md`](docs/README.md).
 
@@ -131,8 +131,7 @@ pnpm smoke
 
 `pnpm build` compiles `src/` into the checked-in `lib/types/` output. Source
 changes must include regenerated artifacts, and rendering, questionnaire, or
-tool-card changes require the relevant regression scripts. See
-[`AGENTS.md`](AGENTS.md) for the complete workflow.
+tool-card changes require the relevant regression scripts.
 
 ## Permissions and Security Boundary
 

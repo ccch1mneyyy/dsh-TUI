@@ -14,7 +14,7 @@ the `.en.md` suffix.
 | 配色与自定义主题 / Color and custom themes | [主题系统](themes.md) | [Themes](themes.en.md) |
 | 键盘、鼠标与命令 / Keyboard, mouse, and commands | [交互与命令](interaction.md) | [Interaction and commands](interaction.en.md) |
 | 运行链路、性能、安全与限制 / Runtime, performance, security, and limitations | [架构与限制](architecture.md) | [Architecture and limitations](architecture.en.md) |
-| 仓库开发规则 / Repository development rules | [AGENTS.md](../AGENTS.md) | [AGENTS.md](../AGENTS.md) |
+| 贡献与开发约定 / Contributing and development rules | [贡献指南](contributing.md) | [Contributing](contributing.en.md) |
 
 ## 快速入口 / Quick Links
 
