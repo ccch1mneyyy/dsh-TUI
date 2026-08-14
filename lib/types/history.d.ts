@@ -11,7 +11,8 @@ export type HistoryEntry = {
  * File IO is ASYNCHRONOUS and serialized: the sync read+rewrite of the whole
  * file on every submit used to block the UI thread at the exact Enter
  * moment (and grew slower as the file grew). Callers keep the sync void
- * signature — the write drains in the background.
+ * signature — the write drains in the background; a process exit while the
+ * chain drains flushes the latest computed state synchronously.
  * @param text - Input to persist; blank inputs are ignored.
  */
 export declare function appendHistory(text: string): void;

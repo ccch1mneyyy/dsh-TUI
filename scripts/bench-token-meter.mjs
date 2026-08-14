@@ -2,6 +2,11 @@
  * Measure dsh-token-meter `measure(session)` cost vs session size — the
  * per-Enter (per agent/pre-step) pressure check run by compaction-basic.
  *
+ * NOTE: imports @deepseek-ai/dsh-token-meter / dsh-session / cordis, which
+ * are NOT declared dependencies of this package — run it where the dsh CLI
+ * bundle (or a dsh profile) makes them resolvable, e.g. from the profile
+ * module-fallback environment used during development.
+ *
  * Run: node scripts/bench-token-meter.mjs
  */
 import { Context } from '@deepseek-ai/cordis'

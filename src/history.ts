@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { promises as fsp } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -55,6 +55,22 @@ async function loadRawAsync(): Promise<HistoryEntry[]> {
 // best-effort and a failed write must not break the in-session history.
 let historyWriteChain: Promise<void> = Promise.resolve()
 
+// Latest computed state, for the exit flush below: a chain still draining
+// when the process exits must not silently drop the newest entries.
+let lastComputed: HistoryEntry[] | null = null
+process.on('exit', () => {
+  if (lastComputed === null) return
+  try {
+    writeFileSync(
+      HISTORY_FILE,
+      lastComputed.map(e => JSON.stringify(e)).join('\n') + '\n',
+      'utf8',
+    )
+  } catch {
+    // Best effort — the in-session history is unaffected.
+  }
+})
+
 /**
  * Append an input to the persisted history, deduping the immediately
  * previous entry and capping the file at 200 entries.
@@ -62,7 +78,8 @@ let historyWriteChain: Promise<void> = Promise.resolve()
  * File IO is ASYNCHRONOUS and serialized: the sync read+rewrite of the whole
  * file on every submit used to block the UI thread at the exact Enter
  * moment (and grew slower as the file grew). Callers keep the sync void
- * signature — the write drains in the background.
+ * signature — the write drains in the background; a process exit while the
+ * chain drains flushes the latest computed state synchronously.
  * @param text - Input to persist; blank inputs are ignored.
  */
 export function appendHistory(text: string): void {
@@ -80,6 +97,9 @@ export function appendHistory(text: string): void {
         entries.push({ text: trimmed, ts: Date.now() })
       }
       const sliced = entries.slice(-HISTORY_LIMIT)
+      // Snapshot the intended state BEFORE the await: the exit flush above
+      // can then always persist at least everything computed so far.
+      lastComputed = sliced
       await fsp.mkdir(HISTORY_DIR, { recursive: true })
       await fsp.writeFile(
         HISTORY_FILE,

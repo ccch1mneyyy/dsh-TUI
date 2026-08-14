@@ -98,4 +98,33 @@ await partA(300)
 await partB(10)
 await partB(30)
 await partB(300)
+await partC()
 process.exit(0)
+
+/**
+ * Part C — idle clock pause: with a done-phase ActivityLine the 60ms clock
+ * must not drive periodic commits; the only frames are one-time setup/teardown
+ * sequences, so a settled window counts ~0 frames (live phase would count
+ * many). Reproduces the "idle status line stops ticking" claim.
+ */
+async function partC(windowMs = 1500) {
+  const { stdout, stderr, stdin } = makeStreams()
+  const tree = React.createElement(
+    ThemeProvider,
+    null,
+    React.createElement(Box, { flexDirection: 'column' },
+      React.createElement(ActivityLine, {
+        key: 'activity',
+        activity: { phase: 'done', line: '完成', frames: [] },
+        activityFrames: undefined,
+      }),
+    ),
+  )
+  const instance = await render(tree, { exitOnCtrlC: false, stdout, stderr, stdin })
+  await sleep(300) // settle: initial content + one-time terminal mode frames
+  stdout.frames.length = 0
+  await sleep(windowMs)
+  const frames = stdout.frames.length
+  instance.unmount()
+  console.log(`C done-phase: frames=${frames} in ${(windowMs / 1000).toFixed(1)}s (期望≈0，live 相位同一窗口应有 ~16+)`)
+}
