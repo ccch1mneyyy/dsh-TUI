@@ -1,6 +1,6 @@
 {
   "name": "dsh-cc-tui",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "MIT",
   "type": "module",
@@ -48,7 +48,7 @@
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-persona": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-session-persistence-sqlite": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-terminal": "^0.1.0-rc.6",
@@ -86,6 +86,7 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence-sqlite": "^0.1.0-rc.6",
     "@types/lodash-es": "^4.17.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
