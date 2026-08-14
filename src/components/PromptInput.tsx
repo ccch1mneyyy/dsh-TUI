@@ -6,6 +6,7 @@ import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import type { Channel } from '../channel.js'
 import { filterCommands, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
+import { mentionAtCaret } from '../utils/mentions.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
@@ -172,16 +173,20 @@ export function PromptInput({
     !selectionActive &&
     !value.includes('\n')
 
-  // `@` file completion: load the cwd listing once when the trigger appears.
+  // `@` file completion (issue #15): the trigger is the mention token at the
+  // CARET, so `@` works mid-message (`看看 @src/a.ts 这个`), not only when it
+  // is the input's first character. The cwd listing loads when the trigger
+  // appears.
   const [fileList, setFileList] = React.useState<readonly string[]>([])
   const [fileSelected, setFileSelected] = React.useState(0)
-  const atTrigger = value.startsWith('@') && !value.includes('\n')
+  const mention = mentionAtCaret(value, cursor)
+  const atTrigger = mention !== undefined
   React.useEffect(() => {
     if (atTrigger) {
       void channel.listFiles().then(setFileList)
     }
   }, [atTrigger, channel])
-  const atRest = value.replace(/^@/, '').toLowerCase()
+  const atRest = (mention?.query ?? '').toLowerCase()
   // Match the relative path prefix OR the basename (CC's IDE suggestions do
   // both): `@src/ink` and `@ink` both find `src/ink/Box.js`.
   const fileMatches = atTrigger
@@ -193,7 +198,32 @@ export function PromptInput({
         return base.startsWith(atRest)
       })
     : []
-  const fileOverlayOpen = fileMatches.length > 0 && !helpOpen && !selectionActive
+  // Esc dismisses the overlay for the token being edited (it reopens once the
+  // text changes); it must NOT clear a mid-message input.
+  const fileEscRef = React.useRef(-1)
+  React.useEffect(() => {
+    fileEscRef.current = -1
+  }, [value])
+  const fileOverlayOpen =
+    fileMatches.length > 0 &&
+    !helpOpen &&
+    !selectionActive &&
+    fileEscRef.current !== mention?.start
+
+  /**
+   * Accept the selected file suggestion: replace ONLY the mention token at
+   * the caret (prefix/suffix text survives), quoting whitespace paths. A
+   * directory inserts `@dir/` without a trailing space so completion
+   * continues into it; a file completes the token with a space.
+   */
+  const acceptFile = (file: string) => {
+    if (!mention) return
+    const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
+    const insert = file.endsWith('/') ? body : `${body} `
+    const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
+    setInput(next, mention.start + insert.length)
+    setFileSelected(0)
+  }
 
   const submitText = (text: string, notice?: string) => {
     const trimmed = text.trim()
@@ -399,6 +429,15 @@ export function PromptInput({
           return
         }
       }
+      // File-completion overlay open → Enter accepts the selection (same
+      // contract as the command menu: the overlay owns Enter while open).
+      if (fileOverlayOpen) {
+        const file = fileMatches[fileSelected]
+        if (file) {
+          acceptFile(file)
+          return
+        }
+      }
       if (channel.working && value.trim() !== '') {
         steerSend(value)
         return
@@ -454,7 +493,7 @@ export function PromptInput({
     }
     if (key.tab && fileOverlayOpen) {
       const file = fileMatches[fileSelected]
-      if (file) setInput(`@${file} `)
+      if (file) acceptFile(file)
       return
     }
     if (key.tab && overlayOpen) {
@@ -621,11 +660,17 @@ export function PromptInput({
       }
       // A single Esc closes the open command menu first (CC/pi behavior);
       // the double-tap-clear semantics only apply to ordinary input.
-      if (overlayOpen || fileOverlayOpen) {
+      if (overlayOpen) {
         setValue('')
         setCursor(0)
         setSelectedCommand(0)
         setFileSelected(0)
+        return
+      }
+      // File overlay: Esc dismisses the menu for THIS token only — clearing
+      // the input would nuke a mid-message `@` mention's surrounding text.
+      if (fileOverlayOpen) {
+        fileEscRef.current = mention?.start ?? -1
         return
       }
       // With pending messages while working, Esc = interrupt and deliver

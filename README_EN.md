@@ -59,8 +59,9 @@ This plugin was featured by the **official DeepSeek Harness WeChat account** as 
 - **Complete Claude Code interaction details**: a vertical `/` command menu with Enter execution and
   Tab completion, gray user-message bubbles, `●` assistant text with Markdown tables and code
   highlighting, tool-call cards, a `?` shortcut menu, `/` full-text search, Ctrl+R history search,
-  `@` file completion, Shift+Enter multiline input, a pinned current-prompt bar while scrolling,
-  and a `↓ N new messages` pill.
+  `@` file references (completion works anywhere in the message; the referenced file's content or
+  directory listing is attached on send), Shift+Enter multiline input, a pinned current-prompt bar
+  while scrolling, and a `↓ N new messages` pill.
 - **Official DSH mechanisms first**: messages come from the session-log event stream, while
   fork/resume/compact all use official services
   (agents/sessions/sessionPersistence/compact). Uninstalling the plugin restores the original
@@ -274,7 +275,7 @@ Use `/mcp` to view connected servers and their tool counts.
 | `Ctrl+O` | Expand/collapse details, including full thoughts, tool arguments, and output |
 | `Ctrl+R` | Search message history |
 | `/` | Full-text search within the session (`n`/`N` to navigate) |
-| `Tab` | Complete commands or `@` file paths |
+| `Tab` / `Enter` | Complete commands or `@` file paths (directories keep completing) |
 | `Ctrl+V` | Paste text at the cursor; **files/images copied in Explorer insert their file paths** |
 | `?` | Open the shortcut menu |
 | `Shift+Up` | Enter message-selection mode (Enter expands one message) |

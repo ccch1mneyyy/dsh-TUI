@@ -7,7 +7,7 @@ import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/d
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
 import { writeActivityFrames } from './activityPrefs.js'
@@ -19,6 +19,7 @@ import { isPresetName } from './components/activityFrames.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { logForDebugging } from './utils/debug.js'
+import { extractMentions } from './utils/mentions.js'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -891,6 +892,53 @@ export function createChannel(
     state.pending = state.pending.filter(item => item.id !== messageId)
     if (state.pending.length !== before) state.emit()
   }
+  /**
+   * `@` file mentions (issue #15): expansion reads files asynchronously, so
+   * every user-text delivery (submit / steer / interrupt-requeue) funnels
+   * through this chain to keep the send order FIFO.
+   */
+  let sendChain: Promise<void> = Promise.resolve()
+  /**
+   * Expand the text's `@` mentions and deliver ONE user message: the typed
+   * text stays the first content block (the transcript bubble renders it —
+   * never the file dump) and each resolved reference appends a model-facing
+   * attachment block. The pending preview tracks the typed text.
+   */
+  const deliverUserText = (text: string, placement: PendingMessage['placement']): void => {
+    sendChain = sendChain.then(async () => {
+      const expansion = await expandMentions(mentionFs(ctx), state.cwd, text)
+      const message = createUserMessage({
+        content: expansion.blocks,
+        source: { kind: 'user' },
+      })
+      // Track BEFORE the agent call: a synchronous throw inside
+      // followup/steer rolls the preview back; otherwise the inbox events
+      // retire it once the message is claimed or discarded.
+      trackPending({ id: message.id, text }, placement)
+      try {
+        if (placement === 'steer') agent.steer(message)
+        else agent.followup(message)
+      } catch (error) {
+        untrackPending(message.id)
+        throw error
+      }
+      if (expansion.attached.length > 0) {
+        state.notify(`已附加 ${expansion.attached.length} 个文件引用`, { timeoutMs: 2500 })
+      }
+      if (expansion.missing.length > 0) {
+        state.notify(`未找到引用: ${expansion.missing.map(path => `@${path}`).join(' ')}`, {
+          color: 'warning',
+          timeoutMs: 4000,
+        })
+      }
+    }).catch((error: unknown) => {
+      // The chain must survive a failed send: log and notify, then continue
+      // with the next queued delivery.
+      const message = error instanceof Error ? error.message : String(error)
+      logForDebugging(`submit: delivery failed (${message})`)
+      state.notify(`发送失败 · ${message}`, { color: 'error' })
+    })
+  }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
   let interruptSeq = 0
@@ -1080,17 +1128,7 @@ export function createChannel(
       // The current session is being used — move it to the MRU front
       // (/resume sorts by last-used).
       touchSession(state.agentId)
-      const message = createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } })
-      // Track BEFORE the agent call: a synchronous throw inside send()
-      // rolls the preview back; otherwise the inbox events retire it once
-      // the message is claimed or discarded.
-      trackPending({ id: message.id, text: trimmed }, 'followup')
-      try {
-        agent.followup(message)
-      } catch (error) {
-        untrackPending(message.id)
-        throw error
-      }
+      deliverUserText(trimmed, 'followup')
     },
     /** Steer a message into the RUNNING turn (Codex/pi semantics): it is
      *  injected at the next step boundary of the current turn and the agent
@@ -1099,18 +1137,11 @@ export function createChannel(
       const trimmed = text.trim()
       if (!trimmed) return
       touchSession(state.agentId)
-      const message = createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } })
-      trackPending({ id: message.id, text: trimmed }, 'steer')
-      try {
-        // Official dsh-agent rc.6: steer() is synchronous void — the message
-        // enters the next-step inbox. A rejected step leaves it parked for the
-        // next wake; the inbox events below retire the preview (claimed →
-        // turn boundary, discarded → cancel).
-        agent.steer(message)
-      } catch (error) {
-        untrackPending(message.id)
-        throw error
-      }
+      // Official dsh-agent rc.6: steer() is synchronous void — the message
+      // enters the next-step inbox. A rejected step leaves it parked for the
+      // next wake; the inbox events below retire the preview (claimed →
+      // turn boundary, discarded → cancel).
+      deliverUserText(trimmed, 'steer')
     },
     /** Pull a pending message back out of the inbox (Alt+Up): it returns to
      *  the input for editing instead of being delivered. */
@@ -1152,9 +1183,7 @@ export function createChannel(
         if (interruptSeq !== token) return
         for (const text of queued) {
           touchSession(state.agentId)
-          const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
-          trackPending({ id: message.id, text }, 'followup')
-          agent.followup(message)
+          deliverUserText(text, 'followup')
         }
       }
       if (typeof whenIdle === 'function') {
@@ -1820,7 +1849,7 @@ export function createChannel(
                 return
               }
               const data = first.data as { content?: readonly ContentBlock[] }
-              const text = textOf(data.content)
+              const text = firstTextOf(data.content)
               if (text.length > 0) record.title = shortenTitle(text)
             } catch {
               // Keep the basename fallback.
@@ -1949,7 +1978,9 @@ export function createChannel(
         switch (event.type) {
           case 'user/message': {
             if (event.data.source.kind !== 'user') break
-            const text = textOf(event.data.content)
+            // Export what the user SAW: the typed prompt, not the expanded
+            // `@`-mention attachment blocks.
+            const text = firstTextOf(event.data.content)
             if (text) parts.push(`## 用户\n\n${text}\n`)
             break
           }
@@ -2283,6 +2314,15 @@ ${output}
   const textOf = (content: readonly ContentBlock[] | undefined): string =>
     (content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
 
+  /**
+   * Transcript-facing text of a user message: the FIRST text block only.
+   * `@`-mention attachments (issue #15) ride as later blocks — model-facing
+   * only — so joining every block would dump file contents into the bubble,
+   * the sticky header, and session titles.
+   */
+  const firstTextOf = (content: readonly ContentBlock[] | undefined): string =>
+    (content ?? []).find(block => block.type === 'text')?.text.trim() ?? ''
+
   const ensureStreaming = (seq?: number): ChatRow => {
     if (streaming === undefined) {
       streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
@@ -2436,11 +2476,13 @@ ${output}
         // Injected context (plugin/skill source) is not a human bubble; v1
         // renders direct human prompts only.
         if (event.data.source.kind !== 'user') break
-        const text = textOf(event.data.content)
+        const text = firstTextOf(event.data.content)
         if (text) {
           state.rows.push({ id: nextRowId, kind: 'user', text, seq: event.seq })
           state.lastUserText = text
-          state.contextSegments.prompt += estimateTokens(text)
+          // The context estimate counts everything sent to the model —
+          // typed text AND the `@`-mention attachment blocks.
+          state.contextSegments.prompt += estimateTokens(textOf(event.data.content))
           nextRowId += 1
         }
         break
@@ -2864,4 +2906,118 @@ async function listFilesDeep(
 
   await walk(root, '', 1)
   return out
+}
+
+/** One attached file's contribution is capped so an absent-minded `@` of a
+ *  huge file cannot blow the context window (CC caps @-attachments too). */
+const MENTION_MAX_FILE_CHARS = 50_000
+/** Total budget across all attachments in one message. */
+const MENTION_MAX_TOTAL_CHARS = 200_000
+/** A directory mention contributes a shallow listing, capped at this many
+ *  entries. */
+const MENTION_MAX_DIR_ENTRIES = 200
+
+/** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
+export interface MentionFs {
+  resolve(path: string): Promise<{ displayPath: string }>
+  stat(target: { displayPath: string }): Promise<{ type: 'file' | 'directory' | 'other' } | undefined>
+  readText(target: { displayPath: string }): Promise<string>
+  listDir(target: { displayPath: string }): Promise<Array<{ name: string; type: 'file' | 'directory' | 'other' }>>
+}
+
+/** The leaf's fs service in the shape mention expansion needs; undefined
+ *  when the plugin is not mounted (mentions then stay literal text). */
+function mentionFs(ctx: Context): MentionFs | undefined {
+  return ctx.get('fs') as MentionFs | undefined
+}
+
+export interface MentionExpansion {
+  /** Model-facing blocks: the typed text first, one block per attachment. */
+  blocks: Array<{ type: 'text'; text: string }>
+  /** Paths that resolved and were attached (for the confirmation notice). */
+  attached: string[]
+  /** Mention tokens that failed to resolve (kept literal, warned about). */
+  missing: string[]
+}
+
+/**
+ * Expand a submitted text's `@` mentions (issue #15) into model-facing
+ * attachment blocks: each referenced file contributes its (capped) content,
+ * each directory a shallow listing. The typed text stays the first block
+ * verbatim — mentions that resolve keep their `@path` spelling in it, and
+ * unresolved ones stay literal everywhere. Best-effort: an unreadable or
+ * binary file degrades to `missing`, never a failed send.
+ */
+export async function expandMentions(
+  fs: MentionFs | undefined,
+  cwd: string,
+  text: string,
+): Promise<MentionExpansion> {
+  const blocks: MentionExpansion['blocks'] = [{ type: 'text', text }]
+  const attached: string[] = []
+  const missing: string[] = []
+  const mentions = extractMentions(text)
+  if (!fs || mentions.length === 0) return { blocks, attached, missing }
+
+  let budget = MENTION_MAX_TOTAL_CHARS
+  for (const mention of mentions) {
+    if (budget <= 0) break
+    // Mentions resolve against the session cwd, same as the model-facing fs
+    // tools; absolute paths pass through untouched.
+    const absolute = isAbsolute(mention.path) ? mention.path : join(cwd, mention.path)
+    let target: { displayPath: string }
+    let info: { type: 'file' | 'directory' | 'other' } | undefined
+    try {
+      target = await fs.resolve(absolute)
+      info = await fs.stat(target)
+    } catch {
+      missing.push(mention.path)
+      continue
+    }
+    if (info?.type === 'file') {
+      try {
+        const cap = Math.min(MENTION_MAX_FILE_CHARS, budget)
+        let content = await fs.readText(target)
+        let truncated = false
+        if (content.length > cap) {
+          content = content.slice(0, cap)
+          truncated = true
+        }
+        budget -= content.length
+        blocks.push({
+          type: 'text',
+          text: `<attached-file path="${mention.path}">\n${content}${truncated ? '\n[… truncated]' : ''}\n</attached-file>`,
+        })
+        attached.push(mention.path)
+      } catch {
+        // Binary/undecodable or unreadable — report it like a miss.
+        missing.push(mention.path)
+      }
+      continue
+    }
+    if (info?.type === 'directory') {
+      try {
+        const entries = await fs.listDir(target)
+        const listing = entries
+          .slice(0, MENTION_MAX_DIR_ENTRIES)
+          .map(entry => (entry.type === 'directory' ? `${entry.name}/` : entry.name))
+        if (entries.length > MENTION_MAX_DIR_ENTRIES) {
+          listing.push(`… (${entries.length - MENTION_MAX_DIR_ENTRIES} more)`)
+        }
+        const body = listing.join('\n')
+        budget -= body.length
+        blocks.push({
+          type: 'text',
+          text: `<attached-directory path="${mention.path}">\n${body}\n</attached-directory>`,
+        })
+        attached.push(mention.path)
+      } catch {
+        missing.push(mention.path)
+      }
+      continue
+    }
+    // Absent (stat → undefined) or a special file.
+    missing.push(mention.path)
+  }
+  return { blocks, attached, missing }
 }
