@@ -27,6 +27,7 @@
 <p align="center">
   <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-cc-tui" width="560">
 </p>
+
 ## 核心能力
 
   - **终端原生交互**：流式 Markdown、结构化工具卡、命令与文件补全、`@` 文件引用
