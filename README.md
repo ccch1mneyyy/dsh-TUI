@@ -35,8 +35,8 @@
     inline/alternate-screen 两种渲染模式，以及 `/lang` 中英界面语言切换。
   - **可观察的 Agent 状态**：实时工作状态、上下文分段进度、TPS、缓存命中率、
     推理等级、输入/输出 token 与 Git/会话信息。
-  - **完整会话工作流**：`/resume`、`/new`、`/compact`、`/export`、模型切换，
-    以及双击 `Esc` 发起的会话 rewind/fork。
+  - **完整会话工作流**：`/resume`、`/new`、`/compact`、`/export`、`/btw` 侧问、
+    模型切换，以及双击 `Esc` 发起的会话 rewind/fork。
   - **DSH 官方能力接入**：Agent preset、Skills、MCP、Goals、Todos、子代理、
     `ask_user_question` 问卷都通过现有服务或注册表连接。
   - **为长会话设计**：事件驱动投影、差分终端输出、消息虚拟化、回放合并与有界缓存，

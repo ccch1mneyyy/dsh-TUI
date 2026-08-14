@@ -343,6 +343,14 @@ export interface Channel {
      * back to sending the line to the model).
      */
     runExternalCommand(name: string, rawInput: string): Promise<string | undefined>;
+    /** 侧问（CC /btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
+    sideQuestion(question: string, options?: {
+        signal?: AbortSignal;
+        onText?: (delta: string) => void;
+    }): Promise<{
+        answer: string | null;
+        error?: string;
+    }>;
     /** Estimated context segments by content type (pi-nano-context style bar). */
     readonly contextSegments: {
         system: number;
@@ -518,6 +526,14 @@ export interface ChannelState {
     /** Messages submitted while working, awaiting their turn/step boundary.
      *  Driven by agent inbox events (inserted/claimed/discarded). */
     pending: PendingMessage[];
+    /** 侧问（见 public Channel.sideQuestion）。 */
+    sideQuestion(question: string, options?: {
+        signal?: AbortSignal;
+        onText?: (delta: string) => void;
+    }): Promise<{
+        answer: string | null;
+        error?: string;
+    }>;
     /** Effective slash commands (see the public Channel type). */
     commandList: readonly LocalCommand[];
     /** Run a plugin-registered command (see the public Channel type). */

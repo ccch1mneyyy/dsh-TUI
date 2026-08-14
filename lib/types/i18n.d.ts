@@ -599,6 +599,26 @@ declare const dict: {
         readonly zh: "已打断当前回合，{{n}} 条消息立即处理";
         readonly en: "Interrupted current turn, {{n}} messages processed immediately";
     };
+    readonly 'btw-usage': {
+        readonly zh: "用法：/btw <问题> —— 不打断当前对话的快速侧问";
+        readonly en: "Usage: /btw <question> — quick side question without interrupting the conversation";
+    };
+    readonly 'btw-answering': {
+        readonly zh: "思考中…";
+        readonly en: "Answering…";
+    };
+    readonly 'btw-hint-loading': {
+        readonly zh: "Esc 取消";
+        readonly en: "Esc cancel";
+    };
+    readonly 'btw-hint-done': {
+        readonly zh: "↑/↓ 滚动 · Space/Enter/Esc 关闭 · c 复制";
+        readonly en: "↑/↓ scroll · Space/Enter/Esc dismiss · c copy";
+    };
+    readonly 'btw-llm-unavailable': {
+        readonly zh: "侧问不可用（llm 服务未挂载）";
+        readonly en: "Side question unavailable (llm service not mounted)";
+    };
     readonly 'activity-ctx-warn': {
         readonly zh: "⚠ 上下文";
         readonly en: "⚠ ctx ";

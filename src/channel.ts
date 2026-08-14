@@ -8,8 +8,14 @@ import {
   MessageId,
   ReasoningEffortId,
   type ContentBlock,
+  type Message,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
+import { runSideQuestion, wrapSideQuestion } from './utils/sideQuestion.js'
+/** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
+type SideQuestionLlm = {
+  stream(options: object): AsyncIterable<StreamChunk>
+}
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
@@ -347,6 +353,11 @@ export interface Channel {
    * back to sending the line to the model).
    */
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  /** 侧问（CC /btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
+  sideQuestion(
+    question: string,
+    options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+  ): Promise<{ answer: string | null; error?: string }>
   /** Estimated context segments by content type (pi-nano-context style bar). */
   readonly contextSegments: {
     system: number
@@ -516,6 +527,11 @@ export interface ChannelState {
   /** Messages submitted while working, awaiting their turn/step boundary.
    *  Driven by agent inbox events (inserted/claimed/discarded). */
   pending: PendingMessage[]
+  /** 侧问（见 public Channel.sideQuestion）。 */
+  sideQuestion(
+    question: string,
+    options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+  ): Promise<{ answer: string | null; error?: string }>
   /** Effective slash commands (see the public Channel type). */
   commandList: readonly LocalCommand[]
   /** Run a plugin-registered command (see the public Channel type). */
@@ -1839,6 +1855,43 @@ export function createChannel(
       const providers = llm.listProviders()
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
+    },
+    async sideQuestion(
+      question: string,
+      options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+    ): Promise<{ answer: string | null; error?: string }> {
+      // CC /btw：无工具单轮辅助调用，重放 deriveMessages() 前缀 + 一条
+      // 包装问题。tools 永不传（侧问无工具是核心语义）；usage 不回收
+      // （skipCacheWrite 同义——答案不进主上下文也不进 token 计数）。
+      const llm = ctx.get('llm') as SideQuestionLlm | undefined
+      if (!llm) return { answer: null, error: t('btw-llm-unavailable') }
+      const header = agent.session.requestHeader()
+      const config = header?.config
+      const messages: Message[] = [
+        ...agent.session.deriveMessages(),
+        createUserMessage({
+          content: [{ type: 'text', text: wrapSideQuestion(question) }],
+          source: { kind: 'plugin', plugin: 'dsh-cc-tui/btw' },
+        }),
+      ]
+      const request: Record<string, unknown> = {
+        provider: config?.provider ?? state.provider,
+        model: config?.model ?? state.model,
+        messages,
+        ...(header?.system !== undefined && { system: header.system }),
+        ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
+        ...(config?.temperature !== undefined && { temperature: config.temperature }),
+        ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),
+        ...(config?.stop !== undefined && { stop: [...config.stop] }),
+        sessionId: agent.session.id,
+        ...(options?.signal && { signal: options.signal }),
+      }
+      return runSideQuestion({
+        stream: llm.stream.bind(llm),
+        options: request,
+        onText: options?.onText,
+        signal: options?.signal,
+      })
     },
     listFiles() {
       const fs = ctx.get('fs') as

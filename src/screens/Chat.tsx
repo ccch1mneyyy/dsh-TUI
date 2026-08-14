@@ -34,6 +34,8 @@ import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
+import { BtwPanel } from '../components/BtwPanel.js'
+import { setClipboard } from '../ink/termio/osc.js'
 import { LoadingState } from '../components/design-system/LoadingState.js'
 import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'
@@ -205,6 +207,16 @@ export function Chat({
   const [rewindOpen, setRewindOpen] = React.useState(false)
   const [rewindIndex, setRewindIndex] = React.useState(0)
   const [rewindConfirm, setRewindConfirm] = React.useState<ChatRow | null>(null)
+  /** /btw side-question overlay (CC): pure UI state — the answer never
+   *  enters the transcript or the session log. */
+  const [btw, setBtw] = React.useState<{ question: string; answer: string; error?: string; done: boolean } | null>(null)
+  const btwAbortRef = React.useRef<AbortController | null>(null)
+  const closeBtw = () => {
+    btwAbortRef.current?.abort()
+    btwAbortRef.current = null
+    setBtw(null)
+  }
+  React.useEffect(() => () => btwAbortRef.current?.abort(), [])
   /** Startup context panel: expanded by header click or Ctrl+T. */
   const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
@@ -692,6 +704,28 @@ export function Chat({
           t('terminal-paste-hint', { mod: modLabel }),
         ])
         return true
+      case 'btw': {
+        // CC /btw：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
+        // 会话历史。空参数只提示用法。
+        setHelpOpen(false)
+        const question = rawInput.trim()
+        if (!question) {
+          channel.notify(t('btw-usage'), { timeoutMs: 3000 })
+          return true
+        }
+        btwAbortRef.current?.abort()
+        const controller = new AbortController()
+        btwAbortRef.current = controller
+        setBtw({ question, answer: '', done: false })
+        void channel.sideQuestion(question, {
+          signal: controller.signal,
+          onText: delta => setBtw(prev => (prev ? { ...prev, answer: prev.answer + delta } : prev)),
+        }).then(result => {
+          if (controller.signal.aborted) return
+          setBtw(prev => (prev ? { ...prev, answer: result.answer ?? prev.answer, error: result.error, done: true } : prev))
+        })
+        return true
+      }
       case 'connect':
         setHelpOpen(false)
         channel.pushLocal('/connect', [t('connect-none')])
@@ -873,6 +907,11 @@ export function Chat({
   }, [])
 
   useInput((input, key, event) => {
+    // The /btw panel owns the keyboard while open (its own useInput handles
+    // Esc/Enter/Space close, ↑/↓ scroll, c copy; everything else is
+    // swallowed there). Chat registered first, so an early return here does
+    // not block the event from reaching the panel.
+    if (btw !== null) return
     // The questionnaire / approval panel owns the keyboard while one is
     // pending (the panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc;
     // the prompt input is unmounted, so nothing else should see these keys).
@@ -1233,7 +1272,8 @@ export function Chat({
   /** Prompt input is inert while a modal dialog owns the keyboard. */
   const promptSelectionActive =
     selectionActive || modelPickerOpen || resumePickerOpen || activityPickerOpen ||
-    presetPickerOpen || themePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen
+    presetPickerOpen || themePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen ||
+    btw !== null
 
   return (
     <Box flexDirection="column" flexGrow={1} width="100%">
@@ -1404,6 +1444,20 @@ export function Chat({
             approval={approvalSnapshot}
             onDecide={outcome => approvals.decide(outcome)}
           />
+        ) : btw !== null ? (
+          <Box flexDirection="column" marginTop={1}>
+            <BtwPanel
+              question={btw.question}
+              answer={btw.answer}
+              error={btw.error}
+              streaming={!btw.done}
+              onClose={closeBtw}
+              onCopy={() => {
+                void setClipboard(btw.answer ?? '').then(raw => { if (raw) process.stdout.write(raw) })
+                channel.notify(t('copied-chars', { n: (btw.answer ?? '').length }), { timeoutMs: 1500 })
+              }}
+            />
+          </Box>
         ) : questionSnapshot !== null ? (
           <AskUserQuestionPanel
             key={questionSnapshot.key}

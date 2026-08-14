@@ -36,6 +36,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'resume', description: 'Resume a previous session' },
   { name: 'rewind', description: 'Rewind the conversation to a previous message' },
   { name: 'export', description: 'Export the conversation to a markdown file' },
+  { name: 'btw', description: 'Ask a quick side question without interrupting the conversation' },
   // Session / environment
   { name: 'status', description: 'Show session status' },
   { name: 'cost', description: 'Show session token usage' },

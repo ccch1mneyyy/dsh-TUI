@@ -93,6 +93,21 @@ selection is confirmed, the TUI:
 3. Replays history before the boundary.
 4. Restores the original message to the editor for revision and resubmission.
 
+### Side question /btw
+
+`/btw <question>` asks a quick side question without disturbing the main
+task: it reuses the current session context (system prompt + existing
+history) for a single **tool-less, one-turn** model call, and shows the
+answer in a scrollable panel. Notes:
+
+- **Never enters conversation history**: the exchange is not written to the
+  session log and never reaches the main context or token counts (closing
+  the panel discards it).
+- **Never interrupts the running turn**: it can be triggered while the
+  model is streaming; the main task keeps going.
+- Inside the panel: `↑`/`↓` scroll, `Space`/`Enter`/`Esc` dismiss, `c`
+  copies the answer; `Esc` cancels while the answer is still pending.
+
 ### Model and preset
 
 `/model` switches through a session fork at the end of current history because
@@ -139,14 +154,18 @@ FIFO order. A compact Q&A summary is added to the local transcript afterward.
 ## Slash commands
 
 The command menu merges local commands with the DSH command registry. Type `/`
+<<<<<<< HEAD
 to inspect the complete surface available in the current composition. Command
 descriptions follow the UI language (`/lang`): built-in commands and mapped
 registry commands (`/plan`, `/goal`, `/feedback`) show Chinese translations in
 zh; unmapped registry commands fall back to the registry's own text.
 
+=======
+to inspect the complete surface available in the current composition.
+>>>>>>> 0fc5911 (feat(btw): /btw 侧问命令——不打断主回合、不进会话历史的快速提问（CC /btw 对齐）)
 | Group | Commands |
 | --- | --- |
-| Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export` |
+| Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export`, `/btw` |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
