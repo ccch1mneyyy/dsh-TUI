@@ -318,6 +318,12 @@ export function eraseLines(n: number): string {
   return result
 }
 
+/** Reset all SGR attributes (CSI 0 m). Erase/scroll sequences fill blank
+ *  cells with the CURRENT background color (BCE) — prefix this before any
+ *  such sequence that must not inherit a possibly-stuck background (e.g.
+ *  after a truncated frame left a colored SGR active). */
+export const SGR_RESET = csi(0, 'm')
+
 // Scroll
 
 /**

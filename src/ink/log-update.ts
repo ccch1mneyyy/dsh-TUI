@@ -21,15 +21,22 @@ import {
 } from './screen.js'
 import {
   CURSOR_HOME,
+  cursorUp,
+  eraseToEndOfScreen,
   scrollDown as csiScrollDown,
   scrollUp as csiScrollUp,
   RESET_SCROLL_REGION,
+  SGR_RESET,
   setScrollRegion,
 } from './termio/csi.js'
 import { LINK_END, link as oscLink } from './termio/osc.js'
 
 type State = {
   previousOutput: string
+  /** One-shot: the next main-screen frame repaints the whole viewport from
+   *  the physical cursor position instead of diffing. See
+   *  requestViewportReanchor. */
+  reanchorPending: boolean
 }
 
 type Options = {
@@ -50,7 +57,30 @@ export class LogUpdate {
   constructor(private readonly options: Options) {
     this.state = {
       previousOutput: '',
+      reanchorPending: false,
     }
+  }
+
+  /**
+   * Request a one-shot viewport re-anchor on the next main-screen frame.
+   *
+   * The main-screen diff engine addresses rows purely relative to where it
+   * left the cursor — it has no absolute anchor and no way to notice when a
+   * third party moved it. A subprocess writing directly to the tty (an MCP
+   * server's stderr, a stray native log line — issue #17) advances the
+   * cursor and scrolls the terminal; every subsequent diff then lands N
+   * rows off, garbling the UI (missing labels, shifted rows — issue #16)
+   * until some full repaint happens to run. There is nothing to detect
+   * after the fact (a newline-terminated write parks the cursor back at
+   * the bottom column 0, exactly where the engine expects it), so the
+   * recovery is a blind idempotent repaint: rebuild the viewport from the
+   * physical cursor position, which re-syncs the virtual↔physical mapping
+   * no matter how far they had drifted. Wired to the stdin-gap reassert
+   * (>5s idle then a keypress) — the same trigger that re-asserts DEC
+   * modes after tmux attach / ssh reconnect.
+   */
+  requestViewportReanchor(): void {
+    this.state.reanchorPending = true
   }
 
   /**
@@ -166,6 +196,18 @@ export class LogUpdate {
       return fullResetSequence_CAUSES_FLICKER(next, 'resize', stylePool)
     }
 
+    // One-shot viewport re-anchor (see requestViewportReanchor): repaint
+    // the whole visible window from the physical cursor position, blind to
+    // whatever a third-party tty write did to it. Main-screen only — the
+    // alt-screen path already self-heals with CSI H every frame. Checked
+    // after the resize reset (which supersedes it; the flag survives to
+    // the next frame) and before the DECSTBM path (alt-screen only, so
+    // mutually exclusive anyway).
+    if (this.state.reanchorPending && !altScreen) {
+      this.state.reanchorPending = false
+      return repaintViewportInPlace(prev, next, stylePool)
+    }
+
     // DECSTBM scroll optimization: when a ScrollBox's scrollTop changed,
     // shift content with a hardware scroll (CSI top;bot r + CSI n S/T)
     // instead of rewriting the whole scroll region. The shiftRows on
@@ -191,6 +233,10 @@ export class LogUpdate {
         bottom < next.screen.height
       ) {
         shiftRows(prev.screen, top, bottom, delta)
+        // The hardware scroll's blank fill uses the terminal's CURRENT
+        // background (BCE); the SGR reset at the head of every frame buffer
+        // (writeDiffToTerminal) guarantees the default background here even
+        // after a truncated previous frame left a colored SGR stuck.
         scrollPatch = [
           {
             type: 'stdout',
@@ -226,16 +272,21 @@ export class LogUpdate {
     const isShrinking = next.screen.height < prev.screen.height
     const nextFitsViewport = next.screen.height <= prev.viewport.height
 
-    // When shrinking from above-viewport to at-or-below-viewport, content that
-    // was in scrollback should now be visible. Terminal clear operations can't
-    // bring scrollback content into view, so we need a full reset.
-    // Use <= (not <) because even when next height equals viewport height, the
-    // scrollback depth from the previous render differs from a fresh render.
+    // When shrinking from above-viewport to at-or-below-viewport, content
+    // that was in scrollback stays there — terminal clears can't pull it
+    // back — but the viewport itself can be rebuilt in place: the cursor is
+    // parked at the physical bottom (prevHadScrollback implies it), so the
+    // viewport rows are all reachable. Repainting them directly avoids the
+    // former full reset here, whose clearTerminal + whole-frame reprint
+    // deposited one stale UI copy into the scrollback per shrink.
+    // Use <= (not <) because even when next height equals viewport height,
+    // the scrollback depth from the previous render differs from a fresh
+    // render.
     if (prevHadScrollback && nextFitsViewport && isShrinking) {
       logForDebugging(
-        `Full reset (shrink->below): prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${prev.viewport.height}`,
+        `Viewport repaint (shrink->below): prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${prev.viewport.height}`,
       )
-      return fullResetSequence_CAUSES_FLICKER(next, 'offscreen', stylePool)
+      return repaintViewportInPlace(prev, next, stylePool)
     }
 
     // Steady-state scrollback check removed: rows above the viewport used
@@ -262,13 +313,22 @@ export class LogUpdate {
 
       // Main-screen mode + content taller than the viewport: the terminal
       // viewport does NOT follow the content bottom when content shrinks —
-      // any incremental path (eraseLines or scroll-up + slice repaint)
-      // writes rows at stale physical offsets, leaving old status rows
-      // behind and drawing the new bottom-pinned rows (status line, prompt)
-      // mid-screen. Full repaint rebuilds the virtual↔physical mapping from
-      // scratch. clearTerminal no longer emits ESC[2J/3J (scroll-up instead),
-      // so this is safe: scrollback preserved, no WT viewport jump.
+      // a diff-loop path would write rows at stale physical offsets. But
+      // when the cursor sits on its park row (the invariant the renderer
+      // maintains every main-screen frame), the whole viewport is directly
+      // addressable: repaint it in place. This branch fires on EVERY turn
+      // (thinking fold, spinner/esc-hint unmount, markdown reflow shrink
+      // the frame by a row or two while it is taller than the viewport) —
+      // the former full reset here was the copy machine behind the
+      // duplicated-UI scrollback reports (#38 #39 #19). Fall back to the
+      // full reset only if the cursor is somewhere unexpected.
       if (!altScreen && prev.screen.height > prev.viewport.height) {
+        if (cursorAtBottom) {
+          logForDebugging(
+            `Viewport repaint (shrink tall): prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${prev.viewport.height}`,
+          )
+          return repaintViewportInPlace(prev, next, this.options.stylePool)
+        }
         return fullResetSequence_CAUSES_FLICKER(
           next,
           'offscreen',
@@ -541,6 +601,61 @@ function fullResetSequence_CAUSES_FLICKER(
   const screen = new VirtualScreen({ x: 0, y: 0 }, frame.viewport.width)
   renderFrame(screen, frame, stylePool)
   return [{ type: 'clearTerminal', reason, debug }, ...screen.diff]
+}
+
+/**
+ * Repaint the visible viewport in place — the main-screen shrink recovery
+ * that replaces fullResetSequence's clearTerminal + whole-frame reprint.
+ *
+ * Precondition (caller-guarded): the cursor is parked on the physical
+ * bottom row (the renderer pins cursor.y = screen.height every main-screen
+ * frame), so the viewport top is exactly viewportHeight-1 rows up. Walk
+ * there, erase to the end of the screen, and repaint the frame's tail
+ * directly into the viewport. Nothing scrolls: no rows are pushed into
+ * (WT semantics) or spliced out of (xterm.js semantics) the terminal
+ * scrollback, so the shrink frames that fire on EVERY turn — thinking
+ * fold, spinner/esc-hint rows unmounting at end of turn, streaming
+ * markdown reflow — stop depositing a full stale UI copy per turn into
+ * the user's scroll history (issues #38 #39 #19).
+ *
+ * Frame-row bookkeeping stays on the steady-state formulas: the repaint
+ * leaves frame rows [H-min(H,V-1), H) on the viewport with the cursor at
+ * frame row H on the physical bottom row — exactly the mapping viewportY
+ * derives (viewport top = H-V+1 when H >= V), so the next frame needs no
+ * special casing. Cost is O(viewport) cells once per shrink frame, well
+ * under the fullReset path it replaces (whole frame + 10000-row scroll).
+ *
+ * Also reused by the viewport re-anchor (requestViewportReanchor), where
+ * the cursor may NOT be exactly on the park row — a third-party write
+ * left it somewhere in the bottom region. The CR + cursorUp(V-1) still
+ * lands on the viewport top because CUU clamps at the top margin, so the
+ * repaint re-syncs the mapping from any bottom-region start. (On legacy
+ * conhost the clamp can drag the viewport instead — see
+ * hasCursorUpViewportYankBug — but only when the cursor starts above the
+ * bottom row, which no known writer produces.)
+ */
+function repaintViewportInPlace(
+  prev: Frame,
+  next: Frame,
+  stylePool: StylePool,
+): Diff {
+  const viewportHeight = prev.viewport.height
+  const height = next.screen.height
+  // The bottom viewport row stays reserved for the cursor park; content
+  // occupies at most viewportHeight-1 rows above it (same split as the
+  // steady state, where the park LF materializes one row below the frame).
+  const contentRows = Math.min(height, viewportHeight - 1)
+  const startY = height - contentRows
+  // CR + up(V-1): from the parked bottom row to the viewport top — stays
+  // inside the viewport, so conhost's CUU-into-scrollback yank bug can't
+  // trigger. Erase down from there (BCE fill — the SGR reset at the head
+  // of every frame buffer guarantees the default background). The erase
+  // also blanks the park row, so no stale prompt/status pixels survive
+  // below short content.
+  const anchor = '\r' + cursorUp(viewportHeight - 1) + eraseToEndOfScreen()
+  const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
+  renderFrameSlice(screen, next, startY, height, stylePool)
+  return [{ type: 'stdout', content: anchor }, ...screen.diff]
 }
 
 function renderFrame(
