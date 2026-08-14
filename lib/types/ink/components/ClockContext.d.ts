@@ -7,4 +7,3 @@ export type Clock = {
 export declare function createClock(tickIntervalMs: number): Clock;
 export declare const ClockContext: React.Context<Clock | null>;
 export declare function ClockProvider(t0: any): any;
-//# sourceMappingURL=ClockContext.d.ts.map

@@ -321,4 +321,3 @@ export type Styles = {
  */
 declare const styles: (node: LayoutNode, style?: Styles, resolvedStyle?: Styles) => void;
 export default styles;
-//# sourceMappingURL=styles.d.ts.map

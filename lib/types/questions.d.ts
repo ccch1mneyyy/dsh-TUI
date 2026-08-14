@@ -94,4 +94,3 @@ export declare class QuestionStore {
     rejectAll(): void;
     private fail;
 }
-//# sourceMappingURL=questions.d.ts.map

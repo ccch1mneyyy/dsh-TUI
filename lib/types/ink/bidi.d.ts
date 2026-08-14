@@ -15,4 +15,3 @@ type ClusteredChar = {
  */
 export declare function reorderBidi(characters: ClusteredChar[]): ClusteredChar[];
 export {};
-//# sourceMappingURL=bidi.d.ts.map

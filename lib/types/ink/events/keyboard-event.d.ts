@@ -37,4 +37,3 @@ export declare class KeyboardEvent extends TerminalEvent {
     readonly fn: boolean;
     constructor(parsedKey: ParsedKey);
 }
-//# sourceMappingURL=keyboard-event.d.ts.map

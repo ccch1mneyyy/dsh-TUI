@@ -17,4 +17,3 @@
  * terminal's native selection is used instead.
  */
 export declare function NoSelect(t0: any): any;
-//# sourceMappingURL=NoSelect.d.ts.map

@@ -40,4 +40,3 @@ export declare function formatToken(token: Token, listDepth?: number, orderedLis
  * @returns `content` padded with spaces to `targetWidth`.
  */
 export declare function padAligned(content: string, displayWidth: number, targetWidth: number, align: 'left' | 'center' | 'right' | null | undefined): string;
-//# sourceMappingURL=markdown.d.ts.map

@@ -38,4 +38,3 @@ export declare function LogoHeader({ model, effort, cwd, }: {
     effort?: string | undefined;
     cwd: string;
 }): React.ReactNode;
-//# sourceMappingURL=MessageList.d.ts.map

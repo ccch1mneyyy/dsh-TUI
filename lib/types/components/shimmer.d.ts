@@ -32,4 +32,3 @@ export declare const FLASH: Rgb;
  * @returns The ANSI bold-colored word with the moving highlight.
  */
 export declare function sweep(word: string, time: number, base: Rgb, highlight: Rgb, stepMs?: number): string;
-//# sourceMappingURL=shimmer.d.ts.map

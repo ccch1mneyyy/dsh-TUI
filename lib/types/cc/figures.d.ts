@@ -56,4 +56,3 @@ export declare const BRIDGE_SPINNER_FRAMES: string[];
 export declare const BRIDGE_READY_INDICATOR = "\u00B7\u2714\uFE0E\u00B7";
 /** Bridge failed indicator (`×`). */
 export declare const BRIDGE_FAILED_INDICATOR = "\u00D7";
-//# sourceMappingURL=figures.d.ts.map

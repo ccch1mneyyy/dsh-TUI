@@ -8,4 +8,3 @@ import React from 'react';
  * Memoized to prevent re-renders when parent changes but children string is the same.
  */
 export declare const Ansi: React.MemoExoticComponent<(t0: any) => any>;
-//# sourceMappingURL=Ansi.d.ts.map

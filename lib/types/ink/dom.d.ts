@@ -175,4 +175,3 @@ export declare const clearYogaNodeReferences: (node: DOMElement | TextNode) => v
  */
 export declare function findOwnerChainAtRow(root: DOMElement, y: number): string[];
 export {};
-//# sourceMappingURL=dom.d.ts.map

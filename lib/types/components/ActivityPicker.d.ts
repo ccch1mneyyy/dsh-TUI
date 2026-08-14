@@ -10,4 +10,3 @@ export declare function ActivityPicker({ focusIndex, currentPreset, }: {
     focusIndex: number;
     currentPreset: string | undefined;
 }): React.ReactNode;
-//# sourceMappingURL=ActivityPicker.d.ts.map

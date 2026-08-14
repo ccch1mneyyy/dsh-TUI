@@ -116,4 +116,3 @@ export type Diff = Patch[];
  * @returns the clearing reason, or undefined when no clear is needed.
  */
 export declare function shouldClearScreen(prevFrame: Frame, frame: Frame): FlickerReason | undefined;
-//# sourceMappingURL=frame.d.ts.map

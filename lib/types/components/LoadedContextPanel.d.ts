@@ -17,4 +17,3 @@ export declare function LoadedContextPanel({ context, open, onToggle, }: {
     open: boolean;
     onToggle: () => void;
 }): React.ReactNode;
-//# sourceMappingURL=LoadedContextPanel.d.ts.map

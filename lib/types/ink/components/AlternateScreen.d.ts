@@ -19,4 +19,3 @@
  * screen if the component's own unmount doesn't run.
  */
 export declare function AlternateScreen(t0: any): any;
-//# sourceMappingURL=AlternateScreen.d.ts.map

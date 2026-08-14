@@ -77,4 +77,3 @@ export type Terminal = {
  * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
  */
 export declare function writeDiffToTerminal(terminal: Terminal, diff: Diff, skipSyncMarkers?: boolean): void;
-//# sourceMappingURL=terminal.d.ts.map

@@ -15,4 +15,3 @@ type Props = {
  */
 export declare function AssistantTextMessage({ text, addMargin, isSelected, isExpanded, onClick, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=AssistantTextMessage.d.ts.map

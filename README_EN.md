@@ -80,6 +80,12 @@ most recently selected session.
 See [Getting started](docs/getting-started.en.md) for profile composition,
 source builds, and troubleshooting.
 
+Inside the TUI, `/update` updates the installed `dsh-cc-tui` package and
+automatically restarts into the current session.
+
+The TUI also checks npm for updates in the background after startup. The check
+never blocks the first frame and silently ignores offline or registry errors.
+
 ## Documentation
 
 | Topic | Contents |

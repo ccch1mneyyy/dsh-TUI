@@ -42,4 +42,3 @@ export type TerminalNotification = {
  */
 export declare function useTerminalNotification(): TerminalNotification;
 export {};
-//# sourceMappingURL=useTerminalNotification.d.ts.map

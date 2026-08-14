@@ -19,4 +19,3 @@ export declare function getClearTerminalSequence(rows?: number): string;
  * Clears the terminal screen. On supported terminals, also clears scrollback.
  */
 export declare const clearTerminal: string;
-//# sourceMappingURL=clearTerminal.d.ts.map

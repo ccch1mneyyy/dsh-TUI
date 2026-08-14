@@ -28,4 +28,3 @@ export declare function isPresetName(name: string): boolean;
  * @returns The matching preset; unknown or absent names fall back to the default.
  */
 export declare function resolvePreset(name: string | undefined): FramePreset;
-//# sourceMappingURL=activityFrames.d.ts.map

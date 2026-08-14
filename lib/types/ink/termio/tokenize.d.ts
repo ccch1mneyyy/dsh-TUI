@@ -47,4 +47,3 @@ type TokenizerOptions = {
  */
 export declare function createTokenizer(options?: TokenizerOptions): Tokenizer;
 export {};
-//# sourceMappingURL=tokenize.d.ts.map

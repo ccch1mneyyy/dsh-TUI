@@ -14,4 +14,3 @@ import type { TextStyle } from './types.js';
  *   codes update the corresponding attribute of a copy.
  */
 export declare function applySGR(paramStr: string, style: TextStyle): TextStyle;
-//# sourceMappingURL=sgr.d.ts.map

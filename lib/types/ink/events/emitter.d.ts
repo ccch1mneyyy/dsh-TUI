@@ -17,4 +17,3 @@ export declare class EventEmitter extends NodeEventEmitter {
      */
     emit(type: string | symbol, ...args: unknown[]): boolean;
 }
-//# sourceMappingURL=emitter.d.ts.map

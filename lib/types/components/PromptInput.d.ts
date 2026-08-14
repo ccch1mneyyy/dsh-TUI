@@ -64,4 +64,3 @@ export interface PromptInputProps {
  * aborts the turn and sends the current input immediately.
  */
 export declare function PromptInput({ channel, helpOpen, onToggleHelp, onRunCommand, selectionActive, fillText, onFillConsumed, onRewindRequest, controllerRef, }: PromptInputProps): React.JSX.Element;
-//# sourceMappingURL=PromptInput.d.ts.map

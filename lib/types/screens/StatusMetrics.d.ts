@@ -84,4 +84,3 @@ export declare function tpsStats(samples: readonly {
     p95: number;
 };
 export {};
-//# sourceMappingURL=StatusMetrics.d.ts.map

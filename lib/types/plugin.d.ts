@@ -10,4 +10,3 @@ import { Config } from './index.js';
  * LLM adapter, and the tool plugins.
  */
 export declare function apply(ctx: Context, config: Config): Promise<void>;
-//# sourceMappingURL=plugin.d.ts.map

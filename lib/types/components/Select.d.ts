@@ -19,4 +19,3 @@ export declare function Select({ options, focusIndex, selectedValue, visibleOpti
     selectedValue: string | undefined;
     visibleOptionCount?: number;
 }): React.ReactNode;
-//# sourceMappingURL=Select.d.ts.map

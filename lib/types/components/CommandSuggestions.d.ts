@@ -11,4 +11,3 @@ export declare function CommandSuggestions({ commands, selectedIndex, columns, }
     selectedIndex: number;
     columns: number;
 }): React.ReactNode;
-//# sourceMappingURL=CommandSuggestions.d.ts.map

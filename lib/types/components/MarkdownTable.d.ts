@@ -14,4 +14,3 @@ type Props = {
  */
 export declare function MarkdownTable({ token, highlight, forceWidth, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=MarkdownTable.d.ts.map

@@ -25,4 +25,3 @@ export interface Rgb {
  * @returns Five ANSI rows, one per block-font line.
  */
 export declare function renderBigText(text: string, time: number, from: Rgb, to: Rgb, flash: Rgb, stepMs?: number): string[];
-//# sourceMappingURL=bigfont.d.ts.map

@@ -5,4 +5,3 @@
  * @returns True when CC_TUI_DISABLE_MOUSE is set to a truthy value.
  */
 export declare function isMouseClicksDisabled(): boolean;
-//# sourceMappingURL=fullscreen.d.ts.map

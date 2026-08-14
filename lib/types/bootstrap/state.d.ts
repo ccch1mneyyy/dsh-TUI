@@ -10,4 +10,3 @@ export declare function flushInteractionTime(): void;
 export declare function updateLastInteractionTime(): void;
 /** No-op scroll-activity stub; cc-tui does not track interaction time. */
 export declare function markScrollActivity(): void;
-//# sourceMappingURL=state.d.ts.map

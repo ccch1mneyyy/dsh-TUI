@@ -17,4 +17,3 @@ export declare function SearchBox({ query, placeholder, isFocused, isTerminalFoc
     cursorOffset?: number;
     borderless?: boolean;
 }): React.ReactNode;
-//# sourceMappingURL=SearchBox.d.ts.map

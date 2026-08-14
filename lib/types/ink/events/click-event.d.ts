@@ -29,4 +29,3 @@ export declare class ClickEvent extends Event {
     readonly cellIsBlank: boolean;
     constructor(col: number, row: number, cellIsBlank: boolean);
 }
-//# sourceMappingURL=click-event.d.ts.map

@@ -21,4 +21,3 @@ type Props = {
  */
 export declare function Markdown({ children, dimColor, cacheTokens }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=Markdown.d.ts.map

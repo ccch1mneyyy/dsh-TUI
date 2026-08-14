@@ -5,4 +5,3 @@ import { type Props } from '../components/AppContext.js';
  */
 declare const useApp: () => Props;
 export default useApp;
-//# sourceMappingURL=use-app.d.ts.map

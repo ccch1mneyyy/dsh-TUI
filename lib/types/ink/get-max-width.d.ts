@@ -17,4 +17,3 @@ import { type LayoutNode } from './layout/node.js';
  */
 declare const getMaxWidth: (yogaNode: LayoutNode) => number;
 export default getMaxWidth;
-//# sourceMappingURL=get-max-width.d.ts.map

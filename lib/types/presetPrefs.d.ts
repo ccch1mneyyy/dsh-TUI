@@ -26,4 +26,3 @@ export declare function readPresetPref(dir?: string): string | undefined;
  * @returns True when the file was written, false on failure.
  */
 export declare function writePresetPref(preset: string, dir?: string): boolean;
-//# sourceMappingURL=presetPrefs.d.ts.map

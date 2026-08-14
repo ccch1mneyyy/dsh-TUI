@@ -31,4 +31,3 @@ export interface ExecFileNoThrowOptions {
  * @returns The process outcome: exit code, captured stdout, and captured stderr.
  */
 export declare function execFileNoThrow(file: string, args?: readonly string[], options?: ExecFileNoThrowOptions): Promise<ExecFileNoThrowResult>;
-//# sourceMappingURL=execFileNoThrow.d.ts.map

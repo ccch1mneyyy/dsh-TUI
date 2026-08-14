@@ -25,4 +25,3 @@ export { useTerminalSize } from './ink/hooks/use-terminal-size.js';
 export { useBlink } from './hooks/useBlink.js';
 export { Ansi } from './ink/Ansi.js';
 export type { Key } from './ink/events/input-event.js';
-//# sourceMappingURL=ui.d.ts.map

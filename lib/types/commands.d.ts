@@ -52,4 +52,3 @@ export declare function isLocalCommandName(input: string, list?: readonly LocalC
  * @returns Commands whose name starts with the prefix, in list order.
  */
 export declare function filterCommands(input: string, list?: readonly LocalCommand[]): LocalCommand[];
-//# sourceMappingURL=commands.d.ts.map

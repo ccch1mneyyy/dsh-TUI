@@ -46,4 +46,3 @@ export type Props = Except<Styles, 'textWrap'> & {
  */
 declare function Box(t0: any): any;
 export default Box;
-//# sourceMappingURL=Box.d.ts.map

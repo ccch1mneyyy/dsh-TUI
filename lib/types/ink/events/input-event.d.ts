@@ -78,4 +78,3 @@ export declare class InputEvent extends Event {
     readonly isPasted: boolean;
     constructor(keypress: ParsedKey);
 }
-//# sourceMappingURL=input-event.d.ts.map

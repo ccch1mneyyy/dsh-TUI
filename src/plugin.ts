@@ -14,7 +14,8 @@ import { readModelPref } from './modelPrefs.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
 import { writeResumeTarget } from './sessionHistory.js'
-import { isLang, resolveStartupLang, setLang } from './i18n.js'
+import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from './update.js'
+import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
 
@@ -38,6 +39,32 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // language.
   const envLang = process.env.CC_TUI_LANG
   setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
+
+  // /update restart verification: the pre-update process stamps the version
+  // it was leaving behind; if the freshly loaded one is not newer, the
+  // package manager "succeeded" without actually moving the version (mirror
+  // lag, cached manifest, wrong profile). Say so instead of silently
+  // pretending the update landed.
+  {
+    const updatedFrom = process.env.DSH_CC_UPDATED_FROM
+    if (updatedFrom !== undefined) {
+      // Assigning undefined would stringify to "undefined" and leak the
+      // marker into every child process; remove it for real.
+      delete process.env.DSH_CC_UPDATED_FROM
+      const now = installedTuiVersion()
+      if (now === undefined || !isVersionNewer(now, updatedFrom)) {
+        ctx.logger.warn(
+          `cc-tui: /update restarted but the version did not advance (still ${now ?? 'unknown'}, was ${updatedFrom})`,
+        )
+        if (process.stderr.isTTY) {
+          process.stderr.write(
+            `\ncc-tui: 更新后版本未变化（仍为 ${now ?? 'unknown'}，原为 ${updatedFrom}）；` +
+              `可能是镜像 registry 未同步，请稍后重试或检查 registry 配置。\n`,
+          )
+        }
+      }
+    }
+  }
 
   // DSH user-interaction seam: the model's ask_user_question tool parks on
   // the userInteraction service until a UI provider answers. Mount the
@@ -101,6 +128,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the end of the final frame, so the prompt printed over it.
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
+  let updateRequested = false
+  // The profile this process was booted with (`dsh --profile <name>`); dsh
+  // exposes it nowhere else, and /update must update the installation the
+  // user is actually running, not a hard-coded one.
+  const profile = resolveDshProfileName()
   const handleExit = (error?: unknown): void => {
     if (exited) return
     exited = true
@@ -128,8 +160,45 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       disposeRootAndExit(ctx, 1)
       return
     }
+    if (updateRequested) {
+      if (process.stdout.isTTY) {
+        process.stdout.write('\nUpdating dsh-cc-tui and restarting…\n')
+      }
+      disposeRootAndThen(ctx, () => {
+        // updateRequested only flips when onUpdate exists, which itself
+        // requires a resolved profile — narrow for the call below.
+        const updateProfile = profile
+        if (updateProfile === undefined) {
+          process.stderr.write('\ncc-tui update aborted: no dsh profile resolved.\n')
+          process.exit(1)
+        }
+        void updateTuiAndRestart(channel.agentId, updateProfile).then(
+          ({ updateCode, restartCode }) => {
+            if (updateCode !== 0) {
+              // The session survives: its log lives in DSH persistence and
+              // resume.txt was already written. A bare non-zero exit would
+              // drop the user into a shell with no way back in.
+              process.stderr.write(
+                `\ncc-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
+                  `${resumeCommand(profile, channel.agentId)}\n\n`,
+              )
+            }
+            process.exit(restartCode)
+          },
+          updateError => {
+            const message = updateError instanceof Error ? updateError.message : String(updateError)
+            process.stderr.write(
+              `\ncc-tui update failed: ${message}. Your session is preserved — resume with:\n` +
+                `${resumeCommand(profile, channel.agentId)}\n\n`,
+            )
+            process.exit(1)
+          },
+        )
+      })
+      return
+    }
     if (process.stdout.isTTY) {
-      process.stdout.write(`\nResume with -c (or command below):\ndsh-cc --resume ${channel.agentId}\n\n`)
+      process.stdout.write(`\nResume with (set the env var, then boot the profile):\n${resumeCommand(profile, channel.agentId)}\n\n`)
     }
     disposeRootAndExit(ctx, 0)
   }
@@ -138,6 +207,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     channel,
     questionStore,
     onExit: () => handleExit(),
+    // Only a `dsh --profile <name>` launch has a profile installation for
+    // `/update` to act on; source checkouts and `--config` overlays get the
+    // unavailable notice instead.
+    onUpdate: profile === undefined ? undefined : () => {
+      if (exited || updateRequested) return
+      // Confirm the target version before tearing the TUI down: on an
+      // already-latest install, an unconditional update+restart would churn
+      // the process and then trip the "version did not advance" warning.
+      void resolveTuiUpdateTarget().then((target) => {
+        if (exited || updateRequested) return
+        if (target.kind === 'latest') {
+          channel.notify(t('update-already-latest', { current: target.current }), { color: 'warning' })
+          return
+        }
+        if (target.kind === 'unknown') {
+          channel.notify(t('update-check-failed'))
+        }
+        channel.notify(t('update-starting'))
+        updateRequested = true
+        instance?.unmount()
+      })
+    },
   })
   // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
   // tracking), which turns on in-app text selection (copy-on-select via
@@ -149,6 +240,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     config.fullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
   )
   instance = await render(tree, { exitOnCtrlC: false })
+
+  // Check in the background so registry latency never delays the first frame.
+  // A failed/offline check is intentionally silent; the manual `/update`
+  // command remains available regardless of network access.
+  void checkForTuiUpdate().then((update) => {
+    if (update === undefined || exited || updateRequested) return
+    channel.notify(
+      t('update-available', { current: update.current, latest: update.latest }),
+      { color: 'warning', timeoutMs: 12000 },
+    )
+  })
 
   // If the surrounding tree goes down (reload, teardown), take the TUI with it.
   ctx.effect(() => () => {
@@ -248,16 +350,40 @@ async function resolveAgent(
  * Mirrors the deleted dsh-tui front-door exit semantics.
  */
 function disposeRootAndExit(ctx: Context, code: number): void {
-  const timer = setTimeout(() => process.exit(code), 5000)
+  disposeRootAndThen(ctx, () => process.exit(code), code)
+}
+
+/**
+ * The real way back into a session after the TUI process is gone. The
+ * package ships no `dsh-cc` bin — resuming means feeding the session id
+ * through `DSH_CC_RESUME_SESSION` (what cordis.patch.yml's `sessionId` reads)
+ * and booting the same profile; on Windows the repo's dsh-cc.cmd wrapper
+ * does this via --resume + ~/.dsh-cc/resume.txt.
+ */
+function resumeCommand(profile: string | undefined, sessionId: string): string {
+  const boot = profile === undefined ? 'dsh --config cordis.yml' : `dsh --profile ${profile}`
+  return process.platform === 'win32'
+    ? `dsh-cc --resume ${sessionId}`
+    : `DSH_CC_RESUME_SESSION=${sessionId} ${boot}`
+}
+
+/**
+ * Dispose the Cordis tree, then run a process-level handoff action. The
+ * fallback exit keeps the caller's intended code when disposal stalls — the
+ * handoff (update/restart) may legitimately take longer than the bound, and
+ * reporting failure on a clean exit would mislead wrapper scripts.
+ */
+function disposeRootAndThen(ctx: Context, done: () => void, fallbackCode = 1): void {
+  const timer = setTimeout(() => process.exit(fallbackCode), 5000)
   timer.unref()
   void ctx.root.fiber.dispose().then(
     () => {
       clearTimeout(timer)
-      process.exit(code)
+      done()
     },
     () => {
       clearTimeout(timer)
-      process.exit(code)
+      done()
     },
   )
 }

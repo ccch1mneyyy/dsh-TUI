@@ -24,4 +24,3 @@ import type { DOMElement } from '../dom.js';
  * so consumers don't need to handle focus state.
  */
 export declare function useAnimationFrame(intervalMs?: number | null): [ref: (element: DOMElement | null) => void, time: number];
-//# sourceMappingURL=use-animation-frame.d.ts.map

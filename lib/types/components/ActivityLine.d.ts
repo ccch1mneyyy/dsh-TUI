@@ -26,4 +26,3 @@ export declare function ActivityLine({ activity, activityFrames, warnPct, warnDa
     warnDanger?: boolean;
     suffix?: string;
 }): React.ReactNode;
-//# sourceMappingURL=ActivityLine.d.ts.map

@@ -8,4 +8,3 @@ import type { DOMElement } from '../ink/dom.js';
  * @returns [ref, isVisible] - Ref to attach to element, true when visible in blink cycle
  */
 export declare function useBlink(enabled: boolean, intervalMs?: number): [ref: (element: DOMElement | null) => void, isVisible: boolean];
-//# sourceMappingURL=useBlink.d.ts.map

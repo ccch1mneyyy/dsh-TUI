@@ -5,4 +5,3 @@ import { type Props } from '../components/StdinContext.js';
  */
 declare const useStdin: () => Props;
 export default useStdin;
-//# sourceMappingURL=use-stdin.d.ts.map

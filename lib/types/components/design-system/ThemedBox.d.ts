@@ -34,4 +34,3 @@ export type Props = BaseStylesWithoutColors & ThemedColorProps & {
  */
 declare function ThemedBox({ borderColor, borderTopColor, borderBottomColor, borderLeftColor, borderRightColor, backgroundColor, ...rest }: PropsWithChildren<Props>): React.ReactNode;
 export default ThemedBox;
-//# sourceMappingURL=ThemedBox.d.ts.map

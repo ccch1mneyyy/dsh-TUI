@@ -11,4 +11,3 @@ type Props = {
  */
 export declare function Byline({ children }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=Byline.d.ts.map

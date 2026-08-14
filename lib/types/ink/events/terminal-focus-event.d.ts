@@ -18,4 +18,3 @@ export declare class TerminalFocusEvent extends Event {
     readonly type: TerminalFocusEventType;
     constructor(type: TerminalFocusEventType);
 }
-//# sourceMappingURL=terminal-focus-event.d.ts.map

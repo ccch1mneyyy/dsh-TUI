@@ -208,4 +208,3 @@ export type Action = {
     type: 'unknown';
     sequence: string;
 };
-//# sourceMappingURL=types.d.ts.map

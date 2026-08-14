@@ -4,4 +4,3 @@ type Props = {
 };
 export default function ErrorOverview({ error }: Props): React.JSX.Element;
 export {};
-//# sourceMappingURL=ErrorOverview.d.ts.map

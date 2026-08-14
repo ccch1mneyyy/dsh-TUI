@@ -53,4 +53,3 @@ export type Props = {
  * component use `color="subtle"`-style theme keys unchanged.
  */
 export default function ThemedText({ color, backgroundColor, dimColor, bold, italic, underline, strikethrough, inverse, wrap, children, }: Props): React.ReactNode;
-//# sourceMappingURL=ThemedText.d.ts.map

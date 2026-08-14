@@ -205,4 +205,3 @@ export declare function supportsTabStatus(): boolean;
  * @returns the OSC 21337 sequence.
  */
 export declare function tabStatus(fields: TabStatusAction): string;
-//# sourceMappingURL=osc.d.ts.map

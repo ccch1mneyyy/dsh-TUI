@@ -20,4 +20,3 @@ type Props = {
  */
 export declare function AssistantToolUseMessage({ tool, addMargin, verbose, isSelected, isExpanded, }: Props): React.ReactNode;
 export {};
-//# sourceMappingURL=AssistantToolUseMessage.d.ts.map

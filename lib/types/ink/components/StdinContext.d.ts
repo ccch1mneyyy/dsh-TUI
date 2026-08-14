@@ -29,4 +29,3 @@ export type Props = {
  */
 declare const StdinContext: import("react").Context<Props>;
 export default StdinContext;
-//# sourceMappingURL=StdinContext.d.ts.map

@@ -9,4 +9,3 @@ export declare function FileSuggestions({ files, selectedIndex, columns, }: {
     selectedIndex: number;
     columns: number;
 }): React.ReactNode;
-//# sourceMappingURL=FileSuggestions.d.ts.map

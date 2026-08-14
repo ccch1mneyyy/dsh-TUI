@@ -41,4 +41,3 @@ export declare function useSelection(): {
  *   fullscreen mode.
  */
 export declare function useHasSelection(): boolean;
-//# sourceMappingURL=use-selection.d.ts.map

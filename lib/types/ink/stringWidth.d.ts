@@ -8,4 +8,3 @@
  * @returns the number of terminal cells the string occupies.
  */
 export declare const stringWidth: (str: string) => number;
-//# sourceMappingURL=stringWidth.d.ts.map

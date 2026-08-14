@@ -320,4 +320,3 @@ export declare function captureScrolledRows(s: SelectionState, screen: Screen, f
  */
 export declare function applySelectionOverlay(screen: Screen, selection: SelectionState, stylePool: StylePool): void;
 export {};
-//# sourceMappingURL=selection.d.ts.map

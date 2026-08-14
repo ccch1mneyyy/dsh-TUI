@@ -129,4 +129,3 @@ export type ParsedMouse = {
 /** Everything that can come out of the input parser: a user keypress/paste,
  *  a mouse click/drag event, or a terminal response to a query we sent. */
 export type ParsedInput = ParsedKey | ParsedMouse | ParsedResponse;
-//# sourceMappingURL=parse-keypress.d.ts.map

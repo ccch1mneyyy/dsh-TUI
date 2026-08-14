@@ -40,4 +40,3 @@ export declare function formatClipboardInsert(content: {
     kind: 'text';
     text: string;
 }): string;
-//# sourceMappingURL=clipboard.d.ts.map
