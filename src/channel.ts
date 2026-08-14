@@ -1584,11 +1584,17 @@ export function createChannel(
       if (!persistence) return []
       try {
         const headers = await persistence.list()
+        // 按工作目录隔离（Claude Code 的项目维度）：/resume 只列出本会话
+        // 目录启动的会话，别的项目的会话不出现在选择器里。
+        const cwd = state.cwd.replace(/\/+$/, '')
+        const local = headers.filter(header =>
+          (header.cwd ?? '').replace(/\/+$/, '') === cwd,
+        )
         // MRU ordering: DSH headers carry only createdAt, so cc-tui keeps its
         // own last-used timestamps (touchSession on resume/submit/new) and
         // falls back to createdAt for sessions never touched in this install.
         const lastUsed = readLastUsed()
-        const records = headers
+        const records = local
           .map(header => ({
             id: header.id,
             // Titles load lazily below (first user message); until then the
