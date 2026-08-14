@@ -524,6 +524,7 @@ export function Chat({
         })()
         return true
       }
+      case 'quit':
       case 'exit':
         onExit()
         return true
