@@ -20,4 +20,3 @@ export declare function useAnimationTimer(intervalMs: number): number;
  * @param intervalMs - the interval in milliseconds, or null to pause.
  */
 export declare function useInterval(callback: () => void, intervalMs: number | null): void;
-//# sourceMappingURL=use-interval.d.ts.map

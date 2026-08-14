@@ -4,4 +4,3 @@ import React from 'react';
  * the leak's `InterruptedByUser.tsx`.
  */
 export declare function InterruptedByUser(): React.ReactNode;
-//# sourceMappingURL=InterruptedByUser.d.ts.map

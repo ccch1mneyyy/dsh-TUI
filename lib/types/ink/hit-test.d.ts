@@ -44,4 +44,3 @@ export declare function dispatchClick(root: DOMElement, col: number, row: number
  * @param hovered - the previously hovered element set; updated in place.
  */
 export declare function dispatchHover(root: DOMElement, col: number, row: number, hovered: Set<DOMElement>): void;
-//# sourceMappingURL=hit-test.d.ts.map

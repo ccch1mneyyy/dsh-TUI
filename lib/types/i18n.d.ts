@@ -911,4 +911,3 @@ export declare function detectLocaleLang(): Lang;
  */
 export declare function resolveStartupLang(): Lang;
 export {};
-//# sourceMappingURL=i18n.d.ts.map

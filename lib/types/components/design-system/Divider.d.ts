@@ -37,4 +37,3 @@ type DividerProps = {
  */
 export declare function Divider({ width, color, char, padding, title, }: DividerProps): React.ReactNode;
 export {};
-//# sourceMappingURL=Divider.d.ts.map

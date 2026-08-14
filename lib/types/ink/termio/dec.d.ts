@@ -58,4 +58,3 @@ export declare const EXIT_ALT_SCREEN: string;
 export declare const ENABLE_MOUSE_TRACKING: string;
 /** Disable all mouse tracking modes enabled by ENABLE_MOUSE_TRACKING. */
 export declare const DISABLE_MOUSE_TRACKING: string;
-//# sourceMappingURL=dec.d.ts.map

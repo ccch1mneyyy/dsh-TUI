@@ -16,4 +16,3 @@ export declare function LoadingState({ message, bold, dimColor, subtitle, }: {
     /** Optional subtitle displayed below the main message. */
     subtitle?: string;
 }): React.ReactNode;
-//# sourceMappingURL=LoadingState.d.ts.map

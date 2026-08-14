@@ -33,4 +33,3 @@ export type BorderStyle = keyof Boxes | keyof typeof CUSTOM_BORDER_STYLES | BoxS
  */
 declare const renderBorder: (x: number, y: number, node: DOMNode, output: Output) => void;
 export default renderBorder;
-//# sourceMappingURL=render-border.d.ts.map

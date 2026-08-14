@@ -8,4 +8,3 @@
  * @returns true if the terminal is focused (or focus state is unknown)
  */
 export declare function useTerminalFocus(): boolean;
-//# sourceMappingURL=use-terminal-focus.d.ts.map

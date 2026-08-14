@@ -16,4 +16,3 @@ export declare class FocusEvent extends TerminalEvent {
     readonly relatedTarget: EventTarget | null;
     constructor(type: 'focus' | 'blur', relatedTarget?: EventTarget | null);
 }
-//# sourceMappingURL=focus-event.d.ts.map

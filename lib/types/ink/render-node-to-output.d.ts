@@ -90,4 +90,3 @@ declare function renderNodeToOutput(node: DOMElement, output: Output, options: {
 }): void;
 export { buildCharToSegmentMap, applyStylesToWrappedText };
 export default renderNodeToOutput;
-//# sourceMappingURL=render-node-to-output.d.ts.map

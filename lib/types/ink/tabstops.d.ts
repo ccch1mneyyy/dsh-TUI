@@ -6,4 +6,3 @@
  * @returns `text` with every tab replaced by the spaces needed to reach the next stop.
  */
 export declare function expandTabs(text: string, interval?: number): string;
-//# sourceMappingURL=tabstops.d.ts.map

@@ -43,4 +43,3 @@ export declare class Parser {
     private processText;
     private processSequence;
 }
-//# sourceMappingURL=parser.d.ts.map

@@ -44,4 +44,3 @@ export declare const HANDLER_FOR_EVENT: Record<string, {
  */
 export declare const EVENT_HANDLER_PROPS: Set<string>;
 export {};
-//# sourceMappingURL=event-handlers.d.ts.map

@@ -12,4 +12,3 @@ export declare function StatusIcon({ status, withSpace, }: {
     withSpace?: boolean;
 }): React.ReactNode;
 export {};
-//# sourceMappingURL=StatusIcon.d.ts.map

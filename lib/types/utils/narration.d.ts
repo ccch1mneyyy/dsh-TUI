@@ -8,4 +8,3 @@
  * @returns The text without its leading `⏵` narration line.
  */
 export declare function stripNarration(text: string): string;
-//# sourceMappingURL=narration.d.ts.map

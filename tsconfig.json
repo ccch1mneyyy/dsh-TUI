@@ -6,7 +6,7 @@
     "lib": ["ES2024"],
     "jsx": "react-jsx",
     "declaration": true,
-    "declarationMap": true,
+    "declarationMap": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "strict": true,

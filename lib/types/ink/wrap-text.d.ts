@@ -7,4 +7,3 @@ import type { Styles } from './styles.js';
  * @returns the wrapped or truncated text, or `text` unchanged when no wrapping applies.
  */
 export default function wrapText(text: string, maxWidth: number, wrapType: Styles['textWrap']): string;
-//# sourceMappingURL=wrap-text.d.ts.map

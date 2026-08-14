@@ -60,4 +60,3 @@ export declare class Dispatcher {
     dispatchContinuous(target: EventTarget, event: TerminalEvent): boolean;
 }
 export {};
-//# sourceMappingURL=dispatcher.d.ts.map

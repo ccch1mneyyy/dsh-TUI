@@ -38,4 +38,3 @@ export declare function hueToRgb(hue: number): RGBColor;
  * @returns The parsed RGB color, or null when the string is not `rgb(r,g,b)`.
  */
 export declare function parseRGB(colorStr: string): RGBColor | null;
-//# sourceMappingURL=spinnerUtils.d.ts.map

@@ -4,4 +4,3 @@
  * @returns the maximum display width across all lines.
  */
 export declare function widestLine(string: string): number;
-//# sourceMappingURL=widest-line.d.ts.map

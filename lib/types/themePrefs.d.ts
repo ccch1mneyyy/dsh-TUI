@@ -25,4 +25,3 @@ export declare function readThemePref(dir?: string): string | undefined;
  * @returns True when the file was written, false on failure.
  */
 export declare function writeThemePref(name: string, dir?: string): boolean;
-//# sourceMappingURL=themePrefs.d.ts.map

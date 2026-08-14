@@ -440,4 +440,3 @@ export declare function diffEach(prev: Screen, next: Screen, cb: DiffCallback): 
  */
 export declare function markNoSelectRegion(screen: Screen, x: number, y: number, width: number, height: number): void;
 export {};
-//# sourceMappingURL=screen.d.ts.map

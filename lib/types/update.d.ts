@@ -73,4 +73,3 @@ export declare function shellQuote(args: readonly string[]): string[];
  * @returns Exit codes for the update run and the replacement process.
  */
 export declare function updateTuiAndRestart(sessionId: string, profile: string): Promise<TuiUpdateResult>;
-//# sourceMappingURL=update.d.ts.map

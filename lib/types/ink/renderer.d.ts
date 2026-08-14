@@ -21,4 +21,3 @@ export type Renderer = (options: RenderOptions) => Frame;
  * @returns a function that renders one frame from the given options.
  */
 export default function createRenderer(node: DOMElement, stylePool: StylePool): Renderer;
-//# sourceMappingURL=renderer.d.ts.map

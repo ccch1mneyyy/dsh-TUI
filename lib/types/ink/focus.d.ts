@@ -71,4 +71,3 @@ export declare function getRootNode(node: DOMElement): DOMElement;
  * @returns the root's FocusManager.
  */
 export declare function getFocusManager(node: DOMElement): FocusManager;
-//# sourceMappingURL=focus.d.ts.map

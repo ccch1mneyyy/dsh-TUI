@@ -4,4 +4,3 @@ import type { LayoutNode } from './node.js';
  * @returns an empty layout node with no children, styles, or measure function.
  */
 export declare function createLayoutNode(): LayoutNode;
-//# sourceMappingURL=engine.d.ts.map

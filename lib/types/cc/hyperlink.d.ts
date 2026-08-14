@@ -18,4 +18,3 @@ type HyperlinkOptions = {
  */
 export declare function createHyperlink(url: string, content?: string, options?: HyperlinkOptions): string;
 export {};
-//# sourceMappingURL=hyperlink.d.ts.map

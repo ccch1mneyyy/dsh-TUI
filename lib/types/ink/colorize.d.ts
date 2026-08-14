@@ -30,4 +30,3 @@ export declare function applyTextStyles(text: string, styles: TextStyles): strin
  * @returns `text` wrapped in the foreground color sequence.
  */
 export declare function applyColor(text: string, color: Color | undefined): string;
-//# sourceMappingURL=colorize.d.ts.map

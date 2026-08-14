@@ -31,4 +31,3 @@ export declare function useSearchHighlight(): {
         currentIdx: number;
     } | null) => void;
 };
-//# sourceMappingURL=use-search-highlight.d.ts.map

@@ -7,4 +7,3 @@
 export declare const env: {
     readonly terminal: string;
 };
-//# sourceMappingURL=env.d.ts.map

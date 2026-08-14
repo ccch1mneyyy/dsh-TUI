@@ -30,4 +30,3 @@ export declare function addPendingClear(parent: DOMElement, rect: Rectangle, isA
  * @returns whether an absolutely positioned node was removed since the last render.
  */
 export declare function consumeAbsoluteRemovedFlag(): boolean;
-//# sourceMappingURL=node-cache.d.ts.map

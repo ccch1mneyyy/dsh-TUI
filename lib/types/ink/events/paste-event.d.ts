@@ -8,4 +8,3 @@ export declare class PasteEvent extends Event {
     readonly data: string;
     constructor(data: string);
 }
-//# sourceMappingURL=paste-event.d.ts.map

@@ -23,4 +23,3 @@ export declare function formatTokens(count: number): string;
 export declare function formatDuration(durationMs: number, options?: {
     mostSignificantOnly?: boolean;
 }): string;
-//# sourceMappingURL=format.d.ts.map

@@ -14,4 +14,3 @@ export declare function Pane({ children, color, }: {
     /** Theme color for the top border line. */
     color?: keyof Theme;
 }): React.ReactNode;
-//# sourceMappingURL=Pane.d.ts.map

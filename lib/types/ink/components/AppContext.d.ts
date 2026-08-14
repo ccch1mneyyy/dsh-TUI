@@ -12,4 +12,3 @@ export type Props = {
  */
 declare const AppContext: import("react").Context<Props>;
 export default AppContext;
-//# sourceMappingURL=AppContext.d.ts.map

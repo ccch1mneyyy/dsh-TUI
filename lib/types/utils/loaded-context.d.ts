@@ -17,4 +17,3 @@ export declare function truncateContextText(text: string, max?: number): string;
  * @returns the summary, or `''` when every group is empty.
  */
 export declare function summarizeLoadedContext(context: LoadedContext): string;
-//# sourceMappingURL=loaded-context.d.ts.map

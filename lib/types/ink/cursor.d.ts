@@ -8,4 +8,3 @@ export interface Cursor {
     y: number;
     visible: boolean;
 }
-//# sourceMappingURL=cursor.d.ts.map

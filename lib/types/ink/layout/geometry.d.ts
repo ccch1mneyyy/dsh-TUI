@@ -83,4 +83,3 @@ export declare function withinBounds(size: Size, point: Point): boolean;
  * @returns `value` clamped to [`min`, `max`].
  */
 export declare function clamp(value: number, min?: number, max?: number): number;
-//# sourceMappingURL=geometry.d.ts.map

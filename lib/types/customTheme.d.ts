@@ -101,4 +101,3 @@ export declare function resolveCustomTheme(name: string): Theme | undefined;
 export declare function isThemeAvailable(name: string): boolean;
 /** Drop the resolved-theme cache and name index (tests, or after themes change on disk). */
 export declare function clearCustomThemeCache(): void;
-//# sourceMappingURL=customTheme.d.ts.map

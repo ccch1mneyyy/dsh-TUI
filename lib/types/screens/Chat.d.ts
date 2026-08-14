@@ -20,4 +20,3 @@ export declare function Chat({ channel, questionStore, onExit, onUpdate, }: {
     /** Update the installed package and restart the current TUI process. */
     onUpdate?: () => void;
 }): React.JSX.Element;
-//# sourceMappingURL=Chat.d.ts.map

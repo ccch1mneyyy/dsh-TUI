@@ -68,8 +68,9 @@ boundaries and helpers over introducing parallel abstractions.
 - `cordis.yml`: full bare-composition example for direct Cordis/DSH startup.
 - `scripts/`: headless regressions, reproduction harnesses, probes, and
   diagnostics. Read each script's header before running it.
-- `lib/types/`: checked-in output from `tsc` (JavaScript, declarations, and
-  declaration maps). It is generated from `src/` and ships to npm.
+- `lib/types/`: checked-in output from `tsc` (JavaScript and declarations). It
+  is generated from `src/` and ships to npm. No declaration maps
+  (`.d.ts.map`): `declarationMap` is off, for the reason given below.
 - `lib/invariant.js`: separate bundled runtime export for `./invariant`; the
   normal `pnpm build` does not regenerate this file.
 - `README.md` and `README_EN.md`: Chinese and English user documentation. Keep
@@ -147,7 +148,16 @@ Rules for generated output:
 
 - Edit `src/`, never `lib/types/`, to implement behavior.
 - After any source change, run `pnpm build` and include the corresponding
-  `lib/types/` JavaScript, `.d.ts`, and `.d.ts.map` changes.
+  `lib/types/` JavaScript and `.d.ts` changes.
+- Leave `declarationMap` off; do not turn it back on. A declaration map exists
+  only so a consumer's "go to definition" lands in the original `.ts`, which
+  requires the sources to ship with the package. This package's `files` omits
+  `src/` (`npm pack` measures 0 `src/` entries out of 625), so the maps point
+  at paths the tarball does not contain and the jump cannot resolve. The cost
+  is real, though: a `.d.ts.map` is one single line holding the whole file's
+  coordinate table, rewritten end to end by any source edit, and git merges by
+  line — two PRs touching the same module always collide on that line, and the
+  collision is only resolvable by rebuilding, never by hand.
 - `tsc` does not clean `outDir`. After renaming or deleting a source module,
   inspect `lib/types/` and remove only the stale outputs for that module.
 - Review generated diffs. Unexpected changes usually indicate an accidental

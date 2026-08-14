@@ -4,4 +4,3 @@
  * @returns The shared grapheme segmenter, created once on first use.
  */
 export declare function getGraphemeSegmenter(): Intl.Segmenter;
-//# sourceMappingURL=intl.d.ts.map

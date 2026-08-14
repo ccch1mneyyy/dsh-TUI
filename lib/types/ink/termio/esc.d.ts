@@ -12,4 +12,3 @@ import type { Action } from './types.js';
  *   is empty or deliberately ignored (tab stop set, charset selection).
  */
 export declare function parseEsc(chars: string): Action | null;
-//# sourceMappingURL=esc.d.ts.map

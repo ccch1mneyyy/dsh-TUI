@@ -5,4 +5,3 @@
  * @param fields - Optional JSON-serialized fields appended to the line.
  */
 export declare function logForDebugging(message: string, fields?: Record<string, unknown>): void;
-//# sourceMappingURL=debug.d.ts.map

@@ -75,4 +75,3 @@ export type ScrollBoxProps = Except<Styles, 'textWrap' | 'overflow' | 'overflowX
  */
 declare function ScrollBox({ children, ref, stickyScroll, ...style }: PropsWithChildren<ScrollBoxProps>): React.ReactNode;
 export default ScrollBox;
-//# sourceMappingURL=ScrollBox.d.ts.map

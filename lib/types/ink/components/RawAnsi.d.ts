@@ -14,4 +14,3 @@
  * which already splits on '\n' and parses ANSI into the screen buffer.
  */
 export declare function RawAnsi(t0: any): any;
-//# sourceMappingURL=RawAnsi.d.ts.map

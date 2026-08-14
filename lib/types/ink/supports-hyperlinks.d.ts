@@ -17,4 +17,3 @@ type SupportsHyperlinksOptions = {
  */
 export declare function supportsHyperlinks(options?: SupportsHyperlinksOptions): boolean;
 export {};
-//# sourceMappingURL=supports-hyperlinks.d.ts.map

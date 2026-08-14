@@ -34,4 +34,3 @@ export type Props = Except<Styles, 'textWrap'> & {
 declare function Button(t0: any): any;
 export default Button;
 export type { ButtonState };
-//# sourceMappingURL=Button.d.ts.map

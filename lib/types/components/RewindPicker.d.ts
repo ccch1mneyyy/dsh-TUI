@@ -11,4 +11,3 @@ export declare function RewindPicker({ rows, focusIndex, confirmRow, }: {
     focusIndex: number;
     confirmRow: ChatRow | null;
 }): React.ReactNode;
-//# sourceMappingURL=RewindPicker.d.ts.map

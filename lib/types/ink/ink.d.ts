@@ -367,4 +367,3 @@ export default class Ink {
  * arrive for a few ms after it's written.
  */
 export declare function drainStdin(stdin?: NodeJS.ReadStream): void;
-//# sourceMappingURL=ink.d.ts.map

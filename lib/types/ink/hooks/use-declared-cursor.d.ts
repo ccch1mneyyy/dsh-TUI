@@ -28,4 +28,3 @@ export declare function useDeclaredCursor(options: {
     column: number;
     active: boolean;
 }): (element: DOMElement | null) => void;
-//# sourceMappingURL=use-declared-cursor.d.ts.map

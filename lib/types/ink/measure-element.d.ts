@@ -16,4 +16,3 @@ type Output = {
  */
 declare const measureElement: (node: DOMElement) => Output;
 export default measureElement;
-//# sourceMappingURL=measure-element.d.ts.map

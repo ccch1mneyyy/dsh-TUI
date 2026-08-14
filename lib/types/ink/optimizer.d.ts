@@ -15,4 +15,3 @@ import type { Diff } from './frame.js';
  * @returns the optimized patch list, with no-ops removed and adjacent patches merged.
  */
 export declare function optimize(diff: Diff): Diff;
-//# sourceMappingURL=optimizer.d.ts.map

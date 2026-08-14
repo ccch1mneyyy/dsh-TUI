@@ -27,4 +27,3 @@ export type CursorDeclarationSetter = (declaration: CursorDeclaration | null, cl
  */
 declare const CursorDeclarationContext: import("react").Context<CursorDeclarationSetter>;
 export default CursorDeclarationContext;
-//# sourceMappingURL=CursorDeclarationContext.d.ts.map

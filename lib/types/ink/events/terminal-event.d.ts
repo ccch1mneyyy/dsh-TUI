@@ -109,4 +109,3 @@ export type EventTarget = {
     _eventHandlers?: Record<string, unknown>;
 };
 export {};
-//# sourceMappingURL=terminal-event.d.ts.map

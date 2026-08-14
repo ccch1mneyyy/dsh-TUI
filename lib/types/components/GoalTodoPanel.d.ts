@@ -10,4 +10,3 @@ import type { Channel } from '../channel.js';
 export declare function GoalTodoPanel({ channel }: {
     channel: Channel;
 }): React.ReactNode;
-//# sourceMappingURL=GoalTodoPanel.d.ts.map

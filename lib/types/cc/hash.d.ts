@@ -22,4 +22,3 @@ export declare function hashContent(content: string): string;
  * @returns The lowercase hex SHA-256 digest of the NUL-separated pair.
  */
 export declare function hashPair(a: string, b: string): string;
-//# sourceMappingURL=hash.d.ts.map

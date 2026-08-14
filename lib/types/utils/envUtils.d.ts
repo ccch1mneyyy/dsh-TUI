@@ -5,4 +5,3 @@
  * @returns True for booleans `true` and the truthy spellings, false otherwise.
  */
 export declare function isEnvTruthy(value: string | boolean | undefined | null): boolean;
-//# sourceMappingURL=envUtils.d.ts.map

@@ -62,4 +62,3 @@ export declare function scanPositions(screen: Screen, query: string): MatchPosit
  * @returns true when the highlight was written, false when out of range.
  */
 export declare function applyPositionedHighlight(screen: Screen, stylePool: StylePool, positions: MatchPosition[], rowOffset: number, currentIdx: number): boolean;
-//# sourceMappingURL=render-to-screen.d.ts.map
