@@ -618,4 +618,44 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     /** Handle of the initial agent; disposed when a rewind replaces it. */
     handle?: AgentHandle;
 }): ChannelState;
+/** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
+export interface MentionFs {
+    resolve(path: string): Promise<{
+        displayPath: string;
+    }>;
+    stat(target: {
+        displayPath: string;
+    }): Promise<{
+        type: 'file' | 'directory' | 'other';
+    } | undefined>;
+    readText(target: {
+        displayPath: string;
+    }): Promise<string>;
+    listDir(target: {
+        displayPath: string;
+    }): Promise<Array<{
+        name: string;
+        type: 'file' | 'directory' | 'other';
+    }>>;
+}
+export interface MentionExpansion {
+    /** Model-facing blocks: the typed text first, one block per attachment. */
+    blocks: Array<{
+        type: 'text';
+        text: string;
+    }>;
+    /** Paths that resolved and were attached (for the confirmation notice). */
+    attached: string[];
+    /** Mention tokens that failed to resolve (kept literal, warned about). */
+    missing: string[];
+}
+/**
+ * Expand a submitted text's `@` mentions (issue #15) into model-facing
+ * attachment blocks: each referenced file contributes its (capped) content,
+ * each directory a shallow listing. The typed text stays the first block
+ * verbatim — mentions that resolve keep their `@path` spelling in it, and
+ * unresolved ones stay literal everywhere. Best-effort: an unreadable or
+ * binary file degrades to `missing`, never a failed send.
+ */
+export declare function expandMentions(fs: MentionFs | undefined, cwd: string, text: string): Promise<MentionExpansion>;
 //# sourceMappingURL=channel.d.ts.map

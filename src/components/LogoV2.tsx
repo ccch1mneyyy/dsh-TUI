@@ -1,4 +1,5 @@
 import React from 'react'
+import { t as tr } from '../i18n.js'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,7 +39,7 @@ const FULL_WHALE_WIDTH = 40
 /**
  * Leading spaces that center the welcome line under the drawn whale: the
  * art's bounding box spans sprite columns 3..34 (center 18.5) of the
- * 40-wide box, and the 7 full-width chars of `探索未至之境！` measure 14
+ * 40-wide box, and the tagline measure 14
  * columns — 18.5 − 7 = 11.5 → 12. Centered on the full 40-column box
  * instead would need 13, which reads one column right of the whale body.
  */
@@ -60,7 +61,7 @@ function capitalize(text: string): string {
  * the `✦ dsh-cc` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
  * the 5-row block font (brand-blue → ice gradient), the model/effort and
  * cwd in plain text (no brand-color highlight), the startup tip, and below
- * the whale the `探索未至之境！` welcome line, centered under the art, in ice
+ * the whale the welcome tagline, centered under the art, in ice
  * blue. Narrow terminals drop the whale and keep the text column.
  */
 export function LogoV2({
@@ -140,16 +141,16 @@ export function LogoV2({
           <Text wrap="truncate-end">
             <Text dimColor>Tip: </Text>
             /model
-            <Text dimColor> 切换模型 · </Text>
+            <Text dimColor> {tr('logo-tip-model')} · </Text>
             /help
-            <Text dimColor> 查看命令 · </Text>
+            <Text dimColor> {tr('logo-tip-help')} · </Text>
             Tab
-            <Text dimColor> 自动补全</Text>
+            <Text dimColor> {tr('logo-tip-tab')}</Text>
           </Text>
         </Box>
       </Box>
       <Box marginTop={1} paddingLeft={showWhale ? WELCOME_PAD : 2}>
-        <Text>{sweep('探索未至之境！', t, taglineRGB, FLASH, 60)}</Text>
+        <Text>{sweep(tr('logo-tagline'), t, taglineRGB, FLASH, 60)}</Text>
       </Box>
     </Box>
   )

@@ -13,6 +13,7 @@
  */
 
 import React from 'react'
+import { t } from '../../i18n.js'
 import { Box, Text, useInput } from '../../ui.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../cc/figures.js'
@@ -99,7 +100,7 @@ export function AskUserQuestionPanel({
     if (multiSelect) {
       const selected = checkedLabels()
       if (selected.length === 0 && text === '') {
-        setError('至少选择一个选项，或在最后一行输入回答')
+        setError(t('question-select-or-answer'))
         return
       }
       onAnswer({ selected, ...(text !== '' ? { custom: text } : {}) })
@@ -107,7 +108,7 @@ export function AskUserQuestionPanel({
     }
     const label = options[focusIndex]?.label
     if (label === undefined) {
-      setError('至少选择一个选项，或在最后一行输入回答')
+      setError(t('question-select-or-answer'))
       return
     }
     onAnswer({ selected: [label], ...(text !== '' ? { custom: text } : {}) })
@@ -120,14 +121,14 @@ export function AskUserQuestionPanel({
     if (multiSelect) {
       const selected = checkedLabels()
       if (selected.length === 0 && text === '') {
-        setError('输入回答或勾选选项后再提交')
+        setError(t('question-answer-or-check'))
         return
       }
       onAnswer({ selected, ...(text !== '' ? { custom: text } : {}) })
       return
     }
     if (text === '') {
-      setError('先输入回答内容再提交')
+      setError(t('question-type-answer-first'))
       return
     }
     onAnswer({ selected: attached !== null ? [attached] : [], custom: text })
@@ -231,7 +232,7 @@ export function AskUserQuestionPanel({
   }, { isActive: true })
 
   const remaining = total - answered
-  const headerTitle = ` 📋 提问 · 第 ${position}/${total} 题${remaining > 1 ? ` · 还剩 ${remaining} 题` : ''} `
+  const headerTitle = ` ${t('question-header-progress', { position, total, remaining: remaining > 1 ? t('question-remaining-more', { n: remaining }) : '' })} `
 
   const cursorChar = customCursor < customText.length ? customText[customCursor] : ' '
   const renderInputRow = (): React.ReactNode => (
@@ -246,14 +247,14 @@ export function AskUserQuestionPanel({
       </Box>
       <Box flexDirection="row" marginLeft={1}>
         <Text bold={inputFocused} color={inputFocused ? 'claude' : 'suggestion'}>
-          自定义回答
+          {t('question-custom-tab')}
         </Text>
         {attached !== null && (
-          <Text color="suggestion">（附加：{attached}）</Text>
+          <Text color="suggestion">{t('question-attached-label', { label: attached })}</Text>
         )}
         <Text dimColor>：</Text>
         {customText === '' && !inputFocused ? (
-          <Text dimColor>直接输入…</Text>
+          <Text dimColor>{t('question-direct-input')}</Text>
         ) : (
           <>
             <Text wrap="wrap">{customText.slice(0, customCursor)}</Text>
@@ -303,19 +304,19 @@ export function AskUserQuestionPanel({
 
   const hintParts = inputFocused
     ? [
-        '输入回答',
-        'Enter 提交',
-        ...(options.length > 0 ? ['↑ 返回选项'] : []),
-        'Esc 中断',
-        ...(multiSelect && checked.size > 0 ? [`已选 ${checked.size}`] : []),
+        t('question-hint-type'),
+        t('question-hint-enter'),
+        ...(options.length > 0 ? [t('question-hint-back')] : []),
+        t('question-hint-esc'),
+        ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
       ]
     : [
-        '↑/↓ 选择',
-        ...(multiSelect ? ['Space 多选'] : []),
-        '输入文字附带回答',
-        'Enter 提交',
-        'Esc 中断',
-        ...(multiSelect && checked.size > 0 ? [`已选 ${checked.size}`] : []),
+        t('question-hint-select'),
+        ...(multiSelect ? [t('question-hint-multi')] : []),
+        t('question-hint-attach'),
+        t('question-hint-enter'),
+        t('question-hint-esc'),
+        ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
       ]
 
   return (

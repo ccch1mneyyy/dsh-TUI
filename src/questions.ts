@@ -12,6 +12,7 @@
  * concurrent asks from subagents are drained FIFO.
  */
 
+import { t } from './i18n.js'
 import {
   UserQuestionError,
   type AskUserQuestionAnswer,
@@ -79,7 +80,7 @@ function buildSummary(pending: PendingQuestion): QuestionSummary {
   })
   const total = pending.request.questions.length
   return {
-    title: `📋 问卷已答 · ${total} 题`,
+    title: t('questionnaire-answered', { total }),
     lines,
   }
 }

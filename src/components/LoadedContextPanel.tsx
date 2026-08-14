@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import type { LoadedContext, LoadedContextEntry } from '../channel.js'
 import { summarizeLoadedContext, truncateContextText } from '../utils/loaded-context.js'
@@ -32,7 +33,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
 }
 
 /**
- * The startup `已加载上下文` panel: a collapsed one-line summary of what a
+ * The startup context panel: a collapsed one-line summary of what a
  * fresh conversation will load for the current agent (system prompt
  * sections, workspace instruction files, dynamic context, skill catalog,
  * tools). Toggle with Ctrl+T (see HelpMenu; the ported ink core has no
@@ -57,20 +58,20 @@ export function LoadedContextPanel({
   return (
     <Box flexDirection="column" marginTop={1} marginBottom={1}>
       <Box paddingX={1} backgroundColor={open ? 'userMessageBackground' : undefined}>
-        <Text bold={open}>{open ? '▼' : '▶'} 已加载上下文 · {summary}</Text>
-        <Text dimColor> （Ctrl+T{open ? '折叠' : '展开'}）</Text>
+        <Text bold={open}>{open ? '▼' : '▶'} {t('context-loaded')} · {summary}</Text>
+        <Text dimColor> （Ctrl+T{open ? t('context-panel-collapse') : t('context-panel-expand')}）</Text>
       </Box>
       {open && (
         <Box flexDirection="column" paddingX={1} paddingTop={1}>
           {context.sections.length > 0 && (
-            <Group title={`系统提示词 · ${context.sections.length} 段`}>
+            <Group title={t('context-panel-sections', { n: context.sections.length })}>
               {context.sections.map(section => (
                 <Entry key={section.name} entry={section} />
               ))}
             </Group>
           )}
           {context.files.length > 0 && (
-            <Group title={`工作区指令 · ${context.files.length} 个文件`}>
+            <Group title={t('context-panel-files', { n: context.files.length })}>
               {context.files.map(file => (
                 <Text key={file.displayPath} dimColor>
                   {file.displayPath}
@@ -79,14 +80,14 @@ export function LoadedContextPanel({
             </Group>
           )}
           {context.contexts.length > 0 && (
-            <Group title={`运行时上下文 · ${context.contexts.length} 项`}>
+            <Group title={t('context-panel-runtime', { n: context.contexts.length })}>
               {context.contexts.map(entry => (
                 <Entry key={entry.name} entry={entry} />
               ))}
             </Group>
           )}
           {context.skills.length > 0 && (
-            <Group title={`技能 · ${context.skills.length}`}>
+            <Group title={t('context-panel-skills', { n: context.skills.length })}>
               {context.skills.map(skill => (
                 <Box key={skill.name} flexDirection="column">
                   <Text bold dimColor>
@@ -100,7 +101,7 @@ export function LoadedContextPanel({
             </Group>
           )}
           {context.tools.length > 0 && (
-            <Group title={`工具 · ${context.tools.length}`}>
+            <Group title={t('context-panel-tools', { n: context.tools.length })}>
               {context.tools.map(tool => (
                 <Box key={tool.name} flexDirection="column">
                   <Text bold dimColor>

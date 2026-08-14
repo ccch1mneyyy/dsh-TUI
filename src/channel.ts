@@ -20,6 +20,7 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { logForDebugging } from './utils/debug.js'
 import { extractMentions } from './utils/mentions.js'
+import { t } from './i18n.js'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -923,10 +924,10 @@ export function createChannel(
         throw error
       }
       if (expansion.attached.length > 0) {
-        state.notify(`已附加 ${expansion.attached.length} 个文件引用`, { timeoutMs: 2500 })
+        state.notify(t('mentions-attached', { count: expansion.attached.length }), { timeoutMs: 2500 })
       }
       if (expansion.missing.length > 0) {
-        state.notify(`未找到引用: ${expansion.missing.map(path => `@${path}`).join(' ')}`, {
+        state.notify(t('mentions-missing', { paths: expansion.missing.map(path => `@${path}`).join(' ') }), {
           color: 'warning',
           timeoutMs: 4000,
         })
@@ -936,7 +937,7 @@ export function createChannel(
       // with the next queued delivery.
       const message = error instanceof Error ? error.message : String(error)
       logForDebugging(`submit: delivery failed (${message})`)
-      state.notify(`发送失败 · ${message}`, { color: 'error' })
+      state.notify(t('send-failed', { err: message }), { color: 'error' })
     })
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
@@ -990,7 +991,7 @@ export function createChannel(
    *  on this channel (resume/model switch re-validate it per route). */
   const cycleEffort = async (): Promise<void> => {
     if (llmRuntime === undefined) {
-      state.notify('推理等级切换不可用（llm 服务未挂载）', { color: 'error' })
+      state.notify(t('effort-unavailable'), { color: 'error' })
       return
     }
     let efforts: ReadonlyArray<{ id: string; name: string }>
@@ -1000,7 +1001,7 @@ export function createChannel(
       efforts = info.reasoning?.efforts ?? []
       defaultEffort = info.reasoning?.defaultEffort
     } catch (error) {
-      state.notify(`推理等级读取失败 · ${error instanceof Error ? error.message : String(error)}`, {
+      state.notify(t('effort-read-failed', { error: error instanceof Error ? error.message : String(error) }), {
         color: 'error',
         timeoutMs: 8000,
       })
@@ -1009,8 +1010,8 @@ export function createChannel(
     if (efforts.length <= 1) {
       state.notify(
         efforts.length === 1
-          ? `当前模型只有一档推理等级（${efforts[0]!.name}）`
-          : '当前模型不支持推理等级切换',
+          ? t('effort-single-tier', { name: efforts[0]!.name })
+          : t('effort-unsupported'),
         { color: 'warning' },
       )
       return
@@ -1028,7 +1029,7 @@ export function createChannel(
     preferredEffort = next.id
     state.reasoningEffort = next.id
     writeEffortPref(next.id)
-    state.notify(`推理强度 → ${next.name}`)
+    state.notify(t('effort-switched', { name: next.name }))
     state.emit()
   }
 
@@ -1623,7 +1624,7 @@ export function createChannel(
       // contract as /preset and Shift+Tab effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
       if (!writeModelPref(provider, model)) {
-        state.notify('无法写入 ~/.dsh-cc/model.json，模型选择不会保存到重启后', {
+        state.notify(t('model-pref-write-failed'), {
           color: 'warning',
         })
       }
@@ -1665,22 +1666,22 @@ export function createChannel(
     },
     setActivityFrames(name) {
       if (!isPresetName(name)) {
-        state.notify(`未知预设「${name}」· /activity frames 查看全部`, { color: 'error' })
+        state.notify(t('unknown-activity-preset', { name }), { color: 'error' })
         return false
       }
       if (name === state.activityFrames) {
-        state.notify(`指示器已是：${name}`, { color: 'success' })
+        state.notify(t('activity-indicator-already', { name }), { color: 'success' })
         return true
       }
       // Persist first (pi behavior: a failed write refuses the switch) so a
       // preference that cannot be saved never silently disappears.
       if (!writeActivityFrames(name)) {
-        state.notify('无法写入 ~/.dsh-cc/working-activity.json，切换未保存', { color: 'error' })
+        state.notify(t('activity-pref-write-failed'), { color: 'error' })
         return false
       }
       state.activityFrames = name
       state.emit()
-      state.notify(`指示器已切换：${name}（已保存）`)
+      state.notify(t('activity-indicator-switched', { name }))
       return true
     },
     async listPresets() {
@@ -1702,11 +1703,11 @@ export function createChannel(
     async switchPreset(presetId) {
       const presets = rosterOf(ctx)
       if (presets === undefined) {
-        state.notify('Preset 不可用——当前组合未挂载 agent-presets 名册', { color: 'error' })
+        state.notify(t('preset-unavailable'), { color: 'error' })
         return false
       }
       if (state.working) {
-        state.notify('Agent 运行中，无法切换 preset', { color: 'warning' })
+        state.notify(t('preset-agent-running'), { color: 'warning' })
         return false
       }
       let target: AgentPresetInfo
@@ -1714,17 +1715,17 @@ export function createChannel(
         target = await presets.resolve(presetId)
       } catch (error) {
         state.notify(
-          `Preset「${presetId}」不存在 · ${error instanceof Error ? error.message : String(error)}`,
+          t('preset-not-found', { id: presetId, err: error instanceof Error ? error.message : String(error) }),
           { color: 'error', timeoutMs: 8000 },
         )
         return false
       }
       if (target.broken !== undefined) {
-        state.notify(`Preset「${presetId}」无法加载 · ${target.broken}`, { color: 'error', timeoutMs: 8000 })
+        state.notify(t('preset-load-failed', { id: presetId, broken: target.broken }), { color: 'error', timeoutMs: 8000 })
         return false
       }
       if (target.id === state.agentPreset) {
-        state.notify(`当前 preset 已是：${target.id}`, { color: 'success' })
+        state.notify(t('preset-already-current', { id: target.id }), { color: 'success' })
         return true
       }
       // Official rule (dsh-agent-presets): only a session that has produced
@@ -1734,11 +1735,11 @@ export function createChannel(
       if (!blank) {
         // Persist as the default for future sessions instead of failing.
         if (!writePresetPref(target.id)) {
-          state.notify('无法写入 ~/.dsh-cc/agent-preset.json，选择未保存', { color: 'error' })
+          state.notify(t('preset-pref-write-failed'), { color: 'error' })
           return false
         }
         state.notify(
-          `会话已开始，preset 已锁定（当前：${state.agentPreset ?? 'host'}）· 已保存为默认：${target.id}（/new 或下次启动生效）`,
+          t('preset-locked-saved-default', { current: state.agentPreset ?? 'host', id: target.id }),
           { color: 'warning', timeoutMs: 8000 },
         )
         return true
@@ -1756,17 +1757,17 @@ export function createChannel(
         state.agentPreset = preset.id
       } catch (error) {
         state.notify(
-          `Preset 切换失败 · ${error instanceof Error ? error.message : String(error)}`,
+          t('preset-switch-failed', { err: error instanceof Error ? error.message : String(error) }),
           { color: 'error', timeoutMs: 8000 },
         )
         return false
       }
       state.emit()
       if (!writePresetPref(target.id)) {
-        state.notify(`Preset 已切换：${target.id}，但默认偏好写入失败（重启后不保留）`, { color: 'warning' })
+        state.notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
         return true
       }
-      state.notify(`Preset 已切换：${target.id}（已保存为默认）`, { color: 'success' })
+      state.notify(t('preset-switched-saved', { id: target.id }), { color: 'success' })
       return true
     },
     listModels() {
@@ -1947,18 +1948,18 @@ export function createChannel(
       }
       if (byServer.size === 0) {
         return [
-          '未配置 MCP 服务器。',
-          '在 profile 补丁层（~/.dsh/profiles/cc-tui/cordis.patch.yml）insert 一行即可，例：',
+          t('mcp-none-configured'),
+          t('mcp-insert-hint'),
           '  - insert:',
           '      - id: mcp-context7',
           "        name: '@deepseek-ai/dsh-mcp-client'",
           '        config: { transport: stdio, serverName: context7, command: npx, args: ["-y", "@upstash/context7-mcp"] }',
-          '详见仓库 README 的 MCP 章节。',
+          t('mcp-readme-hint'),
         ]
       }
       const lines: string[] = []
       for (const [server, tools] of byServer) {
-        lines.push(`${server}（${tools.length} 个工具）: ${tools.join('、')}`)
+        lines.push(t('mcp-server-tools', { server, count: tools.length, tools: tools.join(', ') }))
       }
       return lines
     },
@@ -1966,12 +1967,12 @@ export function createChannel(
       // Export from the session log — the authoritative, complete record —
       // not the bounded transcript window (folded rows keep only previews).
       const parts: string[] = [
-        '# dsh-cc 会话导出',
+        t('export-title'),
         '',
-        `- 导出时间: ${new Date().toLocaleString()}`,
-        `- 模型: ${state.model}`,
-        `- 会话: ${state.agentId}`,
-        `- 目录: ${state.cwd}`,
+        t('export-time', { time: new Date().toLocaleString() }),
+        t('export-model', { model: state.model }),
+        t('export-session', { id: state.agentId }),
+        t('export-dir', { cwd: state.cwd }),
         '',
       ]
       for (const event of agent.session.events) {
@@ -1981,22 +1982,22 @@ export function createChannel(
             // Export what the user SAW: the typed prompt, not the expanded
             // `@`-mention attachment blocks.
             const text = firstTextOf(event.data.content)
-            if (text) parts.push(`## 用户\n\n${text}\n`)
+            if (text) parts.push(`${t('export-user-section')}\n\n${text}\n`)
             break
           }
           case 'assistant/message': {
             const blocks = event.data.message.content
             for (const block of blocks) {
               if (block.type === 'reasoning' && block.text) {
-                parts.push(`## 思考\n\n${block.text}\n`)
+                parts.push(`${t('export-thinking-section')}\n\n${block.text}\n`)
               } else if (block.type === 'text' && block.text) {
-                parts.push(`## 助手\n\n${block.text}\n`)
+                parts.push(`${t('export-assistant-section')}\n\n${block.text}\n`)
               }
             }
             break
           }
           case 'tool/call': {
-            parts.push(`## 工具 · ${event.data.name}\n\n\`\`\`json\n${event.data.arguments}\n\`\`\`\n`)
+            parts.push(`${t('export-tool-section', { name: event.data.name })}\n\n\`\`\`json\n${event.data.arguments}\n\`\`\`\n`)
             break
           }
           case 'tool/result': {
@@ -2004,7 +2005,7 @@ export function createChannel(
             // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may not match type
             if (block.type === 'tool-result') {
               const text = textOf(block.content)
-              if (text) parts.push(`### 结果\n\n\`\`\`\n${text}\n\`\`\`\n`)
+              if (text) parts.push(`${t('export-result-section')}\n\n\`\`\`\n${text}\n\`\`\`\n`)
             }
             break
           }
@@ -2027,14 +2028,14 @@ export function createChannel(
       const template = [
         '# AGENTS.md',
         '',
-        '## 项目',
+        t('agentsmd-project'),
         '',
-        '（在此描述项目的目标、结构与约定——这份文件会注入给每个 agent 作为工作区上下文。）',
+        t('agentsmd-project-body'),
         '',
-        '## 约定',
+        t('agentsmd-conventions'),
         '',
-        '- 改动前先阅读相关模块',
-        '- 保持与现有代码风格一致',
+        t('agentsmd-convention-read'),
+        t('agentsmd-convention-style'),
         '',
       ].join('\n')
       try {
@@ -2047,21 +2048,21 @@ export function createChannel(
     doctorInfo() {
       const lines: string[] = []
       lines.push(`Node ${process.version} · ${process.platform} ${process.arch}`)
-      lines.push(`API key: ${process.env.DEEPSEEK_API_KEY ? '已配置' : '未配置（DEEPSEEK_API_KEY）'}`)
-      lines.push(`模型: ${state.model} · 提供方: ${options.provider}`)
-      lines.push(`工作目录: ${state.cwd}`)
-      lines.push(`上下文窗口: ${state.contextWindow ?? '未知'} tokens`)
-      lines.push(`会话: ${state.agentId}${state.sessionTitle ? ' · ' + state.sessionTitle : ''}`)
+      lines.push(`${t('doctor-api-key', { state: process.env.DEEPSEEK_API_KEY ? t('doctor-key-configured') : t('doctor-key-missing') })}`)
+      lines.push(t('doctor-model', { model: state.model, provider: options.provider }))
+      lines.push(t('doctor-cwd', { cwd: state.cwd }))
+      lines.push(t('doctor-context-window', { window: state.contextWindow ?? t('doctor-unknown') }))
+      lines.push(`${t('doctor-session', { id: state.agentId })}${state.sessionTitle ? ' · ' + state.sessionTitle : ''}`)
       const userHome = process.env.USERPROFILE ?? homedir()
       const configCandidates = [
         join(userHome, '.dsh-cc/cordis.yml'),
         join(state.cwd, 'examples/cc-tui-agent/cordis.yml'),
       ]
       for (const candidate of configCandidates) {
-        lines.push(`配置: ${candidate} ${existsSync(candidate) ? '✓' : '（不存在）'}`)
+        lines.push(`${t('doctor-config', { candidate, state: existsSync(candidate) ? '✓' : t('doctor-config-missing') })}`)
       }
       const sessionsDir = join(userHome, '.dsh-cc/sessions')
-      lines.push(`会话存储: ${sessionsDir} ${existsSync(sessionsDir) ? '✓' : '（未初始化）'}`)
+      lines.push(`${t('doctor-storage', { dir: sessionsDir, state: existsSync(sessionsDir) ? '✓' : t('doctor-storage-uninit') })}`)
       return lines
     },
     async listSubagents() {
@@ -2081,19 +2082,19 @@ export function createChannel(
           >
         }
         | undefined
-      if (!subagents) return ['子代理服务未挂载（leaf 未启用 subagent）']
+      if (!subagents) return [t('subagent-not-mounted')]
       try {
         const children = await subagents.listChildren(agent.session.id)
-        if (children.length === 0) return ['当前会话暂无子代理']
+        if (children.length === 0) return [t('subagent-none')]
         return children.map((child) => {
           const id =
             typeof child.id === 'string' ? child.id : (child.id.value ?? '')
           const label = child.label ? `「${child.label}」` : ''
-          const mode = child.mode === 'continuable' ? '可续' : '一次性'
-          return `${mode} ${label}${child.activity === 'running' ? ' 运行中' : ' 已归档'} · ${id.slice(0, 8)}`
+          const mode = child.mode === 'continuable' ? t('subagent-resumable') : t('subagent-oneshot')
+          return `${t('subagent-row', { mode, label, activity: child.activity === 'running' ? t('subagent-running') : t('subagent-archived'), id: id.slice(0, 8) })}`
         })
       } catch (error) {
-        return [`查询失败 · ${error instanceof Error ? error.message : String(error)}`]
+        return [t('subagent-query-failed', { err: error instanceof Error ? error.message : String(error) })]
       }
     },
   }
@@ -2710,7 +2711,7 @@ ${output}
           state.rows.push({
             id: nextRowId,
             kind: 'notice',
-            text: `Agent preset 已切换：${data.agentPreset ?? 'unknown'}`,
+            text: t('agent-preset-switched', { preset: data.agentPreset ?? 'unknown' }),
           })
           nextRowId += 1
         }

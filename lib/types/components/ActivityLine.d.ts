@@ -16,7 +16,7 @@ export declare function contextPressurePct(usage: {
  * turn runs — replacing the CC random-verb spinner) or on the status bar
  * (the turn-summary card once idle). pi working-activity style: an animated
  * indicator frame, an ice-blue shimmer sweep over the line, an amber/red
- * `⚠ 上下文N%` pressure prefix, and a trailing token suffix for the spinner
+ * `⚠ ctx N%` pressure prefix, and a trailing token suffix for the spinner
  * placement. Done summaries render statically in the brand mist blue.
  */
 export declare function ActivityLine({ activity, activityFrames, warnPct, warnDanger, suffix, }: {
