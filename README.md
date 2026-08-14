@@ -1,58 +1,59 @@
 <p align="center">
-  <a href="README_ZH.md">简体中文</a> | <strong>English</strong>
+  <strong>简体中文</strong> | <a href="README_EN.md">English</a>
 </p>
 
 <p align="center">
-  <img src="screenshots/splash.png" alt="dsh-cc-tui — Claude Code-style terminal TUI for DeepSeek Harness" width="100%">
+  <img src="screenshots/splash.png" alt="dsh-cc-tui — DeepSeek Harness 的 Claude Code 风格终端 TUI" width="100%">
 </p>
 
 # dsh-TUI
 
-> DeepSeek Harness currently has no official terminal TUI (only a Web UI), so I built dsh-cc-tui!
+> DeepSeek Harness 官方目前还没有终端 TUI（只有 Web UI） 因此！我制作了这个dsh-cc-tui！
 
-![Type](https://img.shields.io/badge/type-cordis%20plugin-blue) ![Status](https://img.shields.io/badge/status-public%20beta-blue) ![Official feature](https://img.shields.io/badge/DeepSeek%20Harness-featured-brightgreen)
+![类型](https://img.shields.io/badge/type-cordis%20plugin-blue) ![状态](https://img.shields.io/badge/status-公测-blue) ![官方收录](https://img.shields.io/badge/DeepSeek%20Harness%20官方公众号-收录-brightgreen)
 
-## 🎉 Featured by DeepSeek Harness
+## 🎉 官方收录
 
-This plugin was featured by the **official DeepSeek Harness WeChat account** as a selected early-access community plugin:
+本插件被 **DeepSeek Harness 官方公众号** 推文收录，作为"内测用户精选插件"展示：
 
 <p align="center">
-  <img src="screenshots/wechat-official.png" alt="dsh-cc-tui featured by the official DeepSeek Harness WeChat account" width="560">
+  <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-cc-tui" width="560">
 </p>
 
-## Interface Preview
+## 界面预览
 
-![Start screen with pixel whale header](screenshots/splash.png)
+![首屏：像素鲸鱼顶栏](screenshots/splash.png)
 
-![Live activity line and context meter](screenshots/working-line.png)
+![工作状态行 + 上下文进度条](screenshots/working-line.png)
 
-## Why Install It: Beautiful and Easy to Use
+## 为什么值得装：美观、易用
 
-- **Live activity line**: the model's live activity remains visible above the input while it works,
-  with dozens of status variations.
-- **Model state at a glance**: the bottom status bar shows the current model state and
-  `git branch · working directory · session title` on the right.
-- **Streaming thoughts remain visible**: thinking blocks expand while they are generated,
-  collapse at the end of a turn, and can be expanded at any time with Ctrl+O.
-- **Double-Esc time rewind**: roll the conversation back to any historical message.
-- **And more features waiting to be discovered...**
+- **实时工作状态行**：工作时输入框上方常驻模型的实时动态——包含数十种状态
 
-## How to Install
+- **一眼看穿模型状态**：底部状态栏
+  右侧 `git 分支 · 工作目录 · 会话标题`
+
+- **思考过程流式可见**：thinking 块边生成边展开，回合结束自动折叠，Ctrl+O 随时展开全文
+
+- **双击 Esc 时间回溯**：把对话回滚到任意一条历史消息
+
+- **还有更多特性等你发现......**
+
+## 如何安装
 
 ```sh
-  # 1. Install DeepSeek Harness (skip if already installed)
+  # 1. 安装DeepSeek Harness（已装可跳过）
   npm install -g @deepseek-ai/dsh
 
-  # 2. Install this plugin
+  # 2. 装入本插件
   dsh plugin --profile ds-tui add dsh-cc-tui
 
-  # 3. Start it
-  #    On Windows, you can also use dsh-cc.cmd from this repository
-  #    (equivalent, with --resume to restore the previous session)
+  # 3. 启动
+  #    Windows 也可用仓库里的 dsh-cc.cmd（等价，且 --resume 恢复上次会话）
   dsh --profile ds-tui
 ```
 
 ## And More......
 
-For configuration, usage details, technical notes, and known limitations, see
-[the documentation index](docs/Index_EN.md).
+配置、使用说明、技术细节和已知限制请参阅
+[文档索引](docs/Index_ZH.md)

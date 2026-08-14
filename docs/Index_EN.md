@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="../README_ZH.md">简体中文</a> | <strong>English</strong>
+  <a href="../README.md">简体中文</a> | <strong>English</strong>
 </p>
 
 # dsh-TUI Documentation Index
 
-[← Project introduction](../README.md)
+[← Project introduction](../README_EN.md)
 
 The documentation is organized by topic:
 

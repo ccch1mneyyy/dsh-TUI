@@ -1,10 +1,10 @@
 <p align="center">
-  <strong>简体中文</strong> | <a href="../README.md">English</a>
+  <strong>简体中文</strong> | <a href="../README_EN.md">English</a>
 </p>
 
 # dsh-TUI 文档索引
 
-[← 项目介绍](../README_ZH.md)
+[← 项目介绍](../README.md)
 
 - [配置（profile cordis.patch.yml）](zh/configuration.md)
 - [Agent preset（四种官方 Agent 模式）](zh/agent-presets.md)
