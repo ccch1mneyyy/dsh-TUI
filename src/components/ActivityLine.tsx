@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Text, useAnimationFrame } from '../ui.js'
 import { resolvePreset } from './activityFrames.js'
 import { BRAND, FLASH, ICE, sweep } from './shimmer.js'
@@ -29,7 +30,7 @@ export function contextPressurePct(
  * turn runs — replacing the CC random-verb spinner) or on the status bar
  * (the turn-summary card once idle). pi working-activity style: an animated
  * indicator frame, an ice-blue shimmer sweep over the line, an amber/red
- * `⚠ 上下文N%` pressure prefix, and a trailing token suffix for the spinner
+ * `⚠ ctx N%` pressure prefix, and a trailing token suffix for the spinner
  * placement. Done summaries render statically in the brand mist blue.
  */
 export function ActivityLine({

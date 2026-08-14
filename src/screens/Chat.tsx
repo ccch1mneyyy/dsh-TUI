@@ -1,4 +1,5 @@
 import React from 'react'
+import { t, getLang, setLang, isLang, writeLangPref, subscribeLang } from '../i18n.js'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { formatTokens } from '../cc/format.js'
@@ -62,13 +63,13 @@ function capitalize(text: string): string {
  * tools (the corresponding SKILL.md ships under ~/.dsh/skills with dsh-cc).
  */
 const SKILL_PROMPTS: Readonly<Record<string, string>> = {
-  audit: '请使用 audit 技能对当前项目做一次全面的代码审计，找出安全、正确性与质量问题。',
-  bug: '请使用 bug 技能协助我记录一份完整的 bug 报告（现象、复现步骤、期望行为）。',
-  practice: '请使用 practice 技能陪我进行一轮编程练习。',
-  review: '请使用 review 技能对当前项目做一次全面的代码评审。',
-  pr_comments: '请使用 pr-comments 技能审查当前分支的拉取请求评论并给出改进建议。',
-  'release-notes': '请使用 release-notes 技能为当前项目生成发布说明。',
-  'vuln-check': '请使用 vuln-check 技能对当前项目做一次安全漏洞检查。',
+  audit: t('skill-audit-prompt'),
+  bug: t('skill-bug-prompt'),
+  practice: t('skill-practice-prompt'),
+  review: t('skill-review-prompt'),
+  pr_comments: t('skill-pr-comments-prompt'),
+  'release-notes': t('skill-release-notes-prompt'),
+  'vuln-check': t('skill-vuln-check-prompt'),
 }
 
 /** Terminal-title spinner frames (CC's TITLE_ANIMATION_FRAMES). */
@@ -110,6 +111,8 @@ export function Chat({
 }) {
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   React.useSyncExternalStore(channel.subscribe, () => channel.version)
+  // Re-render on language switches so the whole UI hot-swaps its strings.
+  React.useSyncExternalStore(subscribeLang, getLang)
   // The pending ask-user-question (DSH user-interaction seam): the model's
   // `ask_user_question` tool parks here until the panel is answered.
   const questionSnapshot = React.useSyncExternalStore(
@@ -173,7 +176,7 @@ export function Chat({
   const [rewindOpen, setRewindOpen] = React.useState(false)
   const [rewindIndex, setRewindIndex] = React.useState(0)
   const [rewindConfirm, setRewindConfirm] = React.useState<ChatRow | null>(null)
-  /** Startup `已加载上下文` panel: expanded by header click or Ctrl+T. */
+  /** Startup context panel: expanded by header click or Ctrl+T. */
   const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
   const [searchOpen, setSearchOpen] = React.useState(false)
@@ -260,7 +263,7 @@ export function Chat({
   // subscription in inline mode, where selection belongs to the terminal.
   // The copy clears the highlight and posts a transient notification.
   useCopyOnSelect(text =>
-    channel.notify(`已复制 ${text.length} 个字符`, { timeoutMs: 1500 }),
+    channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 }),
   )
   const { clearSelection: clearMouseSelection, hasSelection: hasMouseSelection } =
     useSelection()
@@ -289,7 +292,7 @@ export function Chat({
     switch (name) {
       case 'activity': {
         // Ported from the pi working-activity extension: bare `/activity`
-        // opens the interactive indicator picker; `/activity frames <名>`
+        // opens the interactive indicator picker; `/activity frames <name>`
         // switches directly; `/activity frames` lists presets; `/activity
         // status` shows the current choice. The choice persists to
         // ~/.dsh-cc/working-activity.json and survives restarts.
@@ -297,9 +300,9 @@ export function Chat({
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/activity', [
-            `当前预设  ${channel.activityFrames ?? 'claude'}`,
-            '切换      /activity（选择器）或 /activity frames <名>',
-            '持久化    ~/.dsh-cc/working-activity.json（重启后仍生效）',
+            t('activity-current-preset', { name: channel.activityFrames ?? 'claude' }),
+            t('activity-switch-hint'),
+            t('activity-persist-hint'),
           ])
           return true
         }
@@ -311,15 +314,15 @@ export function Chat({
           }
           const current = channel.activityFrames
           channel.pushLocal('/activity', [
-            `当前预设：${current ?? 'claude'} · /activity frames <名> 直接切换：`,
+            t('activity-current-direct', { name: current ?? 'claude' }),
             ...PRESET_NAMES.map(name =>
-              `${name.padEnd(10)} ${name === 'random' ? '每次随机' : FRAME_PRESETS[name].frames.slice(0, 5).join(' ')}${name === current ? '  ← 当前' : ''}`,
+              `${name.padEnd(10)} ${name === 'random' ? t('activity-random-each') : FRAME_PRESETS[name].frames.slice(0, 5).join(' ')}${name === current ? t('activity-current-marker') : ''}`,
             ),
           ])
           return true
         }
         if (parts.length > 0) {
-          channel.notify('用法：/activity | /activity frames <名> | /activity status', { color: 'warning' })
+          channel.notify(t('activity-usage'), { color: 'warning' })
           return true
         }
         setHelpOpen(false)
@@ -338,10 +341,10 @@ export function Chat({
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/preset', [
-            `当前 preset  ${channel.agentPreset ?? '（未挂载名册）'}`,
-            '切换        /preset（选择器）或 /preset <id>',
-            '持久化      ~/.dsh-cc/agent-preset.json（重启后仍生效；cordis.yml preset 优先）',
-            '锁定规则    已开始的会话不可切换（官方 blank-only 规则）',
+            t('preset-current', { name: channel.agentPreset ?? t('preset-roster-missing') }),
+            t('preset-switch-hint'),
+            t('preset-persist-hint'),
+            t('preset-lock-hint'),
           ])
           return true
         }
@@ -355,7 +358,7 @@ export function Chat({
         void channel.listPresets().then((list) => {
           if (list.length === 0) {
             setPresetPickerOpen(false)
-            channel.notify('当前组合未挂载 agent-presets 名册（preset 不可用）', { color: 'warning' })
+            channel.notify(t('preset-roster-unmounted'), { color: 'warning' })
             return
           }
           setPresetOptions(list)
@@ -364,9 +367,45 @@ export function Chat({
         })
         return true
       }
+      case 'lang': {
+        // `/lang` shows the current UI language, `/lang en|zh` switches
+        // (hot-swap, persisted to ~/.dsh-cc/lang.json). Precedence on next
+        // launch: CC_TUI_LANG > cordis.yml `lang` > the persisted choice.
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        if (parts[0] === 'status') {
+          setHelpOpen(false)
+          channel.pushLocal('/lang', [
+            t('lang-current', { lang: getLang() }),
+            t('lang-switch-hint'),
+            t('lang-persist-hint'),
+          ])
+          return true
+        }
+        if (parts.length > 0) {
+          setHelpOpen(false)
+          if (isLang(parts[0])) {
+            const ok = writeLangPref(parts[0])
+            setLang(parts[0])
+            channel.notify(
+              ok ? t('lang-switched', { lang: parts[0] }) : t('lang-switch-failed', { lang: parts[0] }),
+              { color: ok ? 'success' : 'error' },
+            )
+          } else {
+            channel.notify(t('lang-unknown', { lang: parts[0] }), { color: 'error' })
+          }
+          return true
+        }
+        setHelpOpen(false)
+        channel.pushLocal('/lang', [
+          t('lang-current', { lang: getLang() }),
+          t('lang-switch-hint'),
+          t('lang-persist-hint'),
+        ])
+        return true
+      }
       case 'theme': {
         // Bare `/theme` opens the interactive color picker (built-in
-        // palettes + user themes from ~/.dsh-cc/themes); `/theme <名字>`
+        // palettes + user themes from ~/.dsh-cc/themes); `/theme <name>`
         // switches directly; `/theme status` shows the current choice.
         // Selection persists to ~/.dsh-cc/theme.json and hot swaps via the
         // ThemeProvider setter (CC_TUI_THEME still wins on next launch).
@@ -374,10 +413,10 @@ export function Chat({
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/theme', [
-            `当前主题  ${themeName}`,
-            '切换      /theme（选择器）或 /theme <名字>',
-            '持久化    ~/.dsh-cc/theme.json（重启后仍生效；CC_TUI_THEME 优先）',
-            '自定义    ~/.dsh-cc/themes/<名字>.json（见 README「自定义主题」）',
+            t('theme-current', { name: themeName }),
+            t('theme-switch-hint'),
+            t('theme-persist-hint'),
+            t('theme-custom-hint'),
           ])
           return true
         }
@@ -385,7 +424,7 @@ export function Chat({
           setHelpOpen(false)
           const ok = setTheme(parts[0])
           channel.notify(
-            ok ? `主题已切换：${parts[0]}（已保存）` : `未知主题「${parts[0]}」· /theme 查看全部`,
+            ok ? t('theme-switched-saved', { name: parts[0] }) : t('theme-unknown', { name: parts[0] }),
             { color: ok ? 'success' : 'error' },
           )
           return true
@@ -493,19 +532,19 @@ export function Chat({
             ? undefined
             : Math.max(0, Math.min(100, Math.round((channel.tokens.input / channel.contextWindow) * 100)))
         const lines: string[] = [
-          `模型   ${channel.model}${channel.reasoningEffort ? ` · ${capitalize(channel.reasoningEffort)} effort` : ''}`,
-          `状态   ${channel.working ? '工作中' : '空闲'}`,
-          `会话   ${channel.agentId}`,
-          `目录   ${channel.cwd}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
+          `${t('status-model', { model: channel.model })}${channel.reasoningEffort ? ` · ${capitalize(channel.reasoningEffort)} effort` : ''}`,
+          `${t('status-state', { state: channel.working ? t('status-working') : t('status-idle') })}`,
+          `${t('status-session', { id: channel.agentId })}`,
+          `${t('status-dir', { cwd: channel.cwd })}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
           `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
         ]
         if (usage !== undefined) {
           const total = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
-          lines.push(`缓存率 ${rate}% · ${formatTokens(usage.cacheRead)} 读 / ${formatTokens(usage.cacheWrite)} 写`)
+          lines.push(t('cost-cache-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
         }
-        if (pct !== undefined) lines.push(`上下文 ${pct}%`)
-        if (channel.sessionTitle) lines.push(`标题   ${channel.sessionTitle}`)
+        if (pct !== undefined) lines.push(t('cost-context', { pct }))
+        if (channel.sessionTitle) lines.push(t('status-title', { title: channel.sessionTitle }))
         setHelpOpen(false)
         channel.pushLocal('/status', lines)
         return true
@@ -518,9 +557,9 @@ export function Chat({
         if (usage !== undefined) {
           const total = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
-          lines.push(`缓存命中率 ${rate}% · 缓存 ${formatTokens(usage.cacheRead)} 读 / ${formatTokens(usage.cacheWrite)} 写`)
+          lines.push(t('cost-cache-hit-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
         }
-        lines.push('注：DSH 不提供 API 费用计量，以上为 token 用量（按 provider 账单计费）')
+        lines.push(t('cost-note'))
         setHelpOpen(false)
         channel.pushLocal('/cost', lines)
         return true
@@ -528,11 +567,11 @@ export function Chat({
       case 'config': {
         const userHome = process.env.USERPROFILE ?? ''
         const lines = [
-          `示例配置  ${channel.cwd}/examples/cc-tui-agent/cordis.yml`,
-          `用户配置  ${userHome}\\.dsh-cc\\cordis.yml（install.sh --full 生成）`,
+          t('doctor-example-config', { path: `${channel.cwd}/examples/cc-tui-agent/cordis.yml` }),
+          t('doctor-user-config', { path: `${userHome}\\.dsh-cc\\cordis.yml` }),
           '',
-          '启动方式  dsh-cc.cmd / dsh --config <上述任一配置>',
-          '模型路由  由 cordis.yml 的 llm-deepseek 段决定（/model 仅提示重启生效）',
+          t('doctor-launch-hint'),
+          t('doctor-route-hint'),
         ]
         setHelpOpen(false)
         channel.pushLocal('/config', lines)
@@ -546,17 +585,17 @@ export function Chat({
         const target = channel.exportSession()
         channel.notify(
           target === null
-            ? '导出失败（无法写入工作目录）'
-            : `已导出: ${target}`,
+            ? t('export-failed')
+            : t('export-saved', { target }),
           target === null ? { color: 'error', timeoutMs: 8000 } : { timeoutMs: 8000 },
         )
         return true
       }
       case 'init': {
         const result = channel.initWorkspace()
-        if (result === null) channel.notify('创建 AGENTS.md 失败', { color: 'error' })
-        else if (result === 'exists') channel.notify('AGENTS.md 已存在，未覆盖')
-        else channel.notify(`已创建 ${result}`)
+        if (result === null) channel.notify(t('agentsmd-create-failed'), { color: 'error' })
+        else if (result === 'exists') channel.notify(t('agentsmd-exists'))
+        else channel.notify(t('agentsmd-created', { result }))
         return true
       }
       case 'agents':
@@ -568,36 +607,36 @@ export function Chat({
       case 'login': {
         const key = process.env.DEEPSEEK_API_KEY
         const lines = [
-          `API key: ${key ? key.slice(0, 6) + '…' + key.slice(-4) : '未配置（DEEPSEEK_API_KEY）'}`,
-          `Base URL: ${process.env.DEEPSEEK_BASE_URL ?? '官方端点'}`,
-          '来源：环境变量 → 工作区 .env（run.ts 兜底读取）',
+          `${t('login-api-key', { key: key ? key.slice(0, 6) + '…' + key.slice(-4) : t('login-key-missing') })}`,
+          `${t('login-base-url', { url: process.env.DEEPSEEK_BASE_URL ?? t('login-official-endpoint') })}`,
+          t('login-source-hint'),
         ]
         setHelpOpen(false)
         channel.pushLocal('/login', lines)
         return true
       }
       case 'logout':
-        channel.notify('DSH 凭证来自环境变量 DEEPSEEK_API_KEY — 删除该环境变量后重启 dsh-cc 即登出')
+        channel.notify(t('login-logout-hint'))
         return true
       case 'permissions':
         setHelpOpen(false)
         channel.pushLocal('/permissions', [
-          'DSH 权限策略由 fs-policy / bash-sandbox 配置决定（当前 leaf：workspace 内读写、写入需已读文件）。',
-          'DSH 的 /permission 预设切换需要 approval 服务 + 审批 UI，dsh-cc 未挂载。',
+          t('permissions-policy-hint'),
+          t('permissions-approval-hint'),
         ])
         return true
       case 'add-dir':
         setHelpOpen(false)
         channel.pushLocal('/add-dir', [
-          `当前文件系统策略以工作目录为根：${channel.cwd}`,
-          '模型工具相对路径均解析自该目录；跨目录访问由 fs-policy 拦截。',
+          t('permissions-root-hint', { cwd: channel.cwd }),
+          t('permissions-path-hint'),
         ])
         return true
       case 'hooks':
         setHelpOpen(false)
         channel.pushLocal('/hooks', [
-          'DSH hooks（dsh-hooks-claude / dsh-hooks-codex）未在本 leaf 挂载。',
-          '需要时可在 cordis.yml 挂载对应 hooks 插件。',
+          t('hooks-not-mounted'),
+          t('hooks-mount-hint'),
         ])
         return true
       case 'mcp':
@@ -607,23 +646,23 @@ export function Chat({
       case 'memory':
         setHelpOpen(false)
         channel.pushLocal('/memory', [
-          'DSH 暂无持久记忆服务。',
-          '长期约定可写入 AGENTS.md（工作区上下文）或技能（~/.dsh/skills）。',
+          t('memory-none'),
+          t('memory-hint'),
         ])
         return true
       case 'vim':
-        channel.notify('vim 模式暂未实现')
+        channel.notify(t('vim-not-implemented'))
         return true
       case 'terminal-setup':
         setHelpOpen(false)
         channel.pushLocal('/terminal-setup', [
-          '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。',
-          'Ctrl+V 粘贴文本/文件路径；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。',
+          t('terminal-setup-hint'),
+          t('terminal-paste-hint'),
         ])
         return true
       case 'connect':
         setHelpOpen(false)
-        channel.pushLocal('/connect', ['DSH 暂无远程连接机制（CC 的 /connect 对应能力未适配）。'])
+        channel.pushLocal('/connect', [t('connect-none')])
         return true
       case 'audit':
       case 'bug':
@@ -992,7 +1031,7 @@ export function Chat({
         if (name !== undefined) {
           const ok = setTheme(name)
           channel.notify(
-            ok ? `主题已切换：${name}（已保存）` : `主题「${name}」切换失败（无法写入 ~/.dsh-cc/theme.json）`,
+            ok ? t('theme-switched-saved', { name }) : t('theme-switch-failed', { name }),
             { color: ok ? 'success' : 'error' },
           )
         }
@@ -1110,7 +1149,7 @@ export function Chat({
       if (channel.pending.length > 0) {
         const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
         if (count > 0) {
-          channel.notify(`已打断当前回合，${count} 条消息立即处理`, { timeoutMs: 2500 })
+          channel.notify(t('interrupt-delivered', { n: count }), { timeoutMs: 2500 })
         }
       } else {
         channel.cancel()

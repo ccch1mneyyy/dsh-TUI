@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -241,7 +242,7 @@ export function PromptInput({
     } else if (channel.working) {
       // While the model is streaming, the message joins the DSH inbox and is
       // processed after the current turn — say so, or it looks "lost".
-      channel.notify('已发送，当前回合结束后处理', { timeoutMs: 2500 })
+      channel.notify(t('input-sent-after-turn'), { timeoutMs: 2500 })
     }
   }
 
@@ -261,7 +262,7 @@ export function PromptInput({
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.steer(trimmed)
-    channel.notify('已插话 · 下一步立即处理', { timeoutMs: 2500 })
+    channel.notify(t('input-interrupted-next'), { timeoutMs: 2500 })
   }
 
   /**
@@ -279,7 +280,7 @@ export function PromptInput({
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.submit(trimmed)
-    channel.notify('已排队 · 回合结束后处理', { timeoutMs: 2500 })
+    channel.notify(t('input-queued-after-turn'), { timeoutMs: 2500 })
   }
 
   /**
@@ -291,14 +292,14 @@ export function PromptInput({
     const item = channel.pending[channel.pending.length - 1]
     if (!item) return
     if (!channel.removePending(item.id)) {
-      channel.notify('无法撤回：消息可能已被处理，或当前版本不支持', { color: 'warning', timeoutMs: 2500 })
+      channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
     }
     setValue(item.text)
     setCursor(item.text.length)
     setSelectedCommand(0)
     setFileSelected(0)
-    channel.notify('已撤回，可编辑后重新发送', { timeoutMs: 2000 })
+    channel.notify(t('input-retracted'), { timeoutMs: 2000 })
   }
 
   /**
@@ -308,7 +309,7 @@ export function PromptInput({
   const interruptSend = () => {
     const trimmed = value.trim()
     if (!trimmed) {
-      channel.notify('输入为空，没有可发送的内容', { color: 'warning' })
+      channel.notify(t('input-empty'), { color: 'warning' })
       return
     }
     // Abort the running turn and deliver: previously queued pending
@@ -324,7 +325,7 @@ export function PromptInput({
     setSelectedCommand(0)
     setFileSelected(0)
     appendHistory(trimmed)
-    channel.notify('已打断当前回合，正在立即处理', { timeoutMs: 2500 })
+    channel.notify(t('input-interrupt-immediate'), { timeoutMs: 2500 })
   }
 
   /**
@@ -399,7 +400,7 @@ export function PromptInput({
       void readClipboard().then(content => {
         clipboardBusyRef.current = false
         if (content === null) {
-          channel.notify('剪贴板为空', { color: 'warning' })
+          channel.notify(t('input-clipboard-empty'), { color: 'warning' })
           return
         }
         insertAtCaret(formatClipboardInsert(content))
@@ -678,7 +679,7 @@ export function PromptInput({
       // turn is aborted and each message is re-queued once it settles.
       if (channel.working && channel.pending.length > 0) {
         const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
-        channel.notify(`已打断当前回合，${count} 条消息立即处理`, {
+        channel.notify(t('interrupt-delivered', { n: count }), {
           timeoutMs: 2500,
         })
         return
