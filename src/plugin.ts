@@ -162,6 +162,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // persisted `/preset` choice; undefined adopts the roster default.
     configuredPreset: config.preset,
     agentPreset,
+    // Shift+Tab session-mode cycle (undefined → the built-in default/
+    // plan/full cycle in sessionModes.ts).
+    modes: config.modes,
     handle,
   })
   // DSH approval seam: the permission layer asks ApprovalService.request(),

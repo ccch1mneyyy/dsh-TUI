@@ -635,6 +635,38 @@ declare const dict: {
         readonly zh: "推理强度 → {{name}}";
         readonly en: "Reasoning effort → {{name}}";
     };
+    readonly 'effort-invalid': {
+        readonly zh: "未知推理等级 {{id}}（当前模型可选：{{ids}}）";
+        readonly en: "Unknown reasoning effort {{id}} (this model offers: {{ids}})";
+    };
+    readonly 'effort-current': {
+        readonly zh: "当前推理强度 {{name}}";
+        readonly en: "Current reasoning effort {{name}}";
+    };
+    readonly 'effort-usage': {
+        readonly zh: "用法：/effort（滑杆）| /effort <id> | /effort status";
+        readonly en: "Usage: /effort (slider) | /effort <id> | /effort status";
+    };
+    readonly 'mode-switched': {
+        readonly zh: "模式 → {{name}}";
+        readonly en: "Mode → {{name}}";
+    };
+    readonly 'mode-default': {
+        readonly zh: "默认";
+        readonly en: "default";
+    };
+    readonly 'mode-plan': {
+        readonly zh: "计划模式";
+        readonly en: "plan mode";
+    };
+    readonly 'mode-full': {
+        readonly zh: "完全访问";
+        readonly en: "full access";
+    };
+    readonly 'mode-plan-unavailable': {
+        readonly zh: "当前 preset 未注册 /plan 命令，无法切换计划模式";
+        readonly en: "The active preset does not register /plan; cannot toggle plan mode";
+    };
     readonly 'logo-tagline': {
         readonly zh: "探索未至之境！";
         readonly en: "Explore the uncharted!";

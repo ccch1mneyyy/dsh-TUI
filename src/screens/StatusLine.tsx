@@ -5,6 +5,7 @@ import { Byline } from '../components/design-system/Byline.js'
 import { KeyboardShortcutHint } from '../components/design-system/KeyboardShortcutHint.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import type { Channel } from '../channel.js'
+import { modeDisplayName } from '../sessionModes.js'
 import {
   renderContextBar,
   renderTpsGauge,
@@ -34,6 +35,18 @@ export function StatusLine({
 
   const usage = channel.lastUsage
   const contextParts: React.ReactNode[] = []
+  // Session-mode marker (Shift+Tab cycle): hidden on the unmarked base
+  // mode (index 0); sage while a plan-declaring mode is in force.
+  if (channel.modeIndex > 0) {
+    contextParts.push(
+      <Text
+        key="mode"
+        color={channel.mode.plan === true ? 'planMode' : 'warning'}
+      >
+        {modeDisplayName(channel.mode)}
+      </Text>,
+    )
+  }
   if (channel.reasoningEffort !== undefined) {
     contextParts.push(
       <Text key="effort" color="inactiveShimmer">

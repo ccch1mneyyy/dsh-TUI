@@ -96,7 +96,9 @@ function check(name, ok) {
 {
   const { stdout, stderr, stdin } = makeStreams()
   const channel = {
-    working: false,
+    mode: { id: 'default', plan: false },
+    modeIndex: 0,
+    cycleMode() {},
     commandList: [],
     notifications: [],
     pending: [],
@@ -135,6 +137,9 @@ function check(name, ok) {
   // keystrokes through stdin.
   const { stdout: stdout2, stderr: stderr2, stdin: stdin2 } = makeStreams()
   const channel2 = {
+    mode: { id: 'default', plan: false },
+    modeIndex: 0,
+    cycleMode() {},
     working: false,
     commandList: [],
     notifications: [],

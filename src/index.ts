@@ -8,6 +8,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
+import type { SessionModeSpec } from './sessionModes.js'
 
 export const name = 'dsh-tui'
 export const inject = ['agents']
@@ -33,7 +34,7 @@ export interface Config {
   cwd?: string
   /** Reasoning effort applied to every request, validated against the live
    *  route's adapter levels (an unlisted level is ignored and the adapter
-   *  default applies). Wins over the persisted Shift+Tab choice; also seeds
+   *  default applies). Wins over the persisted /effort choice; also seeds
    *  the startup status line until the first request header reports the
    *  live value. */
   effort?: string
@@ -59,6 +60,11 @@ export interface Config {
    *  persisted in `~/.dsh-cc/agent-preset.json` wins, then the roster
    *  default (`standard`). */
   preset?: string
+  /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
+   *  is the unmarked base mode). Each entry bundles any subset of the
+   *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
+   *  default/plan/full cycle (see sessionModes.ts). */
+  modes?: SessionModeSpec[]
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -77,6 +83,15 @@ export const Config: Schema<Config> = Schema.object({
   fullscreen: Schema.boolean().default(false),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
+  modes: Schema.array(
+    Schema.object({
+      id: Schema.string(),
+      label: Schema.string().required(false),
+      plan: Schema.boolean().required(false),
+      sandbox: Schema.union(['read-only', 'workspace-write', 'danger-full-access']).required(false),
+      approval: Schema.union(['ask', 'never']).required(false),
+    }),
+  ).required(false),
 })
 
 /**

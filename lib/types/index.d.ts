@@ -1,17 +1,18 @@
 /**
- * dsh-tui plugin entry. The TUI implementation lives in `./plugin.tsx` (its
+ * cc-tui plugin entry. The TUI implementation lives in `./plugin.tsx` (its
  * render path is JSX); this module owns the plugin surface (`name`/`inject`/
  * `Config`/`apply`) at the canonical `src/index.ts` location and delegates
  * `apply` through a dynamic import so entry-scanning tooling and the Loader
  * resolve a plain `.ts` module.
- * @module @deepseek-harness-tui/dsh-tui
+ * @module @deepseek-ai/dsh-cc-tui
  */
 import type { Context } from '@deepseek-ai/cordis';
 import Schema from '@deepseek-ai/schemastery';
-export declare const name = "dsh-tui";
+import type { SessionModeSpec } from './sessionModes.js';
+export declare const name = "cc-tui";
 export declare const inject: string[];
 /**
- * dsh-tui plugin configuration: session attachment, model route, working
+ * cc-tui plugin configuration: session attachment, model route, working
  * directory, and display preferences.
  */
 export interface Config {
@@ -31,7 +32,7 @@ export interface Config {
     cwd?: string;
     /** Reasoning effort applied to every request, validated against the live
      *  route's adapter levels (an unlisted level is ignored and the adapter
-     *  default applies). Wins over the persisted Shift+Tab choice; also seeds
+     *  default applies). Wins over the persisted /effort choice; also seeds
      *  the startup status line until the first request header reports the
      *  live value. */
     effort?: string;
@@ -57,13 +58,18 @@ export interface Config {
      *  persisted in `~/.dsh-cc/agent-preset.json` wins, then the roster
      *  default (`standard`). */
     preset?: string;
+    /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
+     *  is the unmarked base mode). Each entry bundles any subset of the
+     *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
+     *  default/plan/full cycle (see sessionModes.ts). */
+    modes?: SessionModeSpec[];
 }
 export declare const Config: Schema<Config>;
 /**
  * Start the interactive TUI front door, delegating to the JSX implementation
  * in `./plugin.tsx` (see its module doc for the full contract).
  * @param ctx - the plugin context.
- * @param config - the validated dsh-tui configuration.
+ * @param config - the validated cc-tui configuration.
  * @returns a promise settling when the TUI teardown completes.
  */
 export declare function apply(ctx: Context, config: Config): Promise<void>;

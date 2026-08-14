@@ -30,6 +30,7 @@ import { homedir } from 'node:os'
 import { logForDebugging } from './utils/debug.js'
 import { extractMentions } from './utils/mentions.js'
 import { t } from './i18n.js'
+import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from './sessionModes.js'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -383,10 +384,20 @@ export interface Channel {
    *  current end and continues it with a new agent routed to `provider`/`model`.
    *  The history replays unchanged; only the request route changes. */
   switchModel(provider: string, model: string): Promise<boolean>
-  /** Cycle the live route's reasoning effort (Shift+Tab) through the
-   *  adapter's own level list (dsh parity: deepseek Off→High→Max), taking
-   *  effect on the next request and persisting across restarts. */
-  cycleEffort(): Promise<void>
+  /** The live route's effort levels + adapter default for the `/effort`
+   *  slider; empty `efforts` after notifying when unsupported/unavailable. */
+  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }>
+  /** Set one effort level by id (validated against the adapter list);
+   *  false + a notify when the id is not offered. Persists like the old
+   *  Shift+Tab cycle (~/.dsh-cc/effort.json). */
+  setEffort(id: string): Promise<boolean>
+  /** The session mode currently in force (matched from the session log, or
+   *  the last one Shift+Tab applied). */
+  readonly mode: SessionModeSpec
+  /** Index of `mode` in the configured cycle; 0 is the unmarked base mode. */
+  readonly modeIndex: number
+  /** Shift+Tab: advance to the next configured session mode. */
+  cycleMode(): Promise<void>
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined
@@ -469,6 +480,13 @@ export interface PendingMessage {
  * fields mirror the public {@link Channel} contract, and the `@internal`
  * emit hooks belong to the implementation.
  */
+/** One adapter-owned reasoning-effort level for the `/effort` slider. */
+export interface EffortOption {
+  id: string
+  name: string
+  description?: string
+}
+
 export interface ChannelState {
   version: number
   rows: ChatRow[]
@@ -548,8 +566,16 @@ export interface ChannelState {
   newSession(): Promise<boolean>
   /** Switch the live model (`/model` picker). */
   switchModel(provider: string, model: string): Promise<boolean>
-  /** Cycle reasoning effort (see the public Channel type). */
-  cycleEffort(): Promise<void>
+  /** The route's effort levels for `/effort` (see the public Channel type). */
+  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }>
+  /** Set one effort level by id (see the public Channel type). */
+  setEffort(id: string): Promise<boolean>
+  /** The session mode currently in force (see the public Channel type). */
+  mode: SessionModeSpec
+  /** Index of `mode` in the configured cycle (see the public Channel type). */
+  modeIndex: number
+  /** Shift+Tab session-mode advance (see the public Channel type). */
+  cycleMode(): Promise<void>
   /** The preset the current session runs under (see the public Channel type). */
   agentPreset: string | undefined
   /** The roster's presets for the `/preset` picker (see the public Channel type). */
@@ -866,6 +892,9 @@ export function createChannel(
     configuredModel?: string
     /** The preset the initial agent's session runs under (from resolveAgent). */
     agentPreset?: string
+    /** Shift+Tab session-mode cycle from cordis.yml `modes`; undefined →
+     *  the built-in default/plan/full cycle (sessionModes.ts). */
+    modes?: readonly SessionModeSpec[]
     /** Handle of the initial agent; disposed when a rewind replaces it. */
     handle?: AgentHandle
   },
@@ -878,6 +907,14 @@ export function createChannel(
   // command/run + command/done records). Absent the service, only the
   // built-in local commands exist.
   const commandService: CommandRuntime | undefined = ctx.get('commands')
+  // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
+  // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
+  const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
+  if (droppedModeIds.length > 0) {
+    ctx.logger.warn(
+      `cc-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
+    )
+  }
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
@@ -1005,52 +1042,213 @@ export function createChannel(
     }
   }
 
-  /** Shift+Tab: cycle the live route's adapter-owned reasoning efforts in
-   *  the adapter's own display order (dsh parity — deepseek: Off→High→Max).
-   *  The choice persists to ~/.dsh-cc/effort.json and follows future agents
-   *  on this channel (resume/model switch re-validate it per route). */
-  const cycleEffort = async (): Promise<void> => {
-    if (llmRuntime === undefined) {
-      state.notify(t('effort-unavailable'), { color: 'error' })
-      return
-    }
-    let efforts: ReadonlyArray<{ id: string; name: string }>
-    let defaultEffort: string | undefined
+  /** Resolve the live route's effort levels + adapter default through the
+   *  llm runtime; 'unavailable' when the service is unmounted, 'error' when
+   *  resolution throws (notified here). */
+  const resolveEfforts = async (): Promise<
+    | {
+        efforts: ReadonlyArray<{ id: string; name: string; description?: string }>
+        defaultEffort: string | undefined
+      }
+    | 'unavailable'
+    | 'error'
+  > => {
+    if (llmRuntime === undefined) return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      efforts = info.reasoning?.efforts ?? []
-      defaultEffort = info.reasoning?.defaultEffort
+      return {
+        efforts: info.reasoning?.efforts ?? [],
+        defaultEffort: info.reasoning?.defaultEffort,
+      }
     } catch (error) {
       state.notify(t('effort-read-failed', { error: error instanceof Error ? error.message : String(error) }), {
         color: 'error',
         timeoutMs: 8000,
       })
-      return
+      return 'error'
     }
-    if (efforts.length <= 1) {
-      state.notify(
-        efforts.length === 1
-          ? t('effort-single-tier', { name: efforts[0]!.name })
-          : t('effort-unsupported'),
-        { color: 'warning' },
-      )
-      return
-    }
-    // No explicit level yet = the adapter's materialized default is in
-    // effect; cycle from THERE, not from the top of the list.
-    const currentId = state.reasoningEffort ?? defaultEffort
-    const currentIndex = efforts.findIndex(effort => effort.id === currentId)
-    const next = efforts[(currentIndex + 1) % efforts.length]!
+  }
+
+  /** Pin one validated effort level on the live route: reroutes the next
+   *  request, persists the choice, and refreshes the StatusLine segment. */
+  const applyEffort = (effort: { id: string; name: string }): void => {
     selection.current = {
       provider: state.provider,
       model: state.model,
-      reasoningEffort: ReasoningEffortId(next.id),
+      reasoningEffort: ReasoningEffortId(effort.id),
     }
-    preferredEffort = next.id
-    state.reasoningEffort = next.id
-    writeEffortPref(next.id)
-    state.notify(t('effort-switched', { name: next.name }))
+    preferredEffort = effort.id
+    state.reasoningEffort = effort.id
+    writeEffortPref(effort.id)
+    state.notify(t('effort-switched', { name: effort.name }))
     state.emit()
+  }
+
+
+  /** The live route's effort levels for the `/effort` slider; empty after
+   *  notifying when the route is unsupported/unavailable/single-tier. */
+  const listEfforts = async (): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }> => {
+    const resolved = await resolveEfforts()
+    if (resolved === 'unavailable') {
+      state.notify(t('effort-unavailable'), { color: 'error' })
+      return { efforts: [], defaultEffort: undefined }
+    }
+    if (resolved === 'error') return { efforts: [], defaultEffort: undefined }
+    if (resolved.efforts.length === 0) {
+      state.notify(t('effort-unsupported'), { color: 'warning' })
+    } else if (resolved.efforts.length === 1) {
+      state.notify(t('effort-single-tier', { name: resolved.efforts[0]!.name }), { color: 'warning' })
+    }
+    return resolved
+  }
+
+  /** Set one effort level by id (`/effort <id>` and the slider's live
+   *  apply); false + a notify when the id is not offered by the route. */
+  const setEffort = async (id: string): Promise<boolean> => {
+    const resolved = await resolveEfforts()
+    if (resolved === 'unavailable') {
+      state.notify(t('effort-unavailable'), { color: 'error' })
+      return false
+    }
+    if (resolved === 'error') return false
+    if (resolved.efforts.length === 0) {
+      state.notify(t('effort-unsupported'), { color: 'warning' })
+      return false
+    }
+    const found = resolved.efforts.find(effort => effort.id === id)
+    if (!found) {
+      state.notify(
+        t('effort-invalid', { id, ids: resolved.efforts.map(effort => effort.id).join(', ') }),
+        { color: 'warning' },
+      )
+      return false
+    }
+    applyEffort(found)
+    return true
+  }
+
+  /** Run one DSH registry command (`/plan`, …) on the live agent; the text
+   *  of its result, '' when the result is textless, undefined when the
+   *  command is not registered, and the error message when it throws. */
+  const executeRegistryCommand = async (name: string, rawInput: string): Promise<string | undefined> => {
+    if (!commandService) return undefined
+    try {
+      const execution = await commandService.execute(
+        agent,
+        `/${name}${rawInput}`,
+        new AbortController().signal,
+      )
+      // `undefined` = not registered; a handler error surfaces as its
+      // message so the user sees why the command failed.
+      return execution?.result.text ?? ''
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  // Session-mode folds: last-wins projections over the session log. The
+  // event types are registered by dsh-plan-mode / dsh-sandbox-policy /
+  // dsh-user-approval and are NOT in this package's typed SessionEvent
+  // union, so they are matched by name through casts — the same pattern as
+  // `agent-preset/selected` in renderEvent and the goal projection above.
+  const foldPlanActive = (events: readonly SessionEvent[]): boolean => {
+    let active = false
+    for (const event of events) {
+      if ((event as { type: string }).type === 'plan/mode') {
+        active = (event.data as unknown as { active?: boolean }).active === true
+      }
+    }
+    return active
+  }
+  const foldSandboxMode = (events: readonly SessionEvent[]): string | undefined => {
+    let mode: string | undefined
+    for (const event of events) {
+      if ((event as { type: string }).type === 'sandbox/mode') {
+        const value = (event.data as unknown as { mode?: string }).mode
+        if (typeof value === 'string') mode = value
+      }
+    }
+    return mode
+  }
+  const foldApprovalPolicy = (events: readonly SessionEvent[]): string | undefined => {
+    let policy: string | undefined
+    for (const event of events) {
+      if ((event as { type: string }).type === 'approval/policy') {
+        const value = (event.data as unknown as { policy?: string }).policy
+        if (typeof value === 'string') policy = value
+      }
+    }
+    return policy
+  }
+
+  /** First configured mode whose declared atoms all match the folds;
+   *  undeclared atoms are wildcards; no match → index 0 (the base mode).
+   *  Matching is exact: a fresh session has no `approval/policy` event, so
+   *  a mode declaring `approval: 'ask'` never falsely matches it. */
+  const deriveModeIndex = (events: readonly SessionEvent[]): number => {
+    const index = sessionModes.findIndex(
+      spec =>
+        (spec.plan === undefined || foldPlanActive(events) === spec.plan) &&
+        (spec.sandbox === undefined || foldSandboxMode(events) === spec.sandbox) &&
+        (spec.approval === undefined || foldApprovalPolicy(events) === spec.approval),
+    )
+    return index >= 0 ? index : 0
+  }
+
+  /** Re-derive the current mode from the live session log (boot, every
+   *  agent re-bind, and after mode-affecting session events). */
+  const refreshMode = (): void => {
+    state.modeIndex = deriveModeIndex(agent.session.events)
+    state.mode = sessionModes[state.modeIndex]!
+  }
+
+  /** Apply one configured mode: each declared atom switches independently
+   *  (plan via the registry `/plan` command; sandbox/approval via their
+   *  durable session-log override events). A failing plan toggle aborts the
+   *  whole switch so the session never lands in a half-applied mode. */
+  const applyMode = async (spec: SessionModeSpec): Promise<void> => {
+    if (spec.plan !== undefined && foldPlanActive(agent.session.events) !== spec.plan) {
+      const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
+      if (text === undefined) {
+        // The active preset registers no /plan.
+        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+        return
+      }
+    }
+    // The durable sandbox override is one session event (dsh-sandbox-policy's
+    // own write path); the session/event arm picks it up immediately.
+    if (spec.sandbox !== undefined && foldSandboxMode(agent.session.events) !== spec.sandbox) {
+      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+        'sandbox/mode',
+        { mode: spec.sandbox },
+      )
+    }
+    // Prefer the approval service (it narrates the switch to the model);
+    // the raw durable event is the fallback when it is unmounted.
+    if (spec.approval !== undefined && foldApprovalPolicy(agent.session.events) !== spec.approval) {
+      const approval = ctx.get('approval') as
+        | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
+        | undefined
+      if (approval) {
+        approval.setPolicy(agent, spec.approval)
+      } else {
+        ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+          'approval/policy',
+          { policy: spec.approval },
+        )
+      }
+    }
+    refreshMode()
+    state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
+    state.emit()
+  }
+
+  /** Shift+Tab: advance to the next configured session mode. Cycling starts
+   *  from the mode DERIVED from the session log (never a stored index), so
+   *  manual `/plan` use can never desync the cycle. */
+  const cycleMode = async (): Promise<void> => {
+    const index = deriveModeIndex(agent.session.events)
+    await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
   }
 
   const state: ChannelState = {
@@ -1072,9 +1270,13 @@ export function createChannel(
     lastUserText: '',
     notifications: [],
     contextWindow: undefined,
-    // Explicit cordis.yml `effort` wins; otherwise the persisted Shift+Tab
+    // Explicit cordis.yml `effort` wins; otherwise the persisted /effort
     // choice; the first request/header event re-asserts the adapter's truth.
     reasoningEffort: options.effort ?? readEffortPref(),
+    // Session-mode seed; the first refreshMode() (bindAgent) re-derives it
+    // from the session log, so a resumed session lands on its recorded mode.
+    mode: sessionModes[0]!,
+    modeIndex: 0,
     workingActivity: undefined,
     activityFrames: options.activityFrames,
     activityEnabled: options.activity !== false,
@@ -1572,7 +1774,6 @@ export function createChannel(
       clearResumeTarget()
       // The brand-new session becomes the most recently used.
       touchSession(handle.agent.id)
-      state.emit()
       void oldHandle?.dispose().catch(() => {})
       return true
     },
@@ -1679,7 +1880,7 @@ export function createChannel(
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       // Persist the choice so the next boot and `/new` start on it (same
-      // contract as /preset and Shift+Tab effort; issues #14/#30). A failed
+      // contract as /preset and /effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
       if (!writeModelPref(provider, model)) {
         state.notify(t('model-pref-write-failed'), {
@@ -1688,7 +1889,9 @@ export function createChannel(
       }
       return true
     },
-    cycleEffort,
+    listEfforts,
+    setEffort,
+    cycleMode,
     clear() {
       state.rows.length = 0
       nextRowId = 0
@@ -1963,20 +2166,8 @@ export function createChannel(
           )
         })
     },
-    async runExternalCommand(name, rawInput) {
-      if (!commandService) return undefined
-      try {
-        const execution = await commandService.execute(
-          agent,
-          `/${name}${rawInput}`,
-          new AbortController().signal,
-        )
-        // `undefined` = not registered; a handler error surfaces as its
-        // message so the user sees why the command failed.
-        return execution?.result.text ?? ''
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error)
-      }
+    runExternalCommand(name, rawInput) {
+      return executeRegistryCommand(name, rawInput)
     },
     pushLocal(title, lines) {
       state.rows.push({ id: nextRowId++, kind: 'local', text: title })
@@ -2875,6 +3066,7 @@ ${output}
     selection.current = undefined
     selection.assembled = undefined
     void applyPreferredEffort()
+    refreshMode()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),
       ctx.on('agent/status', ({ agent: subject, status }) => {
@@ -2941,6 +3133,12 @@ ${output}
           }
           state.emit()
           return
+        }
+        // Mode-affecting atoms fold into the Shift+Tab mode indicator the
+        // moment they land (whether appended by cycleMode or by hand).
+        const eventType = (event as { type: string }).type
+        if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
+          refreshMode()
         }
         renderEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
