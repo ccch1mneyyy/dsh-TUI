@@ -195,6 +195,11 @@ export declare const ERASE_SCROLLBACK: string;
  *   n is 0 or negative.
  */
 export declare function eraseLines(n: number): string;
+/** Reset all SGR attributes (CSI 0 m). Erase/scroll sequences fill blank
+ *  cells with the CURRENT background color (BCE) — prefix this before any
+ *  such sequence that must not inherit a possibly-stuck background (e.g.
+ *  after a truncated frame left a colored SGR active). */
+export declare const SGR_RESET: string;
 /**
  * Scroll up n lines (CSI n S).
  * @param n - number of lines to scroll; defaults to 1.

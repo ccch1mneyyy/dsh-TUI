@@ -1,41 +1,51 @@
 /**
- * Headless verification of the main-screen shrink repaint fix.
+ * Headless verification of the main-screen shrink repaint.
  *
  * Scenario (the user-reported bug): content taller than the viewport, then
  * the content shrinks. In main-screen mode the terminal viewport does NOT
- * follow the content bottom — incremental paths (eraseLines or scroll-up +
- * slice repaint) write rows at stale physical offsets, leaving old status
- * rows behind and mixing old/new characters on the same lines.
+ * follow the content bottom — a stale-offset incremental path would leave
+ * old status rows behind and mix old/new characters on the same lines.
  *
- * The fix: on shrink in main-screen mode, full-repaint via a scroll-up-to-top
- * clear sequence (CSI 10000 S) — no ESC[2J/ESC[3J (those snap the Windows
- * Terminal viewport to the top inside DEC 2026 sync blocks, claude-code
- * #35580), scrollback preserved.
+ * 修复演进：旧方案是收缩帧发 full-reset（CSI 10000 S 清屏 + 整帧重打）——
+ * 正确但每次把整份 UI 复制进 scrollback（issue #38/#39/#19 的"上滚看到
+ * 重复渲染"即由此累积）。现方案就地重画视口（光标锚定在 park 行 → 上移
+ * 到视口顶 → ED 清 → 重打帧尾窗口），零滚动、零 scrollback 沉积。
+ * 本脚本因此从字节形态断言（必须发 CSI 10000S）升级为语义断言：用
+ * xterm-headless 重建终端，验证收缩后【用户看到什么】。
  *
  * Checks:
- *  1. the shrink frame emits the scroll-up clear (CSI 10000 S);
- *  2. the shrink frame emits NO ESC[2J / ESC[3J;
- *  3. the repainted frame contains the bottom-pinned marker text;
- *  4. the frame repaints ALL rows (full repaint, not a partial slice);
- *  5. the marker is in the LAST rows of the emitted frame (bottom-pinned).
+ *  1. the shrink frame emits NO scroll-up clear (CSI n S) — no scrollback
+ *     deposit — and NO ESC[2J/ESC[3J (those snap the Windows Terminal
+ *     viewport to the top inside DEC 2026 sync blocks, claude-code #35580);
+ *  2. after the shrink the viewport shows the tail of the 40-line content
+ *     with the bottom-pinned marker on its last content row;
+ *  3. no stale rows: lines 40..59 from the pre-shrink frame are gone from
+ *     the viewport;
+ *  4. no mixed/duplicated rows: every visible content line appears at most
+ *     once, in ascending order.
  * Run: node scripts/verify-shrink.mjs
  */
 process.env.FORCE_COLOR = '3'
+process.env.TERM_PROGRAM = 'WezTerm' // DEC-2026 路径，与真机一致
 
 const { Writable, PassThrough } = await import('node:stream')
 const React = await import('react')
-const { render } = await import('../lib/types/ui.js')
-const { Box, Text } = await import('../lib/types/ui.js')
+const m = await import('@xterm/headless'); const XTerm = m.default?.Terminal ?? m.Terminal
+const { render, Box, Text } = await import('../lib/types/ui.js')
 
-function makeStreams(rows = 28) {
+const COLS = 100
+const ROWS = 28
+
+function makeStreams(term) {
   const stdout = new Writable({
     write(chunk, _enc, cb) {
-      stdout.frames.push(String(chunk))
-      cb()
+      const str = String(chunk)
+      stdout.frames.push(str)
+      term.write(str, cb)
     },
   })
-  stdout.columns = 100
-  stdout.rows = rows
+  stdout.columns = COLS
+  stdout.rows = ROWS
   stdout.isTTY = true
   stdout.frames = []
   const stderr = new Writable({
@@ -56,15 +66,16 @@ function makeStreams(rows = 28) {
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 let failed = 0
-function check(name, ok) {
-  console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}`)
+function check(name, ok, extra = '') {
+  console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed = 1
 }
 
 // Render a tall list + a bottom marker; then shrink the list and verify the
-// emitted frame handles the shrink without clearing the screen.
+// viewport the user actually sees (xterm-reconstructed).
 {
-  const { stdout, stderr, stdin } = makeStreams()
+  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 500, allowProposedApi: true })
+  const { stdout, stderr, stdin } = makeStreams(term)
   const App = ({ lineCount }) =>
     React.createElement(
       Box,
@@ -82,47 +93,51 @@ function check(name, ok) {
     patchConsole: false,
   })
   await sleep(500)
-  const first = stdout.frames.join('')
-  check('initial frame has no clear sequence', !/\x1b\[2J\x1b\[3J/.test(first))
+  const framesBefore = stdout.frames.length
 
-  // Shrink: 60 -> 40 lines. Main-screen shrink must FULLY repaint (partial
-  // paths write at stale physical offsets → duplicated/mixed rows) via the
-  // scroll-up clear sequence (no ESC[2J/3J → no WT viewport jump).
+  // Shrink: 60 -> 40 lines.
   instance.rerender(React.createElement(App, { lineCount: 40 }))
   await sleep(500)
-  const shrink = stdout.frames[stdout.frames.length - 1]
+  const shrinkBytes = stdout.frames.slice(framesBefore).join('')
+
+  // 1. 无 scrollback 沉积、无 WT 跳顶序列。
   check(
-    'shrink frame emits scroll-up-to-top clear',
-    /\x1b\[10000S/.test(shrink),
+    'shrink frame emits NO scroll-up clear (CSI n S)',
+    !/\x1b\[\d*S/.test(shrinkBytes),
   )
   check(
     'shrink frame emits NO ESC[2J/ESC[3J',
-    !/\x1b\[2J|\x1b\[3J/.test(shrink),
-  )
-  check(
-    'shrink frame repaints the marker',
-    shrink.includes('BOTTOM_PINNED_MARKER'),
+    !/\x1b\[2J|\x1b\[3J/.test(shrinkBytes),
   )
 
-  // The marker must be painted near the BOTTOM of the emitted content:
-  // normalize cursor-right moves to spaces, strip ANSI, and check the marker
-  // row index is in the last 2 rows of the frame's text lines.
-  const toPlain = s =>
-    s
-      .replace(/\x1b\[(\d+)C/g, (_, n) => ' '.repeat(Number(n)))
-      .replace(/\x1b\[[0-9;?>:]*[a-zA-Z]/g, '')
-      .replace(/\x1b\]9;[^\x07]*\x07/g, '')
+  // 2-4. xterm 重建的视口语义断言。
+  const buf = term.buffer.active
+  const start = Math.max(0, buf.length - ROWS)
+  const viewport = []
+  for (let y = start; y < buf.length; y++) {
+    viewport.push((buf.getLine(y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
+  }
+  const markerRow = viewport.findIndex(l => l.includes('BOTTOM_PINNED_MARKER'))
+  check('marker visible in viewport', markerRow >= 0)
   check(
-    'shrink frame repaints ALL rows (full repaint)',
-    toPlain(shrink).includes('line 0 padded content') &&
-      toPlain(shrink).includes('line 39 padded content'),
+    'marker is the last content row',
+    markerRow >= 0 && viewport.slice(markerRow + 1).every(l => l === ''),
+    `marker at ${markerRow}/${ROWS}`,
   )
-  const plain = toPlain(shrink)
-  const linesOut = plain.split('\n')
-  const markerIdx = linesOut.findIndex(l => l.includes('BOTTOM_PINNED_MARKER'))
+  // 收缩后帧高 41 > 视口 28：视口应显示帧尾窗口（line 14..39 + marker），
+  // 且 line 40..59（旧内容）一行都不许残留。
+  const staleRows = viewport.filter(l => /line (4\d|5\d) padded/.test(l))
+  check('no stale rows from the taller frame', staleRows.length === 0, staleRows.slice(0, 3).join(' | '))
+  const nums = viewport
+    .map(l => /^line (\d+) padded content$/.exec(l.trim()))
+    .filter(Boolean)
+    .map(m => Number(m[1]))
+  const ascendingUnique = nums.every((n, i) => i === 0 || n === nums[i - 1] + 1)
+  check('visible lines are consecutive and unique', ascendingUnique, nums.join(','))
   check(
-    `marker painted in last rows (found at ${markerIdx}/${linesOut.length})`,
-    markerIdx >= linesOut.length - 2,
+    'tail window ends at line 39',
+    nums.length > 0 && nums[nums.length - 1] === 39,
+    `last=${nums[nums.length - 1]}`,
   )
 
   await instance.unmount()

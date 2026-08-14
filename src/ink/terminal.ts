@@ -5,7 +5,7 @@ import { env } from '../utils/env.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
-import { cursorMove, cursorTo, eraseLines } from './termio/csi.js'
+import { cursorMove, cursorTo, eraseLines, SGR_RESET } from './termio/csi.js'
 import { BSU, ESU, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js'
 import { link } from './termio/osc.js'
 
@@ -255,8 +255,17 @@ export function writeDiffToTerminal(
   // DEC 2026 (e.g. tmux) AND the cost matters (high-frequency alt-screen).
   const useSync = !skipSyncMarkers
 
-  // Buffer all writes into a single string to avoid multiple write calls
-  let buffer = useSync ? BSU : ''
+  // Buffer all writes into a single string to avoid multiple write calls.
+  // SGR_RESET + link('') head every frame: the diff engine computes style
+  // and hyperlink transitions from a frame-start baseline of none — normally
+  // guaranteed by the previous frame's tail resets, but a truncated frame
+  // (interrupted write, dropped PTY bytes) leaves the terminal stuck with a
+  // colored SGR / an open hyperlink. Every erase, hardware scroll, and LF
+  // scroll fills blank cells with the CURRENT background (BCE), so one stuck
+  // red background floods whole regions (issue #10). ~12 bytes per frame
+  // turn the baseline assumption into a per-frame guarantee; on healthy
+  // frames both sequences are idempotent no-ops.
+  let buffer = (useSync ? BSU : '') + SGR_RESET + link('')
 
   for (const patch of diff) {
     switch (patch.type) {
@@ -269,7 +278,12 @@ export function writeDiffToTerminal(
         }
         break
       case 'clearTerminal':
-        buffer += getClearTerminalSequence()
+        // Pass the live row count: the blank only needs one viewport worth
+        // of scroll (see getClearTerminalSequence on why overshooting
+        // evicts the user's real scrollback).
+        buffer += getClearTerminalSequence(
+          (terminal.stdout as unknown as { rows?: number }).rows,
+        )
         break
       case 'cursorHide':
         buffer += HIDE_CURSOR

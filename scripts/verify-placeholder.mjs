@@ -50,7 +50,9 @@ const toPlain = s =>
   s
     .replace(/\x1b\[(\d+)C/g, (_, n) => ' '.repeat(Number(n)))
     .replace(/\x1b\[[0-9;?>:]*[a-zA-Z]/g, '')
-    .replace(/\x1b\]9;[^\x07]*\x07/g, '')
+    // OSC（\x1b]…BEL / …ST）整类清除：进度报告（OSC 9;4）、超链接
+    // （OSC 8——每帧帧头的防御性 link('') 关闭序列会出现在所有帧里）。
+    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
 
 const EXAMPLE_RE =
   /Summarize the changes|Explain the code|Find and fix|Write tests|Review my recent|What does this function|Refactor this|Update the documentation|Help me debug|Add a feature/
