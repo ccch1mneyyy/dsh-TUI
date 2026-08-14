@@ -4,8 +4,8 @@
  *    segments by content type, free space right-aligned with the usage
  *    readout, largest-remainder column allocation).
  *  - `pi-tps-meter`: live 1/8-cell gauge while streaming and a min-max
- *    normalized sparkline with rolling avg / all-time μ / p95 after each
- *    message; colors green ≥ 50 tps, yellow ≥ 20, red below.
+ *    normalized sparkline after each completed turn; colors green ≥ 50 tps,
+ *    yellow ≥ 20, red below.
  */
 
 /** Context bar segments — DeepSeek blue family (dark-theme friendly: deep
@@ -241,7 +241,7 @@ export function renderTpsGauge(tps: number, peak: number): string {
 }
 
 /** Min-max normalized 12-sample sparkline: `▁▄▇▅▂▁▇█▅▃▆▇`.
- * @param samples - TPS samples; only the last 12 are rendered.
+ * @param samples - Turn TPS samples; only the last 12 are rendered.
  * @returns The ANSI sparkline string.
  */
 export function renderTpsSparkline(samples: readonly { tps: number }[]): string {
@@ -268,7 +268,7 @@ export function renderTpsSparkline(samples: readonly { tps: number }[]): string 
 }
 
 /** Rolling stats: 60s average, all-time mean and p95.
- * @param samples - TPS samples with their timestamps in milliseconds.
+ * @param samples - Turn TPS samples with their timestamps in milliseconds.
  * @param nowMs - Current time in milliseconds; the 60s rolling window keeps samples with `nowMs - at <= 60_000`.
  * @returns The 60s average, all-time mean, and all-time p95 (all zero for an empty sample list).
  */

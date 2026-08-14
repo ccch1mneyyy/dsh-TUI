@@ -286,7 +286,7 @@ export interface Channel {
     } | undefined;
     /** Output tokens per second of the current/last turn's response, when known. */
     readonly tps: number | undefined;
-    /** Per-message tps samples (sparkline + μ/p95 readout), oldest first. */
+    /** Per-turn tps samples (sparkline history), oldest first. */
     readonly tpsSamples: readonly {
         tps: number;
         at: number;
@@ -493,7 +493,7 @@ export interface ChannelState {
     } | undefined;
     /** Output tokens per second of the current/last turn's response, when known. */
     tps: number | undefined;
-    /** Per-message tps samples (sparkline + μ/p95 readout), oldest first. */
+    /** Per-turn tps samples (sparkline history), oldest first. */
     tpsSamples: {
         tps: number;
         at: number;

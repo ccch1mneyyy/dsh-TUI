@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
-import { createUserMessage, MessageId, ReasoningEffortId, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import {
+  createUserMessage,
+  isTokenDelta,
+  MessageId,
+  ReasoningEffortId,
+  type ContentBlock,
+  type StreamChunk,
+} from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
@@ -284,7 +291,7 @@ export interface Channel {
     | undefined
   /** Output tokens per second of the current/last turn's response, when known. */
   readonly tps: number | undefined
-  /** Per-message tps samples (sparkline + μ/p95 readout), oldest first. */
+  /** Per-turn tps samples (sparkline history), oldest first. */
   readonly tpsSamples: readonly { tps: number; at: number }[]
   /** Latest working-activity snapshot (log-only `activity/status` event),
    *  when the leaf mounts dsh-working-activity. */
@@ -485,7 +492,7 @@ export interface ChannelState {
     | undefined
   /** Output tokens per second of the current/last turn's response, when known. */
   tps: number | undefined
-  /** Per-message tps samples (sparkline + μ/p95 readout), oldest first. */
+  /** Per-turn tps samples (sparkline history), oldest first. */
   tpsSamples: { tps: number; at: number }[]
   /** Latest working-activity snapshot (see the public Channel type). */
   workingActivity: ActivityStatus | undefined
@@ -2266,10 +2273,22 @@ ${output}
   const sealedReasoning: ChatRow[] = []
   /** Wall-clock start of the current reasoning row (durationMs on settle). */
   let reasoningStart = 0
-  /** First-output wall-clock + estimated output tokens of the current turn
-   *  (live tps readout; refined by exact usage at assistant/message). */
-  let turnOutputStart = 0
-  let turnOutputTokens = 0
+  /** Decode-throughput fold for the current turn. DSH defines one step as
+   *  one model call plus its tools; summing only first-token → message spans
+   *  excludes tool execution and per-request TTFT from generation speed. */
+  let tpsTurn: number | undefined
+  let tpsBeforeTurn: number | undefined
+  let tpsTurnDecodeMs = 0
+  let tpsTurnDecodeTokens = 0
+  let tpsTurnSampled = false
+  let tpsStep:
+    | {
+      turn: number
+      step: number
+      firstTokenTime: number | undefined
+      outputChars: number
+    }
+    | undefined
   /** Tool cards by callId, so tool/result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
 
@@ -2488,21 +2507,42 @@ ${output}
         }
         break
       }
+      case 'step/start': {
+        if (tpsTurn === event.data.turn) {
+          tpsStep = {
+            turn: event.data.turn,
+            step: event.data.step,
+            firstTokenTime: undefined,
+            outputChars: 0,
+          }
+        }
+        break
+      }
       case 'assistant/chunk': {
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
           if (chunk.text) {
             ensureStreaming(event.seq).text += chunk.text
             state.responseChars += chunk.text.length
-            // Live output-speed estimate (chars/4 ≈ tokens) from the first
-            // output token of the turn.
-            if (turnOutputStart === 0) turnOutputStart = Date.now()
-            turnOutputTokens += chunk.text.length / 4
-            const elapsedSec = (Date.now() - turnOutputStart) / 1000
-            if (elapsedSec > 0.5) state.tps = turnOutputTokens / elapsedSec
           }
         } else if (chunk.type === 'reasoning-delta') {
           if (chunk.text) ensureReasoning(event.seq).text += chunk.text
+        }
+        const step = tpsStep
+        if (
+          step !== undefined &&
+          step.turn === event.data.turn &&
+          step.step === event.data.step &&
+          isTokenDelta(chunk)
+        ) {
+          step.firstTokenTime ??= event.time
+          step.outputChars += tokenDeltaChars(chunk)
+          const elapsedMs = Math.max(0, event.time - step.firstTokenTime)
+          if (elapsedMs > 500) {
+            const decodeMs = tpsTurnDecodeMs + elapsedMs
+            const outputTokens = tpsTurnDecodeTokens + Math.ceil(step.outputChars / 4)
+            state.tps = outputTokens / (decodeMs / 1000)
+          }
         }
         updateSpinnerMode()
         break
@@ -2541,18 +2581,34 @@ ${output}
             cacheRead: usage.cacheReadTokens ?? 0,
             cacheWrite: usage.cacheWriteTokens ?? 0,
           }
-          // Refine the live estimate with the exact output total, and record
-          // the message-level sample for the sparkline / μ / p95 readout.
-          if (turnOutputStart !== 0) {
-            const elapsedSec = (Date.now() - turnOutputStart) / 1000
-            if (elapsedSec > 0.5) {
-              // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
-              const exactTps = (usage.outputTokens ?? 0) / elapsedSec
-              state.tps = exactTps
-              state.tpsSamples.push({ tps: exactTps, at: Date.now() })
-              if (state.tpsSamples.length > 500) state.tpsSamples.shift()
+        }
+        const tpsMessageStep = tpsStep
+        if (
+          tpsTurn === event.data.turn &&
+          tpsMessageStep !== undefined &&
+          tpsMessageStep.turn === event.data.turn &&
+          tpsMessageStep.step === event.data.step &&
+          tpsMessageStep.firstTokenTime !== undefined
+        ) {
+          const outputTokens = usageOutputTokens(usage)
+            ?? (tpsMessageStep.outputChars > 0
+              ? Math.ceil(tpsMessageStep.outputChars / 4)
+              : undefined)
+          if (outputTokens !== undefined) {
+            tpsTurnDecodeMs += Math.max(0, event.time - tpsMessageStep.firstTokenTime)
+            tpsTurnDecodeTokens += outputTokens
+            tpsTurnSampled = true
+            if (tpsTurnDecodeMs > 0) {
+              state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
             }
           }
+        }
+        if (
+          tpsMessageStep !== undefined &&
+          tpsMessageStep.turn === event.data.turn &&
+          tpsMessageStep.step === event.data.step
+        ) {
+          tpsStep = undefined
         }
         // Context-bar segmentation (pi-nano-context style): assistant text
         // and tool calls in the assistant segment, thinking separately.
@@ -2631,22 +2687,52 @@ ${output}
         }
         break
       }
+      case 'step/end': {
+        if (
+          tpsStep !== undefined &&
+          tpsStep.turn === event.data.turn &&
+          tpsStep.step === event.data.step
+        ) {
+          tpsStep = undefined
+        }
+        break
+      }
       case 'turn/start': {
         state.working = true
         state.turnStart = Date.now()
         state.responseChars = 0
         state.spinnerMode = 'requesting'
-        // New turn: fresh output-speed window; the previous turn's tps stays
-        // visible until this turn produces output (it describes the last
-        // completed response).
-        turnOutputStart = 0
-        turnOutputTokens = 0
+        // Keep the prior turn visible until this turn produces a measurable
+        // decode span, while starting a fresh weighted step fold.
+        tpsBeforeTurn = state.tps
+        tpsTurn = event.data.turn
+        tpsTurnDecodeMs = 0
+        tpsTurnDecodeTokens = 0
+        tpsTurnSampled = false
+        tpsStep = undefined
         break
       }
       case 'turn/end': {
         settleStreaming()
         state.working = false
         state.activeToolCount = 0
+        if (tpsTurn !== undefined && tpsTurn === event.data.turn) {
+          if (tpsTurnSampled && tpsTurnDecodeMs > 0) {
+            const turnTps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
+            state.tps = turnTps
+            state.tpsSamples.push({ tps: turnTps, at: event.time })
+            if (state.tpsSamples.length > 500) state.tpsSamples.shift()
+          } else {
+            // Do not leave a chars/4 live estimate behind when no completed
+            // decode sample exists for this turn.
+            state.tps = tpsBeforeTurn
+          }
+          tpsTurn = undefined
+          tpsStep = undefined
+          tpsTurnDecodeMs = 0
+          tpsTurnDecodeTokens = 0
+          tpsTurnSampled = false
+        }
         const reason = event.data.reason
         if (reason.kind === 'completed') {
           checkContextWarning()
@@ -2850,6 +2936,28 @@ function basename(path: string): string {
 /** Context-bar token estimate (pi-nano-context: ~4 chars per token). */
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
+}
+
+/** Character payload of one token-bearing stream delta for the live fallback. */
+function tokenDeltaChars(chunk: StreamChunk): number {
+  switch (chunk.type) {
+    case 'text-delta':
+    case 'reasoning-delta':
+      return chunk.text.length
+    case 'tool-call-delta':
+      return (chunk.name?.length ?? 0) + chunk.argumentsDelta.length
+    default:
+      return 0
+  }
+}
+
+/** Provider output count when usable; durable imports may predate strict validation. */
+function usageOutputTokens(usage: unknown): number | undefined {
+  if (typeof usage !== 'object' || usage === null) return undefined
+  const value = (usage as { outputTokens?: unknown }).outputTokens
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined
 }
 
 /**

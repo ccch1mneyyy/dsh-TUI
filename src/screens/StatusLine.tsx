@@ -56,7 +56,7 @@ export function StatusLine({
   // TPS readout sits right after the model so a crowded footer truncates
   // the trailing fields (tokens/think/cache), never the speedometer. One
   // number only: the live value (gauge while streaming, sparkline of past
-  // messages once samples exist) — no μ/p95 clutter.
+  // turns once samples exist) — no μ/p95 clutter.
   const tpsParts: React.ReactNode[] = []
   if (channel.tps !== undefined) {
     if (channel.working && channel.tpsSamples.length === 0) {
