@@ -376,6 +376,10 @@ export interface Channel {
      *  current end and continues it with a new agent routed to `provider`/`model`.
      *  The history replays unchanged; only the request route changes. */
     switchModel(provider: string, model: string): Promise<boolean>;
+    /** Cycle the live route's reasoning effort (Shift+Tab) through the
+     *  adapter's own level list (dsh parity: deepseek Off→High→Max), taking
+     *  effect on the next request and persisting across restarts. */
+    cycleEffort(): Promise<void>;
     /** The preset the CURRENT session runs under (issue #8), resolved from its
      *  log at create/resume time; undefined when no roster is mounted. */
     readonly agentPreset: string | undefined;
@@ -541,6 +545,8 @@ export interface ChannelState {
     newSession(): Promise<boolean>;
     /** Switch the live model (`/model` picker). */
     switchModel(provider: string, model: string): Promise<boolean>;
+    /** Cycle reasoning effort (see the public Channel type). */
+    cycleEffort(): Promise<void>;
     /** The preset the current session runs under (see the public Channel type). */
     agentPreset: string | undefined;
     /** The roster's presets for the `/preset` picker (see the public Channel type). */

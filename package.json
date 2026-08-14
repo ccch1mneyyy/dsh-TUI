@@ -1,6 +1,6 @@
 {
   "name": "dsh-cc-tui",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "MIT",
   "type": "module",

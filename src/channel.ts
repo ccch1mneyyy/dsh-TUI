@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { assembleContextFor, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions } from '@deepseek-ai/dsh-agent'
+import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
-import { createUserMessage, MessageId, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, MessageId, ReasoningEffortId, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
 import { writeActivityFrames } from './activityPrefs.js'
+import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
@@ -367,6 +368,10 @@ export interface Channel {
    *  current end and continues it with a new agent routed to `provider`/`model`.
    *  The history replays unchanged; only the request route changes. */
   switchModel(provider: string, model: string): Promise<boolean>
+  /** Cycle the live route's reasoning effort (Shift+Tab) through the
+   *  adapter's own level list (dsh parity: deepseek Off→High→Max), taking
+   *  effect on the next request and persisting across restarts. */
+  cycleEffort(): Promise<void>
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined
@@ -526,6 +531,8 @@ export interface ChannelState {
   newSession(): Promise<boolean>
   /** Switch the live model (`/model` picker). */
   switchModel(provider: string, model: string): Promise<boolean>
+  /** Cycle reasoning effort (see the public Channel type). */
+  cycleEffort(): Promise<void>
   /** The preset the current session runs under (see the public Channel type). */
   agentPreset: string | undefined
   /** The roster's presets for the `/preset` picker (see the public Channel type). */
@@ -881,6 +888,96 @@ export function createChannel(
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
   let interruptSeq = 0
+  /** The llm runtime seam (dsh-llm LlmRuntime): route metadata resolution. */
+  const llmRuntime = ctx.get('llm') as
+    | {
+        resolveModelInfo(
+          provider: string,
+          model: string,
+        ): Promise<{
+          reasoning?: {
+            efforts: ReadonlyArray<{ id: string; name: string; description?: string }>
+            defaultEffort?: string
+          }
+        }>
+      }
+    | undefined
+
+  /** Mutable per-agent model selection (dsh-agent's routing override seam).
+   *  `current` stays undefined until the user explicitly cycles effort, so
+   *  default routing (agentOptions on create/fork) is untouched; bindAgent
+   *  re-couples it to each new agent's prompt assembly + request config. */
+  const selection: ModelSelectionRef = { current: undefined, assembled: undefined }
+  /** The effort chosen this run (or persisted from a previous one); applied
+   *  to every newly bound agent once validated against its adapter's list. */
+  let preferredEffort: string | undefined = options.effort ?? readEffortPref()
+
+  /** Pin `preferredEffort` on the live agent when its route offers it;
+   *  silent no-op otherwise (the next request/header corrects the display). */
+  const applyPreferredEffort = async (): Promise<void> => {
+    if (preferredEffort === undefined || llmRuntime === undefined) return
+    try {
+      const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
+      if (!info.reasoning?.efforts.some(effort => effort.id === preferredEffort)) return
+      selection.current = {
+        provider: state.provider,
+        model: state.model,
+        reasoningEffort: ReasoningEffortId(preferredEffort),
+      }
+    } catch {
+      // Route metadata resolution is best-effort; a failure just leaves the
+      // provider default in effect.
+    }
+  }
+
+  /** Shift+Tab: cycle the live route's adapter-owned reasoning efforts in
+   *  the adapter's own display order (dsh parity — deepseek: Off→High→Max).
+   *  The choice persists to ~/.dsh-cc/effort.json and follows future agents
+   *  on this channel (resume/model switch re-validate it per route). */
+  const cycleEffort = async (): Promise<void> => {
+    if (llmRuntime === undefined) {
+      state.notify('推理等级切换不可用（llm 服务未挂载）', { color: 'error' })
+      return
+    }
+    let efforts: ReadonlyArray<{ id: string; name: string }>
+    let defaultEffort: string | undefined
+    try {
+      const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
+      efforts = info.reasoning?.efforts ?? []
+      defaultEffort = info.reasoning?.defaultEffort
+    } catch (error) {
+      state.notify(`推理等级读取失败 · ${error instanceof Error ? error.message : String(error)}`, {
+        color: 'error',
+        timeoutMs: 8000,
+      })
+      return
+    }
+    if (efforts.length <= 1) {
+      state.notify(
+        efforts.length === 1
+          ? `当前模型只有一档推理等级（${efforts[0]!.name}）`
+          : '当前模型不支持推理等级切换',
+        { color: 'warning' },
+      )
+      return
+    }
+    // No explicit level yet = the adapter's materialized default is in
+    // effect; cycle from THERE, not from the top of the list.
+    const currentId = state.reasoningEffort ?? defaultEffort
+    const currentIndex = efforts.findIndex(effort => effort.id === currentId)
+    const next = efforts[(currentIndex + 1) % efforts.length]!
+    selection.current = {
+      provider: state.provider,
+      model: state.model,
+      reasoningEffort: ReasoningEffortId(next.id),
+    }
+    preferredEffort = next.id
+    state.reasoningEffort = next.id
+    writeEffortPref(next.id)
+    state.notify(`推理强度 → ${next.name}`)
+    state.emit()
+  }
+
   const state: ChannelState = {
     version: 0,
     rows: [],
@@ -900,7 +997,9 @@ export function createChannel(
     lastUserText: '',
     notifications: [],
     contextWindow: undefined,
-    reasoningEffort: options.effort,
+    // Explicit cordis.yml `effort` wins; otherwise the persisted Shift+Tab
+    // choice; the first request/header event re-asserts the adapter's truth.
+    reasoningEffort: options.effort ?? readEffortPref(),
     workingActivity: undefined,
     activityFrames: options.activityFrames,
     activityEnabled: options.activity !== false,
@@ -1472,6 +1571,7 @@ export function createChannel(
       void oldHandle?.dispose().catch(() => {})
       return true
     },
+    cycleEffort,
     clear() {
       state.rows.length = 0
       nextRowId = 0
@@ -2560,7 +2660,14 @@ ${output}
   let agentSubscriptions: Array<() => void> = []
   const bindAgent = (): void => {
     for (const dispose of agentSubscriptions) dispose()
+    // Re-couple the channel-owned model selection to the new agent's
+    // assembly/request waterfalls, then re-apply the persisted effort when
+    // this agent's route offers it (dsh-agent installModelSelection).
+    selection.current = undefined
+    selection.assembled = undefined
+    void applyPreferredEffort()
     agentSubscriptions = [
+      installModelSelection(agent.ctx, selection),
       ctx.on('agent/status', ({ agent: subject, status }) => {
         if (subject !== agent) return
         state.status = status

@@ -58,6 +58,9 @@ export function HelpMenu({
         <Box>
           <Text dimColor>tab to complete command</Text>
         </Box>
+        <Box>
+          <Text dimColor>shift+tab to cycle effort</Text>
+        </Box>
       </Box>
       <Box flexDirection="column" flexShrink={1}>
         <Text dimColor>commands:</Text>
