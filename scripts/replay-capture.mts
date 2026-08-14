@@ -3,7 +3,7 @@ const [{ Terminal: XTerm }, fs] = await Promise.all([import('@xterm/headless'), 
 
 const COLS = Number(process.env.COLS ?? 100)
 const ROWS = Number(process.env.ROWS ?? 95)
-let data = fs.readFileSync('/tmp/cap-tui.bin', 'utf8')
+let data = fs.readFileSync(process.argv[2] ?? '/tmp/cap-tui.bin', 'utf8')
 // strip script(1) header/footer (everything up to the first ESC byte is header)
 const firstEsc = data.indexOf('\x1b')
 if (firstEsc > 0) data = data.slice(firstEsc)

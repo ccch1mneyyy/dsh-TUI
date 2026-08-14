@@ -1,5 +1,6 @@
 import { type Agent, type AgentHandle, type AgentStatus } from '@deepseek-ai/dsh-agent';
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm';
+import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
@@ -18,10 +19,92 @@ export interface ToolRow {
     /** Full result text, shown when Ctrl+O verbose mode is on. */
     resultFull?: string;
     errorText?: string;
+    /** Tool-owned render intent from dsh-tools `presentCall` (diff/terminal/
+     *  generic). Drives the structured card body instead of the raw text. */
+    callView?: ToolCallView;
+    /** Tool-owned completed-state view from `presentResult` (applied diff
+     *  hunks, terminal output, read content…). Wins over callView once set. */
+    resultView?: ToolResultView;
     /** Wall-clock start of the call (live elapsed while running). */
     startedAt: number;
     /** Settled wall-clock duration, written by tool/result. */
     durationMs?: number;
+}
+/** One file change in a tool presentation (dsh-tools FileDiff). */
+export interface ToolFileDiff {
+    readonly path: string;
+    /** Prior content, or null for a new file / no before-image. */
+    readonly oldText: string | null;
+    readonly newText: string;
+}
+/** Pending-call render intent (structural subset of dsh-tools ToolCallView). */
+export type ToolCallView = {
+    readonly card: 'generic';
+    readonly title: string;
+    readonly kind?: string;
+} | {
+    readonly card: 'terminal';
+    readonly title: string;
+    readonly description?: string;
+    readonly cwd?: string;
+} | {
+    readonly card: 'diff';
+    readonly title: string;
+    readonly diffs: readonly ToolFileDiff[];
+};
+/** Completed-call render intent (structural subset of dsh-tools
+ *  ToolResultView). `web` results and unknown shapes fall back to raw text. */
+export type ToolResultView = {
+    readonly card: 'generic';
+    readonly title?: string;
+    readonly content?: ReadonlyArray<{
+        readonly type: string;
+        readonly text?: string;
+    }>;
+} | {
+    readonly card: 'terminal';
+    readonly title?: string;
+    readonly output?: string;
+    readonly exitCode?: number;
+    readonly signal?: string;
+} | {
+    readonly card: 'diff';
+    readonly title?: string;
+    readonly diffs: readonly ToolFileDiff[];
+} | {
+    readonly card: 'read';
+    readonly title?: string;
+    readonly path?: string;
+    readonly content?: ReadonlyArray<{
+        readonly type: string;
+        readonly text?: string;
+    }>;
+} | {
+    readonly card: 'search';
+    readonly shape: 'matches';
+    readonly title?: string;
+    readonly files: ReadonlyArray<{
+        readonly path: string;
+        readonly matches: ReadonlyArray<{
+            readonly lineNumber: number;
+            readonly line: string;
+        }>;
+    }>;
+    readonly truncated: boolean;
+    readonly total: number;
+} | {
+    readonly card: 'search';
+    readonly shape: 'paths';
+    readonly title?: string;
+    readonly paths: readonly string[];
+    readonly truncated: boolean;
+    readonly total: number;
+};
+/** Re-derives the presentation views foldRows dropped, threaded into
+ *  foldBack (module-level, no ctx access) by the channel. */
+export interface ToolViewPresenter {
+    call(name: string, rawArgs: string): ToolCallView | undefined;
+    result(name: string, rawArgs: string, data: SessionEvent<'tool/result'>['data']): ToolResultView | undefined;
 }
 /**
  * One rendered transcript row. The DSH session log is the source of truth:

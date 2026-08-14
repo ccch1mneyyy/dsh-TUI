@@ -33,11 +33,67 @@ export interface ToolRow {
   /** Full result text, shown when Ctrl+O verbose mode is on. */
   resultFull?: string
   errorText?: string
+  /** Tool-owned render intent from dsh-tools `presentCall` (diff/terminal/
+   *  generic). Drives the structured card body instead of the raw text. */
+  callView?: ToolCallView
+  /** Tool-owned completed-state view from `presentResult` (applied diff
+   *  hunks, terminal output, read content…). Wins over callView once set. */
+  resultView?: ToolResultView
   /** Wall-clock start of the call (live elapsed while running). */
   startedAt: number
   /** Settled wall-clock duration, written by tool/result. */
   durationMs?: number
 }
+
+/** One file change in a tool presentation (dsh-tools FileDiff). */
+export interface ToolFileDiff {
+  readonly path: string
+  /** Prior content, or null for a new file / no before-image. */
+  readonly oldText: string | null
+  readonly newText: string
+}
+
+/** Pending-call render intent (structural subset of dsh-tools ToolCallView). */
+export type ToolCallView =
+  | { readonly card: 'generic'; readonly title: string; readonly kind?: string }
+  | { readonly card: 'terminal'; readonly title: string; readonly description?: string; readonly cwd?: string }
+  | { readonly card: 'diff'; readonly title: string; readonly diffs: readonly ToolFileDiff[] }
+
+/** Completed-call render intent (structural subset of dsh-tools
+ *  ToolResultView). `web` results and unknown shapes fall back to raw text. */
+export type ToolResultView =
+  | { readonly card: 'generic'; readonly title?: string; readonly content?: ReadonlyArray<{ readonly type: string; readonly text?: string }> }
+  | { readonly card: 'terminal'; readonly title?: string; readonly output?: string; readonly exitCode?: number; readonly signal?: string }
+  | { readonly card: 'diff'; readonly title?: string; readonly diffs: readonly ToolFileDiff[] }
+  | { readonly card: 'read'; readonly title?: string; readonly path?: string; readonly content?: ReadonlyArray<{ readonly type: string; readonly text?: string }> }
+  | {
+      readonly card: 'search'
+      readonly shape: 'matches'
+      readonly title?: string
+      readonly files: ReadonlyArray<{ readonly path: string; readonly matches: ReadonlyArray<{ readonly lineNumber: number; readonly line: string }> }>
+      readonly truncated: boolean
+      readonly total: number
+    }
+  | { readonly card: 'search'; readonly shape: 'paths'; readonly title?: string; readonly paths: readonly string[]; readonly truncated: boolean; readonly total: number }
+
+/** The dsh-tools registry seam cc-tui reads presentations through. The
+ *  registry lives on the host plane; `get` takes the live agent as the
+ *  scope so a preset's own tool definitions resolve (dsh-host-apiproxy's
+ *  presenter pattern). */
+interface ToolsRegistryLike {
+  get(name: string, scope?: unknown): {
+    presentCall?(args: unknown): unknown
+    presentResult?(args: unknown, result: unknown): unknown
+  } | undefined
+}
+
+/** Re-derives the presentation views foldRows dropped, threaded into
+ *  foldBack (module-level, no ctx access) by the channel. */
+export interface ToolViewPresenter {
+  call(name: string, rawArgs: string): ToolCallView | undefined
+  result(name: string, rawArgs: string, data: SessionEvent<'tool/result'>['data']): ToolResultView | undefined
+}
+
 
 /**
  * One rendered transcript row. The DSH session log is the source of truth:
@@ -546,6 +602,10 @@ function foldRows(rows: ChatRow[], cap: number): number {
       row.tool.argsFull = undefined
       row.tool.resultFull = undefined
       row.tool.errorText = undefined
+      // Presentation views hold duplicated content strings (diff before/
+      // after images, terminal output); the session log re-derives them.
+      row.tool.callView = undefined
+      row.tool.resultView = undefined
     } else if (row.text.length > 0) {
       // Keep a short preview so the transcript reads naturally; the full
       // text lives in the session log and is restored by loadOlder().
@@ -559,9 +619,11 @@ function foldRows(rows: ChatRow[], cap: number): number {
  * Restore folded rows from the session log, newest folded batch first.
  * Rebuilds each folded row's full text from its source events and clears
  * the folded mark, keeping row ids, scroll anchors, and selection stable.
+ * `views` re-derives the tool presentation views foldRows dropped (the
+ * presenters live on the host plane, so the channel passes them in).
  * Returns the number of rows restored.
  */
-function foldBack(rows: ChatRow[], events: readonly SessionEvent[]): number {
+function foldBack(rows: ChatRow[], events: readonly SessionEvent[], views?: ToolViewPresenter): number {
   const folded = rows.filter(row => row.folded)
   if (folded.length === 0) return 0
   const firstFoldedSeq = folded[0]?.seq ?? 0
@@ -586,6 +648,10 @@ function foldBack(rows: ChatRow[], events: readonly SessionEvent[]): number {
       restoreRowFromEvent(row, call)
       const result = resultsByCall.get(row.tool.callId)
       if (result !== undefined) restoreToolResult(row, result)
+      row.tool.callView = views?.call(call.data.name, call.data.arguments)
+      row.tool.resultView = result !== undefined && result.data.error === undefined
+        ? views?.result(call.data.name, call.data.arguments, result.data)
+        : undefined
       row.folded = false
       restored += 1
       continue
@@ -888,7 +954,7 @@ export function createChannel(
       // batch first, clearing the folded marks. The log is the authoritative
       // source, so restored rows match a fresh replay; live streaming rows
       // are never folded, so nothing here races a running turn.
-      const restored = foldBack(state.rows, agent.session.events)
+      const restored = foldBack(state.rows, agent.session.events, { call: presentCallView, result: presentResultView })
       if (restored > 0) state.emit()
       return restored
     },
@@ -2046,6 +2112,43 @@ ${output}
   /** Tool cards by callId, so tool/result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
 
+  /** The host-plane tools registry (dsh-tools). Resolved once; absent in
+   *  bare embedders — every presenter call soft-fails to undefined and the
+   *  card falls back to raw text. */
+  const toolsRegistry = ctx.get('tools') as ToolsRegistryLike | undefined
+  /** Ask the producing tool how its call should render (diff/terminal/…).
+   *  Scoped to the live agent so preset-owned tool definitions resolve —
+   *  the dsh-host-apiproxy presenter pattern. Unknown tool, unparseable
+   *  args, or a throwing presenter all degrade to the plain text card. */
+  const presentCallView = (name: string, rawArgs: string): ToolCallView | undefined => {
+    try {
+      const tool = toolsRegistry?.get(name, agent)
+      if (tool?.presentCall === undefined) return undefined
+      return tool.presentCall(JSON.parse(rawArgs)) as ToolCallView | undefined
+    } catch {
+      return undefined
+    }
+  }
+  /** Same for the settled result; `meta` is the tool-private presentation
+   *  payload the tool attached to its tool/result event (dsh-tool-fs reads
+   *  its result-time contextual diff back from here). */
+  const presentResultView = (name: string, rawArgs: string, data: SessionEvent<'tool/result'>['data']): ToolResultView | undefined => {
+    try {
+      const tool = toolsRegistry?.get(name, agent)
+      if (tool?.presentResult === undefined) return undefined
+      const block = data.message.content[0]
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may not match type
+      const content = block !== undefined && block.type === 'tool-result' ? block.content : []
+      return tool.presentResult(JSON.parse(rawArgs), {
+        content,
+        isError: block?.isError === true,
+        ...(data.meta !== undefined ? { meta: data.meta } : {}),
+      }) as ToolResultView | undefined
+    } catch {
+      return undefined
+    }
+  }
+
   // ContentBlockMap is merge-extensible: plugin-added block types are
   // silently skipped (v1 renders text blocks only) — never crashes.
   const textOf = (content: readonly ContentBlock[] | undefined): string =>
@@ -2309,6 +2412,7 @@ ${output}
             argsText: preview(event.data.arguments, ARGS_PREVIEW_LIMIT),
             argsFull: event.data.arguments,
             status: 'running',
+            callView: presentCallView(event.data.name, event.data.arguments),
             startedAt: Date.now(),
           },
         }
@@ -2339,6 +2443,10 @@ ${output}
             const result = block !== undefined && block.type === 'tool-result' ? textOf(block.content) : ''
             card.tool.resultFull = result || undefined
             card.tool.resultText = result ? preview(result, RESULT_PREVIEW_LIMIT) : undefined
+            // The tool's own settled-state view (applied diff, terminal
+            // output, read content…) wins over the raw text body. argsFull
+            // pairs the args: live cards are never folded, so it is intact.
+            card.tool.resultView = presentResultView(card.tool.name, card.tool.argsFull ?? '', event.data)
             state.contextSegments.tools += estimateTokens(result)
           }
           state.activeToolCount = Math.max(0, state.activeToolCount - 1)

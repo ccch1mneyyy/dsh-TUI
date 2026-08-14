@@ -36,6 +36,8 @@ jobs:
 
       - run: node --import tsx/esm scripts/repro-askpanel.tsx
 
+      - run: node --import tsx/esm scripts/repro-toolcards.tsx
+
       - run: pnpm publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

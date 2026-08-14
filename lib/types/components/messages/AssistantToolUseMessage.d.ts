@@ -12,10 +12,11 @@ type Props = {
     isExpanded?: boolean;
 };
 /**
- * Tool-call card: `● Bash("args")` header with a blinking status dot, then a
- * `Running…`/result/error line (ported from the leak's
- * `AssistantToolUseMessage.tsx` + the BashTool UI, collapsed into one card
- * because cc-tui's channel settles tool/result into a single row).
+ * Tool-call card: `● Edit /path` header with a blinking status dot, then the
+ * structured body under a `  ⎿  ` gutter — diff hunks in red/green, terminal
+ * output, read content — instead of the raw result dump (ported from the
+ * leak's `AssistantToolUseMessage.tsx` + the dsh-tools presentation views the
+ * channel captures per call).
  */
 export declare function AssistantToolUseMessage({ tool, addMargin, verbose, isSelected, isExpanded, }: Props): React.ReactNode;
 export {};

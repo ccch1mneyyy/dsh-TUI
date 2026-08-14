@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
-import type { ChatRow, ToolRow } from '../channel.js'
+import type { ChatRow, ToolRow, ToolCallView, ToolResultView } from '../channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
@@ -299,6 +299,8 @@ export function MessageList({
               toolResultText={tool?.resultText}
               toolResultFull={tool?.resultFull}
               toolErrorText={tool?.errorText}
+              toolCallView={tool?.callView}
+              toolResultView={tool?.resultView}
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
               nowSec={tool?.status === 'running' ? nowSec : undefined}
@@ -344,6 +346,10 @@ type MemoRowProps = {
   toolResultText: string | undefined
   toolResultFull: string | undefined
   toolErrorText: string | undefined
+  /** Presentation views are set-once stable refs (creation / settle), so a
+   *  plain ref compare stays correct under the in-place mutation model. */
+  toolCallView: ToolCallView | undefined
+  toolResultView: ToolResultView | undefined
   toolStartedAt: number | undefined
   toolDurationMs: number | undefined
   /** Second-resolution clock, forwarded only while the tool runs so the
@@ -374,6 +380,8 @@ function TranscriptRow({
   toolResultText,
   toolResultFull,
   toolErrorText,
+  toolCallView,
+  toolResultView,
   toolStartedAt,
   toolDurationMs,
   onToggleRow,
@@ -484,6 +492,8 @@ function TranscriptRow({
         resultText: toolResultText,
         resultFull: toolResultFull,
         errorText: toolErrorText,
+        callView: toolCallView,
+        resultView: toolResultView,
         startedAt: toolStartedAt,
         durationMs: toolDurationMs,
       }
