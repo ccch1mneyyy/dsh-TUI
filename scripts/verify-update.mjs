@@ -24,7 +24,7 @@ function check(name, ok, extra = '') {
   if (!ok) failed += 1
 }
 
-const { installedTuiVersion, resolveRegistryBase, isVersionNewer } = await import(
+const { installedTuiVersion, resolveRegistryBase, isVersionNewer, resolveDshProfileName, shellQuote } = await import(
   '../lib/types/update.js'
 )
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
@@ -142,15 +142,65 @@ check('isVersionNewer: same version is not newer', !isVersionNewer('0.4.1', '0.4
 check('isVersionNewer: older is not newer', !isVersionNewer('0.4.0', '0.4.1'))
 check('isVersionNewer: invalid input is not newer', !isVersionNewer('banana', '0.4.1'))
 
+// ---- resolveDshProfileName: the profile /update must act on
+check(
+  'profile: --profile value is read',
+  resolveDshProfileName(['node', 'dsh', '--profile', 'my-tui']) === 'my-tui',
+)
+check(
+  'profile: --profile=name form is read',
+  resolveDshProfileName(['node', 'dsh', '--profile=my-tui', '--resume', 'abc']) === 'my-tui',
+)
+check(
+  'profile: missing value yields undefined',
+  resolveDshProfileName(['node', 'dsh', '--profile']) === undefined,
+)
+check(
+  'profile: no launcher flags yields undefined (source mode)',
+  resolveDshProfileName(['node', 'scripts/run.ts']) === undefined,
+)
+check(
+  'profile: inner app args do not shadow the launcher flag',
+  resolveDshProfileName(['node', 'dsh', '--profile', 'cc-tui', '--resume', 'sid', '--model', 'x']) === 'cc-tui',
+)
+
+// ---- shellQuote: cmd.exe safety for the .cmd path (P1 companion)
+check(
+  'shellQuote: plain tokens pass through',
+  shellQuote(['plugin', '--profile', 'cc-tui']).join(' ') === 'plugin --profile cc-tui',
+)
+check(
+  'shellQuote: spaces get quoted',
+  shellQuote(['C:\\Program Files\\nodejs\\node.exe']).join(' ') === '"C:\\Program Files\\nodejs\\node.exe"',
+)
+check(
+  'shellQuote: embedded quotes are doubled',
+  shellQuote(['a"b c']).join(' ') === '"a""b c"',
+)
+
 // ---- pnpm args include --latest (must-fix: cross-minor update capability)
 const compiledSource = readFileSync(compiledModulePath, 'utf8')
 check(
   'update command passes --latest to pnpm',
-  compiledSource.includes('--latest'),
+  /['"]update['"],\s*\n\s*['"]--latest['"],/.test(compiledSource),
 )
 check(
   'update command keeps the package name',
   compiledSource.includes('dsh-cc-tui'),
+)
+// P1: the node restart must NOT go through a shell — assert the compiled
+// restart spawn call has no shell option while the dsh call does.
+const dshSpawn = compiledSource.indexOf("runProcess(dsh")
+const nodeSpawn = compiledSource.indexOf('runProcess(process.execPath')
+const dshSegment = compiledSource.slice(dshSpawn, nodeSpawn)
+const nodeSegment = compiledSource.slice(nodeSpawn)
+check(
+  'P1: dsh.cmd spawn requests a shell',
+  /\{\s*shell:\s*true\s*\}/.test(dshSegment),
+)
+check(
+  'P1: node restart spawn has no shell (space-safe exec path)',
+  !/shell/.test(nodeSegment.replace(/shellQuote/g, '')),
 )
 
 if (failed > 0) {

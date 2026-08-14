@@ -14,7 +14,7 @@ import { readModelPref } from './modelPrefs.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
 import { writeResumeTarget } from './sessionHistory.js'
-import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, updateTuiAndRestart } from './update.js'
+import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from './update.js'
 import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
@@ -48,7 +48,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   {
     const updatedFrom = process.env.DSH_CC_UPDATED_FROM
     if (updatedFrom !== undefined) {
-      process.env.DSH_CC_UPDATED_FROM = undefined
+      // Assigning undefined would stringify to "undefined" and leak the
+      // marker into every child process; remove it for real.
+      delete process.env.DSH_CC_UPDATED_FROM
       const now = installedTuiVersion()
       if (now === undefined || !isVersionNewer(now, updatedFrom)) {
         ctx.logger.warn(
@@ -127,6 +129,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
   let updateRequested = false
+  // The profile this process was booted with (`dsh --profile <name>`); dsh
+  // exposes it nowhere else, and /update must update the installation the
+  // user is actually running, not a hard-coded one.
+  const profile = resolveDshProfileName()
   const handleExit = (error?: unknown): void => {
     if (exited) return
     exited = true
@@ -159,7 +165,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         process.stdout.write('\nUpdating dsh-cc-tui and restarting…\n')
       }
       disposeRootAndThen(ctx, () => {
-        void updateTuiAndRestart(channel.agentId).then(
+        // updateRequested only flips when onUpdate exists, which itself
+        // requires a resolved profile — narrow for the call below.
+        const updateProfile = profile
+        if (updateProfile === undefined) {
+          process.stderr.write('\ncc-tui update aborted: no dsh profile resolved.\n')
+          process.exit(1)
+        }
+        void updateTuiAndRestart(channel.agentId, updateProfile).then(
           ({ updateCode, restartCode }) => {
             if (updateCode !== 0) {
               // The session survives: its log lives in DSH persistence and
@@ -167,7 +180,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
               // drop the user into a shell with no way back in.
               process.stderr.write(
                 `\ncc-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
-                  `dsh-cc --resume ${channel.agentId}\n\n`,
+                  `${resumeCommand(profile, channel.agentId)}\n\n`,
               )
             }
             process.exit(restartCode)
@@ -176,7 +189,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             const message = updateError instanceof Error ? updateError.message : String(updateError)
             process.stderr.write(
               `\ncc-tui update failed: ${message}. Your session is preserved — resume with:\n` +
-                `dsh-cc --resume ${channel.agentId}\n\n`,
+                `${resumeCommand(profile, channel.agentId)}\n\n`,
             )
             process.exit(1)
           },
@@ -185,7 +198,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       return
     }
     if (process.stdout.isTTY) {
-      process.stdout.write(`\nResume with -c (or command below):\ndsh-cc --resume ${channel.agentId}\n\n`)
+      process.stdout.write(`\nResume with (set the env var, then boot the profile):\n${resumeCommand(profile, channel.agentId)}\n\n`)
     }
     disposeRootAndExit(ctx, 0)
   }
@@ -194,10 +207,27 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     channel,
     questionStore,
     onExit: () => handleExit(),
-    onUpdate: () => {
+    // Only a `dsh --profile <name>` launch has a profile installation for
+    // `/update` to act on; source checkouts and `--config` overlays get the
+    // unavailable notice instead.
+    onUpdate: profile === undefined ? undefined : () => {
       if (exited || updateRequested) return
-      updateRequested = true
-      instance?.unmount()
+      // Confirm the target version before tearing the TUI down: on an
+      // already-latest install, an unconditional update+restart would churn
+      // the process and then trip the "version did not advance" warning.
+      void resolveTuiUpdateTarget().then((target) => {
+        if (exited || updateRequested) return
+        if (target.kind === 'latest') {
+          channel.notify(t('update-already-latest', { current: target.current }), { color: 'warning' })
+          return
+        }
+        if (target.kind === 'unknown') {
+          channel.notify(t('update-check-failed'))
+        }
+        channel.notify(t('update-starting'))
+        updateRequested = true
+        instance?.unmount()
+      })
     },
   })
   // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
@@ -321,6 +351,20 @@ async function resolveAgent(
  */
 function disposeRootAndExit(ctx: Context, code: number): void {
   disposeRootAndThen(ctx, () => process.exit(code), code)
+}
+
+/**
+ * The real way back into a session after the TUI process is gone. The
+ * package ships no `dsh-cc` bin — resuming means feeding the session id
+ * through `DSH_CC_RESUME_SESSION` (what cordis.patch.yml's `sessionId` reads)
+ * and booting the same profile; on Windows the repo's dsh-cc.cmd wrapper
+ * does this via --resume + ~/.dsh-cc/resume.txt.
+ */
+function resumeCommand(profile: string | undefined, sessionId: string): string {
+  const boot = profile === undefined ? 'dsh --config cordis.yml' : `dsh --profile ${profile}`
+  return process.platform === 'win32'
+    ? `dsh-cc --resume ${sessionId}`
+    : `DSH_CC_RESUME_SESSION=${sessionId} ${boot}`
 }
 
 /**

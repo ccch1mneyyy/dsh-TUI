@@ -152,6 +152,8 @@ transcript。
   配置（`NPM_CONFIG_REGISTRY` 或 `~/.npmrc`），镜像源用户看到的就是安装源
   的最新版。`/update` 更新已安装的
   `dsh-cc-tui`，然后自动重启并恢复当前会话；当前回合运行时需等待完成。
+  仅在 `dsh --profile <name>` 启动时可用（源码运行等场景会提示不可用）；
+  已是最新版时直接提示，不会重启。
 - `/plan [off|message]` 与 `/goal ...` 由 DSH 命令插件处理并写入会话事件。
 - Skill 命令只发送激活提示；实际 skill 通过 DSH skill 注册表加载。包内
   `skills/` 会在插件启动时自动注册，也可用项目或用户目录中的同名 skill 覆盖。

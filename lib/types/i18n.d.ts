@@ -540,8 +540,8 @@ declare const dict: {
         readonly en: "Long-term conventions can go into AGENTS.md (workspace context) or skills (~/.dsh/skills).";
     };
     readonly 'update-unavailable': {
-        readonly zh: "当前运行方式不支持自动更新，请在终端执行 dsh plugin --profile cc-tui update dsh-cc-tui";
-        readonly en: "Automatic update is unavailable in this launch mode. Run dsh plugin --profile cc-tui update dsh-cc-tui in a terminal.";
+        readonly zh: "当前运行方式不支持自动更新（需经 dsh --profile 启动），请在终端执行 dsh plugin --profile <name> update dsh-cc-tui";
+        readonly en: "Automatic update is unavailable in this launch mode (needs dsh --profile). Run dsh plugin --profile <name> update dsh-cc-tui in a terminal.";
     };
     readonly 'update-working': {
         readonly zh: "当前回合仍在运行，请等待完成后再更新 TUI。";
@@ -554,6 +554,14 @@ declare const dict: {
     readonly 'update-available': {
         readonly zh: "发现新版本：v{{latest}}（当前 v{{current}}）· 输入 /update 更新 TUI";
         readonly en: "New version available: v{{latest}} (current v{{current}}) · type /update to update the TUI";
+    };
+    readonly 'update-already-latest': {
+        readonly zh: "当前已是最新版本（v{{current}}）。";
+        readonly en: "Already on the latest version (v{{current}}).";
+    };
+    readonly 'update-check-failed': {
+        readonly zh: "无法确认新版本（网络或 registry 不可达），已尝试直接更新……";
+        readonly en: "Could not confirm a newer version (network or registry unreachable); attempting the update anyway…";
     };
     readonly 'vim-not-implemented': {
         readonly zh: "vim 模式暂未实现";

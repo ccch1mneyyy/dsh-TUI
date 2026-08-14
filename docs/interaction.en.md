@@ -163,7 +163,10 @@ Additional forms:
   registry configuration (`NPM_CONFIG_REGISTRY` or `~/.npmrc`), so mirror
   users see the versions their package manager actually installs. `/update`
   updates the installed `dsh-cc-tui`, then restarts and resumes the current
-  session automatically; wait for an active turn to finish first.
+  session automatically; wait for an active turn to finish first. It is only
+  available under a `dsh --profile <name>` launch (source checkouts get an
+  unavailable notice), and an already-latest install is reported as such
+  without restarting.
 - `/plan [off|message]` and `/goal ...` are handled by DSH command plugins and
   recorded as session events.
 - Skill commands submit activation prompts. The actual skill is loaded through
