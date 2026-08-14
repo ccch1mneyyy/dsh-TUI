@@ -1,0 +1,3 @@
+/** Whether the process runs on macOS (used for Cmd-vs-Ctrl shortcut adaptation). */
+export declare const isMacOS: boolean;
+//# sourceMappingURL=platform.d.ts.map

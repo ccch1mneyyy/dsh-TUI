@@ -579,22 +579,22 @@ export function PromptInput({
       setCursor(entry.length)
       return
     }
+    // Word jump: Ctrl+←/→ (readline/emacs) or Option+←/→ (macOS text-edit
+    // convention). Must precede the plain-arrow branches below.
+    if ((key.ctrl || key.meta) && key.leftArrow) {
+      setCursor(previous => wordBoundaryLeft(value, previous))
+      return
+    }
+    if ((key.ctrl || key.meta) && key.rightArrow) {
+      setCursor(previous => wordBoundaryRight(value, previous))
+      return
+    }
     if (key.leftArrow) {
       setCursor(previous => Math.max(0, previous - 1))
       return
     }
     if (key.rightArrow) {
       setCursor(previous => Math.min(value.length, previous + 1))
-      return
-    }
-    if (key.ctrl && key.leftArrow) {
-      // Jump to the previous word boundary (readline alt+b).
-      setCursor(previous => wordBoundaryLeft(value, previous))
-      return
-    }
-    if (key.ctrl && key.rightArrow) {
-      // Jump to the next word boundary (readline alt+f).
-      setCursor(previous => wordBoundaryRight(value, previous))
       return
     }
     if (key.backspace) {
@@ -722,7 +722,7 @@ export function PromptInput({
       onToggleHelp()
       return
     }
-    if (input && !key.ctrl && !key.meta && !key.tab && !key.escape) {
+    if (input && !key.ctrl && !key.meta && !key.tab && !key.escape && !key.super) {
       // Typing anything else dismisses the help menu (CC behavior).
       if (helpOpen) onToggleHelp()
       const next = value.slice(0, cursor) + input + value.slice(cursor)

@@ -28,6 +28,18 @@
 the `Ctrl+O` transcript view it opens full-session search; use `n` and `N` to
 move forward and backward through matches.
 
+**macOS**: in terminals with extended key reporting (kitty, WezTerm, Ghostty,
+tmux, …), app-level shortcuts are triggered by `⌘` (Command): `⌘O` verbose
+detail, `⌘R` history search, `⌘L` redraw, `⌘V` paste, `⌘D` exit, `⌘Enter`
+send now; the help menu shows the platform-appropriate keys. System muscle
+memory is respected — the following never claim ⌘: `⌘C` **copies the active
+text selection** (fullscreen mode) with interrupt staying on `Ctrl+C`; the
+editing keys `Ctrl+A/E/U/K/W` and `Ctrl+←/→` word jumps stay on Ctrl (macOS
+supports these emacs bindings natively); `⌘←/⌘→` moves to line start/end and
+`Option+←/→` jumps by word, per macOS text conventions. Terminal.app and
+default-configured iTerm2 never forward the ⌘ key to the application; there
+the shortcuts automatically fall back to Ctrl.
+
 ## Editing keys
 
 | Key | Behavior |

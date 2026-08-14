@@ -86,6 +86,15 @@ Windows 也可用仓库里的 `dsh-cc.cmd`（等价，且 `--resume` 恢复上�
 | `?` | 快捷键菜单 |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
 
+> **macOS 快捷键**：在支持扩展按键协议的终端（kitty、WezTerm、Ghostty、
+> tmux 等）中，应用级快捷键由 `⌘`（Command）触发：`⌘O` 详情、`⌘R` 历史搜索、
+> `⌘L` 重绘、`⌘V` 粘贴、`⌘D` 退出、`⌘Enter` 立即发送；帮助菜单也会按平台
+> 显示对应按键。遵循系统肌肉记忆，以下键位**不占用 ⌘**：`⌘C` 用于复制选中文
+> 本（全屏模式选区），中断仍用 `Ctrl+C`；编辑类 `Ctrl+A/E/U/K/W` 与
+> `Ctrl+←/→` 按词跳转保持 Ctrl（macOS 原生即支持这些 emacs 绑定）；
+> `⌘←/⌘→` 为行首/行尾，`Option+←/→` 按词移动（macOS 文本惯例）。
+> Terminal.app 与默认配置的 iTerm2 不会把 ⌘ 键转发给应用，此时自动回退为 Ctrl。
+
 **鼠标（`fullscreen: true` 全屏模式；默认关，profile 补丁层覆盖开启）**
 
 | 操作 | 功能 |
