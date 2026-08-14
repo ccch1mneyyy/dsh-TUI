@@ -46,9 +46,11 @@ export function ActivityLine({
   warnDanger?: boolean
   suffix?: string
 }): React.ReactNode {
-  // 60ms frames: the shimmer sweep advances one column per frame (3.3× the
-  // ported 200ms cadence — the slow crawl read as lag).
-  const [, time] = useAnimationFrame(60)
+  // 60ms frames while live: the shimmer sweep advances one column per frame
+  // (3.3× the ported 200ms cadence — the slow crawl read as lag). The done
+  // summary renders statically and never uses `time`, so the clock pauses —
+  // an idle status line must not drive 60ms full-tree commits forever.
+  const [, time] = useAnimationFrame(activity.phase === 'done' ? null : 60)
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   const preset = React.useMemo(

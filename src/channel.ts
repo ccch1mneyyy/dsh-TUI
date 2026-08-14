@@ -916,6 +916,11 @@ export function createChannel(
       // followup/steer rolls the preview back; otherwise the inbox events
       // retire it once the message is claimed or discarded.
       trackPending({ id: message.id, text }, placement)
+      // Paint-first yield: the Enter-state frame (cleared input + pending
+      // preview) flushes before the agent call kicks the turn-start
+      // assembly, so a heavy assembly can never freeze the UI before the
+      // submission is visible on screen.
+      await new Promise<void>(resolve => setImmediate(resolve))
       try {
         if (placement === 'steer') agent.steer(message)
         else agent.followup(message)

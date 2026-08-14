@@ -7,6 +7,11 @@ export type HistoryEntry = {
 /**
  * Append an input to the persisted history, deduping the immediately
  * previous entry and capping the file at 200 entries.
+ *
+ * File IO is ASYNCHRONOUS and serialized: the sync read+rewrite of the whole
+ * file on every submit used to block the UI thread at the exact Enter
+ * moment (and grew slower as the file grew). Callers keep the sync void
+ * signature — the write drains in the background.
  * @param text - Input to persist; blank inputs are ignored.
  */
 export declare function appendHistory(text: string): void;
