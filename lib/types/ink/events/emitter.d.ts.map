@@ -1,0 +1,1 @@
+{"version":3,"file":"emitter.d.ts","sourceRoot":"","sources":["../../../../src/ink/events/emitter.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,YAAY,IAAI,gBAAgB,EAAE,MAAM,QAAQ,CAAA;AAGzD;;;GAGG;AACH,qBAAa,YAAa,SAAQ,gBAAgB;;IAShD;;;;;;;;;OASG;IACM,IAAI,CAAC,IAAI,EAAE,MAAM,GAAG,MAAM,EAAE,GAAG,IAAI,EAAE,OAAO,EAAE,GAAG,OAAO;CAwBlE"}

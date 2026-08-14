@@ -1,0 +1,219 @@
+# The dsh-cc-tui bundle patch: the interactive terminal front door over the
+# dsh-base layer. Applied after dsh-base's insert; rows here override base
+# rows by id, with the profile's own cordis.patch.yml and any --patch
+# overlays still to come.
+#
+# A patch replaces the targeted row's whole `config`, so each row below
+# restates every key it owns (see the dsh-base patch for the shared
+# defaults). The dsh-base core rows that need no cc-tui value — tools,
+# sandbox/approval policy, skills, goal, plan mode, workspace context,
+# telemetry — are inherited unchanged.
+
+# ── surface-specific values over the dsh-base layer ─────────────────────────
+
+# The cc-tui deployment persona; CC_TUI_PERSONA overrides the coding-agent
+# default (the base persona is empty).
+- id: system-prompt
+  config:
+    persona: !!js process.env.CC_TUI_PERSONA ?? 'You are a coding agent.'
+
+# The native DeepSeek adapter, pinned to the harness defaults: full thinking
+# at max effort, key and base URL from the launching environment. The base
+# entry defers both to the `llm-deepseek:` settings section; the settings
+# document still overrides these entries per request when it carries one.
+# rc.6 schema key is `apiKeyEnv` (credential-ref env var NAME, default
+# DEEPSEEK_API_KEY); the old snapshot's `apiKey` key no longer exists.
+- id: llm-deepseek
+  config:
+    apiKeyEnv: 'DEEPSEEK_API_KEY'
+    baseURL: !!js process.env.DEEPSEEK_BASE_URL
+    thinking: enabled
+    reasoningEffort: max
+
+# The TUI creates (or resumes) its agent at runtime through the agent
+# factory; no declarative agents are started at boot, and the configured
+# agent list stays the base's empty default.
+- id: agent-loop
+  config:
+    agents: []
+
+# ── agent presets (issue #8) ────────────────────────────────────────────────
+#
+# The model-facing plugin set moves INTO the agent-presets roster: every
+# session composes its tools/prompt sections from one preset directory
+# (standard/code/minimal/cordis) instead of the host rows below. The dsh CLI's
+# profile-boot sees this composition's `agent-presets` row and overlays the
+# shipped `config/agent-presets/` root onto it automatically, so the row here
+# carries no roots; `$DSH_HOME/.agent-presets` (user-authored presets) is
+# appended by the roster itself (`includeUserRoot` default). Mirroring the
+# official dsh-web-app patch: every dsh-base row a preset now owns is
+# disabled here, so a minimal agent does not leak host-layer tools (an agent's
+# registry view resolves agent → preset → global).
+
+- id: agent-instructions
+  disabled: true
+
+- id: command-compact
+  disabled: true
+
+# compaction lives in the preset's own isolate realm (standard/code/cordis
+# carry `compaction-basic` with package defaults; minimal has none). The
+# CC_TUI_COMPACT_RATIO/CC_TUI_COMPACT_RETAIN tunables retired with this host
+# row — preset compositions own their compaction config.
+- id: compaction-basic
+  disabled: true
+
+- id: plan-mode
+  disabled: true
+
+- id: skill-filesystem
+  disabled: true
+
+- id: tool-bash
+  disabled: true
+
+- id: tool-fs
+  disabled: true
+
+- id: tool-fs-search
+  disabled: true
+
+- id: tool-goal
+  disabled: true
+
+- id: tool-jobs
+  disabled: true
+
+- id: tool-pwsh
+  disabled: true
+
+- id: tool-ralph
+  disabled: true
+
+- id: tool-result-pruner
+  disabled: true
+
+- id: tool-skill
+  disabled: true
+
+- id: tool-str-replace-editor
+  disabled: true
+
+# Delegation tools (subagent spawn/fork, controls, workflows) are preset rows
+# now; the preset's `delegation` group re-adds them with package defaults, so
+# cc-tui's former depth-1 cap no longer applies.
+- id: tool-subagent
+  disabled: true
+
+- id: tool-subagent-control
+  disabled: true
+
+- id: tool-subagent-fork
+  disabled: true
+
+- id: tool-subagent-list-agents
+  disabled: true
+
+- id: tool-todo
+  disabled: true
+
+- id: tool-web
+  disabled: true
+
+- id: tool-workflow
+  disabled: true
+
+- id: workflow-worker-thread
+  disabled: true
+
+# Windows has no sandbox confinement backend yet (sandbox-local's win32
+# chain is empty); use danger-full-access on Windows so bash commands can
+# run. Other platforms keep the base workspace-write default.
+- id: sandbox-policy
+  config:
+    mode: !!js "process.platform === 'win32' ? 'danger-full-access' : (process.env.DSH_PERMISSION_MODE ?? 'workspace-write')"
+    workspaceRoot: !!js process.cwd()
+
+# On Windows, skip approval prompts (no sandbox = the user's terminal trust
+# model, matching every other terminal coding agent).
+- id: approval
+  config:
+    policy: !!js "process.platform === 'win32' ? 'never' : ((process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask')"
+
+# Sessions are durable under the SQLite backend inserted below; the shared
+# JSONL backend is off so one write path owns every session.
+- id: session-persistence-jsonl
+  disabled: true
+
+# ── cc-tui rows ─────────────────────────────────────────────────────────────
+
+# The `user-interaction` service row comes from the dsh-base bundle layer
+# (mounted before this layer); do not insert it again — the include patch
+# semantics would create a duplicate row. cc-tui defensively creates the
+# service on its own context when no composition provides it (bare
+# `dsh --config cordis.yml` boots), then mounts the model-facing
+# ask_user_question tool and registers the questionnaire provider on
+# `ctx.userQuestions`.
+
+- insert:
+    # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
+    # TUI composes every session's model-facing world from. No `roots` here —
+    # the dsh CLI's profile-boot overlays its shipped `config/agent-presets/`
+    # directory (standard/code/minimal/cordis, system trust) onto this row
+    # whenever a composition carries it, and the roster itself appends the
+    # user-authored `$DSH_HOME/.agent-presets` root. A boot that never reached
+    # profile-boot (bare `dsh --config cordis.yml`) leaves the roster empty;
+    # the TUI then keeps its pre-presets behavior (see presets.ts).
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+
+    # Host-plane services the `cordis` preset's plugin-experimentation tool
+    # waits on (dynamicCordisRunner/cordisInspect); dsh-base carries no such
+    # row — the official web app inserts it the same way.
+    - id: cordis-host-runner
+      name: '@deepseek-ai/dsh-cordis-host-runner'
+
+    # The interactive front door. The plugin creates/resumes its agent at
+    # runtime, seeds the startup status line, and disposes the whole app tree
+    # (exiting the process) when the TUI unmounts. `dsh-cc --resume` feeds
+    # the session id through DSH_CC_RESUME_SESSION.
+    - id: cc-tui
+      name: 'dsh-cc-tui'
+      config:
+        provider: deepseek-official
+        # Alt-screen fullscreen（CC 同款）：应用内鼠标选区（选择即复制, OSC 52 +
+        # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。默认关闭——
+        # inline 模式下由终端原生选择/复制/scrollback 接管；想用 fullscreen 在
+        # profile 用户层 cordis.patch.yml 同 id 覆盖整行 config（fullscreen: true）。
+        fullscreen: false
+        # Startup display seed for the header/statusline; the live value from
+        # request headers replaces it after the first turn. Keep in sync with
+        # the adapter's reasoningEffort below.
+        effort: max
+        # Static preset choice (CC_TUI_PRESET overrides): wins over the
+        # persisted `/preset` preference (~/.dsh-cc/agent-preset.json), which
+        # wins over the roster default (standard).
+        preset: !!js process.env.CC_TUI_PRESET ?? undefined
+        sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
+
+    # Durable session log (DSH's own persistence seam): /resume and rewind
+    # both rely on this backend writing every session/event. Root defaults
+    # under the user home so sessions survive across terminals (Windows:
+    # USERPROFILE); DSH_CC_SESSION_ROOT overrides the path.
+    - id: sessions
+      name: '@deepseek-ai/dsh-session-persistence-sqlite'
+      config:
+        path: !!js process.env.DSH_CC_SESSION_ROOT ?? (process.env.USERPROFILE ?? process.env.HOME) + '/.dsh-cc/sessions.sqlite'
+
+    # Live working-line data source (thinking copy / running tool / turn
+    # summary). dsh-working-activity ships as a plain npm dependency of
+    # dsh-cc-tui — transitive deps never enter dsh.profile.bundles — so this
+    # layer inserts the row itself instead of relying on a separate bundle.
+    # publishIntervalMs 500 keeps the status-line timers ticking smoothly
+    # (default 2000ms).
+    - id: working-activity
+      name: 'dsh-working-activity'
+      config:
+        publishIntervalMs: 500

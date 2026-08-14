@@ -1,0 +1,896 @@
+import React from 'react'
+import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
+import { stringWidth } from '../ink/stringWidth.js'
+import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
+import type { Channel } from '../channel.js'
+import { filterCommands, parseCommandName } from '../commands.js'
+import { appendHistory } from '../history.js'
+import { CommandSuggestions } from './CommandSuggestions.js'
+import { FileSuggestions } from './FileSuggestions.js'
+import { HelpMenu } from './HelpMenu.js'
+
+const HISTORY_LIMIT = 50
+
+/** Index of the word boundary at or before `cursor` (readline alt+b). */
+function wordBoundaryLeft(text: string, cursor: number): number {
+  let index = cursor
+  while (index > 0 && /\s/.test(text[index - 1]!)) index--
+  while (index > 0 && !/\s/.test(text[index - 1]!)) index--
+  return index
+}
+
+/** Index of the word boundary after `cursor` (readline alt+f). */
+function wordBoundaryRight(text: string, cursor: number): number {
+  const length = text.length
+  let index = cursor
+  while (index < length && !/\s/.test(text[index]!)) index++
+  while (index < length && /\s/.test(text[index]!)) index++
+  return index
+}
+
+/**
+ * The empty input deliberately shows NO placeholder text: terminal emulators
+ * paint the IME preedit (pinyin) at the physical cursor, which the app parks
+ * on the caret's cell, and the app receives no input events while a
+ * composition is active (Windows Terminal suppresses key events during TSF
+ * composition) — so it can never hide a placeholder in time. Keeping the row
+ * blank while empty is what guarantees the preedit has nothing to overlay.
+ */
+
+/** Max input rows before the visible viewport starts scrolling (CC's
+ *  maxVisibleLines behavior — the box keeps a stable height). */
+const MAX_VISIBLE_LINES = 5
+
+/**
+ * Imperative handle for the Chat-level Ctrl+C rule: Chat's useInput listener
+ * runs BEFORE this component's (EventEmitter registration order), so Chat
+ * asks the prompt whether it holds text (→ clear it) or not (→ arm the
+ * double-press exit). Populated every render; null while unmounted.
+ */
+export interface PromptController {
+  hasText(): boolean
+  clear(): void
+}
+
+export interface PromptInputProps {
+  channel: Channel
+  /** Whether the `?` help menu is open (state lives in the Chat screen). */
+  helpOpen: boolean
+  onToggleHelp(): void
+  /**
+   * Execute a slash command (built-in or plugin-registered) with its raw
+   * argument text; returns false when the input should be sent to the model.
+   */
+  onRunCommand(name: string, rawInput: string): boolean
+  /** Message-selection mode (Shift+↑): the input ignores keys while active. */
+  selectionActive: boolean
+  /**
+   * External fill from the ctrl+r history dialog: when this prop changes to
+   * a non-null string, the input replaces its value and moves the caret to
+   * the end. The caller clears it via onFillConsumed once consumed.
+   */
+  fillText?: string | null
+  onFillConsumed?(): void
+  /** Double-tap Esc with an empty input: open the rewind picker (CC rewind). */
+  onRewindRequest?(): void
+  /** Filled with the live controller each render (see PromptController). */
+  controllerRef?: React.RefObject<PromptController | null>
+}
+
+/**
+ * Claude Code style prompt input: rounded border box (top+bottom borders
+ * only), `❯ ` prompt char (dimmed while a turn is working), the text with a
+ * block cursor at the cursor position, and below it the slash-command
+ * suggestion overlay (name column + description, selected row in the
+ * `suggestion` color — ported from the leak's PromptInputFooterSuggestions).
+ *
+ * Empty input: a solid block caret on a blank cell and nothing else — no
+ * placeholder text, so the terminal-painted IME preedit (pinyin) at the
+ * parked cursor can never be overlaid on anything.
+ *
+ * Multi-line: Shift+Enter inserts a newline; ↑/↓ move between lines while
+ * the input spans multiple lines (history/command selection otherwise); the
+ * visible window scrolls to keep the caret row on screen past
+ * MAX_VISIBLE_LINES. Enter submits, backspace/delete edit, ←/→ move the
+ * cursor, Tab completes the selected command, Escape clears (or closes the
+ * help menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
+ * whole lines with the Enter key lost: a trailing CR/LF in the input marks
+ * a complete line to submit.
+ *
+ * Enter submits immediately even while the model is streaming — as a STEER
+ * (Codex/pi semantics): the message is injected at the next step boundary
+ * of the running turn and the agent continues without aborting; Tab instead
+ * queues the message for after the turn (followup). Both appear in a
+ * pending preview above the input until delivered. Alt+Up pulls the last
+ * pending message back for editing; Esc (with pending messages while
+ * working) interrupts the turn and delivers them right away; Ctrl+Enter
+ * aborts the turn and sends the current input immediately.
+ */
+export function PromptInput({
+  channel,
+  helpOpen,
+  onToggleHelp,
+  onRunCommand,
+  selectionActive,
+  fillText,
+  onFillConsumed,
+  onRewindRequest,
+  controllerRef,
+}: PromptInputProps) {
+  const [value, setValue] = React.useState('')
+  const [cursor, setCursor] = React.useState(0)
+  // Publish the live controller (fresh closure over `value` every render).
+  // clear() mirrors the double-tap-Esc clear: text + caret reset.
+  React.useEffect(() => {
+    if (!controllerRef) return
+    controllerRef.current = {
+      hasText: () => value.length > 0,
+      clear: () => {
+        setValue('')
+        setCursor(0)
+      },
+    }
+    return () => {
+      controllerRef.current = null
+    }
+  })
+  const [selectedCommand, setSelectedCommand] = React.useState(0)
+  const history = React.useRef<string[]>([])
+  const historyIndex = React.useRef(-1)
+  // ctrl+r history fill: replace the input when a new fill arrives, then
+  // tell the caller to clear it.
+  const lastFill = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (fillText && fillText !== lastFill.current) {
+      lastFill.current = fillText
+      setValue(fillText)
+      setCursor(fillText.length)
+      onFillConsumed?.()
+    }
+  }, [fillText, onFillConsumed])
+  // Double-tap Esc to clear (CC semantics).
+  const escPendingRef = React.useRef(false)
+  const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
+  const clipboardBusyRef = React.useRef(false)
+  /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
+  const lastEnterAtRef = React.useRef(0)
+  React.useEffect(() => {
+    return () => {
+      if (escTimerRef.current) clearTimeout(escTimerRef.current)
+    }
+  }, [])
+  const { columns } = useTerminalSize()
+
+  const suggestions = value.startsWith('/')
+    ? filterCommands(value, channel.commandList)
+    : []
+  const overlayOpen =
+    suggestions.length > 0 &&
+    !helpOpen &&
+    !selectionActive &&
+    !value.includes('\n')
+
+  // `@` file completion: load the cwd listing once when the trigger appears.
+  const [fileList, setFileList] = React.useState<readonly string[]>([])
+  const [fileSelected, setFileSelected] = React.useState(0)
+  const atTrigger = value.startsWith('@') && !value.includes('\n')
+  React.useEffect(() => {
+    if (atTrigger) {
+      void channel.listFiles().then(setFileList)
+    }
+  }, [atTrigger, channel])
+  const atRest = value.replace(/^@/, '').toLowerCase()
+  // Match the relative path prefix OR the basename (CC's IDE suggestions do
+  // both): `@src/ink` and `@ink` both find `src/ink/Box.js`.
+  const fileMatches = atTrigger
+    ? fileList.filter(file => {
+        const lower = file.toLowerCase()
+        if (lower.startsWith(atRest)) return true
+        if (atRest.includes('/')) return false
+        const base = lower.split('/').pop() ?? ''
+        return base.startsWith(atRest)
+      })
+    : []
+  const fileOverlayOpen = fileMatches.length > 0 && !helpOpen && !selectionActive
+
+  const submitText = (text: string, notice?: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    history.current.push(trimmed)
+    if (history.current.length > HISTORY_LIMIT) history.current.shift()
+    historyIndex.current = -1
+    setValue('')
+    setCursor(0)
+    setSelectedCommand(0)
+    appendHistory(trimmed)
+    channel.submit(trimmed)
+    if (notice) {
+      channel.notify(notice, { timeoutMs: 2500 })
+    } else if (channel.working) {
+      // While the model is streaming, the message joins the DSH inbox and is
+      // processed after the current turn — say so, or it looks "lost".
+      channel.notify('已发送，当前回合结束后处理', { timeoutMs: 2500 })
+    }
+  }
+
+  /**
+   * Enter while the model is working = STEER (Codex/pi semantics): the
+   * message is injected at the next step boundary of the RUNNING turn and
+   * the agent continues without aborting — the "immediate" send.
+   */
+  const steerSend = (text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    history.current.push(trimmed)
+    if (history.current.length > HISTORY_LIMIT) history.current.shift()
+    historyIndex.current = -1
+    setValue('')
+    setCursor(0)
+    setSelectedCommand(0)
+    appendHistory(trimmed)
+    channel.steer(trimmed)
+    channel.notify('已插话 · 下一步立即处理', { timeoutMs: 2500 })
+  }
+
+  /**
+   * Tab while the model is working = plain queue (followup): the message
+   * waits for the running turn to end, then is processed in order.
+   */
+  const queueSend = (text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    history.current.push(trimmed)
+    if (history.current.length > HISTORY_LIMIT) history.current.shift()
+    historyIndex.current = -1
+    setValue('')
+    setCursor(0)
+    setSelectedCommand(0)
+    appendHistory(trimmed)
+    channel.submit(trimmed)
+    channel.notify('已排队 · 回合结束后处理', { timeoutMs: 2500 })
+  }
+
+  /**
+   * Alt+Up: pull the last pending message back into the input for editing
+   * (never interrupts the running turn). Refused when the running dsh-agent
+   * cannot withdraw inbox messages (released package without the inbox API).
+   */
+  const pullBackLast = () => {
+    const item = channel.pending[channel.pending.length - 1]
+    if (!item) return
+    if (!channel.removePending(item.id)) {
+      channel.notify('无法撤回：消息可能已被处理，或当前版本不支持', { color: 'warning', timeoutMs: 2500 })
+      return
+    }
+    setValue(item.text)
+    setCursor(item.text.length)
+    setSelectedCommand(0)
+    setFileSelected(0)
+    channel.notify('已撤回，可编辑后重新发送', { timeoutMs: 2000 })
+  }
+
+  /**
+   * Ctrl+Enter: abort the running turn and send the input immediately — the
+   * model stops what it is doing and starts on this message right away.
+   */
+  const interruptSend = () => {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      channel.notify('输入为空，没有可发送的内容', { color: 'warning' })
+      return
+    }
+    // Abort the running turn and deliver: previously queued pending
+    // messages first (FIFO), then the current input — all processed
+    // immediately once the abort settles.
+    const count = channel.interruptAndDeliver([...channel.pending.map(item => item.text), value])
+    if (count === 0) return
+    history.current.push(trimmed)
+    if (history.current.length > HISTORY_LIMIT) history.current.shift()
+    historyIndex.current = -1
+    setValue('')
+    setCursor(0)
+    setSelectedCommand(0)
+    setFileSelected(0)
+    appendHistory(trimmed)
+    channel.notify('已打断当前回合，正在立即处理', { timeoutMs: 2500 })
+  }
+
+  /**
+   * Execute a slash command (built-in or plugin-registered) when the input
+   * resolves to one: the name parses as the first token so `/plan off`
+   * dispatches `plan` with its argument text, and the merged command list
+   * (locals + registry) decides whether the line is a command at all.
+   */
+  const tryRunCommand = (text: string): boolean => {
+    if (!text.startsWith('/')) return false
+    const parsed = parseCommandName(text)
+    if (parsed === undefined) return false
+    const known = channel.commandList.some(command => command.name === parsed.name)
+    if (!known) return false
+    const handled = onRunCommand(parsed.name, parsed.rawInput)
+    if (handled) {
+      history.current.push(text.trim())
+      if (history.current.length > HISTORY_LIMIT) history.current.shift()
+      historyIndex.current = -1
+      setValue('')
+      setCursor(0)
+      setSelectedCommand(0)
+      appendHistory(text.trim())
+    }
+    return handled
+  }
+
+  const setInput = (next: string, cursorOffset = next.length) => {
+    setValue(next)
+    setCursor(Math.max(0, Math.min(cursorOffset, next.length)))
+  }
+
+  /** Line index of the cursor; -1 when the cursor is at the very end. */
+  const cursorLine = () => {
+    const before = value.slice(0, cursor)
+    return before.split('\n').length - 1
+  }
+  /** Column of the cursor within its line. */
+  const cursorColumn = () => {
+    const before = value.slice(0, cursor)
+    const line = before.split('\n').pop() ?? ''
+    return line.length
+  }
+
+  useInput((input, key, event) => {
+    if (selectionActive) return
+
+    /** Insert text at the caret (typing, paste) and dismiss overlays. */
+    const insertAtCaret = (text: string) => {
+      if (helpOpen) onToggleHelp()
+      const next = value.slice(0, cursor) + text + value.slice(cursor)
+      setValue(next)
+      setCursor(cursor + text.length)
+      setSelectedCommand(0)
+      setFileSelected(0)
+    }
+
+    // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click): insert
+    // verbatim at the caret. Paste content may contain newlines — that is
+    // NOT Enter — so this branch runs before the whole-line submit rule.
+    if (event?.isPasted && input.length > 0) {
+      insertAtCaret(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+      return
+    }
+
+    // Ctrl+V: raw mode hands the key to the app, so the clipboard is read
+    // here — text, or file paths when Explorer copied files (pasted files
+    // insert their paths).
+    if (key.ctrl && input === 'v') {
+      if (clipboardBusyRef.current) return
+      clipboardBusyRef.current = true
+      void readClipboard().then(content => {
+        clipboardBusyRef.current = false
+        if (content === null) {
+          channel.notify('剪贴板为空', { color: 'warning' })
+          return
+        }
+        insertAtCaret(formatClipboardInsert(content))
+      })
+      return
+    }
+
+    /**
+     * Unified Enter semantics (both the parsed `return` key and the raw
+     * CR/LF line from Windows cmd pipelines):
+     * - command menu open → run the SELECTED command (never send `/mo`);
+     * - model working → STEER into the running turn (next step boundary,
+     *   agent continues — the "immediate" send; Codex/pi semantics);
+     * - otherwise → submit directly (or run a unique command).
+     */
+    const handleEnter = () => {
+      // A single Enter can arrive as two events in cmd pipelines (`\r`
+      // parsed as return + a raw `\n` line): collapse them so one keypress
+      // never sends the message twice.
+      const now = Date.now()
+      if (now - lastEnterAtRef.current < 80) return
+      lastEnterAtRef.current = now
+      if (overlayOpen) {
+        const command = suggestions[selectedCommand]
+        if (command) {
+          tryRunCommand(`/${command.name}`)
+          return
+        }
+      }
+      if (channel.working && value.trim() !== '') {
+        steerSend(value)
+        return
+      }
+      if (!tryRunCommand(value)) submitText(value)
+    }
+
+    // Whole-line input from Windows ConPTY pipelines (cmd batch -> node):
+    // the trailing CR/LF marks a complete line to submit. A bare Enter
+    // arrives as `\r`/`\n`/`\r\n` — treat it as Enter, NOT a direct
+    // submit. Only real multi-char piped lines keep the legacy
+    // direct-submit path.
+    if (input.includes('\n') || input.includes('\r')) {
+      if (/^[\r\n]+$/.test(input)) {
+        handleEnter()
+        return
+      }
+      const line = (value + input).trim()
+      if (line.startsWith('/')) {
+        const matches = filterCommands(line, channel.commandList)
+        if (matches.length === 1) {
+          tryRunCommand(`/${matches[0]!.name}`)
+          return
+        }
+      }
+      if (!tryRunCommand(line)) submitText(line)
+      return
+    }
+    if (key.return && key.ctrl) {
+      // Ctrl+Enter: interrupt the running turn and process this message
+      // immediately (Windows Terminal sends CSI 13;5u / 13;1;5u).
+      interruptSend()
+      return
+    }
+    if (key.return && key.shift) {
+      // Insert a newline at the caret (multi-line input).
+      const next = value.slice(0, cursor) + '\n' + value.slice(cursor)
+      setValue(next)
+      setCursor(cursor + 1)
+      setSelectedCommand(0)
+      return
+    }
+    if (key.return) {
+      handleEnter()
+      return
+    }
+    if (key.tab && fileOverlayOpen) {
+      const file = fileMatches[fileSelected]
+      if (file) setInput(`@${file} `)
+      return
+    }
+    if (key.tab && overlayOpen) {
+      const command = suggestions[selectedCommand]
+      if (command) setInput(`/${command.name} `)
+      return
+    }
+    // Tab while the model is working = queue for AFTER the turn (followup),
+    // distinct from Enter's steer (Codex's "tab to queue message").
+    if (key.tab && channel.working && value.trim() !== '') {
+      queueSend(value)
+      return
+    }
+    if (key.meta && key.upArrow) {
+      // Alt+Up: pull the last pending message back for editing (pi/Codex).
+      pullBackLast()
+      return
+    }
+    if (key.upArrow) {
+      if (fileOverlayOpen) {
+        setFileSelected(index =>
+          index <= 0 ? fileMatches.length - 1 : index - 1,
+        )
+        return
+      }
+      const line = cursorLine()
+      if (line > 0) {
+        // Move to the previous line, clamping to its length.
+        const upToLineStart = value.lastIndexOf('\n', cursor - 1)
+        const prevLineStart =
+          upToLineStart === -1 ? 0 : value.lastIndexOf('\n', upToLineStart - 1) + 1
+        const prevLine = value.slice(prevLineStart, upToLineStart)
+        setCursor(prevLineStart + Math.min(cursorColumn(), prevLine.length))
+        return
+      }
+      if (overlayOpen) {
+        setSelectedCommand(index =>
+          index <= 0 ? suggestions.length - 1 : index - 1,
+        )
+        return
+      }
+      if (history.current.length === 0) return
+      historyIndex.current = historyIndex.current < 0
+        ? history.current.length - 1
+        : Math.max(0, historyIndex.current - 1)
+      const entry = history.current[historyIndex.current] ?? ''
+      setValue(entry)
+      setCursor(entry.length)
+      return
+    }
+    if (key.downArrow) {
+      if (fileOverlayOpen) {
+        setFileSelected(index =>
+          index >= fileMatches.length - 1 ? 0 : index + 1,
+        )
+        return
+      }
+      const line = cursorLine()
+      const lines = value.split('\n')
+      if (line < lines.length - 1) {
+        const nextLineStart = value.indexOf('\n', cursor) + 1
+        const nextLineEnd = value.indexOf('\n', nextLineStart)
+        const nextLine = value.slice(
+          nextLineStart,
+          nextLineEnd === -1 ? value.length : nextLineEnd,
+        )
+        setCursor(nextLineStart + Math.min(cursorColumn(), nextLine.length))
+        return
+      }
+      if (overlayOpen) {
+        setSelectedCommand(index =>
+          index >= suggestions.length - 1 ? 0 : index + 1,
+        )
+        return
+      }
+      if (historyIndex.current < 0) return
+      historyIndex.current += 1
+      const entry = historyIndex.current >= history.current.length
+        ? ''
+        : (history.current[historyIndex.current] ?? '')
+      setValue(entry)
+      setCursor(entry.length)
+      return
+    }
+    if (key.leftArrow) {
+      setCursor(previous => Math.max(0, previous - 1))
+      return
+    }
+    if (key.rightArrow) {
+      setCursor(previous => Math.min(value.length, previous + 1))
+      return
+    }
+    if (key.ctrl && key.leftArrow) {
+      // Jump to the previous word boundary (readline alt+b).
+      setCursor(previous => wordBoundaryLeft(value, previous))
+      return
+    }
+    if (key.ctrl && key.rightArrow) {
+      // Jump to the next word boundary (readline alt+f).
+      setCursor(previous => wordBoundaryRight(value, previous))
+      return
+    }
+    if (key.backspace) {
+      if (cursor === 0) return
+      setValue(value.slice(0, cursor - 1) + value.slice(cursor))
+      setCursor(cursor - 1)
+      return
+    }
+    if (key.delete) {
+      if (cursor >= value.length) return
+      setValue(value.slice(0, cursor) + value.slice(cursor + 1))
+      return
+    }
+    if (key.home) {
+      // Start of the current line.
+      const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
+      setCursor(lineStart)
+      return
+    }
+    if (key.end) {
+      // End of the current line.
+      const nextLine = value.indexOf('\n', cursor)
+      setCursor(nextLine === -1 ? value.length : nextLine)
+      return
+    }
+    if (key.ctrl && input === 'a') {
+      const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
+      setCursor(lineStart)
+      return
+    }
+    if (key.ctrl && input === 'e') {
+      const nextLine = value.indexOf('\n', cursor)
+      setCursor(nextLine === -1 ? value.length : nextLine)
+      return
+    }
+    if (key.ctrl && input === 'u') {
+      // Delete to start of line.
+      const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
+      setValue(value.slice(0, lineStart) + value.slice(cursor))
+      setCursor(lineStart)
+      return
+    }
+    if (key.ctrl && input === 'k') {
+      // Delete to end of line.
+      const nextLine = value.indexOf('\n', cursor)
+      const end = nextLine === -1 ? value.length : nextLine
+      setValue(value.slice(0, cursor) + value.slice(end))
+      return
+    }
+    if (key.ctrl && input === 'w') {
+      // Delete the word before the cursor (CC/readline behavior).
+      const before = value.slice(0, cursor)
+      const trimmed = before.replace(/\s+$/, '')
+      const wordStart = trimmed.search(/\S\s*$/)
+      const start = wordStart === -1 ? 0 : wordStart + 1
+      setValue(value.slice(0, start) + value.slice(cursor))
+      setCursor(start)
+      return
+    }
+    if (key.escape) {
+      if (helpOpen) {
+        onToggleHelp()
+        return
+      }
+      // A single Esc closes the open command menu first (CC/pi behavior);
+      // the double-tap-clear semantics only apply to ordinary input.
+      if (overlayOpen || fileOverlayOpen) {
+        setValue('')
+        setCursor(0)
+        setSelectedCommand(0)
+        setFileSelected(0)
+        return
+      }
+      // With pending messages while working, Esc = interrupt and deliver
+      // them right away (Codex's "interrupt and send immediately"): the
+      // turn is aborted and each message is re-queued once it settles.
+      if (channel.working && channel.pending.length > 0) {
+        const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
+        channel.notify(`已打断当前回合，${count} 条消息立即处理`, {
+          timeoutMs: 2500,
+        })
+        return
+      }
+      // A single Esc clears the current input (if any); the double-tap
+      // path below handles rewind/clear on an already-empty input.
+      if (value.length > 0) {
+        setValue('')
+        setCursor(0)
+        setSelectedCommand(0)
+        setFileSelected(0)
+        return
+      }
+      // Double-tap Esc: clear the input when it has content; when empty,
+      // open the rewind picker (CC's "Double-tap esc to rewind the code
+      // and/or conversation to a previous point in time").
+      if (escPendingRef.current) {
+        escPendingRef.current = false
+        if (escTimerRef.current) clearTimeout(escTimerRef.current)
+        if (value.length === 0) {
+          onRewindRequest?.()
+        } else {
+          setValue('')
+          setCursor(0)
+        }
+        return
+      }
+      escPendingRef.current = true
+      channel.notify(
+        value.length === 0
+          ? 'Press Esc again to rewind'
+          : 'Press Esc again to clear',
+      )
+      escTimerRef.current = setTimeout(() => {
+        escPendingRef.current = false
+      }, 3000)
+      return
+    }
+    if (input === '?' && value.length === 0) {
+      onToggleHelp()
+      return
+    }
+    if (input && !key.ctrl && !key.meta && !key.tab && !key.escape) {
+      // Typing anything else dismisses the help menu (CC behavior).
+      if (helpOpen) onToggleHelp()
+      const next = value.slice(0, cursor) + input + value.slice(cursor)
+      setValue(next)
+      setCursor(cursor + input.length)
+      setSelectedCommand(0)
+      setFileSelected(0)
+    }
+  })
+
+  // === Render: hard-wrap every logical line at the input width, then show
+  // the window of visual lines with the caret row always visible (CC's
+  // maxVisibleLines behavior with automatic wrapping).
+  const inputWidth = Math.max(10, columns - 3)
+  const visualLines = wrapToWidth(value, inputWidth)
+  const caretVisualLine = wrapToWidth(value.slice(0, cursor), inputWidth).length - 1
+  const windowStart = Math.max(
+    0,
+    Math.min(
+      caretVisualLine - MAX_VISIBLE_LINES + 1,
+      visualLines.length - MAX_VISIBLE_LINES,
+    ),
+  )
+  const visibleLines = visualLines.slice(
+    windowStart,
+    windowStart + MAX_VISIBLE_LINES,
+  )
+
+  // Caret position in the caret's visual row, in two units:
+  // - char index (for slicing the row's characters in the render below)
+  // - visual column (for the physical cursor declaration — CJK characters
+  //   occupy TWO terminal columns, so the raw char count would park the
+  //   cursor mid-character and Windows Terminal would paint the IME
+  //   preedit (pinyin) over the surrounding text).
+  const caretCharCol = () => {
+    const before = value.slice(0, cursor)
+    const rows = wrapToWidth(before, inputWidth)
+    const last = rows[rows.length - 1] ?? ''
+    return last.length
+  }
+  const caretVisualCol = () => {
+    const before = value.slice(0, cursor)
+    const rows = wrapToWidth(before, inputWidth)
+    const last = rows[rows.length - 1] ?? ''
+    return stringWidth(last)
+  }
+
+  const rendered = visibleLines.map((line, index) => {
+    const absoluteLine = windowStart + index
+    if (absoluteLine !== caretVisualLine) {
+      return (
+        <Text key={absoluteLine} wrap="truncate-end">
+          {line}
+        </Text>
+      )
+    }
+    // Caret row: invert the char at the caret column (solid block).
+    const col = caretCharCol()
+    const before = line.slice(0, col)
+    const at = line[col] ?? ' '
+    const after = line.slice(col + 1)
+    return (
+      <Text key={absoluteLine} wrap="truncate-end">
+        {before}
+        <Text inverse>{at}</Text>
+        {after}
+      </Text>
+    )
+  })
+
+  const lastNotification =
+    channel.notifications[channel.notifications.length - 1]
+
+  // Park the native terminal cursor at the input caret (via the renderer's
+  // cursor-declaration mechanism). Terminal emulators render IME preedit
+  // text and screen-reader focus at the physical cursor, so parking it at
+  // the caret makes CJK/IME composition appear inline at the input instead
+  // of at the screen's bottom row; in line-mode terminals the console echo
+  // of typed characters lands at the same spot. `line`/`column` are
+  // relative to the value box the ref attaches to.
+  const valueBoxRef = useDeclaredCursor({
+    line: caretVisualLine - windowStart,
+    column: caretVisualCol(),
+    active: !selectionActive,
+  })
+
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {lastNotification && (
+        // position=absolute takes zero layout height so the transcript never
+        // shifts when a notification appears/disappears; the layer floats one
+        // row above the prompt border, right-aligned (CC's Notifications).
+        <Box
+          position="absolute"
+          marginTop={-1}
+          height={1}
+          width="100%"
+          paddingLeft={2}
+          paddingRight={1}
+          flexDirection="column"
+          justifyContent="flex-end"
+          overflow="hidden"
+        >
+          <Box justifyContent="flex-end">
+            <Text
+              color={lastNotification.color}
+              dimColor={!lastNotification.color}
+              wrap="truncate"
+            >
+              {lastNotification.text}
+            </Text>
+          </Box>
+        </Box>
+      )}
+      {helpOpen && (
+        <Box marginBottom={1}>
+          <HelpMenu commands={channel.commandList} />
+        </Box>
+      )}
+      {channel.pending.length > 0 && (
+        <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
+          {channel.pending.some(item => item.placement === 'steer') && (
+            <Box flexDirection="column">
+              <Text dimColor>⚡ 插话 · 下一步送达</Text>
+              {channel.pending
+                .filter(item => item.placement === 'steer')
+                .map(item => (
+                  <Text key={item.id} dimColor wrap="truncate">
+                    {'  '}↳ {item.text}
+                  </Text>
+                ))}
+            </Box>
+          )}
+          {channel.pending.some(item => item.placement === 'followup') && (
+            <Box flexDirection="column">
+              <Text dimColor>⏳ 排队 · 回合结束后送达</Text>
+              {channel.pending
+                .filter(item => item.placement === 'followup')
+                .map(item => (
+                  <Text key={item.id} dimColor wrap="truncate">
+                    {'  '}↳ {item.text}
+                  </Text>
+                ))}
+            </Box>
+          )}
+          <Text dimColor>Alt+↑ 撤回 · Esc 打断并立即发送</Text>
+        </Box>
+      )}
+      {fileOverlayOpen && (
+        <Box paddingLeft={2} paddingBottom={1}>
+          <FileSuggestions
+            files={fileMatches}
+            selectedIndex={fileSelected}
+            columns={columns}
+          />
+        </Box>
+      )}
+      {overlayOpen && (
+        <Box paddingLeft={2} paddingBottom={1}>
+          <CommandSuggestions
+            commands={suggestions}
+            selectedIndex={selectedCommand}
+            columns={columns}
+          />
+        </Box>
+      )}
+      <Box
+        flexDirection="column"
+        alignItems="flex-start"
+        justifyContent="flex-start"
+        borderColor="promptBorder"
+        borderStyle="round"
+        borderLeft={false}
+        borderRight={false}
+        borderBottom
+        width="100%"
+      >
+        <Box flexDirection="row" alignItems="flex-start" width="100%">
+          <Text dimColor={channel.working}>❯ </Text>
+          <Box ref={valueBoxRef} flexGrow={1} flexShrink={1}>
+            {value.length === 0 ? (
+              // Solid block caret on a BLANK cell: the terminal paints the
+              // IME preedit (pinyin) at the physical cursor, which is parked
+              // right here, so nothing else may occupy this cell.
+              <Text inverse> </Text>
+            ) : (
+              <Box flexDirection="column">{rendered}</Box>
+            )}
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
+/**
+ * Hard-wrap text into visual rows of at most `width` columns (CJK-aware via
+ * stringWidth). Used by the input renderer so long lines wrap instead of
+ * truncating, with exact caret-row mapping.
+ */
+function wrapToWidth(text: string, width: number): string[] {
+  const rows: string[] = []
+  for (const line of text.split('\n')) {
+    if (line === '') {
+      rows.push('')
+      continue
+    }
+    let current = ''
+    let currentWidth = 0
+    for (const ch of line) {
+      const w = stringWidth(ch)
+      if (currentWidth + w > width && current !== '') {
+        rows.push(current)
+        current = ch
+        currentWidth = w
+      } else {
+        current += ch
+        currentWidth += w
+      }
+    }
+    rows.push(current)
+  }
+  return rows
+}

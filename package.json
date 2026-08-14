@@ -1,0 +1,103 @@
+{
+  "name": "dsh-cc-tui",
+  "version": "0.3.3",
+  "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "main": "lib/types/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "import": "./lib/types/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./src/*": "./src/*"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "cordis.yml",
+    "skills"
+  ],
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "tui": "node --import tsx/esm scripts/run.ts",
+    "smoke": "node --import tsx/esm scripts/smoke.tsx"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6"
+  },
+  "dependencies": {
+    "@alcalzone/ansi-tokenize": "^0.3.0",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-instructions": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-tool-presentation": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-commands": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-cordis-host-runner": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-persona": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence-sqlite": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-terminal": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-terminal-bash": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-ask-user": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-bash-persistent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-cordis": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "auto-bind": "^4.0.0 || ^5.0.0",
+    "bidi-js": "^1.0.0",
+    "chalk": "^5.0.0",
+    "cli-boxes": "^3.0.0 || ^4.0.0",
+    "cli-highlight": "^2.1.11",
+    "code-excerpt": "^3.0.0 || ^4.0.0",
+    "dsh-working-activity": "^0.2.2",
+    "emoji-regex": "^10.0.0",
+    "figures": "^6.1.0",
+    "get-east-asian-width": "^1.0.0",
+    "highlight.js": "^11.11.1",
+    "indent-string": "^5.0.0",
+    "lodash-es": "^4.17.0",
+    "marked": "^18.0.7",
+    "react": "^19.2.0",
+    "react-reconciler": "^0.33.0",
+    "semver": "^7.0.0",
+    "signal-exit": "^4.0.0",
+    "stack-utils": "^2.0.0",
+    "strip-ansi": "^7.0.0",
+    "supports-hyperlinks": "^3.0.0",
+    "type-fest": "^4.0.0",
+    "usehooks-ts": "^3.1.0",
+    "wrap-ansi": "^8.0.0 || ^9.0.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
+    "@types/lodash-es": "^4.17.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-reconciler": "^0.33.0",
+    "@types/semver": "^7.0.0",
+    "@xterm/headless": "^6.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^6.0.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

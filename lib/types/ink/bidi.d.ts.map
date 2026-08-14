@@ -1,0 +1,1 @@
+{"version":3,"file":"bidi.d.ts","sourceRoot":"","sources":["../../../src/ink/bidi.ts"],"names":[],"mappings":"AAkBA,KAAK,aAAa,GAAG;IACnB,KAAK,EAAE,MAAM,CAAA;IACb,KAAK,EAAE,MAAM,CAAA;IACb,OAAO,EAAE,MAAM,CAAA;IACf,SAAS,EAAE,MAAM,GAAG,SAAS,CAAA;CAC9B,CAAA;AAsBD;;;;;;;;GAQG;AACH,wBAAgB,WAAW,CAAC,UAAU,EAAE,aAAa,EAAE,GAAG,aAAa,EAAE,CAoDxE"}

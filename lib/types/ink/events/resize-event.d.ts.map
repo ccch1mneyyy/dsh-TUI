@@ -1,0 +1,1 @@
+{"version":3,"file":"resize-event.d.ts","sourceRoot":"","sources":["../../../../src/ink/events/resize-event.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,MAAM,YAAY,CAAA;AAElC;;;GAGG;AACH,qBAAa,WAAY,SAAQ,KAAK;IACpC,yCAAyC;IACzC,QAAQ,CAAC,OAAO,EAAE,MAAM,CAAA;IACxB,uCAAuC;IACvC,QAAQ,CAAC,IAAI,EAAE,MAAM,CAAA;gBACT,OAAO,EAAE,MAAM,EAAE,IAAI,EAAE,MAAM;CAK1C"}

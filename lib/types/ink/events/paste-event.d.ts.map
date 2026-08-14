@@ -1,0 +1,1 @@
+{"version":3,"file":"paste-event.d.ts","sourceRoot":"","sources":["../../../../src/ink/events/paste-event.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,MAAM,YAAY,CAAA;AAElC;;;GAGG;AACH,qBAAa,UAAW,SAAQ,KAAK;IACnC,+BAA+B;IAC/B,QAAQ,CAAC,IAAI,EAAE,MAAM,CAAA;gBACT,IAAI,EAAE,MAAM;CAIzB"}

@@ -1,0 +1,1 @@
+{"version":3,"file":"measure-element.d.ts","sourceRoot":"","sources":["../../../src/ink/measure-element.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,UAAU,CAAA;AAE1C,KAAK,MAAM,GAAG;IACZ;;OAEG;IACH,KAAK,EAAE,MAAM,CAAA;IAEb;;OAEG;IACH,MAAM,EAAE,MAAM,CAAA;CACf,CAAA;AAED;;;;GAIG;AACH,QAAA,MAAM,cAAc,GAAI,MAAM,UAAU,KAAG,MAGzC,CAAA;AAEF,eAAe,cAAc,CAAA"}

@@ -1,0 +1,1 @@
+{"version":3,"file":"terminal-focus-event.d.ts","sourceRoot":"","sources":["../../../../src/ink/events/terminal-focus-event.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,EAAE,MAAM,YAAY,CAAA;AAElC;;;GAGG;AACH,MAAM,MAAM,sBAAsB,GAAG,eAAe,GAAG,cAAc,CAAA;AAErE;;;;;;GAMG;AACH,qBAAa,kBAAmB,SAAQ,KAAK;IAC3C;;OAEG;IACH,QAAQ,CAAC,IAAI,EAAE,sBAAsB,CAAA;gBAEzB,IAAI,EAAE,sBAAsB;CAIzC"}

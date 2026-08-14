@@ -1,0 +1,41 @@
+name: Publish
+
+# 发版入口：推送 v* 标签（git tag v0.3.4 && git push origin v0.3.4）。
+# 需要在仓库 Secrets 配置 NPM_TOKEN（对 dsh-cc-tui 有 write 权限的
+# granular token）。标签版本号必须与 package.json 的 version 一致。
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # 标签与 package.json version 不一致直接失败，防止发错版本。
+      - name: Check tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          [ "$tag" = "$pkg" ] || { echo "tag $tag != package.json $pkg"; exit 1; }
+
+      - run: node --import tsx/esm scripts/repro-askpanel.tsx
+
+      - run: pnpm publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

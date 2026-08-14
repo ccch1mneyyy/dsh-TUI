@@ -1,0 +1,179 @@
+# cc-tui interactive front door over the agent-spine bundle.
+# Run with: dsh --config cordis.yml (或 npm 安装后走 dsh plugin 机制)
+# Requires DEEPSEEK_API_KEY; a terminal TTY is mandatory.
+
+# The user-interaction service: hosts `ctx.userQuestions`, the seam behind
+# the model-facing ask_user_question tool. cc-tui registers its questionnaire
+# provider on it; the service must live at the root so the agent loop's tool
+# execution can reach it.
+- id: user-questions
+  name: '@deepseek-ai/dsh-user-questions'
+
+- id: cc-tui
+  name: 'dsh-cc-tui'
+  config:
+    provider: deepseek-official
+    # Alt-screen fullscreen (CC 同款): 应用内鼠标选区（选择即复制, OSC 52 +
+    # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
+    # inline 渲染, 鼠标交给终端模拟器原生选择。
+    fullscreen: true
+    # Startup display seed for the header/statusline; the live value from
+    # request headers replaces it after the first turn. Keep in sync with
+    # the adapter's reasoningEffort below.
+    effort: max
+    #  feeds the chosen session id through this env var.
+    sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
+
+# The DeepSeek adapter. Shipped default: full thinking at max effort.
+# rc.6 schema key is `apiKeyEnv` (a credential-ref env var NAME, default
+# DEEPSEEK_API_KEY), not `apiKey`; the old snapshot's `apiKey` key is
+# dropped by the loader and would never take effect.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    apiKeyEnv: 'DEEPSEEK_API_KEY'
+    baseURL: !!js process.env.DEEPSEEK_BASE_URL
+    thinking: enabled
+    reasoningEffort: max
+
+# Managed child-process groups for the bash executor.
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+
+- id: bash
+  name: '@deepseek-ai/dsh-bash-local'
+  config:
+    cwd: !!js process.cwd()
+    timeoutMs: 60000
+
+# Filesystem service: `@` completion lists the session cwd through it, and
+# the model-facing fs tools resolve relative paths from the process cwd.
+- id: fs
+  name: '@deepseek-ai/dsh-fs-local'
+  config:
+    cwd: !!js process.cwd()
+
+# Read/write/edit policy loads before the model-facing filesystem tools so
+# writes and edits require an observed file (DSH's own fs policy gate).
+- id: fs-policy
+  name: '@deepseek-ai/dsh-fs-observation-policy'
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+# The todo_write tool replaces the logged whole list (DSH's todo tool).
+# allowParallelInProgress is REQUIRED (no schema default) — a bare mount
+# fails validation. True matches the official dsh-base bundle value.
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# Subagents: the registry service, then the spawn/fork backends and the
+# delegation tools (max depth 1 keeps the TUI's tool cards shallow). The
+# core `dsh-subagent` service MUST be mounted before any provider.
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+
+- id: subagent-spawn
+  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
+  config:
+    providerName: spawn
+
+- id: subagent-fork
+  name: '@deepseek-ai/dsh-subagent-fork-in-process'
+  config:
+    providerName: fork
+
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+    maxDepth: 1
+
+- id: tool-subagent-fork
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: continuable
+    maxDepth: 1
+
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    persona: !!js process.env.CC_TUI_PERSONA ?? 'You are a coding agent.'
+    # Workspace context (AGENTS.md injection) at the standard 64KB cap;
+    # task tools stay at their DSH defaults (on).
+    workspaceContext:
+      maxBytes: 65536
+    # Skills on: the spine mounts the local skill provider (discovers
+    # SKILL.md catalogs under ~/.dsh, ~/.agents and project roots) plus the
+    # model-facing skill catalog/load tools.
+    skills:
+      enabled: true
+    # Persisted goal stack: mounts the goal domain service + the model-facing
+    # goal tool; /goal (command-goal below) needs the service present.
+    goals: {}
+
+# Human-command registry: plan-mode's /plan and command-goal's /goal register
+# here; the TUI merges them into its slash menu and dispatches through the
+# registry (logs command/run + command/done). Must mount before the commands.
+- id: commands
+  name: '@deepseek-ai/dsh-commands'
+
+# Plan mode: the plan:policy prompt section, the /plan command and the
+# model-facing plan/exit tools (DSH's plan seam). `section` is REQUIRED and
+# non-empty — a bare mount fails validation and rolls the whole tree back.
+- id: plan-mode
+  name: '@deepseek-ai/dsh-plan-mode'
+  config:
+    section: |
+      You are in plan mode. Explore and design before presenting the
+      complete plan through exit_plan_mode.
+
+# /goal — set or view the goal for a long-running task (needs the goal
+# domain service mounted by agent-spine's `goals` config above).
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+# Live working line for the status bar: thinking copy / running tool / turn
+# summary. dsh-cc consumes its log-only activity/status events; the
+# plugin's own TUI prompt slot is skipped without an official dsh-tui.
+# publishIntervalMs 500: live-phase snapshots republish every 500ms so the
+# cc-tui status-line elapsed timers tick smoothly (default 2000ms).
+- id: working-activity
+  name: 'dsh-working-activity'
+  config:
+    publishIntervalMs: 500
+
+# Durable session log (DSH's own persistence seam): /resume and rewind both
+# rely on this backend writing every session/event. Root defaults under the
+# user home so sessions survive across terminals (Windows: USERPROFILE).
+- id: sessions
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js process.env.DSH_CC_SESSION_ROOT ?? (process.env.USERPROFILE ?? process.env.HOME) + '/.dsh-cc/sessions'
+
+# Read-only session lineage — the subagent service's /agents listing reads it.
+- id: session-query
+  name: '@deepseek-ai/dsh-session-query'
+
+- id: session-checkpoints
+  name: '@deepseek-ai/dsh-session-checkpoint-policy'
+
+# Token accounting + manual session compaction (/compact).
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+
+- id: compact
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    # DeepSeek advertises a 1M context window, so the 80% default threshold
+    # would never make manual /compact useful. Default 20% (200k tokens)
+    # with a 5% retained tail; both are overridable for tests and must keep
+    # retainRatio < thresholdRatio (BasicCompactConfig validates this).
+    thresholdRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RATIO ?? '0.2')
+    retainRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RETAIN ?? '0.05')

@@ -1,0 +1,1 @@
+{"version":3,"file":"focus-event.d.ts","sourceRoot":"","sources":["../../../../src/ink/events/focus-event.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,KAAK,WAAW,EAAE,aAAa,EAAE,MAAM,qBAAqB,CAAA;AAErE;;;;;;;GAOG;AACH,qBAAa,UAAW,SAAQ,aAAa;IAC3C;;;;OAIG;IACH,QAAQ,CAAC,aAAa,EAAE,WAAW,GAAG,IAAI,CAAA;gBAGxC,IAAI,EAAE,OAAO,GAAG,MAAM,EACtB,aAAa,GAAE,WAAW,GAAG,IAAW;CAK3C"}
