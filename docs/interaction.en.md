@@ -148,7 +148,7 @@ to inspect the complete surface available in the current composition.
 | Model and display | `/model`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
-| Other | `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
+| Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
 | Registry | `/plan`, `/goal`, and any other command registered by the DSH composition |
 
 Additional forms:
@@ -158,6 +158,10 @@ Additional forms:
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/theme <name>` and `/theme status` are described in the theme guide.
 - `/lang` toggles the interface language (see “Interface language”).
+- After startup, the TUI checks npm for a newer version in the background and
+  shows a notification when one is available. `/update` updates the installed
+  `dsh-cc-tui`, then restarts and resumes the current session automatically;
+  wait for an active turn to finish first.
 - `/plan [off|message]` and `/goal ...` are handled by DSH command plugins and
   recorded as session events.
 - Skill commands submit activation prompts. The actual skill is loaded through

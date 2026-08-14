@@ -14,7 +14,8 @@ import { readModelPref } from './modelPrefs.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
 import { writeResumeTarget } from './sessionHistory.js'
-import { isLang, resolveStartupLang, setLang } from './i18n.js'
+import { checkForTuiUpdate, updateTuiAndRestart } from './update.js'
+import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
 
@@ -99,6 +100,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the end of the final frame, so the prompt printed over it.
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
+  let updateRequested = false
   const handleExit = (error?: unknown): void => {
     if (exited) return
     exited = true
@@ -126,6 +128,22 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       disposeRootAndExit(ctx, 1)
       return
     }
+    if (updateRequested) {
+      if (process.stdout.isTTY) {
+        process.stdout.write('\nUpdating dsh-cc-tui and restarting…\n')
+      }
+      disposeRootAndThen(ctx, () => {
+        void updateTuiAndRestart(channel.agentId).then(
+          code => process.exit(code),
+          updateError => {
+            const message = updateError instanceof Error ? updateError.message : String(updateError)
+            process.stderr.write(`cc-tui update failed: ${message}\n`)
+            process.exit(1)
+          },
+        )
+      })
+      return
+    }
     if (process.stdout.isTTY) {
       process.stdout.write(`\nResume with -c (or command below):\ndsh-cc --resume ${channel.agentId}\n\n`)
     }
@@ -136,6 +154,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     channel,
     questionStore,
     onExit: () => handleExit(),
+    onUpdate: () => {
+      if (exited || updateRequested) return
+      updateRequested = true
+      instance?.unmount()
+    },
   })
   // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
   // tracking), which turns on in-app text selection (copy-on-select via
@@ -147,6 +170,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     config.fullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
   )
   instance = await render(tree, { exitOnCtrlC: false })
+
+  // Check in the background so registry latency never delays the first frame.
+  // A failed/offline check is intentionally silent; the manual `/update`
+  // command remains available regardless of network access.
+  void checkForTuiUpdate().then((update) => {
+    if (update === undefined || exited || updateRequested) return
+    channel.notify(
+      t('update-available', { current: update.current, latest: update.latest }),
+      { color: 'warning', timeoutMs: 12000 },
+    )
+  })
 
   // If the surrounding tree goes down (reload, teardown), take the TUI with it.
   ctx.effect(() => () => {
@@ -246,16 +280,21 @@ async function resolveAgent(
  * Mirrors the deleted dsh-tui front-door exit semantics.
  */
 function disposeRootAndExit(ctx: Context, code: number): void {
-  const timer = setTimeout(() => process.exit(code), 5000)
+  disposeRootAndThen(ctx, () => process.exit(code))
+}
+
+/** Dispose the Cordis tree, then run a process-level handoff action. */
+function disposeRootAndThen(ctx: Context, done: () => void): void {
+  const timer = setTimeout(() => process.exit(1), 5000)
   timer.unref()
   void ctx.root.fiber.dispose().then(
     () => {
       clearTimeout(timer)
-      process.exit(code)
+      done()
     },
     () => {
       clearTimeout(timer)
-      process.exit(code)
+      done()
     },
   )
 }

@@ -539,6 +539,22 @@ declare const dict: {
         readonly zh: "长期约定可写入 AGENTS.md（工作区上下文）或技能（~/.dsh/skills）。";
         readonly en: "Long-term conventions can go into AGENTS.md (workspace context) or skills (~/.dsh/skills).";
     };
+    readonly 'update-unavailable': {
+        readonly zh: "当前运行方式不支持自动更新，请在终端执行 dsh plugin --profile cc-tui update dsh-cc-tui";
+        readonly en: "Automatic update is unavailable in this launch mode. Run dsh plugin --profile cc-tui update dsh-cc-tui in a terminal.";
+    };
+    readonly 'update-working': {
+        readonly zh: "当前回合仍在运行，请等待完成后再更新 TUI。";
+        readonly en: "The current turn is still running. Wait for it to finish before updating the TUI.";
+    };
+    readonly 'update-starting': {
+        readonly zh: "正在更新 dsh-cc-tui，完成后会自动重启并恢复当前会话……";
+        readonly en: "Updating dsh-cc-tui. The TUI will restart and resume this session when finished…";
+    };
+    readonly 'update-available': {
+        readonly zh: "发现新版本：v{{latest}}（当前 v{{current}}）· 输入 /update 更新 TUI";
+        readonly en: "New version available: v{{latest}} (current v{{current}}) · type /update to update the TUI";
+    };
     readonly 'vim-not-implemented': {
         readonly zh: "vim 模式暂未实现";
         readonly en: "vim mode not implemented yet";

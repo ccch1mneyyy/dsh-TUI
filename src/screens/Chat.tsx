@@ -106,10 +106,13 @@ export function Chat({
   channel,
   questionStore,
   onExit,
+  onUpdate,
 }: {
   channel: Channel
   questionStore: QuestionStore
   onExit: () => void
+  /** Update the installed package and restart the current TUI process. */
+  onUpdate?: () => void
 }) {
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   React.useSyncExternalStore(channel.subscribe, () => channel.version)
@@ -651,6 +654,17 @@ export function Chat({
           t('memory-none'),
           t('memory-hint'),
         ])
+        return true
+      case 'update':
+        setHelpOpen(false)
+        if (onUpdate === undefined) {
+          channel.notify(t('update-unavailable'), { color: 'warning' })
+        } else if (channel.working) {
+          channel.notify(t('update-working'), { color: 'warning' })
+        } else {
+          channel.notify(t('update-starting'))
+          onUpdate()
+        }
         return true
       case 'vim':
         channel.notify(t('vim-not-implemented'))
