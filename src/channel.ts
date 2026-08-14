@@ -12,6 +12,7 @@ import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
+import { readModelPref, writeModelPref } from './modelPrefs.js'
 import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
@@ -836,6 +837,11 @@ export function createChannel(
     /** cordis.yml's static preset choice (`preset` key): wins over the
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string
+    /** cordis.yml's static route (`provider`/`model` keys), undefined when
+     *  unset: wins over the persisted `/model` preference for NEW sessions,
+     *  and is the only route a resume overrides the target's own record with. */
+    configuredProvider?: string
+    configuredModel?: string
     /** The preset the initial agent's session runs under (from resolveAgent). */
     agentPreset?: string
     /** Handle of the initial agent; disposed when a rewind replaces it. */
@@ -1222,6 +1228,8 @@ export function createChannel(
       // The fork continues under the source session's own preset: switches
       // are blank-only, so every `agent-preset/selected` event predates any
       // rewind boundary and the source log resolves the exact composition.
+      // The route likewise stays the live one — a rewind continues the same
+      // conversation, so a `/model` switch must survive it (issue #30).
       const rewindComposed = await composePreset(ctx, runningPresetOf(agent.session))
       try {
         handle = await agents.create({
@@ -1235,7 +1243,7 @@ export function createChannel(
               ? {}
               : { agentPreset: rewindComposed.agentPreset }),
           },
-          agentOptions: { provider: options.provider, model: options.model },
+          agentOptions: { provider: state.provider, model: state.model },
           ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
         })
       } catch {
@@ -1312,7 +1320,9 @@ export function createChannel(
       let handle: AgentHandle
       // The target session's own preset (from its persisted log) — never the
       // current preference: a resume re-enters the composition its history
-      // was produced under.
+      // was produced under. Same rule for the route: only an explicit
+      // cordis.yml provider/model overrides the route the target's own
+      // request/header records (issue #30).
       const resumeComposed = await composePreset(
         ctx,
         await resolvePersistedPreset(ctx, SessionId(sessionId)),
@@ -1320,7 +1330,7 @@ export function createChannel(
       try {
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
-          agentOptions: { provider: options.provider, model: options.model },
+          agentOptions: { provider: options.configuredProvider, model: options.configuredModel },
           ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
         })
       } catch (error) {
@@ -1403,6 +1413,15 @@ export function createChannel(
       // `preset` key wins over the persisted `/preset` choice, which wins
       // over the roster default (same precedence as activityFrames).
       const newComposed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+      // Same precedence for the route (issues #14/#30): cordis.yml explicit
+      // keys win over the persisted `/model` choice — a switch earlier in
+      // this run just wrote it, so `/new` follows the live model — which
+      // wins over the startup fallback.
+      const modelPref = readModelPref()
+      const route = {
+        provider: options.configuredProvider ?? modelPref?.provider ?? options.provider,
+        model: options.configuredModel ?? modelPref?.model ?? options.model,
+      }
       try {
         handle = await agents.create({
           sessionId,
@@ -1412,7 +1431,7 @@ export function createChannel(
               ? {}
               : { agentPreset: newComposed.agentPreset }),
           },
-          agentOptions: { provider: options.provider, model: options.model },
+          agentOptions: route,
           ...(newComposed.setup === undefined ? {} : { setup: newComposed.setup }),
         })
       } catch (error) {
@@ -1442,6 +1461,8 @@ export function createChannel(
       state.status = handle.agent.status
       state.agentId = handle.agent.id
       state.agentPreset = newComposed.agentPreset
+      state.model = route.model
+      state.provider = route.provider
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
@@ -1569,6 +1590,14 @@ export function createChannel(
       touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
+      // Persist the choice so the next boot and `/new` start on it (same
+      // contract as /preset and Shift+Tab effort; issues #14/#30). A failed
+      // write keeps the live switch but warns it will not survive a restart.
+      if (!writeModelPref(provider, model)) {
+        state.notify('无法写入 ~/.dsh-cc/model.json，模型选择不会保存到重启后', {
+          color: 'warning',
+        })
+      }
       return true
     },
     cycleEffort,

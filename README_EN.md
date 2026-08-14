@@ -171,6 +171,10 @@ Usage:
   registry default (`standard`).
 - Resuming an old session always restores the preset recorded in that session's log, regardless of
   the current default.
+- The `/model` choice is stored in `~/.dsh-cc/model.json`, with the same precedence as presets:
+  the `provider`/`model` keys in cordis.yml > preference file > harness defaults
+  (`deepseek-official` / `deepseek-v4-flash`). Resuming an old session restores the route recorded
+  in its own log (request/header), independent of the current preference.
 - To create a custom preset, place a directory containing `agent.cordis.yml` under
   `~/.dsh/.agent-presets/`. The registry discovers it immediately and exposes it in the `/preset`
   picker.
@@ -376,7 +380,8 @@ Use `/mcp` to view connected servers and their tool counts.
   system-prompt segment of the context meter.
 - `/model` switches through a session fork because DSH has no in-place model-switch API. History is
   preserved unchanged in the new session, which routes to the new model; the old session remains in
-  the `/resume` list.
+  the `/resume` list. The choice is written to `~/.dsh-cc/model.json` and is honored after restarts
+  and by `/new` (rewinds keep the current model too).
 - Ctrl+V clipboard access depends on PowerShell `Get-Clipboard`. If another process such as Explorer
   briefly locks the clipboard, the TUI retries automatically; a persistent lock fails silently and
   shows `Clipboard is empty`.

@@ -608,6 +608,11 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     /** cordis.yml's static preset choice (`preset` key): wins over the
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string;
+    /** cordis.yml's static route (`provider`/`model` keys), undefined when
+     *  unset: wins over the persisted `/model` preference for NEW sessions,
+     *  and is the only route a resume overrides the target's own record with. */
+    configuredProvider?: string;
+    configuredModel?: string;
     /** The preset the initial agent's session runs under (from resolveAgent). */
     agentPreset?: string;
     /** Handle of the initial agent; disposed when a rewind replaces it. */

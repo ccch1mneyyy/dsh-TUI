@@ -155,6 +155,10 @@ dsh-working-activity（工作状态行，随 add 自动挂载，见上）。模�
   cordis.yml 的 `preset` 键（或 `CC_TUI_PRESET` 环境变量）＞ 偏好文件 ＞
   名册默认（standard）；
 - resume 旧会话总是恢复其自身日志记录的 preset，不受当前默认影响；
+- `/model` 的选择持久化在 `~/.dsh-cc/model.json`；优先级与 preset 一致：
+  cordis.yml 的 `provider`/`model` 键 ＞ 偏好文件 ＞  harness 默认
+  （deepseek-official / deepseek-v4-flash）；resume 旧会话恢复其自身日志
+  记录的路由（request/header），不受当前偏好影响；
 - 用户自创 preset：把目录（含 `agent.cordis.yml`）放进
   `~/.dsh/.agent-presets/`，名册即时发现，`/preset` 选择器直接可见。
 
@@ -344,7 +348,8 @@ cc-tui 定制随之退役（preset 拥有自己的 compaction/delegation 配置�
 
 - 注入上下文（plugin source 内容）未做独立展示，随系统提示词并入进度条统计。
 - `/model` 实时切换走"会话 fork 续聊"（DSH 无原位换模型 API）：历史原样保留，
-  新会话路由到新模型，旧会话仍留在 `/resume` 列表里。
+  新会话路由到新模型，旧会话仍留在 `/resume` 列表里；选择会写入
+  `~/.dsh-cc/model.json`，重启与 `/new` 均沿用（rewind 也保留当前模型）。
 - `Ctrl+V` 读剪贴板依赖 PowerShell `Get-Clipboard`：剪贴板被其他进程
   （如 Explorer）短暂锁定时自动重试，持续锁定时静默放弃（显示"剪贴板为空"提示）。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
