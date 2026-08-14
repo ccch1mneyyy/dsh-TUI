@@ -1,5 +1,6 @@
 import { coerce } from 'semver'
 import type { Writable } from 'stream'
+import { appendFileSync } from 'node:fs'
 import { env } from '../utils/env.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
@@ -203,6 +204,27 @@ export function hasCursorUpViewportYankBug(): boolean {
 export const SYNC_OUTPUT_SUPPORTED = isSynchronizedOutputSupported()
 
 /**
+ * Render forensics: when DSH_CC_RENDER_LOG names a file path, every painted
+ * frame's raw ANSI bytes append to it (one JSON-escaped line per frame,
+ * prefixed with a timestamp header). Real-terminal rendering corruption
+ * (missing rows, stale attributes) cannot be reproduced in headless xterm
+ * harnesses — this captures the exact byte stream the terminal received so
+ * the corrupt frame can be diffed against the expected screen. Opt-in and
+ * zero-cost when unset: the env read happens once at module load.
+ */
+const RENDER_LOG_PATH = process.env.DSH_CC_RENDER_LOG ?? ''
+
+function dumpFrame(buffer: string): void {
+  if (RENDER_LOG_PATH === '') return
+  try {
+    appendFileSync(RENDER_LOG_PATH, `\n===== frame ${new Date().toISOString()} (${buffer.length} bytes) =====\n${JSON.stringify(buffer)}\n`)
+  } catch {
+    // Forensics must never break rendering: an unwritable log path (bad
+    // directory, permissions) drops the dump, not the frame.
+  }
+}
+
+/**
  * The output streams a terminal renders to.
  */
 export type Terminal = {
@@ -275,5 +297,6 @@ export function writeDiffToTerminal(
 
   // Add synchronized update end and flush buffer
   if (useSync) buffer += ESU
+  dumpFrame(buffer)
   terminal.stdout.write(buffer)
 }
