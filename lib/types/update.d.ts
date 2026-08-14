@@ -56,7 +56,7 @@ export declare function checkForTuiUpdate(): Promise<TuiUpdateInfo | undefined>;
 /** cmd.exe joins spawn arguments with spaces; quote anything that could split. */
 export declare function shellQuote(args: readonly string[]): string[];
 /**
- * Update the installed cc-tui package and restart the same launcher while
+ * Update the installed dsh-tui package and restart the same launcher while
  * preserving the active session. The TUI must already be unmounted before
  * this is called so pnpm output cannot corrupt the rendered terminal frame.
  *

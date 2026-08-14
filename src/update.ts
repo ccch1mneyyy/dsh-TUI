@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gt, valid } from 'semver'
 
-const PACKAGE_NAME = 'dsh-cc-tui'
+const PACKAGE_NAME = '@deepseek-harness-tui/dsh-tui'
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
 const UPDATE_CHECK_TIMEOUT_MS = 4000
 /** env marker set on the /update restart; the new process verifies it at boot. */
@@ -189,7 +189,7 @@ function runProcess(
       resolve(code)
     }
     child.once('error', error => {
-      process.stderr.write(`cc-tui: failed to run ${command}: ${error.message}\n`)
+      process.stderr.write(`dsh-tui: failed to run ${command}: ${error.message}\n`)
       finish(127)
     })
     child.once('close', code => finish(code ?? 1))
@@ -197,7 +197,7 @@ function runProcess(
 }
 
 /**
- * Update the installed cc-tui package and restart the same launcher while
+ * Update the installed dsh-tui package and restart the same launcher while
  * preserving the active session. The TUI must already be unmounted before
  * this is called so pnpm output cannot corrupt the rendered terminal frame.
  *

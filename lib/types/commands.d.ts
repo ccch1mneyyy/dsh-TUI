@@ -1,6 +1,6 @@
 /**
- * Local slash commands for the dsh-cc TUI. Claude Code's command system is
- * deeply wired into its engine; cc-tui ships a small built-in set with the
+ * Local slash commands for the dsh-tui TUI. Claude Code's command system is
+ * deeply wired into its engine; dsh-tui ships a small built-in set with the
  * same `/name — description` suggestion chrome, and merges plugin-registered
  * commands (plan/goal/…) from the DSH command registry (`dsh-commands`) —
  * `runCommand` in the Chat screen dispatches either kind, with the registry

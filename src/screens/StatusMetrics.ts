@@ -220,7 +220,7 @@ export function speedColor(tps: number, text: string): string {
 }
 
 function colorHex(key: 'success' | 'warning' | 'error'): string {
-  // cc-tui dark theme values (theme.ts), semicolon-separated for raw ANSI.
+  // dsh-tui dark theme values (theme.ts), semicolon-separated for raw ANSI.
   const palette: Record<string, string> = {
     success: '78;186;101',
     warning: '202;138;4',

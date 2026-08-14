@@ -1,6 +1,6 @@
 /**
- * Local slash commands for the dsh-cc TUI. Claude Code's command system is
- * deeply wired into its engine; cc-tui ships a small built-in set with the
+ * Local slash commands for the dsh-tui TUI. Claude Code's command system is
+ * deeply wired into its engine; dsh-tui ships a small built-in set with the
  * same `/name — description` suggestion chrome, and merges plugin-registered
  * commands (plan/goal/…) from the DSH command registry (`dsh-commands`) —
  * `runCommand` in the Chat screen dispatches either kind, with the registry
@@ -33,7 +33,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Session / environment
   { name: 'status', description: 'Show session status' },
   { name: 'cost', description: 'Show session token usage' },
-  { name: 'config', description: 'Show the dsh-cc configuration source' },
+  { name: 'config', description: 'Show the dsh-tui configuration source' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
@@ -53,11 +53,11 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'hooks', description: 'Show hooks status' },
   { name: 'mcp', description: 'Show MCP status' },
   { name: 'memory', description: 'Show memory status' },
-  { name: 'update', description: 'Update dsh-cc-tui and restart' },
+  { name: 'update', description: 'Update dsh-tui and restart' },
   // Built-in skills (CC's skill commands, driven through DSH skills)
   { name: 'audit', description: 'Run a comprehensive code audit on this project' },
   { name: 'bug', description: 'Capture a bug report' },
-  { name: 'practice', description: 'Practice programming with dsh-cc' },
+  { name: 'practice', description: 'Practice programming with dsh-tui' },
   { name: 'review', description: 'Run a comprehensive code review on this project' },
   { name: 'pr_comments', description: 'Review pull request comments' },
   { name: 'release-notes', description: 'Generate release notes' },
@@ -68,7 +68,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'connect', description: 'Connect to a remote machine' },
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
-  { name: 'exit', description: 'Exit dsh-cc' },
+  { name: 'exit', description: 'Exit dsh-tui' },
 ]
 
 /**

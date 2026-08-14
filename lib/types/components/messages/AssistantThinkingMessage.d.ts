@@ -15,7 +15,7 @@ type Props = {
  * Thinking block: folded `∴ Thinking (ctrl+o to expand)`, expanded shows the
  * full reasoning text indented under `∴ Thinking…` (ported from the leak's
  * `messages/AssistantThinkingMessage.tsx`). When the channel records the
- * reasoning duration, the label carries it (`∴ Thinking · 12s …`) — cc-tui's
+ * reasoning duration, the label carries it (`∴ Thinking · 12s …`) — dsh-tui's
  * take on making thinking time visible in the transcript.
  */
 export declare function AssistantThinkingMessage({ thinking, addMargin, verbose, durationMs, isSelected, onClick, }: Props): React.ReactNode;

@@ -60,7 +60,7 @@ function capitalize(text: string): string {
 /**
  * CC's built-in skill commands, driven through the DSH skill system: each
  * submits an activation prompt the model resolves via its skill catalog/load
- * tools (the corresponding SKILL.md ships under ~/.dsh/skills with dsh-cc).
+ * tools (the corresponding SKILL.md ships under ~/.dsh/skills with dsh-tui).
  */
 // i18n keys, not resolved strings: module scope evaluates before apply()'s
 // setLang, so t() must run at the call site to follow the active language.
@@ -255,9 +255,9 @@ export function Chat({
   const thinkingStatus = useThinkingStatus(channel.spinnerMode === 'thinking')
 
   // Terminal tab title (ported from CC's AnimatedTerminalTitle): the session
-  // title when set, else "dsh-cc"; a `⠂/⠐` spinner prefix while a turn is
+  // title when set, else "dsh-TUI"; a `⠂/⠐` spinner prefix while a turn is
   // working (960ms cadence, only while the terminal is focused), a static
-  // `✦` otherwise. cc-tui brands the idle prefix with the DeepSeek whale.
+  // `✦` otherwise. dsh-TUI brands the idle prefix with the DeepSeek whale.
   const [titleFrame, setTitleFrame] = React.useState(0)
   const terminalFocused = useTerminalFocus()
   // Mouse text selection auto-copy (CC's copy-on-select): active only in
@@ -561,8 +561,8 @@ export function Chat({
       case 'config': {
         const userHome = process.env.USERPROFILE ?? ''
         const lines = [
-          t('doctor-example-config', { path: `${channel.cwd}/examples/cc-tui-agent/cordis.yml` }),
-          t('doctor-user-config', { path: `${userHome}\\.dsh-cc\\cordis.yml` }),
+          t('doctor-example-config', { path: 'dsh --profile dsh-tui' }),
+          t('doctor-user-config', { path: `${userHome}/.dsh/profiles/dsh-tui/cordis.patch.yml` }),
           '',
           t('doctor-launch-hint'),
           t('doctor-route-hint'),

@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-cc-tui"><img alt="npm" src="https://img.shields.io/npm/v/dsh-cc-tui?style=flat-square&color=4b6fff"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm" src="https://img.shields.io/npm/v/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
   <a href="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
   <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
@@ -67,24 +67,27 @@ Prerequisites: an interactive terminal TTY, the official `dsh` CLI, and
 npm install -g @deepseek-ai/dsh
 
 # 2. Add the dsh-TUI profile plugin
-dsh plugin --profile cc-tui add dsh-cc-tui
+dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 
 # 3. Start it
-dsh --profile cc-tui
+dsh --profile dsh-tui
 ```
 
 The repository's `sh install.sh` wraps step 2 and checks the required commands.
-Windows users can also launch with `dsh-cc.cmd`; passing `--resume` restores the
+Windows users can also launch with `dsh-tui.cmd`; passing `--resume` restores the
 most recently selected session.
 
 See [Getting started](docs/getting-started.en.md) for profile composition,
 source builds, and troubleshooting.
 
-Inside the TUI, `/update` updates the installed `dsh-cc-tui` package and
-automatically restarts into the current session.
+Inside the TUI, `/update` updates the installed
+`@deepseek-harness-tui/dsh-tui` package and automatically restarts into the current session.
 
 The TUI also checks npm for updates in the background after startup. The check
 never blocks the first frame and silently ignores offline or registry errors.
+
+For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
+[Getting started](docs/getting-started.en.md#migrate-from-the-former-package).
 
 ## Documentation
 

@@ -1,11 +1,15 @@
 name: Publish
 
-# 发版入口：推送 v* 标签（git tag v0.3.4 && git push origin v0.3.4）。
-# 需要在仓库 Secrets 配置 NPM_TOKEN（对 dsh-cc-tui 有 write 权限的
-# granular token）。标签版本号必须与 package.json 的 version 一致。
+# 发版入口：推送 v* 标签（git tag v0.4.2 && git push origin v0.4.2）。
+# 首次发布继续使用仓库 Secrets 中的 NPM_TOKEN 鉴权；标签版本号必须与
+# package.json 的 version 一致。OIDC 仅用于生成 npm provenance。
 on:
   push:
     tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   npm:
@@ -38,6 +42,6 @@ jobs:
 
       - run: node --import tsx/esm scripts/repro-toolcards.tsx
 
-      - run: pnpm publish --no-git-checks --access public
+      - run: pnpm publish --no-git-checks --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

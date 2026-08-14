@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the dsh-cc-tui external plugin: compile src/ → lib/types/ (JS +
+# Build the dsh-tui external plugin: compile src/ → lib/types/ (JS +
 # declarations) with the DSH checkout's TypeScript. Dependency resolution
 # mirrors dsh-vision: node_modules holds symlinks into the checkout, so tsc
 # type-checks against the same vendored/workspace packages the running dsh

@@ -7,7 +7,7 @@
 After an npm/profile installation, user configuration lives at:
 
 ```text
-$DSH_HOME/profiles/cc-tui/cordis.patch.yml
+$DSH_HOME/profiles/dsh-tui/cordis.patch.yml
 ```
 
 When `DSH_HOME` is unset, it normally defaults to `~/.dsh`. The file is a
@@ -26,7 +26,7 @@ service.
 A complete common override looks like this:
 
 ```yaml
-- id: cc-tui
+- id: dsh-tui
   config:
     provider: deepseek-official
     model: deepseek-v4-flash
@@ -98,7 +98,7 @@ Place a custom preset at `$DSH_HOME/.agent-presets/<name>/` with an
 
 Since 0.3, model-side tools, planning, compaction, and delegation are owned by
 the preset. Profile mode no longer uses the old `CC_TUI_COMPACT_RATIO`,
-`CC_TUI_COMPACT_RETAIN`, or cc-tui subagent-depth customization; configure
+`CC_TUI_COMPACT_RETAIN`, or the former TUI's subagent-depth customization; configure
 those policies in the preset instead.
 
 ## MCP
@@ -146,8 +146,8 @@ for the complete field reference.
 | `DSH_CC_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
 | `DSH_CC_SESSION_ROOT` | Override the session persistence location; the profile uses a SQLite database path, while bare `cordis.yml` uses a JSONL root directory |
 | `DSH_PERMISSION_MODE` | Override non-Windows sandbox policy, such as `workspace-write` or `danger-full-access` |
-| `DSH_CC_WORKSPACE` | Working directory used by the Windows `dsh-cc.cmd` launcher |
-| `CC_TUI_DEBUG` | Enable cc-tui diagnostics on stderr |
+| `DSH_CC_WORKSPACE` | Working directory used by the Windows `dsh-tui.cmd` launcher |
+| `CC_TUI_DEBUG` | Enable dsh-tui diagnostics on stderr |
 | `DSH_CC_RENDER_LOG` | File path for raw ANSI frame capture |
 
 `DSH_CC_RENDER_LOG` may capture visible prompts, tool arguments, and output.
@@ -168,7 +168,7 @@ Do not attach it to a public issue without reviewing and redacting it.
   `cordis.patch.yml`.
 
 `DSH_CC_SESSION_ROOT` is interpreted by the active composition: `dsh --profile
-cc-tui` uses the SQLite row inserted by this package and defaults to
+dsh-tui` uses the SQLite row inserted by this package and defaults to
 `~/.dsh-cc/sessions.sqlite`; direct `dsh --config cordis.yml` uses the example's
 JSONL persistence and defaults to `~/.dsh-cc/sessions/`. Do not point both
 startup modes at the same existing data directory.

@@ -86,7 +86,7 @@ const settledPlain = plain(stdout.frames.slice(-6).join(''))
 
 console.log('--- opening: has block font?', openingPlain.includes('█'))
 console.log('--- opening: has whale SGR truecolor?', /\x1b\[38;2;78;111;255m/.test(opening))
-console.log('--- opening: has wordmark dsh-cc?', openingPlain.includes('dsh-cc'))
+console.log('--- opening: has wordmark dsh-TUI?', openingPlain.includes('dsh-TUI'))
 console.log('--- frames during opening:', openingLen)
 console.log('--- frames opening->settle:', settledLen - openingLen)
 console.log('--- frames after settle (must be 0):', afterSettleLen - settledLen)
@@ -124,7 +124,7 @@ const sgrBefore = (needle: string): string => {
   return before.slice(before.lastIndexOf('\x1b[0m'))
 }
 console.log('--- settled: has block font?', full.includes('█'))
-console.log('--- settled: has wordmark dsh-cc?', full.includes('dsh-cc'))
+console.log('--- settled: has wordmark dsh-TUI?', full.includes('dsh-TUI'))
 console.log('--- settled: has version?', full.includes('v0.1.0'))
 console.log('--- settled: has model?', full.includes('deepseek-v4-flash'))
 console.log('--- settled: has cwd?', full.includes('D:/code/projects/test'))

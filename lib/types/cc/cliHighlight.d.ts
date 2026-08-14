@@ -1,4 +1,4 @@
-/** The cli-highlight surface cc-tui consumes: the syntax highlighter and the language support check. */
+/** The cli-highlight surface dsh-tui consumes: the syntax highlighter and the language support check. */
 export type CliHighlight = {
     highlight: typeof import('cli-highlight').highlight;
     supportsLanguage: typeof import('cli-highlight').supportsLanguage;

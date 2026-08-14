@@ -2,7 +2,7 @@
  * Headless smoke test for the ported Ink core + CC-style UI: renders the Chat
  * screen (with markdown, tool card, reasoning row) into in-memory terminal
  * streams. Run with:
- *   pnpm --filter @deepseek-ai/dsh-cc-tui run smoke
+ *   pnpm --filter @deepseek-harness-tui/dsh-tui run smoke
  *
  * FORCE_COLOR must be set BEFORE any chalk import evaluates — ESM imports are
  * hoisted, so chalk-dependent modules are loaded via dynamic import() below.

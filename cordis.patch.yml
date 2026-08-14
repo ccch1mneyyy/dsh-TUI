@@ -1,17 +1,17 @@
-# The dsh-cc-tui bundle patch: the interactive terminal front door over the
+# The dsh-tui bundle patch: the interactive terminal front door over the
 # dsh-base layer. Applied after dsh-base's insert; rows here override base
 # rows by id, with the profile's own cordis.patch.yml and any --patch
 # overlays still to come.
 #
 # A patch replaces the targeted row's whole `config`, so each row below
 # restates every key it owns (see the dsh-base patch for the shared
-# defaults). The dsh-base core rows that need no cc-tui value — tools,
+# defaults). The dsh-base core rows that need no dsh-tui value — tools,
 # sandbox/approval policy, skills, goal, plan mode, workspace context,
 # telemetry — are inherited unchanged.
 
 # ── surface-specific values over the dsh-base layer ─────────────────────────
 
-# The cc-tui deployment persona; CC_TUI_PERSONA overrides the coding-agent
+# The dsh-tui deployment persona; CC_TUI_PERSONA overrides the coding-agent
 # default (the base persona is empty).
 - id: system-prompt
   config:
@@ -101,7 +101,7 @@
 
 # Delegation tools (subagent spawn/fork, controls, workflows) are preset rows
 # now; the preset's `delegation` group re-adds them with package defaults, so
-# cc-tui's former depth-1 cap no longer applies.
+# the former TUI's depth-1 cap no longer applies.
 - id: tool-subagent
   disabled: true
 
@@ -148,11 +148,11 @@
   config:
     root: !!js process.env.DSH_CC_SESSION_ROOT ?? dshHomePath('sessions')
 
-# ── cc-tui rows ─────────────────────────────────────────────────────────────
+# ── dsh-tui rows ────────────────────────────────────────────────────────────
 
 # The `user-interaction` service row comes from the dsh-base bundle layer
 # (mounted before this layer); do not insert it again — the include patch
-# semantics would create a duplicate row. cc-tui defensively creates the
+# semantics would create a duplicate row. dsh-tui defensively creates the
 # service on its own context when no composition provides it (bare
 # `dsh --config cordis.yml` boots), then mounts the model-facing
 # ask_user_question tool and registers the questionnaire provider on
@@ -180,10 +180,10 @@
 
     # The interactive front door. The plugin creates/resumes its agent at
     # runtime, seeds the startup status line, and disposes the whole app tree
-    # (exiting the process) when the TUI unmounts. `dsh-cc --resume` feeds
-    # the session id through DSH_CC_RESUME_SESSION.
-    - id: cc-tui
-      name: 'dsh-cc-tui'
+    # (exiting the process) when the TUI unmounts. `dsh-tui.cmd --resume`
+    # feeds the session id through DSH_CC_RESUME_SESSION.
+    - id: dsh-tui
+      name: '@deepseek-harness-tui/dsh-tui'
       config:
         provider: deepseek-official
         # Alt-screen fullscreen（CC 同款）：应用内鼠标选区（选择即复制, OSC 52 +
@@ -203,15 +203,16 @@
         sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
 
     # Live working-line data source (thinking copy / running tool / turn
-    # summary). Mounted through dsh-cc-tui's own `./working-activity`
-    # re-export, NOT the bare `dsh-working-activity` name: the dsh Loader
-    # resolves row names from the profile directory, and pnpm's isolated
-    # node_modules layout never links a transitive dependency into the
-    # profile root (npm's flat layout hid this), so the bare name died with
-    # ERR_MODULE_NOT_FOUND and disposed the whole app at boot (#60).
+    # summary). Mounted through @deepseek-harness-tui/dsh-tui's own
+    # `./working-activity` re-export, NOT the bare `dsh-working-activity`
+    # name: the dsh Loader resolves row names from the profile directory,
+    # and pnpm's isolated node_modules layout never links a transitive
+    # dependency into the profile root (npm's flat layout hid this), so the
+    # bare name died with ERR_MODULE_NOT_FOUND and disposed the whole app at
+    # boot (#60).
     # publishIntervalMs 500 keeps the status-line timers ticking smoothly
     # (default 2000ms).
     - id: working-activity
-      name: 'dsh-cc-tui/working-activity'
+      name: '@deepseek-harness-tui/dsh-tui/working-activity'
       config:
         publishIntervalMs: 500

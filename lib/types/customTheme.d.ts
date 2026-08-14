@@ -1,5 +1,5 @@
 /**
- * User-defined color themes for cc-tui.
+ * User-defined color themes for dsh-tui.
  *
  * A theme is a JSON file in `~/.dsh-cc/themes/<name>.json`:
  *

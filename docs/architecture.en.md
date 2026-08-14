@@ -142,8 +142,8 @@ visual TUI alone does not describe the effective policy.
 | Goal | Method |
 | --- | --- |
 | Environment and profile | Run `/doctor`, `/config`, and `/permissions` inside the TUI |
-| stderr diagnostics | `CC_TUI_DEBUG=1 dsh --profile cc-tui` |
-| Raw ANSI frames | `DSH_CC_RENDER_LOG=/path/to/render.log dsh --profile cc-tui` |
+| stderr diagnostics | `CC_TUI_DEBUG=1 dsh --profile dsh-tui` |
+| Raw ANSI frames | `DSH_CC_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | Theme regression | `node --import tsx/esm scripts/verify-themes.mjs` |
 
 `DSH_CC_RENDER_LOG` and session exports may contain sensitive content. Redact

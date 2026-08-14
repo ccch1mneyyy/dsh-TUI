@@ -1,5 +1,5 @@
 /**
- * Typing shims for the ported Ink core and cc-tui additions.
+ * Typing shims for the ported Ink core and dsh-tui additions.
  *
  * This file is a MODULE (top-level import) so every `declare module` block is
  * a module augmentation that merges with the real declarations — a global
@@ -30,7 +30,7 @@ declare module 'react' {
 }
 
 // The ported core probes Bun's fast string-width/wrap implementations at
-// module scope; cc-tui runs on Node, where the probes must stay inert.
+// module scope; dsh-tui runs on Node, where the probes must stay inert.
 declare global {
   const Bun: any
 }
