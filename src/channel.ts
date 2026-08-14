@@ -19,7 +19,7 @@ import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
-import { readModelPref, writeModelPref } from './modelPrefs.js'
+import { readModelPref, resolveModelRoute, writeModelPref } from './modelPrefs.js'
 import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
@@ -847,8 +847,10 @@ export function createChannel(
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string
     /** cordis.yml's static route (`provider`/`model` keys), undefined when
-     *  unset: wins over the persisted `/model` preference for NEW sessions,
-     *  and is the only route a resume overrides the target's own record with. */
+     *  unset: wins over the persisted `/model` preference for NEW sessions
+     *  only as a COMPLETE pair (both halves set — a half-set pair is
+     *  ignored, issue #67), and is the only route a resume overrides the
+     *  target's own record with. */
     configuredProvider?: string
     configuredModel?: string
     /** The preset the initial agent's session runs under (from resolveAgent). */
@@ -1367,7 +1369,18 @@ export function createChannel(
       try {
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
-          agentOptions: { provider: options.configuredProvider, model: options.configuredModel },
+          // Route override only as a COMPLETE route (issue #67): a half-set
+          // cordis.yml pair would merge with the target's own record
+          // half-way, so unless both halves are explicit the session's
+          // recorded route wins untouched.
+          ...(options.configuredProvider !== undefined && options.configuredModel !== undefined
+            ? {
+              agentOptions: {
+                provider: options.configuredProvider,
+                model: options.configuredModel,
+              },
+            }
+            : {}),
           ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
         })
       } catch (error) {
@@ -1450,15 +1463,17 @@ export function createChannel(
       // `preset` key wins over the persisted `/preset` choice, which wins
       // over the roster default (same precedence as activityFrames).
       const newComposed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
-      // Same precedence for the route (issues #14/#30): cordis.yml explicit
-      // keys win over the persisted `/model` choice — a switch earlier in
-      // this run just wrote it, so `/new` follows the live model — which
-      // wins over the startup fallback.
-      const modelPref = readModelPref()
-      const route = {
-        provider: options.configuredProvider ?? modelPref?.provider ?? options.provider,
-        model: options.configuredModel ?? modelPref?.model ?? options.model,
-      }
+      // Same precedence for the route (issues #14/#30), resolved ATOMICALLY
+      // (issue #67): a cordis.yml override wins only as a complete route
+      // (both halves set) — which a switch earlier in this run satisfied by
+      // writing the pref — so the halves can never come from different
+      // sources. The channel's live route backs the default branch: it is
+      // the last route known to work.
+      const { route } = resolveModelRoute(
+        { provider: options.configuredProvider, model: options.configuredModel },
+        readModelPref(),
+        { provider: options.provider, model: options.model },
+      )
       try {
         handle = await agents.create({
           sessionId,

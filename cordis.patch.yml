@@ -182,10 +182,16 @@
     # runtime, seeds the startup status line, and disposes the whole app tree
     # (exiting the process) when the TUI unmounts. `dsh-cc --resume` feeds
     # the session id through DSH_CC_RESUME_SESSION.
+    # No static `provider` here (issue #67): a config key expresses a
+    # deployment DECISION, never a default. Pinning half a route here used
+    # to override the persisted /model choice's provider while keeping its
+    # model half, sending requests to deepseek-official with a foreign
+    # model id. The default route now lives in code (DEFAULT_MODEL_ROUTE);
+    # a deployment that wants to pin the route sets BOTH `provider` and
+    # `model`, which wins atomically.
     - id: cc-tui
       name: 'dsh-cc-tui'
       config:
-        provider: deepseek-official
         # Alt-screen fullscreen（CC 同款）：应用内鼠标选区（选择即复制, OSC 52 +
         # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。默认关闭——
         # inline 模式下由终端原生选择/复制/scrollback 接管；想用 fullscreen 在

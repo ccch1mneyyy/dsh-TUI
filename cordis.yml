@@ -12,7 +12,10 @@
 - id: cc-tui
   name: 'dsh-cc-tui'
   config:
-    provider: deepseek-official
+    # No static `provider` (issue #67): half a route in config used to
+    # override the persisted /model choice's provider half while keeping
+    # its model half. The default route lives in code (DEFAULT_MODEL_ROUTE);
+    # a deployment pins the route by setting BOTH `provider` and `model`.
     # Alt-screen fullscreen (CC 同款): 应用内鼠标选区（选择即复制, OSC 52 +
     # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
     # inline 渲染, 鼠标交给终端模拟器原生选择。
