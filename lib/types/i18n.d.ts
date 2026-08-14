@@ -115,6 +115,18 @@ declare const dict: {
         readonly zh: "- 目录: {{cwd}}";
         readonly en: "- Directory: {{cwd}}";
     };
+    readonly 'mentions-attached': {
+        readonly zh: "已附加 {{count}} 个文件引用";
+        readonly en: "Attached {{count}} file reference(s)";
+    };
+    readonly 'mentions-missing': {
+        readonly zh: "未找到引用: {{paths}}";
+        readonly en: "References not found: {{paths}}";
+    };
+    readonly 'send-failed': {
+        readonly zh: "发送失败 · {{err}}";
+        readonly en: "Send failed · {{err}}";
+    };
     readonly 'export-user-section': {
         readonly zh: "## 用户";
         readonly en: "## User";

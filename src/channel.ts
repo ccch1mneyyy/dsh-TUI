@@ -924,10 +924,10 @@ export function createChannel(
         throw error
       }
       if (expansion.attached.length > 0) {
-        state.notify(`已附加 ${expansion.attached.length} 个文件引用`, { timeoutMs: 2500 })
+        state.notify(t('mentions-attached', { count: expansion.attached.length }), { timeoutMs: 2500 })
       }
       if (expansion.missing.length > 0) {
-        state.notify(`未找到引用: ${expansion.missing.map(path => `@${path}`).join(' ')}`, {
+        state.notify(t('mentions-missing', { paths: expansion.missing.map(path => `@${path}`).join(' ') }), {
           color: 'warning',
           timeoutMs: 4000,
         })
@@ -937,7 +937,7 @@ export function createChannel(
       // with the next queued delivery.
       const message = error instanceof Error ? error.message : String(error)
       logForDebugging(`submit: delivery failed (${message})`)
-      state.notify(`发送失败 · ${message}`, { color: 'error' })
+      state.notify(t('send-failed', { err: message }), { color: 'error' })
     })
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a

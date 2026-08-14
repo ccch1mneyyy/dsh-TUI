@@ -1,5 +1,5 @@
 import React from 'react'
-import { t, getLang, setLang, isLang, writeLangPref, subscribeLang } from '../i18n.js'
+import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, type I18nKey } from '../i18n.js'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { formatTokens } from '../cc/format.js'
@@ -62,14 +62,16 @@ function capitalize(text: string): string {
  * submits an activation prompt the model resolves via its skill catalog/load
  * tools (the corresponding SKILL.md ships under ~/.dsh/skills with dsh-cc).
  */
-const SKILL_PROMPTS: Readonly<Record<string, string>> = {
-  audit: t('skill-audit-prompt'),
-  bug: t('skill-bug-prompt'),
-  practice: t('skill-practice-prompt'),
-  review: t('skill-review-prompt'),
-  pr_comments: t('skill-pr-comments-prompt'),
-  'release-notes': t('skill-release-notes-prompt'),
-  'vuln-check': t('skill-vuln-check-prompt'),
+// i18n keys, not resolved strings: module scope evaluates before apply()'s
+// setLang, so t() must run at the call site to follow the active language.
+const SKILL_PROMPTS: Readonly<Record<string, I18nKey>> = {
+  audit: 'skill-audit-prompt',
+  bug: 'skill-bug-prompt',
+  practice: 'skill-practice-prompt',
+  review: 'skill-review-prompt',
+  pr_comments: 'skill-pr-comments-prompt',
+  'release-notes': 'skill-release-notes-prompt',
+  'vuln-check': 'skill-vuln-check-prompt',
 }
 
 /** Terminal-title spinner frames (CC's TITLE_ANIMATION_FRAMES). */
@@ -674,8 +676,8 @@ export function Chat({
         // CC's skill commands: drive the DSH skill system by sending the
         // activation prompt to the model (it loads the skill via its skill
         // catalog/load tools when the SKILL.md ships in ~/.dsh/skills).
-        const prompt = SKILL_PROMPTS[name]
-        if (prompt) channel.submit(prompt)
+        const key = SKILL_PROMPTS[name]
+        if (key) channel.submit(t(key))
         return true
       }
       default: {
