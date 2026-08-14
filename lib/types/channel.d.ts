@@ -29,6 +29,22 @@ export interface ToolRow {
     startedAt: number;
     /** Settled wall-clock duration, written by tool/result. */
     durationMs?: number;
+    /** Live child-run stats (subagent delegation), aggregated from the child
+     *  session's own events; undefined for non-delegation tools. */
+    childStats?: {
+        toolUses: number;
+        totalTokens: number;
+        firstEventAt?: number;
+        endedAt?: number;
+        stopReason?: string;
+    };
+    /** Background job correlation (bash run_in_background / background
+     *  subagent): the row updates live from the jobs registry. */
+    jobId?: string;
+    /** Job snapshot detail (e.g. `exit code: 0`) synced from ctx.jobs. */
+    jobDetail?: string;
+    /** Job status synced from ctx.jobs (running/stopping/completed/killed/failed). */
+    jobStatus?: 'running' | 'stopping' | 'completed' | 'killed' | 'failed';
 }
 /** One file change in a tool presentation (dsh-tools FileDiff). */
 export interface ToolFileDiff {
@@ -53,7 +69,7 @@ export type ToolCallView = {
     readonly diffs: readonly ToolFileDiff[];
 };
 /** Completed-call render intent (structural subset of dsh-tools
- *  ToolResultView). `web` results and unknown shapes fall back to raw text. */
+ * ToolResultView). Unknown shapes fall back to raw text. */
 export type ToolResultView = {
     readonly card: 'generic';
     readonly title?: string;
@@ -79,6 +95,13 @@ export type ToolResultView = {
         readonly type: string;
         readonly text?: string;
     }>;
+    readonly offset?: number;
+    readonly lines?: ReadonlyArray<{
+        readonly number: number;
+        readonly text: string;
+    }>;
+    readonly totalLines?: number;
+    readonly lang?: string;
 } | {
     readonly card: 'search';
     readonly shape: 'matches';
@@ -99,6 +122,25 @@ export type ToolResultView = {
     readonly paths: readonly string[];
     readonly truncated: boolean;
     readonly total: number;
+} | {
+    readonly card: 'web';
+    readonly kind: 'search';
+    readonly title?: string;
+    readonly sources: ReadonlyArray<{
+        readonly url: string;
+        readonly title?: string;
+        readonly snippet?: string;
+        readonly publishedAt?: string;
+    }>;
+    readonly answer?: string;
+    readonly truncated: boolean;
+} | {
+    readonly card: 'web';
+    readonly kind: 'fetch';
+    readonly title?: string;
+    readonly url: string;
+    readonly statusCode: number;
+    readonly truncated: boolean;
 };
 /** Re-derives the presentation views foldRows dropped, threaded into
  *  foldBack (module-level, no ctx access) by the channel. */

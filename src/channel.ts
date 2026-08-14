@@ -55,7 +55,23 @@ export interface ToolRow {
   startedAt: number
   /** Settled wall-clock duration, written by tool/result. */
   durationMs?: number
-}
+  /** Live child-run stats (subagent delegation), aggregated from the child
+   *  session's own events; undefined for non-delegation tools. */
+  childStats?: {
+    toolUses: number
+    totalTokens: number
+    firstEventAt?: number
+    endedAt?: number
+    stopReason?: string
+  }
+  /** Background job correlation (bash run_in_background / background
+   *  subagent): the row updates live from the jobs registry. */
+  jobId?: string
+  /** Job snapshot detail (e.g. `exit code: 0`) synced from ctx.jobs. */
+  jobDetail?: string
+  /** Job status synced from ctx.jobs (running/stopping/completed/killed/failed). */
+  jobStatus?: 'running' | 'stopping' | 'completed' | 'killed' | 'failed'
+ }
 
 /** One file change in a tool presentation (dsh-tools FileDiff). */
 export interface ToolFileDiff {
@@ -72,12 +88,21 @@ export type ToolCallView =
   | { readonly card: 'diff'; readonly title: string; readonly diffs: readonly ToolFileDiff[] }
 
 /** Completed-call render intent (structural subset of dsh-tools
- *  ToolResultView). `web` results and unknown shapes fall back to raw text. */
+ * ToolResultView). Unknown shapes fall back to raw text. */
 export type ToolResultView =
   | { readonly card: 'generic'; readonly title?: string; readonly content?: ReadonlyArray<{ readonly type: string; readonly text?: string }> }
   | { readonly card: 'terminal'; readonly title?: string; readonly output?: string; readonly exitCode?: number; readonly signal?: string }
   | { readonly card: 'diff'; readonly title?: string; readonly diffs: readonly ToolFileDiff[] }
-  | { readonly card: 'read'; readonly title?: string; readonly path?: string; readonly content?: ReadonlyArray<{ readonly type: string; readonly text?: string }> }
+  | {
+      readonly card: 'read'
+      readonly title?: string
+      readonly path?: string
+      readonly content?: ReadonlyArray<{ readonly type: string; readonly text?: string }>
+      readonly offset?: number
+      readonly lines?: ReadonlyArray<{ readonly number: number; readonly text: string }>
+      readonly totalLines?: number
+      readonly lang?: string
+    }
   | {
       readonly card: 'search'
       readonly shape: 'matches'
@@ -87,6 +112,15 @@ export type ToolResultView =
       readonly total: number
     }
   | { readonly card: 'search'; readonly shape: 'paths'; readonly title?: string; readonly paths: readonly string[]; readonly truncated: boolean; readonly total: number }
+  | {
+      readonly card: 'web'
+      readonly kind: 'search'
+      readonly title?: string
+      readonly sources: ReadonlyArray<{ readonly url: string; readonly title?: string; readonly snippet?: string; readonly publishedAt?: string }>
+      readonly answer?: string
+      readonly truncated: boolean
+    }
+  | { readonly card: 'web'; readonly kind: 'fetch'; readonly title?: string; readonly url: string; readonly statusCode: number; readonly truncated: boolean }
 
 /** The dsh-tools registry seam dsh-tui reads presentations through. The
  *  registry lives on the host plane; `get` takes the live agent as the
@@ -2339,6 +2373,142 @@ ${output}
   /** Tool cards by callId, so tool/result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
 
+  // --- subagent / background-job stats aggregation (delegation cards) -----
+  // dsh's parent-side tool/result carries no child statistics: the subagent
+  // tool renders `started subagent <id>` / `started background subagent task
+  // <jobId>` (or the child's final output) and bash backgrounds ack with
+  // `started background job <id>`. Token/tool counts live only in the CHILD
+  // session's own event log, so the channel subscribes to child
+  // session/event streams (bindAgent) and folds them here; the jobs registry
+  // (ctx.jobs) supplements finishedAt/status/detail for background cards.
+
+  /** childSessionId → live stats + the card currently displaying them. */
+  const childStatsBySession = new Map<string, NonNullable<ToolRow['childStats']>>()
+  /** childSessionId → the tool row rendering the delegation (re-bound on
+   *  settle so later child events keep updating the settled live card). */
+  const childCards = new Map<string, ChatRow>()
+  /** The most recent running subagent card — foreground delegations carry no
+   *  session id in their render text, so subagent/start binds them FIFO. */
+  let pendingForegroundCard: ChatRow | undefined
+
+  const touchChildStats = (childId: string): NonNullable<ToolRow['childStats']> => {
+    let stats = childStatsBySession.get(childId)
+    if (stats === undefined) {
+      stats = { toolUses: 0, totalTokens: 0 }
+      childStatsBySession.set(childId, stats)
+    }
+    return stats
+  }
+
+  /** Fold one child-session event into its stats and refresh the card. */
+  const trackChildEvent = (childId: string, event: SessionEvent): void => {
+    const stats = touchChildStats(childId)
+    if (stats.firstEventAt === undefined) stats.firstEventAt = event.time
+    switch (event.type) {
+      case 'tool/call':
+        stats.toolUses += 1
+        break
+      case 'assistant/message': {
+        const usage = event.data.usage
+        if (usage !== undefined) {
+          stats.totalTokens += usage.inputTokens
+            + (usage.cacheReadTokens ?? 0)
+            + (usage.cacheWriteTokens ?? 0)
+            + usage.outputTokens
+        }
+        break
+      }
+      case 'turn/end':
+        stats.endedAt = event.time
+        stats.stopReason = event.data.reason.kind
+        break
+      default:
+        break
+    }
+    const card = childCards.get(childId)
+    if (card?.tool !== undefined) {
+      card.tool.childStats = { ...stats }
+      state.emit()
+    }
+  }
+
+  /** Render-text shapes the subagent/bash tools produce on background ack. */
+  const STARTED_SUBAGENT = /^started (?:background )?(?:subagent task |subagent )([\w-]+)/
+  const STARTED_JOB = /^started background job ([\w-]+)/
+
+  /** Bind a settled delegation card to its child session / job. Called from
+   *  tool/result handling once the render text is known. */
+  const correlateDelegation = (card: ChatRow, name: string, resultText: string): void => {
+    if (card.tool === undefined) return
+    if (name === 'subagent' || name === 'subagent_fork') {
+      const match = STARTED_SUBAGENT.exec(resultText.trim())
+      if (match !== null) {
+        const childId = match[1] ?? ''
+        card.tool.jobId = childId
+        childCards.set(childId, card)
+        const stats = childStatsBySession.get(childId)
+        if (stats !== undefined) card.tool.childStats = { ...stats }
+        syncJobIntoCard(card, childId)
+      } else {
+        // Foreground: the render text is the child's output; the running card
+        // captured at subagent/start time holds the binding.
+        const pending = pendingForegroundCard
+        if (pending?.tool !== undefined && pending.tool.status === 'running' && pending.tool.name === 'subagent') {
+          pendingForegroundCard = undefined
+        }
+      }
+      return
+    }
+    if (name === 'bash' || name === 'pwsh') {
+      const match = STARTED_JOB.exec(resultText.trim())
+      if (match !== null) {
+        const jobId = match[1] ?? ''
+        card.tool.jobId = jobId
+        card.tool.childStats = card.tool.childStats ?? { toolUses: 0, totalTokens: 0 }
+        syncJobIntoCard(card, jobId)
+      }
+    }
+  }
+
+  /** Jobs registry seam (dsh-jobs-local behind ctx.jobs). Structural type —
+   *  the same pattern the channel already uses for other services. */
+  const jobs = ctx.get('jobs') as {
+    list(caller?: unknown): Array<{ id: string; status: string; detail?: string; startedAt: number; finishedAt?: number }>
+    get(id: string, caller?: unknown): { id: string; status: string; detail?: string; startedAt: number; finishedAt?: number }
+    onJobDone(listener: (snapshot: { id: string; status: string; detail?: string; startedAt: number; finishedAt?: number }) => void): () => void
+    onJobsChanged(listener: () => void): () => void
+  } | undefined
+
+  /** Refresh one card from a jobs snapshot (status/detail/duration). */
+  const syncJobIntoCard = (card: ChatRow, jobId: string): void => {
+    if (card.tool === undefined || jobs === undefined) return
+    let snapshot: { id: string; status: string; detail?: string; startedAt: number; finishedAt?: number }
+    try {
+      snapshot = jobs.get(jobId, agent)
+    } catch {
+      return // unknown or foreign job — keep the static rendering
+    }
+    card.tool.jobStatus = snapshot.status as NonNullable<ToolRow['jobStatus']>
+    if (snapshot.detail !== undefined) card.tool.jobDetail = snapshot.detail
+    const stats = card.tool.childStats ?? { toolUses: 0, totalTokens: 0 }
+    if (stats.firstEventAt === undefined) stats.firstEventAt = snapshot.startedAt
+    if (snapshot.finishedAt !== undefined) {
+      stats.endedAt = snapshot.finishedAt
+      if (snapshot.status === 'completed') stats.stopReason = 'completed'
+      else if (snapshot.status === 'killed') stats.stopReason = 'aborted'
+      else if (snapshot.status === 'failed') stats.stopReason = 'error'
+    }
+    card.tool.childStats = { ...stats }
+    state.emit()
+  }
+
+  /** Refresh every job-correlated card (jobs-change listener). */
+  const syncAllJobCards = (): void => {
+    for (const card of state.rows) {
+      if (card.kind === 'tool' && card.tool?.jobId !== undefined) syncJobIntoCard(card, card.tool.jobId)
+    }
+  }
+
   /** The host-plane tools registry (dsh-tools). Resolved once; absent in
    *  bare embedders — every presenter call soft-fails to undefined and the
    *  card falls back to raw text. */
@@ -2595,12 +2765,6 @@ ${output}
         break
       }
       case 'assistant/message': {
-        const row = ensureStreaming(event.seq)
-        row.time = event.time
-        const text = textOf(event.data.message.content)
-        if (text) row.text = text
-        row.streaming = false
-        streaming = undefined
         if (reasoning !== undefined) {
           // Seal, don't fold: the per-step duration settles here, but the
           // row keeps streaming=true (expanded) until turn/end — WebUI
@@ -2695,6 +2859,11 @@ ${output}
         toolCards.set(event.data.callId, card)
         state.rows.push(card)
         state.activeToolCount += 1
+        if (event.data.name === 'subagent' || event.data.name === 'subagent_fork') {
+          // Foreground delegations carry no child id in their result text;
+          // the scoped subagent/start event binds this card to the child.
+          pendingForegroundCard = card
+        }
         state.contextSegments.assistant += estimateTokens(
           `${event.data.name}${event.data.arguments}`,
         )
@@ -2723,6 +2892,9 @@ ${output}
             // pairs the args: live cards are never folded, so it is intact.
             card.tool.resultView = presentResultView(card.tool.name, card.tool.argsFull ?? '', event.data)
             state.contextSegments.tools += estimateTokens(result)
+            // Background/subagent delegations: bind the card to its child
+            // session or job id, parsed from the ack render text.
+            correlateDelegation(card, card.tool.name, result)
           }
           state.activeToolCount = Math.max(0, state.activeToolCount - 1)
           // The card is settled: no later event looks it up by callId, so
@@ -2907,8 +3079,41 @@ ${output}
           for (const dispose of disposers) dispose()
         }
       })(),
+      // Foreground subagent runs carry no id in their render text: the
+      // scoped lifecycle event names the child session, binding the running
+      // card FIFO. Absent service → foreground cards show duration only.
+      (() => {
+        const startListener = (payload: unknown): void => {
+          const info = payload as { id?: string }
+          if (typeof info.id !== 'string') return
+          const card = pendingForegroundCard
+          if (card?.tool !== undefined) {
+            childCards.set(info.id, card)
+            card.tool.childStats = { ...(childStatsBySession.get(info.id) ?? { toolUses: 0, totalTokens: 0 }) }
+            state.emit()
+          }
+          pendingForegroundCard = undefined
+        }
+        const disposers = [
+          ctx.on('subagent/start' as never, startListener as never),
+          jobs?.onJobsChanged(() => syncAllJobCards()),
+        ]
+        return () => {
+          for (const dispose of disposers) dispose?.()
+        }
+      })(),
       ctx.on('session/event', (session, event) => {
-        if (session !== agent.session) return
+        // Child (subagent) sessions of the live agent: aggregate tool-use and
+        // token stats for the delegation card instead of dropping them. The
+        // dsh subagent drivers stamp `origin: 'subagent'` +
+        // `parentSession` on every child session header.
+        if (session !== agent.session) {
+          const header = session.header as { origin?: string; parentSession?: string }
+          if (header.origin === 'subagent' && header.parentSession === agent.session.id) {
+            trackChildEvent(String(session.id), event)
+          }
+          return
+        }
         // Live working-activity snapshot (log-only event, appended by
         // dsh-working-activity for UI consumers). Consumed here — NOT in
         // renderEvent — so replayed history never resurrects a stale line

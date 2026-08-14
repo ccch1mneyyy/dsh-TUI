@@ -129,7 +129,7 @@ const darkTheme: Theme = {
   suggestion: rgb('#ABC2EC'), // Border Blue — focus/selection
   remember: rgb('#ABC2EC'),
   background: rgb('#5E88CC'), // Accent Blue — badge fill
-  success: rgb('#82B89D'), // Mist green (from #4E9675)
+  success: rgb('#7DA1DE'), // DeepSeek blue — success carries brand blue (from #4E9675 green)
   error: rgb('#DA8A93'), // Soft rose
   warning: rgb('#D8B270'), // Soft amber
   merged: rgb('#B3A0D4'), // Soft violet (matches autoAccept)
@@ -207,7 +207,7 @@ const lightTheme: Theme = {
   suggestion: rgb('#3F6CC4'), // Primary Blue — focus/selection
   remember: rgb('#27478C'), // Deep Outline — picker titles
   background: rgb('#3F6CC4'), // Primary Blue — badge fill
-  success: rgb('#4E9675'),
+  success: rgb('#3F6CC4'), // DeepSeek blue — success carries brand blue
   error: rgb('#C65D6B'), // Muted rose-red
   warning: rgb('#C08A3E'), // Muted amber
   merged: rgb('#9B86B8'), // Muted violet (matches autoAccept)
@@ -287,7 +287,7 @@ const darkAnsiTheme: Theme = {
   suggestion: 'ansi:blueBright',
   remember: 'ansi:blueBright',
   background: 'ansi:cyanBright',
-  success: 'ansi:greenBright',
+  success: 'ansi:blueBright',
   error: 'ansi:redBright',
   warning: 'ansi:yellowBright',
   merged: 'ansi:magentaBright',

@@ -264,8 +264,8 @@ declare const dict: {
         readonly en: "Agent preset switched: {{preset}}";
     };
     readonly 'questionnaire-answered': {
-        readonly zh: "📋 问卷已答 · {{total}} 题";
-        readonly en: "📋 Questionnaire answered · {{total}} questions";
+        readonly zh: "问卷已答 · {{total}} 题";
+        readonly en: "Questionnaire answered · {{total}} questions";
     };
     readonly 'theme-sakura-name': {
         readonly zh: "樱花粉";
@@ -804,8 +804,8 @@ declare const dict: {
         readonly en: "Type your answer before submitting";
     };
     readonly 'question-header-progress': {
-        readonly zh: " 📋 提问 · 第 {{position}}/{{total}} 题{{remaining}} ";
-        readonly en: " 📋 Question {{position}}/{{total}} {{remaining}} ";
+        readonly zh: " 提问 · 第 {{position}}/{{total}} 题{{remaining}} ";
+        readonly en: " Question {{position}}/{{total}} {{remaining}} ";
     };
     readonly 'question-remaining-more': {
         readonly zh: " · 还剩 {{n}} 题";

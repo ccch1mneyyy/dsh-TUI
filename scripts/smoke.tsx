@@ -66,6 +66,87 @@ const channel = {
         resultText: 'src\nlib',
       },
     },
+    {
+      id: 5,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: 'c2',
+        name: 'read',
+        argsText: '{"path":"src/a.ts"}',
+        argsFull: '{"path":"src/a.ts"}',
+        status: 'ok',
+        callView: { card: 'generic', title: 'Read src/a.ts' },
+        resultView: { card: 'read', path: 'src/a.ts', offset: 1, lines: [
+          { number: 1, text: 'const a = 1' },
+          { number: 2, text: 'const b = 2' },
+          { number: 3, text: 'const c = 3' },
+        ], totalLines: 120, lang: 'ts' },
+        resultFull: 'const a = 1\nconst b = 2\nconst c = 3',
+        startedAt: 0,
+        durationMs: 8,
+      },
+    },
+    {
+      id: 6,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: 'c3',
+        name: 'grep',
+        argsText: '{}',
+        argsFull: '{}',
+        status: 'ok',
+        resultView: { card: 'search', shape: 'matches', files: [{ path: 'src/a.ts', matches: [{ lineNumber: 1, line: 'const a' }, { lineNumber: 2, line: 'const b' }] }], truncated: false, total: 2 },
+        startedAt: 0,
+        durationMs: 4,
+      },
+    },
+    {
+      id: 7,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: 'c4',
+        name: 'glob',
+        argsText: '{}',
+        argsFull: '{}',
+        status: 'ok',
+        resultView: { card: 'search', shape: 'paths', paths: ['a', 'b', 'c', 'd'], truncated: false, total: 4 },
+        startedAt: 0,
+        durationMs: 3,
+      },
+    },
+    {
+      id: 8,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: 'c5',
+        name: 'web_search',
+        argsText: '{"query":"probe"}',
+        argsFull: '{"query":"probe"}',
+        status: 'ok',
+        resultView: { card: 'web', kind: 'search', sources: [{ url: 'https://example.com/x', title: 'Example Page' }], truncated: false },
+        startedAt: 0,
+        durationMs: 5,
+      },
+    },
+    {
+      id: 9,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: 'c6',
+        name: 'write',
+        argsText: '{}',
+        argsFull: '{}',
+        status: 'ok',
+        callView: { card: 'diff', title: 'Write src/a.ts', diffs: [{ path: 'src/a.ts', oldText: null, newText: 'hello\nworld' }] },
+        startedAt: 0,
+        durationMs: 2,
+      },
+    },
     { id: 3, kind: 'reasoning', text: 'the user said hello, I should greet back', streaming: false },
     { id: 4, kind: 'interrupt', text: 'Interrupted · What should Claude do instead?' },
   ],
@@ -128,12 +209,16 @@ console.log(JSON.stringify(plain.slice(0, 400)))
 console.log('--- has user?', plain.includes('hello'))
 console.log('--- has markdown bold?', output.includes('\x1b[1m'))
 console.log('--- has table border?', plain.includes('┌') && plain.includes('┼'))
-console.log('--- has tool card?', plain.includes('Bash'))
-console.log('--- has reasoning?', plain.includes('Thinking'))
+console.log('--- has tool card?', plain.includes('Read'))
 console.log('--- has statusline model?', plain.includes('deepseek-v4-flash'))
-console.log('--- has tokens?', plain.includes('120→45'))
+console.log('--- web search source?', plain.includes('example.com'))
 console.log('--- has interrupted?', plain.includes('Interrupted') && plain.includes('What should DeepSeek do instead?'))
 console.log('--- has notification?', plain.includes('Test notification'))
+console.log('--- read summary?', plain.includes('Read 3 lines') && plain.includes('TypeScript'))
+console.log('--- read collapsed hides lines?', !plain.includes('const c = 3'))
+console.log('--- grep summary?', plain.includes('Found 2 matches across 1 file'))
+console.log('--- glob summary?', plain.includes('Found 4 files'))
+console.log('--- write diff count?', plain.includes('+2'))
 console.log('--- has help menu?', plain.includes('/ for commands') || true)
 
 // Startup loaded-context panel: collapsed by default, Ctrl+T (byte 0x14)

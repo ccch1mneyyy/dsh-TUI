@@ -5,8 +5,9 @@ type Props = {
     shouldAnimate: boolean;
 };
 /**
- * The status dot on tool-call rows (ported from the leak's ToolUseLoader):
- * blinking `●` while running, green on success, red on error, dim when queued.
+ * The status dot on tool-card headers (ported from the leak's
+ * ToolUseLoader): blinking `●` while running, theme-blue on success, rose on
+ * error, dim while queued.
  */
 export declare function ToolUseLoader({ isError, isUnresolved, shouldAnimate, }: Props): React.ReactNode;
 export {};

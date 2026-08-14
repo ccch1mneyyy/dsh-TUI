@@ -306,6 +306,10 @@ export function MessageList({
               toolResultView={tool?.resultView}
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
+              toolChildStats={tool?.childStats}
+              toolJobId={tool?.jobId}
+              toolJobStatus={tool?.jobStatus}
+              toolJobDetail={tool?.jobDetail}
               nowSec={tool?.status === 'running' ? nowSec : undefined}
               onToggleRow={onToggleRow}
               setRowRef={setRowRef}
@@ -355,6 +359,14 @@ type MemoRowProps = {
   toolResultView: ToolResultView | undefined
   toolStartedAt: number | undefined
   toolDurationMs: number | undefined
+  /** Live delegation stats (subagent child-session aggregation) — flattened
+   *  like the rest: the channel writes a fresh object per update, so a ref
+   *  compare catches each tick. */
+  toolChildStats: ToolRow['childStats']
+  /** Background job correlation + live status synced from ctx.jobs. */
+  toolJobId: ToolRow['jobId']
+  toolJobStatus: ToolRow['jobStatus']
+  toolJobDetail: ToolRow['jobDetail']
   /** Second-resolution clock, forwarded only while the tool runs so the
    *  live elapsed label ticks; settled rows never receive a changing prop. */
   nowSec: number | undefined
@@ -387,6 +399,10 @@ function TranscriptRow({
   toolResultView,
   toolStartedAt,
   toolDurationMs,
+  toolChildStats,
+  toolJobId,
+  toolJobStatus,
+  toolJobDetail,
   onToggleRow,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
@@ -499,6 +515,10 @@ function TranscriptRow({
         resultView: toolResultView,
         startedAt: toolStartedAt,
         durationMs: toolDurationMs,
+        childStats: toolChildStats,
+        jobId: toolJobId,
+        jobStatus: toolJobStatus,
+        jobDetail: toolJobDetail,
       }
       return (
         <Box flexDirection="column" ref={ref}>

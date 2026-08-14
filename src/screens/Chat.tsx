@@ -280,7 +280,7 @@ export function Chat({
     ? (TITLE_ANIMATION_FRAMES[titleFrame] ?? '✦')
     : '✦'
   useTerminalTitle(
-    `${titlePrefix} 🐋 ${channel.sessionTitle}`,
+    `${titlePrefix} · ${channel.sessionTitle}`,
   )
 
   /**

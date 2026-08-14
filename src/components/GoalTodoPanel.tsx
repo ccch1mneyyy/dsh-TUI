@@ -74,7 +74,7 @@ export function GoalTodoPanel({ channel }: { channel: Channel }): React.ReactNod
       {goal !== undefined && (
         <Box flexDirection="column" marginBottom={todos.length > 0 ? 1 : 0}>
           <Box flexDirection="row" width="100%">
-            <Text color="suggestion">🎯 </Text>
+            <Text color="suggestion">◆ </Text>
             <Box flexGrow={1} flexShrink={1}>
               <Text bold wrap="truncate">
                 {goal.objective}

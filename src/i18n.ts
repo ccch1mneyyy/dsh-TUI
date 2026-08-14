@@ -92,7 +92,7 @@ const dict = {
   'agent-preset-switched': { zh: 'Agent preset 已切换：{{preset}}', en: 'Agent preset switched: {{preset}}' },
 
   // ── questions.ts ─────────────────────────────────────────────────────
-  'questionnaire-answered': { zh: '📋 问卷已答 · {{total}} 题', en: '📋 Questionnaire answered · {{total}} questions' },
+  'questionnaire-answered': { zh: '问卷已答 · {{total}} 题', en: 'Questionnaire answered · {{total}} questions' },
 
   // ── customTheme.ts (doc example only) ───────────────────────────────
   'theme-sakura-name': { zh: '樱花粉', en: 'Sakura Pink' },
@@ -255,7 +255,7 @@ const dict = {
   'question-select-or-answer': { zh: '至少选择一个选项，或在最后一行输入回答', en: 'Select at least one option, or type an answer on the last line' },
   'question-answer-or-check': { zh: '输入回答或勾选选项后再提交', en: 'Type an answer or check options before submitting' },
   'question-type-answer-first': { zh: '先输入回答内容再提交', en: 'Type your answer before submitting' },
-  'question-header-progress': { zh: ' 📋 提问 · 第 {{position}}/{{total}} 题{{remaining}} ', en: ' 📋 Question {{position}}/{{total}} {{remaining}} ' },
+  'question-header-progress': { zh: ' 提问 · 第 {{position}}/{{total}} 题{{remaining}} ', en: ' Question {{position}}/{{total}} {{remaining}} ' },
   'question-remaining-more': { zh: ' · 还剩 {{n}} 题', en: ' · {{n}} left' },
   'question-hint-type': { zh: '输入回答', en: 'Type answer' },
   'question-hint-enter': { zh: 'Enter 提交', en: 'Enter submit' },

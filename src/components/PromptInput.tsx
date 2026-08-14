@@ -848,7 +848,7 @@ export function PromptInput({
         <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
           {channel.pending.some(item => item.placement === 'steer') && (
             <Box flexDirection="column">
-              <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
+              <Text dimColor>↯ {t('input-pending-steer-label')}</Text>
               {channel.pending
                 .filter(item => item.placement === 'steer')
                 .map(item => (
@@ -860,7 +860,7 @@ export function PromptInput({
           )}
           {channel.pending.some(item => item.placement === 'followup') && (
             <Box flexDirection="column">
-              <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
+              <Text dimColor>○ {t('input-pending-queue-label')}</Text>
               {channel.pending
                 .filter(item => item.placement === 'followup')
                 .map(item => (

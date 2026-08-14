@@ -1,6 +1,6 @@
 import React from 'react'
 import Box from '../ink/components/Box.js'
-import Text from '../ink/components/Text.js'
+import { Text } from '../ui.js'
 import { useBlink } from '../hooks/useBlink.js'
 import { BLACK_CIRCLE } from '../cc/figures.js'
 
@@ -11,8 +11,9 @@ type Props = {
 }
 
 /**
- * The status dot on tool-call rows (ported from the leak's ToolUseLoader):
- * blinking `●` while running, green on success, red on error, dim when queued.
+ * The status dot on tool-card headers (ported from the leak's
+ * ToolUseLoader): blinking `●` while running, theme-blue on success, rose on
+ * error, dim while queued.
  */
 export function ToolUseLoader({
   isError,
