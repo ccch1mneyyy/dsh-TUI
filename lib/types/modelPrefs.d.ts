@@ -5,7 +5,8 @@
  * missing/corrupt file or an incomplete route simply falls back to the
  * harness default. Explicit `provider`/`model` keys in cordis.yml win over
  * this preference (deployment choice over runtime preference, matching
- * activityFrames and agent-preset).
+ * activityFrames and agent-preset) — but only as a COMPLETE pair; the
+ * atomic resolution itself lives in modelRoute.ts (issue #67).
  */
 /** One persisted model route: the provider route plus its model id. */
 export interface ModelPref {

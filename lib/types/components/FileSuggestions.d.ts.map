@@ -1,0 +1,1 @@
+{"version":3,"file":"FileSuggestions.d.ts","sourceRoot":"","sources":["../../../src/components/FileSuggestions.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAK,MAAM,OAAO,CAAA;AAKzB;;;;GAIG;AACH,wBAAgB,eAAe,CAAC,EAC9B,KAAK,EACL,aAAa,EACb,OAAO,GACR,EAAE;IACD,KAAK,EAAE,SAAS,MAAM,EAAE,CAAA;IACxB,aAAa,EAAE,MAAM,CAAA;IACrB,OAAO,EAAE,MAAM,CAAA;CAChB,GAAG,KAAK,CAAC,SAAS,CAqClB"}

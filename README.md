@@ -50,7 +50,7 @@
 
 ## 快速开始
 
-前置条件：可用的终端 TTY、官方 `dsh` CLI，以及 `pnpm`。运行模型还需要
+前置条件：可用的终端 TTY、官方 `dsh` CLI，以及 `pnpm` 10+。运行模型还需要
 `DEEPSEEK_API_KEY`。
 
 ```sh

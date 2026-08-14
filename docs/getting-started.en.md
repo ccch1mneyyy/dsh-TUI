@@ -6,7 +6,11 @@
 
 - Node.js `^22.19 || >=24`; CI uses Node 24.
 - The official DeepSeek Harness CLI: `@deepseek-ai/dsh`.
-- `pnpm`; `dsh plugin` delegates profile installation to pnpm.
+- `pnpm` **10 or newer** (CI uses 11); `dsh plugin` delegates profile
+  installation to pnpm. pnpm 9 hoists transitive dependencies differently,
+  leaving `dsh-working-activity` unresolvable inside the profile — the TUI
+  then exits right after startup with almost no error output (issue #60,
+  see Troubleshooting below).
 - An interactive terminal TTY. `dsh-cc-tui` cannot start with stdout redirected.
 - `DEEPSEEK_API_KEY`. Set `DEEPSEEK_BASE_URL` as well when using a compatible
   custom endpoint.
@@ -93,6 +97,27 @@ dsh-cc.cmd --resume
 last selected by the TUI. Set `DSH_CC_WORKSPACE` to override the working
 directory used by the batch launcher.
 
+## Update to the latest version
+
+The project moves fast. Updating reuses the install command with an explicit
+`@latest`:
+
+```sh
+dsh plugin --profile cc-tui add dsh-cc-tui@latest
+```
+
+- Without `@latest`, pnpm resolves within the version range already recorded
+  in the profile's `package.json` (for example `^0.1.4`) and may stay on an
+  old line — the usual reason "re-running the install command" appears to
+  change nothing.
+- To confirm: the startup banner shows the running version
+  (`✦ dsh-cc vX.Y.Z`).
+- Your `cordis.patch.yml` override layer survives updates untouched. Session
+  storage may move between versions (since 0.3.7, `/resume` uses the JSONL
+  session store shared with dsh web), so older sessions missing from the
+  list after a major update is expected — the underlying data is not
+  deleted.
+
 ## Profile configuration
 
 The user override file is:
@@ -112,7 +137,7 @@ the profile.
 ## Develop from source
 
 ```sh
-git clone https://github.com/yuxiaoLeeMarks/dsh-TUI.git
+git clone https://github.com/ccch1mneyyy/dsh-TUI.git
 cd dsh-TUI
 pnpm install --frozen-lockfile
 pnpm build
@@ -148,6 +173,18 @@ redirecting its main output to another command or file.
 
 Make sure the global npm bin directory is on `PATH`, then open a new terminal.
 `install.sh` checks both commands before installation.
+
+### The TUI exits right back to the shell with almost no error (pnpm 9)
+
+In a profile installed by pnpm 9, the transitive dependency
+`dsh-working-activity` is not hoisted where the loader can resolve it; the
+failed module resolution tears down the whole plugin tree, and the TUI prints
+the resume hint and exits (issue #60). Upgrade pnpm to 10+ and reinstall:
+
+```sh
+npm install -g pnpm@latest
+dsh plugin --profile cc-tui add dsh-cc-tui@latest
+```
 
 ### The model reports missing credentials
 

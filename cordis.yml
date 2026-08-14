@@ -17,9 +17,11 @@
     # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
     # inline 渲染, 鼠标交给终端模拟器原生选择。
     fullscreen: true
-    # Startup display seed for the header/statusline; the live value from
-    # request headers replaces it after the first turn. Keep in sync with
-    # the adapter's reasoningEffort below.
+    # Reasoning effort applied to every request, validated against the live
+    # route's adapter levels (deepseek: off/high/max) — an unlisted level is
+    # ignored and the adapter default applies. Wins over the persisted
+    # Shift+Tab choice (~/.dsh-cc/effort.json); also seeds the startup
+    # header/statusline until the first request header reports the live value.
     effort: max
     #  feeds the chosen session id through this env var.
     sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
@@ -142,10 +144,14 @@
 # Live working line for the status bar: thinking copy / running tool / turn
 # summary. dsh-cc consumes its log-only activity/status events; the
 # plugin's own TUI prompt slot is skipped without an official dsh-tui.
+# Mounted through dsh-cc-tui's `./working-activity` re-export (not the bare
+# `dsh-working-activity` name) so the row resolves from install layouts that
+# never link transitive dependencies into the boot anchor's node_modules —
+# pnpm's isolated profile layout, issue #60.
 # publishIntervalMs 500: live-phase snapshots republish every 500ms so the
 # cc-tui status-line elapsed timers tick smoothly (default 2000ms).
 - id: working-activity
-  name: 'dsh-working-activity'
+  name: 'dsh-cc-tui/working-activity'
   config:
     publishIntervalMs: 500
 

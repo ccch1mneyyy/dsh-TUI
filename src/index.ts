@@ -19,17 +19,23 @@ export const inject = ['agents']
 export interface Config {
   /** Existing session to attach; a fresh session is created when absent. */
   sessionId?: string
-  /** LLM provider route. When absent, the `/model` choice persisted in
-   *  `~/.dsh-cc/model.json` wins, then the harness `deepseek-official`
-   *  route. */
+  /** LLM provider route. The route resolves atomically (issue #67): when
+   *  cordis.yml names BOTH `provider` and `model`, that pair wins; otherwise
+   *  the `/model` choice persisted in `~/.dsh-cc/model.json` wins whole;
+   *  otherwise the harness defaults (`deepseek-official`). A provider-only
+   *  pin never half-overrides the persisted choice. */
   provider?: string
-  /** Model override passed to the agent. When absent, the persisted `/model`
-   *  choice wins, then the harness default (`deepseek-v4-flash`). */
+  /** Model override passed to the agent; resolved together with `provider`
+   *  as one atomic route (see `provider`). Harness default model:
+   *  `deepseek-v4-flash`. */
   model?: string
   /** Session working directory; defaults to the invoking directory. */
   cwd?: string
-  /** Configured reasoning effort, displayed from startup (the live value
-   *  from request headers replaces it once the first turn runs). */
+  /** Reasoning effort applied to every request, validated against the live
+   *  route's adapter levels (an unlisted level is ignored and the adapter
+   *  default applies). Wins over the persisted Shift+Tab choice; also seeds
+   *  the startup status line until the first request header reports the
+   *  live value. */
   effort?: string
   /** Show the dsh-working-activity live working line on the status bar
    *  (consumes its log-only `activity/status` events; off hides it). */
@@ -60,7 +66,7 @@ export const Config: Schema<Config> = Schema.object({
   // No schema defaults on the route: a `.default()` here would make an
   // unset key indistinguishable from an explicit cordis.yml choice and the
   // persisted `/model` preference could never win (issue #30). The defaults
-  // live at the end of the fallback chain in plugin.ts instead.
+  // live at the end of the fallback chain in modelRoute.ts instead.
   provider: Schema.string().required(false),
   model: Schema.string().required(false),
   cwd: Schema.string().required(false),

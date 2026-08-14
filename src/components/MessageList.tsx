@@ -14,6 +14,8 @@ import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
+import { stringWidth } from '../ink/stringWidth.js'
+import { truncateToWidth } from '../ink/truncateToWidth.js'
 
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
@@ -561,10 +563,11 @@ function TranscriptRow({
 }
 
 /** Folded compact-summary preview: whitespace flattened, capped with an
- *  ellipsis so the fold line never wraps. */
+ *  ellipsis so the fold line never wraps. `limit` is terminal cells, so
+ *  CJK wide chars count double and never split mid-glyph. */
 function compactPreview(text: string, limit = 60): string {
   const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length <= limit ? flat : `${flat.slice(0, limit - 1)}…`
+  return stringWidth(flat) <= limit ? flat : `${truncateToWidth(flat, limit - 1)}…`
 }
 
 const MemoRow = React.memo(TranscriptRow)

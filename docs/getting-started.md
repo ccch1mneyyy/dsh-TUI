@@ -6,7 +6,10 @@
 
 - Node.js `^22.19 || >=24`。CI 使用 Node 24。
 - 官方 DeepSeek Harness CLI：`@deepseek-ai/dsh`。
-- `pnpm`。`dsh plugin` 会把 profile 内的包安装交给 pnpm。
+- `pnpm` **10 或更高**（CI 使用 11）。`dsh plugin` 会把 profile 内的包安装
+  交给 pnpm；pnpm 9 对传递依赖的提升行为不同，profile 里会解析不到
+  `dsh-working-activity`，表现为启动后立刻退出且几乎无报错（见 issue #60
+  与下方常见问题）。
 - 支持交互输入的终端 TTY。`dsh-cc-tui` 不支持把 stdout 重定向后启动。
 - `DEEPSEEK_API_KEY`。使用自定义兼容端点时还可设置
   `DEEPSEEK_BASE_URL`。
@@ -89,6 +92,22 @@ dsh-cc.cmd --resume
 `--resume` 会读取 `%USERPROFILE%\.dsh-cc\resume.txt`，恢复 TUI 最近选择的
 会话。设置 `DSH_CC_WORKSPACE` 可以覆盖批处理启动器采用的工作目录。
 
+## 更新到最新版本
+
+项目迭代很快，更新复用安装命令，显式指定 `@latest`：
+
+```sh
+dsh plugin --profile cc-tui add dsh-cc-tui@latest
+```
+
+- 不带 `@latest` 时 pnpm 会按 profile `package.json` 里已记录的版本范围
+  （如 `^0.1.4`）就地解析，可能停留在旧的主线上——这是"重复执行安装命令
+  但版本没变"的常见原因。
+- 确认生效：启动横幅右上角显示当前版本（`✦ dsh-cc vX.Y.Z`）。
+- 用户覆盖层 `cordis.patch.yml` 在更新中原样保留；会话数据的存放位置
+  可能随版本变化（如 0.3.7 起 `/resume` 改用与 dsh web 共享的 JSONL
+  会话库），跨大版本更新后旧会话不在列表属预期，原数据不会被删除。
+
 ## Profile 配置
 
 用户覆盖文件位于：
@@ -106,7 +125,7 @@ $DSH_HOME/profiles/cc-tui/cordis.patch.yml
 ## 从源码开发
 
 ```sh
-git clone https://github.com/yuxiaoLeeMarks/dsh-TUI.git
+git clone https://github.com/ccch1mneyyy/dsh-TUI.git
 cd dsh-TUI
 pnpm install --frozen-lockfile
 pnpm build
@@ -139,6 +158,17 @@ stdout 不是 TTY。请直接在终端中启动，不要把主进程输出管道
 
 确认全局 npm bin 目录在 `PATH` 中，并重新打开终端。`install.sh` 会在安装前检查
 这两个命令。
+
+### 启动后立刻退回 shell，几乎没有报错（pnpm 9）
+
+pnpm 9 安装的 profile 里，传递依赖 `dsh-working-activity` 不会被提升到
+loader 可解析的位置，模块解析失败导致整棵插件树被回收，TUI 打印 resume
+提示后直接退出（issue #60）。升级 pnpm 到 10+ 后重装即可：
+
+```sh
+npm install -g pnpm@latest
+dsh plugin --profile cc-tui add dsh-cc-tui@latest
+```
 
 ### 模型启动失败或提示没有凭证
 

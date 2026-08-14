@@ -162,9 +162,6 @@ export function Chat({
   const [themePickerOpen, setThemePickerOpen] = React.useState(false)
   const [themeIndex, setThemeIndex] = React.useState(0)
   const [themeName, setTheme] = useTheme()
-  /** `/new` confirmation: a conversation with content needs a second `/new`
-   *  (CC asks before discarding). Auto-disarms after a few seconds. */
-  const newConfirmRef = React.useRef(false)
   const [showAllMessages, setShowAllMessages] = React.useState(false)
   const [thinkingVisible, setThinkingVisible] = React.useState(true)
   const [thinkingOpen, setThinkingOpen] = React.useState(false)
@@ -444,24 +441,10 @@ export function Chat({
         return true
       }
       case 'new': {
-        // CC confirms before discarding a conversation with content: the
-        // first /new arms, a second /new within 4s executes.
+        // One-shot `/new` (issue #25): the old session stays persisted and
+        // is recoverable via /resume, so discarding the live view is
+        // non-destructive — no CC-style "press /new again" confirmation.
         setHelpOpen(false)
-        const hasContent = channel.rows.some(
-          row => row.kind === 'user' || row.kind === 'assistant',
-        )
-        if (hasContent && !newConfirmRef.current) {
-          newConfirmRef.current = true
-          channel.notify('Press /new again to confirm — this starts a fresh conversation', {
-            color: 'warning',
-            timeoutMs: 4000,
-          })
-          setTimeout(() => {
-            newConfirmRef.current = false
-          }, 4000)
-          return true
-        }
-        newConfirmRef.current = false
         void channel.newSession().then((ok) => {
           if (ok) channel.notify('New session started')
         })
@@ -531,6 +514,12 @@ export function Chat({
         })()
         return true
       }
+      case 'rewind':
+        // Same picker as PromptInput's double-Esc on an empty input (CC
+        // rewind); `openRewind` notifies when there is nothing to rewind.
+        setHelpOpen(false)
+        openRewind()
+        return true
       case 'exit':
         onExit()
         return true

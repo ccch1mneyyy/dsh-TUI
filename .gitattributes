@@ -1,0 +1,13 @@
+# 统一以 LF 入库并检出。tsc 会把源码模板字符串里的换行原样透传进 lib/
+# 构建产物（随 npm 包分发、其中的提示词片段会真实发给模型）——Windows 上
+# core.autocrlf 检出的 CRLF 会顺着这条链污染产物（实测 channel.ts 的
+# <bash-stdout> 包裹与 reconciler 的告警文案均会带上 \r）。钉死 LF 后
+# 任何平台的贡献者构建出的 lib/ 都字节一致。
+* text=auto eol=lf
+
+# Windows 批处理由 cmd.exe 解析，保持 CRLF 检出（LF-only 批处理在标签
+# 跳转与 for 循环上有历史解析怪癖）。入库仍按 LF 规范化。
+*.cmd text eol=crlf
+
+# 二进制资源
+*.png binary

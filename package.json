@@ -11,6 +11,10 @@
       "types": "./lib/types/index.d.ts",
       "import": "./lib/types/index.js"
     },
+    "./working-activity": {
+      "types": "./lib/types/working-activity.d.ts",
+      "import": "./lib/types/working-activity.js"
+    },
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"

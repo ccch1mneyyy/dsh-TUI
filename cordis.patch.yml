@@ -191,9 +191,10 @@
         # inline 模式下由终端原生选择/复制/scrollback 接管；想用 fullscreen 在
         # profile 用户层 cordis.patch.yml 同 id 覆盖整行 config（fullscreen: true）。
         fullscreen: false
-        # Startup display seed for the header/statusline; the live value from
-        # request headers replaces it after the first turn. Keep in sync with
-        # the adapter's reasoningEffort below.
+        # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
+        # （deepseek: off/high/max）——不在档位表里的值被忽略，回落 adapter
+        # 默认值。优先于持久化的 Shift+Tab 选择（~/.dsh-cc/effort.json）；
+        # 同时作为顶栏/状态栏的启动显示，首个请求头回来后以实际值为准。
         effort: max
         # Static preset choice (CC_TUI_PRESET overrides): wins over the
         # persisted `/preset` preference (~/.dsh-cc/agent-preset.json), which
@@ -202,12 +203,15 @@
         sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
 
     # Live working-line data source (thinking copy / running tool / turn
-    # summary). dsh-working-activity ships as a plain npm dependency of
-    # dsh-cc-tui — transitive deps never enter dsh.profile.bundles — so this
-    # layer inserts the row itself instead of relying on a separate bundle.
+    # summary). Mounted through dsh-cc-tui's own `./working-activity`
+    # re-export, NOT the bare `dsh-working-activity` name: the dsh Loader
+    # resolves row names from the profile directory, and pnpm's isolated
+    # node_modules layout never links a transitive dependency into the
+    # profile root (npm's flat layout hid this), so the bare name died with
+    # ERR_MODULE_NOT_FOUND and disposed the whole app at boot (#60).
     # publishIntervalMs 500 keeps the status-line timers ticking smoothly
     # (default 2000ms).
     - id: working-activity
-      name: 'dsh-working-activity'
+      name: 'dsh-cc-tui/working-activity'
       config:
         publishIntervalMs: 500

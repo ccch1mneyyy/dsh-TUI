@@ -35,6 +35,10 @@ declare const dict: {
         readonly zh: "无法写入 ~/.dsh-cc/model.json，模型选择不会保存到重启后";
         readonly en: "Cannot write ~/.dsh-cc/model.json, the model choice will not survive a restart";
     };
+    readonly 'model-route-invalid': {
+        readonly zh: "持久化的模型路由 {{provider}}/{{model}} 不在该 provider 的模型列表中，已整体回退到 {{fallback}}";
+        readonly en: "Persisted model route {{provider}}/{{model}} is not advertised by that provider; fell back to {{fallback}}";
+    };
     readonly 'unknown-activity-preset': {
         readonly zh: "未知预设「{{name}}」· /activity frames 查看全部";
         readonly en: "Unknown preset \"{{name}}\" · /activity frames to view all";
@@ -94,6 +98,14 @@ declare const dict: {
     readonly 'mcp-server-tools': {
         readonly zh: "{{server}}（{{count}} 个工具）: {{tools}}";
         readonly en: "{{server}} ({{count}} tools): {{tools}}";
+    };
+    readonly 'child-stderr-line': {
+        readonly zh: "子进程 stderr: {{line}}";
+        readonly en: "Subprocess stderr: {{line}}";
+    };
+    readonly 'child-stderr-line-repeat': {
+        readonly zh: "子进程 stderr: {{line}}（重复 {{count}} 次）";
+        readonly en: "Subprocess stderr: {{line}} (repeated {{count}}×)";
     };
     readonly 'export-title': {
         readonly zh: "# dsh-cc 会话导出";

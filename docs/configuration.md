@@ -44,7 +44,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`dsh-cc-tui` 的�
 | `provider` | `deepseek-official` | DSH 模型路由名称 |
 | `model` | `deepseek-v4-flash` | 启动模型；`/model` 可通过 session fork 实时切换 |
 | `cwd` | `process.cwd()` | Agent 工作目录与文件策略根目录 |
-| `effort` | 配置层通常为 `max` | 顶栏初始推理等级；首个请求后由实际模型状态更新 |
+| `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按模型档位校验，deepseek 仅 off/high/max，非法档位静默回落默认；优先于 Shift+Tab 持久化选择），兼作顶栏启动显示 |
 | `activity` | `true` | 是否显示实时工作状态行 |
 | `activityFrames` | 持久化选择或 `claude` | 工作状态动画预设；也可通过 `/activity` 修改 |
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行 |

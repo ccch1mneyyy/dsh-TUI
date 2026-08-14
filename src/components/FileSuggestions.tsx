@@ -1,5 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
+import { stringWidth } from '../ink/stringWidth.js'
+import { truncateToWidth } from '../ink/truncateToWidth.js'
 
 /**
  * The `@` file-completion overlay in CC's suggestion style: `+` icon prefix
@@ -32,17 +34,18 @@ export function FileSuggestions({
       {visible.map(file => {
         const isSelected = file === files[selectedIndex]
         const isDir = file.endsWith('/')
+        const name = isDir ? file.slice(0, -1) : file
         const descriptionWidth = Math.max(0, columns - 24)
         const description = isDir ? 'directory' : 'file'
         return (
           <Text key={file} wrap="truncate">
             <Text color={isSelected ? 'suggestion' : undefined} dimColor={!isSelected}>
-              + {isDir ? file.slice(0, -1) : file}
+              + {name}
             </Text>
             <Text color={isSelected ? 'suggestion' : undefined} dimColor={!isSelected}>
-              {' '.repeat(Math.max(1, 20 - file.length))}
-              {description.length > descriptionWidth
-                ? description.slice(0, descriptionWidth - 1) + '…'
+              {' '.repeat(Math.max(1, 20 - stringWidth(name)))}
+              {stringWidth(description) > descriptionWidth
+                ? truncateToWidth(description, descriptionWidth - 1) + '…'
                 : description}
             </Text>
           </Text>

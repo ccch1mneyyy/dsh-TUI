@@ -45,7 +45,7 @@ A complete common override looks like this:
 | `provider` | `deepseek-official` | DSH model route |
 | `model` | `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | `process.cwd()` | Agent workspace and filesystem-policy root |
-| `effort` | normally `max` in the bundle | Initial header effort; replaced by live model state after the first request |
+| `effort` | normally `max` in the bundle | Reasoning effort actually applied to every request (validated against model levels; deepseek supports only off/high/max and invalid levels silently fall back to the adapter default; wins over the persisted Shift+Tab choice), also shown in the header at startup |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |

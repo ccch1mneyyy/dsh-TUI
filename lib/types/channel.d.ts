@@ -601,8 +601,10 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     model: string;
     cwd: string;
     provider: string;
-    /** Configured reasoning effort, shown from startup until the first
-     *  request/header event reports the adapter's live value. */
+    /** Configured reasoning effort: applied to the agent's requests when the
+     *  live route offers it (silently ignored otherwise), and shown from
+     *  startup until the first request/header event reports the adapter's
+     *  live value. */
     effort?: string;
     /** Consume `activity/status` session events (dsh-working-activity) into
      *  the status line; default on. */
@@ -617,8 +619,9 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string;
     /** cordis.yml's static route (`provider`/`model` keys), undefined when
-     *  unset: wins over the persisted `/model` preference for NEW sessions,
-     *  and is the only route a resume overrides the target's own record with. */
+     *  unset: wins over the persisted `/model` preference for NEW sessions
+     *  only when BOTH halves are pinned (atomic rule, issue #67), and is the
+     *  only route a resume overrides the target's own record with. */
     configuredProvider?: string;
     configuredModel?: string;
     /** The preset the initial agent's session runs under (from resolveAgent). */

@@ -20,6 +20,7 @@ import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writ
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
+import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from './modelRoute.js'
 import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
@@ -839,8 +840,10 @@ export function createChannel(
     model: string
     cwd: string
     provider: string
-    /** Configured reasoning effort, shown from startup until the first
-     *  request/header event reports the adapter's live value. */
+    /** Configured reasoning effort: applied to the agent's requests when the
+     *  live route offers it (silently ignored otherwise), and shown from
+     *  startup until the first request/header event reports the adapter's
+     *  live value. */
     effort?: string
     /** Consume `activity/status` session events (dsh-working-activity) into
      *  the status line; default on. */
@@ -855,8 +858,9 @@ export function createChannel(
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string
     /** cordis.yml's static route (`provider`/`model` keys), undefined when
-     *  unset: wins over the persisted `/model` preference for NEW sessions,
-     *  and is the only route a resume overrides the target's own record with. */
+     *  unset: wins over the persisted `/model` preference for NEW sessions
+     *  only when BOTH halves are pinned (atomic rule, issue #67), and is the
+     *  only route a resume overrides the target's own record with. */
     configuredProvider?: string
     configuredModel?: string
     /** The preset the initial agent's session runs under (from resolveAgent). */
@@ -1368,15 +1372,21 @@ export function createChannel(
       // current preference: a resume re-enters the composition its history
       // was produced under. Same rule for the route: only an explicit
       // cordis.yml provider/model overrides the route the target's own
-      // request/header records (issue #30).
+      // request/header records (issue #30) — and only as a COMPLETE pair
+      // (issue #67): a provider-only pin must not merge with the recorded
+      // model half into a route no adapter recognizes.
       const resumeComposed = await composePreset(
         ctx,
         await resolvePersistedPreset(ctx, SessionId(sessionId)),
       )
+      const resumeRoute = explicitModelRoute({
+        provider: options.configuredProvider,
+        model: options.configuredModel,
+      })
       try {
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
-          agentOptions: { provider: options.configuredProvider, model: options.configuredModel },
+          agentOptions: { provider: resumeRoute?.provider, model: resumeRoute?.model },
           ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
         })
       } catch (error) {
@@ -1405,6 +1415,15 @@ export function createChannel(
       state.status = handle.agent.status
       state.agentId = handle.agent.id
       state.agentPreset = resumeComposed.agentPreset
+      // Status-line route follows the resumed session (review feedback): the
+      // route it actually continues on — a complete cordis.yml pin, else the
+      // route its own request/header records carry. A bare log (no turn ever
+      // started) records none; keep the current display as best effort.
+      const resumedRoute = resumeRoute ?? recordedModelRoute(handle.agent.session.events)
+      if (resumedRoute !== undefined) {
+        state.provider = resumedRoute.provider
+        state.model = resumedRoute.model
+      }
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
@@ -1459,14 +1478,33 @@ export function createChannel(
       // `preset` key wins over the persisted `/preset` choice, which wins
       // over the roster default (same precedence as activityFrames).
       const newComposed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
-      // Same precedence for the route (issues #14/#30): cordis.yml explicit
-      // keys win over the persisted `/model` choice — a switch earlier in
-      // this run just wrote it, so `/new` follows the live model — which
-      // wins over the startup fallback.
-      const modelPref = readModelPref()
-      const route = {
-        provider: options.configuredProvider ?? modelPref?.provider ?? options.provider,
-        model: options.configuredModel ?? modelPref?.model ?? options.model,
+      // Same precedence for the route (issues #14/#30/#67): the pair resolves
+      // atomically — a complete cordis.yml route wins whole, else the
+      // persisted `/model` choice (a switch earlier in this run just wrote
+      // it, so `/new` follows the live model) wins whole, else the startup
+      // route. A stale persisted choice that the adapter catalog rejects
+      // falls back to the startup route wholesale, with a warning.
+      const newResolved = resolveModelRoute(
+        { provider: options.configuredProvider, model: options.configuredModel },
+        readModelPref(),
+        { provider: options.provider, model: options.model },
+      )
+      const newLlm = ctx.get('llm') as
+        | { listModels(provider: string): Promise<readonly { id: string }[]> }
+        | undefined
+      const { route, rejected } = await validateModelRoute(newLlm, newResolved, {
+        provider: options.provider,
+        model: options.model,
+      })
+      if (rejected !== undefined) {
+        state.notify(
+          t('model-route-invalid', {
+            provider: rejected.provider,
+            model: rejected.model,
+            fallback: `${route.provider}/${route.model}`,
+          }),
+          { color: 'warning', timeoutMs: 8000 },
+        )
       }
       try {
         handle = await agents.create({

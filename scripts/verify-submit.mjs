@@ -6,7 +6,14 @@
  * - `channel.steer(text)` → `agent.steer` (into the RUNNING turn)
  * - both land in `channel.pending` with the right placement
  * - a simulated `agent/inbox/claimed` event retires them (delivery)
- * - `channel.removePending(id)` pulls one back and calls `agent.inbox.remove`
+ * - `channel.removePending(id)` pulls one back through `agent.inbox.remove`,
+ *   and respects a refusal (already claimed → no ghost pull-back)
+ * - `channel.interruptAndDeliver` cancels, then re-queues on `whenIdle`
+ *
+ * 对齐说明：投递自 #34（@ 文件引用）起走 sendChain 异步链（expandMentions
+ * 在 followup/steer 之前 await），断言前需等链落定；撤回自 rc.6 收敛为
+ * 官方 `Inbox.remove(messageId)` 单一路径——旧版 positional inbox 事件与
+ * `updateInbox` 兼容层已从 channel 移除，对应测试段一并退役。
  *
  * Run with plain node against the compiled lib: `node scripts/verify-submit.mjs`
  */
@@ -19,6 +26,8 @@ function check(name, ok, extra = '') {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
+/** 投递链（sendChain）落定：expandMentions + followup/steer 都是微任务级。 */
+const settle = () => sleep(10)
 
 const handlers = new Map()
 const ctx = {
@@ -32,13 +41,22 @@ const ctx = {
   logger: { warn() {} },
 }
 
+// bindAgent 会把 dsh-agent 的 installModelSelection 挂到 agent.ctx 的
+// assembly/request 瀑布上（0.3.6 Shift+Tab 推理等级）；stub 只需提供
+// "可订阅、返回解除函数"的最小面。
+const stubAgentCtx = { on: () => () => {} }
+
 const followupCalls = []
 const steerCalls = []
 const inboxRemovals = []
+// rc.6 语义：remove 返回是否成功撤回（false = 已被认领，UI 不得假装
+// 拉回一次幽灵发送）。可切换，供拒绝场景复用同一 agent。
+let inboxRemoveResult = true
 const agent = {
   id: 'a1',
   status: 'idle',
   session: { id: 's1', seq: 0, events: [] },
+  ctx: stubAgentCtx,
   followup(message) {
     followupCalls.push(message)
   },
@@ -48,6 +66,7 @@ const agent = {
   inbox: {
     remove(id) {
       inboxRemovals.push(id)
+      return inboxRemoveResult
     },
   },
 }
@@ -61,11 +80,13 @@ const channel = createChannel(ctx, agent, {
 
 // ---- followup (Tab queue) path
 channel.submit('  第一条消息  ')
+await settle()
 check('submit → agent.followup', followupCalls.length === 1 && followupCalls[0]?.content?.[0]?.text === '第一条消息')
 check('submit tracked as pending followup', channel.pending.length === 1 && channel.pending[0]?.placement === 'followup', JSON.stringify(channel.pending))
 
 // ---- steer (Enter while working) path
 channel.steer('第二条消息')
+await settle()
 check('steer → agent.steer', steerCalls.length === 1 && steerCalls[0]?.content?.[0]?.text === '第二条消息')
 check('steer tracked as pending steer', channel.pending.length === 2 && channel.pending[1]?.placement === 'steer', JSON.stringify(channel.pending))
 check('blank steer ignored', channel.steer('   ') === undefined && steerCalls.length === 1)
@@ -85,115 +106,20 @@ if (discardedHandler) {
 
 // ---- removePending pulls a message back out of the inbox
 channel.steer('撤回我')
+await settle()
 check('steer for removal tracked', channel.pending.length === 1, JSON.stringify(channel.pending))
 const removed = channel.removePending(channel.pending[0]?.id ?? '')
 check('removePending → agent.inbox.remove', removed === true && inboxRemovals.length === 1)
 check('removePending clears the item', channel.pending.length === 0)
 check('removePending unknown id is false', channel.removePending('nope') === false)
 
-// ---- released dsh-agent without the inbox API: pull-back is refused
-const legacyAgent = {
-  id: 'a1',
-  status: 'idle',
-  session: { id: 's1', seq: 0, events: [] },
-  followup(message) {
-    followupCalls.push(message)
-  },
-  steer(message) {
-    steerCalls.push(message)
-  },
-  // no `inbox` — released dsh-agent shape
-}
-const legacyChannel = createChannel(ctx, legacyAgent, {
-  model: 'deepseek-chat',
-  cwd: '/tmp',
-  provider: 'deepseek',
-  activity: false,
-})
-legacyChannel.steer('旧版agent的消息')
-check('legacy agent steers fine', steerCalls.some(m => m.content?.[0]?.text === '旧版agent的消息'))
-check('legacy agent tracks pending', legacyChannel.pending.length === 1, JSON.stringify(legacyChannel.pending))
-check('legacy pull-back refused (no ghost send)', legacyChannel.removePending(legacyChannel.pending[0]?.id ?? '') === false)
-check('legacy pending kept after refusal', legacyChannel.pending.length === 1)
-
-// ---- released dsh-agent: POSITIONAL inbox events (agent, item) ----
-// The released package emits `enqueue/update/dequeue/discard` as
-// `(agent, item | item[])` where `item.message.id` is the tracked id and
-// `item.id` is an occurrence id; pull-back goes through `updateInbox`.
-const releasedUpdateCalls = []
-const makeReleasedAgent = (options = {}) => {
-  const agent = {
-    id: 'a1',
-    status: 'idle',
-    session: { id: 's1', seq: 0, events: [] },
-    followup() {},
-    // Released agent emits `enqueue` synchronously inside steer().
-    steer(message) {
-      const enqueue = handlers.get('agent/inbox/enqueue')
-      enqueue?.(agent, { id: 'occ-1', message, placement: 'steering' })
-      return { outcome: Promise.resolve({ status: 'admitted', turn: 1, step: 1 }) }
-    },
-    updateInbox(id, action) {
-      releasedUpdateCalls.push({ id, action })
-      return 'applied'
-    },
-    ...options,
-  }
-  return agent
-}
-const releasedAgent = makeReleasedAgent()
-const releasedChannel = createChannel(ctx, releasedAgent, {
-  model: 'deepseek-chat',
-  cwd: '/tmp',
-  provider: 'deepseek',
-  activity: false,
-})
-releasedChannel.steer('发布版消息')
-check('released steer tracked', releasedChannel.pending.length === 1, JSON.stringify(releasedChannel.pending))
-check('released enqueue captured occurrence id', releasedChannel.pending[0]?.inboxItemId === 'occ-1', JSON.stringify(releasedChannel.pending))
-
-// positional dequeue: (agent, item) — retires by item.message.id
-const dequeueHandler = handlers.get('agent/inbox/dequeue')
-if (dequeueHandler) {
-  dequeueHandler(releasedAgent, { id: 'occ-1', message: { id: releasedChannel.pending[0]?.id }, placement: 'steering' })
-  check('released positional dequeue retires the item', releasedChannel.pending.length === 0, JSON.stringify(releasedChannel.pending))
-}
-
-// positional discard: (agent, items[]) — retires every item's message id
-releasedChannel.steer('a')
-releasedChannel.steer('b')
-const discardHandler = handlers.get('agent/inbox/discard')
-if (discardHandler) {
-  discardHandler(releasedAgent, releasedChannel.pending.map(p => ({ id: 'occ', message: { id: p.id }, placement: 'queued' })))
-  check('released positional discard retires all', releasedChannel.pending.length === 0, JSON.stringify(releasedChannel.pending))
-}
-
-// pull-back via updateInbox (applied)
-releasedChannel.steer('撤回我')
-const releasePullId = releasedChannel.pending[0]?.id ?? ''
-check('released pull-back via updateInbox', releasedChannel.removePending(releasePullId) === true && releasedUpdateCalls.at(-1)?.action?.kind === 'remove', JSON.stringify(releasedUpdateCalls.at(-1)))
-check('released pending cleared after pull-back', releasedChannel.pending.length === 0)
-
-// updateInbox refuses ('not-found' = already claimed) → pending kept
-const refusedChannel = createChannel(ctx, makeReleasedAgent({ updateInbox() { return 'not-found' } }), {
-  model: 'deepseek-chat',
-  cwd: '/tmp',
-  provider: 'deepseek',
-  activity: false,
-})
-refusedChannel.steer('已被认领')
-check('refused pull-back keeps pending', refusedChannel.removePending(refusedChannel.pending[0]?.id ?? '') === false && refusedChannel.pending.length === 1, JSON.stringify(refusedChannel.pending))
-
-// steer admission rejected → preview rolls back once the outcome settles
-const rejectedChannel = createChannel(ctx, makeReleasedAgent({ steer() { return { outcome: Promise.resolve({ status: 'rejected' }) } } }), {
-  model: 'deepseek-chat',
-  cwd: '/tmp',
-  provider: 'deepseek',
-  activity: false,
-})
-rejectedChannel.steer('被拒绝的插话')
-await sleep(10)
-check('rejected steer untracked after outcome', rejectedChannel.pending.length === 0, JSON.stringify(rejectedChannel.pending))
+// ---- inbox.remove refuses (already claimed) → pending kept, no ghost send
+channel.steer('已被认领')
+await settle()
+inboxRemoveResult = false
+check('refused pull-back keeps pending', channel.removePending(channel.pending[0]?.id ?? '') === false && channel.pending.length === 1, JSON.stringify(channel.pending))
+inboxRemoveResult = true
+check('pull-back succeeds once unclaimed', channel.removePending(channel.pending[0]?.id ?? '') === true && channel.pending.length === 0)
 
 // ---- interruptAndDeliver: cancel + re-queue once the abort settles ----
 // The harness parks kept inbox work until an unrelated wake (official
@@ -208,6 +134,7 @@ const interruptAgent = {
   id: 'a1',
   status: 'running',
   session: { id: 's1', seq: 0, events: [] },
+  ctx: stubAgentCtx,
   cancel(cause, options) {
     interruptCalls.push({ cause, options })
   },
@@ -241,6 +168,7 @@ const interruptAgent2 = {
   id: 'a1',
   status: 'running',
   session: { id: 's1', seq: 0, events: [] },
+  ctx: stubAgentCtx,
   cancel() {},
   whenIdle() {
     return idlePromise2
@@ -267,6 +195,7 @@ const fallbackAgent = {
   id: 'a1',
   status: 'running',
   session: { id: 's1', seq: 0, events: [] },
+  ctx: stubAgentCtx,
   cancel() {},
   followup(message) {
     fallbackCalls.push(message)

@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { truncateToWidth } from '../ink/truncateToWidth.js'
 import type { LocalCommand } from '../commands.js'
 
 /**
@@ -52,8 +53,8 @@ export function CommandSuggestions({
           columns - nameWidth - tagWidth - 4,
         )
         const description =
-          command.description.length > descriptionWidth
-            ? command.description.slice(0, descriptionWidth - 1) + '…'
+          stringWidth(command.description) > descriptionWidth
+            ? truncateToWidth(command.description, descriptionWidth - 1) + '…'
             : command.description
         return (
           <Text key={command.name} wrap="truncate">

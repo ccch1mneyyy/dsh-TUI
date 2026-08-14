@@ -7,10 +7,14 @@ import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
+import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
+import { logForDebugging } from './utils/debug.js'
 import { QuestionStore } from './questions.js'
 import { registerPackagedSkills } from './packaged-skills.js'
 import { readActivityFrames } from './activityPrefs.js'
 import { readModelPref } from './modelPrefs.js'
+import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from './modelRoute.js'
+import type { ModelRoute } from './modelRoute.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
 import { writeResumeTarget } from './sessionHistory.js'
@@ -86,23 +90,61 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
   ctx.effect(() => () => questionStore.rejectAll())
 
+  // Child-process stderr guard (issue #17): MCP servers spawned with an
+  // inherited stderr (the MCP SDK's stdio default) write straight to the
+  // terminal device from the child process, bypassing the renderer's own
+  // stderr patch and corrupting the alt-screen. Take over those spawns and
+  // surface their stderr as deduplicated notifications instead. Installed
+  // before agent resolution so servers spawned during startup are covered;
+  // notices posted before the channel exists are buffered and flushed then.
+  const stderrBacklog: Array<[string, { color?: 'error' | 'warning' | 'success'; timeoutMs?: number }?]> = []
+  let notifyStderr: ((text: string, options?: { color?: 'error' | 'warning' | 'success'; timeoutMs?: number }) => void) | undefined
+  const stderrReporter = createChildStderrReporter((text, options) => {
+    if (notifyStderr !== undefined) notifyStderr(text, options)
+    else stderrBacklog.push([text, options])
+  })
+  ctx.effect(() => {
+    const restoreSpawn = installChildStderrGuard(line => {
+      logForDebugging(`[child-stderr] ${line}`)
+      stderrReporter.push(line)
+    })
+    return () => {
+      restoreSpawn()
+      stderrReporter.dispose()
+    }
+  })
+
   // Config-only route: resolveAgent applies the persisted `/model`
   // preference on CREATE only — a resumed session keeps the route its own
   // log records (last request/header), matching the preset rule.
-  const agentOptions = {
+  const configuredRoute = {
     provider: config.provider,
     model: config.model,
   }
+  // Atomic route resolution (issue #67): a complete cordis.yml route wins
+  // whole, else the persisted `/model` choice wins whole, else the harness
+  // defaults — a provider-only config pin never merges with the persisted
+  // model half. resolveAgent validates this route on create and reports the
+  // one actually used, so the status line shows the real request route.
+  const startupRoute = resolveModelRoute(configuredRoute, readModelPref())
   const meta = { cwd: config.cwd ?? process.cwd() }
-  const { agent, handle, agentPreset } = await resolveAgent(ctx, config.sessionId, agentOptions, meta, config.preset)
+  const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
+    ctx,
+    config.sessionId,
+    configuredRoute,
+    startupRoute,
+    meta,
+    config.preset,
+  )
 
-  // Status-line route: cordis.yml explicit keys win over the persisted
-  // `/model` choice, which wins over the harness defaults.
-  const modelPref = readModelPref()
+  // Status-line route: the exact route the agent runs with — on create the
+  // validated startup resolution, on resume the route the target session's
+  // own records carry (a complete cordis.yml pin wins over them).
+  const displayRoute = createdRoute ?? startupRoute
   const channel = createChannel(ctx, agent, {
-    model: config.model ?? modelPref?.model ?? 'deepseek-v4-flash',
+    model: displayRoute.model,
     cwd: config.cwd ?? process.cwd(),
-    provider: config.provider ?? modelPref?.provider ?? 'deepseek-official',
+    provider: displayRoute.provider,
     // Raw cordis.yml route (undefined when unset): the channel's
     // new-session path re-resolves prefs against these, and resume passes
     // only explicit values so the target session's own record wins.
@@ -121,11 +163,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     agentPreset,
     handle,
   })
-  // Single exit funnel: `/exit`, double Ctrl+C, and external teardown all
-  // land here. unmount() restores the terminal (cursor, raw mode, mouse
-  // tracking); the explicit newlines afterwards keep the shell prompt from
-  // overlapping the TUI's last line — the bare unmount left the cursor at
-  // the end of the final frame, so the prompt printed over it.
+  // Attach the stderr reporter to the live channel and flush anything a
+  // startup-spawned server produced while the channel didn't exist yet.
+  notifyStderr = (text, options) => channel.notify(text, options)
+  for (const [text, options] of stderrBacklog.splice(0)) {
+    notifyStderr(text, options)
+  }
+  // Single exit funnel: `/exit` and double Ctrl+C land here, and so does
+  // the unmount triggered by a cordis context teardown — but the two must
+  // not share a fate (issue #12). The DSH launcher's boot-time recompose
+  // disposes every entry once; treating that teardown as a user exit killed
+  // the process before the recomposed tree could re-mount the TUI (the
+  // "flash back to bash with no error" symptom). Teardown only unmounts the
+  // UI; user exit runs the full leave sequence: unmount() restores the
+  // terminal (cursor, raw mode, mouse tracking) and the explicit newlines
+  // keep the shell prompt from overlapping the TUI's last line.
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
   let updateRequested = false
@@ -133,75 +185,84 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // exposes it nowhere else, and /update must update the installation the
   // user is actually running, not a hard-coded one.
   const profile = resolveDshProfileName()
-  const handleExit = (error?: unknown): void => {
-    if (exited) return
-    exited = true
-    try {
-      writeResumeTarget(channel.agentId)
-    } catch {
-      // Best effort — the resume marker is a launcher nicety; a stale
-      // marker must never block a clean exit.
-    }
-    try {
-      instance?.unmount()
-    } catch {
-      // The terminal state may already be gone (broken pipe, alt session);
-      // the exit path must never throw.
-    }
-    if (error !== undefined) {
-      // Error-driven unmount (render crash): stay loud and exit non-zero.
-      // A success code + resume hint here would tell wrappers/CI the
-      // session ended cleanly while the TUI actually crashed.
-      const message = error instanceof Error ? error.message : String(error)
-      ctx.logger.error(`cc-tui: exit after error: ${message}`)
-      if (process.stderr.isTTY) {
-        process.stderr.write(`\ncc-tui crashed: ${message}\n`)
+  // Single exit funnel: `/exit` and double Ctrl+C land here, and so does
+  // the unmount triggered by a cordis context teardown — but the two must
+  // not share a fate (issue #12). Teardown only unmounts the UI; user exit
+  // runs the full leave sequence below (resume marker, terminal restore,
+  // update handoff or resume hint).
+  const funnel = createExitFunnel({
+    onUserExit: error => {
+      // Mirror the funnel's internal exited flag for the /update and
+      // background-check guards that still read the outer one.
+      exited = true
+      try {
+        writeResumeTarget(channel.agentId)
+      } catch {
+        // Best effort — the resume marker is a launcher nicety; a stale
+        // marker must never block a clean exit.
       }
-      disposeRootAndExit(ctx, 1)
-      return
-    }
-    if (updateRequested) {
-      if (process.stdout.isTTY) {
-        process.stdout.write('\nUpdating dsh-cc-tui and restarting…\n')
+      try {
+        instance?.unmount()
+      } catch {
+        // The terminal state may already be gone (broken pipe, alt session);
+        // the exit path must never throw.
       }
-      disposeRootAndThen(ctx, () => {
-        // updateRequested only flips when onUpdate exists, which itself
-        // requires a resolved profile — narrow for the call below.
-        const updateProfile = profile
-        if (updateProfile === undefined) {
-          process.stderr.write('\ncc-tui update aborted: no dsh profile resolved.\n')
-          process.exit(1)
+      if (error !== undefined) {
+        // Error-driven unmount (render crash): stay loud and exit non-zero.
+        // A success code + resume hint here would tell wrappers/CI the
+        // session ended cleanly while the TUI actually crashed.
+        const message = error instanceof Error ? error.message : String(error)
+        ctx.logger.error(`cc-tui: exit after error: ${message}`)
+        if (process.stderr.isTTY) {
+          process.stderr.write(`\ncc-tui crashed: ${message}\n`)
         }
-        void updateTuiAndRestart(channel.agentId, updateProfile).then(
-          ({ updateCode, restartCode }) => {
-            if (updateCode !== 0) {
-              // The session survives: its log lives in DSH persistence and
-              // resume.txt was already written. A bare non-zero exit would
-              // drop the user into a shell with no way back in.
+        disposeRootAndExit(ctx, 1)
+        return
+      }
+      if (updateRequested) {
+        if (process.stdout.isTTY) {
+          process.stdout.write('\nUpdating dsh-cc-tui and restarting…\n')
+        }
+        disposeRootAndThen(ctx, () => {
+          // updateRequested only flips when onUpdate exists, which itself
+          // requires a resolved profile — narrow for the call below.
+          const updateProfile = profile
+          if (updateProfile === undefined) {
+            process.stderr.write('\ncc-tui update aborted: no dsh profile resolved.\n')
+            process.exit(1)
+          }
+          void updateTuiAndRestart(channel.agentId, updateProfile).then(
+            ({ updateCode, restartCode }) => {
+              if (updateCode !== 0) {
+                // The session survives: its log lives in DSH persistence and
+                // resume.txt was already written. A bare non-zero exit would
+                // drop the user into a shell with no way back in.
+                process.stderr.write(
+                  `\ncc-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
+                    `${resumeCommand(profile, channel.agentId)}\n\n`,
+                )
+              }
+              process.exit(restartCode)
+            },
+            updateError => {
+              const message = updateError instanceof Error ? updateError.message : String(updateError)
               process.stderr.write(
-                `\ncc-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
+                `\ncc-tui update failed: ${message}. Your session is preserved — resume with:\n` +
                   `${resumeCommand(profile, channel.agentId)}\n\n`,
               )
-            }
-            process.exit(restartCode)
-          },
-          updateError => {
-            const message = updateError instanceof Error ? updateError.message : String(updateError)
-            process.stderr.write(
-              `\ncc-tui update failed: ${message}. Your session is preserved — resume with:\n` +
-                `${resumeCommand(profile, channel.agentId)}\n\n`,
-            )
-            process.exit(1)
-          },
-        )
-      })
-      return
-    }
-    if (process.stdout.isTTY) {
-      process.stdout.write(`\nResume with (set the env var, then boot the profile):\n${resumeCommand(profile, channel.agentId)}\n\n`)
-    }
-    disposeRootAndExit(ctx, 0)
-  }
+              process.exit(1)
+            },
+          )
+        })
+        return
+      }
+      if (process.stdout.isTTY) {
+        process.stdout.write(`\nResume with (set the env var, then boot the profile):\n${resumeCommand(profile, channel.agentId)}\n\n`)
+      }
+      disposeRootAndExit(ctx, 0)
+    },
+  })
+  const handleExit = funnel.handleExit
 
   const chat = React.createElement(Chat, {
     channel,
@@ -252,15 +313,20 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     )
   })
 
-  // If the surrounding tree goes down (reload, teardown), take the TUI with it.
+  // If the surrounding tree goes down (reload, teardown), unmount the UI —
+  // but flag it as teardown first so the settling waitUntilExit does not
+  // run the user-exit sequence: no resume marker, no disposeRootAndExit,
+  // the process stays alive and the recomposed tree re-mounts the TUI.
   ctx.effect(() => () => {
+    funnel.markTeardown()
     instance?.unmount()
   })
 
-  // The TUI is the front door: when it unmounts (Ctrl+C), dispose the app
-  // tree and exit the process. The rejection handler covers error-driven
-  // unmounts — without it a rejected exitPromise became an unhandled
-  // rejection instead of a clean exit.
+  // The TUI is the front door: when the user unmounts it (Ctrl+C), dispose
+  // the app tree and exit the process. The rejection handler covers
+  // error-driven unmounts — without it a rejected exitPromise became an
+  // unhandled rejection instead of a clean exit. A teardown-driven settle
+  // is swallowed by the funnel (issue #12).
   void instance.waitUntilExit().then(handleExit, handleExit)
 }
 
@@ -278,18 +344,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
  * preset the session's own log records. Without the roster both paths behave
  * as before presets existed.
  *
- * Model route (issues #14/#30): a create resolves cordis.yml
- * `provider`/`model` over the persisted `/model` choice; a resume passes the
- * config-only route through so the session's own recorded route wins when
- * cordis.yml sets nothing.
+ * Model route (issues #14/#30/#67): a create adopts the caller's atomically
+ * resolved route (validated against the adapter catalog below); a resume
+ * passes only a COMPLETE cordis.yml route through — a provider-only pin must
+ * not half-override the route the target session's own records carry.
  */
 async function resolveAgent(
   ctx: Context,
   requestedSessionId: string | undefined,
-  agentOptions: { provider?: string; model?: string },
+  configuredRoute: { provider?: string; model?: string },
+  startupRoute: ModelRoute,
   meta: { cwd: string },
   configuredPreset?: string,
-): Promise<{ agent: Agent; handle?: AgentHandle; agentPreset?: string }> {
+): Promise<{ agent: Agent; handle?: AgentHandle; agentPreset?: string; route?: ModelRoute }> {
+  // Resume override (issue #67): cordis.yml overrides the target session's
+  // recorded route only when it pins BOTH halves; undefined halves let the
+  // session's own request/header records win (issue #30).
+  const resumeRoute = explicitModelRoute(configuredRoute)
+  const resumeOptions = { provider: resumeRoute?.provider, model: resumeRoute?.model }
   if (requestedSessionId !== undefined) {
     const resumeId = SessionId(requestedSessionId)
     const existing = ctx.agents.get(resumeId)
@@ -304,10 +376,19 @@ async function resolveAgent(
       const composed = await composePreset(ctx, persisted)
       const resumed = await ctx.agents.resume({
         resumeSessionId: resumeId,
-        agentOptions,
+        agentOptions: resumeOptions,
         ...(composed.setup === undefined ? {} : { setup: composed.setup }),
       })
-      return { agent: resumed.agent, handle: resumed, agentPreset: composed.agentPreset }
+      // Status-line route on resume: the route the session actually
+      // continues on — a complete cordis.yml pin, else the route its own
+      // request/header records carry (a bare log yields undefined and the
+      // caller falls back to the startup resolution, best effort).
+      return {
+        agent: resumed.agent,
+        handle: resumed,
+        agentPreset: composed.agentPreset,
+        route: resumeRoute ?? recordedModelRoute(resumed.agent.session.events),
+      }
     } catch (error) {
       // No artifact (first run / cleared storage) or persistence not
       // mounted: fall through to a fresh session, but stay loud in the log.
@@ -318,12 +399,19 @@ async function resolveAgent(
   }
   const sessionId = SessionId(randomUUID())
   const composed = await composePreset(ctx, configuredPreset ?? readPresetPref())
-  // Fresh-session route precedence (issues #14/#30): cordis.yml explicit
-  // keys > the persisted `/model` choice > the adapter/harness default.
-  const modelPref = readModelPref()
-  const route = {
-    provider: agentOptions.provider ?? modelPref?.provider,
-    model: agentOptions.model ?? modelPref?.model,
+  // Fresh-session route precedence (issues #14/#30/#67): resolved atomically
+  // by the caller (complete cordis.yml route > the persisted `/model` choice
+  // > the harness default), then validated against the adapter catalog — a
+  // stale persisted choice falls back to the default route wholesale instead
+  // of reaching the server as an unknown model name.
+  const llm = ctx.get('llm') as
+    | { listModels(provider: string): Promise<readonly { id: string }[]> }
+    | undefined
+  const { route, rejected } = await validateModelRoute(llm, startupRoute)
+  if (rejected !== undefined) {
+    ctx.logger.warn(
+      `cc-tui: model route ${rejected.provider}/${rejected.model} is not advertised by provider "${rejected.provider}"; falling back to ${route.provider}/${route.model}`,
+    )
   }
   const created = await ctx.agents.create({
     sessionId,
@@ -339,10 +427,43 @@ async function resolveAgent(
     // the worst outcome for a misconfigured leaf (unknown provider/model).
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
-      `cc-tui: failed to create agent (provider=${route.provider ?? 'deepseek-official'}, model=${route.model ?? 'deepseek-v4-flash'}): ${message}`,
+      `cc-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`,
     )
   })
-  return { agent: created.agent, handle: created, agentPreset: composed.agentPreset }
+  return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
+}
+
+/**
+ * Distinguish a user-driven exit from a cordis context teardown (issue #12).
+ *
+ * Both paths settle the Ink instance's exit promise, but only a user exit
+ * (`/exit`, double Ctrl+C, render crash) may leave the process. A teardown —
+ * the DSH launcher's boot-time recompose disposes every entry once — must
+ * only unmount the UI: the recomposed tree re-runs `apply` and mounts a
+ * fresh instance, so exiting here would kill the process mid-recompose
+ * (the "flash back to bash with no error" symptom).
+ *
+ * `markTeardown` must run before the unmount that settles the exit promise
+ * (the settle reaches `handleExit` through a microtask, so a same-tick flag
+ * is always observed). Exported for scripts/verify-teardown-exit.tsx.
+ */
+export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }): {
+  handleExit: (error?: unknown) => void
+  markTeardown: () => void
+} {
+  let exited = false
+  let teardown = false
+  return {
+    markTeardown: () => {
+      teardown = true
+    },
+    handleExit: (error?: unknown) => {
+      if (teardown) return
+      if (exited) return
+      exited = true
+      deps.onUserExit(error)
+    },
+  }
 }
 
 /**

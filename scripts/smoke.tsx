@@ -174,9 +174,10 @@ panelStdin.write(Buffer.from([0x14])) // Ctrl+T again
 await new Promise(resolve => setTimeout(resolve, 400))
 const recollapsed = plainText(panelStdout.frames)
 console.log('--- panel recollapsed by Ctrl+T?', recollapsed.includes('▶'))
+// unmount() 本身已等清理完成；这里不能再 waitUntilExit()——它的 resolve
+// 回调在 waitUntilExit 首次被调用时才装上（ink.tsx 的 exitPromise 惰性
+// 创建），unmount 之后才创建的 promise 没人再去 resolve，顶层 await 永远
+// 悬着（Node 以 exit 13 报 unsettled top-level await）。
 await panelInstance.unmount()
-await panelInstance.waitUntilExit()
-
 await instance.unmount()
-await instance.waitUntilExit()
 process.exit(0)

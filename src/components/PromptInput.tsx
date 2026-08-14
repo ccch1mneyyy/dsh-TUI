@@ -645,11 +645,13 @@ export function PromptInput({
       return
     }
     if (key.ctrl && input === 'w') {
-      // Delete the word before the cursor (CC/readline behavior).
+      // Delete the word before the cursor (CC/readline behavior): skip
+      // trailing whitespace, then the whitespace-delimited word.
       const before = value.slice(0, cursor)
-      const trimmed = before.replace(/\s+$/, '')
-      const wordStart = trimmed.search(/\S\s*$/)
-      const start = wordStart === -1 ? 0 : wordStart + 1
+      let end = before.length
+      while (end > 0 && /\s/.test(before[end - 1]!)) end--
+      let start = end
+      while (start > 0 && !/\s/.test(before[start - 1]!)) start--
       setValue(value.slice(0, start) + value.slice(cursor))
       setCursor(start)
       return

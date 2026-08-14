@@ -60,7 +60,7 @@ Live activity, goal/todo state, and context metrics:
 ## Quick Start
 
 Prerequisites: an interactive terminal TTY, the official `dsh` CLI, and
-`pnpm`. Model requests also require `DEEPSEEK_API_KEY`.
+`pnpm` 10+. Model requests also require `DEEPSEEK_API_KEY`.
 
 ```sh
 # 1. Install the DeepSeek Harness CLI
