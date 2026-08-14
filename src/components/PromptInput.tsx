@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -6,6 +7,7 @@ import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import type { Channel } from '../channel.js'
 import { filterCommands, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
+import { mentionAtCaret } from '../utils/mentions.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
@@ -172,16 +174,20 @@ export function PromptInput({
     !selectionActive &&
     !value.includes('\n')
 
-  // `@` file completion: load the cwd listing once when the trigger appears.
+  // `@` file completion (issue #15): the trigger is the mention token at the
+  // CARET, so `@` works mid-message (`看看 @src/a.ts 这个`), not only when it
+  // is the input's first character. The cwd listing loads when the trigger
+  // appears.
   const [fileList, setFileList] = React.useState<readonly string[]>([])
   const [fileSelected, setFileSelected] = React.useState(0)
-  const atTrigger = value.startsWith('@') && !value.includes('\n')
+  const mention = mentionAtCaret(value, cursor)
+  const atTrigger = mention !== undefined
   React.useEffect(() => {
     if (atTrigger) {
       void channel.listFiles().then(setFileList)
     }
   }, [atTrigger, channel])
-  const atRest = value.replace(/^@/, '').toLowerCase()
+  const atRest = (mention?.query ?? '').toLowerCase()
   // Match the relative path prefix OR the basename (CC's IDE suggestions do
   // both): `@src/ink` and `@ink` both find `src/ink/Box.js`.
   const fileMatches = atTrigger
@@ -193,7 +199,32 @@ export function PromptInput({
         return base.startsWith(atRest)
       })
     : []
-  const fileOverlayOpen = fileMatches.length > 0 && !helpOpen && !selectionActive
+  // Esc dismisses the overlay for the token being edited (it reopens once the
+  // text changes); it must NOT clear a mid-message input.
+  const fileEscRef = React.useRef(-1)
+  React.useEffect(() => {
+    fileEscRef.current = -1
+  }, [value])
+  const fileOverlayOpen =
+    fileMatches.length > 0 &&
+    !helpOpen &&
+    !selectionActive &&
+    fileEscRef.current !== mention?.start
+
+  /**
+   * Accept the selected file suggestion: replace ONLY the mention token at
+   * the caret (prefix/suffix text survives), quoting whitespace paths. A
+   * directory inserts `@dir/` without a trailing space so completion
+   * continues into it; a file completes the token with a space.
+   */
+  const acceptFile = (file: string) => {
+    if (!mention) return
+    const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
+    const insert = file.endsWith('/') ? body : `${body} `
+    const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
+    setInput(next, mention.start + insert.length)
+    setFileSelected(0)
+  }
 
   const submitText = (text: string, notice?: string) => {
     const trimmed = text.trim()
@@ -211,7 +242,7 @@ export function PromptInput({
     } else if (channel.working) {
       // While the model is streaming, the message joins the DSH inbox and is
       // processed after the current turn — say so, or it looks "lost".
-      channel.notify('已发送，当前回合结束后处理', { timeoutMs: 2500 })
+      channel.notify(t('input-sent-after-turn'), { timeoutMs: 2500 })
     }
   }
 
@@ -231,7 +262,7 @@ export function PromptInput({
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.steer(trimmed)
-    channel.notify('已插话 · 下一步立即处理', { timeoutMs: 2500 })
+    channel.notify(t('input-interrupted-next'), { timeoutMs: 2500 })
   }
 
   /**
@@ -249,7 +280,7 @@ export function PromptInput({
     setSelectedCommand(0)
     appendHistory(trimmed)
     channel.submit(trimmed)
-    channel.notify('已排队 · 回合结束后处理', { timeoutMs: 2500 })
+    channel.notify(t('input-queued-after-turn'), { timeoutMs: 2500 })
   }
 
   /**
@@ -261,14 +292,14 @@ export function PromptInput({
     const item = channel.pending[channel.pending.length - 1]
     if (!item) return
     if (!channel.removePending(item.id)) {
-      channel.notify('无法撤回：消息可能已被处理，或当前版本不支持', { color: 'warning', timeoutMs: 2500 })
+      channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
     }
     setValue(item.text)
     setCursor(item.text.length)
     setSelectedCommand(0)
     setFileSelected(0)
-    channel.notify('已撤回，可编辑后重新发送', { timeoutMs: 2000 })
+    channel.notify(t('input-retracted'), { timeoutMs: 2000 })
   }
 
   /**
@@ -278,7 +309,7 @@ export function PromptInput({
   const interruptSend = () => {
     const trimmed = value.trim()
     if (!trimmed) {
-      channel.notify('输入为空，没有可发送的内容', { color: 'warning' })
+      channel.notify(t('input-empty'), { color: 'warning' })
       return
     }
     // Abort the running turn and deliver: previously queued pending
@@ -294,7 +325,7 @@ export function PromptInput({
     setSelectedCommand(0)
     setFileSelected(0)
     appendHistory(trimmed)
-    channel.notify('已打断当前回合，正在立即处理', { timeoutMs: 2500 })
+    channel.notify(t('input-interrupt-immediate'), { timeoutMs: 2500 })
   }
 
   /**
@@ -369,7 +400,7 @@ export function PromptInput({
       void readClipboard().then(content => {
         clipboardBusyRef.current = false
         if (content === null) {
-          channel.notify('剪贴板为空', { color: 'warning' })
+          channel.notify(t('input-clipboard-empty'), { color: 'warning' })
           return
         }
         insertAtCaret(formatClipboardInsert(content))
@@ -396,6 +427,15 @@ export function PromptInput({
         const command = suggestions[selectedCommand]
         if (command) {
           tryRunCommand(`/${command.name}`)
+          return
+        }
+      }
+      // File-completion overlay open → Enter accepts the selection (same
+      // contract as the command menu: the overlay owns Enter while open).
+      if (fileOverlayOpen) {
+        const file = fileMatches[fileSelected]
+        if (file) {
+          acceptFile(file)
           return
         }
       }
@@ -454,7 +494,7 @@ export function PromptInput({
     }
     if (key.tab && fileOverlayOpen) {
       const file = fileMatches[fileSelected]
-      if (file) setInput(`@${file} `)
+      if (file) acceptFile(file)
       return
     }
     if (key.tab && overlayOpen) {
@@ -621,11 +661,17 @@ export function PromptInput({
       }
       // A single Esc closes the open command menu first (CC/pi behavior);
       // the double-tap-clear semantics only apply to ordinary input.
-      if (overlayOpen || fileOverlayOpen) {
+      if (overlayOpen) {
         setValue('')
         setCursor(0)
         setSelectedCommand(0)
         setFileSelected(0)
+        return
+      }
+      // File overlay: Esc dismisses the menu for THIS token only — clearing
+      // the input would nuke a mid-message `@` mention's surrounding text.
+      if (fileOverlayOpen) {
+        fileEscRef.current = mention?.start ?? -1
         return
       }
       // With pending messages while working, Esc = interrupt and deliver
@@ -633,7 +679,7 @@ export function PromptInput({
       // turn is aborted and each message is re-queued once it settles.
       if (channel.working && channel.pending.length > 0) {
         const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
-        channel.notify(`已打断当前回合，${count} 条消息立即处理`, {
+        channel.notify(t('interrupt-delivered', { n: count }), {
           timeoutMs: 2500,
         })
         return
@@ -800,7 +846,7 @@ export function PromptInput({
         <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
           {channel.pending.some(item => item.placement === 'steer') && (
             <Box flexDirection="column">
-              <Text dimColor>⚡ 插话 · 下一步送达</Text>
+              <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
               {channel.pending
                 .filter(item => item.placement === 'steer')
                 .map(item => (
@@ -812,7 +858,7 @@ export function PromptInput({
           )}
           {channel.pending.some(item => item.placement === 'followup') && (
             <Box flexDirection="column">
-              <Text dimColor>⏳ 排队 · 回合结束后送达</Text>
+              <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
               {channel.pending
                 .filter(item => item.placement === 'followup')
                 .map(item => (
@@ -822,7 +868,7 @@ export function PromptInput({
                 ))}
             </Box>
           )}
-          <Text dimColor>Alt+↑ 撤回 · Esc 打断并立即发送</Text>
+          <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
         </Box>
       )}
       {fileOverlayOpen && (

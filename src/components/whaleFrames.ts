@@ -46,7 +46,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '眨眼',
+    name: 'blink',
     rows: [
       '........................................',
       '........................................',
@@ -76,7 +76,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '动腹鳍1',
+    name: 'fin1',
     rows: [
       '........................................',
       '........................................',
@@ -106,7 +106,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '动腹鳍2',
+    name: 'fin2',
     rows: [
       '........................................',
       '........................................',
@@ -136,7 +136,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '喷水花1',
+    name: 'spout1',
     rows: [
       '........................................',
       '........................................',
@@ -166,7 +166,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '喷水花2',
+    name: 'spout2',
     rows: [
       '........................................',
       '........................................',
@@ -196,7 +196,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '喷水花3',
+    name: 'spout3',
     rows: [
       '........................................',
       '........................................',
@@ -226,7 +226,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '喷水花4',
+    name: 'spout4',
     rows: [
       '........................................',
       '...........L............................',
@@ -256,7 +256,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '喷水花5',
+    name: 'spout5',
     rows: [
       '........................................',
       '.......LL..L..LL........................',
@@ -286,7 +286,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '喷水花6',
+    name: 'spout6',
     rows: [
       '........................................',
       '......LL...L...LL.......................',
@@ -316,7 +316,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '摆尾巴1',
+    name: 'tail1',
     rows: [
       '........................................',
       '........................................',
@@ -346,7 +346,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '摆尾巴2',
+    name: 'tail2',
     rows: [
       '........................................',
       '........................................',
@@ -376,7 +376,7 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     ],
   },
   {
-    name: '摆尾巴3',
+    name: 'tail3',
     rows: [
       '........................................',
       '........................................',
@@ -418,19 +418,19 @@ export interface OpeningStep {
 /** Startup sequence (~3.4s), ending on the standard pose. */
 export const OPENING_SEQUENCE: readonly OpeningStep[] = [
   { frame: 0, ms: 400 }, // standard
-  { frame: 1, ms: 250 }, // 眨眼
+  { frame: 1, ms: 250 }, // blink
   { frame: 0, ms: 300 }, // standard
-  { frame: 4, ms: 150 }, // 喷水花1
-  { frame: 5, ms: 150 }, // 喷水花2
-  { frame: 6, ms: 150 }, // 喷水花3
-  { frame: 7, ms: 150 }, // 喷水花4
-  { frame: 8, ms: 150 }, // 喷水花5
-  { frame: 9, ms: 150 }, // 喷水花6
+  { frame: 4, ms: 150 }, // spout1
+  { frame: 5, ms: 150 }, // spout2
+  { frame: 6, ms: 150 }, // spout3
+  { frame: 7, ms: 150 }, // spout4
+  { frame: 8, ms: 150 }, // spout5
+  { frame: 9, ms: 150 }, // spout6
   { frame: 0, ms: 250 }, // standard
-  { frame: 10, ms: 170 }, // 摆尾巴1
-  { frame: 11, ms: 170 }, // 摆尾巴2
-  { frame: 12, ms: 260 }, // 摆尾巴3
-  { frame: 11, ms: 170 }, // 摆尾巴2
-  { frame: 10, ms: 170 }, // 摆尾巴1
+  { frame: 10, ms: 170 }, // tail1
+  { frame: 11, ms: 170 }, // tail2
+  { frame: 12, ms: 260 }, // tail3
+  { frame: 11, ms: 170 }, // tail2
+  { frame: 10, ms: 170 }, // tail1
   { frame: 0, ms: 300 }, // standard
 ]

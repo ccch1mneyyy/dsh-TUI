@@ -17,9 +17,12 @@ export declare const inject: string[];
 export interface Config {
     /** Existing session to attach; a fresh session is created when absent. */
     sessionId?: string;
-    /** LLM provider route; the harness `deepseek-official` route by default. */
+    /** LLM provider route. When absent, the `/model` choice persisted in
+     *  `~/.dsh-cc/model.json` wins, then the harness `deepseek-official`
+     *  route. */
     provider?: string;
-    /** Model override passed to the agent (adapter default when absent). */
+    /** Model override passed to the agent. When absent, the persisted `/model`
+     *  choice wins, then the harness default (`deepseek-v4-flash`). */
     model?: string;
     /** Session working directory; defaults to the invoking directory. */
     cwd?: string;
@@ -36,6 +39,9 @@ export interface Config {
     activityFrames?: string;
     /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
     fullscreen?: boolean;
+    /** UI language: `en` / `zh`. When absent, the `CC_TUI_LANG` env var wins,
+     *  then the `/lang` choice persisted in `~/.dsh-cc/lang.json`, then `zh`. */
+    lang?: string;
     /** Agent preset id new sessions compose from (standard/code/minimal/
      *  cordis/… when the roster is mounted). When absent, the `/preset` choice
      *  persisted in `~/.dsh-cc/agent-preset.json` wins, then the roster

@@ -7,17 +7,20 @@ import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/d
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
+import { readModelPref, writeModelPref } from './modelPrefs.js'
 import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { logForDebugging } from './utils/debug.js'
+import { extractMentions } from './utils/mentions.js'
+import { t } from './i18n.js'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -836,6 +839,11 @@ export function createChannel(
     /** cordis.yml's static preset choice (`preset` key): wins over the
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string
+    /** cordis.yml's static route (`provider`/`model` keys), undefined when
+     *  unset: wins over the persisted `/model` preference for NEW sessions,
+     *  and is the only route a resume overrides the target's own record with. */
+    configuredProvider?: string
+    configuredModel?: string
     /** The preset the initial agent's session runs under (from resolveAgent). */
     agentPreset?: string
     /** Handle of the initial agent; disposed when a rewind replaces it. */
@@ -884,6 +892,53 @@ export function createChannel(
     const before = state.pending.length
     state.pending = state.pending.filter(item => item.id !== messageId)
     if (state.pending.length !== before) state.emit()
+  }
+  /**
+   * `@` file mentions (issue #15): expansion reads files asynchronously, so
+   * every user-text delivery (submit / steer / interrupt-requeue) funnels
+   * through this chain to keep the send order FIFO.
+   */
+  let sendChain: Promise<void> = Promise.resolve()
+  /**
+   * Expand the text's `@` mentions and deliver ONE user message: the typed
+   * text stays the first content block (the transcript bubble renders it —
+   * never the file dump) and each resolved reference appends a model-facing
+   * attachment block. The pending preview tracks the typed text.
+   */
+  const deliverUserText = (text: string, placement: PendingMessage['placement']): void => {
+    sendChain = sendChain.then(async () => {
+      const expansion = await expandMentions(mentionFs(ctx), state.cwd, text)
+      const message = createUserMessage({
+        content: expansion.blocks,
+        source: { kind: 'user' },
+      })
+      // Track BEFORE the agent call: a synchronous throw inside
+      // followup/steer rolls the preview back; otherwise the inbox events
+      // retire it once the message is claimed or discarded.
+      trackPending({ id: message.id, text }, placement)
+      try {
+        if (placement === 'steer') agent.steer(message)
+        else agent.followup(message)
+      } catch (error) {
+        untrackPending(message.id)
+        throw error
+      }
+      if (expansion.attached.length > 0) {
+        state.notify(t('mentions-attached', { count: expansion.attached.length }), { timeoutMs: 2500 })
+      }
+      if (expansion.missing.length > 0) {
+        state.notify(t('mentions-missing', { paths: expansion.missing.map(path => `@${path}`).join(' ') }), {
+          color: 'warning',
+          timeoutMs: 4000,
+        })
+      }
+    }).catch((error: unknown) => {
+      // The chain must survive a failed send: log and notify, then continue
+      // with the next queued delivery.
+      const message = error instanceof Error ? error.message : String(error)
+      logForDebugging(`submit: delivery failed (${message})`)
+      state.notify(t('send-failed', { err: message }), { color: 'error' })
+    })
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
@@ -936,7 +991,7 @@ export function createChannel(
    *  on this channel (resume/model switch re-validate it per route). */
   const cycleEffort = async (): Promise<void> => {
     if (llmRuntime === undefined) {
-      state.notify('推理等级切换不可用（llm 服务未挂载）', { color: 'error' })
+      state.notify(t('effort-unavailable'), { color: 'error' })
       return
     }
     let efforts: ReadonlyArray<{ id: string; name: string }>
@@ -946,7 +1001,7 @@ export function createChannel(
       efforts = info.reasoning?.efforts ?? []
       defaultEffort = info.reasoning?.defaultEffort
     } catch (error) {
-      state.notify(`推理等级读取失败 · ${error instanceof Error ? error.message : String(error)}`, {
+      state.notify(t('effort-read-failed', { error: error instanceof Error ? error.message : String(error) }), {
         color: 'error',
         timeoutMs: 8000,
       })
@@ -955,8 +1010,8 @@ export function createChannel(
     if (efforts.length <= 1) {
       state.notify(
         efforts.length === 1
-          ? `当前模型只有一档推理等级（${efforts[0]!.name}）`
-          : '当前模型不支持推理等级切换',
+          ? t('effort-single-tier', { name: efforts[0]!.name })
+          : t('effort-unsupported'),
         { color: 'warning' },
       )
       return
@@ -974,7 +1029,7 @@ export function createChannel(
     preferredEffort = next.id
     state.reasoningEffort = next.id
     writeEffortPref(next.id)
-    state.notify(`推理强度 → ${next.name}`)
+    state.notify(t('effort-switched', { name: next.name }))
     state.emit()
   }
 
@@ -1074,17 +1129,7 @@ export function createChannel(
       // The current session is being used — move it to the MRU front
       // (/resume sorts by last-used).
       touchSession(state.agentId)
-      const message = createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } })
-      // Track BEFORE the agent call: a synchronous throw inside send()
-      // rolls the preview back; otherwise the inbox events retire it once
-      // the message is claimed or discarded.
-      trackPending({ id: message.id, text: trimmed }, 'followup')
-      try {
-        agent.followup(message)
-      } catch (error) {
-        untrackPending(message.id)
-        throw error
-      }
+      deliverUserText(trimmed, 'followup')
     },
     /** Steer a message into the RUNNING turn (Codex/pi semantics): it is
      *  injected at the next step boundary of the current turn and the agent
@@ -1093,18 +1138,11 @@ export function createChannel(
       const trimmed = text.trim()
       if (!trimmed) return
       touchSession(state.agentId)
-      const message = createUserMessage({ content: [{ type: 'text', text: trimmed }], source: { kind: 'user' } })
-      trackPending({ id: message.id, text: trimmed }, 'steer')
-      try {
-        // Official dsh-agent rc.6: steer() is synchronous void — the message
-        // enters the next-step inbox. A rejected step leaves it parked for the
-        // next wake; the inbox events below retire the preview (claimed →
-        // turn boundary, discarded → cancel).
-        agent.steer(message)
-      } catch (error) {
-        untrackPending(message.id)
-        throw error
-      }
+      // Official dsh-agent rc.6: steer() is synchronous void — the message
+      // enters the next-step inbox. A rejected step leaves it parked for the
+      // next wake; the inbox events below retire the preview (claimed →
+      // turn boundary, discarded → cancel).
+      deliverUserText(trimmed, 'steer')
     },
     /** Pull a pending message back out of the inbox (Alt+Up): it returns to
      *  the input for editing instead of being delivered. */
@@ -1146,9 +1184,7 @@ export function createChannel(
         if (interruptSeq !== token) return
         for (const text of queued) {
           touchSession(state.agentId)
-          const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
-          trackPending({ id: message.id, text }, 'followup')
-          agent.followup(message)
+          deliverUserText(text, 'followup')
         }
       }
       if (typeof whenIdle === 'function') {
@@ -1222,6 +1258,8 @@ export function createChannel(
       // The fork continues under the source session's own preset: switches
       // are blank-only, so every `agent-preset/selected` event predates any
       // rewind boundary and the source log resolves the exact composition.
+      // The route likewise stays the live one — a rewind continues the same
+      // conversation, so a `/model` switch must survive it (issue #30).
       const rewindComposed = await composePreset(ctx, runningPresetOf(agent.session))
       try {
         handle = await agents.create({
@@ -1235,7 +1273,7 @@ export function createChannel(
               ? {}
               : { agentPreset: rewindComposed.agentPreset }),
           },
-          agentOptions: { provider: options.provider, model: options.model },
+          agentOptions: { provider: state.provider, model: state.model },
           ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
         })
       } catch {
@@ -1312,7 +1350,9 @@ export function createChannel(
       let handle: AgentHandle
       // The target session's own preset (from its persisted log) — never the
       // current preference: a resume re-enters the composition its history
-      // was produced under.
+      // was produced under. Same rule for the route: only an explicit
+      // cordis.yml provider/model overrides the route the target's own
+      // request/header records (issue #30).
       const resumeComposed = await composePreset(
         ctx,
         await resolvePersistedPreset(ctx, SessionId(sessionId)),
@@ -1320,7 +1360,7 @@ export function createChannel(
       try {
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
-          agentOptions: { provider: options.provider, model: options.model },
+          agentOptions: { provider: options.configuredProvider, model: options.configuredModel },
           ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
         })
       } catch (error) {
@@ -1403,6 +1443,15 @@ export function createChannel(
       // `preset` key wins over the persisted `/preset` choice, which wins
       // over the roster default (same precedence as activityFrames).
       const newComposed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+      // Same precedence for the route (issues #14/#30): cordis.yml explicit
+      // keys win over the persisted `/model` choice — a switch earlier in
+      // this run just wrote it, so `/new` follows the live model — which
+      // wins over the startup fallback.
+      const modelPref = readModelPref()
+      const route = {
+        provider: options.configuredProvider ?? modelPref?.provider ?? options.provider,
+        model: options.configuredModel ?? modelPref?.model ?? options.model,
+      }
       try {
         handle = await agents.create({
           sessionId,
@@ -1412,7 +1461,7 @@ export function createChannel(
               ? {}
               : { agentPreset: newComposed.agentPreset }),
           },
-          agentOptions: { provider: options.provider, model: options.model },
+          agentOptions: route,
           ...(newComposed.setup === undefined ? {} : { setup: newComposed.setup }),
         })
       } catch (error) {
@@ -1442,6 +1491,8 @@ export function createChannel(
       state.status = handle.agent.status
       state.agentId = handle.agent.id
       state.agentPreset = newComposed.agentPreset
+      state.model = route.model
+      state.provider = route.provider
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
@@ -1569,6 +1620,14 @@ export function createChannel(
       touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
+      // Persist the choice so the next boot and `/new` start on it (same
+      // contract as /preset and Shift+Tab effort; issues #14/#30). A failed
+      // write keeps the live switch but warns it will not survive a restart.
+      if (!writeModelPref(provider, model)) {
+        state.notify(t('model-pref-write-failed'), {
+          color: 'warning',
+        })
+      }
       return true
     },
     cycleEffort,
@@ -1607,22 +1666,22 @@ export function createChannel(
     },
     setActivityFrames(name) {
       if (!isPresetName(name)) {
-        state.notify(`未知预设「${name}」· /activity frames 查看全部`, { color: 'error' })
+        state.notify(t('unknown-activity-preset', { name }), { color: 'error' })
         return false
       }
       if (name === state.activityFrames) {
-        state.notify(`指示器已是：${name}`, { color: 'success' })
+        state.notify(t('activity-indicator-already', { name }), { color: 'success' })
         return true
       }
       // Persist first (pi behavior: a failed write refuses the switch) so a
       // preference that cannot be saved never silently disappears.
       if (!writeActivityFrames(name)) {
-        state.notify('无法写入 ~/.dsh-cc/working-activity.json，切换未保存', { color: 'error' })
+        state.notify(t('activity-pref-write-failed'), { color: 'error' })
         return false
       }
       state.activityFrames = name
       state.emit()
-      state.notify(`指示器已切换：${name}（已保存）`)
+      state.notify(t('activity-indicator-switched', { name }))
       return true
     },
     async listPresets() {
@@ -1644,11 +1703,11 @@ export function createChannel(
     async switchPreset(presetId) {
       const presets = rosterOf(ctx)
       if (presets === undefined) {
-        state.notify('Preset 不可用——当前组合未挂载 agent-presets 名册', { color: 'error' })
+        state.notify(t('preset-unavailable'), { color: 'error' })
         return false
       }
       if (state.working) {
-        state.notify('Agent 运行中，无法切换 preset', { color: 'warning' })
+        state.notify(t('preset-agent-running'), { color: 'warning' })
         return false
       }
       let target: AgentPresetInfo
@@ -1656,17 +1715,17 @@ export function createChannel(
         target = await presets.resolve(presetId)
       } catch (error) {
         state.notify(
-          `Preset「${presetId}」不存在 · ${error instanceof Error ? error.message : String(error)}`,
+          t('preset-not-found', { id: presetId, err: error instanceof Error ? error.message : String(error) }),
           { color: 'error', timeoutMs: 8000 },
         )
         return false
       }
       if (target.broken !== undefined) {
-        state.notify(`Preset「${presetId}」无法加载 · ${target.broken}`, { color: 'error', timeoutMs: 8000 })
+        state.notify(t('preset-load-failed', { id: presetId, broken: target.broken }), { color: 'error', timeoutMs: 8000 })
         return false
       }
       if (target.id === state.agentPreset) {
-        state.notify(`当前 preset 已是：${target.id}`, { color: 'success' })
+        state.notify(t('preset-already-current', { id: target.id }), { color: 'success' })
         return true
       }
       // Official rule (dsh-agent-presets): only a session that has produced
@@ -1676,11 +1735,11 @@ export function createChannel(
       if (!blank) {
         // Persist as the default for future sessions instead of failing.
         if (!writePresetPref(target.id)) {
-          state.notify('无法写入 ~/.dsh-cc/agent-preset.json，选择未保存', { color: 'error' })
+          state.notify(t('preset-pref-write-failed'), { color: 'error' })
           return false
         }
         state.notify(
-          `会话已开始，preset 已锁定（当前：${state.agentPreset ?? 'host'}）· 已保存为默认：${target.id}（/new 或下次启动生效）`,
+          t('preset-locked-saved-default', { current: state.agentPreset ?? 'host', id: target.id }),
           { color: 'warning', timeoutMs: 8000 },
         )
         return true
@@ -1698,17 +1757,17 @@ export function createChannel(
         state.agentPreset = preset.id
       } catch (error) {
         state.notify(
-          `Preset 切换失败 · ${error instanceof Error ? error.message : String(error)}`,
+          t('preset-switch-failed', { err: error instanceof Error ? error.message : String(error) }),
           { color: 'error', timeoutMs: 8000 },
         )
         return false
       }
       state.emit()
       if (!writePresetPref(target.id)) {
-        state.notify(`Preset 已切换：${target.id}，但默认偏好写入失败（重启后不保留）`, { color: 'warning' })
+        state.notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
         return true
       }
-      state.notify(`Preset 已切换：${target.id}（已保存为默认）`, { color: 'success' })
+      state.notify(t('preset-switched-saved', { id: target.id }), { color: 'success' })
       return true
     },
     listModels() {
@@ -1791,7 +1850,7 @@ export function createChannel(
                 return
               }
               const data = first.data as { content?: readonly ContentBlock[] }
-              const text = textOf(data.content)
+              const text = firstTextOf(data.content)
               if (text.length > 0) record.title = shortenTitle(text)
             } catch {
               // Keep the basename fallback.
@@ -1889,18 +1948,18 @@ export function createChannel(
       }
       if (byServer.size === 0) {
         return [
-          '未配置 MCP 服务器。',
-          '在 profile 补丁层（~/.dsh/profiles/cc-tui/cordis.patch.yml）insert 一行即可，例：',
+          t('mcp-none-configured'),
+          t('mcp-insert-hint'),
           '  - insert:',
           '      - id: mcp-context7',
           "        name: '@deepseek-ai/dsh-mcp-client'",
           '        config: { transport: stdio, serverName: context7, command: npx, args: ["-y", "@upstash/context7-mcp"] }',
-          '详见仓库 README 的 MCP 章节。',
+          t('mcp-readme-hint'),
         ]
       }
       const lines: string[] = []
       for (const [server, tools] of byServer) {
-        lines.push(`${server}（${tools.length} 个工具）: ${tools.join('、')}`)
+        lines.push(t('mcp-server-tools', { server, count: tools.length, tools: tools.join(', ') }))
       }
       return lines
     },
@@ -1908,35 +1967,37 @@ export function createChannel(
       // Export from the session log — the authoritative, complete record —
       // not the bounded transcript window (folded rows keep only previews).
       const parts: string[] = [
-        '# dsh-cc 会话导出',
+        t('export-title'),
         '',
-        `- 导出时间: ${new Date().toLocaleString()}`,
-        `- 模型: ${state.model}`,
-        `- 会话: ${state.agentId}`,
-        `- 目录: ${state.cwd}`,
+        t('export-time', { time: new Date().toLocaleString() }),
+        t('export-model', { model: state.model }),
+        t('export-session', { id: state.agentId }),
+        t('export-dir', { cwd: state.cwd }),
         '',
       ]
       for (const event of agent.session.events) {
         switch (event.type) {
           case 'user/message': {
             if (event.data.source.kind !== 'user') break
-            const text = textOf(event.data.content)
-            if (text) parts.push(`## 用户\n\n${text}\n`)
+            // Export what the user SAW: the typed prompt, not the expanded
+            // `@`-mention attachment blocks.
+            const text = firstTextOf(event.data.content)
+            if (text) parts.push(`${t('export-user-section')}\n\n${text}\n`)
             break
           }
           case 'assistant/message': {
             const blocks = event.data.message.content
             for (const block of blocks) {
               if (block.type === 'reasoning' && block.text) {
-                parts.push(`## 思考\n\n${block.text}\n`)
+                parts.push(`${t('export-thinking-section')}\n\n${block.text}\n`)
               } else if (block.type === 'text' && block.text) {
-                parts.push(`## 助手\n\n${block.text}\n`)
+                parts.push(`${t('export-assistant-section')}\n\n${block.text}\n`)
               }
             }
             break
           }
           case 'tool/call': {
-            parts.push(`## 工具 · ${event.data.name}\n\n\`\`\`json\n${event.data.arguments}\n\`\`\`\n`)
+            parts.push(`${t('export-tool-section', { name: event.data.name })}\n\n\`\`\`json\n${event.data.arguments}\n\`\`\`\n`)
             break
           }
           case 'tool/result': {
@@ -1944,7 +2005,7 @@ export function createChannel(
             // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may not match type
             if (block.type === 'tool-result') {
               const text = textOf(block.content)
-              if (text) parts.push(`### 结果\n\n\`\`\`\n${text}\n\`\`\`\n`)
+              if (text) parts.push(`${t('export-result-section')}\n\n\`\`\`\n${text}\n\`\`\`\n`)
             }
             break
           }
@@ -1967,14 +2028,14 @@ export function createChannel(
       const template = [
         '# AGENTS.md',
         '',
-        '## 项目',
+        t('agentsmd-project'),
         '',
-        '（在此描述项目的目标、结构与约定——这份文件会注入给每个 agent 作为工作区上下文。）',
+        t('agentsmd-project-body'),
         '',
-        '## 约定',
+        t('agentsmd-conventions'),
         '',
-        '- 改动前先阅读相关模块',
-        '- 保持与现有代码风格一致',
+        t('agentsmd-convention-read'),
+        t('agentsmd-convention-style'),
         '',
       ].join('\n')
       try {
@@ -1987,21 +2048,21 @@ export function createChannel(
     doctorInfo() {
       const lines: string[] = []
       lines.push(`Node ${process.version} · ${process.platform} ${process.arch}`)
-      lines.push(`API key: ${process.env.DEEPSEEK_API_KEY ? '已配置' : '未配置（DEEPSEEK_API_KEY）'}`)
-      lines.push(`模型: ${state.model} · 提供方: ${options.provider}`)
-      lines.push(`工作目录: ${state.cwd}`)
-      lines.push(`上下文窗口: ${state.contextWindow ?? '未知'} tokens`)
-      lines.push(`会话: ${state.agentId}${state.sessionTitle ? ' · ' + state.sessionTitle : ''}`)
+      lines.push(`${t('doctor-api-key', { state: process.env.DEEPSEEK_API_KEY ? t('doctor-key-configured') : t('doctor-key-missing') })}`)
+      lines.push(t('doctor-model', { model: state.model, provider: options.provider }))
+      lines.push(t('doctor-cwd', { cwd: state.cwd }))
+      lines.push(t('doctor-context-window', { window: state.contextWindow ?? t('doctor-unknown') }))
+      lines.push(`${t('doctor-session', { id: state.agentId })}${state.sessionTitle ? ' · ' + state.sessionTitle : ''}`)
       const userHome = process.env.USERPROFILE ?? homedir()
       const configCandidates = [
         join(userHome, '.dsh-cc/cordis.yml'),
         join(state.cwd, 'examples/cc-tui-agent/cordis.yml'),
       ]
       for (const candidate of configCandidates) {
-        lines.push(`配置: ${candidate} ${existsSync(candidate) ? '✓' : '（不存在）'}`)
+        lines.push(`${t('doctor-config', { candidate, state: existsSync(candidate) ? '✓' : t('doctor-config-missing') })}`)
       }
       const sessionsDir = join(userHome, '.dsh-cc/sessions')
-      lines.push(`会话存储: ${sessionsDir} ${existsSync(sessionsDir) ? '✓' : '（未初始化）'}`)
+      lines.push(`${t('doctor-storage', { dir: sessionsDir, state: existsSync(sessionsDir) ? '✓' : t('doctor-storage-uninit') })}`)
       return lines
     },
     async listSubagents() {
@@ -2021,19 +2082,19 @@ export function createChannel(
           >
         }
         | undefined
-      if (!subagents) return ['子代理服务未挂载（leaf 未启用 subagent）']
+      if (!subagents) return [t('subagent-not-mounted')]
       try {
         const children = await subagents.listChildren(agent.session.id)
-        if (children.length === 0) return ['当前会话暂无子代理']
+        if (children.length === 0) return [t('subagent-none')]
         return children.map((child) => {
           const id =
             typeof child.id === 'string' ? child.id : (child.id.value ?? '')
           const label = child.label ? `「${child.label}」` : ''
-          const mode = child.mode === 'continuable' ? '可续' : '一次性'
-          return `${mode} ${label}${child.activity === 'running' ? ' 运行中' : ' 已归档'} · ${id.slice(0, 8)}`
+          const mode = child.mode === 'continuable' ? t('subagent-resumable') : t('subagent-oneshot')
+          return `${t('subagent-row', { mode, label, activity: child.activity === 'running' ? t('subagent-running') : t('subagent-archived'), id: id.slice(0, 8) })}`
         })
       } catch (error) {
-        return [`查询失败 · ${error instanceof Error ? error.message : String(error)}`]
+        return [t('subagent-query-failed', { err: error instanceof Error ? error.message : String(error) })]
       }
     },
   }
@@ -2254,6 +2315,15 @@ ${output}
   const textOf = (content: readonly ContentBlock[] | undefined): string =>
     (content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
 
+  /**
+   * Transcript-facing text of a user message: the FIRST text block only.
+   * `@`-mention attachments (issue #15) ride as later blocks — model-facing
+   * only — so joining every block would dump file contents into the bubble,
+   * the sticky header, and session titles.
+   */
+  const firstTextOf = (content: readonly ContentBlock[] | undefined): string =>
+    (content ?? []).find(block => block.type === 'text')?.text.trim() ?? ''
+
   const ensureStreaming = (seq?: number): ChatRow => {
     if (streaming === undefined) {
       streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
@@ -2407,11 +2477,13 @@ ${output}
         // Injected context (plugin/skill source) is not a human bubble; v1
         // renders direct human prompts only.
         if (event.data.source.kind !== 'user') break
-        const text = textOf(event.data.content)
+        const text = firstTextOf(event.data.content)
         if (text) {
           state.rows.push({ id: nextRowId, kind: 'user', text, seq: event.seq })
           state.lastUserText = text
-          state.contextSegments.prompt += estimateTokens(text)
+          // The context estimate counts everything sent to the model —
+          // typed text AND the `@`-mention attachment blocks.
+          state.contextSegments.prompt += estimateTokens(textOf(event.data.content))
           nextRowId += 1
         }
         break
@@ -2639,7 +2711,7 @@ ${output}
           state.rows.push({
             id: nextRowId,
             kind: 'notice',
-            text: `Agent preset 已切换：${data.agentPreset ?? 'unknown'}`,
+            text: t('agent-preset-switched', { preset: data.agentPreset ?? 'unknown' }),
           })
           nextRowId += 1
         }
@@ -2835,4 +2907,118 @@ async function listFilesDeep(
 
   await walk(root, '', 1)
   return out
+}
+
+/** One attached file's contribution is capped so an absent-minded `@` of a
+ *  huge file cannot blow the context window (CC caps @-attachments too). */
+const MENTION_MAX_FILE_CHARS = 50_000
+/** Total budget across all attachments in one message. */
+const MENTION_MAX_TOTAL_CHARS = 200_000
+/** A directory mention contributes a shallow listing, capped at this many
+ *  entries. */
+const MENTION_MAX_DIR_ENTRIES = 200
+
+/** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
+export interface MentionFs {
+  resolve(path: string): Promise<{ displayPath: string }>
+  stat(target: { displayPath: string }): Promise<{ type: 'file' | 'directory' | 'other' } | undefined>
+  readText(target: { displayPath: string }): Promise<string>
+  listDir(target: { displayPath: string }): Promise<Array<{ name: string; type: 'file' | 'directory' | 'other' }>>
+}
+
+/** The leaf's fs service in the shape mention expansion needs; undefined
+ *  when the plugin is not mounted (mentions then stay literal text). */
+function mentionFs(ctx: Context): MentionFs | undefined {
+  return ctx.get('fs') as MentionFs | undefined
+}
+
+export interface MentionExpansion {
+  /** Model-facing blocks: the typed text first, one block per attachment. */
+  blocks: Array<{ type: 'text'; text: string }>
+  /** Paths that resolved and were attached (for the confirmation notice). */
+  attached: string[]
+  /** Mention tokens that failed to resolve (kept literal, warned about). */
+  missing: string[]
+}
+
+/**
+ * Expand a submitted text's `@` mentions (issue #15) into model-facing
+ * attachment blocks: each referenced file contributes its (capped) content,
+ * each directory a shallow listing. The typed text stays the first block
+ * verbatim — mentions that resolve keep their `@path` spelling in it, and
+ * unresolved ones stay literal everywhere. Best-effort: an unreadable or
+ * binary file degrades to `missing`, never a failed send.
+ */
+export async function expandMentions(
+  fs: MentionFs | undefined,
+  cwd: string,
+  text: string,
+): Promise<MentionExpansion> {
+  const blocks: MentionExpansion['blocks'] = [{ type: 'text', text }]
+  const attached: string[] = []
+  const missing: string[] = []
+  const mentions = extractMentions(text)
+  if (!fs || mentions.length === 0) return { blocks, attached, missing }
+
+  let budget = MENTION_MAX_TOTAL_CHARS
+  for (const mention of mentions) {
+    if (budget <= 0) break
+    // Mentions resolve against the session cwd, same as the model-facing fs
+    // tools; absolute paths pass through untouched.
+    const absolute = isAbsolute(mention.path) ? mention.path : join(cwd, mention.path)
+    let target: { displayPath: string }
+    let info: { type: 'file' | 'directory' | 'other' } | undefined
+    try {
+      target = await fs.resolve(absolute)
+      info = await fs.stat(target)
+    } catch {
+      missing.push(mention.path)
+      continue
+    }
+    if (info?.type === 'file') {
+      try {
+        const cap = Math.min(MENTION_MAX_FILE_CHARS, budget)
+        let content = await fs.readText(target)
+        let truncated = false
+        if (content.length > cap) {
+          content = content.slice(0, cap)
+          truncated = true
+        }
+        budget -= content.length
+        blocks.push({
+          type: 'text',
+          text: `<attached-file path="${mention.path}">\n${content}${truncated ? '\n[… truncated]' : ''}\n</attached-file>`,
+        })
+        attached.push(mention.path)
+      } catch {
+        // Binary/undecodable or unreadable — report it like a miss.
+        missing.push(mention.path)
+      }
+      continue
+    }
+    if (info?.type === 'directory') {
+      try {
+        const entries = await fs.listDir(target)
+        const listing = entries
+          .slice(0, MENTION_MAX_DIR_ENTRIES)
+          .map(entry => (entry.type === 'directory' ? `${entry.name}/` : entry.name))
+        if (entries.length > MENTION_MAX_DIR_ENTRIES) {
+          listing.push(`… (${entries.length - MENTION_MAX_DIR_ENTRIES} more)`)
+        }
+        const body = listing.join('\n')
+        budget -= body.length
+        blocks.push({
+          type: 'text',
+          text: `<attached-directory path="${mention.path}">\n${body}\n</attached-directory>`,
+        })
+        attached.push(mention.path)
+      } catch {
+        missing.push(mention.path)
+      }
+      continue
+    }
+    // Absent (stat → undefined) or a special file.
+    missing.push(mention.path)
+  }
+  return { blocks, attached, missing }
 }

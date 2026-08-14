@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView } from '../channel.js'
 import type { DOMElement } from '../ink/dom.js'
@@ -260,7 +261,7 @@ export function MessageList({
     <>
       {rows.some(row => row.folded) && (
         <Box marginTop={1} onClick={onLoadOlder}>
-          <Divider title={' ↑ 加载更早消息（会话日志完整，/export 导出全文） '} />
+          <Divider title={t('load-earlier')} />
         </Box>
       )}
       {!showAll && hiddenCount > 0 && (
@@ -550,7 +551,7 @@ function TranscriptRow({
             <Text dimColor>{text}</Text>
           ) : (
             <Text dimColor italic>
-              ∴ 摘要已折叠 · {compactPreview(text)}{' '}
+              ∴ {t('compact-summary-folded')} · {compactPreview(text)}{' '}
               <KeyboardShortcutHint shortcut="ctrl+o" action="expand" parens />
             </Text>
           )}

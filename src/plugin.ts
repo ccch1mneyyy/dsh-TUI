@@ -10,9 +10,11 @@ import { createChannel } from './channel.js'
 import { QuestionStore } from './questions.js'
 import { registerPackagedSkills } from './packaged-skills.js'
 import { readActivityFrames } from './activityPrefs.js'
+import { readModelPref } from './modelPrefs.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
 import { writeResumeTarget } from './sessionHistory.js'
+import { isLang, resolveStartupLang, setLang } from './i18n.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
 
@@ -29,6 +31,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (!process.stdout.isTTY) {
     throw new Error('cc-tui requires an interactive terminal (stdout must be a TTY).')
   }
+
+  // UI language resolution: CC_TUI_LANG env var wins, then cordis.yml
+  // `lang`, then the persisted `/lang` choice, then `zh`. Must settle
+  // before the first render so every module resolves strings in the same
+  // language.
+  const envLang = process.env.CC_TUI_LANG
+  setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
 
   // DSH user-interaction seam: the model's ask_user_question tool parks on
   // the userInteraction service until a UI provider answers. Mount the
@@ -50,6 +59,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
   ctx.effect(() => () => questionStore.rejectAll())
 
+  // Config-only route: resolveAgent applies the persisted `/model`
+  // preference on CREATE only — a resumed session keeps the route its own
+  // log records (last request/header), matching the preset rule.
   const agentOptions = {
     provider: config.provider,
     model: config.model,
@@ -57,10 +69,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const meta = { cwd: config.cwd ?? process.cwd() }
   const { agent, handle, agentPreset } = await resolveAgent(ctx, config.sessionId, agentOptions, meta, config.preset)
 
+  // Status-line route: cordis.yml explicit keys win over the persisted
+  // `/model` choice, which wins over the harness defaults.
+  const modelPref = readModelPref()
   const channel = createChannel(ctx, agent, {
-    model: config.model ?? 'deepseek-v4-flash',
+    model: config.model ?? modelPref?.model ?? 'deepseek-v4-flash',
     cwd: config.cwd ?? process.cwd(),
-    provider: config.provider ?? 'deepseek-official',
+    provider: config.provider ?? modelPref?.provider ?? 'deepseek-official',
+    // Raw cordis.yml route (undefined when unset): the channel's
+    // new-session path re-resolves prefs against these, and resume passes
+    // only explicit values so the target session's own record wins.
+    configuredModel: config.model,
+    configuredProvider: config.provider,
     effort: config.effort,
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
@@ -153,6 +173,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
  * default) and mounts it in the factory's setup hook; a resume re-mounts the
  * preset the session's own log records. Without the roster both paths behave
  * as before presets existed.
+ *
+ * Model route (issues #14/#30): a create resolves cordis.yml
+ * `provider`/`model` over the persisted `/model` choice; a resume passes the
+ * config-only route through so the session's own recorded route wins when
+ * cordis.yml sets nothing.
  */
 async function resolveAgent(
   ctx: Context,
@@ -189,6 +214,13 @@ async function resolveAgent(
   }
   const sessionId = SessionId(randomUUID())
   const composed = await composePreset(ctx, configuredPreset ?? readPresetPref())
+  // Fresh-session route precedence (issues #14/#30): cordis.yml explicit
+  // keys > the persisted `/model` choice > the adapter/harness default.
+  const modelPref = readModelPref()
+  const route = {
+    provider: agentOptions.provider ?? modelPref?.provider,
+    model: agentOptions.model ?? modelPref?.model,
+  }
   const created = await ctx.agents.create({
     sessionId,
     meta: {
@@ -196,14 +228,14 @@ async function resolveAgent(
       // Durable header value: a later resume re-mounts exactly this preset.
       ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
     },
-    agentOptions,
+    agentOptions: route,
     ...(composed.setup === undefined ? {} : { setup: composed.setup }),
   }).catch((error: unknown) => {
     // Fail loud with the reason on stderr — a dead TUI with no message is
     // the worst outcome for a misconfigured leaf (unknown provider/model).
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
-      `cc-tui: failed to create agent (provider=${agentOptions.provider ?? 'deepseek-official'}, model=${agentOptions.model ?? 'deepseek-v4-flash'}): ${message}`,
+      `cc-tui: failed to create agent (provider=${route.provider ?? 'deepseek-official'}, model=${route.model ?? 'deepseek-v4-flash'}): ${message}`,
     )
   })
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset }

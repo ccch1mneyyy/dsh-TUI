@@ -140,10 +140,13 @@
   config:
     policy: !!js "process.platform === 'win32' ? 'never' : ((process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask')"
 
-# Sessions are durable under the SQLite backend inserted below; the shared
-# JSONL backend is off so one write path owns every session.
+# Sessions live in the shared JSONL store (~/.dsh/sessions) — the same
+# backend dsh web writes — so /resume here and the web session list see each
+# other (#24). The row itself comes from the dsh-base layer; this override
+# only re-points the root when DSH_CC_SESSION_ROOT is set (test isolation).
 - id: session-persistence-jsonl
-  disabled: true
+  config:
+    root: !!js process.env.DSH_CC_SESSION_ROOT ?? dshHomePath('sessions')
 
 # ── cc-tui rows ─────────────────────────────────────────────────────────────
 
@@ -197,15 +200,6 @@
         # wins over the roster default (standard).
         preset: !!js process.env.CC_TUI_PRESET ?? undefined
         sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
-
-    # Durable session log (DSH's own persistence seam): /resume and rewind
-    # both rely on this backend writing every session/event. Root defaults
-    # under the user home so sessions survive across terminals (Windows:
-    # USERPROFILE); DSH_CC_SESSION_ROOT overrides the path.
-    - id: sessions
-      name: '@deepseek-ai/dsh-session-persistence-sqlite'
-      config:
-        path: !!js process.env.DSH_CC_SESSION_ROOT ?? (process.env.USERPROFILE ?? process.env.HOME) + '/.dsh-cc/sessions.sqlite'
 
     # Live working-line data source (thinking copy / running tool / turn
     # summary). dsh-working-activity ships as a plain npm dependency of

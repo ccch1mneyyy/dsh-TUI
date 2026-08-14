@@ -42,6 +42,20 @@ transcript 模式中打开会话全文搜索。全文搜索使用 `n`/`N` 在结
 Bracketed paste（右键或终端原生粘贴）会原样插入，包括换行，不会把粘贴内容误当
 成 Enter 提交。
 
+## @ 文件引用
+
+在消息**任意位置**输入 `@` 会打开文件补全菜单：继续输入路径片段过滤，`Tab`/
+`Enter` 选择，目录可继续深入。发送消息时，选中的文件内容或目录列表会自动附加
+到消息中（0.3.7+）。
+
+`Ctrl+V` 粘贴时，Windows Explorer 复制的文件/图片会直接插入为文件路径（含空格
+自动加引号），而不是粘贴路径文本本身。
+
+## 界面语言
+
+`/lang` 在简体中文与英文界面之间切换（影响所有 UI 文案），选择持久化，重启后
+沿用（0.3.7+）。
+
 ## 消息投递语义
 
 模型正在工作时有三种不同路径：
@@ -121,7 +135,7 @@ transcript。
 | --- | --- |
 | 会话 | `/new`、`/resume`、`/clear`、`/compact`、`/export` |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
-| 模型与显示 | `/model`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme` |
+| 模型与显示 | `/model`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
 | 账号与策略 | `/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |
 | 其他 | `/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit` |
@@ -133,6 +147,7 @@ transcript。
   `/activity status` 查看状态。
 - `/preset <id>` 与 `/preset status` 见配置文档。
 - `/theme <name>` 与 `/theme status` 见主题文档。
+- `/lang` 切换中英界面语言（见「界面语言」）。
 - `/plan [off|message]` 与 `/goal ...` 由 DSH 命令插件处理并写入会话事件。
 - Skill 命令只发送激活提示；实际 skill 通过 DSH skill 注册表加载。包内
   `skills/` 会在插件启动时自动注册，也可用项目或用户目录中的同名 skill 覆盖。

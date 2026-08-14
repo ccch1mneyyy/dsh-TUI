@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import { Pane } from './design-system/Pane.js'
 import { Select } from './Select.js'
@@ -33,7 +34,7 @@ export function ActivityPicker({
             value: name,
             label: name,
             description: name === 'random'
-              ? '每次随机一个预设'
+              ? t('activity-random-each-preset')
               : FRAME_PRESETS[name].frames.slice(0, 5).join(' '),
           }))}
           focusIndex={focusIndex}

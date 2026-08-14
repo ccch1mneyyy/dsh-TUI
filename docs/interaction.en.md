@@ -43,6 +43,21 @@ move forward and backward through matches.
 Bracketed paste from right-click or the terminal's native paste command is
 inserted verbatim, including newlines, and is never mistaken for an Enter key.
 
+## @ file references
+
+Typing `@` at **any position** of the message opens file completion: keep typing
+path fragments to filter, `Tab`/`Enter` to pick, and directories can be entered
+further. When you send, the selected file content or directory listing is attached
+to the message automatically (0.3.7+).
+
+On `Ctrl+V`, files/images copied from Windows Explorer are inserted as file paths
+(quoted automatically when they contain spaces) instead of pasting the path text.
+
+## Interface language
+
+`/lang` toggles the UI between Simplified Chinese and English (affects all UI
+strings); the choice persists across restarts (0.3.7+).
+
 ## Message delivery semantics
 
 While the model is working, three paths have different placement:
@@ -130,7 +145,7 @@ to inspect the complete surface available in the current composition.
 | --- | --- |
 | Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export` |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
-| Model and display | `/model`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme` |
+| Model and display | `/model`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
 | Other | `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
@@ -142,6 +157,7 @@ Additional forms:
   directly; `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/theme <name>` and `/theme status` are described in the theme guide.
+- `/lang` toggles the interface language (see “Interface language”).
 - `/plan [off|message]` and `/goal ...` are handled by DSH command plugins and
   recorded as session events.
 - Skill commands submit activation prompts. The actual skill is loaded through

@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import { Pane } from './design-system/Pane.js'
 import { Select } from './Select.js'
@@ -37,8 +38,8 @@ export function PresetPicker({
             value: preset.id,
             label:
               (preset.name ?? preset.id) +
-              (preset.isDefault ? '（默认）' : '') +
-              (preset.broken !== undefined ? '（无法加载）' : ''),
+              (preset.isDefault ? t('preset-default-tag') : '') +
+              (preset.broken !== undefined ? t('preset-broken-tag') : ''),
             description: preset.broken ?? preset.description ?? preset.id,
           }))}
           focusIndex={focusIndex}

@@ -12,7 +12,7 @@ export declare const CONTEXT_ENTRY_MAX_CHARS = 800;
 export declare function truncateContextText(text: string, max?: number): string;
 /**
  * One-line collapsed summary of a loaded-context snapshot, naming only the
- * non-empty groups (`系统提示词 5 段 · 工作区指令 ×2 · 技能 3 · 工具 28`).
+ * non-empty groups (`${t('context-sections', { n: context.sections.length })} · ${t('context-files', { n: context.files.length })} · ${t('context-skills', { n: context.skills.length })} · ${t('context-tools', { n: context.tools.length })}`).
  * @param context - the loaded-context snapshot.
  * @returns the summary, or `''` when every group is empty.
  */
