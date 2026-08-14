@@ -148,7 +148,9 @@ transcript。
 - `/preset <id>` 与 `/preset status` 见配置文档。
 - `/theme <name>` 与 `/theme status` 见主题文档。
 - `/lang` 切换中英界面语言（见「界面语言」）。
-- 启动后会后台检查 npm 新版本；发现更新时会提示。`/update` 更新已安装的
+- 启动后会后台检查 npm 新版本；发现更新时会提示。检测遵循 npm registry
+  配置（`NPM_CONFIG_REGISTRY` 或 `~/.npmrc`），镜像源用户看到的就是安装源
+  的最新版。`/update` 更新已安装的
   `dsh-cc-tui`，然后自动重启并恢复当前会话；当前回合运行时需等待完成。
 - `/plan [off|message]` 与 `/goal ...` 由 DSH 命令插件处理并写入会话事件。
 - Skill 命令只发送激活提示；实际 skill 通过 DSH skill 注册表加载。包内

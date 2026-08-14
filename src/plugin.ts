@@ -14,7 +14,7 @@ import { readModelPref } from './modelPrefs.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
 import { writeResumeTarget } from './sessionHistory.js'
-import { checkForTuiUpdate, updateTuiAndRestart } from './update.js'
+import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, updateTuiAndRestart } from './update.js'
 import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
@@ -39,6 +39,30 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // language.
   const envLang = process.env.CC_TUI_LANG
   setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
+
+  // /update restart verification: the pre-update process stamps the version
+  // it was leaving behind; if the freshly loaded one is not newer, the
+  // package manager "succeeded" without actually moving the version (mirror
+  // lag, cached manifest, wrong profile). Say so instead of silently
+  // pretending the update landed.
+  {
+    const updatedFrom = process.env.DSH_CC_UPDATED_FROM
+    if (updatedFrom !== undefined) {
+      process.env.DSH_CC_UPDATED_FROM = undefined
+      const now = installedTuiVersion()
+      if (now === undefined || !isVersionNewer(now, updatedFrom)) {
+        ctx.logger.warn(
+          `cc-tui: /update restarted but the version did not advance (still ${now ?? 'unknown'}, was ${updatedFrom})`,
+        )
+        if (process.stderr.isTTY) {
+          process.stderr.write(
+            `\ncc-tui: 更新后版本未变化（仍为 ${now ?? 'unknown'}，原为 ${updatedFrom}）；` +
+              `可能是镜像 registry 未同步，请稍后重试或检查 registry 配置。\n`,
+          )
+        }
+      }
+    }
+  }
 
   // DSH user-interaction seam: the model's ask_user_question tool parks on
   // the userInteraction service until a UI provider answers. Mount the
@@ -134,10 +158,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       disposeRootAndThen(ctx, () => {
         void updateTuiAndRestart(channel.agentId).then(
-          code => process.exit(code),
+          ({ updateCode, restartCode }) => {
+            if (updateCode !== 0) {
+              // The session survives: its log lives in DSH persistence and
+              // resume.txt was already written. A bare non-zero exit would
+              // drop the user into a shell with no way back in.
+              process.stderr.write(
+                `\ncc-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
+                  `dsh-cc --resume ${channel.agentId}\n\n`,
+              )
+            }
+            process.exit(restartCode)
+          },
           updateError => {
             const message = updateError instanceof Error ? updateError.message : String(updateError)
-            process.stderr.write(`cc-tui update failed: ${message}\n`)
+            process.stderr.write(
+              `\ncc-tui update failed: ${message}. Your session is preserved — resume with:\n` +
+                `dsh-cc --resume ${channel.agentId}\n\n`,
+            )
             process.exit(1)
           },
         )
@@ -280,12 +318,17 @@ async function resolveAgent(
  * Mirrors the deleted dsh-tui front-door exit semantics.
  */
 function disposeRootAndExit(ctx: Context, code: number): void {
-  disposeRootAndThen(ctx, () => process.exit(code))
+  disposeRootAndThen(ctx, () => process.exit(code), code)
 }
 
-/** Dispose the Cordis tree, then run a process-level handoff action. */
-function disposeRootAndThen(ctx: Context, done: () => void): void {
-  const timer = setTimeout(() => process.exit(1), 5000)
+/**
+ * Dispose the Cordis tree, then run a process-level handoff action. The
+ * fallback exit keeps the caller's intended code when disposal stalls — the
+ * handoff (update/restart) may legitimately take longer than the bound, and
+ * reporting failure on a clean exit would mislead wrapper scripts.
+ */
+function disposeRootAndThen(ctx: Context, done: () => void, fallbackCode = 1): void {
+  const timer = setTimeout(() => process.exit(fallbackCode), 5000)
   timer.unref()
   void ctx.root.fiber.dispose().then(
     () => {

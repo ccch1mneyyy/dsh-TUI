@@ -1,0 +1,160 @@
+/**
+ * Pure-function verification for the /update machinery (real compiled lib,
+ * no network, no child processes):
+ *
+ * - installedTuiVersion() finds the version in both the compiled-package
+ *   layout and the source-checkout layout, and prefers a matching manifest
+ *   over a foreign one at the nearer level
+ * - resolveRegistryBase() honors NPM_CONFIG_REGISTRY (both spellings), the
+ *   user ~/.npmrc `registry=` line, and falls back to npmjs.org
+ * - isVersionNewer() requires a strictly greater valid semver
+ * - updateTuiAndRestart's pnpm args include --latest (cross-minor updates);
+ *   asserted via the compiled source text since spawning dsh is out of scope
+ *
+ * Run: node scripts/verify-update.mjs
+ */
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+let failed = 0
+function check(name, ok, extra = '') {
+  console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
+  if (!ok) failed += 1
+}
+
+const { installedTuiVersion, resolveRegistryBase, isVersionNewer } = await import(
+  '../lib/types/update.js'
+)
+const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
+const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+
+// ---- installedTuiVersion: compiled layout is this module's own real layout
+const compiled = installedTuiVersion()
+check(
+  'installedTuiVersion returns this package version',
+  compiled !== undefined && /^\d+\.\d+\.\d+/.test(compiled),
+  `got ${compiled}`,
+)
+
+const scratch = mkdtempSync(join(tmpdir(), 'verify-update-'))
+try {
+  // The copied module imports `semver`; point its root at this repo's deps.
+  symlinkSync(join(repoRoot, 'node_modules'), join(scratch, 'node_modules'))
+
+  // Source-checkout layout: <root>/package.json + module under <root>/src/.
+  // ../../package.json lands above the root (missing) → ../package.json hits.
+  const sourceRoot = join(scratch, 'source')
+  mkdirSync(join(sourceRoot, 'src'), { recursive: true })
+  cpSync(compiledModulePath, join(sourceRoot, 'src', 'update.js'))
+  writeFileSync(join(sourceRoot, 'package.json'), JSON.stringify({ name: 'dsh-cc-tui', version: '1.2.3', type: 'module' }))
+  const sourceMod = await import(`${pathToFileURL(join(sourceRoot, 'src', 'update.js'))}?probe=1`)
+  check(
+    'installedTuiVersion reads the source-checkout layout',
+    sourceMod.installedTuiVersion() === '1.2.3',
+    `got ${sourceMod.installedTuiVersion()}`,
+  )
+
+  // Compiled layout with a foreign manifest at the near level: the root
+  // manifest must win over a nearer foreign one.
+  const pkgRoot = join(scratch, 'pkg')
+  mkdirSync(join(pkgRoot, 'lib', 'types'), { recursive: true })
+  cpSync(compiledModulePath, join(pkgRoot, 'lib', 'types', 'update.js'))
+  writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: 'dsh-cc-tui', version: '0.9.9', type: 'module' }))
+  writeFileSync(join(pkgRoot, 'lib', 'package.json'), JSON.stringify({ name: 'other-pkg', version: '9.9.9' }))
+  const pkgMod = await import(`${pathToFileURL(join(pkgRoot, 'lib', 'types', 'update.js'))}?probe=2`)
+  check(
+    'installedTuiVersion prefers the matching root manifest over a foreign near one',
+    pkgMod.installedTuiVersion() === '0.9.9',
+    `got ${pkgMod.installedTuiVersion()}`,
+  )
+
+  // A foreign name at BOTH levels must yield undefined, never a version.
+  const foreignRoot = join(scratch, 'foreign')
+  mkdirSync(join(foreignRoot, 'lib', 'types'), { recursive: true })
+  cpSync(compiledModulePath, join(foreignRoot, 'lib', 'types', 'update.js'))
+  writeFileSync(join(foreignRoot, 'package.json'), JSON.stringify({ name: 'other-pkg', version: '9.9.9' }))
+  writeFileSync(join(foreignRoot, 'lib', 'package.json'), JSON.stringify({ name: 'third-pkg', version: '8.8.8' }))
+  const foreignMod = await import(`${pathToFileURL(join(foreignRoot, 'lib', 'types', 'update.js'))}?probe=3`)
+  check(
+    'installedTuiVersion rejects foreign manifests entirely',
+    foreignMod.installedTuiVersion() === undefined,
+    `got ${foreignMod.installedTuiVersion()}`,
+  )
+} finally {
+  rmSync(scratch, { recursive: true, force: true })
+}
+
+// ---- resolveRegistryBase: env (both spellings) over npmrc over default
+const HOME_BACKUP = process.env.HOME
+const scratch2 = mkdtempSync(join(tmpdir(), 'verify-update2-'))
+try {
+  writeFileSync(join(scratch2, '.npmrc'), 'registry=https://mirror.example.com/\n')
+
+  delete process.env.NPM_CONFIG_REGISTRY
+  delete process.env.npm_config_registry
+  process.env.HOME = scratch2
+  check(
+    'resolveRegistryBase reads ~/.npmrc',
+    resolveRegistryBase() === 'https://mirror.example.com',
+    `got ${resolveRegistryBase()}`,
+  )
+
+  process.env.NPM_CONFIG_REGISTRY = 'https://env-registry.example.com/'
+  check(
+    'resolveRegistryBase prefers NPM_CONFIG_REGISTRY (upper)',
+    resolveRegistryBase() === 'https://env-registry.example.com',
+    `got ${resolveRegistryBase()}`,
+  )
+
+  delete process.env.NPM_CONFIG_REGISTRY
+  process.env.npm_config_registry = 'https://lower-registry.example.com'
+  check(
+    'resolveRegistryBase honors npm_config_registry (lower)',
+    resolveRegistryBase() === 'https://lower-registry.example.com',
+    `got ${resolveRegistryBase()}`,
+  )
+
+  delete process.env.npm_config_registry
+  // Default applies only with no env AND no readable user .npmrc.
+  const emptyHome = mkdtempSync(join(tmpdir(), 'verify-update3-'))
+  try {
+    process.env.HOME = emptyHome
+    check(
+      'resolveRegistryBase defaults to npmjs.org',
+      resolveRegistryBase() === 'https://registry.npmjs.org',
+      `got ${resolveRegistryBase()}`,
+    )
+  } finally {
+    rmSync(emptyHome, { recursive: true, force: true })
+  }
+} finally {
+  if (HOME_BACKUP === undefined) delete process.env.HOME
+  else process.env.HOME = HOME_BACKUP
+  rmSync(scratch2, { recursive: true, force: true })
+}
+
+// ---- isVersionNewer
+check('isVersionNewer: newer major wins', isVersionNewer('1.0.0', '0.4.1'))
+check('isVersionNewer: newer minor wins', isVersionNewer('0.5.0', '0.4.1'))
+check('isVersionNewer: same version is not newer', !isVersionNewer('0.4.1', '0.4.1'))
+check('isVersionNewer: older is not newer', !isVersionNewer('0.4.0', '0.4.1'))
+check('isVersionNewer: invalid input is not newer', !isVersionNewer('banana', '0.4.1'))
+
+// ---- pnpm args include --latest (must-fix: cross-minor update capability)
+const compiledSource = readFileSync(compiledModulePath, 'utf8')
+check(
+  'update command passes --latest to pnpm',
+  compiledSource.includes('--latest'),
+)
+check(
+  'update command keeps the package name',
+  compiledSource.includes('dsh-cc-tui'),
+)
+
+if (failed > 0) {
+  console.error(`\n${failed} check(s) failed`)
+  process.exit(1)
+}
+console.log('\nall checks passed')
