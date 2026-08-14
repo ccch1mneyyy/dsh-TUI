@@ -8,6 +8,7 @@ import type { Channel } from '../channel.js'
 import { filterCommands, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
+import { isMod } from '../utils/modifiers.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
@@ -391,10 +392,10 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+V: raw mode hands the key to the app, so the clipboard is read
-    // here — text, or file paths when Explorer copied files (pasted files
-    // insert their paths).
-    if (key.ctrl && input === 'v') {
+    // Ctrl+V / Cmd+V: raw mode hands the key to the app, so the clipboard is
+    // read here — text, or file paths when Explorer copied files (pasted
+    // files insert their paths).
+    if (isMod(key) && input === 'v') {
       if (clipboardBusyRef.current) return
       clipboardBusyRef.current = true
       void readClipboard().then(content => {
@@ -467,9 +468,9 @@ export function PromptInput({
       if (!tryRunCommand(line)) submitText(line)
       return
     }
-    if (key.return && key.ctrl) {
-      // Ctrl+Enter: interrupt the running turn and process this message
-      // immediately (Windows Terminal sends CSI 13;5u / 13;1;5u).
+    if (key.return && isMod(key)) {
+      // Ctrl+Enter / Cmd+Enter: interrupt the running turn and process this
+      // message immediately (Windows Terminal sends CSI 13;5u / 13;1;5u).
       interruptSend()
       return
     }
@@ -587,12 +588,12 @@ export function PromptInput({
       setCursor(previous => Math.min(value.length, previous + 1))
       return
     }
-    if (key.ctrl && key.leftArrow) {
+    if (isMod(key) && key.leftArrow) {
       // Jump to the previous word boundary (readline alt+b).
       setCursor(previous => wordBoundaryLeft(value, previous))
       return
     }
-    if (key.ctrl && key.rightArrow) {
+    if (isMod(key) && key.rightArrow) {
       // Jump to the next word boundary (readline alt+f).
       setCursor(previous => wordBoundaryRight(value, previous))
       return
@@ -620,31 +621,31 @@ export function PromptInput({
       setCursor(nextLine === -1 ? value.length : nextLine)
       return
     }
-    if (key.ctrl && input === 'a') {
+    if (isMod(key) && input === 'a') {
       const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
       setCursor(lineStart)
       return
     }
-    if (key.ctrl && input === 'e') {
+    if (isMod(key) && input === 'e') {
       const nextLine = value.indexOf('\n', cursor)
       setCursor(nextLine === -1 ? value.length : nextLine)
       return
     }
-    if (key.ctrl && input === 'u') {
+    if (isMod(key) && input === 'u') {
       // Delete to start of line.
       const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
       setValue(value.slice(0, lineStart) + value.slice(cursor))
       setCursor(lineStart)
       return
     }
-    if (key.ctrl && input === 'k') {
+    if (isMod(key) && input === 'k') {
       // Delete to end of line.
       const nextLine = value.indexOf('\n', cursor)
       const end = nextLine === -1 ? value.length : nextLine
       setValue(value.slice(0, cursor) + value.slice(end))
       return
     }
-    if (key.ctrl && input === 'w') {
+    if (isMod(key) && input === 'w') {
       // Delete the word before the cursor (CC/readline behavior): skip
       // trailing whitespace, then the whitespace-delimited word.
       const before = value.slice(0, cursor)
@@ -724,7 +725,7 @@ export function PromptInput({
       onToggleHelp()
       return
     }
-    if (input && !key.ctrl && !key.meta && !key.tab && !key.escape) {
+    if (input && !key.ctrl && !key.meta && !key.super && !key.tab && !key.escape) {
       // Typing anything else dismisses the help menu (CC behavior).
       if (helpOpen) onToggleHelp()
       const next = value.slice(0, cursor) + input + value.slice(cursor)

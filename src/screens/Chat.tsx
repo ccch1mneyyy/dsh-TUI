@@ -2,6 +2,7 @@ import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, type I18nKey } from '../i18n.js'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '../ui.js'
 import { POINTER } from '../cc/figures.js'
+import { isMod, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Channel, ChatRow, PresetOption } from '../channel.js'
@@ -662,7 +663,7 @@ export function Chat({
         setHelpOpen(false)
         channel.pushLocal('/terminal-setup', [
           t('terminal-setup-hint'),
-          t('terminal-paste-hint'),
+          t('terminal-paste-hint', { mod: modLabel }),
         ])
         return true
       case 'connect':
@@ -896,7 +897,7 @@ export function Chat({
         setSearchCursor(0)
       } else if (key.end) {
         setSearchCursor(searchQuery.length)
-      } else if (!key.ctrl && !key.meta && input) {
+      } else if (!key.ctrl && !key.meta && !key.super && input) {
         const next = searchQuery.slice(0, searchCursor) + input + searchQuery.slice(searchCursor)
         setSearchQuery(next)
         setSearchCursor(searchCursor + input.length)
@@ -907,12 +908,12 @@ export function Chat({
     // After Enter closed the search bar, n/N keep walking the matches
     // (CC: "Query persists across bar open/close so n/N keep working").
     // Transcript mode only — in prompt mode n/N are ordinary input chars.
-    if (expanded && input === 'n' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta) {
+    if (expanded && input === 'n' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta && !key.super) {
       setSearchCurrent(i => (i >= searchCount - 1 ? 0 : i + 1))
       event.stopImmediatePropagation()
       return
     }
-    if (expanded && input === 'N' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta) {
+    if (expanded && input === 'N' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta && !key.super) {
       setSearchCurrent(i => (i <= 0 ? searchCount - 1 : i - 1))
       event.stopImmediatePropagation()
       return
@@ -1062,7 +1063,7 @@ export function Chat({
         setHistoryFocus(index =>
           historyMatches.length === 0 ? 0 : (index <= 0 ? historyMatches.length - 1 : index - 1),
         )
-      } else if (key.downArrow || (key.ctrl && input === 'r')) {
+      } else if (key.downArrow || (isMod(key) && input === 'r')) {
         // CC's historySearch:next — ↓ and repeat ctrl+r walk to the next match.
         setHistoryFocus(index =>
           historyMatches.length === 0 ? 0 : (index >= historyMatches.length - 1 ? 0 : index + 1),
@@ -1087,7 +1088,7 @@ export function Chat({
         setHistoryCursor(0)
       } else if (key.end) {
         setHistoryCursor(historyQuery.length)
-      } else if (!key.ctrl && !key.meta && input) {
+      } else if (!key.ctrl && !key.meta && !key.super && input) {
         const next = historyQuery.slice(0, historyCursor) + input + historyQuery.slice(historyCursor)
         setHistoryQuery(next)
         setHistoryCursor(historyCursor + input.length)
@@ -1120,12 +1121,12 @@ export function Chat({
       }
       return
     }
-    if (key.ctrl && input === 't') {
+    if (isMod(key) && input === 't') {
       // Toggle the startup loaded-context panel (keyboard only — the
       // ported ink core handles no mouse clicks).
       setLoadedContextOpen(previous => !previous)
     }
-    if (key.ctrl && input === 'r' && !helpOpen) {
+    if (isMod(key) && input === 'r' && !helpOpen) {
       setHistoryQuery('')
       setHistoryCursor(0)
       setHistoryFocus(0)
@@ -1160,10 +1161,10 @@ export function Chat({
         channel.cancel()
       }
       event.stopImmediatePropagation()
-    } else if (key.ctrl && input === 'o') {
+    } else if (isMod(key) && input === 'o') {
       // Leaving transcript mode (Ctrl+O) — search was already handled above.
       setExpanded(previous => !previous)
-    } else if (input === '/' && !key.ctrl && !key.meta) {
+    } else if (input === '/' && !key.ctrl && !key.meta && !key.super) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
       // search is active on the transcript screen where `/` isn't a command).
       if (expanded) {
@@ -1190,10 +1191,10 @@ export function Chat({
       } else {
         requestExit()
       }
-    } else if (key.ctrl && input === 'l') {
+    } else if (isMod(key) && input === 'l') {
       // CC's app:redraw — clear the physical terminal and repaint.
       instances.get(process.stdout)?.forceRedraw()
-    } else if (key.ctrl && input === 'e') {
+    } else if (isMod(key) && input === 'e') {
       setShowAllMessages(previous => !previous)
     } else if (key.return && showPill) {
       handle?.scrollToBottom()

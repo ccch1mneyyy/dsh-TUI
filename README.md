@@ -89,6 +89,12 @@ TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提�
 | `?` | 快捷键菜单 |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
 
+**macOS 修饰键**：上表中 Windows/Linux 的 `Ctrl+<键>` 在 macOS 上同时可用 `⌘<键>`
+（如 `⌘V` 粘贴、`⌘O` 展开详情、`⌘Enter` 立即发送）；仅 `Ctrl+C` / `Ctrl+D`
+（中断/退出）保持 Ctrl 不变，避免与 macOS 系统级 `⌘C` 复制等肌肉记忆冲突。
+`⌘` 需终端支持扩展键盘协议（iTerm2 / kitty / WezTerm / ghostty / tmux）；
+macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctrl`。
+
 **鼠标（`fullscreen: true` 全屏模式；默认关，profile 补丁层覆盖开启）**
 
 | 操作 | 功能 |
