@@ -20,7 +20,7 @@ the `.en.md` suffix.
 
 - 中文项目首页：[README.md](../README.md)
 - English project page: [README_EN.md](../README_EN.md)
-- npm package: [`dsh-cc-tui`](https://www.npmjs.com/package/dsh-cc-tui)
+- npm package: [`@deepseek-harness-tui/dsh-tui`](https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui)
 - DeepSeek Harness configuration catalog:
   [official reference](https://deepseek-harness.github.io/deepseek-harness/reference/config-catalog)
 

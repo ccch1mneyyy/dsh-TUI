@@ -84,7 +84,7 @@ export function ThemeProvider({
     if (forced === undefined) return false
     if (isThemeAvailable(forced)) return true
     console.warn(
-      `[dsh-cc-tui] theme "${forced}" not found (built-ins: light, dark, dark-ansi; user themes: ~/.dsh-cc/themes/*.json); falling back to auto-detection`,
+      `[dsh-tui] theme "${forced}" not found (built-ins: light, dark, dark-ansi; user themes: ~/.dsh-cc/themes/*.json); falling back to auto-detection`,
     )
     return false
   })
@@ -132,11 +132,11 @@ export function ThemeProvider({
    */
   const setTheme = React.useCallback((name: string): boolean => {
     if (!isThemeAvailable(name)) {
-      console.warn(`[dsh-cc-tui] theme "${name}" not found`)
+      console.warn(`[dsh-tui] theme "${name}" not found`)
       return false
     }
     if (!writeThemePref(name)) {
-      console.warn('[dsh-cc-tui] failed to write ~/.dsh-cc/theme.json')
+      console.warn('[dsh-tui] failed to write ~/.dsh-cc/theme.json')
       return false
     }
     setActive(name)

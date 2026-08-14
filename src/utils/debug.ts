@@ -7,5 +7,5 @@
 export function logForDebugging(message: string, fields?: Record<string, unknown>): void {
   if (!process.env.CC_TUI_DEBUG) return
   const suffix = fields === undefined ? '' : ` ${JSON.stringify(fields)}`
-  process.stderr.write(`[cc-tui] ${message}${suffix}\n`)
+  process.stderr.write(`[dsh-tui] ${message}${suffix}\n`)
 }

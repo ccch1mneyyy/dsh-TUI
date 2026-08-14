@@ -8,7 +8,7 @@
 
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/dsh-cc-tui"><img alt="npm" src="https://img.shields.io/npm/v/dsh-cc-tui?style=flat-square&color=4b6fff"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm" src="https://img.shields.io/npm/v/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
   <a href="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
   <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
@@ -25,7 +25,7 @@
 本插件被 **DeepSeek Harness 官方公众号** 推文收录，作为"内测用户精选插件"展示：
 
 <p align="center">
-  <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-cc-tui" width="560">
+  <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-TUI" width="560">
 </p>
 
 ## 核心能力
@@ -54,22 +54,28 @@
 `DEEPSEEK_API_KEY`。
 
 ```sh
-# 1. 安装 DeepSeek Harness CLI（已装可跳过）
-npm install -g @deepseek-ai/dsh
+# 1. 全局安装 CLI + 本插件（本插件自带 dsh-tui 直达命令）
+npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
 
-# 2. 装入本插件（仓库根目录 install.sh 已封装这条命令，含 pnpm 预检）
-sh install.sh
-# 或手工执行：
-dsh plugin --profile cc-tui add dsh-cc-tui
-
-# 3. 启动
-dsh --profile cc-tui
+# 2. 启动（首次运行会自动初始化 dsh-tui profile，需 pnpm）
+dsh-tui
 ```
 
-Windows 也可用仓库里的 `dsh-cc.cmd`（等价，且 `--resume` 恢复上次会话）。
+备选——手工安装 profile（仓库根目录 `install.sh` 已封装，含 pnpm 预检）：
+
+```sh
+sh install.sh
+# 或：dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
+# 之后 dsh-tui 与 dsh --profile dsh-tui 等价
+```
+
+`dsh-tui --resume` 恢复上次会话；Windows 也可用仓库里的 `dsh-tui.cmd`（等价）。
 
 TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提示，输入 `/update`
 即可自动更新并重启恢复当前会话。
+
+旧版 `dsh-cc-tui` / `cc-tui` profile 的迁移命令与兼容数据说明见
+[安装与快速开始](docs/getting-started.md#从旧包迁移)。
 
 安装流程、profile 叠加机制、源码构建与常见问题见
 [安装与快速开始](docs/getting-started.md)。

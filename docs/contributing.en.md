@@ -3,7 +3,7 @@
 [Documentation index](README.md) · [简体中文](contributing.md)
 
 Thanks for considering contributing to dsh-TUI! This guide is the shared
-development contract for humans and coding agents working on `dsh-cc-tui`.
+development contract for humans and coding agents working on `@deepseek-harness-tui/dsh-tui`.
 
 ## How To Contribute
 
@@ -21,9 +21,9 @@ development contract for humans and coding agents working on `dsh-cc-tui`.
 ## Scope
 
 This file applies to the entire repository. It is the shared development
-contract for humans and coding agents working on `dsh-cc-tui`.
+contract for humans and coding agents working on `@deepseek-harness-tui/dsh-tui`.
 
-`dsh-cc-tui` is a single-package, ESM-only TypeScript project. It provides a
+`@deepseek-harness-tui/dsh-tui` is a single-package, ESM-only TypeScript project. It provides a
 React terminal UI front door for DeepSeek Harness through Cordis. The package
 owns the TUI, its local command surface, packaged skills, and a ported Ink/Yoga
 renderer. DeepSeek Harness owns the agent, session, model, tool, persistence,
@@ -214,7 +214,7 @@ paths, so use the matching probe when changing one of them.
 `pnpm tui` invokes `scripts/run.ts`, which assumes the package lives inside a
 DeepSeek Harness monorepo layout with `apps/cli` and `packages/*`. It is not a
 portable standalone smoke command. For an end-user integration check, install
-the plugin into a DSH profile and run `dsh --profile cc-tui` in a real TTY with
+the plugin into a DSH profile and run `dsh --profile dsh-tui` in a real TTY with
 the required credentials.
 
 ## TypeScript And Style

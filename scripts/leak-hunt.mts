@@ -38,13 +38,13 @@ const patches = [
   ...loadOverlayPatches('dsh', resolve(workspace, 'packages/bundle/base/cordis.patch.yml')),
   ...loadOverlayPatches('dsh', resolve(workspace, 'packages/activity/working-activity/cordis.patch.yml')),
   ...loadOverlayPatches('dsh', resolve(workspace, 'packages/ui/cc-tui/cordis.patch.yml')),
-  { id: 'cc-tui', disabled: true },
+  { id: 'dsh-tui', disabled: true },
 ]
 healProfilesModuleFallback(resolve(workspace, 'apps/cli/package.json'))
-writeFileSync(join(dshHome, 'profiles/cc-tui/cordis.yml'), '[]\n')
+writeFileSync(join(dshHome, 'profiles/dsh-tui/cordis.yml'), '[]\n')
 
 console.error(`[leak] phase=${phase} rounds=${ROUNDS} booting...`)
-const ctx = await boot('dsh', join(dshHome, 'profiles/cc-tui/cordis.yml'), patches, async () => {})
+const ctx = await boot('dsh', join(dshHome, 'profiles/dsh-tui/cordis.yml'), patches, async () => {})
 const agents = ctx.get('agents')
 
 const snapshotDir = join(dshHome, 'leak-snapshots')

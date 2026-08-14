@@ -16,7 +16,7 @@ Capture a complete, actionable bug report. Ask only the questions needed to fill
    - **标题**: one-line symptom summary
    - **现象**: observed vs expected behavior
    - **复现步骤**: minimal steps, with inputs
-   - **环境**: OS / node version / dsh-cc version / terminal
+   - **环境**: OS / node version / dsh-tui version / terminal
    - **影响**: severity + who/what is affected
    - **根因假设**: evidence-based guesses, clearly labeled as hypotheses
    - **建议**: fix direction or workaround

@@ -19,7 +19,7 @@ fs.mkdirSync('D:\\tmp', { recursive: true })
 fs.writeFileSync(COMMIT_LOG, '')
 const heapBefore = fs.existsSync(HEAP_WATCH) ? fs.statSync(HEAP_WATCH).size : 0
 
-const pty = spawn('cmd.exe', ['/c', 'dsh-cc.cmd'], {
+const pty = spawn('cmd.exe', ['/c', 'dsh-tui.cmd'], {
   name: 'xterm-256color',
   cols: 120,
   rows: 36,

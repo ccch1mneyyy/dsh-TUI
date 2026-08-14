@@ -2,8 +2,8 @@
 
 [文档索引](README.md) · [English](contributing.en.md)
 
-感谢你考虑为 dsh-TUI 做贡献！本文档是 `dsh-cc-tui` 的共享开发契约，适用于
-在本仓库工作的所有人与编码 Agent。
+感谢你考虑为 dsh-TUI 做贡献！本文档是 `@deepseek-harness-tui/dsh-tui` 的共享开发
+契约，适用于在本仓库工作的所有人与编码 Agent。
 
 ## 如何贡献
 
@@ -15,7 +15,7 @@
 
 ## 范围（Scope）
 
-`dsh-cc-tui` 是单包、纯 ESM 的 TypeScript 项目：为 DeepSeek Harness 提供
+`@deepseek-harness-tui/dsh-tui` 是单包、纯 ESM 的 TypeScript 项目：为 DeepSeek Harness 提供
 React 终端 UI 前门（通过 Cordis 挂载）。包内拥有 TUI、本地命令面、打包技能
 以及移植的 Ink/Yoga 渲染器；Agent、会话、模型、工具、持久化与策略域由
 DeepSeek Harness 拥有，TUI 只消费它们。
@@ -164,7 +164,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 
 `pnpm tui` 调用 `scripts/run.ts`，它假定包位于 DeepSeek Harness monorepo
 （`apps/cli` + `packages/*`）布局内，不是可移植的独立冒烟命令。端到端集成检查：
-把插件装进 DSH profile，在真实 TTY 用所需凭证运行 `dsh --profile cc-tui`。
+把插件装进 DSH profile，在真实 TTY 用所需凭证运行 `dsh --profile dsh-tui`。
 
 ## TypeScript 与风格（TypeScript And Style）
 

@@ -66,10 +66,10 @@ async function main() {
   const t0 = Date.now()
   await new Promise((r) => {
     const iv = setInterval(() => {
-      if (output.includes('❯') || output.includes('dsh-cc') || Date.now() - t0 > 90000) { clearInterval(iv); r() }
+      if (output.includes('❯') || output.includes('dsh-TUI') || Date.now() - t0 > 90000) { clearInterval(iv); r() }
     }, 500)
   })
-  const bootOk = output.includes('❯') || output.includes('dsh-cc')
+  const bootOk = output.includes('❯') || output.includes('dsh-TUI')
   console.error(`[stress] boot ${bootOk ? 'OK' : 'TIMEOUT-BAILOUT'} after ${((Date.now() - t0) / 1000).toFixed(0)}s, output=${output.length}B`)
   if (!bootOk) {
     console.error('[stress] TUI did not render — aborting (check heap-watch.log / diagnostic)')

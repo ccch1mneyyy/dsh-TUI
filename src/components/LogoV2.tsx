@@ -58,7 +58,7 @@ function capitalize(text: string): string {
  * off-screen, clock unsubscribed, zero timers.
  *
  * Layout: the 13-row pixel whale beside a text column of matching height —
- * the `✦ dsh-cc` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
+ * the `✦ dsh-TUI` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
  * the 5-row block font (brand-blue → ice gradient), the model/effort and
  * cwd in plain text (no brand-color highlight), the startup tip, and below
  * the whale the welcome tagline, centered under the art, in ice
@@ -118,7 +118,7 @@ export function LogoV2({
         {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
         <Box flexDirection="column" flexShrink={1}>
           <Text wrap="truncate-end">
-            {sweep('✦ dsh-cc', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
+            {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
             <Text dimColor>{'  v' + VERSION}</Text>
           </Text>
           {bigDeepSeek.map((row, index) => (

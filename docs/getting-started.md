@@ -10,7 +10,7 @@
   交给 pnpm；pnpm 9 对传递依赖的提升行为不同，profile 里会解析不到
   `dsh-working-activity`，表现为启动后立刻退出且几乎无报错（见 issue #60
   与下方常见问题）。
-- 支持交互输入的终端 TTY。`dsh-cc-tui` 不支持把 stdout 重定向后启动。
+- 支持交互输入的终端 TTY。`dsh-tui` 不支持把 stdout 重定向后启动。
 - `DEEPSEEK_API_KEY`。使用自定义兼容端点时还可设置
   `DEEPSEEK_BASE_URL`。
 
@@ -30,16 +30,26 @@ $env:DEEPSEEK_API_KEY = 'your-key'
 
 ## 安装
 
-```sh
-# 安装官方 CLI
-npm install -g @deepseek-ai/dsh
+最快路径（全局安装后自带 `dsh-tui` 直达命令）：
 
-# pnpm 未安装时任选一种方式
+```sh
+# 官方 CLI + 本插件
+npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
+
+# pnpm 未安装时任选一种方式（首次启动自动初始化 profile 时需要）
 npm install -g pnpm
 # 或：corepack enable pnpm
 
-# 为 cc-tui profile 安装插件
-dsh plugin --profile cc-tui add dsh-cc-tui
+# 启动：首次运行自动执行 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<版本>
+dsh-tui
+```
+
+手工分步（等价）：
+
+```sh
+npm install -g @deepseek-ai/dsh
+dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
+dsh --profile dsh-tui   # 或 dsh-tui
 ```
 
 从仓库检出运行时，也可以执行：
@@ -51,32 +61,47 @@ sh install.sh
 `install.sh` 只封装 profile 插件命令并检查 `dsh`、`pnpm` 是否可用；它不会
 复制源码，也不需要本地构建。
 
+## 从旧包迁移
+
+旧版安装使用无 scope 包 `dsh-cc-tui` 和 `cc-tui` profile。新版本改为组织包
+`@deepseek-harness-tui/dsh-tui` 与 `dsh-tui` profile；执行以下命令创建新 profile：
+
+```sh
+dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
+dsh --profile dsh-tui
+```
+
+`~/.dsh-cc`、`CC_TUI_*` 与 `DSH_CC_*` 暂时保留为兼容接口，因此会话恢复标记、
+主题、模型、preset 和输入历史无需迁移。确认新 profile 正常后，旧
+`$DSH_HOME/profiles/cc-tui` 仅作为旧安装残留，可按需删除；不要把旧包和新包同时
+添加到同一个 profile。
+
 ## 安装命令做了什么
 
-首次执行 `dsh plugin --profile cc-tui add dsh-cc-tui` 时，官方 CLI 会：
+首次执行 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui` 时，官方 CLI 会：
 
-1. 在 `$DSH_HOME/profiles/cc-tui/` 初始化 profile。未设置 `DSH_HOME` 时，
+1. 在 `$DSH_HOME/profiles/dsh-tui/` 初始化 profile。未设置 `DSH_HOME` 时，
    默认根目录通常是 `~/.dsh`。
 2. 让 profile 的第一层 bundle 使用 `@deepseek-ai/dsh-base`。
-3. 在 profile 内通过 pnpm 安装 `dsh-cc-tui`。
+3. 在 profile 内通过 pnpm 安装 `@deepseek-harness-tui/dsh-tui`。
 4. 读取包内 `dsh.bundle.patch` 元数据，将 `cordis.patch.yml` 追加为组合层。
 
 启动时的主要顺序是：
 
 ```text
-dsh-base -> 其他 bundle -> dsh-cc-tui patch -> 用户 profile patch
+dsh-base -> 其他 bundle -> @deepseek-harness-tui/dsh-tui patch -> 用户 profile patch
 ```
 
 base 提供 Agent、模型、会话、文件、Shell、策略和注册表等服务；本插件的 patch
 覆盖或插入 TUI、Agent preset 名册、SQLite 会话持久化与工作状态行。
 
-`dsh-working-activity` 已经是本包依赖，并由 `dsh-cc-tui` 的 patch 自动插入。
+`dsh-working-activity` 已经是本包依赖，并由 `dsh-tui` 的 patch 自动插入。
 不要对同一个 profile 再单独执行 `add dsh-working-activity`，否则可能出现重复行。
 
 ## 启动
 
 ```sh
-dsh --profile cc-tui
+dsh --profile dsh-tui
 ```
 
 命令从当前目录启动，因此 Agent 的默认工作区也是当前目录。进入目标项目目录后再
@@ -85,8 +110,8 @@ dsh --profile cc-tui
 Windows 仓库检出还提供：
 
 ```bat
-dsh-cc.cmd
-dsh-cc.cmd --resume
+dsh-tui.cmd
+dsh-tui.cmd --resume
 ```
 
 `--resume` 会读取 `%USERPROFILE%\.dsh-cc\resume.txt`，恢复 TUI 最近选择的
@@ -97,7 +122,7 @@ dsh-cc.cmd --resume
 项目迭代很快，更新复用安装命令，显式指定 `@latest`：
 
 ```sh
-dsh plugin --profile cc-tui add dsh-cc-tui@latest
+dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 ```
 
 - 不带 `@latest` 时 pnpm 会按 profile `package.json` 里已记录的版本范围
@@ -113,7 +138,7 @@ dsh plugin --profile cc-tui add dsh-cc-tui@latest
 用户覆盖文件位于：
 
 ```text
-$DSH_HOME/profiles/cc-tui/cordis.patch.yml
+$DSH_HOME/profiles/dsh-tui/cordis.patch.yml
 ```
 
 配置一个节点时，`config` 块是整段替换，不是逐字段深合并。复制示例时需要保留
@@ -150,7 +175,7 @@ node --import tsx/esm scripts/repro-toolcards.tsx
 
 ## 常见问题
 
-### `cc-tui requires an interactive terminal`
+### `dsh-tui requires an interactive terminal`
 
 stdout 不是 TTY。请直接在终端中启动，不要把主进程输出管道到文件或其他命令。
 
@@ -167,7 +192,7 @@ loader 可解析的位置，模块解析失败导致整棵插件树被回收，T
 
 ```sh
 npm install -g pnpm@latest
-dsh plugin --profile cc-tui add dsh-cc-tui@latest
+dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 ```
 
 ### 模型启动失败或提示没有凭证

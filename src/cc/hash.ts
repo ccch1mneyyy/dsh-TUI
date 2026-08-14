@@ -23,7 +23,7 @@ export function djb2Hash(str: string): number {
 /**
  * Hash arbitrary content for change detection. Bun.hash is ~100x faster than
  * sha256 and collision-resistant enough for diff detection (not crypto-safe).
- * The original used `require('crypto')`; cc-tui runs ESM so node:crypto is
+ * The original used `require('crypto')`; dsh-tui runs ESM so node:crypto is
  * imported statically and Bun.hash is skipped entirely.
  * @param content - The content to hash.
  * @returns The lowercase hex SHA-256 digest of `content`.

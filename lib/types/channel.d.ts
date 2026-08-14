@@ -144,7 +144,7 @@ export interface TokenUsage {
 /**
  * Latest `activity/status` snapshot (the log-only event appended by
  * `@deepseek-ai/dsh-working-activity` for any UI consumer): the model's
- * live working line — thinking copy, running tool, turn summary. cc-tui
+ * live working line — thinking copy, running tool, turn summary. dsh-tui
  * renders it on the status line; nothing here requires the plugin (absent
  * events simply leave the slot empty).
  */
@@ -419,7 +419,7 @@ export interface Channel {
     listFiles(): Promise<readonly string[]>;
     /** Recent sessions recorded by the DSH persistence backend (for `/resume`). */
     listSessions(): Promise<readonly SessionRecord[]>;
-    /** Mark a session for `dsh-cc --resume` on the next launch. */
+    /** Mark a session for `dsh-tui --resume` on the next launch. */
     setResumeTarget(sessionId: string): void;
     /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
     compact(): void;
@@ -428,7 +428,7 @@ export interface Channel {
     pushLocal(title: string, lines: readonly string[]): void;
     /** MCP server/tool status for /mcp: one line per server, or setup guidance. */
     mcpStatus(): string[];
-    /** Write the conversation transcript to `dsh-cc-export-<ts>.md` in the
+    /** Write the conversation transcript to `dsh-tui-export-<ts>.md` in the
      *  session cwd; returns the written path, or null on failure. */
     exportSession(): string | null;
     /** Create `AGENTS.md` in the session cwd (DSH workspace-context file);

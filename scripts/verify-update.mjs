@@ -48,7 +48,7 @@ try {
   const sourceRoot = join(scratch, 'source')
   mkdirSync(join(sourceRoot, 'src'), { recursive: true })
   cpSync(compiledModulePath, join(sourceRoot, 'src', 'update.js'))
-  writeFileSync(join(sourceRoot, 'package.json'), JSON.stringify({ name: 'dsh-cc-tui', version: '1.2.3', type: 'module' }))
+  writeFileSync(join(sourceRoot, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '1.2.3', type: 'module' }))
   const sourceMod = await import(`${pathToFileURL(join(sourceRoot, 'src', 'update.js'))}?probe=1`)
   check(
     'installedTuiVersion reads the source-checkout layout',
@@ -61,7 +61,7 @@ try {
   const pkgRoot = join(scratch, 'pkg')
   mkdirSync(join(pkgRoot, 'lib', 'types'), { recursive: true })
   cpSync(compiledModulePath, join(pkgRoot, 'lib', 'types', 'update.js'))
-  writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: 'dsh-cc-tui', version: '0.9.9', type: 'module' }))
+  writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.9.9', type: 'module' }))
   writeFileSync(join(pkgRoot, 'lib', 'package.json'), JSON.stringify({ name: 'other-pkg', version: '9.9.9' }))
   const pkgMod = await import(`${pathToFileURL(join(pkgRoot, 'lib', 'types', 'update.js'))}?probe=2`)
   check(
@@ -161,13 +161,13 @@ check(
 )
 check(
   'profile: inner app args do not shadow the launcher flag',
-  resolveDshProfileName(['node', 'dsh', '--profile', 'cc-tui', '--resume', 'sid', '--model', 'x']) === 'cc-tui',
+  resolveDshProfileName(['node', 'dsh', '--profile', 'dsh-tui', '--resume', 'sid', '--model', 'x']) === 'dsh-tui',
 )
 
 // ---- shellQuote: cmd.exe safety for the .cmd path (P1 companion)
 check(
   'shellQuote: plain tokens pass through',
-  shellQuote(['plugin', '--profile', 'cc-tui']).join(' ') === 'plugin --profile cc-tui',
+  shellQuote(['plugin', '--profile', 'dsh-tui']).join(' ') === 'plugin --profile dsh-tui',
 )
 check(
   'shellQuote: spaces get quoted',
@@ -185,8 +185,8 @@ check(
   /['"]update['"],\s*\n\s*['"]--latest['"],/.test(compiledSource),
 )
 check(
-  'update command keeps the package name',
-  compiledSource.includes('dsh-cc-tui'),
+  'update command keeps the scoped package name',
+  compiledSource.includes('@deepseek-harness-tui/dsh-tui'),
 )
 // P1: the node restart must NOT go through a shell — assert the compiled
 // restart spawn call has no shell option while the dsh call does.

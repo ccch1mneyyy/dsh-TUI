@@ -1,9 +1,23 @@
 {
-  "name": "dsh-cc-tui",
-  "version": "0.4.1",
+  "name": "@deepseek-harness-tui/dsh-tui",
+  "version": "0.5.0",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ccch1mneyyy/dsh-TUI.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ccch1mneyyy/dsh-TUI/issues"
+  },
+  "homepage": "https://github.com/ccch1mneyyy/dsh-TUI#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
+  "bin": {
+    "dsh-tui": "./bin/dsh-tui.js"
+  },
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
@@ -24,6 +38,7 @@
     "./src/*": "./src/*"
   },
   "files": [
+    "bin",
     "lib",
     "cordis.patch.yml",
     "cordis.yml",
@@ -88,9 +103,27 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.6",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.2",
+    "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-brand": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-code-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-fs": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session-persistence-jsonl": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session-persistence-sqlite": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-sandbox-policy": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-scope": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-timeout": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-approval": "^0.1.0-rc.6",
     "@types/lodash-es": "^4.17.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",

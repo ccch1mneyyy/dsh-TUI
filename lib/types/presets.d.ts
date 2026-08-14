@@ -27,7 +27,7 @@ export interface AgentPresetInfo {
     /** Present when the preset cannot compose a session (human-readable). */
     readonly broken?: string;
 }
-/** The `ctx.agentPresets` service surface cc-tui consumes. */
+/** The `ctx.agentPresets` service surface dsh-tui consumes. */
 export interface AgentPresetsLike {
     readonly defaultId: string;
     list(): Promise<readonly AgentPresetInfo[]>;

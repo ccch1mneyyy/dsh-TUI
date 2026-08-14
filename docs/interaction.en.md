@@ -80,7 +80,7 @@ redelivers them immediately.
 Titles come from the first user message, and entries are ordered by most recent
 use. Confirming switches the Agent and replays persisted events.
 
-On Windows, `dsh-cc.cmd --resume` uses the session ID last written to
+On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
 `~/.dsh-cc/resume.txt`.
 
 ### Rewind
@@ -162,8 +162,8 @@ Additional forms:
   shows a notification when one is available. The check follows the npm
   registry configuration (`NPM_CONFIG_REGISTRY` or `~/.npmrc`), so mirror
   users see the versions their package manager actually installs. `/update`
-  updates the installed `dsh-cc-tui`, then restarts and resumes the current
-  session automatically; wait for an active turn to finish first. It is only
+  updates the installed `@deepseek-harness-tui/dsh-tui`, then restarts and
+  resumes the current session automatically; wait for an active turn to finish first. It is only
   available under a `dsh --profile <name>` launch (source checkouts get an
   unavailable notice), and an already-latest install is reported as such
   without restarting.

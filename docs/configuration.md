@@ -7,14 +7,14 @@
 通过 npm/profile 机制安装后，用户配置位于：
 
 ```text
-$DSH_HOME/profiles/cc-tui/cordis.patch.yml
+$DSH_HOME/profiles/dsh-tui/cordis.patch.yml
 ```
 
 `DSH_HOME` 未设置时通常为 `~/.dsh`。该文件是顶层 YAML 数组，可使用 DSH
 支持的 `!!js` 表达式。
 
-Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`dsh-cc-tui` 的包内
-`cordis.patch.yml`，最后再应用用户补丁。用户配置通常通过相同 `id` 覆盖已有行；
+Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness-tui/dsh-tui`
+的包内 `cordis.patch.yml`，最后再应用用户补丁。用户配置通常通过相同 `id` 覆盖已有行；
 只有确实新增服务时才使用 `insert`。
 
 > 覆盖某一行时，`config` 是整块替换，不是逐字段深合并。需要继续生效的字段必须
@@ -25,7 +25,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`dsh-cc-tui` 的�
 下面是完整的常用覆盖示例：
 
 ```yaml
-- id: cc-tui
+- id: dsh-tui
   config:
     provider: deepseek-official
     model: deepseek-v4-flash
@@ -92,7 +92,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`dsh-cc-tui` 的�
 
 从 0.3 起，模型侧工具、plan、compaction、delegation 等由 preset 自己组合。
 Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
-`CC_TUI_COMPACT_RETAIN` 或 cc-tui 深度限制；这些策略应在 preset 中配置。
+`CC_TUI_COMPACT_RETAIN` 或旧版 TUI 的深度限制；这些策略应在 preset 中配置。
 
 ## MCP
 
@@ -138,8 +138,8 @@ Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
 | `DSH_CC_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
 | `DSH_CC_SESSION_ROOT` | 覆盖会话持久化位置；profile 安装时是 SQLite 数据库路径，裸 `cordis.yml` 启动时是 JSONL 根目录 |
 | `DSH_PERMISSION_MODE` | 非 Windows 平台覆盖 sandbox policy，例如 `workspace-write` 或 `danger-full-access` |
-| `DSH_CC_WORKSPACE` | Windows `dsh-cc.cmd` 采用的工作目录 |
-| `CC_TUI_DEBUG` | 启用写往 stderr 的 cc-tui 调试日志 |
+| `DSH_CC_WORKSPACE` | Windows `dsh-tui.cmd` 采用的工作目录 |
+| `CC_TUI_DEBUG` | 启用写往 stderr 的 dsh-tui 调试日志 |
 | `DSH_CC_RENDER_LOG` | 指定文件路径，记录原始 ANSI 渲染帧用于取证 |
 
 `DSH_CC_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
@@ -156,7 +156,7 @@ Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
 - `cordis.yml` 是裸组合示例，服务拓扑可能与 profile patch 不同。正常安装和用户
   覆盖应以 `cordis.patch.yml` 为准。
 
-`DSH_CC_SESSION_ROOT` 的解释也随组合而变：`dsh --profile cc-tui` 使用本包 patch
+`DSH_CC_SESSION_ROOT` 的解释也随组合而变：`dsh --profile dsh-tui` 使用本包 patch
 插入的 SQLite 行，默认文件为 `~/.dsh-cc/sessions.sqlite`；直接运行
 `dsh --config cordis.yml` 时，示例挂载的是 JSONL 持久化，默认目录为
 `~/.dsh-cc/sessions/`。两种启动方式不要混用同一个已有数据目录。
