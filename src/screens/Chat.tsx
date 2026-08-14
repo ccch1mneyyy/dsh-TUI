@@ -514,7 +514,7 @@ export function Chat({
           const pickable = sessions.filter(session => session.id !== channel.agentId)
           setResumeSessions(pickable)
           if (pickable.length === 0) {
-            channel.notify('当前目录没有可恢复的历史会话')
+            channel.notify(t('resume-none-in-cwd'))
             return
           }
           setResumePickerOpen(true)

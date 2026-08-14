@@ -650,6 +650,10 @@ declare const dict: {
         readonly zh: " ↑ 加载更早消息（会话日志完整，/export 导出全文） ";
         readonly en: " ↑ load earlier messages (full session log; /export for full text) ";
     };
+    readonly 'resume-none-in-cwd': {
+        readonly zh: "当前目录没有可恢复的历史会话";
+        readonly en: "No resumable sessions in the current directory";
+    };
     readonly 'theme-builtin-base': {
         readonly zh: "内置 · {{name}} 基底";
         readonly en: "Built-in · {{name}} base";
