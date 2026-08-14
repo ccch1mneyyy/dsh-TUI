@@ -73,6 +73,7 @@ const baseChannel = {
   workingActivity: undefined,
   activityFrames: undefined,
   activityEnabled: false,
+  contextBarEnabled: true,
   commandList: [],
   contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
   subscribe() { return () => {} },

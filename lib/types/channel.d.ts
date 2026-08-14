@@ -298,6 +298,9 @@ export interface Channel {
     readonly activityFrames: string | undefined;
     /** Whether working-activity events are consumed (config.activity). */
     readonly activityEnabled: boolean;
+    /** Whether the segmented context bar row shows in the status footer
+     *  (config.contextBar; the status/mode lines are unaffected). */
+    readonly contextBarEnabled: boolean;
     /**
      * Current same-session goal projection, when a goal exists. Derived live
      * from the durable `goal/change` context events (round-zero goal-sourced
@@ -504,6 +507,8 @@ export interface ChannelState {
     activityFrames: string | undefined;
     /** Working-activity consumption switch (see the public Channel type). */
     activityEnabled: boolean;
+    /** Context bar row switch (see the public Channel type). */
+    contextBarEnabled: boolean;
     /** Current same-session goal projection (see the public Channel type). */
     goal: ChannelGoal | undefined;
     /** Latest todo-list snapshot (see the public Channel type). */
@@ -605,6 +610,9 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     /** Indicator preset for the working-activity line (`claude`/`moon`/
      *  `comet`/`dots`/… or `random`); default `claude`. */
     activityFrames?: string;
+    /** Show the segmented context bar row in the status footer; default on
+     *  (cordis.yml `contextBar: false` hides it, issue #29). */
+    contextBar?: boolean;
     /** cordis.yml's static preset choice (`preset` key): wins over the
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string;

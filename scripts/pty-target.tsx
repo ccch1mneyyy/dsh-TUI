@@ -14,7 +14,7 @@ const channel = {
   cwd: 'C:/code/demo-project', gitBranch: 'main', working: true,
   spinnerMode: 'requesting', responseChars: 20, activeToolCount: 0, turnStart: Date.now(),
   lastUserText: '再来问一个问题', pending: [], commandList: [], notifications: [],
-  activityEnabled: true, activityFrames: [],
+  activityEnabled: true, activityFrames: [], contextBarEnabled: true,
   workingActivity: { phase: 'asking', line: '提问中', toolCount: 0, turnElapsedMs: 80000, phaseStartedAt: Date.now() - 80000 },
   subscribe: () => () => {}, submit: () => {}, cancel: () => {}, clear: () => {}, notify: () => {},
   listModels: () => Promise.resolve([]), listSessions: () => [], setResumeTarget: () => {},

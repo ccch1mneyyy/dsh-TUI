@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text, useTerminalSize } from '../ui.js'
+import { Box, Text, useTerminalSize, useTheme } from '../ui.js'
 import { formatTokens } from '../cc/format.js'
 import { Byline } from '../components/design-system/Byline.js'
 import { KeyboardShortcutHint } from '../components/design-system/KeyboardShortcutHint.js'
@@ -30,6 +30,7 @@ export function StatusLine({
   helpOpen?: boolean
 }) {
   const { columns } = useTerminalSize()
+  const [themeName] = useTheme()
 
   const usage = channel.lastUsage
   const contextParts: React.ReactNode[] = []
@@ -139,12 +140,21 @@ export function StatusLine({
 
   const barWidth = columns - 4
   let bar: string | null = null
-  if (barWidth >= 14 && channel.contextWindow !== undefined) {
+  // Theme-aware free segment: the light palette's near-white fill (#E8E8E8)
+  // reads as a glaring white band on dark terminals — swap it for a deep
+  // blue-gray there while keeping the light palette as-is (dark-ansi carries
+  // `ansi:` color names, so map by theme name rather than palette tokens).
+  const barColors =
+    themeName === 'light'
+      ? undefined
+      : { freeFill: '#2E3440', freeText: '#8D95A6' }
+  if (channel.contextBarEnabled && barWidth >= 14 && channel.contextWindow !== undefined) {
     bar = renderContextBar(
       channel.contextSegments,
       usage !== undefined ? usage.input + usage.cacheRead + usage.cacheWrite : 0,
       channel.contextWindow,
       barWidth,
+      barColors,
     )
   }
 

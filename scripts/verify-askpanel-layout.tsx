@@ -87,6 +87,7 @@ function makeChannel(transcriptRows: unknown[], listeners?: Set<() => void>) {
     commandList: [],
     notifications: [],
     activityEnabled: true,
+    contextBarEnabled: true,
     activityFrames: [],
     workingActivity: {
       phase: 'asking',

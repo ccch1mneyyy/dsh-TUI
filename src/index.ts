@@ -39,6 +39,10 @@ export interface Config {
    *  choice persisted in `~/.dsh-cc/working-activity.json` wins, then the
    *  `claude` default. */
   activityFrames?: string
+  /** Show the segmented context bar (the band under the input with the
+   *  `ctx used/window` readout) in the status footer; off hides that row
+   *  while the status/mode lines stay (issue #29). */
+  contextBar?: boolean
   /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
   fullscreen?: boolean
   /** UI language: `en` / `zh`. When absent, the `CC_TUI_LANG` env var wins,
@@ -63,6 +67,7 @@ export const Config: Schema<Config> = Schema.object({
   effort: Schema.string().required(false),
   activity: Schema.boolean().default(true),
   activityFrames: Schema.string().required(false),
+  contextBar: Schema.boolean().default(true),
   fullscreen: Schema.boolean().default(false),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),

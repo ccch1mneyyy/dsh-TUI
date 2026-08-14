@@ -97,7 +97,12 @@ function chooseRightAlignedText(
   return ''
 }
 
-function renderFreeSegment(options: readonly string[], width: number): string {
+function renderFreeSegment(
+  options: readonly string[],
+  width: number,
+  fill: string,
+  text: string,
+): string {
   if (width <= 0) return ''
   const content = Array.from({ length: width }, () => ' ')
   const label = chooseLabel(FREE_SEGMENT_LABELS, width)
@@ -115,10 +120,7 @@ function renderFreeSegment(options: readonly string[], width: number): string {
       content[labelStart + offset] = char
     }
   }
-  return background(
-    FREE_SEGMENT_FILL,
-    foreground(FREE_SEGMENT_TEXT, content.join('')),
-  )
+  return background(fill, foreground(text, content.join('')))
 }
 
 /** Largest-remainder column allocation (pi-nano-context). */
@@ -176,6 +178,7 @@ export function renderContextBar(
   usedTokens: number,
   contextWindow: number,
   width: number,
+  colors?: { freeFill: string; freeText: string },
 ): string {
   if (width <= 0 || contextWindow <= 0) return ''
   const freeTokens = Math.max(0, contextWindow - usedTokens)
@@ -188,7 +191,12 @@ export function renderContextBar(
   const percent = `${((usedTokens / contextWindow) * 100).toFixed(1)}%`
   const total = `${formatTokens(usedTokens)}/${formatTokens(contextWindow)}`
   const free = formatTokens(contextWindow - usedTokens)
-  return `${used}${renderFreeSegment([`ctx ${total} ${percent} ${free}`, `${total} ${percent} ${free}`, `${total} ${percent}`, percent], freeWidth)}`
+  return `${used}${renderFreeSegment(
+    [`ctx ${total} ${percent} ${free}`, `${total} ${percent} ${free}`, `${total} ${percent}`, percent],
+    freeWidth,
+    colors?.freeFill ?? FREE_SEGMENT_FILL,
+    colors?.freeText ?? FREE_SEGMENT_TEXT,
+  )}`
 }
 
 // --- TPS gauge + sparkline (pi-tps-meter) ---

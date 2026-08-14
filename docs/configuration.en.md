@@ -34,6 +34,7 @@ A complete common override looks like this:
     effort: max
     activity: true
     activityFrames: claude
+    contextBar: true
     fullscreen: false
     preset: !!js process.env.CC_TUI_PRESET ?? undefined
     sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
@@ -47,6 +48,7 @@ A complete common override looks like this:
 | `effort` | normally `max` in the bundle | Initial header effort; replaced by live model state after the first request |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
+| `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
 | `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |

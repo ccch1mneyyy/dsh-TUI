@@ -111,6 +111,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
     activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
+    // Static footer preference: cordis.yml `contextBar` (schema default on).
+    contextBar: config.contextBar,
     // Same precedence for the agent preset: cordis.yml `preset` over the
     // persisted `/preset` choice; undefined adopts the roster default.
     configuredPreset: config.preset,

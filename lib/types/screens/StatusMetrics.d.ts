@@ -47,7 +47,10 @@ export declare function formatTokens(count: number): string;
  * @param width - Total bar width in terminal columns.
  * @returns The ANSI-styled segmented bar, or '' when `width` or `contextWindow` is non-positive.
  */
-export declare function renderContextBar(segments: ContextSegments, usedTokens: number, contextWindow: number, width: number): string;
+export declare function renderContextBar(segments: ContextSegments, usedTokens: number, contextWindow: number, width: number, colors?: {
+    freeFill: string;
+    freeText: string;
+}): string;
 /** Speed color: green ≥ 50, yellow ≥ 20, red below (pi-tps-meter).
  * @param tps - Tokens per second; selects the color threshold.
  * @param text - Text to color.

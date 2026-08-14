@@ -68,6 +68,7 @@ const channel = {
   reasoningEffort: 'max',
   workingActivity: { phase: 'tool', line: '正在查看 src/channel.ts · 总12s', toolCount: 2, turnElapsedMs: 12000 },
   activityFrames: 'claude',
+  contextBarEnabled: true,
   lastUsage: { input: 12000, output: 356, cacheRead: 3400, cacheWrite: 1200 },
   tps: 42,
   tpsSamples: [
