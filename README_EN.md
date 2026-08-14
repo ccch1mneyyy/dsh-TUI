@@ -63,19 +63,19 @@ Prerequisites: an interactive terminal TTY, the official `dsh` CLI, and
 `pnpm` 10+. Model requests also require `DEEPSEEK_API_KEY`.
 
 ```sh
-# 1. Install the DeepSeek Harness CLI
-npm install -g @deepseek-ai/dsh
+# 1. Install the CLI and this plugin globally (ships the dsh-tui command)
+npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
 
-# 2. Add the dsh-TUI profile plugin
-dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
-
-# 3. Start it
-dsh --profile dsh-tui
+# 2. Start it (first run auto-initializes the dsh-tui profile; needs pnpm)
+dsh-tui
 ```
 
-The repository's `sh install.sh` wraps step 2 and checks the required commands.
-Windows users can also launch with `dsh-tui.cmd`; passing `--resume` restores the
-most recently selected session.
+Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`
+(the repository's `sh install.sh` wraps this step and checks the required
+commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
+
+`dsh-tui --resume` restores the most recently selected session; on Windows
+the repository's `dsh-tui.cmd` works the same way.
 
 See [Getting started](docs/getting-started.en.md) for profile composition,
 source builds, and troubleshooting.

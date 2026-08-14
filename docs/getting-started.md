@@ -30,16 +30,26 @@ $env:DEEPSEEK_API_KEY = 'your-key'
 
 ## 安装
 
-```sh
-# 安装官方 CLI
-npm install -g @deepseek-ai/dsh
+最快路径（全局安装后自带 `dsh-tui` 直达命令）：
 
-# pnpm 未安装时任选一种方式
+```sh
+# 官方 CLI + 本插件
+npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
+
+# pnpm 未安装时任选一种方式（首次启动自动初始化 profile 时需要）
 npm install -g pnpm
 # 或：corepack enable pnpm
 
-# 为 dsh-tui profile 安装 scoped 包
+# 启动：首次运行自动执行 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<版本>
+dsh-tui
+```
+
+手工分步（等价）：
+
+```sh
+npm install -g @deepseek-ai/dsh
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
+dsh --profile dsh-tui   # 或 dsh-tui
 ```
 
 从仓库检出运行时，也可以执行：
