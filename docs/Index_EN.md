@@ -15,3 +15,4 @@ The documentation is organized by topic:
 - [Keyboard Shortcuts](en/keyboard-shortcuts.md)
 - [Technical Highlights](en/technical-highlights.md)
 - [Known Limitations](en/known-limitations.md)
+- [Contributing Guide](en/contributing.md)

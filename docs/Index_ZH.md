@@ -13,4 +13,4 @@
 - [快捷键](zh/keyboard-shortcuts.md)
 - [技术要点](zh/technical-highlights.md)
 - [已知限制](zh/known-limitations.md)
-
+- [贡献指南](zh/contributing.md)
