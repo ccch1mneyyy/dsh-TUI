@@ -93,7 +93,7 @@ export const THEME_NAMES = ['dark', 'dark-ansi', 'light'] as const
 
 /**
  * Any theme name: a built-in palette (`light`/`dark`/`dark-ansi`) or a user
- * theme from ~/.dsh-cc/themes/<name>.json. Always resolvable to a concrete
+ * theme from ~/.dsh-tui/themes/<name>.json. Always resolvable to a concrete
  * color palette via getTheme() (unknown names fall back to `dark`).
  */
 export type ThemeName = string
@@ -262,7 +262,7 @@ const lightTheme: Theme = {
  * Dark ANSI theme using only the 16 standard ANSI colors, for terminals
  * without true color support (verbatim from the leak).
  *
- * User themes (JSON files in ~/.dsh-cc/themes/) overlay one of these three
+ * User themes (JSON files in ~/.dsh-tui/themes/) overlay one of these three
  * bases — see customTheme.ts. `getTheme` resolves them through a resolver
  * registered by ThemeProvider.
  */

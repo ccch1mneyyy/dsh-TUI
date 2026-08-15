@@ -8,13 +8,15 @@ export interface SessionRecord {
 }
 /**
  * Store the session to resume and report the launcher invocation.
+ * Dual-writes the legacy path for pre-rename launchers (see header).
  * @param sessionId - Session id for `dsh-tui --resume` on the next launch.
  */
 export declare function writeResumeTarget(sessionId: string): void;
 /** Forget the resume marker (`/new` starts a fresh conversation). */
 export declare function clearResumeTarget(): void;
 /**
- * The session id requested by `dsh-tui --resume`, if any.
+ * The session id requested by `dsh-tui --resume`, if any. The new path
+ * wins; the legacy path is the fallback for pre-rename launchers.
  * @returns The stored session id, or undefined when none is set.
  */
 export declare function readResumeTarget(): string | undefined;

@@ -9,11 +9,11 @@ import { logForDebugging } from '../../utils/debug.js'
 
 /**
  * Theme provider with terminal-background auto-detection. With no explicit
- * `theme` prop, no CC_TUI_THEME override and no persisted choice
- * (~/.dsh-cc/theme.json), it queries the terminal's background color
+ * `theme` prop, no DSH_TUI_THEME override and no persisted choice
+ * (~/.dsh-tui/theme.json), it queries the terminal's background color
  * (OSC 11) before first paint and picks the Gentle Mist Blue `light` palette
  * on light backgrounds, `dark` otherwise. Priority: explicit `theme` prop >
- * CC_TUI_THEME (built-in or user theme name) > persisted `/theme` choice >
+ * DSH_TUI_THEME (built-in or user theme name) > persisted `/theme` choice >
  * OSC 11 detection. An invalid forced name is warned and skipped, so
  * detection still runs. Children render only after the theme settles, so
  * the first frame already carries the final palette — no dark→light flash.
@@ -22,11 +22,11 @@ import { logForDebugging } from '../../utils/debug.js'
  * setActiveThemeName() for non-React rendering (markdown inline code).
  *
  * The context also exposes setTheme() for the runtime `/theme` picker: it
- * validates the name, persists the choice to ~/.dsh-cc/theme.json and hot
+ * validates the name, persists the choice to ~/.dsh-tui/theme.json and hot
  * swaps the palette (and the module-level mirror) immediately.
  */
 
-// User themes (~/.dsh-cc/themes/<name>.json) resolve through this registry,
+// User themes (~/.dsh-tui/themes/<name>.json) resolve through this registry,
 // so getTheme() serves them to every themed component and to non-React
 // rendering (markdown inline code) without a context.
 registerCustomThemeResolver(resolveCustomTheme)
@@ -35,7 +35,7 @@ type ThemeContextValue = {
   /** The active theme name: a built-in palette or a user theme. */
   theme: string
   /**
-   * Switch themes at runtime. Persists to ~/.dsh-cc/theme.json and hot
+   * Switch themes at runtime. Persists to ~/.dsh-tui/theme.json and hot
    * swaps the palette; false when the name is unknown or cannot persist.
    */
   setTheme: (name: string) => boolean
@@ -47,12 +47,12 @@ const ThemeContext = createContext<ThemeContextValue>({
 })
 
 /**
- * CC_TUI_THEME skips terminal detection (tests, debugging). Accepts a
+ * DSH_TUI_THEME skips terminal detection (tests, debugging). Accepts a
  * built-in name (light|dark|dark-ansi) or a user theme name; invalid values
  * are warned and ignored by the caller, falling back to detection.
  */
 function envThemeOverride(): string | undefined {
-  const v = process.env.CC_TUI_THEME
+  const v = process.env.DSH_TUI_THEME
   return v === undefined || v === '' ? undefined : v
 }
 
@@ -84,7 +84,7 @@ export function ThemeProvider({
     if (forced === undefined) return false
     if (isThemeAvailable(forced)) return true
     console.warn(
-      `[dsh-tui] theme "${forced}" not found (built-ins: light, dark, dark-ansi; user themes: ~/.dsh-cc/themes/*.json); falling back to auto-detection`,
+      `[dsh-tui] theme "${forced}" not found (built-ins: light, dark, dark-ansi; user themes: ~/.dsh-tui/themes/*.json); falling back to auto-detection`,
     )
     return false
   })
@@ -136,7 +136,7 @@ export function ThemeProvider({
       return false
     }
     if (!writeThemePref(name)) {
-      console.warn('[dsh-tui] failed to write ~/.dsh-cc/theme.json')
+      console.warn('[dsh-tui] failed to write ~/.dsh-tui/theme.json')
       return false
     }
     setActive(name)

@@ -396,7 +396,7 @@ export interface Channel {
     }>;
     /** Set one effort level by id (validated against the adapter list);
      *  false + a notify when the id is not offered. Persists like the old
-     *  Shift+Tab cycle (~/.dsh-cc/effort.json). */
+     *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
     setEffort(id: string): Promise<boolean>;
     /** The session mode currently in force (matched from the session log, or
      *  the last one Shift+Tab applied). */
@@ -431,7 +431,7 @@ export interface Channel {
         timeoutMs?: number;
     }): void;
     /** Switch the working-activity indicator preset (`/activity`): validates
-     *  the name, persists it to `~/.dsh-cc/working-activity.json`, and
+     *  the name, persists it to `~/.dsh-tui/working-activity.json`, and
      *  re-renders the indicator immediately; false when the name is unknown
      *  or the preference cannot be written. */
     setActivityFrames(name: string): boolean;

@@ -76,7 +76,8 @@ Bracketed paste（右键或终端原生粘贴）会原样插入，包括换行�
 `/resume` 显示当前工作目录下最近使用的可恢复会话。标题取第一条用户消息，列表
 按最近使用时间排序。确认后会切换 Agent 并回放持久化事件。
 
-Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-cc/resume.txt` 中最后选择的会话 ID。
+Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的会话 ID
+（该文件同时双写到旧路径 `~/.dsh-cc/resume.txt`，供只读旧路径的旧版启动器过渡）。
 
 ### Rewind
 
@@ -121,7 +122,7 @@ prompt + 已有历史）做一次**无工具、单轮**的模型调用，答案�
 | `Esc` | 取消正在进行的拖拽，不复制 |
 
 复制优先使用 OSC 52；本地终端可回退到 `wl-copy`、`xclip` 或 `xsel`，tmux 使用
-`load-buffer -w`。设置 `CC_TUI_DISABLE_MOUSE=1` 可临时关闭 fullscreen 鼠标。
+`load-buffer -w`。设置 `DSH_TUI_DISABLE_MOUSE=1` 可临时关闭 fullscreen 鼠标。
 
 ## `ask_user_question` 问卷
 

@@ -30,6 +30,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { homeDir } from '../utils/paths.js'
 
 /** Repair outcomes, surfaced for regression assertions and debug logging. */
 export type ResumeRepairOutcome =
@@ -42,11 +43,15 @@ const ZSTD_MAGIC = 0xfd2fb528
 
 /**
  * Session-log storage root, mirroring the persistence plugin's `root`
- * resolution in cordis.yml: DSH_CC_SESSION_ROOT, else ~/.dsh-cc/sessions.
+ * resolution in cordis.patch.yml: DSH_TUI_SESSION_ROOT, else
+ * $DSH_HOME/sessions (default ~/.dsh/sessions) — the shared JSONL store
+ * dsh web writes too (#24).
  */
 function sessionsRoot(): string {
-  const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
-  return process.env.DSH_CC_SESSION_ROOT ?? join(home, '.dsh-cc', 'sessions')
+  return (
+    process.env.DSH_TUI_SESSION_ROOT ??
+    join(process.env.DSH_HOME || join(homeDir(), '.dsh'), 'sessions')
+  )
 }
 
 /**

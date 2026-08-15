@@ -63,9 +63,28 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 dsh --profile dsh-tui
 ```
 
-`~/.dsh-cc`, `CC_TUI_*`, and `DSH_CC_*` remain compatibility interfaces, so
-resume state, themes, model and preset choices, and input history need no data
-migration. After the new profile works, `$DSH_HOME/profiles/cc-tui` is only a
+This release completes the rename of environment variables and the data
+directory: `CC_TUI_*` and `DSH_CC_*` become `DSH_TUI_*` (for example
+`CC_TUI_THEME` → `DSH_TUI_THEME`), and the data directory moves from
+`~/.dsh-cc` to `~/.dsh-tui`. Behavior notes:
+
+- Old variable names no longer take effect. If a legacy name is still set at
+  startup, one warning line is printed asking you to switch to the new name
+  (the warning repeats on every launch while the old name remains set).
+- The only exception is the resume contract: `DSH_TUI_RESUME_SESSION` is the
+  new name, the reader prefers it but still accepts the old
+  `DSH_CC_RESUME_SESSION`, and the writer sets both variables so older
+  launchers keep working during the transition.
+- The data directory migrates automatically: on first launch, if `~/.dsh-cc`
+  exists and `~/.dsh-tui` does not, the old directory is **copied** (not
+  moved) to the new location and one notice line is printed. Themes, model
+  and preset choices, and input history come along. The old directory stays
+  in place; remove it yourself once the new one works.
+- `resume.txt` is an exception: it is written to both the new and the old
+  path, so older launchers that only read the old path still find the recent
+  session.
+
+After the new profile works, `$DSH_HOME/profiles/cc-tui` is only a
 former installation and may be removed when convenient. Do not add both
 packages to the same profile.
 
@@ -110,8 +129,10 @@ dsh-tui.cmd
 dsh-tui.cmd --resume
 ```
 
-`--resume` reads `%USERPROFILE%\.dsh-cc\resume.txt` and restores the session
-last selected by the TUI. Set `DSH_CC_WORKSPACE` to override the working
+`--resume` reads `%USERPROFILE%\.dsh-tui\resume.txt` and restores the session
+last selected by the TUI. The file is also dual-written to the old path
+`%USERPROFILE%\.dsh-cc\resume.txt` so older launchers that only read the old
+path keep working. Set `DSH_TUI_WORKSPACE` to override the working
 directory used by the batch launcher.
 
 ## Update to the latest version
@@ -128,7 +149,7 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
   old line — the usual reason "re-running the install command" appears to
   change nothing.
 - To confirm: the startup banner shows the running version
-  (`✦ dsh-cc vX.Y.Z`).
+  (`✦ dsh-TUI vX.Y.Z`).
 - Your `cordis.patch.yml` override layer survives updates untouched. Session
   storage may move between versions (since 0.3.7, `/resume` uses the JSONL
   session store shared with dsh web), so older sessions missing from the
@@ -211,12 +232,12 @@ Check `DEEPSEEK_BASE_URL` too when using a custom endpoint.
 ### The activity row appears twice
 
 Check whether `dsh-working-activity` was added separately to the profile. Keep
-the row inserted by the cc-tui patch and remove the duplicate bundle entry.
+the row inserted by the dsh-tui patch and remove the duplicate bundle entry.
 
 ### The TUI is misaligned or leaves terminal state behind
 
 Run `/doctor`, record the terminal and mode, then consult
 [Interaction and commands](interaction.en.md) and
-[Architecture and limitations](architecture.en.md). `DSH_CC_RENDER_LOG` can
+[Architecture and limitations](architecture.en.md). `DSH_TUI_RENDER_LOG` can
 capture raw frames for rendering bugs, but those frames may contain visible
 conversation content and should be handled as sensitive data.

@@ -65,8 +65,8 @@ by `callId`, never guessed from array position.
 
 When changing `src/ink/` or Yoga, run the CI questionnaire/tool-card regressions
 and the affected scroll, resize, copy-on-select, or PTY harness. Do not print
-diagnostics to an active TUI's stdout; use stderr `CC_TUI_DEBUG` or
-`DSH_CC_RENDER_LOG`.
+diagnostics to an active TUI's stdout; use stderr `DSH_TUI_DEBUG` or
+`DSH_TUI_RENDER_LOG`.
 
 ## Inline and fullscreen modes
 
@@ -84,19 +84,26 @@ ConPTY.
 
 | Path | Contents |
 | --- | --- |
-| `~/.dsh-cc/sessions.sqlite` | DSH SQLite session events from the profile patch |
-| `~/.dsh-cc/resume.txt` | Recent session ID used by the Windows launcher and exit hint |
-| `~/.dsh-cc/last-used.json` | `/resume` recency metadata |
-| `~/.dsh-cc/theme.json` | Current theme selection |
-| `~/.dsh-cc/themes/` | User theme JSON files |
-| `~/.dsh-cc/working-activity.json` | Activity animation selection |
-| `~/.dsh-cc/agent-preset.json` | Default Agent preset for new sessions |
+| `~/.dsh-tui/sessions.sqlite` | DSH SQLite session events from the profile patch |
+| `~/.dsh-tui/resume.txt` | Recent session ID used by the Windows launcher and exit hint |
+| `~/.dsh-tui/last-used.json` | `/resume` recency metadata |
+| `~/.dsh-tui/theme.json` | Current theme selection |
+| `~/.dsh-tui/themes/` | User theme JSON files |
+| `~/.dsh-tui/working-activity.json` | Activity animation selection |
+| `~/.dsh-tui/agent-preset.json` | Default Agent preset for new sessions |
 
-`DSH_CC_SESSION_ROOT` can override the SQLite path in the profile composition;
+`DSH_TUI_SESSION_ROOT` can override the SQLite path in the profile composition;
 when the root `cordis.yml` is launched directly, the same variable overrides
-the JSONL root (default `~/.dsh-cc/sessions/`). Preference files are optional
+the JSONL root (default `$DSH_HOME/sessions`, i.e. `~/.dsh/sessions/`).
+Preference files are optional
 state: malformed or missing files fall back silently rather than preventing
 startup.
+
+The data directory was renamed from `~/.dsh-cc` to `~/.dsh-tui`: on first
+launch, if the old directory exists and the new one does not, it is copied
+(not moved) to the new location with one notice line; the old directory stays
+in place for the user to remove. `resume.txt` is an exception: it is
+dual-written to both paths because older launchers only read the old one.
 
 ## Permissions and security boundary
 
@@ -142,9 +149,9 @@ visual TUI alone does not describe the effective policy.
 | Goal | Method |
 | --- | --- |
 | Environment and profile | Run `/doctor`, `/config`, and `/permissions` inside the TUI |
-| stderr diagnostics | `CC_TUI_DEBUG=1 dsh --profile dsh-tui` |
-| Raw ANSI frames | `DSH_CC_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
+| stderr diagnostics | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
+| Raw ANSI frames | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | Theme regression | `node --import tsx/esm scripts/verify-themes.mjs` |
 
-`DSH_CC_RENDER_LOG` and session exports may contain sensitive content. Redact
+`DSH_TUI_RENDER_LOG` and session exports may contain sensitive content. Redact
 them before sharing.

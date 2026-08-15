@@ -1,6 +1,6 @@
 /**
  * Side Question (`/btw`) — CC's btw.tsx/sideQuestion.ts semantics on the
- * dsh-cc call primitives: a single-turn, TOOL-LESS LLM call replaying the
+ * dsh call primitives: a single-turn, TOOL-LESS LLM call replaying the
  * live session's derived history (prompt-cache reuse, compaction-style
  * auxiliary call) plus one wrapped user message. The answer never enters
  * the session log — it is pure UI state in the Chat screen.

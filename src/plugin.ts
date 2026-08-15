@@ -21,6 +21,7 @@ import { composePreset, resolvePersistedPreset, runningPresetOf } from './preset
 import { clearResumeTarget, writeResumeTarget } from './sessionHistory.js'
 import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from './update.js'
 import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
+import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from './utils/paths.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
 import instances from './ink/instances.js'
@@ -42,12 +43,34 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
   }
 
-  // UI language resolution: CC_TUI_LANG env var wins, then cordis.yml
+  // Data-directory rename (~/.dsh-cc → ~/.dsh-tui, issue #120): copy the
+  // legacy directory before ANY preference read below (resolveStartupLang
+  // already touches lang.json). Copy, not move — old launchers keep working
+  // and the user deletes the legacy directory themselves.
+  const migrated = migrateLegacyDataDir()
+
+  // UI language resolution: DSH_TUI_LANG env var wins, then cordis.yml
   // `lang`, then the persisted `/lang` choice, then `zh`. Must settle
   // before the first render so every module resolves strings in the same
   // language.
-  const envLang = process.env.CC_TUI_LANG
+  const envLang = process.env.DSH_TUI_LANG
   setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
+
+  // Rename notices must land before the first render — stderr writes break
+  // the fullscreen UI once it is up. The bin launcher prints the same
+  // warnings; this covers direct `dsh --profile dsh-tui` boots.
+  if (migrated) {
+    ctx.logger.warn('dsh-tui: data directory copied from ~/.dsh-cc to ~/.dsh-tui (legacy kept)')
+    if (process.stderr.isTTY) {
+      process.stderr.write(`\n[dsh-tui] ${t('legacy-dir-migrated')}\n`)
+    }
+  }
+  for (const oldName of detectLegacyEnv()) {
+    ctx.logger.warn(`dsh-tui: env ${oldName} renamed to ${RENAMED_ENV[oldName]}; the old name no longer takes effect`)
+    if (process.stderr.isTTY) {
+      process.stderr.write(`\n[dsh-tui] ${t('legacy-env-renamed', { old: oldName, new: RENAMED_ENV[oldName] })}\n`)
+    }
+  }
 
   // /update restart verification: the pre-update process stamps the version
   // it was leaving behind; if the freshly loaded one is not newer, the
@@ -55,11 +78,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // lag, cached manifest, wrong profile). Say so instead of silently
   // pretending the update landed.
   {
-    const updatedFrom = process.env.DSH_CC_UPDATED_FROM
+    const updatedFrom = process.env.DSH_TUI_UPDATED_FROM
     if (updatedFrom !== undefined) {
       // Assigning undefined would stringify to "undefined" and leak the
       // marker into every child process; remove it for real.
-      delete process.env.DSH_CC_UPDATED_FROM
+      delete process.env.DSH_TUI_UPDATED_FROM
       const now = installedTuiVersion()
       if (now === undefined || !isVersionNewer(now, updatedFrom)) {
         ctx.logger.warn(
@@ -645,15 +668,16 @@ function disposeRootAndExit(ctx: Context, code: number): void {
 /**
  * The real way back into a session after the TUI process is gone. The
  * package ships no `dsh-tui` bin — resuming means feeding the session id
- * through `DSH_CC_RESUME_SESSION` (what cordis.patch.yml's `sessionId` reads)
- * and booting the same profile; on Windows the repo's dsh-tui.cmd wrapper
- * does this via --resume + ~/.dsh-cc/resume.txt.
+ * through `DSH_TUI_RESUME_SESSION` (what cordis.patch.yml's `sessionId`
+ * reads; the pre-rename DSH_CC_ spelling still works, issue #120) and
+ * booting the same profile; on Windows the repo's dsh-tui.cmd wrapper
+ * does this via --resume + ~/.dsh-tui/resume.txt.
  */
 function resumeCommand(profile: string | undefined, sessionId: string): string {
   const boot = profile === undefined ? 'dsh --config cordis.yml' : `dsh --profile ${profile}`
   return process.platform === 'win32'
     ? `dsh-tui --resume ${sessionId}`
-    : `DSH_CC_RESUME_SESSION=${sessionId} ${boot}`
+    : `DSH_TUI_RESUME_SESSION=${sessionId} ${boot}`
 }
 
 /**

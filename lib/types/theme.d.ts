@@ -84,7 +84,7 @@ export type Theme = {
 export declare const THEME_NAMES: readonly ["dark", "dark-ansi", "light"];
 /**
  * Any theme name: a built-in palette (`light`/`dark`/`dark-ansi`) or a user
- * theme from ~/.dsh-cc/themes/<name>.json. Always resolvable to a concrete
+ * theme from ~/.dsh-tui/themes/<name>.json. Always resolvable to a concrete
  * color palette via getTheme() (unknown names fall back to `dark`).
  */
 export type ThemeName = string;

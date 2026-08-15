@@ -203,7 +203,7 @@ export function Chat({
   const [effortSliderOpen, setEffortSliderOpen] = React.useState(false)
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
   const [effortIndex, setEffortIndex] = React.useState(0)
-  /** `/theme` color-theme picker (built-ins + ~/.dsh-cc/themes user themes). */
+  /** `/theme` color-theme picker (built-ins + ~/.dsh-tui/themes user themes). */
   const [themePickerOpen, setThemePickerOpen] = React.useState(false)
   const [themeIndex, setThemeIndex] = React.useState(0)
   const [themeName, setTheme] = useTheme()
@@ -361,7 +361,7 @@ export function Chat({
         // opens the interactive indicator picker; `/activity frames <name>`
         // switches directly; `/activity frames` lists presets; `/activity
         // status` shows the current choice. The choice persists to
-        // ~/.dsh-cc/working-activity.json and survives restarts.
+        // ~/.dsh-tui/working-activity.json and survives restarts.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -402,7 +402,7 @@ export function Chat({
         // switches directly; `/preset status` shows the current choice. A
         // blank session swaps composition in place (official blank-only
         // rule); a started session is locked and the choice persists as the
-        // default for future sessions (~/.dsh-cc/agent-preset.json).
+        // default for future sessions (~/.dsh-tui/agent-preset.json).
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -437,7 +437,7 @@ export function Chat({
         // Bare `/effort` opens the rheostat slider over the live route's
         // adapter levels (←/→ applies each step immediately); `/effort <id>`
         // sets directly (validated by the channel); `/effort status` prints
-        // the current level. The choice persists to ~/.dsh-cc/effort.json.
+        // the current level. The choice persists to ~/.dsh-tui/effort.json.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -466,8 +466,8 @@ export function Chat({
       }
       case 'lang': {
         // `/lang` shows the current UI language, `/lang en|zh` switches
-        // (hot-swap, persisted to ~/.dsh-cc/lang.json). Precedence on next
-        // launch: CC_TUI_LANG > cordis.yml `lang` > the persisted choice.
+        // (hot-swap, persisted to ~/.dsh-tui/lang.json). Precedence on next
+        // launch: DSH_TUI_LANG > cordis.yml `lang` > the persisted choice.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -502,10 +502,10 @@ export function Chat({
       }
       case 'theme': {
         // Bare `/theme` opens the interactive color picker (built-in
-        // palettes + user themes from ~/.dsh-cc/themes); `/theme <name>`
+        // palettes + user themes from ~/.dsh-tui/themes); `/theme <name>`
         // switches directly; `/theme status` shows the current choice.
-        // Selection persists to ~/.dsh-cc/theme.json and hot swaps via the
-        // ThemeProvider setter (CC_TUI_THEME still wins on next launch).
+        // Selection persists to ~/.dsh-tui/theme.json and hot swaps via the
+        // ThemeProvider setter (DSH_TUI_THEME still wins on next launch).
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)

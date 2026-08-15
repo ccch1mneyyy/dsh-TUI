@@ -20,7 +20,7 @@
     # Reasoning effort applied to every request, validated against the live
     # route's adapter levels (deepseek: off/high/max) — an unlisted level is
     # ignored and the adapter default applies. Wins over the persisted
-    # Shift+Tab choice (~/.dsh-cc/effort.json); also seeds the startup
+    # Shift+Tab choice (~/.dsh-tui/effort.json); also seeds the startup
     # header/statusline until the first request header reports the live value.
     effort: max
     # Shift+Tab 会话模式循环（数组顺序即循环顺序；缺省为下面三档）。
@@ -40,8 +40,9 @@
     #     plan: false
     #     sandbox: danger-full-access
     #     approval: never
-    #  feeds the chosen session id through this env var.
-    sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
+    #  feeds the chosen session id through this env var (DSH_TUI_ name; the
+    #  pre-rename DSH_CC_ spelling is still honored, issue #120).
+    sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? process.env.DSH_CC_RESUME_SESSION ?? undefined
 
 # The DeepSeek adapter. Shipped default: full thinking at max effort.
 # rc.6 schema key is `apiKeyEnv` (a credential-ref env var NAME, default
@@ -123,7 +124,7 @@
 - id: agent-spine
   name: '@deepseek-ai/dsh-agent-spine-demo'
   config:
-    persona: !!js process.env.CC_TUI_PERSONA ?? 'You are a coding agent.'
+    persona: !!js process.env.DSH_TUI_PERSONA ?? 'You are a coding agent.'
     # Workspace context (AGENTS.md injection) at the standard 64KB cap;
     # task tools stay at their DSH defaults (on).
     workspaceContext:
@@ -178,7 +179,7 @@
 - id: sessions
   name: '@deepseek-ai/dsh-session-persistence-jsonl'
   config:
-    root: !!js process.env.DSH_CC_SESSION_ROOT ?? (process.env.USERPROFILE ?? process.env.HOME) + '/.dsh-cc/sessions'
+    root: !!js process.env.DSH_TUI_SESSION_ROOT ?? (process.env.USERPROFILE ?? process.env.HOME) + '/.dsh-tui/sessions'
 
 # Read-only session lineage — the subagent service's /agents listing reads it.
 - id: session-query
@@ -198,5 +199,5 @@
     # would never make manual /compact useful. Default 20% (200k tokens)
     # with a 5% retained tail; both are overridable for tests and must keep
     # retainRatio < thresholdRatio (BasicCompactConfig validates this).
-    thresholdRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RATIO ?? '0.2')
-    retainRatio: !!js parseFloat(process.env.CC_TUI_COMPACT_RETAIN ?? '0.05')
+    thresholdRatio: !!js parseFloat(process.env.DSH_TUI_COMPACT_RATIO ?? '0.2')
+    retainRatio: !!js parseFloat(process.env.DSH_TUI_COMPACT_RETAIN ?? '0.05')

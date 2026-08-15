@@ -63,7 +63,7 @@ export declare function checkForTuiUpdate(): Promise<TuiUpdateInfo | undefined>;
  * `--latest` is required: `pnpm add` writes a caret range into the profile
  * manifest, and a plain `pnpm update` stays inside that range — with this
  * project's minor-per-release cadence the TUI would restart unchanged while
- * reporting success. The restart carries `DSH_CC_UPDATED_FROM` so the new
+ * reporting success. The restart carries `DSH_TUI_UPDATED_FROM` so the new
  * process can warn when the version did not actually move (e.g. a mirror
  * registry still serving the old `latest`).
  *
