@@ -237,7 +237,7 @@ Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-acce
 
 ## 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ccch1mneyyy/dsh-TUI&type=Date)](https://www.star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=ccch1mneyyy/dsh-tui&type=Date)](https://www.star-history.com/#ccch1mneyyy/dsh-tui&Date)
 
 
 ## License
