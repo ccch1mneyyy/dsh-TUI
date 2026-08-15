@@ -34,6 +34,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'clear', description: 'Clear the conversation' },
   { name: 'compact', description: 'Compact the conversation history' },
   { name: 'resume', description: 'Resume a previous session' },
+  { name: 'rename', description: 'Rename the current session' },
   { name: 'rewind', description: 'Rewind the conversation to a previous message' },
   { name: 'export', description: 'Export the conversation to a markdown file' },
   // Session / environment

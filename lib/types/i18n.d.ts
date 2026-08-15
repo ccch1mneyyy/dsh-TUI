@@ -751,6 +751,18 @@ declare const dict: {
         readonly zh: "当前目录没有可恢复的历史会话";
         readonly en: "No resumable sessions in the current directory";
     };
+    readonly 'rename-usage': {
+        readonly zh: "用法  /rename <新名称>";
+        readonly en: "Usage  /rename <new title>";
+    };
+    readonly 'rename-current': {
+        readonly zh: "当前名称  {{title}}";
+        readonly en: "Current title  {{title}}";
+    };
+    readonly 'rename-done': {
+        readonly zh: "已重命名为「{{title}}」";
+        readonly en: "Renamed to \"{{title}}\"";
+    };
     readonly 'compact-summary-folded': {
         readonly zh: "摘要已折叠";
         readonly en: "Summary folded";
@@ -902,6 +914,15 @@ declare const dict: {
     };
     readonly 'cmd-desc-resume': {
         readonly zh: "恢复历史会话";
+    };
+    readonly 'cmd-desc-rename': {
+        readonly zh: "重命名当前会话";
+    };
+    readonly 'cmd-desc-quit': {
+        readonly zh: "退出 dsh-tui";
+    };
+    readonly 'cmd-desc-q': {
+        readonly zh: "退出 dsh-tui";
     };
     readonly 'cmd-desc-rewind': {
         readonly zh: "回退会话到历史消息";

@@ -18,11 +18,15 @@ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateMode
 import type { ModelRoute } from './modelRoute.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
-import { writeResumeTarget } from './sessionHistory.js'
+import { clearResumeTarget, writeResumeTarget } from './sessionHistory.js'
 import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from './update.js'
 import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
 import { Chat } from './screens/Chat.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
+import instances from './ink/instances.js'
+import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS } from './ink/termio/csi.js'
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from './ink/termio/dec.js'
+import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from './ink/termio/osc.js'
 
 /**
  * Claude Code style interactive TUI front door for DeepSeek Harness agents.
@@ -210,71 +214,62 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       // Mirror the funnel's internal exited flag for the /update and
       // background-check guards that still read the outer one.
       exited = true
-      try {
-        writeResumeTarget(channel.agentId)
-      } catch {
-        // Best effort — the resume marker is a launcher nicety; a stale
-        // marker must never block a clean exit.
-      }
-      try {
-        instance?.unmount()
-      } catch {
-        // The terminal state may already be gone (broken pipe, alt session);
-        // the exit path must never throw.
-      }
       if (error !== undefined) {
-        // Error-driven unmount (render crash): stay loud and exit non-zero.
-        // A success code + resume hint here would tell wrappers/CI the
-        // session ended cleanly while the TUI actually crashed.
         const message = error instanceof Error ? error.message : String(error)
         ctx.logger.error(`dsh-tui: exit after error: ${message}`)
-        if (process.stderr.isTTY) {
-          process.stderr.write(`\ndsh-tui crashed: ${message}\n`)
-        }
-        disposeRootAndExit(ctx, 1)
+        void finishExit(
+          ctx,
+          instance,
+          config.fullscreen === true,
+          undefined,
+          `dsh-tui crashed: ${message}`,
+          () => disposeRootAndExit(ctx, 1),
+        )
         return
       }
       if (updateRequested) {
-        if (process.stdout.isTTY) {
-          process.stdout.write('\nUpdating @deepseek-harness-tui/dsh-tui and restarting…\n')
+        try {
+          writeResumeTarget(channel.agentId)
+        } catch {
+          // Resume persistence is best effort and must never block an update.
         }
-        disposeRootAndThen(ctx, () => {
-          // updateRequested only flips when onUpdate exists, which itself
-          // requires a resolved profile — narrow for the call below.
-          const updateProfile = profile
-          if (updateProfile === undefined) {
-            process.stderr.write('\ndsh-tui update aborted: no dsh profile resolved.\n')
-            process.exit(1)
-          }
-          void updateTuiAndRestart(channel.agentId, updateProfile).then(
-            ({ updateCode, restartCode }) => {
-              if (updateCode !== 0) {
-                // The session survives: its log lives in DSH persistence and
-                // resume.txt was already written. A bare non-zero exit would
-                // drop the user into a shell with no way back in.
-                process.stderr.write(
-                  `\ndsh-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
-                    `${resumeCommand(profile, channel.agentId)}\n\n`,
-                )
-              }
-              process.exit(restartCode)
-            },
-            updateError => {
-              const message = updateError instanceof Error ? updateError.message : String(updateError)
-              process.stderr.write(
-                `\ndsh-tui update failed: ${message}. Your session is preserved — resume with:\n` +
-                  `${resumeCommand(profile, channel.agentId)}\n\n`,
-              )
-              process.exit(1)
-            },
-          )
-        })
+        void finishExit(
+          ctx,
+          instance,
+          config.fullscreen === true,
+          'Updating @deepseek-harness-tui/dsh-tui and restarting…',
+          undefined,
+          () => runUpdate(ctx, profile, channel.agentId),
+        )
         return
       }
-      if (process.stdout.isTTY) {
-        process.stdout.write(`\nResume with (set the env var, then boot the profile):\n${resumeCommand(profile, channel.agentId)}\n\n`)
+
+      // Judge against the live session behind the channel (channel.agentId),
+      // not the boot-time agent captured above: /resume, /new and /model swap
+      // the active agent, so the captured reference can go stale (see
+      // isExitResumable).
+      const resumable = isExitResumable({
+        pendingCount: channel.pending.length,
+        liveAgent: ctx.agents.get(SessionId(channel.agentId)),
+        startupAgent: agent,
+      })
+      try {
+        if (resumable) writeResumeTarget(channel.agentId)
+        else clearResumeTarget()
+      } catch {
+        // Resume persistence is best effort and must never block shutdown.
       }
-      disposeRootAndExit(ctx, 0)
+      const hint = resumable
+        ? `Resume with the command below:\n${resumeCommand(profile, channel.agentId)}`
+        : undefined
+      void finishExit(
+        ctx,
+        instance,
+        config.fullscreen === true,
+        hint,
+        undefined,
+        () => disposeRootAndExit(ctx, 0),
+      )
     },
   })
   const handleExit = funnel.handleExit
@@ -303,7 +298,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }
         channel.notify(t('update-starting'))
         updateRequested = true
-        instance?.unmount()
+        handleExit()
       })
     },
   })
@@ -480,6 +475,160 @@ export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }
       deps.onUserExit(error)
     },
   }
+}
+
+/**
+ * Whether a user exit should leave the resume marker (and print the resume
+ * hint). Must be judged against the LIVE session behind the channel, not the
+ * boot-time agent apply() captured: /resume, /new and /model swap the active
+ * agent (channel.agentId follows, the old handle is disposed), so the
+ * captured reference can point at a stale session — wiping a marker the
+ * resume path just wrote (boot empty → /resume into history) or rewriting it
+ * to a fresh empty session (boot with history → /new). `liveAgent` is the
+ * registry lookup of channel.agentId; it falls back to the captured agent
+ * when the lookup misses. Exported for scripts/verify-exit-resume-marker.
+ */
+export function isExitResumable(deps: {
+  pendingCount: number
+  liveAgent: Agent | undefined
+  startupAgent: Agent
+}): boolean {
+  const agent = deps.liveAgent ?? deps.startupAgent
+  return (
+    deps.pendingCount > 0 ||
+    agent.session.events.some(
+      event => event.type === 'user/message' && event.data.source.kind === 'user',
+    )
+  )
+}
+
+type InkShutdownState = {
+  detachForShutdown?: () => void
+  frontFrame?: { cursor?: { x: number; y: number } }
+  displayCursor?: { x: number; y: number } | null
+}
+
+/** Finish terminal I/O before handing control to a process-level exit action. */
+async function finishExit(
+  ctx: Context,
+  instance: Awaited<ReturnType<typeof render>> | undefined,
+  fullscreen: boolean,
+  notice: string | undefined,
+  stderrNotice: string | undefined,
+  done: () => void,
+): Promise<void> {
+  try {
+    const runtime = readInkShutdownState(instances.get(process.stdout))
+    if (runtime === undefined && instance !== undefined) {
+      ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
+    }
+    const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
+
+    try {
+      runtime?.detachForShutdown?.()
+    } catch {
+      ctx.logger.debug('dsh-tui: Ink shutdown detach failed; continuing with generic terminal cleanup')
+    }
+    const cleanup = [
+      fullscreen ? EXIT_ALT_SCREEN : '',
+      cursor,
+      DISABLE_MOUSE_TRACKING,
+      DISABLE_MODIFY_OTHER_KEYS,
+      DISABLE_KITTY_KEYBOARD,
+      DFE,
+      DBP,
+      SHOW_CURSOR,
+      CLEAR_ITERM2_PROGRESS,
+      supportsTabStatus() ? wrapForMultiplexer(CLEAR_TAB_STATUS) : '',
+    ].join('')
+    const suffix = notice === undefined ? '' : `${notice}\n`
+    await writeStream(process.stdout, `${cleanup}\r\n${suffix}`)
+    if (stderrNotice !== undefined) {
+      await writeStream(process.stderr, `\n${stderrNotice}\n`)
+    }
+  } catch {
+    ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
+  }
+  done()
+}
+
+function readInkShutdownState(value: unknown): InkShutdownState | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const candidate = value as Record<string, unknown>
+  if (candidate.detachForShutdown !== undefined && typeof candidate.detachForShutdown !== 'function') return undefined
+  if (candidate.frontFrame !== undefined && !isFrameState(candidate.frontFrame)) return undefined
+  if (candidate.displayCursor !== undefined && candidate.displayCursor !== null && !isCursorState(candidate.displayCursor)) return undefined
+  return value as InkShutdownState
+}
+
+function isFrameState(value: unknown): value is { cursor?: { x: number; y: number } } {
+  if (value === null || typeof value !== 'object') return false
+  const cursor = (value as Record<string, unknown>).cursor
+  return cursor === undefined || isCursorState(cursor)
+}
+
+function isCursorState(value: unknown): value is { x: number; y: number } {
+  if (value === null || typeof value !== 'object') return false
+  const cursor = value as Record<string, unknown>
+  return typeof cursor.x === 'number' && typeof cursor.y === 'number'
+}
+
+function cursorMoveToFrameEnd(runtime: InkShutdownState | undefined): string {
+  const frame = runtime?.frontFrame?.cursor
+  if (frame === undefined) return ''
+  const parked = runtime?.displayCursor ?? frame
+  return cursorMove(frame.x - parked.x, frame.y - parked.y)
+}
+
+function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
+  if (data.length === 0) return Promise.resolve()
+  return new Promise(resolve => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    const timer = setTimeout(finish, 1000)
+    timer.unref()
+    try {
+      stream.write(data, () => {
+        clearTimeout(timer)
+        finish()
+      })
+    } catch {
+      clearTimeout(timer)
+      finish()
+    }
+  })
+}
+
+function runUpdate(ctx: Context, profile: string | undefined, sessionId: string): void {
+  disposeRootAndThen(ctx, () => {
+    if (profile === undefined) {
+      process.stderr.write('\ndsh-tui update aborted: no dsh profile resolved.\n')
+      process.exit(1)
+    }
+    void updateTuiAndRestart(sessionId, profile).then(
+      ({ updateCode, restartCode }) => {
+        if (updateCode !== 0) {
+          process.stderr.write(
+            `\ndsh-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
+              `${resumeCommand(profile, sessionId)}\n\n`,
+          )
+        }
+        process.exit(restartCode)
+      },
+      updateError => {
+        const message = updateError instanceof Error ? updateError.message : String(updateError)
+        process.stderr.write(
+          `\ndsh-tui update failed: ${message}. Your session is preserved — resume with:\n` +
+            `${resumeCommand(profile, sessionId)}\n\n`,
+        )
+        process.exit(1)
+      },
+    )
+  })
 }
 
 /**
