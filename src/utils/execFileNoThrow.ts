@@ -41,19 +41,29 @@ export function execFileNoThrow(
 ): Promise<ExecFileNoThrowResult> {
   return new Promise(resolve => {
     const child = spawn(file, args ?? [], { timeout: options?.timeout, cwd: options?.cwd })
-    let stdout = ''
-    let stderr = ''
+    // Collect raw bytes and decode once at close: per-chunk toString() splits
+    // multi-byte UTF-8 characters straddling a chunk boundary into U+FFFD.
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
+      stdoutChunks.push(chunk)
     })
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
+      stderrChunks.push(chunk)
     })
     child.on('error', () => {
-      resolve({ code: 1, stdout, stderr })
+      resolve({
+        code: 1,
+        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+        stderr: Buffer.concat(stderrChunks).toString('utf8'),
+      })
     })
     child.on('close', code => {
-      resolve({ code, stdout, stderr })
+      resolve({
+        code,
+        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+        stderr: Buffer.concat(stderrChunks).toString('utf8'),
+      })
     })
     if (options?.input !== undefined) child.stdin.write(options.input)
     child.stdin.end()

@@ -115,8 +115,11 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - 注入到 system prompt 的插件上下文不会在 UI 中单独列出，而是计入 system/context
   分段。
 - `/model` 通过 session fork 切换，不是原位修改；旧会话会留在 `/resume`。
-- Windows `Ctrl+V` 依赖 PowerShell `Get-Clipboard`；剪贴板被其他程序锁定时可能静默
-  失败并显示为空。
+- `Ctrl+V` 读剪贴板按平台分派：Windows 用 PowerShell `Get-Clipboard`（剪贴板被
+  其他程序锁定时重试后可能静默失败并显示为空）；macOS 用 `osascript`/`pbpaste`；
+  Linux/Unix 按会话顺序尝试 `wl-paste`/`xclip`/`xsel`（工具缺失跳过、会话
+  不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。剪贴板图片
+  导出为临时文件插入路径（0700 私有目录、0600 文件），不内嵌图片块。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
 - 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的沙箱
   预设切换由 dsh-base 的 `permission-presets` 插件提供，profile 组合下可用；

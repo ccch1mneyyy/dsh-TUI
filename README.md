@@ -91,7 +91,8 @@ TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提�
 | `Ctrl+R` | 历史消息搜索 |
 | `/` | 会话内全文搜索（`n`/`N` 跳转） |
 | `Tab` / `Enter` | 命令 / `@` 文件补全（目录可继续深入） |
-| `Ctrl+V` | 粘贴：文本直接插入光标处；**Explorer 复制的文件/图片 → 插入文件路径** |
+| `Ctrl+V` | 粘贴：文本直接插入光标处；**文件管理器复制的文件 → 插入路径；剪贴板图片（截图）→ 导出临时文件并插入路径** |
+| `Ctrl+X` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
 | `?` | 快捷键菜单 |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
 
@@ -127,7 +128,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 | 会话 | `/new` 新会话 · `/resume` 恢复 · `/rename` 重命名 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹时间线 |
 | 状态 | `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
 | 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 · `/lang` 中英界面切换 |
-| 账号/策略 | `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` · `/memory` |
+| 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` · `/memory` |
 | 技能 | `/audit` 代码审计 · `/bug` bug 报告 · `/review` 代码评审 · `/practice` 编程练习 · `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查 |
 | 其它 | `/agents` 子代理列表 · `/update` 自动更新并重启 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` |
 | 注册表 | `/plan` `/goal`（DSH 命令注册表插件，随插件自动并入 `/` 菜单） |
@@ -195,8 +196,10 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
 - **working-activity 生态**：工作状态行复用
   [dsh-working-activity](https://github.com/ccch1mneyyy/dsh-working-activity)
   的纯状态机，在进程内从基础会话事件派生，不向共享日志写入 UI 状态。
-- **终端粘贴**：raw 模式下 Ctrl+V 由应用接管——PowerShell `Get-Clipboard` 读取，
-  Explorer 复制的文件/图片插入文件路径，纯文本原样插入光标处。
+- **终端粘贴**：raw 模式下 Ctrl+V 由应用接管，按平台读取系统剪贴板——Windows
+  走 PowerShell `Get-Clipboard`，macOS 走 `osascript`/`pbpaste`，Linux 自动探测
+  `wl-paste`/`xclip`/`xsel`；文件管理器复制的文件插入文件路径，剪贴板图片（截图）
+  先导出为临时文件再插入路径，纯文本原样插入光标处。
 
 ## 已知限制
 
@@ -204,8 +207,12 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
 - `/model` 实时切换走"会话 fork 续聊"（DSH 无原位换模型 API）：历史原样保留，
   新会话路由到新模型，旧会话仍留在 `/resume` 列表里；选择写入
   `~/.dsh-tui/model.json`，重启与 `/new` 均沿用。
-- `Ctrl+V` 读剪贴板依赖 PowerShell `Get-Clipboard`：剪贴板被其他进程短暂锁定
-  时自动重试，持续锁定时静默放弃。
+- `Ctrl+V` 读剪贴板按平台依赖外部工具：Windows 用 PowerShell `Get-Clipboard`
+  （剪贴板被其他进程短暂锁定时自动重试，持续锁定时静默放弃）；macOS 用
+  `osascript`/`pbpaste`（Finder 多文件复制没有稳定的 AppleScript 读法，按
+  文本/图片回退）；Linux 需要 `wl-paste`/`xclip`/`xsel` 之一且会话可连接
+  （工具缺失或会话不可连接时提示无可用剪贴板工具）。剪贴板图片统一以
+  临时文件路径插入，不内嵌为图片消息块。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
 - 工具级审批已实现：approval 服务 + TUI answerer（CC 式审批面板）消费审批流，
   权限提升命令会弹出审批条。`/permission` 预设切换由 dsh-base 的

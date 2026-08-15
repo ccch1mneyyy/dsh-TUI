@@ -755,6 +755,26 @@ declare const dict: {
         readonly zh: "剪贴板为空";
         readonly en: "Clipboard is empty";
     };
+    readonly 'input-editor-unavailable': {
+        readonly zh: "未找到可用编辑器，请设置 $EDITOR（或 $VISUAL）环境变量";
+        readonly en: "No editor available — set the $EDITOR (or $VISUAL) environment variable";
+    };
+    readonly 'input-editor-failed': {
+        readonly zh: "外部编辑器失败：{{name}}";
+        readonly en: "External editor failed: {{name}}";
+    };
+    readonly 'input-clipboard-read-failed': {
+        readonly zh: "读取剪贴板失败";
+        readonly en: "Failed to read the clipboard";
+    };
+    readonly 'input-clipboard-unavailable': {
+        readonly zh: "无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）";
+        readonly en: "Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)";
+    };
+    readonly 'input-clipboard-image-saved': {
+        readonly zh: "剪贴板图片已保存为临时文件，已插入路径";
+        readonly en: "Clipboard image saved to a temp file; path inserted";
+    };
     readonly 'input-pending-steer-label': {
         readonly zh: "插话 · 下一步送达";
         readonly en: "Steer · delivered next";
@@ -1191,6 +1211,194 @@ declare const dict: {
         readonly zh: "↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · Enter 提交 · Esc 打断评审";
         readonly en: "↑/↓ select · 1/2 quick-pick · type feedback · Enter submit · Esc dismiss";
     };
+    readonly 'provider-unavailable': {
+        readonly zh: "/provider 需要经 dsh profile 启动（settings / credentials / llm-pi-ai 服务未挂载）";
+        readonly en: "/provider requires starting through a dsh profile (settings / credentials / llm-pi-ai services not mounted)";
+    };
+    readonly 'provider-q-mode': {
+        readonly zh: "要添加哪种模型提供方？";
+        readonly en: "Which kind of model provider do you want to add?";
+    };
+    readonly 'provider-opt-catalog': {
+        readonly zh: "内置 provider";
+        readonly en: "Built-in provider";
+    };
+    readonly 'provider-opt-catalog-desc': {
+        readonly zh: "openai、anthropic、deepseek 等内置目录，自动继承端点与协议";
+        readonly en: "Built-in catalog such as openai, anthropic, deepseek — endpoint and protocol inherited";
+    };
+    readonly 'provider-opt-custom': {
+        readonly zh: "自定义 API 端点";
+        readonly en: "Custom API endpoint";
+    };
+    readonly 'provider-opt-custom-desc': {
+        readonly zh: "OpenAI / Anthropic 兼容的网关或自建服务";
+        readonly en: "An OpenAI/Anthropic-compatible gateway or self-hosted server";
+    };
+    readonly 'provider-q-catalog': {
+        readonly zh: "选择 provider";
+        readonly en: "Choose a provider";
+    };
+    readonly 'provider-opt-other-route': {
+        readonly zh: "其他（手动输入路由名）";
+        readonly en: "Other (enter a route name)";
+    };
+    readonly 'provider-opt-other-route-desc': {
+        readonly zh: "目录里没列出的 catalog 路由";
+        readonly en: "A catalog route not listed above";
+    };
+    readonly 'provider-q-route-id': {
+        readonly zh: "输入路由名";
+        readonly en: "Enter a route name";
+    };
+    readonly 'provider-q-route-id-detail': {
+        readonly zh: "小写字母开头，可含数字与连字符，如 my-gateway";
+        readonly en: "Lowercase letter first, digits and dashes allowed, e.g. my-gateway";
+    };
+    readonly 'provider-route-id-invalid': {
+        readonly zh: "路由名不合法：须以小写字母开头，仅含小写字母 / 数字 / 连字符";
+        readonly en: "Invalid route name: must start with a lowercase letter, only lowercase letters / digits / dashes";
+    };
+    readonly 'provider-q-apikey': {
+        readonly zh: "输入 API key";
+        readonly en: "Enter the API key";
+    };
+    readonly 'provider-q-apikey-detail': {
+        readonly zh: "密钥将写入 ~/.dsh/.credentials.yaml（权限 0600），不会出现在会话记录中";
+        readonly en: "The key is stored in ~/.dsh/.credentials.yaml (mode 0600) and never shown in the transcript";
+    };
+    readonly 'provider-q-baseurl-choice': {
+        readonly zh: "是否覆盖默认 API 端点（baseURL）？";
+        readonly en: "Override the default API endpoint (baseURL)?";
+    };
+    readonly 'provider-opt-baseurl-skip': {
+        readonly zh: "跳过，使用默认端点";
+        readonly en: "Skip — use the default endpoint";
+    };
+    readonly 'provider-opt-baseurl-input': {
+        readonly zh: "现在输入 baseURL";
+        readonly en: "Enter a baseURL now";
+    };
+    readonly 'provider-q-baseurl': {
+        readonly zh: "输入 baseURL";
+        readonly en: "Enter the baseURL";
+    };
+    readonly 'provider-q-protocol': {
+        readonly zh: "选择 API 协议";
+        readonly en: "Choose the wire protocol";
+    };
+    readonly 'provider-protocol-completions-desc': {
+        readonly zh: "OpenAI Chat Completions 兼容（大多数网关）";
+        readonly en: "OpenAI Chat Completions compatible (most gateways)";
+    };
+    readonly 'provider-protocol-responses-desc': {
+        readonly zh: "OpenAI Responses API";
+        readonly en: "OpenAI Responses API";
+    };
+    readonly 'provider-protocol-anthropic-desc': {
+        readonly zh: "Anthropic Messages API";
+        readonly en: "Anthropic Messages API";
+    };
+    readonly 'provider-discovery-running': {
+        readonly zh: "正在探测该端点公布的模型…";
+        readonly en: "Discovering the models this endpoint advertises…";
+    };
+    readonly 'provider-discovery-failed': {
+        readonly zh: "模型探测失败，改为手动输入模型 id";
+        readonly en: "Model discovery failed — enter model ids manually instead";
+    };
+    readonly 'provider-q-models': {
+        readonly zh: "选择要启用的模型（可在输入行逗号分隔补充）";
+        readonly en: "Select the models to enable (add more comma-separated on the input row)";
+    };
+    readonly 'provider-q-models-fallback': {
+        readonly zh: "输入模型 id（逗号分隔）";
+        readonly en: "Enter model ids (comma-separated)";
+    };
+    readonly 'provider-models-required': {
+        readonly zh: "自定义端点至少需要一个模型 id";
+        readonly en: "A custom endpoint needs at least one model id";
+    };
+    readonly 'provider-q-confirm': {
+        readonly zh: "确认写入该 provider 配置？";
+        readonly en: "Write this provider configuration?";
+    };
+    readonly 'provider-route-exists-warning': {
+        readonly zh: "⚠ 该路由已有配置，写入将覆盖现有设置";
+        readonly en: "⚠ This route is already configured — writing overwrites it";
+    };
+    readonly 'provider-opt-confirm-write': {
+        readonly zh: "写入并启用";
+        readonly en: "Write and enable";
+    };
+    readonly 'provider-opt-confirm-cancel': {
+        readonly zh: "取消";
+        readonly en: "Cancel";
+    };
+    readonly 'provider-line-route': {
+        readonly zh: "路由：{{route}}";
+        readonly en: "Route: {{route}}";
+    };
+    readonly 'provider-line-keyref': {
+        readonly zh: "密钥引用：{{ref}}（已写入 ~/.dsh/.credentials.yaml）";
+        readonly en: "Key ref: {{ref}} (stored in ~/.dsh/.credentials.yaml)";
+    };
+    readonly 'provider-line-keyref-env': {
+        readonly zh: "密钥引用：{{ref}}（进程环境已提供同名变量，跳过写入）";
+        readonly en: "Key ref: {{ref}} (already in the process environment, write skipped)";
+    };
+    readonly 'provider-line-baseurl': {
+        readonly zh: "baseURL：{{url}}";
+        readonly en: "baseURL: {{url}}";
+    };
+    readonly 'provider-line-protocol': {
+        readonly zh: "协议：{{api}}";
+        readonly en: "Protocol: {{api}}";
+    };
+    readonly 'provider-line-models': {
+        readonly zh: "模型：{{models}}";
+        readonly en: "Models: {{models}}";
+    };
+    readonly 'provider-line-models-catalog': {
+        readonly zh: "模型：整个 catalog（未收窄）";
+        readonly en: "Models: the whole catalog (not narrowed)";
+    };
+    readonly 'provider-rollback-ok': {
+        readonly zh: "已回滚刚写入的密钥";
+        readonly en: "Rolled back the just-written key";
+    };
+    readonly 'provider-rollback-failed': {
+        readonly zh: "密钥回滚失败，请手动检查 ~/.dsh/.credentials.yaml";
+        readonly en: "Key rollback failed — check ~/.dsh/.credentials.yaml manually";
+    };
+    readonly 'provider-write-failed': {
+        readonly zh: "provider 配置写入失败 · {{err}}";
+        readonly en: "Failed to write the provider configuration · {{err}}";
+    };
+    readonly 'provider-cancelled': {
+        readonly zh: "已取消添加 provider";
+        readonly en: "Provider setup cancelled";
+    };
+    readonly 'provider-success': {
+        readonly zh: "provider {{route}} 已添加";
+        readonly en: "Provider {{route}} added";
+    };
+    readonly 'provider-switch-hint': {
+        readonly zh: "运行 /model 可切换到新 provider 的模型";
+        readonly en: "Run /model to switch to the new provider’s models";
+    };
+    readonly 'provider-q-switch': {
+        readonly zh: "立即切换到新 provider？";
+        readonly en: "Switch to the new provider now?";
+    };
+    readonly 'provider-opt-switch-now': {
+        readonly zh: "切换到 {{model}}";
+        readonly en: "Switch to {{model}}";
+    };
+    readonly 'provider-opt-switch-keep': {
+        readonly zh: "保持当前模型";
+        readonly en: "Keep the current model";
+    };
     readonly 'cmd-desc-new': {
         readonly zh: "新开会话";
     };
@@ -1256,6 +1464,9 @@ declare const dict: {
     };
     readonly 'cmd-desc-tokens': {
         readonly zh: "查看会话 token 用量";
+    };
+    readonly 'cmd-desc-provider': {
+        readonly zh: "添加模型提供方（内置目录或自定义 API 端点）";
     };
     readonly 'cmd-desc-login': {
         readonly zh: "查看 API 凭证状态";

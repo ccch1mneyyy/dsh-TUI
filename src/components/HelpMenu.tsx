@@ -68,6 +68,9 @@ export function HelpMenu({
         <Box>
           <Text dimColor>shift+tab to cycle mode</Text>
         </Box>
+        <Box>
+          <Text dimColor>ctrl+x to open editor</Text>
+        </Box>
       </Box>
       <Box flexDirection="column" flexShrink={1}>
         <Text dimColor>commands:</Text>

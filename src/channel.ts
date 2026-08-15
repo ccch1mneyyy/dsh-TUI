@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { isUserInvocable, type SkillSummary } from '@deepseek-ai/dsh-skill'
-import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
+import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
   isTokenDelta,
@@ -29,6 +29,7 @@ import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from './modelRoute.js'
+import type { ProviderSetupHost } from './providerWizard.js'
 import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
@@ -425,6 +426,10 @@ export interface Channel {
   setActivityFrames(name: string): boolean
   /** Advertised models across every registered provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Runtime capabilities for the `/provider` wizard, over the settings /
+   *  credentials / llm seams; undefined when the composition lacks them
+   *  (bare cordis.yml start without the dsh-base services). */
+  providerSetup(): ProviderSetupHost | undefined
   /** Top-level entries of the session cwd for `@` file completion. */
   listFiles(): Promise<readonly string[]>
   /** Recent sessions recorded by the DSH persistence backend (for `/resume`). */
@@ -611,6 +616,8 @@ export interface ChannelState {
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** `/provider` wizard capabilities (see the public Channel type). */
+  providerSetup(): ProviderSetupHost | undefined
   listFiles(): Promise<readonly string[]>
   listSessions(): Promise<readonly SessionRecord[]>
   setResumeTarget(sessionId: string): void
@@ -2111,6 +2118,100 @@ export function createChannel(
       const providers = llm.listProviders()
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
+    },
+    providerSetup(): ProviderSetupHost | undefined {
+      // The `/provider` wizard's runtime surface, over the dsh-base seams:
+      // settings (profile persistence), credentials (key storage) and the
+      // llm runtime's configurable-provider directory + model discovery.
+      // Structurally typed like the other optional seams in this file.
+      const llm = ctx.get('llm') as
+        | {
+          listConfigurableProviders(): readonly LlmConfigurableProvider[]
+          discoverModels(
+            settingsNs: string,
+            request: {
+              provider?: string
+              baseURL?: string
+              api?: string
+              apiKey?: string
+            },
+          ): Promise<readonly LlmDiscoveredModel[]>
+        }
+        | undefined
+      const settings = ctx.get('settings') as
+        | {
+          describe(): readonly { ns: string; revision: number }[]
+          get(ns: string): unknown
+          mutate(
+            ns: string,
+            ops: readonly { op: 'set'; path: readonly string[]; value: unknown }[],
+            expectedRevision?: number,
+          ): Promise<void>
+        }
+        | undefined
+      const credentials = ctx.get('credentials') as
+        | {
+          resolve(ref: string): Promise<{ value: string } | undefined>
+          set(ref: string, value: string): Promise<void>
+          unset(ref: string): Promise<void>
+        }
+        | undefined
+      // Without dsh-llm-pi-ai there is no adapter watching the settings
+      // section, so a written profile would never activate a route. The
+      // adapter registers its `llm-pi-ai` settings namespace at mount, which
+      // is the rc.6-observable mount signal (the newer
+      // `listModelDiscoveryNamespaces()` does not exist in rc.6).
+      if (!llm || !settings || !credentials
+        || !settings.describe().some(descriptor => descriptor.ns === 'llm-pi-ai')) {
+        return undefined
+      }
+      const revision = (): number | undefined =>
+        settings.describe().find(descriptor => descriptor.ns === 'llm-pi-ai')?.revision
+      return {
+        listCatalogProviders() {
+          // declared === true marks routes the adapter knows only because a
+          // stored profile names them (user-added); the rest are activatable
+          // catalog routes.
+          return llm.listConfigurableProviders()
+            .filter(entry => entry.settingsNs === 'llm-pi-ai' && entry.declared !== true)
+            .map(entry => ({ provider: entry.provider, displayName: entry.displayName }))
+        },
+        routeExists(route) {
+          const section = settings.get('llm-pi-ai') as
+            | { providers?: Record<string, unknown> }
+            | undefined
+          return section?.providers !== undefined && route in section.providers
+        },
+        discoverModels(request) {
+          return llm.discoverModels('llm-pi-ai', request)
+        },
+        envShadows(ref) {
+          return process.env[ref] !== undefined
+        },
+        async readCredential(ref) {
+          const resolved = await credentials.resolve(ref)
+          return resolved?.value
+        },
+        writeCredential(ref, value) {
+          return credentials.set(ref, value)
+        },
+        removeCredential(ref) {
+          return credentials.unset(ref)
+        },
+        async writeProfile(route, profile) {
+          const ops = [{ op: 'set' as const, path: ['providers', route], value: profile }]
+          try {
+            await settings.mutate('llm-pi-ai', ops, revision())
+          } catch (error) {
+            // One retry on a stale-revision conflict (a concurrent write
+            // landed between describe and mutate); anything else propagates
+            // so the wizard can report and roll back the credential.
+            const code = (error as { code?: unknown })?.code
+            if (code !== 'SETTINGS_CONFLICT') throw error
+            await settings.mutate('llm-pi-ai', ops, revision())
+          }
+        },
+      }
     },
     async sideQuestion(
       question: string,

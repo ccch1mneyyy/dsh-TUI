@@ -141,6 +141,7 @@ for the complete field reference.
 
 | Variable | Purpose |
 | --- | --- |
+| `VISUAL` / `EDITOR` | External editor opened by `Ctrl+X` (`VISUAL` wins; arguments like `code --wait` are allowed; POSIX falls back to `vi`) |
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |
@@ -163,6 +164,36 @@ the transition for older launchers.
 
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
 Do not attach it to a public issue without reviewing and redacting it.
+
+## `/provider`: add a model provider at runtime
+
+`/provider` opens an interactive wizard that adds a model provider without a
+restart:
+
+- **Built-in provider**: pick a catalog route (openai, anthropic, deepseek, …)
+  from `llm.listConfigurableProviders()`; only the API key is required. The
+  baseURL can optionally be overridden (proxy gateways); the protocol and
+  model catalog are inherited.
+- **Custom API endpoint**: enter a route name, API key, baseURL, and the wire
+  protocol (`openai-completions` / `openai-responses` / `anthropic-messages`).
+  The wizard probes the endpoint with the draft credential and offers the
+  advertised models for selection (manual id entry as fallback).
+
+What gets written (on a profile start, where dsh-base provides the
+settings/credentials services):
+
+| Artifact | Location |
+| --- | --- |
+| Provider profile | `llm-pi-ai.providers.<route>` in `~/.dsh/settings.yaml`; the route registers on write |
+| API key | `~/.dsh/.credentials.yaml` (mode 0600), referenced as `<ROUTE>_API_KEY` |
+
+Key answers render as `••••••` in the transcript; when the process environment
+already provides the same-named variable, the write is skipped and the value
+resolves from the environment at request time. The configuration is shared
+with the dsh web UI's Models settings page (same settings section). A bare
+`dsh --config cordis.yml` start lacks these services and `/provider` reports
+itself unavailable. After adding, run `/model` to switch to the new route's
+models.
 
 ## Composition constraints
 

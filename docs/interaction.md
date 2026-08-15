@@ -13,7 +13,8 @@
 | `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问） |
 | `Alt/Option+Up` | 把最后一条尚未处理的消息取回输入框编辑 |
 | `Up/Down` | 菜单选择；普通输入中浏览历史或在多行文本间移动 |
-| `Ctrl+V` | 从系统剪贴板插入文本；Windows Explorer 复制的文件/图片会插入路径 |
+| `Ctrl+V` | 从系统剪贴板插入文本；文件管理器复制的文件插入路径；剪贴板图片导出为临时文件后插入路径 |
+| `Ctrl+X` | 用外部编辑器（`$VISUAL` → `$EDITOR` → vi）编辑当前输入，保存退出后回填；`:cq` 或非零退出保留原稿 |
 | `Esc` | 按当前模式关闭菜单/选区/弹窗；有输入时清空；模型工作时中断；空输入连续两次打开 rewind |
 | `Ctrl+C` | 工作时中断；空闲且有输入时清空；空输入时连续两次退出 |
 | `Ctrl+D` | 空闲时连续两次退出 |
@@ -48,8 +49,9 @@ Bracketed paste（右键或终端原生粘贴）会原样插入，包括换行�
 `Enter` 选择，目录可继续深入。发送消息时，选中的文件内容或目录列表会自动附加
 到消息中（0.3.7+）。
 
-`Ctrl+V` 粘贴时，Windows Explorer 复制的文件/图片会直接插入为文件路径（含空格
-自动加引号），而不是粘贴路径文本本身。
+`Ctrl+V` 粘贴时，文件管理器（Windows Explorer、GNOME Files、KDE Dolphin 等）复制
+的文件会直接插入为文件路径（含空格自动加引号），而不是粘贴路径文本本身；剪贴板
+里的图片（如截图）会先导出为临时文件再插入其路径。
 
 ## 界面语言
 
@@ -176,7 +178,7 @@ transcript。
 | 会话 | `/new`、`/resume`、`/clear`、`/compact`、`/export`、`/btw`、`/trace` |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
-| 账号与策略 | `/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |
+| 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |
 | 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit` |
 | 注册表 | `/plan`、`/goal`，以及当前 DSH 组合注册的其他命令 |

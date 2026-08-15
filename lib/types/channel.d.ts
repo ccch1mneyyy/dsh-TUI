@@ -4,6 +4,7 @@ import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
+import type { ProviderSetupHost } from './providerWizard.js';
 import { type SessionModeSpec } from './sessionModes.js';
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js';
 import { type ActivityState } from 'dsh-working-activity/status';
@@ -422,6 +423,10 @@ export interface Channel {
     setActivityFrames(name: string): boolean;
     /** Advertised models across every registered provider route (empty when the LLM service is absent). */
     listModels(): Promise<readonly LlmModelInfo[]>;
+    /** Runtime capabilities for the `/provider` wizard, over the settings /
+     *  credentials / llm seams; undefined when the composition lacks them
+     *  (bare cordis.yml start without the dsh-base services). */
+    providerSetup(): ProviderSetupHost | undefined;
     /** Top-level entries of the session cwd for `@` file completion. */
     listFiles(): Promise<readonly string[]>;
     /** Recent sessions recorded by the DSH persistence backend (for `/resume`). */
@@ -619,6 +624,8 @@ export interface ChannelState {
     /** Switch the working-activity indicator preset (see the public Channel). */
     setActivityFrames(name: string): boolean;
     listModels(): Promise<readonly LlmModelInfo[]>;
+    /** `/provider` wizard capabilities (see the public Channel type). */
+    providerSetup(): ProviderSetupHost | undefined;
     listFiles(): Promise<readonly string[]>;
     listSessions(): Promise<readonly SessionRecord[]>;
     setResumeTarget(sessionId: string): void;

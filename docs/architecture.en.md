@@ -134,8 +134,14 @@ visual TUI alone does not describe the effective policy.
   separate UI segment; it is included in the system/context meter.
 - `/model` switches through a session fork rather than an in-place update; the
   old session remains in `/resume`.
-- Windows `Ctrl+V` depends on PowerShell `Get-Clipboard`; another process can
-  lock the clipboard and make the operation appear empty.
+- `Ctrl+V` clipboard reads dispatch per platform: PowerShell `Get-Clipboard` on
+  Windows (a competing process can lock the clipboard and make the read appear
+  empty after retries), `osascript`/`pbpaste` on macOS, and the first usable of
+  `wl-paste`/`xclip`/`xsel` on Linux/Unix (missing tools are skipped, an
+  unreachable session falls through to the next candidate, and paste reports
+  no usable clipboard tool when all fail). Clipboard images are exported to
+  a temp file whose path is inserted (0700 private directory, 0600 file);
+  they are not embedded as image blocks.
 - Exit restores the terminal and ends the process without waiting for the
   Agent's asynchronous flush; the persistence plugin is the fallback.
 - The tool-level approval panel is implemented (approval service + TUI
