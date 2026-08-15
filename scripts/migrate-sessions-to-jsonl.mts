@@ -1,6 +1,7 @@
 /**
  * One-shot migration (#24): copy sessions out of the retired cc-tui SQLite
- * store (`~/.dsh-cc/sessions.sqlite`) into the shared JSONL store
+ * store (`~/.dsh-tui/sessions.sqlite` — the pre-#120 `~/.dsh-cc` copy is
+ * migrated there on first launch) into the shared JSONL store
  * (`$DSH_HOME/sessions`, i.e. what dsh web and post-#24 cc-tui both use).
  *
  * Both sides are written/read through the official persistence backends — the
@@ -11,7 +12,7 @@
  *
  *   pnpm tsx scripts/migrate-sessions-to-jsonl.mts [--from <sqlite>] [--to <root>] [--dry-run]
  *
- * Defaults: --from $DSH_CC_SESSION_ROOT ?? ~/.dsh-cc/sessions.sqlite
+ * Defaults: --from $DSH_TUI_SESSION_ROOT ?? ~/.dsh-tui/sessions.sqlite
  *           --to   $DSH_HOME/sessions ?? ~/.dsh/sessions
  */
 import { existsSync } from 'node:fs'
@@ -27,7 +28,7 @@ function argValue(flag: string): string | undefined {
   return i !== -1 ? process.argv[i + 1] : undefined
 }
 
-const from = argValue('--from') ?? process.env.DSH_CC_SESSION_ROOT ?? join(homedir(), '.dsh-cc', 'sessions.sqlite')
+const from = argValue('--from') ?? process.env.DSH_TUI_SESSION_ROOT ?? join(homedir(), '.dsh-tui', 'sessions.sqlite')
 const to = argValue('--to') ?? join(process.env.DSH_HOME?.trim() ? process.env.DSH_HOME : join(homedir(), '.dsh'), 'sessions')
 const dryRun = process.argv.includes('--dry-run')
 

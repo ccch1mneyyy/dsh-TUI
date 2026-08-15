@@ -233,7 +233,17 @@ await sleep(250)
   check('配对耗时后缀 (1.5s)', s.includes('(1.5s)'))
   check('thinking 条目渲染', s.includes('先看一下登录模块的代码结构'))
   check('todo 条目渲染', s.includes('1/2 · 修复并重测'))
-  check('底部键位提示', s.includes('filter') && s.includes('close'))
+  check('底部键位提示（zh）', s.includes('f 过滤') && s.includes('Esc/q 关闭'))
+}
+
+// en 语言下提示行整体切回英文（picker i18n 分支：hint-trace 词条双语）。
+{
+  setLang('en')
+  app.rerender(view(entries, entries.length - 1))
+  await sleep(250)
+  const s = screen()
+  check('底部键位提示（en）', s.includes('to scroll') && s.includes('to close'))
+  setLang('zh')
 }
 
 // 选中行带 ❯ 指针（光标在最后一行 = todo 条目）。

@@ -81,7 +81,8 @@ Titles come from the first user message, and entries are ordered by most recent
 use. Confirming switches the Agent and replays persisted events.
 
 On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
-`~/.dsh-cc/resume.txt`.
+`~/.dsh-tui/resume.txt` (also dual-written to the old path
+`~/.dsh-cc/resume.txt` for older launchers that only read it).
 
 ### Rewind
 
@@ -132,7 +133,7 @@ owns native scrollback and selection.
 | `Esc` | Cancel an active drag without copying |
 
 Copy prefers OSC 52. Local fallbacks include `wl-copy`, `xclip`, and `xsel`;
-tmux uses `load-buffer -w`. Set `CC_TUI_DISABLE_MOUSE=1` to temporarily disable
+tmux uses `load-buffer -w`. Set `DSH_TUI_DISABLE_MOUSE=1` to temporarily disable
 fullscreen mouse handling.
 
 ## `ask_user_question` questionnaires

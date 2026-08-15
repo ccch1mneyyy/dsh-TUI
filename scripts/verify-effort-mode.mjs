@@ -4,7 +4,7 @@
  * against a minimal fake ctx/agent (llm/commands/approval service stubs),
  * then asserts
  *   - listEfforts/setEffort against the stubbed adapter level list
- *     (persistence lands in $HOME/.dsh-cc/effort.json — run under a throwaway
+ *     (persistence lands in $HOME/.dsh-tui/effort.json — run under a throwaway
  *     HOME so the real preference file is untouched);
  *   - cycleMode over the built-in default→plan→full cycle: /plan registry
  *     command dispatched, sandbox/mode + approval/policy session events
@@ -126,7 +126,7 @@ const baseOptions = {
   const ok = await channel.setEffort('max')
   check('setEffort(max) → true', ok === true)
   check('state.reasoningEffort = max', channel.reasoningEffort === 'max', String(channel.reasoningEffort))
-  const prefRaw = readFileSync(join(homedir(), '.dsh-cc', 'effort.json'), 'utf8')
+  const prefRaw = readFileSync(join(homedir(), '.dsh-tui', 'effort.json'), 'utf8')
   check('effort pref persisted', prefRaw.includes('max'), prefRaw)
 
   const before = channel.reasoningEffort

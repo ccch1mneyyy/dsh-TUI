@@ -4,7 +4,6 @@ import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView } from '../channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
 import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
@@ -554,7 +553,7 @@ function TranscriptRow({
           ) : (
             <Text dimColor italic>
               ∴ {t('compact-summary-folded')} · {compactPreview(text)}{' '}
-              <KeyboardShortcutHint shortcut="ctrl+o" action="expand" parens />
+              {t('hint-expand-ctrl-o')}
             </Text>
           )}
         </Box>

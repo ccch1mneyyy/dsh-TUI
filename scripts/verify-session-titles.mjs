@@ -28,7 +28,7 @@ import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-session-titles-'))
-process.env.DSH_CC_SESSION_ROOT = root
+process.env.DSH_TUI_SESSION_ROOT = root
 
 // Import AFTER the env override (root resolves at call time, but keep the
 // order obvious against future module-level reads).

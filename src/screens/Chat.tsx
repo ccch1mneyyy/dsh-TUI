@@ -2,7 +2,7 @@ import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, type I18nKey } from '../i18n.js'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '../ui.js'
 import { POINTER } from '../cc/figures.js'
-import { isMod, modLabel } from '../utils/modifiers.js'
+import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Channel, ChatRow, EffortOption, PresetOption } from '../channel.js'
@@ -27,11 +27,12 @@ import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
-import { ResumePicker } from '../components/ResumePicker.js'
+import { ResumePicker, type ResumePickerMode } from '../components/ResumePicker.js'
 import { ActivityPicker } from '../components/ActivityPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
+import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js'
 import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
@@ -193,6 +194,10 @@ export function Chat({
   const [resumePickerOpen, setResumePickerOpen] = React.useState(false)
   const [resumeSessions, setResumeSessions] = React.useState<readonly SessionRecord[]>([])
   const [resumeIndex, setResumeIndex] = React.useState(0)
+  /** `/resume` session management (issue #112): plain selection, a delete
+   *  confirmation (ctrl+d), or the inline rename input (ctrl+r). */
+  const [resumeMode, setResumeMode] = React.useState<ResumePickerMode>('list')
+  const [resumeRenameText, setResumeRenameText] = React.useState('')
   /** `/activity` indicator picker (pi extension's interactive select). */
   const [activityPickerOpen, setActivityPickerOpen] = React.useState(false)
   const [activityIndex, setActivityIndex] = React.useState(0)
@@ -204,7 +209,7 @@ export function Chat({
   const [effortSliderOpen, setEffortSliderOpen] = React.useState(false)
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
   const [effortIndex, setEffortIndex] = React.useState(0)
-  /** `/theme` color-theme picker (built-ins + ~/.dsh-cc/themes user themes). */
+  /** `/theme` color-theme picker (built-ins + ~/.dsh-tui/themes user themes). */
   const [themePickerOpen, setThemePickerOpen] = React.useState(false)
   const [themeIndex, setThemeIndex] = React.useState(0)
   const [themeName, setTheme] = useTheme()
@@ -362,7 +367,7 @@ export function Chat({
         // opens the interactive indicator picker; `/activity frames <name>`
         // switches directly; `/activity frames` lists presets; `/activity
         // status` shows the current choice. The choice persists to
-        // ~/.dsh-cc/working-activity.json and survives restarts.
+        // ~/.dsh-tui/working-activity.json and survives restarts.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -403,7 +408,7 @@ export function Chat({
         // switches directly; `/preset status` shows the current choice. A
         // blank session swaps composition in place (official blank-only
         // rule); a started session is locked and the choice persists as the
-        // default for future sessions (~/.dsh-cc/agent-preset.json).
+        // default for future sessions (~/.dsh-tui/agent-preset.json).
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -438,7 +443,7 @@ export function Chat({
         // Bare `/effort` opens the rheostat slider over the live route's
         // adapter levels (←/→ applies each step immediately); `/effort <id>`
         // sets directly (validated by the channel); `/effort status` prints
-        // the current level. The choice persists to ~/.dsh-cc/effort.json.
+        // the current level. The choice persists to ~/.dsh-tui/effort.json.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -467,8 +472,8 @@ export function Chat({
       }
       case 'lang': {
         // `/lang` shows the current UI language, `/lang en|zh` switches
-        // (hot-swap, persisted to ~/.dsh-cc/lang.json). Precedence on next
-        // launch: CC_TUI_LANG > cordis.yml `lang` > the persisted choice.
+        // (hot-swap, persisted to ~/.dsh-tui/lang.json). Precedence on next
+        // launch: DSH_TUI_LANG > cordis.yml `lang` > the persisted choice.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -502,16 +507,22 @@ export function Chat({
         return true
       }
       case 'theme': {
-        // Bare `/theme` opens the interactive color picker (built-in
-        // palettes + user themes from ~/.dsh-cc/themes); `/theme <name>`
+        // Bare `/theme` opens the interactive color picker (`auto` + built-in
+        // palettes + user themes from ~/.dsh-tui/themes); `/theme <name>`
         // switches directly; `/theme status` shows the current choice.
-        // Selection persists to ~/.dsh-cc/theme.json and hot swaps via the
-        // ThemeProvider setter (CC_TUI_THEME still wins on next launch).
+        // `auto` follows the terminal background (OSC 11). Selection
+        // persists to ~/.dsh-tui/theme.json and hot swaps via the
+        // ThemeProvider setter (DSH_TUI_THEME still wins on next launch).
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/theme', [
             t('theme-current', { name: themeName }),
+            // `auto` resolves through terminal-background detection; show
+            // which palette it currently maps to.
+            ...(themeName === AUTO_THEME_NAME
+              ? [t('theme-auto-resolved', { name: getAutoThemeBase() })]
+              : []),
             t('theme-switch-hint'),
             t('theme-persist-hint'),
             t('theme-custom-hint'),
@@ -635,6 +646,7 @@ export function Chat({
             channel.notify(t('resume-none-in-cwd'))
             return
           }
+          setResumeMode('list')
           setResumePickerOpen(true)
           setResumeIndex(0)
         })()
@@ -763,6 +775,13 @@ export function Chat({
         channel.pushLocal('/permissions', [
           t('permissions-policy-hint'),
           t('permissions-approval-hint'),
+          // /permission comes from the dsh-base permission-presets row via the
+          // commands registry; only advertise it when this composition
+          // actually mounted it (the bare cordis.yml leaf has no
+          // permission-presets, so the command does not exist there).
+          ...(channel.commandList.some(command => command.name === 'permission')
+            ? [t('permissions-preset-hint')]
+            : []),
         ])
         return true
       case 'add-dir':
@@ -909,7 +928,7 @@ export function Chat({
       .filter(row => row.kind === 'user' && row.label === undefined)
       .reverse()
     if (candidates.length === 0) {
-      channel.notify('Nothing to rewind yet')
+      channel.notify(t('rewind-none'))
       return
     }
     setRewindIndex(0)
@@ -922,7 +941,7 @@ export function Chat({
     if (text !== null) {
       // CC puts the restored message back in the prompt for re-editing.
       setHistoryFill(text)
-      channel.notify('Rewound — edit and press Enter to resend')
+      channel.notify(t('rewind-done'))
     }
   }
 
@@ -1072,7 +1091,7 @@ export function Chat({
         setSearchOpen(false)
         setHighlight('')
         handle?.scrollTo(searchAnchorRef.current)
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         // Enter commits; 0-match junk queries don't persist (CC behavior).
         if (searchCount === 0) setSearchQuery('')
         setSearchOpen(false)
@@ -1117,7 +1136,7 @@ export function Chat({
     if (thinkingOpen) {
       if (thinkingConfirm !== null) {
         // Confirmation state: Enter applies, Esc backs out to the select.
-        if (key.return) {
+        if (isPlainReturn(key)) {
           const enabled = thinkingConfirm
           setThinkingVisible(enabled)
           setThinkingConfirm(null)
@@ -1128,7 +1147,7 @@ export function Chat({
         }
       } else if (key.upArrow || key.downArrow) {
         setThinkingFocus(index => (index === 0 ? 1 : 0))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const enabled = thinkingFocus === 0
         const midConversation = channel.rows.some(row => row.kind === 'assistant')
         if (midConversation && enabled !== thinkingVisible) {
@@ -1144,27 +1163,106 @@ export function Chat({
       return
     }
     if (resumePickerOpen) {
+      const resumeSession = resumeSessions[resumeIndex]
+      // Session management modes (issue #112): the list keys stay untouched
+      // until ctrl+d/ctrl+r switch into a sub-mode, each with Enter/Esc.
+      if (resumeMode === 'confirm-delete') {
+        if (isPlainReturn(key)) {
+          setResumeMode('list')
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
+          if (resumeSession) {
+            const target = resumeSession
+            void (async () => {
+              const ok = await channel.deleteSession(target.id)
+              if (!ok) {
+                channel.notify(t('resume-delete-failed', { name: target.title || target.id }), { color: 'error' })
+                return
+              }
+              channel.notify(t('resume-deleted', { name: target.title || target.id }))
+              // Refresh right away so the row disappears in place; closing
+              // the picker when nothing resumable remains.
+              const sessions = await channel.listSessions()
+              const pickable = sessions.filter(session => session.id !== channel.agentId)
+              setResumeSessions(pickable)
+              if (pickable.length === 0) {
+                setResumePickerOpen(false)
+              } else {
+                setResumeIndex(index => Math.min(index, pickable.length - 1))
+              }
+            })()
+          }
+        } else if (key.escape) {
+          setResumeMode('list')
+        }
+        return
+      }
+      if (resumeMode === 'rename') {
+        if (isPlainReturn(key)) {
+          setResumeMode('list')
+          const title = resumeRenameText.trim()
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
+          if (resumeSession && title.length > 0) {
+            const target = resumeSession
+            void (async () => {
+              const ok = await channel.renameSessionTo(target.id, title)
+              if (!ok) {
+                channel.notify(t('resume-rename-failed', { name: target.title || target.id }), { color: 'error' })
+                return
+              }
+              channel.notify(t('rename-done', { title }))
+              // Re-list so the row reflects the persisted state, but patch
+              // the renamed row's title explicitly: listSessions resolves
+              // persisted titles only within the MRU top SESSION_TITLE_DEPTH
+              // window, and a freshly renamed row must never snap back to
+              // the basename fallback in between.
+              const sessions = await channel.listSessions()
+              const next = sessions
+                .filter(session => session.id !== channel.agentId)
+                .map(session => (session.id === target.id ? { ...session, title } : session))
+              setResumeSessions(next)
+              // Re-anchor focus on the renamed row: renameSessionTo touches
+              // MRU, so the re-listed order shifts — a kept index would
+              // silently point at a DIFFERENT session, and a following
+              // Enter/ctrl+d would act on the wrong one (review leftover).
+              const anchored = next.findIndex(session => session.id === target.id)
+              if (anchored >= 0) setResumeIndex(anchored)
+            })()
+          }
+        } else if (key.escape) {
+          setResumeMode('list')
+        } else if (key.backspace) {
+          setResumeRenameText(text => text.slice(0, -1))
+        } else if (!key.ctrl && !key.meta && !key.super && input) {
+          // Single-line title: pasted newlines collapse to spaces.
+          setResumeRenameText(text => text + input.replace(/[\r\n]+/g, ' '))
+        }
+        return
+      }
       if (key.upArrow) {
         setResumeIndex(index => (index <= 0 ? resumeSessions.length - 1 : index - 1))
       } else if (key.downArrow) {
         setResumeIndex(index => (index >= resumeSessions.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
-        const session = resumeSessions[resumeIndex]
+      } else if (isPlainReturn(key)) {
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
-        if (session) {
+        if (resumeSession) {
           // Enter switches the live agent to the persisted session right
           // away (the history replays into the transcript); the resume.txt
           // launcher marker is refreshed by resumeTo so `--resume` on the
           // next launch opens the same session.
           setResumePickerOpen(false)
-          void channel.resumeTo(session.id).then((ok) => {
-            if (ok) channel.notify('Session resumed')
+          void channel.resumeTo(resumeSession.id).then((ok) => {
+            if (ok) channel.notify(t('resume-resumed'))
           })
         } else {
           setResumePickerOpen(false)
         }
       } else if (key.escape) {
         setResumePickerOpen(false)
+      } else if (isMod(key) && input === 'd' && resumeSession) {
+        setResumeMode('confirm-delete')
+      } else if (isMod(key) && input === 'r' && resumeSession) {
+        setResumeRenameText(resumeSession.title || '')
+        setResumeMode('rename')
       }
       return
     }
@@ -1173,7 +1271,7 @@ export function Chat({
         setModelIndex(index => (index <= 0 ? models.length - 1 : index - 1))
       } else if (key.downArrow) {
         setModelIndex(index => (index >= models.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const model = models[modelIndex]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (model) {
@@ -1181,9 +1279,9 @@ export function Chat({
           // forked at its end and continued with an agent routed to the new
           // model (history replays unchanged).
           setModelPickerOpen(false)
-          channel.notify(`Switching model to ${model.name}…`)
+          channel.notify(t('model-switching', { name: model.name }))
           void channel.switchModel(model.provider, model.id).then((ok) => {
-            if (ok) channel.notify(`Model switched to ${model.name}`)
+            if (ok) channel.notify(t('model-switched', { name: model.name }))
           })
         } else {
           setModelPickerOpen(false)
@@ -1198,7 +1296,7 @@ export function Chat({
         setActivityIndex(index => (index <= 0 ? PRESET_NAMES.length - 1 : index - 1))
       } else if (key.downArrow) {
         setActivityIndex(index => (index >= PRESET_NAMES.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const name = PRESET_NAMES[activityIndex]
         setActivityPickerOpen(false)
         if (name) channel.setActivityFrames(name)
@@ -1215,7 +1313,7 @@ export function Chat({
         const option = effortOptions[next]
         // Live-apply: the slider IS the control; Esc does not revert.
         if (option) void channel.setEffort(option.id)
-      } else if (key.return || key.escape) {
+      } else if (isPlainReturn(key) || key.escape) {
         setEffortSliderOpen(false)
       }
       return
@@ -1225,7 +1323,7 @@ export function Chat({
         setPresetIndex(index => (index <= 0 ? presetOptions.length - 1 : index - 1))
       } else if (key.downArrow) {
         setPresetIndex(index => (index >= presetOptions.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const option = presetOptions[presetIndex]
         setPresetPickerOpen(false)
         if (option) void channel.switchPreset(option.id)
@@ -1240,7 +1338,7 @@ export function Chat({
         setThemeIndex(index => (index <= 0 ? options.length - 1 : index - 1))
       } else if (key.downArrow) {
         setThemeIndex(index => (index >= options.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         setThemePickerOpen(false)
         const name = options[themeIndex]?.value
         if (name !== undefined) {
@@ -1261,7 +1359,7 @@ export function Chat({
       } else if (key.ctrl && (input === 'c' || input === 'd')) {
         // CC's history search cancels on ctrl+c/ctrl+d too.
         setHistoryOpen(false)
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const entry = historyMatches[historyFocus]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty match list
         if (entry) {
@@ -1308,7 +1406,7 @@ export function Chat({
     if (rewindOpen) {
       if (rewindConfirm !== null) {
         // Confirmation state: Enter rewinds, Esc backs out to the list.
-        if (key.return) {
+        if (isPlainReturn(key)) {
           const row = rewindConfirm
           setRewindOpen(false)
           setRewindConfirm(null)
@@ -1320,7 +1418,7 @@ export function Chat({
         setRewindIndex(index => (index <= 0 ? rewindRows.length - 1 : index - 1))
       } else if (key.downArrow) {
         setRewindIndex(index => (index >= rewindRows.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const row = rewindRows[rewindIndex]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (row) setRewindConfirm(row)
@@ -1389,7 +1487,7 @@ export function Chat({
         moveSelection(-1)
       } else if (key.downArrow) {
         moveSelection(1)
-      } else if (key.return && selectedId !== null) {
+      } else if (isPlainReturn(key) && selectedId !== null) {
         toggleRowExpanded(selectedId)
       } else if (key.escape) {
         setSelectionActive(false)
@@ -1444,7 +1542,7 @@ export function Chat({
       instances.get(process.stdout)?.forceRedraw()
     } else if (isMod(key) && input === 'e') {
       setShowAllMessages(previous => !previous)
-    } else if (key.return && showPill) {
+    } else if (isPlainReturn(key) && showPill) {
       handle?.scrollToBottom()
     }
   })
@@ -1563,6 +1661,8 @@ export function Chat({
               sessions={resumeSessions}
               focusIndex={resumeIndex}
               currentSessionId={channel.agentId}
+              mode={resumeMode}
+              renameText={resumeRenameText}
             />
           </Box>
         )}
@@ -1755,12 +1855,12 @@ function ModelPickerLoading(): React.ReactNode {
     <Pane color="permission">
       <Box flexDirection="column" gap={1}>
         <Text bold color="permission">
-          Model
+          {t('picker-title-model')}
         </Text>
         <LoadingState
-          message="Loading models"
+          message={t('model-loading')}
           bold
-          subtitle="Querying the provider…"
+          subtitle={t('model-loading-subtitle')}
         />
       </Box>
     </Pane>
@@ -1802,7 +1902,7 @@ function ModelPickerLoading(): React.ReactNode {
       {cursorOffset < query.length && <Text>{query.slice(cursorOffset + 1)}</Text>}
       <Box flexGrow={1} />
       {query && count === 0 ? (
-        <Text color="error">no matches </Text>
+        <Text color="error">{t('search-no-matches')} </Text>
       ) : count > 0 ? (
         <Text dimColor>
           {Math.min(current + 1, count)}/{count}{'  '}

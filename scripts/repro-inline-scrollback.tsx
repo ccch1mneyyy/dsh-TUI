@@ -12,7 +12,7 @@
  */
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'  // DEC-2026 同步输出路径（与真机 Windows Terminal/WezTerm 一致）
-process.env.CC_TUI_THEME = 'dark'     // 跳过 OSC 11 探测，保持确定性
+process.env.DSH_TUI_THEME = 'dark'    // 跳过 OSC 11 探测，保持确定性
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
   import('node:stream'),

@@ -60,7 +60,7 @@ boundaries and helpers over introducing parallel abstractions.
 - `src/cc/`: terminal formatting and presentation helpers adapted for the
   Claude Code-style UI.
 - `src/*Prefs.ts`, `src/customTheme.ts`, and `src/sessionHistory.ts`: persisted
-  user preferences and local session metadata under `~/.dsh-cc`.
+  user preferences and local session metadata under `~/.dsh-tui`.
 - `skills/*/SKILL.md`: skills shipped in the npm package and registered by
   `src/packaged-skills.ts`.
 - `cordis.patch.yml`: package bundle overlay used by profile installation.
@@ -308,7 +308,7 @@ the required credentials.
   use the repository's width, slicing, wrapping, and ANSI helpers.
 - Keep frame output buffered and normal runs quiet. Do not add `console.log` or
   stdout diagnostics while the TUI is active. Use an opt-in stderr/debug path
-  such as `CC_TUI_DEBUG`, or the existing `DSH_CC_RENDER_LOG` frame capture.
+  such as `DSH_TUI_DEBUG`, or the existing `DSH_TUI_RENDER_LOG` frame capture.
 - Preserve raw-mode, cursor, alternate-screen, synchronized-output, mouse,
   focus, and terminal-query cleanup on success, error, interrupt, and teardown.
 - Avoid render-time unbounded collections or per-token/per-frame allocations.
@@ -326,7 +326,7 @@ the required credentials.
 - Follow the existing precedence for configurable preferences: explicit
   deployment config or environment override, then persisted user choice, then
   detected/default value. Document any change to that order.
-- Persist user data beneath the existing `~/.dsh-cc` locations. Validate and
+- Persist user data beneath the existing `~/.dsh-tui` locations. Validate and
   safely parse external JSON; malformed optional state should warn or fall
   back rather than crash the TUI.
 - Treat theme names and file contents as untrusted input. Preserve path

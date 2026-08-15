@@ -4,9 +4,9 @@
  *
  * Resolution order mirrors the `/theme` mechanism (see themePrefs.ts):
  *
- *   1. `CC_TUI_LANG` env var (`en` / `zh`) — pinned at process start
+ *   1. `DSH_TUI_LANG` env var (`en` / `zh`) — pinned at process start
  *   2. `lang` cordis.yml config key (see Config in index.ts)
- *   3. the persisted `/lang` choice in `~/.dsh-cc/lang.json`
+ *   3. the persisted `/lang` choice in `~/.dsh-tui/lang.json`
  *   4. the OS locale guess (`LC_ALL` / `LC_MESSAGES` / `LANG`)
  *   5. `zh` (the original hard-coded language)
  *
@@ -17,12 +17,12 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { DATA_DIR } from './utils/paths.js'
 
 export type Lang = 'zh' | 'en'
 
-const PREFS_DIR = join(homedir(), '.dsh-cc')
+const PREFS_DIR = DATA_DIR
 
 /** The languages shipped with the plugin, in display order. */
 export const LANGS = ['zh', 'en'] as const
@@ -31,8 +31,8 @@ const dict = {
   // ── channel.ts ───────────────────────────────────────────────────────
   'activity-indicator-already': { zh: '指示器已是：{{name}}', en: 'Indicator already set: {{name}}' },
   'activity-indicator-switched': { zh: '指示器已切换：{{name}}（已保存）', en: 'Indicator switched: {{name}} (saved)' },
-  'activity-pref-write-failed': { zh: '无法写入 ~/.dsh-cc/working-activity.json，切换未保存', en: 'Cannot write ~/.dsh-cc/working-activity.json, switch not saved' },
-  'model-pref-write-failed': { zh: '无法写入 ~/.dsh-cc/model.json，模型选择不会保存到重启后', en: 'Cannot write ~/.dsh-cc/model.json, the model choice will not survive a restart' },
+  'activity-pref-write-failed': { zh: '无法写入 ~/.dsh-tui/working-activity.json，切换未保存', en: 'Cannot write ~/.dsh-tui/working-activity.json, switch not saved' },
+  'model-pref-write-failed': { zh: '无法写入 ~/.dsh-tui/model.json，模型选择不会保存到重启后', en: 'Cannot write ~/.dsh-tui/model.json, the model choice will not survive a restart' },
   'model-route-invalid': { zh: '持久化的模型路由 {{provider}}/{{model}} 不在该 provider 的模型列表中，已整体回退到 {{fallback}}', en: 'Persisted model route {{provider}}/{{model}} is not advertised by that provider; fell back to {{fallback}}' },
   'unknown-activity-preset': { zh: '未知预设「{{name}}」· /activity frames 查看全部', en: 'Unknown preset "{{name}}" · /activity frames to view all' },
   'preset-unavailable': { zh: 'Preset 不可用——当前组合未挂载 agent-presets 名册', en: 'Preset unavailable — the agent-presets roster is not mounted' },
@@ -40,7 +40,7 @@ const dict = {
   'preset-not-found': { zh: 'Preset「{{id}}」不存在 · {{err}}', en: 'Preset "{{id}}" not found · {{err}}' },
   'preset-load-failed': { zh: 'Preset「{{id}}」无法加载 · {{broken}}', en: 'Preset "{{id}}" failed to load · {{broken}}' },
   'preset-already-current': { zh: '当前 preset 已是：{{id}}', en: 'Current preset already: {{id}}' },
-  'preset-pref-write-failed': { zh: '无法写入 ~/.dsh-cc/agent-preset.json，选择未保存', en: 'Cannot write ~/.dsh-cc/agent-preset.json, selection not saved' },
+  'preset-pref-write-failed': { zh: '无法写入 ~/.dsh-tui/agent-preset.json，选择未保存', en: 'Cannot write ~/.dsh-tui/agent-preset.json, selection not saved' },
   'preset-locked-saved-default': { zh: '会话已开始，preset 已锁定（当前：{{current}}）· 已保存为默认：{{id}}（/new 或下次启动生效）', en: 'Session already started, preset locked (current: {{current}}) · Saved as default: {{id}} (applies on /new or next start)' },
   'preset-switch-failed': { zh: 'Preset 切换失败 · {{err}}', en: 'Preset switch failed · {{err}}' },
   'preset-switched-pref-failed': { zh: 'Preset 已切换：{{id}}，但默认偏好写入失败（重启后不保留）', en: 'Preset switched: {{id}}, but writing the default preference failed (won\'t persist after restart)' },
@@ -81,6 +81,7 @@ const dict = {
   'doctor-config-missing': { zh: '（不存在）', en: '(missing)' },
   'doctor-storage': { zh: '会话存储: {{dir}} {{state}}', en: 'Session storage: {{dir}} {{state}}' },
   'doctor-storage-uninit': { zh: '（未初始化）', en: '(not initialized)' },
+  'doctor-legacy-dir': { zh: '旧数据目录: ~/.dsh-tui 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）', en: 'Legacy data directory: ~/.dsh-tui still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)' },
   'subagent-not-mounted': { zh: '子代理服务未挂载（leaf 未启用 subagent）', en: 'Subagent service not mounted (leaf has no subagent)' },
   'subagent-none': { zh: '当前会话暂无子代理', en: 'No subagents in the current session' },
   'subagent-resumable': { zh: '可续', en: 'resumable' },
@@ -118,7 +119,7 @@ const dict = {
   'activity-usage-name': { zh: '/activity frames <名>', en: '/activity frames <name>' },
   'activity-current-preset': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
   'activity-switch-hint': { zh: '切换      /activity（选择器）或 /activity frames <名>', en: 'Switch      /activity (picker) or /activity frames <name>' },
-  'activity-persist-hint': { zh: '持久化    ~/.dsh-cc/working-activity.json（重启后仍生效）', en: 'Persisted    ~/.dsh-cc/working-activity.json (survives restart)' },
+  'activity-persist-hint': { zh: '持久化    ~/.dsh-tui/working-activity.json（重启后仍生效）', en: 'Persisted    ~/.dsh-tui/working-activity.json (survives restart)' },
   'activity-current-direct': { zh: '当前预设：{{name}} · /activity frames <名> 直接切换：', en: 'Current preset: {{name}} · /activity frames <name> to switch directly:' },
   'activity-random-each': { zh: '每次随机', en: 'random each time' },
   'activity-current-marker': { zh: '  ← 当前', en: '  ← current' },
@@ -126,14 +127,15 @@ const dict = {
   'preset-current': { zh: '当前 preset  {{name}}', en: 'Current preset  {{name}}' },
   'preset-roster-missing': { zh: '（未挂载名册）', en: '(roster not mounted)' },
   'preset-switch-hint': { zh: '切换        /preset（选择器）或 /preset <id>', en: 'Switch        /preset (picker) or /preset <id>' },
-  'preset-persist-hint': { zh: '持久化      ~/.dsh-cc/agent-preset.json（重启后仍生效；cordis.yml preset 优先）', en: 'Persisted      ~/.dsh-cc/agent-preset.json (survives restart; cordis.yml preset wins)' },
+  'preset-persist-hint': { zh: '持久化      ~/.dsh-tui/agent-preset.json（重启后仍生效；cordis.yml preset 优先）', en: 'Persisted      ~/.dsh-tui/agent-preset.json (survives restart; cordis.yml preset wins)' },
   'preset-lock-hint': { zh: '锁定规则    已开始的会话不可切换（官方 blank-only 规则）', en: 'Lock rule     started sessions cannot switch (official blank-only rule)' },
   'preset-roster-unmounted': { zh: '当前组合未挂载 agent-presets 名册（preset 不可用）', en: 'The agent-presets roster is not mounted (presets unavailable)' },
   'theme-name-arg': { zh: '/theme <名字>', en: '/theme <name>' },
   'theme-current': { zh: '当前主题  {{name}}', en: 'Current theme  {{name}}' },
   'theme-switch-hint': { zh: '切换      /theme（选择器）或 /theme <名字>', en: 'Switch      /theme (picker) or /theme <name>' },
-  'theme-persist-hint': { zh: '持久化    ~/.dsh-cc/theme.json（重启后仍生效；CC_TUI_THEME 优先）', en: 'Persisted    ~/.dsh-cc/theme.json (survives restart; CC_TUI_THEME wins)' },
-  'theme-custom-hint': { zh: '自定义    ~/.dsh-cc/themes/<名字>.json（见 README「自定义主题」）', en: 'Custom      ~/.dsh-cc/themes/<name>.json (see README "Custom themes")' },
+  'theme-persist-hint': { zh: '持久化    ~/.dsh-tui/theme.json（重启后仍生效；DSH_TUI_THEME 优先）', en: 'Persisted    ~/.dsh-tui/theme.json (survives restart; DSH_TUI_THEME wins)' },
+  'theme-custom-hint': { zh: '自定义    ~/.dsh-tui/themes/<名字>.json（见 README「自定义主题」）', en: 'Custom      ~/.dsh-tui/themes/<name>.json (see README "Custom themes")' },
+  'theme-auto-resolved': { zh: '自动解析  当前为 {{name}}（跟随终端背景）', en: 'Auto-resolved  currently {{name}} (follows terminal background)' },
   'theme-switched-saved': { zh: '主题已切换：{{name}}（已保存）', en: 'Theme switched: {{name}} (saved)' },
   'theme-unknown': { zh: '未知主题「{{name}}」· /theme 查看全部', en: 'Unknown theme "{{name}}" · /theme to view all' },
   'status-model': { zh: '模型   {{model}}', en: 'Model   {{model}}' },
@@ -163,7 +165,8 @@ const dict = {
   'login-source-hint': { zh: '来源：环境变量 → 工作区 .env（run.ts 兜底读取）', en: 'Source: env var → workspace .env (run.ts fallback)' },
   'login-logout-hint': { zh: 'DSH 凭证来自环境变量 DEEPSEEK_API_KEY — 删除该环境变量后重启 dsh-tui 即登出', en: 'DSH credentials come from the DEEPSEEK_API_KEY env var — remove it and restart dsh-tui to log out' },
   'permissions-policy-hint': { zh: 'DSH 权限策略由 fs-policy / bash-sandbox 配置决定（当前 leaf：workspace 内读写、写入需已读文件）。', en: 'DSH permission policy is set by fs-policy / bash-sandbox config (current leaf: read/write in workspace, writes need a prior read).' },
-  'permissions-approval-hint': { zh: 'DSH 的 /permission 预设切换需要 approval 服务 + 审批 UI，dsh-tui 未挂载。', en: 'DSH /permission preset switching needs the approval service + approval UI, not mounted in dsh-tui.' },
+  'permissions-approval-hint': { zh: '审批通道已挂载：命令申请权限提升（sandbox_permissions）时弹出审批条，Yes 放行一次、No / Esc 拒绝。', en: 'The approval channel is mounted: sandbox escalations (sandbox_permissions) raise an approval bar — Yes allows once, No / Esc rejects.' },
+  'permissions-preset-hint': { zh: '/permission 可查看与切换权限预设（read-only / workspace-write / danger-full-access）。', en: '/permission shows and switches permission presets (read-only / workspace-write / danger-full-access).' },
   'permissions-root-hint': { zh: '当前文件系统策略以工作目录为根：{{cwd}}', en: 'Current filesystem policy is rooted at the working directory: {{cwd}}' },
   'permissions-path-hint': { zh: '模型工具相对路径均解析自该目录；跨目录访问由 fs-policy 拦截。', en: 'Relative paths of model tools resolve from this directory; cross-directory access is blocked by fs-policy.' },
   'hooks-not-mounted': { zh: 'DSH hooks（dsh-hooks-claude / dsh-hooks-codex）未在本 leaf 挂载。', en: 'DSH hooks (dsh-hooks-claude / dsh-hooks-codex) are not mounted in this leaf.' },
@@ -180,13 +183,17 @@ const dict = {
   'terminal-setup-hint': { zh: '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。', en: 'Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).' },
   'terminal-paste-hint': { zh: '{{mod}}V 粘贴文本/文件路径；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。', en: '{{mod}}V pastes text/file paths; Ctrl+Shift+V is native terminal paste; right-click paste also works.' },
   'connect-none': { zh: 'DSH 暂无远程连接机制（CC 的 /connect 对应能力未适配）。', en: 'DSH has no remote connection mechanism (CC\'s /connect equivalent is not adapted).' },
-  'theme-switch-failed': { zh: '主题「{{name}}」切换失败（无法写入 ~/.dsh-cc/theme.json）', en: 'Theme "{{name}}" switch failed (cannot write ~/.dsh-cc/theme.json)' },
+  'theme-switch-failed': { zh: '主题「{{name}}」切换失败（无法写入 ~/.dsh-tui/theme.json）', en: 'Theme "{{name}}" switch failed (cannot write ~/.dsh-tui/theme.json)' },
   'interrupt-delivered': { zh: '已打断当前回合，{{n}} 条消息立即处理', en: 'Interrupted current turn, {{n}} messages processed immediately' },
   'btw-usage': { zh: '用法：/btw <问题> —— 不打断当前对话的快速侧问', en: 'Usage: /btw <question> — quick side question without interrupting the conversation' },
   'btw-answering': { zh: '思考中…', en: 'Answering…' },
   'btw-hint-loading': { zh: 'Esc 取消', en: 'Esc cancel' },
   'btw-hint-done': { zh: '↑/↓ 滚动 · Space/Enter/Esc 关闭 · c 复制', en: '↑/↓ scroll · Space/Enter/Esc dismiss · c copy' },
   'btw-llm-unavailable': { zh: '侧问不可用（llm 服务未挂载）', en: 'Side question unavailable (llm service not mounted)' },
+
+  // ── plugin.ts — boot-time rename notices (issue #120) ───────────────
+  'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-tui 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）', en: 'Data directory copied from ~/.dsh-tui to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)' },
+  'legacy-env-renamed': { zh: '环境变量 {{old}} 已更名为 {{new}}，旧名不再生效', en: 'Environment variable {{old}} was renamed to {{new}}; the old name no longer takes effect' },
 
   // ── components/ActivityLine.tsx ──────────────────────────────────────
   'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
@@ -251,6 +258,74 @@ const dict = {
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },
   'resume-none-in-cwd': { zh: '当前目录没有可恢复的历史会话', en: 'No resumable sessions in the current directory' },
+
+  // ── components/ResumePicker.tsx + screens/Chat.tsx (/resume) ────────
+  'resume-resumed': { zh: '已恢复会话', en: 'Session resumed' },
+  'resume-more-above': { zh: '↑ 还有 {{n}} 条', en: '↑ {{n}} more' },
+  'resume-more-below': { zh: '↓ 还有 {{n}} 条', en: '↓ {{n}} more' },
+  'resume-delete-confirm': { zh: '删除「{{name}}」？会话日志将被永久移除。', en: 'Delete "{{name}}"? The session log is removed permanently.' },
+  'resume-deleted': { zh: '已删除会话「{{name}}」', en: 'Deleted session {{name}}' },
+  'resume-delete-failed': { zh: '无法删除会话「{{name}}」', en: 'Could not delete session {{name}}' },
+  'resume-rename-placeholder': { zh: '新的会话名称…', en: 'New session name…' },
+  'resume-rename-failed': { zh: '无法重命名会话「{{name}}」', en: 'Could not rename session {{name}}' },
+  'resume-hint-list': { zh: '**Enter** 恢复 · Esc 退出 · {{mod}}d 删除 · {{mod}}r 重命名', en: '**Enter** to confirm · Esc to exit · {{mod}}d to delete · {{mod}}r to rename' },
+  'resume-hint-delete': { zh: '**Enter** 删除 · Esc 取消', en: '**Enter** to delete · Esc to cancel' },
+  'resume-hint-rename': { zh: '**Enter** 保存 · Esc 取消', en: '**Enter** to save · Esc to cancel' },
+  'resume-title': { zh: '恢复会话', en: 'Resume' },
+
+  // ── picker 通用快捷键提示（整句本地化，zh 不用 "to" 结构；**段** 渲染为粗体主快捷键）─
+  'hint-confirm-exit': { zh: '**Enter** 确认 · Esc 退出', en: '**Enter** to confirm · Esc to exit' },
+  'hint-confirm-cancel': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
+  'hint-select-exit': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** to select · Esc to exit' },
+  'hint-rewind-back': { zh: '**Enter** 回退 · Esc 返回', en: '**Enter** to rewind · Esc to back' },
+  'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
+  'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
+  'hint-trace': { zh: '**↑/↓ PgUp/PgDn g/G** 滚动 · f 过滤 · Esc/q 关闭', en: '**↑/↓ PgUp/PgDn g/G** to scroll · f to filter · Esc/q to close' },
+  'hint-expand-ctrl-o': { zh: '（ctrl+o 展开）', en: '(ctrl+o to expand)' },
+
+  // ── components/ModelPicker.tsx / ThemePicker.tsx / ActivityPicker.tsx / EffortSlider.tsx ──
+  'picker-title-model': { zh: '模型', en: 'Model' },
+  'picker-title-theme': { zh: '颜色主题', en: 'Color theme' },
+  'picker-title-activity': { zh: '指示器预设', en: 'Indicator preset' },
+  'picker-title-effort': { zh: '推理强度', en: 'Reasoning effort' },
+  'model-loading': { zh: '正在加载模型', en: 'Loading models' },
+  'model-loading-subtitle': { zh: '正在查询 provider…', en: 'Querying the provider…' },
+  'model-switching': { zh: '正在切换模型到 {{name}}…', en: 'Switching model to {{name}}…' },
+  'model-switched': { zh: '模型已切换为 {{name}}', en: 'Model switched to {{name}}' },
+
+  // ── components/RewindPicker.tsx ─────────────────────────────────────
+  'rewind-title': { zh: '回退', en: 'Rewind' },
+  'rewind-subtitle': { zh: '选择一条消息，将对话回退到该处', en: 'Pick a message to rewind the conversation to' },
+  'rewind-confirm-title': { zh: '将对话回退到这条消息？', en: 'Rewind conversation to this message?' },
+  'rewind-confirm-desc': { zh: '对话从此处重新开始', en: 'conversation restarts here' },
+  'rewind-empty': { zh: '没有可回退的消息', en: 'No messages to rewind to' },
+  'rewind-last-message': { zh: '最近一条消息', en: 'last message' },
+  'rewind-none': { zh: '还没有可回退的消息', en: 'Nothing to rewind yet' },
+  'rewind-done': { zh: '已回退——编辑后按 Enter 重新发送', en: 'Rewound — edit and press Enter to resend' },
+
+  // ── components/ThinkingToggle.tsx + messages/AssistantThinkingMessage.tsx ──
+  'thinking-title': { zh: '切换思考模式', en: 'Toggle thinking mode' },
+  'thinking-subtitle': { zh: '为本会话启用或关闭思考。', en: 'Enable or disable thinking for this session.' },
+  'thinking-enabled': { zh: '启用', en: 'Enabled' },
+  'thinking-enabled-desc': { zh: 'DeepSeek 会在回复前先思考', en: 'DeepSeek will think before responding' },
+  'thinking-disabled': { zh: '关闭', en: 'Disabled' },
+  'thinking-disabled-desc': { zh: 'DeepSeek 不做扩展思考，直接回复', en: 'DeepSeek will respond without extended thinking' },
+  'thinking-mid-warning': { zh: '在对话中途切换思考模式会增加延迟，并可能降低质量。建议在会话开始时设置。', en: 'Changing thinking mode mid-conversation will increase latency and may reduce quality. For best results, set this at the start of a session.' },
+  'thinking-proceed': { zh: '要继续吗？', en: 'Do you want to proceed?' },
+  'thinking-label': { zh: '思考', en: 'Thinking' },
+
+  // ── components/HistorySearchDialog.tsx ──────────────────────────────
+  'history-search-title': { zh: '搜索历史', en: 'Search history' },
+  'history-search-placeholder': { zh: '输入以搜索…', en: 'Type to search…' },
+  'history-search-empty': { zh: '没有匹配的命令', en: 'No matching commands' },
+  'time-now': { zh: '刚刚', en: 'now' },
+  'time-minutes-ago': { zh: '{{n}} 分钟前', en: '{{n}}m ago' },
+  'time-hours-ago': { zh: '{{n}} 小时前', en: '{{n}}h ago' },
+  'time-days-ago': { zh: '{{n}} 天前', en: '{{n}}d ago' },
+
+  // ── screens/Chat.tsx（/ 转录搜索条）─────────────────────────────────
+  'search-no-matches': { zh: '无匹配', en: 'no matches' },
+
   'rename-usage': { zh: '用法  /rename <新名称>', en: 'Usage  /rename <new title>' },
   'rename-current': { zh: '当前名称  {{title}}', en: 'Current title  {{title}}' },
   'rename-done': { zh: '已重命名为「{{title}}」', en: 'Renamed to "{{title}}"' },
@@ -258,7 +333,8 @@ const dict = {
 
   // ── components/ThemePicker.tsx ──────────────────────────────────────
   'theme-builtin-base': { zh: '内置 · {{name}} 基底', en: 'Built-in · {{name}} base' },
-  'theme-user-base': { zh: '{{base}} 基底 · ~/.dsh-cc/themes/{{name}}.json', en: '{{base}} base · ~/.dsh-cc/themes/{{name}}.json' },
+  'theme-auto-base': { zh: '内置 · 跟随系统/终端背景自动选择 light/dark', en: 'Built-in · follows the system/terminal background (light/dark)' },
+  'theme-user-base': { zh: '{{base}} 基底 · ~/.dsh-tui/themes/{{name}}.json', en: '{{base}} base · ~/.dsh-tui/themes/{{name}}.json' },
 
   // ── components/LoadedContextPanel.tsx ───────────────────────────────
   'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
@@ -368,14 +444,14 @@ const dict = {
   // Session / environment
   'cmd-desc-status': { zh: '查看会话状态' },
   'cmd-desc-cost': { zh: '查看会话 token 用量' },
-  'cmd-desc-config': { zh: '查看 dsh-cc 配置来源' },
+  'cmd-desc-config': { zh: '查看 dsh-tui 配置来源' },
   'cmd-desc-doctor': { zh: '运行环境检查' },
   'cmd-desc-init': { zh: '在工作目录创建 AGENTS.md' },
   'cmd-desc-agents': { zh: '查看本会话的子代理' },
   // Model / display
   'cmd-desc-activity': { zh: '切换工作状态指示器预设' },
   'cmd-desc-preset': { zh: '切换 Agent 预设（standard/code/minimal/cordis）' },
-  'cmd-desc-theme': { zh: '切换配色主题（内置或自定义）' },
+  'cmd-desc-theme': { zh: '切换配色主题（auto 跟随系统，或内置/自定义）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },
   'cmd-desc-thinking': { zh: '切换扩展思考显示' },
@@ -389,11 +465,11 @@ const dict = {
   'cmd-desc-hooks': { zh: '查看 hooks 状态' },
   'cmd-desc-mcp': { zh: '查看 MCP 状态' },
   'cmd-desc-memory': { zh: '查看记忆状态' },
-  'cmd-desc-update': { zh: '更新 dsh-cc-tui 并重启' },
+  'cmd-desc-update': { zh: '更新 dsh-tui 并重启' },
   // Built-in skills
   'cmd-desc-audit': { zh: '对当前项目做全面代码审计' },
   'cmd-desc-bug': { zh: '记录一份 bug 报告' },
-  'cmd-desc-practice': { zh: '与 dsh-cc 进行编程练习' },
+  'cmd-desc-practice': { zh: '与 dsh-tui 进行编程练习' },
   'cmd-desc-review': { zh: '对当前项目做全面代码评审' },
   'cmd-desc-pr_comments': { zh: '审查拉取请求评论' },
   'cmd-desc-release-notes': { zh: '生成发布说明' },
@@ -414,10 +490,10 @@ const dict = {
   // ── /lang command ───────────────────────────────────────────────────
   'lang-current': { zh: '当前语言  {{lang}}', en: 'Current language  {{lang}}' },
   'lang-switch-hint': { zh: '切换      /lang en | /lang zh', en: 'Switch      /lang en | /lang zh' },
-  'lang-persist-hint': { zh: '持久化    ~/.dsh-cc/lang.json（重启后仍生效；CC_TUI_LANG 优先）', en: 'Persisted    ~/.dsh-cc/lang.json (survives restart; CC_TUI_LANG wins)' },
+  'lang-persist-hint': { zh: '持久化    ~/.dsh-tui/lang.json（重启后仍生效；DSH_TUI_LANG 优先）', en: 'Persisted    ~/.dsh-tui/lang.json (survives restart; DSH_TUI_LANG wins)' },
   'lang-switched': { zh: '语言已切换：{{lang}}（已保存）', en: 'Language switched: {{lang}} (saved)' },
   'lang-unknown': { zh: '未知语言「{{lang}}」· /lang 查看全部（en / zh）', en: 'Unknown language "{{lang}}" · /lang to view all (en / zh)' },
-  'lang-switch-failed': { zh: '语言「{{lang}}」切换失败（无法写入 ~/.dsh-cc/lang.json）', en: 'Language "{{lang}}" switch failed (cannot write ~/.dsh-cc/lang.json)' },
+  'lang-switch-failed': { zh: '语言「{{lang}}」切换失败（无法写入 ~/.dsh-tui/lang.json）', en: 'Language "{{lang}}" switch failed (cannot write ~/.dsh-tui/lang.json)' },
 
   // ── components/TraceView.tsx (/trace, issue #80) ─────────────────────
   'trace-title': { zh: '轨迹', en: 'Trace' },
@@ -493,7 +569,7 @@ export function tOr(key: string, fallback: string): string {
   return entry?.[activeLang] ?? fallback
 }
 
-// ── persistence (~/.dsh-cc/lang.json) ──────────────────────────────────
+// ── persistence (~/.dsh-tui/lang.json) ─────────────────────────────────
 
 /**
  * Parse a persisted `{ lang }` value; anything else yields undefined.

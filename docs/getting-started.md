@@ -71,10 +71,23 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 dsh --profile dsh-tui
 ```
 
-`~/.dsh-cc`、`CC_TUI_*` 与 `DSH_CC_*` 暂时保留为兼容接口，因此会话恢复标记、
-主题、模型、preset 和输入历史无需迁移。确认新 profile 正常后，旧
-`$DSH_HOME/profiles/cc-tui` 仅作为旧安装残留，可按需删除；不要把旧包和新包同时
-添加到同一个 profile。
+本版本起，环境变量与数据目录完成更名：`CC_TUI_*` 与 `DSH_CC_*` 统一改为
+`DSH_TUI_*`（如 `CC_TUI_THEME` → `DSH_TUI_THEME`），数据目录从 `~/.dsh-cc` 改为
+`~/.dsh-tui`。行为要点：
+
+- 旧名环境变量不再生效；启动时若检测到旧名仍被设置，会打印一行警告提示改用新名
+  （只要还设着，每次启动都会提示）。
+- 唯一例外是恢复契约：`DSH_TUI_RESUME_SESSION` 为新名，读端优先取新名、同时仍
+  读取旧名 `DSH_CC_RESUME_SESSION`；写端两个变量都会设置，旧版启动器仍可用旧名
+  完成过渡。
+- 数据目录自动迁移：首次启动时若 `~/.dsh-cc` 存在而 `~/.dsh-tui` 不存在，会整体
+  **复制**（不移动）到新目录并提示一行；主题、模型、preset 和输入历史随之生效。
+  旧目录保留在原处，确认新目录正常后由你自行删除。
+- `resume.txt` 例外：会同时写入新旧两个路径，保证只读旧路径的旧版启动器仍能
+  找到最近会话。
+
+确认新 profile 正常后，旧 `$DSH_HOME/profiles/cc-tui` 仅作为旧安装残留，可按需
+删除；不要把旧包和新包同时添加到同一个 profile。
 
 ## 安装命令做了什么
 
@@ -114,8 +127,9 @@ dsh-tui.cmd
 dsh-tui.cmd --resume
 ```
 
-`--resume` 会读取 `%USERPROFILE%\.dsh-cc\resume.txt`，恢复 TUI 最近选择的
-会话。设置 `DSH_CC_WORKSPACE` 可以覆盖批处理启动器采用的工作目录。
+`--resume` 会读取 `%USERPROFILE%\.dsh-tui\resume.txt`，恢复 TUI 最近选择的
+会话。该文件同时双写到旧路径 `%USERPROFILE%\.dsh-cc\resume.txt`，供只读旧路径的
+旧版启动器过渡使用。设置 `DSH_TUI_WORKSPACE` 可以覆盖批处理启动器采用的工作目录。
 
 ## 更新到最新版本
 
@@ -128,7 +142,7 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 - 不带 `@latest` 时 pnpm 会按 profile `package.json` 里已记录的版本范围
   （如 `^0.1.4`）就地解析，可能停留在旧的主线上——这是"重复执行安装命令
   但版本没变"的常见原因。
-- 确认生效：启动横幅右上角显示当前版本（`✦ dsh-cc vX.Y.Z`）。
+- 确认生效：启动横幅右上角显示当前版本（`✦ dsh-TUI vX.Y.Z`）。
 - 用户覆盖层 `cordis.patch.yml` 在更新中原样保留；会话数据的存放位置
   可能随版本变化（如 0.3.7 起 `/resume` 改用与 dsh web 共享的 JSONL
   会话库），跨大版本更新后旧会话不在列表属预期，原数据不会被删除。
@@ -208,5 +222,5 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 ### TUI 显示错位或终端退出后状态异常
 
 先运行 `/doctor`，记录终端类型和模式，再参考[交互文档](interaction.md)与
-[架构文档](architecture.md)。渲染问题可使用 `DSH_CC_RENDER_LOG` 采集原始帧，
+[架构文档](architecture.md)。渲染问题可使用 `DSH_TUI_RENDER_LOG` 采集原始帧，
 但日志可能包含会话可见内容，应妥善处理。

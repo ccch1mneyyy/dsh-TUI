@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
+import { isUserInvocable, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
@@ -22,8 +23,8 @@ import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instruc
 import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
-import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
-import { prepareSessionForResume, readSessionTitleFromLog } from './compat/index.js'
+import { clearResumeTarget, forgetSession, readLastUsed, readResumeTarget, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
+import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog, sessionsRoots } from './compat/index.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
@@ -33,8 +34,8 @@ import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
 import { existsSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { logForDebugging } from './utils/debug.js'
+import { homeDir, LEGACY_DATA_DIR } from './utils/paths.js'
 import { extractMentions } from './utils/mentions.js'
 import { t } from './i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from './sessionModes.js'
@@ -401,7 +402,7 @@ export interface Channel {
   listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }>
   /** Set one effort level by id (validated against the adapter list);
    *  false + a notify when the id is not offered. Persists like the old
-   *  Shift+Tab cycle (~/.dsh-cc/effort.json). */
+   *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
   setEffort(id: string): Promise<boolean>
   /** The session mode currently in force (matched from the session log, or
    *  the last one Shift+Tab applied). */
@@ -433,7 +434,7 @@ export interface Channel {
   /** Push a transient notification above the prompt input. */
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
   /** Switch the working-activity indicator preset (`/activity`): validates
-   *  the name, persists it to `~/.dsh-cc/working-activity.json`, and
+   *  the name, persists it to `~/.dsh-tui/working-activity.json`, and
    *  re-renders the indicator immediately; false when the name is unknown
    *  or the preference cannot be written. */
   setActivityFrames(name: string): boolean
@@ -452,6 +453,14 @@ export interface Channel {
   /** Rename the current session (CC's /rename): appends a `session/title`
    *  event, which the status line and the /resume picker both read. */
   renameSession(title: string): void
+  /** Delete a persisted session (`/resume` picker ctrl+d): removes its log
+   *  directory, its last-used entry, and the resume marker when it points
+   *  here. False for the live session or a missing/unwritable log. */
+  deleteSession(sessionId: string): Promise<boolean>
+  /** Rename any persisted session (`/resume` picker ctrl+r): appends a
+   *  `session/title` event to its log (live sessions go through the normal
+   *  rename path). False when the log is absent or undecodable. */
+  renameSessionTo(sessionId: string, title: string): Promise<boolean>
   /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
   compact(): void
   /** Render a multi-line local report in the transcript (`/status`,
@@ -628,6 +637,10 @@ export interface ChannelState {
   setResumeTarget(sessionId: string): void
   /** Rename the current session (see the public Channel type). */
   renameSession(title: string): void
+  /** Delete a persisted session (see the public Channel type). */
+  deleteSession(sessionId: string): Promise<boolean>
+  /** Rename any persisted session (see the public Channel type). */
+  renameSessionTo(sessionId: string, title: string): Promise<boolean>
   /** Manually compact the session history (CC's /compact). */
   compact(): void
   /** Multi-line local report (`/status`, `/doctor`, …). */
@@ -950,7 +963,7 @@ export function createChannel(
   const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
   if (droppedModeIds.length > 0) {
     ctx.logger.warn(
-      `cc-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
+      `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
     )
   }
   const listeners = new Set<() => void>()
@@ -1527,7 +1540,7 @@ export function createChannel(
           sessionId: childId,
           seed,
           meta: {
-            cwd: options.cwd,
+            cwd: state.cwd,
             parentSession: agent.session.id,
             seedLength: seed.length,
             ...(rewindComposed.agentPreset === undefined
@@ -1590,7 +1603,7 @@ export function createChannel(
     async resumeTo(sessionId: string): Promise<boolean> {
       // Switch the live agent to a persisted session: /resume picker Enter
       // loads the history immediately (the `--resume` launcher path keeps
-      // resolving through DSH_CC_RESUME_SESSION at boot).
+      // resolving through DSH_TUI_RESUME_SESSION at boot).
       if (state.working) {
         state.notify('Cannot resume while a turn is running', { color: 'warning' })
         return false
@@ -1658,6 +1671,14 @@ export function createChannel(
       state.spinnerMode = 'requesting'
       state.status = handle.agent.status
       state.agentId = handle.agent.id
+      // Adopt the resumed session's persisted cwd (issue #96): pre-upgrade
+      // sessions recorded the LAUNCH directory (often a repo subdirectory),
+      // so keeping the freshly resolved root would split @ expansion / file
+      // completion (state.cwd) from the agent's own workspace record — and
+      // drop the session back out of the /resume filter. The branch
+      // breadcrumb follows the adopted cwd.
+      state.cwd = handle.agent.session.header.cwd ?? state.cwd
+      refreshGitBranch()
       state.agentPreset = resumeComposed.agentPreset
       // Status-line route follows the resumed session (review feedback): the
       // route it actually continues on — a complete cordis.yml pin, else the
@@ -1754,7 +1775,7 @@ export function createChannel(
         handle = await agents.create({
           sessionId,
           meta: {
-            cwd: options.cwd,
+            cwd: state.cwd,
             ...(newComposed.agentPreset === undefined
               ? {}
               : { agentPreset: newComposed.agentPreset }),
@@ -1857,7 +1878,7 @@ export function createChannel(
           sessionId: childId,
           seed,
           meta: {
-            cwd: options.cwd,
+            cwd: state.cwd,
             parentSession: agent.session.id,
             seedLength: seed.length,
             ...(modelComposed.agentPreset === undefined
@@ -2190,7 +2211,7 @@ export function createChannel(
         ...agent.session.deriveMessages(),
         createUserMessage({
           content: [{ type: 'text', text: wrapSideQuestion(question) }],
-          source: { kind: 'plugin', plugin: 'dsh-cc-tui/btw' },
+          source: { kind: 'plugin', plugin: 'dsh-tui/btw' },
         }),
       ]
       const request: Record<string, unknown> = {
@@ -2241,9 +2262,8 @@ export function createChannel(
         const headers = await persistence.list()
         // 按工作目录隔离（Claude Code 的项目维度）：/resume 只列出本会话
         // 目录启动的会话，别的项目的会话不出现在选择器里。
-        const cwd = state.cwd.replace(/\/+$/, '')
         const local = headers.filter(header =>
-          (header.cwd ?? '').replace(/\/+$/, '') === cwd,
+          sessionCwdMatches(state.cwd, header.cwd ?? ''),
         )
         // MRU ordering: DSH headers carry only createdAt, so dsh-tui keeps its
         // own last-used timestamps (touchSession on resume/submit/new) and
@@ -2299,6 +2319,37 @@ export function createChannel(
       agent.session.append('session/title', { title })
       state.sessionTitle = title
       state.emit()
+    },
+    async deleteSession(sessionId) {
+      // The live session's log is still being appended by this process —
+      // deleting it from under the writer is never offered in the picker
+      // (the current session is filtered out), so refuse it here too.
+      if (sessionId === agent.session.id) return false
+      if (deleteSessionLog(sessionId) !== 'deleted') return false
+      forgetSession(sessionId)
+      // A resume marker naming the deleted session would make the next
+      // `dsh-tui --resume` launch target a log that no longer exists.
+      if (readResumeTarget() === sessionId) clearResumeTarget()
+      return true
+    },
+    async renameSessionTo(sessionId, title) {
+      if (sessionId === agent.session.id) {
+        // The live session renames through session.append so the firehose
+        // updates the status line right away (same as /rename).
+        agent.session.append('session/title', { title })
+        state.sessionTitle = title
+        state.emit()
+        return true
+      }
+      if (appendSessionTitle(sessionId, title) !== 'appended') return false
+      // listSessions resolves persisted titles only for the MRU top
+      // SESSION_TITLE_DEPTH; a rename does not change MRU by itself, so a
+      // session beyond the window would keep showing the cwd-basename
+      // fallback (in the next picker AND after restart) even though the
+      // title event is durable. A rename IS user interaction with the
+      // session — touching it pulls it into the title window.
+      touchSession(sessionId)
+      return true
     },
     compact() {
       // DSH compaction service key: `ctx.compaction` (dsh-compaction's
@@ -2476,16 +2527,24 @@ export function createChannel(
       lines.push(t('doctor-cwd', { cwd: state.cwd }))
       lines.push(t('doctor-context-window', { window: state.contextWindow ?? t('doctor-unknown') }))
       lines.push(`${t('doctor-session', { id: state.agentId })}${state.sessionTitle ? ' · ' + state.sessionTitle : ''}`)
-      const userHome = process.env.USERPROFILE ?? homedir()
+      const userHome = homeDir()
       const configCandidates = [
-        join(userHome, '.dsh-cc/cordis.yml'),
+        join(userHome, '.dsh-tui/cordis.yml'),
         join(userHome, '.dsh/profiles/dsh-tui/cordis.patch.yml'),
       ]
       for (const candidate of configCandidates) {
         lines.push(`${t('doctor-config', { candidate, state: existsSync(candidate) ? '✓' : t('doctor-config-missing') })}`)
       }
-      const sessionsDir = join(userHome, '.dsh-cc/sessions')
-      lines.push(`${t('doctor-storage', { dir: sessionsDir, state: existsSync(sessionsDir) ? '✓' : t('doctor-storage-uninit') })}`)
+      // Session store candidates mirror the compat layer (sessionsRoots):
+      // the active root depends on the composition (bare cordis.yml →
+      // legacy ~/.dsh-tui, profile → $DSH_HOME/sessions), so list every
+      // candidate with its own state instead of hardcoding one.
+      for (const dir of sessionsRoots()) {
+        lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
+      }
+      if (existsSync(LEGACY_DATA_DIR)) {
+        lines.push(t('doctor-legacy-dir'))
+      }
       return lines
     },
     async listSubagents() {
@@ -2565,7 +2624,7 @@ export function createChannel(
           tools.push({ name: tool.name, description: tool.description ?? '' })
         }
       }
-      const discovered = await discoverBaselineInstructionFiles({ cwd: options.cwd })
+      const discovered = await discoverBaselineInstructionFiles({ cwd: state.cwd })
       if (target !== agent) return
       files.push(...discovered.map(file => ({ displayPath: file.displayPath })))
       // The skills registry is host-plane but scope-layered: preset rows
@@ -2592,15 +2651,34 @@ export function createChannel(
   }
 
   /**
-   * Rebuild the merged slash-command list from the registry. Registry
-   * registrations are global or agent-scoped, so this runs on
-   * `commands/change` and again whenever the live agent is swapped
-   * (rewind/resume).
+   * Rebuild the merged slash-command list: built-in locals, then registry
+   * commands (plan/goal/…), then user-invocable skills from the DSH skill
+   * registry (issue #86 — filesystem-discovered skills must appear in the
+   * `/` menu and Tab completion, like /audit and /review). Skill entries
+   * are completion-only: dispatch falls through to the model as plain text,
+   * where dsh-tool-skill's pre-step hook injects the skill body — the same
+   * path a hand-typed `/skill-name` takes. Registry and skill reads are
+   * scoped to the LIVE agent, so this runs on `commands/change` +
+   * `skills/change` and again whenever the live agent is swapped
+   * (rewind/resume/new/model). A failed skill read restores the last
+   * successfully merged skill set for the same agent (last-good), so a
+   * transient provider failure never makes known skills vanish.
    */
+  let commandListSeq = 0
+  /**
+   * The last successfully merged skill entries, tagged with the agent whose
+   * scope produced them. A failed catalog read restores these instead of
+   * dropping skill entries from the menu until the next successful refresh
+   * (last-good); the agent tag refuses cross-agent restores — a different
+   * scope's skills may not exist for the live agent at all.
+   */
+  let lastGoodSkills: { agent: Agent; commands: LocalCommand[] } | undefined
   const refreshCommandList = (): void => {
+    const target = agent
+    const token = ++commandListSeq
     const merged: LocalCommand[] = [...LOCAL_COMMANDS]
     if (commandService) {
-      for (const descriptor of commandService.list(agent)) {
+      for (const descriptor of commandService.list(target)) {
         if (merged.some(command => command.name === descriptor.name)) continue
         merged.push({
           name: descriptor.name,
@@ -2612,8 +2690,72 @@ export function createChannel(
     }
     state.commandList = merged
     state.emit()
+    // The skill catalog resolves asynchronously (filesystem providers scan
+    // their roots), so skills append in a continuation; a newer refresh or
+    // an agent swap supersedes this run (token/identity check, same rule as
+    // refreshLoadedContext). Locals and registry commands win name
+    // collisions — a skill named `plan` must not shadow the registry's.
+    const skillsService = serviceForAgent<{
+      snapshot(options?: { scope?: unknown; cwd?: string }): Promise<{
+        skills: readonly SkillSummary[]
+        complete: boolean
+      }>
+    }>(ctx, target, 'skills')
+    if (skillsService === undefined) return
+    /** Last-good restore shared by the failed-read and incomplete-read
+     *  paths; the caller holds the staleness check. */
+    const restoreLastGood = (): void => {
+      const fallback = lastGoodSkills?.agent === target ? lastGoodSkills.commands : []
+      const restored = fallback.filter(entry =>
+        !merged.some(command => command.name === entry.name))
+      if (restored.length === 0) return
+      state.commandList = [...merged, ...restored]
+      state.emit()
+    }
+    // snapshot() over list(): only a COMPLETE observation is authoritative
+    // — list() discards `complete`, so a provider failure or a rescan still
+    // in flight would resolve as a partial/empty catalog and wrongly clear
+    // the last-good set (dsh-skill's own consumer contract).
+    void skillsService.snapshot({
+      scope: target,
+      cwd: (target.session as { header?: { cwd?: string } }).header?.cwd ?? state.cwd,
+    }).then((observation) => {
+      if (token !== commandListSeq || target !== agent) return
+      if (!observation.complete) {
+        // Incomplete (provider failure/rescan mid-flight): NOT authoritative
+        // — never clear last-good or repopulate from the partial catalog.
+        // The provider's next invalidate fires skills/change for the retry.
+        ctx.logger.warn('skill command merge: incomplete catalog observation, keeping last-good skills')
+        restoreLastGood()
+        return
+      }
+      const withSkills = [...merged]
+      for (const skill of observation.skills) {
+        if (!isUserInvocable(skill)) continue
+        if (withSkills.some(command => command.name === skill.name)) continue
+        withSkills.push({ name: skill.name, description: skill.description, skill: true })
+      }
+      const added = withSkills.slice(merged.length)
+      lastGoodSkills = { agent: target, commands: added }
+      // The sync phase already assigned `merged`; a complete read that adds
+      // nothing leaves the state as-is (and authoritatively clears the
+      // last-good set above).
+      if (added.length === 0) return
+      state.commandList = withSkills
+      state.emit()
+    }).catch((error: unknown) => {
+      // A superseded read (a newer refresh or an agent swap beat it) says
+      // nothing about the live menu: stay silent instead of logging a
+      // misleading failure warning.
+      if (token !== commandListSeq || target !== agent) return
+      ctx.logger.warn('skill command merge failed: %o', error)
+      // Last-good: a transient provider failure (rescan error, permission
+      // hiccup) must not make known skills vanish from completion.
+      restoreLastGood()
+    })
   }
   ctx.on('commands/change', refreshCommandList)
+  ctx.on('skills/change', refreshCommandList)
   refreshCommandList()
   void refreshLoadedContext()
 
@@ -3329,16 +3471,25 @@ ${output}
   }
   bindAgent()
   // Statusline breadcrumb: current git branch of the session cwd (best-effort).
-  if (bash) {
+  // Re-run when an agent swap adopts a different persisted cwd (/resume,
+  // issue #96) so the breadcrumb never shows the previous workspace's branch.
+  const refreshGitBranch = () => {
+    state.gitBranch = undefined
+    if (!bash) return
+    // Capture the requested cwd: a /resume landing while this query is in
+    // flight refreshes the branch for the NEW cwd, so a late reply from the
+    // old workspace must be dropped (statusline staleness, issue #96 review).
+    const requestedCwd = state.cwd
     void bash
       .run(
         bash.resolve({
           command: 'git branch --show-current',
-          workdir: options.cwd,
+          workdir: requestedCwd,
           timeoutMs: 3000,
         }),
       )
       .then((result) => {
+        if (state.cwd !== requestedCwd) return
         const branch = result.stdout.text.trim()
         if (branch !== '') {
           state.gitBranch = branch
@@ -3351,6 +3502,7 @@ ${output}
         // not be a git repo. Either way the statusline simply stays blank.
       })
   }
+  refreshGitBranch()
 
   return state
 }
@@ -3359,6 +3511,45 @@ ${output}
 function basename(path: string): string {
   const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] ?? path
+}
+
+/** Normalize a cwd for comparison: forward slashes, no trailing slash; case
+ *  folded when the platform's filesystem semantics are case-insensitive. */
+function normalizeCwd(path: string, caseInsensitive: boolean): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  return caseInsensitive ? normalized.toLowerCase() : normalized
+}
+
+/**
+ * `/resume` project filter (issue #96): exact cwd match, PLUS sessions
+ * recorded in a subdirectory — pre-upgrade launches recorded the launch
+ * subdirectory as the header cwd, and with the cwd default now resolving to
+ * the git worktree root an exact match would hide those sessions forever.
+ * They belong to the same workspace, so they stay listed. Comparison follows
+ * the platform's filesystem semantics (case-insensitive on Windows — a
+ * pre-upgrade header may record `C:\Repo` where the current launch resolves
+ * `c:\repo`). `caseInsensitive` is a parameter (not a platform read) so the
+ * verifier can exercise both modes on any host. Exported for
+ * scripts/verify-session-cwd.mjs.
+ */
+export function sessionCwdMatches(
+  stateCwd: string,
+  headerCwd: string,
+  caseInsensitive: boolean = process.platform === 'win32',
+): boolean {
+  const cwd = normalizeCwd(stateCwd, caseInsensitive)
+  const recorded = normalizeCwd(headerCwd, caseInsensitive)
+  if (recorded === '' || cwd === '') return false
+  return (
+    recorded === cwd ||
+    // Pre-upgrade subdirectory session of this workspace.
+    recorded.startsWith(`${cwd}/`) ||
+    // Resumed INTO a pre-upgrade subdirectory session (state.cwd adopted its
+    // recorded subdirectory): the workspace-root sessions it belongs with
+    // must stay visible, or /resume looks like it lost them for the rest of
+    // the process lifetime (review leftover).
+    cwd.startsWith(`${recorded}/`)
+  )
 }
 
 /** Context-bar token estimate (pi-nano-context: ~4 chars per token). */

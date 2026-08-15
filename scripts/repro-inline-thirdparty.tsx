@@ -15,7 +15,7 @@
  */
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'
-process.env.CC_TUI_THEME = 'dark'
+process.env.DSH_TUI_THEME = 'dark'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
   import('node:stream'),

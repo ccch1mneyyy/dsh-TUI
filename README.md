@@ -149,11 +149,11 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 
 - **Agent preset**：四种官方 Agent 模式（`standard` / `code` / `minimal` / `cordis`），
   `/preset` 切换；已产生对话的会话不可切换，空白会话立即生效。默认 preset 持久化
-  在 `~/.dsh-cc/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-cc/model.json`。
+  在 `~/.dsh-tui/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-tui/model.json`。
   详见[配置参考](docs/configuration.md#agent-preset)。
-- **自定义主题**：`/theme` 选择器（内置 `light` / `dark` / `dark-ansi`），也支持
-  `~/.dsh-cc/themes/<名字>.json` 自定义主题，选中即热切换并持久化；
-  `CC_TUI_THEME` 环境变量 > 持久化选择 > OSC 11 终端背景自动检测。
+- **自定义主题**：`/theme` 选择器（`auto` 跟随系统/终端背景，内置 `light` / `dark` /
+  `dark-ansi`），也支持 `~/.dsh-tui/themes/<名字>.json` 自定义主题，选中即热切换
+  并持久化；`DSH_TUI_THEME` 环境变量 > 持久化选择 > OSC 11 终端背景自动检测。
   详见[主题系统](docs/themes.md)。
 - **MCP**：通过 `@deepseek-ai/dsh-mcp-client` 挂载服务器，工具以
   `mcp__<服务器>__<工具>` 注册；`/mcp` 查看连接状态。
@@ -198,12 +198,14 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
 - 注入上下文（plugin source 内容）未做独立展示，随系统提示词并入进度条统计。
 - `/model` 实时切换走"会话 fork 续聊"（DSH 无原位换模型 API）：历史原样保留，
   新会话路由到新模型，旧会话仍留在 `/resume` 列表里；选择写入
-  `~/.dsh-cc/model.json`，重启与 `/new` 均沿用。
+  `~/.dsh-tui/model.json`，重启与 `/new` 均沿用。
 - `Ctrl+V` 读剪贴板依赖 PowerShell `Get-Clipboard`：剪贴板被其他进程短暂锁定
   时自动重试，持续锁定时静默放弃。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
-- DSH 的 `/permission`（沙箱模式切换）未适配：需要 approval 服务 + 审批 UI，
-  当前 TUI 不消费审批流，刻意不挂。
+- 工具级审批已实现：approval 服务 + TUI answerer（CC 式审批面板）消费审批流，
+  权限提升命令会弹出审批条。`/permission` 预设切换由 dsh-base 的
+  `permission-presets` 插件提供，profile 组合默认可用；裸组合 `cordis.yml`
+  未挂载该插件（无 `/permission` 命令）。
 - `/vim` `/connect` `/hooks` `/memory` 为 CC 同名占位：对应能力在 DSH 侧无等价
   机制，命令会给出明确说明而非静默。
 
@@ -237,7 +239,9 @@ Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-acce
 
 ## 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ccch1mneyyy/dsh-TUI&type=Date)](https://www.star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+<!-- star-history:start -->
+[![Star History](https://raw.githubusercontent.com/ccch1mneyyy/dsh-TUI/bot-star-history/assets/star-history/star-history.png)](https://star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+<!-- star-history:end -->
 
 
 ## License

@@ -1,0 +1,43 @@
+name: Star History
+
+# GitHub 于 2026-06-30 宣布限制 stargazers 端点（仅仓库 owner/collaborator 可读），
+# 导致第三方托管服务（api.star-history.com/svg）无法再为公开仓库渲染趋势图。
+# 本 workflow 用仓库自己的 GITHUB_TOKEN（owner 身份）读取星标数据，
+# 复用 star-history 官方渲染器生成静态 PNG 提交到 bot-star-history 分支，
+# README 引用该分支的 raw 链接（main 有规则集禁止直接 push，故图表走独立分支）。
+# 参考：https://github.com/narayann7/star-history-action
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 每天 UTC 0 点（北京时间 8 点）刷新一次
+  watch:
+    types: [started]      # 有人点星时立即刷新
+  workflow_dispatch:      # 支持手动触发
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: true   # 星标突增时合并为一次运行
+
+jobs:
+  star-history:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: 切换到图表专用分支（基于最新 main，同步远端）
+        run: |
+          git checkout -B bot-star-history origin/main
+          # 首次运行远端无此分支；每次运行重置远端为最新 main（无保护，force 安全）
+          git push --force origin bot-star-history
+          git branch --show-current
+      - uses: narayann7/star-history-action@v1
+        with:
+          # repos 默认取当前仓库（${{ github.repository }}）
+          update-readme: false   # main 上的 README 由仓库维护者引用固定 raw URL，无需 action 改写
+          readme-format: png     # npm 不渲染 <picture>，用纯 markdown PNG（README 会随包发布）
+          themes: light          # png 模式只用单主题，减少渲染与仓库冗余文件
+          commit-message: 'chore: 更新 Star History 趋势图 [skip ci]'

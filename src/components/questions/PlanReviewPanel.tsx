@@ -22,6 +22,7 @@ import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../cc/figures.js'
 import type { QuestionSelection } from '../../questions.js'
+import { isPlainReturn } from '../../utils/modifiers.js'
 
 const PENCIL = '✎'
 
@@ -119,7 +120,7 @@ export function PlanReviewPanel({
         moveFocus(1)
         return
       }
-      if (key.return) {
+      if (isPlainReturn(key)) {
         submitFeedback()
         return
       }
@@ -166,7 +167,7 @@ export function PlanReviewPanel({
       moveFocus(1)
       return
     }
-    if (key.return) {
+    if (isPlainReturn(key)) {
       submitOption(focusIndex)
       return
     }
