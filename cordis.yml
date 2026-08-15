@@ -9,6 +9,18 @@
 - id: user-questions
   name: '@deepseek-ai/dsh-user-questions'
 
+# The approval service (issue #49): the harness's sandbox escalation seam
+# (`sandbox_permissions: danger-full-access`) asks ApprovalService.request(),
+# which dispatches an `approval/request` waterfall; dsh-tui registers itself
+# as the interactive answerer (ApprovalStore + approval panel). Without this
+# row the waterfall has no service and fail-closes to 'unavailable'. Policy
+# mirrors the dsh-base layer: ask everywhere except danger-full-access,
+# where nothing needs asking.
+- id: approval
+  name: '@deepseek-ai/dsh-user-approval'
+  config:
+    policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
+
 - id: dsh-tui
   name: '@deepseek-harness-tui/dsh-tui'
   config:
