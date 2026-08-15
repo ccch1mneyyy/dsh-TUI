@@ -13,7 +13,7 @@
 | `Shift+Tab` | Cycle the configured session modes (default: default → plan → full-access) |
 | `Alt/Option+Up` | Pull the latest undelivered message back into the editor |
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
-| `Ctrl+V` | Insert system clipboard text; files/images copied in Windows Explorer insert paths |
+| `Ctrl+V` | Insert system clipboard text; files copied in a file manager insert paths; a clipboard image (screenshot) is exported to a temp file and its path inserted |
 | `Esc` | Close the active menu, selection, or modal; clear input; interrupt a working model; double-tap on empty input to rewind |
 | `Ctrl+C` | Interrupt while working; clear non-empty idle input; press twice on empty input to exit |
 | `Ctrl+D` | Press twice while idle to exit |
@@ -50,8 +50,10 @@ path fragments to filter, `Tab`/`Enter` to pick, and directories can be entered
 further. When you send, the selected file content or directory listing is attached
 to the message automatically (0.3.7+).
 
-On `Ctrl+V`, files/images copied from Windows Explorer are inserted as file paths
-(quoted automatically when they contain spaces) instead of pasting the path text.
+On `Ctrl+V`, files copied from a file manager (Windows Explorer, GNOME Files, KDE
+Dolphin, …) are inserted as file paths (quoted automatically when they contain
+spaces) instead of pasting the path text. A raw clipboard image (e.g. a screenshot)
+is first exported to a temp file and its path is inserted.
 
 ## Interface language
 

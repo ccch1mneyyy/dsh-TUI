@@ -63,6 +63,17 @@ jobs:
       # 版本不一致提示、双语消息、shellQuote 转义规则。
       - run: node scripts/verify-launcher.mjs
 
+      # 剪贴板回归：text/uri-list 严格 URL 解析（远程 authority 拒绝、
+      # query/fragment 剥离、畸形转义保留）、image/text MIME 挑选、插入格式化；
+      # stub PATH 假 wl-paste/xclip 集成——CJK 跨 chunk、gnome verb 行、
+      # 图片导出权限（目录 0700/文件 0600）、空 vs unavailable、
+      # 死 Wayland 会话回退 xclip。
+      - run: node scripts/verify-clipboard.mjs
+
+      # Ctrl+V UI 端到端回归（stub wl-paste）：帮助面板在读取前关闭、
+      # 剪贴板文本落入输入框、busy 闩锁释放后第二次粘贴仍生效。
+      - run: node --import tsx/esm scripts/repro-clipboard.tsx
+
       # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
       # ignorable 标记，已知类型不动，二次运行幂等。
       - run: node scripts/verify-resume-repair.mjs

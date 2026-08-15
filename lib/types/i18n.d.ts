@@ -735,6 +735,18 @@ declare const dict: {
         readonly zh: "剪贴板为空";
         readonly en: "Clipboard is empty";
     };
+    readonly 'input-clipboard-read-failed': {
+        readonly zh: "读取剪贴板失败";
+        readonly en: "Failed to read the clipboard";
+    };
+    readonly 'input-clipboard-unavailable': {
+        readonly zh: "无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）";
+        readonly en: "Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)";
+    };
+    readonly 'input-clipboard-image-saved': {
+        readonly zh: "剪贴板图片已保存为临时文件，已插入路径";
+        readonly en: "Clipboard image saved to a temp file; path inserted";
+    };
     readonly 'input-pending-steer-label': {
         readonly zh: "插话 · 下一步送达";
         readonly en: "Steer · delivered next";
