@@ -72,6 +72,7 @@ function makeChannel() {
     provider: 'deepseek',
     tokens: { input: 120, output: 45 },
     cwd: 'C:/code/demo-project',
+    displayCwd: 'C:/code/demo-project',
     gitBranch: 'main',
     working: false,
     spinnerMode: 'requesting' as const,
