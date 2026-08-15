@@ -6,6 +6,7 @@ import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
 import { type SessionModeSpec } from './sessionModes.js';
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js';
+import { type ActivityState } from 'dsh-working-activity/status';
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
 export interface ToolRow {
     readonly callId: string;
@@ -142,23 +143,8 @@ export interface TokenUsage {
     input: number;
     output: number;
 }
-/**
- * Latest `activity/status` snapshot (the log-only event appended by
- * `@deepseek-ai/dsh-working-activity` for any UI consumer): the model's
- * live working line — thinking copy, running tool, turn summary. dsh-tui
- * renders it on the status line; nothing here requires the plugin (absent
- * events simply leave the slot empty).
- */
-export interface ActivityStatus {
-    readonly phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done';
-    /** Human-readable status line (plain text, no ANSI). */
-    readonly line: string;
-    readonly label?: string;
-    readonly detail?: string;
-    readonly phrase?: string;
-    readonly toolCount: number;
-    readonly turnElapsedMs: number;
-}
+/** In-process working-line snapshot derived from the base session stream. */
+export type ActivityStatus = ActivityState;
 /** A transient status message shown above the prompt input. */
 export interface NotificationItem {
     id: number;
@@ -292,12 +278,11 @@ export interface Channel {
         tps: number;
         at: number;
     }[];
-    /** Latest working-activity snapshot (log-only `activity/status` event),
-     *  when the leaf mounts dsh-working-activity. */
+    /** Latest in-process working-activity snapshot. */
     readonly workingActivity: ActivityStatus | undefined;
     /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
     readonly activityFrames: string | undefined;
-    /** Whether working-activity events are consumed (config.activity). */
+    /** Whether the in-process working-activity line is shown (config.activity). */
     readonly activityEnabled: boolean;
     /** Whether the segmented context bar row shows in the status footer
      *  (config.contextBar; the status/mode lines are unaffected). */
@@ -552,7 +537,7 @@ export interface ChannelState {
     workingActivity: ActivityStatus | undefined;
     /** Working-activity indicator preset (see the public Channel type). */
     activityFrames: string | undefined;
-    /** Working-activity consumption switch (see the public Channel type). */
+    /** Working-activity display switch (see the public Channel type). */
     activityEnabled: boolean;
     /** Context bar row switch (see the public Channel type). */
     contextBarEnabled: boolean;
@@ -680,8 +665,7 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
      *  startup until the first request/header event reports the adapter's
      *  live value. */
     effort?: string;
-    /** Consume `activity/status` session events (dsh-working-activity) into
-     *  the status line; default on. */
+    /** Derive the working line from base session events; default on. */
     activity?: boolean;
     /** Indicator preset for the working-activity line (`claude`/`moon`/
      *  `comet`/`dots`/… or `random`); default `claude`. */

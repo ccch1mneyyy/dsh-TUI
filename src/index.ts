@@ -40,8 +40,7 @@ export interface Config {
    *  the startup status line until the first request header reports the
    *  live value. */
   effort?: string
-  /** Show the dsh-working-activity live working line on the status bar
-   *  (consumes its log-only `activity/status` events; off hides it). */
+  /** Show the live working line derived in-process from base session events. */
   activity?: boolean
   /** Working-activity indicator preset: `claude`/`moon`/`comet`/`dots`/…
    *  or `random` (see activityFrames.ts). When absent, the `/activity`

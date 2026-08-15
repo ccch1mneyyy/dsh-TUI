@@ -231,13 +231,11 @@
     # dependency into the profile root (npm's flat layout hid this), so the
     # bare name died with ERR_MODULE_NOT_FOUND and disposed the whole app at
     # boot (#60).
-    # publishIntervalMs 500 keeps the status-line timers ticking smoothly
-    # (default 2000ms). publish is enabled here (upstream default off since
-    # 0.2.2) because this profile's resume path repairs third-party event
-    # types via src/compat/sessionLog.ts — the TUI is the protected consumer;
-    # the bare plugin stays default-off for unprotected web/headless users.
+    # The plugin stays mounted for its narration/system-prompt features. The
+    # TUI derives its working line in-process from the base session stream;
+    # never persist activity/status, so the shared log remains Web-readable.
     - id: working-activity
       name: '@deepseek-harness-tui/dsh-tui/working-activity'
       config:
-        publish: true
+        publish: false
         publishIntervalMs: 500

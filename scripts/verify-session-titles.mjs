@@ -6,8 +6,8 @@
  *
  * Why this exists: picker titles used to come from `persistence.load()`,
  * which validates every event against KNOWN_SESSION_EVENT_TYPES and throws
- * the whole load on an unmarked third-party type (activity/status written
- * by working-activity before resume-repair). Every such session silently
+ * the whole load on an unmarked third-party type (for example an
+ * activity/status record in a legacy log). Every such session silently
  * fell back to the cwd basename in the picker — "历史会话没有重命名".
  *
  * Asserts:

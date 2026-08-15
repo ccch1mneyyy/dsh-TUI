@@ -80,9 +80,8 @@ jobs:
       #（ask / never / win32 never），两个入口语义不漂移。
       - run: node scripts/verify-cordis-approval.mjs
 
-      # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
-      # ignorable 标记，已知类型不动，二次运行幂等。
-      - run: node scripts/verify-resume-repair.mjs
+      # 工作状态由基础事件在进程内派生：阶段、500ms tick、Agent 切换重置。
+      - run: node scripts/verify-working-activity.mjs
 
       # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
       # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。

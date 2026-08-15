@@ -24,7 +24,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, forgetSession, readLastUsed, readResumeTarget, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
-import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog, sessionsRoots } from './compat/index.js'
+import { appendSessionTitle, deleteSessionLog, readSessionTitleFromLog, sessionsRoots } from './compat/index.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
@@ -39,6 +39,7 @@ import { extractMentions } from './utils/mentions.js'
 import { t } from './i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from './sessionModes.js'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
+import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
 export interface ToolRow {
@@ -153,23 +154,8 @@ export interface TokenUsage {
   output: number
 }
 
-/**
- * Latest `activity/status` snapshot (the log-only event appended by
- * `@deepseek-ai/dsh-working-activity` for any UI consumer): the model's
- * live working line — thinking copy, running tool, turn summary. dsh-tui
- * renders it on the status line; nothing here requires the plugin (absent
- * events simply leave the slot empty).
- */
-export interface ActivityStatus {
-  readonly phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
-  /** Human-readable status line (plain text, no ANSI). */
-  readonly line: string
-  readonly label?: string
-  readonly detail?: string
-  readonly phrase?: string
-  readonly toolCount: number
-  readonly turnElapsedMs: number
-}
+/** In-process working-line snapshot derived from the base session stream. */
+export type ActivityStatus = ActivityState
 
 /** A transient status message shown above the prompt input. */
 export interface NotificationItem {
@@ -303,12 +289,11 @@ export interface Channel {
   readonly tps: number | undefined
   /** Per-turn tps samples (sparkline history), oldest first. */
   readonly tpsSamples: readonly { tps: number; at: number }[]
-  /** Latest working-activity snapshot (log-only `activity/status` event),
-   *  when the leaf mounts dsh-working-activity. */
+  /** Latest in-process working-activity snapshot. */
   readonly workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
   readonly activityFrames: string | undefined
-  /** Whether working-activity events are consumed (config.activity). */
+  /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
    *  (config.contextBar; the status/mode lines are unaffected). */
@@ -552,7 +537,7 @@ export interface ChannelState {
   workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset (see the public Channel type). */
   activityFrames: string | undefined
-  /** Working-activity consumption switch (see the public Channel type). */
+  /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
   contextBarEnabled: boolean
@@ -916,8 +901,7 @@ export function createChannel(
      *  startup until the first request/header event reports the adapter's
      *  live value. */
     effort?: string
-    /** Consume `activity/status` session events (dsh-working-activity) into
-     *  the status line; default on. */
+    /** Derive the working line from base session events; default on. */
     activity?: boolean
     /** Indicator preset for the working-activity line (`claude`/`moon`/
      *  `comet`/`dots`/… or `random`); default `claude`. */
@@ -1631,9 +1615,6 @@ export function createChannel(
         model: options.configuredModel,
       })
       try {
-        // Compat boundary: mark third-party event types in the target log
-        // ignorable before the harness seed-validates it (src/compat/).
-        await prepareSessionForResume(sessionId)
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
           agentOptions: { provider: resumeRoute?.provider, model: resumeRoute?.model },
@@ -2185,8 +2166,8 @@ export function createChannel(
         // useful label. Read via the tolerant compat log reader instead of
         // persistence.load: the backend validates every event against
         // KNOWN_SESSION_EVENT_TYPES and throws the whole load on an unmarked
-        // third-party type (activity/status before resume-repair), which used
-        // to leave every working-activity session titled with the cwd
+        // an unregistered third-party type, which would otherwise leave the
+        // affected session titled with the cwd
         // basename. An unreadable log keeps the basename fallback.
         const empty = new Set<string>()
         for (const record of records.slice(0, SESSION_TITLE_DEPTH)) {
@@ -3253,7 +3234,7 @@ ${output}
         // Logged preset switch (blank sessions only, issue #8): a transcript
         // marker so a replayed log shows which composition produced the
         // turns after it. Not in dsh-session's typed union — matched here by
-        // name, the way `activity/status` is consumed in bindAgent.
+        // name, like the other plugin-defined events above.
         if ((event as { type: string }).type === 'agent-preset/selected') {
           const data = event.data as unknown as { agentPreset?: string }
           state.rows.push({
@@ -3276,10 +3257,62 @@ ${output}
   state.status = agent.status
   state.emit()
 
-  // Live subscription list, rebound to a fresh agent by rewindTo.
+  // Live subscription list and activity timer, rebound to every replacement
+  // agent so no status from the previous session can leak across a swap.
   let agentSubscriptions: Array<() => void> = []
+  let activityTracker = new ActivityTracker({
+    phrases: true,
+    detailLimit: 40,
+    showIdle: false,
+  })
+  let activityTickTimer: NodeJS.Timeout | undefined
+
+  const stopActivityTick = (): void => {
+    if (activityTickTimer === undefined) return
+    clearInterval(activityTickTimer)
+    activityTickTimer = undefined
+  }
+
+  /** Render the current tracker into the TUI-only projection. */
+  const renderWorkingActivity = (): ActivityStatus | undefined => {
+    if (options.activity === false) {
+      state.workingActivity = undefined
+      return undefined
+    }
+    const rendered = activityTracker.render()
+    state.workingActivity = rendered
+    return rendered
+  }
+
   const bindAgent = (): void => {
     for (const dispose of agentSubscriptions) dispose()
+    stopActivityTick()
+    activityTracker = new ActivityTracker({
+      phrases: true,
+      detailLimit: 40,
+      showIdle: false,
+    })
+    activityTracker.onAgentStatus(agent.status)
+    renderWorkingActivity()
+    activityTickTimer = setInterval(() => {
+      const previous = state.workingActivity
+      const rendered = renderWorkingActivity()
+      if (rendered === undefined) return
+      // Live phases deliberately wake at 500 ms even when the formatted line
+      // has not crossed its next whole-second boundary: turnElapsedMs remains
+      // a current state value, while line changes cover phrase rotation and
+      // the short-lived completed-tool summary.
+      if (
+        rendered.phase === 'waiting' ||
+        rendered.phase === 'thinking' ||
+        rendered.phase === 'tool' ||
+        previous?.phase !== rendered.phase ||
+        previous.line !== rendered.line
+      ) {
+        state.emit()
+      }
+    }, 500)
+    activityTickTimer.unref()
     // Re-couple the channel-owned model selection to the new agent's
     // assembly/request waterfalls, then re-apply the persisted effort when
     // this agent's route offers it (dsh-agent installModelSelection).
@@ -3292,11 +3325,14 @@ ${output}
       ctx.on('agent/status', ({ agent: subject, status }) => {
         if (subject !== agent) return
         state.status = status
+        activityTracker.onAgentStatus(status)
+        renderWorkingActivity()
         state.emit()
       }),
       ctx.on('agent/disposed', ({ agent: subject }) => {
         if (subject !== agent) return
         state.status = 'disposed'
+        stopActivityTick()
         state.emit()
       }),
       // Pending delivery is driven by the agent inbox: a claimed message
@@ -3325,35 +3361,8 @@ ${output}
       })(),
       ctx.on('session/event', (session, event) => {
         if (session !== agent.session) return
-        // Live working-activity snapshot (log-only event, appended by
-        // dsh-working-activity for UI consumers). Consumed here — NOT in
-        // renderEvent — so replayed history never resurrects a stale line
-        // (the renderEvent switch's default arm ignores it on replay).
-        if (
-          options.activity !== false &&
-          (event as { type: string }).type === 'activity/status'
-        ) {
-          const data = event.data as unknown as {
-            phase: string
-            line: string
-            toolCount?: number
-            turnElapsedMs?: number
-            label?: string
-            detail?: string
-            phrase?: string
-          }
-          state.workingActivity = {
-            phase: data.phase as ActivityStatus['phase'],
-            line: data.line,
-            toolCount: data.toolCount ?? 0,
-            turnElapsedMs: data.turnElapsedMs ?? 0,
-            ...(data.label === undefined ? {} : { label: data.label }),
-            ...(data.detail === undefined ? {} : { detail: data.detail }),
-            ...(data.phrase === undefined ? {} : { phrase: data.phrase }),
-          }
-          state.emit()
-          return
-        }
+        activityTracker.onSessionEvent(event)
+        renderWorkingActivity()
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
         // moment they land (whether appended by cycleMode or by hand).
         const eventType = (event as { type: string }).type
@@ -3369,6 +3378,12 @@ ${output}
     ]
   }
   bindAgent()
+  // Cordis owns the Channel lifetime. Rebinding handles the common case;
+  // this effect closes the final timer when the Channel's context unloads.
+  const effect = (ctx as Context & {
+    effect?: (setup: () => () => void, label?: string) => void
+  }).effect
+  effect?.call(ctx, () => () => { stopActivityTick() }, 'dsh-tui activity timer')
   // Statusline breadcrumb: current git branch of the session cwd (best-effort).
   // Re-run when an agent swap adopts a different persisted cwd (/resume,
   // issue #96) so the breadcrumb never shows the previous workspace's branch.
