@@ -524,8 +524,12 @@ declare const dict: {
         readonly en: "DSH permission policy is set by fs-policy / bash-sandbox config (current leaf: read/write in workspace, writes need a prior read).";
     };
     readonly 'permissions-approval-hint': {
-        readonly zh: "审批通道已挂载：命令申请权限提升（sandbox_permissions）时弹出审批条，Yes 放行一次、No / Esc 拒绝；/permission 可查看与切换权限预设（read-only / workspace-write / danger-full-access）。";
-        readonly en: "The approval channel is mounted: sandbox escalations (sandbox_permissions) raise an approval bar — Yes allows once, No / Esc rejects; /permission shows and switches permission presets (read-only / workspace-write / danger-full-access).";
+        readonly zh: "审批通道已挂载：命令申请权限提升（sandbox_permissions）时弹出审批条，Yes 放行一次、No / Esc 拒绝。";
+        readonly en: "The approval channel is mounted: sandbox escalations (sandbox_permissions) raise an approval bar — Yes allows once, No / Esc rejects.";
+    };
+    readonly 'permissions-preset-hint': {
+        readonly zh: "/permission 可查看与切换权限预设（read-only / workspace-write / danger-full-access）。";
+        readonly en: "/permission shows and switches permission presets (read-only / workspace-write / danger-full-access).";
     };
     readonly 'permissions-root-hint': {
         readonly zh: "当前文件系统策略以工作目录为根：{{cwd}}";

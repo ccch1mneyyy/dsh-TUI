@@ -14,12 +14,14 @@
 # which dispatches an `approval/request` waterfall; dsh-tui registers itself
 # as the interactive answerer (ApprovalStore + approval panel). Without this
 # row the waterfall has no service and fail-closes to 'unavailable'. Policy
-# mirrors the dsh-base layer: ask everywhere except danger-full-access,
-# where nothing needs asking.
+# expression mirrors the profile cordis.patch.yml row exactly (verified by
+# scripts/verify-cordis-approval.mjs): ask everywhere except
+# danger-full-access (nothing needs asking) and Windows (no sandbox — the
+# user's terminal trust model, matching every other terminal coding agent).
 - id: approval
   name: '@deepseek-ai/dsh-user-approval'
   config:
-    policy: !!js "(process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
+    policy: !!js "process.platform === 'win32' ? 'never' : ((process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask')"
 
 - id: dsh-tui
   name: '@deepseek-harness-tui/dsh-tui'

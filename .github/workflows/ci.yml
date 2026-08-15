@@ -63,6 +63,11 @@ jobs:
       # 版本不一致提示、双语消息、shellQuote 转义规则。
       - run: node scripts/verify-launcher.mjs
 
+      # 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
+      # approval 行；裸组合与 profile patch 的 policy 表达式逐场景同值
+      #（ask / never / win32 never），两个入口语义不漂移。
+      - run: node scripts/verify-cordis-approval.mjs
+
       # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
       # ignorable 标记，已知类型不动，二次运行幂等。
       - run: node scripts/verify-resume-repair.mjs
