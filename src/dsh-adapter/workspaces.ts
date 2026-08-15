@@ -124,7 +124,11 @@ export class TuiWorkspaceRuntime extends Service {
     signal?.throwIfAborted()
     const targets = new Map<string, TuiWorkspaceTarget>()
     for (const provider of this.providers) {
-      for (const target of await provider.list(signal)) targets.set(target.uri, this.withStoredTitle(target))
+      try {
+        for (const target of await provider.list(signal)) targets.set(target.uri, this.withStoredTitle(target))
+      } catch (error) {
+        this.ctx.logger.warn(`dsh-tui: workspace provider list failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
 
     // The official registry is the durable catalog. Provider-owned aliases
@@ -157,7 +161,13 @@ export class TuiWorkspaceRuntime extends Service {
     const deadline = Date.now() + 5000
     const scheme = uriScheme(reference)
     if (scheme === undefined) {
-      const owner = [...this.providers].find(provider => provider.describe(currentCwd) !== undefined)
+      const owner = [...this.providers].find((provider) => {
+        try {
+          return provider.describe(currentCwd) !== undefined
+        } catch {
+          return false
+        }
+      })
       if (owner !== undefined) return owner.resolvePath?.(reference, currentCwd, signal)
       return localWorkspaceTarget(resolve(currentCwd, reference))
     }
@@ -180,7 +190,13 @@ export class TuiWorkspaceRuntime extends Service {
 
   describe(cwd: string): TuiWorkspaceTarget {
     for (const provider of this.providers) {
-      const target = provider.describe(cwd)
+      let target: TuiWorkspaceTarget | undefined
+      try {
+        target = provider.describe(cwd)
+      } catch (error) {
+        this.ctx.logger.warn(`dsh-tui: workspace provider describe failed: ${error instanceof Error ? error.message : String(error)}`)
+        continue
+      }
       if (target !== undefined) return this.withStoredTitle(target)
     }
     return this.withStoredTitle(localWorkspaceTarget(cwd))
@@ -188,7 +204,13 @@ export class TuiWorkspaceRuntime extends Service {
 
   async commandShell(cwd: string): Promise<TuiCommandShell | undefined> {
     for (const provider of this.providers) {
-      const shell = await provider.commandShell?.(cwd)
+      let shell: TuiCommandShell | undefined
+      try {
+        shell = await provider.commandShell?.(cwd)
+      } catch (error) {
+        this.ctx.logger.warn(`dsh-tui: workspace provider commandShell failed: ${error instanceof Error ? error.message : String(error)}`)
+        continue
+      }
       if (shell !== undefined) return shell
     }
     return undefined
@@ -198,7 +220,17 @@ export class TuiWorkspaceRuntime extends Service {
     const normalizedTitle = title.trim()
     if (normalizedTitle.length === 0) throw new Error('workspace title must not be empty')
     for (const provider of this.providers) {
-      if (provider.describe(cwd) === undefined) continue
+      let owned = false
+      try {
+        owned = provider.describe(cwd) !== undefined
+      } catch {
+        continue
+      }
+      if (!owned) continue
+      // A provider without rename (or returning undefined) falls through to
+      // the local durable ledger below — the title stays visible everywhere
+      // this runtime runs. A rename that THROWS propagates to the caller's
+      // failure notification instead of silently writing a local record.
       const renamed = await provider.rename?.(cwd, normalizedTitle)
       if (renamed !== undefined) return this.withStoredTitle(renamed)
       break

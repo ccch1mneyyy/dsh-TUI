@@ -33,7 +33,7 @@ import type { ProviderSetupHost } from './providerWizard.js'
 import { readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from '../components/activityFrames.js'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
@@ -1671,6 +1671,11 @@ export function createChannel(
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
+      // Queued-but-undelivered messages live in the OLD agent's inbox; the
+      // swap must drop their previews or they linger forever (unretirable —
+      // retire events are filtered to the new agent, unwithdrawable — the
+      // new inbox never heard of them).
+      state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
@@ -1776,6 +1781,11 @@ export function createChannel(
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
+      // Queued-but-undelivered messages live in the OLD agent's inbox; the
+      // swap must drop their previews or they linger forever (unretirable —
+      // retire events are filtered to the new agent, unwithdrawable — the
+      // new inbox never heard of them).
+      state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
@@ -1924,6 +1934,11 @@ export function createChannel(
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
+      // Queued-but-undelivered messages live in the OLD agent's inbox; the
+      // swap must drop their previews or they linger forever (unretirable —
+      // retire events are filtered to the new agent, unwithdrawable — the
+      // new inbox never heard of them).
+      state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
@@ -1973,6 +1988,16 @@ export function createChannel(
         state.notify(t('workspace-switch-working'), { color: 'warning' })
         return false
       }
+      // Local targets must exist and be directories — creating a session in
+      // a typo'd cwd "succeeds" and then every file tool errors per call.
+      if (target.kind === 'local') {
+        try {
+          if (!statSync(target.cwd).isDirectory()) throw new Error('not a directory')
+        } catch {
+          state.notify(t('workspace-open-invalid', { target: target.label }), { color: 'error', timeoutMs: 8000 })
+          return false
+        }
+      }
       const previousCwd = state.cwd
       const previousDisplay = state.displayCwd
       state.cwd = target.cwd
@@ -1983,6 +2008,8 @@ export function createChannel(
         state.displayCwd = previousDisplay
         return false
       }
+      // The breadcrumb follows the adopted cwd, same as /resume (#96).
+      refreshGitBranch()
       state.notify(t('workspace-switched', { target: target.label }))
       state.emit()
       return true
@@ -2081,6 +2108,11 @@ export function createChannel(
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
+      // Queued-but-undelivered messages live in the OLD agent's inbox; the
+      // swap must drop their previews or they linger forever (unretirable —
+      // retire events are filtered to the new agent, unwithdrawable — the
+      // new inbox never heard of them).
+      state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }

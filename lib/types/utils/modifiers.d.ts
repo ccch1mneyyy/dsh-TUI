@@ -37,5 +37,7 @@ export declare function isPlainReturn(key: {
  * CR/LF fallback. PromptInput already handled both forms; shared modal
  * pickers must do the same or their UI can render while Enter appears inert.
  */
-export declare function isPlainReturnInput(input: string, key: Parameters<typeof isPlainReturn>[0]): boolean;
+export declare function isPlainReturnInput(input: string, key: Parameters<typeof isPlainReturn>[0] & {
+    isPasted?: boolean;
+}): boolean;
 //# sourceMappingURL=modifiers.d.ts.map

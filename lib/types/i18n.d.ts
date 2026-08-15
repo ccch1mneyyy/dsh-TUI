@@ -475,6 +475,10 @@ declare const dict: {
         readonly zh: "Agent 运行中，无法切换工作区";
         readonly en: "Cannot switch workspaces while the agent is running";
     };
+    readonly 'workspace-open-invalid': {
+        readonly zh: "无法打开工作区：{target} 不是存在的目录";
+        readonly en: "Cannot open workspace: {target} is not an existing directory";
+    };
     readonly 'workspace-switched': {
         readonly zh: "已切换工作区：{{target}}";
         readonly en: "Workspace switched: {{target}}";

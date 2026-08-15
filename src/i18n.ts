@@ -151,6 +151,7 @@ const dict = {
   'workspace-uri-invalid': { zh: '无法解析工作区目标：{{uri}}', en: 'Cannot resolve workspace target: {{uri}}' },
   'workspace-uri-failed': { zh: '加载工作区失败 · {{err}}', en: 'Failed to load workspace · {{err}}' },
   'workspace-switch-working': { zh: 'Agent 运行中，无法切换工作区', en: 'Cannot switch workspaces while the agent is running' },
+  'workspace-open-invalid': { zh: '无法打开工作区：{target} 不是存在的目录', en: 'Cannot open workspace: {target} is not an existing directory' },
   'workspace-switched': { zh: '已切换工作区：{{target}}', en: 'Workspace switched: {{target}}' },
   'workspace-flow-hint': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** select · Esc to exit' },
   'workspace-flow-edit-hint': { zh: '**Enter** 选择当前目录 · Tab 手动输入路径 · Esc 退出', en: '**Enter** select current directory · Tab enter a path · Esc to exit' },

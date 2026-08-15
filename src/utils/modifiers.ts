@@ -45,9 +45,12 @@ export function isPlainReturn(key: {
  */
 export function isPlainReturnInput(
   input: string,
-  key: Parameters<typeof isPlainReturn>[0],
+  key: Parameters<typeof isPlainReturn>[0] & { isPasted?: boolean },
 ): boolean {
   if (isPlainReturn(key)) return true
+  // Bracketed paste can deliver a chunk that is all line breaks — that is
+  // pasted content, not an Enter press, and must never confirm a modal.
+  if (key.isPasted === true) return false
   return /^[\r\n]+$/u.test(input)
     && !key.ctrl && !key.meta && !key.shift && !key.super
 }

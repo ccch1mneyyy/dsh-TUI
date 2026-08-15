@@ -14,7 +14,7 @@
 import React from 'react'
 import { t } from '../../i18n.js'
 import { Box, Text, useInput } from '../../ui.js'
-import { isPlainReturn } from '../../utils/modifiers.js'
+import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../cc/figures.js'
 import type { ApprovalSnapshot } from '../../dsh-adapter/approvals.js'
@@ -47,7 +47,7 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
       onDecide(OUTCOMES[Number(input) - 1]!)
       return
     }
-    if (isPlainReturn(key)) {
+    if (isPlainReturnInput(input, key)) {
       onDecide(OUTCOMES[focusIndex]!)
     }
   }, { isActive: true })
