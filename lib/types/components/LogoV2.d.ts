@@ -1,5 +1,4 @@
 import React from 'react';
-import { type WhaleStyle } from './Whale.js';
 /**
  * The header splash: one layout, two phases. The **opening** (~3.4s, once)
  * plays the hand-drawn whale animation (blink → water-spout bloom → tail
@@ -13,19 +12,12 @@ import { type WhaleStyle } from './Whale.js';
  * cwd in plain text (no brand-color highlight), the startup tip, and below
  * the whale the welcome tagline, centered under the art, in ice
  * blue. Narrow terminals drop the whale and keep the text column.
- *
- * `whaleStyle` selects the artwork (`whale` config, issue #4): `classic`
- * pixel whale or the `girl` whale-girl sprite, each with its own opening
- * sequence; both share the 40-column pinned box and the same bounding-box
- * center, so the layout below never shifts between styles.
  */
-export declare function LogoV2({ model, effort, cwd, skipIntro, whaleStyle, }: {
+export declare function LogoV2({ model, effort, cwd, skipIntro, }: {
     model: string;
     effort?: string | undefined;
     cwd: string;
     /** Test seam: mount straight into the settled header (probes skip the intro). */
     skipIntro?: boolean;
-    /** Startup whale artwork: classic pixel whale, or the whale-girl (issue #4). */
-    whaleStyle?: WhaleStyle;
 }): React.ReactNode;
 //# sourceMappingURL=LogoV2.d.ts.map

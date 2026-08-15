@@ -47,9 +47,6 @@ export interface Config {
      *  `ctx used/window` readout) in the status footer; off hides that row
      *  while the status/mode lines stay (issue #29). */
     contextBar?: boolean;
-    /** Startup splash artwork: `classic` pixel whale (default) or `girl`,
-     *  the whale-girl sprite (issue #4). */
-    whale?: string;
     /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
     fullscreen?: boolean;
     /** UI language: `en` / `zh`. When absent, the `CC_TUI_LANG` env var wins,

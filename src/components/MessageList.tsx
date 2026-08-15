@@ -11,7 +11,6 @@ import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
 import { InterruptedByUser } from './InterruptedByUser.js'
 import { LogoV2 } from './LogoV2.js'
-import type { WhaleStyle } from './Whale.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
@@ -583,17 +582,14 @@ export function LogoHeader({
   model,
   effort,
   cwd,
-  whaleStyle,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
-  /** Startup whale artwork (`whale` config); classic whale when absent. */
-  whaleStyle?: WhaleStyle
 }): React.ReactNode {
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} whaleStyle={whaleStyle} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} />
     </Box>
   )
 }

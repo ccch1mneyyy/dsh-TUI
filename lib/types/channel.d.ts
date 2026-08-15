@@ -4,7 +4,6 @@ import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
-import type { WhaleStyle } from './components/Whale.js';
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js';
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
 export interface ToolRow {
@@ -297,8 +296,6 @@ export interface Channel {
     readonly workingActivity: ActivityStatus | undefined;
     /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
     readonly activityFrames: string | undefined;
-    /** Startup whale artwork (`whale` config): classic whale or whale-girl. */
-    readonly whaleStyle: WhaleStyle;
     /** Whether working-activity events are consumed (config.activity). */
     readonly activityEnabled: boolean;
     /** Whether the segmented context bar row shows in the status footer
@@ -511,8 +508,6 @@ export interface ChannelState {
     workingActivity: ActivityStatus | undefined;
     /** Working-activity indicator preset (see the public Channel type). */
     activityFrames: string | undefined;
-    /** Startup whale artwork (see the public Channel type). */
-    whaleStyle: WhaleStyle;
     /** Working-activity consumption switch (see the public Channel type). */
     activityEnabled: boolean;
     /** Context bar row switch (see the public Channel type). */
@@ -625,8 +620,6 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean;
-    /** Startup whale artwork (`whale` config key); default `classic`. */
-    whaleStyle?: WhaleStyle;
     /** cordis.yml's static preset choice (`preset` key): wins over the
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string;

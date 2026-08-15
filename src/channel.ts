@@ -25,7 +25,6 @@ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateMode
 import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
-import type { WhaleStyle } from './components/Whale.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { logForDebugging } from './utils/debug.js'
@@ -301,8 +300,6 @@ export interface Channel {
   readonly workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
   readonly activityFrames: string | undefined
-  /** Startup whale artwork (`whale` config): classic whale or whale-girl. */
-  readonly whaleStyle: WhaleStyle
   /** Whether working-activity events are consumed (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -509,8 +506,6 @@ export interface ChannelState {
   workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset (see the public Channel type). */
   activityFrames: string | undefined
-  /** Startup whale artwork (see the public Channel type). */
-  whaleStyle: WhaleStyle
   /** Working-activity consumption switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -865,8 +860,6 @@ export function createChannel(
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
-    /** Startup whale artwork (`whale` config key); default `classic`. */
-    whaleStyle?: WhaleStyle
     /** cordis.yml's static preset choice (`preset` key): wins over the
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string
@@ -1089,7 +1082,6 @@ export function createChannel(
     reasoningEffort: options.effort ?? readEffortPref(),
     workingActivity: undefined,
     activityFrames: options.activityFrames,
-    whaleStyle: options.whaleStyle ?? 'classic',
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,

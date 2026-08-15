@@ -22,7 +22,6 @@ import { clearResumeTarget, writeResumeTarget } from './sessionHistory.js'
 import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from './update.js'
 import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
 import { Chat } from './screens/Chat.js'
-import { isWhaleStyle } from './components/Whale.js'
 import { render, ThemeProvider, AlternateScreen } from './ui.js'
 import instances from './ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS } from './ink/termio/csi.js'
@@ -163,9 +162,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
     // Static footer preference: cordis.yml `contextBar` (schema default on).
     contextBar: config.contextBar,
-    // Startup whale artwork (issue #4): `classic` or `girl`; anything else
-    // (or unset) keeps the classic whale.
-    whaleStyle: isWhaleStyle(config.whale) ? config.whale : 'classic',
     // Same precedence for the agent preset: cordis.yml `preset` over the
     // persisted `/preset` choice; undefined adopts the roster default.
     configuredPreset: config.preset,

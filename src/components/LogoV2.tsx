@@ -9,9 +9,8 @@ import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
 import { renderBigText } from './bigfont.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
-import { STANDARD_FRAME_INDEX, WhaleArt, type WhaleStyle } from './Whale.js'
+import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { OPENING_SEQUENCE } from './whaleFrames.js'
-import { WHALE_GIRL_OPENING_SEQUENCE } from './whaleGirlFrames.js'
 
 /**
  * Header badge version, read from the installed package.json so the display
@@ -64,46 +63,37 @@ function capitalize(text: string): string {
  * cwd in plain text (no brand-color highlight), the startup tip, and below
  * the whale the welcome tagline, centered under the art, in ice
  * blue. Narrow terminals drop the whale and keep the text column.
- *
- * `whaleStyle` selects the artwork (`whale` config, issue #4): `classic`
- * pixel whale or the `girl` whale-girl sprite, each with its own opening
- * sequence; both share the 40-column pinned box and the same bounding-box
- * center, so the layout below never shifts between styles.
  */
 export function LogoV2({
   model,
   effort,
   cwd,
   skipIntro = false,
-  whaleStyle = 'classic',
 }: {
   model: string
   effort?: string | undefined
   cwd: string
   /** Test seam: mount straight into the settled header (probes skip the intro). */
   skipIntro?: boolean
-  /** Startup whale artwork: classic pixel whale, or the whale-girl (issue #4). */
-  whaleStyle?: WhaleStyle
 }): React.ReactNode {
-  const opening = whaleStyle === 'girl' ? WHALE_GIRL_OPENING_SEQUENCE : OPENING_SEQUENCE
-  const [step, setStep] = React.useState(skipIntro ? opening.length : 0)
-  const settled = step >= opening.length
+  const [step, setStep] = React.useState(skipIntro ? OPENING_SEQUENCE.length : 0)
+  const settled = step >= OPENING_SEQUENCE.length
 
   // Opening clock: drives the shimmer sweep and big-text highlight only
   // while the intro plays; `null` afterwards unsubscribes so the settled
   // header never repaints. 60ms frames keep the sweep lively.
   const [ref, time] = useAnimationFrame(settled ? null : 60)
 
-  // Frame chain: dwell per opening-sequence entry, then settle for good.
+  // Frame chain: dwell per OPENING_SEQUENCE entry, then settle for good.
   React.useEffect(() => {
     if (settled) return
     const timer = setTimeout(() => {
       setStep(s => s + 1)
-    }, opening[step].ms)
+    }, OPENING_SEQUENCE[step].ms)
     return () => {
       clearTimeout(timer)
     }
-  }, [step, settled, opening])
+  }, [step, settled])
 
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
@@ -114,7 +104,7 @@ export function LogoV2({
   const taglineRGB = parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE
 
   const showWhale = columns >= WHALE_MIN_COLUMNS
-  const frameIndex = settled ? STANDARD_FRAME_INDEX : opening[step].frame
+  const frameIndex = settled ? STANDARD_FRAME_INDEX : OPENING_SEQUENCE[step].frame
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
@@ -125,7 +115,7 @@ export function LogoV2({
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
       <Box flexDirection="row" gap={2} width="100%" alignItems="center">
-        {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} style={whaleStyle} />}
+        {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
         <Box flexDirection="column" flexShrink={1}>
           <Text wrap="truncate-end">
             {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
