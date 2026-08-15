@@ -29,7 +29,9 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
   config:
     provider: deepseek-official
     model: deepseek-v4-flash
-    cwd: !!js process.cwd()
+    # cwd 不建议显式设置——默认解析为启动目录所在的 git 仓库根；确需固定
+    # 工作区时写绝对路径（如 cwd: /repo/packages/app），不要用
+    # `!!js process.cwd()`（那会把工作区钉死在启动子目录上，issue #96）。
     effort: max
     activity: true
     activityFrames: claude
@@ -43,7 +45,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | --- | --- | --- |
 | `provider` | `deepseek-official` | DSH 模型路由名称 |
 | `model` | `deepseek-v4-flash` | 启动模型；`/model` 可通过 session fork 实时切换 |
-| `cwd` | 所在 git 仓库根目录（不在任何仓库内时为 `process.cwd()`） | Agent 工作目录与文件策略根目录 |
+| `cwd` | 所在 git 仓库根目录（不在任何仓库内时为 `process.cwd()`） | Agent 工作目录与文件策略根目录；恢复已有会话时以该会话持久化的 cwd 为准 |
 | `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按模型档位校验，deepseek 仅 off/high/max，非法档位静默回落默认；优先于 `/effort` 持久化选择），兼作顶栏启动显示 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `activity` | `true` | 是否显示实时工作状态行 |

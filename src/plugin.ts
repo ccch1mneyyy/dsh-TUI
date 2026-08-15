@@ -155,7 +155,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const displayRoute = createdRoute ?? startupRoute
   const channel = createChannel(ctx, agent, {
     model: displayRoute.model,
-    cwd: sessionCwd,
+    // A RESUMED session keeps its persisted header cwd (issue #96 review):
+    // pre-upgrade sessions recorded the launch directory, and re-resolving
+    // from the current launch directory would split @ expansion / file
+    // completion (state.cwd) from the agent's own workspace record. Fresh
+    // sessions record sessionCwd at creation, so both agree there.
+    cwd: agent.session.header.cwd ?? sessionCwd,
     provider: displayRoute.provider,
     // Raw cordis.yml route (undefined when unset): the channel's
     // new-session path re-resolves prefs against these, and resume passes

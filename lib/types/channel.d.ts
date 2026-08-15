@@ -694,6 +694,15 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     /** Handle of the initial agent; disposed when a rewind replaces it. */
     handle?: AgentHandle;
 }): ChannelState;
+/**
+ * `/resume` project filter (issue #96): exact cwd match, PLUS sessions
+ * recorded in a subdirectory — pre-upgrade launches recorded the launch
+ * subdirectory as the header cwd, and with the cwd default now resolving to
+ * the git worktree root an exact match would hide those sessions forever.
+ * They belong to the same workspace, so they stay listed. Exported for
+ * scripts/verify-session-cwd.mjs.
+ */
+export declare function sessionCwdMatches(stateCwd: string, headerCwd: string): boolean;
 /** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
 export interface MentionFs {
     resolve(path: string): Promise<{

@@ -1520,7 +1520,7 @@ export function createChannel(
           sessionId: childId,
           seed,
           meta: {
-            cwd: options.cwd,
+            cwd: state.cwd,
             parentSession: agent.session.id,
             seedLength: seed.length,
             ...(rewindComposed.agentPreset === undefined
@@ -1651,6 +1651,14 @@ export function createChannel(
       state.spinnerMode = 'requesting'
       state.status = handle.agent.status
       state.agentId = handle.agent.id
+      // Adopt the resumed session's persisted cwd (issue #96): pre-upgrade
+      // sessions recorded the LAUNCH directory (often a repo subdirectory),
+      // so keeping the freshly resolved root would split @ expansion / file
+      // completion (state.cwd) from the agent's own workspace record — and
+      // drop the session back out of the /resume filter. The branch
+      // breadcrumb follows the adopted cwd.
+      state.cwd = handle.agent.session.header.cwd ?? state.cwd
+      refreshGitBranch()
       state.agentPreset = resumeComposed.agentPreset
       // Status-line route follows the resumed session (review feedback): the
       // route it actually continues on — a complete cordis.yml pin, else the
@@ -1747,7 +1755,7 @@ export function createChannel(
         handle = await agents.create({
           sessionId,
           meta: {
-            cwd: options.cwd,
+            cwd: state.cwd,
             ...(newComposed.agentPreset === undefined
               ? {}
               : { agentPreset: newComposed.agentPreset }),
@@ -1850,7 +1858,7 @@ export function createChannel(
           sessionId: childId,
           seed,
           meta: {
-            cwd: options.cwd,
+            cwd: state.cwd,
             parentSession: agent.session.id,
             seedLength: seed.length,
             ...(modelComposed.agentPreset === undefined
@@ -2140,9 +2148,8 @@ export function createChannel(
         const headers = await persistence.list()
         // 按工作目录隔离（Claude Code 的项目维度）：/resume 只列出本会话
         // 目录启动的会话，别的项目的会话不出现在选择器里。
-        const cwd = state.cwd.replace(/\/+$/, '')
         const local = headers.filter(header =>
-          (header.cwd ?? '').replace(/\/+$/, '') === cwd,
+          sessionCwdMatches(state.cwd, header.cwd ?? ''),
         )
         // MRU ordering: DSH headers carry only createdAt, so dsh-tui keeps its
         // own last-used timestamps (touchSession on resume/submit/new) and
@@ -2464,7 +2471,7 @@ export function createChannel(
           tools.push({ name: tool.name, description: tool.description ?? '' })
         }
       }
-      const discovered = await discoverBaselineInstructionFiles({ cwd: options.cwd })
+      const discovered = await discoverBaselineInstructionFiles({ cwd: state.cwd })
       if (target !== agent) return
       files.push(...discovered.map(file => ({ displayPath: file.displayPath })))
       // The skills registry is host-plane but scope-layered: preset rows
@@ -3228,12 +3235,16 @@ ${output}
   }
   bindAgent()
   // Statusline breadcrumb: current git branch of the session cwd (best-effort).
-  if (bash) {
+  // Re-run when an agent swap adopts a different persisted cwd (/resume,
+  // issue #96) so the breadcrumb never shows the previous workspace's branch.
+  const refreshGitBranch = () => {
+    state.gitBranch = undefined
+    if (!bash) return
     void bash
       .run(
         bash.resolve({
           command: 'git branch --show-current',
-          workdir: options.cwd,
+          workdir: state.cwd,
           timeoutMs: 3000,
         }),
       )
@@ -3250,6 +3261,7 @@ ${output}
         // not be a git repo. Either way the statusline simply stays blank.
       })
   }
+  refreshGitBranch()
 
   return state
 }
@@ -3258,6 +3270,25 @@ ${output}
 function basename(path: string): string {
   const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] ?? path
+}
+
+/** Normalize a cwd for comparison: forward slashes, no trailing slash. */
+function normalizeCwd(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+/**
+ * `/resume` project filter (issue #96): exact cwd match, PLUS sessions
+ * recorded in a subdirectory — pre-upgrade launches recorded the launch
+ * subdirectory as the header cwd, and with the cwd default now resolving to
+ * the git worktree root an exact match would hide those sessions forever.
+ * They belong to the same workspace, so they stay listed. Exported for
+ * scripts/verify-session-cwd.mjs.
+ */
+export function sessionCwdMatches(stateCwd: string, headerCwd: string): boolean {
+  const cwd = normalizeCwd(stateCwd)
+  const recorded = normalizeCwd(headerCwd)
+  return recorded === cwd || (cwd !== '' && recorded.startsWith(`${cwd}/`))
 }
 
 /** Context-bar token estimate (pi-nano-context: ~4 chars per token). */
