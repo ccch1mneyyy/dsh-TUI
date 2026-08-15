@@ -12,12 +12,14 @@
  *   3. 已初始化但版本与本包不一致时打印一行提示（TUI 内 /update 或重新 add）；
  *   4. 透传全部参数启动 `dsh --profile dsh-tui`。
  *
- * `--resume` 由本启动器拦截：读取 TUI 保留的兼容路径 ~/.dsh-cc/resume.txt，
- * 以 DSH_CC_RESUME_SESSION 环境变量喂回（见 src/sessionHistory.ts 的
- * 启动器契约），该 flag 本身不再传给 dsh。
+ * `--resume` 由本启动器拦截：读取 TUI 保留的 ~/.dsh-tui/resume.txt
+ * （旧路径 ~/.dsh-cc/resume.txt 兜底，直到旧版 TUI 退场——见
+ * src/sessionHistory.ts 的启动器契约，issue #120），以
+ * DSH_TUI_RESUME_SESSION（并兼容写 DSH_CC_RESUME_SESSION）环境变量喂回，
+ * 该 flag 本身不再传给 dsh。
  *
  * 面向用户的消息走下方 MSG 双语表：与 TUI 的语言契约一致——
- * `CC_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
+ * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -25,6 +27,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { shellQuote } from '../lib/types/utils/shellQuote.js'
+import { detectLegacyEnv, RENAMED_ENV } from '../lib/types/utils/paths.js'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 const ownVersion = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).version
@@ -32,8 +35,9 @@ const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PROFILE = 'dsh-tui'
 
 // --- 双语消息表（启动器跑在 TUI boot 之前，无法复用 src/i18n.ts）-------------
-// 与 TUI 一致：CC_TUI_LANG 显式指定才生效，否则默认中文。
-const lang = process.env.CC_TUI_LANG === 'en' ? 'en' : 'zh'
+// 与 TUI 一致：DSH_TUI_LANG 显式指定才生效，否则默认中文；旧名 CC_TUI_LANG
+// 仅用于让警告本身以用户习惯的语言显示（配置不再从旧名生效）。
+const lang = (process.env.DSH_TUI_LANG ?? process.env.CC_TUI_LANG) === 'en' ? 'en' : 'zh'
 const MSG = {
   noDsh: {
     en: '[dsh-tui] dsh CLI not found. Install the official client first:\n  npm install -g @deepseek-ai/dsh',
@@ -64,6 +68,10 @@ const MSG = {
   launchFailed: {
     en: err => `[dsh-tui] Failed to launch: ${err.message}`,
     zh: err => `[dsh-tui] 启动失败：${err.message}`,
+  },
+  legacyEnv: {
+    en: (oldName, newName) => `[dsh-tui] note: env ${oldName} was renamed to ${newName}; the old name no longer takes effect.`,
+    zh: (oldName, newName) => `[dsh-tui] 提示：环境变量 ${oldName} 已更名为 ${newName}，旧名不再生效。`,
   },
 }
 const msg = key => MSG[key][lang]
@@ -117,17 +125,32 @@ if (installedVersion === undefined) {
 }
 
 // --- 3. --resume 拦截 ---------------------------------------------------------
+// 换名过渡（issue #120）：全局 bin 与 profile 内 TUI 包版本可能错位，所以
+// env 双写（新旧名都设），文件读取新路径优先、旧路径兜底。
 const args = []
 for (const a of process.argv.slice(2)) {
   if (a === '--resume') {
-    try {
-      process.env.DSH_CC_RESUME_SESSION = readFileSync(join(homedir(), '.dsh-cc', 'resume.txt'), 'utf8').trim()
-    } catch {
-      // 没有历史会话可恢复——静默忽略，正常冷启动。
+    let sessionId = ''
+    for (const dir of ['.dsh-tui', '.dsh-cc']) {
+      try {
+        sessionId = readFileSync(join(homedir(), dir, 'resume.txt'), 'utf8').trim()
+        if (sessionId) break
+      } catch {
+        // 没有历史会话可恢复——静默忽略，正常冷启动。
+      }
+    }
+    if (sessionId) {
+      process.env.DSH_TUI_RESUME_SESSION = sessionId
+      process.env.DSH_CC_RESUME_SESSION = sessionId
     }
   } else {
     args.push(a)
   }
+}
+
+// --- 3.5 旧环境变量警告（必须在 TUI 渲染前输出，fullscreen 下写 stderr 会破坏界面）
+for (const oldName of detectLegacyEnv()) {
+  console.error(MSG.legacyEnv[lang](oldName, RENAMED_ENV[oldName]))
 }
 
 // --- 4. 启动 ------------------------------------------------------------------

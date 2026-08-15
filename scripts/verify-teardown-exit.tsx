@@ -12,7 +12,7 @@
  * 3. plain handleExit: onUserExit runs exactly once (exited latch);
  * 4. handleExit(error): the error reaches onUserExit.
  */
-const { createExitFunnel } = await import('../src/plugin.js')
+const { createExitFunnel } = await import('../src/dsh-adapter/plugin.js')
 
 let failed = 0
 const check = (name: string, ok: boolean) => {

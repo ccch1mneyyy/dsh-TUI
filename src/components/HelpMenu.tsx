@@ -10,13 +10,17 @@ import { modLabel } from '../utils/modifiers.js'
  * (three-column shortcut layout, trimmed to the keys dsh-tui actually binds).
  * The command column lists the merged slash-command surface: built-in
  * commands plus plugin-registered ones from the DSH registry (plan/goal/…).
- * Modifier labels follow the platform convention: ⌘ on macOS, ctrl elsewhere.
+ * Skill entries (user-invocable skills merged for `/` completion, issue
+ * #86) are hidden — a skills directory can hold dozens of entries and the
+ * menu is for chrome commands. Modifier labels follow the platform
+ * convention: ⌘ on macOS, ctrl elsewhere.
  */
 export function HelpMenu({
   commands,
 }: {
   commands: readonly LocalCommand[]
 }): React.ReactNode {
+  const chrome = commands.filter(command => !command.skill)
   return (
     <Box paddingX={2} flexDirection="row" gap={4}>
       <Box flexDirection="column" width={26} flexShrink={0}>
@@ -64,10 +68,13 @@ export function HelpMenu({
         <Box>
           <Text dimColor>shift+tab to cycle mode</Text>
         </Box>
+        <Box>
+          <Text dimColor>ctrl+x to open editor</Text>
+        </Box>
       </Box>
       <Box flexDirection="column" flexShrink={1}>
         <Text dimColor>commands:</Text>
-        {commands.map(command => (
+        {chrome.map(command => (
           <Box key={command.name}>
             <Text dimColor wrap="truncate-end">
               /{command.name} — {localizedDescription(command)}

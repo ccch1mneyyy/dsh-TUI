@@ -12,7 +12,7 @@
  */
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'  // DEC-2026 同步输出，使 DECSTBM 滚动优化生效
-process.env.CC_TUI_THEME = 'dark'
+process.env.DSH_TUI_THEME = 'dark'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }] = await Promise.all([
   import('node:stream'),

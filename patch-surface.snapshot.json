@@ -1,5 +1,9 @@
 {
   "inserts": [
+    "storage",
+    "storage-json",
+    "storage-domain",
+    "workspace",
     "agent-presets",
     "cordis-host-runner",
     "dsh-tui",
@@ -18,6 +22,10 @@
     "hmr"
   ],
   "insertsSharedWithWebApp": [
+    "storage",
+    "storage-json",
+    "storage-domain",
+    "workspace",
     "agent-presets",
     "cordis-host-runner"
   ]

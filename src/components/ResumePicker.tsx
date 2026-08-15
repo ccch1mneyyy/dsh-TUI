@@ -1,18 +1,18 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
+import { t, getLang } from '../i18n.js'
 import type { SessionRecord } from '../sessionHistory.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
-import { Byline } from './design-system/Byline.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
+import { HintLine } from './design-system/HintLine.js'
 import { SearchBox } from './SearchBox.js'
 import { modLabel } from '../utils/modifiers.js'
 
-/** Compact timestamp like `Jan 2, 03:04` for the resume list. */
+/** Compact timestamp like `Jan 2, 03:04` (en) / `1月2日 03:04` (zh). */
 function formatTimestamp(ms: number): string {
   const date = new Date(ms)
-  return date.toLocaleString('en-US', {
+  return date.toLocaleString(getLang() === 'zh' ? 'zh-CN' : 'en-US', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -70,12 +70,12 @@ export function ResumePicker({
       <Box flexDirection="column">
         <Box marginBottom={1}>
           <Text color="remember" bold>
-            Resume
+            {t('resume-title')}
           </Text>
         </Box>
         {above > 0 && (
           <Text dimColor italic>
-            ↑ {above} more
+            {t('resume-more-above', { n: above })}
           </Text>
         )}
         {visible.map(session => (
@@ -90,13 +90,13 @@ export function ResumePicker({
         ))}
         {below > 0 && (
           <Text dimColor italic>
-            ↓ {below} more
+            {t('resume-more-below', { n: below })}
           </Text>
         )}
         {mode === 'confirm-delete' && focused !== undefined && (
           <Box marginTop={1}>
             <Text color="error">
-              Delete “{focused.title || focused.id}”? The session log is removed permanently.
+              {t('resume-delete-confirm', { name: focused.title || focused.id })}
             </Text>
           </Box>
         )}
@@ -106,7 +106,7 @@ export function ResumePicker({
               query={renameText}
               isFocused
               isTerminalFocused={isTerminalFocused}
-              placeholder="New session name…"
+              placeholder={t('resume-rename-placeholder')}
               prefix="✎"
               borderless
             />
@@ -114,24 +114,13 @@ export function ResumePicker({
         )}
       </Box>
       <Text dimColor italic>
-        {mode === 'list' ? (
-          <Byline>
-            <KeyboardShortcutHint shortcut="Enter" action="confirm" bold />
-            <KeyboardShortcutHint shortcut="Esc" action="exit" />
-            <KeyboardShortcutHint shortcut={`${modLabel}d`} action="delete" />
-            <KeyboardShortcutHint shortcut={`${modLabel}r`} action="rename" />
-          </Byline>
-        ) : mode === 'confirm-delete' ? (
-          <Byline>
-            <KeyboardShortcutHint shortcut="Enter" action="delete" bold />
-            <KeyboardShortcutHint shortcut="Esc" action="cancel" />
-          </Byline>
-        ) : (
-          <Byline>
-            <KeyboardShortcutHint shortcut="Enter" action="save" bold />
-            <KeyboardShortcutHint shortcut="Esc" action="cancel" />
-          </Byline>
-        )}
+        <HintLine
+          text={mode === 'list'
+            ? t('resume-hint-list', { mod: modLabel })
+            : mode === 'confirm-delete'
+              ? t('resume-hint-delete')
+              : t('resume-hint-rename')}
+        />
       </Text>
     </Pane>
   )

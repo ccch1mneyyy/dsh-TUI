@@ -1,18 +1,18 @@
 /**
  * Persisted color-theme preference. The `/theme` choice (built-in palette
- * or user theme name) survives restarts in `~/.dsh-cc/theme.json`, mirroring
- * the working-activity preference (`~/.dsh-cc/working-activity.json`). The
+ * or user theme name) survives restarts in `~/.dsh-tui/theme.json`, mirroring
+ * the working-activity preference (`~/.dsh-tui/working-activity.json`). The
  * file is best-effort: a missing or corrupt file just falls back to the
  * default (terminal-background auto-detection). The preference only wins
- * when CC_TUI_THEME is unset — see ThemeProvider.
+ * when DSH_TUI_THEME is unset — see ThemeProvider.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isSafeThemeName } from './customTheme.js'
+import { DATA_DIR } from './utils/paths.js'
 
-const PREFS_DIR = join(homedir(), '.dsh-cc')
+const PREFS_DIR = DATA_DIR
 
 /**
  * Parse a persisted `{ theme }` value; anything else yields undefined.

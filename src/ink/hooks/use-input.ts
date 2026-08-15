@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect } from 'react'
 import { useEventCallback } from 'usehooks-ts'
 import type { InputEvent, Key } from '../events/input-event.js'
+import { isInputSuppressed } from '../input-suppression.js'
 import useStdin from './use-stdin.js'
 
 type Handler = (input: string, key: Key, event: InputEvent) => void
@@ -71,6 +72,13 @@ const useInput = (inputHandler: Handler, options: Options = {}): void => {
   // closure (it syncs via useLayoutEffect, so it's compiler-safe).
   const handleData = useEventCallback((event: InputEvent) => {
     if (options.isActive === false) {
+      return
+    }
+    // Post-handoff window (external editor restore): the byte burst the
+    // tty delivers right after stdin resumes is terminal chatter, not
+    // keystrokes — drop it here so NO listener sees it (a stray ESC would
+    // clear the prompt via Chat/PromptInput escape handling).
+    if (isInputSuppressed()) {
       return
     }
     const { input, key } = event

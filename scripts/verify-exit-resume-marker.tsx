@@ -16,7 +16,7 @@
  * plus: a live-agent lookup miss falls back to the captured agent, and a
  * user/message injected by a non-user source does not count.
  */
-const { isExitResumable } = await import('../src/plugin.js')
+const { isExitResumable } = await import('../src/dsh-adapter/plugin.js')
 
 let failed = 0
 const check = (name: string, ok: boolean) => {

@@ -74,12 +74,17 @@ export declare class QuestionStore {
     private rebuildSnapshot;
     /**
      * Provider entry point — called by `ctx.userQuestions.ask()` when the
-     * model runs the `ask_user_question` tool.
+     * model runs the `ask_user_question` tool, and by local wizards (e.g.
+     * `/provider`) driving the same panel.
      * @param request - The ask request: questions plus optional abort signal.
+     * @param options - `redact` hides answer text from the transcript summary
+     *   (use for batches that collect secrets such as API keys).
      * @returns A promise settling with the collected answers when the user
      *   submits the batch, or rejecting when the ask is interrupted.
      */
-    ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer>;
+    ask(request: AskUserQuestionRequest, options?: {
+        redact?: boolean;
+    }): Promise<AskUserQuestionAnswer>;
     /** Advance to the next queued ask, if any. */
     private startNext;
     /**

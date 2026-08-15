@@ -22,6 +22,14 @@ export interface LocalCommand {
   tag?: string
   /** True when a DSH plugin registered this command (not built in). */
   external?: boolean
+  /**
+   * True when the entry is a user-invocable skill discovered by the DSH
+   * skill registry (issue #86). Skill entries are completion-only: dispatch
+   * falls through to the model as plain text, where dsh-tool-skill's
+   * pre-step hook injects the skill body — the same path a hand-typed
+   * `/skill-name` takes. The help menu hides them (chrome commands only).
+   */
+  skill?: boolean
 }
 
 /**
@@ -49,13 +57,14 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
   { name: 'preset', description: 'Switch the agent preset (standard/code/minimal/cordis)' },
-  { name: 'theme', description: 'Switch the color theme (built-in or custom)' },
+  { name: 'theme', description: 'Switch the color theme (auto, built-in or custom)' },
   { name: 'lang', description: 'Switch the UI language (en / zh)' },
   { name: 'model', description: 'Show the active model' },
   { name: 'effort', description: 'Adjust the reasoning effort (slider)' },
   { name: 'thinking', description: 'Toggle extended thinking display' },
   { name: 'tokens', description: 'Show session token usage' },
   // Account / policy
+  { name: 'provider', description: 'Add an LLM provider (catalog or custom API endpoint)' },
   { name: 'login', description: 'Show API credential status' },
   { name: 'logout', description: 'Clear the API credential' },
   { name: 'permissions', description: 'Show permission policy status' },

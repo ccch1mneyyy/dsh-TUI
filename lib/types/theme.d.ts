@@ -8,6 +8,12 @@
  * text, accent-soft blues). `dark-ansi` is the 16-color fallback for
  * terminals without truecolor. The active palette is chosen at startup by
  * querying the terminal background (OSC 11) — see ThemeProvider.
+ *
+ * `auto` is a pseudo-theme, not a palette: it resolves to `light` or `dark`
+ * from the terminal background detected via OSC 11 (which tracks the system
+ * theme in terminals that follow it). ThemeProvider re-runs detection every
+ * time `auto` is selected and pushes the result through setAutoThemeBase(),
+ * so getTheme('auto') always serves the currently detected palette.
  */
 export type Theme = {
     autoAccept: string;
@@ -83,15 +89,33 @@ export type Theme = {
 /** The built-in theme names, in display order. */
 export declare const THEME_NAMES: readonly ["dark", "dark-ansi", "light"];
 /**
+ * The `auto` pseudo-theme: not a palette, but a standing request to follow
+ * the terminal background (OSC 11, which tracks the system theme in
+ * terminals that follow it). Selectable everywhere a theme name is
+ * (/theme, DSH_TUI_THEME, ~/.dsh-tui/theme.json); getTheme() resolves it to
+ * the last detected `light`/`dark` palette via the auto base below.
+ */
+export declare const AUTO_THEME_NAME = "auto";
+/**
+ * Record the palette `auto` should resolve to. Called by ThemeProvider
+ * after each terminal-background detection while `auto` is active.
+ * @param name - The detected base palette.
+ */
+export declare function setAutoThemeBase(name: 'light' | 'dark'): void;
+/** The palette `auto` currently resolves to (`light` or `dark`). */
+export declare function getAutoThemeBase(): 'light' | 'dark';
+/**
  * Any theme name: a built-in palette (`light`/`dark`/`dark-ansi`) or a user
- * theme from ~/.dsh-cc/themes/<name>.json. Always resolvable to a concrete
+ * theme from ~/.dsh-tui/themes/<name>.json. Always resolvable to a concrete
  * color palette via getTheme() (unknown names fall back to `dark`).
  */
 export type ThemeName = string;
 /**
  * Resolve a theme name to its concrete color palette.
- * @param themeName - The theme to resolve (built-in or user theme name).
- * @returns The matching palette; unknown names fall back to `dark`.
+ * @param themeName - The theme to resolve (built-in, `auto`, or user theme
+ *   name).
+ * @returns The matching palette; `auto` resolves to the detected base
+ *   (light/dark), unknown names fall back to `dark`.
  */
 export declare function getTheme(themeName: ThemeName): Theme;
 /**

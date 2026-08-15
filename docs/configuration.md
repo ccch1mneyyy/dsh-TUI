@@ -37,15 +37,15 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
     activityFrames: claude
     contextBar: true
     fullscreen: false
-    preset: !!js process.env.CC_TUI_PRESET ?? undefined
-    sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
+    preset: !!js process.env.DSH_TUI_PRESET ?? undefined
+    sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
 ```
 
 | 字段 | 默认/来源 | 说明 |
 | --- | --- | --- |
 | `provider` | `deepseek-official` | DSH 模型路由名称 |
 | `model` | `deepseek-v4-flash` | 启动模型；`/model` 可通过 session fork 实时切换 |
-| `cwd` | 所在 git 仓库根目录（不在任何仓库内时为 `process.cwd()`） | Agent 工作目录与文件策略根目录；恢复已有会话时以该会话持久化的 cwd 为准 |
+| `cwd` | 所在 git 仓库根目录（不在任何仓库内时为 `process.cwd()`；家目录的 dotfiles 仓不算） | TUI 会话侧工作区：agent meta、`@` 补全/提及展开、/resume 过滤、状态栏；恢复已有会话时以该会话持久化的 cwd 为准。注意 bash/fs-policy/sandbox 的根仍由组合层 cordis 配置决定（默认启动目录，归 dsh-base 管），与这里的会话侧 cwd 可能不同 |
 | `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按模型档位校验，deepseek 仅 off/high/max，非法档位静默回落默认；优先于 `/effort` 持久化选择），兼作顶栏启动显示 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `activity` | `true` | 是否显示实时工作状态行 |
@@ -85,8 +85,8 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 - `/preset <id>` 直接选择；`/preset status` 查看当前状态。
 - 空白会话可以原地切换。已经产生对话的会话遵循官方 blank-only 规则，选择只会
   保存为新默认值，在 `/new` 或下一次启动时生效。
-- 默认值保存在 `~/.dsh-cc/agent-preset.json`。
-- 优先级为：显式 `config.preset` 或 `CC_TUI_PRESET`，然后持久化偏好，最后名册
+- 默认值保存在 `~/.dsh-tui/agent-preset.json`。
+- 优先级为：显式 `config.preset` 或 `DSH_TUI_PRESET`，然后持久化偏好，最后名册
   默认值 `standard`。
 - 恢复旧会话时，以该会话日志记录的 preset 为准，不读取当前默认值覆盖它。
 
@@ -94,8 +94,8 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 `agent.cordis.yml`。默认 `DSH_HOME` 下的路径即 `~/.dsh/.agent-presets/`。
 
 从 0.3 起，模型侧工具、plan、compaction、delegation 等由 preset 自己组合。
-Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
-`CC_TUI_COMPACT_RETAIN` 或旧版 TUI 的深度限制；这些策略应在 preset 中配置。
+Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
+`DSH_TUI_COMPACT_RETAIN` 或旧版 TUI 的深度限制；这些策略应在 preset 中配置。
 
 ## MCP
 
@@ -132,21 +132,50 @@ Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
 
 | 变量 | 用途 |
 | --- | --- |
+| `VISUAL` / `EDITOR` | `Ctrl+X` 打开的外部编辑器（`VISUAL` 优先，可带参数如 `code --wait`；未设置时 POSIX 回退 `vi`） |
 | `DEEPSEEK_API_KEY` | DeepSeek 凭证；运行模型的必需项 |
 | `DEEPSEEK_BASE_URL` | 覆盖 DeepSeek 兼容 API 端点 |
-| `CC_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
-| `CC_TUI_PRESET` | 覆盖新会话默认 Agent preset |
-| `CC_TUI_THEME` | 锁定内置或自定义主题，优先于持久化选择 |
-| `CC_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
-| `DSH_CC_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
-| `DSH_CC_SESSION_ROOT` | 覆盖会话持久化位置；profile 安装时是 SQLite 数据库路径，裸 `cordis.yml` 启动时是 JSONL 根目录 |
+| `DSH_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
+| `DSH_TUI_PRESET` | 覆盖新会话默认 Agent preset |
+| `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）或自定义主题，优先于持久化选择 |
+| `DSH_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
+| `DSH_TUI_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
+| `DSH_TUI_SESSION_ROOT` | 覆盖 JSONL 会话根目录；profile 默认 `$DSH_HOME/sessions`，裸 `cordis.yml` 默认 `~/.dsh-tui/sessions` |
 | `DSH_PERMISSION_MODE` | 非 Windows 平台覆盖 sandbox policy，例如 `workspace-write` 或 `danger-full-access` |
-| `DSH_CC_WORKSPACE` | Windows `dsh-tui.cmd` 采用的工作目录 |
-| `CC_TUI_DEBUG` | 启用写往 stderr 的 dsh-tui 调试日志 |
-| `DSH_CC_RENDER_LOG` | 指定文件路径，记录原始 ANSI 渲染帧用于取证 |
+| `DSH_TUI_WORKSPACE` | Windows `dsh-tui.cmd` 采用的工作目录 |
+| `DSH_TUI_DEBUG` | 启用写往 stderr 的 dsh-tui 调试日志 |
+| `DSH_TUI_RENDER_LOG` | 指定文件路径，记录原始 ANSI 渲染帧用于取证 |
 
-`DSH_CC_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
+旧名 `CC_TUI_*` 与 `DSH_CC_*` 自本版本起不再生效；启动时检测到旧名仍被设置会
+打印一行警告（只要还设着，每次启动都会提示）。唯一例外是
+`DSH_TUI_RESUME_SESSION`：读端优先取新名、同时仍读取旧名
+`DSH_CC_RESUME_SESSION`，写端两个变量都会设置，供旧版启动器过渡。
+
+`DSH_TUI_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
 公开 issue，除非已经检查并脱敏。
+
+## `/provider`：运行时添加模型提供方
+
+`/provider` 打开交互向导，无需重启即可添加模型提供方：
+
+- **内置 provider**：从 `llm.listConfigurableProviders()` 列出的 catalog
+  路由（openai、anthropic、deepseek 等）中选择，只需输入 API key；baseURL
+  可选覆盖（代理网关场景），协议与模型目录自动继承。
+- **自定义 API 端点**：输入路由名、API key、baseURL 与协议
+  （`openai-completions` / `openai-responses` / `anthropic-messages`），
+  向导会用草稿凭据探测端点公布的模型供勾选（探测失败则手输模型 id）。
+
+写入产物（profile 启动时，dsh-base 提供 settings/credentials 服务）：
+
+| 产物 | 位置 |
+| --- | --- |
+| provider profile | `~/.dsh/settings.yaml` 的 `llm-pi-ai.providers.<路由名>`，写入即注册路由 |
+| API key | `~/.dsh/.credentials.yaml`（0600），引用名为 `<路由名大写>_API_KEY` |
+
+密钥答案在会话记录中只显示 `••••••`；若进程环境已有同名变量，则跳过写入、
+运行时直接从环境解析。配置与 dsh web 端的 Models 设置页互通（同一 settings
+section）。裸 `dsh --config cordis.yml` 启动没有这些服务，`/provider` 会提示
+不可用。添加完成后运行 `/model` 即可切换到新路由的模型。
 
 ## 组合约束
 
@@ -154,14 +183,13 @@ Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
   但 profile patch 不应重复插入。
 - 自定义插入 subagent provider 时，核心 `subagent` 服务必须先挂载。
 - 自定义覆盖 `plan-mode` 时，`section` 必须是非空文本。
-- Profile 使用本包的 SQLite `sessions` 行，并禁用 base 的 JSONL 持久化，避免
-  同一会话出现两个写入所有者。
+- Profile 使用 base 的 JSONL 持久化并将根目录指向共享的 `~/.dsh/sessions`，
+  因而 TUI 和 Web 可以读取同一份会话历史。
 - `cordis.yml` 是裸组合示例，服务拓扑可能与 profile patch 不同。正常安装和用户
   覆盖应以 `cordis.patch.yml` 为准。
 
-`DSH_CC_SESSION_ROOT` 的解释也随组合而变：`dsh --profile dsh-tui` 使用本包 patch
-插入的 SQLite 行，默认文件为 `~/.dsh-cc/sessions.sqlite`；直接运行
-`dsh --config cordis.yml` 时，示例挂载的是 JSONL 持久化，默认目录为
-`~/.dsh-cc/sessions/`。两种启动方式不要混用同一个已有数据目录。
+`DSH_TUI_SESSION_ROOT` 始终表示 JSONL 根目录。`dsh --profile dsh-tui` 默认使用
+`$DSH_HOME/sessions`（通常为 `~/.dsh/sessions/`）；直接运行
+`dsh --config cordis.yml` 的裸示例默认使用 `~/.dsh-tui/sessions/`。
 
 权限相关配置与平台差异见[架构与限制](architecture.md#权限与安全边界)。
