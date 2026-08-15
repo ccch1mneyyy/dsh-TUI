@@ -236,6 +236,9 @@ const dict = {
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },
   'resume-none-in-cwd': { zh: '当前目录没有可恢复的历史会话', en: 'No resumable sessions in the current directory' },
+  'rename-usage': { zh: '用法  /rename <新名称>', en: 'Usage  /rename <new title>' },
+  'rename-current': { zh: '当前名称  {{title}}', en: 'Current title  {{title}}' },
+  'rename-done': { zh: '已重命名为「{{title}}」', en: 'Renamed to "{{title}}"' },
   'compact-summary-folded': { zh: '摘要已折叠', en: 'Summary folded' },
 
   // ── components/ThemePicker.tsx ──────────────────────────────────────
@@ -293,6 +296,7 @@ const dict = {
   'cmd-desc-clear': { zh: '清空当前会话' },
   'cmd-desc-compact': { zh: '压缩会话历史' },
   'cmd-desc-resume': { zh: '恢复历史会话' },
+  'cmd-desc-rename': { zh: '重命名当前会话' },
   'cmd-desc-rewind': { zh: '回退会话到历史消息' },
   'cmd-desc-export': { zh: '导出会话为 Markdown 文件' },
   // Session / environment
