@@ -164,7 +164,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
-| Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
+| Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
 | Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
 | Registry | `/plan`, `/goal`, and any other command registered by the DSH composition |

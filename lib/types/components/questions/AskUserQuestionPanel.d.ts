@@ -24,6 +24,10 @@ export type AskUserQuestionPanelProps = {
             readonly description?: string;
         }>;
         readonly multiSelect?: boolean;
+        /** Hide the trailing free-text input row for pure option questions
+         *  (local wizards, e.g. /provider). Ignored when there are no options —
+         *  a text-only question would otherwise be unanswerable. */
+        readonly hideCustomInput?: boolean;
         /** Presentation intent tag (rc.6): 'plan-review' switches to the
          *  decision-card layout; an intent never changes the protocol. */
         readonly intent?: {

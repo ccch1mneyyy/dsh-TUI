@@ -112,3 +112,12 @@ jobs:
       # /trace 轨迹视图回归（issue #80）：事件装配配对耗时 + 组件渲染/滚动。
       - run: node --import tsx/esm scripts/repro-trace.tsx
 
+      # /provider 向导回归：catalog/custom 两分支的 profile 形状、凭据回滚
+      # （覆盖时恢复旧 key 而非误删）、env shadow 跳过、rc.6 兼容守卫、
+      # hideCustomInput 逐题标记。
+      - run: node scripts/verify-provider-wizard.mjs
+
+      # 提问面板 hideCustomInput 行为回归：纯选择题隐藏输入行且 Tab/打字
+      # 不劫持焦点，纯文本题忽略 hide 标记，多选题默认行为不回退。
+      - run: node --import tsx/esm scripts/verify-askpanel-hide-custom-input.tsx
+
