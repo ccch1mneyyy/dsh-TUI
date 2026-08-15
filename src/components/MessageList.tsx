@@ -122,6 +122,7 @@ export function MessageList({
   const localRefs = React.useRef(new Map<number, DOMElement>())
   /** Content-space offset of visibleRows[0] (header + dividers), measured. */
   const baseRef = React.useRef<number | null>(null)
+  const measureQueuedRef = React.useRef(false)
   const [, setMeasureTick] = React.useState(0)
   const [, setScrollTick] = React.useState(0)
 
@@ -243,7 +244,15 @@ export function MessageList({
         scrollHandle.setClampBounds(min, Math.max(min, base + mountedBottom - viewport))
       }
     }
-    if (changed) setMeasureTick(t => t + 1)
+    if (changed && !measureQueuedRef.current) {
+      // Layout corrections can cascade for many rows. Yield between commits
+      // so React does not count the valid convergence as nested updates.
+      measureQueuedRef.current = true
+      queueMicrotask(() => {
+        measureQueuedRef.current = false
+        setMeasureTick(t => t + 1)
+      })
+    }
   })
 
   // useCallback: the reference feeds MemoRow's shallow compare; a fresh
