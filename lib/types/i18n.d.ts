@@ -803,6 +803,218 @@ declare const dict: {
         readonly zh: "当前目录没有可恢复的历史会话";
         readonly en: "No resumable sessions in the current directory";
     };
+    readonly 'resume-resumed': {
+        readonly zh: "已恢复会话";
+        readonly en: "Session resumed";
+    };
+    readonly 'resume-more-above': {
+        readonly zh: "↑ 还有 {{n}} 条";
+        readonly en: "↑ {{n}} more";
+    };
+    readonly 'resume-more-below': {
+        readonly zh: "↓ 还有 {{n}} 条";
+        readonly en: "↓ {{n}} more";
+    };
+    readonly 'resume-delete-confirm': {
+        readonly zh: "删除「{{name}}」？会话日志将被永久移除。";
+        readonly en: "Delete \"{{name}}\"? The session log is removed permanently.";
+    };
+    readonly 'resume-deleted': {
+        readonly zh: "已删除会话「{{name}}」";
+        readonly en: "Deleted session {{name}}";
+    };
+    readonly 'resume-delete-failed': {
+        readonly zh: "无法删除会话「{{name}}」";
+        readonly en: "Could not delete session {{name}}";
+    };
+    readonly 'resume-rename-placeholder': {
+        readonly zh: "新的会话名称…";
+        readonly en: "New session name…";
+    };
+    readonly 'resume-rename-failed': {
+        readonly zh: "无法重命名会话「{{name}}」";
+        readonly en: "Could not rename session {{name}}";
+    };
+    readonly 'resume-hint-list': {
+        readonly zh: "**Enter** 恢复 · Esc 退出 · {{mod}}d 删除 · {{mod}}r 重命名";
+        readonly en: "**Enter** to confirm · Esc to exit · {{mod}}d to delete · {{mod}}r to rename";
+    };
+    readonly 'resume-hint-delete': {
+        readonly zh: "**Enter** 删除 · Esc 取消";
+        readonly en: "**Enter** to delete · Esc to cancel";
+    };
+    readonly 'resume-hint-rename': {
+        readonly zh: "**Enter** 保存 · Esc 取消";
+        readonly en: "**Enter** to save · Esc to cancel";
+    };
+    readonly 'resume-title': {
+        readonly zh: "恢复会话";
+        readonly en: "Resume";
+    };
+    readonly 'hint-confirm-exit': {
+        readonly zh: "**Enter** 确认 · Esc 退出";
+        readonly en: "**Enter** to confirm · Esc to exit";
+    };
+    readonly 'hint-confirm-cancel': {
+        readonly zh: "**Enter** 确认 · Esc 取消";
+        readonly en: "**Enter** to confirm · Esc to cancel";
+    };
+    readonly 'hint-select-exit': {
+        readonly zh: "**Enter** 选择 · Esc 退出";
+        readonly en: "**Enter** to select · Esc to exit";
+    };
+    readonly 'hint-rewind-back': {
+        readonly zh: "**Enter** 回退 · Esc 返回";
+        readonly en: "**Enter** to rewind · Esc to back";
+    };
+    readonly 'hint-adjust-done': {
+        readonly zh: "**←/→** 调整 · Enter/Esc 完成";
+        readonly en: "**←/→** to adjust · Enter/Esc to done";
+    };
+    readonly 'hint-history-search': {
+        readonly zh: "↑/↓ 选择 · **Enter** 确认 · Esc 取消";
+        readonly en: "↑/↓ to navigate · **Enter** to select · Esc to cancel";
+    };
+    readonly 'hint-trace': {
+        readonly zh: "**↑/↓ PgUp/PgDn g/G** 滚动 · f 过滤 · Esc/q 关闭";
+        readonly en: "**↑/↓ PgUp/PgDn g/G** to scroll · f to filter · Esc/q to close";
+    };
+    readonly 'hint-expand-ctrl-o': {
+        readonly zh: "（ctrl+o 展开）";
+        readonly en: "(ctrl+o to expand)";
+    };
+    readonly 'picker-title-model': {
+        readonly zh: "模型";
+        readonly en: "Model";
+    };
+    readonly 'picker-title-theme': {
+        readonly zh: "颜色主题";
+        readonly en: "Color theme";
+    };
+    readonly 'picker-title-activity': {
+        readonly zh: "指示器预设";
+        readonly en: "Indicator preset";
+    };
+    readonly 'picker-title-effort': {
+        readonly zh: "推理强度";
+        readonly en: "Reasoning effort";
+    };
+    readonly 'model-loading': {
+        readonly zh: "正在加载模型";
+        readonly en: "Loading models";
+    };
+    readonly 'model-loading-subtitle': {
+        readonly zh: "正在查询 provider…";
+        readonly en: "Querying the provider…";
+    };
+    readonly 'model-switching': {
+        readonly zh: "正在切换模型到 {{name}}…";
+        readonly en: "Switching model to {{name}}…";
+    };
+    readonly 'model-switched': {
+        readonly zh: "模型已切换为 {{name}}";
+        readonly en: "Model switched to {{name}}";
+    };
+    readonly 'rewind-title': {
+        readonly zh: "回退";
+        readonly en: "Rewind";
+    };
+    readonly 'rewind-subtitle': {
+        readonly zh: "选择一条消息，将对话回退到该处";
+        readonly en: "Pick a message to rewind the conversation to";
+    };
+    readonly 'rewind-confirm-title': {
+        readonly zh: "将对话回退到这条消息？";
+        readonly en: "Rewind conversation to this message?";
+    };
+    readonly 'rewind-confirm-desc': {
+        readonly zh: "对话从此处重新开始";
+        readonly en: "conversation restarts here";
+    };
+    readonly 'rewind-empty': {
+        readonly zh: "没有可回退的消息";
+        readonly en: "No messages to rewind to";
+    };
+    readonly 'rewind-last-message': {
+        readonly zh: "最近一条消息";
+        readonly en: "last message";
+    };
+    readonly 'rewind-none': {
+        readonly zh: "还没有可回退的消息";
+        readonly en: "Nothing to rewind yet";
+    };
+    readonly 'rewind-done': {
+        readonly zh: "已回退——编辑后按 Enter 重新发送";
+        readonly en: "Rewound — edit and press Enter to resend";
+    };
+    readonly 'thinking-title': {
+        readonly zh: "切换思考模式";
+        readonly en: "Toggle thinking mode";
+    };
+    readonly 'thinking-subtitle': {
+        readonly zh: "为本会话启用或关闭思考。";
+        readonly en: "Enable or disable thinking for this session.";
+    };
+    readonly 'thinking-enabled': {
+        readonly zh: "启用";
+        readonly en: "Enabled";
+    };
+    readonly 'thinking-enabled-desc': {
+        readonly zh: "DeepSeek 会在回复前先思考";
+        readonly en: "DeepSeek will think before responding";
+    };
+    readonly 'thinking-disabled': {
+        readonly zh: "关闭";
+        readonly en: "Disabled";
+    };
+    readonly 'thinking-disabled-desc': {
+        readonly zh: "DeepSeek 不做扩展思考，直接回复";
+        readonly en: "DeepSeek will respond without extended thinking";
+    };
+    readonly 'thinking-mid-warning': {
+        readonly zh: "在对话中途切换思考模式会增加延迟，并可能降低质量。建议在会话开始时设置。";
+        readonly en: "Changing thinking mode mid-conversation will increase latency and may reduce quality. For best results, set this at the start of a session.";
+    };
+    readonly 'thinking-proceed': {
+        readonly zh: "要继续吗？";
+        readonly en: "Do you want to proceed?";
+    };
+    readonly 'thinking-label': {
+        readonly zh: "思考";
+        readonly en: "Thinking";
+    };
+    readonly 'history-search-title': {
+        readonly zh: "搜索历史";
+        readonly en: "Search history";
+    };
+    readonly 'history-search-placeholder': {
+        readonly zh: "输入以搜索…";
+        readonly en: "Type to search…";
+    };
+    readonly 'history-search-empty': {
+        readonly zh: "没有匹配的命令";
+        readonly en: "No matching commands";
+    };
+    readonly 'time-now': {
+        readonly zh: "刚刚";
+        readonly en: "now";
+    };
+    readonly 'time-minutes-ago': {
+        readonly zh: "{{n}} 分钟前";
+        readonly en: "{{n}}m ago";
+    };
+    readonly 'time-hours-ago': {
+        readonly zh: "{{n}} 小时前";
+        readonly en: "{{n}}h ago";
+    };
+    readonly 'time-days-ago': {
+        readonly zh: "{{n}} 天前";
+        readonly en: "{{n}}d ago";
+    };
+    readonly 'search-no-matches': {
+        readonly zh: "无匹配";
+        readonly en: "no matches";
+    };
     readonly 'rename-usage': {
         readonly zh: "用法  /rename <新名称>";
         readonly en: "Usage  /rename <new title>";

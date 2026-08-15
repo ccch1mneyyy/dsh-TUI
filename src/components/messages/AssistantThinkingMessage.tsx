@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text } from '../../ui.js'
-import { KeyboardShortcutHint } from '../design-system/KeyboardShortcutHint.js'
+import { t } from '../../i18n.js'
 import { Markdown } from '../Markdown.js'
 import { formatDuration } from '../../cc/format.js'
 
@@ -47,10 +47,7 @@ export function AssistantThinkingMessage({
         onClick={onClick}
       >
         <Text dimColor italic>
-          ∴ Thinking{duration}{' '}
-          <Text dimColor>
-            <KeyboardShortcutHint shortcut="ctrl+o" action="expand" parens />
-          </Text>
+          ∴ {t('thinking-label')}{duration} {t('hint-expand-ctrl-o')}
         </Text>
       </Box>
     )
@@ -66,7 +63,7 @@ export function AssistantThinkingMessage({
       onClick={onClick}
     >
       <Text dimColor italic>
-        ∴ Thinking{duration}…
+        ∴ {t('thinking-label')}{duration}…
       </Text>
       <Box paddingLeft={2}>
         <Markdown dimColor>{thinking}</Markdown>

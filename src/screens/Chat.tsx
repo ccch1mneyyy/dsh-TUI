@@ -890,7 +890,7 @@ export function Chat({
       .filter(row => row.kind === 'user' && row.label === undefined)
       .reverse()
     if (candidates.length === 0) {
-      channel.notify('Nothing to rewind yet')
+      channel.notify(t('rewind-none'))
       return
     }
     setRewindIndex(0)
@@ -903,7 +903,7 @@ export function Chat({
     if (text !== null) {
       // CC puts the restored message back in the prompt for re-editing.
       setHistoryFill(text)
-      channel.notify('Rewound — edit and press Enter to resend')
+      channel.notify(t('rewind-done'))
     }
   }
 
@@ -1137,10 +1137,10 @@ export function Chat({
             void (async () => {
               const ok = await channel.deleteSession(target.id)
               if (!ok) {
-                channel.notify(`Could not delete session ${target.title || target.id}`, { color: 'error' })
+                channel.notify(t('resume-delete-failed', { name: target.title || target.id }), { color: 'error' })
                 return
               }
-              channel.notify(`Deleted session ${target.title || target.id}`)
+              channel.notify(t('resume-deleted', { name: target.title || target.id }))
               // Refresh right away so the row disappears in place; closing
               // the picker when nothing resumable remains.
               const sessions = await channel.listSessions()
@@ -1168,10 +1168,10 @@ export function Chat({
             void (async () => {
               const ok = await channel.renameSessionTo(target.id, title)
               if (!ok) {
-                channel.notify(`Could not rename session ${target.title || target.id}`, { color: 'error' })
+                channel.notify(t('resume-rename-failed', { name: target.title || target.id }), { color: 'error' })
                 return
               }
-              channel.notify(`Renamed session to ${title}`)
+              channel.notify(t('rename-done', { title }))
               // Re-list so the row reflects the persisted state, but patch
               // the renamed row's title explicitly: listSessions resolves
               // persisted titles only within the MRU top SESSION_TITLE_DEPTH
@@ -1208,7 +1208,7 @@ export function Chat({
           // next launch opens the same session.
           setResumePickerOpen(false)
           void channel.resumeTo(resumeSession.id).then((ok) => {
-            if (ok) channel.notify('Session resumed')
+            if (ok) channel.notify(t('resume-resumed'))
           })
         } else {
           setResumePickerOpen(false)
@@ -1236,9 +1236,9 @@ export function Chat({
           // forked at its end and continued with an agent routed to the new
           // model (history replays unchanged).
           setModelPickerOpen(false)
-          channel.notify(`Switching model to ${model.name}…`)
+          channel.notify(t('model-switching', { name: model.name }))
           void channel.switchModel(model.provider, model.id).then((ok) => {
-            if (ok) channel.notify(`Model switched to ${model.name}`)
+            if (ok) channel.notify(t('model-switched', { name: model.name }))
           })
         } else {
           setModelPickerOpen(false)
@@ -1812,12 +1812,12 @@ function ModelPickerLoading(): React.ReactNode {
     <Pane color="permission">
       <Box flexDirection="column" gap={1}>
         <Text bold color="permission">
-          Model
+          {t('picker-title-model')}
         </Text>
         <LoadingState
-          message="Loading models"
+          message={t('model-loading')}
           bold
-          subtitle="Querying the provider…"
+          subtitle={t('model-loading-subtitle')}
         />
       </Box>
     </Pane>
@@ -1859,7 +1859,7 @@ function ModelPickerLoading(): React.ReactNode {
       {cursorOffset < query.length && <Text>{query.slice(cursorOffset + 1)}</Text>}
       <Box flexGrow={1} />
       {query && count === 0 ? (
-        <Text color="error">no matches </Text>
+        <Text color="error">{t('search-no-matches')} </Text>
       ) : count > 0 ? (
         <Text dimColor>
           {Math.min(current + 1, count)}/{count}{'  '}

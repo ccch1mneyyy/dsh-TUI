@@ -21,6 +21,7 @@ import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { Chat } from '../lib/types/screens/Chat.js'
+import { setLang } from '../lib/types/i18n.js'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -184,6 +185,10 @@ await sleep(700)
 
 const screen = () => toPlain(stdout.frames.join(''))
 
+// Pin the UI language so the assertions below don't depend on the host's
+// persisted /lang choice or OS locale (the slider chrome is localized).
+setLang('en')
+
 // 1. /effort bare → slider opens with the current level (High) checked.
 stdin.write('/effort')
 await sleep(250)
@@ -225,6 +230,25 @@ check('second backtab → full', channel.mode.id === 'full', channel.mode.id)
 stdin.write('\x1b[Z')
 await sleep(300)
 check('third backtab → default (no segment)', channel.modeIndex === 0, String(channel.modeIndex))
+
+// 6. zh locale: the slider chrome hot-swaps to the localized strings
+//    (picker i18n branch: picker-title-effort / hint-adjust-done).
+setLang('zh')
+stdin.write('/effort')
+await sleep(250)
+stdin.write('\r')
+await sleep(400)
+s = screen()
+check('zh: slider title 推理强度', s.includes('推理强度'), '')
+check('zh: hint line localized', s.includes('调整') && s.includes('完成'), '')
+// Clear the frame buffer so the check only sees the post-Esc repaint —
+// slicing the joined backlog can still reach the open-slider frame.
+stdout.frames.length = 0
+stdin.write('\x1b')
+await sleep(300)
+s = screen()
+check('zh: Esc closed the slider', !s.includes('推理强度'), '')
+setLang('en')
 
 instance.unmount()
 process.exit(failed)
