@@ -37,7 +37,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { homeDir } from '../utils/paths.js'
 
@@ -49,6 +49,17 @@ export type ResumeRepairOutcome =
 
 /** Zstd frame magic number, little-endian (0xFD2FB528). */
 const ZSTD_MAGIC = 0xfd2fb528
+
+/**
+ * Expand the `~`/`~/` prefixes dsh home configuration accepts, against the
+ * operating-system home. Mirrors dsh-home-paths' expansion without taking a
+ * runtime dependency on that package.
+ */
+function expandHomePath(path: string, home: string): string {
+  if (path === '~') return home
+  if (path.startsWith('~/') || path.startsWith('~\\')) return join(home, path.slice(2))
+  return path
+}
 
 /**
  * Session-log storage roots, in priority order, mirroring the persistence
@@ -64,7 +75,10 @@ export function sessionsRoots(): string[] {
   const override = process.env.DSH_TUI_SESSION_ROOT
   if (override !== undefined && override.trim().length > 0) roots.push(override)
   const dshHome = process.env.DSH_HOME
-  roots.push(join(dshHome !== undefined && dshHome.trim().length > 0 ? dshHome : join(home, '.dsh'), 'sessions'))
+  const dshRoot = dshHome !== undefined && dshHome.trim().length > 0
+    ? resolve(expandHomePath(dshHome, home))
+    : join(home, '.dsh')
+  roots.push(join(dshRoot, 'sessions'))
   roots.push(join(home, '.dsh-tui', 'sessions'))
   return [...new Set(roots)]
 }

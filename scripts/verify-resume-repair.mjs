@@ -9,7 +9,10 @@
  *   2. known types are never marked;
  *   3. already-ignorable events are untouched;
  *   4. a second repair pass is a no-op ('clean');
- *   5. a missing session reports 'unavailable' and touches nothing.
+ *   5. a missing session reports 'unavailable' and touches nothing;
+ *   6. without DSH_CC_SESSION_ROOT, the shared `$DSH_HOME/sessions`
+ *      (default `~/.dsh/sessions`) root is found and repaired;
+ *   7. a `~`-prefixed DSH_HOME is expanded before scanning.
  * Exits non-zero on any assertion failure (CI gate).
  */
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
@@ -101,4 +104,49 @@ const missing = await repairSessionLogForResume('ffffffff-ffff-ffff-ffff-fffffff
 assert.equal(missing, 'unavailable', 'missing session reports unavailable')
 
 rmSync(root, { recursive: true, force: true })
+
+// Scenario 2: the shared dsh profile root used by `dsh --profile dsh-tui`
+// and read by dsh web — no DSH_CC_SESSION_ROOT, default `~/.dsh/sessions`.
+// Scenario 3: a `~`-prefixed DSH_HOME, which dsh-home-paths expands but the
+// naive `join(DSH_HOME, 'sessions')` would keep as a literal `~` segment.
+const savedHome = process.env.HOME
+const savedUserProfile = process.env.USERPROFILE
+const savedDshHome = process.env.DSH_HOME
+const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-tui-home-'))
+delete process.env.DSH_CC_SESSION_ROOT
+delete process.env.USERPROFILE
+process.env.HOME = fakeHome
+
+const sharedSessionId = '11111111-2222-3333-4444-555555555555'
+const sharedDir = join(fakeHome, '.dsh', 'sessions', '--shared-work-space--', sharedSessionId)
+const tildeSessionId = '22222222-3333-4444-5555-666666666666'
+const tildeDir = join(fakeHome, 'custom-dsh', 'sessions', '--tilde-work-space--', tildeSessionId)
+try {
+  for (const [dir, sessionId] of [[sharedDir, sharedSessionId], [tildeDir, tildeSessionId]]) {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'session.jsonl.zstd'),
+      Buffer.concat(frames.map((f) => zstdCompressSync(Buffer.from(f.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8')))),
+    )
+  }
+
+  const sharedOutcome = await repairSessionLogForResume(sharedSessionId)
+  assert.equal(sharedOutcome, 'repaired', 'default ~/.dsh/sessions log must be repaired')
+
+  delete process.env.DSH_HOME
+  const defaultAfter = splitFrames(readFileSync(join(sharedDir, 'session.jsonl.zstd'))).flatMap((f) =>
+    zstdDecompressSync(f).toString('utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)),
+  )
+  assert.equal(defaultAfter.find((e) => e.type === 'activity/status')?.ignorable, true, 'shared-root activity/status marked')
+
+  process.env.DSH_HOME = '~/custom-dsh'
+  const tildeOutcome = await repairSessionLogForResume(tildeSessionId)
+  assert.equal(tildeOutcome, 'repaired', '~-prefixed DSH_HOME log must be repaired')
+} finally {
+  if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome
+  if (savedUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedUserProfile
+  if (savedDshHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = savedDshHome
+  rmSync(fakeHome, { recursive: true, force: true })
+}
+
 console.log('verify-resume-repair: OK')

@@ -180,8 +180,9 @@
 # re-export (not the bare `dsh-working-activity` name) so the row resolves
 # from install layouts that never link transitive dependencies into the
 # boot anchor's node_modules — pnpm's isolated profile layout, issue #60.
-# publishIntervalMs 500: live-phase snapshots republish every 500ms so the
-# dsh-tui status-line elapsed timers tick smoothly (default 2000ms).
+# publish stays off: unmarked activity/status events break web/history
+# readers that share ~/.dsh/sessions and do not run this repo's compat
+# repair. The TUI live line uses the prompt slot, not session events.
 - id: working-activity
   name: '@deepseek-harness-tui/dsh-tui/working-activity'
   config:

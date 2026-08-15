@@ -24,7 +24,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, forgetSession, readLastUsed, readResumeTarget, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
-import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog, sessionsRoots } from './compat/index.js'
+import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog, repairSessionLogForResume, sessionsRoots } from './compat/index.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
@@ -2187,9 +2187,13 @@ export function createChannel(
         // KNOWN_SESSION_EVENT_TYPES and throws the whole load on an unmarked
         // third-party type (activity/status before resume-repair), which used
         // to leave every working-activity session titled with the cwd
-        // basename. An unreadable log keeps the basename fallback.
+        // basename. Repair the listed session FIRST so the same picker open
+        // also migrates its log for web/history readers sharing this root;
+        // the live session is skipped — its log is still being appended.
         const empty = new Set<string>()
+        const liveId = String(agent.session.id)
         for (const record of records.slice(0, SESSION_TITLE_DEPTH)) {
+          if (String(record.id) !== liveId) repairSessionLogForResume(String(record.id))
           const info = readSessionTitleFromLog(String(record.id))
           if (info === undefined) continue // keep the basename fallback
           if (!info.hasUserMessage) {
