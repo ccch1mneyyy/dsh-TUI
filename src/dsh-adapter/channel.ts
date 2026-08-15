@@ -1050,6 +1050,10 @@ export function createChannel(
   let sendChain: Promise<void> = Promise.resolve()
   let stagedImageSequence = 0
   const stagedImages = new Map<string, ChannelImageBlock['attachment']>()
+  const clearStagedImages = (): void => {
+    stagedImages.clear()
+    stagedImageSequence = 0
+  }
   /**
    * Expand the text's `@` mentions and deliver ONE user message: the typed
    * text stays the first content block (the transcript bubble renders it —
@@ -1465,6 +1469,9 @@ export function createChannel(
       if (!attachments.imageLimits.mediaTypes.includes(input.mediaType)) {
         throw new Error(`${input.mediaType} images are not accepted by this profile`)
       }
+      if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
+        throw new Error(`image exceeds this profile's per-image size limit`)
+      }
       const attachment = await attachments.saveImage(input)
       stagedImageSequence += 1
       const token = `[Image #${stagedImageSequence}]`
@@ -1825,6 +1832,7 @@ export function createChannel(
       touchSession(sessionId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
+      clearStagedImages()
       return true
     },
     async newSession(): Promise<boolean> {
@@ -1951,6 +1959,7 @@ export function createChannel(
       // The brand-new session becomes the most recently used.
       touchSession(handle.agent.id)
       void oldHandle?.dispose().catch(() => {})
+      clearStagedImages()
       return true
     },
     listWorkspaces() {
@@ -4039,9 +4048,17 @@ export async function expandMentions(
     const limits = attachments.imageLimits
     for (const [token, attachment] of stagedImages) {
       if (!text.includes(token)) continue
-      if (imageCount >= limits.maxImagesPerMessage) break
-      if (imageBytes + attachment.bytes > limits.maxMessageImageBytes) break
-      if (!limits.mediaTypes.includes(attachment.mediaType)) continue
+      // A referenced-but-dropped staged image must be loud: silently sending
+      // the bare token would leave the user believing the image reached the
+      // model. Reuse the missing-mention warning channel.
+      if (
+        imageCount >= limits.maxImagesPerMessage
+        || imageBytes + attachment.bytes > limits.maxMessageImageBytes
+        || !limits.mediaTypes.includes(attachment.mediaType)
+      ) {
+        missing.push(token)
+        continue
+      }
       blocks.push({ type: 'image', attachment })
       imageCount += 1
       imageBytes += attachment.bytes
