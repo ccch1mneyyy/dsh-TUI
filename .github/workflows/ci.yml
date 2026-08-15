@@ -120,6 +120,10 @@ jobs:
       # Ctrl+Enter（CSI 13;5u）不得触发审批面板决定或任何模态确认，
       # 仅无修饰 Enter 生效；ApprovalPanel 全链路 + 源码静态不变量。
       - run: node scripts/verify-plain-enter-guard.mjs
+      # Ctrl+←/-> 按词跳转回归（issue #156, PR #158）：Ctrl+方向键以
+      # leftArrow+ctrl 到达，isMod 跳词分支必须先于裸方向键分支；
+      # 真实管线喂 ESC[1;5D/1;5C 移动光标插入标记字符后提交校验全文。
+      - run: node scripts/verify-word-jump.mjs
       # /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
       # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
       - run: node scripts/verify-resume-manage.mjs
