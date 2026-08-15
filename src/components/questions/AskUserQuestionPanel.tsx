@@ -19,6 +19,7 @@ import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../cc/figures.js'
 import type { QuestionSelection } from '../../questions.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
+import { isPlainReturn } from '../../utils/modifiers.js'
 
 const CHECKED = '◉'
 const UNCHECKED = '○'
@@ -159,7 +160,7 @@ export function AskUserQuestionPanel({
         moveFocus(1)
         return
       }
-      if (key.return) {
+      if (isPlainReturn(key)) {
         submitInput()
         return
       }
@@ -224,7 +225,7 @@ export function AskUserQuestionPanel({
       })
       return
     }
-    if (key.return) {
+    if (isPlainReturn(key)) {
       submitOptions()
       return
     }
