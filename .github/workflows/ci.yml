@@ -89,6 +89,9 @@ jobs:
       # Ctrl+V UI 端到端回归（stub wl-paste）：帮助面板在读取前关闭、
       # 剪贴板文本落入输入框、busy 闩锁释放后第二次粘贴仍生效。
       - run: node --import tsx/esm scripts/repro-clipboard.tsx
+
+      # 图片附件回归：剪贴板位图占位符与图片文件 @ 引用进附件库（#152）。
+      - run: node --import tsx/esm scripts/verify-clipboard-image.ts
       # 换名迁移回归（issue #120）：~/.dsh-cc → ~/.dsh-tui 首启复制迁移、
       # resume.txt 双写契约、旧 env 名检测（DSH_CC_RESUME_SESSION 双读不算废弃）。
       - run: node scripts/verify-legacy-rename.mjs

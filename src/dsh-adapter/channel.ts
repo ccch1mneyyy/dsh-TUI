@@ -1647,7 +1647,7 @@ export function createChannel(
         return null
       }
       try {
-        await attachSessionToWorkspace(ctx, options.cwd, childId)
+        await attachSessionToWorkspace(ctx, state.cwd, childId)
       } catch (error) {
         state.notify(
           `Session rewound, but workspace attachment failed · ${error instanceof Error ? error.message : String(error)}`,
@@ -1752,7 +1752,7 @@ export function createChannel(
         // `/resume` is an explicit adoption of this persisted conversation.
         // This also repairs sessions created by TUI versions that predate the
         // separate workspace ownership ledger.
-        await attachSessionToWorkspace(ctx, options.cwd, SessionId(sessionId))
+        await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
       } catch (error) {
         state.notify(
           `Session resumed, but workspace attachment failed · ${error instanceof Error ? error.message : String(error)}`,
@@ -1901,7 +1901,7 @@ export function createChannel(
         return false
       }
       try {
-        await attachSessionToWorkspace(ctx, options.cwd, sessionId)
+        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
       } catch (error) {
         state.notify(
           `Session created, but workspace attachment failed · ${error instanceof Error ? error.message : String(error)}`,
@@ -2057,7 +2057,7 @@ export function createChannel(
         return false
       }
       try {
-        await attachSessionToWorkspace(ctx, options.cwd, childId)
+        await attachSessionToWorkspace(ctx, state.cwd, childId)
       } catch (error) {
         state.notify(
           `Model switched, but workspace attachment failed · ${error instanceof Error ? error.message : String(error)}`,
