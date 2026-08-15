@@ -112,8 +112,9 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - Windows `Ctrl+V` 依赖 PowerShell `Get-Clipboard`；剪贴板被其他程序锁定时可能静默
   失败并显示为空。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
-- `/permission` 的沙箱预设切换仍未接入（`permission-presets` seam），但工具级审批
-  面板已实现。
+- 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的沙箱
+  预设切换由 dsh-base 的 `permission-presets` 插件提供，profile 组合下可用；
+  裸组合 `cordis.yml` 只挂了 approval 服务，未挂 `permission-presets`。
 - `/vim`、`/connect`、`/hooks`、`/memory` 是兼容占位命令，不代表对应 DSH 能力已挂载。
 - 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务，
   真实模型集成仍需要在目标终端手动验证。

@@ -29,4 +29,10 @@ export declare function readLastUsed(): Readonly<Record<string, number>>;
  * @param sessionId - Session id to touch.
  */
 export declare function touchSession(sessionId: string): void;
+/**
+ * Drop a session's last-used entry (`/resume` picker delete) so the MRU map
+ * never accumulates ids whose logs are gone. Best effort — never throws.
+ * @param sessionId - Session id to forget.
+ */
+export declare function forgetSession(sessionId: string): void;
 //# sourceMappingURL=sessionHistory.d.ts.map

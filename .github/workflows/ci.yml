@@ -46,6 +46,10 @@ jobs:
       - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
       - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
 
+      # 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
+      # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
+      - run: node --import tsx/esm scripts/verify-keys.tsx
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 
@@ -63,6 +67,11 @@ jobs:
       # 版本不一致提示、双语消息、shellQuote 转义规则。
       - run: node scripts/verify-launcher.mjs
 
+      # 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
+      # approval 行；裸组合与 profile patch 的 policy 表达式逐场景同值
+      #（ask / never / win32 never），两个入口语义不漂移。
+      - run: node scripts/verify-cordis-approval.mjs
+
       # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
       # ignorable 标记，已知类型不动，二次运行幂等。
       - run: node scripts/verify-resume-repair.mjs
@@ -75,6 +84,13 @@ jobs:
       # 与 .git 文件 worktree 均覆盖），/resume 过滤兼容升级前记录的
       # 子目录会话，Windows 分隔符与大小写语义。
       - run: node scripts/verify-session-cwd.mjs
+      # /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
+      # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
+      - run: node scripts/verify-resume-manage.mjs
+
+      # /resume 深度窗口外重命名回归（issue #112 review）：MRU 前 20 之外
+      # 的会话改名后必须显示新标题（touch 进入标题窗口），不能回落到目录名。
+      - run: node scripts/verify-resume-rename-mru.mjs
 
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
