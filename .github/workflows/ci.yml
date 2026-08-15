@@ -120,6 +120,11 @@ jobs:
 
       - run: node --import tsx/esm scripts/verify-channel-goal-todo.mjs
 
+      # 技能斜杠命令补全回归（issue #86）：user-invocable 技能合并进 /
+      # 菜单与 Tab 补全（skill 标记、与 locals/注册表撞名让位），
+      # skills/change 实时增删，读取失败保留 last-good。
+      - run: node scripts/verify-skill-commands.mjs
+
       # effort 配置链路回归（issue #51）：cordis 配置的 effort 必须进入实际
       # 请求配置，而不是只做状态栏启动显示（≤0.3.5 的 display-only 行为）。
       - run: node --import tsx/esm scripts/repro-effort.tsx
