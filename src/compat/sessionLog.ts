@@ -39,6 +39,7 @@ import {
 } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { homeDir } from '../utils/paths.js'
 
 /** Repair outcomes, surfaced for regression assertions and debug logging. */
 export type ResumeRepairOutcome =
@@ -51,20 +52,20 @@ const ZSTD_MAGIC = 0xfd2fb528
 
 /**
  * Session-log storage roots, in priority order, mirroring the persistence
- * backend's `root` resolution: cordis.patch.yml sets `DSH_CC_SESSION_ROOT ?? dshHomePath(
+ * backend's `root` resolution: cordis.patch.yml sets `DSH_TUI_SESSION_ROOT ?? dshHomePath(
  * 'sessions')` where dshHomePath is `$DSH_HOME ?? ~/.dsh`; the unpatched
- * cordis.yml base falls back to ~/.dsh-cc/sessions, kept here as the legacy
+ * cordis.yml base falls back to ~/.dsh-tui/sessions, kept here as the legacy
  * last resort. Every candidate is scanned — the first hit wins, so an
- * explicit DSH_CC_SESSION_ROOT always outranks the defaults.
+ * explicit DSH_TUI_SESSION_ROOT always outranks the defaults.
  */
 export function sessionsRoots(): string[] {
-  const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
+  const home = homeDir()
   const roots: string[] = []
-  const override = process.env.DSH_CC_SESSION_ROOT
+  const override = process.env.DSH_TUI_SESSION_ROOT
   if (override !== undefined && override.trim().length > 0) roots.push(override)
   const dshHome = process.env.DSH_HOME
   roots.push(join(dshHome !== undefined && dshHome.trim().length > 0 ? dshHome : join(home, '.dsh'), 'sessions'))
-  roots.push(join(home, '.dsh-cc', 'sessions'))
+  roots.push(join(home, '.dsh-tui', 'sessions'))
   return [...new Set(roots)]
 }
 

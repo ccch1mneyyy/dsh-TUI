@@ -3,7 +3,7 @@
  * Regression: /resume session management (issue #112) — the storage-level
  * half of picker delete/rename (src/compat/sessionLog.ts).
  *
- * Builds a multi-frame zstd session log under a temp DSH_CC_SESSION_ROOT
+ * Builds a multi-frame zstd session log under a temp DSH_TUI_SESSION_ROOT
  * and asserts:
  *   1. appendSessionTitle adds ONE zstd frame whose event continues the
  *      seq sequence, leaving every existing byte untouched (the frame-0
@@ -29,7 +29,7 @@ import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-resume-manage-'))
-process.env.DSH_CC_SESSION_ROOT = root
+process.env.DSH_TUI_SESSION_ROOT = root
 
 // Import AFTER the env override: the module resolves roots at call time,
 // but keeping the order obvious protects against future module-level reads.

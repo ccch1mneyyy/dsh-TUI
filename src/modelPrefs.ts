@@ -1,6 +1,6 @@
 /**
  * Persisted model-route preference (`/model` picker choice), kept at
- * `~/.dsh-cc/model.json` (`provider` + `model` keys) so the choice survives
+ * `~/.dsh-tui/model.json` (`provider` + `model` keys) so the choice survives
  * restarts — same pattern as agent-preset.json. The file is best-effort: a
  * missing/corrupt file or an incomplete route simply falls back to the
  * harness default. Explicit `provider`/`model` keys in cordis.yml win over
@@ -10,10 +10,10 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { DATA_DIR } from './utils/paths.js'
 
-const PREFS_DIR = join(homedir(), '.dsh-cc')
+const PREFS_DIR = DATA_DIR
 
 /** One persisted model route: the provider route plus its model id. */
 export interface ModelPref {

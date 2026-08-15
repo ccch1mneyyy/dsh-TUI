@@ -39,8 +39,8 @@ A complete common override looks like this:
     activityFrames: claude
     contextBar: true
     fullscreen: false
-    preset: !!js process.env.CC_TUI_PRESET ?? undefined
-    sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
+    preset: !!js process.env.DSH_TUI_PRESET ?? undefined
+    sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
 ```
 
 | Field | Default/source | Meaning |
@@ -90,8 +90,8 @@ Usage rules:
 - A blank session can switch in place. Once a conversation has started, the
   official blank-only rule stores the choice as the new default for `/new` or
   the next launch.
-- The default is stored in `~/.dsh-cc/agent-preset.json`.
-- Precedence is explicit `config.preset` or `CC_TUI_PRESET`, then persisted
+- The default is stored in `~/.dsh-tui/agent-preset.json`.
+- Precedence is explicit `config.preset` or `DSH_TUI_PRESET`, then persisted
   preference, then the roster default `standard`.
 - Resuming a session restores the preset recorded in that session's log and
   does not overwrite it with the current default.
@@ -101,8 +101,8 @@ Place a custom preset at `$DSH_HOME/.agent-presets/<name>/` with an
 `~/.dsh/.agent-presets/`.
 
 Since 0.3, model-side tools, planning, compaction, and delegation are owned by
-the preset. Profile mode no longer uses the old `CC_TUI_COMPACT_RATIO`,
-`CC_TUI_COMPACT_RETAIN`, or the former TUI's subagent-depth customization; configure
+the preset. Profile mode no longer uses the old `DSH_TUI_COMPACT_RATIO`,
+`DSH_TUI_COMPACT_RETAIN`, or the former TUI's subagent-depth customization; configure
 those policies in the preset instead.
 
 ## MCP
@@ -143,18 +143,25 @@ for the complete field reference.
 | --- | --- |
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
-| `CC_TUI_PERSONA` | Override the Agent persona injected by the composition |
-| `CC_TUI_PRESET` | Override the default Agent preset for new sessions |
-| `CC_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`) or custom theme ahead of persisted selection |
-| `CC_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
-| `DSH_CC_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
-| `DSH_CC_SESSION_ROOT` | Override the session persistence location; the profile uses a SQLite database path, while bare `cordis.yml` uses a JSONL root directory |
+| `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |
+| `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
+| `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`) or custom theme ahead of persisted selection |
+| `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
+| `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
+| `DSH_TUI_SESSION_ROOT` | Override the session persistence location; the profile uses a SQLite database path, while bare `cordis.yml` uses a JSONL root directory |
 | `DSH_PERMISSION_MODE` | Override non-Windows sandbox policy, such as `workspace-write` or `danger-full-access` |
-| `DSH_CC_WORKSPACE` | Working directory used by the Windows `dsh-tui.cmd` launcher |
-| `CC_TUI_DEBUG` | Enable dsh-tui diagnostics on stderr |
-| `DSH_CC_RENDER_LOG` | File path for raw ANSI frame capture |
+| `DSH_TUI_WORKSPACE` | Working directory used by the Windows `dsh-tui.cmd` launcher |
+| `DSH_TUI_DEBUG` | Enable dsh-tui diagnostics on stderr |
+| `DSH_TUI_RENDER_LOG` | File path for raw ANSI frame capture |
 
-`DSH_CC_RENDER_LOG` may capture visible prompts, tool arguments, and output.
+The old `DSH_TUI_*` and `DSH_TUI_*` names no longer take effect as of this
+release; startup prints one warning line whenever a legacy name is still set
+(repeated on every launch while it remains set). The only exception is
+`DSH_TUI_RESUME_SESSION`: the reader prefers the new name but still accepts
+the old `DSH_TUI_RESUME_SESSION`, and the writer sets both variables to ease
+the transition for older launchers.
+
+`DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
 Do not attach it to a public issue without reviewing and redacting it.
 
 ## Composition constraints
@@ -171,10 +178,11 @@ Do not attach it to a public issue without reviewing and redacting it.
   topology. Normal installation and user overrides should follow
   `cordis.patch.yml`.
 
-`DSH_CC_SESSION_ROOT` is interpreted by the active composition: `dsh --profile
+`DSH_TUI_SESSION_ROOT` is interpreted by the active composition: `dsh --profile
 dsh-tui` uses the SQLite row inserted by this package and defaults to
-`~/.dsh-cc/sessions.sqlite`; direct `dsh --config cordis.yml` uses the example's
-JSONL persistence and defaults to `~/.dsh-cc/sessions/`. Do not point both
+`~/.dsh-tui/sessions.sqlite`; direct `dsh --config cordis.yml` uses the example's
+JSONL persistence and defaults to `$DSH_HOME/sessions` (i.e. `~/.dsh/sessions/`).
+Do not point both
 startup modes at the same existing data directory.
 
 See [Architecture and limitations](architecture.en.md#permissions-and-security-boundary)

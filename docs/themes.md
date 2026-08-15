@@ -26,8 +26,8 @@ dsh-TUI 提供三套 Gentle Mist Blue 色板，外加一个 `auto` 伪主题：
 选择优先级：
 
 ```text
-CC_TUI_THEME
-  > ~/.dsh-cc/theme.json 中的持久化选择
+DSH_TUI_THEME
+  > ~/.dsh-tui/theme.json 中的持久化选择
   > OSC 11 背景检测
   > dark 回退
 ```
@@ -38,12 +38,12 @@ CC_TUI_THEME
 - `/theme <name>`：直接切换。
 - `/theme status`：显示当前主题与持久化位置。
 
-选择器确认后立即热切换，并把选择写入 `~/.dsh-cc/theme.json`。如果设置了
-`CC_TUI_THEME`，它在下一次启动时仍然优先。
+选择器确认后立即热切换，并把选择写入 `~/.dsh-tui/theme.json`。如果设置了
+`DSH_TUI_THEME`，它在下一次启动时仍然优先。
 
 ## 自定义主题
 
-在 `~/.dsh-cc/themes/` 下放置 JSON 文件。每个文件定义一个主题，并从一个内置
+在 `~/.dsh-tui/themes/` 下放置 JSON 文件。每个文件定义一个主题，并从一个内置
 色板开始覆盖：
 
 ```json
@@ -101,7 +101,7 @@ CC_TUI_THEME
 - 一个坏主题不会阻止 TUI 启动，也不会影响其他主题。
 
 主题名来自用户输入，加载器会检查路径是否仍位于主题目录内，防止通过名称跳出
-`~/.dsh-cc/themes/`。修改这部分实现时必须保留路径约束。
+`~/.dsh-tui/themes/`。修改这部分实现时必须保留路径约束。
 
 ## 设计建议
 

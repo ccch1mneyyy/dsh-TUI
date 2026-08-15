@@ -29,8 +29,8 @@ built-in pseudo-theme (not listed in the picker).
 Selection precedence is:
 
 ```text
-CC_TUI_THEME
-  > persisted choice in ~/.dsh-cc/theme.json
+DSH_TUI_THEME
+  > persisted choice in ~/.dsh-tui/theme.json
   > OSC 11 background detection
   > dark fallback
 ```
@@ -42,11 +42,11 @@ CC_TUI_THEME
 - `/theme status` shows the current theme and persistence location.
 
 Confirming a choice hot-switches immediately and writes it to
-`~/.dsh-cc/theme.json`. `CC_TUI_THEME`, when set, still wins on the next launch.
+`~/.dsh-tui/theme.json`. `DSH_TUI_THEME`, when set, still wins on the next launch.
 
 ## Custom themes
 
-Place JSON files under `~/.dsh-cc/themes/`. Each file starts from one built-in
+Place JSON files under `~/.dsh-tui/themes/`. Each file starts from one built-in
 palette and overrides a subset of its colors:
 
 ```json
@@ -106,7 +106,7 @@ color names are not accepted.
 - One bad theme never blocks TUI startup or other themes.
 
 Theme names are user input. The loader verifies that the resolved path remains
-inside `~/.dsh-cc/themes/`, preventing names from escaping the theme directory.
+inside `~/.dsh-tui/themes/`, preventing names from escaping the theme directory.
 Preserve that containment check when changing the implementation.
 
 ## Design guidance

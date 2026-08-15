@@ -149,11 +149,11 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 
 - **Agent preset**：四种官方 Agent 模式（`standard` / `code` / `minimal` / `cordis`），
   `/preset` 切换；已产生对话的会话不可切换，空白会话立即生效。默认 preset 持久化
-  在 `~/.dsh-cc/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-cc/model.json`。
+  在 `~/.dsh-tui/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-tui/model.json`。
   详见[配置参考](docs/configuration.md#agent-preset)。
 - **自定义主题**：`/theme` 选择器（`auto` 跟随系统/终端背景，内置 `light` / `dark` /
-  `dark-ansi`），也支持 `~/.dsh-cc/themes/<名字>.json` 自定义主题，选中即热切换
-  并持久化；`CC_TUI_THEME` 环境变量 > 持久化选择 > OSC 11 终端背景自动检测。
+  `dark-ansi`），也支持 `~/.dsh-tui/themes/<名字>.json` 自定义主题，选中即热切换
+  并持久化；`DSH_TUI_THEME` 环境变量 > 持久化选择 > OSC 11 终端背景自动检测。
   详见[主题系统](docs/themes.md)。
 - **MCP**：通过 `@deepseek-ai/dsh-mcp-client` 挂载服务器，工具以
   `mcp__<服务器>__<工具>` 注册；`/mcp` 查看连接状态。
@@ -198,7 +198,7 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
 - 注入上下文（plugin source 内容）未做独立展示，随系统提示词并入进度条统计。
 - `/model` 实时切换走"会话 fork 续聊"（DSH 无原位换模型 API）：历史原样保留，
   新会话路由到新模型，旧会话仍留在 `/resume` 列表里；选择写入
-  `~/.dsh-cc/model.json`，重启与 `/new` 均沿用。
+  `~/.dsh-tui/model.json`，重启与 `/new` 均沿用。
 - `Ctrl+V` 读剪贴板依赖 PowerShell `Get-Clipboard`：剪贴板被其他进程短暂锁定
   时自动重试，持续锁定时静默放弃。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。

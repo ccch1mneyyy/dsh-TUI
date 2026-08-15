@@ -2,11 +2,11 @@
 export type ResumeRepairOutcome = 'repaired' | 'clean' | 'unavailable';
 /**
  * Session-log storage roots, in priority order, mirroring the persistence
- * backend's `root` resolution: cordis.patch.yml sets `DSH_CC_SESSION_ROOT ?? dshHomePath(
+ * backend's `root` resolution: cordis.patch.yml sets `DSH_TUI_SESSION_ROOT ?? dshHomePath(
  * 'sessions')` where dshHomePath is `$DSH_HOME ?? ~/.dsh`; the unpatched
- * cordis.yml base falls back to ~/.dsh-cc/sessions, kept here as the legacy
+ * cordis.yml base falls back to ~/.dsh-tui/sessions, kept here as the legacy
  * last resort. Every candidate is scanned — the first hit wins, so an
- * explicit DSH_CC_SESSION_ROOT always outranks the defaults.
+ * explicit DSH_TUI_SESSION_ROOT always outranks the defaults.
  */
 export declare function sessionsRoots(): string[];
 /**

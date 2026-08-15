@@ -11,11 +11,11 @@
 
 # ── surface-specific values over the dsh-base layer ─────────────────────────
 
-# The dsh-tui deployment persona; CC_TUI_PERSONA overrides the coding-agent
+# The dsh-tui deployment persona; DSH_TUI_PERSONA overrides the coding-agent
 # default (the base persona is empty).
 - id: system-prompt
   config:
-    persona: !!js process.env.CC_TUI_PERSONA ?? 'You are a coding agent.'
+    persona: !!js process.env.DSH_TUI_PERSONA ?? 'You are a coding agent.'
 
 # The native DeepSeek adapter, pinned to the harness defaults: full thinking
 # at max effort, key and base URL from the launching environment. The base
@@ -143,10 +143,10 @@
 # Sessions live in the shared JSONL store (~/.dsh/sessions) — the same
 # backend dsh web writes — so /resume here and the web session list see each
 # other (#24). The row itself comes from the dsh-base layer; this override
-# only re-points the root when DSH_CC_SESSION_ROOT is set (test isolation).
+# only re-points the root when DSH_TUI_SESSION_ROOT is set (test isolation).
 - id: session-persistence-jsonl
   config:
-    root: !!js process.env.DSH_CC_SESSION_ROOT ?? dshHomePath('sessions')
+    root: !!js process.env.DSH_TUI_SESSION_ROOT ?? dshHomePath('sessions')
 
 # ── dsh-tui rows ────────────────────────────────────────────────────────────
 
@@ -180,8 +180,10 @@
 
     # The interactive front door. The plugin creates/resumes its agent at
     # runtime, seeds the startup status line, and disposes the whole app tree
-    # (exiting the process) when the TUI unmounts. `dsh-tui.cmd --resume`
-    # feeds the session id through DSH_CC_RESUME_SESSION.
+    # (exiting the process) when the TUI unmounts. `dsh-tui --resume`
+    # feeds the session id through DSH_TUI_RESUME_SESSION (the pre-rename
+    # DSH_CC_RESUME_SESSION is still honored as a fallback for old
+    # launchers — TODO: drop once they age out, issue #120).
     - id: dsh-tui
       name: '@deepseek-harness-tui/dsh-tui'
       config:
@@ -193,7 +195,7 @@
         fullscreen: false
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
         # （deepseek: off/high/max）——不在档位表里的值被忽略，回落 adapter
-        # 默认值。优先于持久化的 Shift+Tab 选择（~/.dsh-cc/effort.json）；
+        # 默认值。优先于持久化的 Shift+Tab 选择（~/.dsh-tui/effort.json）；
         # 同时作为顶栏/状态栏的启动显示，首个请求头回来后以实际值为准。
         effort: max
         # Shift+Tab session-mode cycle (array order IS the cycle order;
@@ -215,11 +217,11 @@
         #     plan: false
         #     sandbox: danger-full-access
         #     approval: never
-        # Static preset choice (CC_TUI_PRESET overrides): wins over the
-        # persisted `/preset` preference (~/.dsh-cc/agent-preset.json), which
+        # Static preset choice (DSH_TUI_PRESET overrides): wins over the
+        # persisted `/preset` preference (~/.dsh-tui/agent-preset.json), which
         # wins over the roster default (standard).
-        preset: !!js process.env.CC_TUI_PRESET ?? undefined
-        sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
+        preset: !!js process.env.DSH_TUI_PRESET ?? undefined
+        sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? process.env.DSH_CC_RESUME_SESSION ?? undefined
 
     # Live working-line data source (thinking copy / running tool / turn
     # summary). Mounted through @deepseek-harness-tui/dsh-tui's own

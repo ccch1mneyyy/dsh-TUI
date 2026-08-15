@@ -92,7 +92,7 @@ export declare const THEME_NAMES: readonly ["dark", "dark-ansi", "light"];
  * The `auto` pseudo-theme: not a palette, but a standing request to follow
  * the terminal background (OSC 11, which tracks the system theme in
  * terminals that follow it). Selectable everywhere a theme name is
- * (/theme, CC_TUI_THEME, ~/.dsh-cc/theme.json); getTheme() resolves it to
+ * (/theme, DSH_TUI_THEME, ~/.dsh-tui/theme.json); getTheme() resolves it to
  * the last detected `light`/`dark` palette via the auto base below.
  */
 export declare const AUTO_THEME_NAME = "auto";
@@ -106,7 +106,7 @@ export declare function setAutoThemeBase(name: 'light' | 'dark'): void;
 export declare function getAutoThemeBase(): 'light' | 'dark';
 /**
  * Any theme name: a built-in palette (`light`/`dark`/`dark-ansi`) or a user
- * theme from ~/.dsh-cc/themes/<name>.json. Always resolvable to a concrete
+ * theme from ~/.dsh-tui/themes/<name>.json. Always resolvable to a concrete
  * color palette via getTheme() (unknown names fall back to `dark`).
  */
 export type ThemeName = string;
