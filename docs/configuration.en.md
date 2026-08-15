@@ -44,7 +44,7 @@ A complete common override looks like this:
 | --- | --- | --- |
 | `provider` | `deepseek-official` | DSH model route |
 | `model` | `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
-| `cwd` | `process.cwd()` | Agent workspace and filesystem-policy root |
+| `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree) | Agent workspace and filesystem-policy root |
 | `effort` | normally `max` in the bundle | Reasoning effort actually applied to every request (validated against model levels; deepseek supports only off/high/max and invalid levels silently fall back to the adapter default; wins over the persisted `/effort` choice), also shown in the header at startup |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
