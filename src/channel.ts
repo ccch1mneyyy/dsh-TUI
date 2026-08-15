@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
+import { isUserInvocable, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
@@ -2491,15 +2492,24 @@ export function createChannel(
   }
 
   /**
-   * Rebuild the merged slash-command list from the registry. Registry
-   * registrations are global or agent-scoped, so this runs on
-   * `commands/change` and again whenever the live agent is swapped
-   * (rewind/resume).
+   * Rebuild the merged slash-command list: built-in locals, then registry
+   * commands (plan/goal/…), then user-invocable skills from the DSH skill
+   * registry (issue #86 — filesystem-discovered skills must appear in the
+   * `/` menu and Tab completion, like /audit and /review). Skill entries
+   * are completion-only: dispatch falls through to the model as plain text,
+   * where dsh-tool-skill's pre-step hook injects the skill body — the same
+   * path a hand-typed `/skill-name` takes. Registry and skill reads are
+   * scoped to the LIVE agent, so this runs on `commands/change` +
+   * `skills/change` and again whenever the live agent is swapped
+   * (rewind/resume/new/model).
    */
+  let commandListSeq = 0
   const refreshCommandList = (): void => {
+    const target = agent
+    const token = ++commandListSeq
     const merged: LocalCommand[] = [...LOCAL_COMMANDS]
     if (commandService) {
-      for (const descriptor of commandService.list(agent)) {
+      for (const descriptor of commandService.list(target)) {
         if (merged.some(command => command.name === descriptor.name)) continue
         merged.push({
           name: descriptor.name,
@@ -2511,8 +2521,35 @@ export function createChannel(
     }
     state.commandList = merged
     state.emit()
+    // The skill catalog resolves asynchronously (filesystem providers scan
+    // their roots), so skills append in a continuation; a newer refresh or
+    // an agent swap supersedes this run (token/identity check, same rule as
+    // refreshLoadedContext). Locals and registry commands win name
+    // collisions — a skill named `plan` must not shadow the registry's.
+    const skillsService = serviceForAgent<{
+      list(options?: { scope?: unknown; cwd?: string }): Promise<readonly SkillSummary[]>
+    }>(ctx, target, 'skills')
+    if (skillsService === undefined) return
+    void skillsService.list({
+      scope: target,
+      cwd: (target.session as { header?: { cwd?: string } }).header?.cwd ?? state.cwd,
+    }).then((catalog) => {
+      if (token !== commandListSeq || target !== agent) return
+      const withSkills = [...merged]
+      for (const skill of catalog) {
+        if (!isUserInvocable(skill)) continue
+        if (withSkills.some(command => command.name === skill.name)) continue
+        withSkills.push({ name: skill.name, description: skill.description, skill: true })
+      }
+      if (withSkills.length === merged.length) return
+      state.commandList = withSkills
+      state.emit()
+    }).catch((error: unknown) => {
+      ctx.logger.warn('skill command merge failed: %o', error)
+    })
   }
   ctx.on('commands/change', refreshCommandList)
+  ctx.on('skills/change', refreshCommandList)
   refreshCommandList()
   void refreshLoadedContext()
 
