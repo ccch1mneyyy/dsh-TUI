@@ -4,9 +4,9 @@
  *
  * Resolution order mirrors the `/theme` mechanism (see themePrefs.ts):
  *
- *   1. `CC_TUI_LANG` env var (`en` / `zh`) — pinned at process start
+ *   1. `DSH_TUI_LANG` env var (`en` / `zh`) — pinned at process start
  *   2. `lang` cordis.yml config key (see Config in index.ts)
- *   3. the persisted `/lang` choice in `~/.dsh-cc/lang.json`
+ *   3. the persisted `/lang` choice in `~/.dsh-tui/lang.json`
  *   4. the OS locale guess (`LC_ALL` / `LC_MESSAGES` / `LANG`)
  *   5. `zh` (the original hard-coded language)
  *
@@ -28,12 +28,12 @@ declare const dict: {
         readonly en: "Indicator switched: {{name}} (saved)";
     };
     readonly 'activity-pref-write-failed': {
-        readonly zh: "无法写入 ~/.dsh-cc/working-activity.json，切换未保存";
-        readonly en: "Cannot write ~/.dsh-cc/working-activity.json, switch not saved";
+        readonly zh: "无法写入 ~/.dsh-tui/working-activity.json，切换未保存";
+        readonly en: "Cannot write ~/.dsh-tui/working-activity.json, switch not saved";
     };
     readonly 'model-pref-write-failed': {
-        readonly zh: "无法写入 ~/.dsh-cc/model.json，模型选择不会保存到重启后";
-        readonly en: "Cannot write ~/.dsh-cc/model.json, the model choice will not survive a restart";
+        readonly zh: "无法写入 ~/.dsh-tui/model.json，模型选择不会保存到重启后";
+        readonly en: "Cannot write ~/.dsh-tui/model.json, the model choice will not survive a restart";
     };
     readonly 'model-route-invalid': {
         readonly zh: "持久化的模型路由 {{provider}}/{{model}} 不在该 provider 的模型列表中，已整体回退到 {{fallback}}";
@@ -64,8 +64,8 @@ declare const dict: {
         readonly en: "Current preset already: {{id}}";
     };
     readonly 'preset-pref-write-failed': {
-        readonly zh: "无法写入 ~/.dsh-cc/agent-preset.json，选择未保存";
-        readonly en: "Cannot write ~/.dsh-cc/agent-preset.json, selection not saved";
+        readonly zh: "无法写入 ~/.dsh-tui/agent-preset.json，选择未保存";
+        readonly en: "Cannot write ~/.dsh-tui/agent-preset.json, selection not saved";
     };
     readonly 'preset-locked-saved-default': {
         readonly zh: "会话已开始，preset 已锁定（当前：{{current}}）· 已保存为默认：{{id}}（/new 或下次启动生效）";
@@ -227,6 +227,10 @@ declare const dict: {
         readonly zh: "（未初始化）";
         readonly en: "(not initialized)";
     };
+    readonly 'doctor-legacy-dir': {
+        readonly zh: "旧数据目录: ~/.dsh-tui 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）";
+        readonly en: "Legacy data directory: ~/.dsh-tui still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)";
+    };
     readonly 'subagent-not-mounted': {
         readonly zh: "子代理服务未挂载（leaf 未启用 subagent）";
         readonly en: "Subagent service not mounted (leaf has no subagent)";
@@ -344,8 +348,8 @@ declare const dict: {
         readonly en: "Switch      /activity (picker) or /activity frames <name>";
     };
     readonly 'activity-persist-hint': {
-        readonly zh: "持久化    ~/.dsh-cc/working-activity.json（重启后仍生效）";
-        readonly en: "Persisted    ~/.dsh-cc/working-activity.json (survives restart)";
+        readonly zh: "持久化    ~/.dsh-tui/working-activity.json（重启后仍生效）";
+        readonly en: "Persisted    ~/.dsh-tui/working-activity.json (survives restart)";
     };
     readonly 'activity-current-direct': {
         readonly zh: "当前预设：{{name}} · /activity frames <名> 直接切换：";
@@ -376,8 +380,8 @@ declare const dict: {
         readonly en: "Switch        /preset (picker) or /preset <id>";
     };
     readonly 'preset-persist-hint': {
-        readonly zh: "持久化      ~/.dsh-cc/agent-preset.json（重启后仍生效；cordis.yml preset 优先）";
-        readonly en: "Persisted      ~/.dsh-cc/agent-preset.json (survives restart; cordis.yml preset wins)";
+        readonly zh: "持久化      ~/.dsh-tui/agent-preset.json（重启后仍生效；cordis.yml preset 优先）";
+        readonly en: "Persisted      ~/.dsh-tui/agent-preset.json (survives restart; cordis.yml preset wins)";
     };
     readonly 'preset-lock-hint': {
         readonly zh: "锁定规则    已开始的会话不可切换（官方 blank-only 规则）";
@@ -400,12 +404,16 @@ declare const dict: {
         readonly en: "Switch      /theme (picker) or /theme <name>";
     };
     readonly 'theme-persist-hint': {
-        readonly zh: "持久化    ~/.dsh-cc/theme.json（重启后仍生效；CC_TUI_THEME 优先）";
-        readonly en: "Persisted    ~/.dsh-cc/theme.json (survives restart; CC_TUI_THEME wins)";
+        readonly zh: "持久化    ~/.dsh-tui/theme.json（重启后仍生效；DSH_TUI_THEME 优先）";
+        readonly en: "Persisted    ~/.dsh-tui/theme.json (survives restart; DSH_TUI_THEME wins)";
     };
     readonly 'theme-custom-hint': {
-        readonly zh: "自定义    ~/.dsh-cc/themes/<名字>.json（见 README「自定义主题」）";
-        readonly en: "Custom      ~/.dsh-cc/themes/<name>.json (see README \"Custom themes\")";
+        readonly zh: "自定义    ~/.dsh-tui/themes/<名字>.json（见 README「自定义主题」）";
+        readonly en: "Custom      ~/.dsh-tui/themes/<name>.json (see README \"Custom themes\")";
+    };
+    readonly 'theme-auto-resolved': {
+        readonly zh: "自动解析  当前为 {{name}}（跟随终端背景）";
+        readonly en: "Auto-resolved  currently {{name}} (follows terminal background)";
     };
     readonly 'theme-switched-saved': {
         readonly zh: "主题已切换：{{name}}（已保存）";
@@ -524,8 +532,12 @@ declare const dict: {
         readonly en: "DSH permission policy is set by fs-policy / bash-sandbox config (current leaf: read/write in workspace, writes need a prior read).";
     };
     readonly 'permissions-approval-hint': {
-        readonly zh: "DSH 的 /permission 预设切换需要 approval 服务 + 审批 UI，dsh-tui 未挂载。";
-        readonly en: "DSH /permission preset switching needs the approval service + approval UI, not mounted in dsh-tui.";
+        readonly zh: "审批通道已挂载：命令申请权限提升（sandbox_permissions）时弹出审批条，Yes 放行一次、No / Esc 拒绝。";
+        readonly en: "The approval channel is mounted: sandbox escalations (sandbox_permissions) raise an approval bar — Yes allows once, No / Esc rejects.";
+    };
+    readonly 'permissions-preset-hint': {
+        readonly zh: "/permission 可查看与切换权限预设（read-only / workspace-write / danger-full-access）。";
+        readonly en: "/permission shows and switches permission presets (read-only / workspace-write / danger-full-access).";
     };
     readonly 'permissions-root-hint': {
         readonly zh: "当前文件系统策略以工作目录为根：{{cwd}}";
@@ -592,8 +604,8 @@ declare const dict: {
         readonly en: "DSH has no remote connection mechanism (CC's /connect equivalent is not adapted).";
     };
     readonly 'theme-switch-failed': {
-        readonly zh: "主题「{{name}}」切换失败（无法写入 ~/.dsh-cc/theme.json）";
-        readonly en: "Theme \"{{name}}\" switch failed (cannot write ~/.dsh-cc/theme.json)";
+        readonly zh: "主题「{{name}}」切换失败（无法写入 ~/.dsh-tui/theme.json）";
+        readonly en: "Theme \"{{name}}\" switch failed (cannot write ~/.dsh-tui/theme.json)";
     };
     readonly 'interrupt-delivered': {
         readonly zh: "已打断当前回合，{{n}} 条消息立即处理";
@@ -618,6 +630,14 @@ declare const dict: {
     readonly 'btw-llm-unavailable': {
         readonly zh: "侧问不可用（llm 服务未挂载）";
         readonly en: "Side question unavailable (llm service not mounted)";
+    };
+    readonly 'legacy-dir-migrated': {
+        readonly zh: "数据目录已从 ~/.dsh-tui 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）";
+        readonly en: "Data directory copied from ~/.dsh-tui to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)";
+    };
+    readonly 'legacy-env-renamed': {
+        readonly zh: "环境变量 {{old}} 已更名为 {{new}}，旧名不再生效";
+        readonly en: "Environment variable {{old}} was renamed to {{new}}; the old name no longer takes effect";
     };
     readonly 'activity-ctx-warn': {
         readonly zh: "⚠ 上下文";
@@ -815,6 +835,218 @@ declare const dict: {
         readonly zh: "当前目录没有可恢复的历史会话";
         readonly en: "No resumable sessions in the current directory";
     };
+    readonly 'resume-resumed': {
+        readonly zh: "已恢复会话";
+        readonly en: "Session resumed";
+    };
+    readonly 'resume-more-above': {
+        readonly zh: "↑ 还有 {{n}} 条";
+        readonly en: "↑ {{n}} more";
+    };
+    readonly 'resume-more-below': {
+        readonly zh: "↓ 还有 {{n}} 条";
+        readonly en: "↓ {{n}} more";
+    };
+    readonly 'resume-delete-confirm': {
+        readonly zh: "删除「{{name}}」？会话日志将被永久移除。";
+        readonly en: "Delete \"{{name}}\"? The session log is removed permanently.";
+    };
+    readonly 'resume-deleted': {
+        readonly zh: "已删除会话「{{name}}」";
+        readonly en: "Deleted session {{name}}";
+    };
+    readonly 'resume-delete-failed': {
+        readonly zh: "无法删除会话「{{name}}」";
+        readonly en: "Could not delete session {{name}}";
+    };
+    readonly 'resume-rename-placeholder': {
+        readonly zh: "新的会话名称…";
+        readonly en: "New session name…";
+    };
+    readonly 'resume-rename-failed': {
+        readonly zh: "无法重命名会话「{{name}}」";
+        readonly en: "Could not rename session {{name}}";
+    };
+    readonly 'resume-hint-list': {
+        readonly zh: "**Enter** 恢复 · Esc 退出 · {{mod}}d 删除 · {{mod}}r 重命名";
+        readonly en: "**Enter** to confirm · Esc to exit · {{mod}}d to delete · {{mod}}r to rename";
+    };
+    readonly 'resume-hint-delete': {
+        readonly zh: "**Enter** 删除 · Esc 取消";
+        readonly en: "**Enter** to delete · Esc to cancel";
+    };
+    readonly 'resume-hint-rename': {
+        readonly zh: "**Enter** 保存 · Esc 取消";
+        readonly en: "**Enter** to save · Esc to cancel";
+    };
+    readonly 'resume-title': {
+        readonly zh: "恢复会话";
+        readonly en: "Resume";
+    };
+    readonly 'hint-confirm-exit': {
+        readonly zh: "**Enter** 确认 · Esc 退出";
+        readonly en: "**Enter** to confirm · Esc to exit";
+    };
+    readonly 'hint-confirm-cancel': {
+        readonly zh: "**Enter** 确认 · Esc 取消";
+        readonly en: "**Enter** to confirm · Esc to cancel";
+    };
+    readonly 'hint-select-exit': {
+        readonly zh: "**Enter** 选择 · Esc 退出";
+        readonly en: "**Enter** to select · Esc to exit";
+    };
+    readonly 'hint-rewind-back': {
+        readonly zh: "**Enter** 回退 · Esc 返回";
+        readonly en: "**Enter** to rewind · Esc to back";
+    };
+    readonly 'hint-adjust-done': {
+        readonly zh: "**←/→** 调整 · Enter/Esc 完成";
+        readonly en: "**←/→** to adjust · Enter/Esc to done";
+    };
+    readonly 'hint-history-search': {
+        readonly zh: "↑/↓ 选择 · **Enter** 确认 · Esc 取消";
+        readonly en: "↑/↓ to navigate · **Enter** to select · Esc to cancel";
+    };
+    readonly 'hint-trace': {
+        readonly zh: "**↑/↓ PgUp/PgDn g/G** 滚动 · f 过滤 · Esc/q 关闭";
+        readonly en: "**↑/↓ PgUp/PgDn g/G** to scroll · f to filter · Esc/q to close";
+    };
+    readonly 'hint-expand-ctrl-o': {
+        readonly zh: "（ctrl+o 展开）";
+        readonly en: "(ctrl+o to expand)";
+    };
+    readonly 'picker-title-model': {
+        readonly zh: "模型";
+        readonly en: "Model";
+    };
+    readonly 'picker-title-theme': {
+        readonly zh: "颜色主题";
+        readonly en: "Color theme";
+    };
+    readonly 'picker-title-activity': {
+        readonly zh: "指示器预设";
+        readonly en: "Indicator preset";
+    };
+    readonly 'picker-title-effort': {
+        readonly zh: "推理强度";
+        readonly en: "Reasoning effort";
+    };
+    readonly 'model-loading': {
+        readonly zh: "正在加载模型";
+        readonly en: "Loading models";
+    };
+    readonly 'model-loading-subtitle': {
+        readonly zh: "正在查询 provider…";
+        readonly en: "Querying the provider…";
+    };
+    readonly 'model-switching': {
+        readonly zh: "正在切换模型到 {{name}}…";
+        readonly en: "Switching model to {{name}}…";
+    };
+    readonly 'model-switched': {
+        readonly zh: "模型已切换为 {{name}}";
+        readonly en: "Model switched to {{name}}";
+    };
+    readonly 'rewind-title': {
+        readonly zh: "回退";
+        readonly en: "Rewind";
+    };
+    readonly 'rewind-subtitle': {
+        readonly zh: "选择一条消息，将对话回退到该处";
+        readonly en: "Pick a message to rewind the conversation to";
+    };
+    readonly 'rewind-confirm-title': {
+        readonly zh: "将对话回退到这条消息？";
+        readonly en: "Rewind conversation to this message?";
+    };
+    readonly 'rewind-confirm-desc': {
+        readonly zh: "对话从此处重新开始";
+        readonly en: "conversation restarts here";
+    };
+    readonly 'rewind-empty': {
+        readonly zh: "没有可回退的消息";
+        readonly en: "No messages to rewind to";
+    };
+    readonly 'rewind-last-message': {
+        readonly zh: "最近一条消息";
+        readonly en: "last message";
+    };
+    readonly 'rewind-none': {
+        readonly zh: "还没有可回退的消息";
+        readonly en: "Nothing to rewind yet";
+    };
+    readonly 'rewind-done': {
+        readonly zh: "已回退——编辑后按 Enter 重新发送";
+        readonly en: "Rewound — edit and press Enter to resend";
+    };
+    readonly 'thinking-title': {
+        readonly zh: "切换思考模式";
+        readonly en: "Toggle thinking mode";
+    };
+    readonly 'thinking-subtitle': {
+        readonly zh: "为本会话启用或关闭思考。";
+        readonly en: "Enable or disable thinking for this session.";
+    };
+    readonly 'thinking-enabled': {
+        readonly zh: "启用";
+        readonly en: "Enabled";
+    };
+    readonly 'thinking-enabled-desc': {
+        readonly zh: "DeepSeek 会在回复前先思考";
+        readonly en: "DeepSeek will think before responding";
+    };
+    readonly 'thinking-disabled': {
+        readonly zh: "关闭";
+        readonly en: "Disabled";
+    };
+    readonly 'thinking-disabled-desc': {
+        readonly zh: "DeepSeek 不做扩展思考，直接回复";
+        readonly en: "DeepSeek will respond without extended thinking";
+    };
+    readonly 'thinking-mid-warning': {
+        readonly zh: "在对话中途切换思考模式会增加延迟，并可能降低质量。建议在会话开始时设置。";
+        readonly en: "Changing thinking mode mid-conversation will increase latency and may reduce quality. For best results, set this at the start of a session.";
+    };
+    readonly 'thinking-proceed': {
+        readonly zh: "要继续吗？";
+        readonly en: "Do you want to proceed?";
+    };
+    readonly 'thinking-label': {
+        readonly zh: "思考";
+        readonly en: "Thinking";
+    };
+    readonly 'history-search-title': {
+        readonly zh: "搜索历史";
+        readonly en: "Search history";
+    };
+    readonly 'history-search-placeholder': {
+        readonly zh: "输入以搜索…";
+        readonly en: "Type to search…";
+    };
+    readonly 'history-search-empty': {
+        readonly zh: "没有匹配的命令";
+        readonly en: "No matching commands";
+    };
+    readonly 'time-now': {
+        readonly zh: "刚刚";
+        readonly en: "now";
+    };
+    readonly 'time-minutes-ago': {
+        readonly zh: "{{n}} 分钟前";
+        readonly en: "{{n}}m ago";
+    };
+    readonly 'time-hours-ago': {
+        readonly zh: "{{n}} 小时前";
+        readonly en: "{{n}}h ago";
+    };
+    readonly 'time-days-ago': {
+        readonly zh: "{{n}} 天前";
+        readonly en: "{{n}}d ago";
+    };
+    readonly 'search-no-matches': {
+        readonly zh: "无匹配";
+        readonly en: "no matches";
+    };
     readonly 'rename-usage': {
         readonly zh: "用法  /rename <新名称>";
         readonly en: "Usage  /rename <new title>";
@@ -835,9 +1067,13 @@ declare const dict: {
         readonly zh: "内置 · {{name}} 基底";
         readonly en: "Built-in · {{name}} base";
     };
+    readonly 'theme-auto-base': {
+        readonly zh: "内置 · 跟随系统/终端背景自动选择 light/dark";
+        readonly en: "Built-in · follows the system/terminal background (light/dark)";
+    };
     readonly 'theme-user-base': {
-        readonly zh: "{{base}} 基底 · ~/.dsh-cc/themes/{{name}}.json";
-        readonly en: "{{base}} base · ~/.dsh-cc/themes/{{name}}.json";
+        readonly zh: "{{base}} 基底 · ~/.dsh-tui/themes/{{name}}.json";
+        readonly en: "{{base}} base · ~/.dsh-tui/themes/{{name}}.json";
     };
     readonly 'context-panel-collapse': {
         readonly zh: "折叠";
@@ -967,6 +1203,194 @@ declare const dict: {
         readonly zh: "↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · Enter 提交 · Esc 打断评审";
         readonly en: "↑/↓ select · 1/2 quick-pick · type feedback · Enter submit · Esc dismiss";
     };
+    readonly 'provider-unavailable': {
+        readonly zh: "/provider 需要经 dsh profile 启动（settings / credentials / llm-pi-ai 服务未挂载）";
+        readonly en: "/provider requires starting through a dsh profile (settings / credentials / llm-pi-ai services not mounted)";
+    };
+    readonly 'provider-q-mode': {
+        readonly zh: "要添加哪种模型提供方？";
+        readonly en: "Which kind of model provider do you want to add?";
+    };
+    readonly 'provider-opt-catalog': {
+        readonly zh: "内置 provider";
+        readonly en: "Built-in provider";
+    };
+    readonly 'provider-opt-catalog-desc': {
+        readonly zh: "openai、anthropic、deepseek 等内置目录，自动继承端点与协议";
+        readonly en: "Built-in catalog such as openai, anthropic, deepseek — endpoint and protocol inherited";
+    };
+    readonly 'provider-opt-custom': {
+        readonly zh: "自定义 API 端点";
+        readonly en: "Custom API endpoint";
+    };
+    readonly 'provider-opt-custom-desc': {
+        readonly zh: "OpenAI / Anthropic 兼容的网关或自建服务";
+        readonly en: "An OpenAI/Anthropic-compatible gateway or self-hosted server";
+    };
+    readonly 'provider-q-catalog': {
+        readonly zh: "选择 provider";
+        readonly en: "Choose a provider";
+    };
+    readonly 'provider-opt-other-route': {
+        readonly zh: "其他（手动输入路由名）";
+        readonly en: "Other (enter a route name)";
+    };
+    readonly 'provider-opt-other-route-desc': {
+        readonly zh: "目录里没列出的 catalog 路由";
+        readonly en: "A catalog route not listed above";
+    };
+    readonly 'provider-q-route-id': {
+        readonly zh: "输入路由名";
+        readonly en: "Enter a route name";
+    };
+    readonly 'provider-q-route-id-detail': {
+        readonly zh: "小写字母开头，可含数字与连字符，如 my-gateway";
+        readonly en: "Lowercase letter first, digits and dashes allowed, e.g. my-gateway";
+    };
+    readonly 'provider-route-id-invalid': {
+        readonly zh: "路由名不合法：须以小写字母开头，仅含小写字母 / 数字 / 连字符";
+        readonly en: "Invalid route name: must start with a lowercase letter, only lowercase letters / digits / dashes";
+    };
+    readonly 'provider-q-apikey': {
+        readonly zh: "输入 API key";
+        readonly en: "Enter the API key";
+    };
+    readonly 'provider-q-apikey-detail': {
+        readonly zh: "密钥将写入 ~/.dsh/.credentials.yaml（权限 0600），不会出现在会话记录中";
+        readonly en: "The key is stored in ~/.dsh/.credentials.yaml (mode 0600) and never shown in the transcript";
+    };
+    readonly 'provider-q-baseurl-choice': {
+        readonly zh: "是否覆盖默认 API 端点（baseURL）？";
+        readonly en: "Override the default API endpoint (baseURL)?";
+    };
+    readonly 'provider-opt-baseurl-skip': {
+        readonly zh: "跳过，使用默认端点";
+        readonly en: "Skip — use the default endpoint";
+    };
+    readonly 'provider-opt-baseurl-input': {
+        readonly zh: "现在输入 baseURL";
+        readonly en: "Enter a baseURL now";
+    };
+    readonly 'provider-q-baseurl': {
+        readonly zh: "输入 baseURL";
+        readonly en: "Enter the baseURL";
+    };
+    readonly 'provider-q-protocol': {
+        readonly zh: "选择 API 协议";
+        readonly en: "Choose the wire protocol";
+    };
+    readonly 'provider-protocol-completions-desc': {
+        readonly zh: "OpenAI Chat Completions 兼容（大多数网关）";
+        readonly en: "OpenAI Chat Completions compatible (most gateways)";
+    };
+    readonly 'provider-protocol-responses-desc': {
+        readonly zh: "OpenAI Responses API";
+        readonly en: "OpenAI Responses API";
+    };
+    readonly 'provider-protocol-anthropic-desc': {
+        readonly zh: "Anthropic Messages API";
+        readonly en: "Anthropic Messages API";
+    };
+    readonly 'provider-discovery-running': {
+        readonly zh: "正在探测该端点公布的模型…";
+        readonly en: "Discovering the models this endpoint advertises…";
+    };
+    readonly 'provider-discovery-failed': {
+        readonly zh: "模型探测失败，改为手动输入模型 id";
+        readonly en: "Model discovery failed — enter model ids manually instead";
+    };
+    readonly 'provider-q-models': {
+        readonly zh: "选择要启用的模型（可在输入行逗号分隔补充）";
+        readonly en: "Select the models to enable (add more comma-separated on the input row)";
+    };
+    readonly 'provider-q-models-fallback': {
+        readonly zh: "输入模型 id（逗号分隔）";
+        readonly en: "Enter model ids (comma-separated)";
+    };
+    readonly 'provider-models-required': {
+        readonly zh: "自定义端点至少需要一个模型 id";
+        readonly en: "A custom endpoint needs at least one model id";
+    };
+    readonly 'provider-q-confirm': {
+        readonly zh: "确认写入该 provider 配置？";
+        readonly en: "Write this provider configuration?";
+    };
+    readonly 'provider-route-exists-warning': {
+        readonly zh: "⚠ 该路由已有配置，写入将覆盖现有设置";
+        readonly en: "⚠ This route is already configured — writing overwrites it";
+    };
+    readonly 'provider-opt-confirm-write': {
+        readonly zh: "写入并启用";
+        readonly en: "Write and enable";
+    };
+    readonly 'provider-opt-confirm-cancel': {
+        readonly zh: "取消";
+        readonly en: "Cancel";
+    };
+    readonly 'provider-line-route': {
+        readonly zh: "路由：{{route}}";
+        readonly en: "Route: {{route}}";
+    };
+    readonly 'provider-line-keyref': {
+        readonly zh: "密钥引用：{{ref}}（已写入 ~/.dsh/.credentials.yaml）";
+        readonly en: "Key ref: {{ref}} (stored in ~/.dsh/.credentials.yaml)";
+    };
+    readonly 'provider-line-keyref-env': {
+        readonly zh: "密钥引用：{{ref}}（进程环境已提供同名变量，跳过写入）";
+        readonly en: "Key ref: {{ref}} (already in the process environment, write skipped)";
+    };
+    readonly 'provider-line-baseurl': {
+        readonly zh: "baseURL：{{url}}";
+        readonly en: "baseURL: {{url}}";
+    };
+    readonly 'provider-line-protocol': {
+        readonly zh: "协议：{{api}}";
+        readonly en: "Protocol: {{api}}";
+    };
+    readonly 'provider-line-models': {
+        readonly zh: "模型：{{models}}";
+        readonly en: "Models: {{models}}";
+    };
+    readonly 'provider-line-models-catalog': {
+        readonly zh: "模型：整个 catalog（未收窄）";
+        readonly en: "Models: the whole catalog (not narrowed)";
+    };
+    readonly 'provider-rollback-ok': {
+        readonly zh: "已回滚刚写入的密钥";
+        readonly en: "Rolled back the just-written key";
+    };
+    readonly 'provider-rollback-failed': {
+        readonly zh: "密钥回滚失败，请手动检查 ~/.dsh/.credentials.yaml";
+        readonly en: "Key rollback failed — check ~/.dsh/.credentials.yaml manually";
+    };
+    readonly 'provider-write-failed': {
+        readonly zh: "provider 配置写入失败 · {{err}}";
+        readonly en: "Failed to write the provider configuration · {{err}}";
+    };
+    readonly 'provider-cancelled': {
+        readonly zh: "已取消添加 provider";
+        readonly en: "Provider setup cancelled";
+    };
+    readonly 'provider-success': {
+        readonly zh: "provider {{route}} 已添加";
+        readonly en: "Provider {{route}} added";
+    };
+    readonly 'provider-switch-hint': {
+        readonly zh: "运行 /model 可切换到新 provider 的模型";
+        readonly en: "Run /model to switch to the new provider’s models";
+    };
+    readonly 'provider-q-switch': {
+        readonly zh: "立即切换到新 provider？";
+        readonly en: "Switch to the new provider now?";
+    };
+    readonly 'provider-opt-switch-now': {
+        readonly zh: "切换到 {{model}}";
+        readonly en: "Switch to {{model}}";
+    };
+    readonly 'provider-opt-switch-keep': {
+        readonly zh: "保持当前模型";
+        readonly en: "Keep the current model";
+    };
     readonly 'cmd-desc-new': {
         readonly zh: "新开会话";
     };
@@ -1001,7 +1425,7 @@ declare const dict: {
         readonly zh: "查看会话 token 用量";
     };
     readonly 'cmd-desc-config': {
-        readonly zh: "查看 dsh-cc 配置来源";
+        readonly zh: "查看 dsh-tui 配置来源";
     };
     readonly 'cmd-desc-doctor': {
         readonly zh: "运行环境检查";
@@ -1019,7 +1443,7 @@ declare const dict: {
         readonly zh: "切换 Agent 预设（standard/code/minimal/cordis）";
     };
     readonly 'cmd-desc-theme': {
-        readonly zh: "切换配色主题（内置或自定义）";
+        readonly zh: "切换配色主题（auto 跟随系统，或内置/自定义）";
     };
     readonly 'cmd-desc-lang': {
         readonly zh: "切换界面语言（en / zh）";
@@ -1032,6 +1456,9 @@ declare const dict: {
     };
     readonly 'cmd-desc-tokens': {
         readonly zh: "查看会话 token 用量";
+    };
+    readonly 'cmd-desc-provider': {
+        readonly zh: "添加模型提供方（内置目录或自定义 API 端点）";
     };
     readonly 'cmd-desc-login': {
         readonly zh: "查看 API 凭证状态";
@@ -1055,7 +1482,7 @@ declare const dict: {
         readonly zh: "查看记忆状态";
     };
     readonly 'cmd-desc-update': {
-        readonly zh: "更新 dsh-cc-tui 并重启";
+        readonly zh: "更新 dsh-tui 并重启";
     };
     readonly 'cmd-desc-audit': {
         readonly zh: "对当前项目做全面代码审计";
@@ -1064,7 +1491,7 @@ declare const dict: {
         readonly zh: "记录一份 bug 报告";
     };
     readonly 'cmd-desc-practice': {
-        readonly zh: "与 dsh-cc 进行编程练习";
+        readonly zh: "与 dsh-tui 进行编程练习";
     };
     readonly 'cmd-desc-review': {
         readonly zh: "对当前项目做全面代码评审";
@@ -1111,8 +1538,8 @@ declare const dict: {
         readonly en: "Switch      /lang en | /lang zh";
     };
     readonly 'lang-persist-hint': {
-        readonly zh: "持久化    ~/.dsh-cc/lang.json（重启后仍生效；CC_TUI_LANG 优先）";
-        readonly en: "Persisted    ~/.dsh-cc/lang.json (survives restart; CC_TUI_LANG wins)";
+        readonly zh: "持久化    ~/.dsh-tui/lang.json（重启后仍生效；DSH_TUI_LANG 优先）";
+        readonly en: "Persisted    ~/.dsh-tui/lang.json (survives restart; DSH_TUI_LANG wins)";
     };
     readonly 'lang-switched': {
         readonly zh: "语言已切换：{{lang}}（已保存）";
@@ -1123,8 +1550,8 @@ declare const dict: {
         readonly en: "Unknown language \"{{lang}}\" · /lang to view all (en / zh)";
     };
     readonly 'lang-switch-failed': {
-        readonly zh: "语言「{{lang}}」切换失败（无法写入 ~/.dsh-cc/lang.json）";
-        readonly en: "Language \"{{lang}}\" switch failed (cannot write ~/.dsh-cc/lang.json)";
+        readonly zh: "语言「{{lang}}」切换失败（无法写入 ~/.dsh-tui/lang.json）";
+        readonly en: "Language \"{{lang}}\" switch failed (cannot write ~/.dsh-tui/lang.json)";
     };
     readonly 'trace-title': {
         readonly zh: "轨迹";

@@ -83,7 +83,8 @@ Titles come from the first user message, and entries are ordered by most recent
 use. Confirming switches the Agent and replays persisted events.
 
 On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
-`~/.dsh-cc/resume.txt`.
+`~/.dsh-tui/resume.txt` (also dual-written to the old path
+`~/.dsh-cc/resume.txt` for older launchers that only read it).
 
 ### Rewind
 
@@ -134,7 +135,7 @@ owns native scrollback and selection.
 | `Esc` | Cancel an active drag without copying |
 
 Copy prefers OSC 52. Local fallbacks include `wl-copy`, `xclip`, and `xsel`;
-tmux uses `load-buffer -w`. Set `CC_TUI_DISABLE_MOUSE=1` to temporarily disable
+tmux uses `load-buffer -w`. Set `DSH_TUI_DISABLE_MOUSE=1` to temporarily disable
 fullscreen mouse handling.
 
 ## `ask_user_question` questionnaires
@@ -166,7 +167,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
-| Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
+| Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
 | Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
 | Registry | `/plan`, `/goal`, and any other command registered by the DSH composition |

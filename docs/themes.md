@@ -4,10 +4,11 @@
 
 ## 内置主题
 
-dsh-TUI 提供三套 Gentle Mist Blue 色板：
+dsh-TUI 提供三套 Gentle Mist Blue 色板，外加一个 `auto` 伪主题：
 
 | 名称 | 用途 |
 | --- | --- |
+| `auto` | 伪主题：跟随系统/终端背景，自动解析为 `light` 或 `dark` |
 | `light` | 暖白背景、墨色正文、雾蓝交互色 |
 | `dark` | 深色终端适配，暖灰正文与柔雾蓝强调色 |
 | `dark-ansi` | 只依赖 16 色 ANSI 的兼容回退 |
@@ -15,27 +16,34 @@ dsh-TUI 提供三套 Gentle Mist Blue 色板：
 未明确指定主题时，TUI 会通过 OSC 11 查询终端背景并在 `light` 与 `dark` 之间
 选择；终端不响应时回退到 `dark`。
 
+`auto` 把这次性启动检测变成常驻选择：它在 `/theme`、`CC_TUI_THEME`、
+`~/.dsh-cc/theme.json` 中都是合法值。选中 `auto` 时立即应用上次检测结果，并
+在后台重新查询 OSC 11——跟随系统主题的终端切换深浅色后，再次选择 `auto`（或
+重启）即可跟上。`/theme status` 会显示 `auto` 当前解析到的色板。解析结果通过
+`getTheme('auto')` 对所有消费方生效。注意：用户自定义主题若命名为 `auto` 会被
+内置伪主题遮蔽（选择器中不列出）。
+
 选择优先级：
 
 ```text
-CC_TUI_THEME
-  > ~/.dsh-cc/theme.json 中的持久化选择
+DSH_TUI_THEME
+  > ~/.dsh-tui/theme.json 中的持久化选择
   > OSC 11 背景检测
   > dark 回退
 ```
 
 ## 切换主题
 
-- `/theme`：打开主题选择器。内置主题在前，自定义主题在后。
+- `/theme`：打开主题选择器。`auto` 与内置主题在前，自定义主题在后。
 - `/theme <name>`：直接切换。
 - `/theme status`：显示当前主题与持久化位置。
 
-选择器确认后立即热切换，并把选择写入 `~/.dsh-cc/theme.json`。如果设置了
-`CC_TUI_THEME`，它在下一次启动时仍然优先。
+选择器确认后立即热切换，并把选择写入 `~/.dsh-tui/theme.json`。如果设置了
+`DSH_TUI_THEME`，它在下一次启动时仍然优先。
 
 ## 自定义主题
 
-在 `~/.dsh-cc/themes/` 下放置 JSON 文件。每个文件定义一个主题，并从一个内置
+在 `~/.dsh-tui/themes/` 下放置 JSON 文件。每个文件定义一个主题，并从一个内置
 色板开始覆盖：
 
 ```json
@@ -93,7 +101,7 @@ CC_TUI_THEME
 - 一个坏主题不会阻止 TUI 启动，也不会影响其他主题。
 
 主题名来自用户输入，加载器会检查路径是否仍位于主题目录内，防止通过名称跳出
-`~/.dsh-cc/themes/`。修改这部分实现时必须保留路径约束。
+`~/.dsh-tui/themes/`。修改这部分实现时必须保留路径约束。
 
 ## 设计建议
 

@@ -22,7 +22,7 @@ export interface Config {
   sessionId?: string
   /** LLM provider route. The route resolves atomically (issue #67): when
    *  cordis.yml names BOTH `provider` and `model`, that pair wins; otherwise
-   *  the `/model` choice persisted in `~/.dsh-cc/model.json` wins whole;
+   *  the `/model` choice persisted in `~/.dsh-tui/model.json` wins whole;
    *  otherwise the harness defaults (`deepseek-official`). A provider-only
    *  pin never half-overrides the persisted choice. */
   provider?: string
@@ -30,7 +30,9 @@ export interface Config {
    *  as one atomic route (see `provider`). Harness default model:
    *  `deepseek-v4-flash`. */
   model?: string
-  /** Session working directory; defaults to the invoking directory. */
+  /** Session working directory. When absent, the git worktree root
+   *  containing the invoking directory wins (the invoking directory itself
+   *  outside any worktree) — never a bare launch subdirectory (issue #96). */
   cwd?: string
   /** Reasoning effort applied to every request, validated against the live
    *  route's adapter levels (an unlisted level is ignored and the adapter
@@ -43,7 +45,7 @@ export interface Config {
   activity?: boolean
   /** Working-activity indicator preset: `claude`/`moon`/`comet`/`dots`/…
    *  or `random` (see activityFrames.ts). When absent, the `/activity`
-   *  choice persisted in `~/.dsh-cc/working-activity.json` wins, then the
+   *  choice persisted in `~/.dsh-tui/working-activity.json` wins, then the
    *  `claude` default. */
   activityFrames?: string
   /** Show the segmented context bar (the band under the input with the
@@ -52,12 +54,12 @@ export interface Config {
   contextBar?: boolean
   /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
   fullscreen?: boolean
-  /** UI language: `en` / `zh`. When absent, the `CC_TUI_LANG` env var wins,
-   *  then the `/lang` choice persisted in `~/.dsh-cc/lang.json`, then `zh`. */
+  /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
+   *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */
   lang?: string
   /** Agent preset id new sessions compose from (standard/code/minimal/
    *  cordis/… when the roster is mounted). When absent, the `/preset` choice
-   *  persisted in `~/.dsh-cc/agent-preset.json` wins, then the roster
+   *  persisted in `~/.dsh-tui/agent-preset.json` wins, then the roster
    *  default (`standard`). */
   preset?: string
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0

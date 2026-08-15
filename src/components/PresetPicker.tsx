@@ -3,8 +3,7 @@ import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import { Pane } from './design-system/Pane.js'
 import { Select } from './Select.js'
-import { Byline } from './design-system/Byline.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
+import { HintLine } from './design-system/HintLine.js'
 import type { PresetOption } from '../channel.js'
 
 /**
@@ -46,10 +45,7 @@ export function PresetPicker({
           selectedValue={currentPreset}
         />
         <Text dimColor italic>
-          <Byline>
-            <KeyboardShortcutHint shortcut="Enter" action="confirm" bold />
-            <KeyboardShortcutHint shortcut="Esc" action="exit" />
-          </Byline>
+          <HintLine text={t('hint-confirm-exit')} />
         </Text>
       </Box>
     </Pane>

@@ -4,6 +4,7 @@ import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
+import type { ProviderSetupHost } from './providerWizard.js';
 import { type SessionModeSpec } from './sessionModes.js';
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js';
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -396,7 +397,7 @@ export interface Channel {
     }>;
     /** Set one effort level by id (validated against the adapter list);
      *  false + a notify when the id is not offered. Persists like the old
-     *  Shift+Tab cycle (~/.dsh-cc/effort.json). */
+     *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
     setEffort(id: string): Promise<boolean>;
     /** The session mode currently in force (matched from the session log, or
      *  the last one Shift+Tab applied). */
@@ -431,12 +432,16 @@ export interface Channel {
         timeoutMs?: number;
     }): void;
     /** Switch the working-activity indicator preset (`/activity`): validates
-     *  the name, persists it to `~/.dsh-cc/working-activity.json`, and
+     *  the name, persists it to `~/.dsh-tui/working-activity.json`, and
      *  re-renders the indicator immediately; false when the name is unknown
      *  or the preference cannot be written. */
     setActivityFrames(name: string): boolean;
     /** Advertised models across every registered provider route (empty when the LLM service is absent). */
     listModels(): Promise<readonly LlmModelInfo[]>;
+    /** Runtime capabilities for the `/provider` wizard, over the settings /
+     *  credentials / llm seams; undefined when the composition lacks them
+     *  (bare cordis.yml start without the dsh-base services). */
+    providerSetup(): ProviderSetupHost | undefined;
     /** Top-level entries of the session cwd for `@` file completion. */
     listFiles(): Promise<readonly string[]>;
     /** Recent sessions recorded by the DSH persistence backend (for `/resume`). */
@@ -446,6 +451,14 @@ export interface Channel {
     /** Rename the current session (CC's /rename): appends a `session/title`
      *  event, which the status line and the /resume picker both read. */
     renameSession(title: string): void;
+    /** Delete a persisted session (`/resume` picker ctrl+d): removes its log
+     *  directory, its last-used entry, and the resume marker when it points
+     *  here. False for the live session or a missing/unwritable log. */
+    deleteSession(sessionId: string): Promise<boolean>;
+    /** Rename any persisted session (`/resume` picker ctrl+r): appends a
+     *  `session/title` event to its log (live sessions go through the normal
+     *  rename path). False when the log is absent or undecodable. */
+    renameSessionTo(sessionId: string, title: string): Promise<boolean>;
     /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
     compact(): void;
     /** Render a multi-line local report in the transcript (`/status`,
@@ -626,11 +639,17 @@ export interface ChannelState {
     /** Switch the working-activity indicator preset (see the public Channel). */
     setActivityFrames(name: string): boolean;
     listModels(): Promise<readonly LlmModelInfo[]>;
+    /** `/provider` wizard capabilities (see the public Channel type). */
+    providerSetup(): ProviderSetupHost | undefined;
     listFiles(): Promise<readonly string[]>;
     listSessions(): Promise<readonly SessionRecord[]>;
     setResumeTarget(sessionId: string): void;
     /** Rename the current session (see the public Channel type). */
     renameSession(title: string): void;
+    /** Delete a persisted session (see the public Channel type). */
+    deleteSession(sessionId: string): Promise<boolean>;
+    /** Rename any persisted session (see the public Channel type). */
+    renameSessionTo(sessionId: string, title: string): Promise<boolean>;
     /** Manually compact the session history (CC's /compact). */
     compact(): void;
     /** Multi-line local report (`/status`, `/doctor`, …). */
@@ -694,6 +713,19 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     /** Handle of the initial agent; disposed when a rewind replaces it. */
     handle?: AgentHandle;
 }): ChannelState;
+/**
+ * `/resume` project filter (issue #96): exact cwd match, PLUS sessions
+ * recorded in a subdirectory — pre-upgrade launches recorded the launch
+ * subdirectory as the header cwd, and with the cwd default now resolving to
+ * the git worktree root an exact match would hide those sessions forever.
+ * They belong to the same workspace, so they stay listed. Comparison follows
+ * the platform's filesystem semantics (case-insensitive on Windows — a
+ * pre-upgrade header may record `C:\Repo` where the current launch resolves
+ * `c:\repo`). `caseInsensitive` is a parameter (not a platform read) so the
+ * verifier can exercise both modes on any host. Exported for
+ * scripts/verify-session-cwd.mjs.
+ */
+export declare function sessionCwdMatches(stateCwd: string, headerCwd: string, caseInsensitive?: boolean): boolean;
 /** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
 export interface MentionFs {
     resolve(path: string): Promise<{

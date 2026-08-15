@@ -3,8 +3,7 @@ import { Box, Text, useTerminalSize } from '../ui.js'
 import { t } from '../i18n.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
-import { Byline } from './design-system/Byline.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
+import { HintLine } from './design-system/HintLine.js'
 import {
   formatClock,
   formatDuration,
@@ -129,11 +128,7 @@ export function TraceView({
         )}
       </Box>
       <Text dimColor italic>
-        <Byline>
-          <KeyboardShortcutHint shortcut="↑/↓ PgUp/PgDn g/G" action="scroll" bold />
-          <KeyboardShortcutHint shortcut="f" action="filter" />
-          <KeyboardShortcutHint shortcut="Esc/q" action="close" />
-        </Byline>
+        <HintLine text={t('hint-trace')} />
       </Text>
     </Pane>
   )

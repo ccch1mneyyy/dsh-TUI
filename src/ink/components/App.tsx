@@ -161,7 +161,9 @@ export default class App extends PureComponent<Props, State> {
 
 	// Terminal query/response dispatch. Responses arrive on stdin (parsed
 	// out by parse-keypress) and are routed to pending promise resolvers.
-	querier = new TerminalQuerier(this.props.stdout);
+	querier = new TerminalQuerier(this.props.stdout, enabled =>
+		this.handleSetRawMode(enabled),
+	);
 
 	// Multi-click tracking for double/triple-click text selection. A click
 	// within MULTI_CLICK_TIMEOUT_MS and MULTI_CLICK_DISTANCE of the previous
@@ -270,9 +272,10 @@ export default class App extends PureComponent<Props, State> {
 			clearImmediate(this.xtversionProbe);
 			this.xtversionProbe = null;
 		}
+		this.querier.dispose();
 		// ignore calling setRawMode on an handle stdin it cannot be called
 		if (this.isRawModeSupported()) {
-			this.handleSetRawMode(false);
+			while (this.rawModeEnabledCount > 0) this.handleSetRawMode(false);
 		}
 	}
 	override componentDidCatch(error: Error) {
@@ -326,13 +329,9 @@ export default class App extends PureComponent<Props, State> {
 				// tracking enable writes that may happen in the same render cycle.
 				this.xtversionProbe = setImmediate(() => {
 					this.xtversionProbe = null;
-					// A short-lived raw-mode borrower (ThemeProvider's OSC 11 theme
-					// probe) can acquire and release raw mode entirely within this
-					// tick, so this deferred probe may fire after echo has already
-					// been restored — the terminal's replies would then echo onto
-					// the screen as visible garbage. Only query while raw mode is
-					// still held; if it was released, the next acquisition (count
-					// 0→1) queues a fresh probe.
+					// The original borrower may unmount before this callback runs.
+					// Once sent, TerminalQuerier keeps raw mode held until the reply
+					// and DA1 barrier arrive, so delayed responses cannot echo.
 					if (this.rawModeEnabledCount === 0) {
 						return;
 					}
@@ -352,6 +351,9 @@ export default class App extends PureComponent<Props, State> {
 			this.rawModeEnabledCount++;
 			return;
 		}
+
+		// Cleanups may race App unmount, which already drains every borrower.
+		if (this.rawModeEnabledCount === 0) return;
 
 		// Disable raw mode only when no components left that are using it
 		if (--this.rawModeEnabledCount === 0) {

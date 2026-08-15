@@ -664,7 +664,7 @@ export default class Ink {
       y: rect.y + decl.relativeY
     } : null;
     const parked = this.displayCursor;
-    // Diagnostics: the resolved park target per frame (CC_TUI_DEBUG only).
+    // Diagnostics: the resolved park target per frame (DSH_TUI_DEBUG only).
     // ConPTY's readback drops trailing cursor moves, so pty probes can't
     // observe the park position — this trace is the ground truth of where
     // the native cursor is being told to go.
