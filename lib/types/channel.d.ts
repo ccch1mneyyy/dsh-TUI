@@ -421,6 +421,9 @@ export interface Channel {
     listSessions(): Promise<readonly SessionRecord[]>;
     /** Mark a session for `dsh-tui --resume` on the next launch. */
     setResumeTarget(sessionId: string): void;
+    /** Rename the current session (CC's /rename): appends a `session/title`
+     *  event, which the status line and the /resume picker both read. */
+    renameSession(title: string): void;
     /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
     compact(): void;
     /** Render a multi-line local report in the transcript (`/status`,
@@ -571,6 +574,8 @@ export interface ChannelState {
     listFiles(): Promise<readonly string[]>;
     listSessions(): Promise<readonly SessionRecord[]>;
     setResumeTarget(sessionId: string): void;
+    /** Rename the current session (see the public Channel type). */
+    renameSession(title: string): void;
     /** Manually compact the session history (CC's /compact). */
     compact(): void;
     /** Multi-line local report (`/status`, `/doctor`, …). */

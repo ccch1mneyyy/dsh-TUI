@@ -4,6 +4,11 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gt, valid } from 'semver'
+import { shellQuote } from './utils/shellQuote.js'
+
+// Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
+// the compiled copy at lib/types/utils/shellQuote.js.
+export { shellQuote }
 
 const PACKAGE_NAME = '@deepseek-harness-tui/dsh-tui'
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
@@ -152,13 +157,7 @@ export async function checkForTuiUpdate(): Promise<TuiUpdateInfo | undefined> {
   return target.kind === 'update' ? { current: target.current, latest: target.latest } : undefined
 }
 
-/** cmd.exe joins spawn arguments with spaces; quote anything that could split. */
-export function shellQuote(args: readonly string[]): string[] {
-  return args.map(arg => (/[ \t"^&|<>()]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg))
-}
-
-interface ProcessOptions {
-  env?: NodeJS.ProcessEnv
+interface ProcessOptions {  env?: NodeJS.ProcessEnv
   /** Needed only for .cmd launchers on Windows (they cannot spawn directly). */
   shell?: boolean
 }
