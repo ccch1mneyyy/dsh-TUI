@@ -1,0 +1,1 @@
+{"version":3,"file":"OverlayAbove.d.ts","sourceRoot":"","sources":["../../../src/components/OverlayAbove.tsx"],"names":[],"mappings":"AAAA,OAAO,KAAK,MAAM,OAAO,CAAA;AAGzB;;;;;;;;;;;;GAYG;AACH,wBAAgB,YAAY,CAAC,EAC3B,QAAQ,EACR,SAAS,GACV,EAAE;IACD,QAAQ,EAAE,KAAK,CAAC,SAAS,CAAA;IACzB,kCAAkC;IAClC,SAAS,CAAC,EAAE,MAAM,GAAG,SAAS,CAAA;CAC/B,GAAG,KAAK,CAAC,SAAS,CAqBlB"}

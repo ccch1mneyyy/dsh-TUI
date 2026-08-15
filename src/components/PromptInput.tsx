@@ -15,6 +15,7 @@ import { isMod } from '../utils/modifiers.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
+import { OverlayAbove } from './OverlayAbove.js'
 
 const HISTORY_LIMIT = 50
 
@@ -192,7 +193,7 @@ export function PromptInput({
       if (escTimerRef.current) clearTimeout(escTimerRef.current)
     }
   }, [])
-  const { columns } = useTerminalSize()
+  const { columns, rows: terminalRows } = useTerminalSize()
 
   const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
   const overlayOpen =
@@ -945,8 +946,73 @@ export function PromptInput({
     active: !selectionActive,
   })
 
+  // 浮层整体挂载条件：与内部面板可见条件精确同值。关闭时必须把整个
+  // absolute 浮层移除——渲染器的 absolute-removed 检测只看被移除节点自身
+  // 的 style.position，常驻浮层 + 移除普通子节点不会触发 blit 解毒，被
+  // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。
+  const floatersOpen = helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen
+
   return (
     <Box flexDirection="column" marginTop={1}>
+      {/* 瞬态面板浮层（帮助/队列/补全）：零布局高度、向上覆盖转录尾部，
+          帧高不随面板开关涨落——否则帧顶行会被滚进 scrollback 并在关闭
+          重绘时二次写入（/model 切换多一份启动画的根因，见 OverlayAbove）。 */}
+      {floatersOpen && (
+      <OverlayAbove maxHeight={Math.max(terminalRows - 6, 4)}>
+        {helpOpen && (
+          <Box marginBottom={1}>
+            <HelpMenu commands={channel.commandList} />
+          </Box>
+        )}
+        {channel.pending.length > 0 && (
+          <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
+            {channel.pending.some(item => item.placement === 'steer') && (
+              <Box flexDirection="column">
+                <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
+                {channel.pending
+                  .filter(item => item.placement === 'steer')
+                  .map(item => (
+                    <Text key={item.id} dimColor wrap="truncate">
+                      {'  '}↳ {item.text}
+                    </Text>
+                  ))}
+              </Box>
+            )}
+            {channel.pending.some(item => item.placement === 'followup') && (
+              <Box flexDirection="column">
+                <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
+                {channel.pending
+                  .filter(item => item.placement === 'followup')
+                  .map(item => (
+                    <Text key={item.id} dimColor wrap="truncate">
+                      {'  '}↳ {item.text}
+                    </Text>
+                  ))}
+              </Box>
+            )}
+            <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
+          </Box>
+        )}
+        {fileOverlayOpen && (
+          <Box paddingLeft={2} paddingBottom={1}>
+            <FileSuggestions
+              files={fileMatches}
+              selectedIndex={fileSelected}
+              columns={columns}
+            />
+          </Box>
+        )}
+        {overlayOpen && (
+          <Box paddingLeft={2} paddingBottom={1}>
+            <CommandSuggestions
+              commands={suggestions}
+              selectedIndex={selectedCommand}
+              columns={columns}
+            />
+          </Box>
+        )}
+      </OverlayAbove>
+      )}
       {lastNotification && (
         // position=absolute takes zero layout height so the transcript never
         // shifts when a notification appears/disappears; the layer floats one
@@ -971,58 +1037,6 @@ export function PromptInput({
               {lastNotification.text}
             </Text>
           </Box>
-        </Box>
-      )}
-      {helpOpen && (
-        <Box marginBottom={1}>
-          <HelpMenu commands={channel.commandList} />
-        </Box>
-      )}
-      {channel.pending.length > 0 && (
-        <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-          {channel.pending.some(item => item.placement === 'steer') && (
-            <Box flexDirection="column">
-              <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
-              {channel.pending
-                .filter(item => item.placement === 'steer')
-                .map(item => (
-                  <Text key={item.id} dimColor wrap="truncate">
-                    {'  '}↳ {item.text}
-                  </Text>
-                ))}
-            </Box>
-          )}
-          {channel.pending.some(item => item.placement === 'followup') && (
-            <Box flexDirection="column">
-              <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
-              {channel.pending
-                .filter(item => item.placement === 'followup')
-                .map(item => (
-                  <Text key={item.id} dimColor wrap="truncate">
-                    {'  '}↳ {item.text}
-                  </Text>
-                ))}
-            </Box>
-          )}
-          <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
-        </Box>
-      )}
-      {fileOverlayOpen && (
-        <Box paddingLeft={2} paddingBottom={1}>
-          <FileSuggestions
-            files={fileMatches}
-            selectedIndex={fileSelected}
-            columns={columns}
-          />
-        </Box>
-      )}
-      {overlayOpen && (
-        <Box paddingLeft={2} paddingBottom={1}>
-          <CommandSuggestions
-            commands={suggestions}
-            selectedIndex={selectedCommand}
-            columns={columns}
-          />
         </Box>
       )}
       <Box

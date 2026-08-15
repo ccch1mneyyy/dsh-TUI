@@ -174,7 +174,10 @@ function makeChannel() {
 
 const toPlain = s =>
   s
-    .replace(/\x1b\[(\d+)C/g, () => ' '.repeat(8))
+    // 光标前移按真实格数展开：浮层面板覆盖既有行时 diff 会跳过未变单元格
+    // （两个空格之间只发 CSI n C），固定 8 空格会把 "Reasoning effort"
+    // 拆成多格空格导致断言漏匹配。
+    .replace(/\x1b\[(\d+)C/g, (_, n) => ' '.repeat(Number(n)))
     .replace(/\x1b\[[0-9;?>:]*[a-zA-Z]/g, '')
     .replace(/\x1b\]9;[^\x07]*\x07/g, '')
 

@@ -1,11 +1,12 @@
 import React from 'react'
 import { t } from '../i18n.js'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTerminalSize } from '../ui.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
 import { SearchBox } from './SearchBox.js'
+import { listWindow } from './listWindow.js'
 import { historyEntryId, type HistoryEntry } from '../history.js'
 
 /**
@@ -27,6 +28,18 @@ export function HistorySearchDialog({
   focusIndex: number
 }): React.ReactNode {
   const isTerminalFocused = useTerminalFocus()
+  const { rows: terminalRows } = useTerminalSize()
+  // 焦点窗口化按行预算：每项恒 2 行（命令 + age 描述，ListItem 保证单行
+  // 截断），容器 gap={1} 项间再空 1 行。只数项数会把焦点裁出浮层（二次
+  // 审查实证）。
+  // 框架行：浮层预留 8 + Pane 2 + 标题 1 + gap 1 + SearchBox 3（圆角边框）
+  // + gap 1 + gap 1 + 页脚 1 = 18。
+  const { start, end } = listWindow(
+    matches.map(() => 2),
+    focusIndex,
+    Math.max(terminalRows - 18, 2),
+    1,
+  )
   return (
     <Pane color="permission">
       <Box flexDirection="column" gap={1}>
@@ -43,15 +56,20 @@ export function HistorySearchDialog({
         {matches.length === 0 ? (
           <Text dimColor>{t('history-search-empty')}</Text>
         ) : (
-          matches.map((entry, index) => (
-            <ListItem
-              key={historyEntryId(entry)}
-              isFocused={index === focusIndex}
-              description={formatRelativeAge(entry.ts)}
-            >
-              {entry.text}
-            </ListItem>
-          ))
+          matches.slice(start, end).map((entry, index) => {
+            const absoluteIndex = start + index
+            return (
+              <ListItem
+                key={historyEntryId(entry)}
+                isFocused={absoluteIndex === focusIndex}
+                description={formatRelativeAge(entry.ts)}
+                showScrollUp={absoluteIndex === start && start > 0}
+                showScrollDown={absoluteIndex === end - 1 && end < matches.length}
+              >
+                {entry.text}
+              </ListItem>
+            )
+          })
         )}
         <Text dimColor italic>
           <HintLine text={t('hint-history-search')} />

@@ -1,10 +1,11 @@
 import React from 'react'
 import { t } from '../i18n.js'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTerminalSize } from '../ui.js'
 import type { ChatRow } from '../dsh-adapter/channel.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
+import { listWindow } from './listWindow.js'
 
 /**
  * Double-Esc rewind picker (CC's "Double-tap esc to rewind the code and/or
@@ -41,6 +42,15 @@ export function RewindPicker({
     )
   }
 
+  const { rows: terminalRows } = useTerminalSize()
+  // 焦点窗口化按行预算：首项带 'last message' 描述占 2 行、其余 1 行
+  //（ListItem 保证单行截断）。rewind 是不可见确认的高危操作，焦点必须
+  // 始终在屏。框架行：浮层预留 8 + Pane 2 + 标题块 3 + 页脚 1 = 14。
+  const { start, end } = listWindow(
+    rows.map((_, i) => (i === 0 ? 2 : 1)),
+    focusIndex,
+    Math.max(terminalRows - 14, 2),
+  )
   return (
     <Pane color="permission">
       <Box flexDirection="column">
@@ -53,15 +63,20 @@ export function RewindPicker({
         {rows.length === 0 ? (
           <ListItem isFocused={false}>{t('rewind-empty')}</ListItem>
         ) : (
-          rows.map((row, index) => (
-            <ListItem
-              key={row.id}
-              isFocused={index === focusIndex}
-              description={index === 0 ? t('rewind-last-message') : undefined}
-            >
-              {preview(row.text)}
-            </ListItem>
-          ))
+          rows.slice(start, end).map((row, index) => {
+            const absoluteIndex = start + index
+            return (
+              <ListItem
+                key={row.id}
+                isFocused={absoluteIndex === focusIndex}
+                description={absoluteIndex === 0 ? t('rewind-last-message') : undefined}
+                showScrollUp={absoluteIndex === start && start > 0}
+                showScrollDown={absoluteIndex === end - 1 && end < rows.length}
+              >
+                {preview(row.text)}
+              </ListItem>
+            )
+          })
         )}
       </Box>
       <Text dimColor italic>

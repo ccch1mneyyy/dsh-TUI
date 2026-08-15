@@ -54,6 +54,16 @@ jobs:
       - run: node scripts/verify-scroll.mjs
       - run: node scripts/verify-shrink.mjs
 
+      # /model 切换 scrollback 重复沉积回归：瞬态面板（补全/picker）必须
+      # 走零高度浮层，帧高不随开关涨落——否则帧顶行滚进 scrollback 后被
+      # 关闭重绘二次写入，每切一次 /model 多一份启动画。
+      - run: node --import tsx/esm scripts/repro-model-switch-scrollback.tsx
+
+      # 长列表 picker 焦点窗口化回归：限高浮层下全量渲染会把焦点行裁出屏外
+      # （30 行终端 30 个模型，焦点在索引 0 不可见），且 yoga 挤压会产生
+      # 零高丢行——焦点必须始终随窗口在屏。
+      - run: node --import tsx/esm scripts/repro-picker-windowing.tsx
+
       # 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
       # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
       - run: node --import tsx/esm scripts/verify-keys.tsx

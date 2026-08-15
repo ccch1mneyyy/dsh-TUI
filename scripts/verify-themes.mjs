@@ -125,6 +125,26 @@ check('parse: name/displayName default to file name', () => {
   assert.equal(spec.displayName, 'unnamed')
 })
 
+check('parse: displayName internal CR/LF flattened at the entry', () => {
+  // displayName 会进入按固定行高切片的列表行（ThemePicker/Select）与状态栏
+  // 等单行 UI——内部换行必须在入口压平（四次审查 P3；ListItem 的递归压平
+  // 是第二道防线，不能替代入口断言）。\n、\r、\r\n、连续换行各自折叠为一个
+  // 空格。
+  for (const [raw, want] of [
+    ['A\nB', 'A B'],
+    ['A\rB', 'A B'],
+    ['A\r\nB', 'A B'],
+    ['A\n\nB', 'A B'],
+  ]) {
+    const spec = parseCustomTheme(
+      JSON.stringify({ name: 'nl', displayName: raw, base: 'dark' }),
+      'nl.json',
+    )
+    assert.ok(spec)
+    assert.equal(spec.displayName, want, `displayName ${JSON.stringify(raw)}`)
+  }
+})
+
 check('parse: bad JSON rejected, no throw', () => {
   assert.equal(parseCustomTheme(FIXTURES['broken.json'], 'broken.json'), undefined)
 })

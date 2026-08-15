@@ -16,17 +16,22 @@
  *
  * Assertion discipline: ink repaints only changed lines, so each step opens
  * a FRESH output window (frames cleared before the action) and asserts only
- * on what that window painted.
+ * on what that window painted. One exception: the rename re-anchor check
+ * reads the composed xterm screen, because overlay reflow + the per-cell
+ * minimal diff can legitimately omit the '❯'-prefix cells from the bytes.
  *
  * Run with plain node against the compiled lib:
  *   node scripts/verify-resume-picker-ui.mjs
  * Exits 1 on any failed assertion (CI gate).
  */
 import { Writable, PassThrough } from 'node:stream'
+import xtermPkg from '@xterm/headless'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { Chat } from '../lib/types/screens/Chat.js'
 import { setLang } from '../lib/types/i18n.js'
+
+const { Terminal } = xtermPkg
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -36,12 +41,19 @@ function check(name, ok, extra = '') {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function makeStreams() {
+  // Mirror every byte into a headless terminal so checks can assert on the
+  // composed SCREEN when the per-cell minimal diff makes raw-byte matching
+  // misleading (see the rename re-anchor check below).
+  const term = new Terminal({ cols: 110, rows: 34, scrollback: 200, allowProposedApi: true })
   const stdout = new Writable({
     write(chunk, _enc, cb) {
-      stdout.frames.push(String(chunk))
+      const text = String(chunk)
+      stdout.frames.push(text)
+      term.write(text)
       cb()
     },
   })
+  stdout.term = term
   stdout.columns = 110
   stdout.rows = 34
   stdout.isTTY = true
@@ -214,9 +226,24 @@ s = await windowed(() => stdin.write('\r'), 600) // save → 'betarenamed'
 check('rename call hit the intended session (beta/s-mid)',
   channel.calls.rename.length === 1 && channel.calls.rename[0][0] === 's-mid',
   JSON.stringify(channel.calls.rename))
+// Screen-based, not byte-based: the picker lives in a bottom-anchored
+// zero-height overlay, so entering rename mode reflows the list two rows up;
+// after the save, the renamed row lands where the minimal per-cell diff can
+// reuse the previous row's '❯ beta' prefix and emits only the 'renamed'
+// suffix — a raw-window regex for '❯ betarenamed' can never match even though
+// the composed screen is correct. Assert on what the user actually sees.
+await sleep(30) // let xterm finish parsing the window's bytes
+const renamedRows = []
+{
+  const buf = stdout.term.buffer.active
+  for (let y = 0; y < buf.length; y++) {
+    const txt = buf.getLine(y)?.translateToString(true).trim() ?? ''
+    if (txt.includes('betarenamed')) renamedRows.push(txt)
+  }
+}
 check('focus followed the renamed row to its new top position',
-  /❯\s*betarenamed/.test(s),
-  s.split('\n').filter(l => l.includes('❯')).join('|'))
+  renamedRows.some((l) => /^❯\s*betarenamed/.test(l)),
+  JSON.stringify(renamedRows))
 
 // ── 2. confirm-delete Enter guard ───────────────────────────────────────────
 s = await windowed(() => stdin.write('\x04'), 400) // ctrl+d on the focused row
