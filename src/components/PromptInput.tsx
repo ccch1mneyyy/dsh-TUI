@@ -672,22 +672,23 @@ export function PromptInput({
       setCursor(entry.length)
       return
     }
-    if (key.leftArrow) {
-      setCursor(previous => Math.max(0, previous - 1))
-      return
-    }
-    if (key.rightArrow) {
-      setCursor(previous => Math.min(value.length, previous + 1))
-      return
-    }
     if (isMod(key) && key.leftArrow) {
-      // Jump to the previous word boundary (readline alt+b).
+      // Jump to the previous word boundary (readline alt+b). Must precede the
+      // bare-arrow arms: Ctrl+Left arrives as leftArrow + ctrl.
       setCursor(previous => wordBoundaryLeft(value, previous))
       return
     }
     if (isMod(key) && key.rightArrow) {
       // Jump to the next word boundary (readline alt+f).
       setCursor(previous => wordBoundaryRight(value, previous))
+      return
+    }
+    if (key.leftArrow) {
+      setCursor(previous => Math.max(0, previous - 1))
+      return
+    }
+    if (key.rightArrow) {
+      setCursor(previous => Math.min(value.length, previous + 1))
       return
     }
     if (key.backspace) {
