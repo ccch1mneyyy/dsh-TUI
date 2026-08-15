@@ -62,6 +62,13 @@ export interface QuestionSummary {
 }
 
 const ASK_ABORTED = 'ASK_ABORTED'
+/**
+ * User-initiated cancel (Esc / Ctrl+C in the panel). dsh-plan-mode keys on
+ * this code to report "the user dismissed the plan review to speak instead"
+ * rather than the generic abort message, so user cancels must be told apart
+ * from harness aborts (signal fired) and teardown rejects.
+ */
+const ASK_CANCELLED = 'ASK_CANCELLED'
 
 /** Truncate a long answer line for the transcript summary. */
 function clip(text: string, max = 140): string {
@@ -234,7 +241,7 @@ export class QuestionStore {
     if (pending === undefined) return
     this.active = undefined
     this.rebuildSnapshot()
-    this.fail(pending)
+    this.cancel(pending)
     this.startNext()
     this.emit()
   }
@@ -249,6 +256,15 @@ export class QuestionStore {
     this.emit()
   }
 
+  /** User-initiated cancel — the asker learns the user wants to speak. */
+  private cancel(pending: PendingQuestion): void {
+    pending.reject(new UserQuestionError(
+      'the user cancelled ask_user_question',
+      ASK_CANCELLED,
+    ))
+  }
+
+  /** Harness-side interruption — abort signal fired or plugin teardown. */
   private fail(pending: PendingQuestion): void {
     pending.reject(new UserQuestionError(
       'ask_user_question was interrupted before the user answered',

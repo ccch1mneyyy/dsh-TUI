@@ -46,11 +46,34 @@ const frames = [
 ]
 writeFileSync(file, Buffer.concat(frames.map((f) => zstdCompressSync(Buffer.from(f.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8')))))
 
+// 多帧日志必须逐帧解码——单帧 decompress 只出第一帧，静默漏掉后续事件。
 const decodeAll = () =>
-  zstdDecompressSync(readFileSync(file)).toString('utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  splitFrames(readFileSync(file)).flatMap((f) =>
+    zstdDecompressSync(f).toString('utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)),
+  )
 
 const outcome = await repairSessionLogForResume(sessionId)
 assert.equal(outcome, 'repaired', 'first pass must repair')
+
+// Frame layout is load-bearing: the backend asserts frame 0 holds EXACTLY
+// the header line (assertZstdHeaderFrame; listings read only that frame).
+// A repair that collapses frames breaks /resume listing for EVERY session.
+const ZSTD_MAGIC = 0xfd2fb528
+const splitFrames = (buf) => {
+  const offsets = []
+  for (let i = 0; i + 4 <= buf.length; i++) if (buf.readUInt32LE(i) === ZSTD_MAGIC) offsets.push(i)
+  return offsets.map((start, i) => buf.subarray(start, i + 1 < offsets.length ? offsets[i + 1] : buf.length))
+}
+const repairedBuf = readFileSync(file)
+const repairedFrames = splitFrames(repairedBuf)
+assert.equal(repairedFrames.length, 3, 'frame count preserved (no collapsing)')
+const frame0Lines = zstdDecompressSync(repairedFrames[0]).toString('utf8').split('\n').filter(Boolean)
+assert.equal(frame0Lines.length, 1, 'frame 0 must hold exactly the header line')
+assert.equal(JSON.parse(frame0Lines[0]).type, 'session', 'frame 0 is the header')
+// Frames whose lines were untouched are copied back byte-identically.
+const originalFrames = splitFrames(Buffer.concat(frames.map((f) => zstdCompressSync(Buffer.from(f.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8')))))
+assert.deepEqual(repairedFrames[0], originalFrames[0], 'header frame bytes untouched')
+assert.deepEqual(repairedFrames[1], originalFrames[1], 'known-only frame bytes untouched')
 
 const after = decodeAll()
 assert.equal(after.length, 6, 'event count preserved')
@@ -69,8 +92,10 @@ for (const e of after) {
   }
 }
 
+const bytesBeforeSecond = readFileSync(file)
 const second = await repairSessionLogForResume(sessionId)
 assert.equal(second, 'clean', 'second pass is a no-op')
+assert.deepEqual(readFileSync(file), bytesBeforeSecond, 'second pass leaves bytes identical')
 
 const missing = await repairSessionLogForResume('ffffffff-ffff-ffff-ffff-ffffffffffff')
 assert.equal(missing, 'unavailable', 'missing session reports unavailable')

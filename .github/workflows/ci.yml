@@ -52,6 +52,10 @@ jobs:
       # ignorable 标记，已知类型不动，二次运行幂等。
       - run: node scripts/verify-resume-repair.mjs
 
+      # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
+      # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
+      - run: node scripts/verify-session-titles.mjs
+
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
       # installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
@@ -77,3 +81,11 @@ jobs:
       # CJK 显示宽度截断回归（issue #41）：4 处描述按终端显示宽度处理，
       # CJK 不劈字、窄终端布局不破。
       - run: node --import tsx/esm scripts/verify-cjk-truncate.tsx
+
+      # thinking spinner 残影回归（issue #72）：text-default emoji（✳）
+      # 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
+      - run: node --import tsx/esm scripts/repro-thinking.tsx
+
+      # 斜杠命令描述 i18n 回归（issue #41）：/ 菜单与 ? 帮助菜单描述随
+      # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
+      - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx

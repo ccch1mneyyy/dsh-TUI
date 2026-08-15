@@ -2,12 +2,15 @@ import React from 'react'
 import Box from '../ink/components/Box.js'
 import Text from '../ink/components/Text.js'
 import type { LocalCommand } from '../commands.js'
+import { localizedDescription } from '../commands.js'
+import { modLabel } from '../utils/modifiers.js'
 
 /**
  * The `?` help menu, ported from the leak's `PromptInputHelpMenu.tsx`
  * (three-column shortcut layout, trimmed to the keys dsh-tui actually binds).
  * The command column lists the merged slash-command surface: built-in
  * commands plus plugin-registered ones from the DSH registry (plan/goal/…).
+ * Modifier labels follow the platform convention: ⌘ on macOS, ctrl elsewhere.
  */
 export function HelpMenu({
   commands,
@@ -24,13 +27,13 @@ export function HelpMenu({
           <Text dimColor>? for this help</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+o for verbose output</Text>
+          <Text dimColor>{modLabel}o for verbose output</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+t to toggle context</Text>
+          <Text dimColor>{modLabel}t to toggle context</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+r to search history</Text>
+          <Text dimColor>{modLabel}r to search history</Text>
         </Box>
         <Box>
           <Text dimColor>ctrl+c to interrupt</Text>
@@ -39,7 +42,7 @@ export function HelpMenu({
           <Text dimColor>ctrl+d to exit</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+l to redraw</Text>
+          <Text dimColor>{modLabel}l to redraw</Text>
         </Box>
       </Box>
       <Box flexDirection="column" width={24} flexShrink={0}>
@@ -53,7 +56,7 @@ export function HelpMenu({
           <Text dimColor>←/→ to move cursor</Text>
         </Box>
         <Box>
-          <Text dimColor>ctrl+←/→ for word jumps</Text>
+          <Text dimColor>{modLabel}←/→ for word jumps</Text>
         </Box>
         <Box>
           <Text dimColor>tab to complete command</Text>
@@ -67,7 +70,7 @@ export function HelpMenu({
         {commands.map(command => (
           <Box key={command.name}>
             <Text dimColor wrap="truncate-end">
-              /{command.name} — {command.description}
+              /{command.name} — {localizedDescription(command)}
             </Text>
           </Box>
         ))}

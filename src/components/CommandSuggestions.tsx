@@ -3,6 +3,7 @@ import { Box, Text } from '../ui.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import type { LocalCommand } from '../commands.js'
+import { localizedDescription } from '../commands.js'
 
 /**
  * The slash-command suggestion overlay, ported from the leak's
@@ -52,10 +53,11 @@ export function CommandSuggestions({
           0,
           columns - nameWidth - tagWidth - 4,
         )
+        const rawDescription = localizedDescription(command)
         const description =
-          stringWidth(command.description) > descriptionWidth
-            ? truncateToWidth(command.description, descriptionWidth - 1) + '…'
-            : command.description
+          stringWidth(rawDescription) > descriptionWidth
+            ? truncateToWidth(rawDescription, descriptionWidth - 1) + '…'
+            : rawDescription
         return (
           <Text key={command.name} wrap="truncate">
             <Text color={isSelected ? 'suggestion' : undefined} dimColor={!isSelected}>

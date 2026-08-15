@@ -24,6 +24,12 @@ export type AskUserQuestionPanelProps = {
             readonly description?: string;
         }>;
         readonly multiSelect?: boolean;
+        /** Presentation intent tag (rc.6): 'plan-review' switches to the
+         *  decision-card layout; an intent never changes the protocol. */
+        readonly intent?: {
+            readonly kind: 'plan-review';
+            readonly approve: string;
+        };
     };
     /** 1-based position within the batch (progress header). */
     readonly position: number;

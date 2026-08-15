@@ -290,8 +290,9 @@ the required credentials.
   regression for conflicts with existing modes.
 - Local slash commands are declared in `src/commands.ts` and dispatched in
   `Chat.tsx`; registry commands are merged at runtime. When adding a command,
-  update declaration, dispatch, help/documentation, and any packaged skill
-  mapping together.
+  update declaration, dispatch, help/documentation, the i18n description
+  (`cmd-desc-<name>` in `src/i18n.ts`, zh only — en falls back to the
+  declaration), and any packaged skill mapping together.
 - Skill command spelling is not always the directory spelling. For example,
   the local `/pr_comments` command activates the packaged `pr-comments` skill.
   Preserve explicit mappings and host naming constraints.

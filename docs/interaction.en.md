@@ -139,7 +139,10 @@ FIFO order. A compact Q&A summary is added to the local transcript afterward.
 ## Slash commands
 
 The command menu merges local commands with the DSH command registry. Type `/`
-to inspect the complete surface available in the current composition.
+to inspect the complete surface available in the current composition. Command
+descriptions follow the UI language (`/lang`): built-in commands and mapped
+registry commands (`/plan`, `/goal`, `/feedback`) show Chinese translations in
+zh; unmapped registry commands fall back to the registry's own text.
 
 | Group | Commands |
 | --- | --- |

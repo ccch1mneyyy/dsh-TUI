@@ -2,11 +2,14 @@ import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, type I18nKey } from '../i18n.js'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '../ui.js'
 import { POINTER } from '../cc/figures.js'
+import { isMod, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Channel, ChatRow, PresetOption } from '../channel.js'
 import type { QuestionStore } from '../questions.js'
+import { ApprovalStore } from '../approvals.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
+import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
@@ -102,14 +105,29 @@ function searchableText(row: ChatRow): string {
  * interrupts the running turn, or (when idle) asks for a second Ctrl+C to
  * exit; Enter while scrolled up jumps back to the bottom.
  */
+
+/**
+ * Shared inert approval store for hosts that render Chat without an
+ * approval seam (headless verify scripts). Never parked into, so its
+ * snapshot stays null and the approval panel never mounts.
+ */
+let fallbackApprovalStore: ApprovalStore | undefined
+
 export function Chat({
   channel,
   questionStore,
+  approvalStore,
   onExit,
   onUpdate,
 }: {
   channel: Channel
   questionStore: QuestionStore
+  /**
+   * The approval seam's UI store. Optional: hosts without an approval
+   * channel (headless scripts, older embeds) render Chat without it and
+   * simply never see an approval panel — the question panel keeps its seat.
+   */
+  approvalStore?: ApprovalStore
   onExit: () => void
   /** Update the installed package and restart the current TUI process. */
   onUpdate?: () => void
@@ -123,6 +141,15 @@ export function Chat({
   const questionSnapshot = React.useSyncExternalStore(
     listener => questionStore.subscribe(listener),
     () => questionStore.getSnapshot(),
+  )
+  // The pending tool-approval ask (DSH approval seam): the permission layer
+  // parks here until the panel decides; shown with priority over a pending
+  // questionnaire since it gates a tool about to run. Hosts that pass no
+  // approvalStore share one inert instance that never holds an ask.
+  const approvals = approvalStore ?? (fallbackApprovalStore ??= new ApprovalStore())
+  const approvalSnapshot = React.useSyncExternalStore(
+    listener => approvals.subscribe(listener),
+    () => approvals.getSnapshot(),
   )
   // When a questionnaire batch completes, fold a Q&A summary into the
   // transcript (the tool card itself is hidden from the message list).
@@ -510,6 +537,20 @@ export function Chat({
         })()
         return true
       }
+      case 'rename': {
+        setHelpOpen(false)
+        const title = rawInput.trim()
+        if (title.length === 0) {
+          channel.pushLocal('/rename', [
+            t('rename-current', { title: channel.sessionTitle || '—' }),
+            t('rename-usage'),
+          ])
+          return true
+        }
+        channel.renameSession(title)
+        channel.notify(t('rename-done', { title }))
+        return true
+      }
       case 'rewind':
         // Same picker as PromptInput's double-Esc on an empty input (CC
         // rewind); `openRewind` notifies when there is nothing to rewind.
@@ -662,7 +703,7 @@ export function Chat({
         setHelpOpen(false)
         channel.pushLocal('/terminal-setup', [
           t('terminal-setup-hint'),
-          t('terminal-paste-hint'),
+          t('terminal-paste-hint', { mod: modLabel }),
         ])
         return true
       case 'connect':
@@ -846,10 +887,10 @@ export function Chat({
   }, [])
 
   useInput((input, key, event) => {
-    // The questionnaire owns the keyboard while a question is pending (the
-    // panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc; the prompt
-    // input is unmounted, so nothing else should see these keys).
-    if (questionSnapshot !== null) return
+    // The questionnaire / approval panel owns the keyboard while one is
+    // pending (the panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc;
+    // the prompt input is unmounted, so nothing else should see these keys).
+    if (questionSnapshot !== null || approvalSnapshot !== null) return
     // Mouse wheel scrolls the transcript — in fullscreen there is no
     // terminal scrollback (alt-screen), so this is the only way back.
     // Imperative scrollBy: no React re-render per notch (CC semantics).
@@ -896,7 +937,7 @@ export function Chat({
         setSearchCursor(0)
       } else if (key.end) {
         setSearchCursor(searchQuery.length)
-      } else if (!key.ctrl && !key.meta && input) {
+      } else if (!key.ctrl && !key.meta && !key.super && input) {
         const next = searchQuery.slice(0, searchCursor) + input + searchQuery.slice(searchCursor)
         setSearchQuery(next)
         setSearchCursor(searchCursor + input.length)
@@ -907,12 +948,12 @@ export function Chat({
     // After Enter closed the search bar, n/N keep walking the matches
     // (CC: "Query persists across bar open/close so n/N keep working").
     // Transcript mode only — in prompt mode n/N are ordinary input chars.
-    if (expanded && input === 'n' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta) {
+    if (expanded && input === 'n' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta && !key.super) {
       setSearchCurrent(i => (i >= searchCount - 1 ? 0 : i + 1))
       event.stopImmediatePropagation()
       return
     }
-    if (expanded && input === 'N' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta) {
+    if (expanded && input === 'N' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta && !key.super) {
       setSearchCurrent(i => (i <= 0 ? searchCount - 1 : i - 1))
       event.stopImmediatePropagation()
       return
@@ -1062,7 +1103,7 @@ export function Chat({
         setHistoryFocus(index =>
           historyMatches.length === 0 ? 0 : (index <= 0 ? historyMatches.length - 1 : index - 1),
         )
-      } else if (key.downArrow || (key.ctrl && input === 'r')) {
+      } else if (key.downArrow || (isMod(key) && input === 'r')) {
         // CC's historySearch:next — ↓ and repeat ctrl+r walk to the next match.
         setHistoryFocus(index =>
           historyMatches.length === 0 ? 0 : (index >= historyMatches.length - 1 ? 0 : index + 1),
@@ -1087,7 +1128,7 @@ export function Chat({
         setHistoryCursor(0)
       } else if (key.end) {
         setHistoryCursor(historyQuery.length)
-      } else if (!key.ctrl && !key.meta && input) {
+      } else if (!key.ctrl && !key.meta && !key.super && input) {
         const next = historyQuery.slice(0, historyCursor) + input + historyQuery.slice(historyCursor)
         setHistoryQuery(next)
         setHistoryCursor(historyCursor + input.length)
@@ -1120,12 +1161,12 @@ export function Chat({
       }
       return
     }
-    if (key.ctrl && input === 't') {
+    if (isMod(key) && input === 't') {
       // Toggle the startup loaded-context panel (keyboard only — the
       // ported ink core handles no mouse clicks).
       setLoadedContextOpen(previous => !previous)
     }
-    if (key.ctrl && input === 'r' && !helpOpen) {
+    if (isMod(key) && input === 'r' && !helpOpen) {
       setHistoryQuery('')
       setHistoryCursor(0)
       setHistoryFocus(0)
@@ -1160,10 +1201,10 @@ export function Chat({
         channel.cancel()
       }
       event.stopImmediatePropagation()
-    } else if (key.ctrl && input === 'o') {
+    } else if (isMod(key) && input === 'o') {
       // Leaving transcript mode (Ctrl+O) — search was already handled above.
       setExpanded(previous => !previous)
-    } else if (input === '/' && !key.ctrl && !key.meta) {
+    } else if (input === '/' && !key.ctrl && !key.meta && !key.super) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
       // search is active on the transcript screen where `/` isn't a command).
       if (expanded) {
@@ -1190,10 +1231,10 @@ export function Chat({
       } else {
         requestExit()
       }
-    } else if (key.ctrl && input === 'l') {
+    } else if (isMod(key) && input === 'l') {
       // CC's app:redraw — clear the physical terminal and repaint.
       instances.get(process.stdout)?.forceRedraw()
-    } else if (key.ctrl && input === 'e') {
+    } else if (isMod(key) && input === 'e') {
       setShowAllMessages(previous => !previous)
     } else if (key.return && showPill) {
       handle?.scrollToBottom()
@@ -1371,7 +1412,13 @@ export function Chat({
         )}
         {searchOpen && <TranscriptSearchBar query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
         <GoalTodoPanel channel={channel} />
-        {questionSnapshot !== null && (
+        {approvalSnapshot !== null ? (
+          <ApprovalPanel
+            key={approvalSnapshot.key}
+            approval={approvalSnapshot}
+            onDecide={outcome => approvals.decide(outcome)}
+          />
+        ) : questionSnapshot !== null ? (
           <AskUserQuestionPanel
             key={questionSnapshot.key}
             question={questionSnapshot.question}
@@ -1381,8 +1428,7 @@ export function Chat({
             onAnswer={selection => questionStore.answerCurrent(selection)}
             onCancel={() => questionStore.cancelCurrent()}
           />
-        )}
-        {questionSnapshot === null && (
+        ) : (
           <PromptInput
             channel={channel}
             helpOpen={helpOpen}

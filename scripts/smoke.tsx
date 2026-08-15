@@ -9,12 +9,14 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { ApprovalStore }, { UserQuestionError }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/questions.js'),
+  import('../src/approvals.js'),
+  import('@deepseek-ai/dsh-user-questions'),
 ])
 
 class FakeStdout extends Writable {
@@ -106,7 +108,7 @@ const plainText = (frames: string[]) => frames
 
 const stdout = new FakeStdout()
 const instance = await render(
-  <Chat channel={channel} questionStore={new QuestionStore()} />,
+  <Chat channel={channel} questionStore={new QuestionStore()} approvalStore={new ApprovalStore()} />,
   {
     stdout,
     stdin: new FakeStdin(),
@@ -154,7 +156,7 @@ const panelChannel = {
 const panelStdout = new FakeStdout()
 const panelStdin = new FakeStdin()
 const panelInstance = await render(
-  <Chat channel={panelChannel} questionStore={new QuestionStore()} />,
+  <Chat channel={panelChannel} questionStore={new QuestionStore()} approvalStore={new ApprovalStore()} />,
   {
     stdout: panelStdout,
     stdin: panelStdin,
@@ -174,6 +176,133 @@ panelStdin.write(Buffer.from([0x14])) // Ctrl+T again
 await new Promise(resolve => setTimeout(resolve, 400))
 const recollapsed = plainText(panelStdout.frames)
 console.log('--- panel recollapsed by Ctrl+T?', recollapsed.includes('▶'))
+// ── Interaction panels: plan review + approval ─────────────────────────
+// Drives a third Chat with real QuestionStore/ApprovalStore instances. The
+// fake channel needs pushLocal: resolving a question folds a Q&A summary
+// into the transcript through it.
+const interactChannel = {
+  ...channel,
+  version: 2,
+  rows: [],
+  lastUserText: '',
+  notifications: [],
+  pushLocal: () => {},
+} as never
+const interactStdin = new FakeStdin()
+const interactStdout = new FakeStdout()
+const interactQuestions = new QuestionStore()
+const interactApprovals = new ApprovalStore()
+const interactInstance = await render(
+  <Chat channel={interactChannel} questionStore={interactQuestions} approvalStore={interactApprovals} />,
+  {
+    stdout: interactStdout,
+    stdin: interactStdin,
+    stderr: new FakeStderr(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+  },
+)
+await new Promise(resolve => setTimeout(resolve, 600))
+
+const reviewRequest = {
+  questions: [{
+    id: 'plan-review',
+    header: 'Plan review',
+    question: 'Approve this plan and leave plan mode?',
+    detail: '# Demo plan\n\n1. step',
+    options: [
+      { label: 'Approve', description: 'Leave plan mode; the plan is carried out from the next step.' },
+      { label: 'Keep planning', description: 'Stay in plan mode and keep refining the plan.' },
+    ],
+    intent: { kind: 'plan-review', approve: 'Approve' },
+  }],
+} as never
+
+// Review 1: Enter on the focused Approve row resolves a clean approve.
+let mark = interactStdout.frames.length
+const reviewApprove = interactQuestions.ask(reviewRequest)
+await new Promise(resolve => setTimeout(resolve, 400))
+const reviewFrame = plainText(interactStdout.frames.slice(mark))
+console.log('--- plan review header?', reviewFrame.includes('Plan review'))
+console.log('--- plan review markdown body?', reviewFrame.includes('Demo plan') && reviewFrame.includes('step'))
+console.log('--- plan review decision rows?', reviewFrame.includes('Approve') && reviewFrame.includes('Keep planning'))
+console.log('--- plan review hint?', reviewFrame.includes('Esc 打断评审'))
+interactStdin.write('\r')
+const approveAnswer = await reviewApprove
+console.log('--- clean approve payload?', JSON.stringify(approveAnswer) === JSON.stringify({ answers: [{ id: 'plan-review', selected: ['Approve'] }] }))
+
+// Review 2: typing routes to the feedback row; Enter there declines with
+// the feedback as custom text.
+mark = interactStdout.frames.length
+const reviewFeedback = interactQuestions.ask(reviewRequest)
+await new Promise(resolve => setTimeout(resolve, 400))
+interactStdin.write('改一下')
+await new Promise(resolve => setTimeout(resolve, 200))
+interactStdin.write('\r')
+const feedbackAnswer = await reviewFeedback
+console.log('--- feedback payload?', JSON.stringify(feedbackAnswer) === JSON.stringify({ answers: [{ id: 'plan-review', selected: ['Keep planning'], custom: '改一下' }] }))
+
+// Review 3: Esc dismisses with ASK_CANCELLED (plan-mode reads it as "the
+// user dismissed the review to speak instead").
+const reviewDismiss = interactQuestions.ask(reviewRequest)
+await new Promise(resolve => setTimeout(resolve, 400))
+interactStdin.write('\x1b')
+const dismissCode = await reviewDismiss.then(
+  () => 'resolved',
+  (error: unknown) => error instanceof UserQuestionError ? error.code : 'other',
+)
+console.log('--- dismiss rejects ASK_CANCELLED?', dismissCode === 'ASK_CANCELLED')
+
+// Approval while a question is parked: the approval panel takes precedence.
+const fakeApprovalReq = (callId: string, command: string) => ({
+  agent: {
+    id: 'probe',
+    session: {
+      events: [{
+        type: 'tool/call',
+        seq: 1,
+        time: 0,
+        data: { turn: 0, step: 0, callId, name: 'Bash', arguments: JSON.stringify({ command }) },
+      }],
+    },
+  },
+  toolName: 'Bash',
+  callId,
+  reason: 'needs to delete temp files',
+}) as never
+
+mark = interactStdout.frames.length
+const parkedQuestion = interactQuestions.ask(reviewRequest)
+const approvalReject = interactApprovals.park(fakeApprovalReq('c9', 'rm -rf /tmp/x'))
+await new Promise(resolve => setTimeout(resolve, 400))
+const approvalFrame = plainText(interactStdout.frames.slice(mark))
+console.log('--- approval title?', approvalFrame.includes('等待审批 · Bash'))
+console.log('--- approval command?', approvalFrame.includes('rm -rf /tmp/x'))
+console.log('--- approval reason?', approvalFrame.includes('needs to delete temp files'))
+console.log('--- approval proceed line?', approvalFrame.includes('要允许这次操作吗？'))
+console.log('--- approval rows?', approvalFrame.includes('允许（仅本次）') && approvalFrame.includes('拒绝'))
+console.log('--- approval precedence over question?', !approvalFrame.includes('Plan review'))
+interactStdin.write('2')
+console.log('--- digit 2 rejects?', (await approvalReject) === 'rejected')
+
+// The parked question surfaces once the approval settles; dismiss it.
+await new Promise(resolve => setTimeout(resolve, 400))
+const surfacedFrame = plainText(interactStdout.frames.slice(mark))
+console.log('--- parked question surfaces after approval?', surfacedFrame.includes('Plan review'))
+interactStdin.write('\x1b')
+await parkedQuestion.then(() => 'resolved', () => 'rejected')
+
+// Approval allow-once via digit 1, and Esc rejects (fail closed).
+const approvalAllow = interactApprovals.park(fakeApprovalReq('c10', 'ls /tmp'))
+await new Promise(resolve => setTimeout(resolve, 300))
+interactStdin.write('1')
+console.log('--- digit 1 allows once?', (await approvalAllow) === 'allowed-once')
+const approvalEsc = interactApprovals.park(fakeApprovalReq('c11', 'pwd'))
+await new Promise(resolve => setTimeout(resolve, 300))
+interactStdin.write('\x1b')
+console.log('--- Esc rejects approval?', (await approvalEsc) === 'rejected')
+
+await interactInstance.unmount()
 // unmount() 本身已等清理完成；这里不能再 waitUntilExit()——它的 resolve
 // 回调在 waitUntilExit 首次被调用时才装上（ink.tsx 的 exitPromise 惰性
 // 创建），unmount 之后才创建的 promise 没人再去 resolve，顶层 await 永远

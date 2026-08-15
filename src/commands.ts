@@ -7,10 +7,16 @@
  * handler winning for names both sides declare.
  */
 
+import { tOr } from './i18n.js'
+
 export interface LocalCommand {
   /** The command name without the slash, e.g. `clear`. */
   name: string
-  /** One-line description shown in the suggestion overlay. */
+  /**
+   * One-line description shown in the suggestion overlay — the English text
+   * and the fallback for languages without a `cmd-desc-<name>` dict entry
+   * (see {@link localizedDescription}).
+   */
   description: string
   /** Optional bracket tag shown between name and description. */
   tag?: string
@@ -28,6 +34,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'clear', description: 'Clear the conversation' },
   { name: 'compact', description: 'Compact the conversation history' },
   { name: 'resume', description: 'Resume a previous session' },
+  { name: 'rename', description: 'Rename the current session' },
   { name: 'rewind', description: 'Rewind the conversation to a previous message' },
   { name: 'export', description: 'Export the conversation to a markdown file' },
   // Session / environment
@@ -70,6 +77,18 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'help', description: 'Show shortcuts and commands' },
   { name: 'exit', description: 'Exit dsh-tui' },
 ]
+
+/**
+ * Resolve a command's description in the active UI language. The en text in
+ * `LOCAL_COMMANDS` (and the registry's own text for external commands) is
+ * the fallback; zh translations live in the i18n dict under
+ * `cmd-desc-<name>`. Resolved at call time — components call this during
+ * render, so a `/lang` switch repaints descriptions immediately.
+ * @param command - The command whose description to localize.
+ */
+export function localizedDescription(command: LocalCommand): string {
+  return tOr(`cmd-desc-${command.name}`, command.description)
+}
 
 /**
  * Parse a slash-command line into its name and the verbatim input following

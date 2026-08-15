@@ -92,6 +92,9 @@ export declare class QuestionStore {
     cancelCurrent(): void;
     /** Reject the active and all queued asks (plugin teardown). */
     rejectAll(): void;
+    /** User-initiated cancel — the asker learns the user wants to speak. */
+    private cancel;
+    /** Harness-side interruption — abort signal fired or plugin teardown. */
     private fail;
 }
 //# sourceMappingURL=questions.d.ts.map

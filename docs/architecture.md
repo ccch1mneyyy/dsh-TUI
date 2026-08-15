@@ -88,8 +88,10 @@ profile 可通过 `DSH_CC_SESSION_ROOT` 改写 SQLite 路径；直接运行根�
 
 ## 权限与安全边界
 
-`dsh-TUI` 本身不提供独立沙箱，也不实现 `/permission` 的审批 UI。实际能力由
-`cordis.patch.yml` 挂载的 DSH 服务决定：
+`dsh-TUI` 本身不提供独立沙箱；实际能力由 `cordis.patch.yml` 挂载的 DSH 服务
+决定。审批走 `ctx.approval` seam：策略为 `ask` 时 TUI 以 CC 式审批面板作为
+answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定——协议没有
+"总是允许"与反馈通道：
 
 - 非 Windows 默认 `DSH_PERMISSION_MODE` 为 `workspace-write`，文件策略要求先观察
   文件，审批策略通常为 `ask`。
@@ -110,7 +112,8 @@ profile 可通过 `DSH_CC_SESSION_ROOT` 改写 SQLite 路径；直接运行根�
 - Windows `Ctrl+V` 依赖 PowerShell `Get-Clipboard`；剪贴板被其他程序锁定时可能静默
   失败并显示为空。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
-- `/permission` 的沙箱预设切换没有接入，因为当前 TUI 没有 approval UI。
+- `/permission` 的沙箱预设切换仍未接入（`permission-presets` seam），但工具级审批
+  面板已实现。
 - `/vim`、`/connect`、`/hooks`、`/memory` 是兼容占位命令，不代表对应 DSH 能力已挂载。
 - 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务，
   真实模型集成仍需要在目标终端手动验证。

@@ -10,6 +10,7 @@ import { createChannel } from './channel.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { logForDebugging } from './utils/debug.js'
 import { QuestionStore } from './questions.js'
+import { ApprovalStore } from './approvals.js'
 import { registerPackagedSkills } from './packaged-skills.js'
 import { readActivityFrames } from './activityPrefs.js'
 import { readModelPref } from './modelPrefs.js'
@@ -163,6 +164,20 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     agentPreset,
     handle,
   })
+  // DSH approval seam: the permission layer asks ApprovalService.request(),
+  // which dispatches an `approval/request` waterfall. With no answerer the
+  // chain falls through to the fail-closed 'unavailable', so register this
+  // TUI as the interactive answerer for the agent it owns; requests for
+  // other agents delegate down the chain (next()). Guarded on the service
+  // being mounted — a bare composition without the dsh-base approval row
+  // has nothing to answer into. channel.agentId tracks agent swaps
+  // (/new, /resume, rewind), so ownership is re-evaluated per request.
+  const approvalStore = new ApprovalStore()
+  if (ctx.get('approval') !== undefined) {
+    ctx.on('approval/request', (req, next) =>
+      String(req.agent.id) === channel.agentId ? approvalStore.park(req) : next())
+    ctx.effect(() => () => approvalStore.settleAll('cancelled'))
+  }
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
   notifyStderr = (text, options) => channel.notify(text, options)
@@ -267,6 +282,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const chat = React.createElement(Chat, {
     channel,
     questionStore,
+    approvalStore,
     onExit: () => handleExit(),
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the

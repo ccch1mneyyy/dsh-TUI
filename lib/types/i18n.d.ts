@@ -584,8 +584,8 @@ declare const dict: {
         readonly en: "Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).";
     };
     readonly 'terminal-paste-hint': {
-        readonly zh: "Ctrl+V 粘贴文本/文件路径；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。";
-        readonly en: "Ctrl+V pastes text/file paths; Ctrl+Shift+V is native terminal paste; right-click paste also works.";
+        readonly zh: "{{mod}}V 粘贴文本/文件路径；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。";
+        readonly en: "{{mod}}V pastes text/file paths; Ctrl+Shift+V is native terminal paste; right-click paste also works.";
     };
     readonly 'connect-none': {
         readonly zh: "DSH 暂无远程连接机制（CC 的 /connect 对应能力未适配）。";
@@ -751,6 +751,18 @@ declare const dict: {
         readonly zh: "当前目录没有可恢复的历史会话";
         readonly en: "No resumable sessions in the current directory";
     };
+    readonly 'rename-usage': {
+        readonly zh: "用法  /rename <新名称>";
+        readonly en: "Usage  /rename <new title>";
+    };
+    readonly 'rename-current': {
+        readonly zh: "当前名称  {{title}}";
+        readonly en: "Current title  {{title}}";
+    };
+    readonly 'rename-done': {
+        readonly zh: "已重命名为「{{title}}」";
+        readonly en: "Renamed to \"{{title}}\"";
+    };
     readonly 'compact-summary-folded': {
         readonly zh: "摘要已折叠";
         readonly en: "Summary folded";
@@ -855,6 +867,171 @@ declare const dict: {
         readonly zh: "直接输入…";
         readonly en: "Type directly…";
     };
+    readonly 'approval-waiting': {
+        readonly zh: " ⏳ 等待审批 · {{tool}} ";
+        readonly en: " Awaiting approval · {{tool}} ";
+    };
+    readonly 'approval-proceed': {
+        readonly zh: "要允许这次操作吗？";
+        readonly en: "Do you want to proceed?";
+    };
+    readonly 'approval-yes': {
+        readonly zh: "允许（仅本次）";
+        readonly en: "Yes, allow once";
+    };
+    readonly 'approval-no': {
+        readonly zh: "拒绝";
+        readonly en: "No";
+    };
+    readonly 'approval-hint': {
+        readonly zh: "↑/↓ 选择 · Enter 确认 · Esc 拒绝";
+        readonly en: "↑/↓ select · Enter confirm · Esc reject";
+    };
+    readonly 'plan-review-fallback-header': {
+        readonly zh: "计划评审";
+        readonly en: "Plan review";
+    };
+    readonly 'plan-review-feedback-placeholder': {
+        readonly zh: "输入反馈，告诉模型要改什么…";
+        readonly en: "Tell the model what to change…";
+    };
+    readonly 'plan-review-approve-needs-empty': {
+        readonly zh: "请先清空反馈再批准（或在输入行回车提交反馈）";
+        readonly en: "Clear the feedback to approve (or press Enter on the input row to send it)";
+    };
+    readonly 'plan-review-hint': {
+        readonly zh: "↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · Enter 提交 · Esc 打断评审";
+        readonly en: "↑/↓ select · 1/2 quick-pick · type feedback · Enter submit · Esc dismiss";
+    };
+    readonly 'cmd-desc-new': {
+        readonly zh: "新开会话";
+    };
+    readonly 'cmd-desc-clear': {
+        readonly zh: "清空当前会话";
+    };
+    readonly 'cmd-desc-compact': {
+        readonly zh: "压缩会话历史";
+    };
+    readonly 'cmd-desc-resume': {
+        readonly zh: "恢复历史会话";
+    };
+    readonly 'cmd-desc-rename': {
+        readonly zh: "重命名当前会话";
+    };
+    readonly 'cmd-desc-rewind': {
+        readonly zh: "回退会话到历史消息";
+    };
+    readonly 'cmd-desc-export': {
+        readonly zh: "导出会话为 Markdown 文件";
+    };
+    readonly 'cmd-desc-status': {
+        readonly zh: "查看会话状态";
+    };
+    readonly 'cmd-desc-cost': {
+        readonly zh: "查看会话 token 用量";
+    };
+    readonly 'cmd-desc-config': {
+        readonly zh: "查看 dsh-cc 配置来源";
+    };
+    readonly 'cmd-desc-doctor': {
+        readonly zh: "运行环境检查";
+    };
+    readonly 'cmd-desc-init': {
+        readonly zh: "在工作目录创建 AGENTS.md";
+    };
+    readonly 'cmd-desc-agents': {
+        readonly zh: "查看本会话的子代理";
+    };
+    readonly 'cmd-desc-activity': {
+        readonly zh: "切换工作状态指示器预设";
+    };
+    readonly 'cmd-desc-preset': {
+        readonly zh: "切换 Agent 预设（standard/code/minimal/cordis）";
+    };
+    readonly 'cmd-desc-theme': {
+        readonly zh: "切换配色主题（内置或自定义）";
+    };
+    readonly 'cmd-desc-lang': {
+        readonly zh: "切换界面语言（en / zh）";
+    };
+    readonly 'cmd-desc-model': {
+        readonly zh: "查看当前模型";
+    };
+    readonly 'cmd-desc-thinking': {
+        readonly zh: "切换扩展思考显示";
+    };
+    readonly 'cmd-desc-tokens': {
+        readonly zh: "查看会话 token 用量";
+    };
+    readonly 'cmd-desc-login': {
+        readonly zh: "查看 API 凭证状态";
+    };
+    readonly 'cmd-desc-logout': {
+        readonly zh: "清除 API 凭证";
+    };
+    readonly 'cmd-desc-permissions': {
+        readonly zh: "查看权限策略状态";
+    };
+    readonly 'cmd-desc-add-dir': {
+        readonly zh: "查看文件系统策略范围";
+    };
+    readonly 'cmd-desc-hooks': {
+        readonly zh: "查看 hooks 状态";
+    };
+    readonly 'cmd-desc-mcp': {
+        readonly zh: "查看 MCP 状态";
+    };
+    readonly 'cmd-desc-memory': {
+        readonly zh: "查看记忆状态";
+    };
+    readonly 'cmd-desc-update': {
+        readonly zh: "更新 dsh-cc-tui 并重启";
+    };
+    readonly 'cmd-desc-audit': {
+        readonly zh: "对当前项目做全面代码审计";
+    };
+    readonly 'cmd-desc-bug': {
+        readonly zh: "记录一份 bug 报告";
+    };
+    readonly 'cmd-desc-practice': {
+        readonly zh: "与 dsh-cc 进行编程练习";
+    };
+    readonly 'cmd-desc-review': {
+        readonly zh: "对当前项目做全面代码评审";
+    };
+    readonly 'cmd-desc-pr_comments': {
+        readonly zh: "审查拉取请求评论";
+    };
+    readonly 'cmd-desc-release-notes': {
+        readonly zh: "生成发布说明";
+    };
+    readonly 'cmd-desc-vuln-check': {
+        readonly zh: "运行安全漏洞检查";
+    };
+    readonly 'cmd-desc-vim': {
+        readonly zh: "切换 vim 模式";
+    };
+    readonly 'cmd-desc-terminal-setup': {
+        readonly zh: "查看终端配置建议";
+    };
+    readonly 'cmd-desc-connect': {
+        readonly zh: "连接远程机器";
+    };
+    readonly 'cmd-desc-help': {
+        readonly zh: "查看快捷键与命令";
+    };
+    readonly 'cmd-desc-exit': {
+        readonly zh: "退出 dsh-tui";
+    };
+    readonly 'cmd-desc-plan': {
+        readonly zh: "切换计划模式（/plan off 退出）";
+    };
+    readonly 'cmd-desc-goal': {
+        readonly zh: "设置或查看会话目标";
+    };
+    readonly 'cmd-desc-feedback': {
+        readonly zh: "提交使用反馈";
+    };
     readonly 'lang-current': {
         readonly zh: "当前语言  {{lang}}";
         readonly en: "Current language  {{lang}}";
@@ -900,6 +1077,16 @@ export declare function isLang(value: unknown): value is Lang;
  * @param params - Placeholder values.
  */
 export declare function t(key: I18nKey, params?: I18nParams): string;
+/**
+ * Translate a runtime-computed key (e.g. `cmd-desc-${name}`), falling back
+ * to the given text when the key is missing or has no entry in the active
+ * language — unlike {@link t}, which renders the key itself. Used where the
+ * fallback holds the authoritative text (command descriptions: the en copy
+ * lives in `LOCAL_COMMANDS` / the DSH registry, the dict carries zh only).
+ * @param key - Dictionary key, computed at runtime so it is not type-checked.
+ * @param fallback - Text used when no translation exists.
+ */
+export declare function tOr(key: string, fallback: string): string;
 /**
  * Parse a persisted `{ lang }` value; anything else yields undefined.
  * @param text - Raw file contents.

@@ -18,6 +18,7 @@ import { Box, Text, useInput } from '../../ui.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../cc/figures.js'
 import type { QuestionSelection } from '../../questions.js'
+import { PlanReviewPanel } from './PlanReviewPanel.js'
 
 const CHECKED = '◉'
 const UNCHECKED = '○'
@@ -31,6 +32,9 @@ export type AskUserQuestionPanelProps = {
     readonly detail?: string
     readonly options?: ReadonlyArray<{ readonly label: string; readonly description?: string }>
     readonly multiSelect?: boolean
+    /** Presentation intent tag (rc.6): 'plan-review' switches to the
+     *  decision-card layout; an intent never changes the protocol. */
+    readonly intent?: { readonly kind: 'plan-review'; readonly approve: string }
   }
   /** 1-based position within the batch (progress header). */
   readonly position: number
@@ -51,6 +55,12 @@ export function AskUserQuestionPanel({
   onAnswer,
   onCancel,
 }: AskUserQuestionPanelProps): React.ReactNode {
+  // Plan-mode's exit_plan_mode ask carries a presentation intent: render
+  // the CC-style decision card instead of the generic questionnaire. The
+  // branch precedes every hook so hook order stays stable per remount key.
+  if (question.intent?.kind === 'plan-review') {
+    return <PlanReviewPanel question={question} onAnswer={onAnswer} onCancel={onCancel} />
+  }
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true
   /** Rows: the real options plus the inline input row at the tail. */
@@ -183,7 +193,7 @@ export function AskUserQuestionPanel({
         setCustomCursor(customText.length)
         return
       }
-      if (!key.ctrl && !key.meta && input) {
+      if (!key.ctrl && !key.meta && !key.super && input) {
         setCustomText(text => text.slice(0, customCursor) + input + text.slice(customCursor))
         setCustomCursor(cursor => cursor + input.length)
         setError(null)
@@ -225,7 +235,7 @@ export function AskUserQuestionPanel({
     }
     // Typing on an option appends into the input row; single-select also
     // attaches this option's label so Enter carries label + text (#9).
-    if (!key.ctrl && !key.meta && input) {
+    if (!key.ctrl && !key.meta && !key.super && input) {
       appendText(input)
       if (!multiSelect) setAttached(options[focusIndex]?.label ?? null)
     }
