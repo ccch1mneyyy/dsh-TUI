@@ -128,7 +128,7 @@ assert.match(
 )
 assert.doesNotMatch(plugin, /if \(created\)/, 'startup attachment must not skip resumed legacy sessions')
 assert.equal(
-  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, options\.cwd, (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
+  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|handle\.agent\.session\.header\.cwd \?\? state\.cwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
   4,
   'rewind, /resume, /new, and model-switch paths all attach ownership',
 )
