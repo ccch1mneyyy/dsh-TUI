@@ -123,7 +123,7 @@ export function StatusLine({
         ]
       : []),
     <Text key="cwd" color="inactiveShimmer">
-      {basename(channel.cwd)}
+      {basename(channel.displayCwd)}
     </Text>,
     ...(channel.sessionTitle
       ? [

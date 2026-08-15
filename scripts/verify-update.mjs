@@ -94,6 +94,7 @@ try {
 
 // ---- resolveRegistryBase: env (both spellings) over npmrc over default
 const HOME_BACKUP = process.env.HOME
+const USERPROFILE_BACKUP = process.env.USERPROFILE
 const scratch2 = mkdtempSync(join(tmpdir(), 'verify-update2-'))
 try {
   writeFileSync(join(scratch2, '.npmrc'), 'registry=https://mirror.example.com/\n')
@@ -101,6 +102,7 @@ try {
   delete process.env.NPM_CONFIG_REGISTRY
   delete process.env.npm_config_registry
   process.env.HOME = scratch2
+  process.env.USERPROFILE = scratch2
   check(
     'resolveRegistryBase reads ~/.npmrc',
     resolveRegistryBase() === 'https://mirror.example.com',
@@ -127,6 +129,7 @@ try {
   const emptyHome = mkdtempSync(join(tmpdir(), 'verify-update3-'))
   try {
     process.env.HOME = emptyHome
+    process.env.USERPROFILE = emptyHome
     check(
       'resolveRegistryBase defaults to npmjs.org',
       resolveRegistryBase() === 'https://registry.npmjs.org',
@@ -138,6 +141,8 @@ try {
 } finally {
   if (HOME_BACKUP === undefined) delete process.env.HOME
   else process.env.HOME = HOME_BACKUP
+  if (USERPROFILE_BACKUP === undefined) delete process.env.USERPROFILE
+  else process.env.USERPROFILE = USERPROFILE_BACKUP
   rmSync(scratch2, { recursive: true, force: true })
 }
 

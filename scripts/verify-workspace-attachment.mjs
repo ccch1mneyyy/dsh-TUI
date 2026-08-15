@@ -138,7 +138,7 @@ for (const id of ['storage', 'storage-json', 'storage-domain', 'workspace']) {
 assert.match(patch, /root: !!js dshHomePath\('storages'\)/)
 assert.match(
   patch,
-  /- id: dsh-tui\n\s+name: '@deepseek-harness-tui\/dsh-tui'\n[\s\S]{0,240}inject: \[workspaceRegistry\]/,
+  /- id: dsh-tui\n\s+name: '@deepseek-harness-tui\/dsh-tui'\n[\s\S]{0,240}inject: \[[^\]]*\bworkspaceRegistry\b[^\]]*\]/,
   'profile waits for WorkspaceRegistry before the TUI creates its startup session',
 )
 

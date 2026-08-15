@@ -152,17 +152,34 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     model: config.model,
   }
   // Atomic route resolution (issue #67): a complete cordis.yml route wins
-  // whole, else the persisted `/model` choice wins whole, else the harness
-  // defaults — a provider-only config pin never merges with the persisted
-  // model half. resolveAgent validates this route on create and reports the
-  // one actually used, so the status line shows the real request route.
-  const startupRoute = resolveModelRoute(configuredRoute, readModelPref())
+  // whole, else the persisted `/model` choice wins whole, else Harness's
+  // provider-neutral agent-default-model selection. The local DeepSeek pair
+  // remains the final fallback for bare embedders without that service. This
+  // lets optional provider bundles supply the same default to Web and TUI
+  // without patching this front door by name.
+  const configuredDefault = (ctx.get('agentDefaultModel') as {
+    currentSelection?(): { provider?: unknown; model?: unknown }
+  } | undefined)?.currentSelection?.()
+  const harnessDefault = typeof configuredDefault?.provider === 'string'
+    && configuredDefault.provider.length > 0
+    && typeof configuredDefault.model === 'string'
+    && configuredDefault.model.length > 0
+    ? { provider: configuredDefault.provider, model: configuredDefault.model }
+    : undefined
+  const startupRoute = resolveModelRoute(configuredRoute, readModelPref(), harnessDefault)
   // Session cwd (issue #96): explicit cordis.yml `cwd` wins; otherwise the
   // git worktree root containing the launch directory (the launch directory
   // itself outside any worktree), so `@` completion and mention expansion
   // see the repository, not an arbitrary launch subdirectory. Resolved ONCE
   // here — the agent meta and the channel must agree.
-  const sessionCwd = resolveSessionCwd(config.cwd)
+  const requestedWorkspace = config.workspace ?? process.env.DSH_TUI_WORKSPACE_TARGET
+  const initialWorkspace = requestedWorkspace === undefined
+    ? undefined
+    : await ctx.tuiWorkspaces.resolve(requestedWorkspace)
+  if (requestedWorkspace !== undefined && initialWorkspace === undefined) {
+    throw new Error(`dsh-tui: unsupported or unavailable workspace target: ${requestedWorkspace}`)
+  }
+  const sessionCwd = initialWorkspace?.cwd ?? resolveSessionCwd(config.cwd)
   const meta = { cwd: sessionCwd }
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,

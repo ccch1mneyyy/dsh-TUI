@@ -76,6 +76,7 @@ function makeChannel(transcriptRows: unknown[], listeners?: Set<() => void>) {
     model: 'deepseek-v4-flash',
     tokens: { input: 120, output: 45 },
     cwd: 'C:/code/demo-project',
+    displayCwd: 'C:/code/demo-project',
     gitBranch: 'main',
     working: true,
     spinnerMode: 'requesting',

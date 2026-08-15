@@ -32,6 +32,9 @@ export interface Config {
      *  containing the invoking directory wins (the invoking directory itself
      *  outside any worktree) — never a bare launch subdirectory (issue #96). */
     cwd?: string;
+    /** Absolute local path, file URL, or provider URI resolved before the
+     *  initial agent is created. */
+    workspace?: string;
     /** Reasoning effort applied to every request, validated against the live
      *  route's adapter levels (an unlisted level is ignored and the adapter
      *  default applies). Wins over the persisted /effort choice; also seeds

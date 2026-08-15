@@ -4,6 +4,8 @@
     "storage-json",
     "storage-domain",
     "workspace",
+    "dsh-tui-workspaces",
+    "dsh-tui-command-trees",
     "agent-presets",
     "cordis-host-runner",
     "dsh-tui",

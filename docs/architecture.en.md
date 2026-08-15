@@ -24,6 +24,7 @@ Cordis profile
 | `src/index.ts` | Cordis plugin name, injection declaration, config interface, and Schema; keep the entry small and lazy |
 | `src/plugin.ts` | TTY guard, questionnaire/skill registration, Agent create/resume, React mount, and the single cleanup funnel |
 | `src/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
+| `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |
@@ -33,6 +34,13 @@ Cordis profile
 
 Do not duplicate DSH Agent, session, or tool services in a component. Connect new
 capability through an existing service, registry, or channel seam.
+
+Workspace extensions follow a one-way dependency: the TUI publishes only a
+structural provider interface, while optional plugins register URIs, display
+metadata, and command executors. Protocol parsing and external connections
+belong entirely to the plugin. Removing a plugin must leave local workspaces
+and session flows free of missing configuration, placeholders, or fallback
+branches.
 
 ## The session log is the source of truth
 

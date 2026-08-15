@@ -16,7 +16,7 @@ export function CommandSuggestions({
   selectedIndex,
   columns,
 }: {
-  commands: readonly LocalCommand[]
+  commands: readonly (LocalCommand & { descriptionKey?: string })[]
   selectedIndex: number
   columns: number
 }): React.ReactNode {

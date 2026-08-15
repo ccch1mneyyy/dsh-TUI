@@ -104,9 +104,9 @@ export declare function readClipboard(): Promise<ClipboardRead>;
  */
 export declare function _resetLinuxPasteCache(): void;
 /**
- * Render pasted clipboard content for insertion into the prompt: file paths
- * and exported image paths quoted when they contain whitespace, text with
- * line endings normalized.
+ * Render pasted clipboard content for insertion into the prompt. Image files
+ * become `@` references so the send pipeline can attach their bytes; ordinary
+ * files remain quoted paths and text has normalized line endings.
  * @param content - Clipboard content as read by {@link readClipboard}.
  * @returns The prompt-ready text: quoted, space-joined paths, or the text
  *   with line endings normalized.

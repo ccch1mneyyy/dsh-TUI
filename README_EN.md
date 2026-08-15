@@ -30,13 +30,14 @@ the interface, and removing it leaves no core modifications behind.
 ## Highlights
 
 - **Terminal-native interaction**: streaming Markdown, structured tool cards,
-  command and file completion, `@` file references (complete anywhere in the
-  message; sending attaches the file content or directory listing), history
+  command and file completion, `@` file references (complete anywhere; text
+  files attach content, directories attach listings, and PNG/JPEG/WebP/GIF are
+  sent as durable image blocks), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
   zh/en UI language switching.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
-- **Complete session workflow**: `/resume`, `/new`, `/compact`, `/export`, the
+- **Complete session workflow**: `/resume`, `/new`, `/workspace`, `/compact`, `/export`, the
   `/btw` side question, model switching, and double-`Esc` rewind through a
   session fork.
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,

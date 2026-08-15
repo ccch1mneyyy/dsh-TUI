@@ -121,13 +121,13 @@ check('pickTextMime returns null without text offers', pickTextMime(['image/png'
 
 // ---- formatClipboardInsert ----------------------------------------------
 check(
-  'formatClipboardInsert quotes whitespace paths and joins files',
+  'formatClipboardInsert turns image files into @ references and joins files',
   formatClipboardInsert({ kind: 'files', paths: ['/tmp/a b.png', '/etc/hostname'] }) ===
-    '"/tmp/a b.png" /etc/hostname',
+    '@"/tmp/a b.png" /etc/hostname',
 )
 check(
-  'formatClipboardInsert inserts the exported image path',
-  formatClipboardInsert({ kind: 'image', path: '/tmp/dsh-tui-paste-1.png' }) === '/tmp/dsh-tui-paste-1.png',
+  'formatClipboardInsert turns an exported image into an @ reference',
+  formatClipboardInsert({ kind: 'image', path: '/tmp/dsh-tui-paste-1.png' }) === '@/tmp/dsh-tui-paste-1.png',
 )
 check(
   'formatClipboardInsert normalizes text line endings',

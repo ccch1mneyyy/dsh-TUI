@@ -37,3 +37,17 @@ export function isPlainReturn(key: {
 }): boolean {
   return !!key.return && !key.ctrl && !key.meta && !key.shift && !key.super
 }
+
+/**
+ * Modal Enter recognition across parsed key events and Windows ConPTY's raw
+ * CR/LF fallback. PromptInput already handled both forms; shared modal
+ * pickers must do the same or their UI can render while Enter appears inert.
+ */
+export function isPlainReturnInput(
+  input: string,
+  key: Parameters<typeof isPlainReturn>[0],
+): boolean {
+  if (isPlainReturn(key)) return true
+  return /^[\r\n]+$/u.test(input)
+    && !key.ctrl && !key.meta && !key.shift && !key.super
+}

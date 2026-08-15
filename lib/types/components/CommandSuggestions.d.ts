@@ -7,7 +7,9 @@ import type { LocalCommand } from '../commands.js';
  * The selected row renders in the theme's `suggestion` color, others dim.
  */
 export declare function CommandSuggestions({ commands, selectedIndex, columns, }: {
-    commands: readonly LocalCommand[];
+    commands: readonly (LocalCommand & {
+        descriptionKey?: string;
+    })[];
     selectedIndex: number;
     columns: number;
 }): React.ReactNode;

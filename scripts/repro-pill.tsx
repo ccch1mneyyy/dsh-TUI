@@ -58,6 +58,7 @@ const channel: any = {
   reasoningEffort: 'max',
   tokens: { input: 1, output: 1 },
   cwd: '/tmp/demo',
+  displayCwd: '/tmp/demo',
   gitBranch: 'main',
   working: false,
   spinnerMode: 'requesting',

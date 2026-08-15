@@ -178,6 +178,16 @@
     - id: workspace
       name: '@deepseek-ai/dsh-workspace'
 
+    # Generic terminal workspace registry. Optional plugins add providers;
+    # the TUI itself always supplies LOCAL and has no provider-specific code.
+    - id: dsh-tui-workspaces
+      name: '@deepseek-harness-tui/dsh-tui/workspaces'
+
+    # Optional plugins contribute nested slash-command completion here;
+    # execution and durable command events remain owned by dsh-commands.
+    - id: dsh-tui-command-trees
+      name: '@deepseek-harness-tui/dsh-tui/command-trees'
+
     # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
     # TUI composes every session's model-facing world from. No `roots` here —
     # the dsh CLI's profile-boot overlays its shipped `config/agent-presets/`
@@ -207,7 +217,7 @@
       name: '@deepseek-harness-tui/dsh-tui'
       # The entry-level dependency augments the plugin's `agents` inject and
       # prevents startup Session creation from racing WorkspaceRegistry init.
-      inject: [workspaceRegistry]
+      inject: [workspaceRegistry, agents, tuiWorkspaces]
       config:
         provider: deepseek-official
         # Alt-screen fullscreen（CC 同款）：应用内鼠标选区（选择即复制, OSC 52 +
@@ -243,6 +253,7 @@
         # persisted `/preset` preference (~/.dsh-tui/agent-preset.json), which
         # wins over the roster default (standard).
         preset: !!js process.env.DSH_TUI_PRESET ?? undefined
+        workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
         sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? process.env.DSH_CC_RESUME_SESSION ?? undefined
 
     # Live working-line data source (thinking copy / running tool / turn

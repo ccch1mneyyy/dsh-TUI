@@ -13,7 +13,7 @@
 | `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问） |
 | `Alt/Option+Up` | 把最后一条尚未处理的消息取回输入框编辑 |
 | `Up/Down` | 菜单选择；普通输入中浏览历史或在多行文本间移动 |
-| `Ctrl+V` | 从系统剪贴板插入文本；文件管理器复制的文件插入路径；剪贴板图片导出为临时文件后插入路径 |
+| `Ctrl+V` | 从系统剪贴板插入文本或文件；图片作为持久附件发送 |
 | `Ctrl+X` | 用外部编辑器（`$VISUAL` → `$EDITOR` → vi）编辑当前输入，保存退出后回填；`:cq` 或非零退出保留原稿 |
 | `Esc` | 按当前模式关闭菜单/选区/弹窗；有输入时清空；模型工作时中断；空输入连续两次打开 rewind |
 | `Ctrl+C` | 工作时中断；空闲且有输入时清空；空输入时连续两次退出 |
@@ -46,12 +46,13 @@ Bracketed paste（右键或终端原生粘贴）会原样插入，包括换行�
 ## @ 文件引用
 
 在消息**任意位置**输入 `@` 会打开文件补全菜单：继续输入路径片段过滤，`Tab`/
-`Enter` 选择，目录可继续深入。发送消息时，选中的文件内容或目录列表会自动附加
-到消息中（0.3.7+）。
+`Enter` 选择，目录可继续深入。发送消息时，文本文件内容或目录列表会自动附加
+到消息中；PNG、JPEG、WebP、GIF 会通过 Harness 附件库作为真正的图片块发送。
+文件读取走当前 workspace 的 FS 服务，提供者管理的 workspace 同样适用。
 
 `Ctrl+V` 粘贴时，文件管理器（Windows Explorer、GNOME Files、KDE Dolphin 等）复制
-的文件会直接插入为文件路径（含空格自动加引号），而不是粘贴路径文本本身；剪贴板
-里的图片（如截图）会先导出为临时文件再插入其路径。
+的普通文件会插入路径，图片文件会自动插入 `@` 引用。剪贴板位图会保存到附件库，
+输入框显示 `[Image #N]`，发送时变成真正的图片块；输入文本中不含 base64。
 
 ## 界面语言
 
@@ -109,6 +110,22 @@ prompt + 已有历史）做一次**无工具、单轮**的模型调用，答案�
 
 `/preset` 只允许空白会话原地切换。已经开始的会话会把选择保存为下一次 `/new`
 或启动时的默认值。详细规则见[配置参考](configuration.md#agent-preset)。
+
+### 工作区
+
+`/workspace resume` 打开工作区选择器；`/workspace rename <名称>` 重命名当前工作区；
+`/workspace open <目标>` 直接打开工作区并创建一个全新会话。`/resume` 和 `/rename`
+仍分别用于当前工作区内的会话切换和当前会话重命名。
+本地目标可以是绝对路径、相对当前本地工作区的路径或标准 `file://` URI。其他 URI
+scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识任何具体外部协议。当前工作区属于插件时，
+相对路径也由该插件在自己的路径空间内解析。
+
+输入 `/workspace ` 后会列出内建及插件注册的子命令；继续输入前缀并按 Tab
+即可补全，例如 `/workspace rem`。插件别名同样参与匹配。
+
+启动器同样接受工作区目标，例如 `dsh-tui .`、`dsh-tui ../project` 或
+`dsh-tui file:///path/to/project`。未安装任何工作区插件时，本地路径、`!command`
+和全部普通 TUI 会话流程保持可用。
 
 ## Fullscreen 与鼠标
 
@@ -175,7 +192,7 @@ transcript。
 
 | 分组 | 命令 |
 | --- | --- |
-| 会话 | `/new`、`/resume`、`/clear`、`/compact`、`/export`、`/btw`、`/trace` |
+| 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace` |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |

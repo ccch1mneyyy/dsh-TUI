@@ -2,7 +2,7 @@ import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, type I18nKey } from '../i18n.js'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '../ui.js'
 import { POINTER } from '../cc/figures.js'
-import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
+import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
 import type { LlmModelInfo } from '../dsh-adapter/types.js'
 import type { Channel, ChatRow, EffortOption, PresetOption } from '../dsh-adapter/channel.js'
@@ -28,6 +28,9 @@ import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { ResumePicker, type ResumePickerMode } from '../components/ResumePicker.js'
+import { WorkspacePicker } from '../components/WorkspacePicker.js'
+import { WorkspaceFlowPicker } from '../components/WorkspaceFlowPicker.js'
+import type { TuiWorkspaceCommandResult, TuiWorkspaceTarget } from '../workspaces.js'
 import { ActivityPicker } from '../components/ActivityPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
@@ -197,6 +200,20 @@ export function Chat({
   /** `/resume` session management (issue #112): plain selection, a delete
    *  confirmation (ctrl+d), or the inline rename input (ctrl+r). */
   const [resumeMode, setResumeMode] = React.useState<ResumePickerMode>('list')
+  const [workspacePickerOpen, setWorkspacePickerOpen] = React.useState(false)
+  const [workspaceTargets, setWorkspaceTargets] = React.useState<readonly TuiWorkspaceTarget[]>([])
+  const [workspaceIndex, setWorkspaceIndex] = React.useState(0)
+  const [workspaceFlow, setWorkspaceFlow] = React.useState<Extract<TuiWorkspaceCommandResult, { kind: 'choices' }> | null>(null)
+  const [workspaceFlowIndex, setWorkspaceFlowIndex] = React.useState(0)
+  const [workspaceFlowBusy, setWorkspaceFlowBusy] = React.useState(false)
+  const [workspaceFlowInput, setWorkspaceFlowInput] = React.useState<{
+    choiceId: string
+    value: string
+    cursor: number
+    placeholder?: string
+  } | null>(null)
+  const workspaceFlowRequestRef = React.useRef(0)
+  const workspaceFlowAbortRef = React.useRef<AbortController | null>(null)
   const [resumeRenameText, setResumeRenameText] = React.useState('')
   /** `/activity` indicator picker (pi extension's interactive select). */
   const [activityPickerOpen, setActivityPickerOpen] = React.useState(false)
@@ -352,6 +369,79 @@ export function Chat({
   useTerminalTitle(
     `${titlePrefix} 🐋 ${channel.sessionTitle}`,
   )
+
+  const handleWorkspaceResult = (result: TuiWorkspaceCommandResult): void => {
+    workspaceFlowAbortRef.current = null
+    setWorkspaceFlowBusy(false)
+    setWorkspaceFlowInput(null)
+    if (result.kind === 'target') {
+      setWorkspaceFlow(null)
+      void channel.switchWorkspace(result.target)
+      return
+    }
+    if (result.choices.length === 0) {
+      setWorkspaceFlow(null)
+      channel.notify(t('workspace-command-empty'))
+      return
+    }
+    setWorkspaceFlow(result)
+    setWorkspaceFlowIndex(0)
+  }
+
+  const runWorkspaceFlowAction = (
+    action: (signal: AbortSignal) => Promise<TuiWorkspaceCommandResult> | TuiWorkspaceCommandResult,
+  ): void => {
+    const request = ++workspaceFlowRequestRef.current
+    const controller = new AbortController()
+    workspaceFlowAbortRef.current = controller
+    setWorkspaceFlowBusy(true)
+    void Promise.resolve()
+      .then(() => action(controller.signal))
+      .then((result) => {
+        if (request === workspaceFlowRequestRef.current) handleWorkspaceResult(result)
+      })
+      .catch((error: unknown) => {
+        if (request !== workspaceFlowRequestRef.current) return
+        workspaceFlowAbortRef.current = null
+        setWorkspaceFlowBusy(false)
+        channel.notify(
+          t('workspace-command-failed', { err: error instanceof Error ? error.message : String(error) }),
+          { color: 'error', timeoutMs: 8000 },
+        )
+      })
+  }
+
+  const openWorkspaceTarget = (reference: string): void => {
+    void channel.resolveWorkspace(reference).then((target) => {
+      if (target === undefined) {
+        channel.notify(t('workspace-uri-invalid', { uri: reference }), { color: 'error', timeoutMs: 8000 })
+        return
+      }
+      void channel.switchWorkspace(target)
+    }).catch((error: unknown) => {
+      channel.notify(
+        t('workspace-uri-failed', { err: error instanceof Error ? error.message : String(error) }),
+        { color: 'error', timeoutMs: 8000 },
+      )
+    })
+  }
+
+  const openWorkspaceResume = (): void => {
+    void channel.listWorkspaces().then((targets) => {
+      if (targets.length === 0) {
+        channel.notify(t('workspace-none'))
+        return
+      }
+      setWorkspaceTargets(targets)
+      setWorkspaceIndex(Math.max(0, targets.findIndex(target => target.cwd === channel.cwd)))
+      setWorkspacePickerOpen(true)
+    }).catch((error: unknown) => {
+      channel.notify(
+        t('workspace-list-failed', { err: error instanceof Error ? error.message : String(error) }),
+        { color: 'error' },
+      )
+    })
+  }
 
   /**
    * Dispatch a slash command; false lets the input flow to the model.
@@ -652,6 +742,41 @@ export function Chat({
         })()
         return true
       }
+      case 'workspace': {
+        setHelpOpen(false)
+        const trimmed = rawInput.trim()
+        const separator = trimmed.search(/\s/u)
+        const subcommand = (separator < 0 ? trimmed : trimmed.slice(0, separator)).toLowerCase()
+        const input = separator < 0 ? '' : trimmed.slice(separator).trim()
+        if (subcommand === '') {
+          const extensions = channel.workspaceCommands()
+            .map(command => ` | ${command.name}`)
+            .join('')
+          channel.pushLocal('/workspace', [t('workspace-command-usage', { commands: extensions })])
+        } else if (subcommand === 'resume') {
+          openWorkspaceResume()
+        } else if (subcommand === 'rename') {
+          if (input.length === 0) channel.notify(t('workspace-rename-usage'))
+          else void channel.renameWorkspace(input)
+        } else if (subcommand === 'open') {
+          if (input.length === 0) channel.notify(t('workspace-open-usage'))
+          else openWorkspaceTarget(input)
+        } else if (channel.workspaceCommands().some(command =>
+          command.name.toLowerCase() === subcommand
+          || command.aliases?.some(alias => alias.toLowerCase() === subcommand))) {
+          void channel.runWorkspaceCommand(subcommand, input).then((result) => {
+            if (result !== undefined) handleWorkspaceResult(result)
+          }).catch((error: unknown) => {
+            channel.notify(
+              t('workspace-command-failed', { err: error instanceof Error ? error.message : String(error) }),
+              { color: 'error', timeoutMs: 8000 },
+            )
+          })
+        } else {
+          channel.notify(t('workspace-command-unknown', { command: subcommand }), { color: 'error' })
+        }
+        return true
+      }
       case 'rename': {
         setHelpOpen(false)
         const title = rawInput.trim()
@@ -687,7 +812,7 @@ export function Chat({
           `${t('status-model', { model: channel.model })}${channel.reasoningEffort ? ` · ${capitalize(channel.reasoningEffort)} effort` : ''}`,
           `${t('status-state', { state: channel.working ? t('status-working') : t('status-idle') })}`,
           `${t('status-session', { id: channel.agentId })}`,
-          `${t('status-dir', { cwd: channel.cwd })}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
+          `${t('status-dir', { cwd: channel.displayCwd })}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
           `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
         ]
         if (usage !== undefined) {
@@ -1055,6 +1180,8 @@ export function Chat({
     if (el) rowRefsRef.current.set(rowId, el)
     else rowRefsRef.current.delete(rowId)
   }, [])
+  /** Deduplicate terminals that report one Enter as parsed Return then raw CR/LF. */
+  const lastModalEnterAtRef = React.useRef(0)
 
   useInput((input, key, event) => {
     // The /btw panel owns the keyboard while open (its own useInput handles
@@ -1066,6 +1193,10 @@ export function Chat({
     // pending (the panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc;
     // the prompt input is unmounted, so nothing else should see these keys).
     if (questionSnapshot !== null || approvalSnapshot !== null) return
+    const returnCandidate = isPlainReturnInput(input, key)
+    const returnNow = Date.now()
+    const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
+    if (plainReturn) lastModalEnterAtRef.current = returnNow
     // Mouse wheel scrolls the transcript — in fullscreen there is no
     // terminal scrollback (alt-screen), so this is the only way back.
     // Imperative scrollBy: no React re-render per notch (CC semantics).
@@ -1091,7 +1222,7 @@ export function Chat({
         setSearchOpen(false)
         setHighlight('')
         handle?.scrollTo(searchAnchorRef.current)
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         // Enter commits; 0-match junk queries don't persist (CC behavior).
         if (searchCount === 0) setSearchQuery('')
         setSearchOpen(false)
@@ -1136,7 +1267,7 @@ export function Chat({
     if (thinkingOpen) {
       if (thinkingConfirm !== null) {
         // Confirmation state: Enter applies, Esc backs out to the select.
-        if (isPlainReturn(key)) {
+        if (plainReturn) {
           const enabled = thinkingConfirm
           setThinkingVisible(enabled)
           setThinkingConfirm(null)
@@ -1147,7 +1278,7 @@ export function Chat({
         }
       } else if (key.upArrow || key.downArrow) {
         setThinkingFocus(index => (index === 0 ? 1 : 0))
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         const enabled = thinkingFocus === 0
         const midConversation = channel.rows.some(row => row.kind === 'assistant')
         if (midConversation && enabled !== thinkingVisible) {
@@ -1162,12 +1293,103 @@ export function Chat({
       }
       return
     }
+    if (workspaceFlow !== null) {
+      if (key.escape) {
+        if (workspaceFlowInput !== null && !workspaceFlowBusy) {
+          setWorkspaceFlowInput(null)
+          return
+        }
+        workspaceFlowAbortRef.current?.abort()
+        workspaceFlowAbortRef.current = null
+        workspaceFlowRequestRef.current += 1
+        setWorkspaceFlowBusy(false)
+        setWorkspaceFlow(null)
+        return
+      }
+      if (workspaceFlowBusy) return
+      if (workspaceFlowInput !== null) {
+        const choice = workspaceFlow.choices.find(candidate => candidate.id === workspaceFlowInput.choiceId)
+        const editor = choice?.input
+        if (plainReturn) {
+          const value = workspaceFlowInput.value.trim()
+          if (value.length === 0) {
+            channel.notify(t('workspace-flow-input-empty'), { color: 'warning' })
+          } else if (editor !== undefined) {
+            runWorkspaceFlowAction(signal => editor.submit(value, signal))
+          }
+        } else if (key.backspace && workspaceFlowInput.cursor > 0) {
+          setWorkspaceFlowInput(current => current === null ? null : {
+            ...current,
+            value: current.value.slice(0, current.cursor - 1) + current.value.slice(current.cursor),
+            cursor: current.cursor - 1,
+          })
+        } else if (key.delete && workspaceFlowInput.cursor < workspaceFlowInput.value.length) {
+          setWorkspaceFlowInput(current => current === null ? null : {
+            ...current,
+            value: current.value.slice(0, current.cursor) + current.value.slice(current.cursor + 1),
+          })
+        } else if (key.leftArrow) {
+          setWorkspaceFlowInput(current => current === null ? null : {
+            ...current,
+            cursor: Math.max(0, current.cursor - 1),
+          })
+        } else if (key.rightArrow) {
+          setWorkspaceFlowInput(current => current === null ? null : {
+            ...current,
+            cursor: Math.min(current.value.length, current.cursor + 1),
+          })
+        } else if (input.length > 0 && !key.ctrl && !key.meta && !key.super && !key.tab) {
+          setWorkspaceFlowInput(current => current === null ? null : {
+            ...current,
+            value: current.value.slice(0, current.cursor) + input + current.value.slice(current.cursor),
+            cursor: current.cursor + input.length,
+          })
+        }
+        return
+      }
+      if (key.upArrow) {
+        setWorkspaceFlowIndex(index => (index <= 0 ? workspaceFlow.choices.length - 1 : index - 1))
+      } else if (key.downArrow) {
+        setWorkspaceFlowIndex(index => (index >= workspaceFlow.choices.length - 1 ? 0 : index + 1))
+      } else if (key.tab && !key.shift) {
+        const choice = workspaceFlow.choices[workspaceFlowIndex]
+        if (choice?.input !== undefined) {
+          const value = choice.input.initialValue ?? ''
+          setWorkspaceFlowInput({
+            choiceId: choice.id,
+            value,
+            cursor: value.length,
+            ...(choice.input.placeholder === undefined ? {} : { placeholder: choice.input.placeholder }),
+          })
+        }
+      } else if (plainReturn) {
+        const choice = workspaceFlow.choices[workspaceFlowIndex]
+        if (choice !== undefined) {
+          runWorkspaceFlowAction(signal => choice.choose(signal))
+        }
+      }
+      return
+    }
+    if (workspacePickerOpen) {
+      if (key.upArrow) {
+        setWorkspaceIndex(index => (index <= 0 ? workspaceTargets.length - 1 : index - 1))
+      } else if (key.downArrow) {
+        setWorkspaceIndex(index => (index >= workspaceTargets.length - 1 ? 0 : index + 1))
+      } else if (plainReturn) {
+        const target = workspaceTargets[workspaceIndex]
+        setWorkspacePickerOpen(false)
+        if (target !== undefined) void channel.switchWorkspace(target)
+      } else if (key.escape) {
+        setWorkspacePickerOpen(false)
+      }
+      return
+    }
     if (resumePickerOpen) {
       const resumeSession = resumeSessions[resumeIndex]
       // Session management modes (issue #112): the list keys stay untouched
       // until ctrl+d/ctrl+r switch into a sub-mode, each with Enter/Esc.
       if (resumeMode === 'confirm-delete') {
-        if (isPlainReturn(key)) {
+        if (plainReturn) {
           setResumeMode('list')
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
           if (resumeSession) {
@@ -1197,7 +1419,7 @@ export function Chat({
         return
       }
       if (resumeMode === 'rename') {
-        if (isPlainReturn(key)) {
+        if (plainReturn) {
           setResumeMode('list')
           const title = resumeRenameText.trim()
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
@@ -1242,7 +1464,7 @@ export function Chat({
         setResumeIndex(index => (index <= 0 ? resumeSessions.length - 1 : index - 1))
       } else if (key.downArrow) {
         setResumeIndex(index => (index >= resumeSessions.length - 1 ? 0 : index + 1))
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (resumeSession) {
           // Enter switches the live agent to the persisted session right
@@ -1271,7 +1493,7 @@ export function Chat({
         setModelIndex(index => (index <= 0 ? models.length - 1 : index - 1))
       } else if (key.downArrow) {
         setModelIndex(index => (index >= models.length - 1 ? 0 : index + 1))
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         const model = models[modelIndex]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (model) {
@@ -1296,7 +1518,7 @@ export function Chat({
         setActivityIndex(index => (index <= 0 ? PRESET_NAMES.length - 1 : index - 1))
       } else if (key.downArrow) {
         setActivityIndex(index => (index >= PRESET_NAMES.length - 1 ? 0 : index + 1))
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         const name = PRESET_NAMES[activityIndex]
         setActivityPickerOpen(false)
         if (name) channel.setActivityFrames(name)
@@ -1313,7 +1535,7 @@ export function Chat({
         const option = effortOptions[next]
         // Live-apply: the slider IS the control; Esc does not revert.
         if (option) void channel.setEffort(option.id)
-      } else if (isPlainReturn(key) || key.escape) {
+      } else if (plainReturn || key.escape) {
         setEffortSliderOpen(false)
       }
       return
@@ -1323,7 +1545,7 @@ export function Chat({
         setPresetIndex(index => (index <= 0 ? presetOptions.length - 1 : index - 1))
       } else if (key.downArrow) {
         setPresetIndex(index => (index >= presetOptions.length - 1 ? 0 : index + 1))
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         const option = presetOptions[presetIndex]
         setPresetPickerOpen(false)
         if (option) void channel.switchPreset(option.id)
@@ -1338,7 +1560,7 @@ export function Chat({
         setThemeIndex(index => (index <= 0 ? options.length - 1 : index - 1))
       } else if (key.downArrow) {
         setThemeIndex(index => (index >= options.length - 1 ? 0 : index + 1))
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         setThemePickerOpen(false)
         const name = options[themeIndex]?.value
         if (name !== undefined) {
@@ -1359,7 +1581,7 @@ export function Chat({
       } else if (key.ctrl && (input === 'c' || input === 'd')) {
         // CC's history search cancels on ctrl+c/ctrl+d too.
         setHistoryOpen(false)
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         const entry = historyMatches[historyFocus]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty match list
         if (entry) {
@@ -1406,7 +1628,7 @@ export function Chat({
     if (rewindOpen) {
       if (rewindConfirm !== null) {
         // Confirmation state: Enter rewinds, Esc backs out to the list.
-        if (isPlainReturn(key)) {
+        if (plainReturn) {
           const row = rewindConfirm
           setRewindOpen(false)
           setRewindConfirm(null)
@@ -1418,7 +1640,7 @@ export function Chat({
         setRewindIndex(index => (index <= 0 ? rewindRows.length - 1 : index - 1))
       } else if (key.downArrow) {
         setRewindIndex(index => (index >= rewindRows.length - 1 ? 0 : index + 1))
-      } else if (isPlainReturn(key)) {
+      } else if (plainReturn) {
         const row = rewindRows[rewindIndex]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (row) setRewindConfirm(row)
@@ -1487,7 +1709,7 @@ export function Chat({
         moveSelection(-1)
       } else if (key.downArrow) {
         moveSelection(1)
-      } else if (isPlainReturn(key) && selectedId !== null) {
+      } else if (plainReturn && selectedId !== null) {
         toggleRowExpanded(selectedId)
       } else if (key.escape) {
         setSelectionActive(false)
@@ -1542,7 +1764,7 @@ export function Chat({
       instances.get(process.stdout)?.forceRedraw()
     } else if (isMod(key) && input === 'e') {
       setShowAllMessages(previous => !previous)
-    } else if (isPlainReturn(key) && showPill) {
+    } else if (plainReturn && showPill) {
       handle?.scrollToBottom()
     }
   })
@@ -1552,7 +1774,7 @@ export function Chat({
   const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
   /** Prompt input is inert while a modal dialog owns the keyboard. */
   const promptSelectionActive =
-    selectionActive || modelPickerOpen || resumePickerOpen || activityPickerOpen ||
+    selectionActive || modelPickerOpen || resumePickerOpen || workspacePickerOpen || workspaceFlow !== null || activityPickerOpen ||
     effortSliderOpen || presetPickerOpen || themePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen ||
     btw !== null ||
     traceOpen
@@ -1574,7 +1796,7 @@ export function Chat({
         <LogoHeader
           model={channel.model}
           effort={channel.reasoningEffort}
-          cwd={channel.cwd}
+          cwd={channel.displayCwd}
         />
         {/* The startup loaded-context panel: before the first message the
             transcript is empty, so the collapsed summary of what this
@@ -1654,6 +1876,26 @@ export function Chat({
             focusIndex={thinkingFocus}
             confirmationPending={thinkingConfirm}
           />
+        )}
+        {workspacePickerOpen && workspaceTargets.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            <WorkspacePicker
+              targets={workspaceTargets}
+              focusIndex={workspaceIndex}
+              currentCwd={channel.cwd}
+            />
+          </Box>
+        )}
+        {workspaceFlow !== null && (
+          <Box flexDirection="column" marginTop={1}>
+            <WorkspaceFlowPicker
+              title={workspaceFlow.title}
+              choices={workspaceFlow.choices}
+              focusIndex={workspaceFlowIndex}
+              busy={workspaceFlowBusy}
+              input={workspaceFlowInput}
+            />
+          </Box>
         )}
         {resumePickerOpen && resumeSessions.length > 0 && (
           <Box flexDirection="column" marginTop={1}>

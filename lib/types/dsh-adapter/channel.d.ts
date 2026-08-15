@@ -1,13 +1,24 @@
 import { type Agent, type AgentHandle, type AgentStatus } from '@deepseek-ai/dsh-agent';
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm';
+import { type ContentBlock } from '@deepseek-ai/dsh-llm';
 import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
-import { type LocalCommand } from '../commands.js';
+import { type CommandCompletion, type LocalCommand } from '../commands.js';
 import { type SessionRecord } from '../sessionHistory.js';
 import type { ProviderSetupHost } from './providerWizard.js';
 import { type SessionModeSpec } from '../sessionModes.js';
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js';
 import { type ActivityState } from 'dsh-working-activity/status';
+import { type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js';
+type ChannelImageBlock = Extract<ContentBlock, {
+    type: 'image';
+}>;
+type ChannelImageMediaType = ChannelImageBlock['attachment']['mediaType'];
+export interface StagedImageInput {
+    data: Uint8Array;
+    mediaType: ChannelImageMediaType;
+    name?: string;
+}
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
 export interface ToolRow {
     readonly callId: string;
@@ -119,6 +130,8 @@ export interface ChatRow {
     kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact';
     /** Extra label for non-human user rows (e.g. `steering`). */
     label?: string;
+    /** Actual execution location for `!command` rows. */
+    executionTarget?: string;
     text: string;
     /** True while an assistant step is still streaming chunks. */
     streaming?: boolean;
@@ -244,6 +257,8 @@ export interface Channel {
     readonly tokens: TokenUsage;
     /** Working directory of the session. */
     readonly cwd: string;
+    /** Human-facing cwd (remote POSIX path/URI instead of a host alias). */
+    readonly displayCwd: string;
     /** Current git branch, when the cwd is inside a git worktree. */
     readonly gitBranch: string | undefined;
     /** True between turn/start and turn/end — drives the working spinner. */
@@ -322,6 +337,8 @@ export interface Channel {
      * nothing here; locals win on name collisions.
      */
     readonly commandList: readonly LocalCommand[];
+    /** Context-aware slash completions, including plugin subcommands. */
+    commandCompletions(input: string): readonly CommandCompletion[];
     /**
      * Run a plugin-registered slash command against the live agent (DSH
      * `dsh-commands` registry): logs `command/run`/`command/done` and returns
@@ -347,6 +364,8 @@ export interface Channel {
         tools: number;
     };
     subscribe: (listener: () => void) => () => void;
+    /** Validate and persist a pasted image, returning its prompt placeholder. */
+    stageImage(input: StagedImageInput): Promise<string>;
     submit(text: string): void;
     /**
      * Steer a message into the running turn (Codex/pi semantics): injected at
@@ -370,6 +389,17 @@ export interface Channel {
     /** Start a fresh conversation (`/new`): a brand-new agent + session, the
      *  transcript cleared, the resume marker forgotten. */
     newSession(): Promise<boolean>;
+    /** Workspace targets contributed by the TUI and optional providers. */
+    listWorkspaces(): Promise<readonly TuiWorkspaceTarget[]>;
+    /** Resolve an absolute path, file URL, or provider URI. */
+    resolveWorkspace(reference: string): Promise<TuiWorkspaceTarget | undefined>;
+    /** Start a fresh session in the selected workspace. */
+    switchWorkspace(target: TuiWorkspaceTarget): Promise<boolean>;
+    /** Rename the current durable workspace. */
+    renameWorkspace(title: string): Promise<boolean>;
+    /** Provider-owned workspace subcommands. */
+    workspaceCommands(): readonly Pick<TuiWorkspaceCommand, 'name' | 'aliases' | 'description'>[];
+    runWorkspaceCommand(name: string, input: string): Promise<TuiWorkspaceCommandResult | undefined>;
     /** Switch the live model (`/model` picker): forks the conversation at its
      *  current end and continues it with a new agent routed to `provider`/`model`.
      *  The history replays unchanged; only the request route changes. */
@@ -512,6 +542,7 @@ export interface ChannelState {
     provider: string;
     tokens: TokenUsage;
     cwd: string;
+    displayCwd: string;
     gitBranch: string | undefined;
     working: boolean;
     spinnerMode: SpinnerMode;
@@ -565,6 +596,8 @@ export interface ChannelState {
     }>;
     /** Effective slash commands (see the public Channel type). */
     commandList: readonly LocalCommand[];
+    /** Context-aware slash completions (see the public Channel type). */
+    commandCompletions(input: string): readonly CommandCompletion[];
     /** Run a plugin-registered command (see the public Channel type). */
     runExternalCommand(name: string, rawInput: string): Promise<string | undefined>;
     /** Estimated context segments by content type (pi-nano-context style bar). */
@@ -576,6 +609,7 @@ export interface ChannelState {
         tools: number;
     };
     subscribe: (listener: () => void) => () => void;
+    stageImage(input: StagedImageInput): Promise<string>;
     /** @internal event bump (the public `notify(text)` posts a notification). */
     emit(): void;
     /** @internal frame-aligned emit for high-frequency streaming deltas:
@@ -593,6 +627,12 @@ export interface ChannelState {
     resumeTo(sessionId: string): Promise<boolean>;
     /** Start a fresh conversation (`/new`). */
     newSession(): Promise<boolean>;
+    listWorkspaces(): Promise<readonly TuiWorkspaceTarget[]>;
+    resolveWorkspace(uri: string): Promise<TuiWorkspaceTarget | undefined>;
+    switchWorkspace(target: TuiWorkspaceTarget): Promise<boolean>;
+    renameWorkspace(title: string): Promise<boolean>;
+    workspaceCommands(): readonly Pick<TuiWorkspaceCommand, 'name' | 'aliases' | 'description'>[];
+    runWorkspaceCommand(name: string, input: string): Promise<TuiWorkspaceCommandResult | undefined>;
     /** Switch the live model (`/model` picker). */
     switchModel(provider: string, model: string): Promise<boolean>;
     /** The route's effort levels for `/effort` (see the public Channel type). */
@@ -723,6 +763,9 @@ export interface MentionFs {
     readText(target: {
         displayPath: string;
     }): Promise<string>;
+    readBytes?(target: {
+        displayPath: string;
+    }, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array>;
     listDir(target: {
         displayPath: string;
     }): Promise<Array<{
@@ -730,12 +773,25 @@ export interface MentionFs {
         type: 'file' | 'directory' | 'other';
     }>>;
 }
+type MentionImageBlock = ChannelImageBlock;
+type MentionImageMediaType = ChannelImageMediaType;
+/** Attachment subset used to turn an image path into a durable user block. */
+export interface MentionAttachments {
+    readonly imageLimits: {
+        readonly maxImageBytes: number;
+        readonly maxImagesPerMessage: number;
+        readonly maxMessageImageBytes: number;
+        readonly mediaTypes: readonly MentionImageMediaType[];
+    };
+    saveImage(input: {
+        data: Uint8Array;
+        mediaType: MentionImageMediaType;
+        name?: string;
+    }): Promise<MentionImageBlock['attachment']>;
+}
 export interface MentionExpansion {
     /** Model-facing blocks: the typed text first, one block per attachment. */
-    blocks: Array<{
-        type: 'text';
-        text: string;
-    }>;
+    blocks: ContentBlock[];
     /** Paths that resolved and were attached (for the confirmation notice). */
     attached: string[];
     /** Mention tokens that failed to resolve (kept literal, warned about). */
@@ -743,11 +799,12 @@ export interface MentionExpansion {
 }
 /**
  * Expand a submitted text's `@` mentions (issue #15) into model-facing
- * attachment blocks: each referenced file contributes its (capped) content,
- * each directory a shallow listing. The typed text stays the first block
- * verbatim — mentions that resolve keep their `@path` spelling in it, and
- * unresolved ones stay literal everywhere. Best-effort: an unreadable or
- * binary file degrades to `missing`, never a failed send.
+ * attachment blocks: supported image files become durable image blocks,
+ * other files contribute capped text, and directories contribute a shallow
+ * listing. Reads always go through the active fs service, so provider-owned
+ * workspaces keep their routing semantics. The typed text stays first and
+ * verbatim. Best-effort failures degrade to `missing`, never a failed send.
  */
-export declare function expandMentions(fs: MentionFs | undefined, cwd: string, text: string): Promise<MentionExpansion>;
+export declare function expandMentions(fs: MentionFs | undefined, cwd: string, text: string, attachments?: MentionAttachments, stagedImages?: ReadonlyMap<string, MentionImageBlock['attachment']>): Promise<MentionExpansion>;
+export {};
 //# sourceMappingURL=channel.d.ts.map

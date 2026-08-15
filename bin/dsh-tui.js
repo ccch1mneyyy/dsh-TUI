@@ -22,9 +22,9 @@
  * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { shellQuote } from '../lib/types/utils/shellQuote.js'
 import { detectLegacyEnv, RENAMED_ENV } from '../lib/types/utils/paths.js'
@@ -143,6 +143,14 @@ for (const a of process.argv.slice(2)) {
       process.env.DSH_TUI_RESUME_SESSION = sessionId
       process.env.DSH_CC_RESUME_SESSION = sessionId
     }
+  } else if (
+    process.env.DSH_TUI_WORKSPACE_TARGET === undefined
+    && !a.startsWith('-')
+    && (isAbsolute(a) || /^[a-z][a-z0-9+.-]*:\/\//iu.test(a) || existsSync(resolve(a)))
+  ) {
+    // A workspace target is launcher syntax, not an argument for the profile
+    // app. The registry resolves local paths/file URLs and provider URIs.
+    process.env.DSH_TUI_WORKSPACE_TARGET = a
   } else {
     args.push(a)
   }

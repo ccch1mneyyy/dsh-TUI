@@ -447,6 +447,90 @@ declare const dict: {
         readonly zh: "目录   {{cwd}}";
         readonly en: "Directory   {{cwd}}";
     };
+    readonly 'workspace-picker-title': {
+        readonly zh: "工作区";
+        readonly en: "Workspace";
+    };
+    readonly 'workspace-picker-hint': {
+        readonly zh: "**Enter** 切换并新建会话 · Esc 退出 · 也可输入 /workspace open <路径或 URI>";
+        readonly en: "**Enter** switch and start a new session · Esc to exit · or type /workspace open <path-or-URI>";
+    };
+    readonly 'workspace-none': {
+        readonly zh: "没有可用工作区";
+        readonly en: "No workspaces available";
+    };
+    readonly 'workspace-list-failed': {
+        readonly zh: "读取工作区失败 · {{err}}";
+        readonly en: "Failed to list workspaces · {{err}}";
+    };
+    readonly 'workspace-uri-invalid': {
+        readonly zh: "无法解析工作区目标：{{uri}}";
+        readonly en: "Cannot resolve workspace target: {{uri}}";
+    };
+    readonly 'workspace-uri-failed': {
+        readonly zh: "加载工作区失败 · {{err}}";
+        readonly en: "Failed to load workspace · {{err}}";
+    };
+    readonly 'workspace-switch-working': {
+        readonly zh: "Agent 运行中，无法切换工作区";
+        readonly en: "Cannot switch workspaces while the agent is running";
+    };
+    readonly 'workspace-switched': {
+        readonly zh: "已切换工作区：{{target}}";
+        readonly en: "Workspace switched: {{target}}";
+    };
+    readonly 'workspace-flow-hint': {
+        readonly zh: "**Enter** 选择 · Esc 退出";
+        readonly en: "**Enter** select · Esc to exit";
+    };
+    readonly 'workspace-flow-edit-hint': {
+        readonly zh: "**Enter** 选择当前目录 · Tab 手动输入路径 · Esc 退出";
+        readonly en: "**Enter** select current directory · Tab enter a path · Esc to exit";
+    };
+    readonly 'workspace-flow-input-hint': {
+        readonly zh: "输入绝对路径 · **Enter** 读取目录 · Esc 返回";
+        readonly en: "Enter an absolute path · **Enter** load directory · Esc back";
+    };
+    readonly 'workspace-flow-input-empty': {
+        readonly zh: "目录路径不能为空";
+        readonly en: "Directory path cannot be empty";
+    };
+    readonly 'workspace-flow-loading': {
+        readonly zh: "正在连接并读取目录… · Esc 关闭";
+        readonly en: "Connecting and loading directories… · Esc to close";
+    };
+    readonly 'workspace-command-usage': {
+        readonly zh: "用法：/workspace resume | rename <名称> | open <路径或 URI>{{commands}}";
+        readonly en: "Usage: /workspace resume | rename <name> | open <path-or-URI>{{commands}}";
+    };
+    readonly 'workspace-open-usage': {
+        readonly zh: "用法：/workspace open <路径或 URI>";
+        readonly en: "Usage: /workspace open <path-or-URI>";
+    };
+    readonly 'workspace-rename-usage': {
+        readonly zh: "用法：/workspace rename <名称>";
+        readonly en: "Usage: /workspace rename <name>";
+    };
+    readonly 'workspace-command-unknown': {
+        readonly zh: "未知的 workspace 子命令：{{command}}";
+        readonly en: "Unknown workspace subcommand: {{command}}";
+    };
+    readonly 'workspace-command-empty': {
+        readonly zh: "该 workspace 操作没有可选目标";
+        readonly en: "This workspace action has no available targets";
+    };
+    readonly 'workspace-command-failed': {
+        readonly zh: "workspace 操作失败 · {{err}}";
+        readonly en: "Workspace action failed · {{err}}";
+    };
+    readonly 'workspace-renamed': {
+        readonly zh: "工作区已重命名：{{title}}";
+        readonly en: "Workspace renamed: {{title}}";
+    };
+    readonly 'workspace-rename-failed': {
+        readonly zh: "工作区重命名失败 · {{err}}";
+        readonly en: "Failed to rename workspace · {{err}}";
+    };
     readonly 'cost-cache-rate': {
         readonly zh: "缓存率 {{rate}}% · {{read}} 读 / {{write}} 写";
         readonly en: "Cache rate {{rate}}% · {{read}} read / {{write}} write";
@@ -596,8 +680,8 @@ declare const dict: {
         readonly en: "Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).";
     };
     readonly 'terminal-paste-hint': {
-        readonly zh: "{{mod}}V 粘贴文本/文件路径；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。";
-        readonly en: "{{mod}}V pastes text/file paths; Ctrl+Shift+V is native terminal paste; right-click paste also works.";
+        readonly zh: "{{mod}}V 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。";
+        readonly en: "{{mod}}V pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works.";
     };
     readonly 'connect-none': {
         readonly zh: "DSH 暂无远程连接机制（CC 的 /connect 对应能力未适配）。";
@@ -774,6 +858,14 @@ declare const dict: {
     readonly 'input-clipboard-image-saved': {
         readonly zh: "剪贴板图片已保存为临时文件，已插入路径";
         readonly en: "Clipboard image saved to a temp file; path inserted";
+    };
+    readonly 'input-image-pasted': {
+        readonly zh: "已粘贴图片 {{token}}";
+        readonly en: "Pasted image {{token}}";
+    };
+    readonly 'input-image-paste-failed': {
+        readonly zh: "粘贴图片失败：{{err}}";
+        readonly en: "Could not paste image: {{err}}";
     };
     readonly 'input-pending-steer-label': {
         readonly zh: "插话 · 下一步送达";
@@ -1521,6 +1613,21 @@ declare const dict: {
     };
     readonly 'cmd-desc-connect': {
         readonly zh: "连接远程机器";
+    };
+    readonly 'cmd-desc-workspace': {
+        readonly zh: "切换、重命名或打开工作区";
+    };
+    readonly 'cmd-desc-workspace-resume': {
+        readonly zh: "切换到另一个工作区";
+        readonly en: "Switch to another workspace";
+    };
+    readonly 'cmd-desc-workspace-rename': {
+        readonly zh: "重命名当前工作区";
+        readonly en: "Rename the current workspace";
+    };
+    readonly 'cmd-desc-workspace-open': {
+        readonly zh: "打开路径或工作区 URI";
+        readonly en: "Open a path or workspace URI";
     };
     readonly 'cmd-desc-help': {
         readonly zh: "查看快捷键与命令";

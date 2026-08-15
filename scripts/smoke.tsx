@@ -9,15 +9,162 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { ApprovalStore }, { UserQuestionError }] = await Promise.all([
+const [{ PassThrough, Writable }, { resolve }, { Context }, React, { render }, { Chat }, { QuestionStore }, { ApprovalStore }, { UserQuestionError }, workspaceModule, commandModule, modifierModule] = await Promise.all([
   import('node:stream'),
+  import('node:path'),
+  import('@deepseek-ai/cordis'),
   import('react'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/dsh-adapter/approvals.js'),
   import('@deepseek-ai/dsh-user-questions'),
+  import('../src/workspaces.js'),
+  import('../src/commands.js'),
+  import('../src/utils/modifiers.js'),
 ])
+
+const commandTreeModule = await import('../src/command-trees.js')
+const i18nModule = await import('../src/i18n.js')
+const commandTreeCtx = new Context()
+await commandTreeCtx.plugin(commandTreeModule.default).await()
+commandTreeCtx.tuiCommandTrees.register({
+  root: 'settings',
+  descriptions: { en: 'Manage settings', zh: '管理设置' },
+  children: path => path.length === 1
+    ? [{ name: 'status', description: 'Show status', descriptions: { en: 'Show status', zh: '查看状态' } }, { name: 'set', description: 'Change setting' }]
+    : path.length === 2 && path[1] === 'set'
+      ? [{ name: 'native-compaction', description: 'Toggle compaction' }]
+      : [],
+})
+const commandTreeCompletion = commandModule.completeCommands(
+  '/settings set nat',
+  [{ name: 'settings', description: 'Manage settings', external: true }],
+  path => commandTreeCtx.tuiCommandTrees.children(path),
+)
+if (commandTreeCompletion[0]?.replacement !== '/settings set native-compaction ') {
+  throw new Error('command-tree smoke: nested provider completion failed')
+}
+const statusCompletion = commandModule.completeCommands(
+  '/settings sta',
+  [{
+    name: 'settings',
+    description: 'Manage settings',
+    descriptions: commandTreeCtx.tuiCommandTrees.descriptions('settings'),
+    external: true,
+  }],
+  path => commandTreeCtx.tuiCommandTrees.children(path),
+)
+i18nModule.setLang('zh')
+if (commandModule.localizedDescription(statusCompletion[0]!) !== '查看状态') {
+  throw new Error('command-tree smoke: provider translation was not selected')
+}
+if (commandModule.localizedDescription({
+  name: 'settings',
+  description: 'Manage settings',
+  descriptions: commandTreeCtx.tuiCommandTrees.descriptions('settings'),
+}) !== '管理设置') {
+  throw new Error('command-tree smoke: root provider translation was not selected')
+}
+i18nModule.setLang('en')
+await commandTreeCtx.fiber.dispose()
+
+// Generic workspace seam: prove the TUI works with only its local fallback,
+// and that an anonymous provider can add URI/path/shell behavior without the
+// TUI knowing its protocol.
+const workspaceCtx = new Context()
+await workspaceCtx.plugin(workspaceModule.default).await()
+const localCwd = process.cwd()
+const localTarget = await workspaceCtx.tuiWorkspaces.resolve('.', localCwd)
+if (localTarget?.cwd !== localCwd || localTarget.kind !== 'local') {
+  throw new Error('workspace smoke: relative local path resolution failed')
+}
+const fileTarget = await workspaceCtx.tuiWorkspaces.resolve(workspaceModule.localWorkspaceUri(localCwd))
+if (fileTarget?.cwd !== localCwd) throw new Error('workspace smoke: file URL resolution failed')
+const providerCwd = resolve(localCwd, '.provider-alias')
+const providerTarget = {
+  uri: 'example://host/project',
+  cwd: providerCwd,
+  label: 'Example',
+  description: '/project',
+  kind: 'provider' as const,
+  badge: 'EXT',
+}
+const providerShell = {
+  resolve: (request: unknown) => request,
+  run: async () => ({ exitCode: 0, stdout: { text: 'ok' }, stderr: { text: '' }, timedOut: false }),
+}
+let providerTitle = providerTarget.label
+const unregisterWorkspaceProvider = workspaceCtx.tuiWorkspaces.register({
+  schemes: ['example'],
+  list: () => [providerTarget],
+  resolve: (uri: string) => uri === providerTarget.uri ? providerTarget : undefined,
+  resolvePath: (path: string, cwd: string) => path === '..' && cwd === providerCwd
+    ? { ...providerTarget, uri: 'example://host', description: '/' }
+    : undefined,
+  describe: (cwd: string) => cwd === providerCwd ? providerTarget : undefined,
+  commandShell: (cwd: string) => cwd === providerCwd ? providerShell : undefined,
+  rename: (cwd: string, title: string) => cwd === providerCwd
+    ? { ...providerTarget, label: (providerTitle = title) }
+    : undefined,
+  commands: [{
+    name: 'browse',
+    aliases: ['connect'],
+    description: 'browse example workspaces',
+    run: () => ({
+      kind: 'choices' as const,
+      title: 'Examples',
+      choices: [{
+        id: 'example',
+        label: 'Example',
+        choose: () => ({ kind: 'target' as const, target: providerTarget }),
+      }],
+    }),
+  }],
+})
+if ((await workspaceCtx.tuiWorkspaces.resolve(providerTarget.uri))?.cwd !== providerCwd) {
+  throw new Error('workspace smoke: provider URI resolution failed')
+}
+if ((await workspaceCtx.tuiWorkspaces.resolve('..', providerCwd))?.description !== '/') {
+  throw new Error('workspace smoke: provider-relative path resolution failed')
+}
+if (await workspaceCtx.tuiWorkspaces.commandShell(providerCwd) !== providerShell) {
+  throw new Error('workspace smoke: provider command routing failed')
+}
+if ((await workspaceCtx.tuiWorkspaces.rename(providerCwd, 'Renamed')).label !== 'Renamed' || providerTitle !== 'Renamed') {
+  throw new Error('workspace smoke: provider rename failed')
+}
+const workspaceFlow = await workspaceCtx.tuiWorkspaces.runCommand('connect', '', localCwd)
+if (workspaceFlow?.kind !== 'choices' || workspaceFlow.choices.length !== 1) {
+  throw new Error('workspace smoke: provider subcommand failed')
+}
+const workspaceChoice = await workspaceFlow.choices[0]?.choose()
+if (workspaceChoice?.kind !== 'target' || workspaceChoice.target.cwd !== providerCwd) {
+  throw new Error('workspace smoke: provider choice failed')
+}
+const completionChildren = (path: readonly string[]) => path.length === 1 && path[0] === 'workspace'
+  ? [
+      { name: 'resume', description: 'switch workspace' },
+      ...workspaceCtx.tuiWorkspaces.commands(),
+    ]
+  : []
+const rootCompletion = commandModule.completeCommands('/work', commandModule.LOCAL_COMMANDS, completionChildren)
+if (rootCompletion[0]?.replacement !== '/workspace ') {
+  throw new Error('command completion smoke: root completion failed')
+}
+const childCompletion = commandModule.completeCommands('/workspace res', commandModule.LOCAL_COMMANDS, completionChildren)
+if (childCompletion[0]?.replacement !== '/workspace resume ') {
+  throw new Error('command completion smoke: child completion failed')
+}
+const aliasCompletion = commandModule.completeCommands('/workspace con', commandModule.LOCAL_COMMANDS, completionChildren)
+if (aliasCompletion[0]?.replacement !== '/workspace connect ') {
+  throw new Error('command completion smoke: plugin alias completion failed')
+}
+if (!modifierModule.isPlainReturnInput('\r', {}) || modifierModule.isPlainReturnInput('\r', { shift: true })) {
+  throw new Error('modal input smoke: raw CR recognition failed')
+}
+unregisterWorkspaceProvider()
+await workspaceCtx.fiber.dispose()
 
 class FakeStdout extends Writable {
   columns = 100
@@ -77,6 +224,7 @@ const channel = {
   model: 'deepseek-v4-flash',
   tokens: { input: 120, output: 45 },
   cwd: 'C:/code/demo-project',
+  displayCwd: 'C:/code/demo-project',
   gitBranch: 'main',
   working: false,
   spinnerMode: 'requesting',
