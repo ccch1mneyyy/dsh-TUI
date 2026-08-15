@@ -140,6 +140,12 @@ jobs:
       # （引号拆分、优先级、vi 兜底）与临时文件往返（edited/unchanged/
       # 非零退出/启动失败）。假编辑器进程，无需 TTY。
       - run: node scripts/verify-external-editor.mjs
+
+      # 外部编辑器 TTY 交接回归（issue #123 实机冒烟）：恢复后 transcript
+      # 全量重绘、交接窗口残留/晚到字节不落输入、抑制窗口结束后活性正常。
+      # xterm headless + 假编辑器进程，模拟 vim rmcup 与终端应答残片。
+      - run: node --import tsx/esm scripts/repro-external-editor.tsx
+
       # /effort 滑杆 + 模式指示全应用回归（真实 Chat 渲染）：滑杆开/
       # ←/→ 实时生效/Esc 关闭、状态栏 effort 段与模式段、三次 backtab
       # 完整循环。

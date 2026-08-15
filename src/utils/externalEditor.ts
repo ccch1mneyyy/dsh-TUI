@@ -240,7 +240,11 @@ export async function editInExternalEditor(draft: string): Promise<EditorOutcome
   const argv = resolveEditorCommand()
   if (argv === undefined) return { kind: 'unavailable' }
 
-  const ink = instances.get(process.stdout)
+  const ink =
+    instances.get(process.stdout) ??
+    // Test harnesses render onto a fake stdout — fall back to the process's
+    // single live instance so the handover path stays exercisable there.
+    (instances.size === 1 ? [...instances.values()][0] : undefined)
   let handed = false
   let dir: string | undefined
   try {
