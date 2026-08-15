@@ -1,6 +1,6 @@
 /** Regression checks for Ctrl+V image placeholders and Explorer image paths. */
 
-import { expandMentions } from '../src/channel.js'
+import { expandMentions } from '../src/dsh-adapter/channel.js'
 import { formatClipboardInsert } from '../src/utils/clipboard.js'
 
 const fileInsert = formatClipboardInsert({
