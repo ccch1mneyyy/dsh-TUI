@@ -3240,15 +3240,20 @@ ${output}
   const refreshGitBranch = () => {
     state.gitBranch = undefined
     if (!bash) return
+    // Capture the requested cwd: a /resume landing while this query is in
+    // flight refreshes the branch for the NEW cwd, so a late reply from the
+    // old workspace must be dropped (statusline staleness, issue #96 review).
+    const requestedCwd = state.cwd
     void bash
       .run(
         bash.resolve({
           command: 'git branch --show-current',
-          workdir: state.cwd,
+          workdir: requestedCwd,
           timeoutMs: 3000,
         }),
       )
       .then((result) => {
+        if (state.cwd !== requestedCwd) return
         const branch = result.stdout.text.trim()
         if (branch !== '') {
           state.gitBranch = branch
@@ -3272,9 +3277,11 @@ function basename(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
-/** Normalize a cwd for comparison: forward slashes, no trailing slash. */
-function normalizeCwd(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/+$/, '')
+/** Normalize a cwd for comparison: forward slashes, no trailing slash; case
+ *  folded when the platform's filesystem semantics are case-insensitive. */
+function normalizeCwd(path: string, caseInsensitive: boolean): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  return caseInsensitive ? normalized.toLowerCase() : normalized
 }
 
 /**
@@ -3282,12 +3289,20 @@ function normalizeCwd(path: string): string {
  * recorded in a subdirectory — pre-upgrade launches recorded the launch
  * subdirectory as the header cwd, and with the cwd default now resolving to
  * the git worktree root an exact match would hide those sessions forever.
- * They belong to the same workspace, so they stay listed. Exported for
+ * They belong to the same workspace, so they stay listed. Comparison follows
+ * the platform's filesystem semantics (case-insensitive on Windows — a
+ * pre-upgrade header may record `C:\Repo` where the current launch resolves
+ * `c:\repo`). `caseInsensitive` is a parameter (not a platform read) so the
+ * verifier can exercise both modes on any host. Exported for
  * scripts/verify-session-cwd.mjs.
  */
-export function sessionCwdMatches(stateCwd: string, headerCwd: string): boolean {
-  const cwd = normalizeCwd(stateCwd)
-  const recorded = normalizeCwd(headerCwd)
+export function sessionCwdMatches(
+  stateCwd: string,
+  headerCwd: string,
+  caseInsensitive: boolean = process.platform === 'win32',
+): boolean {
+  const cwd = normalizeCwd(stateCwd, caseInsensitive)
+  const recorded = normalizeCwd(headerCwd, caseInsensitive)
   return recorded === cwd || (cwd !== '' && recorded.startsWith(`${cwd}/`))
 }
 

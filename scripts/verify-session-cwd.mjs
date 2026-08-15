@@ -7,7 +7,9 @@
  *   itself survives.
  * - sessionCwdMatches: exact match, pre-upgrade subdirectory sessions stay
  *   visible (recorded cwd is a descendant of the workspace root), sibling
- *   and parent directories stay hidden, Windows separators normalize.
+ *   and parent directories stay hidden, Windows separators normalize, and
+ *   case folding follows the platform's filesystem semantics (explicit third
+ *   argument exercises both modes on any host).
  *
  * Run with plain node against the compiled lib: `node scripts/verify-session-cwd.mjs`
  */
@@ -69,6 +71,16 @@ check(
 )
 check('windows separators normalize', sessionCwdMatches('C:\\repo', 'C:/repo/packages/app'))
 check('empty header cwd never matches', !sessionCwdMatches('/repo', ''))
+// Case handling follows the platform's filesystem semantics; the explicit
+// third argument lets both modes be exercised on any host.
+check(
+  'case-insensitive mode matches differing case',
+  sessionCwdMatches('C:/Repo', 'c:\\repo\\packages\\app', true),
+)
+check(
+  'case-sensitive mode keeps case-distinct dirs apart',
+  !sessionCwdMatches('/Repo', '/repo/packages/app', false),
+)
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`)
