@@ -50,6 +50,10 @@ jobs:
       # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
       - run: node --import tsx/esm scripts/verify-keys.tsx
 
+      # 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
+      # 回复只进 querier，不回显成终端残影。
+      - run: node --import tsx/esm scripts/verify-terminal-queries.tsx
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 
@@ -132,4 +136,3 @@ jobs:
 
       # /trace 轨迹视图回归（issue #80）：事件装配配对耗时 + 组件渲染/滚动。
       - run: node --import tsx/esm scripts/repro-trace.tsx
-
