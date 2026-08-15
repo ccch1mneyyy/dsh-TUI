@@ -159,6 +159,25 @@
 # `ctx.userQuestions`.
 
 - insert:
+    # Workspace grouping is a separate durable ledger, not a cwd-derived
+    # projection. Mount the same domain stack and storage root as dsh-web-app
+    # so TUI-created sessions can attach to the exact registry Web reads.
+    - id: storage
+      name: '@deepseek-ai/dsh-storage'
+
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: !!js dshHomePath('storages')
+
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config:
+        backend: json
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
     # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
     # TUI composes every session's model-facing world from. No `roots` here —
     # the dsh CLI's profile-boot overlays its shipped `config/agent-presets/`
@@ -186,6 +205,9 @@
     # launchers — TODO: drop once they age out, issue #120).
     - id: dsh-tui
       name: '@deepseek-harness-tui/dsh-tui'
+      # The entry-level dependency augments the plugin's `agents` inject and
+      # prevents startup Session creation from racing WorkspaceRegistry init.
+      inject: [workspaceRegistry]
       config:
         provider: deepseek-official
         # Alt-screen fullscreen（CC 同款）：应用内鼠标选区（选择即复制, OSC 52 +

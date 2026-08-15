@@ -40,6 +40,7 @@ import { t } from './i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from './sessionModes.js'
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
+import { attachSessionToWorkspace } from './workspace.js'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
 export interface ToolRow {
@@ -1531,6 +1532,14 @@ export function createChannel(
         state.notify('Rewind failed — could not create the replacement session', { color: 'error' })
         return null
       }
+      try {
+        await attachSessionToWorkspace(ctx, options.cwd, childId)
+      } catch (error) {
+        state.notify(
+          `Session rewound, but workspace attachment failed · ${error instanceof Error ? error.message : String(error)}`,
+          { color: 'warning', timeoutMs: 8000 },
+        )
+      }
       // Replay the forked history into a fresh transcript (tokens/spinner
       // counters land back at the rewind point, matching the fork).
       streaming = undefined
@@ -1624,6 +1633,17 @@ export function createChannel(
         const message = error instanceof Error ? error.message : String(error)
         state.notify(`Resume failed · ${message}`, { color: 'error', timeoutMs: 8000 })
         return false
+      }
+      try {
+        // `/resume` is an explicit adoption of this persisted conversation.
+        // This also repairs sessions created by TUI versions that predate the
+        // separate workspace ownership ledger.
+        await attachSessionToWorkspace(ctx, options.cwd, SessionId(sessionId))
+      } catch (error) {
+        state.notify(
+          `Session resumed, but workspace attachment failed · ${error instanceof Error ? error.message : String(error)}`,
+          { color: 'warning', timeoutMs: 8000 },
+        )
       }
       // Replay the persisted history into a fresh transcript (same reset as
       // rewindTo, plus the context window which the replay re-derives).
@@ -1765,6 +1785,14 @@ export function createChannel(
         })
         return false
       }
+      try {
+        await attachSessionToWorkspace(ctx, options.cwd, sessionId)
+      } catch (error) {
+        state.notify(
+          `Session created, but workspace attachment failed · ${error instanceof Error ? error.message : String(error)}`,
+          { color: 'warning', timeoutMs: 8000 },
+        )
+      }
       streaming = undefined
       reasoning = undefined
       toolCards.clear()
@@ -1866,6 +1894,14 @@ export function createChannel(
         const message = error instanceof Error ? error.message : String(error)
         state.notify(`Model switch failed · ${message}`, { color: 'error', timeoutMs: 8000 })
         return false
+      }
+      try {
+        await attachSessionToWorkspace(ctx, options.cwd, childId)
+      } catch (error) {
+        state.notify(
+          `Model switched, but workspace attachment failed · ${error instanceof Error ? error.message : String(error)}`,
+          { color: 'warning', timeoutMs: 8000 },
+        )
       }
       streaming = undefined
       reasoning = undefined
