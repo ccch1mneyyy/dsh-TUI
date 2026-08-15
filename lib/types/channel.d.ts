@@ -446,6 +446,14 @@ export interface Channel {
     /** Rename the current session (CC's /rename): appends a `session/title`
      *  event, which the status line and the /resume picker both read. */
     renameSession(title: string): void;
+    /** Delete a persisted session (`/resume` picker ctrl+d): removes its log
+     *  directory, its last-used entry, and the resume marker when it points
+     *  here. False for the live session or a missing/unwritable log. */
+    deleteSession(sessionId: string): Promise<boolean>;
+    /** Rename any persisted session (`/resume` picker ctrl+r): appends a
+     *  `session/title` event to its log (live sessions go through the normal
+     *  rename path). False when the log is absent or undecodable. */
+    renameSessionTo(sessionId: string, title: string): Promise<boolean>;
     /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
     compact(): void;
     /** Render a multi-line local report in the transcript (`/status`,
@@ -631,6 +639,10 @@ export interface ChannelState {
     setResumeTarget(sessionId: string): void;
     /** Rename the current session (see the public Channel type). */
     renameSession(title: string): void;
+    /** Delete a persisted session (see the public Channel type). */
+    deleteSession(sessionId: string): Promise<boolean>;
+    /** Rename any persisted session (see the public Channel type). */
+    renameSessionTo(sessionId: string, title: string): Promise<boolean>;
     /** Manually compact the session history (CC's /compact). */
     compact(): void;
     /** Multi-line local report (`/status`, `/doctor`, …). */
@@ -694,6 +706,19 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     /** Handle of the initial agent; disposed when a rewind replaces it. */
     handle?: AgentHandle;
 }): ChannelState;
+/**
+ * `/resume` project filter (issue #96): exact cwd match, PLUS sessions
+ * recorded in a subdirectory — pre-upgrade launches recorded the launch
+ * subdirectory as the header cwd, and with the cwd default now resolving to
+ * the git worktree root an exact match would hide those sessions forever.
+ * They belong to the same workspace, so they stay listed. Comparison follows
+ * the platform's filesystem semantics (case-insensitive on Windows — a
+ * pre-upgrade header may record `C:\Repo` where the current launch resolves
+ * `c:\repo`). `caseInsensitive` is a parameter (not a platform read) so the
+ * verifier can exercise both modes on any host. Exported for
+ * scripts/verify-session-cwd.mjs.
+ */
+export declare function sessionCwdMatches(stateCwd: string, headerCwd: string, caseInsensitive?: boolean): boolean;
 /** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
 export interface MentionFs {
     resolve(path: string): Promise<{

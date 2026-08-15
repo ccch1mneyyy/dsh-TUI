@@ -202,8 +202,10 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
 - `Ctrl+V` 读剪贴板依赖 PowerShell `Get-Clipboard`：剪贴板被其他进程短暂锁定
   时自动重试，持续锁定时静默放弃。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
-- DSH 的 `/permission`（沙箱模式切换）未适配：需要 approval 服务 + 审批 UI，
-  当前 TUI 不消费审批流，刻意不挂。
+- 工具级审批已实现：approval 服务 + TUI answerer（CC 式审批面板）消费审批流，
+  权限提升命令会弹出审批条。`/permission` 预设切换由 dsh-base 的
+  `permission-presets` 插件提供，profile 组合默认可用；裸组合 `cordis.yml`
+  未挂载该插件（无 `/permission` 命令）。
 - `/vim` `/connect` `/hooks` `/memory` 为 CC 同名占位：对应能力在 DSH 侧无等价
   机制，命令会给出明确说明而非静默。
 
@@ -237,7 +239,9 @@ Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-acce
 
 ## 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ccch1mneyyy/dsh-tui&type=Date)](https://www.star-history.com/#ccch1mneyyy/dsh-tui&Date)
+<!-- star-history:start -->
+[![Star History](https://raw.githubusercontent.com/ccch1mneyyy/dsh-TUI/bot-star-history/assets/star-history/star-history.png)](https://star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+<!-- star-history:end -->
 
 
 ## License

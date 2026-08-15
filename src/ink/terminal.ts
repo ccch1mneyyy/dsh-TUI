@@ -165,12 +165,18 @@ export function isXtermJs(): boolean {
 // in xterm.js-based terminals like VS Code). tmux is allowlisted because it
 // accepts modifyOtherKeys and doesn't forward the kitty sequence to the outer
 // terminal.
+// env.terminal is lowercased (utils/env.ts) and falls back to TERM when
+// TERM_PROGRAM is unset — kitty doesn't set TERM_PROGRAM, so its TERM
+// (xterm-kitty) is listed too. Warp sets TERM_PROGRAM=WarpTerminal and
+// implements the kitty keyboard protocol (issue #110).
 const EXTENDED_KEYS_TERMINALS = [
-  'iTerm.app',
+  'iterm.app',
   'kitty',
-  'WezTerm',
+  'xterm-kitty',
+  'wezterm',
   'ghostty',
   'tmux',
+  'warpterminal',
   'windows-terminal',
 ]
 

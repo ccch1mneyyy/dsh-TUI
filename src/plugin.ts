@@ -19,6 +19,7 @@ import type { ModelRoute } from './modelRoute.js'
 import { readPresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
 import { clearResumeTarget, writeResumeTarget } from './sessionHistory.js'
+import { resolveSessionCwd } from './utils/workspaceRoot.js'
 import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from './update.js'
 import { isLang, resolveStartupLang, setLang, t } from './i18n.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from './utils/paths.js'
@@ -155,7 +156,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // model half. resolveAgent validates this route on create and reports the
   // one actually used, so the status line shows the real request route.
   const startupRoute = resolveModelRoute(configuredRoute, readModelPref())
-  const meta = { cwd: config.cwd ?? process.cwd() }
+  // Session cwd (issue #96): explicit cordis.yml `cwd` wins; otherwise the
+  // git worktree root containing the launch directory (the launch directory
+  // itself outside any worktree), so `@` completion and mention expansion
+  // see the repository, not an arbitrary launch subdirectory. Resolved ONCE
+  // here — the agent meta and the channel must agree.
+  const sessionCwd = resolveSessionCwd(config.cwd)
+  const meta = { cwd: sessionCwd }
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,
     config.sessionId,
@@ -171,7 +178,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const displayRoute = createdRoute ?? startupRoute
   const channel = createChannel(ctx, agent, {
     model: displayRoute.model,
-    cwd: config.cwd ?? process.cwd(),
+    // A RESUMED session keeps its persisted header cwd (issue #96 review):
+    // pre-upgrade sessions recorded the launch directory, and re-resolving
+    // from the current launch directory would split @ expansion / file
+    // completion (state.cwd) from the agent's own workspace record. Fresh
+    // sessions record sessionCwd at creation, so both agree there.
+    cwd: agent.session.header.cwd ?? sessionCwd,
     provider: displayRoute.provider,
     // Raw cordis.yml route (undefined when unset): the channel's
     // new-session path re-resolves prefs against these, and resume passes

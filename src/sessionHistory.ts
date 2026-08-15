@@ -117,3 +117,20 @@ export function touchSession(sessionId: string): void {
     // Best effort — MRU ordering is a nicety.
   }
 }
+
+/**
+ * Drop a session's last-used entry (`/resume` picker delete) so the MRU map
+ * never accumulates ids whose logs are gone. Best effort — never throws.
+ * @param sessionId - Session id to forget.
+ */
+export function forgetSession(sessionId: string): void {
+  try {
+    const lastUsed: Record<string, number> = { ...readLastUsed() }
+    if (!(sessionId in lastUsed)) return
+    delete lastUsed[sessionId]
+    ensureDir()
+    writeFileSync(LAST_USED_FILE, JSON.stringify(lastUsed))
+  } catch {
+    // Best effort — a stale entry only skews sort order.
+  }
+}

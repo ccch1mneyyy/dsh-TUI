@@ -107,8 +107,10 @@ dual-written to both paths because older launchers only read the old one.
 
 ## Permissions and security boundary
 
-`dsh-TUI` does not provide a separate sandbox and does not implement the
-approval UI for `/permission`. Effective capability comes from the DSH services
+`dsh-TUI` does not provide a separate sandbox; it implements the tool-level
+approval UI (a CC-style panel answering the `approval/request` waterfall),
+while `/permission` preset switching comes from the dsh-base
+`permission-presets` row. Effective capability comes from the DSH services
 mounted by `cordis.patch.yml`:
 
 - On non-Windows platforms, `DSH_PERMISSION_MODE` defaults to `workspace-write`;
@@ -136,8 +138,10 @@ visual TUI alone does not describe the effective policy.
   lock the clipboard and make the operation appear empty.
 - Exit restores the terminal and ends the process without waiting for the
   Agent's asynchronous flush; the persistence plugin is the fallback.
-- DSH `/permission` sandbox switching is not connected because this TUI has no
-  approval UI.
+- The tool-level approval panel is implemented (approval service + TUI
+  answerer); `/permission` preset switching is provided by the dsh-base
+  `permission-presets` plugin and works in profile compositions — the bare
+  `cordis.yml` mounts only the approval service, not `permission-presets`.
 - `/vim`, `/connect`, `/hooks`, and `/memory` are compatibility placeholders,
   not evidence that those DSH capabilities are mounted.
 - There is no automated full-flow suite that requires real model credentials;
