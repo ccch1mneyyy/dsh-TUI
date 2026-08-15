@@ -14,6 +14,7 @@
 | `Alt/Option+Up` | Pull the latest undelivered message back into the editor |
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
 | `Ctrl+V` | Insert system clipboard text; files/images copied in Windows Explorer insert paths |
+| `Ctrl+X` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR` → vi); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft |
 | `Esc` | Close the active menu, selection, or modal; clear input; interrupt a working model; double-tap on empty input to rewind |
 | `Ctrl+C` | Interrupt while working; clear non-empty idle input; press twice on empty input to exit |
 | `Ctrl+D` | Press twice while idle to exit |

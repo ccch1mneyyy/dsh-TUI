@@ -141,6 +141,7 @@ for the complete field reference.
 
 | Variable | Purpose |
 | --- | --- |
+| `VISUAL` / `EDITOR` | External editor opened by `Ctrl+X` (`VISUAL` wins; arguments like `code --wait` are allowed; POSIX falls back to `vi`) |
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `CC_TUI_PERSONA` | Override the Agent persona injected by the composition |

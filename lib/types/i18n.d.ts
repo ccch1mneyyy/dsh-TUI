@@ -739,6 +739,14 @@ declare const dict: {
         readonly zh: "剪贴板为空";
         readonly en: "Clipboard is empty";
     };
+    readonly 'input-editor-unavailable': {
+        readonly zh: "未找到可用编辑器，请设置 $EDITOR（或 $VISUAL）环境变量";
+        readonly en: "No editor available — set the $EDITOR (or $VISUAL) environment variable";
+    };
+    readonly 'input-editor-failed': {
+        readonly zh: "编辑器启动失败：{{name}}";
+        readonly en: "Failed to launch editor: {{name}}";
+    };
     readonly 'input-pending-steer-label': {
         readonly zh: "插话 · 下一步送达";
         readonly en: "Steer · delivered next";

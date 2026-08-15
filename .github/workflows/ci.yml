@@ -135,6 +135,11 @@ jobs:
       # 斜杠命令描述 i18n 回归（issue #41）：/ 菜单与 ? 帮助菜单描述随
       # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
       - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx
+
+      # 外部编辑器回归（issue #123）：Ctrl+X 的 $VISUAL/$EDITOR 解析
+      # （引号拆分、优先级、vi 兜底）与临时文件往返（edited/unchanged/
+      # 非零退出/启动失败）。假编辑器进程，无需 TTY。
+      - run: node scripts/verify-external-editor.mjs
       # /effort 滑杆 + 模式指示全应用回归（真实 Chat 渲染）：滑杆开/
       # ←/→ 实时生效/Esc 关闭、状态栏 effort 段与模式段、三次 backtab
       # 完整循环。

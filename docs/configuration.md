@@ -132,6 +132,7 @@ Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
 
 | 变量 | 用途 |
 | --- | --- |
+| `VISUAL` / `EDITOR` | `Ctrl+X` 打开的外部编辑器（`VISUAL` 优先，可带参数如 `code --wait`；未设置时 POSIX 回退 `vi`） |
 | `DEEPSEEK_API_KEY` | DeepSeek 凭证；运行模型的必需项 |
 | `DEEPSEEK_BASE_URL` | 覆盖 DeepSeek 兼容 API 端点 |
 | `CC_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
