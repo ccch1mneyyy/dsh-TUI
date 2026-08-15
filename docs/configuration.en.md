@@ -148,17 +148,17 @@ for the complete field reference.
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`) or custom theme ahead of persisted selection |
 | `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
-| `DSH_TUI_SESSION_ROOT` | Override the session persistence location; the profile uses a SQLite database path, while bare `cordis.yml` uses a JSONL root directory |
+| `DSH_TUI_SESSION_ROOT` | Override the JSONL session root; profile default `$DSH_HOME/sessions`, bare `cordis.yml` default `~/.dsh-tui/sessions` |
 | `DSH_PERMISSION_MODE` | Override non-Windows sandbox policy, such as `workspace-write` or `danger-full-access` |
 | `DSH_TUI_WORKSPACE` | Working directory used by the Windows `dsh-tui.cmd` launcher |
 | `DSH_TUI_DEBUG` | Enable dsh-tui diagnostics on stderr |
 | `DSH_TUI_RENDER_LOG` | File path for raw ANSI frame capture |
 
-The old `DSH_TUI_*` and `DSH_TUI_*` names no longer take effect as of this
+The old `CC_TUI_*` and `DSH_CC_*` names no longer take effect as of this
 release; startup prints one warning line whenever a legacy name is still set
 (repeated on every launch while it remains set). The only exception is
 `DSH_TUI_RESUME_SESSION`: the reader prefers the new name but still accepts
-the old `DSH_TUI_RESUME_SESSION`, and the writer sets both variables to ease
+the old `DSH_CC_RESUME_SESSION`, and the writer sets both variables to ease
 the transition for older launchers.
 
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
@@ -172,18 +172,15 @@ Do not attach it to a public issue without reviewing and redacting it.
 - When manually inserting a subagent provider, mount the core `subagent`
   service first.
 - A custom `plan-mode` override requires a non-empty `section`.
-- Profile mode uses this package's SQLite `sessions` row and disables base
-  JSONL persistence so one writer owns each session.
+- Profile mode uses the base JSONL persistence row rooted at the shared
+  `~/.dsh/sessions`, allowing TUI and Web to read the same history.
 - `cordis.yml` is a bare-composition example and may have a different service
   topology. Normal installation and user overrides should follow
   `cordis.patch.yml`.
 
-`DSH_TUI_SESSION_ROOT` is interpreted by the active composition: `dsh --profile
-dsh-tui` uses the SQLite row inserted by this package and defaults to
-`~/.dsh-tui/sessions.sqlite`; direct `dsh --config cordis.yml` uses the example's
-JSONL persistence and defaults to `$DSH_HOME/sessions` (i.e. `~/.dsh/sessions/`).
-Do not point both
-startup modes at the same existing data directory.
+`DSH_TUI_SESSION_ROOT` always names a JSONL root. `dsh --profile dsh-tui`
+defaults to `$DSH_HOME/sessions` (normally `~/.dsh/sessions/`); direct
+`dsh --config cordis.yml` defaults to `~/.dsh-tui/sessions/`.
 
 See [Architecture and limitations](architecture.en.md#permissions-and-security-boundary)
 for permission behavior and platform differences.

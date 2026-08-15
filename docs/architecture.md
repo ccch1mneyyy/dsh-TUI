@@ -74,7 +74,8 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 
 | 路径 | 内容 |
 | --- | --- |
-| `~/.dsh-tui/sessions.sqlite` | profile patch 默认的 DSH SQLite 会话事件 |
+| `~/.dsh/sessions/` | profile patch 默认的共享 JSONL 会话事件（TUI / Web） |
+| `~/.dsh-tui/sessions/` | 直接运行 `cordis.yml` 时的 JSONL 会话事件 |
 | `~/.dsh-tui/resume.txt` | Windows 启动器和退出提示使用的最近 session ID |
 | `~/.dsh-tui/last-used.json` | `/resume` 最近使用排序元数据 |
 | `~/.dsh-tui/theme.json` | 当前主题选择 |
@@ -82,9 +83,10 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 | `~/.dsh-tui/working-activity.json` | 工作状态动画选择 |
 | `~/.dsh-tui/agent-preset.json` | 新会话默认 Agent preset |
 
-profile 可通过 `DSH_TUI_SESSION_ROOT` 改写 SQLite 路径；直接运行根目录的
-`cordis.yml` 时，该变量改写的是 JSONL 根目录（默认 `$DSH_HOME/sessions`，即
-`~/.dsh/sessions/`）。偏好文件是可选状态：损坏或缺失时回退，不应阻止 TUI 启动。
+`DSH_TUI_SESSION_ROOT` 在两种组合中都改写 JSONL 根目录。profile 默认使用
+`$DSH_HOME/sessions`（通常为 `~/.dsh/sessions/`）；直接运行根目录的
+`cordis.yml` 时默认使用 `~/.dsh-tui/sessions/`。偏好文件是可选状态：损坏或
+缺失时回退，不应阻止 TUI 启动。
 
 数据目录已从 `~/.dsh-cc` 更名为 `~/.dsh-tui`：首次启动时若旧目录存在而新目录
 不存在，会整体复制（不移动）到新目录并提示一行，旧目录保留由用户自行删除。

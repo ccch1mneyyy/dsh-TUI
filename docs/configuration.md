@@ -139,16 +139,16 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 | `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）或自定义主题，优先于持久化选择 |
 | `DSH_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
 | `DSH_TUI_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
-| `DSH_TUI_SESSION_ROOT` | 覆盖会话持久化位置；profile 安装时是 SQLite 数据库路径，裸 `cordis.yml` 启动时是 JSONL 根目录 |
+| `DSH_TUI_SESSION_ROOT` | 覆盖 JSONL 会话根目录；profile 默认 `$DSH_HOME/sessions`，裸 `cordis.yml` 默认 `~/.dsh-tui/sessions` |
 | `DSH_PERMISSION_MODE` | 非 Windows 平台覆盖 sandbox policy，例如 `workspace-write` 或 `danger-full-access` |
 | `DSH_TUI_WORKSPACE` | Windows `dsh-tui.cmd` 采用的工作目录 |
 | `DSH_TUI_DEBUG` | 启用写往 stderr 的 dsh-tui 调试日志 |
 | `DSH_TUI_RENDER_LOG` | 指定文件路径，记录原始 ANSI 渲染帧用于取证 |
 
-旧名 `DSH_TUI_*` 与 `DSH_TUI_*` 自本版本起不再生效；启动时检测到旧名仍被设置会
+旧名 `CC_TUI_*` 与 `DSH_CC_*` 自本版本起不再生效；启动时检测到旧名仍被设置会
 打印一行警告（只要还设着，每次启动都会提示）。唯一例外是
 `DSH_TUI_RESUME_SESSION`：读端优先取新名、同时仍读取旧名
-`DSH_TUI_RESUME_SESSION`，写端两个变量都会设置，供旧版启动器过渡。
+`DSH_CC_RESUME_SESSION`，写端两个变量都会设置，供旧版启动器过渡。
 
 `DSH_TUI_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
 公开 issue，除非已经检查并脱敏。
@@ -159,14 +159,13 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
   但 profile patch 不应重复插入。
 - 自定义插入 subagent provider 时，核心 `subagent` 服务必须先挂载。
 - 自定义覆盖 `plan-mode` 时，`section` 必须是非空文本。
-- Profile 使用本包的 SQLite `sessions` 行，并禁用 base 的 JSONL 持久化，避免
-  同一会话出现两个写入所有者。
+- Profile 使用 base 的 JSONL 持久化并将根目录指向共享的 `~/.dsh/sessions`，
+  因而 TUI 和 Web 可以读取同一份会话历史。
 - `cordis.yml` 是裸组合示例，服务拓扑可能与 profile patch 不同。正常安装和用户
   覆盖应以 `cordis.patch.yml` 为准。
 
-`DSH_TUI_SESSION_ROOT` 的解释也随组合而变：`dsh --profile dsh-tui` 使用本包 patch
-插入的 SQLite 行，默认文件为 `~/.dsh-tui/sessions.sqlite`；直接运行
-`dsh --config cordis.yml` 时，示例挂载的是 JSONL 持久化，默认目录为
-`$DSH_HOME/sessions`（即 `~/.dsh/sessions/`）。两种启动方式不要混用同一个已有数据目录。
+`DSH_TUI_SESSION_ROOT` 始终表示 JSONL 根目录。`dsh --profile dsh-tui` 默认使用
+`$DSH_HOME/sessions`（通常为 `~/.dsh/sessions/`）；直接运行
+`dsh --config cordis.yml` 的裸示例默认使用 `~/.dsh-tui/sessions/`。
 
 权限相关配置与平台差异见[架构与限制](architecture.md#权限与安全边界)。

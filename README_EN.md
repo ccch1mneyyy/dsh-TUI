@@ -123,6 +123,11 @@ compaction, and persistence remain owned by DSH services. See the
 [architecture guide](docs/architecture.en.md) for module boundaries and
 performance details.
 
+```text
+chat / tool base events ──> persisted Session log ──> TUI / Web
+          └───────────────> ActivityTracker (memory) ──> TUI status only
+```
+
 ## Development
 
 CI uses Node 24 and pnpm 11. The package supports Node `^22.19 || >=24`.
