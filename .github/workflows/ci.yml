@@ -46,6 +46,10 @@ jobs:
       - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
       - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
 
+      # 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
+      # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
+      - run: node --import tsx/esm scripts/verify-keys.tsx
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 

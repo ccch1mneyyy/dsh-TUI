@@ -157,7 +157,7 @@ early user-built extensions. [View the feature screenshot](screenshots/wechat-of
 
 ## Trend
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ccch1mneyyy/dsh-TUI&type=Date)](https://www.star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=ccch1mneyyy/dsh-tui&type=Date)](https://www.star-history.com/#ccch1mneyyy/dsh-tui&Date)
 
 ## License
 
