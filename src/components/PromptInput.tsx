@@ -482,8 +482,12 @@ export function PromptInput({
       interruptSend()
       return
     }
-    if (key.return && key.shift) {
-      // Insert a newline at the caret (multi-line input).
+    if (key.return && (key.shift || key.meta)) {
+      // Shift+Enter / Option+Enter: insert a newline at the caret
+      // (multi-line input). Shift+Enter only arrives when the terminal
+      // supports extended key reporting (kitty/modifyOtherKeys allowlist in
+      // ink/terminal.ts); Option+Enter (ESC CR) is the fallback on terminals
+      // that can't report shift — e.g. macOS Terminal.app (issue #110).
       const next = value.slice(0, cursor) + '\n' + value.slice(cursor)
       setValue(next)
       setCursor(cursor + 1)
