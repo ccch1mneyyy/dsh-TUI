@@ -107,6 +107,25 @@ check(
     JSON.stringify(shimDesc),
   )
 }
+{
+  // cross-spawn 的 path.normalize 步骤：显式正斜杠 Windows 路径必须先
+  // 规范化再转义，否则 cmd 侧可能 ENOENT。
+  const fwd = buildCmdExeSpawn('C:/Program Files/Microsoft VS Code/bin/code.cmd', ['--wait'], {})
+  check(
+    'cmd-spawn: 正斜杠路径先 win32.normalize 再转义',
+    eq(fwd.args, ['/d', '/s', '/c', '"C:\\Program^ Files\\Microsoft^ VS^ Code\\bin\\code.cmd ^"--wait^""']),
+    JSON.stringify(fwd),
+  )
+}
+{
+  // 空字符串 ComSpec 也要回退 cmd.exe（cross-spawn 用 || 而非 ??）。
+  const emptyComspec = buildCmdExeSpawn('x.cmd', [], { comspec: '' })
+  check(
+    'cmd-spawn: 空 ComSpec 回退 cmd.exe',
+    emptyComspec.file === 'cmd.exe' && eq(emptyComspec.args, ['/d', '/s', '/c', '"x.cmd"']),
+    JSON.stringify(emptyComspec),
+  )
+}
 
 // ── resolveWindowsShim（PATH 里有 code.cmd / code.exe 的模拟目录）─────
 const scratch = mkdtempSync(join(tmpdir(), 'dsh-tui-verify-editor-'))

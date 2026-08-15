@@ -37,7 +37,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, join, win32 } from 'node:path'
 import instances from '../ink/instances.js'
 import { cmdEscapeArgument, cmdEscapeCommand } from './shellQuote.js'
 
@@ -146,22 +146,28 @@ const CMD_SHIM_RE = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i
 
 /**
  * Build the `comspec /d /s /c` spawn descriptor for a `.cmd`/`.bat` editor,
- * following the cross-spawn protocol: the escaped command and arguments are
- * joined, wrapped in one pair of quotes (`/s` strips exactly those), and
- * passed with `windowsVerbatimArguments` so libuv does not re-quote the
- * payload. Exported for tests — the assembly is pure.
+ * following the cross-spawn protocol: the command is normalized first
+ * (explicit forward-slash paths like `C:/Program Files/.../code.cmd` must
+ * become backslash form — cross-spawn's path.normalize step, without which
+ * Windows can ENOENT), then command and arguments are escaped, joined, and
+ * wrapped in one pair of quotes (`/s` strips exactly those), and passed
+ * with `windowsVerbatimArguments` so libuv does not re-quote the payload.
+ * Exported for tests — the assembly is pure.
  */
 export function buildCmdExeSpawn(
   command: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
 ): { file: string; args: string[]; verbatim: true } {
+  const normalized = win32.normalize(command)
   const line = [
-    cmdEscapeCommand(command),
-    ...args.map(arg => cmdEscapeArgument(arg, CMD_SHIM_RE.test(command))),
+    cmdEscapeCommand(normalized),
+    ...args.map(arg => cmdEscapeArgument(arg, CMD_SHIM_RE.test(normalized))),
   ].join(' ')
   return {
-    file: env.comspec ?? 'cmd.exe',
+    // `||`, not `??`: a present-but-empty ComSpec must fall back too
+    // (cross-spawn semantics); spawning an empty file name fails outright.
+    file: env.comspec || 'cmd.exe',
     args: ['/d', '/s', '/c', `"${line}"`],
     verbatim: true,
   }

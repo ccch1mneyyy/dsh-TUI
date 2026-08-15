@@ -79,10 +79,13 @@ export declare function resolveWindowsShim(command: string, env?: NodeJS.Process
 };
 /**
  * Build the `comspec /d /s /c` spawn descriptor for a `.cmd`/`.bat` editor,
- * following the cross-spawn protocol: the escaped command and arguments are
- * joined, wrapped in one pair of quotes (`/s` strips exactly those), and
- * passed with `windowsVerbatimArguments` so libuv does not re-quote the
- * payload. Exported for tests — the assembly is pure.
+ * following the cross-spawn protocol: the command is normalized first
+ * (explicit forward-slash paths like `C:/Program Files/.../code.cmd` must
+ * become backslash form — cross-spawn's path.normalize step, without which
+ * Windows can ENOENT), then command and arguments are escaped, joined, and
+ * wrapped in one pair of quotes (`/s` strips exactly those), and passed
+ * with `windowsVerbatimArguments` so libuv does not re-quote the payload.
+ * Exported for tests — the assembly is pure.
  */
 export declare function buildCmdExeSpawn(command: string, args: readonly string[], env?: NodeJS.ProcessEnv): {
     file: string;
