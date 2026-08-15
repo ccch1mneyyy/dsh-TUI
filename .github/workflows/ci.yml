@@ -62,6 +62,14 @@ jobs:
       # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
       - run: node scripts/verify-session-titles.mjs
 
+      # /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
+      # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
+      - run: node scripts/verify-resume-manage.mjs
+
+      # /resume 深度窗口外重命名回归（issue #112 review）：MRU 前 20 之外
+      # 的会话改名后必须显示新标题（touch 进入标题窗口），不能回落到目录名。
+      - run: node scripts/verify-resume-rename-mru.mjs
+
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
       # installModelSelection、#34 的投递异步化都没被它们拦下），挂进来

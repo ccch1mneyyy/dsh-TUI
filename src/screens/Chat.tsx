@@ -26,7 +26,7 @@ import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
-import { ResumePicker } from '../components/ResumePicker.js'
+import { ResumePicker, type ResumePickerMode } from '../components/ResumePicker.js'
 import { ActivityPicker } from '../components/ActivityPicker.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
@@ -191,6 +191,10 @@ export function Chat({
   const [resumePickerOpen, setResumePickerOpen] = React.useState(false)
   const [resumeSessions, setResumeSessions] = React.useState<readonly SessionRecord[]>([])
   const [resumeIndex, setResumeIndex] = React.useState(0)
+  /** `/resume` session management (issue #112): plain selection, a delete
+   *  confirmation (ctrl+d), or the inline rename input (ctrl+r). */
+  const [resumeMode, setResumeMode] = React.useState<ResumePickerMode>('list')
+  const [resumeRenameText, setResumeRenameText] = React.useState('')
   /** `/activity` indicator picker (pi extension's interactive select). */
   const [activityPickerOpen, setActivityPickerOpen] = React.useState(false)
   const [activityIndex, setActivityIndex] = React.useState(0)
@@ -575,6 +579,7 @@ export function Chat({
             channel.notify(t('resume-none-in-cwd'))
             return
           }
+          setResumeMode('list')
           setResumePickerOpen(true)
           setResumeIndex(0)
         })()
@@ -1084,20 +1089,89 @@ export function Chat({
       return
     }
     if (resumePickerOpen) {
+      const resumeSession = resumeSessions[resumeIndex]
+      // Session management modes (issue #112): the list keys stay untouched
+      // until ctrl+d/ctrl+r switch into a sub-mode, each with Enter/Esc.
+      if (resumeMode === 'confirm-delete') {
+        if (key.return) {
+          setResumeMode('list')
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
+          if (resumeSession) {
+            const target = resumeSession
+            void (async () => {
+              const ok = await channel.deleteSession(target.id)
+              if (!ok) {
+                channel.notify(`Could not delete session ${target.title || target.id}`, { color: 'error' })
+                return
+              }
+              channel.notify(`Deleted session ${target.title || target.id}`)
+              // Refresh right away so the row disappears in place; closing
+              // the picker when nothing resumable remains.
+              const sessions = await channel.listSessions()
+              const pickable = sessions.filter(session => session.id !== channel.agentId)
+              setResumeSessions(pickable)
+              if (pickable.length === 0) {
+                setResumePickerOpen(false)
+              } else {
+                setResumeIndex(index => Math.min(index, pickable.length - 1))
+              }
+            })()
+          }
+        } else if (key.escape) {
+          setResumeMode('list')
+        }
+        return
+      }
+      if (resumeMode === 'rename') {
+        if (key.return) {
+          setResumeMode('list')
+          const title = resumeRenameText.trim()
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
+          if (resumeSession && title.length > 0) {
+            const target = resumeSession
+            void (async () => {
+              const ok = await channel.renameSessionTo(target.id, title)
+              if (!ok) {
+                channel.notify(`Could not rename session ${target.title || target.id}`, { color: 'error' })
+                return
+              }
+              channel.notify(`Renamed session to ${title}`)
+              // Re-list so the row reflects the persisted state, but patch
+              // the renamed row's title explicitly: listSessions resolves
+              // persisted titles only within the MRU top SESSION_TITLE_DEPTH
+              // window, and a freshly renamed row must never snap back to
+              // the basename fallback in between.
+              const sessions = await channel.listSessions()
+              setResumeSessions(
+                sessions
+                  .filter(session => session.id !== channel.agentId)
+                  .map(session => (session.id === target.id ? { ...session, title } : session)),
+              )
+            })()
+          }
+        } else if (key.escape) {
+          setResumeMode('list')
+        } else if (key.backspace) {
+          setResumeRenameText(text => text.slice(0, -1))
+        } else if (!key.ctrl && !key.meta && !key.super && input) {
+          // Single-line title: pasted newlines collapse to spaces.
+          setResumeRenameText(text => text + input.replace(/[\r\n]+/g, ' '))
+        }
+        return
+      }
       if (key.upArrow) {
         setResumeIndex(index => (index <= 0 ? resumeSessions.length - 1 : index - 1))
       } else if (key.downArrow) {
         setResumeIndex(index => (index >= resumeSessions.length - 1 ? 0 : index + 1))
       } else if (key.return) {
-        const session = resumeSessions[resumeIndex]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
-        if (session) {
+        if (resumeSession) {
           // Enter switches the live agent to the persisted session right
           // away (the history replays into the transcript); the resume.txt
           // launcher marker is refreshed by resumeTo so `--resume` on the
           // next launch opens the same session.
           setResumePickerOpen(false)
-          void channel.resumeTo(session.id).then((ok) => {
+          void channel.resumeTo(resumeSession.id).then((ok) => {
             if (ok) channel.notify('Session resumed')
           })
         } else {
@@ -1105,6 +1179,11 @@ export function Chat({
         }
       } else if (key.escape) {
         setResumePickerOpen(false)
+      } else if (isMod(key) && input === 'd' && resumeSession) {
+        setResumeMode('confirm-delete')
+      } else if (isMod(key) && input === 'r' && resumeSession) {
+        setResumeRenameText(resumeSession.title || '')
+        setResumeMode('rename')
       }
       return
     }
@@ -1490,6 +1569,8 @@ export function Chat({
               sessions={resumeSessions}
               focusIndex={resumeIndex}
               currentSessionId={channel.agentId}
+              mode={resumeMode}
+              renameText={resumeRenameText}
             />
           </Box>
         )}

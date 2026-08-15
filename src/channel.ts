@@ -22,8 +22,8 @@ import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instruc
 import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
-import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
-import { prepareSessionForResume, readSessionTitleFromLog } from './compat/index.js'
+import { clearResumeTarget, forgetSession, readLastUsed, readResumeTarget, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
+import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog } from './compat/index.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
@@ -436,6 +436,14 @@ export interface Channel {
   /** Rename the current session (CC's /rename): appends a `session/title`
    *  event, which the status line and the /resume picker both read. */
   renameSession(title: string): void
+  /** Delete a persisted session (`/resume` picker ctrl+d): removes its log
+   *  directory, its last-used entry, and the resume marker when it points
+   *  here. False for the live session or a missing/unwritable log. */
+  deleteSession(sessionId: string): Promise<boolean>
+  /** Rename any persisted session (`/resume` picker ctrl+r): appends a
+   *  `session/title` event to its log (live sessions go through the normal
+   *  rename path). False when the log is absent or undecodable. */
+  renameSessionTo(sessionId: string, title: string): Promise<boolean>
   /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
   compact(): void
   /** Render a multi-line local report in the transcript (`/status`,
@@ -595,6 +603,10 @@ export interface ChannelState {
   setResumeTarget(sessionId: string): void
   /** Rename the current session (see the public Channel type). */
   renameSession(title: string): void
+  /** Delete a persisted session (see the public Channel type). */
+  deleteSession(sessionId: string): Promise<boolean>
+  /** Rename any persisted session (see the public Channel type). */
+  renameSessionTo(sessionId: string, title: string): Promise<boolean>
   /** Manually compact the session history (CC's /compact). */
   compact(): void
   /** Multi-line local report (`/status`, `/doctor`, …). */
@@ -1995,6 +2007,37 @@ export function createChannel(
       agent.session.append('session/title', { title })
       state.sessionTitle = title
       state.emit()
+    },
+    async deleteSession(sessionId) {
+      // The live session's log is still being appended by this process —
+      // deleting it from under the writer is never offered in the picker
+      // (the current session is filtered out), so refuse it here too.
+      if (sessionId === agent.session.id) return false
+      if (deleteSessionLog(sessionId) !== 'deleted') return false
+      forgetSession(sessionId)
+      // A resume marker naming the deleted session would make the next
+      // `dsh-tui --resume` launch target a log that no longer exists.
+      if (readResumeTarget() === sessionId) clearResumeTarget()
+      return true
+    },
+    async renameSessionTo(sessionId, title) {
+      if (sessionId === agent.session.id) {
+        // The live session renames through session.append so the firehose
+        // updates the status line right away (same as /rename).
+        agent.session.append('session/title', { title })
+        state.sessionTitle = title
+        state.emit()
+        return true
+      }
+      if (appendSessionTitle(sessionId, title) !== 'appended') return false
+      // listSessions resolves persisted titles only for the MRU top
+      // SESSION_TITLE_DEPTH; a rename does not change MRU by itself, so a
+      // session beyond the window would keep showing the cwd-basename
+      // fallback (in the next picker AND after restart) even though the
+      // title event is durable. A rename IS user interaction with the
+      // session — touching it pulls it into the title window.
+      touchSession(sessionId)
+      return true
     },
     compact() {
       // DSH compaction service key: `ctx.compaction` (dsh-compaction's
