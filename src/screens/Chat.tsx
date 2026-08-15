@@ -2,7 +2,7 @@ import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, type I18nKey } from '../i18n.js'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '../ui.js'
 import { POINTER } from '../cc/figures.js'
-import { isMod, modLabel } from '../utils/modifiers.js'
+import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Channel, ChatRow, EffortOption, PresetOption } from '../channel.js'
@@ -1060,7 +1060,7 @@ export function Chat({
         setSearchOpen(false)
         setHighlight('')
         handle?.scrollTo(searchAnchorRef.current)
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         // Enter commits; 0-match junk queries don't persist (CC behavior).
         if (searchCount === 0) setSearchQuery('')
         setSearchOpen(false)
@@ -1105,7 +1105,7 @@ export function Chat({
     if (thinkingOpen) {
       if (thinkingConfirm !== null) {
         // Confirmation state: Enter applies, Esc backs out to the select.
-        if (key.return) {
+        if (isPlainReturn(key)) {
           const enabled = thinkingConfirm
           setThinkingVisible(enabled)
           setThinkingConfirm(null)
@@ -1116,7 +1116,7 @@ export function Chat({
         }
       } else if (key.upArrow || key.downArrow) {
         setThinkingFocus(index => (index === 0 ? 1 : 0))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const enabled = thinkingFocus === 0
         const midConversation = channel.rows.some(row => row.kind === 'assistant')
         if (midConversation && enabled !== thinkingVisible) {
@@ -1136,7 +1136,7 @@ export function Chat({
       // Session management modes (issue #112): the list keys stay untouched
       // until ctrl+d/ctrl+r switch into a sub-mode, each with Enter/Esc.
       if (resumeMode === 'confirm-delete') {
-        if (key.return) {
+        if (isPlainReturn(key)) {
           setResumeMode('list')
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
           if (resumeSession) {
@@ -1166,7 +1166,7 @@ export function Chat({
         return
       }
       if (resumeMode === 'rename') {
-        if (key.return) {
+        if (isPlainReturn(key)) {
           setResumeMode('list')
           const title = resumeRenameText.trim()
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
@@ -1185,11 +1185,16 @@ export function Chat({
               // window, and a freshly renamed row must never snap back to
               // the basename fallback in between.
               const sessions = await channel.listSessions()
-              setResumeSessions(
-                sessions
-                  .filter(session => session.id !== channel.agentId)
-                  .map(session => (session.id === target.id ? { ...session, title } : session)),
-              )
+              const next = sessions
+                .filter(session => session.id !== channel.agentId)
+                .map(session => (session.id === target.id ? { ...session, title } : session))
+              setResumeSessions(next)
+              // Re-anchor focus on the renamed row: renameSessionTo touches
+              // MRU, so the re-listed order shifts — a kept index would
+              // silently point at a DIFFERENT session, and a following
+              // Enter/ctrl+d would act on the wrong one (review leftover).
+              const anchored = next.findIndex(session => session.id === target.id)
+              if (anchored >= 0) setResumeIndex(anchored)
             })()
           }
         } else if (key.escape) {
@@ -1206,7 +1211,7 @@ export function Chat({
         setResumeIndex(index => (index <= 0 ? resumeSessions.length - 1 : index - 1))
       } else if (key.downArrow) {
         setResumeIndex(index => (index >= resumeSessions.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (resumeSession) {
           // Enter switches the live agent to the persisted session right
@@ -1235,7 +1240,7 @@ export function Chat({
         setModelIndex(index => (index <= 0 ? models.length - 1 : index - 1))
       } else if (key.downArrow) {
         setModelIndex(index => (index >= models.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const model = models[modelIndex]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (model) {
@@ -1260,7 +1265,7 @@ export function Chat({
         setActivityIndex(index => (index <= 0 ? PRESET_NAMES.length - 1 : index - 1))
       } else if (key.downArrow) {
         setActivityIndex(index => (index >= PRESET_NAMES.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const name = PRESET_NAMES[activityIndex]
         setActivityPickerOpen(false)
         if (name) channel.setActivityFrames(name)
@@ -1277,7 +1282,7 @@ export function Chat({
         const option = effortOptions[next]
         // Live-apply: the slider IS the control; Esc does not revert.
         if (option) void channel.setEffort(option.id)
-      } else if (key.return || key.escape) {
+      } else if (isPlainReturn(key) || key.escape) {
         setEffortSliderOpen(false)
       }
       return
@@ -1287,7 +1292,7 @@ export function Chat({
         setPresetIndex(index => (index <= 0 ? presetOptions.length - 1 : index - 1))
       } else if (key.downArrow) {
         setPresetIndex(index => (index >= presetOptions.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const option = presetOptions[presetIndex]
         setPresetPickerOpen(false)
         if (option) void channel.switchPreset(option.id)
@@ -1302,7 +1307,7 @@ export function Chat({
         setThemeIndex(index => (index <= 0 ? options.length - 1 : index - 1))
       } else if (key.downArrow) {
         setThemeIndex(index => (index >= options.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         setThemePickerOpen(false)
         const name = options[themeIndex]?.value
         if (name !== undefined) {
@@ -1323,7 +1328,7 @@ export function Chat({
       } else if (key.ctrl && (input === 'c' || input === 'd')) {
         // CC's history search cancels on ctrl+c/ctrl+d too.
         setHistoryOpen(false)
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const entry = historyMatches[historyFocus]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty match list
         if (entry) {
@@ -1370,7 +1375,7 @@ export function Chat({
     if (rewindOpen) {
       if (rewindConfirm !== null) {
         // Confirmation state: Enter rewinds, Esc backs out to the list.
-        if (key.return) {
+        if (isPlainReturn(key)) {
           const row = rewindConfirm
           setRewindOpen(false)
           setRewindConfirm(null)
@@ -1382,7 +1387,7 @@ export function Chat({
         setRewindIndex(index => (index <= 0 ? rewindRows.length - 1 : index - 1))
       } else if (key.downArrow) {
         setRewindIndex(index => (index >= rewindRows.length - 1 ? 0 : index + 1))
-      } else if (key.return) {
+      } else if (isPlainReturn(key)) {
         const row = rewindRows[rewindIndex]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (row) setRewindConfirm(row)
@@ -1451,7 +1456,7 @@ export function Chat({
         moveSelection(-1)
       } else if (key.downArrow) {
         moveSelection(1)
-      } else if (key.return && selectedId !== null) {
+      } else if (isPlainReturn(key) && selectedId !== null) {
         toggleRowExpanded(selectedId)
       } else if (key.escape) {
         setSelectionActive(false)
@@ -1506,7 +1511,7 @@ export function Chat({
       instances.get(process.stdout)?.forceRedraw()
     } else if (isMod(key) && input === 'e') {
       setShowAllMessages(previous => !previous)
-    } else if (key.return && showPill) {
+    } else if (isPlainReturn(key) && showPill) {
       handle?.scrollToBottom()
     }
   })

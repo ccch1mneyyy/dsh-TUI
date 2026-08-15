@@ -28,6 +28,7 @@
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import {
+  appendFileSync,
   existsSync,
   readdirSync,
   readFileSync,
@@ -49,14 +50,14 @@ export type ResumeRepairOutcome =
 const ZSTD_MAGIC = 0xfd2fb528
 
 /**
- * Session-log storage roots, mirroring the persistence backend's `root`
- * resolution: cordis.patch.yml sets `DSH_CC_SESSION_ROOT ?? dshHomePath(
+ * Session-log storage roots, in priority order, mirroring the persistence
+ * backend's `root` resolution: cordis.patch.yml sets `DSH_CC_SESSION_ROOT ?? dshHomePath(
  * 'sessions')` where dshHomePath is `$DSH_HOME ?? ~/.dsh`; the unpatched
  * cordis.yml base falls back to ~/.dsh-cc/sessions, kept here as the legacy
  * last resort. Every candidate is scanned — the first hit wins, so an
  * explicit DSH_CC_SESSION_ROOT always outranks the defaults.
  */
-function sessionsRoots(): string[] {
+export function sessionsRoots(): string[] {
   const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
   const roots: string[] = []
   const override = process.env.DSH_CC_SESSION_ROOT
@@ -279,8 +280,14 @@ export async function prepareSessionForResume(sessionId: string): Promise<void> 
  * untouched (the frame-0 header invariant holds), and `last title wins` in
  * {@link readSessionTitleFromLog} surfaces the new name. The seq continues
  * the log's contiguity contract (seq = event count) by taking maxSeq + 1.
- * The write is staged tmp + rename like the repair, so a crash never leaves
- * a torn frame. Never throws.
+ * The frame is APPEND-ONLY (O_APPEND), matching the backend's own flush
+ * discipline: this store is shared with dsh web (#24), and a
+ * read-concat-rewrite (tmp + rename) would silently drop a frame another
+ * writer lands between our read and replace. A single append never rewrites
+ * existing bytes, so concurrent frames all survive; the worst remaining
+ * race is a duplicate seq when the maxSeq read above passes another
+ * appender — benign next to lost frames, since last-title-wins keeps the
+ * rename semantics. Never throws.
  * @param sessionId - Session to rename.
  * @param title - New display title (already trimmed by the caller).
  * @returns 'appended', or 'unavailable' when the log is absent/undecodable.
@@ -307,9 +314,7 @@ export function appendSessionTitle(sessionId: string, title: string): 'appended'
       data: { title },
     }
     const frame = zstdCompressSync(Buffer.from(JSON.stringify(event) + '\n', 'utf8'))
-    const tmp = `${file}.compat-${randomUUID()}.tmp`
-    writeFileSync(tmp, Buffer.concat([original, frame]))
-    renameSync(tmp, file)
+    appendFileSync(file, frame)
     return 'appended'
   } catch {
     return 'unavailable'

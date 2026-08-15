@@ -23,7 +23,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, forgetSession, readLastUsed, readResumeTarget, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
-import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog } from './compat/index.js'
+import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog, sessionsRoots } from './compat/index.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
@@ -2433,8 +2433,13 @@ export function createChannel(
       for (const candidate of configCandidates) {
         lines.push(`${t('doctor-config', { candidate, state: existsSync(candidate) ? '✓' : t('doctor-config-missing') })}`)
       }
-      const sessionsDir = join(userHome, '.dsh-cc/sessions')
-      lines.push(`${t('doctor-storage', { dir: sessionsDir, state: existsSync(sessionsDir) ? '✓' : t('doctor-storage-uninit') })}`)
+      // Session store candidates mirror the compat layer (sessionsRoots):
+      // the active root depends on the composition (bare cordis.yml →
+      // legacy ~/.dsh-cc, profile → $DSH_HOME/sessions), so list every
+      // candidate with its own state instead of hardcoding one.
+      for (const dir of sessionsRoots()) {
+        lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
+      }
       return lines
     },
     async listSubagents() {
@@ -3346,7 +3351,17 @@ export function sessionCwdMatches(
 ): boolean {
   const cwd = normalizeCwd(stateCwd, caseInsensitive)
   const recorded = normalizeCwd(headerCwd, caseInsensitive)
-  return recorded === cwd || (cwd !== '' && recorded.startsWith(`${cwd}/`))
+  if (recorded === '' || cwd === '') return false
+  return (
+    recorded === cwd ||
+    // Pre-upgrade subdirectory session of this workspace.
+    recorded.startsWith(`${cwd}/`) ||
+    // Resumed INTO a pre-upgrade subdirectory session (state.cwd adopted its
+    // recorded subdirectory): the workspace-root sessions it belongs with
+    // must stay visible, or /resume looks like it lost them for the rest of
+    // the process lifetime (review leftover).
+    cwd.startsWith(`${recorded}/`)
+  )
 }
 
 /** Context-bar token estimate (pi-nano-context: ~4 chars per token). */

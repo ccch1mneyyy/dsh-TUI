@@ -21,5 +21,6 @@ export {
   prepareSessionForResume,
   readSessionTitleFromLog,
   repairSessionLogForResume,
+  sessionsRoots,
 } from './sessionLog.js'
 export type { ResumeRepairOutcome } from './sessionLog.js'
