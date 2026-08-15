@@ -44,6 +44,10 @@ jobs:
       # registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
       - run: node scripts/verify-update.mjs
 
+      # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
+      # ignorable 标记，已知类型不动，二次运行幂等。
+      - run: node scripts/verify-resume-repair.mjs
+
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
       # installModelSelection、#34 的投递异步化都没被它们拦下），挂进来

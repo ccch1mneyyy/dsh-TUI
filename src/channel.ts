@@ -17,6 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
+import { prepareSessionForResume } from './compat/index.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
@@ -1384,6 +1385,9 @@ export function createChannel(
         model: options.configuredModel,
       })
       try {
+        // Compat boundary: mark third-party event types in the target log
+        // ignorable before the harness seed-validates it (src/compat/).
+        await prepareSessionForResume(sessionId)
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
           agentOptions: { provider: resumeRoute?.provider, model: resumeRoute?.model },
