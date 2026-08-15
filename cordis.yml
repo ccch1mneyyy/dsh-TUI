@@ -23,6 +23,23 @@
     # Shift+Tab choice (~/.dsh-cc/effort.json); also seeds the startup
     # header/statusline until the first request header reports the live value.
     effort: max
+    # Shift+Tab 会话模式循环（数组顺序即循环顺序；缺省为下面三档）。
+    # 每档可声明 plan（计划模式开/关）、sandbox（read-only/
+    # workspace-write/danger-full-access）、approval（ask/never）三个
+    # 原子的任意子集；未声明的原子不动。首档（index 0）为无标记基态。
+    # modes:
+    #   - id: default
+    #     plan: false
+    #     sandbox: workspace-write
+    #     approval: ask
+    #   - id: plan
+    #     plan: true
+    #     sandbox: read-only
+    #     approval: ask
+    #   - id: full
+    #     plan: false
+    #     sandbox: danger-full-access
+    #     approval: never
     #  feeds the chosen session id through this env var.
     sessionId: !!js process.env.DSH_CC_RESUME_SESSION ?? undefined
 

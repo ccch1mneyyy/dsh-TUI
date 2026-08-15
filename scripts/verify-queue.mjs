@@ -57,6 +57,9 @@ function makeChannel(working) {
   let seq = 0
   return {
     working,
+    mode: { id: 'default', plan: false },
+    modeIndex: 0,
+    cycleMode() {},
     commandList: [],
     notifications: [],
     contextWindow: undefined,

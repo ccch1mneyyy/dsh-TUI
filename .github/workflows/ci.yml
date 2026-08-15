@@ -37,6 +37,15 @@ jobs:
 
       - run: node --import tsx/esm scripts/repro-toolcards.tsx
 
+      # 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
+      # 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
+      # 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
+      # 整个 0.6.x 才被发现——挂进来防再烂。
+      - run: node --import tsx/esm scripts/repro-pill.tsx
+      - run: node --import tsx/esm scripts/repro-ctrlc.tsx
+      - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
+      - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 
@@ -103,6 +112,10 @@ jobs:
       # 斜杠命令描述 i18n 回归（issue #41）：/ 菜单与 ? 帮助菜单描述随
       # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
       - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx
+      # /effort 滑杆 + 模式指示全应用回归（真实 Chat 渲染）：滑杆开/
+      # ←/→ 实时生效/Esc 关闭、状态栏 effort 段与模式段、三次 backtab
+      # 完整循环。
+      - run: node scripts/verify-effort-slider-ui.mjs
 
       # /trace 轨迹视图回归（issue #80）：事件装配配对耗时 + 组件渲染/滚动。
       - run: node --import tsx/esm scripts/repro-trace.tsx

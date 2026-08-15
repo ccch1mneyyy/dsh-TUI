@@ -10,7 +10,7 @@
 | `Tab` | Complete a `/` command or `@` file; while the model is working, queue non-empty input as a post-turn follow-up |
 | `Ctrl+Enter` | Interrupt the running turn and process the input immediately |
 | `Shift+Enter` | Insert a newline at the caret |
-| `Shift+Tab` | Cycle the effort levels declared by the active adapter, for example Off -> High -> Max |
+| `Shift+Tab` | Cycle the configured session modes (default: default → plan → full-access) |
 | `Alt/Option+Up` | Pull the latest undelivered message back into the editor |
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
 | `Ctrl+V` | Insert system clipboard text; files/images copied in Windows Explorer insert paths |
@@ -163,7 +163,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | --- | --- |
 | Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
-| Model and display | `/model`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
+| Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
 | Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
@@ -174,6 +174,8 @@ Additional forms:
 - `/activity` opens the animation picker; `/activity frames <name>` selects
   directly; `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
+- `/effort` opens the reasoning-effort slider (←/→ adjusts live);
+  `/effort <id>` sets a level directly; `/effort status` reports the current one.
 - `/theme <name>` and `/theme status` are described in the theme guide.
 - `/lang` toggles the interface language (see “Interface language”).
 - After startup, the TUI checks npm for a newer version in the background and

@@ -52,6 +52,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'theme', description: 'Switch the color theme (built-in or custom)' },
   { name: 'lang', description: 'Switch the UI language (en / zh)' },
   { name: 'model', description: 'Show the active model' },
+  { name: 'effort', description: 'Adjust the reasoning effort (slider)' },
   { name: 'thinking', description: 'Toggle extended thinking display' },
   { name: 'tokens', description: 'Show session token usage' },
   // Account / policy

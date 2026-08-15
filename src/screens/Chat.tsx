@@ -5,7 +5,7 @@ import { POINTER } from '../cc/figures.js'
 import { isMod, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
-import type { Channel, ChatRow, PresetOption } from '../channel.js'
+import type { Channel, ChatRow, EffortOption, PresetOption } from '../channel.js'
 import type { QuestionStore } from '../questions.js'
 import { ApprovalStore } from '../approvals.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
@@ -28,6 +28,7 @@ import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { ResumePicker, type ResumePickerMode } from '../components/ResumePicker.js'
 import { ActivityPicker } from '../components/ActivityPicker.js'
+import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
 import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
@@ -202,6 +203,10 @@ export function Chat({
   const [presetPickerOpen, setPresetPickerOpen] = React.useState(false)
   const [presetOptions, setPresetOptions] = React.useState<readonly PresetOption[]>([])
   const [presetIndex, setPresetIndex] = React.useState(0)
+  /** `/effort` rheostat slider: adapter levels load async, focus moves ←/→. */
+  const [effortSliderOpen, setEffortSliderOpen] = React.useState(false)
+  const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
+  const [effortIndex, setEffortIndex] = React.useState(0)
   /** `/theme` color-theme picker (built-ins + ~/.dsh-cc/themes user themes). */
   const [themePickerOpen, setThemePickerOpen] = React.useState(false)
   const [themeIndex, setThemeIndex] = React.useState(0)
@@ -429,6 +434,37 @@ export function Chat({
           setPresetOptions(list)
           const index = list.findIndex(preset => preset.id === channel.agentPreset)
           setPresetIndex(index >= 0 ? index : 0)
+        })
+        return true
+      }
+      case 'effort': {
+        // Bare `/effort` opens the rheostat slider over the live route's
+        // adapter levels (←/→ applies each step immediately); `/effort <id>`
+        // sets directly (validated by the channel); `/effort status` prints
+        // the current level. The choice persists to ~/.dsh-cc/effort.json.
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        if (parts[0] === 'status') {
+          setHelpOpen(false)
+          channel.pushLocal('/effort', [
+            t('effort-current', { name: channel.reasoningEffort ?? '—' }),
+            t('effort-usage'),
+          ])
+          return true
+        }
+        if (parts.length > 0) {
+          setHelpOpen(false)
+          void channel.setEffort(parts[0])
+          return true
+        }
+        setHelpOpen(false)
+        void channel.listEfforts().then(({ efforts, defaultEffort }) => {
+          // 0/1-tier routes were already notified by listEfforts.
+          if (efforts.length <= 1) return
+          setEffortOptions(efforts)
+          const current = channel.reasoningEffort ?? defaultEffort
+          const index = efforts.findIndex(effort => effort.id === current)
+          setEffortIndex(index >= 0 ? index : 0)
+          setEffortSliderOpen(true)
         })
         return true
       }
@@ -1226,6 +1262,19 @@ export function Chat({
       }
       return
     }
+    if (effortSliderOpen) {
+      if (key.leftArrow || key.rightArrow) {
+        const delta = key.leftArrow ? -1 : 1
+        const next = (effortIndex + delta + effortOptions.length) % effortOptions.length
+        setEffortIndex(next)
+        const option = effortOptions[next]
+        // Live-apply: the slider IS the control; Esc does not revert.
+        if (option) void channel.setEffort(option.id)
+      } else if (key.return || key.escape) {
+        setEffortSliderOpen(false)
+      }
+      return
+    }
     if (presetPickerOpen) {
       if (key.upArrow) {
         setPresetIndex(index => (index <= 0 ? presetOptions.length - 1 : index - 1))
@@ -1461,7 +1510,7 @@ export function Chat({
   /** Prompt input is inert while a modal dialog owns the keyboard. */
   const promptSelectionActive =
     selectionActive || modelPickerOpen || resumePickerOpen || activityPickerOpen ||
-    presetPickerOpen || themePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen ||
+    effortSliderOpen || presetPickerOpen || themePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen ||
     btw !== null ||
     traceOpen
 
@@ -1592,6 +1641,15 @@ export function Chat({
             <ActivityPicker
               focusIndex={activityIndex}
               currentPreset={channel.activityFrames}
+            />
+          </Box>
+        )}
+        {effortSliderOpen && effortOptions.length > 1 && (
+          <Box flexDirection="column" marginTop={1}>
+            <EffortSlider
+              options={effortOptions}
+              focusIndex={effortIndex}
+              currentId={channel.reasoningEffort}
             />
           </Box>
         )}

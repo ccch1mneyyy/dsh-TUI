@@ -10,7 +10,7 @@
 | `Tab` | 补全 `/` 命令或 `@` 文件；模型工作且输入非空时排入当前回合之后的 follow-up |
 | `Ctrl+Enter` | 打断当前回合并立即处理输入消息 |
 | `Shift+Enter` | 在光标处插入换行 |
-| `Shift+Tab` | 按当前模型适配器声明的等级循环推理 effort，例如 Off -> High -> Max |
+| `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问） |
 | `Alt/Option+Up` | 把最后一条尚未处理的消息取回输入框编辑 |
 | `Up/Down` | 菜单选择；普通输入中浏览历史或在多行文本间移动 |
 | `Ctrl+V` | 从系统剪贴板插入文本；Windows Explorer 复制的文件/图片会插入路径 |
@@ -174,7 +174,7 @@ transcript。
 | --- | --- |
 | 会话 | `/new`、`/resume`、`/clear`、`/compact`、`/export`、`/btw`、`/trace` |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
-| 模型与显示 | `/model`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
+| 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
 | 账号与策略 | `/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |
 | 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit` |
@@ -185,6 +185,8 @@ transcript。
 - `/activity` 打开动画选择器；`/activity frames <name>` 直接设置；
   `/activity status` 查看状态。
 - `/preset <id>` 与 `/preset status` 见配置文档。
+- `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
+  `/effort status` 查看当前档位。
 - `/theme <name>` 与 `/theme status` 见主题文档。
 - `/lang` 切换中英界面语言（见「界面语言」）。
 - 启动后会后台检查 npm 新版本；发现更新时会提示。检测遵循 npm registry

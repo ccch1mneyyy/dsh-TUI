@@ -155,6 +155,10 @@ for details.
 The DeepSeek Harness official WeChat account featured this plugin among its
 early user-built extensions. [View the feature screenshot](screenshots/wechat-official.png).
 
+## Trend
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ccch1mneyyy/dsh-TUI&type=Date)](https://www.star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+
 ## License
 
 [MIT](LICENSE)

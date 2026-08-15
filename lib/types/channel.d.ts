@@ -4,6 +4,7 @@ import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
+import { type SessionModeSpec } from './sessionModes.js';
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js';
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
 export interface ToolRow {
@@ -387,10 +388,23 @@ export interface Channel {
      *  current end and continues it with a new agent routed to `provider`/`model`.
      *  The history replays unchanged; only the request route changes. */
     switchModel(provider: string, model: string): Promise<boolean>;
-    /** Cycle the live route's reasoning effort (Shift+Tab) through the
-     *  adapter's own level list (dsh parity: deepseek Off→High→Max), taking
-     *  effect on the next request and persisting across restarts. */
-    cycleEffort(): Promise<void>;
+    /** The live route's effort levels + adapter default for the `/effort`
+     *  slider; empty `efforts` after notifying when unsupported/unavailable. */
+    listEfforts(): Promise<{
+        efforts: readonly EffortOption[];
+        defaultEffort: string | undefined;
+    }>;
+    /** Set one effort level by id (validated against the adapter list);
+     *  false + a notify when the id is not offered. Persists like the old
+     *  Shift+Tab cycle (~/.dsh-cc/effort.json). */
+    setEffort(id: string): Promise<boolean>;
+    /** The session mode currently in force (matched from the session log, or
+     *  the last one Shift+Tab applied). */
+    readonly mode: SessionModeSpec;
+    /** Index of `mode` in the configured cycle; 0 is the unmarked base mode. */
+    readonly modeIndex: number;
+    /** Shift+Tab: advance to the next configured session mode. */
+    cycleMode(): Promise<void>;
     /** The preset the CURRENT session runs under (issue #8), resolved from its
      *  log at create/resume time; undefined when no roster is mounted. */
     readonly agentPreset: string | undefined;
@@ -492,6 +506,12 @@ export interface PendingMessage {
  * fields mirror the public {@link Channel} contract, and the `@internal`
  * emit hooks belong to the implementation.
  */
+/** One adapter-owned reasoning-effort level for the `/effort` slider. */
+export interface EffortOption {
+    id: string;
+    name: string;
+    description?: string;
+}
 export interface ChannelState {
     version: number;
     rows: ChatRow[];
@@ -585,8 +605,19 @@ export interface ChannelState {
     newSession(): Promise<boolean>;
     /** Switch the live model (`/model` picker). */
     switchModel(provider: string, model: string): Promise<boolean>;
-    /** Cycle reasoning effort (see the public Channel type). */
-    cycleEffort(): Promise<void>;
+    /** The route's effort levels for `/effort` (see the public Channel type). */
+    listEfforts(): Promise<{
+        efforts: readonly EffortOption[];
+        defaultEffort: string | undefined;
+    }>;
+    /** Set one effort level by id (see the public Channel type). */
+    setEffort(id: string): Promise<boolean>;
+    /** The session mode currently in force (see the public Channel type). */
+    mode: SessionModeSpec;
+    /** Index of `mode` in the configured cycle (see the public Channel type). */
+    modeIndex: number;
+    /** Shift+Tab session-mode advance (see the public Channel type). */
+    cycleMode(): Promise<void>;
     /** The preset the current session runs under (see the public Channel type). */
     agentPreset: string | undefined;
     /** The roster's presets for the `/preset` picker (see the public Channel type). */
@@ -669,6 +700,9 @@ export declare function createChannel(ctx: Context, initialAgent: Agent, options
     configuredModel?: string;
     /** The preset the initial agent's session runs under (from resolveAgent). */
     agentPreset?: string;
+    /** Shift+Tab session-mode cycle from cordis.yml `modes`; undefined →
+     *  the built-in default/plan/full cycle (sessionModes.ts). */
+    modes?: readonly SessionModeSpec[];
     /** Handle of the initial agent; disposed when a rewind replaces it. */
     handle?: AgentHandle;
 }): ChannelState;

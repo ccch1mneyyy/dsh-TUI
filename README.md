@@ -235,6 +235,10 @@ Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-acce
 
 朋友们开发的[社区、相关项目与周边工具](docs/links.md)
 
+## 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ccch1mneyyy/dsh-TUI&type=Date)](https://www.star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+
 
 ## License
 

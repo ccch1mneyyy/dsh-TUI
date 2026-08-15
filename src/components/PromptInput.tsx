@@ -494,11 +494,12 @@ export function PromptInput({
       handleEnter()
       return
     }
-    // Shift+Tab cycles the reasoning effort (dsh parity: the adapter's own
-    // level list, e.g. deepseek Off→High→Max). Must precede the plain-Tab
-    // arms — the parser reports backtab as key.tab + key.shift.
+    // Shift+Tab cycles the configured session modes (default: 默认 →
+    // 计划模式 → 完全访问; each mode bundles plan/sandbox/approval atoms —
+    // see the `modes` config). Must precede the plain-Tab arms — the parser
+    // reports backtab as key.tab + key.shift.
     if (key.tab && key.shift) {
-      void channel.cycleEffort()
+      void channel.cycleMode()
       return
     }
     if (key.tab && fileOverlayOpen) {
@@ -904,7 +905,7 @@ export function PromptInput({
         flexDirection="column"
         alignItems="flex-start"
         justifyContent="flex-start"
-        borderColor="promptBorder"
+        borderColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
         borderStyle="round"
         borderLeft={false}
         borderRight={false}
