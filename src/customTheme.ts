@@ -22,7 +22,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getTheme, THEME_NAMES, type Theme } from './theme.js'
+import { getTheme, THEME_NAMES, AUTO_THEME_NAME, type Theme } from './theme.js'
 import { DATA_DIR } from './utils/paths.js'
 
 /** The base palettes a user theme may overlay. */
@@ -289,14 +289,14 @@ function indexCustomThemeNames(): void {
 }
 
 /**
- * Whether a name selects a usable theme: a built-in palette or a valid user
- * theme file. Used for DSH_TUI_THEME / persisted-preference validation and
- * the runtime /theme switch.
+ * Whether a name selects a usable theme: a built-in palette, the `auto`
+ * pseudo-theme, or a valid user theme file. Used for DSH_TUI_THEME /
+ * persisted-preference validation and the runtime /theme switch.
  * @param name - Candidate theme name.
  * @returns True when the theme resolves.
  */
 export function isThemeAvailable(name: string): boolean {
-  if (isThemeBase(name)) return true
+  if (name === AUTO_THEME_NAME || isThemeBase(name)) return true
   return resolveCustomTheme(name) !== undefined
 }
 

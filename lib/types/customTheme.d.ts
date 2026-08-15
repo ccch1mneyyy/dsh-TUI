@@ -92,9 +92,9 @@ export declare function buildTheme(spec: CustomThemeSpec): Theme;
  */
 export declare function resolveCustomTheme(name: string): Theme | undefined;
 /**
- * Whether a name selects a usable theme: a built-in palette or a valid user
- * theme file. Used for DSH_TUI_THEME / persisted-preference validation and
- * the runtime /theme switch.
+ * Whether a name selects a usable theme: a built-in palette, the `auto`
+ * pseudo-theme, or a valid user theme file. Used for DSH_TUI_THEME /
+ * persisted-preference validation and the runtime /theme switch.
  * @param name - Candidate theme name.
  * @returns True when the theme resolves.
  */

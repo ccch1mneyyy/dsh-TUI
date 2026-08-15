@@ -34,7 +34,7 @@ const {
   clearCustomThemeCache,
 } = await import('../src/customTheme.js')
 const { parseThemePref, readThemePref, writeThemePref } = await import('../src/themePrefs.js')
-const { getTheme, registerCustomThemeResolver } = await import('../src/theme.js')
+const { getTheme, registerCustomThemeResolver, setAutoThemeBase, getAutoThemeBase } = await import('../src/theme.js')
 
 const themesDir = join(tmpHome, '.dsh-tui', 'themes')
 mkdirSync(themesDir, { recursive: true })
@@ -236,6 +236,28 @@ check('getTheme: registry resolves user themes, built-ins untouched', () => {
   assert.equal(getTheme('good').claude, '#FF9EC7') // file name alias
   assert.equal(getTheme('dark'), getTheme('dark')) // built-in identity preserved
   assert.equal(getTheme('nope').claude, getTheme('dark').claude) // unknown -> dark
+})
+
+// --- the auto pseudo-theme -------------------------------------------------
+check('auto: available, resolves to the detected base, shadows user themes', () => {
+  assert.ok(isThemeAvailable('auto'))
+  // pre-detection default is dark (the readable fallback)
+  assert.equal(getAutoThemeBase(), 'dark')
+  assert.equal(getTheme('auto'), getTheme('dark'))
+  setAutoThemeBase('light')
+  assert.equal(getAutoThemeBase(), 'light')
+  assert.equal(getTheme('auto'), getTheme('light'))
+  setAutoThemeBase('dark')
+  // a user theme named auto can never shadow the built-in pseudo-theme
+  writeFileSync(join(themesDir, 'auto.json'), JSON.stringify({ base: 'light', colors: { claude: '#123456' } }))
+  clearCustomThemeCache()
+  assert.equal(getTheme('auto'), getTheme('dark'))
+})
+
+check('themePrefs: the auto choice round-trips like any theme name', () => {
+  assert.ok(writeThemePref('auto'))
+  assert.equal(readThemePref(), 'auto')
+  assert.equal(parseThemePref('{"theme": "auto"}'), 'auto')
 })
 
 // --- persistence (themePrefs) ----------------------------------------------

@@ -228,8 +228,8 @@ declare const dict: {
         readonly en: "(not initialized)";
     };
     readonly 'doctor-legacy-dir': {
-        readonly zh: "旧数据目录: ~/.dsh-cc 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）";
-        readonly en: "Legacy data directory: ~/.dsh-cc still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)";
+        readonly zh: "旧数据目录: ~/.dsh-tui 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）";
+        readonly en: "Legacy data directory: ~/.dsh-tui still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)";
     };
     readonly 'subagent-not-mounted': {
         readonly zh: "子代理服务未挂载（leaf 未启用 subagent）";
@@ -410,6 +410,10 @@ declare const dict: {
     readonly 'theme-custom-hint': {
         readonly zh: "自定义    ~/.dsh-tui/themes/<名字>.json（见 README「自定义主题」）";
         readonly en: "Custom      ~/.dsh-tui/themes/<name>.json (see README \"Custom themes\")";
+    };
+    readonly 'theme-auto-resolved': {
+        readonly zh: "自动解析  当前为 {{name}}（跟随终端背景）";
+        readonly en: "Auto-resolved  currently {{name}} (follows terminal background)";
     };
     readonly 'theme-switched-saved': {
         readonly zh: "主题已切换：{{name}}（已保存）";
@@ -628,8 +632,8 @@ declare const dict: {
         readonly en: "Side question unavailable (llm service not mounted)";
     };
     readonly 'legacy-dir-migrated': {
-        readonly zh: "数据目录已从 ~/.dsh-cc 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）";
-        readonly en: "Data directory copied from ~/.dsh-cc to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)";
+        readonly zh: "数据目录已从 ~/.dsh-tui 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）";
+        readonly en: "Data directory copied from ~/.dsh-tui to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)";
     };
     readonly 'legacy-env-renamed': {
         readonly zh: "环境变量 {{old}} 已更名为 {{new}}，旧名不再生效";
@@ -839,6 +843,10 @@ declare const dict: {
         readonly zh: "内置 · {{name}} 基底";
         readonly en: "Built-in · {{name}} base";
     };
+    readonly 'theme-auto-base': {
+        readonly zh: "内置 · 跟随系统/终端背景自动选择 light/dark";
+        readonly en: "Built-in · follows the system/terminal background (light/dark)";
+    };
     readonly 'theme-user-base': {
         readonly zh: "{{base}} 基底 · ~/.dsh-tui/themes/{{name}}.json";
         readonly en: "{{base}} base · ~/.dsh-tui/themes/{{name}}.json";
@@ -1023,7 +1031,7 @@ declare const dict: {
         readonly zh: "切换 Agent 预设（standard/code/minimal/cordis）";
     };
     readonly 'cmd-desc-theme': {
-        readonly zh: "切换配色主题（内置或自定义）";
+        readonly zh: "切换配色主题（auto 跟随系统，或内置/自定义）";
     };
     readonly 'cmd-desc-lang': {
         readonly zh: "切换界面语言（en / zh）";

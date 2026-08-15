@@ -94,8 +94,8 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 `agent.cordis.yml`。默认 `DSH_HOME` 下的路径即 `~/.dsh/.agent-presets/`。
 
 从 0.3 起，模型侧工具、plan、compaction、delegation 等由 preset 自己组合。
-Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
-`CC_TUI_COMPACT_RETAIN` 或旧版 TUI 的深度限制；这些策略应在 preset 中配置。
+Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
+`DSH_TUI_COMPACT_RETAIN` 或旧版 TUI 的深度限制；这些策略应在 preset 中配置。
 
 ## MCP
 
@@ -136,7 +136,7 @@ Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
 | `DEEPSEEK_BASE_URL` | 覆盖 DeepSeek 兼容 API 端点 |
 | `DSH_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
 | `DSH_TUI_PRESET` | 覆盖新会话默认 Agent preset |
-| `DSH_TUI_THEME` | 锁定内置或自定义主题，优先于持久化选择 |
+| `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）或自定义主题，优先于持久化选择 |
 | `DSH_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
 | `DSH_TUI_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
 | `DSH_TUI_SESSION_ROOT` | 覆盖会话持久化位置；profile 安装时是 SQLite 数据库路径，裸 `cordis.yml` 启动时是 JSONL 根目录 |
@@ -145,10 +145,10 @@ Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
 | `DSH_TUI_DEBUG` | 启用写往 stderr 的 dsh-tui 调试日志 |
 | `DSH_TUI_RENDER_LOG` | 指定文件路径，记录原始 ANSI 渲染帧用于取证 |
 
-旧名 `CC_TUI_*` 与 `DSH_CC_*` 自本版本起不再生效；启动时检测到旧名仍被设置会
+旧名 `DSH_TUI_*` 与 `DSH_TUI_*` 自本版本起不再生效；启动时检测到旧名仍被设置会
 打印一行警告（只要还设着，每次启动都会提示）。唯一例外是
 `DSH_TUI_RESUME_SESSION`：读端优先取新名、同时仍读取旧名
-`DSH_CC_RESUME_SESSION`，写端两个变量都会设置，供旧版启动器过渡。
+`DSH_TUI_RESUME_SESSION`，写端两个变量都会设置，供旧版启动器过渡。
 
 `DSH_TUI_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
 公开 issue，除非已经检查并脱敏。
