@@ -1,5 +1,5 @@
 import React from 'react';
-import type { PresetOption } from '../channel.js';
+import type { PresetOption } from '../dsh-adapter/channel.js';
 /**
  * Agent-preset picker (issue #8) in the CC ModelPicker style — same chrome
  * as the ActivityPicker: a permission-colored Pane listing every roster

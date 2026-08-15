@@ -1,6 +1,6 @@
 import React from 'react';
 import { type ScrollBoxHandle } from '../ui.js';
-import type { ChatRow } from '../channel.js';
+import type { ChatRow } from '../dsh-adapter/channel.js';
 import type { DOMElement } from '../ink/dom.js';
 export declare function MessageList({ rows, expanded, expandedRows, selectedId, onToggleRow, model, showAll, onToggleAll, onLoadOlder, thinkingVisible, registerRowRef, scrollHandle, forceMountRowId, newSinceRowId, onUnseenCount, }: {
     rows: readonly ChatRow[];

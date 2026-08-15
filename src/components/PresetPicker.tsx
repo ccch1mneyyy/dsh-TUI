@@ -5,7 +5,7 @@ import { Pane } from './design-system/Pane.js'
 import { Select } from './Select.js'
 import { Byline } from './design-system/Byline.js'
 import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
-import type { PresetOption } from '../channel.js'
+import type { PresetOption } from '../dsh-adapter/channel.js'
 
 /**
  * Agent-preset picker (issue #8) in the CC ModelPicker style — same chrome

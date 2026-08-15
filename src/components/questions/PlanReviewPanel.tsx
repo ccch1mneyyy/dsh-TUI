@@ -21,7 +21,7 @@ import { Box, Text, useInput } from '../../ui.js'
 import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../cc/figures.js'
-import type { QuestionSelection } from '../../questions.js'
+import type { QuestionSelection } from '../../dsh-adapter/questions.js'
 
 const PENCIL = '✎'
 

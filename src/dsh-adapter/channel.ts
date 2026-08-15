@@ -11,7 +11,7 @@ import {
   type Message,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import { runSideQuestion, wrapSideQuestion } from './utils/sideQuestion.js'
+import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
 /** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
 type SideQuestionLlm = {
   stream(options: object): AsyncIterable<StreamChunk>
@@ -21,23 +21,23 @@ import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-pro
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
-import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
-import { clearResumeTarget, forgetSession, readLastUsed, readResumeTarget, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
+import { LOCAL_COMMANDS, type LocalCommand } from '../commands.js'
+import { clearResumeTarget, forgetSession, readLastUsed, readResumeTarget, touchSession, type SessionRecord, writeResumeTarget } from '../sessionHistory.js'
 import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog } from './compat/index.js'
-import { writeActivityFrames } from './activityPrefs.js'
-import { readEffortPref, writeEffortPref } from './effortPrefs.js'
-import { readModelPref, writeModelPref } from './modelPrefs.js'
-import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from './modelRoute.js'
-import { readPresetPref, writePresetPref } from './presetPrefs.js'
+import { writeActivityFrames } from '../activityPrefs.js'
+import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
+import { readModelPref, writeModelPref } from '../modelPrefs.js'
+import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
+import { readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
-import { isPresetName } from './components/activityFrames.js'
+import { isPresetName } from '../components/activityFrames.js'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { logForDebugging } from './utils/debug.js'
-import { extractMentions } from './utils/mentions.js'
-import { t } from './i18n.js'
-import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from './sessionModes.js'
-import type { SpinnerMode } from './components/Spinner/spinnerMode.js'
+import { logForDebugging } from '../utils/debug.js'
+import { extractMentions } from '../utils/mentions.js'
+import { t } from '../i18n.js'
+import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
 export interface ToolRow {

@@ -16,7 +16,7 @@
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { stringWidth } from './ink/stringWidth.js'
+import { stringWidth } from '../ink/stringWidth.js'
 
 /** The entry kinds a trace row can carry. */
 export type TraceKind =

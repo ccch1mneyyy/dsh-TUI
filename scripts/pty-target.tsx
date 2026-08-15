@@ -1,7 +1,7 @@
 /** conpty 探测的目标进程：真实 stdout 渲染 Chat + ask 问卷（精确 payload）。 */
 process.env.FORCE_COLOR = '3'
 const [{ default: React }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
-  import('react'), import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/questions.js'),
+  import('react'), import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/dsh-adapter/questions.js'),
 ])
 const rows: unknown[] = []
 for (let i = 0; i < 60; i++) {

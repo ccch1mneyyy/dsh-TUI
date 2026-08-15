@@ -1,5 +1,5 @@
 import React from 'react';
-import { type TraceEntry, type TraceFilter } from '../trace.js';
+import { type TraceEntry, type TraceFilter } from '../dsh-adapter/trace.js';
 /** Rows of the timeline visible at once (the window scrolls with the cursor). */
 export declare const TRACE_WINDOW = 12;
 /**

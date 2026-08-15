@@ -12,7 +12,7 @@
  * the input row itself and typing gives a pure custom answer.
  */
 import React from 'react';
-import type { QuestionSelection } from '../../questions.js';
+import type { QuestionSelection } from '../../dsh-adapter/questions.js';
 export type AskUserQuestionPanelProps = {
     /** The question to render (from the QuestionStore snapshot). */
     readonly question: {

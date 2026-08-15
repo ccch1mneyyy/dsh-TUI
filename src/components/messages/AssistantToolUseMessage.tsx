@@ -2,7 +2,7 @@ import React from 'react'
 import { Box, Text } from '../../ui.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js'
-import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../channel.js'
+import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../dsh-adapter/channel.js'
 import { ToolUseLoader } from '../ToolUseLoader.js'
 import { formatDuration } from '../../cc/format.js'
 

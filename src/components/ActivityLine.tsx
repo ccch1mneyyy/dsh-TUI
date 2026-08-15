@@ -6,7 +6,7 @@ import { BRAND, FLASH, ICE, sweep } from './shimmer.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
-import type { ActivityStatus } from '../channel.js'
+import type { ActivityStatus } from '../dsh-adapter/channel.js'
 
 /**
  * Context-pressure percentage (0–100) from the last usage snapshot, or

@@ -17,7 +17,7 @@ import { t } from '../../i18n.js'
 import { Box, Text, useInput } from '../../ui.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../cc/figures.js'
-import type { QuestionSelection } from '../../questions.js'
+import type { QuestionSelection } from '../../dsh-adapter/questions.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 
 const CHECKED = '◉'

@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ToolRow } from '../../channel.js';
+import type { ToolRow } from '../../dsh-adapter/channel.js';
 type Props = {
     tool: ToolRow;
     /** Adds the top margin between messages (CC: addMargin). */

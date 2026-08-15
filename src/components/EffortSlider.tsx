@@ -3,7 +3,7 @@ import { Box, Text } from '../ui.js'
 import { Pane } from './design-system/Pane.js'
 import { Byline } from './design-system/Byline.js'
 import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
-import type { EffortOption } from '../channel.js'
+import type { EffortOption } from '../dsh-adapter/channel.js'
 
 /**
  * Reasoning-effort slider (`/effort`): a rheostat row of the live route's

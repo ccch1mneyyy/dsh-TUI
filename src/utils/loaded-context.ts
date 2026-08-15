@@ -1,4 +1,4 @@
-import type { LoadedContext } from '../channel.js'
+import type { LoadedContext } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
 
 /** Per-entry display cap: the panel shows the beginning of long texts. */

@@ -1,4 +1,4 @@
-import type { LoadedContext } from '../channel.js';
+import type { LoadedContext } from '../dsh-adapter/channel.js';
 /** Per-entry display cap: the panel shows the beginning of long texts. */
 export declare const CONTEXT_ENTRY_MAX_CHARS = 800;
 /**

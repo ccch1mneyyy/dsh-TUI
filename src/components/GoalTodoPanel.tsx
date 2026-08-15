@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
-import type { Channel, ChannelGoal, TodoPanelItem } from '../channel.js'
+import type { Channel, ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 
 /** Maximum todo rows shown before the overflow line. */
 const MAX_TODOS = 8

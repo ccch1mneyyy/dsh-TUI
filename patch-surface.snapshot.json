@@ -1,0 +1,24 @@
+{
+  "inserts": [
+    "agent-presets",
+    "cordis-host-runner",
+    "dsh-tui",
+    "working-activity"
+  ],
+  "configOverrides": [
+    "system-prompt",
+    "llm-deepseek",
+    "agent-loop",
+    "sandbox-policy",
+    "approval",
+    "session-persistence-jsonl"
+  ],
+  "disablesBeyondWebApp": [],
+  "webAppDisablesBeyondTui": [
+    "hmr"
+  ],
+  "insertsSharedWithWebApp": [
+    "agent-presets",
+    "cordis-host-runner"
+  ]
+}

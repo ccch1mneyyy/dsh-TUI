@@ -12,7 +12,7 @@ import {
   type TraceEntry,
   type TraceFilter,
   type TraceKind,
-} from '../trace.js'
+} from '../dsh-adapter/trace.js'
 
 /** Rows of the timeline visible at once (the window scrolls with the cursor). */
 export const TRACE_WINDOW = 12

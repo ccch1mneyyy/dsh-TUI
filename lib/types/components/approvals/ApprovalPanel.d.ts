@@ -11,7 +11,7 @@
  * (fail closed, CC's "Esc to cancel" semantics).
  */
 import React from 'react';
-import type { ApprovalSnapshot } from '../../approvals.js';
+import type { ApprovalSnapshot } from '../../dsh-adapter/approvals.js';
 export type ApprovalPanelProps = {
     /** The approval to render (from the ApprovalStore snapshot). */
     readonly approval: ApprovalSnapshot;

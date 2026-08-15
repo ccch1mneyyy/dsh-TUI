@@ -4,10 +4,10 @@ import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '
 import { POINTER } from '../cc/figures.js'
 import { isMod, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
-import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
-import type { Channel, ChatRow, EffortOption, PresetOption } from '../channel.js'
-import type { QuestionStore } from '../questions.js'
-import { ApprovalStore } from '../approvals.js'
+import type { LlmModelInfo } from '../dsh-adapter/types.js'
+import type { Channel, ChatRow, EffortOption, PresetOption } from '../dsh-adapter/channel.js'
+import type { QuestionStore } from '../dsh-adapter/questions.js'
+import { ApprovalStore } from '../dsh-adapter/approvals.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import type { DOMElement } from '../ink/dom.js'
@@ -45,7 +45,7 @@ import {
   type TraceBuild,
   type TraceEntry,
   type TraceFilter,
-} from '../trace.js'
+} from '../dsh-adapter/trace.js'
 import { LoadingState } from '../components/design-system/LoadingState.js'
 import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'

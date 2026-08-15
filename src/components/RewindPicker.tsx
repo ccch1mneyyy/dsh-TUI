@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
-import type { ChatRow } from '../channel.js'
+import type { ChatRow } from '../dsh-adapter/channel.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { Byline } from './design-system/Byline.js'

@@ -21,7 +21,7 @@ const {
   formatClock,
   formatDuration,
   truncateWidth,
-} = await import('../src/trace.js')
+} = await import('../src/dsh-adapter/trace.js')
 const { TraceView, TRACE_WINDOW } = await import('../src/components/TraceView.js')
 const { setLang } = await import('../src/i18n.js')
 

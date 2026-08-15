@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ChatRow } from '../channel.js';
+import type { ChatRow } from '../dsh-adapter/channel.js';
 /**
  * Double-Esc rewind picker (CC's "Double-tap esc to rewind the code and/or
  * conversation to a previous point in time"): lists the user's past messages

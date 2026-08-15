@@ -1,7 +1,7 @@
 import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
-import type { LoadedContext, LoadedContextEntry } from '../channel.js'
+import type { LoadedContext, LoadedContextEntry } from '../dsh-adapter/channel.js'
 import { summarizeLoadedContext, truncateContextText } from '../utils/loaded-context.js'
 
 /** One named entry (section or dynamic context) with its full text. */

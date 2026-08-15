@@ -1,5 +1,5 @@
 import React from 'react';
-import type { LlmModelInfo } from '@deepseek-ai/dsh-llm';
+import type { LlmModelInfo } from '../dsh-adapter/types.js';
 /**
  * Model picker in the CC ModelPicker style: a permission-colored Pane with
  * the model list as Select rows (❯ focus pointer, ✓ on the active model,

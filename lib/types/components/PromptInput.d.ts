@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Channel } from '../channel.js';
+import type { Channel } from '../dsh-adapter/channel.js';
 /**
  * Imperative handle for the Chat-level Ctrl+C rule: Chat's useInput listener
  * runs BEFORE this component's (EventEmitter registration order), so Chat

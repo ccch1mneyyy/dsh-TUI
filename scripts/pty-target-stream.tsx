@@ -7,7 +7,7 @@
  */
 process.env.FORCE_COLOR = '3'
 const [{ default: React }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
-  import('react'), import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/questions.js'),
+  import('react'), import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/dsh-adapter/questions.js'),
 ])
 
 const listeners = new Set<() => void>()
