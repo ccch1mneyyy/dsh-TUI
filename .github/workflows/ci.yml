@@ -46,6 +46,10 @@ jobs:
       - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
       - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
 
+      # 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
+      # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
+      - run: node --import tsx/esm scripts/verify-keys.tsx
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 
@@ -62,6 +66,11 @@ jobs:
       # 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
       # 版本不一致提示、双语消息、shellQuote 转义规则。
       - run: node scripts/verify-launcher.mjs
+
+      # 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
+      # approval 行；裸组合与 profile patch 的 policy 表达式逐场景同值
+      #（ask / never / win32 never），两个入口语义不漂移。
+      - run: node scripts/verify-cordis-approval.mjs
 
       # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
       # ignorable 标记，已知类型不动，二次运行幂等。
