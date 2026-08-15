@@ -44,6 +44,10 @@ jobs:
       # registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
       - run: node scripts/verify-update.mjs
 
+      # 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
+      # 版本不一致提示、双语消息、shellQuote 转义规则。
+      - run: node scripts/verify-launcher.mjs
+
       # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
       # ignorable 标记，已知类型不动，二次运行幂等。
       - run: node scripts/verify-resume-repair.mjs
