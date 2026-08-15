@@ -87,6 +87,18 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-cc/resume.txt` 中最后选择的�
 3. 回放该边界前的历史。
 4. 把原消息放回输入框供修改和重发。
 
+### 侧问 /btw
+
+`/btw <问题>` 发起一次不打扰主任务的快速侧问：复用当前会话上下文（system
+prompt + 已有历史）做一次**无工具、单轮**的模型调用，答案显示在可滚动的浮层
+面板里。要点：
+
+- **不进会话历史**：问答不写入 session log，也不会出现在主上下文与 token
+  计数里（关闭面板即消失）。
+- **不打断主回合**：模型正在流式输出时也可以触发，主任务继续运行。
+- 面板内 `↑`/`↓` 滚动，`Space`/`Enter`/`Esc` 关闭，`c` 复制答案；等待答案
+  时 `Esc` 取消。
+
 ### Model 与 preset
 
 `/model` 通过在当前历史末尾 fork 会话来切换模型，因为 DSH 没有原位换模型 API。
@@ -160,7 +172,7 @@ transcript。
 
 | 分组 | 命令 |
 | --- | --- |
-| 会话 | `/new`、`/resume`、`/clear`、`/compact`、`/export` |
+| 会话 | `/new`、`/resume`、`/clear`、`/compact`、`/export`、`/btw`、`/trace` |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
 | 账号与策略 | `/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |

@@ -182,6 +182,11 @@ const dict = {
   'connect-none': { zh: 'DSH 暂无远程连接机制（CC 的 /connect 对应能力未适配）。', en: 'DSH has no remote connection mechanism (CC\'s /connect equivalent is not adapted).' },
   'theme-switch-failed': { zh: '主题「{{name}}」切换失败（无法写入 ~/.dsh-cc/theme.json）', en: 'Theme "{{name}}" switch failed (cannot write ~/.dsh-cc/theme.json)' },
   'interrupt-delivered': { zh: '已打断当前回合，{{n}} 条消息立即处理', en: 'Interrupted current turn, {{n}} messages processed immediately' },
+  'btw-usage': { zh: '用法：/btw <问题> —— 不打断当前对话的快速侧问', en: 'Usage: /btw <question> — quick side question without interrupting the conversation' },
+  'btw-answering': { zh: '思考中…', en: 'Answering…' },
+  'btw-hint-loading': { zh: 'Esc 取消', en: 'Esc cancel' },
+  'btw-hint-done': { zh: '↑/↓ 滚动 · Space/Enter/Esc 关闭 · c 复制', en: '↑/↓ scroll · Space/Enter/Esc dismiss · c copy' },
+  'btw-llm-unavailable': { zh: '侧问不可用（llm 服务未挂载）', en: 'Side question unavailable (llm service not mounted)' },
 
   // ── components/ActivityLine.tsx ──────────────────────────────────────
   'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
@@ -246,6 +251,9 @@ const dict = {
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },
   'resume-none-in-cwd': { zh: '当前目录没有可恢复的历史会话', en: 'No resumable sessions in the current directory' },
+  'rename-usage': { zh: '用法  /rename <新名称>', en: 'Usage  /rename <new title>' },
+  'rename-current': { zh: '当前名称  {{title}}', en: 'Current title  {{title}}' },
+  'rename-done': { zh: '已重命名为「{{title}}」', en: 'Renamed to "{{title}}"' },
   'compact-summary-folded': { zh: '摘要已折叠', en: 'Summary folded' },
 
   // ── components/ThemePicker.tsx ──────────────────────────────────────
@@ -303,6 +311,9 @@ const dict = {
   'cmd-desc-clear': { zh: '清空当前会话' },
   'cmd-desc-compact': { zh: '压缩会话历史' },
   'cmd-desc-resume': { zh: '恢复历史会话' },
+  'cmd-desc-rename': { zh: '重命名当前会话' },
+  'cmd-desc-quit': { zh: '退出 dsh-tui' },
+  'cmd-desc-q': { zh: '退出 dsh-tui' },
   'cmd-desc-rewind': { zh: '回退会话到历史消息' },
   'cmd-desc-export': { zh: '导出会话为 Markdown 文件' },
   // Session / environment
@@ -357,6 +368,16 @@ const dict = {
   'lang-switched': { zh: '语言已切换：{{lang}}（已保存）', en: 'Language switched: {{lang}} (saved)' },
   'lang-unknown': { zh: '未知语言「{{lang}}」· /lang 查看全部（en / zh）', en: 'Unknown language "{{lang}}" · /lang to view all (en / zh)' },
   'lang-switch-failed': { zh: '语言「{{lang}}」切换失败（无法写入 ~/.dsh-cc/lang.json）', en: 'Language "{{lang}}" switch failed (cannot write ~/.dsh-cc/lang.json)' },
+
+  // ── components/TraceView.tsx (/trace, issue #80) ─────────────────────
+  'trace-title': { zh: '轨迹', en: 'Trace' },
+  'trace-subtitle': { zh: '会话事件时间线 · 过滤：{{filter}} · {{count}} 条', en: 'Session event timeline · filter: {{filter}} · {{count}} entries' },
+  'trace-empty': { zh: '暂无轨迹事件', en: 'No trace events yet' },
+  'trace-filter-all': { zh: '全部', en: 'all' },
+  'trace-filter-tool': { zh: '工具', en: 'tools' },
+  'trace-filter-thinking': { zh: '思考', en: 'thinking' },
+  'trace-filter-message': { zh: '消息', en: 'messages' },
+  'trace-filter-progress': { zh: '进度', en: 'progress' },
 } as const
 
 export type I18nKey = keyof typeof dict

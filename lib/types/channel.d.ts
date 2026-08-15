@@ -344,6 +344,14 @@ export interface Channel {
      * back to sending the line to the model).
      */
     runExternalCommand(name: string, rawInput: string): Promise<string | undefined>;
+    /** 侧问（CC /btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
+    sideQuestion(question: string, options?: {
+        signal?: AbortSignal;
+        onText?: (delta: string) => void;
+    }): Promise<{
+        answer: string | null;
+        error?: string;
+    }>;
     /** Estimated context segments by content type (pi-nano-context style bar). */
     readonly contextSegments: {
         system: number;
@@ -435,6 +443,9 @@ export interface Channel {
     listSessions(): Promise<readonly SessionRecord[]>;
     /** Mark a session for `dsh-tui --resume` on the next launch. */
     setResumeTarget(sessionId: string): void;
+    /** Rename the current session (CC's /rename): appends a `session/title`
+     *  event, which the status line and the /resume picker both read. */
+    renameSession(title: string): void;
     /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
     compact(): void;
     /** Render a multi-line local report in the transcript (`/status`,
@@ -453,6 +464,14 @@ export interface Channel {
     /** Subagent rows for `/agents` (DSH subagent service; empty message when
      *  the service is absent). */
     listSubagents(): Promise<string[]>;
+    /**
+     * The live agent's session event log (immutable snapshot, replaced on
+     * every append — dsh-session caches the frozen array) — the `/trace`
+     * trajectory view's data source. Screens already re-render on `version`
+     * bumps, so a view reading this per render follows live events in real
+     * time; agent swaps (/resume /rewind /new) are reflected immediately.
+     */
+    traceEvents(): readonly SessionEvent[];
 }
 /** @internal */
 /** One roster entry in the `/preset` picker (see {@link Channel.listPresets}). */
@@ -538,6 +557,14 @@ export interface ChannelState {
     /** Messages submitted while working, awaiting their turn/step boundary.
      *  Driven by agent inbox events (inserted/claimed/discarded). */
     pending: PendingMessage[];
+    /** 侧问（见 public Channel.sideQuestion）。 */
+    sideQuestion(question: string, options?: {
+        signal?: AbortSignal;
+        onText?: (delta: string) => void;
+    }): Promise<{
+        answer: string | null;
+        error?: string;
+    }>;
     /** Effective slash commands (see the public Channel type). */
     commandList: readonly LocalCommand[];
     /** Run a plugin-registered command (see the public Channel type). */
@@ -602,6 +629,8 @@ export interface ChannelState {
     listFiles(): Promise<readonly string[]>;
     listSessions(): Promise<readonly SessionRecord[]>;
     setResumeTarget(sessionId: string): void;
+    /** Rename the current session (see the public Channel type). */
+    renameSession(title: string): void;
     /** Manually compact the session history (CC's /compact). */
     compact(): void;
     /** Multi-line local report (`/status`, `/doctor`, …). */
@@ -616,6 +645,8 @@ export interface ChannelState {
     doctorInfo(): string[];
     /** Subagent rows (CC's /agents). */
     listSubagents(): Promise<string[]>;
+    /** Live session event log (see the public Channel type, `/trace`). */
+    traceEvents(): readonly SessionEvent[];
 }
 /**
  * Create the live channel state for one agent session: replay the durable

@@ -8,8 +8,14 @@ import {
   MessageId,
   ReasoningEffortId,
   type ContentBlock,
+  type Message,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
+import { runSideQuestion, wrapSideQuestion } from './utils/sideQuestion.js'
+/** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
+type SideQuestionLlm = {
+  stream(options: object): AsyncIterable<StreamChunk>
+}
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { discoverBaselineInstructionFiles } from '@deepseek-ai/dsh-agent-instructions'
@@ -17,7 +23,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, readLastUsed, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
-import { prepareSessionForResume } from './compat/index.js'
+import { prepareSessionForResume, readSessionTitleFromLog } from './compat/index.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
@@ -348,6 +354,11 @@ export interface Channel {
    * back to sending the line to the model).
    */
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  /** 侧问（CC /btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
+  sideQuestion(
+    question: string,
+    options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+  ): Promise<{ answer: string | null; error?: string }>
   /** Estimated context segments by content type (pi-nano-context style bar). */
   readonly contextSegments: {
     system: number
@@ -433,6 +444,9 @@ export interface Channel {
   listSessions(): Promise<readonly SessionRecord[]>
   /** Mark a session for `dsh-tui --resume` on the next launch. */
   setResumeTarget(sessionId: string): void
+  /** Rename the current session (CC's /rename): appends a `session/title`
+   *  event, which the status line and the /resume picker both read. */
+  renameSession(title: string): void
   /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
   compact(): void
   /** Render a multi-line local report in the transcript (`/status`,
@@ -451,6 +465,14 @@ export interface Channel {
   /** Subagent rows for `/agents` (DSH subagent service; empty message when
    *  the service is absent). */
   listSubagents(): Promise<string[]>
+  /**
+   * The live agent's session event log (immutable snapshot, replaced on
+   * every append — dsh-session caches the frozen array) — the `/trace`
+   * trajectory view's data source. Screens already re-render on `version`
+   * bumps, so a view reading this per render follows live events in real
+   * time; agent swaps (/resume /rewind /new) are reflected immediately.
+   */
+  traceEvents(): readonly SessionEvent[]
 }
 
 /** @internal */
@@ -534,6 +556,11 @@ export interface ChannelState {
   /** Messages submitted while working, awaiting their turn/step boundary.
    *  Driven by agent inbox events (inserted/claimed/discarded). */
   pending: PendingMessage[]
+  /** 侧问（见 public Channel.sideQuestion）。 */
+  sideQuestion(
+    question: string,
+    options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+  ): Promise<{ answer: string | null; error?: string }>
   /** Effective slash commands (see the public Channel type). */
   commandList: readonly LocalCommand[]
   /** Run a plugin-registered command (see the public Channel type). */
@@ -592,6 +619,8 @@ export interface ChannelState {
   listFiles(): Promise<readonly string[]>
   listSessions(): Promise<readonly SessionRecord[]>
   setResumeTarget(sessionId: string): void
+  /** Rename the current session (see the public Channel type). */
+  renameSession(title: string): void
   /** Manually compact the session history (CC's /compact). */
   compact(): void
   /** Multi-line local report (`/status`, `/doctor`, …). */
@@ -606,6 +635,8 @@ export interface ChannelState {
   doctorInfo(): string[]
   /** Subagent rows (CC's /agents). */
   listSubagents(): Promise<string[]>
+  /** Live session event log (see the public Channel type, `/trace`). */
+  traceEvents(): readonly SessionEvent[]
 }
 
 const ARGS_PREVIEW_LIMIT = 160
@@ -2043,6 +2074,43 @@ export function createChannel(
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
     },
+    async sideQuestion(
+      question: string,
+      options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+    ): Promise<{ answer: string | null; error?: string }> {
+      // CC /btw：无工具单轮辅助调用，重放 deriveMessages() 前缀 + 一条
+      // 包装问题。tools 永不传（侧问无工具是核心语义）；usage 不回收
+      // （skipCacheWrite 同义——答案不进主上下文也不进 token 计数）。
+      const llm = ctx.get('llm') as SideQuestionLlm | undefined
+      if (!llm) return { answer: null, error: t('btw-llm-unavailable') }
+      const header = agent.session.requestHeader()
+      const config = header?.config
+      const messages: Message[] = [
+        ...agent.session.deriveMessages(),
+        createUserMessage({
+          content: [{ type: 'text', text: wrapSideQuestion(question) }],
+          source: { kind: 'plugin', plugin: 'dsh-cc-tui/btw' },
+        }),
+      ]
+      const request: Record<string, unknown> = {
+        provider: config?.provider ?? state.provider,
+        model: config?.model ?? state.model,
+        messages,
+        ...(header?.system !== undefined && { system: header.system }),
+        ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
+        ...(config?.temperature !== undefined && { temperature: config.temperature }),
+        ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),
+        ...(config?.stop !== undefined && { stop: [...config.stop] }),
+        sessionId: agent.session.id,
+        ...(options?.signal && { signal: options.signal }),
+      }
+      return runSideQuestion({
+        stream: llm.stream.bind(llm),
+        options: request,
+        onText: options?.onText,
+        signal: options?.signal,
+      })
+    },
     listFiles() {
       const fs = ctx.get('fs') as
         | {
@@ -2092,32 +2160,28 @@ export function createChannel(
             updatedAt: lastUsed[header.id] ?? header.createdAt,
           }))
           .sort((a, b) => b.updatedAt - a.updatedAt)
-        // Title = the session's FIRST user message — the picker's most
-        // useful label. persistence.load reads the whole log (zstd), so
-        // only the newest sessions pay for it; older rows keep the
-        // basename fallback. A load failure degrades silently.
+        // Title = the session's session/title event (auto: first prompt;
+        // manual: /rename), else its FIRST user message — the picker's most
+        // useful label. Read via the tolerant compat log reader instead of
+        // persistence.load: the backend validates every event against
+        // KNOWN_SESSION_EVENT_TYPES and throws the whole load on an unmarked
+        // third-party type (activity/status before resume-repair), which used
+        // to leave every working-activity session titled with the cwd
+        // basename. An unreadable log keeps the basename fallback.
         const empty = new Set<string>()
-        await Promise.all(
-          records.slice(0, SESSION_TITLE_DEPTH).map(async (record) => {
-            try {
-              const { events } = await persistence.load(SessionId(record.id))
-              const first = events.find(event => event.type === 'user/message')
-              if (first === undefined) {
-                // Launch artifact — a session with no user message holds no
-                // conversation to resume, so drop it from the picker (its
-                // createdAt-only updatedAt would otherwise pin it near the
-                // top forever, one per dsh-tui launch).
-                empty.add(record.id)
-                return
-              }
-              const data = first.data as { content?: readonly ContentBlock[] }
-              const text = firstTextOf(data.content)
-              if (text.length > 0) record.title = shortenTitle(text)
-            } catch {
-              // Keep the basename fallback.
-            }
-          }),
-        )
+        for (const record of records.slice(0, SESSION_TITLE_DEPTH)) {
+          const info = readSessionTitleFromLog(String(record.id))
+          if (info === undefined) continue // keep the basename fallback
+          if (!info.hasUserMessage) {
+            // Launch artifact — a session with no user message holds no
+            // conversation to resume, so drop it from the picker (its
+            // createdAt-only updatedAt would otherwise pin it near the
+            // top forever, one per dsh-tui launch).
+            empty.add(record.id)
+            continue
+          }
+          if (info.title !== undefined) record.title = shortenTitle(info.title)
+        }
         return records.filter(record => !empty.has(record.id))
       } catch {
         return []
@@ -2125,6 +2189,15 @@ export function createChannel(
     },
     setResumeTarget(sessionId) {
       writeResumeTarget(sessionId)
+    },
+    renameSession(title) {
+      // `session/title` is a known envelope type (dsh-session-title writes
+      // it for the first prompt). The append publishes through the session
+      // firehose, so the event case above updates state.sessionTitle and
+      // the persistence flush makes it durable for the next picker open.
+      agent.session.append('session/title', { title })
+      state.sessionTitle = title
+      state.emit()
     },
     compact() {
       // DSH compaction service key: `ctx.compaction` (dsh-compaction's
@@ -2345,6 +2418,11 @@ export function createChannel(
       } catch (error) {
         return [t('subagent-query-failed', { err: error instanceof Error ? error.message : String(error) })]
       }
+    },
+    traceEvents() {
+      // Immutable per-append snapshot (dsh-session caches the frozen array);
+      // reads follow agent swaps (/resume /rewind /new) automatically.
+      return agent.session.events
     },
   }
 

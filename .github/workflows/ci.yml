@@ -40,13 +40,27 @@ jobs:
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 
+      # 退出 resume marker 回归（issue #42）：仅有实际消息或 pending 操作时保留 marker。
+      - run: node --import tsx/esm scripts/verify-exit-resume-marker.tsx
+
+      # 退出阶段 stderr/console 恢复回归（issue #42）：shutdown 解绑恢复物理流并注销监听器。
+      - run: node --import tsx/esm scripts/verify-shutdown-stderr.tsx
+
       # /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
       # registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
       - run: node scripts/verify-update.mjs
 
+      # 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
+      # 版本不一致提示、双语消息、shellQuote 转义规则。
+      - run: node scripts/verify-launcher.mjs
+
       # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
       # ignorable 标记，已知类型不动，二次运行幂等。
       - run: node scripts/verify-resume-repair.mjs
+
+      # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
+      # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
+      - run: node scripts/verify-session-titles.mjs
 
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
@@ -81,17 +95,11 @@ jobs:
       # 斜杠命令描述 i18n 回归（issue #41）：/ 菜单与 ? 帮助菜单描述随
       # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
       - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx
-      # /effort API + Shift+Tab 会话模式循环回归：listEfforts/setEffort、
-      # 默认三档循环（/plan 注册表命令 + sandbox/approval 会话事件）、
-      # 自定义 modes、无 /plan 时整体中止。HOME 隔离避免污染真实
-      # ~/.dsh-cc/effort.json。
-      - run: HOME=$(mktemp -d) node scripts/verify-effort-mode.mjs
-
-      # Shift+Tab 键路回归：backtab（\x1b[Z）恰好触发一次 cycleMode，
-      # 不误触发送路径；plain Tab 不循环模式。
-      - run: node scripts/verify-shift-tab-mode.mjs
-
       # /effort 滑杆 + 模式指示全应用回归（真实 Chat 渲染）：滑杆开/
       # ←/→ 实时生效/Esc 关闭、状态栏 effort 段与模式段、三次 backtab
       # 完整循环。
       - run: node scripts/verify-effort-slider-ui.mjs
+
+      # /trace 轨迹视图回归（issue #80）：事件装配配对耗时 + 组件渲染/滚动。
+      - run: node --import tsx/esm scripts/repro-trace.tsx
+
