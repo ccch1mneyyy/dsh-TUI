@@ -116,7 +116,7 @@ if (skillsChange === undefined) {
   check('kept skill stays', refreshed.includes('i-h'))
 }
 
-// ---- skills/change with a failed read keeps the last-good list
+// ---- skills/change with a failed read keeps the last-good skill list
 ctx.get = (name) => {
   if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
   if (name === 'skills') return { list: async () => { throw new Error('scan blew up') } }
@@ -126,11 +126,48 @@ let warned = 0
 ctx.logger = { warn() { warned += 1 } }
 skillsChange?.()
 await tick()
-check(
-  'failed skill read keeps locals + registry and logs a warning',
-  channel.commandList.some(command => command.name === 'plan') && warned >= 1,
-  `warned=${warned}`,
-)
+{
+  const after = channel.commandList.map(command => command.name)
+  check(
+    'failed skill read keeps locals + registry and logs a warning',
+    after.includes('plan') && warned >= 1,
+    `warned=${warned}`,
+  )
+  check(
+    'failed skill read restores the last-good skills',
+    after.includes('i-h') && after.includes('newskill'),
+    after.join(','),
+  )
+}
+
+// ---- a superseded read failing later stays silent and touches nothing
+{
+  const pending = []
+  ctx.get = (name) => {
+    if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
+    if (name === 'skills') {
+      return { list: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) }
+    }
+    return undefined
+  }
+  let staleWarned = 0
+  ctx.logger = { warn() { staleWarned += 1 } }
+  skillsChange?.() // read A: pending, superseded by B below
+  skillsChange?.() // read B: wins the token race
+  pending[1].resolve([
+    { name: 'live', description: 'Live skill', invocation: { modelInvocable: true, userInvocable: true } },
+  ])
+  await tick()
+  check('superseding read repopulates the menu', channel.commandList.some(command => command.name === 'live'))
+  pending[0].reject(new Error('stale scan failed'))
+  await tick()
+  check('stale read failure logs no warning', staleWarned === 0, `warned=${staleWarned}`)
+  check(
+    'stale read failure does not touch the live menu',
+    channel.commandList.some(command => command.name === 'live') &&
+      !channel.commandList.some(command => command.name === 'i-h'),
+  )
+}
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)
