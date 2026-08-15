@@ -142,7 +142,7 @@ for the complete field reference.
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `CC_TUI_PERSONA` | Override the Agent persona injected by the composition |
 | `CC_TUI_PRESET` | Override the default Agent preset for new sessions |
-| `CC_TUI_THEME` | Pin a built-in or custom theme ahead of persisted selection |
+| `CC_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`) or custom theme ahead of persisted selection |
 | `CC_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
 | `DSH_CC_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
 | `DSH_CC_SESSION_ROOT` | Override the session persistence location; the profile uses a SQLite database path, while bare `cordis.yml` uses a JSONL root directory |

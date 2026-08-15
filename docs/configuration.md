@@ -134,7 +134,7 @@ Profile 模式不再使用旧的 `CC_TUI_COMPACT_RATIO`、
 | `DEEPSEEK_BASE_URL` | 覆盖 DeepSeek 兼容 API 端点 |
 | `CC_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
 | `CC_TUI_PRESET` | 覆盖新会话默认 Agent preset |
-| `CC_TUI_THEME` | 锁定内置或自定义主题，优先于持久化选择 |
+| `CC_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）或自定义主题，优先于持久化选择 |
 | `CC_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
 | `DSH_CC_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
 | `DSH_CC_SESSION_ROOT` | 覆盖会话持久化位置；profile 安装时是 SQLite 数据库路径，裸 `cordis.yml` 启动时是 JSONL 根目录 |

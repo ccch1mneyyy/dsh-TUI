@@ -407,6 +407,10 @@ declare const dict: {
         readonly zh: "自定义    ~/.dsh-cc/themes/<名字>.json（见 README「自定义主题」）";
         readonly en: "Custom      ~/.dsh-cc/themes/<name>.json (see README \"Custom themes\")";
     };
+    readonly 'theme-auto-resolved': {
+        readonly zh: "自动解析  当前为 {{name}}（跟随终端背景）";
+        readonly en: "Auto-resolved  currently {{name}} (follows terminal background)";
+    };
     readonly 'theme-switched-saved': {
         readonly zh: "主题已切换：{{name}}（已保存）";
         readonly en: "Theme switched: {{name}} (saved)";
@@ -823,6 +827,10 @@ declare const dict: {
         readonly zh: "内置 · {{name}} 基底";
         readonly en: "Built-in · {{name}} base";
     };
+    readonly 'theme-auto-base': {
+        readonly zh: "内置 · 跟随系统/终端背景自动选择 light/dark";
+        readonly en: "Built-in · follows the system/terminal background (light/dark)";
+    };
     readonly 'theme-user-base': {
         readonly zh: "{{base}} 基底 · ~/.dsh-cc/themes/{{name}}.json";
         readonly en: "{{base}} base · ~/.dsh-cc/themes/{{name}}.json";
@@ -1007,7 +1015,7 @@ declare const dict: {
         readonly zh: "切换 Agent 预设（standard/code/minimal/cordis）";
     };
     readonly 'cmd-desc-theme': {
-        readonly zh: "切换配色主题（内置或自定义）";
+        readonly zh: "切换配色主题（auto 跟随系统，或内置/自定义）";
     };
     readonly 'cmd-desc-lang': {
         readonly zh: "切换界面语言（en / zh）";

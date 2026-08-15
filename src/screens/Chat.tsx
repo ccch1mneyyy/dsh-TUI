@@ -31,6 +31,7 @@ import { ActivityPicker } from '../components/ActivityPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
+import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js'
 import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
@@ -501,16 +502,22 @@ export function Chat({
         return true
       }
       case 'theme': {
-        // Bare `/theme` opens the interactive color picker (built-in
+        // Bare `/theme` opens the interactive color picker (`auto` + built-in
         // palettes + user themes from ~/.dsh-cc/themes); `/theme <name>`
         // switches directly; `/theme status` shows the current choice.
-        // Selection persists to ~/.dsh-cc/theme.json and hot swaps via the
+        // `auto` follows the terminal background (OSC 11). Selection
+        // persists to ~/.dsh-cc/theme.json and hot swaps via the
         // ThemeProvider setter (CC_TUI_THEME still wins on next launch).
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/theme', [
             t('theme-current', { name: themeName }),
+            // `auto` resolves through terminal-background detection; show
+            // which palette it currently maps to.
+            ...(themeName === AUTO_THEME_NAME
+              ? [t('theme-auto-resolved', { name: getAutoThemeBase() })]
+              : []),
             t('theme-switch-hint'),
             t('theme-persist-hint'),
             t('theme-custom-hint'),

@@ -4,10 +4,11 @@
 
 ## Built-in themes
 
-dsh-TUI provides three Gentle Mist Blue palettes:
+dsh-TUI provides three Gentle Mist Blue palettes, plus an `auto` pseudo-theme:
 
 | Name | Purpose |
 | --- | --- |
+| `auto` | Pseudo-theme: follows the system/terminal background, resolving to `light` or `dark` |
 | `light` | Warm-white surfaces, ink body text, and mist-blue interaction color |
 | `dark` | Dark-terminal adaptation with warm-gray text and soft blue accents |
 | `dark-ansi` | Compatibility fallback using only the 16 ANSI colors |
@@ -15,6 +16,15 @@ dsh-TUI provides three Gentle Mist Blue palettes:
 Without an explicit choice, the TUI queries the terminal background with OSC
 11 and selects `light` or `dark`. It falls back to `dark` when the terminal does
 not answer.
+
+`auto` turns that one-shot startup detection into a standing choice: it is a
+valid value for `/theme`, `CC_TUI_THEME`, and `~/.dsh-cc/theme.json`. Selecting
+`auto` applies the last detected base immediately and re-queries OSC 11 in the
+background — on terminals that follow the system theme, picking `auto` again
+(or restarting) catches up after a system light/dark switch. `/theme status`
+shows which palette `auto` currently resolves to, and `getTheme('auto')` serves
+that palette to every consumer. A user theme named `auto` is shadowed by the
+built-in pseudo-theme (not listed in the picker).
 
 Selection precedence is:
 
@@ -27,7 +37,7 @@ CC_TUI_THEME
 
 ## Switching themes
 
-- `/theme` opens the picker, with built-ins before custom themes.
+- `/theme` opens the picker, with `auto` and the built-ins before custom themes.
 - `/theme <name>` switches directly.
 - `/theme status` shows the current theme and persistence location.
 
