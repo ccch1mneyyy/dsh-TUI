@@ -102,8 +102,10 @@ const missing = await repairSessionLogForResume('ffffffff-ffff-ffff-ffff-fffffff
 assert.equal(missing, 'unavailable', 'missing session reports unavailable')
 
 // Profile installs default to $DSH_HOME/sessions, not the legacy
-// ~/.dsh-cc/sessions. Exercise that path without an explicit root override.
-delete process.env.DSH_CC_SESSION_ROOT
+// ~/.dsh-tui/sessions. Exercise that path without an explicit root override
+// (post-#120 the override is DSH_TUI_SESSION_ROOT — the script sets it
+// above, so it must actually be cleared here).
+delete process.env.DSH_TUI_SESSION_ROOT
 process.env.DSH_HOME = join(root, 'dsh-home')
 const sharedSessionId = '11111111-2222-3333-4444-555555555555'
 const sharedDir = join(process.env.DSH_HOME, 'sessions', '--shared-workspace--', sharedSessionId)
