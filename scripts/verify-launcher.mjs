@@ -36,12 +36,32 @@ const tmp = mkdtempSync(join(tmpdir(), 'verify-launcher-'))
 const home = join(tmp, 'home')
 const stubDir = join(tmp, 'stub-bin')
 const stubLog = join(tmp, 'stub.log')
+const isWin = process.platform === 'win32'
 mkdirSync(stubDir, { recursive: true })
 // argv 逐参数 <angle> 编码，参数被拆分时一目了然；退出码恒 0。
 writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nexit 0\n')
 writeFileSync(join(stubDir, 'pnpm'), '#!/bin/sh\nexit 0\n')
 chmodSync(join(stubDir, 'dsh'), 0o755)
 chmodSync(join(stubDir, 'pnpm'), 0o755)
+// Windows：启动器经 shell:true 走 cmd，只认 .cmd/.bat，扩展名无关的 sh 脚本
+// 不可见——需要 .cmd stub。日志格式与 sh stub 逐字节一致（角度编码 + 换行），
+// 新言共用同一套断言。cmd 必须纯 ASCII + CRLF；node 由 runBin 的 PATH 提供。
+if (isWin) {
+  writeFileSync(
+    join(stubDir, 'dsh.cmd'),
+    '@echo off\r\nnode -e "const fs=require(\'fs\');fs.appendFileSync(process.env.DSH_STUB_LOG,process.argv.slice(1).map(a=>\'<\'+a+\'>\').join(\'\')+\'\\n\')" -- %*\r\n@exit /b 0\r\n',
+    'ascii',
+  )
+  writeFileSync(join(stubDir, 'pnpm.cmd'), '@echo off\r\n@exit /b 0\r\n', 'ascii')
+}
+// cmd.exe 需要 PATH 里的 node（stub 依赖）与 System32（shell 解释器）；
+// PATH 分隔符平台不同。
+const sep = isWin ? ';' : ':'
+const winBasics = ['C:\\Windows\\System32', 'C:\\Windows']
+const stubPath = [stubDir, ...(isWin ? [dirname(process.execPath), ...winBasics] : ['/usr/bin', '/bin'])].join(sep)
+// 无 dsh 环境：绝不能含 node 目录——本机 node 与 dsh 同目录（D:\\node）时会把真 dsh 带进来。
+// bin 自身经绝对路径 spawn，不需要 PATH 里的 node；仅需 cmd.exe（System32）。
+const noDshPath = (isWin ? winBasics : ['/usr/bin', '/bin']).join(sep)
 
 function setProfileVersion(version) {
   const dir = join(home, PKG_DIR)
@@ -60,10 +80,13 @@ function stubCalls() {
 function runBin(args, extraEnv = {}) {
   return spawnSync(process.execPath, [bin, ...args], {
     env: {
-      PATH: `${stubDir}:/usr/bin:/bin`,
+      PATH: stubPath,
       HOME: tmp,
       DSH_HOME: home,
       DSH_STUB_LOG: stubLog,
+      // 启动器 spawn(shell:true) 在 Windows 触 DEP0190 弃用警告，
+      // 会污染「静默启动」类断言的 stderr——测试环境下关掉。
+      NODE_OPTIONS: '--no-deprecation',
       ...extraEnv,
     },
     encoding: 'utf8',
@@ -94,7 +117,7 @@ check('mismatch: hint names both versions', r.stderr.includes('v0.0.0') && r.std
 check('mismatch: still launches', stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0)
 
 // --- 4. 消息双语：缺 dsh 时的报错（契约同 TUI：CC_TUI_LANG 指定才生效，否则默认中文）-
-const envNoDsh = { PATH: '/usr/bin:/bin' }
+const envNoDsh = { PATH: noDshPath }
 r = runBin([], { ...envNoDsh, CC_TUI_LANG: 'en' })
 check('i18n: CC_TUI_LANG=en prints English', r.stderr.includes('dsh CLI not found'))
 r = runBin([], { ...envNoDsh, CC_TUI_LANG: 'zh' })
