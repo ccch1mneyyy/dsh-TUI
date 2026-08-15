@@ -377,6 +377,10 @@ export function PromptInput({
 
   useInput((input, key, event) => {
     if (selectionActive) return
+    // The editor round-trip ends by resuming stdin one microtask before the
+    // outcome lands — drop any key squeezed into that gap so the prompt's
+    // setValue can never overwrite fresh typing (and vice versa).
+    if (editorBusyRef.current) return
 
     /** Insert text at the caret (typing, paste) and dismiss overlays. */
     const insertAtCaret = (text: string) => {
@@ -416,25 +420,35 @@ export function PromptInput({
     // Ctrl+X / Cmd+X: edit the current draft in $VISUAL/$EDITOR (issue #123,
     // readline's edit-and-execute-command). The draft is written to a temp
     // file, the terminal is handed to the editor (Ink's alt-screen handoff),
-    // and the saved text replaces the input when it differs.
+    // and the saved text replaces the input when it differs. The util maps
+    // every failure to an outcome, but the catch/finally here is the hard
+    // guarantee: a rejected promise must never kill the process, and the
+    // busy flag must always clear or Ctrl+X stays locked forever.
     if (isMod(key) && input === 'x') {
-      if (editorBusyRef.current) return
       editorBusyRef.current = true
-      void editInExternalEditor(value).then(outcome => {
-        editorBusyRef.current = false
-        if (outcome.kind === 'edited') {
-          setValue(outcome.text)
-          setCursor(outcome.text.length)
-          setSelectedCommand(0)
-          setFileSelected(0)
-        } else if (outcome.kind === 'unavailable') {
-          channel.notify(t('input-editor-unavailable'), { color: 'warning' })
-        } else if (outcome.kind === 'failed') {
-          channel.notify(t('input-editor-failed', { name: outcome.message }), {
+      void (async () => {
+        try {
+          const outcome = await editInExternalEditor(value)
+          if (outcome.kind === 'edited') {
+            setValue(outcome.text)
+            setCursor(outcome.text.length)
+            setSelectedCommand(0)
+            setFileSelected(0)
+          } else if (outcome.kind === 'unavailable') {
+            channel.notify(t('input-editor-unavailable'), { color: 'warning' })
+          } else if (outcome.kind === 'failed') {
+            channel.notify(t('input-editor-failed', { name: outcome.message }), {
+              color: 'warning',
+            })
+          }
+        } catch {
+          channel.notify(t('input-editor-failed', { name: 'unknown' }), {
             color: 'warning',
           })
+        } finally {
+          editorBusyRef.current = false
         }
-      })
+      })()
       return
     }
 

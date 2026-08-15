@@ -744,8 +744,8 @@ declare const dict: {
         readonly en: "No editor available — set the $EDITOR (or $VISUAL) environment variable";
     };
     readonly 'input-editor-failed': {
-        readonly zh: "编辑器启动失败：{{name}}";
-        readonly en: "Failed to launch editor: {{name}}";
+        readonly zh: "外部编辑器失败：{{name}}";
+        readonly en: "External editor failed: {{name}}";
     };
     readonly 'input-pending-steer-label': {
         readonly zh: "插话 · 下一步送达";

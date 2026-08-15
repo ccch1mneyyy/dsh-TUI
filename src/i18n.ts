@@ -232,7 +232,7 @@ const dict = {
   'input-interrupt-immediate': { zh: '已打断当前回合，正在立即处理', en: 'Interrupted current turn, processing immediately' },
   'input-clipboard-empty': { zh: '剪贴板为空', en: 'Clipboard is empty' },
   'input-editor-unavailable': { zh: '未找到可用编辑器，请设置 $EDITOR（或 $VISUAL）环境变量', en: 'No editor available — set the $EDITOR (or $VISUAL) environment variable' },
-  'input-editor-failed': { zh: '编辑器启动失败：{{name}}', en: 'Failed to launch editor: {{name}}' },
+  'input-editor-failed': { zh: '外部编辑器失败：{{name}}', en: 'External editor failed: {{name}}' },
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },
   'input-pending-actions-hint': { zh: '撤回 · Esc 打断并立即发送', en: 'Retract · Esc interrupts and sends immediately' },
