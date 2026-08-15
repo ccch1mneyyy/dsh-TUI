@@ -83,6 +83,9 @@ jobs:
       # 工作状态由基础事件在进程内派生：阶段、500ms tick、Agent 切换重置。
       - run: node scripts/verify-working-activity.mjs
 
+      # TUI 创建及恢复的会话必须持久关联到 Workspace。
+      - run: node scripts/verify-workspace-attachment.mjs
+
       # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
       # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
       - run: node scripts/verify-session-titles.mjs
