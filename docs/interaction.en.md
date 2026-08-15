@@ -13,7 +13,8 @@
 | `Shift+Tab` | Cycle the configured session modes (default: default → plan → full-access) |
 | `Alt/Option+Up` | Pull the latest undelivered message back into the editor |
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
-| `Ctrl+V` | Insert system clipboard text; files/images copied in Windows Explorer insert paths |
+| `Ctrl+V` | Insert system clipboard text; files copied in a file manager insert paths; a clipboard image (screenshot) is exported to a temp file and its path inserted |
+| `Ctrl+X` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR` → vi); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft |
 | `Esc` | Close the active menu, selection, or modal; clear input; interrupt a working model; double-tap on empty input to rewind |
 | `Ctrl+C` | Interrupt while working; clear non-empty idle input; press twice on empty input to exit |
 | `Ctrl+D` | Press twice while idle to exit |
@@ -50,8 +51,10 @@ path fragments to filter, `Tab`/`Enter` to pick, and directories can be entered
 further. When you send, the selected file content or directory listing is attached
 to the message automatically (0.3.7+).
 
-On `Ctrl+V`, files/images copied from Windows Explorer are inserted as file paths
-(quoted automatically when they contain spaces) instead of pasting the path text.
+On `Ctrl+V`, files copied from a file manager (Windows Explorer, GNOME Files, KDE
+Dolphin, …) are inserted as file paths (quoted automatically when they contain
+spaces) instead of pasting the path text. A raw clipboard image (e.g. a screenshot)
+is first exported to a temp file and its path is inserted.
 
 ## Interface language
 
@@ -81,7 +84,8 @@ Titles come from the first user message, and entries are ordered by most recent
 use. Confirming switches the Agent and replays persisted events.
 
 On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
-`~/.dsh-cc/resume.txt`.
+`~/.dsh-tui/resume.txt` (also dual-written to the old path
+`~/.dsh-cc/resume.txt` for older launchers that only read it).
 
 ### Rewind
 
@@ -132,7 +136,7 @@ owns native scrollback and selection.
 | `Esc` | Cancel an active drag without copying |
 
 Copy prefers OSC 52. Local fallbacks include `wl-copy`, `xclip`, and `xsel`;
-tmux uses `load-buffer -w`. Set `CC_TUI_DISABLE_MOUSE=1` to temporarily disable
+tmux uses `load-buffer -w`. Set `DSH_TUI_DISABLE_MOUSE=1` to temporarily disable
 fullscreen mouse handling.
 
 ## `ask_user_question` questionnaires
@@ -164,7 +168,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
-| Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
+| Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
 | Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
 | Registry | `/plan`, `/goal`, and any other command registered by the DSH composition |

@@ -1,8 +1,8 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import { Pane } from './design-system/Pane.js'
-import { Byline } from './design-system/Byline.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
+import { HintLine } from './design-system/HintLine.js'
 import type { EffortOption } from '../channel.js'
 
 /**
@@ -27,7 +27,7 @@ export function EffortSlider({
       <Box flexDirection="column">
         <Box marginBottom={1}>
           <Text color="remember" bold>
-            Reasoning effort
+            {t('picker-title-effort')}
           </Text>
         </Box>
         <Box flexDirection="row">
@@ -50,10 +50,7 @@ export function EffortSlider({
           <Text dimColor>{focused.description}</Text>
         ) : null}
         <Text dimColor italic>
-          <Byline>
-            <KeyboardShortcutHint shortcut="←/→" action="adjust" bold />
-            <KeyboardShortcutHint shortcut="Enter/Esc" action="done" />
-          </Byline>
+          <HintLine text={t('hint-adjust-done')} />
         </Text>
       </Box>
     </Pane>

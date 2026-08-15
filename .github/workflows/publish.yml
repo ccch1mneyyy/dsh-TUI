@@ -42,6 +42,10 @@ jobs:
 
       - run: node --import tsx/esm scripts/repro-toolcards.tsx
 
+      # /provider 向导与面板 hideCustomInput 回归（发版门禁同 CI）。
+      - run: node scripts/verify-provider-wizard.mjs
+      - run: node --import tsx/esm scripts/verify-askpanel-hide-custom-input.tsx
+
       - run: pnpm publish --no-git-checks --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

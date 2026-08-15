@@ -15,6 +15,6 @@
  *    types enter KNOWN_SESSION_EVENT_TYPES upstream.
  * @module @deepseek-harness-tui/dsh-tui/compat
  */
-export { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog, repairSessionLogForResume, } from './sessionLog.js';
+export { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog, repairSessionLogForResume, sessionsRoots, } from './sessionLog.js';
 export type { ResumeRepairOutcome } from './sessionLog.js';
 //# sourceMappingURL=index.d.ts.map

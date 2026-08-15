@@ -1,10 +1,10 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import type { ChatRow } from '../channel.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
-import { Byline } from './design-system/Byline.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
+import { HintLine } from './design-system/HintLine.js'
 
 /**
  * Double-Esc rewind picker (CC's "Double-tap esc to rewind the code and/or
@@ -27,17 +27,14 @@ export function RewindPicker({
         <Box flexDirection="column">
           <Box marginBottom={1}>
             <Text color="remember" bold>
-              Rewind conversation to this message?
+              {t('rewind-confirm-title')}
             </Text>
           </Box>
-          <ListItem isFocused={false} description="conversation restarts here">
+          <ListItem isFocused={false} description={t('rewind-confirm-desc')}>
             {preview(confirmRow.text)}
           </ListItem>
           <Text dimColor italic>
-            <Byline>
-              <KeyboardShortcutHint shortcut="Enter" action="rewind" bold />
-              <KeyboardShortcutHint shortcut="Esc" action="back" />
-            </Byline>
+            <HintLine text={t('hint-rewind-back')} />
           </Text>
         </Box>
       </Pane>
@@ -49,18 +46,18 @@ export function RewindPicker({
       <Box flexDirection="column">
         <Box marginBottom={1}>
           <Text color="remember" bold>
-            Rewind
+            {t('rewind-title')}
           </Text>
-          <Text dimColor>Pick a message to rewind the conversation to</Text>
+          <Text dimColor>{t('rewind-subtitle')}</Text>
         </Box>
         {rows.length === 0 ? (
-          <ListItem isFocused={false}>No messages to rewind to</ListItem>
+          <ListItem isFocused={false}>{t('rewind-empty')}</ListItem>
         ) : (
           rows.map((row, index) => (
             <ListItem
               key={row.id}
               isFocused={index === focusIndex}
-              description={index === 0 ? 'last message' : undefined}
+              description={index === 0 ? t('rewind-last-message') : undefined}
             >
               {preview(row.text)}
             </ListItem>
@@ -68,10 +65,7 @@ export function RewindPicker({
         )}
       </Box>
       <Text dimColor italic>
-        <Byline>
-          <KeyboardShortcutHint shortcut="Enter" action="select" bold />
-          <KeyboardShortcutHint shortcut="Esc" action="exit" />
-        </Byline>
+        <HintLine text={t('hint-select-exit')} />
       </Text>
     </Pane>
   )

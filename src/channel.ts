@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
-import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
+import { isUserInvocable, type SkillSummary } from '@deepseek-ai/dsh-skill'
+import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
   isTokenDelta,
@@ -23,17 +24,18 @@ import type { Context } from '@deepseek-ai/cordis'
 import { isAbsolute, join } from 'node:path'
 import { LOCAL_COMMANDS, type LocalCommand } from './commands.js'
 import { clearResumeTarget, forgetSession, readLastUsed, readResumeTarget, touchSession, type SessionRecord, writeResumeTarget } from './sessionHistory.js'
-import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog } from './compat/index.js'
+import { appendSessionTitle, deleteSessionLog, prepareSessionForResume, readSessionTitleFromLog, sessionsRoots } from './compat/index.js'
 import { writeActivityFrames } from './activityPrefs.js'
 import { readEffortPref, writeEffortPref } from './effortPrefs.js'
 import { readModelPref, writeModelPref } from './modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from './modelRoute.js'
+import type { ProviderSetupHost } from './providerWizard.js'
 import { readPresetPref, writePresetPref } from './presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from './components/activityFrames.js'
 import { existsSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { logForDebugging } from './utils/debug.js'
+import { homeDir, LEGACY_DATA_DIR } from './utils/paths.js'
 import { extractMentions } from './utils/mentions.js'
 import { t } from './i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from './sessionModes.js'
@@ -400,7 +402,7 @@ export interface Channel {
   listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }>
   /** Set one effort level by id (validated against the adapter list);
    *  false + a notify when the id is not offered. Persists like the old
-   *  Shift+Tab cycle (~/.dsh-cc/effort.json). */
+   *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
   setEffort(id: string): Promise<boolean>
   /** The session mode currently in force (matched from the session log, or
    *  the last one Shift+Tab applied). */
@@ -432,12 +434,16 @@ export interface Channel {
   /** Push a transient notification above the prompt input. */
   notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
   /** Switch the working-activity indicator preset (`/activity`): validates
-   *  the name, persists it to `~/.dsh-cc/working-activity.json`, and
+   *  the name, persists it to `~/.dsh-tui/working-activity.json`, and
    *  re-renders the indicator immediately; false when the name is unknown
    *  or the preference cannot be written. */
   setActivityFrames(name: string): boolean
   /** Advertised models across every registered provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Runtime capabilities for the `/provider` wizard, over the settings /
+   *  credentials / llm seams; undefined when the composition lacks them
+   *  (bare cordis.yml start without the dsh-base services). */
+  providerSetup(): ProviderSetupHost | undefined
   /** Top-level entries of the session cwd for `@` file completion. */
   listFiles(): Promise<readonly string[]>
   /** Recent sessions recorded by the DSH persistence backend (for `/resume`). */
@@ -624,6 +630,8 @@ export interface ChannelState {
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** `/provider` wizard capabilities (see the public Channel type). */
+  providerSetup(): ProviderSetupHost | undefined
   listFiles(): Promise<readonly string[]>
   listSessions(): Promise<readonly SessionRecord[]>
   setResumeTarget(sessionId: string): void
@@ -955,7 +963,7 @@ export function createChannel(
   const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
   if (droppedModeIds.length > 0) {
     ctx.logger.warn(
-      `cc-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
+      `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
     )
   }
   const listeners = new Set<() => void>()
@@ -1595,7 +1603,7 @@ export function createChannel(
     async resumeTo(sessionId: string): Promise<boolean> {
       // Switch the live agent to a persisted session: /resume picker Enter
       // loads the history immediately (the `--resume` launcher path keeps
-      // resolving through DSH_CC_RESUME_SESSION at boot).
+      // resolving through DSH_TUI_RESUME_SESSION at boot).
       if (state.working) {
         state.notify('Cannot resume while a turn is running', { color: 'warning' })
         return false
@@ -2094,6 +2102,100 @@ export function createChannel(
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
     },
+    providerSetup(): ProviderSetupHost | undefined {
+      // The `/provider` wizard's runtime surface, over the dsh-base seams:
+      // settings (profile persistence), credentials (key storage) and the
+      // llm runtime's configurable-provider directory + model discovery.
+      // Structurally typed like the other optional seams in this file.
+      const llm = ctx.get('llm') as
+        | {
+          listConfigurableProviders(): readonly LlmConfigurableProvider[]
+          discoverModels(
+            settingsNs: string,
+            request: {
+              provider?: string
+              baseURL?: string
+              api?: string
+              apiKey?: string
+            },
+          ): Promise<readonly LlmDiscoveredModel[]>
+        }
+        | undefined
+      const settings = ctx.get('settings') as
+        | {
+          describe(): readonly { ns: string; revision: number }[]
+          get(ns: string): unknown
+          mutate(
+            ns: string,
+            ops: readonly { op: 'set'; path: readonly string[]; value: unknown }[],
+            expectedRevision?: number,
+          ): Promise<void>
+        }
+        | undefined
+      const credentials = ctx.get('credentials') as
+        | {
+          resolve(ref: string): Promise<{ value: string } | undefined>
+          set(ref: string, value: string): Promise<void>
+          unset(ref: string): Promise<void>
+        }
+        | undefined
+      // Without dsh-llm-pi-ai there is no adapter watching the settings
+      // section, so a written profile would never activate a route. The
+      // adapter registers its `llm-pi-ai` settings namespace at mount, which
+      // is the rc.6-observable mount signal (the newer
+      // `listModelDiscoveryNamespaces()` does not exist in rc.6).
+      if (!llm || !settings || !credentials
+        || !settings.describe().some(descriptor => descriptor.ns === 'llm-pi-ai')) {
+        return undefined
+      }
+      const revision = (): number | undefined =>
+        settings.describe().find(descriptor => descriptor.ns === 'llm-pi-ai')?.revision
+      return {
+        listCatalogProviders() {
+          // declared === true marks routes the adapter knows only because a
+          // stored profile names them (user-added); the rest are activatable
+          // catalog routes.
+          return llm.listConfigurableProviders()
+            .filter(entry => entry.settingsNs === 'llm-pi-ai' && entry.declared !== true)
+            .map(entry => ({ provider: entry.provider, displayName: entry.displayName }))
+        },
+        routeExists(route) {
+          const section = settings.get('llm-pi-ai') as
+            | { providers?: Record<string, unknown> }
+            | undefined
+          return section?.providers !== undefined && route in section.providers
+        },
+        discoverModels(request) {
+          return llm.discoverModels('llm-pi-ai', request)
+        },
+        envShadows(ref) {
+          return process.env[ref] !== undefined
+        },
+        async readCredential(ref) {
+          const resolved = await credentials.resolve(ref)
+          return resolved?.value
+        },
+        writeCredential(ref, value) {
+          return credentials.set(ref, value)
+        },
+        removeCredential(ref) {
+          return credentials.unset(ref)
+        },
+        async writeProfile(route, profile) {
+          const ops = [{ op: 'set' as const, path: ['providers', route], value: profile }]
+          try {
+            await settings.mutate('llm-pi-ai', ops, revision())
+          } catch (error) {
+            // One retry on a stale-revision conflict (a concurrent write
+            // landed between describe and mutate); anything else propagates
+            // so the wizard can report and roll back the credential.
+            const code = (error as { code?: unknown })?.code
+            if (code !== 'SETTINGS_CONFLICT') throw error
+            await settings.mutate('llm-pi-ai', ops, revision())
+          }
+        },
+      }
+    },
     async sideQuestion(
       question: string,
       options?: { signal?: AbortSignal; onText?: (delta: string) => void },
@@ -2109,7 +2211,7 @@ export function createChannel(
         ...agent.session.deriveMessages(),
         createUserMessage({
           content: [{ type: 'text', text: wrapSideQuestion(question) }],
-          source: { kind: 'plugin', plugin: 'dsh-cc-tui/btw' },
+          source: { kind: 'plugin', plugin: 'dsh-tui/btw' },
         }),
       ]
       const request: Record<string, unknown> = {
@@ -2425,16 +2527,24 @@ export function createChannel(
       lines.push(t('doctor-cwd', { cwd: state.cwd }))
       lines.push(t('doctor-context-window', { window: state.contextWindow ?? t('doctor-unknown') }))
       lines.push(`${t('doctor-session', { id: state.agentId })}${state.sessionTitle ? ' · ' + state.sessionTitle : ''}`)
-      const userHome = process.env.USERPROFILE ?? homedir()
+      const userHome = homeDir()
       const configCandidates = [
-        join(userHome, '.dsh-cc/cordis.yml'),
+        join(userHome, '.dsh-tui/cordis.yml'),
         join(userHome, '.dsh/profiles/dsh-tui/cordis.patch.yml'),
       ]
       for (const candidate of configCandidates) {
         lines.push(`${t('doctor-config', { candidate, state: existsSync(candidate) ? '✓' : t('doctor-config-missing') })}`)
       }
-      const sessionsDir = join(userHome, '.dsh-cc/sessions')
-      lines.push(`${t('doctor-storage', { dir: sessionsDir, state: existsSync(sessionsDir) ? '✓' : t('doctor-storage-uninit') })}`)
+      // Session store candidates mirror the compat layer (sessionsRoots):
+      // the active root depends on the composition (bare cordis.yml →
+      // legacy ~/.dsh-tui, profile → $DSH_HOME/sessions), so list every
+      // candidate with its own state instead of hardcoding one.
+      for (const dir of sessionsRoots()) {
+        lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
+      }
+      if (existsSync(LEGACY_DATA_DIR)) {
+        lines.push(t('doctor-legacy-dir'))
+      }
       return lines
     },
     async listSubagents() {
@@ -2541,15 +2651,34 @@ export function createChannel(
   }
 
   /**
-   * Rebuild the merged slash-command list from the registry. Registry
-   * registrations are global or agent-scoped, so this runs on
-   * `commands/change` and again whenever the live agent is swapped
-   * (rewind/resume).
+   * Rebuild the merged slash-command list: built-in locals, then registry
+   * commands (plan/goal/…), then user-invocable skills from the DSH skill
+   * registry (issue #86 — filesystem-discovered skills must appear in the
+   * `/` menu and Tab completion, like /audit and /review). Skill entries
+   * are completion-only: dispatch falls through to the model as plain text,
+   * where dsh-tool-skill's pre-step hook injects the skill body — the same
+   * path a hand-typed `/skill-name` takes. Registry and skill reads are
+   * scoped to the LIVE agent, so this runs on `commands/change` +
+   * `skills/change` and again whenever the live agent is swapped
+   * (rewind/resume/new/model). A failed skill read restores the last
+   * successfully merged skill set for the same agent (last-good), so a
+   * transient provider failure never makes known skills vanish.
    */
+  let commandListSeq = 0
+  /**
+   * The last successfully merged skill entries, tagged with the agent whose
+   * scope produced them. A failed catalog read restores these instead of
+   * dropping skill entries from the menu until the next successful refresh
+   * (last-good); the agent tag refuses cross-agent restores — a different
+   * scope's skills may not exist for the live agent at all.
+   */
+  let lastGoodSkills: { agent: Agent; commands: LocalCommand[] } | undefined
   const refreshCommandList = (): void => {
+    const target = agent
+    const token = ++commandListSeq
     const merged: LocalCommand[] = [...LOCAL_COMMANDS]
     if (commandService) {
-      for (const descriptor of commandService.list(agent)) {
+      for (const descriptor of commandService.list(target)) {
         if (merged.some(command => command.name === descriptor.name)) continue
         merged.push({
           name: descriptor.name,
@@ -2561,8 +2690,72 @@ export function createChannel(
     }
     state.commandList = merged
     state.emit()
+    // The skill catalog resolves asynchronously (filesystem providers scan
+    // their roots), so skills append in a continuation; a newer refresh or
+    // an agent swap supersedes this run (token/identity check, same rule as
+    // refreshLoadedContext). Locals and registry commands win name
+    // collisions — a skill named `plan` must not shadow the registry's.
+    const skillsService = serviceForAgent<{
+      snapshot(options?: { scope?: unknown; cwd?: string }): Promise<{
+        skills: readonly SkillSummary[]
+        complete: boolean
+      }>
+    }>(ctx, target, 'skills')
+    if (skillsService === undefined) return
+    /** Last-good restore shared by the failed-read and incomplete-read
+     *  paths; the caller holds the staleness check. */
+    const restoreLastGood = (): void => {
+      const fallback = lastGoodSkills?.agent === target ? lastGoodSkills.commands : []
+      const restored = fallback.filter(entry =>
+        !merged.some(command => command.name === entry.name))
+      if (restored.length === 0) return
+      state.commandList = [...merged, ...restored]
+      state.emit()
+    }
+    // snapshot() over list(): only a COMPLETE observation is authoritative
+    // — list() discards `complete`, so a provider failure or a rescan still
+    // in flight would resolve as a partial/empty catalog and wrongly clear
+    // the last-good set (dsh-skill's own consumer contract).
+    void skillsService.snapshot({
+      scope: target,
+      cwd: (target.session as { header?: { cwd?: string } }).header?.cwd ?? state.cwd,
+    }).then((observation) => {
+      if (token !== commandListSeq || target !== agent) return
+      if (!observation.complete) {
+        // Incomplete (provider failure/rescan mid-flight): NOT authoritative
+        // — never clear last-good or repopulate from the partial catalog.
+        // The provider's next invalidate fires skills/change for the retry.
+        ctx.logger.warn('skill command merge: incomplete catalog observation, keeping last-good skills')
+        restoreLastGood()
+        return
+      }
+      const withSkills = [...merged]
+      for (const skill of observation.skills) {
+        if (!isUserInvocable(skill)) continue
+        if (withSkills.some(command => command.name === skill.name)) continue
+        withSkills.push({ name: skill.name, description: skill.description, skill: true })
+      }
+      const added = withSkills.slice(merged.length)
+      lastGoodSkills = { agent: target, commands: added }
+      // The sync phase already assigned `merged`; a complete read that adds
+      // nothing leaves the state as-is (and authoritatively clears the
+      // last-good set above).
+      if (added.length === 0) return
+      state.commandList = withSkills
+      state.emit()
+    }).catch((error: unknown) => {
+      // A superseded read (a newer refresh or an agent swap beat it) says
+      // nothing about the live menu: stay silent instead of logging a
+      // misleading failure warning.
+      if (token !== commandListSeq || target !== agent) return
+      ctx.logger.warn('skill command merge failed: %o', error)
+      // Last-good: a transient provider failure (rescan error, permission
+      // hiccup) must not make known skills vanish from completion.
+      restoreLastGood()
+    })
   }
   ctx.on('commands/change', refreshCommandList)
+  ctx.on('skills/change', refreshCommandList)
   refreshCommandList()
   void refreshLoadedContext()
 
@@ -3346,7 +3539,17 @@ export function sessionCwdMatches(
 ): boolean {
   const cwd = normalizeCwd(stateCwd, caseInsensitive)
   const recorded = normalizeCwd(headerCwd, caseInsensitive)
-  return recorded === cwd || (cwd !== '' && recorded.startsWith(`${cwd}/`))
+  if (recorded === '' || cwd === '') return false
+  return (
+    recorded === cwd ||
+    // Pre-upgrade subdirectory session of this workspace.
+    recorded.startsWith(`${cwd}/`) ||
+    // Resumed INTO a pre-upgrade subdirectory session (state.cwd adopted its
+    // recorded subdirectory): the workspace-root sessions it belongs with
+    // must stay visible, or /resume looks like it lost them for the rest of
+    // the process lifetime (review leftover).
+    cwd.startsWith(`${recorded}/`)
+  )
 }
 
 /** Context-bar token estimate (pi-nano-context: ~4 chars per token). */

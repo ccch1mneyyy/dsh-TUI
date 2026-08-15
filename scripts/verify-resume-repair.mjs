@@ -4,7 +4,7 @@
  *
  * Builds a multi-frame zstd session log mixing known harness event types
  * with third-party ones (activity/status + a fictitious plugin type), runs
- * the repair against a temp DSH_CC_SESSION_ROOT, and asserts:
+ * the repair against a temp DSH_TUI_SESSION_ROOT, and asserts:
  *   1. unknown types get ignorable:true (the resume-blocking case);
  *   2. known types are never marked;
  *   3. already-ignorable events are untouched;
@@ -21,7 +21,7 @@ import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-resume-repair-'))
-process.env.DSH_CC_SESSION_ROOT = root
+process.env.DSH_TUI_SESSION_ROOT = root
 
 // Import AFTER the env override: the module resolves the root at call time,
 // but keeping the order obvious protects against future module-level reads.

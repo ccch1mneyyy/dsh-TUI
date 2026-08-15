@@ -1,10 +1,10 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
-import { Byline } from './design-system/Byline.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
+import { HintLine } from './design-system/HintLine.js'
 
 /**
  * Model picker in the CC ModelPicker style: a permission-colored Pane with
@@ -26,7 +26,7 @@ export function ModelPicker({
       <Box flexDirection="column">
         <Box marginBottom={1}>
           <Text color="remember" bold>
-            Model
+            {t('picker-title-model')}
           </Text>
         </Box>
         {models.map((model, index) => (
@@ -41,10 +41,7 @@ export function ModelPicker({
         ))}
       </Box>
       <Text dimColor italic>
-        <Byline>
-          <KeyboardShortcutHint shortcut="Enter" action="confirm" bold />
-          <KeyboardShortcutHint shortcut="Esc" action="exit" />
-        </Byline>
+        <HintLine text={t('hint-confirm-exit')} />
       </Text>
     </Pane>
   )

@@ -12,6 +12,7 @@
  */
 
 import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 /**
@@ -32,7 +33,14 @@ export function resolveSessionCwd(
 /** Nearest ancestor of `start` (itself included) that is a git worktree root. */
 function gitWorktreeRoot(start: string): string | undefined {
   let dir = resolve(start)
+  const home = homedir()
   for (;;) {
+    // Dotfiles guard: a ~/.git (dotfiles management repo) must NOT promote
+    // the whole home directory to the workspace — /resume would list every
+    // session ever recorded under $HOME and @ completion would widen just
+    // as far. Stop the climb at home entirely: a worktree above $HOME is
+    // never a sensible session root either (review leftover).
+    if (dir === home) return undefined
     if (existsSync(join(dir, '.git'))) return dir
     const parent = dirname(dir)
     if (parent === dir) return undefined
