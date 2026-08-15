@@ -1,3 +1,4 @@
+import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { Context } from '@deepseek-ai/cordis';
 import { Config } from './index.js';
 /**
@@ -30,4 +31,20 @@ export declare function createExitFunnel(deps: {
     handleExit: (error?: unknown) => void;
     markTeardown: () => void;
 };
+/**
+ * Whether a user exit should leave the resume marker (and print the resume
+ * hint). Must be judged against the LIVE session behind the channel, not the
+ * boot-time agent apply() captured: /resume, /new and /model swap the active
+ * agent (channel.agentId follows, the old handle is disposed), so the
+ * captured reference can point at a stale session — wiping a marker the
+ * resume path just wrote (boot empty → /resume into history) or rewriting it
+ * to a fresh empty session (boot with history → /new). `liveAgent` is the
+ * registry lookup of channel.agentId; it falls back to the captured agent
+ * when the lookup misses. Exported for scripts/verify-exit-resume-marker.
+ */
+export declare function isExitResumable(deps: {
+    pendingCount: number;
+    liveAgent: Agent | undefined;
+    startupAgent: Agent;
+}): boolean;
 //# sourceMappingURL=plugin.d.ts.map
