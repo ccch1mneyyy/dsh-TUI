@@ -145,8 +145,9 @@ type Pending =
       kind: 'query'
       match: (r: TerminalResponse) => boolean
       resolve: (r: TerminalResponse | undefined) => void
+      releaseRawMode: () => void
     }
-  | { kind: 'sentinel'; resolve: () => void }
+  | { kind: 'sentinel'; resolve: () => void; releaseRawMode: () => void }
 
 /**
  * Sends terminal queries to stdout and resolves their responses, using a
@@ -160,7 +161,15 @@ export class TerminalQuerier {
    */
   private queue: Pending[] = []
 
-  constructor(private stdout: NodeJS.WriteStream) {}
+  constructor(
+    private stdout: NodeJS.WriteStream,
+    private setRawMode?: (enabled: boolean) => void,
+  ) {}
+
+  private holdRawMode(): () => void {
+    this.setRawMode?.(true)
+    return () => this.setRawMode?.(false)
+  }
 
   /**
    * Send a query and wait for its response.
@@ -183,6 +192,7 @@ export class TerminalQuerier {
         kind: 'query',
         match: query.match,
         resolve: r => resolve(r as T | undefined),
+        releaseRawMode: this.holdRawMode(),
       })
       this.stdout.write(query.request)
     })
@@ -199,9 +209,22 @@ export class TerminalQuerier {
    */
   flush(): Promise<void> {
     return new Promise(resolve => {
-      this.queue.push({ kind: 'sentinel', resolve })
+      this.queue.push({
+        kind: 'sentinel',
+        resolve,
+        releaseRawMode: this.holdRawMode(),
+      })
       this.stdout.write(SENTINEL)
     })
+  }
+
+  /** Resolve and release all pending queries when their owning app unmounts. */
+  dispose(): void {
+    for (const pending of this.queue.splice(0)) {
+      if (pending.kind === 'query') pending.resolve(undefined)
+      else pending.resolve()
+      pending.releaseRawMode()
+    }
   }
 
   /**
@@ -227,7 +250,10 @@ export class TerminalQuerier {
     const idx = this.queue.findIndex(p => p.kind === 'query' && p.match(r))
     if (idx !== -1) {
       const [q] = this.queue.splice(idx, 1)
-      if (q?.kind === 'query') q.resolve(r)
+      if (q?.kind === 'query') {
+        q.resolve(r)
+        q.releaseRawMode()
+      }
       return
     }
 
@@ -237,6 +263,7 @@ export class TerminalQuerier {
       for (const p of this.queue.splice(0, s + 1)) {
         if (p.kind === 'query') p.resolve(undefined)
         else p.resolve()
+        p.releaseRawMode()
       }
     }
   }

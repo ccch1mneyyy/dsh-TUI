@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ActivityStatus } from '../channel.js';
+import type { ActivityStatus } from '../dsh-adapter/channel.js';
 /**
  * Context-pressure percentage (0–100) from the last usage snapshot, or
  * undefined when unknown — shared by the spinner-line and status-line

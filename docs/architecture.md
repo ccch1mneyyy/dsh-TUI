@@ -59,7 +59,7 @@ Channel 只保留适合当前 TUI 的投影。长会话超过窗口后，旧行�
 
 改动 `src/ink/` 或 Yoga 时，至少运行 CI 的问卷/工具卡回归，并按影响范围运行
 scroll、resize、copy-on-select 或 PTY 脚本。不要用普通 `console.log` 向活动 TUI 的
-stdout 打印诊断；使用 stderr 的 `CC_TUI_DEBUG` 或 `DSH_CC_RENDER_LOG`。
+stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`。
 
 ## Inline 与 fullscreen
 
@@ -74,17 +74,23 @@ stdout 打印诊断；使用 stderr 的 `CC_TUI_DEBUG` 或 `DSH_CC_RENDER_LOG`�
 
 | 路径 | 内容 |
 | --- | --- |
-| `~/.dsh-cc/sessions.sqlite` | profile patch 默认的 DSH SQLite 会话事件 |
-| `~/.dsh-cc/resume.txt` | Windows 启动器和退出提示使用的最近 session ID |
-| `~/.dsh-cc/last-used.json` | `/resume` 最近使用排序元数据 |
-| `~/.dsh-cc/theme.json` | 当前主题选择 |
-| `~/.dsh-cc/themes/` | 用户自定义主题 JSON |
-| `~/.dsh-cc/working-activity.json` | 工作状态动画选择 |
-| `~/.dsh-cc/agent-preset.json` | 新会话默认 Agent preset |
+| `~/.dsh/sessions/` | profile patch 默认的共享 JSONL 会话事件（TUI / Web） |
+| `~/.dsh-tui/sessions/` | 直接运行 `cordis.yml` 时的 JSONL 会话事件 |
+| `~/.dsh-tui/resume.txt` | Windows 启动器和退出提示使用的最近 session ID |
+| `~/.dsh-tui/last-used.json` | `/resume` 最近使用排序元数据 |
+| `~/.dsh-tui/theme.json` | 当前主题选择 |
+| `~/.dsh-tui/themes/` | 用户自定义主题 JSON |
+| `~/.dsh-tui/working-activity.json` | 工作状态动画选择 |
+| `~/.dsh-tui/agent-preset.json` | 新会话默认 Agent preset |
 
-profile 可通过 `DSH_CC_SESSION_ROOT` 改写 SQLite 路径；直接运行根目录的
-`cordis.yml` 时，该变量改写的是 JSONL 根目录（默认 `~/.dsh-cc/sessions/`）。
-偏好文件是可选状态：损坏或缺失时回退，不应阻止 TUI 启动。
+`DSH_TUI_SESSION_ROOT` 在两种组合中都改写 JSONL 根目录。profile 默认使用
+`$DSH_HOME/sessions`（通常为 `~/.dsh/sessions/`）；直接运行根目录的
+`cordis.yml` 时默认使用 `~/.dsh-tui/sessions/`。偏好文件是可选状态：损坏或
+缺失时回退，不应阻止 TUI 启动。
+
+数据目录已从 `~/.dsh-cc` 更名为 `~/.dsh-tui`：首次启动时若旧目录存在而新目录
+不存在，会整体复制（不移动）到新目录并提示一行，旧目录保留由用户自行删除。
+`resume.txt` 例外：同时双写到新旧两个路径，因为旧版启动器只读旧路径。
 
 ## 权限与安全边界
 
@@ -109,8 +115,11 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - 注入到 system prompt 的插件上下文不会在 UI 中单独列出，而是计入 system/context
   分段。
 - `/model` 通过 session fork 切换，不是原位修改；旧会话会留在 `/resume`。
-- Windows `Ctrl+V` 依赖 PowerShell `Get-Clipboard`；剪贴板被其他程序锁定时可能静默
-  失败并显示为空。
+- `Ctrl+V` 读剪贴板按平台分派：Windows 用 PowerShell `Get-Clipboard`（剪贴板被
+  其他程序锁定时重试后可能静默失败并显示为空）；macOS 用 `osascript`/`pbpaste`；
+  Linux/Unix 按会话顺序尝试 `wl-paste`/`xclip`/`xsel`（工具缺失跳过、会话
+  不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。剪贴板图片
+  导出为临时文件插入路径（0700 私有目录、0600 文件），不内嵌图片块。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
 - 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的沙箱
   预设切换由 dsh-base 的 `permission-presets` 插件提供，profile 组合下可用；
@@ -124,8 +133,8 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 | 目的 | 方式 |
 | --- | --- |
 | 环境与 profile | TUI 内运行 `/doctor`、`/config`、`/permissions` |
-| stderr 调试 | `CC_TUI_DEBUG=1 dsh --profile dsh-tui` |
-| 原始 ANSI 帧 | `DSH_CC_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
+| stderr 调试 | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
+| 原始 ANSI 帧 | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | 主题回归 | `node --import tsx/esm scripts/verify-themes.mjs` |
 
-`DSH_CC_RENDER_LOG` 和会话导出可能包含敏感内容，分享前必须脱敏。
+`DSH_TUI_RENDER_LOG` 和会话导出可能包含敏感内容，分享前必须脱敏。

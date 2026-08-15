@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Channel } from '../channel.js';
+import type { Channel } from '../dsh-adapter/channel.js';
 /**
  * The footer under the prompt input, in Claude Code's PromptInputFooter
  * layout: the segmented context progress bar on its own first line, the

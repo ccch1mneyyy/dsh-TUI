@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Channel } from '../channel.js';
+import type { Channel } from '../dsh-adapter/channel.js';
 /**
  * Imperative handle for the Chat-level Ctrl+C rule: Chat's useInput listener
  * runs BEFORE this component's (EventEmitter registration order), so Chat
@@ -49,8 +49,9 @@ export interface PromptInputProps {
  * the input spans multiple lines (history/command selection otherwise); the
  * visible window scrolls to keep the caret row on screen past
  * MAX_VISIBLE_LINES. Enter submits, backspace/delete edit, ←/→ move the
- * cursor, Tab completes the selected command, Escape clears (or closes the
- * help menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
+ * cursor, Tab completes the selected command, Ctrl+X opens the draft in the
+ * external editor ($VISUAL/$EDITOR), Escape clears (or closes the help
+ * menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
  * a complete line to submit.
  *

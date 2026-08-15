@@ -1,5 +1,5 @@
 import React from 'react';
-import type { EffortOption } from '../channel.js';
+import type { EffortOption } from '../dsh-adapter/channel.js';
 /**
  * Reasoning-effort slider (`/effort`): a rheostat row of the live route's
  * adapter-owned levels in adapter order, ←/→ moving focus (each move applies

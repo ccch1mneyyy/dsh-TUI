@@ -79,7 +79,7 @@ const agent = handle.agent
 // --- Phase B: wrap in channel (render path) ---
 let channel: any = null
 if (phase === 'B') {
-  const { createChannel } = await import('../src/channel.ts')
+  const { createChannel } = await import('../src/dsh-adapter/channel.ts')
   channel = createChannel(ctx, agent, {
     model: 'deepseek-v4-flash',
     cwd: workspace,

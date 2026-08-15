@@ -26,6 +26,7 @@ import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { Chat } from '../lib/types/screens/Chat.js'
+import { setLang } from '../lib/types/i18n.js'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -187,6 +188,10 @@ async function windowed(action, settle = 300) {
   return toPlain(stdout.frames.join(''))
 }
 
+// Pin UI language: the picker chrome is localized (picker i18n branch),
+// so the en assertions below must not depend on the host's persisted /lang.
+setLang('en')
+
 // ── open the picker ─────────────────────────────────────────────────────────
 let s = await windowed(() => stdin.write('/resume'), 250)
 s += await windowed(() => stdin.write('\r'), 500)
@@ -208,7 +213,7 @@ check('focus followed the renamed row to its new top position',
 
 // ── 2. confirm-delete Enter guard ───────────────────────────────────────────
 s = await windowed(() => stdin.write('\x04'), 400) // ctrl+d on the focused row
-check('delete confirmation names the focused session', /Delete “betarenamed”/.test(flat(s)), flat(s).slice(-160))
+check('delete confirmation names the focused session', /Delete "betarenamed"/.test(flat(s)), flat(s).slice(-160))
 await windowed(() => stdin.write('\x1b[13;5u'), 400) // Ctrl+Enter must NOT confirm
 check('Ctrl+Enter does not confirm the delete', channel.calls.delete.length === 0, JSON.stringify(channel.calls.delete))
 // Survival is behavioral: an ignored key paints nothing, so prove the
@@ -222,9 +227,9 @@ check('plain Enter afterwards still confirms (confirmation survived Ctrl+Enter)'
 // ── 3. Esc cancels; plain Enter confirms ────────────────────────────────────
 // After the delete the focus clamps to the new top row (gamma).
 s = await windowed(() => stdin.write('\x04'), 400) // ctrl+d on gamma
-check('confirmation retargets gamma', /Delete “gamma”/.test(flat(s)), flat(s).slice(-160))
+check('confirmation retargets gamma', /Delete "gamma"/.test(flat(s)), flat(s).slice(-160))
 s = await windowed(() => stdin.write('\x1b'), 400) // Esc cancels
-check('Esc cancels the confirmation', !/Delete “/.test(flat(s)) && channel.calls.delete.length === 1)
+check('Esc cancels the confirmation', !/Delete "/.test(flat(s)) && channel.calls.delete.length === 1)
 await windowed(() => stdin.write('\x04'), 400) // ctrl+d on gamma again
 s = await windowed(() => stdin.write('\r'), 600) // plain Enter confirms
 check('plain Enter confirms the delete', channel.calls.delete.length === 2 && channel.calls.delete[1] === 's-new', JSON.stringify(channel.calls.delete))

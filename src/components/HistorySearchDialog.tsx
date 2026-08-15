@@ -1,10 +1,10 @@
 import React from 'react'
+import { t } from '../i18n.js'
 import { Box, Text } from '../ui.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
-import { Byline } from './design-system/Byline.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
+import { HintLine } from './design-system/HintLine.js'
 import { SearchBox } from './SearchBox.js'
 import { historyEntryId, type HistoryEntry } from '../history.js'
 
@@ -31,17 +31,17 @@ export function HistorySearchDialog({
     <Pane color="permission">
       <Box flexDirection="column" gap={1}>
         <Text bold color="permission">
-          Search history
+          {t('history-search-title')}
         </Text>
         <SearchBox
           query={query}
           cursorOffset={cursorOffset}
           isFocused
           isTerminalFocused={isTerminalFocused}
-          placeholder="Type to search…"
+          placeholder={t('history-search-placeholder')}
         />
         {matches.length === 0 ? (
-          <Text dimColor>No matching commands</Text>
+          <Text dimColor>{t('history-search-empty')}</Text>
         ) : (
           matches.map((entry, index) => (
             <ListItem
@@ -54,22 +54,18 @@ export function HistorySearchDialog({
           ))
         )}
         <Text dimColor italic>
-          <Byline>
-            <KeyboardShortcutHint shortcut="↑/↓" action="navigate" />
-            <KeyboardShortcutHint shortcut="Enter" action="select" bold />
-            <KeyboardShortcutHint shortcut="Esc" action="cancel" />
-          </Byline>
+          <HintLine text={t('hint-history-search')} />
         </Text>
       </Box>
     </Pane>
   )
 }
 
-/** "now", "5m ago", "2h ago", "3d ago" — like CC's formatRelativeTimeAgo. */
+/** Relative age like CC's formatRelativeTimeAgo ("now" / "5m ago" / …), localized. */
 function formatRelativeAge(ts: number): string {
   const elapsed = Date.now() - ts
-  if (elapsed < 60_000) return 'now'
-  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`
-  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`
-  return `${Math.floor(elapsed / 86_400_000)}d ago`
+  if (elapsed < 60_000) return t('time-now')
+  if (elapsed < 3_600_000) return t('time-minutes-ago', { n: Math.floor(elapsed / 60_000) })
+  if (elapsed < 86_400_000) return t('time-hours-ago', { n: Math.floor(elapsed / 3_600_000) })
+  return t('time-days-ago', { n: Math.floor(elapsed / 86_400_000) })
 }

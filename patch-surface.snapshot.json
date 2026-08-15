@@ -1,0 +1,32 @@
+{
+  "inserts": [
+    "storage",
+    "storage-json",
+    "storage-domain",
+    "workspace",
+    "agent-presets",
+    "cordis-host-runner",
+    "dsh-tui",
+    "working-activity"
+  ],
+  "configOverrides": [
+    "system-prompt",
+    "llm-deepseek",
+    "agent-loop",
+    "sandbox-policy",
+    "approval",
+    "session-persistence-jsonl"
+  ],
+  "disablesBeyondWebApp": [],
+  "webAppDisablesBeyondTui": [
+    "hmr"
+  ],
+  "insertsSharedWithWebApp": [
+    "storage",
+    "storage-json",
+    "storage-domain",
+    "workspace",
+    "agent-presets",
+    "cordis-host-runner"
+  ]
+}

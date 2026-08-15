@@ -13,7 +13,7 @@ const os = require('node:os')
 const ROUNDS = Number(process.argv[2] ?? 25)
 const INTERVAL_SEC = Number(process.argv[3] ?? 75)
 const WORKSPACE = 'D:/code/projects/test-ccch1mneyyy'
-const LOG = path.join(os.homedir(), '.dsh-cc', 'pty-stress-rss.log')
+const LOG = path.join(os.homedir(), '.dsh-tui', 'pty-stress-rss.log')
 
 const PROMPTS = [
   'run bash: git log --oneline -15, then make a markdown table summarizing each commit in detail',
@@ -44,7 +44,7 @@ async function main() {
 
   const runScript = 'packages/ui/cc-tui/scripts/run.ts'
   // V8-native OOM snapshot via NODE_OPTIONS (avoids cmd quoting hell).
-  const snapDir = path.join(os.homedir(), '.dsh-cc').split('\\').join('/')
+  const snapDir = path.join(os.homedir(), '.dsh-tui').split('\\').join('/')
   const env = {
     ...process.env,
     DSH_CC_HEAP_WATCH: '1',

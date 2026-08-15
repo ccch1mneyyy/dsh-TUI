@@ -29,7 +29,7 @@ const check = (name: string, ok: boolean) => {
 }
 
 async function runInner(mode: string): Promise<void> {
-  const { installChildStderrGuard } = await import('../src/childStderr.js')
+  const { installChildStderrGuard } = await import('../src/dsh-adapter/childStderr.js')
   if (mode !== 'inner-plain') {
     installChildStderrGuard(line => process.stdout.write(`SINK:${line}\n`))
   }
@@ -76,7 +76,7 @@ async function runDriver(): Promise<void> {
   check('接管（字符串 stdio）：输出行进入受控 sink', guardedString.stdout.includes('SINK:BOOM-LINE'))
 
   // ── reporter: dedup / cooldown / cleanup ──────────────────────────────
-  const { createChildStderrReporter } = await import('../src/childStderr.js')
+  const { createChildStderrReporter } = await import('../src/dsh-adapter/childStderr.js')
   const notices: string[] = []
   const reporter = createChildStderrReporter(text => notices.push(text), {
     debounceMs: 60,

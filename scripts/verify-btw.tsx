@@ -16,9 +16,9 @@ const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }
   import('react'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
-  import('../src/questions.js'),
+  import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
-  import('../src/utils/sideQuestion.js'),
+  import('../src/dsh-adapter/sideQuestion.js'),
 ])
 
 class FakeStdout extends Writable {

@@ -21,7 +21,7 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sessionCwdMatches } from '../lib/types/channel.js'
+import { sessionCwdMatches } from '../lib/types/dsh-adapter/channel.js'
 import { resolveSessionCwd } from '../lib/types/utils/workspaceRoot.js'
 
 let failed = 0

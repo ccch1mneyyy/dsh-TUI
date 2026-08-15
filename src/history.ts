@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { DATA_DIR } from './utils/paths.js'
 
-const HISTORY_DIR = join(homedir(), '.dsh-cc')
+const HISTORY_DIR = DATA_DIR
 const HISTORY_FILE = join(HISTORY_DIR, 'history.jsonl')
 
 /** One persisted input-history entry. */

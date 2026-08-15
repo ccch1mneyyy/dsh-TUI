@@ -1,7 +1,7 @@
 import React from 'react';
-import type { Channel } from '../channel.js';
-import type { QuestionStore } from '../questions.js';
-import { ApprovalStore } from '../approvals.js';
+import type { Channel } from '../dsh-adapter/channel.js';
+import type { QuestionStore } from '../dsh-adapter/questions.js';
+import { ApprovalStore } from '../dsh-adapter/approvals.js';
 export declare function Chat({ channel, questionStore, approvalStore, onExit, onUpdate, }: {
     channel: Channel;
     questionStore: QuestionStore;

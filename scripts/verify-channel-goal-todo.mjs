@@ -8,7 +8,7 @@
  *
  * Run with plain node against the compiled lib: `node scripts/verify-channel-goal-todo.mjs`
  */
-import { createChannel } from '../lib/types/channel.js'
+import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 
 let failed = 0
 function check(name, ok, extra = '') {

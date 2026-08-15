@@ -3,8 +3,7 @@ import { Box, Text, useTerminalSize } from '../ui.js'
 import { t } from '../i18n.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
-import { Byline } from './design-system/Byline.js'
-import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js'
+import { HintLine } from './design-system/HintLine.js'
 import {
   formatClock,
   formatDuration,
@@ -12,7 +11,7 @@ import {
   type TraceEntry,
   type TraceFilter,
   type TraceKind,
-} from '../trace.js'
+} from '../dsh-adapter/trace.js'
 
 /** Rows of the timeline visible at once (the window scrolls with the cursor). */
 export const TRACE_WINDOW = 12
@@ -129,11 +128,7 @@ export function TraceView({
         )}
       </Box>
       <Text dimColor italic>
-        <Byline>
-          <KeyboardShortcutHint shortcut="↑/↓ PgUp/PgDn g/G" action="scroll" bold />
-          <KeyboardShortcutHint shortcut="f" action="filter" />
-          <KeyboardShortcutHint shortcut="Esc/q" action="close" />
-        </Byline>
+        <HintLine text={t('hint-trace')} />
       </Text>
     </Pane>
   )

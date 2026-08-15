@@ -15,7 +15,7 @@
  *   reads as "the user dismissed the review to speak instead".
  */
 import React from 'react';
-import type { QuestionSelection } from '../../questions.js';
+import type { QuestionSelection } from '../../dsh-adapter/questions.js';
 export type PlanReviewPanelProps = {
     /** The plan-review question (intent.kind === 'plan-review'). */
     readonly question: {

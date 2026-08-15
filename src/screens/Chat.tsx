@@ -4,10 +4,11 @@ import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme } from '
 import { POINTER } from '../cc/figures.js'
 import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
-import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
-import type { Channel, ChatRow, EffortOption, PresetOption } from '../channel.js'
-import type { QuestionStore } from '../questions.js'
-import { ApprovalStore } from '../approvals.js'
+import type { LlmModelInfo } from '../dsh-adapter/types.js'
+import type { Channel, ChatRow, EffortOption, PresetOption } from '../dsh-adapter/channel.js'
+import type { QuestionStore } from '../dsh-adapter/questions.js'
+import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
+import { ApprovalStore } from '../dsh-adapter/approvals.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import type { DOMElement } from '../ink/dom.js'
@@ -31,6 +32,7 @@ import { ActivityPicker } from '../components/ActivityPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
+import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js'
 import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
@@ -45,7 +47,7 @@ import {
   type TraceBuild,
   type TraceEntry,
   type TraceFilter,
-} from '../trace.js'
+} from '../dsh-adapter/trace.js'
 import { LoadingState } from '../components/design-system/LoadingState.js'
 import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'
@@ -207,7 +209,7 @@ export function Chat({
   const [effortSliderOpen, setEffortSliderOpen] = React.useState(false)
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
   const [effortIndex, setEffortIndex] = React.useState(0)
-  /** `/theme` color-theme picker (built-ins + ~/.dsh-cc/themes user themes). */
+  /** `/theme` color-theme picker (built-ins + ~/.dsh-tui/themes user themes). */
   const [themePickerOpen, setThemePickerOpen] = React.useState(false)
   const [themeIndex, setThemeIndex] = React.useState(0)
   const [themeName, setTheme] = useTheme()
@@ -365,7 +367,7 @@ export function Chat({
         // opens the interactive indicator picker; `/activity frames <name>`
         // switches directly; `/activity frames` lists presets; `/activity
         // status` shows the current choice. The choice persists to
-        // ~/.dsh-cc/working-activity.json and survives restarts.
+        // ~/.dsh-tui/working-activity.json and survives restarts.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -406,7 +408,7 @@ export function Chat({
         // switches directly; `/preset status` shows the current choice. A
         // blank session swaps composition in place (official blank-only
         // rule); a started session is locked and the choice persists as the
-        // default for future sessions (~/.dsh-cc/agent-preset.json).
+        // default for future sessions (~/.dsh-tui/agent-preset.json).
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -441,7 +443,7 @@ export function Chat({
         // Bare `/effort` opens the rheostat slider over the live route's
         // adapter levels (←/→ applies each step immediately); `/effort <id>`
         // sets directly (validated by the channel); `/effort status` prints
-        // the current level. The choice persists to ~/.dsh-cc/effort.json.
+        // the current level. The choice persists to ~/.dsh-tui/effort.json.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -470,8 +472,8 @@ export function Chat({
       }
       case 'lang': {
         // `/lang` shows the current UI language, `/lang en|zh` switches
-        // (hot-swap, persisted to ~/.dsh-cc/lang.json). Precedence on next
-        // launch: CC_TUI_LANG > cordis.yml `lang` > the persisted choice.
+        // (hot-swap, persisted to ~/.dsh-tui/lang.json). Precedence on next
+        // launch: DSH_TUI_LANG > cordis.yml `lang` > the persisted choice.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -505,16 +507,22 @@ export function Chat({
         return true
       }
       case 'theme': {
-        // Bare `/theme` opens the interactive color picker (built-in
-        // palettes + user themes from ~/.dsh-cc/themes); `/theme <name>`
+        // Bare `/theme` opens the interactive color picker (`auto` + built-in
+        // palettes + user themes from ~/.dsh-tui/themes); `/theme <name>`
         // switches directly; `/theme status` shows the current choice.
-        // Selection persists to ~/.dsh-cc/theme.json and hot swaps via the
-        // ThemeProvider setter (CC_TUI_THEME still wins on next launch).
+        // `auto` follows the terminal background (OSC 11). Selection
+        // persists to ~/.dsh-tui/theme.json and hot swaps via the
+        // ThemeProvider setter (DSH_TUI_THEME still wins on next launch).
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/theme', [
             t('theme-current', { name: themeName }),
+            // `auto` resolves through terminal-background detection; show
+            // which palette it currently maps to.
+            ...(themeName === AUTO_THEME_NAME
+              ? [t('theme-auto-resolved', { name: getAutoThemeBase() })]
+              : []),
             t('theme-switch-hint'),
             t('theme-persist-hint'),
             t('theme-custom-hint'),
@@ -581,6 +589,29 @@ export function Chat({
           setModelIndex(index >= 0 ? index : 0)
         })
         return true
+      case 'provider': {
+        // Interactive add-provider wizard (/provider): drives the shared
+        // question panel, persists profile + key via the channel's settings/
+        // credentials seams. No picker state — AskUserQuestionPanel renders it.
+        setHelpOpen(false)
+        const host = channel.providerSetup()
+        if (!host) {
+          channel.notify(t('provider-unavailable'), { color: 'warning', timeoutMs: 8000 })
+          return true
+        }
+        void runProviderWizard({
+          host,
+          ask: (request, options) => questionStore.ask(request, options),
+          notify: (text, options) => channel.notify(text, options),
+          pushLocal: (title, lines) => channel.pushLocal(title, lines),
+          working: () => channel.working,
+          switchModel: (provider, model) => channel.switchModel(provider, model),
+        }).catch(() => {
+          // The wizard notifies on every handled failure; this only swallows
+          // an unexpected reject so it never surfaces as an unhandled promise.
+        })
+        return true
+      }
       case 'thinking':
         setHelpOpen(false)
         setThinkingOpen(true)
@@ -897,7 +928,7 @@ export function Chat({
       .filter(row => row.kind === 'user' && row.label === undefined)
       .reverse()
     if (candidates.length === 0) {
-      channel.notify('Nothing to rewind yet')
+      channel.notify(t('rewind-none'))
       return
     }
     setRewindIndex(0)
@@ -910,7 +941,7 @@ export function Chat({
     if (text !== null) {
       // CC puts the restored message back in the prompt for re-editing.
       setHistoryFill(text)
-      channel.notify('Rewound — edit and press Enter to resend')
+      channel.notify(t('rewind-done'))
     }
   }
 
@@ -1144,10 +1175,10 @@ export function Chat({
             void (async () => {
               const ok = await channel.deleteSession(target.id)
               if (!ok) {
-                channel.notify(`Could not delete session ${target.title || target.id}`, { color: 'error' })
+                channel.notify(t('resume-delete-failed', { name: target.title || target.id }), { color: 'error' })
                 return
               }
-              channel.notify(`Deleted session ${target.title || target.id}`)
+              channel.notify(t('resume-deleted', { name: target.title || target.id }))
               // Refresh right away so the row disappears in place; closing
               // the picker when nothing resumable remains.
               const sessions = await channel.listSessions()
@@ -1175,10 +1206,10 @@ export function Chat({
             void (async () => {
               const ok = await channel.renameSessionTo(target.id, title)
               if (!ok) {
-                channel.notify(`Could not rename session ${target.title || target.id}`, { color: 'error' })
+                channel.notify(t('resume-rename-failed', { name: target.title || target.id }), { color: 'error' })
                 return
               }
-              channel.notify(`Renamed session to ${title}`)
+              channel.notify(t('rename-done', { title }))
               // Re-list so the row reflects the persisted state, but patch
               // the renamed row's title explicitly: listSessions resolves
               // persisted titles only within the MRU top SESSION_TITLE_DEPTH
@@ -1220,7 +1251,7 @@ export function Chat({
           // next launch opens the same session.
           setResumePickerOpen(false)
           void channel.resumeTo(resumeSession.id).then((ok) => {
-            if (ok) channel.notify('Session resumed')
+            if (ok) channel.notify(t('resume-resumed'))
           })
         } else {
           setResumePickerOpen(false)
@@ -1248,9 +1279,9 @@ export function Chat({
           // forked at its end and continued with an agent routed to the new
           // model (history replays unchanged).
           setModelPickerOpen(false)
-          channel.notify(`Switching model to ${model.name}…`)
+          channel.notify(t('model-switching', { name: model.name }))
           void channel.switchModel(model.provider, model.id).then((ok) => {
-            if (ok) channel.notify(`Model switched to ${model.name}`)
+            if (ok) channel.notify(t('model-switched', { name: model.name }))
           })
         } else {
           setModelPickerOpen(false)
@@ -1824,12 +1855,12 @@ function ModelPickerLoading(): React.ReactNode {
     <Pane color="permission">
       <Box flexDirection="column" gap={1}>
         <Text bold color="permission">
-          Model
+          {t('picker-title-model')}
         </Text>
         <LoadingState
-          message="Loading models"
+          message={t('model-loading')}
           bold
-          subtitle="Querying the provider…"
+          subtitle={t('model-loading-subtitle')}
         />
       </Box>
     </Pane>
@@ -1871,7 +1902,7 @@ function ModelPickerLoading(): React.ReactNode {
       {cursorOffset < query.length && <Text>{query.slice(cursorOffset + 1)}</Text>}
       <Box flexGrow={1} />
       {query && count === 0 ? (
-        <Text color="error">no matches </Text>
+        <Text color="error">{t('search-no-matches')} </Text>
       ) : count > 0 ? (
         <Text dimColor>
           {Math.min(current + 1, count)}/{count}{'  '}

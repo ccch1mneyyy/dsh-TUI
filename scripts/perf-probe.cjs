@@ -9,7 +9,7 @@ const path = require('path')
 
 const CC = 'D:\\code\\projects\\test-ccch1mneyyy\\packages\\ui\\cc-tui'
 const COMMIT_LOG = 'D:\\tmp\\commit-log.txt'
-const HEAP_WATCH = process.env.USERPROFILE + '\\.dsh-cc\\heap-watch.log'
+const HEAP_WATCH = process.env.USERPROFILE + '\\.dsh-tui\\heap-watch.log'
 const ROUNDS = Number(process.argv[2] || 2)
 const MSG =
   process.env.PERF_MSG ||

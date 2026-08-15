@@ -21,7 +21,7 @@
  */
 import { Context } from '@deepseek-ai/cordis'
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
-import { createChannel } from '../src/channel.js'
+import { createChannel } from '../src/dsh-adapter/channel.js'
 
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {

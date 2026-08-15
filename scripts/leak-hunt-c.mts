@@ -67,7 +67,7 @@ const handle = await agents.create({
 })
 const agent = handle.agent
 
-const { createChannel } = await import('../src/channel.ts')
+const { createChannel } = await import('../src/dsh-adapter/channel.ts')
 const channel = createChannel(ctx, agent, {
   model: 'deepseek-v4-flash',
   cwd: workspace,

@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Channel } from '../channel.js';
+import type { Channel } from '../dsh-adapter/channel.js';
 /**
  * Live goal + todo panel above the prompt input. Data rides on the channel:
  * `channel.goal` is folded from `goal/change` context events and

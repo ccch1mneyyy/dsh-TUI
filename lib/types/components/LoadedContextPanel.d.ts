@@ -1,5 +1,5 @@
 import React from 'react';
-import type { LoadedContext } from '../channel.js';
+import type { LoadedContext } from '../dsh-adapter/channel.js';
 /**
  * The startup context panel: a collapsed one-line summary of what a
  * fresh conversation will load for the current agent (system prompt

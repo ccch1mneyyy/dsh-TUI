@@ -66,7 +66,7 @@ const channel = {
   tokens: { input: 120, output: 45 },
   contextWindow: 1000000,
   reasoningEffort: 'max',
-  workingActivity: { phase: 'tool', line: '正在查看 src/channel.ts · 总12s', toolCount: 2, turnElapsedMs: 12000 },
+  workingActivity: { phase: 'tool', line: '正在查看 src/dsh-adapter/channel.ts · 总12s', toolCount: 2, turnElapsedMs: 12000 },
   activityFrames: 'claude',
   contextBarEnabled: true,
   lastUsage: { input: 12000, output: 356, cacheRead: 3400, cacheWrite: 1200 },
@@ -225,17 +225,17 @@ check('context bar usage readout', cursorMoved.includes('ctx ') && cursorMoved.i
 //     ⏵ self-narration first line is stripped from the transcript body.
 check(
   'activity line in status',
-  contentLines.some(l => l.includes('正在查看 src/channel.ts')),
+  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts')),
   'live working line on the status row',
 )
 check(
   'activity + hint side by side',
-  contentLines.some(l => l.includes('正在查看 src/channel.ts') && l.includes('? for shortcuts')),
+  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts') && l.includes('? for shortcuts')),
   'hint stays visible beside the activity line',
 )
 check(
   'activity indicator frame',
-  contentLines.some(l => l.includes('正在查看 src/channel.ts') && /^[·✢*✶✻✽]/.test(l)),
+  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts') && /^[·✢*✶✻✽]/.test(l)),
   'indicator frame leads the activity line (claude preset)',
 )
 check(

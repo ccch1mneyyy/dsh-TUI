@@ -1,6 +1,6 @@
 /**
  * Persisted agent-preset preference (`/preset` picker choice), kept at
- * `~/.dsh-cc/agent-preset.json` (`preset` key) so the choice survives
+ * `~/.dsh-tui/agent-preset.json` (`preset` key) so the choice survives
  * restarts — same pattern as working-activity.json. The file is best-effort:
  * a missing/corrupt file or an id the roster no longer supplies simply falls
  * back to the roster default (`standard`). An explicit `preset` key in
@@ -9,10 +9,10 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { DATA_DIR } from './utils/paths.js'
 
-const PREFS_DIR = join(homedir(), '.dsh-cc')
+const PREFS_DIR = DATA_DIR
 
 /** Ids a preset directory may use (dsh-agent-presets' own boundary). */
 const PRESET_ID = /^[a-z0-9][a-z0-9-]*$/
