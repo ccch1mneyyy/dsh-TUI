@@ -8,6 +8,12 @@
  * text, accent-soft blues). `dark-ansi` is the 16-color fallback for
  * terminals without truecolor. The active palette is chosen at startup by
  * querying the terminal background (OSC 11) — see ThemeProvider.
+ *
+ * `auto` is a pseudo-theme, not a palette: it resolves to `light` or `dark`
+ * from the terminal background detected via OSC 11 (which tracks the system
+ * theme in terminals that follow it). ThemeProvider re-runs detection every
+ * time `auto` is selected and pushes the result through setAutoThemeBase(),
+ * so getTheme('auto') always serves the currently detected palette.
  */
 
 export type Theme = {
@@ -92,8 +98,40 @@ export type Theme = {
 export const THEME_NAMES = ['dark', 'dark-ansi', 'light'] as const
 
 /**
+ * The `auto` pseudo-theme: not a palette, but a standing request to follow
+ * the terminal background (OSC 11, which tracks the system theme in
+ * terminals that follow it). Selectable everywhere a theme name is
+ * (/theme, DSH_TUI_THEME, ~/.dsh-tui/theme.json); getTheme() resolves it to
+ * the last detected `light`/`dark` palette via the auto base below.
+ */
+export const AUTO_THEME_NAME = 'auto'
+
+/**
+ * The palette `auto` currently resolves to, mirrored module-level so
+ * getTheme('auto') works for non-React rendering without a context.
+ * ThemeProvider sets this on every detection (startup and runtime switch);
+ * defaults to `dark` until the first detection settles (the pre-detection
+ * status quo, biased dark for readability).
+ */
+let autoBase: 'light' | 'dark' = 'dark'
+
+/**
+ * Record the palette `auto` should resolve to. Called by ThemeProvider
+ * after each terminal-background detection while `auto` is active.
+ * @param name - The detected base palette.
+ */
+export function setAutoThemeBase(name: 'light' | 'dark'): void {
+  autoBase = name
+}
+
+/** The palette `auto` currently resolves to (`light` or `dark`). */
+export function getAutoThemeBase(): 'light' | 'dark' {
+  return autoBase
+}
+
+/**
  * Any theme name: a built-in palette (`light`/`dark`/`dark-ansi`) or a user
- * theme from ~/.dsh-cc/themes/<name>.json. Always resolvable to a concrete
+ * theme from ~/.dsh-tui/themes/<name>.json. Always resolvable to a concrete
  * color palette via getTheme() (unknown names fall back to `dark`).
  */
 export type ThemeName = string
@@ -262,7 +300,7 @@ const lightTheme: Theme = {
  * Dark ANSI theme using only the 16 standard ANSI colors, for terminals
  * without true color support (verbatim from the leak).
  *
- * User themes (JSON files in ~/.dsh-cc/themes/) overlay one of these three
+ * User themes (JSON files in ~/.dsh-tui/themes/) overlay one of these three
  * bases — see customTheme.ts. `getTheme` resolves them through a resolver
  * registered by ThemeProvider.
  */
@@ -340,15 +378,25 @@ const darkAnsiTheme: Theme = {
 
 /**
  * Resolve a theme name to its concrete color palette.
- * @param themeName - The theme to resolve (built-in or user theme name).
- * @returns The matching palette; unknown names fall back to `dark`.
+ * @param themeName - The theme to resolve (built-in, `auto`, or user theme
+ *   name).
+ * @returns The matching palette; `auto` resolves to the detected base
+ *   (light/dark), unknown names fall back to `dark`.
  */
 export function getTheme(themeName: ThemeName): Theme {
   switch (themeName) {
     case 'light':
       return lightTheme
+    // `dark` is an explicit case (not the default): built-in bases must
+    // resolve without touching the custom-theme resolver — parseCustomTheme
+    // calls getTheme(base) while the resolver may still be indexing, and a
+    // resolver round-trip there re-enters theme-file parsing recursively.
+    case 'dark':
+      return darkTheme
     case 'dark-ansi':
       return darkAnsiTheme
+    case AUTO_THEME_NAME:
+      return autoBase === 'light' ? lightTheme : darkTheme
     default:
       return customThemeResolver?.(themeName) ?? darkTheme
   }

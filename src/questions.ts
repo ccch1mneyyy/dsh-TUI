@@ -37,6 +37,12 @@ interface PendingQuestion {
   index: number
   /** Answers collected so far, in question order. */
   readonly answers: AskUserQuestionAnswerItem[]
+  /**
+   * Redact answer text in the transcript summary (e.g. a wizard asking for
+   * an API key): the summary lines show `••••••` instead of the raw text so
+   * secrets never reach the transcript or an `/export` dump.
+   */
+  readonly redact?: boolean
   resolve: (answer: AskUserQuestionAnswer) => void
   reject: (error: unknown) => void
   onAbort: () => void
@@ -79,10 +85,14 @@ function clip(text: string, max = 140): string {
 function buildSummary(pending: PendingQuestion): QuestionSummary {
   const lines = pending.answers.map(answer => {
     const question = pending.request.questions.find(q => q.id === answer.id)
-    const labels = answer.selected.join('、')
-    const text = answer.custom !== undefined && answer.custom !== ''
-      ? labels === '' ? answer.custom : `${labels}：${answer.custom}`
-      : labels
+    const text = pending.redact
+      ? '••••••'
+      : (() => {
+          const labels = answer.selected.join('、')
+          return answer.custom !== undefined && answer.custom !== ''
+            ? labels === '' ? answer.custom : `${labels}：${answer.custom}`
+            : labels
+        })()
     return `· ${question?.question ?? answer.id} → ${clip(text)}`
   })
   const total = pending.request.questions.length
@@ -164,18 +174,23 @@ export class QuestionStore {
 
   /**
    * Provider entry point — called by `ctx.userQuestions.ask()` when the
-   * model runs the `ask_user_question` tool.
+   * model runs the `ask_user_question` tool, and by local wizards (e.g.
+   * `/provider`) driving the same panel.
    * @param request - The ask request: questions plus optional abort signal.
+   * @param options - `redact` hides answer text from the transcript summary
+   *   (use for batches that collect secrets such as API keys).
    * @returns A promise settling with the collected answers when the user
    *   submits the batch, or rejecting when the ask is interrupted.
    */
-  ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
+  ask(request: AskUserQuestionRequest,
+      options?: { redact?: boolean }): Promise<AskUserQuestionAnswer> {
     return new Promise<AskUserQuestionAnswer>((resolve, reject) => {
       const pending: PendingQuestion = {
         request,
         batchId: ++this.batchSeq,
         index: 0,
         answers: [],
+        ...(options?.redact ? { redact: true } : {}),
         resolve,
         reject,
         onAbort: () => {

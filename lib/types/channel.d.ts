@@ -4,6 +4,7 @@ import { type SessionEvent } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import { type LocalCommand } from './commands.js';
 import { type SessionRecord } from './sessionHistory.js';
+import type { ProviderSetupHost } from './providerWizard.js';
 import { type SessionModeSpec } from './sessionModes.js';
 import type { SpinnerMode } from './components/Spinner/spinnerMode.js';
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -396,7 +397,7 @@ export interface Channel {
     }>;
     /** Set one effort level by id (validated against the adapter list);
      *  false + a notify when the id is not offered. Persists like the old
-     *  Shift+Tab cycle (~/.dsh-cc/effort.json). */
+     *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
     setEffort(id: string): Promise<boolean>;
     /** The session mode currently in force (matched from the session log, or
      *  the last one Shift+Tab applied). */
@@ -431,12 +432,16 @@ export interface Channel {
         timeoutMs?: number;
     }): void;
     /** Switch the working-activity indicator preset (`/activity`): validates
-     *  the name, persists it to `~/.dsh-cc/working-activity.json`, and
+     *  the name, persists it to `~/.dsh-tui/working-activity.json`, and
      *  re-renders the indicator immediately; false when the name is unknown
      *  or the preference cannot be written. */
     setActivityFrames(name: string): boolean;
     /** Advertised models across every registered provider route (empty when the LLM service is absent). */
     listModels(): Promise<readonly LlmModelInfo[]>;
+    /** Runtime capabilities for the `/provider` wizard, over the settings /
+     *  credentials / llm seams; undefined when the composition lacks them
+     *  (bare cordis.yml start without the dsh-base services). */
+    providerSetup(): ProviderSetupHost | undefined;
     /** Top-level entries of the session cwd for `@` file completion. */
     listFiles(): Promise<readonly string[]>;
     /** Recent sessions recorded by the DSH persistence backend (for `/resume`). */
@@ -634,6 +639,8 @@ export interface ChannelState {
     /** Switch the working-activity indicator preset (see the public Channel). */
     setActivityFrames(name: string): boolean;
     listModels(): Promise<readonly LlmModelInfo[]>;
+    /** `/provider` wizard capabilities (see the public Channel type). */
+    providerSetup(): ProviderSetupHost | undefined;
     listFiles(): Promise<readonly string[]>;
     listSessions(): Promise<readonly SessionRecord[]>;
     setResumeTarget(sessionId: string): void;

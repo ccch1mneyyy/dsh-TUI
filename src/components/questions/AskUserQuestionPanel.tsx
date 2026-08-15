@@ -33,6 +33,10 @@ export type AskUserQuestionPanelProps = {
     readonly detail?: string
     readonly options?: ReadonlyArray<{ readonly label: string; readonly description?: string }>
     readonly multiSelect?: boolean
+    /** Hide the trailing free-text input row for pure option questions
+     *  (local wizards, e.g. /provider). Ignored when there are no options —
+     *  a text-only question would otherwise be unanswerable. */
+    readonly hideCustomInput?: boolean
     /** Presentation intent tag (rc.6): 'plan-review' switches to the
      *  decision-card layout; an intent never changes the protocol. */
     readonly intent?: { readonly kind: 'plan-review'; readonly approve: string }
@@ -64,8 +68,9 @@ export function AskUserQuestionPanel({
   }
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true
+  const hideCustomInput = question.hideCustomInput === true && options.length > 0
   /** Rows: the real options plus the inline input row at the tail. */
-  const rowCount = options.length + 1
+  const rowCount = options.length + (hideCustomInput ? 0 : 1)
   const [focusIndex, setFocusIndex] = React.useState(0)
   const [checked, setChecked] = React.useState<ReadonlySet<number>>(() => new Set())
   const [customText, setCustomText] = React.useState('')
@@ -75,7 +80,7 @@ export function AskUserQuestionPanel({
   const [attached, setAttached] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
-  const inputFocused = focusIndex === options.length
+  const inputFocused = !hideCustomInput && focusIndex === options.length
 
   const moveFocus = (delta: 1 | -1): void => {
     if (rowCount <= 1) return
@@ -211,7 +216,7 @@ export function AskUserQuestionPanel({
       moveFocus(1)
       return
     }
-    if (key.tab) {
+    if (key.tab && !hideCustomInput) {
       setFocusIndex(options.length)
       setError(null)
       return
@@ -231,12 +236,12 @@ export function AskUserQuestionPanel({
     }
     if (key.backspace) {
       // Edit the input row without leaving the option list.
-      if (customText !== '') backspaceText()
+      if (!hideCustomInput && customText !== '') backspaceText()
       return
     }
     // Typing on an option appends into the input row; single-select also
     // attaches this option's label so Enter carries label + text (#9).
-    if (!key.ctrl && !key.meta && !key.super && input) {
+    if (!hideCustomInput && !key.ctrl && !key.meta && !key.super && input) {
       appendText(input)
       if (!multiSelect) setAttached(options[focusIndex]?.label ?? null)
     }
@@ -309,7 +314,7 @@ export function AskUserQuestionPanel({
           </Box>
         )
       })}
-      {renderInputRow()}
+      {hideCustomInput ? null : renderInputRow()}
     </Box>
   )
 
@@ -324,7 +329,7 @@ export function AskUserQuestionPanel({
     : [
         t('question-hint-select'),
         ...(multiSelect ? [t('question-hint-multi')] : []),
-        t('question-hint-attach'),
+        ...(hideCustomInput ? [] : [t('question-hint-attach')]),
         t('question-hint-enter'),
         t('question-hint-esc'),
         ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),

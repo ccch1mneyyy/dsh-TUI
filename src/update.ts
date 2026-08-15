@@ -14,7 +14,7 @@ const PACKAGE_NAME = '@deepseek-harness-tui/dsh-tui'
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
 const UPDATE_CHECK_TIMEOUT_MS = 4000
 /** env marker set on the /update restart; the new process verifies it at boot. */
-const UPDATED_FROM_ENV = 'DSH_CC_UPDATED_FROM'
+const UPDATED_FROM_ENV = 'DSH_TUI_UPDATED_FROM'
 
 export interface TuiUpdateInfo {
   current: string
@@ -203,7 +203,7 @@ function runProcess(
  * `--latest` is required: `pnpm add` writes a caret range into the profile
  * manifest, and a plain `pnpm update` stays inside that range — with this
  * project's minor-per-release cadence the TUI would restart unchanged while
- * reporting success. The restart carries `DSH_CC_UPDATED_FROM` so the new
+ * reporting success. The restart carries `DSH_TUI_UPDATED_FROM` so the new
  * process can warn when the version did not actually move (e.g. a mirror
  * registry still serving the old `latest`).
  *
@@ -227,6 +227,9 @@ export async function updateTuiAndRestart(sessionId: string, profile: string): P
   const restartCode = await runProcess(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
     env: {
       ...process.env,
+      // Dual-write the resume contract (issue #120): the cordis layer of a
+      // still-old TUI build reads only DSH_CC_RESUME_SESSION.
+      DSH_TUI_RESUME_SESSION: sessionId,
       DSH_CC_RESUME_SESSION: sessionId,
       [UPDATED_FROM_ENV]: installedTuiVersion() ?? '',
     },

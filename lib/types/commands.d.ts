@@ -19,6 +19,14 @@ export interface LocalCommand {
     tag?: string;
     /** True when a DSH plugin registered this command (not built in). */
     external?: boolean;
+    /**
+     * True when the entry is a user-invocable skill discovered by the DSH
+     * skill registry (issue #86). Skill entries are completion-only: dispatch
+     * falls through to the model as plain text, where dsh-tool-skill's
+     * pre-step hook injects the skill body — the same path a hand-typed
+     * `/skill-name` takes. The help menu hides them (chrome commands only).
+     */
+    skill?: boolean;
 }
 /**
  * The built-in slash commands (name + description pairs). Plugin-registered

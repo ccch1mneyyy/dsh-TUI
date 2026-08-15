@@ -7,7 +7,7 @@
  *   - 残骸 profile（目录在、package.json 不可读）触发重新自举，且版本号
  *     与本包对齐
  *   - profile 已装版本与启动器不一致时打印提示，但不阻塞启动
- *   - 面向用户的消息双语：CC_TUI_LANG=zh 输出中文，否则默认英文
+ *   - 面向用户的消息双语：DSH_TUI_LANG=zh 输出中文，否则默认英文
  *   - shellQuote 单元（win32 的 shell:true 路径 CI 跑不到 Windows，只能靠
  *     单测覆盖转义规则本身）
  *
@@ -116,12 +116,12 @@ r = runBin([])
 check('mismatch: hint names both versions', r.stderr.includes('v0.0.0') && r.stderr.includes(`v${ownVersion}`))
 check('mismatch: still launches', stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0)
 
-// --- 4. 消息双语：缺 dsh 时的报错（契约同 TUI：CC_TUI_LANG 指定才生效，否则默认中文）-
+// --- 4. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
 const envNoDsh = { PATH: noDshPath }
-r = runBin([], { ...envNoDsh, CC_TUI_LANG: 'en' })
-check('i18n: CC_TUI_LANG=en prints English', r.stderr.includes('dsh CLI not found'))
-r = runBin([], { ...envNoDsh, CC_TUI_LANG: 'zh' })
-check('i18n: CC_TUI_LANG=zh prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
+r = runBin([], { ...envNoDsh, DSH_TUI_LANG: 'en' })
+check('i18n: DSH_TUI_LANG=en prints English', r.stderr.includes('dsh CLI not found'))
+r = runBin([], { ...envNoDsh, DSH_TUI_LANG: 'zh' })
+check('i18n: DSH_TUI_LANG=zh prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
 r = runBin([], envNoDsh)
 check('i18n: default (unset) prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
 

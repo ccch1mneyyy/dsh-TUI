@@ -1,7 +1,7 @@
 /**
  * User-defined color themes for dsh-tui.
  *
- * A theme is a JSON file in `~/.dsh-cc/themes/<name>.json`:
+ * A theme is a JSON file in `~/.dsh-tui/themes/<name>.json`:
  *
  * ```json
  * { "name": "sakura", "displayName": "Sakura Pink", "base": "dark",
@@ -23,7 +23,7 @@ import { type Theme } from './theme.js';
 /** The base palettes a user theme may overlay. */
 export declare const THEME_BASE_NAMES: readonly ["light", "dark", "dark-ansi"];
 export type ThemeBase = (typeof THEME_BASE_NAMES)[number];
-/** The directory user theme files live in (~/.dsh-cc/themes). */
+/** The directory user theme files live in (~/.dsh-tui/themes). */
 export declare const CUSTOM_THEME_DIR: string;
 /** A validated user theme file. `colors` only carries accepted overrides. */
 export type CustomThemeSpec = {
@@ -40,7 +40,7 @@ export type CustomThemeSpec = {
 };
 /**
  * Whether a name is safe to use as a file name (no path separators or dot
- * traversal). Theme names are user input from CC_TUI_THEME and /theme, so
+ * traversal). Theme names are user input from DSH_TUI_THEME and /theme, so
  * they must never escape the themes directory.
  */
 export declare function isSafeThemeName(name: string): boolean;
@@ -92,9 +92,9 @@ export declare function buildTheme(spec: CustomThemeSpec): Theme;
  */
 export declare function resolveCustomTheme(name: string): Theme | undefined;
 /**
- * Whether a name selects a usable theme: a built-in palette or a valid user
- * theme file. Used for CC_TUI_THEME / persisted-preference validation and
- * the runtime /theme switch.
+ * Whether a name selects a usable theme: a built-in palette, the `auto`
+ * pseudo-theme, or a valid user theme file. Used for DSH_TUI_THEME /
+ * persisted-preference validation and the runtime /theme switch.
  * @param name - Candidate theme name.
  * @returns True when the theme resolves.
  */

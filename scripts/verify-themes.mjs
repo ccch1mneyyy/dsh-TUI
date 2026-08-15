@@ -1,7 +1,7 @@
 /**
  * Theme subsystem smoke test (no assertions framework, plain node:assert).
  *
- * Creates a throwaway HOME with a fake ~/.dsh-cc/themes directory containing
+ * Creates a throwaway HOME with a fake ~/.dsh-tui/themes directory containing
  * one valid theme, one format-exercise theme, and one of each failure mode
  * (unknown key, invalid color, bad base, broken JSON), then asserts that
  * loading, validation, fallback and persistence behave as designed.
@@ -17,8 +17,8 @@ import { join } from 'node:path'
 import assert from 'node:assert/strict'
 
 // Point HOME/USERPROFILE at a throwaway dir BEFORE importing the modules, so
-// their module-level dirs (~/.dsh-cc, ~/.dsh-cc/themes) resolve there.
-const tmpHome = mkdtempSync(join(tmpdir(), 'dshcc-theme-test-'))
+// their module-level dirs (~/.dsh-tui, ~/.dsh-tui/themes) resolve there.
+const tmpHome = mkdtempSync(join(tmpdir(), 'dshtui-theme-test-'))
 process.env.USERPROFILE = tmpHome
 process.env.HOME = tmpHome
 
@@ -34,9 +34,9 @@ const {
   clearCustomThemeCache,
 } = await import('../src/customTheme.js')
 const { parseThemePref, readThemePref, writeThemePref } = await import('../src/themePrefs.js')
-const { getTheme, registerCustomThemeResolver } = await import('../src/theme.js')
+const { getTheme, registerCustomThemeResolver, setAutoThemeBase, getAutoThemeBase } = await import('../src/theme.js')
 
-const themesDir = join(tmpHome, '.dsh-cc', 'themes')
+const themesDir = join(tmpHome, '.dsh-tui', 'themes')
 mkdirSync(themesDir, { recursive: true })
 
 // --- fixture files: one valid, one exercising every accepted color form,
@@ -238,6 +238,28 @@ check('getTheme: registry resolves user themes, built-ins untouched', () => {
   assert.equal(getTheme('nope').claude, getTheme('dark').claude) // unknown -> dark
 })
 
+// --- the auto pseudo-theme -------------------------------------------------
+check('auto: available, resolves to the detected base, shadows user themes', () => {
+  assert.ok(isThemeAvailable('auto'))
+  // pre-detection default is dark (the readable fallback)
+  assert.equal(getAutoThemeBase(), 'dark')
+  assert.equal(getTheme('auto'), getTheme('dark'))
+  setAutoThemeBase('light')
+  assert.equal(getAutoThemeBase(), 'light')
+  assert.equal(getTheme('auto'), getTheme('light'))
+  setAutoThemeBase('dark')
+  // a user theme named auto can never shadow the built-in pseudo-theme
+  writeFileSync(join(themesDir, 'auto.json'), JSON.stringify({ base: 'light', colors: { claude: '#123456' } }))
+  clearCustomThemeCache()
+  assert.equal(getTheme('auto'), getTheme('dark'))
+})
+
+check('themePrefs: the auto choice round-trips like any theme name', () => {
+  assert.ok(writeThemePref('auto'))
+  assert.equal(readThemePref(), 'auto')
+  assert.equal(parseThemePref('{"theme": "auto"}'), 'auto')
+})
+
 // --- persistence (themePrefs) ----------------------------------------------
 check('themePrefs: write/read round-trip under the temp HOME', () => {
   assert.ok(writeThemePref('good'))
@@ -245,7 +267,7 @@ check('themePrefs: write/read round-trip under the temp HOME', () => {
 })
 
 check('themePrefs: corrupt file yields undefined, no throw', () => {
-  writeFileSync(join(tmpHome, '.dsh-cc', 'theme.json'), '{ nope ')
+  writeFileSync(join(tmpHome, '.dsh-tui', 'theme.json'), '{ nope ')
   assert.equal(readThemePref(), undefined)
 })
 

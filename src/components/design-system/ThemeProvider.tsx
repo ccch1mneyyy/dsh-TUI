@@ -1,5 +1,11 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import { registerCustomThemeResolver, setActiveThemeName } from '../../theme.js'
+import {
+  registerCustomThemeResolver,
+  setActiveThemeName,
+  setAutoThemeBase,
+  getAutoThemeBase,
+  AUTO_THEME_NAME,
+} from '../../theme.js'
 import { isThemeAvailable, resolveCustomTheme } from '../../customTheme.js'
 import { readThemePref, writeThemePref } from '../../themePrefs.js'
 import useStdin from '../../ink/hooks/use-stdin.js'
@@ -9,11 +15,11 @@ import { logForDebugging } from '../../utils/debug.js'
 
 /**
  * Theme provider with terminal-background auto-detection. With no explicit
- * `theme` prop, no CC_TUI_THEME override and no persisted choice
- * (~/.dsh-cc/theme.json), it queries the terminal's background color
+ * `theme` prop, no DSH_TUI_THEME override and no persisted choice
+ * (~/.dsh-tui/theme.json), it queries the terminal's background color
  * (OSC 11) before first paint and picks the Gentle Mist Blue `light` palette
  * on light backgrounds, `dark` otherwise. Priority: explicit `theme` prop >
- * CC_TUI_THEME (built-in or user theme name) > persisted `/theme` choice >
+ * DSH_TUI_THEME (built-in or user theme name) > persisted `/theme` choice >
  * OSC 11 detection. An invalid forced name is warned and skipped, so
  * detection still runs. Children render only after the theme settles, so
  * the first frame already carries the final palette — no dark→light flash.
@@ -21,21 +27,36 @@ import { logForDebugging } from '../../utils/debug.js'
  * stall) falls back to `dark`. The resolved name is mirrored via
  * setActiveThemeName() for non-React rendering (markdown inline code).
  *
+ * The `auto` pseudo-theme turns that one-shot startup detection into a
+ * standing choice: `auto` is valid everywhere a theme name is (DSH_TUI_THEME,
+ * theme.json, /theme), defers first paint until detection settles like the
+ * unforced path, and re-queries OSC 11 on every runtime switch to `auto` —
+ * the detected base (light/dark) is mirrored via setAutoThemeBase() so
+ * getTheme('auto') resolves it for every consumer. OSC 11 tracks the system
+ * theme in terminals that follow it, so `auto` effectively follows the
+ * system light/dark mode.
+ *
  * The context also exposes setTheme() for the runtime `/theme` picker: it
- * validates the name, persists the choice to ~/.dsh-cc/theme.json and hot
+ * validates the name, persists the choice to ~/.dsh-tui/theme.json and hot
  * swaps the palette (and the module-level mirror) immediately.
  */
 
-// User themes (~/.dsh-cc/themes/<name>.json) resolve through this registry,
+// User themes (~/.dsh-tui/themes/<name>.json) resolve through this registry,
 // so getTheme() serves them to every themed component and to non-React
 // rendering (markdown inline code) without a context.
 registerCustomThemeResolver(resolveCustomTheme)
 
 type ThemeContextValue = {
-  /** The active theme name: a built-in palette or a user theme. */
+  /** The active theme name: a built-in palette, `auto`, or a user theme. */
   theme: string
   /**
-   * Switch themes at runtime. Persists to ~/.dsh-cc/theme.json and hot
+   * The palette `auto` currently resolves to. Part of the context value so
+   * a detected-base flip re-renders consumers even though the theme name
+   * stays `auto` (they re-resolve the palette via getTheme(theme)).
+   */
+  autoBase: 'light' | 'dark'
+  /**
+   * Switch themes at runtime. Persists to ~/.dsh-tui/theme.json and hot
    * swaps the palette; false when the name is unknown or cannot persist.
    */
   setTheme: (name: string) => boolean
@@ -43,16 +64,17 @@ type ThemeContextValue = {
 
 const ThemeContext = createContext<ThemeContextValue>({
   theme: 'dark',
+  autoBase: 'dark',
   setTheme: () => false,
 })
 
 /**
- * CC_TUI_THEME skips terminal detection (tests, debugging). Accepts a
- * built-in name (light|dark|dark-ansi) or a user theme name; invalid values
- * are warned and ignored by the caller, falling back to detection.
+ * DSH_TUI_THEME skips terminal detection (tests, debugging). Accepts a
+ * built-in name (auto|light|dark|dark-ansi) or a user theme name; invalid
+ * values are warned and ignored by the caller, falling back to detection.
  */
 function envThemeOverride(): string | undefined {
-  const v = process.env.CC_TUI_THEME
+  const v = process.env.DSH_TUI_THEME
   return v === undefined || v === '' ? undefined : v
 }
 
@@ -84,34 +106,58 @@ export function ThemeProvider({
     if (forced === undefined) return false
     if (isThemeAvailable(forced)) return true
     console.warn(
-      `[dsh-tui] theme "${forced}" not found (built-ins: light, dark, dark-ansi; user themes: ~/.dsh-cc/themes/*.json); falling back to auto-detection`,
+      `[dsh-tui] theme "${forced}" not found (built-ins: auto, light, dark, dark-ansi; user themes: ~/.dsh-tui/themes/*.json); falling back to auto-detection`,
     )
     return false
   })
-  const [active, setActive] = useState<string | null>(forcedValid ? forced ?? null : null)
-  const { internal_querier, setRawMode, isRawModeSupported } = useStdin()
+  // `auto` (like the unforced path) stays null until detection settles, so
+  // the first frame already carries the detected palette.
+  const [active, setActive] = useState<string | null>(
+    forcedValid && forced !== AUTO_THEME_NAME ? forced ?? null : null,
+  )
+  const { internal_querier, isRawModeSupported } = useStdin()
+
+  /**
+   * The palette `auto` resolves to, as React state so a flip re-renders
+   * consumers through the context value. Kept in sync with the module-level
+   * mirror in theme.ts (non-React rendering reads that one).
+   */
+  const [autoBase, setAutoBase] = useState<'light' | 'dark'>(() => getAutoThemeBase())
+  const applyAutoBase = React.useCallback((base: 'light' | 'dark'): void => {
+    setAutoThemeBase(base)
+    setAutoBase(base)
+  }, [])
 
   useEffect(() => {
-    if (forcedValid) return
+    if (forcedValid && forced !== AUTO_THEME_NAME) return
     const querier = internal_querier
+    // Settle on the detected base: a concrete forced/unforced name activates
+    // directly; `auto` records the base and activates as `auto`.
+    const settle = (name: 'light' | 'dark', why: string): void => {
+      logForDebugging(`theme: ${name} (${why})`)
+      if (forced === AUTO_THEME_NAME) {
+        applyAutoBase(name)
+        setActive(AUTO_THEME_NAME)
+      } else {
+        setActive(name)
+      }
+    }
     // Stdin responses only flow while raw mode holds the readable listener;
     // without a querier (or raw-mode support) detection is impossible.
     if (querier === null || !isRawModeSupported) {
-      logForDebugging('theme: detection unavailable (no querier/raw mode), using dark')
-      setActive('dark')
+      settle('dark', 'detection unavailable (no querier/raw mode)')
       return
     }
     let settled = false
-    const finish = (name: string, why: string): void => {
+    const finish = (name: 'light' | 'dark', why: string): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      setRawMode(false)
-      logForDebugging(`theme: ${name} (${why})`)
-      setActive(name)
+      settle(name, why)
     }
-    const timer = setTimeout(() =>{  finish('dark', 'detection timeout') }, DETECT_TIMEOUT_MS)
-    setRawMode(true)
+    const timer = setTimeout(() => {
+      finish('dark', 'detection timeout')
+    }, DETECT_TIMEOUT_MS)
     void Promise.all([querier.send(oscColor(11)), querier.flush()]).then(([r]) => {
       const color = r ? parseOscColor(r.data) : null
       if (color === null || color.type !== 'rgb') {
@@ -123,29 +169,60 @@ export function ThemeProvider({
         )
       }
     })
+    return () => {
+      settled = true
+      clearTimeout(timer)
+    }
   }, [])
+
+  /**
+   * Re-query the terminal background while the app is running (runtime
+   * switch to `auto`). Stdin is already in raw mode here — unlike the
+   * startup path above — so no raw-mode toggling. Best effort: a terminal
+   * that doesn't answer just keeps the current base.
+   */
+  const redetectAutoBase = React.useCallback((): void => {
+    const querier = internal_querier
+    if (querier === null || !isRawModeSupported) {
+      logForDebugging('theme: auto re-detection unavailable, keeping current base')
+      return
+    }
+    void Promise.all([querier.send(oscColor(11)), querier.flush()]).then(([r]) => {
+      const color = r ? parseOscColor(r.data) : null
+      if (color === null || color.type !== 'rgb') return
+      const base = isLightBackground(color.r, color.g, color.b) ? 'light' : 'dark'
+      logForDebugging(`theme: auto base ${base} (OSC 11 bg rgb(${color.r},${color.g},${color.b}))`)
+      applyAutoBase(base)
+    })
+  }, [internal_querier, isRawModeSupported, applyAutoBase])
 
   /**
    * Runtime theme switch (/theme picker or direct command). Validates the
    * name, persists first (a choice that cannot be saved never silently
-   * disappears), then hot swaps the palette.
+   * disappears), then hot swaps the palette. Switching to `auto` applies
+   * the last detected base immediately and re-queries OSC 11 in the
+   * background, so a theme change since launch is picked up.
    */
-  const setTheme = React.useCallback((name: string): boolean => {
-    if (!isThemeAvailable(name)) {
-      console.warn(`[dsh-tui] theme "${name}" not found`)
-      return false
-    }
-    if (!writeThemePref(name)) {
-      console.warn('[dsh-tui] failed to write ~/.dsh-cc/theme.json')
-      return false
-    }
-    setActive(name)
-    return true
-  }, [])
+  const setTheme = React.useCallback(
+    (name: string): boolean => {
+      if (!isThemeAvailable(name)) {
+        console.warn(`[dsh-tui] theme "${name}" not found`)
+        return false
+      }
+      if (!writeThemePref(name)) {
+        console.warn('[dsh-tui] failed to write ~/.dsh-tui/theme.json')
+        return false
+      }
+      setActive(name)
+      if (name === AUTO_THEME_NAME) redetectAutoBase()
+      return true
+    },
+    [redetectAutoBase],
+  )
 
   const value = React.useMemo(
-    () => ({ theme: active ?? 'dark', setTheme }),
-    [active, setTheme],
+    () => ({ theme: active ?? 'dark', autoBase, setTheme }),
+    [active, autoBase, setTheme],
   )
 
   useEffect(() => {
