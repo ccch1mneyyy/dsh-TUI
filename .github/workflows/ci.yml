@@ -46,6 +46,14 @@ jobs:
       - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
       - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
 
+      # 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
+      # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
+      - run: node --import tsx/esm scripts/verify-keys.tsx
+
+      # 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
+      # 回复只进 querier，不回显成终端残影。
+      - run: node --import tsx/esm scripts/verify-terminal-queries.tsx
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 
@@ -63,6 +71,11 @@ jobs:
       # 版本不一致提示、双语消息、shellQuote 转义规则。
       - run: node scripts/verify-launcher.mjs
 
+      # 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
+      # approval 行；裸组合与 profile patch 的 policy 表达式逐场景同值
+      #（ask / never / win32 never），两个入口语义不漂移。
+      - run: node scripts/verify-cordis-approval.mjs
+
       # resume 兼容层回归：多帧 zstd 会话日志里的第三方事件类型补
       # ignorable 标记，已知类型不动，二次运行幂等。
       - run: node scripts/verify-resume-repair.mjs
@@ -70,6 +83,28 @@ jobs:
       # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
       # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
       - run: node scripts/verify-session-titles.mjs
+
+      # 会话 cwd 回归（issue #96）：启动目录向上解析 git 仓库根（普通克隆
+      # 与 .git 文件 worktree 均覆盖、dotfiles ~/.git 守卫），/resume 过滤
+      # 双向兼容升级前记录的子目录会话，Windows 分隔符与大小写语义。
+      - run: node scripts/verify-session-cwd.mjs
+
+      # 模态确认 Enter 守卫回归（4-PR 评审尾巴）：Option+Enter（ESC CR）/
+      # Ctrl+Enter（CSI 13;5u）不得触发审批面板决定或任何模态确认，
+      # 仅无修饰 Enter 生效；ApprovalPanel 全链路 + 源码静态不变量。
+      - run: node scripts/verify-plain-enter-guard.mjs
+      # /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
+      # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
+      - run: node scripts/verify-resume-manage.mjs
+
+      # /resume 深度窗口外重命名回归（issue #112 review）：MRU 前 20 之外
+      # 的会话改名后必须显示新标题（touch 进入标题窗口），不能回落到目录名。
+      - run: node scripts/verify-resume-rename-mru.mjs
+
+      # /resume picker 按键流回归（4-PR 评审尾巴）：rename 后焦点跟随目标行
+      # 重锚（否则 Enter/ctrl+d 误伤邻行）、confirm-delete 只认无修饰
+      # Enter、Esc 取消、删除后行消失。真实 Chat 渲染驱动。
+      - run: node scripts/verify-resume-picker-ui.mjs
 
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
@@ -80,6 +115,11 @@ jobs:
       - run: node --import tsx/esm scripts/verify-compact.mjs
 
       - run: node --import tsx/esm scripts/verify-channel-goal-todo.mjs
+
+      # 技能斜杠命令补全回归（issue #86）：user-invocable 技能合并进 /
+      # 菜单与 Tab 补全（skill 标记、与 locals/注册表撞名让位），
+      # skills/change 实时增删，读取失败保留 last-good。
+      - run: node scripts/verify-skill-commands.mjs
 
       # effort 配置链路回归（issue #51）：cordis 配置的 effort 必须进入实际
       # 请求配置，而不是只做状态栏启动显示（≤0.3.5 的 display-only 行为）。
@@ -111,4 +151,3 @@ jobs:
 
       # /trace 轨迹视图回归（issue #80）：事件装配配对耗时 + 组件渲染/滚动。
       - run: node --import tsx/esm scripts/repro-trace.tsx
-

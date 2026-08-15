@@ -30,7 +30,9 @@ export interface Config {
    *  as one atomic route (see `provider`). Harness default model:
    *  `deepseek-v4-flash`. */
   model?: string
-  /** Session working directory; defaults to the invoking directory. */
+  /** Session working directory. When absent, the git worktree root
+   *  containing the invoking directory wins (the invoking directory itself
+   *  outside any worktree) — never a bare launch subdirectory (issue #96). */
   cwd?: string
   /** Reasoning effort applied to every request, validated against the live
    *  route's adapter levels (an unlisted level is ignored and the adapter

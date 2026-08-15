@@ -27,8 +27,17 @@
  */
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  appendFileSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { dirname, join, sep } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 
 /** Repair outcomes, surfaced for regression assertions and debug logging. */
@@ -41,12 +50,33 @@ export type ResumeRepairOutcome =
 const ZSTD_MAGIC = 0xfd2fb528
 
 /**
- * Session-log storage root, mirroring the persistence plugin's `root`
- * resolution in cordis.yml: DSH_CC_SESSION_ROOT, else ~/.dsh-cc/sessions.
+ * Session-log storage roots, in priority order, mirroring the persistence
+ * backend's `root` resolution: cordis.patch.yml sets `DSH_CC_SESSION_ROOT ?? dshHomePath(
+ * 'sessions')` where dshHomePath is `$DSH_HOME ?? ~/.dsh`; the unpatched
+ * cordis.yml base falls back to ~/.dsh-cc/sessions, kept here as the legacy
+ * last resort. Every candidate is scanned — the first hit wins, so an
+ * explicit DSH_CC_SESSION_ROOT always outranks the defaults.
  */
-function sessionsRoot(): string {
+export function sessionsRoots(): string[] {
   const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
-  return process.env.DSH_CC_SESSION_ROOT ?? join(home, '.dsh-cc', 'sessions')
+  const roots: string[] = []
+  const override = process.env.DSH_CC_SESSION_ROOT
+  if (override !== undefined && override.trim().length > 0) roots.push(override)
+  const dshHome = process.env.DSH_HOME
+  roots.push(join(dshHome !== undefined && dshHome.trim().length > 0 ? dshHome : join(home, '.dsh'), 'sessions'))
+  roots.push(join(home, '.dsh-cc', 'sessions'))
+  return [...new Set(roots)]
+}
+
+/**
+ * Session ids reach path.join() below from picker/channel callers, and
+ * deleteSessionLog recursively removes the resolved parent directory — so
+ * an id must be a single safe path segment. Real ids are UUIDs or
+ * `session-<uuid>`; anything with separators, dots, or shell-y characters
+ * is rejected outright (treated as "no such session").
+ */
+function isSafeSessionId(sessionId: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)
 }
 
 /**
@@ -57,16 +87,18 @@ function sessionsRoot(): string {
  * @returns Absolute path of session.jsonl.zstd, or undefined when absent.
  */
 function findSessionLogFile(sessionId: string): string | undefined {
-  const root = sessionsRoot()
-  let workspaces: string[]
-  try {
-    workspaces = readdirSync(root)
-  } catch {
-    return undefined
-  }
-  for (const ws of workspaces) {
-    const candidate = join(root, ws, sessionId, 'session.jsonl.zstd')
-    if (existsSync(candidate)) return candidate
+  if (!isSafeSessionId(sessionId)) return undefined
+  for (const root of sessionsRoots()) {
+    let workspaces: string[]
+    try {
+      workspaces = readdirSync(root)
+    } catch {
+      continue
+    }
+    for (const ws of workspaces) {
+      const candidate = join(root, ws, sessionId, 'session.jsonl.zstd')
+      if (existsSync(candidate)) return candidate
+    }
   }
   return undefined
 }
@@ -238,4 +270,88 @@ function firstTextOfContent(content: unknown): string | undefined {
  */
 export async function prepareSessionForResume(sessionId: string): Promise<void> {
   repairSessionLogForResume(sessionId)
+}
+
+/**
+ * Append a `session/title` event to a persisted session's log — the
+ * `/resume` picker rename for a NON-LIVE session (the live one goes through
+ * `session.append` in the channel). The backend flushes by appending zstd
+ * frames, so the new event lands as one more frame: existing bytes stay
+ * untouched (the frame-0 header invariant holds), and `last title wins` in
+ * {@link readSessionTitleFromLog} surfaces the new name. The seq continues
+ * the log's contiguity contract (seq = event count) by taking maxSeq + 1.
+ * The frame is APPEND-ONLY (O_APPEND), matching the backend's own flush
+ * discipline: this store is shared with dsh web (#24), and a
+ * read-concat-rewrite (tmp + rename) would silently drop a frame another
+ * writer lands between our read and replace. A single append never rewrites
+ * existing bytes, so concurrent frames all survive; the worst remaining
+ * race is a duplicate seq when the maxSeq read above passes another
+ * appender — benign next to lost frames, since last-title-wins keeps the
+ * rename semantics. Never throws.
+ * @param sessionId - Session to rename.
+ * @param title - New display title (already trimmed by the caller).
+ * @returns 'appended', or 'unavailable' when the log is absent/undecodable.
+ */
+export function appendSessionTitle(sessionId: string, title: string): 'appended' | 'unavailable' {
+  try {
+    const file = findSessionLogFile(sessionId)
+    if (file === undefined) return 'unavailable'
+    const original = readFileSync(file)
+    const frames = decodeFrames(original)
+    let maxSeq = -1
+    for (const frame of frames) {
+      for (const event of frame.events) {
+        const seq = event['seq']
+        if (typeof seq === 'number' && seq > maxSeq) maxSeq = seq
+      }
+    }
+    // Same envelope shape as a manual /rename append ({ title } only); the
+    // seed validator asks only for type/seq/time/data on non-message types.
+    const event = {
+      type: 'session/title',
+      seq: maxSeq + 1,
+      time: Date.now(),
+      data: { title },
+    }
+    const frame = zstdCompressSync(Buffer.from(JSON.stringify(event) + '\n', 'utf8'))
+    appendFileSync(file, frame)
+    return 'appended'
+  } catch {
+    return 'unavailable'
+  }
+}
+
+/**
+ * Delete a persisted session's log directory (`<root>/<workspace>/<id>/`),
+ * the `/resume` picker delete. The directory holds only session.jsonl.zstd
+ * today; removing it whole keeps future sidecar files from orphaning. The
+ * backend's list() materializes entries from these logs, so the session
+ * drops out of the picker on the next refresh. Never throws.
+ * @param sessionId - Session to delete (must not be the live session).
+ * @returns 'deleted', or 'unavailable' when the log is absent.
+ */
+export function deleteSessionLog(sessionId: string): 'deleted' | 'unavailable' {
+  try {
+    const file = findSessionLogFile(sessionId)
+    if (file === undefined) return 'unavailable'
+    const dir = dirname(file)
+    // Containment must hold after resolving symlinks, not just lexically:
+    // a symlinked workspace directory (<root>/<ws -> /outside>/<id>) would
+    // steer the recursive rm outside the sessions root even with a clean
+    // whitelisted id. realpath BOTH sides — the root itself may legitimately
+    // live behind a symlink (macOS /tmp -> /private/tmp).
+    const realDir = realpathSync(dir)
+    const contained = sessionsRoots().some(root => {
+      try {
+        return realDir.startsWith(realpathSync(root) + sep)
+      } catch {
+        return false
+      }
+    })
+    if (!contained) return 'unavailable'
+    rmSync(dir, { recursive: true, force: true })
+    return 'deleted'
+  } catch {
+    return 'unavailable'
+  }
 }

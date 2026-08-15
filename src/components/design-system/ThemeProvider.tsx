@@ -115,7 +115,7 @@ export function ThemeProvider({
   const [active, setActive] = useState<string | null>(
     forcedValid && forced !== AUTO_THEME_NAME ? forced ?? null : null,
   )
-  const { internal_querier, setRawMode, isRawModeSupported } = useStdin()
+  const { internal_querier, isRawModeSupported } = useStdin()
 
   /**
    * The palette `auto` resolves to, as React state so a flip re-renders
@@ -153,11 +153,11 @@ export function ThemeProvider({
       if (settled) return
       settled = true
       clearTimeout(timer)
-      setRawMode(false)
       settle(name, why)
     }
-    const timer = setTimeout(() =>{  finish('dark', 'detection timeout') }, DETECT_TIMEOUT_MS)
-    setRawMode(true)
+    const timer = setTimeout(() => {
+      finish('dark', 'detection timeout')
+    }, DETECT_TIMEOUT_MS)
     void Promise.all([querier.send(oscColor(11)), querier.flush()]).then(([r]) => {
       const color = r ? parseOscColor(r.data) : null
       if (color === null || color.type !== 'rgb') {
@@ -169,6 +169,10 @@ export function ThemeProvider({
         )
       }
     })
+    return () => {
+      settled = true
+      clearTimeout(timer)
+    }
   }, [])
 
   /**
