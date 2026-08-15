@@ -11,7 +11,11 @@ import { join, relative, resolve } from 'node:path'
 
 const SRC = resolve(import.meta.dirname, '..', 'src')
 const ADAPTER = join(SRC, 'dsh-adapter')
-const OFFICIAL_IMPORT = /@deepseek-ai\//u
+// Match real module specifiers, not prose: import/export … from, bare
+// side-effect imports, dynamic import(), require(), import.meta.resolve().
+// Plain text (comments, docs) mentioning the scope is NOT a violation.
+const OFFICIAL_SPECIFIER =
+  /(?:import|export)\s[^'"\n]*?from\s*['"]@deepseek-ai\/|import\s*['"]@deepseek-ai\/|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"]@deepseek-ai\//u
 const SOURCE_GLOBS = ['.ts', '.tsx', '.d.ts']
 
 function collectSourceFiles(dir: string, out: string[]): void {
@@ -32,16 +36,11 @@ const files: string[] = []
 collectSourceFiles(SRC, files)
 
 for (const file of files) {
-  const rel = relative(ADAPTER, file)
-  if (rel === '..' || rel.startsWith(`..${join('')}`) || !rel.startsWith('..')) {
-    // file is inside src/dsh-adapter (rel does not start with ..)
-  } else {
-    continue
-  }
-  const insideAdapter = !rel.startsWith('..')
+  // relative() prefixes every path outside ADAPTER with '..'.
+  const insideAdapter = !relative(ADAPTER, file).startsWith('..')
   if (insideAdapter) continue
   const content = readFileSync(file, 'utf8')
-  if (OFFICIAL_IMPORT.test(content)) {
+  if (OFFICIAL_SPECIFIER.test(content)) {
     violations.push(`${relative(SRC, file)} imports @deepseek-ai/* outside src/dsh-adapter/`)
   }
 }

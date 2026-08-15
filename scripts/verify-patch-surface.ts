@@ -74,7 +74,8 @@ try {
 } catch {
   console.warn('@deepseek-ai/dsh-web-app not installed — skipping web-app patch comparison')
 }
-const webApp = webAppPatch === '' ? { overrides: [], inserts: [] } : parsePatch(webAppPatch)
+const webAppAvailable = webAppPatch !== ''
+const webApp = webAppAvailable ? parsePatch(webAppPatch) : { overrides: [], inserts: [] }
 
 const tuiDisableSet = new Set(tui.overrides.filter(r => r.disabled).map(r => r.id))
 const webAppDisableSet = new Set(webApp.overrides.filter(r => r.disabled).map(r => r.id))
@@ -101,6 +102,12 @@ const computed: Snapshot = {
 
 const mode = process.argv[2]
 if (mode === '--snapshot') {
+  if (!webAppAvailable) {
+    // A snapshot taken without the web-app baseline records every shared row
+    // as TUI-specific drift and poisons every later comparison.
+    console.error('refusing to snapshot without @deepseek-ai/dsh-web-app installed (baseline would be empty)')
+    process.exit(1)
+  }
   writeFileSync(snapshotPath, `${JSON.stringify(computed, null, 2)}\n`)
   console.log(`patch-surface snapshot written: ${snapshotPath}`)
   process.exit(0)
@@ -111,7 +118,13 @@ if (!existsSync(snapshotPath)) {
   process.exit(1)
 }
 const recorded = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Snapshot
-if (JSON.stringify(recorded) === JSON.stringify(computed)) {
+// The three webApp-derived fields are only comparable when the baseline
+// package is installed; the TUI-own fields always are.
+const same = webAppAvailable
+  ? JSON.stringify(recorded) === JSON.stringify(computed)
+  : JSON.stringify(recorded.inserts) === JSON.stringify(computed.inserts) &&
+    JSON.stringify(recorded.configOverrides) === JSON.stringify(computed.configOverrides)
+if (same) {
   console.log(
     `patch-surface OK (${computed.inserts.length} inserts, ` +
     `${computed.configOverrides.length} config overrides, ` +

@@ -20,12 +20,14 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
 
 `cordis.patch.yml` 里对官方行的干预已快照到 `patch-surface.snapshot.json`:
 
-- **disables**:与官方 `@deepseek-ai/dsh-web-app` 自己的 patch **完全一致**(24 行,
-  preset 所有权迁移的结构性禁用,官方 web 也这么做),TUI 特有的禁用为 0
+- **disables**:23 行,与官方 `@deepseek-ai/dsh-web-app` 自己的 patch 对齐
+  (preset 所有权迁移的结构性禁用,官方 web 也这么做),TUI 特有的禁用为 0;
+  官方 web-app 另多禁一行 `hmr`(TUI 不需要)
 - **config overrides**:6 行(system-prompt / llm-deepseek / agent-loop /
   sandbox-policy / approval / session-persistence-jsonl),全部是表面发行配置
-- **inserts**:4 行(dsh-tui、working-activity、agent-presets、cordis-host-runner;
-  后两个与官方 web-app 共用)
+- **inserts**:8 行(dsh-tui、working-activity、storage、storage-json、
+  storage-domain、workspace、agent-presets、cordis-host-runner;后 6 个与官方
+  web-app 共用)
 
 上游发版后如果 patch 面变化,`pnpm run verify:patch-surface` 会在 CI 先爆;
 确认差异后执行 `node --import tsx/esm scripts/verify-patch-surface.ts --snapshot`

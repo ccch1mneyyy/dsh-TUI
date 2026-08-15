@@ -1,1 +1,0 @@
-{"version":3,"file":"workspace.d.ts","sourceRoot":"","sources":["../../src/workspace.ts"],"names":[],"mappings":"AAAA;;;;;;;;;GASG;AACH,OAAO,KAAK,EAAE,OAAO,EAAE,MAAM,qBAAqB,CAAA;AAClD,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,0BAA0B,CAAA;AAGzD;;;;;;;GAOG;AACH,wBAAsB,wBAAwB,CAC5C,GAAG,EAAE,OAAO,EACZ,GAAG,EAAE,MAAM,EACX,SAAS,EAAE,SAAS,GACnB,OAAO,CAAC,OAAO,CAAC,CAOlB"}

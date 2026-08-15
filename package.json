@@ -30,7 +30,7 @@
       "import": "./lib/types/working-activity.js"
     },
     "./invariant": {
-      "types": "./lib/types/invariant.d.ts",
+      "types": "./lib/types/dsh-adapter/invariant.d.ts",
       "default": "./lib/invariant.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
