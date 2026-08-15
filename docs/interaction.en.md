@@ -154,18 +154,14 @@ FIFO order. A compact Q&A summary is added to the local transcript afterward.
 ## Slash commands
 
 The command menu merges local commands with the DSH command registry. Type `/`
-<<<<<<< HEAD
 to inspect the complete surface available in the current composition. Command
 descriptions follow the UI language (`/lang`): built-in commands and mapped
 registry commands (`/plan`, `/goal`, `/feedback`) show Chinese translations in
 zh; unmapped registry commands fall back to the registry's own text.
 
-=======
-to inspect the complete surface available in the current composition.
->>>>>>> 0fc5911 (feat(btw): /btw 侧问命令——不打断主回合、不进会话历史的快速提问（CC /btw 对齐）)
 | Group | Commands |
 | --- | --- |
-| Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export`, `/btw` |
+| Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |

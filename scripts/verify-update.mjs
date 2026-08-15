@@ -28,7 +28,16 @@ const { installedTuiVersion, resolveRegistryBase, isVersionNewer, resolveDshProf
   '../lib/types/update.js'
 )
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
+const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQuote.js', import.meta.url))
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+
+// The compiled update.js imports ./utils/shellQuote.js — mirror both into
+// every scratch layout or the import dies with ERR_MODULE_NOT_FOUND.
+function copyUpdateModule(dstDir) {
+  mkdirSync(join(dstDir, 'utils'), { recursive: true })
+  cpSync(compiledModulePath, join(dstDir, 'update.js'))
+  cpSync(compiledShellQuotePath, join(dstDir, 'utils', 'shellQuote.js'))
+}
 
 // ---- installedTuiVersion: compiled layout is this module's own real layout
 const compiled = installedTuiVersion()
@@ -46,8 +55,7 @@ try {
   // Source-checkout layout: <root>/package.json + module under <root>/src/.
   // ../../package.json lands above the root (missing) → ../package.json hits.
   const sourceRoot = join(scratch, 'source')
-  mkdirSync(join(sourceRoot, 'src'), { recursive: true })
-  cpSync(compiledModulePath, join(sourceRoot, 'src', 'update.js'))
+  copyUpdateModule(join(sourceRoot, 'src'))
   writeFileSync(join(sourceRoot, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '1.2.3', type: 'module' }))
   const sourceMod = await import(`${pathToFileURL(join(sourceRoot, 'src', 'update.js'))}?probe=1`)
   check(
@@ -59,8 +67,7 @@ try {
   // Compiled layout with a foreign manifest at the near level: the root
   // manifest must win over a nearer foreign one.
   const pkgRoot = join(scratch, 'pkg')
-  mkdirSync(join(pkgRoot, 'lib', 'types'), { recursive: true })
-  cpSync(compiledModulePath, join(pkgRoot, 'lib', 'types', 'update.js'))
+  copyUpdateModule(join(pkgRoot, 'lib', 'types'))
   writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.9.9', type: 'module' }))
   writeFileSync(join(pkgRoot, 'lib', 'package.json'), JSON.stringify({ name: 'other-pkg', version: '9.9.9' }))
   const pkgMod = await import(`${pathToFileURL(join(pkgRoot, 'lib', 'types', 'update.js'))}?probe=2`)
@@ -72,8 +79,7 @@ try {
 
   // A foreign name at BOTH levels must yield undefined, never a version.
   const foreignRoot = join(scratch, 'foreign')
-  mkdirSync(join(foreignRoot, 'lib', 'types'), { recursive: true })
-  cpSync(compiledModulePath, join(foreignRoot, 'lib', 'types', 'update.js'))
+  copyUpdateModule(join(foreignRoot, 'lib', 'types'))
   writeFileSync(join(foreignRoot, 'package.json'), JSON.stringify({ name: 'other-pkg', version: '9.9.9' }))
   writeFileSync(join(foreignRoot, 'lib', 'package.json'), JSON.stringify({ name: 'third-pkg', version: '8.8.8' }))
   const foreignMod = await import(`${pathToFileURL(join(foreignRoot, 'lib', 'types', 'update.js'))}?probe=3`)

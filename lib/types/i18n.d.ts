@@ -771,6 +771,18 @@ declare const dict: {
         readonly zh: "当前目录没有可恢复的历史会话";
         readonly en: "No resumable sessions in the current directory";
     };
+    readonly 'rename-usage': {
+        readonly zh: "用法  /rename <新名称>";
+        readonly en: "Usage  /rename <new title>";
+    };
+    readonly 'rename-current': {
+        readonly zh: "当前名称  {{title}}";
+        readonly en: "Current title  {{title}}";
+    };
+    readonly 'rename-done': {
+        readonly zh: "已重命名为「{{title}}」";
+        readonly en: "Renamed to \"{{title}}\"";
+    };
     readonly 'compact-summary-folded': {
         readonly zh: "摘要已折叠";
         readonly en: "Summary folded";
@@ -923,6 +935,15 @@ declare const dict: {
     readonly 'cmd-desc-resume': {
         readonly zh: "恢复历史会话";
     };
+    readonly 'cmd-desc-rename': {
+        readonly zh: "重命名当前会话";
+    };
+    readonly 'cmd-desc-quit': {
+        readonly zh: "退出 dsh-tui";
+    };
+    readonly 'cmd-desc-q': {
+        readonly zh: "退出 dsh-tui";
+    };
     readonly 'cmd-desc-rewind': {
         readonly zh: "回退会话到历史消息";
     };
@@ -1060,6 +1081,38 @@ declare const dict: {
     readonly 'lang-switch-failed': {
         readonly zh: "语言「{{lang}}」切换失败（无法写入 ~/.dsh-cc/lang.json）";
         readonly en: "Language \"{{lang}}\" switch failed (cannot write ~/.dsh-cc/lang.json)";
+    };
+    readonly 'trace-title': {
+        readonly zh: "轨迹";
+        readonly en: "Trace";
+    };
+    readonly 'trace-subtitle': {
+        readonly zh: "会话事件时间线 · 过滤：{{filter}} · {{count}} 条";
+        readonly en: "Session event timeline · filter: {{filter}} · {{count}} entries";
+    };
+    readonly 'trace-empty': {
+        readonly zh: "暂无轨迹事件";
+        readonly en: "No trace events yet";
+    };
+    readonly 'trace-filter-all': {
+        readonly zh: "全部";
+        readonly en: "all";
+    };
+    readonly 'trace-filter-tool': {
+        readonly zh: "工具";
+        readonly en: "tools";
+    };
+    readonly 'trace-filter-thinking': {
+        readonly zh: "思考";
+        readonly en: "thinking";
+    };
+    readonly 'trace-filter-message': {
+        readonly zh: "消息";
+        readonly en: "messages";
+    };
+    readonly 'trace-filter-progress': {
+        readonly zh: "进度";
+        readonly en: "progress";
     };
 };
 export type I18nKey = keyof typeof dict;
