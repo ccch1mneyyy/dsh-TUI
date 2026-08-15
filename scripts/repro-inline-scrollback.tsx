@@ -97,6 +97,7 @@ const channel: any = {
   sessionTitle: 'probe',
   agentId: 'probe',
   model: 'deepseek-v4-flash',
+  mode: { plan: false },
   reasoningEffort: 'max',
   tokens: { input: 120, output: 45 },
   cwd: '/tmp/demo',

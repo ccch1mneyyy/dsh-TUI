@@ -66,7 +66,8 @@ function check(name: string, ok: boolean, extra = '') {
 const listeners = new Set<() => void>()
 const channel: any = {
   version: 0, rows: [] as any[], status: 'idle', sessionTitle: 'probe', agentId: 'probe',
-  model: 'deepseek-v4-flash', reasoningEffort: 'max', tokens: { input: 120, output: 45 },
+  model: 'deepseek-v4-flash',
+  mode: { plan: false }, reasoningEffort: 'max', tokens: { input: 120, output: 45 },
   cwd: '/tmp/demo', gitBranch: 'main', working: true, spinnerMode: 'requesting',
   responseChars: 0, activeToolCount: 0, turnStart: Date.now(), lastUserText: '概览',
   pending: [], commandList: [], notifications: [],

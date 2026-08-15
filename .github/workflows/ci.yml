@@ -37,6 +37,15 @@ jobs:
 
       - run: node --import tsx/esm scripts/repro-toolcards.tsx
 
+      # 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
+      # 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
+      # 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
+      # 整个 0.6.x 才被发现——挂进来防再烂。
+      - run: node --import tsx/esm scripts/repro-pill.tsx
+      - run: node --import tsx/esm scripts/repro-ctrlc.tsx
+      - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
+      - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 
