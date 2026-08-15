@@ -3,6 +3,7 @@ import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize }
 import { Markdown } from './Markdown.js'
 import { SpinnerGlyph } from './Spinner/SpinnerGlyph.js'
 import { t } from '../i18n.js'
+import { isPlainReturnInput } from '../utils/modifiers.js'
 
 /**
  * /btw side-question panel (CC's btw.tsx, inline-pane form like the local
@@ -36,7 +37,7 @@ export function BtwPanel({
   }, [streaming, answer])
 
   useInput((input, key, event) => {
-    if (key.escape || key.return || input === ' ') {
+    if (key.escape || isPlainReturnInput(input, key) || input === ' ') {
       event.stopImmediatePropagation()
       onClose()
       return

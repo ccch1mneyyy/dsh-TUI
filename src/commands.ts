@@ -7,7 +7,9 @@
  * handler winning for names both sides declare.
  */
 
-import { tOr } from './i18n.js'
+import { getLang, tOr } from './i18n.js'
+
+export type LocalizedDescriptions = Readonly<Partial<Record<'zh' | 'en', string>>>
 
 export interface LocalCommand {
   /** The command name without the slash, e.g. `clear`. */
@@ -18,6 +20,8 @@ export interface LocalCommand {
    * (see {@link localizedDescription}).
    */
   description: string
+  /** Provider-owned translations selected with the active TUI language. */
+  descriptions?: LocalizedDescriptions
   /** Optional bracket tag shown between name and description. */
   tag?: string
   /** True when a DSH plugin registered this command (not built in). */
@@ -31,6 +35,26 @@ export interface LocalCommand {
    */
   skill?: boolean
 }
+
+/** One child in a slash-command tree contributed by a local feature/plugin. */
+export interface CommandCompletionNode {
+  name: string
+  aliases?: readonly string[]
+  description: string
+  descriptions?: LocalizedDescriptions
+  tag?: string
+  /** Optional i18n key; plugin nodes normally rely on fallback text. */
+  descriptionKey?: string
+}
+
+/** A concrete completion row, including the text inserted by Tab/Enter. */
+export interface CommandCompletion extends LocalCommand {
+  replacement: string
+  commandLine: string
+  descriptionKey?: string
+}
+
+export type CommandChildren = (canonicalPath: readonly string[]) => readonly CommandCompletionNode[]
 
 /**
  * The built-in slash commands (name + description pairs). Plugin-registered
@@ -85,6 +109,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'vim', description: 'Toggle vim mode' },
   { name: 'terminal-setup', description: 'Show terminal setup instructions' },
   { name: 'connect', description: 'Connect to a remote machine' },
+  { name: 'workspace', description: 'Resume, rename, or open a workspace' },
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
   { name: 'exit', description: 'Exit dsh-tui' },
@@ -100,8 +125,10 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
  * render, so a `/lang` switch repaints descriptions immediately.
  * @param command - The command whose description to localize.
  */
-export function localizedDescription(command: LocalCommand): string {
-  return tOr(`cmd-desc-${command.name}`, command.description)
+export function localizedDescription(command: LocalCommand & { descriptionKey?: string }): string {
+  const translated = command.descriptions?.[getLang()]
+  if (translated !== undefined) return translated
+  return tOr(command.descriptionKey ?? `cmd-desc-${command.name}`, command.description)
 }
 
 /**
@@ -155,4 +182,66 @@ export function filterCommands(
   return list.filter(command =>
     command.name.toLowerCase().startsWith(prefix),
   )
+}
+
+/**
+ * Complete an arbitrary slash-command path. Root commands come from the
+ * ordinary DSH/TUI catalog; each resolved token asks the caller for its
+ * children, so PromptInput never needs feature- or plugin-specific cases.
+ */
+export function completeCommands(
+  input: string,
+  roots: readonly LocalCommand[] = LOCAL_COMMANDS,
+  children: CommandChildren = () => [],
+): CommandCompletion[] {
+  if (!input.startsWith('/') || /[\r\n]/u.test(input)) return []
+  const body = input.slice(1)
+  if (!/^[a-z0-9_-]*(?:[\t ]+[a-z0-9_-]*)*$/iu.test(body)) return []
+  const trailingSeparator = /[\t ]$/u.test(body)
+  const tokens = body.split(/[\t ]+/u)
+  const prefix = trailingSeparator ? '' : (tokens.pop() ?? '')
+  if (trailingSeparator && tokens.at(-1) === '') tokens.pop()
+
+  const canonicalPath: string[] = []
+  let candidates: readonly CommandCompletionNode[] = roots
+  for (const token of tokens) {
+    const resolved = resolveCompletionNode(candidates, token)
+    if (resolved === undefined) return []
+    canonicalPath.push(resolved.name)
+    candidates = children(canonicalPath)
+  }
+
+  const normalizedPrefix = prefix.toLowerCase()
+  return candidates.flatMap(candidate => {
+    const completionToken = matchingCompletionToken(candidate, normalizedPrefix)
+    if (completionToken === undefined) return []
+    const path = [...tokens, completionToken]
+    const commandLine = `/${path.join(' ')}`
+    return [{
+      name: path.join(' '),
+      description: candidate.description,
+      ...(candidate.descriptions === undefined ? {} : { descriptions: candidate.descriptions }),
+      ...(candidate.descriptionKey === undefined ? {} : { descriptionKey: candidate.descriptionKey }),
+      ...(candidate.tag === undefined && candidate.aliases?.length
+        ? { tag: `aliases: ${candidate.aliases.join(', ')}` }
+        : candidate.tag === undefined ? {} : { tag: candidate.tag }),
+      replacement: `${commandLine} `,
+      commandLine,
+    }]
+  })
+}
+
+function resolveCompletionNode(
+  candidates: readonly CommandCompletionNode[],
+  token: string,
+): CommandCompletionNode | undefined {
+  const normalized = token.toLowerCase()
+  return candidates.find(candidate =>
+    candidate.name.toLowerCase() === normalized
+    || candidate.aliases?.some(alias => alias.toLowerCase() === normalized))
+}
+
+function matchingCompletionToken(candidate: CommandCompletionNode, prefix: string): string | undefined {
+  if (candidate.name.toLowerCase().startsWith(prefix)) return candidate.name
+  return candidate.aliases?.find(alias => alias.toLowerCase().startsWith(prefix))
 }

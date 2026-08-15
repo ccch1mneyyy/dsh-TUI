@@ -10,6 +10,7 @@
  * install fails in CI before it fails on a user's machine.
  */
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 export const UPSTREAM_VALIDATED_VERSION = '0.1.0-rc.6'
 
@@ -59,7 +60,7 @@ export interface UpstreamDriftEntry {
 function resolvePackageJson(packageName: string): string | undefined {
   try {
     const path = import.meta.resolve(`${packageName}/package.json`)
-    return path.startsWith('file:') ? path.slice('file:'.length) : path
+    return path.startsWith('file:') ? fileURLToPath(path) : path
   } catch {
     return undefined
   }

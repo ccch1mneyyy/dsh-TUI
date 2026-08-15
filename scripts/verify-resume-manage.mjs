@@ -131,7 +131,7 @@ symlinkSync(outside, join(root, 'ws-link'), 'junction')
 assert.equal(deleteSessionLog(linkedId), 'unavailable', 'delete through a symlinked workspace is refused')
 assert.equal(readFileSync(join(outside, 'keep.txt'), 'utf8'), 'do not delete', 'outside data survives the symlink delete')
 assert.equal(existsSync(join(linkedDir, 'session.jsonl.zstd')), true, 'outside session log survives')
-rmSync(join(root, 'ws-link'), { force: true })
+rmSync(join(root, 'ws-link'), { recursive: true, force: true })
 rmSync(outside, { recursive: true, force: true })
 
 rmSync(root, { recursive: true, force: true })

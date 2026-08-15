@@ -1,4 +1,6 @@
 import React from 'react'
+import { readFile, unlink } from 'node:fs/promises'
+import { basename } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
@@ -6,7 +8,7 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
-import { filterCommands, parseCommandName } from '../commands.js'
+import { parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { isMod } from '../utils/modifiers.js'
@@ -15,6 +17,14 @@ import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
 
 const HISTORY_LIMIT = 50
+
+function clipboardImageMediaType(path: string): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | undefined {
+  if (/\.png$/iu.test(path)) return 'image/png'
+  if (/\.jpe?g$/iu.test(path)) return 'image/jpeg'
+  if (/\.webp$/iu.test(path)) return 'image/webp'
+  if (/\.gif$/iu.test(path)) return 'image/gif'
+  return undefined
+}
 
 /** Index of the word boundary at or before `cursor` (readline alt+b). */
 function wordBoundaryLeft(text: string, cursor: number): number {
@@ -125,6 +135,10 @@ export function PromptInput({
 }: PromptInputProps) {
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
+  const valueRef = React.useRef(value)
+  const cursorRef = React.useRef(cursor)
+  valueRef.current = value
+  cursorRef.current = cursor
   // Publish the live controller (fresh closure over `value` every render).
   // clear() mirrors the double-tap-Esc clear: text + caret reset.
   React.useEffect(() => {
@@ -180,9 +194,7 @@ export function PromptInput({
   }, [])
   const { columns } = useTerminalSize()
 
-  const suggestions = value.startsWith('/')
-    ? filterCommands(value, channel.commandList)
-    : []
+  const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
   const overlayOpen =
     suggestions.length > 0 &&
     !helpOpen &&
@@ -369,8 +381,20 @@ export function PromptInput({
   }
 
   const setInput = (next: string, cursorOffset = next.length) => {
+    valueRef.current = next
+    cursorRef.current = Math.max(0, Math.min(cursorOffset, next.length))
     setValue(next)
-    setCursor(Math.max(0, Math.min(cursorOffset, next.length)))
+    setCursor(cursorRef.current)
+  }
+
+  /** Clipboard reads are asynchronous; insert against the latest render so
+   * typing while PowerShell owns the clipboard never gets overwritten. */
+  const insertClipboardAtCaret = (text: string) => {
+    const current = valueRef.current
+    const position = cursorRef.current
+    setInput(current.slice(0, position) + text + current.slice(position), position + text.length)
+    setSelectedCommand(0)
+    setFileSelected(0)
   }
 
   /** Line index of the cursor; -1 when the cursor is at the very end. */
@@ -423,7 +447,7 @@ export function PromptInput({
       setFileSelected(0)
       clipboardBusyRef.current = true
       void readClipboard()
-        .then(content => {
+        .then(async content => {
           if (content === null) {
             channel.notify(t('input-clipboard-empty'), { color: 'warning' })
             return
@@ -433,7 +457,23 @@ export function PromptInput({
             return
           }
           if (content.kind === 'image') {
-            channel.notify(t('input-clipboard-image-saved'), { color: 'success' })
+            const mediaType = clipboardImageMediaType(content.path)
+            if (mediaType !== undefined) {
+              try {
+                const token = await channel.stageImage({
+                  data: new Uint8Array(await readFile(content.path)),
+                  mediaType,
+                  name: basename(content.path),
+                })
+                await unlink(content.path).catch(() => undefined)
+                insertClipboardAtCaret(`${token} `)
+                channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+                return
+              } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error)
+                channel.notify(t('input-image-paste-failed', { err: message }), { color: 'warning', timeoutMs: 5000 })
+              }
+            }
           }
           // Insert against the LIVE input state: the read above resolved
           // asynchronously and the user may have typed while waiting.
@@ -506,7 +546,7 @@ export function PromptInput({
       if (overlayOpen) {
         const command = suggestions[selectedCommand]
         if (command) {
-          tryRunCommand(`/${command.name}`)
+          tryRunCommand(command.commandLine)
           return
         }
       }
@@ -546,9 +586,9 @@ export function PromptInput({
       }
       const line = (value + input).trim()
       if (line.startsWith('/')) {
-        const matches = filterCommands(line, channel.commandList)
+        const matches = channel.commandCompletions(line)
         if (matches.length === 1) {
-          tryRunCommand(`/${matches[0]!.name}`)
+          tryRunCommand(matches[0]!.commandLine)
           return
         }
       }
@@ -592,7 +632,7 @@ export function PromptInput({
     }
     if (key.tab && overlayOpen) {
       const command = suggestions[selectedCommand]
-      if (command) setInput(`/${command.name} `)
+      if (command) setInput(command.replacement)
       return
     }
     // Tab while the model is working = queue for AFTER the turn (followup),

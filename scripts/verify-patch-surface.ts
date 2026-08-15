@@ -17,6 +17,7 @@
  */
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 
 const root = resolve(import.meta.dirname, '..')
@@ -59,7 +60,7 @@ function parsePatch(text: string): ParsedPatch {
 
 function readInstalledPatch(packageName: string): string {
   const path = import.meta.resolve(`${packageName}/cordis.patch.yml`)
-  return readFileSync(path.startsWith('file:') ? path.slice('file:'.length) : path, 'utf8')
+  return readFileSync(path.startsWith('file:') ? fileURLToPath(path) : path, 'utf8')
 }
 
 if (!existsSync(tuiPatchPath)) {

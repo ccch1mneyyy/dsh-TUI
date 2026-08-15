@@ -11,7 +11,7 @@ import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
 
 export const name = 'dsh-tui'
-export const inject = ['agents']
+export const inject = ['agents', 'tuiWorkspaces']
 
 /**
  * dsh-tui plugin configuration: session attachment, model route, working
@@ -23,17 +23,20 @@ export interface Config {
   /** LLM provider route. The route resolves atomically (issue #67): when
    *  cordis.yml names BOTH `provider` and `model`, that pair wins; otherwise
    *  the `/model` choice persisted in `~/.dsh-tui/model.json` wins whole;
-   *  otherwise the harness defaults (`deepseek-official`). A provider-only
-   *  pin never half-overrides the persisted choice. */
+   *  otherwise `agentDefaultModel` supplies the provider-neutral Harness
+   *  default. A bare embedder without that service falls back to DeepSeek.
+   *  A provider-only pin never half-overrides the persisted choice. */
   provider?: string
   /** Model override passed to the agent; resolved together with `provider`
-   *  as one atomic route (see `provider`). Harness default model:
-   *  `deepseek-v4-flash`. */
+   *  as one atomic route (see `provider`). */
   model?: string
   /** Session working directory. When absent, the git worktree root
    *  containing the invoking directory wins (the invoking directory itself
    *  outside any worktree) — never a bare launch subdirectory (issue #96). */
   cwd?: string
+  /** Absolute local path, file URL, or provider URI resolved before the
+   *  initial agent is created. */
+  workspace?: string
   /** Reasoning effort applied to every request, validated against the live
    *  route's adapter levels (an unlisted level is ignored and the adapter
    *  default applies). Wins over the persisted /effort choice; also seeds
@@ -77,6 +80,7 @@ export const Config: Schema<Config> = Schema.object({
   provider: Schema.string().required(false),
   model: Schema.string().required(false),
   cwd: Schema.string().required(false),
+  workspace: Schema.string().required(false),
   effort: Schema.string().required(false),
   activity: Schema.boolean().default(true),
   activityFrames: Schema.string().required(false),

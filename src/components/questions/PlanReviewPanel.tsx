@@ -22,7 +22,7 @@ import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../cc/figures.js'
 import type { QuestionSelection } from '../../dsh-adapter/questions.js'
-import { isPlainReturn } from '../../utils/modifiers.js'
+import { isPlainReturnInput } from '../../utils/modifiers.js'
 
 const PENCIL = '✎'
 
@@ -120,7 +120,7 @@ export function PlanReviewPanel({
         moveFocus(1)
         return
       }
-      if (isPlainReturn(key)) {
+      if (isPlainReturnInput(input, key)) {
         submitFeedback()
         return
       }
@@ -167,7 +167,7 @@ export function PlanReviewPanel({
       moveFocus(1)
       return
     }
-    if (isPlainReturn(key)) {
+    if (isPlainReturnInput(input, key)) {
       submitOption(focusIndex)
       return
     }

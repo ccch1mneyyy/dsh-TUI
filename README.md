@@ -31,7 +31,7 @@
 ## 核心能力
 
   - **终端原生交互**：流式 Markdown、结构化工具卡、命令与文件补全、`@` 文件引用
-    （消息任意位置补全，发送时自动附加文件内容/目录列表）、历史搜索、消息选择、
+    （消息任意位置补全，文本附加内容，PNG/JPEG/WebP/GIF 作为持久图片块发送）、历史搜索、消息选择、
     inline/alternate-screen 两种渲染模式，以及 `/lang` 中英界面语言切换。
   - **可观察的 Agent 状态**：实时工作状态、上下文分段进度、TPS、缓存命中率、
     推理等级、输入/输出 token 与 Git/会话信息。
@@ -91,7 +91,7 @@ TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提�
 | `Ctrl+R` | 历史消息搜索 |
 | `/` | 会话内全文搜索（`n`/`N` 跳转） |
 | `Tab` / `Enter` | 命令 / `@` 文件补全（目录可继续深入） |
-| `Ctrl+V` | 粘贴：文本直接插入光标处；**文件管理器复制的文件 → 插入路径；剪贴板图片（截图）→ 导出临时文件并插入路径** |
+| `Ctrl+V` | 粘贴文本或文件管理器中的文件；图片显示为 `[Image #N]` 并作为持久附件发送 |
 | `Ctrl+X` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
 | `?` | 快捷键菜单 |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
@@ -125,7 +125,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 
 | 分组 | 命令 |
 |---|---|
-| 会话 | `/new` 新会话 · `/resume` 恢复 · `/rename` 重命名 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹时间线 |
+| 会话 | `/new` 新会话 · `/resume` 切换当前工作区内的会话 · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹时间线 |
 | 状态 | `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
 | 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 · `/lang` 中英界面切换 |
 | 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` · `/memory` |
@@ -198,8 +198,8 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
   的纯状态机，在进程内从基础会话事件派生，不向共享日志写入 UI 状态。
 - **终端粘贴**：raw 模式下 Ctrl+V 由应用接管，按平台读取系统剪贴板——Windows
   走 PowerShell `Get-Clipboard`，macOS 走 `osascript`/`pbpaste`，Linux 自动探测
-  `wl-paste`/`xclip`/`xsel`；文件管理器复制的文件插入文件路径，剪贴板图片（截图）
-  先导出为临时文件再插入路径，纯文本原样插入光标处。
+  `wl-paste`/`xclip`/`xsel`；普通文件插入路径，图片文件生成 `@` 引用，剪贴板位图
+  写入附件库并在输入框显示 `[Image #N]`，纯文本原样插入光标处。
 
 ## 已知限制
 
@@ -211,8 +211,8 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
   （剪贴板被其他进程短暂锁定时自动重试，持续锁定时静默放弃）；macOS 用
   `osascript`/`pbpaste`（Finder 多文件复制没有稳定的 AppleScript 读法，按
   文本/图片回退）；Linux 需要 `wl-paste`/`xclip`/`xsel` 之一且会话可连接
-  （工具缺失或会话不可连接时提示无可用剪贴板工具）。剪贴板图片统一以
-  临时文件路径插入，不内嵌为图片消息块。
+  （工具缺失或会话不可连接时提示无可用剪贴板工具）。不受支持的图片格式或附件
+  服务不可用时会保留临时文件引用作为降级路径。
 - 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
 - 工具级审批已实现：approval 服务 + TUI answerer（CC 式审批面板）消费审批流，
   权限提升命令会弹出审批条。`/permission` 预设切换由 dsh-base 的

@@ -6,6 +6,7 @@
  * `runCommand` in the Chat screen dispatches either kind, with the registry
  * handler winning for names both sides declare.
  */
+export type LocalizedDescriptions = Readonly<Partial<Record<'zh' | 'en', string>>>;
 export interface LocalCommand {
     /** The command name without the slash, e.g. `clear`. */
     name: string;
@@ -15,6 +16,8 @@ export interface LocalCommand {
      * (see {@link localizedDescription}).
      */
     description: string;
+    /** Provider-owned translations selected with the active TUI language. */
+    descriptions?: LocalizedDescriptions;
     /** Optional bracket tag shown between name and description. */
     tag?: string;
     /** True when a DSH plugin registered this command (not built in). */
@@ -28,6 +31,23 @@ export interface LocalCommand {
      */
     skill?: boolean;
 }
+/** One child in a slash-command tree contributed by a local feature/plugin. */
+export interface CommandCompletionNode {
+    name: string;
+    aliases?: readonly string[];
+    description: string;
+    descriptions?: LocalizedDescriptions;
+    tag?: string;
+    /** Optional i18n key; plugin nodes normally rely on fallback text. */
+    descriptionKey?: string;
+}
+/** A concrete completion row, including the text inserted by Tab/Enter. */
+export interface CommandCompletion extends LocalCommand {
+    replacement: string;
+    commandLine: string;
+    descriptionKey?: string;
+}
+export type CommandChildren = (canonicalPath: readonly string[]) => readonly CommandCompletionNode[];
 /**
  * The built-in slash commands (name + description pairs). Plugin-registered
  * commands merge in at runtime; locals win on name collisions.
@@ -41,7 +61,9 @@ export declare const LOCAL_COMMANDS: LocalCommand[];
  * render, so a `/lang` switch repaints descriptions immediately.
  * @param command - The command whose description to localize.
  */
-export declare function localizedDescription(command: LocalCommand): string;
+export declare function localizedDescription(command: LocalCommand & {
+    descriptionKey?: string;
+}): string;
 /**
  * Parse a slash-command line into its name and the verbatim input following
  * the name (separator whitespace included) — the same split the DSH command
@@ -73,4 +95,10 @@ export declare function isLocalCommandName(input: string, list?: readonly LocalC
  * @returns Commands whose name starts with the prefix, in list order.
  */
 export declare function filterCommands(input: string, list?: readonly LocalCommand[]): LocalCommand[];
+/**
+ * Complete an arbitrary slash-command path. Root commands come from the
+ * ordinary DSH/TUI catalog; each resolved token asks the caller for its
+ * children, so PromptInput never needs feature- or plugin-specific cases.
+ */
+export declare function completeCommands(input: string, roots?: readonly LocalCommand[], children?: CommandChildren): CommandCompletion[];
 //# sourceMappingURL=commands.d.ts.map

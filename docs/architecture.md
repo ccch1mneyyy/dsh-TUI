@@ -24,6 +24,7 @@ Cordis profile
 | `src/index.ts` | Cordis 插件名称、注入声明、配置接口与 Schema；保持入口轻量并延迟加载 runtime |
 | `src/plugin.ts` | TTY 检查、问卷与 Skills 注册、Agent 创建/恢复、React 挂载、统一退出清理 |
 | `src/channel.ts` | 将 DSH 持久化事件投影为 transcript；提供 submit、steer、resume、rewind、model/preset 等动作 |
+| `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
 | `src/ui.ts` | 主题化 `Box`/`Text`、render、选择、滚动等公共 facade |
@@ -33,6 +34,10 @@ Cordis profile
 
 不要在组件中复制 DSH Agent、session 或 tool 服务。需要新能力时，优先通过已有
 service、registry 或 channel seam 接入。
+
+工作区扩展遵循单向依赖：TUI 只发布结构化 provider 接口，可选插件注册 URI、展示
+信息和命令执行器。协议解析与外部连接全部属于插件；删除插件后，本地工作区和会话
+路径不应出现缺失配置、占位文案或降级分支。
 
 ## Session 是真源
 

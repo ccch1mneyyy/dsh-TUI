@@ -128,7 +128,7 @@ assert.match(
 )
 assert.doesNotMatch(plugin, /if \(created\)/, 'startup attachment must not skip resumed legacy sessions')
 assert.equal(
-  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, options\.cwd, (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
+  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|handle\.agent\.session\.header\.cwd \?\? state\.cwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
   4,
   'rewind, /resume, /new, and model-switch paths all attach ownership',
 )
@@ -138,7 +138,7 @@ for (const id of ['storage', 'storage-json', 'storage-domain', 'workspace']) {
 assert.match(patch, /root: !!js dshHomePath\('storages'\)/)
 assert.match(
   patch,
-  /- id: dsh-tui\n\s+name: '@deepseek-harness-tui\/dsh-tui'\n[\s\S]{0,240}inject: \[workspaceRegistry\]/,
+  /- id: dsh-tui\n\s+name: '@deepseek-harness-tui\/dsh-tui'\n[\s\S]{0,240}inject: \[[^\]]*\bworkspaceRegistry\b[^\]]*\]/,
   'profile waits for WorkspaceRegistry before the TUI creates its startup session',
 )
 

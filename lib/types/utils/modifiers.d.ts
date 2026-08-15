@@ -32,4 +32,12 @@ export declare function isPlainReturn(key: {
     shift?: boolean;
     super?: boolean;
 }): boolean;
+/**
+ * Modal Enter recognition across parsed key events and Windows ConPTY's raw
+ * CR/LF fallback. PromptInput already handled both forms; shared modal
+ * pickers must do the same or their UI can render while Enter appears inert.
+ */
+export declare function isPlainReturnInput(input: string, key: Parameters<typeof isPlainReturn>[0] & {
+    isPasted?: boolean;
+}): boolean;
 //# sourceMappingURL=modifiers.d.ts.map

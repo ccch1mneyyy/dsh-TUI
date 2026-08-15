@@ -69,6 +69,7 @@ const channel = {
   model: 'deepseek-v4-flash',
   tokens: { input: 120, output: 45 },
   cwd: '/tmp/repro',
+  displayCwd: '/tmp/repro',
   gitBranch: 'main',
   working: true,
   spinnerMode: 'thinking',

@@ -45,7 +45,8 @@ try {
   const plain = join(fixture, 'plain')
   mkdirSync(plain)
 
-  check('explicit config.cwd wins', resolveSessionCwd('/somewhere', repo) === '/somewhere')
+  const explicit = join(fixture, 'somewhere')
+  check('explicit config.cwd wins', resolveSessionCwd(explicit, repo) === explicit)
   check('repo root resolves to itself', resolveSessionCwd(undefined, repo) === repo)
   check(
     'launch subdirectory resolves to the worktree root',
@@ -110,9 +111,11 @@ check(
 // the session workspace: launching from a non-repo directory under home
 // falls back to the launch directory, and the climb stops at $HOME.
 const savedHome = process.env.HOME
+const savedUserProfile = process.env.USERPROFILE
 const homeFixture = mkdtempSync(join(tmpdir(), 'dsh-tui-home-'))
 try {
   process.env.HOME = homeFixture
+  process.env.USERPROFILE = homeFixture
   mkdirSync(join(homeFixture, '.git'))                 // dotfiles repo
   const proj = join(homeFixture, 'some', 'project')    // itself not a repo
   mkdirSync(proj, { recursive: true })
@@ -134,6 +137,8 @@ try {
 } finally {
   if (savedHome === undefined) delete process.env.HOME
   else process.env.HOME = savedHome
+  if (savedUserProfile === undefined) delete process.env.USERPROFILE
+  else process.env.USERPROFILE = savedUserProfile
   rmSync(homeFixture, { recursive: true, force: true })
 }
 

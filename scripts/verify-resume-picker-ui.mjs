@@ -77,6 +77,7 @@ function makeChannel() {
     provider: 'deepseek',
     tokens: { input: 0, output: 0 },
     cwd: '/tmp',
+    displayCwd: '/tmp',
     gitBranch: 'main',
     working: false,
     spinnerMode: 'requesting',
@@ -95,6 +96,12 @@ function makeChannel() {
     goal: undefined,
     todos: [],
     commandList: [{ name: 'resume', description: 'Resume a session' }],
+    commandCompletions(input) {
+      const prefix = input.replace(/^\//u, '').trim().toLowerCase()
+      return this.commandList
+        .filter((command) => command.name.startsWith(prefix))
+        .map((command) => ({ ...command, commandLine: `/${command.name}`, replacement: `/${command.name} ` }))
+    },
     contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
     mode: { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
     modeIndex: 0,

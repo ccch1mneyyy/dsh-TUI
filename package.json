@@ -29,6 +29,14 @@
       "types": "./lib/types/working-activity.d.ts",
       "import": "./lib/types/working-activity.js"
     },
+    "./workspaces": {
+      "types": "./lib/types/workspaces.d.ts",
+      "import": "./lib/types/workspaces.js"
+    },
+    "./command-trees": {
+      "types": "./lib/types/command-trees.d.ts",
+      "import": "./lib/types/command-trees.js"
+    },
     "./invariant": {
       "types": "./lib/types/dsh-adapter/invariant.d.ts",
       "default": "./lib/invariant.js"
@@ -53,7 +61,8 @@
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
-    "verify:patch-surface": "node --import tsx/esm scripts/verify-patch-surface.ts"
+    "verify:patch-surface": "node --import tsx/esm scripts/verify-patch-surface.ts",
+    "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

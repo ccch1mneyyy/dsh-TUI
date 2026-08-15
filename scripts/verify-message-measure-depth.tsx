@@ -54,7 +54,8 @@ const instance = await render(<MessageList
   patchConsole: false,
 })
 
-await sleep(500)
+const deadline = Date.now() + 2000
+while (textRevision < 60 && Date.now() < deadline) await sleep(25)
 
 await instance.unmount()
 const output = stdout.text + stderr.text

@@ -23,8 +23,15 @@
   config:
     policy: !!js "process.platform === 'win32' ? 'never' : ((process.env.DSH_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask')"
 
+- id: dsh-tui-workspaces
+  name: '@deepseek-harness-tui/dsh-tui/workspaces'
+
+- id: dsh-tui-command-trees
+  name: '@deepseek-harness-tui/dsh-tui/command-trees'
+
 - id: dsh-tui
   name: '@deepseek-harness-tui/dsh-tui'
+  inject: [agents, tuiWorkspaces]
   config:
     provider: deepseek-official
     # Alt-screen fullscreen (CC 同款): 应用内鼠标选区（选择即复制, OSC 52 +
@@ -57,6 +64,7 @@
     #  feeds the chosen session id through this env var (DSH_TUI_ name; the
     #  pre-rename DSH_CC_ spelling is still honored, issue #120).
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? process.env.DSH_CC_RESUME_SESSION ?? undefined
+    workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
 
 # The DeepSeek adapter. Shipped default: full thinking at max effort.
 # rc.6 schema key is `apiKeyEnv` (a credential-ref env var NAME, default
