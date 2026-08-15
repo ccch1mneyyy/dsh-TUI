@@ -2537,24 +2537,50 @@ export function createChannel(
     // refreshLoadedContext). Locals and registry commands win name
     // collisions — a skill named `plan` must not shadow the registry's.
     const skillsService = serviceForAgent<{
-      list(options?: { scope?: unknown; cwd?: string }): Promise<readonly SkillSummary[]>
+      snapshot(options?: { scope?: unknown; cwd?: string }): Promise<{
+        skills: readonly SkillSummary[]
+        complete: boolean
+      }>
     }>(ctx, target, 'skills')
     if (skillsService === undefined) return
-    void skillsService.list({
+    /** Last-good restore shared by the failed-read and incomplete-read
+     *  paths; the caller holds the staleness check. */
+    const restoreLastGood = (): void => {
+      const fallback = lastGoodSkills?.agent === target ? lastGoodSkills.commands : []
+      const restored = fallback.filter(entry =>
+        !merged.some(command => command.name === entry.name))
+      if (restored.length === 0) return
+      state.commandList = [...merged, ...restored]
+      state.emit()
+    }
+    // snapshot() over list(): only a COMPLETE observation is authoritative
+    // — list() discards `complete`, so a provider failure or a rescan still
+    // in flight would resolve as a partial/empty catalog and wrongly clear
+    // the last-good set (dsh-skill's own consumer contract).
+    void skillsService.snapshot({
       scope: target,
       cwd: (target.session as { header?: { cwd?: string } }).header?.cwd ?? state.cwd,
-    }).then((catalog) => {
+    }).then((observation) => {
       if (token !== commandListSeq || target !== agent) return
+      if (!observation.complete) {
+        // Incomplete (provider failure/rescan mid-flight): NOT authoritative
+        // — never clear last-good or repopulate from the partial catalog.
+        // The provider's next invalidate fires skills/change for the retry.
+        ctx.logger.warn('skill command merge: incomplete catalog observation, keeping last-good skills')
+        restoreLastGood()
+        return
+      }
       const withSkills = [...merged]
-      for (const skill of catalog) {
+      for (const skill of observation.skills) {
         if (!isUserInvocable(skill)) continue
         if (withSkills.some(command => command.name === skill.name)) continue
         withSkills.push({ name: skill.name, description: skill.description, skill: true })
       }
       const added = withSkills.slice(merged.length)
       lastGoodSkills = { agent: target, commands: added }
-      // The sync phase already assigned `merged`; a read that adds nothing
-      // leaves the state as-is (and clears the last-good set above).
+      // The sync phase already assigned `merged`; a complete read that adds
+      // nothing leaves the state as-is (and authoritatively clears the
+      // last-good set above).
       if (added.length === 0) return
       state.commandList = withSkills
       state.emit()
@@ -2564,16 +2590,9 @@ export function createChannel(
       // misleading failure warning.
       if (token !== commandListSeq || target !== agent) return
       ctx.logger.warn('skill command merge failed: %o', error)
-      // Last-good: restore the previous successful skill set so a transient
-      // provider failure (rescan error, permission hiccup) does not make
-      // known skills vanish from completion. Entries colliding with the
-      // fresh locals/registry merge still lose.
-      const fallback = lastGoodSkills?.agent === target ? lastGoodSkills.commands : []
-      const restored = fallback.filter(entry =>
-        !merged.some(command => command.name === entry.name))
-      if (restored.length === 0) return
-      state.commandList = [...merged, ...restored]
-      state.emit()
+      // Last-good: a transient provider failure (rescan error, permission
+      // hiccup) must not make known skills vanish from completion.
+      restoreLastGood()
     })
   }
   ctx.on('commands/change', refreshCommandList)

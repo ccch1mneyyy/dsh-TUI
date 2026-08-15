@@ -40,7 +40,7 @@ const ctx = {
       return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
     }
     if (name === 'skills') {
-      return { list: async () => catalog }
+      return { snapshot: async () => ({ skills: catalog, complete: true }) }
     }
     return undefined
   },
@@ -119,7 +119,7 @@ if (skillsChange === undefined) {
 // ---- skills/change with a failed read keeps the last-good skill list
 ctx.get = (name) => {
   if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
-  if (name === 'skills') return { list: async () => { throw new Error('scan blew up') } }
+  if (name === 'skills') return { snapshot: async () => { throw new Error('scan blew up') } }
   return undefined
 }
 let warned = 0
@@ -140,13 +140,57 @@ await tick()
   )
 }
 
+// ---- an INCOMPLETE observation (provider failure mid-discovery) is not
+// authoritative: it must not clear last-good even though it resolves with
+// an empty catalog — this is the real SkillRegistry failure shape; list()
+// would have hidden it, snapshot() exposes it.
+ctx.get = (name) => {
+  if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
+  if (name === 'skills') return { snapshot: async () => ({ skills: [], complete: false }) }
+  return undefined
+}
+warned = 0
+skillsChange?.()
+await tick()
+{
+  const after = channel.commandList.map(command => command.name)
+  check(
+    'incomplete observation logs a warning',
+    warned >= 1,
+    `warned=${warned}`,
+  )
+  check(
+    'incomplete observation keeps the last-good skills',
+    after.includes('i-h') && after.includes('newskill'),
+    after.join(','),
+  )
+}
+
+// ---- a COMPLETE empty observation IS authoritative: skills vanish for real
+catalog.length = 0
+ctx.get = (name) => {
+  if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
+  if (name === 'skills') return { snapshot: async () => ({ skills: [], complete: true }) }
+  return undefined
+}
+skillsChange?.()
+await tick()
+{
+  const after = channel.commandList.map(command => command.name)
+  check(
+    'complete empty observation authoritatively clears skills',
+    !after.includes('i-h') && !after.includes('newskill') && after.includes('plan'),
+    after.join(','),
+  )
+}
+
 // ---- a superseded read failing later stays silent and touches nothing
 {
   const pending = []
   ctx.get = (name) => {
     if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
     if (name === 'skills') {
-      return { list: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) }
+      return { snapshot: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) }
     }
     return undefined
   }
@@ -154,9 +198,10 @@ await tick()
   ctx.logger = { warn() { staleWarned += 1 } }
   skillsChange?.() // read A: pending, superseded by B below
   skillsChange?.() // read B: wins the token race
-  pending[1].resolve([
-    { name: 'live', description: 'Live skill', invocation: { modelInvocable: true, userInvocable: true } },
-  ])
+  pending[1].resolve({
+    skills: [{ name: 'live', description: 'Live skill', invocation: { modelInvocable: true, userInvocable: true } }],
+    complete: true,
+  })
   await tick()
   check('superseding read repopulates the menu', channel.commandList.some(command => command.name === 'live'))
   pending[0].reject(new Error('stale scan failed'))
