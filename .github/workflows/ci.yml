@@ -201,6 +201,11 @@ jobs:
       # 完整循环。
       - run: node scripts/verify-effort-slider-ui.mjs
 
+      # 主题解析回归：内置主题完整性、parseCustomTheme 拒绝畸形/不安全项、
+      # displayName 内嵌换行入口压平（#160 窗口化列表单行契约的第一道防
+      # 线）。注意必须走 tsx——脚本直接 import src/customTheme.ts。
+      - run: node --import tsx/esm scripts/verify-themes.mjs
+
       # /trace 轨迹视图回归（issue #80）：事件装配配对耗时 + 组件渲染/滚动。
       - run: node --import tsx/esm scripts/repro-trace.tsx
 
