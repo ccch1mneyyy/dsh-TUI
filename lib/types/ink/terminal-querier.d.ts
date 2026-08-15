@@ -105,13 +105,15 @@ export declare function xtversion(): TerminalQuery<XtversionResponse>;
  */
 export declare class TerminalQuerier {
     private stdout;
+    private setRawMode?;
     /**
      * Interleaved queue of queries and sentinels in send order. Terminals
      * respond in order, so each flush() barrier only drains queries queued
      * before it — concurrent batches from independent callers stay isolated.
      */
     private queue;
-    constructor(stdout: NodeJS.WriteStream);
+    constructor(stdout: NodeJS.WriteStream, setRawMode?: ((enabled: boolean) => void) | undefined);
+    private holdRawMode;
     /**
      * Send a query and wait for its response.
      *
@@ -136,6 +138,8 @@ export declare class TerminalQuerier {
      * Safe to call with no pending queries — still waits for a round-trip.
      */
     flush(): Promise<void>;
+    /** Resolve and release all pending queries when their owning app unmounts. */
+    dispose(): void;
     /**
      * Dispatch a response parsed from stdin. Called by App.tsx's
      * processKeysInBatch for every `kind: 'response'` item.

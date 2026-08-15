@@ -30,7 +30,10 @@ A complete common override looks like this:
   config:
     provider: deepseek-official
     model: deepseek-v4-flash
-    cwd: !!js process.cwd()
+    # Prefer leaving cwd unset — the default resolves to the git worktree
+    # root containing the launch directory. To pin a fixed workspace, use an
+    # absolute path (e.g. cwd: /repo/packages/app), NOT `!!js process.cwd()`
+    # (that pins the workspace to the launch subdirectory, issue #96).
     effort: max
     activity: true
     activityFrames: claude
@@ -44,7 +47,7 @@ A complete common override looks like this:
 | --- | --- | --- |
 | `provider` | `deepseek-official` | DSH model route |
 | `model` | `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
-| `cwd` | `process.cwd()` | Agent workspace and filesystem-policy root |
+| `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `effort` | normally `max` in the bundle | Reasoning effort actually applied to every request (validated against model levels; deepseek supports only off/high/max and invalid levels silently fall back to the adapter default; wins over the persisted `/effort` choice), also shown in the header at startup |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
@@ -142,7 +145,7 @@ for the complete field reference.
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `CC_TUI_PERSONA` | Override the Agent persona injected by the composition |
 | `CC_TUI_PRESET` | Override the default Agent preset for new sessions |
-| `CC_TUI_THEME` | Pin a built-in or custom theme ahead of persisted selection |
+| `CC_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`) or custom theme ahead of persisted selection |
 | `CC_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
 | `DSH_CC_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
 | `DSH_CC_SESSION_ROOT` | Override the session persistence location; the profile uses a SQLite database path, while bare `cordis.yml` uses a JSONL root directory |

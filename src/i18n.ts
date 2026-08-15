@@ -134,6 +134,7 @@ const dict = {
   'theme-switch-hint': { zh: '切换      /theme（选择器）或 /theme <名字>', en: 'Switch      /theme (picker) or /theme <name>' },
   'theme-persist-hint': { zh: '持久化    ~/.dsh-cc/theme.json（重启后仍生效；CC_TUI_THEME 优先）', en: 'Persisted    ~/.dsh-cc/theme.json (survives restart; CC_TUI_THEME wins)' },
   'theme-custom-hint': { zh: '自定义    ~/.dsh-cc/themes/<名字>.json（见 README「自定义主题」）', en: 'Custom      ~/.dsh-cc/themes/<name>.json (see README "Custom themes")' },
+  'theme-auto-resolved': { zh: '自动解析  当前为 {{name}}（跟随终端背景）', en: 'Auto-resolved  currently {{name}} (follows terminal background)' },
   'theme-switched-saved': { zh: '主题已切换：{{name}}（已保存）', en: 'Theme switched: {{name}} (saved)' },
   'theme-unknown': { zh: '未知主题「{{name}}」· /theme 查看全部', en: 'Unknown theme "{{name}}" · /theme to view all' },
   'status-model': { zh: '模型   {{model}}', en: 'Model   {{model}}' },
@@ -163,7 +164,8 @@ const dict = {
   'login-source-hint': { zh: '来源：环境变量 → 工作区 .env（run.ts 兜底读取）', en: 'Source: env var → workspace .env (run.ts fallback)' },
   'login-logout-hint': { zh: 'DSH 凭证来自环境变量 DEEPSEEK_API_KEY — 删除该环境变量后重启 dsh-tui 即登出', en: 'DSH credentials come from the DEEPSEEK_API_KEY env var — remove it and restart dsh-tui to log out' },
   'permissions-policy-hint': { zh: 'DSH 权限策略由 fs-policy / bash-sandbox 配置决定（当前 leaf：workspace 内读写、写入需已读文件）。', en: 'DSH permission policy is set by fs-policy / bash-sandbox config (current leaf: read/write in workspace, writes need a prior read).' },
-  'permissions-approval-hint': { zh: 'DSH 的 /permission 预设切换需要 approval 服务 + 审批 UI，dsh-tui 未挂载。', en: 'DSH /permission preset switching needs the approval service + approval UI, not mounted in dsh-tui.' },
+  'permissions-approval-hint': { zh: '审批通道已挂载：命令申请权限提升（sandbox_permissions）时弹出审批条，Yes 放行一次、No / Esc 拒绝。', en: 'The approval channel is mounted: sandbox escalations (sandbox_permissions) raise an approval bar — Yes allows once, No / Esc rejects.' },
+  'permissions-preset-hint': { zh: '/permission 可查看与切换权限预设（read-only / workspace-write / danger-full-access）。', en: '/permission shows and switches permission presets (read-only / workspace-write / danger-full-access).' },
   'permissions-root-hint': { zh: '当前文件系统策略以工作目录为根：{{cwd}}', en: 'Current filesystem policy is rooted at the working directory: {{cwd}}' },
   'permissions-path-hint': { zh: '模型工具相对路径均解析自该目录；跨目录访问由 fs-policy 拦截。', en: 'Relative paths of model tools resolve from this directory; cross-directory access is blocked by fs-policy.' },
   'hooks-not-mounted': { zh: 'DSH hooks（dsh-hooks-claude / dsh-hooks-codex）未在本 leaf 挂载。', en: 'DSH hooks (dsh-hooks-claude / dsh-hooks-codex) are not mounted in this leaf.' },
@@ -326,6 +328,7 @@ const dict = {
 
   // ── components/ThemePicker.tsx ──────────────────────────────────────
   'theme-builtin-base': { zh: '内置 · {{name}} 基底', en: 'Built-in · {{name}} base' },
+  'theme-auto-base': { zh: '内置 · 跟随系统/终端背景自动选择 light/dark', en: 'Built-in · follows the system/terminal background (light/dark)' },
   'theme-user-base': { zh: '{{base}} 基底 · ~/.dsh-cc/themes/{{name}}.json', en: '{{base}} base · ~/.dsh-cc/themes/{{name}}.json' },
 
   // ── components/LoadedContextPanel.tsx ───────────────────────────────
@@ -394,7 +397,7 @@ const dict = {
   // Model / display
   'cmd-desc-activity': { zh: '切换工作状态指示器预设' },
   'cmd-desc-preset': { zh: '切换 Agent 预设（standard/code/minimal/cordis）' },
-  'cmd-desc-theme': { zh: '切换配色主题（内置或自定义）' },
+  'cmd-desc-theme': { zh: '切换配色主题（auto 跟随系统，或内置/自定义）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },
   'cmd-desc-thinking': { zh: '切换扩展思考显示' },
