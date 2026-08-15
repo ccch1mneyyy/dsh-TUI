@@ -71,6 +71,11 @@ jobs:
       # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
       - run: node scripts/verify-session-titles.mjs
 
+      # 会话 cwd 回归（issue #96）：启动目录向上解析 git 仓库根（普通克隆
+      # 与 .git 文件 worktree 均覆盖），/resume 过滤兼容升级前记录的
+      # 子目录会话，Windows 分隔符与大小写语义。
+      - run: node scripts/verify-session-cwd.mjs
+
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
       # installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
