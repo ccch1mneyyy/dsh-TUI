@@ -10,6 +10,7 @@
  *   3. already-ignorable events are untouched;
  *   4. a second repair pass is a no-op ('clean');
  *   5. a missing session reports 'unavailable' and touches nothing.
+ *   6. the profile's shared $DSH_HOME/sessions root is scanned by default.
  * Exits non-zero on any assertion failure (CI gate).
  */
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
@@ -99,6 +100,22 @@ assert.deepEqual(readFileSync(file), bytesBeforeSecond, 'second pass leaves byte
 
 const missing = await repairSessionLogForResume('ffffffff-ffff-ffff-ffff-ffffffffffff')
 assert.equal(missing, 'unavailable', 'missing session reports unavailable')
+
+// Profile installs default to $DSH_HOME/sessions, not the legacy
+// ~/.dsh-cc/sessions. Exercise that path without an explicit root override.
+delete process.env.DSH_CC_SESSION_ROOT
+process.env.DSH_HOME = join(root, 'dsh-home')
+const sharedSessionId = '11111111-2222-3333-4444-555555555555'
+const sharedDir = join(process.env.DSH_HOME, 'sessions', '--shared-workspace--', sharedSessionId)
+mkdirSync(sharedDir, { recursive: true })
+const sharedFile = join(sharedDir, 'session.jsonl.zstd')
+writeFileSync(sharedFile, Buffer.concat([
+  zstdCompressSync(Buffer.from(JSON.stringify({ ...header, id: sharedSessionId }) + '\n', 'utf8')),
+  zstdCompressSync(Buffer.from(JSON.stringify(thirdParty) + '\n', 'utf8')),
+]))
+assert.equal(repairSessionLogForResume(sharedSessionId), 'repaired', 'shared DSH_HOME root repaired')
+const sharedEvent = JSON.parse(zstdDecompressSync(splitFrames(readFileSync(sharedFile))[1]).toString('utf8'))
+assert.equal(sharedEvent.ignorable, true, 'shared-root activity/status marked ignorable')
 
 rmSync(root, { recursive: true, force: true })
 console.log('verify-resume-repair: OK')
