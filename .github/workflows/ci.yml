@@ -242,6 +242,10 @@ jobs:
       # 线）。注意必须走 tsx——脚本直接 import src/customTheme.ts。
       - run: node --import tsx/esm scripts/verify-themes.mjs
 
+      # Text 背景色回归（issue #166）：公开 themed Text 与 Box 一致支持
+      # 原始颜色值，且必须把对应 ANSI 背景色写入终端。
+      - run: node --import tsx/esm scripts/verify-text-background.tsx
+
       # 轨迹场景回归（issue #80 演进，取代 repro-trace）：xterm headless 驱动
       # 真实场景——账本行/耗时/光标、窗口滚动、检视窗跟随光标且高度恒定、
       # 查询过滤、时序⇄热点切换，以及备用屏进出后主屏逐字节还原、
