@@ -25,6 +25,7 @@ import {
   type KeyParseState,
   type ParsedInput,
 } from '../src/ink/parse-keypress.js'
+import { supportsWin32InputMode } from '../src/ink/terminal.js'
 
 type KeySummary = {
   kind: string
@@ -66,6 +67,15 @@ class Feeder {
 
 let failures = 0
 
+function checkBoolean(label: string, actual: boolean, expected: boolean): void {
+  if (actual === expected) {
+    console.log(`ok   ${label}`)
+  } else {
+    failures++
+    console.log(`FAIL ${label}\n     expected ${expected}\n     actual   ${actual}`)
+  }
+}
+
 function check(label: string, actual: KeySummary[], expected: KeySummary[]): void {
   const a = JSON.stringify(actual)
   const e = JSON.stringify(expected)
@@ -78,6 +88,29 @@ function check(label: string, actual: KeySummary[], expected: KeySummary[]): voi
 }
 
 const CSI = '\x1b['
+
+// --- 0. host capability gate ------------------------------------------------
+
+checkBoolean(
+  'native Windows terminals enable win32-input-mode',
+  supportsWin32InputMode('win32', undefined, undefined),
+  true,
+)
+checkBoolean(
+  'Termy-style xterm.js hosts keep standard VT input on Windows',
+  supportsWin32InputMode('win32', 'vscode', '6.0.0'),
+  false,
+)
+checkBoolean(
+  'native VS Code keeps win32-input-mode on Windows',
+  supportsWin32InputMode('win32', 'vscode', '1.103.0'),
+  true,
+)
+checkBoolean(
+  'non-Windows terminals never enable win32-input-mode',
+  supportsWin32InputMode('linux', undefined, undefined),
+  false,
+)
 
 // A win32 record translated to a named/special key keeps the raw record as
 // its sequence; a translated text char uses the char itself.

@@ -134,12 +134,13 @@ seam.
   it). Framework packages used only by tests/scripts (e.g. dsh-settings,
   dsh-tools, dsh-session-persistence-*) stay dev-only — do NOT declare peers
   for them. Non-host packages such as `dsh-working-activity` stay runtime
-  dependencies.
-  Known exception: `@deepseek-ai/schemastery` still lands as a real copy in the
-  profile via `dsh-working-activity`'s runtime dependency and resolves ahead of
-  the fallback tree — until that package peers it too, schemastery is NOT a
-  host singleton (no symptom observed in production, but the structural risk
-  stands).
+  dependencies. Historical exception, now resolved: `dsh-working-activity@0.2.4`
+  and earlier pulled a real copy of `@deepseek-ai/schemastery` (plus cosmokit)
+  into the profile via its runtime dependency, shadowing the fallback tree;
+  0.2.5 peer-ified it (working-activity#2), so profiles no longer carry any
+  framework copies. Keep the dependency range at `^0.2.6` or above (0.2.6 also
+  fixes the web-side WorkingLine absent-field guard on unpatched hosts,
+  working-activity#5).
 - Do not expose, persist, or print credentials. Interactive startup reads
   `DEEPSEEK_API_KEY`; diagnostics may report whether it is set but must not
   reveal the complete value.
