@@ -122,9 +122,24 @@ seam.
   #173).
 - When intentionally changing dependencies, update `pnpm-lock.yaml` with
   `pnpm add`, inspect the full lockfile diff, and avoid unrelated upgrades.
-- `@deepseek-ai/cordis` and `@deepseek-ai/dsh-invariants` are both peer and dev
-  dependencies so the package can type-check locally. Keep those declarations
-  compatible when changing their versions.
+- Every `@deepseek-ai/*` framework package this package references at runtime
+  or from its published types (mirroring `UPSTREAM_BLESSED_PACKAGES`, including
+  `@deepseek-ai/schemastery`) is both a peer and a dev dependency: framework
+  packages are host-provided and resolve at runtime to the host's own instance
+  through the `$DSH_HOME/profiles/node_modules` fallback tree (see #198 —
+  declaring them as runtime dependencies lands real copies inside the profile
+  and splits module identity from the host). The dev declarations exist only
+  so the package can type-check locally. Add new references of this kind to
+  both sections at matching ranges (the verify:manifest-deps gate enforces
+  it). Framework packages used only by tests/scripts (e.g. dsh-settings,
+  dsh-tools, dsh-session-persistence-*) stay dev-only — do NOT declare peers
+  for them. Non-host packages such as `dsh-working-activity` stay runtime
+  dependencies.
+  Known exception: `@deepseek-ai/schemastery` still lands as a real copy in the
+  profile via `dsh-working-activity`'s runtime dependency and resolves ahead of
+  the fallback tree — until that package peers it too, schemastery is NOT a
+  host singleton (no symptom observed in production, but the structural risk
+  stands).
 - Do not expose, persist, or print credentials. Interactive startup reads
   `DEEPSEEK_API_KEY`; diagnostics may report whether it is set but must not
   reveal the complete value.
