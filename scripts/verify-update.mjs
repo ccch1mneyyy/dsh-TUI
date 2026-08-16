@@ -8,8 +8,8 @@
  * - resolveRegistryBase() honors NPM_CONFIG_REGISTRY (both spellings), the
  *   user ~/.npmrc `registry=` line, and falls back to npmjs.org
  * - isVersionNewer() requires a strictly greater valid semver
- * - updateTuiAndRestart's pnpm args include --latest (cross-minor updates);
- *   asserted via the compiled source text since spawning dsh is out of scope
+ * - update command args pin the preflight target version, with --latest as the
+ *   fallback when preflight could not resolve one
  *
  * Run: node scripts/verify-update.mjs
  */
@@ -24,9 +24,14 @@ function check(name, ok, extra = '') {
   if (!ok) failed += 1
 }
 
-const { installedTuiVersion, resolveRegistryBase, isVersionNewer, resolveDshProfileName, shellQuote } = await import(
-  '../lib/types/update.js'
-)
+const {
+  installedTuiVersion,
+  resolveRegistryBase,
+  isVersionNewer,
+  resolveDshProfileName,
+  shellQuote,
+  tuiUpdatePluginArgs,
+} = await import('../lib/types/update.js')
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
 const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQuote.js', import.meta.url))
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
@@ -189,16 +194,25 @@ check(
   shellQuote(['a"b c']).join(' ') === '"a""b c"',
 )
 
-// ---- pnpm args include --latest (must-fix: cross-minor update capability)
+// ---- pnpm args reuse the preflight result instead of resolving latest twice
+const exactUpdateArgs = tuiUpdatePluginArgs('dsh-tui', '0.7.2')
+check(
+  'update command pins the preflight target version',
+  JSON.stringify(exactUpdateArgs) === JSON.stringify([
+    'plugin', '--profile', 'dsh-tui', 'update', '@deepseek-harness-tui/dsh-tui@0.7.2',
+  ]),
+  `got ${JSON.stringify(exactUpdateArgs)}`,
+)
+const fallbackUpdateArgs = tuiUpdatePluginArgs('custom-profile')
+check(
+  'update command falls back to --latest when preflight failed',
+  JSON.stringify(fallbackUpdateArgs) === JSON.stringify([
+    'plugin', '--profile', 'custom-profile', 'update', '--latest', '@deepseek-harness-tui/dsh-tui',
+  ]),
+  `got ${JSON.stringify(fallbackUpdateArgs)}`,
+)
+
 const compiledSource = readFileSync(compiledModulePath, 'utf8')
-check(
-  'update command passes --latest to pnpm',
-  /['"]update['"],\s*\n\s*['"]--latest['"],/.test(compiledSource),
-)
-check(
-  'update command keeps the scoped package name',
-  compiledSource.includes('@deepseek-harness-tui/dsh-tui'),
-)
 // P1: the node restart must NOT go through a shell — assert the compiled
 // restart spawn call has no shell option while the dsh call does.
 const dshSpawn = compiledSource.indexOf("runProcess(dsh")

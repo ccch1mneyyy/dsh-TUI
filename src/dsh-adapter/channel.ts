@@ -215,6 +215,13 @@ export interface ChannelGoal {
   blockedReason?: { code: string; message: string }
 }
 
+/** Secret-free credential metadata for configuration and status surfaces. */
+export interface CredentialStatus {
+  configured: boolean
+  source?: string
+  writable: boolean
+}
+
 /** One entry of the latest todo-list snapshot (mirrors the session domain's
  *  `TodoItem`; declared locally for the same reason as {@link ChannelGoal}). */
 export interface TodoPanelItem {
@@ -471,6 +478,8 @@ export interface Channel {
   setActivityFrames(name: string): boolean
   /** Advertised models across every registered provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Safe credential metadata for `/login`; undefined without the service. */
+  describeCredential(ref: string): Promise<CredentialStatus | undefined>
   /** Runtime capabilities for the `/provider` wizard, over the settings /
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */
@@ -686,6 +695,8 @@ export interface ChannelState {
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Safe credential metadata for `/login` (see the public Channel type). */
+  describeCredential(ref: string): Promise<CredentialStatus | undefined>
   /** `/provider` wizard capabilities (see the public Channel type). */
   providerSetup(): ProviderSetupHost | undefined
   listFiles(): Promise<readonly string[]>
@@ -2351,6 +2362,13 @@ export function createChannel(
       const providers = llm.listProviders()
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
+    },
+    async describeCredential(ref) {
+      const credentials = ctx.get('credentials') as
+        | { describe(ref: string): Promise<CredentialStatus> }
+        | undefined
+      if (!credentials) return undefined
+      return credentials.describe(ref)
     },
     providerSetup(): ProviderSetupHost | undefined {
       // The `/provider` wizard's runtime surface, over the dsh-base seams:

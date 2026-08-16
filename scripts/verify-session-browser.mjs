@@ -14,7 +14,8 @@
  *      session, and the cursor FOLLOWS that session when the rename bumps it
  *      to the top of the list — the cursor tracks identity, not position;
  *   6. delete: the confirmation names the focused session, Ctrl+Enter must
- *      NOT confirm an irreversible action, Esc cancels, plain Enter commits.
+ *      NOT confirm an irreversible action, Esc cancels, and repeated Enter
+ *      commits the action only once.
  *
  * Assertion discipline: ink repaints only changed lines, so each step opens a
  * FRESH output window and asserts on what that window painted; checks that
@@ -332,9 +333,9 @@ check('Ctrl+Enter does not confirm an irreversible delete', channel.calls.delete
 await windowed(() => stdin.write('\x1b'), 350) // Esc cancels
 check('Esc cancels the confirmation', !/Delete "/.test(flat(screen())) && channel.calls.delete.length === 0)
 await windowed(() => stdin.write('\x04'), 400)
-await windowed(() => stdin.write('\r'), 700)
+await windowed(() => stdin.write('\x1b[13u\x1b[13u'), 700)
 check(
-  'plain Enter commits the delete, on the session the confirmation named',
+  'repeated Enter commits one delete, on the session the confirmation named',
   channel.calls.delete.length === 1 && channel.calls.delete[0] === 's-mid',
   JSON.stringify(channel.calls.delete),
 )
