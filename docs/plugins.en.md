@@ -471,12 +471,17 @@ React instance:
 ## Seam 9: Decision Events (tui/input · rewind · session-switch · compact)
 
 pi-style before-events: the TUI hands plugins the decision BEFORE executing
-key actions. All decision events use cordis **serial** semantics — listeners
-are awaited in registration order and the **first opinion wins**; listeners
-after it are not called. Every listener returning `undefined` means "proceed
-with the default". A throwing listener counts as "no opinion" (the host logs
-and continues the default path), and a slow listener may legitimately show a
-managed dialog before answering.
+key actions. Decision events are awaited listener-by-listener in registration
+order, and the **first VALID decision wins** — unlike raw `ctx.serial`, the
+host normalizes and isolates per listener:
+
+- `undefined`/`null`/`false` means "no opinion"; the chain continues;
+- **Malformed returns are not decisions** — a blank `{ text }` rewrite, a
+  non-object value, an empty `modes` list, etc. are ignored with a warning
+  and the chain CONTINUES (a buggy plugin can never skip a later safety
+  veto);
+- A throwing listener is skipped with a warning; the chain CONTINUES;
+- All listeners declining means the default behavior proceeds.
 
 The companion notification events (except `tui/rewind-done`'s summary return)
 are **parallel**: after-the-fact broadcasts with no decision power.
@@ -595,15 +600,19 @@ first-set order:
 
 ```ts
 const status = ctx.get('tuiStatus', false)
-status?.set('my-plugin', 'building 42%')   // set/update
-status?.set('my-plugin', undefined)        // clear ('' works too)
+const dispose = status?.set('my-plugin', 'building 42%')   // set/update
+ctx.effect(() => () => dispose?.())   // cleanup hangs on the CALLER's fiber
+status?.set('my-plugin', undefined)        // clear explicitly ('' works too)
 ```
 
 - Key rule: `/^[a-z][a-z0-9_-]*$/` (convention: the plugin name, or
   `plugin:sub-item`); at most 20 keys, text ≤200 cells; violations are
   refused with a warning, never a throw.
-- The host clears every contribution when the plugin unloads — no manual
-  cleanup needed.
+- **Lifecycle is the caller's responsibility** (same contract as
+  tuiShortcuts/tuiScenes): the disposer returned by `set` clears the key only
+  while it still holds exactly that text (a later set is unaffected by a
+  stale disposer); without the `ctx.effect` scoping, an unloaded or
+  hot-reloaded plugin leaves its line behind forever.
 - The status line is DISPLAY-ONLY: for anything actionable use a shortcut
   (seam 12) or a scene (seam 8).
 
@@ -623,7 +632,10 @@ ctx.effect(() => () => dispose?.())       // cleanup hangs on the CALLER's fiber
 Combo syntax: `ctrl`/`alt` (`meta`/`option` are synonyms)/`shift` plus one
 character or a named key (`enter`, `esc`, `tab`, `backspace`, `delete`,
 `up/down/left/right`, `home`, `end`, `pageup`, `pagedown`, `space`) — e.g.
-`ctrl+shift+p`, `alt+k`, `ctrl+space`.
+`ctrl+shift+p`, `alt+k`, `ctrl+space`. **Exception: `escape` combos are
+always refused** — the input layer sets `meta` on every Esc, so `alt+escape`
+would match every bare Esc press (shadowing clear-input and the double-Esc
+rewind); there is no unambiguous way to bind it.
 
 Rules (all "refuse + warn, never throw"):
 
@@ -674,8 +686,12 @@ Rules:
   would corrupt the whole screen.
 - A throwing renderer: that entry is skipped and the type is logged ONCE
   (sticky) — replaying a long log does not spam the warn stream.
-- Output is sanitized as untrusted input too (control chars stripped,
-  preview-clipped by cell).
+- Output is validated and sanitized inside the renderer boundary: the title
+  must be a string (anything else is dropped — a non-string would crash the
+  React render path), lines are kept to scalars, control chars stripped,
+  width capped by cell; at most 100 lines / 400 cells per line / 120 cells
+  for the title, so a replay can never synchronously lay out an unbounded
+  result.
 - The two hard rules of event-type registration (log-only + registering into
   `KNOWN_SESSION_EVENT_TYPES`) remain seam 1's responsibility — a renderer
   only controls "how it displays", not "whether it may persist".

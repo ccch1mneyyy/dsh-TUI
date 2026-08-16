@@ -410,10 +410,15 @@ TUI 的 reconciler 是 **React 19**，场景组件运行在宿主的 React 实�
 ## 接缝九：决策事件（tui/input · rewind · session-switch · compact）
 
 pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交给插件。决策
-事件全是 cordis **serial** 语义——按注册顺序逐个 await，**第一个给出意见的
-插件生效**，其余不再调用；全部返回 `undefined` 则按默认行为放行。监听器抛
-异常等同于"无意见"（宿主告警后继续默认路径），慢监听器可以合法地先弹一个
-托管对话框再回答。
+事件按注册顺序**逐个 await（serial 顺序）**，**第一个返回有效决策的插件
+生效**；与裸 `ctx.serial` 不同，宿主做了逐监听器归一化与隔离：
+
+- 返回 `undefined`/`null`/`false` = 无意见，链继续；
+- **畸形返回不算决策**——空白 `{ text }` 改写、非对象值、空的 `modes`
+  列表等会被忽略并告警，链**继续**（一个写错的插件不可能把后面的安全
+  否决插件跳过去）；
+- 监听器抛异常只跳过该监听器并告警，链**继续**；
+- 全部无意见则按默认行为放行。
 
 配套的通知事件（`tui/rewind-done` 的摘要返回值除外）是 **parallel** 语义：
 事后广播，无决策权。
@@ -521,13 +526,17 @@ const name = await dialogs?.input({
 
 ```ts
 const status = ctx.get('tuiStatus', false)
-status?.set('my-plugin', '构建中 42%')   // 设置/更新
-status?.set('my-plugin', undefined)      // 清除（传 '' 同效）
+const dispose = status?.set('my-plugin', '构建中 42%')   // 设置/更新
+ctx.effect(() => () => dispose?.())   // 清理挂在【调用者】自己的 fiber 上
+status?.set('my-plugin', undefined)      // 主动清除（传 '' 同效）
 ```
 
 - key 规则：`/^[a-z][a-z0-9_-]*$/`（约定用插件名或 `插件:子项`）；最多 20
   个 key，文本 ≤200 cell；违规拒绝并告警，不抛错。
-- 插件卸载时宿主自动清空该插件的全部贡献，不用自己擦。
+- **生命周期是调用者的责任**（与 tuiShortcuts/tuiScenes 同一契约）：
+  `set` 返回的 disposer 只会在 key 仍持有该文本时清除（后被覆盖的值不受
+  旧 disposer 影响）；不用 `ctx.effect` 挂清理的话，插件卸载/热重载后旧
+  状态会永久留在界面。
 - 状态行是**纯展示**：要可点/可按键的东西请用快捷键（接缝十二）或场景
   （接缝八）。
 
@@ -547,7 +556,9 @@ ctx.effect(() => () => dispose?.())     // 清理挂在【调用者】自己的 
 组合键语法：`ctrl`/`alt`（`meta`/`option` 同义）/`shift` + 一个字符或命名键
 （`enter`、`esc`、`tab`、`backspace`、`delete`、`up/down/left/right`、`home`、
 `end`、`pageup`、`pagedown`、`space`），如 `ctrl+shift+p`、`alt+k`、
-`ctrl+space`。
+`ctrl+space`。**例外：`escape` 组合一律拒绝**——输入层给每个 Esc 都置
+`meta`，`alt+escape` 会命中所有裸 Esc 按下（清空输入、双击 Esc rewind 全
+被遮蔽），没有无歧义的绑法。
 
 规则（全部"拒绝 + 告警，不抛错"）：
 
@@ -592,7 +603,10 @@ ctx.effect(() => () => dispose?.())
   纯文本——回放路径上的一次崩溃会毁掉整个屏幕。
 - 渲染器抛错：该条目跳过，每种类型**只告警一次**（粘性），回放长日志不会
   刷屏。
-- 输出同样按不可信输入消毒（控制字符剥离、按 cell 预览截断）。
+- 输出在渲染器边界内完成校验与消毒：title 必须是字符串（其他类型直接丢
+  弃——非字符串进 React 渲染路径会崩）、行只保留标量、控制字符剥离、按
+  cell 截断；行数上限 100、行宽 400 cell、标题 120 cell，回放路径不会被
+  一个超大数组同步撑爆。
 - 事件类型注册的两条铁律（log-only + 写入 `KNOWN_SESSION_EVENT_TYPES`）仍
   是接缝一的责任——渲染器只管"怎么显示"，不管"能不能持久化"。
 

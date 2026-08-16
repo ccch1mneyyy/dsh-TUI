@@ -163,7 +163,11 @@ export class TuiDialogStore {
         if (index !== -1) this.queue.splice(index, 1)
         if (this.active === pending) this.active = null
         pending.settle(undefined)
-        this.emit()
+        // Must advance (not just emit): with the active dialog gone, the
+        // next queued request has to become active — otherwise its Promise
+        // parks forever and the UI shows no dialog until an unrelated ask
+        // happens to trigger advance.
+        this.advance()
       }
       signal?.addEventListener('abort', pending.onAbort, { once: true })
       if (timeoutMs !== undefined && timeoutMs > 0) {

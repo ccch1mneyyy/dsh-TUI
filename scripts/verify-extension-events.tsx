@@ -9,14 +9,18 @@
  *  2. tui/input cancel — nothing is delivered, the reason is toasted.
  *  3. tui/input crash isolation — a throwing listener degrades to
  *     "no opinion"; delivery proceeds unchanged.
+ *  3b. serial chain integrity — a blank rewrite / a throw / a junk return
+ *     must NOT bail the chain: later veto listeners still run (the
+ *     per-listener normalize+isolate dispatch, not raw ctx.serial).
  *  4. tui/rewind-prompt modes — the confirm pane renders the plugin's
  *     modes, picking one threads its id through rewindTo, and the
  *     tui/rewind-done summary + tui/session-switched('rewind') fire.
  *  5. tui/rewind-prompt cancel — the rewind is vetoed before any fork.
  *  6. tui/session-switch veto + tui/session-switched on /new.
- *  7. tui/compact veto (bus-level: the channel wiring shares the helper
- *     covered above; the compact path needs a full preset isolate, which
- *     a headless fake cannot supply).
+ *  7. tui/compact veto + execution through the real channel (fake
+ *     compaction service via serviceForAgent's ctx.get fallback).
+ *  8. compact stale-drop — a slow listener plus /new during the await must
+ *     abandon the old session's compaction, never run it on the new agent.
  *
  * Follows repro-picker-windowing.tsx: fake session event log, fake
  * sessions/agents services, plainText ANSI wash over stdout frames.
@@ -120,6 +124,8 @@ function makeEvents() {
 
 const stubAgentCtx = { on: () => () => {} }
 
+let forkSeq = 0
+
 function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { followupTexts: string[] }) {
   return {
     id,
@@ -135,24 +141,35 @@ function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { fo
   }
 }
 
-function makeServices(captured: { followupTexts: string[] }) {
+function makeServices(captured: { followupTexts: string[]; compactCalls: string[] }) {
   return {
     sessions: { fork(session: { events: readonly unknown[] }) { return { events: session.events } } },
     agents: {
+      // Unique ids per creation — state.agentId comparisons (stale-drop)
+      // are meaningless if every fake agent shares one id.
       async create(options: { sessionId: string; seed?: readonly unknown[] }) {
-        return { agent: makeAgent('fork', options.seed ?? [], captured), dispose: async () => {} }
+        forkSeq += 1
+        return { agent: makeAgent(`fork-${forkSeq}`, options.seed ?? [], captured), dispose: async () => {} }
       },
     },
     llm: {
       listProviders: () => [{ id: 'fake-provider' }],
       listModels: async () => [{ provider: 'fake-provider', id: 'model-00', name: 'Model 00' }],
     },
+    // serviceForAgent falls back to ctx.get when no preset roster exists, so
+    // a root-provided fake compaction service reaches channel.compact().
+    compaction: {
+      async compactNow(agent: { id: string }) {
+        captured.compactCalls.push(agent.id)
+        return true
+      },
+    },
   }
 }
 
 // ── harness: real cordis root + real channel + real Chat ────────────────
 const ctx = new Context()
-const captured = { followupTexts: [] as string[] }
+const captured = { followupTexts: [] as string[], compactCalls: [] as string[] }
 const services = makeServices(captured)
 for (const [key, value] of Object.entries(services)) {
   // Plain-data services: provide them on the root so channel's ctx.get
@@ -211,6 +228,52 @@ await sleep(800)
   check('tui/input crash: a throwing listener degrades to no-opinion',
     captured.followupTexts.some(text => text.includes('照常发送')))
   dispose()
+}
+
+// ── 3b. serial chain integrity: malformed/crashing listeners CANNOT skip a
+// later veto (raw ctx.serial would bail at the first object return or
+// reject at the first throw, cutting the chain) ──────────────────────────
+{
+  // Blank rewrite first, veto second: the blank {text} is ignored and the
+  // chain continues to the veto.
+  const disposeBlank = ctx.on('tui/input', event =>
+    event.text === '空白改写' ? { text: '   ' } : undefined)
+  const disposeVeto = ctx.on('tui/input', event =>
+    event.text === '空白改写' ? { cancel: true, reason: '安全否决生效' } : undefined)
+  const before = captured.followupTexts.length
+  channel.submit('空白改写')
+  await sleep(300)
+  check('serial chain: blank rewrite does NOT bail the chain (veto still runs)',
+    captured.followupTexts.length === before && notified('安全否决生效'))
+  disposeBlank()
+  disposeVeto()
+
+  // Throwing listener first, veto second: the crash is isolated, the veto
+  // still runs.
+  const disposeThrow = ctx.on('tui/input', event => {
+    if (event.text === '崩溃在前') throw new Error('exploded')
+    return undefined
+  })
+  const disposeVeto2 = ctx.on('tui/input', event =>
+    event.text === '崩溃在前' ? { cancel: true, reason: '崩溃后的否决生效' } : undefined)
+  channel.submit('崩溃在前')
+  await sleep(300)
+  check('serial chain: a throwing listener does NOT skip the later veto',
+    !captured.followupTexts.some(text => text.includes('崩溃在前')) && notified('崩溃后的否决生效'))
+  disposeThrow()
+  disposeVeto2()
+
+  // Junk primitive return first, transform second: junk is ignored.
+  const disposeJunk = ctx.on('tui/input', event =>
+    event.text === '垃圾返回' ? (true as never) : undefined)
+  const disposeTransform = ctx.on('tui/input', event =>
+    event.text === '垃圾返回' ? { text: '垃圾已被改写' } : undefined)
+  channel.submit('垃圾返回')
+  await sleep(300)
+  check('serial chain: junk primitive return is skipped, later transform wins',
+    captured.followupTexts.some(text => text.includes('垃圾已被改写')))
+  disposeJunk()
+  disposeTransform()
 }
 
 // ── 4. rewind modes: picker → mode list → rewindTo(mode) → done/switched ─
@@ -309,15 +372,36 @@ await sleep(800)
   disposeSwitched()
 }
 
-// ── 7. tui/compact veto (bus-level contract) ─────────────────────────────
+// ── 7. tui/compact veto + execution through the real channel ─────────────
 {
   const dispose = ctx.on('tui/compact', () => ({ cancel: true, reason: '禁止压缩' }))
-  const decision = await ctx.serial('tui/compact', { sessionId: 's-x', cwd: '/tmp/demo' })
-  check('tui/compact serial bail returns the veto',
-    typeof decision === 'object' && decision !== null && 'cancel' in decision && decision.cancel === true)
+  channel.compact()
+  await sleep(300)
+  check('tui/compact veto: compaction never ran', captured.compactCalls.length === 0)
+  check('tui/compact veto: reason toasted', notified('禁止压缩'))
   dispose()
-  const none = await ctx.serial('tui/compact', { sessionId: 's-x', cwd: '/tmp/demo' })
-  check('tui/compact without listeners → undefined (no opinion)', none === undefined)
+
+  channel.compact()
+  await sleep(400)
+  check('tui/compact without the veto: compaction runs on the live agent',
+    captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
+}
+
+// ── 8. compact stale-drop: a slow listener + /new during the await ───────
+{
+  let release: (value: undefined) => void = () => {}
+  const gate = new Promise<undefined>(resolve => { release = resolve })
+  const dispose = ctx.on('tui/compact', () => gate)
+  channel.compact()
+  await sleep(200)
+  const switched = await channel.newSession()
+  check('compact stale-drop setup: /new succeeded mid-await', switched === true)
+  release(undefined)
+  await sleep(400)
+  check('compact stale-drop: the old session’s compaction never ran',
+    captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
+  check('compact stale-drop: stale notice toasted', notified('压缩已取消'))
+  dispose()
 }
 
 await instance.unmount()

@@ -110,6 +110,7 @@ const RESERVED_COMBOS = new Set([
   'ctrl+left', // word jump
   'ctrl+right', // word jump
   'ctrl+return', // newline (multi-line input)
+  'ctrl+shift+return', // shift+Enter newline (CSI 13;6u) — same editor binding
   'alt+return', // newline fallback on terminals without shift reporting
   'alt+up', // pull the last pending message back for editing
   'escape', // pickers / interrupt / rewind double-tap
@@ -160,6 +161,13 @@ export function parseShortcutCombo(raw: string): ParsedCombo | undefined {
   if (char === undefined && named === undefined) return undefined
   // Bare keys are typing/navigation; a modifier is what makes a shortcut.
   if (!ctrl && !meta) return undefined
+  // Escape combos are refused outright: the input layer sets key.meta = true
+  // for EVERY Escape (ink/events/input-event.ts — `keypress.meta ||
+  // keypress.name === 'escape' || keypress.option`), so an alt+escape combo
+  // would match every bare Esc press and shadow clear-input / the double-Esc
+  // rewind. Esc is fully owned by the TUI; there is no unambiguous way to
+  // bind it.
+  if (named === 'escape') return undefined
   return { raw: parts.join('+'), ctrl, meta, shift, ...(named === undefined ? {} : { named }), ...(char === undefined ? {} : { char }) }
 }
 
@@ -187,13 +195,16 @@ export function matchShortcut(combo: ParsedCombo, input: string, key: TuiShortcu
   // modifier check runs against the combo, not a bare flag read.
   if (Boolean(key.meta) !== combo.meta) return false
   if (key.super) return false
+  // Shift must match for NAMED keys exactly as for characters — otherwise a
+  // registered ctrl+shift+enter would also match a plain ctrl+enter press,
+  // letting a plugin shadow the editor's built-in Ctrl+Enter delivery.
+  if (Boolean(key.shift) !== combo.shift) return false
   if (combo.named !== undefined) {
     return key[combo.named] === true
   }
   if (combo.char === undefined) return false
   // Shift+letter arrives as the uppercase character; compare case-folded
-  // and require the shift flag to match the combo's.
-  if (Boolean(key.shift) !== combo.shift) return false
+  // (the shift FLAG equality above already pinned the modifier state).
   return input.toLowerCase() === combo.char
 }
 

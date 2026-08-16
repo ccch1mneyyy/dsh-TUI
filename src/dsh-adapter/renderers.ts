@@ -24,6 +24,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
+import { stringWidth } from '../ink/stringWidth.js'
 
 /** What a renderer returns: an optional title row plus body lines. */
 export interface TuiEntryRenderResult {
@@ -36,6 +37,37 @@ export interface TuiEntryRenderResult {
 export type TuiEntryRenderer = (payload: unknown) => TuiEntryRenderResult | undefined
 
 const TYPE_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/u
+
+/**
+ * The built-in session-event vocabulary, FROZEN at module load. The live
+ * KNOWN_SESSION_EVENT_TYPES set cannot serve as this denylist: a plugin
+ * persisting custom events MUST add its types to that set (seam 1's hard
+ * rule), so by the time it registers a renderer for `my-plugin/note`, the
+ * mutable set already contains `my-plugin/note` — checking against it would
+ * reject exactly the types this seam exists for. The module-load snapshot
+ * (this service's row mounts before any plugin row) is the built-in truth.
+ */
+const BUILTIN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set(KNOWN_SESSION_EVENT_TYPES)
+
+/** Output bounds (render-path hygiene): a renderer runs on the REPLAY path
+ *  too, where an unbounded result would synchronously create thousands of
+ *  transcript rows. */
+const MAX_RENDER_LINES = 100
+const TITLE_CELLS = 120
+const LINE_CELLS = 400
+
+/** Strip C0/C1 control chars, collapse whitespace, cap width in cells. */
+function cleanLine(value: string, maxCells: number): string {
+  // eslint-disable-next-line no-control-regex -- deliberate: sanitize untrusted render-path text
+  const flat = value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (stringWidth(flat) <= maxCells) return flat
+  let out = ''
+  for (const ch of flat) {
+    if (stringWidth(out + ch) > maxCells - 1) break
+    out += ch
+  }
+  return `${out}…`
+}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -64,8 +96,11 @@ export class TuiRendererRuntime extends Service {
       return () => {}
     }
     // The channel's own projection (its renderEvent switch plus special-
-    // cased plugin events like agent-preset/selected) always wins.
-    if (KNOWN_SESSION_EVENT_TYPES.has(normalized) || normalized === 'agent-preset/selected') {
+    // cased plugin events like agent-preset/selected) always wins. The check
+    // uses the module-load snapshot of the built-in vocabulary — NOT the live
+    // KNOWN_SESSION_EVENT_TYPES, which plugins must extend with their own
+    // types (see BUILTIN_SESSION_EVENT_TYPES above).
+    if (BUILTIN_SESSION_EVENT_TYPES.has(normalized) || normalized === 'agent-preset/selected') {
       this.ctx.logger.warn(`dsh-tui: tuiRenderers.register rejected "${normalized}" — built-in event types keep their own projection`)
       return () => {}
     }
@@ -87,14 +122,29 @@ export class TuiRendererRuntime extends Service {
    * Project one event; undefined when no renderer applies, the renderer has
    * no opinion, or it failed (failure is sticky-logged once per type so a
    * replayed log does not spam the warn stream per event).
+   *
+   * The result is validated and sanitized INSIDE the try boundary: the title
+   * must be a string (anything else is dropped — a non-string would crash
+   * the React render path), lines are kept to scalars, control chars are
+   * stripped, and the count/width caps bound what a replay can synchronously
+   * lay out.
    */
   render(type: string, payload: unknown): TuiEntryRenderResult | undefined {
     const renderer = this.renderers.get(type)
     if (renderer === undefined) return undefined
     try {
       const result = renderer(payload)
-      if (result === undefined || !Array.isArray(result.lines)) return undefined
-      return result
+      if (result === undefined) return undefined
+      const raw = result as { title?: unknown; lines?: unknown }
+      if (!Array.isArray(raw.lines)) return undefined
+      const lines: string[] = []
+      for (const line of raw.lines) {
+        if (lines.length >= MAX_RENDER_LINES) break
+        if (typeof line !== 'string' && typeof line !== 'number' && typeof line !== 'boolean') continue
+        lines.push(cleanLine(String(line), LINE_CELLS))
+      }
+      const title = typeof raw.title === 'string' ? cleanLine(raw.title, TITLE_CELLS) : undefined
+      return { ...(title === undefined || title === '' ? {} : { title }), lines }
     } catch (error) {
       if (!this.failedTypes.has(type)) {
         this.failedTypes.add(type)

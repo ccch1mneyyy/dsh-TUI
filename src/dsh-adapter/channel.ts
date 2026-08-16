@@ -57,13 +57,85 @@ import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-
 import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
 import type { TuiRendererRuntime } from './renderers.js'
+import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events.js'
 import type {
-  TuiCompactDecision,
   TuiInputDecision,
   TuiRewindMode,
   TuiRewindPromptDecision,
-  TuiSessionSwitchDecision,
 } from './extension-events.js'
+
+/** `tui/input` return normalization: transform/handled/cancel or no opinion.
+ *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
+ *  continues so a later veto listener still runs. */
+function normalizeInputDecision(
+  result: unknown,
+  warn: (what: string) => void,
+): TuiInputDecision | undefined {
+  if (result === undefined || result === null || result === false) return undefined
+  if (typeof result !== 'object') {
+    warn(`a non-object (${typeof result})`)
+    return undefined
+  }
+  const record = result as Record<string, unknown>
+  if (record.cancel === true) {
+    return { cancel: true, ...(typeof record.reason === 'string' && record.reason !== '' ? { reason: record.reason } : {}) }
+  }
+  if (record.handled === true) {
+    return { handled: true, ...(typeof record.notice === 'string' && record.notice !== '' ? { notice: record.notice } : {}) }
+  }
+  if (typeof record.text === 'string') {
+    if (record.text.trim() === '') {
+      warn('a blank {text} rewrite')
+      return undefined
+    }
+    return { text: record.text }
+  }
+  warn('an unrecognized decision shape')
+  return undefined
+}
+
+/** `tui/rewind-prompt` return normalization: cancel/modes or no opinion.
+ *  Plugin-supplied modes go onto the render path: keep only well-formed
+ *  entries and cap the count (the pane renders one row per mode). */
+function normalizeRewindPromptDecision(
+  result: unknown,
+  warn: (what: string) => void,
+): TuiRewindPromptDecision | undefined {
+  if (result === undefined || result === null || result === false) return undefined
+  if (typeof result !== 'object') {
+    warn(`a non-object (${typeof result})`)
+    return undefined
+  }
+  const record = result as Record<string, unknown>
+  if (record.cancel === true) {
+    return { cancel: true, ...(typeof record.reason === 'string' && record.reason !== '' ? { reason: record.reason } : {}) }
+  }
+  if (Array.isArray(record.modes)) {
+    const modes = (record.modes as unknown[])
+      .filter(
+        (mode): mode is TuiRewindMode =>
+          typeof (mode as TuiRewindMode)?.id === 'string' && (mode as TuiRewindMode).id !== '' &&
+          typeof (mode as TuiRewindMode)?.label === 'string' && (mode as TuiRewindMode).label !== '',
+      )
+      .slice(0, 8)
+    if (modes.length === 0) {
+      warn('an empty or invalid {modes} list')
+      return undefined
+    }
+    return { modes }
+  }
+  warn('an unrecognized decision shape')
+  return undefined
+}
+
+/** `tui/rewind-done` return normalization: the first non-empty STRING is the
+ *  summary; anything else is not a decision. */
+function normalizeRewindDoneSummary(result: unknown, warn: (what: string) => void): string | undefined {
+  if (result === undefined || result === null || result === false) return undefined
+  if (typeof result === 'string') return result === '' ? undefined : result
+  warn('a non-string summary')
+  return undefined
+}
 
 type ChannelImageBlock = Extract<ContentBlock, { type: 'image' }>
 type ChannelImageMediaType = ChannelImageBlock['attachment']['mediaType']
@@ -1243,11 +1315,13 @@ export function createChannel(
     })
   }
   /**
-   * The `tui/input` decision event (pi's `input` seam, cordis serial
-   * semantics): the FIRST plugin returning a decision wins — transform the
-   * text, mark it handled, or cancel it. No listeners (or only crashing
-   * ones) means delivery proceeds unchanged, so a broken plugin can never
-   * wedge the input path.
+   * The `tui/input` decision event (pi's `input` seam): the FIRST plugin
+   * returning a valid decision wins — transform the text, mark it handled,
+   * or cancel it. No listeners (or only crashing/malformed ones) means
+   * delivery proceeds unchanged, so a broken plugin can never wedge the
+   * input path — and can never skip a later veto listener either
+   * (dispatchTuiDecision isolates crashes and normalizes returns per
+   * listener instead of bailing on the first object).
    *
    * The event fires BEFORE the sendChain: a slow handler (e.g. one showing
    * a managed dialog) parks this submit without blocking the next one —
@@ -1257,29 +1331,26 @@ export function createChannel(
    */
   const dispatchUserText = async (text: string, placement: PendingMessage['placement']): Promise<void> => {
     const originAgentId = state.agentId
-    let decision: TuiInputDecision | undefined
-    try {
-      decision = await ctx.serial('tui/input', { text, delivery: placement === 'steer' ? 'steer' : 'followup', sessionId: originAgentId, cwd: state.cwd })
-    } catch (error) {
-      ctx.logger.warn('dsh-tui: tui/input listener failed; delivering unchanged: %o', error)
-      decision = undefined
-    }
+    const decision = await dispatchTuiDecision(ctx, 'tui/input', {
+      text,
+      delivery: placement === 'steer' ? 'steer' : 'followup',
+      sessionId: originAgentId,
+      cwd: state.cwd,
+    }, normalizeInputDecision)
     if (decision !== undefined) {
-      if ('cancel' in decision && decision.cancel) {
-        if (decision.reason !== undefined && decision.reason !== '') {
+      if ('cancel' in decision) {
+        if (decision.reason !== undefined) {
           state.notify(decision.reason, { color: 'warning', timeoutMs: 4000 })
         }
         return
       }
-      if ('handled' in decision && decision.handled) {
-        if (decision.notice !== undefined && decision.notice !== '') {
+      if ('handled' in decision) {
+        if (decision.notice !== undefined) {
           state.notify(decision.notice, { timeoutMs: 4000 })
         }
         return
       }
-      if ('text' in decision && typeof decision.text === 'string' && decision.text.trim() !== '') {
-        text = decision.text.trim()
-      }
+      text = decision.text.trim()
     }
     if (state.agentId !== originAgentId) {
       state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
@@ -1294,19 +1365,13 @@ export function createChannel(
    * the reason is toasted here so the fallback string stays host-localized.
    */
   const sessionSwitchVetoed = async (kind: 'new' | 'resume', targetSessionId?: string): Promise<boolean> => {
-    let decision: TuiSessionSwitchDecision | undefined
-    try {
-      decision = await ctx.serial('tui/session-switch', {
-        kind,
-        ...(targetSessionId === undefined ? {} : { targetSessionId }),
-        sessionId: state.agentId,
-        cwd: state.cwd,
-      })
-    } catch (error) {
-      ctx.logger.warn('dsh-tui: tui/session-switch listener failed; proceeding: %o', error)
-      return false
-    }
-    if (decision !== undefined && 'cancel' in decision && decision.cancel) {
+    const decision = await dispatchTuiDecision(ctx, 'tui/session-switch', {
+      kind,
+      ...(targetSessionId === undefined ? {} : { targetSessionId }),
+      sessionId: state.agentId,
+      cwd: state.cwd,
+    }, normalizeCancelDecision)
+    if (decision !== undefined) {
       state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
       return true
     }
@@ -1809,36 +1874,18 @@ export function createChannel(
      */
     async promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null> {
       if (row.seq === undefined) return null
-      let decision: TuiRewindPromptDecision | undefined
-      try {
-        decision = await ctx.serial('tui/rewind-prompt', {
-          text: row.text,
-          seq: row.seq,
-          sessionId: state.agentId,
-          cwd: state.cwd,
-        })
-      } catch (error) {
-        ctx.logger.warn('dsh-tui: tui/rewind-prompt listener failed; proceeding with the plain confirm: %o', error)
-        return null
-      }
+      const decision = await dispatchTuiDecision(ctx, 'tui/rewind-prompt', {
+        text: row.text,
+        seq: row.seq,
+        sessionId: state.agentId,
+        cwd: state.cwd,
+      }, normalizeRewindPromptDecision)
       if (decision === undefined) return null
-      if ('cancel' in decision && decision.cancel) {
+      if ('cancel' in decision) {
         state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
         return 'cancel'
       }
-      if ('modes' in decision && Array.isArray(decision.modes)) {
-        // Plugin-supplied strings go onto the render path: keep only
-        // well-formed entries and cap the count (untrusted-input hygiene —
-        // the pane renders one row per mode).
-        const modes = decision.modes
-          .filter(
-            (mode): mode is TuiRewindMode =>
-              typeof mode?.id === 'string' && mode.id !== '' && typeof mode?.label === 'string' && mode.label !== '',
-          )
-          .slice(0, 8)
-        if (modes.length > 0) return { modes }
-      }
-      return null
+      return { modes: decision.modes }
     },
     async rewindTo(row: ChatRow, mode: string | null = null): Promise<string | null> {
       if (row.seq === undefined) return null
@@ -1984,24 +2031,20 @@ export function createChannel(
       state.emit()
       void oldHandle?.dispose().catch(() => {})
       // Decision-event pair around the completed rewind: `tui/rewind-done`
-      // (serial — the first non-empty string is toasted as the post-rewind
-      // summary, e.g. a plugin reporting restored files) and the generic
+      // (the first non-empty string is toasted as the post-rewind summary,
+      // e.g. a plugin reporting restored files) and the generic
       // `tui/session-switched` notification. Listener failures are logged,
       // never surfaced — the rewind itself already succeeded.
-      try {
-        const summary = await ctx.serial('tui/rewind-done', {
-          text: row.text,
-          mode,
-          boundarySeq: boundary,
-          sourceSessionId,
-          childSessionId: String(childId),
-          sessionId: String(childId),
-          cwd: state.cwd,
-        })
-        if (typeof summary === 'string' && summary !== '') state.notify(summary, { timeoutMs: 6000 })
-      } catch (error) {
-        ctx.logger.warn('dsh-tui: tui/rewind-done listener failed: %o', error)
-      }
+      const summary = await dispatchTuiDecision(ctx, 'tui/rewind-done', {
+        text: row.text,
+        mode,
+        boundarySeq: boundary,
+        sourceSessionId,
+        childSessionId: String(childId),
+        sessionId: String(childId),
+        cwd: state.cwd,
+      }, normalizeRewindDoneSummary)
+      if (summary !== undefined) state.notify(summary, { timeoutMs: 6000 })
       notifySessionSwitched('rewind', String(childId), sourceSessionId)
       return row.text
     },
@@ -2956,18 +2999,25 @@ export function createChannel(
         state.notify(t('compact-while-working'), { color: 'warning' })
         return
       }
-      // Plugin veto point (tui/compact, cordis serial semantics): the first
-      // answering plugin may cancel the compaction before anything runs.
+      // Plugin veto point (tui/compact): the first answering plugin may
+      // cancel the compaction before anything runs.
+      const originAgentId = state.agentId
       void (async () => {
-        let decision: TuiCompactDecision | undefined
-        try {
-          decision = await ctx.serial('tui/compact', { sessionId: state.agentId, cwd: state.cwd })
-        } catch (error) {
-          ctx.logger.warn('dsh-tui: tui/compact listener failed; proceeding: %o', error)
-          decision = undefined
-        }
-        if (decision !== undefined && 'cancel' in decision && decision.cancel) {
+        const decision = await dispatchTuiDecision(ctx, 'tui/compact', {
+          sessionId: originAgentId,
+          cwd: state.cwd,
+        }, normalizeCancelDecision)
+        if (decision !== undefined) {
           state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
+          return
+        }
+        // Stale-drop (same rule as tui/input): the await parked us while the
+        // user switched sessions — `compactService` was resolved through the
+        // OLD agent's scope chain, and the mutable `agent` now points at the
+        // new session. Running now would hand the new agent to the old
+        // service (or call into an unloaded one).
+        if (state.agentId !== originAgentId) {
+          state.notify(t('ext-compact-stale'), { color: 'warning', timeoutMs: 4000 })
           return
         }
         if (state.working) {
