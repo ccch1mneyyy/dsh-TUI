@@ -99,7 +99,7 @@ function isSafeSessionId(sessionId: string): boolean {
  * @param sessionId - Session id (directory name under each workspace dir).
  * @returns Absolute path of session.jsonl.zstd, or undefined when absent.
  */
-function findSessionLogFile(sessionId: string): string | undefined {
+export function findSessionLogFile(sessionId: string): string | undefined {
   if (!isSafeSessionId(sessionId)) return undefined
   for (const root of sessionsRoots()) {
     let workspaces: string[]

@@ -169,14 +169,31 @@ jobs:
       # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
       - run: node scripts/verify-resume-manage.mjs
 
-      # /resume 深度窗口外重命名回归（issue #112 review）：MRU 前 20 之外
-      # 的会话改名后必须显示新标题（touch 进入标题窗口），不能回落到目录名。
+      # /resume 任意深度重命名回归：会话索引取消了标题解析窗口，最旧的一条
+      # 也必须解析出自己的标题、改名后立即显示新名。stub 只提供 list（不给
+      # listSnapshots/locate），因此同时覆盖降级路径。
       - run: node scripts/verify-resume-rename-mru.mjs
 
-      # /resume picker 按键流回归（4-PR 评审尾巴）：rename 后焦点跟随目标行
-      # 重锚（否则 Enter/ctrl+d 误伤邻行）、confirm-delete 只认无修饰
-      # Enter、Esc 取消、删除后行消失。真实 Chat 渲染驱动。
-      - run: node scripts/verify-resume-picker-ui.mjs
+      # 会话种类与视图真值表：origin 判子 agent、parentSession 单独出现是
+      # /rewind 分叉（不能一起过滤掉）、空会话只计数不列出、搜索/分组/
+      # 折叠、以及按行高解析的变高窗口（穷举 focus×budget×prev 不溢出）。
+      - run: node scripts/verify-session-kinds.mjs
+
+      # 会话索引引擎：结构化走帧、定界读与全量解码等价、损坏帧不吃掉整个
+      # 日志、标题来源判定、revision 命中/失效（钉住 revision 改写日志作
+      # 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）。
+      - run: node scripts/verify-session-index.mjs
+
+      # /resume 会话浏览器按键流回归：子运行折叠/展开、空会话不列出、搜索、
+      # Esc 先清查询再退出、rename 后光标按 id 跟随目标（不是按行号）、
+      # confirm-delete 只认无修饰 Enter、Esc 取消。真实 Chat 渲染驱动。
+      - run: node scripts/verify-session-browser.mjs
+
+      # 会话浏览器布局压测：8 种几何 × 中英双语 × 9 个交互状态，用 xterm 的
+      # isWrapped 断言没有任何一行溢出终端宽度，并要求提示行始终是最后一行
+      #（等价于「上方每个区域都放得下、没有多占行、没有被挤出屏幕」）。
+      # 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
+      - run: node scripts/verify-session-browser-layout.mjs
 
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的

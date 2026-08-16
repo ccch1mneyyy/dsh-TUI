@@ -22,6 +22,7 @@ export {
   appendSessionTitle,
   deleteSessionLog,
   ensureLegacySessionEventTypes,
+  findSessionLogFile,
   LEGACY_SESSION_EVENT_TYPES,
   readSessionTitleFromLog,
   sessionsRoots,

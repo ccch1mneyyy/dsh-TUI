@@ -133,6 +133,7 @@ const dict = {
   'context-tools': { zh: '工具 {{n}}', en: 'Tools {{n}}' },
 
   // ── screens/Chat.tsx ────────────────────────────────────────────────
+  'skill-unavailable': { zh: '技能 {{name}} 已不可用或未开放用户直调', en: 'Skill {{name}} is gone or not user-invocable' },
   'skill-audit-prompt': { zh: '请使用 audit 技能对当前项目做一次全面的代码审计，找出安全、正确性与质量问题。', en: 'Use the audit skill to do a thorough code audit of the current project, finding security, correctness and quality issues.' },
   'skill-bug-prompt': { zh: '请使用 bug 技能协助我记录一份完整的 bug 报告（现象、复现步骤、期望行为）。', en: 'Use the bug skill to help me write a complete bug report (symptoms, reproduction steps, expected behavior).' },
   'skill-practice-prompt': { zh: '请使用 practice 技能陪我进行一轮编程练习。', en: 'Use the practice skill to run a round of programming practice with me.' },
@@ -350,19 +351,50 @@ const dict = {
   'show-previous-messages': { zh: ' ctrl+e 显示前 {{n}} 条消息 ', en: ' ctrl+e to show {{n}} previous messages ' },
   'resume-none-in-cwd': { zh: '当前目录没有可恢复的历史会话', en: 'No resumable sessions in the current directory' },
 
-  // ── components/ResumePicker.tsx + screens/Chat.tsx (/resume) ────────
+  // ── screens/SessionBrowser.tsx + screens/Chat.tsx (/resume) ─────────
   'resume-resumed': { zh: '已恢复会话', en: 'Session resumed' },
-  'resume-more-above': { zh: '↑ 还有 {{n}} 条', en: '↑ {{n}} more' },
-  'resume-more-below': { zh: '↓ 还有 {{n}} 条', en: '↓ {{n}} more' },
   'resume-delete-confirm': { zh: '删除「{{name}}」？会话日志将被永久移除。', en: 'Delete "{{name}}"? The session log is removed permanently.' },
   'resume-deleted': { zh: '已删除会话「{{name}}」', en: 'Deleted session {{name}}' },
   'resume-delete-failed': { zh: '无法删除会话「{{name}}」', en: 'Could not delete session {{name}}' },
   'resume-rename-placeholder': { zh: '新的会话名称…', en: 'New session name…' },
   'resume-rename-failed': { zh: '无法重命名会话「{{name}}」', en: 'Could not rename session {{name}}' },
-  'resume-hint-list': { zh: '**Enter** 恢复 · Esc 退出 · {{mod}}d 删除 · {{mod}}r 重命名', en: '**Enter** to confirm · Esc to exit · {{mod}}d to delete · {{mod}}r to rename' },
   'resume-hint-delete': { zh: '**Enter** 删除 · Esc 取消', en: '**Enter** to delete · Esc to cancel' },
   'resume-hint-rename': { zh: '**Enter** 保存 · Esc 取消', en: '**Enter** to save · Esc to cancel' },
-  'resume-title': { zh: '恢复会话', en: 'Resume' },
+  'resume-title': { zh: '恢复会话', en: 'Resume session' },
+
+  // ── 会话浏览器：行、计数、筛选、预览 ───────────────────────────────
+  'session-loading': { zh: '正在读取会话…', en: 'Reading sessions…' },
+  'session-list-failed': { zh: '无法读取会话列表 · {{err}}', en: 'Could not read the session list · {{err}}' },
+  'session-resume-refused': { zh: '无法恢复这个会话——原因已记录在对话里（模型正在工作时无法切换）', en: 'That session could not be resumed — the reason is in the conversation (switching is refused while the model is working)' },
+  'session-resume-failed': { zh: '恢复会话失败 · {{err}}', en: 'Resuming the session failed · {{err}}' },
+  'session-when-now': { zh: '刚刚', en: 'just now' },
+  'session-when-minutes': { zh: '{{n}} 分钟前', en: '{{n}}m ago' },
+  'session-when-hours': { zh: '{{n}} 小时前', en: '{{n}}h ago' },
+  'session-when-days': { zh: '{{n}} 天前', en: '{{n}}d ago' },
+  'session-when-date': { zh: '{{month}} 月 {{day}} 日', en: '{{month}}/{{day}}' },
+  'session-children': { zh: '{{n}} 个子运行', en: '{{n}} runs' },
+  'session-kind-root': { zh: '对话', en: 'Conversation' },
+  'session-kind-fork': { zh: '回溯分支', en: 'Rewound branch' },
+  'session-kind-subagent': { zh: '子 agent 运行', en: 'Sub-agent run' },
+  'session-project-unknown': { zh: '（未记录目录）', en: '(no directory recorded)' },
+  'session-scope-all': { zh: '全部项目', en: 'all projects' },
+  'session-search-placeholder': { zh: '输入以搜索 · {{scope}}', en: 'Type to search · {{scope}}' },
+  'session-count-shown': { zh: '{{n}} 个会话', en: '{{n}} sessions' },
+  'session-count-subagents': { zh: '{{n}} 个子运行已折叠', en: '{{n}} runs folded' },
+  'session-count-empty': { zh: '{{n}} 个空会话', en: '{{n}} empty' },
+  'session-clean-confirm': { zh: '清理 {{n}} 个没有对话内容的会话？日志将被永久移除。', en: 'Remove {{n}} sessions that hold no conversation? Their logs are deleted permanently.' },
+  'session-cleaned': { zh: '已清理 {{n}} 个空会话', en: 'Removed {{n}} empty sessions' },
+  'session-preview-times': { zh: '创建于 {{created}} · 最后活动 {{updated}}', en: 'created {{created}} · last active {{updated}}' },
+  'session-preview-loading': { zh: '正在读取会话结尾…', en: 'Reading the end of this session…' },
+  'session-preview-empty': { zh: '这个会话没有可预览的往来消息', en: 'No exchanges to preview in this session' },
+  'session-toggle-on': { zh: '开', en: 'on' },
+  'session-toggle-off': { zh: '关', en: 'off' },
+  // Three widths of the same hint. The browser picks the widest that fits the
+  // terminal, because a hint that wraps costs the rows the list needs and can
+  // push its own tail off the bottom of the screen.
+  'session-hint-list': { zh: '**Enter** 恢复 · Tab 预览 · {{mod}}a 全部项目（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · Tab preview · {{mod}}a all projects ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}d delete · {{mod}}x clean · Esc exit' },
+  'session-hint-list-mid': { zh: '**Enter** 恢复 · Tab 预览 · {{mod}}a 全部项目 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · Tab preview · {{mod}}a projects · {{mod}}s runs · {{mod}}r rename · {{mod}}d delete · Esc exit' },
+  'session-hint-list-short': { zh: '**Enter** 恢复 · Tab 预览 · Esc 退出', en: '**Enter** resume · Tab preview · Esc exit' },
 
   // ── picker 通用快捷键提示（整句本地化，zh 不用 "to" 结构；**段** 渲染为粗体主快捷键）─
   'hint-confirm-exit': { zh: '**Enter** 确认 · Esc 退出', en: '**Enter** to confirm · Esc to exit' },
