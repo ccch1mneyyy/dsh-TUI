@@ -207,7 +207,7 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
 - **TPS 仪表**：参考 pi-tps-meter——流式 1/8 格 gauge、历史 min-max sparkline、
   速度语义色（≥50 绿 / ≥20 黄 / <20 红）。
 - **working-activity 生态**：工作状态行复用
-  [dsh-working-activity](https://github.com/ccch1mneyyy/dsh-working-activity)
+  [dsh-working-activity](https://github.com/ccch1mneyyy/working-activity)
   的纯状态机，在进程内从基础会话事件派生，不向共享日志写入 UI 状态。
 - **终端粘贴**：raw 模式下 Ctrl+V 由应用接管，按平台读取系统剪贴板——Windows
   走 PowerShell `Get-Clipboard`，macOS 走 `osascript`/`pbpaste`，Linux 自动探测

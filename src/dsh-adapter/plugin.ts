@@ -338,6 +338,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
   let updateRequested = false
+  let updateTargetVersion: string | undefined
   // The profile this process was booted with (`dsh --profile <name>`); dsh
   // exposes it nowhere else, and /update must update the installation the
   // user is actually running, not a hard-coded one.
@@ -377,7 +378,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           config.fullscreen === true,
           'Updating @deepseek-harness-tui/dsh-tui and restarting…',
           undefined,
-          () => runUpdate(ctx, profile, channel.agentId),
+          () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
         )
         return
       }
@@ -437,6 +438,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }
         if (target.kind === 'unknown') {
           channel.notify(t('update-check-failed'))
+        } else {
+          updateTargetVersion = target.latest
         }
         channel.notify(t('update-starting'))
         updateRequested = true
@@ -755,13 +758,18 @@ function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
   })
 }
 
-function runUpdate(ctx: Context, profile: string | undefined, sessionId: string): void {
+function runUpdate(
+  ctx: Context,
+  profile: string | undefined,
+  sessionId: string,
+  targetVersion: string | undefined,
+): void {
   disposeRootAndThen(ctx, () => {
     if (profile === undefined) {
       process.stderr.write(`\n${t('update-aborted-no-profile')}\n`)
       process.exit(1)
     }
-    void updateTuiAndRestart(sessionId, profile).then(
+    void updateTuiAndRestart(sessionId, profile, targetVersion).then(
       ({ updateCode, restartCode }) => {
         if (updateCode !== 0) {
           process.stderr.write(

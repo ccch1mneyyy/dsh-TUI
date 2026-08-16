@@ -1,6 +1,7 @@
 import React from 'react'
 import Text from '../../ink/components/Text.js'
 import type { Color, Styles } from '../../ink/styles.js'
+import type { DOMElement } from '../../ink/dom.js'
 import { getTheme, type Theme } from '../../theme.js'
 import { useTheme } from './ThemeProvider.js'
 
@@ -79,6 +80,12 @@ export type Props = {
    */
   readonly wrap?: Styles['textWrap']
 
+  /**
+   * Ref to the underlying ink-text DOMElement (e.g. useDeclaredCursor
+   * parking the native cursor on an inline caret cell).
+   */
+  readonly ref?: React.Ref<DOMElement>
+
   readonly children?: React.ReactNode
 }
 
@@ -97,6 +104,7 @@ export default function ThemedText({
   strikethrough = false,
   inverse = false,
   wrap = 'wrap',
+  ref,
   children,
 }: Props): React.ReactNode {
   const [themeName] = useTheme()
@@ -114,6 +122,7 @@ export default function ThemedText({
 
   return (
     <Text
+      ref={ref}
       color={resolvedColor}
       backgroundColor={resolvedBackgroundColor}
       bold={bold}

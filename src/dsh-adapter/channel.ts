@@ -215,6 +215,13 @@ export interface ChannelGoal {
   blockedReason?: { code: string; message: string }
 }
 
+/** Secret-free credential metadata for configuration and status surfaces. */
+export interface CredentialStatus {
+  configured: boolean
+  source?: string
+  writable: boolean
+}
+
 /** One entry of the latest todo-list snapshot (mirrors the session domain's
  *  `TodoItem`; declared locally for the same reason as {@link ChannelGoal}). */
 export interface TodoPanelItem {
@@ -471,6 +478,8 @@ export interface Channel {
   setActivityFrames(name: string): boolean
   /** Advertised models across every registered provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Safe credential metadata for `/login`; undefined without the service. */
+  describeCredential(ref: string): Promise<CredentialStatus | undefined>
   /** Runtime capabilities for the `/provider` wizard, over the settings /
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */
@@ -686,6 +695,8 @@ export interface ChannelState {
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Safe credential metadata for `/login` (see the public Channel type). */
+  describeCredential(ref: string): Promise<CredentialStatus | undefined>
   /** `/provider` wizard capabilities (see the public Channel type). */
   providerSetup(): ProviderSetupHost | undefined
   listFiles(): Promise<readonly string[]>
@@ -2352,6 +2363,13 @@ export function createChannel(
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
     },
+    async describeCredential(ref) {
+      const credentials = ctx.get('credentials') as
+        | { describe(ref: string): Promise<CredentialStatus> }
+        | undefined
+      if (!credentials) return undefined
+      return credentials.describe(ref)
+    },
     providerSetup(): ProviderSetupHost | undefined {
       // The `/provider` wizard's runtime surface, over the dsh-base seams:
       // settings (profile persistence), credentials (key storage) and the
@@ -3084,25 +3102,38 @@ export function createChannel(
         const dispose = commandService.register({
           name,
           description,
-          // The injected body is the payload; recording the (empty) raw input
-          // would only duplicate the command name into the session log.
+          // The invocation line is re-submitted as a user message (kernel
+          // path) or replaced by the injected body (fallback) — recording
+          // the raw input here too would duplicate it in the session log.
           recordInput: false,
-          handler: async ({ agent: invoker, signal }) => {
+          handler: async ({ agent: invoker, rawInput, signal }) => {
+            // Kernel gesture path: the `skill` tool and dsh-tool-skill's
+            // pre-step boundary mount together, so a visible `skill` tool
+            // means the boundary scans this agent's user messages for the
+            // `/name` gesture and injects the rendered body host-side —
+            // the same architecture as the web client's ui-skill. Routing
+            // through it keeps the user's args in the transcript message
+            // (rawInput rides along instead of being swallowed by the
+            // command layer) and matches the kernel's own adjudication.
+            const tools = ctx.get('tools') as ToolsRegistryLike | undefined
+            if (tools?.get('skill', invoker) !== undefined) {
+              deliverUserText(`/${name}${rawInput}`, 'followup')
+              // Silent success: the submitted message is the feedback.
+              return { kind: 'success' }
+            }
+            // Fallback for compositions without dsh-tool-skill (e.g. the
+            // minimal preset): inject the rendered body directly, in the
+            // official user-explicit invocation shape (dsh-skill's
+            // SkillInvocationSource).
             const view = { ...skillViewOptions(invoker), signal }
             const skill = await skillRegistryFor(invoker)?.get(name, view)
             if (skill === undefined || !isUserInvocable(skill as SkillSummary)) {
               return { kind: 'error', text: t('skill-unavailable', { name }) }
             }
-            // The official user-explicit invocation shape (dsh-skill's
-            // SkillInvocationSource): the rendered body rides as instructions
-            // the model follows, and transcript consumers present it from the
-            // source metadata instead of re-parsing model-facing text.
             invoker.followup(createUserMessage({
               content: [{ type: 'text', text: renderSkillContent(skill as never) }],
               source: { kind: 'skill-invocation', name, form: 'instructions' },
             }))
-            // Silent success: the agent visibly starts working on the skill,
-            // which is the feedback (CC shows no banner either).
             return { kind: 'success' }
           },
         })
