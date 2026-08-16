@@ -65,7 +65,12 @@ function BranchPrefix({ last }: { last: boolean }): React.ReactNode {
  */
 export function GoalTodoPanel({ channel }: { channel: Channel }): React.ReactNode {
   const goal = channel.goal
-  const todos = channel.todos ?? []
+  const allTodos = channel.todos ?? []
+  // Completed rows are useful progress while a turn is running, but become
+  // stale footer noise once the agent is idle. Keep unfinished work visible.
+  const todos = channel.working
+    ? allTodos
+    : allTodos.filter(todo => todo.status !== 'completed')
   if (goal === undefined && todos.length === 0) return null
   const visible = todos.slice(0, MAX_TODOS)
   const hidden = todos.length - visible.length
