@@ -903,14 +903,28 @@ export function Chat({
         })
         return true
       case 'login': {
-        const key = process.env.DEEPSEEK_API_KEY
-        const lines = [
-          `${t('login-api-key', { key: key ? key.slice(0, 6) + '…' + key.slice(-4) : t('login-key-missing') })}`,
-          `${t('login-base-url', { url: process.env.DEEPSEEK_BASE_URL ?? t('login-official-endpoint') })}`,
-          t('login-source-hint'),
-        ]
         setHelpOpen(false)
-        channel.pushLocal('/login', lines)
+        void channel.describeCredential('DEEPSEEK_API_KEY')
+          .catch(() => undefined)
+          .then(status => {
+            const keyStatus = status === undefined
+              ? t('login-credentials-unavailable')
+              : status.configured
+                ? t('login-key-configured', { ref: 'DEEPSEEK_API_KEY' })
+                : t('login-key-missing')
+            channel.pushLocal('/login', [
+              t('login-api-key', { status: keyStatus }),
+              ...(status === undefined
+                ? []
+                : [
+                    t('login-credential-source', { source: status.source ?? t('login-source-none') }),
+                    t('login-credential-storage', {
+                      mode: t(status.writable ? 'login-storage-writable' : 'login-storage-read-only'),
+                    }),
+                  ]),
+              t('login-base-url', { url: process.env.DEEPSEEK_BASE_URL ?? t('login-official-endpoint') }),
+            ])
+          })
         return true
       }
       case 'logout':
