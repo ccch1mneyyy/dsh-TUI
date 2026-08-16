@@ -63,6 +63,7 @@
     "dev": "node scripts/dev-test.mjs",
     "dev:copy-config": "node scripts/dev-copy-config.mjs",
     "dev:test": "node scripts/verify-dev-command.mjs && node scripts/dev-test.mjs --no-launch",
+    "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
     "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap",
@@ -74,6 +75,7 @@
     "verify:minimal-preset-tools": "node scripts/verify-minimal-preset-tools.mjs",
     "verify:liangshen-bootstrap": "node scripts/verify-liangshen-bootstrap.mjs",
     "verify:package": "npm pack --dry-run --json --ignore-scripts | node scripts/verify-package.mjs",
+    "verify:prompt-debug": "npm run build && node scripts/verify-prompt-debug.mjs",
     "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts"
   },
   "peerDependencies": {
@@ -81,6 +83,7 @@
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-instructions": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-commands": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-cordis-host-runner": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",

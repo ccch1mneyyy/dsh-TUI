@@ -6,3 +6,4 @@ package-lock.json
 *.tsbuildinfo
 *.tgz
 AGENTS.md
+.dsh-prompt-debug.json
