@@ -93,15 +93,55 @@ export interface PromptInputProps {
   controllerRef?: React.RefObject<PromptController | null>
 }
 
-type EnhancementIndicator = 'smart' | undefined
-
 const ENHANCEMENT_ARROW_FRAMES = ['❯', '›', '»', '❯'] as const
 const ENHANCEMENT_PULSE_FRAMES = ['·', '✦', '◆', '✦', ' '] as const
 const ENHANCEMENT_ARROW_INTERVAL_MS = 90
 
-function enhancementIndicator(channel: Channel): EnhancementIndicator {
-  if (channel.smart) return 'smart'
-  return undefined
+function SmartPromptIndicator({ active, working }: { active: boolean; working: boolean }) {
+  const previousActive = React.useRef(false)
+  const [frame, setFrame] = React.useState(ENHANCEMENT_ARROW_FRAMES.length - 1)
+
+  React.useEffect(() => {
+    const changed = previousActive.current !== active
+    previousActive.current = active
+    if (!changed || !active) {
+      setFrame(ENHANCEMENT_ARROW_FRAMES.length - 1)
+      return
+    }
+    setFrame(0)
+    const timer = setInterval(() => {
+      setFrame(current => {
+        if (current >= ENHANCEMENT_ARROW_FRAMES.length - 1) {
+          clearInterval(timer)
+          return current
+        }
+        return current + 1
+      })
+    }, ENHANCEMENT_ARROW_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [active])
+
+  if (!active) return <Text dimColor={working}>❯ </Text>
+
+  return (
+    <>
+      <Text
+        bold
+        color={frame === 0 ? 'inactiveShimmer' : 'suggestion'}
+        inverse={frame === 2}
+        dimColor={working}
+      >
+        {ENHANCEMENT_PULSE_FRAMES[frame]} Smart{' '}
+      </Text>
+      <Text
+        bold
+        color={frame === 0 ? 'inactiveShimmer' : 'suggestion'}
+        dimColor={working}
+      >
+        {ENHANCEMENT_ARROW_FRAMES[frame]}{' '}
+      </Text>
+    </>
+  )
 }
 
 /**
@@ -145,32 +185,6 @@ export function PromptInput({
   onRewindRequest,
   controllerRef,
 }: PromptInputProps) {
-  const enhancement = enhancementIndicator(channel)
-  const enhancementLabel = enhancement === 'smart' ? 'Smart' : undefined
-  const enhancementColor = enhancement === 'smart' ? 'suggestion' : undefined
-  const previousEnhancement = React.useRef<EnhancementIndicator>(undefined)
-  const [enhancementFrame, setEnhancementFrame] = React.useState(
-    ENHANCEMENT_ARROW_FRAMES.length - 1,
-  )
-  React.useEffect(() => {
-    const changed = previousEnhancement.current !== enhancement
-    previousEnhancement.current = enhancement
-    if (!changed || enhancement === undefined) {
-      setEnhancementFrame(ENHANCEMENT_ARROW_FRAMES.length - 1)
-      return
-    }
-    setEnhancementFrame(0)
-    const timer = setInterval(() => {
-      setEnhancementFrame(frame => {
-        if (frame >= ENHANCEMENT_ARROW_FRAMES.length - 1) {
-          clearInterval(timer)
-          return frame
-        }
-        return frame + 1
-      })
-    }, ENHANCEMENT_ARROW_INTERVAL_MS)
-    return () => clearInterval(timer)
-  }, [enhancement])
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
   const valueRef = React.useRef(value)
@@ -1059,7 +1073,7 @@ export function PromptInput({
         flexDirection="column"
         alignItems="flex-start"
         justifyContent="flex-start"
-        borderColor={channel.mode.plan === true ? 'planMode' : enhancementColor ?? 'promptBorder'}
+        borderColor={channel.mode.plan === true ? 'planMode' : channel.smart ? 'suggestion' : 'promptBorder'}
         borderStyle="round"
         borderLeft={false}
         borderRight={false}
@@ -1067,27 +1081,7 @@ export function PromptInput({
         width="100%"
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
-          {enhancementLabel !== undefined && (
-            <Text
-              bold
-              color={enhancementFrame === 0 ? 'inactiveShimmer' : enhancementColor}
-              inverse={enhancementFrame === 2}
-              dimColor={channel.working}
-            >
-              {ENHANCEMENT_PULSE_FRAMES[enhancementFrame]} {enhancementLabel}{' '}
-            </Text>
-          )}
-          <Text
-            bold={enhancement !== undefined}
-            color={enhancement === undefined
-              ? undefined
-              : enhancementFrame === 0
-                ? 'inactiveShimmer'
-                : enhancementColor}
-            dimColor={channel.working}
-          >
-            {enhancement === undefined ? '❯' : ENHANCEMENT_ARROW_FRAMES[enhancementFrame]}{' '}
-          </Text>
+          <SmartPromptIndicator active={channel.smart} working={channel.working} />
           <Box ref={valueBoxRef} flexGrow={1} flexShrink={1}>
             {value.length === 0 ? (
               // Solid block caret on a BLANK cell: the terminal paints the
