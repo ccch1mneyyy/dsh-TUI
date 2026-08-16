@@ -214,6 +214,10 @@ jobs:
       # CJK 不劈字、窄终端布局不破。
       - run: node --import tsx/esm scripts/verify-cjk-truncate.tsx
 
+      # 启动上下文摘要窄终端回归（issue #167）：摘要与 Ctrl+T 提示必须
+      # 作为一条可截断文本布局，不能换行后互相穿插。
+      - run: node --import tsx/esm scripts/verify-loaded-context-width.tsx
+
       # thinking spinner 残影回归（issue #72）：text-default emoji（✳）
       # 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
       - run: node --import tsx/esm scripts/repro-thinking.tsx
