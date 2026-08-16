@@ -7,6 +7,7 @@
  *   - 残骸 profile（目录在、package.json 不可读）触发重新自举，且版本号
  *     与本包对齐
  *   - profile 已装版本与启动器不一致时打印提示，但不阻塞启动
+ *   - profile 子进程非零退出时保留退出码与直跑诊断命令
  *   - 面向用户的消息双语：DSH_TUI_LANG=zh 输出中文，否则默认英文
  *   - shellQuote 单元（win32 的 shell:true 路径 CI 跑不到 Windows，只能靠
  *     单测覆盖转义规则本身）
@@ -38,8 +39,9 @@ const stubDir = join(tmp, 'stub-bin')
 const stubLog = join(tmp, 'stub.log')
 const isWin = process.platform === 'win32'
 mkdirSync(stubDir, { recursive: true })
-// argv 逐参数 <angle> 编码，参数被拆分时一目了然；退出码恒 0。
-writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nexit 0\n')
+// argv 逐参数 <angle> 编码，参数被拆分时一目了然；DSH_STUB_EXIT 只让真正
+// 的 profile 子进程失败，`dsh --version` 预检始终成功。
+writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
 writeFileSync(join(stubDir, 'pnpm'), '#!/bin/sh\nexit 0\n')
 chmodSync(join(stubDir, 'dsh'), 0o755)
 chmodSync(join(stubDir, 'pnpm'), 0o755)
@@ -49,7 +51,7 @@ chmodSync(join(stubDir, 'pnpm'), 0o755)
 if (isWin) {
   writeFileSync(
     join(stubDir, 'dsh.cmd'),
-    '@echo off\r\nnode -e "const fs=require(\'fs\');fs.appendFileSync(process.env.DSH_STUB_LOG,process.argv.slice(1).map(a=>\'<\'+a+\'>\').join(\'\')+\'\\n\')" -- %*\r\n@exit /b 0\r\n',
+    '@echo off\r\nnode -e "const fs=require(\'fs\');const a=process.argv.slice(1);fs.appendFileSync(process.env.DSH_STUB_LOG,a.map(v=>\'<\'+v+\'>\').join(\'\')+\'\\n\');process.exit(a[0]===\'--profile\'?Number(process.env.DSH_STUB_EXIT||0):0)" -- %*\r\n@exit /b %errorlevel%\r\n',
     'ascii',
   )
   writeFileSync(join(stubDir, 'pnpm.cmd'), '@echo off\r\n@exit /b 0\r\n', 'ascii')
@@ -109,14 +111,23 @@ r = runBin(['foo', 'a b'])
 check('passthrough: args forwarded after --profile', stubCalls().at(-1) === '<--profile><dsh-tui><foo><a b>')
 check('passthrough: silent when aligned', r.stderr.trim() === '')
 
-// --- 3. 版本不一致：打印提示但不阻塞启动 --------------------------------------
+// --- 3. profile 非零退出：保留退出码与可直接复现的命令 -------------------------
+resetStubLog()
+r = runBin([], { DSH_STUB_EXIT: '42', DSH_TUI_LANG: 'en' })
+check('nonzero exit: launcher preserves the child status', r.status === 42)
+check('nonzero exit: stderr names the status', r.stderr.includes('profile exited with code 42'))
+check('nonzero exit: stderr gives the direct command', r.stderr.includes('dsh --profile dsh-tui'))
+r = runBin([], { DSH_STUB_EXIT: '42', DSH_TUI_LANG: 'zh' })
+check('nonzero exit: Chinese message names the status', r.stderr.includes('退出码 42'))
+
+// --- 4. 版本不一致：打印提示但不阻塞启动 --------------------------------------
 setProfileVersion('0.0.0')
 resetStubLog()
 r = runBin([])
 check('mismatch: hint names both versions', r.stderr.includes('v0.0.0') && r.stderr.includes(`v${ownVersion}`))
 check('mismatch: still launches', stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0)
 
-// --- 4. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
+// --- 5. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
 const envNoDsh = { PATH: noDshPath }
 r = runBin([], { ...envNoDsh, DSH_TUI_LANG: 'en' })
 check('i18n: DSH_TUI_LANG=en prints English', r.stderr.includes('dsh CLI not found'))
@@ -125,7 +136,7 @@ check('i18n: DSH_TUI_LANG=zh prints Chinese', r.stderr.includes('未检测到 ds
 r = runBin([], envNoDsh)
 check('i18n: default (unset) prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
 
-// --- 5. shellQuote 单元（win32 shell:true 路径的转义规则）---------------------
+// --- 6. shellQuote 单元（win32 shell:true 路径的转义规则）---------------------
 check('shellQuote: plain tokens pass through', shellQuote(['plugin', '--profile', 'dsh-tui']).join(' ') === 'plugin --profile dsh-tui')
 check('shellQuote: spaces get quoted', shellQuote(['a b']).join(' ') === '"a b"')
 check('shellQuote: embedded quotes are doubled', shellQuote(['a"b c']).join(' ') === '"a""b c"')
