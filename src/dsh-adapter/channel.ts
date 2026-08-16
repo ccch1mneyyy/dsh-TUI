@@ -3695,11 +3695,17 @@ ${output}
         break
       }
       case 'assistant/message': {
-        const row = ensureStreaming(event.seq)
-        row.time = event.time
         const text = textOf(event.data.message.content)
-        if (text) row.text = text
-        row.streaming = false
+        // Reasoning/tool-only steps emit no text: creating an assistant row
+        // anyway leaves an empty `●` bullet in the transcript. A pre-existing
+        // streaming row always has text (ensureStreaming is only reached on
+        // non-empty text deltas), so only create one when text arrives.
+        const row = streaming ?? (text ? ensureStreaming(event.seq) : undefined)
+        if (row !== undefined) {
+          row.time = event.time
+          if (text) row.text = text
+          row.streaming = false
+        }
         streaming = undefined
         if (reasoning !== undefined) {
           // Seal, don't fold: the per-step duration settles here, but the

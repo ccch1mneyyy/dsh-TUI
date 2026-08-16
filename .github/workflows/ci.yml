@@ -222,6 +222,11 @@ jobs:
 
       - run: node --import tsx/esm scripts/verify-channel-goal-todo.mjs
 
+      # 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
+      # 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
+      # ● 前缀、内容为空的行。
+      - run: node scripts/verify-empty-assistant-row.mjs
+
       # 技能斜杠命令补全回归（issue #86）：user-invocable 技能合并进 /
       # 菜单与 Tab 补全（skill 标记、与 locals/注册表撞名让位），
       # skills/change 实时增删，读取失败保留 last-good。
