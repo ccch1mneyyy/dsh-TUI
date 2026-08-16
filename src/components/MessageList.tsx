@@ -131,7 +131,7 @@ export function MessageList({
   const localRefs = React.useRef(new Map<number, DOMElement>())
   /** Content-space offset of visibleRows[0] (header + dividers), measured. */
   const baseRef = React.useRef<number | null>(null)
-  const measureQueuedRef = React.useRef(false)
+  const measureTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const [, setMeasureTick] = React.useState(0)
   const [, setScrollTick] = React.useState(0)
 
@@ -150,6 +150,12 @@ export function MessageList({
     const tick = (): void =>{  setScrollTick(t => t + 1) }
     return scrollHandle.subscribe(tick)
   }, [scrollHandle])
+
+  React.useLayoutEffect(() => () => {
+    if (measureTimerRef.current === null) return
+    clearTimeout(measureTimerRef.current)
+    measureTimerRef.current = null
+  }, [])
 
   const heightOf = (row: ChatRow): number =>
     heightsRef.current.get(row.id) ?? DEFAULT_ROW_HEIGHT
@@ -253,14 +259,15 @@ export function MessageList({
         scrollHandle.setClampBounds(min, Math.max(min, base + mountedBottom - viewport))
       }
     }
-    if (changed && !measureQueuedRef.current) {
-      // Layout corrections can cascade for many rows. Yield between commits
-      // so React does not count the valid convergence as nested updates.
-      measureQueuedRef.current = true
-      queueMicrotask(() => {
-        measureQueuedRef.current = false
+    if (changed && measureTimerRef.current === null) {
+      // A microtask still belongs to React's current synchronous work turn and
+      // can exhaust the reconciler's 50-update guard during sustained streams.
+      // A timer starts a fresh task while still coalescing all corrections from
+      // this commit. The cleanup above prevents a late update after unmount.
+      measureTimerRef.current = setTimeout(() => {
+        measureTimerRef.current = null
         setMeasureTick(t => t + 1)
-      })
+      }, 0)
     }
   })
 

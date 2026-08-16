@@ -28,7 +28,7 @@ const rows = [{
   id: 1,
   kind: 'assistant' as const,
   get text(): string {
-    textRevision = Math.min(60, textRevision + 1)
+    textRevision = Math.min(200, textRevision + 1)
     return Array.from({ length: textRevision }, (_, line) => `measured line ${line}`).join('\n')
   },
   streaming: false,
@@ -54,8 +54,11 @@ const instance = await render(<MessageList
   patchConsole: false,
 })
 
-const deadline = Date.now() + 2000
-while (textRevision < 60 && Date.now() < deadline) await sleep(25)
+let timerTurns = 0
+const turnCounter = setInterval(() => { timerTurns += 1 }, 0)
+const deadline = Date.now() + 5000
+while (textRevision < 200 && Date.now() < deadline) await sleep(25)
+clearInterval(turnCounter)
 
 await instance.unmount()
 const output = stdout.text + stderr.text
@@ -63,8 +66,12 @@ if (/Maximum update depth|Minified React error #185/.test(output)) {
   console.error('FAIL: MessageList entered a nested measurement update loop')
   process.exit(1)
 }
-if (textRevision !== 60) {
+if (textRevision !== 200) {
   console.error(`FAIL: MessageList measurement stopped at revision ${textRevision}`)
   process.exit(1)
 }
-console.log('PASS: MessageList measurements settle without nested update overflow')
+if (timerTurns < 10) {
+  console.error(`FAIL: MessageList measurement stayed in one microtask chain (${timerTurns} timer turns)`)
+  process.exit(1)
+}
+console.log(`PASS: MessageList measurements settle across ${timerTurns} timer turns without nested update overflow`)
