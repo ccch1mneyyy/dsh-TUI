@@ -19,7 +19,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
+
+const ASK_USER_TOOL = 'ask_user_question'
 
 /** One roster entry, as returned by `agentPresets.list()`/`resolve()`. */
 export interface AgentPresetInfo {
@@ -138,6 +141,28 @@ export function runningPresetOf(session: {
   events: readonly { type: string; data: unknown }[]
 }): string | undefined {
   return resolveSessionPreset(session as Parameters<typeof resolveSessionPreset>[0])
+}
+
+/**
+ * Keep the official Minimal preset's model-facing contract at exactly two
+ * tools. The TUI mounts ask_user_question at the host layer so every other
+ * preset (including user presets) can use its questionnaire UI; host-layer
+ * tools otherwise merge into Minimal's scoped catalog as a third tool.
+ *
+ * This is a per-assembly filter rather than a startup-time decision because
+ * one TUI process can resume, create, or recompose sessions under different
+ * presets. The session log remains the source of truth for the active preset.
+ *
+ * @param assembly - Fully assembled prompt inputs for one model request.
+ * @param presetId - Preset recorded for the requesting session.
+ * @returns The original assembly, except ask_user_question is absent in Minimal.
+ */
+export function filterMinimalPresetTools(assembly: PromptAssembly, presetId: string | undefined): PromptAssembly {
+  if (presetId !== 'minimal' || !assembly.tools.some(tool => tool.name === ASK_USER_TOOL)) return assembly
+  return {
+    ...assembly,
+    tools: assembly.tools.filter(tool => tool.name !== ASK_USER_TOOL),
+  }
 }
 
 /**

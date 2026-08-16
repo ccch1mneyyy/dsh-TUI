@@ -1020,7 +1020,11 @@ export function createChannel(
   // command/run + command/done records). Absent the service, only the
   // built-in local commands exist.
   const commandService: CommandRuntime | undefined = ctx.get('commands')
-  const workspaceService = ctx.tuiWorkspaces ?? createLocalWorkspaceRuntime()
+  // Workspace registry runtime (optional service, issue #183): mounted by
+  // the bundle patch's dsh-tui-workspaces row; absent the row (stale patch
+  // or a bare embedder), degrade to the local-only runtime. plugin.ts owns
+  // the degraded-boot warning for profile launches.
+  const workspaceService = ctx.get('tuiWorkspaces') ?? createLocalWorkspaceRuntime()
   const commandTrees = ctx.get('tuiCommandTrees') as TuiCommandTreeRuntime | undefined
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
@@ -3884,6 +3888,25 @@ ${output}
       }),
     ]
   }
+  // Subagents inherit provider/model from AgentOptions, but resumed TUI
+  // agents can legitimately carry their route only in persisted request
+  // headers. Their child scopes do not share this channel's per-agent
+  // ModelSelectionRef, so fill an otherwise incomplete first request from
+  // the active route. Keep complete child-specific routes authoritative.
+  ctx.on('agent/request', async (_payload, next) => {
+    const resolved = await next()
+    if (
+      typeof resolved.provider === 'string' && resolved.provider.length > 0 &&
+      typeof resolved.model === 'string' && resolved.model.length > 0
+    ) {
+      return resolved
+    }
+    return {
+      ...resolved,
+      provider: state.provider,
+      model: state.model,
+    }
+  })
   bindAgent()
   // Cordis owns the Channel lifetime. Rebinding handles the common case;
   // this effect closes the final timer when the Channel's context unloads.

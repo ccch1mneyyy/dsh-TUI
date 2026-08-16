@@ -11,7 +11,16 @@ import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
 
 export const name = 'dsh-tui'
-export const inject = ['agents', 'tuiWorkspaces']
+// `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
+// dsh CLI resolves the bundle's cordis.patch.yml from the FIRST copy of this
+// package found from its own install anchor (typically the global launcher),
+// while the Loader imports the plugin module from the profile's copy. When
+// the two copies skew, the patch may predate the dsh-tui-workspaces row — a
+// hard inject here then deadlocks the whole tree at boot ("pending (waiting
+// for service: tuiWorkspaces)"). The bundle patch keeps tuiWorkspaces in the
+// row-level inject purely as an ordering guarantee when the row exists; when
+// it does not, plugin.ts/channel.ts fall back to a local workspace runtime.
+export const inject = ['agents']
 
 /**
  * dsh-tui plugin configuration: session attachment, model route, working
