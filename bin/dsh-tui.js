@@ -96,6 +96,10 @@ const MSG = {
     en: err => `[dsh-tui] Failed to launch: ${err.message}`,
     zh: err => `[dsh-tui] 启动失败：${err.message}`,
   },
+  profileExited: {
+    en: code => `[dsh-tui] dsh profile exited with code ${code}. Run it directly for diagnostics:\n  dsh --profile ${PROFILE}`,
+    zh: code => `[dsh-tui] dsh profile 已退出（退出码 ${code}）。可直接运行以下命令查看诊断：\n  dsh --profile ${PROFILE}`,
+  },
   legacyEnv: {
     en: (oldName, newName) => `[dsh-tui] note: env ${oldName} was renamed to ${newName}; the old name no longer takes effect.`,
     zh: (oldName, newName) => `[dsh-tui] 提示：环境变量 ${oldName} 已更名为 ${newName}，旧名不再生效。`,
@@ -233,6 +237,7 @@ child.on('exit', (code, signal) => {
   if (signal) {
     process.kill(process.pid, signal)
   } else {
+    if (code !== null && code !== 0) console.error(MSG.profileExited[lang](code))
     process.exit(code ?? 0)
   }
 })

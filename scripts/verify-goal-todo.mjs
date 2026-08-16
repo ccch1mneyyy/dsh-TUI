@@ -114,6 +114,7 @@ async function run() {
     const { stdout, stderr, stdin } = makeStreams()
     const channel = {
       ...baseChannel,
+      working: true,
       goal: {
         id: 'g1',
         revision: 3,
@@ -145,7 +146,48 @@ async function run() {
     instance.unmount()
   }
 
-  // 3. Blocked goal with reason.
+  // 3. Idle channels drop a snapshot containing only completed work.
+  {
+    const { stdout, stderr, stdin } = makeStreams()
+    const channel = {
+      ...baseChannel,
+      todos: [
+        { content: 'Reproduce the crash', status: 'completed' },
+        { content: 'Fix the null deref in auth', status: 'completed' },
+      ],
+    }
+    const instance = await render(
+      React.createElement(GoalTodoPanel, { channel }),
+      { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+    )
+    await sleep(500)
+    const frame = toPlain(stdout.frames.join(''))
+    check('idle channel hides an all-completed todo snapshot', frame.trim() === '', JSON.stringify(frame))
+    instance.unmount()
+  }
+
+  // 4. Idle channels retain unfinished work but drop completed rows.
+  {
+    const { stdout, stderr, stdin } = makeStreams()
+    const channel = {
+      ...baseChannel,
+      todos: [
+        { content: 'Reproduce the crash', status: 'completed' },
+        { content: 'Add a regression test', status: 'pending' },
+      ],
+    }
+    const instance = await render(
+      React.createElement(GoalTodoPanel, { channel }),
+      { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+    )
+    await sleep(500)
+    const frame = toPlain(stdout.frames.join(''))
+    check('idle channel hides completed todo rows', !frame.includes('Reproduce the crash'))
+    check('idle channel keeps unfinished todo rows', frame.includes('Add a regression test'))
+    instance.unmount()
+  }
+
+  // 5. Blocked goal with reason.
   {
     const { stdout, stderr, stdin } = makeStreams()
     const channel = {
@@ -171,7 +213,7 @@ async function run() {
     instance.unmount()
   }
 
-  // 4. Live update: data arrives after mount (simulates a channel.emit from
+  // 6. Live update: data arrives after mount (simulates a channel.emit from
   //    a goal/change or todo/write event re-rendering the Chat screen).
   {
     const { stdout, stderr, stdin } = makeStreams()
