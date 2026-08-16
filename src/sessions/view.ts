@@ -144,7 +144,19 @@ export function buildView(
   const rows: BrowserRow[] = []
   let shown = 0
   let lastProject: string | undefined
-  for (const session of visible.sort((left, right) => right.updatedAt - left.updatedAt)) {
+  const ordered = visible.sort((left, right) => right.updatedAt - left.updatedAt)
+  if (filters.allProjects) {
+    // Order project groups by their newest visible session, then keep every
+    // session from that project together in MRU order. A global MRU sort alone
+    // can interleave A/B/A and emit the same project header more than once.
+    const projectOrder = new Map<string, number>()
+    for (const session of ordered) {
+      if (!projectOrder.has(session.cwd)) projectOrder.set(session.cwd, projectOrder.size)
+    }
+    ordered.sort((left, right) =>
+      projectOrder.get(left.cwd)! - projectOrder.get(right.cwd)! || right.updatedAt - left.updatedAt)
+  }
+  for (const session of ordered) {
     // Group headers only earn their line when more than one project is in
     // play; inside a single project they would repeat the same path forever.
     if (filters.allProjects && session.cwd !== lastProject) {
