@@ -95,6 +95,16 @@ const escape = (seq = '\x1b'): KeySummary => ({
   super: false,
   seq,
 })
+const named = (name: string, seq: string, mods: Partial<KeySummary> = {}): KeySummary => ({
+  kind: 'key',
+  name,
+  shift: false,
+  meta: false,
+  ctrl: false,
+  super: false,
+  seq,
+  ...mods,
+})
 
 // --- 1. exact sequences ---------------------------------------------------
 
@@ -134,6 +144,32 @@ check('text + ESC CR + text keeps order', new Feeder().feed('a\x1b\rb'), [
 check('CSI-u Shift+Enter + text keeps order', new Feeder().feed('\x1b[13;2uabc'), [
   ret({ shift: true }, '\x1b[13;2u'),
   text('abc'),
+])
+check('text + DEL Backspace + text keeps order', new Feeder().feed('ab\x7fc'), [
+  text('ab'),
+  named('backspace', '\x7f'),
+  char('c'),
+])
+check('text + BS Backspace + text keeps order', new Feeder().feed('ab\bc'), [
+  text('ab'),
+  named('backspace', '\b'),
+  char('c'),
+])
+check('text + Tab + text keeps order', new Feeder().feed('ab\tc'), [
+  text('ab'),
+  named('tab', '\t'),
+  char('c'),
+])
+check('text + Ctrl+C + text keeps order', new Feeder().feed('ab\x03d'), [
+  text('ab'),
+  named('c', '\x03', { ctrl: true }),
+  char('d'),
+])
+check('mixed CR stays a piped-line text token', new Feeder().feed('ab\rc'), [
+  text('ab\rc'),
+])
+check('bracketed paste preserves embedded controls', new Feeder().feed('\x1b[200~a\tb\x7fc\x1b[201~'), [
+  text('a\tb\x7fc'),
 ])
 
 // --- 3. chunked delivery ---------------------------------------------------

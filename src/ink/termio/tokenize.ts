@@ -6,7 +6,7 @@
  * identifies boundaries for use by keyboard input parsing.
  */
 
-import { C0, ESC_TYPE, isEscFinal } from './ansi.js'
+import { C0, ESC_TYPE, isC0, isEscFinal } from './ansi.js'
 import { isCSIFinal, isCSIIntermediate, isCSIParam } from './csi.js'
 
 /** A chunk of terminal input: plain text or a raw escape sequence. */
@@ -43,6 +43,12 @@ type TokenizerOptions = {
    * output streams, and enabling this there swallows display text. Default false.
    */
   x10Mouse?: boolean
+  /**
+   * Emit standalone C0/DEL input controls as sequence tokens instead of
+   * merging them with adjacent text. Intended for stdin key parsing; output
+   * parsers leave this disabled so controls such as BEL and Tab remain text.
+   */
+  splitInputControls?: boolean
 }
 
 /**
@@ -62,6 +68,7 @@ export function createTokenizer(options?: TokenizerOptions): Tokenizer {
   let currentState: State = 'ground'
   let currentBuffer = ''
   const x10Mouse = options?.x10Mouse ?? false
+  const splitInputControls = options?.splitInputControls ?? false
 
   return {
     feed(input: string): Token[] {
@@ -71,6 +78,7 @@ export function createTokenizer(options?: TokenizerOptions): Tokenizer {
         currentBuffer,
         false,
         x10Mouse,
+        splitInputControls,
       )
       currentState = result.state.state
       currentBuffer = result.state.buffer
@@ -78,7 +86,14 @@ export function createTokenizer(options?: TokenizerOptions): Tokenizer {
     },
 
     flush(): Token[] {
-      const result = tokenize('', currentState, currentBuffer, true, x10Mouse)
+      const result = tokenize(
+        '',
+        currentState,
+        currentBuffer,
+        true,
+        x10Mouse,
+        splitInputControls,
+      )
       currentState = result.state.state
       currentBuffer = result.state.buffer
       return result.tokens
@@ -106,6 +121,7 @@ function tokenize(
   initialBuffer: string,
   flush: boolean,
   x10Mouse: boolean,
+  splitInputControls: boolean,
 ): { tokens: Token[]; state: InternalState } {
   const tokens: Token[] = []
   const result: InternalState = {
@@ -146,6 +162,20 @@ function tokenize(
           seqStart = i
           result.state = 'escape'
           i++
+        } else if (
+          splitInputControls &&
+          isC0(code) &&
+          code !== C0.CR &&
+          code !== C0.LF
+        ) {
+          // stdin.read() can coalesce printable text and interactive control
+          // keys into one chunk. Keep Backspace, Tab, Ctrl+C, etc. as their
+          // own tokens so parseKeypress can expose the corresponding key
+          // flags instead of leaking the control byte into prompt text.
+          // CR/LF stay in text chunks for the Windows piped-line fallback.
+          flushText()
+          i++
+          emitSequence(data.slice(i - 1, i))
         } else {
           i++
         }

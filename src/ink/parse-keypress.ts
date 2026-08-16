@@ -660,7 +660,10 @@ export function parseMultipleKeypresses(
   const inputString = isFlush ? '' : inputToString(input)
 
   // Get or create tokenizer
-  const tokenizer = prevState._tokenizer ?? createTokenizer({ x10Mouse: true })
+  const tokenizer = prevState._tokenizer ?? createTokenizer({
+    x10Mouse: true,
+    splitInputControls: true,
+  })
 
   // Tokenize the input
   const tokens = isFlush ? tokenizer.flush() : tokenizer.feed(inputString)
