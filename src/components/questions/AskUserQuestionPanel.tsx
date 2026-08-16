@@ -14,17 +14,24 @@
 
 import React from 'react'
 import { t } from '../../i18n.js'
-import { Box, Text, useInput } from '../../ui.js'
+import { Box, Text, useInput, useTerminalSize } from '../../ui.js'
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
-import { POINTER } from '../../cc/figures.js'
+import { DOWN_ARROW, POINTER, UP_ARROW } from '../../cc/figures.js'
 import type { QuestionSelection } from '../../dsh-adapter/questions.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
+import { listWindow } from '../listWindow.js'
 
 const CHECKED = '◉'
 const UNCHECKED = '○'
 const PENCIL = '✎'
+
+// Keep a conservative amount of room for the divider, question text, footer,
+// and their margins. The exact question can wrap differently by terminal
+// width; leaving a little extra room is preferable to allowing the focused
+// option to fall below the viewport.
+const QUESTION_FRAME_ROWS = 16
 
 export type AskUserQuestionPanelProps = {
   /** The question to render (from the QuestionStore snapshot). */
@@ -82,6 +89,24 @@ export function AskUserQuestionPanel({
   const [error, setError] = React.useState<string | null>(null)
 
   const inputFocused = !hideCustomInput && focusIndex === options.length
+  const { rows: terminalRows } = useTerminalSize()
+
+  // Long provider catalogs and model lists must be windowed by rendered rows,
+  // not by option count. Labels and descriptions are deliberately kept to a
+  // single row below so this budget remains deterministic even for long text.
+  // When the custom row owns focus, keep the window anchored at the tail so
+  // the option immediately above it remains useful context.
+  const optionHeights = options.map(option => option.description === undefined ? 1 : 2)
+  const optionFocus = inputFocused ? Math.max(options.length - 1, 0) : focusIndex
+  const optionBudget = Math.max(
+    terminalRows - QUESTION_FRAME_ROWS - (hideCustomInput ? 0 : 2),
+    1,
+  )
+  const { start: optionStart, end: optionEnd } = listWindow(
+    optionHeights,
+    optionFocus,
+    optionBudget,
+  )
 
   // Park the native terminal cursor on the custom-answer caret: terminal
   // emulators render IME preedit (pinyin) at the physical cursor, so without
@@ -299,14 +324,22 @@ export function AskUserQuestionPanel({
 
   const renderOptions = (): React.ReactNode => (
     <Box flexDirection="column" marginTop={1}>
-      {options.map((option, index) => {
-        const focused = index === focusIndex
-        const selected = multiSelect ? checked.has(index) : focused
+      {options.slice(optionStart, optionEnd).map((option, index) => {
+        const absoluteIndex = optionStart + index
+        const focused = absoluteIndex === focusIndex
+        const selected = multiSelect ? checked.has(absoluteIndex) : focused
+        const indicator = focused
+          ? POINTER
+          : absoluteIndex === optionStart && optionStart > 0
+            ? UP_ARROW
+            : absoluteIndex === optionEnd - 1 && optionEnd < options.length
+              ? DOWN_ARROW
+              : ' '
         return (
-          <Box key={option.label} flexDirection="row" marginTop={focused ? 1 : 0}>
+          <Box key={option.label} flexDirection="row">
             <Box width={1} flexShrink={0}>
-              <Text color={focused ? 'claude' : undefined} bold={focused}>
-                {focused ? POINTER : ' '}
+              <Text color={focused ? 'claude' : undefined} dimColor={!focused} bold={focused}>
+                {indicator}
               </Text>
             </Box>
             <Box width={1} flexShrink={0}>
@@ -315,11 +348,11 @@ export function AskUserQuestionPanel({
               </Text>
             </Box>
             <Box flexDirection="column" marginLeft={1}>
-              <Text bold={focused || selected} color={focused ? 'claude' : undefined} wrap="wrap">
+              <Text bold={focused || selected} color={focused ? 'claude' : undefined} wrap="truncate">
                 {option.label}
               </Text>
               {option.description !== undefined && (
-                <Text dimColor wrap="wrap">
+                <Text dimColor wrap="truncate">
                   {option.description}
                 </Text>
               )}

@@ -59,13 +59,14 @@ function makeDeps(script, options = {}) {
     pushed: [],
     switches: [],
     asks: [],
+    optionLists: {},
     /** question id → hideCustomInput flag as submitted (panel contract). */
     hideFlags: {},
   }
   const host = {
     listCatalogProviders: () => [
       { provider: 'deepseek', displayName: 'DeepSeek' },
-      { provider: 'openai', displayName: 'OpenAI' },
+      { provider: 'openai', displayName: 'openai' },
     ],
     routeExists: () => false,
     discoverModels: async () => {
@@ -91,6 +92,7 @@ function makeDeps(script, options = {}) {
       for (const question of request.questions) {
         calls.asks.push(question.id)
         calls.hideFlags[question.id] = question.hideCustomInput === true
+        if (question.id === 'catalog') calls.optionLists.catalog = question.options
         const spec = script[question.id]
         if (spec === undefined) throw new Error(`unscripted question: ${question.id}`)
         if (spec === 'cancel') throw CANCEL
@@ -170,6 +172,8 @@ const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
     eq(calls.profiles, [['openai', { apiKeyEnv: 'OPENAI_API_KEY' }]]),
     JSON.stringify(calls.profiles))
   check('2 catalog bare: switch never asked', !calls.asks.includes('switch'))
+  check('2 catalog: duplicate provider name has no repeated description',
+    calls.optionLists.catalog?.find(option => option.label === 'openai')?.description === undefined)
 }
 
 // 3. custom path, discovery fails: manual model fallback question.
