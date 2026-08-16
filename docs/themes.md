@@ -79,6 +79,17 @@ DSH_TUI_THEME
 如果文件声明了 `name`，文件名仍可作为加载别名。完整语义键见
 [`src/theme.ts`](../src/theme.ts) 中的 `Theme` 类型。
 
+常用可覆盖键分组：
+
+| 分组 | 键 |
+| --- | --- |
+| 工具卡衬底（深浅两档） | `toolCardBackground`、`toolCardBackgroundDim` |
+| diff 行色 | `diffAdded`、`diffRemoved`、`diffAddedDimmed`、`diffRemovedDimmed`、`diffAddedWord`、`diffRemovedWord` |
+| diff 语法高亮 | `syntaxKeyword`、`syntaxString`、`syntaxComment`、`syntaxNumber`、`syntaxFunction`、`syntaxType`、`syntaxVariable`、`syntaxOperator`、`syntaxPunctuation`、`syntaxConstant` |
+
+diff 语义优先于语法色：改动词组总是使用 `diffAddedWord` / `diffRemovedWord`，
+语法色只作用于未变更的文本。
+
 ## 颜色格式
 
 支持：

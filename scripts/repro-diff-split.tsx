@@ -63,7 +63,9 @@ async function renderAt(cols, tool) {
     React.createElement(AssistantToolUseMessage, { tool, addMargin: false, verbose: false }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
-  await sleep(300)
+  // cli-highlight loads lazily on first use; give it room to land so the
+  // syntax-color assertions see the settled frame.
+  await sleep(900)
   const buf = term.buffer.active
   const lines = []
   for (let y = 0; y < rows; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
@@ -89,7 +91,14 @@ async function renderAt(cols, tool) {
     check('右栏（new）改动行底色为暗绿系', bgAt(dividerX + 2, pairRow) === 0x2b352c, `bg=${bgAt(dividerX + 2, pairRow).toString(16)}`)
     const markX = lines[pairRow]!.indexOf('mark="!"')
     check('右栏改动词组使用亮绿词色', markX > 0 && fgAt(markX, pairRow) === 0x57956b, `fg=${fgAt(Math.max(markX, 0), pairRow).toString(16)}`)
+    const defX = lines[pairRow]!.indexOf('def')
+    check('关键字使用语法色（syntaxKeyword）', defX > 0 && fgAt(defX, pairRow) === 0x8fa8e8, `fg=${fgAt(Math.max(defX, 0), pairRow).toString(16)}`)
   }
+  if (ctxRow >= 0) {
+    check('上下文行底色为浅档卡片色', bgAt(6, ctxRow) === 0x272c35, `bg=${bgAt(6, ctxRow).toString(16)}`)
+  }
+  const headerRow = lines.findIndex(line => line.includes('Edit /tmp/utils.py'))
+  check('工具卡头部带深档衬底', headerRow >= 0 && bgAt(2, headerRow) === 0x1e2229, `bg=${bgAt(Math.max(headerRow, 0), 2).toString(16)}`)
 }
 
 // ---- 3. Narrow terminal: unified fallback

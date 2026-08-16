@@ -303,7 +303,7 @@ export function AssistantToolUseMessage({
           ? 'messageActionsBackground'
           : isExpanded
             ? 'userMessageBackgroundHover'
-            : undefined
+            : 'toolCardBackgroundDim'
       }
     >
       <Box flexDirection="column" flexGrow={1}>

@@ -50,6 +50,21 @@ export type Theme = {
   diffRemovedDimmed: string
   diffAddedWord: string
   diffRemovedWord: string
+  // Tool card surfaces (two depth levels; the card itself takes the dim
+  // shade, diff context rows the lighter one, changed rows the diff palette)
+  toolCardBackground: string
+  toolCardBackgroundDim: string
+  // Diff syntax highlighting (user themes may override any of these)
+  syntaxKeyword: string
+  syntaxString: string
+  syntaxComment: string
+  syntaxNumber: string
+  syntaxFunction: string
+  syntaxType: string
+  syntaxVariable: string
+  syntaxOperator: string
+  syntaxPunctuation: string
+  syntaxConstant: string
   // Agent colors
   red_FOR_SUBAGENTS_ONLY: string
   blue_FOR_SUBAGENTS_ONLY: string
@@ -178,6 +193,18 @@ const darkTheme: Theme = {
   diffRemovedDimmed: rgb('#362B2C'),
   diffAddedWord: rgb('#57956B'),
   diffRemovedWord: rgb('#B26671'),
+  toolCardBackground: rgb('#272C35'), // lighter card surface
+  toolCardBackgroundDim: rgb('#1E2229'), // deeper substrate
+  syntaxKeyword: rgb('#8FA8E8'), // mist blue
+  syntaxString: rgb('#9FBF8F'), // soft sage
+  syntaxComment: rgb('#6B7280'), // neutral grey
+  syntaxNumber: rgb('#D9A97E'), // warm tan
+  syntaxFunction: rgb('#82B8C7'), // cyan blue
+  syntaxType: rgb('#B39DDB'), // soft violet
+  syntaxVariable: rgb('#C9D1D9'), // near-text
+  syntaxOperator: rgb('#93A1B0'), // blue grey
+  syntaxPunctuation: rgb('#7A8694'), // dim blue grey
+  syntaxConstant: rgb('#D98C9B'), // soft rose
   red_FOR_SUBAGENTS_ONLY: rgb('#D4685E'),
   blue_FOR_SUBAGENTS_ONLY: rgb('#7496D6'),
   green_FOR_SUBAGENTS_ONLY: rgb('#66B285'),
@@ -256,6 +283,18 @@ const lightTheme: Theme = {
   diffRemovedDimmed: rgb('#F5E6E4'),
   diffAddedWord: rgb('#A9D3B4'),
   diffRemovedWord: rgb('#E5B3AE'),
+  toolCardBackground: rgb('#F0EBDD'), // lighter warm card
+  toolCardBackgroundDim: rgb('#E8E0CD'), // deeper warm substrate
+  syntaxKeyword: rgb('#4A63A8'),
+  syntaxString: rgb('#4E7A4E'),
+  syntaxComment: rgb('#8A8F98'),
+  syntaxNumber: rgb('#A96B32'),
+  syntaxFunction: rgb('#3F7E8F'),
+  syntaxType: rgb('#7A5CA8'),
+  syntaxVariable: rgb('#343945'),
+  syntaxOperator: rgb('#5B6672'),
+  syntaxPunctuation: rgb('#9AA0A8'),
+  syntaxConstant: rgb('#B04A5A'),
   red_FOR_SUBAGENTS_ONLY: rgb('#BE5A52'),
   blue_FOR_SUBAGENTS_ONLY: rgb('#3F6CC4'),
   green_FOR_SUBAGENTS_ONLY: rgb('#4E9675'),
@@ -336,6 +375,18 @@ const darkAnsiTheme: Theme = {
   diffRemovedDimmed: 'ansi:red',
   diffAddedWord: 'ansi:greenBright',
   diffRemovedWord: 'ansi:redBright',
+  toolCardBackground: 'ansi:blackBright',
+  toolCardBackgroundDim: 'ansi:black',
+  syntaxKeyword: 'ansi:blueBright',
+  syntaxString: 'ansi:greenBright',
+  syntaxComment: 'ansi:blackBright',
+  syntaxNumber: 'ansi:yellowBright',
+  syntaxFunction: 'ansi:cyanBright',
+  syntaxType: 'ansi:magentaBright',
+  syntaxVariable: 'ansi:white',
+  syntaxOperator: 'ansi:white',
+  syntaxPunctuation: 'ansi:blackBright',
+  syntaxConstant: 'ansi:redBright',
   red_FOR_SUBAGENTS_ONLY: 'ansi:redBright',
   blue_FOR_SUBAGENTS_ONLY: 'ansi:blueBright',
   green_FOR_SUBAGENTS_ONLY: 'ansi:greenBright',

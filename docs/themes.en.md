@@ -82,6 +82,17 @@ Fields:
 When the file declares `name`, its filename remains a loading alias. See the
 `Theme` type in [`src/theme.ts`](../src/theme.ts) for every semantic key.
 
+Common override groups:
+
+| Group | Keys |
+| --- | --- |
+| Tool card surfaces (two depths) | `toolCardBackground`, `toolCardBackgroundDim` |
+| Diff rows | `diffAdded`, `diffRemoved`, `diffAddedDimmed`, `diffRemovedDimmed`, `diffAddedWord`, `diffRemovedWord` |
+| Diff syntax highlighting | `syntaxKeyword`, `syntaxString`, `syntaxComment`, `syntaxNumber`, `syntaxFunction`, `syntaxType`, `syntaxVariable`, `syntaxOperator`, `syntaxPunctuation`, `syntaxConstant` |
+
+Diff semantics outrank syntax colors: changed words always render in
+`diffAddedWord` / `diffRemovedWord`; syntax colors apply to unchanged text only.
+
 ## Color formats
 
 Accepted forms:
