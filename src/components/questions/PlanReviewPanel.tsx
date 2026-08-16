@@ -18,6 +18,7 @@
 import React from 'react'
 import { t } from '../../i18n.js'
 import { Box, Text, useInput } from '../../ui.js'
+import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../cc/figures.js'
@@ -56,6 +57,15 @@ export function PlanReviewPanel({
   const [error, setError] = React.useState<string | null>(null)
 
   const inputFocused = focusIndex === options.length
+
+  // Park the native terminal cursor on the feedback caret so IME preedit
+  // (pinyin) renders inline at the input instead of the screen's bottom row
+  // (same mechanism as AskUserQuestionPanel / PromptInput). Always active —
+  // typing on an option row also lands in the feedback buffer. The ref rides
+  // on the caret Text itself (all visual variants): its nodeCache rect IS
+  // the caret cell, so (0, 0) stays exact under wrapping without a
+  // layout-affecting wrapper Box.
+  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: true })
 
   const moveFocus = (delta: 1 | -1): void => {
     setFocusIndex(index => (index + delta + rowCount) % rowCount)
@@ -245,13 +255,13 @@ export function PlanReviewPanel({
           </Box>
           <Box flexDirection="row" marginLeft={1}>
             {feedback === '' && !inputFocused ? (
-              <Text dimColor>{t('plan-review-feedback-placeholder')}</Text>
+              <Text ref={caretRef} dimColor>{t('plan-review-feedback-placeholder')}</Text>
             ) : (
               <>
                 <Text wrap="wrap">{feedback.slice(0, cursor)}</Text>
                 {inputFocused
-                  ? <Text inverse>{cursorChar}</Text>
-                  : <Text color="suggestion">▏</Text>}
+                  ? <Text ref={caretRef} inverse>{cursorChar}</Text>
+                  : <Text ref={caretRef} color="suggestion">▏</Text>}
                 <Text wrap="wrap">{feedback.slice(inputFocused ? cursor + 1 : cursor)}</Text>
               </>
             )}

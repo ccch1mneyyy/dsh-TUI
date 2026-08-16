@@ -160,6 +160,11 @@ export async function checkForTuiUpdate(): Promise<TuiUpdateInfo | undefined> {
 interface ProcessOptions {  env?: NodeJS.ProcessEnv
   /** Needed only for .cmd launchers on Windows (they cannot spawn directly). */
   shell?: boolean
+  /**
+   * Receives each stderr chunk while output still flows to the terminal, so
+   * the caller can classify failures (issue #225's transient-race retry).
+   */
+  onStderr?: (chunk: string) => void
 }
 
 /**
@@ -187,9 +192,17 @@ function runProcess(
       : [command, args]
     const child = spawn(runCommand, runArgs as string[], {
       env: options.env,
-      stdio: 'inherit',
+      stdio: options.onStderr === undefined ? 'inherit' : ['inherit', 'inherit', 'pipe'],
       shell: useShell,
     })
+    if (options.onStderr !== undefined && child.stderr !== null) {
+      const onStderr = options.onStderr
+      child.stderr.on('data', (chunk: Buffer) => {
+        const text = chunk.toString('utf8')
+        process.stderr.write(text)
+        onStderr(text)
+      })
+    }
     const finish = (code: number): void => {
       if (settled) return
       settled = true
@@ -208,6 +221,20 @@ export function tuiUpdatePluginArgs(profile: string, targetVersion?: string): st
   return targetVersion === undefined
     ? ['plugin', '--profile', profile, 'update', '--latest', PACKAGE_NAME]
     : ['plugin', '--profile', profile, 'update', `${PACKAGE_NAME}@${targetVersion}`]
+}
+
+/**
+ * The pnpm Windows tmp-rename race signature (issue #225): pnpm swaps a
+ * package directory via a `<name>_tmp_<pid>` staging dir, and a file lock or
+ * AV scan makes the scandir/rename fail with ENOENT/EPERM/EBUSY. The failure
+ * is transient — the identical command succeeds on retry — but the crashed
+ * run leaves a half-updated profile (manifest pins the old version while the
+ * lockfile already carries the new snapshot), which presents as "update did
+ * nothing" (#209). Genuine resolution errors never carry the `_tmp_<pid>`
+ * token, so matching both keeps the retry from masking real failures.
+ */
+export function isTransientUpdateFailure(stderr: string): boolean {
+  return /ENOENT|EPERM|EBUSY/i.test(stderr) && /_tmp_\d+/i.test(stderr)
 }
 
 /**
@@ -234,8 +261,40 @@ export async function updateTuiAndRestart(
   targetVersion?: string,
 ): Promise<TuiUpdateResult> {
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
-  const updateCode = await runProcess(dsh, tuiUpdatePluginArgs(profile, targetVersion), { shell: true })
+  const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
+  let updateStderr = ''
+  const capture = (chunk: string): void => { updateStderr += chunk }
+  let updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
+  // Transient Windows tmp-rename race (issue #225): retry the identical
+  // command once — it succeeds on a clean second run, and only the
+  // `_tmp_<pid>` race signature qualifies, never a real resolution error.
+  if (updateCode !== 0 && isTransientUpdateFailure(updateStderr)) {
+    process.stderr.write('dsh-tui: transient pnpm failure (Windows tmp-rename race) — retrying once…\n')
+    updateStderr = ''
+    updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
+  }
   if (updateCode !== 0) return { updateCode, restartCode: updateCode }
+
+  // Post-update verification (issue #225): pnpm can report success yet leave
+  // the profile half-updated (manifest old / lockfile new). Verify against
+  // the preflight target; a full `install` reconciles lockfile →
+  // node_modules, and if the mismatch survives, stop before restarting into
+  // a mixed state and hand the user the exact repair command instead.
+  if (targetVersion !== undefined) {
+    let installed = installedTuiVersion()
+    if (installed !== targetVersion) {
+      await runProcess(dsh, ['plugin', '--profile', profile, 'install'], { shell: true })
+      installed = installedTuiVersion()
+    }
+    if (installed !== targetVersion) {
+      process.stderr.write(
+        `dsh-tui: update completed but the profile still runs ${installed ?? 'an unreadable version'} ` +
+          `(expected ${targetVersion}) — the profile is half-updated. Repair manually with:\n` +
+          `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@${targetVersion}\n`,
+      )
+      return { updateCode: 1, restartCode: 1 }
+    }
+  }
 
   const restartCode = await runProcess(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
     env: {

@@ -31,6 +31,7 @@ const {
   resolveDshProfileName,
   shellQuote,
   tuiUpdatePluginArgs,
+  isTransientUpdateFailure,
 } = await import('../lib/types/update.js')
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
 const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQuote.js', import.meta.url))
@@ -221,11 +222,35 @@ const dshSegment = compiledSource.slice(dshSpawn, nodeSpawn)
 const nodeSegment = compiledSource.slice(nodeSpawn)
 check(
   'P1: dsh.cmd spawn requests a shell',
-  /\{\s*shell:\s*true\s*\}/.test(dshSegment),
+  /\{\s*shell:\s*true[,\s}]/.test(dshSegment),
 )
 check(
   'P1: node restart spawn has no shell (space-safe exec path)',
   !/shell/.test(nodeSegment.replace(/shellQuote/g, '')),
+)
+
+// ---- isTransientUpdateFailure: the Windows tmp-rename race (issue #225)
+check(
+  'transient: pnpm tmp-rename ENOENT qualifies',
+  isTransientUpdateFailure(
+    "[ERR_PNPM_ENOENT] [importPackage D:\\p\\node_modules\\dsh-tui] ENOENT: no such file or directory, scandir 'D:\\p\\node_modules\\dsh-tui_tmp_40044_1\\node_modules'",
+  ),
+)
+check(
+  'transient: EPERM rename on a tmp staging dir qualifies',
+  isTransientUpdateFailure('EPERM: operation not permitted, rename D:\\p\\dsh-tui_tmp_123_4'),
+)
+check(
+  'transient: plain resolution ENOENT without tmp token does not qualify',
+  !isTransientUpdateFailure('ENOENT: no such file or directory, open /home/u/package.json'),
+)
+check(
+  'transient: registry 404 does not qualify',
+  !isTransientUpdateFailure('ERR_PNPM_FETCH_404 GET https://registry.npmjs.org/x: Not Found - 404'),
+)
+check(
+  'transient: empty output does not qualify',
+  !isTransientUpdateFailure(''),
 )
 
 if (failed > 0) {

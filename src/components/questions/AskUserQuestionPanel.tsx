@@ -15,6 +15,7 @@
 import React from 'react'
 import { t } from '../../i18n.js'
 import { Box, Text, useInput } from '../../ui.js'
+import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../cc/figures.js'
 import type { QuestionSelection } from '../../dsh-adapter/questions.js'
@@ -81,6 +82,18 @@ export function AskUserQuestionPanel({
   const [error, setError] = React.useState<string | null>(null)
 
   const inputFocused = !hideCustomInput && focusIndex === options.length
+
+  // Park the native terminal cursor on the custom-answer caret: terminal
+  // emulators render IME preedit (pinyin) at the physical cursor, so without
+  // this declaration CJK composition appears at the screen's bottom row
+  // instead of inline at the input (same mechanism as PromptInput's value
+  // box). Active whenever the input row is visible — typing on an option row
+  // also lands in this input, so the IME anchor must follow even when the
+  // row itself is not focused. The ref rides on the caret Text itself (all
+  // three visual variants): its nodeCache rect IS the caret cell, so (0, 0)
+  // stays exact under CJK widths and line wrapping without any
+  // layout-affecting wrapper Box.
+  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: !hideCustomInput })
 
   const moveFocus = (delta: 1 | -1): void => {
     if (rowCount <= 1) return
@@ -270,13 +283,13 @@ export function AskUserQuestionPanel({
         )}
         <Text dimColor>：</Text>
         {customText === '' && !inputFocused ? (
-          <Text dimColor>{t('question-direct-input')}</Text>
+          <Text ref={caretRef} dimColor>{t('question-direct-input')}</Text>
         ) : (
           <>
             <Text wrap="wrap">{customText.slice(0, customCursor)}</Text>
             {inputFocused
-              ? <Text inverse>{cursorChar}</Text>
-              : <Text color="suggestion">▏</Text>}
+              ? <Text ref={caretRef} inverse>{cursorChar}</Text>
+              : <Text ref={caretRef} color="suggestion">▏</Text>}
             <Text wrap="wrap">{customText.slice(inputFocused ? customCursor + 1 : customCursor)}</Text>
           </>
         )}

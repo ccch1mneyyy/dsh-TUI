@@ -1600,9 +1600,19 @@ export function Chat({
           setHistoryFocus(0)
         }
       } else if (key.leftArrow) {
-        setHistoryCursor(cursor => Math.max(0, cursor - 1))
+        // Step by code point, not UTF-16 unit: an emoji is two units, and
+        // a mid-pair caret offset would split it in the SearchBox render.
+        setHistoryCursor(cursor => {
+          if (cursor <= 0) return 0
+          const ch = [...historyQuery.slice(0, cursor)].pop()!
+          return cursor - ch.length
+        })
       } else if (key.rightArrow) {
-        setHistoryCursor(cursor => Math.min(historyQuery.length, cursor + 1))
+        setHistoryCursor(cursor => {
+          if (cursor >= historyQuery.length) return historyQuery.length
+          const ch = [...historyQuery.slice(cursor)][0]!
+          return cursor + ch.length
+        })
       } else if (key.home) {
         setHistoryCursor(0)
       } else if (key.end) {
