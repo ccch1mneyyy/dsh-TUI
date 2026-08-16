@@ -55,9 +55,13 @@ const MSG = {
     en: `[dsh-tui] First run — initializing the ${PROFILE} profile (${PACKAGE}@${ownVersion})…`,
     zh: `[dsh-tui] 首次运行，正在初始化 ${PROFILE} profile（${PACKAGE}@${ownVersion}）…`,
   },
+  bootstrapRetryW: {
+    en: '[dsh-tui] pnpm refused to add to the workspace root (ERR_PNPM_ADDING_TO_ROOT) — retrying with -w…',
+    zh: '[dsh-tui] pnpm 拒绝写入 workspace 根（ERR_PNPM_ADDING_TO_ROOT）——带 -w 重试…',
+  },
   installFailed: {
-    en: `[dsh-tui] Plugin install failed. Retry manually later:\n  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`,
-    zh: `[dsh-tui] 插件安装失败。可稍后手工重试：\n  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`,
+    en: `[dsh-tui] Plugin install failed. Retry manually later:\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${ownVersion}`,
+    zh: `[dsh-tui] 插件安装失败。可稍后手工重试：\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${ownVersion}`,
   },
   versionMismatch: {
     en: (installed, own) =>
@@ -151,7 +155,19 @@ if (installedVersion === undefined) {
     process.exit(1)
   }
   console.log(msg('bootstrapStart'))
-  const add = spawnSync(...cmd('dsh', ['plugin', '--profile', PROFILE, 'add', `${PACKAGE}@${ownVersion}`]), { stdio: 'inherit', ...shellOpt })
+  // pnpm ≥11 在带 pnpm-workspace.yaml 的 profile 目录里可能拒绝向
+  // workspace root 写依赖（ERR_PNPM_ADDING_TO_ROOT，issue #239）：识别该
+  // 错误时带 -w 重试一次。stderr 走 pipe 捕获供识别，stdout 保持
+  // inherit 让用户实时看到安装进度；手工重试提示同步带 -w。
+  const runAdd = extraArgs => spawnSync(
+    ...cmd('dsh', ['plugin', '--profile', PROFILE, 'add', ...extraArgs, `${PACKAGE}@${ownVersion}`]),
+    { stdio: ['inherit', 'inherit', 'pipe'], ...shellOpt },
+  )
+  let add = runAdd([])
+  if (add.status !== 0 && String(add.stderr).includes('ERR_PNPM_ADDING_TO_ROOT')) {
+    console.log(msg('bootstrapRetryW'))
+    add = runAdd(['-w'])
+  }
   if (add.status !== 0) {
     console.error(msg('installFailed'))
     process.exit(add.status ?? 1)
