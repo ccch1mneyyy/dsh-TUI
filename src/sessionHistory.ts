@@ -18,15 +18,6 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR, LEGACY_DATA_DIR } from './utils/paths.js'
 
-/** One persisted session as the `/resume` picker lists it. */
-export interface SessionRecord {
-  id: string
-  title: string
-  cwd: string
-  createdAt: number
-  updatedAt: number
-}
-
 const DIR = DATA_DIR
 const RESUME_FILE = join(DIR, 'resume.txt')
 const LEGACY_RESUME_FILE = join(LEGACY_DATA_DIR, 'resume.txt')

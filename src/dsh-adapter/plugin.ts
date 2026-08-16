@@ -267,6 +267,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       String(req.agent.id) === channel.agentId ? approvalStore.park(req) : next())
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
+  // Positional command-line arguments are the initial prompt (issue #53):
+  // `dsh-tui "run the tests"` forwards positionals through the dsh CLI,
+  // which mounts them as ctx.cmdlineArgs. Submit once the channel exists —
+  // delivery goes through the normal pending/inbox chain, so no special
+  // timing is needed; flag-shaped leftovers are not prompt text.
+  const cmdlineArgs = (ctx as { cmdlineArgs?: { args?: readonly string[] } }).cmdlineArgs?.args
+  const initialPrompt = cmdlineArgs?.filter(arg => !arg.startsWith('-')).join(' ').trim()
+  if (initialPrompt) channel.submit(initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
   notifyStderr = (text, options) => channel.notify(text, options)
@@ -363,8 +371,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     channel,
     questionStore,
     approvalStore,
-    // The trajectory scene enters the alt screen itself in inline mode; in
-    // fullscreen the tree is already wrapped below, so it must not nest.
+    // Full-screen surfaces inside Chat — the trajectory scene and the session
+    // browser — enter the alt screen themselves in inline mode; in fullscreen
+    // the tree is already wrapped below, so they must not nest.
     fullscreen: config.fullscreen === true,
     onExit: () => handleExit(),
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -416,8 +425,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // but flag it as teardown first so the settling waitUntilExit does not
   // run the user-exit sequence: no resume marker, no disposeRootAndExit,
   // the process stays alive and the recomposed tree re-mounts the TUI.
+  // Hand back what the channel contributed to host registries on the way out:
+  // the command registry scopes a registration to ITS own context, so the
+  // skill commands (issue #86) would survive this exact recompose and the
+  // re-mounted channel would find the names taken, freezing its menu.
   ctx.effect(() => () => {
     funnel.markTeardown()
+    channel.releaseContributions()
     instance?.unmount()
   })
 

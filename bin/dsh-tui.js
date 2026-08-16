@@ -132,22 +132,39 @@ if (installedVersion === undefined) {
 // --- 3. --resume 拦截 ---------------------------------------------------------
 // 换名过渡（issue #120）：全局 bin 与 profile 内 TUI 包版本可能错位，所以
 // env 双写（新旧名都设），文件读取新路径优先、旧路径兜底。
+// 支持的形态（对齐 issue #53 的诉求）：
+//   --resume <id> / --resume=<id>   恢复指定会话
+//   --resume / -c / --continue      恢复最近一次会话（读 resume.txt）
+// 其余位置参数原样透传给 dsh CLI，由插件经 ctx.cmdlineArgs 读取（初始 prompt）。
+const setResumeEnv = sessionId => {
+  process.env.DSH_TUI_RESUME_SESSION = sessionId
+  process.env.DSH_CC_RESUME_SESSION = sessionId
+}
+const readLastResumeTarget = () => {
+  for (const dir of ['.dsh-tui', '.dsh-cc']) {
+    try {
+      const sessionId = readFileSync(join(homedir(), dir, 'resume.txt'), 'utf8').trim()
+      if (sessionId) return sessionId
+    } catch {
+      // 没有历史会话可恢复——静默忽略，正常冷启动。
+    }
+  }
+  return ''
+}
 const args = []
-for (const a of process.argv.slice(2)) {
-  if (a === '--resume') {
+const argv = process.argv.slice(2)
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i]
+  if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
     let sessionId = ''
-    for (const dir of ['.dsh-tui', '.dsh-cc']) {
-      try {
-        sessionId = readFileSync(join(homedir(), dir, 'resume.txt'), 'utf8').trim()
-        if (sessionId) break
-      } catch {
-        // 没有历史会话可恢复——静默忽略，正常冷启动。
-      }
+    if (a.startsWith('--resume=')) {
+      sessionId = a.slice('--resume='.length).trim()
+    } else if (a === '--resume' && argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) {
+      sessionId = argv[++i].trim()
     }
-    if (sessionId) {
-      process.env.DSH_TUI_RESUME_SESSION = sessionId
-      process.env.DSH_CC_RESUME_SESSION = sessionId
-    }
+    // 裸形态（含 -c/--continue）回退到 resume.txt。
+    if (!sessionId) sessionId = readLastResumeTarget()
+    if (sessionId) setResumeEnv(sessionId)
   } else if (
     process.env.DSH_TUI_WORKSPACE_TARGET === undefined
     && !a.startsWith('-')

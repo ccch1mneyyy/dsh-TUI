@@ -4,8 +4,9 @@ import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, 
 import { POINTER } from '../cc/figures.js'
 import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
+import { homeDir } from '../utils/paths.js'
 import type { LlmModelInfo } from '../dsh-adapter/types.js'
-import type { Channel, ChatRow, EffortOption, PresetOption } from '../dsh-adapter/channel.js'
+import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PresetOption } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
 import { ApprovalStore } from '../dsh-adapter/approvals.js'
@@ -27,7 +28,7 @@ import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
-import { ResumePicker, type ResumePickerMode } from '../components/ResumePicker.js'
+import { SessionBrowser } from './SessionBrowser.js'
 import { WorkspacePicker } from '../components/WorkspacePicker.js'
 import { WorkspaceFlowPicker } from '../components/WorkspaceFlowPicker.js'
 import type { TuiWorkspaceCommandResult, TuiWorkspaceTarget } from '../workspaces.js'
@@ -52,7 +53,6 @@ import type { SessionEvent } from '../dsh-adapter/types.js'
 import { LoadingState } from '../components/design-system/LoadingState.js'
 import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'
-import type { SessionRecord } from '../sessionHistory.js'
 
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
@@ -153,7 +153,8 @@ export function Chat({
   onUpdate?: () => void
   /**
    * True when the host already wrapped this tree in `<AlternateScreen>`
-   * (`fullscreen: true`). The trajectory scene needs this: entering the alt
+   * (`fullscreen: true`). Both full-screen surfaces need this — the trajectory
+   * scene and the session browser: entering the alt
    * screen a second time is harmless, but the inner unmount's DEC 1049 exit
    * would drop the whole app back to the main screen.
    */
@@ -210,12 +211,9 @@ export function Chat({
   const [modelPickerOpen, setModelPickerOpen] = React.useState(false)
   const [models, setModels] = React.useState<readonly LlmModelInfo[]>([])
   const [modelIndex, setModelIndex] = React.useState(0)
-  const [resumePickerOpen, setResumePickerOpen] = React.useState(false)
-  const [resumeSessions, setResumeSessions] = React.useState<readonly SessionRecord[]>([])
-  const [resumeIndex, setResumeIndex] = React.useState(0)
-  /** `/resume` session management (issue #112): plain selection, a delete
-   *  confirmation (ctrl+d), or the inline rename input (ctrl+r). */
-  const [resumeMode, setResumeMode] = React.useState<ResumePickerMode>('list')
+  /** `/resume` opens the session browser, a screen rather than a panel. It
+   *  owns its own selection, filters and keyboard — Chat only opens it. */
+  const [browserOpen, setBrowserOpen] = React.useState(false)
   const [workspacePickerOpen, setWorkspacePickerOpen] = React.useState(false)
   const [workspaceTargets, setWorkspaceTargets] = React.useState<readonly TuiWorkspaceTarget[]>([])
   const [workspaceIndex, setWorkspaceIndex] = React.useState(0)
@@ -230,7 +228,6 @@ export function Chat({
   } | null>(null)
   const workspaceFlowRequestRef = React.useRef(0)
   const workspaceFlowAbortRef = React.useRef<AbortController | null>(null)
-  const [resumeRenameText, setResumeRenameText] = React.useState('')
   /** `/activity` indicator picker (pi extension's interactive select). */
   const [activityPickerOpen, setActivityPickerOpen] = React.useState(false)
   const [activityIndex, setActivityIndex] = React.useState(0)
@@ -760,22 +757,10 @@ export function Chat({
       }
       case 'resume': {
         setHelpOpen(false)
-        void (async () => {
-          const sessions = await channel.listSessions()
-          // The current session cannot be resumed into itself (agents.resume
-          // rejects a live session), so it is excluded from the picker —
-          // otherwise the fresh empty session of this launch always tops the
-          // list as an unopenable row.
-          const pickable = sessions.filter(session => session.id !== channel.agentId)
-          setResumeSessions(pickable)
-          if (pickable.length === 0) {
-            channel.notify(t('resume-none-in-cwd'))
-            return
-          }
-          setResumeMode('list')
-          setResumePickerOpen(true)
-          setResumeIndex(0)
-        })()
+        // The browser opens immediately and loads its own list. Waiting for
+        // the listing here would make `/resume` feel slower the more history
+        // a project has, which is exactly backwards.
+        setBrowserOpen(true)
         return true
       }
       case 'workspace': {
@@ -1272,6 +1257,10 @@ export function Chat({
     // swallowed there). Chat registered first, so an early return here does
     // not block the event from reaching the panel.
     if (btw !== null) return
+    // Same for the session browser: it renders instead of the conversation,
+    // so every key belongs to it — including the plain letters that drive its
+    // search box, which Chat would otherwise route into the prompt.
+    if (browserOpen) return
     // The questionnaire / approval panel owns the keyboard while one is
     // pending (the panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc;
     // the prompt input is unmounted, so nothing else should see these keys).
@@ -1464,110 +1453,6 @@ export function Chat({
         if (target !== undefined) void channel.switchWorkspace(target)
       } else if (key.escape) {
         setWorkspacePickerOpen(false)
-      }
-      return
-    }
-    if (resumePickerOpen) {
-      const resumeSession = resumeSessions[resumeIndex]
-      // Session management modes (issue #112): the list keys stay untouched
-      // until ctrl+d/ctrl+r switch into a sub-mode, each with Enter/Esc.
-      if (resumeMode === 'confirm-delete') {
-        if (plainReturn) {
-          setResumeMode('list')
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
-          if (resumeSession) {
-            const target = resumeSession
-            void (async () => {
-              const ok = await channel.deleteSession(target.id)
-              if (!ok) {
-                channel.notify(t('resume-delete-failed', { name: target.title || target.id }), { color: 'error' })
-                return
-              }
-              channel.notify(t('resume-deleted', { name: target.title || target.id }))
-              // Refresh right away so the row disappears in place; closing
-              // the picker when nothing resumable remains.
-              const sessions = await channel.listSessions()
-              const pickable = sessions.filter(session => session.id !== channel.agentId)
-              setResumeSessions(pickable)
-              if (pickable.length === 0) {
-                setResumePickerOpen(false)
-              } else {
-                setResumeIndex(index => Math.min(index, pickable.length - 1))
-              }
-            })()
-          }
-        } else if (key.escape) {
-          setResumeMode('list')
-        }
-        return
-      }
-      if (resumeMode === 'rename') {
-        if (plainReturn) {
-          setResumeMode('list')
-          const title = resumeRenameText.trim()
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
-          if (resumeSession && title.length > 0) {
-            const target = resumeSession
-            void (async () => {
-              const ok = await channel.renameSessionTo(target.id, title)
-              if (!ok) {
-                channel.notify(t('resume-rename-failed', { name: target.title || target.id }), { color: 'error' })
-                return
-              }
-              channel.notify(t('rename-done', { title }))
-              // Re-list so the row reflects the persisted state, but patch
-              // the renamed row's title explicitly: listSessions resolves
-              // persisted titles only within the MRU top SESSION_TITLE_DEPTH
-              // window, and a freshly renamed row must never snap back to
-              // the basename fallback in between.
-              const sessions = await channel.listSessions()
-              const next = sessions
-                .filter(session => session.id !== channel.agentId)
-                .map(session => (session.id === target.id ? { ...session, title } : session))
-              setResumeSessions(next)
-              // Re-anchor focus on the renamed row: renameSessionTo touches
-              // MRU, so the re-listed order shifts — a kept index would
-              // silently point at a DIFFERENT session, and a following
-              // Enter/ctrl+d would act on the wrong one (review leftover).
-              const anchored = next.findIndex(session => session.id === target.id)
-              if (anchored >= 0) setResumeIndex(anchored)
-            })()
-          }
-        } else if (key.escape) {
-          setResumeMode('list')
-        } else if (key.backspace) {
-          setResumeRenameText(text => text.slice(0, -1))
-        } else if (!key.ctrl && !key.meta && !key.super && input) {
-          // Single-line title: pasted newlines collapse to spaces.
-          setResumeRenameText(text => text + input.replace(/[\r\n]+/g, ' '))
-        }
-        return
-      }
-      if (key.upArrow) {
-        setResumeIndex(index => (index <= 0 ? resumeSessions.length - 1 : index - 1))
-      } else if (key.downArrow) {
-        setResumeIndex(index => (index >= resumeSessions.length - 1 ? 0 : index + 1))
-      } else if (plainReturn) {
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
-        if (resumeSession) {
-          // Enter switches the live agent to the persisted session right
-          // away (the history replays into the transcript); the resume.txt
-          // launcher marker is refreshed by resumeTo so `--resume` on the
-          // next launch opens the same session.
-          setResumePickerOpen(false)
-          void channel.resumeTo(resumeSession.id).then((ok) => {
-            if (ok) channel.notify(t('resume-resumed'))
-          })
-        } else {
-          setResumePickerOpen(false)
-        }
-      } else if (key.escape) {
-        setResumePickerOpen(false)
-      } else if (isMod(key) && input === 'd' && resumeSession) {
-        setResumeMode('confirm-delete')
-      } else if (isMod(key) && input === 'r' && resumeSession) {
-        setResumeRenameText(resumeSession.title || '')
-        setResumeMode('rename')
       }
       return
     }
@@ -1820,9 +1705,27 @@ export function Chat({
   // Working-activity line (spinner slot): context-pressure prefix shares the
   // StatusLine thresholds (amber ≥ 80, red ≥ 95).
   const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
+  // The browser is a screen, not an overlay: it REPLACES the conversation
+  // rather than floating above it. Rendering it as an early return (after
+  // every hook above has run) is what makes that literal — there is no
+  // transcript underneath to be repainted, scrolled, or bled through.
+  if (browserOpen) {
+    const browser = (
+      <SessionBrowser
+        channel={channel}
+        home={homeDir()}
+        sameProject={sessionCwdMatches}
+        onClose={() => setBrowserOpen(false)}
+      />
+    )
+    // Inline hosts enter the alternate screen for the duration; full-screen
+    // hosts are already in it and must not nest a second one.
+    return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+  }
+
   /** Prompt input is inert while a modal dialog owns the keyboard. */
   const promptSelectionActive =
-    selectionActive || modelPickerOpen || resumePickerOpen || workspacePickerOpen || workspaceFlow !== null || activityPickerOpen ||
+    selectionActive || modelPickerOpen || workspacePickerOpen || workspaceFlow !== null || activityPickerOpen ||
     effortSliderOpen || presetPickerOpen || themePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen ||
     btw !== null
 
@@ -1846,7 +1749,7 @@ export function Chat({
   // blit-skip 后留空（Esc 关 picker 一片空白的根因）。
   const dialogOverlayOpen =
     thinkingOpen || (workspacePickerOpen && workspaceTargets.length > 0) || workspaceFlow !== null ||
-    (resumePickerOpen && resumeSessions.length > 0) || modelPickerOpen ||
+    modelPickerOpen ||
     activityPickerOpen || (effortSliderOpen && effortOptions.length > 1) ||
     (presetPickerOpen && presetOptions.length > 0) || themePickerOpen || historyOpen ||
     rewindOpen || searchOpen
@@ -2033,17 +1936,6 @@ export function Chat({
                 focusIndex={workspaceFlowIndex}
                 busy={workspaceFlowBusy}
                 input={workspaceFlowInput}
-              />
-            </Box>
-          )}
-          {resumePickerOpen && resumeSessions.length > 0 && (
-            <Box flexDirection="column" marginTop={1}>
-              <ResumePicker
-                sessions={resumeSessions}
-                focusIndex={resumeIndex}
-                currentSessionId={channel.agentId}
-                mode={resumeMode}
-                renameText={resumeRenameText}
               />
             </Box>
           )}
