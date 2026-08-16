@@ -1,20 +1,28 @@
 #!/usr/bin/env node
 /**
- * Regression: /resume picker rename BEYOND the title window (issue #112
- * review). channel.listSessions resolves persisted titles only for the MRU
- * top SESSION_TITLE_DEPTH (20) sessions; a rename must not leave a deeper
- * session showing the cwd-basename fallback while reporting success.
+ * Regression: a rename is visible on the row it renamed, at ANY depth.
+ *
+ * History: `listSessions` used to resolve persisted titles for only the 20
+ * most recently used sessions, so a rename deeper than that reported success
+ * while the row snapped back to the cwd-basename fallback. The session index
+ * removed the window — every listed session resolves its own title from a
+ * bounded read — so this now asserts the stronger property the window used to
+ * make impossible: the OLDEST of 25 sessions shows its persisted title before
+ * the rename and the new one after it.
  *
  * Seeds 25 sessions under a temp DSH_TUI_SESSION_ROOT (HOME is also
- * redirected so last-used.json stays in the sandbox), renames the OLDEST
- * one (rank 25, outside the window), and asserts:
- *   1. before the rename its row shows the basename fallback (proving it
- *      sits outside the title window);
+ * redirected so last-used.json and the session index stay in the sandbox),
+ * renames the OLDEST one, and asserts:
+ *   1. before the rename the deep row already carries its persisted title;
  *   2. renameSessionTo returns true and the append lands in the log;
- *   3. after the rename the re-listed row carries the NEW title (the rename
- *      touches MRU, pulling the session into the window) — this is what
- *      keeps the name visible after a restart too;
- *   4. last-used.json actually recorded the touch.
+ *   3. after the rename the re-listed row carries the NEW title;
+ *   4. the rename touched MRU, pulling the row to the top;
+ *   5. last-used.json actually recorded the touch.
+ *
+ * The persistence stub deliberately offers only `list` — no `listSnapshots`
+ * and no `locate` — so this also covers the degraded path: change tokens
+ * derived from the file itself, and log paths resolved by the compat scan.
+ *
  * Run with plain node against the compiled lib: `node scripts/verify-resume-rename-mru.mjs`
  * Exits non-zero on any assertion failure (CI gate).
  */
@@ -40,7 +48,7 @@ const { createChannel } = await import('../lib/types/dsh-adapter/channel.js')
 const CWD = '/tmp'
 const COUNT = 25
 const ids = Array.from({ length: COUNT }, (_, i) => `s${String(i).padStart(3, '0')}`)
-// createdAt ascending: s000 oldest => MRU rank 25, outside the depth-20 window.
+// createdAt ascending: s000 oldest => MRU rank 25, the deepest row.
 const headers = ids.map((id, i) => ({ id, cwd: CWD, createdAt: 1000 + i }))
 
 for (const [i, id] of ids.entries()) {
@@ -74,19 +82,20 @@ const agent = {
 }
 const channel = createChannel(ctx, agent, { model: 'm', cwd: CWD, provider: 'p', activity: false })
 
-const target = ids[0] // oldest — MRU rank 25, outside the title window
+const target = ids[0] // oldest — the deepest row
 const before = await channel.listSessions()
 assert.equal(before.length, COUNT, 'all sessions listed')
 const rowBefore = before.find(r => r.id === target)
 assert.ok(rowBefore, 'target session is listed')
-// Sanity: the target really sits outside the title window, so its row shows
-// the cwd-basename fallback (basename('/tmp')), NOT its persisted old title.
-assert.equal(rowBefore.title, 'tmp', 'target starts on the basename fallback')
+// The deep row resolves its own persisted title — no depth window any more.
+assert.equal(rowBefore.title.text, `old-${target}`, 'deep row carries its persisted title')
+assert.equal(rowBefore.hasPrompt, true, 'seeded sessions hold a user prompt')
+assert.equal(rowBefore.kind.kind, 'root', 'a session with no lineage is a root conversation')
 assert.equal(before[0].id, ids[COUNT - 1], 'MRU order: newest first')
 assert.equal(before.findIndex(r => r.id === target), COUNT - 1, 'target is the last row')
 
-// In-window control: the newest session shows its persisted title.
-assert.equal(before[0].title, `old-${ids[COUNT - 1]}`, 'in-window session shows its log title')
+// In-window control: the newest session shows its persisted title too.
+assert.equal(before[0].title.text, `old-${ids[COUNT - 1]}`, 'newest session shows its log title')
 
 // ── Rename the deep session ─────────────────────────────────────────────
 assert.equal(await channel.renameSessionTo(target, 'renamed-deep'), true, 'rename reports success')
@@ -94,7 +103,8 @@ assert.equal(await channel.renameSessionTo(target, 'renamed-deep'), true, 'renam
 const after = await channel.listSessions()
 const rowAfter = after.find(r => r.id === target)
 assert.ok(rowAfter, 'target still listed after rename')
-assert.equal(rowAfter.title, 'renamed-deep', 'renamed title resolves (no snap back to fallback)')
+assert.equal(rowAfter.title.text, 'renamed-deep', 'renamed title resolves (no snap back to fallback)')
+assert.equal(rowAfter.title.source, 'renamed', 'a title with no provider source reads as a rename')
 assert.equal(after[0].id, target, 'rename touched MRU: target pulled to the top row')
 
 // The MRU touch must be durable (last-used.json under the sandboxed HOME).
