@@ -14,6 +14,9 @@ permissions:
 jobs:
   npm:
     runs-on: ubuntu-latest
+    env:
+      # Gate scripts assert zh UI copy (same convention as CI).
+      DSH_TUI_LANG: zh
     steps:
       - uses: actions/checkout@v4
 
