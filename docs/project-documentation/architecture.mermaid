@@ -1,0 +1,135 @@
+flowchart TB
+  %% dsh-cc-tui 架构总图：所有信息内嵌节点，行号以审计基线 b2f4087 为准
+
+  subgraph CFG["配置层"]
+    C1["cordis.yml：24 个服务 id，裸 dsh --config 组合示例；cc-tui 段 provider 半钉（无 model 键，cordis.yml:15）"]
+    C2["cordis.patch.yml：29 个顶层覆盖 + 1 个 insert 块（cordis.patch.yml:170、:178、:185、:214；publishIntervalMs=500（:217））"]
+    C3["dsh Loader 组合：patch 整行覆盖语义，最终组合内容未核验（node_modules 未安装）"]
+    C4["会话后端实况：JSONL 挂载（cordis.patch.yml:143-149、cordis.yml:158-164）；SQLite 声称仅见于旧文档 = 文档冲突/待确认"]
+  end
+
+  subgraph ENTRY["入口与生命周期"]
+    E1["src/index.ts：插件契约 cc-tui、注入声明、Config Schema；入口轻量、延迟加载 runtime"]
+    E2["src/plugin.ts：TTY 检查、语言 5 级链解析、技能与 stderr 守卫装配、Agent 创建/恢复、React 挂载、统一退出清理；src/plugin.ts:26-33 自述 front door"]
+    E3["src/bootstrap/state.ts：遥测空桩，不参与启动流程"]
+  end
+
+  subgraph CH["会话与通道"]
+    H1["src/channel.ts：session 事件日志为真相源（src/channel.ts:110-114）；transcript 行全部派生自 session/event，不用 React 本地数组"]
+    H2["动作面：submit / steer / resume / rewind / model / preset（src/channel.ts:34-58 ToolRow 按 callId 关联）"]
+    H3["流式链路：assistant/chunk 帧对齐 emitStream 16ms 尾沿（src/channel.ts:1114-1125）；foldRows MAX_ROWS=600"]
+    H4["TPS 折叠链：src/channel.ts:2747-2760、src/channel.ts:2557-2566、src/channel.ts:2568-2595、src/channel.ts:2632-2652、src/channel.ts:2762-2782，样本上限 500"]
+    H5["teardown 退出漏斗：上下文 teardown 不得走到进程退出（issue 12，scripts/verify-teardown-exit.tsx 挂 CI .github/workflows/ci.yml:41）"]
+  end
+
+  subgraph APP["应用层 UI"]
+    A1["src/screens/Chat.tsx：模态优先级、全局按键、滚动/搜索/选择状态、slash 分发；useSyncExternalStore 订阅 channel.version（src/screens/Chat.tsx:118）与 isSticky（src/screens/Chat.tsx:193-198）"]
+    A2["src/screens/StatusLine.tsx：状态栏；model 渲染 src/screens/StatusLine.tsx:92-94、TPS 读数（src/screens/StatusLine.tsx:57-87）；src/screens/StatusMetrics.ts 指标推导"]
+    A3["src/components/MessageList.tsx：虚拟化 MAX_RENDERED_ROWS=300（src/components/MessageList.tsx:28-30）、高度缓存 5000 FIFO（src/components/MessageList.tsx:114-134）、MemoRow 浅比较（src/components/MessageList.tsx:320-328）、compactPreview truncateToWidth（src/components/MessageList.tsx:565-571）"]
+    A4["src/components/WorkingSpinner.tsx、StreamingMarkdown.tsx、LoadedContextPanel.tsx 等；运行时上下文组（src/components/LoadedContextPanel.tsx:82-88）"]
+    A5["src/components/design-system：主题感知原语（Box/Text/Select/PromptInput 等），IME 避让"]
+    A6["src/ui.ts：主题化 renderer facade（Box/Text/render/选择/滚动）"]
+  end
+
+  subgraph INK["移植 Ink 渲染内核（src/ink/，103 文件）"]
+    I1["src/ink/ink.tsx：Ink.render 入口（src/ink/ink.tsx:1464-1476，ConcurrentRoot:262）；scheduleRender 16ms 节流（src/ink/ink.tsx:212-216）；onRender 主管线（src/ink/ink.tsx:420-794）；repaint 三件套（src/ink/ink.tsx:812-861）；搜索侧渲染 scanElementSubtree（src/ink/ink.tsx:1083-1123）"]
+    I2["src/ink/reconciler.ts：resetAfterCommit（src/ink/reconciler.ts:276-344，onRender:333）；CLAUDE_CODE_DEBUG_REPAINTS/COMMIT_LOG 读取（src/ink/reconciler.ts:192/202）"]
+    I3["src/ink/log-update.ts：diff 生成（src/ink/log-update.ts:173-558）；DECSTBM 硬件滚动（src/ink/log-update.ts:228-251）；收缩帧就地重画（src/ink/log-update.ts:285-337）；viewportY 之上跳过（src/ink/log-update.ts:369-376/src/ink/log-update.ts:445-447）；fullResetSequence_CAUSES_FLICKER（src/ink/log-update.ts:594-604）"]
+    I4["src/ink/output.ts：Operation 队列 + CharCache；flushBuffer 每 style run 预计算（src/ink/output.ts:703-737，grapheme 段:729）；writeLineToScreen hot loop（src/ink/output.ts:750-914）"]
+    I5["src/ink/screen.ts：packed typed-array，每格 2xInt32 + noSelect bitmap + damage 区域；CellWidth 枚举（src/ink/screen.ts:356-367）；diff/diffEach（src/ink/screen.ts:1283-1367）"]
+    I6["src/ink/dom.ts：Yoga 桥接；增量 MeasureWrapCache（src/ink/dom.ts:445-549）；measureTextNode（src/ink/dom.ts:447-549）"]
+    I7["src/ink/optimizer.ts：merge cursorMove（src/ink/optimizer.ts:44-52）/ collapse cursorTo（:54-58）/ 超链接去重（:70-77）/ 成对取消（:79-87）"]
+    I8["src/ink/termio/osc.ts：OSC 常量（src/ink/termio/osc.ts:249-269）；osc ST/BEL（:23-26）；wrapForMultiplexer（:43-52）；setClipboard 三路径（:154-174）；tabStatus ant 门控（:498-500/:510-527）"]
+    I9["src/ink/terminal.ts：BSU/ESU 2026 同步输出（BSU 拼接 :268、ESU :313）；SYNC_OUTPUT_SUPPORTED 能力常量（:204）allowlist（:76-124）；win32 光标 yank bug 规避（:195-197）"]
+    I10["src/ink/styles.ts：Style 类型 16 个 ansi 名 + Color 联合（src/ink/styles.ts:22-41）"]
+  end
+
+  subgraph TEX["文本测量与 CJK"]
+    T1["src/ink/stringWidth.ts：Bun 分支（:211-231）；JS 回退纠正 U+26A0（:13-19）；三档路径（:20-104）；梵文合字分歧（:205-209）"]
+    T2["src/ink/line-width-cache.ts：按行缓存、4096 条/10 万字符预算、detachString 断 SlicedString"]
+    T3["src/ink/wrap-text.ts：wrap/wrap-trim/truncate 分发（:47-81）；truncate 三位置（:15-38）；sliceFit 宽字符重试（:8-13）"]
+    T4["src/ink/truncateToWidth.ts：共享截断 helper，按 code point 不劈宽字（:8-18）；3 个调用点：FileSuggestions:38-49、CommandSuggestions:26-58、MessageList:565-571"]
+    T5["src/native-ts/yoga-layout/：纯 TS yoga 移植（src/native-ts/yoga-layout/index.ts:1-39）；generation + 4 槽 LRU 缓存（src/native-ts/yoga-layout/index.ts:1387-1508）"]
+  end
+
+  subgraph INP["输入链"]
+    P1["src/ink/hooks/use-input.ts：useLayoutEffect 同步 raw mode（:45-93）"]
+    P2["src/ink/parse-keypress.ts：tokenizer + 正则表（:23-65）；keyName 表（:316-418）、keycodeToName PUA 键名（:503-557）；DECRPM/DA1/DA2/XTVERSION 解析（:84-170）"]
+    P3["src/ink/events/input-event.ts：parseKey 生成 Key 旗标（:31-194）"]
+    P4["src/ink/events/dispatcher.ts：capture/bubble 两阶段（:46-79）；getEventPriority（:122-138）"]
+    P5["src/ink/focus.ts：FocusManager Tab 循环（:105-179），focusStack MAX 32"]
+    P6["src/ink/hooks/use-terminal-size.ts：注释 ported from the leak（:7）"]
+  end
+
+  subgraph THM["主题与 i18n"]
+    M1["src/theme.ts：THEME_NAMES 三色板（:92）；69 个 string 键；dark-ansi verbatim from the leak（:261-269）；未知名回退 dark（:346-355）；活动主题镜像（:381-398）"]
+    M2["src/components/design-system/ThemeProvider.tsx：强制到探测链（:80-91）；OSC 11 探测 400ms/luma 140（:113-125）；子组件待主题落定才渲染（:10-27）；/theme 热切换（:133-144）"]
+    M3["src/customTheme.ts：~/.dsh-cc/themes/name.json；base + colors 叠加（:249-256）；isSafeThemeName 防穿越（:90-103）；resolveCustomTheme 缓存（:258-289）"]
+    M4["src/i18n.ts：215 个键（:30-279）；5 级语言链（:5-11/:372-382）；setLang 热换（:305-308）；持久化（:336-365）"]
+  end
+
+  subgraph SYS["系统功能"]
+    S1["更新系统 src/update.ts：启动 4s 版本检查、registry 3 级解析、/update 仅 dsh --profile 模式（pnpm update --latest）；已确认缺陷：src/update.ts:232 后读版本导致 DSH_CC_UPDATED_FROM=新版，成功更新必误报"]
+    S2["MCP stderr 聚合：StdioClientTransport stderr 从 inherit 改管道，去重聚合为受控通知（issue 17，scripts/verify-child-stderr.tsx 挂 CI .github/workflows/ci.yml:63）；cross-spawn 行为仅注释声明"]
+    S3["模型路由 src/modelRoute.ts：config 优先级 > pref > default 原子整对解析（issue 67，scripts/verify-model-route.mjs 挂 CI .github/workflows/ci.yml:67）；/model 即时 fork 切换并持久化；provider 钉 cc-tui 段；resume 后状态栏跟随会话自身记录（issue 67）"]
+    S4["上下文 src/utils/loaded-context.ts：注入上下文展示口径冲突（面板独立组 vs 旧文档不列出）；/doctor 存储路径检查 ~/.dsh-cc/sessions 与 JSONL 根不符"]
+    S5["本地命令 src/commands.ts：39 条内置（程序化计数）+ 解析辅助；/rewind 与 /new 一次生效（pr-55）"]
+    S6["打包技能 skills/*/SKILL.md：由 src/packaged-skills.ts 注册随 npm 分发"]
+  end
+
+  subgraph ORG["来源归属审计（元信息参考块）"]
+    O1["282 条目：unverified 116、project-self 81、cc-port 57、port-ink 18、generated 5、port-pi 3、port-yoga 2、deepseek-official 0（程序化计数）"]
+    O1 -.构成.-> O2
+    O2["cc-port 57 标记构成：显式头注释 37、compiler-runtime 12、CLAUDE_CODE_* 5、ported CC build 2、slack 链接 1；markdown.ts 大写 Ported 归入其他类"]
+    O3["源码分布：src/ 共 209 文件（ink 103、components 53、utils 14、cc 8、screens 3、native-ts 2、bootstrap 1、hooks 1、types 1、根 23）；scripts/ repro 10、verify 18；npm exports 6 项（package.json:9-25）"]
+  end
+
+  C1 --> C2
+  C2 --> C3
+  C3 --> E1
+  C4 --> H1
+  E1 --> E2
+  E2 --> H1
+  E2 --> M2
+  E3 -.遥测空桩.-> E2
+  H1 --> H2
+  H1 --> H3
+  H1 --> H4
+  H1 --> H5
+  H1 --> A1
+  A1 --> A2
+  A1 --> A3
+  A1 --> A4
+  A1 --> A5
+  A1 --> A6
+  A6 --> I1
+  I1 --> I2
+  I1 --> I3
+  I3 --> I4
+  I4 --> I5
+  I1 --> I6
+  I1 --> I7
+  I1 --> I8
+  I1 --> I9
+  I1 --> I10
+  I6 --> T1
+  T1 --> T2
+  T1 --> T3
+  T3 --> T4
+  I6 --> T5
+  I1 --> P1
+  I1 --> P6
+  P1 --> P2
+  P2 --> P3
+  P2 --> P4
+  P4 --> P5
+  M1 --> M2
+  M2 --> M3
+  E2 --> M4
+  E2 --> S1
+  E2 --> S2
+  E2 --> S3
+  E2 --> S4
+  A1 --> S5
+  E2 --> S6
+  O1 -.统计.-> O3

@@ -203,33 +203,38 @@ function runProcess(
   })
 }
 
+/** Build the profile-manager command, preferring a preflight-pinned version. */
+export function tuiUpdatePluginArgs(profile: string, targetVersion?: string): string[] {
+  return targetVersion === undefined
+    ? ['plugin', '--profile', profile, 'update', '--latest', PACKAGE_NAME]
+    : ['plugin', '--profile', profile, 'update', `${PACKAGE_NAME}@${targetVersion}`]
+}
+
 /**
  * Update the installed dsh-tui package and restart the same launcher while
  * preserving the active session. The TUI must already be unmounted before
  * this is called so pnpm output cannot corrupt the rendered terminal frame.
  *
- * `--latest` is required: `pnpm add` writes a caret range into the profile
- * manifest, and a plain `pnpm update` stays inside that range — with this
- * project's minor-per-release cadence the TUI would restart unchanged while
- * reporting success. The restart carries `DSH_TUI_UPDATED_FROM` so the new
- * process can warn when the version did not actually move (e.g. a mirror
- * registry still serving the old `latest`).
+ * When the preflight registry check resolved an exact target, pass that
+ * version to pnpm instead of resolving `latest` a second time. This avoids a
+ * stale mirror/dist-tag response between the check and install. If preflight
+ * failed, retain the `--latest` fallback: a plain `pnpm update` stays inside
+ * the manifest range and can restart unchanged across minor releases.
  *
  * @param sessionId - Session to resume in the replacement process.
  * @param profile - The dsh profile this TUI was launched with; updating any
  *   other profile would leave the running install untouched.
+ * @param targetVersion - Exact version returned by the preflight registry
+ *   check, or undefined when that check failed and pnpm should resolve latest.
  * @returns Exit codes for the update run and the replacement process.
  */
-export async function updateTuiAndRestart(sessionId: string, profile: string): Promise<TuiUpdateResult> {
+export async function updateTuiAndRestart(
+  sessionId: string,
+  profile: string,
+  targetVersion?: string,
+): Promise<TuiUpdateResult> {
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
-  const updateCode = await runProcess(dsh, [
-    'plugin',
-    '--profile',
-    profile,
-    'update',
-    '--latest',
-    PACKAGE_NAME,
-  ], { shell: true })
+  const updateCode = await runProcess(dsh, tuiUpdatePluginArgs(profile, targetVersion), { shell: true })
   if (updateCode !== 0) return { updateCode, restartCode: updateCode }
 
   const restartCode = await runProcess(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
