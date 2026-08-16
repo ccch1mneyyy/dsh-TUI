@@ -2,6 +2,7 @@ import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize } from '../ui.js'
 import type { ChatRow } from '../dsh-adapter/channel.js'
+import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
@@ -12,17 +13,75 @@ import { listWindow } from './listWindow.js'
  * conversation to a previous point in time"): lists the user's past messages
  * newest-first; selecting one and confirming rewinds the conversation to
  * that point (the message comes back into the input for re-editing).
+ *
+ * The confirm pane has two shapes: the plain one (Enter rewinds), and —
+ * when a plugin answered the tui/rewind-prompt decision with extra modes —
+ * a choice list whose option zero is always the built-in conversation-only
+ * rewind, followed by the plugin's modes (e.g. "also restore files").
  */
 export function RewindPicker({
   rows,
   focusIndex,
   confirmRow,
+  modes = null,
+  modeIndex = 0,
+  busy = false,
 }: {
   rows: readonly ChatRow[]
   focusIndex: number
   confirmRow: ChatRow | null
+  /** Plugin-offered rewind modes (tui/rewind-prompt); null = plain confirm. */
+  modes?: readonly TuiRewindMode[] | null
+  /** Focused option in the modes list (0 = conversation-only). */
+  modeIndex?: number
+  /** True while the plugin decision is in flight. */
+  busy?: boolean
 }): React.ReactNode {
   if (confirmRow !== null) {
+    if (modes !== null) {
+      // Plugin modes: a described choice list (one extra row per
+      // description), windowed like the message list below.
+      const { rows: terminalRows } = useTerminalSize()
+      const rowCosts = [2, ...modes.map(mode => (mode.description === undefined ? 1 : 2))]
+      const { start, end } = listWindow(rowCosts, modeIndex, Math.max(terminalRows - 10, 2))
+      const options: readonly { key: string; label: string; description?: string }[] = [
+        { key: 'conversation', label: t('rewind-mode-default'), description: t('rewind-confirm-desc') },
+        ...modes.map(mode => ({
+          key: mode.id,
+          label: mode.label,
+          ...(mode.description === undefined ? {} : { description: mode.description }),
+        })),
+      ]
+      return (
+        <Pane color="permission">
+          <Box flexDirection="column">
+            <Box marginBottom={1}>
+              <Text color="remember" bold>
+                {t('rewind-confirm-title')}
+              </Text>
+              <Text dimColor>{preview(confirmRow.text)}</Text>
+            </Box>
+            {options.slice(start, end).map((option, index) => {
+              const absoluteIndex = start + index
+              return (
+                <ListItem
+                  key={option.key}
+                  isFocused={absoluteIndex === modeIndex}
+                  description={option.description}
+                  showScrollUp={absoluteIndex === start && start > 0}
+                  showScrollDown={absoluteIndex === end - 1 && end < options.length}
+                >
+                  {option.label}
+                </ListItem>
+              )
+            })}
+          </Box>
+          <Text dimColor italic>
+            <HintLine text={t('hint-select-exit')} />
+          </Text>
+        </Pane>
+      )
+    }
     return (
       <Pane color="permission">
         <Box flexDirection="column">
@@ -78,6 +137,7 @@ export function RewindPicker({
             )
           })
         )}
+        {busy && <Text dimColor>{t('rewind-waiting-plugins')}</Text>}
       </Box>
       <Text dimColor italic>
         <HintLine text={t('hint-select-exit')} />
