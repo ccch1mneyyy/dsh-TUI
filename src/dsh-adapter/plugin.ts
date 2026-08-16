@@ -29,6 +29,9 @@ import { checkForTuiUpdate, installedTuiVersion, isVersionNewer, resolveDshProfi
 import { isLang, resolveStartupLang, setLang, t } from '../i18n.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { Chat } from '../screens/Chat.js'
+import type { TuiDialogRuntime } from './dialogs.js'
+import type { TuiStatusRuntime } from './status.js'
+import type { TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime } from './workspaces.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
@@ -242,6 +245,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (ctx.get('tuiScenes') === undefined && resolveDshProfileName() !== undefined) {
     ctx.logger.warn(
       'dsh-tui: tuiScenes service is not mounted; plugin scenes will never open. ' +
+      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+    )
+  }
+  // Same skew guard for the plugin-UI services (dsh-tui-extensions row):
+  // managed dialogs park unanswered, status contributions never render,
+  // shortcuts never match, and custom-entry renderers stay invisible when
+  // the row is absent — say why on profile launches.
+  if (ctx.get('tuiDialogs') === undefined && resolveDshProfileName() !== undefined) {
+    ctx.logger.warn(
+      'dsh-tui: tuiDialogs/tuiStatus/tuiShortcuts/tuiRenderers services are not mounted; plugin dialogs, status contributions, shortcuts and custom-entry renderers are off. ' +
       'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
     )
   }
@@ -488,6 +501,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     channel,
     questionStore,
     approvalStore,
+    // The dsh-tui-extensions row's services (managed dialogs, status line,
+    // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
+    // Chat falls back to inert stores and no shortcut registry.
+    extensionDialogs: (ctx.get('tuiDialogs') as TuiDialogRuntime | undefined)?.store,
+    extensionStatus: (ctx.get('tuiStatus') as TuiStatusRuntime | undefined)?.store,
+    extensionShortcuts: ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined,
     // Full-screen surfaces inside Chat — the trajectory scene and the session
     // browser — enter the alt screen themselves in inline mode; in fullscreen
     // the tree is already wrapped below, so they must not nest.

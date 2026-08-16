@@ -8,6 +8,7 @@
     "dsh-tui-command-trees",
     "dsh-tui-settings-sections",
     "dsh-tui-scenes",
+    "dsh-tui-extensions",
     "agent-presets",
     "cordis-host-runner",
     "dsh-tui",

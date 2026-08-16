@@ -71,6 +71,54 @@ Minimal `package.json` skeleton (full reference:
 TypeScript relative imports must carry the `.js` suffix (ESM); build with `tsc`
 into `lib/types/`.
 
+## Seam Overview
+
+| Seam | Shape | Purpose |
+| --- | --- | --- |
+| 1 · Session events | cordis events | Observe model/session state; append log-only events |
+| 2 · TUI prompt slots | official host service | Prompt-line slots in the official TUI (not provided by dsh-TUI) |
+| 3 · Packaged skills | static asset | Ship SKILL.md with the package |
+| 4 · Themes | static asset | JSON color schemes |
+| 5 · System prompt sections | cordis service | Inject stable prompt sections |
+| 6 · Settings sections | `ctx.tuiSettingsSections` | Declarative `/settings` editing cards |
+| 7 · Profile composition | cordis.patch.yml | Install/config rows |
+| 8 · Full-screen scenes | `ctx.tuiScenes` | Whole-terminal React pages (the `/trace` shape) |
+| 9 · Decision events | cordis serial/parallel events | Intercept/rewrite input, rewind, session switches, compaction |
+| 10 · Managed dialogs | `ctx.tuiDialogs` | select / confirm / input modals |
+| 11 · Status line | `ctx.tuiStatus` | Keyed status-line contributions above the prompt |
+| 12 · Keyboard shortcuts | `ctx.tuiShortcuts` | Register global combos |
+| 13 · Entry renderers | `ctx.tuiRenderers` | Custom session events → transcript text rows |
+
+Seams 9–13 together are the **extension surface** (dsh-tui-extensions). One
+import brings the type augmentations (the four services on `Context`, the
+decision events on `Events`):
+
+```ts
+import type {
+  TuiInputEvent, TuiInputDecision,
+  TuiRewindPromptEvent, TuiRewindPromptDecision, TuiRewindMode, TuiRewindDoneEvent,
+  TuiSessionSwitchEvent, TuiSessionSwitchDecision, TuiSessionSwitchedEvent,
+  TuiCompactEvent, TuiCompactDecision,
+} from '@deepseek-harness-tui/dsh-tui/extensions'
+```
+
+The four services are mounted by the main package's `dsh-tui-extensions` row
+(already in cordis.patch.yml) — plugins must not mount their own copy. Always
+consume through `ctx.get('tuiDialogs', false)`-style soft probes: an older
+profile may lack the row, and a missing optional service must degrade
+silently, never block startup (the #183 principle).
+
+Standing discipline for the whole extension surface (not repeated per seam):
+
+- **Locals win**: a plugin shadows nothing built in — reserved shortcut
+  combos, built-in event types, and built-in commands all take precedence;
+  conflicting registrations are refused with a warning, never a throw.
+- **Render-path strings are untrusted input**: the host strips C0/C1 control
+  characters, collapses whitespace, and truncates by terminal CELL (never
+  `string.length`).
+- **A crashing plugin never takes the TUI down**: listener/handler exceptions
+  are caught, logged, and treated as "no opinion" or "skip this entry".
+
 ## Seam 1: Session Events (consumed natively by dsh-TUI)
 
 dsh-TUI's Channel projects durable session events into the transcript.
@@ -419,6 +467,218 @@ React instance:
   transcript gets an error line, the scene closes itself, and the TUI keeps
   running. Errors inside effects and async callbacks are beyond the
   boundary's reach and remain the scene's own responsibility.
+
+## Seam 9: Decision Events (tui/input · rewind · session-switch · compact)
+
+pi-style before-events: the TUI hands plugins the decision BEFORE executing
+key actions. All decision events use cordis **serial** semantics — listeners
+are awaited in registration order and the **first opinion wins**; listeners
+after it are not called. Every listener returning `undefined` means "proceed
+with the default". A throwing listener counts as "no opinion" (the host logs
+and continues the default path), and a slow listener may legitimately show a
+managed dialog before answering.
+
+The companion notification events (except `tui/rewind-done`'s summary return)
+are **parallel**: after-the-fact broadcasts with no decision power.
+
+### Contract table
+
+| Event | Fired | Payload (all carry `sessionId`, `cwd`) | Return (first non-undefined wins) |
+| --- | --- | --- | --- |
+| `tui/input` | Before a user input is delivered (submit AND steer) | `text`, `delivery: 'followup'\|'steer'` | `{ text }` rewrite · `{ handled: true, notice? }` plugin took over · `{ cancel: true, reason? }` drop |
+| `tui/rewind-prompt` | After a rewind target is confirmed, before any fork work | `text`, `seq` | `{ cancel: true, reason? }` veto (picker stays open) · `{ modes: TuiRewindMode[] }` extra rewind modes in the confirm pane (≤8, each needs `id`+`label`) |
+| `tui/rewind-done` | Rewind finished, agent already swapped | `text`, `mode: string\|null`, `boundarySeq`, `sourceSessionId`, `childSessionId` | First non-empty `string` toasted as the summary (6s); other returns ignored |
+| `tui/session-switch` | Before `/new` or `/resume` (zero side effects yet) | `kind: 'new'\|'resume'`, `targetSessionId?` | `{ cancel: true, reason? }` veto |
+| `tui/session-switched` | After `/new`, `/resume`, or a rewind | `kind: 'new'\|'resume'\|'rewind'`, `sessionId`, `previousSessionId?` | Notification (parallel); returns ignored |
+| `tui/compact` | Before `/compact` runs | — | `{ cancel: true, reason? }` veto |
+
+Shared semantics:
+
+- `cancel.reason` / `handled.notice` are toasted; the host supplies a
+  localized fallback when absent.
+- A `{ text }` rewrite is trimmed; an empty result counts as "no opinion".
+  The rewrite applies only BEFORE delivery — if the user switched sessions
+  mid-await, the stale input is dropped with a notice (stale-drop) instead of
+  leaking the old conversation's words into the new session.
+- `tui/rewind-prompt` modes render as a choice list in the confirm pane (the
+  host's "Conversation only" entry always comes first); the picked mode id is
+  echoed back in `tui/rewind-done`'s payload — the plugin performs the actual
+  mode logic (e.g. restoring files) in the done listener.
+- Be deliberate about slow work in decision listeners: `tui/input` sits in
+  front of the delivery chain and genuinely delays sending; when you need to
+  ask the user, use seam 10 (it exists for exactly this).
+
+### Example: input guard + custom command output
+
+```ts
+import type { TuiInputEvent, TuiInputDecision } from '@deepseek-harness-tui/dsh-tui/extensions'
+
+ctx.on('tui/input', (event: TuiInputEvent): TuiInputDecision | undefined => {
+  // /my-command is handled by the plugin itself: no session, no model
+  if (event.text.startsWith('/my-command')) {
+    void runMyCommand(event.text.slice('/my-command'.length).trim())
+    return { handled: true, notice: 'handed to my-command' }
+  }
+  // dangerous-phrase guard
+  if (event.text.includes('rm -rf /')) {
+    return { cancel: true, reason: 'my-guard: blocked by the safety policy' }
+  }
+  // shorthand expansion
+  if (event.text === '@standup') {
+    return { text: "Summarize yesterday's commits in this repo as a standup report" }
+  }
+  return undefined // no opinion — deliver as typed
+})
+```
+
+## Seam 10: Managed Dialogs (tuiDialogs)
+
+The `ctx.ui` equivalent from pi: plugins never touch rendering — they issue
+requests and the TUI shows a modal panel above the prompt (owning the
+keyboard while open), resolving the Promise with the answer. Concurrent
+requests queue **FIFO**, one visible at a time.
+
+```ts
+const dialogs = ctx.get('tuiDialogs', false)
+
+// Single choice: resolves the option id; cancel/Esc/timeout/abort → undefined
+const id = await dialogs?.select({
+  title: 'Pick one',
+  options: [
+    { id: 'fast', label: 'Fast mode' },
+    { id: 'safe', label: 'Safe mode', description: 'One extra confirmation' },
+  ],
+  signal: abortController.signal,  // optional: external abort
+  timeoutMs: 30_000,               // optional: auto-cancel (headless-embedder fuse)
+})
+
+// Confirm: resolves true/false; cancel counts as false (Esc and "No" are
+// deliberately indistinguishable)
+const ok = await dialogs?.confirm({
+  title: 'Overwrite?',
+  message: 'The target file already exists',
+  confirmLabel: 'Overwrite',   // defaults fall back to the host's localized Yes/No
+  cancelLabel: 'Keep',
+})
+
+// Single-line input: resolves the text; cancel → undefined
+const name = await dialogs?.input({
+  title: 'Give it a name',
+  placeholder: 'Enter to confirm, Esc to cancel',
+  initial: 'default-name',
+})
+```
+
+Contract points:
+
+- **Never throws**: malformed requests (no title, no valid options) resolve
+  the cancelled value with a warning — the awaiting plugin always continues.
+- Inputs are sanitized on arrival: control chars stripped, whitespace
+  collapsed; title/label ≤120 cells, message ≤400, input ≤500, ≤100 options
+  (truncated beyond).
+- Panel keys: ↑/↓ to move, Enter to confirm, Esc/Ctrl+C to cancel; `input`
+  is a single-line editor inside the dialog (arrows/Home/End/backspace/
+  delete), independent of the main prompt.
+- When the service is absent (older profiles) `ctx.get` returns `undefined` —
+  the plugin decides whether to skip interaction or fall back to a headless
+  default; `timeoutMs` is the fuse for "service present but no TUI consumer".
+
+Typical pairing: a decision-event listener that asks first —
+`ctx.on('tui/rewind-prompt', async () => … await dialogs.select(…))` — then
+returns its decision once the user answers.
+
+## Seam 11: Status Line (tuiStatus)
+
+Keyed status-line contributions — pi's `setStatus(key, text)`. All
+contributions render as one line (joined with ` · `) above the prompt, in
+first-set order:
+
+```ts
+const status = ctx.get('tuiStatus', false)
+status?.set('my-plugin', 'building 42%')   // set/update
+status?.set('my-plugin', undefined)        // clear ('' works too)
+```
+
+- Key rule: `/^[a-z][a-z0-9_-]*$/` (convention: the plugin name, or
+  `plugin:sub-item`); at most 20 keys, text ≤200 cells; violations are
+  refused with a warning, never a throw.
+- The host clears every contribution when the plugin unloads — no manual
+  cleanup needed.
+- The status line is DISPLAY-ONLY: for anything actionable use a shortcut
+  (seam 12) or a scene (seam 8).
+
+## Seam 12: Keyboard Shortcuts (tuiShortcuts)
+
+pi's `registerShortcut`: bind a combo to a handler.
+
+```ts
+const shortcuts = ctx.get('tuiShortcuts', false)
+const dispose = shortcuts?.register('ctrl+shift+p', {
+  description: 'Open my panel',           // required — discoverability
+  handler: () => { void openMyPanel() },
+})
+ctx.effect(() => () => dispose?.())       // cleanup hangs on the CALLER's fiber
+```
+
+Combo syntax: `ctrl`/`alt` (`meta`/`option` are synonyms)/`shift` plus one
+character or a named key (`enter`, `esc`, `tab`, `backspace`, `delete`,
+`up/down/left/right`, `home`, `end`, `pageup`, `pagedown`, `space`) — e.g.
+`ctrl+shift+p`, `alt+k`, `ctrl+space`.
+
+Rules (all "refuse + warn, never throw"):
+
+- **ctrl or alt is mandatory** — bare letters are typing, bare arrows are
+  navigation.
+- **Reserved combos are refused at registration**: the TUI's own bindings
+  (ctrl+c/d/t/r/x/o/l/e/v/a/u/k/w, ctrl+←/→, ctrl/alt+Enter, alt+↑, Esc, Tab,
+  Shift+Tab). This is the enforcement of "locals win": a collision can never
+  reach the matcher.
+- Re-registering the same canonical combo is refused.
+- Dispatch happens only in the PLAIN chat state: any overlay (pickers,
+  approvals, questionnaires, managed dialogs, scenes, the session browser)
+  owns the keyboard while open.
+- Handlers are fire-and-forget: rejections are caught, toasted against the
+  `description`, and logged — one bad handler never breaks the keyboard for
+  everyone else.
+- The returned dispose is scoped by the CALLER with its own `ctx.effect`
+  (same contract as tuiScenes) — a service method cannot see the caller's
+  fiber.
+
+## Seam 13: Custom Entry Renderers (tuiRenderers)
+
+pi's `registerMessageRenderer`: a renderer maps the log-only session events a
+plugin appends through seam 1 (`session.append('my-plugin/event', payload)`)
+to **plain-text rows**; the Channel then projects them into the transcript —
+the live stream and replays (/resume, rewind) share the same path:
+
+```ts
+const renderers = ctx.get('tuiRenderers', false)
+const dispose = renderers?.register('my-plugin/note', (payload) => {
+  const note = payload as { text: string; ts: number }
+  return {
+    title: 'Note',                         // optional heading row
+    lines: [note.text, `recorded ${new Date(note.ts).toLocaleString()}`],
+  }
+  // returning undefined = skip this entry (per-payload decision)
+})
+ctx.effect(() => () => dispose?.())
+```
+
+Rules:
+
+- The type must look like `plugin/event` (kebab, exactly one `/`); built-in
+  event types (`KNOWN_SESSION_EVENT_TYPES`) and the host-special-cased
+  `agent-preset/selected` are refused — built-in projections always win.
+- Renderers NEVER receive React: the full interactive surface is scenes
+  (seam 8); transcript rows must be plain text — one crash on a replay path
+  would corrupt the whole screen.
+- A throwing renderer: that entry is skipped and the type is logged ONCE
+  (sticky) — replaying a long log does not spam the warn stream.
+- Output is sanitized as untrusted input too (control chars stripped,
+  preview-clipped by cell).
+- The two hard rules of event-type registration (log-only + registering into
+  `KNOWN_SESSION_EVENT_TYPES`) remain seam 1's responsibility — a renderer
+  only controls "how it displays", not "whether it may persist".
 
 ## Naming and Publishing Conventions
 

@@ -1,0 +1,330 @@
+/**
+ * End-to-end verification of the plugin decision-event seam
+ * (dsh-tui-extensions): a REAL cordis context, a REAL createChannel over a
+ * fake agent, and a REAL Chat screen driven through a fake TTY.
+ *
+ * Covered contracts:
+ *  1. tui/input transform — a plugin's substitute text is what gets
+ *     delivered (the typed text never reaches the agent).
+ *  2. tui/input cancel — nothing is delivered, the reason is toasted.
+ *  3. tui/input crash isolation — a throwing listener degrades to
+ *     "no opinion"; delivery proceeds unchanged.
+ *  4. tui/rewind-prompt modes — the confirm pane renders the plugin's
+ *     modes, picking one threads its id through rewindTo, and the
+ *     tui/rewind-done summary + tui/session-switched('rewind') fire.
+ *  5. tui/rewind-prompt cancel — the rewind is vetoed before any fork.
+ *  6. tui/session-switch veto + tui/session-switched on /new.
+ *  7. tui/compact veto (bus-level: the channel wiring shares the helper
+ *     covered above; the compact path needs a full preset isolate, which
+ *     a headless fake cannot supply).
+ *
+ * Follows repro-picker-windowing.tsx: fake session event log, fake
+ * sessions/agents services, plainText ANSI wash over stdout frames.
+ */
+process.env.FORCE_COLOR = '3'
+
+// 家目录隔离：touchSession/clearResumeTarget（/new 与 rewind 都会走）写
+// ~/.dsh-tui 的真实文件，必须先切到临时目录再 import src。HOME 与
+// USERPROFILE 必须成对设置（POSIX 读 HOME、Windows 读 USERPROFILE）。
+const { mkdtempSync, mkdirSync } = await import('node:fs')
+const { tmpdir } = await import('node:os')
+const { join: joinPath } = await import('node:path')
+const isolatedHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-ext-events-home-'))
+process.env.HOME = isolatedHome
+process.env.USERPROFILE = isolatedHome
+mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
+
+const [
+  { PassThrough, Writable },
+  React,
+  { Context },
+  { render },
+  { Chat },
+  { QuestionStore },
+  { createChannel },
+] = await Promise.all([
+  import('node:stream'),
+  import('react'),
+  import('@deepseek-ai/cordis'),
+  import('../src/ui.js'),
+  import('../src/screens/Chat.js'),
+  import('../src/dsh-adapter/questions.js'),
+  import('../src/dsh-adapter/channel.js'),
+])
+
+class FakeStdout extends Writable {
+  columns = 100
+  rows = 28
+  isTTY = true
+  frames: string[] = []
+  _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void) {
+    this.frames.push(String(chunk))
+    callback()
+  }
+}
+
+class FakeStderr extends Writable {
+  isTTY = true
+  _write(_chunk: unknown, _encoding: BufferEncoding, callback: () => void) {
+    callback()
+  }
+}
+
+class FakeStdin extends PassThrough {
+  isTTY = true
+  setRawMode() { return this }
+  ref() { return this }
+  unref() { return this }
+}
+
+const plainText = (frames: string[]) => frames
+  .join('')
+  .replace(/\x1b\[(\d+)C/g, (_, n) => ' '.repeat(Number(n)))
+  .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+  .replace(/\x1b\]9;[^\x07]*\x07/g, '')
+  .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+/** Toasts are a LIST — the screen shows only the newest, so toast
+ *  assertions read the channel's notification queue, not the frames. */
+const notified = (fragment: string): boolean =>
+  (channel as unknown as { notifications: readonly { text: string }[] }).notifications
+    .some(item => item.text.includes(fragment))
+
+let failures = 0
+const check = (name: string, ok: boolean, detail = '') => {
+  if (!ok) failures += 1
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${ok || detail === '' ? '' : ` — ${detail}`}`)
+}
+
+const NOW = 1700000000000
+
+/** 10 closed turns, each turn/start + user/message + turn/end (rewindable). */
+function makeEvents() {
+  const events: Array<Record<string, unknown>> = []
+  for (let i = 0; i < 10; i++) {
+    events.push(
+      { seq: i * 3, time: NOW + i * 30, type: 'turn/start', data: { turn: i } },
+      {
+        seq: i * 3 + 1,
+        time: NOW + i * 30 + 5,
+        type: 'user/message',
+        data: { source: { kind: 'user' }, content: [{ type: 'text', text: `消息 ${String(i).padStart(2, '0')}` }] },
+      },
+      { seq: i * 3 + 2, time: NOW + i * 30 + 10, type: 'turn/end', data: { turn: i, reason: { kind: 'completed' } } },
+    )
+  }
+  return events
+}
+
+const stubAgentCtx = { on: () => () => {} }
+
+function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { followupTexts: string[] }) {
+  return {
+    id,
+    status: 'idle',
+    session: { id: `s-${id}`, seq: sessionEvents.length, events: sessionEvents, header: {} },
+    ctx: stubAgentCtx,
+    followup(message: { content?: readonly { type?: string; text?: string }[] }) {
+      const text = (message.content ?? []).filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+      captured.followupTexts.push(text)
+    },
+    steer() {},
+    inbox: { remove: () => true },
+  }
+}
+
+function makeServices(captured: { followupTexts: string[] }) {
+  return {
+    sessions: { fork(session: { events: readonly unknown[] }) { return { events: session.events } } },
+    agents: {
+      async create(options: { sessionId: string; seed?: readonly unknown[] }) {
+        return { agent: makeAgent('fork', options.seed ?? [], captured), dispose: async () => {} }
+      },
+    },
+    llm: {
+      listProviders: () => [{ id: 'fake-provider' }],
+      listModels: async () => [{ provider: 'fake-provider', id: 'model-00', name: 'Model 00' }],
+    },
+  }
+}
+
+// ── harness: real cordis root + real channel + real Chat ────────────────
+const ctx = new Context()
+const captured = { followupTexts: [] as string[] }
+const services = makeServices(captured)
+for (const [key, value] of Object.entries(services)) {
+  // Plain-data services: provide them on the root so channel's ctx.get
+  // resolves them exactly as the real service rows would.
+  ;(ctx as unknown as { provide(name: string, value: unknown): () => void }).provide(key, value)
+}
+
+const channel = createChannel(ctx as never, makeAgent('a1', makeEvents(), captured) as never, {
+  model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
+})
+
+const stdout = new FakeStdout()
+const stdin = new FakeStdin()
+const instance = await render(
+  <Chat channel={channel as never} questionStore={new QuestionStore()} onExit={() => {}} />,
+  { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+)
+await sleep(800)
+
+// ── 1. tui/input transform ──────────────────────────────────────────────
+{
+  const dispose = ctx.on('tui/input', event => {
+    if (event.text === '原始输入') return { text: '改写后的输入' }
+    return undefined
+  })
+  channel.submit('原始输入')
+  await sleep(300)
+  check('tui/input transform: delivered text is the plugin substitute',
+    captured.followupTexts.some(text => text.includes('改写后的输入')),
+    JSON.stringify(captured.followupTexts))
+  check('tui/input transform: the typed text never reached the agent',
+    !captured.followupTexts.some(text => text.includes('原始输入')))
+  dispose()
+}
+
+// ── 2. tui/input cancel (+ reason toast) ────────────────────────────────
+{
+  const before = captured.followupTexts.length
+  const dispose = ctx.on('tui/input', event =>
+    event.text === '别发这个' ? { cancel: true, reason: '插件拦截了这条输入' } : undefined)
+  channel.submit('别发这个')
+  await sleep(300)
+  check('tui/input cancel: nothing delivered', captured.followupTexts.length === before)
+  check('tui/input cancel: reason toasted',
+    plainText(stdout.frames).includes('插件拦截了这条输入'))
+  dispose()
+}
+
+// ── 3. tui/input crash isolation ────────────────────────────────────────
+{
+  const dispose = ctx.on('tui/input', () => {
+    throw new Error('plugin exploded')
+  })
+  channel.submit('照常发送')
+  await sleep(300)
+  check('tui/input crash: a throwing listener degrades to no-opinion',
+    captured.followupTexts.some(text => text.includes('照常发送')))
+  dispose()
+}
+
+// ── 4. rewind modes: picker → mode list → rewindTo(mode) → done/switched ─
+{
+  const seen: { promptSeq?: number; doneMode?: string | null; switchedKind?: string } = {}
+  const disposePrompt = ctx.on('tui/rewind-prompt', event => {
+    seen.promptSeq = event.seq
+    return {
+      modes: [
+        { id: 'files', label: '回退会话 + 恢复文件', description: '撤销此后的文件修改' },
+        { id: 'branch', label: '回退并打标记' },
+      ],
+    }
+  })
+  const disposeDone = ctx.on('tui/rewind-done', event => {
+    seen.doneMode = event.mode
+    return event.mode === 'files' ? '已恢复 2 个文件' : undefined
+  })
+  const disposeSwitched = ctx.on('tui/session-switched', event => {
+    seen.switchedKind = event.kind
+  })
+
+  // Double-Esc on the empty input opens the picker (3s arming window).
+  stdin.write('\x1b')
+  await sleep(120)
+  stdin.write('\x1b')
+  await sleep(400)
+  const listShown = plainText(stdout.frames.slice(-30)).includes('消息 09')
+  check('rewind picker opens on double-Esc', listShown)
+
+  // Enter on the newest message → the plugin decision resolves → mode list.
+  stdin.write('\r')
+  await sleep(400)
+  const afterEnter = plainText(stdout.frames.slice(-40))
+  check('rewind confirm renders plugin modes',
+    afterEnter.includes('回退会话 + 恢复文件') && afterEnter.includes('仅回退会话'),
+    afterEnter.slice(-200))
+  check('tui/rewind-prompt received the picked message seq', seen.promptSeq !== undefined)
+
+  // ↓ once moves to the first plugin mode; Enter rewinds with it.
+  stdin.write('\x1b[B')
+  await sleep(150)
+  stdin.write('\r')
+  await sleep(600)
+  check('picked mode id threaded to tui/rewind-done', seen.doneMode === 'files', String(seen.doneMode))
+  check('tui/rewind-done summary toasted', notified('已恢复 2 个文件'))
+  check("tui/session-switched fired with kind 'rewind'", seen.switchedKind === 'rewind')
+  disposePrompt()
+  disposeDone()
+  disposeSwitched()
+}
+
+// ── 5. rewind veto: picker stays open, no fork ───────────────────────────
+{
+  const disposePrompt = ctx.on('tui/rewind-prompt', () => ({ cancel: true, reason: '该消息不可回退' }))
+  const forkCountBefore = captured.followupTexts.length // proxy for "nothing happened"
+  // The section-4 rewind restored the picked message into the input for
+  // re-editing: the first Esc clears it, then the double-Esc opens the
+  // picker on the now-empty input.
+  stdin.write('\x1b')
+  await sleep(150)
+  stdin.write('\x1b')
+  await sleep(120)
+  stdin.write('\x1b')
+  await sleep(400)
+  stdin.write('\r') // Enter on the newest message → veto
+  await sleep(400)
+  const tail = plainText(stdout.frames.slice(-40))
+  check('tui/rewind-prompt cancel: reason toasted', notified('该消息不可回退'))
+  check('tui/rewind-prompt cancel: picker still open (list visible)', tail.includes('消息 09'))
+  check('tui/rewind-prompt cancel: no delivery side effects', captured.followupTexts.length === forkCountBefore)
+  stdin.write('\x1b') // close the picker
+  await sleep(200)
+  disposePrompt()
+}
+
+// ── 6. session-switch veto + switched on /new ────────────────────────────
+{
+  const seen: string[] = []
+  const disposeSwitch = ctx.on('tui/session-switch', event => {
+    seen.push(`veto:${event.kind}`)
+    return { cancel: true, reason: '本工作区禁止开会话' }
+  })
+  const vetoed = await channel.newSession()
+  check('tui/session-switch veto: /new refused', vetoed === false)
+  check('tui/session-switch veto: reason toasted', notified('本工作区禁止开会话'))
+  disposeSwitch()
+
+  const disposeSwitched = ctx.on('tui/session-switched', event => {
+    seen.push(`switched:${event.kind}`)
+  })
+  const switched = await channel.newSession()
+  check('/new succeeds without the veto', switched === true)
+  await sleep(200)
+  check("tui/session-switched fired with kind 'new'", seen.includes('switched:new'), seen.join(','))
+  disposeSwitched()
+}
+
+// ── 7. tui/compact veto (bus-level contract) ─────────────────────────────
+{
+  const dispose = ctx.on('tui/compact', () => ({ cancel: true, reason: '禁止压缩' }))
+  const decision = await ctx.serial('tui/compact', { sessionId: 's-x', cwd: '/tmp/demo' })
+  check('tui/compact serial bail returns the veto',
+    typeof decision === 'object' && decision !== null && 'cancel' in decision && decision.cancel === true)
+  dispose()
+  const none = await ctx.serial('tui/compact', { sessionId: 's-x', cwd: '/tmp/demo' })
+  check('tui/compact without listeners → undefined (no opinion)', none === undefined)
+}
+
+await instance.unmount()
+
+if (failures > 0) {
+  console.error(`${failures} check(s) failed`)
+  process.exit(1)
+}
+console.log('extension decision-event seam verified')
+process.exit(0)

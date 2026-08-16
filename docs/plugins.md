@@ -62,6 +62,50 @@ export function apply(ctx: Context, config: Config): void { … }  // 入口
 
 TypeScript 相对导入必须带 `.js` 后缀（ESM）；构建用 `tsc` 输出到 `lib/types/`。
 
+## 接缝总览
+
+| 接缝 | 形态 | 用途 |
+| --- | --- | --- |
+| 一 · 会话事件 | cordis 事件 | 观察模型/会话状态；追加 log-only 事件 |
+| 二 · TUI prompt 槽位 | 官方宿主服务 | 官方 TUI 的提示行槽位（dsh-TUI 不提供） |
+| 三 · 技能打包 | 静态资产 | 随包分发 SKILL.md |
+| 四 · 主题 | 静态资产 | JSON 配色 |
+| 五 · system prompt 段 | cordis 服务 | 注入稳定提示词段 |
+| 六 · 设置区块 | `ctx.tuiSettingsSections` | `/settings` 声明式编辑区块 |
+| 七 · profile 组合 | cordis.patch.yml | 安装/配置行 |
+| 八 · 全屏场景 | `ctx.tuiScenes` | 整屏 React 页面（`/trace` 形态） |
+| 九 · 决策事件 | cordis serial/parallel 事件 | 拦截/改写输入、rewind、会话切换、压缩 |
+| 十 · 托管对话框 | `ctx.tuiDialogs` | select / confirm / input 弹窗 |
+| 十一 · 状态行 | `ctx.tuiStatus` | 提示框上方的键控状态行 |
+| 十二 · 键盘快捷键 | `ctx.tuiShortcuts` | 注册全局组合键 |
+| 十三 · 条目渲染器 | `ctx.tuiRenderers` | 自定义会话事件 → transcript 文本行 |
+
+接缝九~十三统称**扩展面**（dsh-tui-extensions）。类型增强（`Context` 上的
+四个服务、`Events` 上的决策事件）从一个导入获得：
+
+```ts
+import type {
+  TuiInputEvent, TuiInputDecision,
+  TuiRewindPromptEvent, TuiRewindPromptDecision, TuiRewindMode, TuiRewindDoneEvent,
+  TuiSessionSwitchEvent, TuiSessionSwitchDecision, TuiSessionSwitchedEvent,
+  TuiCompactEvent, TuiCompactDecision,
+} from '@deepseek-harness-tui/dsh-tui/extensions'
+```
+
+四个服务由主包的 `dsh-tui-extensions` 行挂载（cordis.patch.yml 已带），插件
+无需也不应自己再挂。消费一律走 `ctx.get('tuiDialogs', false)` 软探测——旧版
+profile 可能还没有这一行，探测不到就静默降级（#183 原则），绝不要让可选服务
+缺席拖垮启动。
+
+扩展面的统一纪律（每个接缝一节里不再重复）：
+
+- **本地优先**：插件永远遮蔽不了内建——快捷键保留位、内建事件类型、内建
+  命令全都先于插件生效；冲突注册被拒绝并告警，不抛错。
+- **渲染路径字符串按不可信输入处理**：宿主统一剥离 C0/C1 控制字符、折叠
+  空白、按 terminal cell（不是 `string.length`）截断。
+- **插件崩溃不拖垮 TUI**：监听器/处理器抛错被宿主捕获、告警、按"无意见"
+  或"跳过该条目"处理。
+
 ## 接缝一：会话事件（dsh-TUI 原生消费）
 
 dsh-TUI 的 Channel 把持久化会话事件投影为 transcript。**会话事件是真源**：
@@ -362,6 +406,195 @@ TUI 的 reconciler 是 **React 19**，场景组件运行在宿主的 React 实�
 - **渲染期异常有边界兜底**：场景组件 render/生命周期里抛错会被
   `PluginSceneBoundary` 接住——转录里报一条错误、场景自动关闭，不会拖垮整个
   TUI。但 boundary 管不到 effect 与异步回调里的异常，那些仍是场景自己的责任。
+
+## 接缝九：决策事件（tui/input · rewind · session-switch · compact）
+
+pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交给插件。决策
+事件全是 cordis **serial** 语义——按注册顺序逐个 await，**第一个给出意见的
+插件生效**，其余不再调用；全部返回 `undefined` 则按默认行为放行。监听器抛
+异常等同于"无意见"（宿主告警后继续默认路径），慢监听器可以合法地先弹一个
+托管对话框再回答。
+
+配套的通知事件（`tui/rewind-done` 的摘要返回值除外）是 **parallel** 语义：
+事后广播，无决策权。
+
+### 契约表
+
+| 事件 | 时机 | payload（均含 `sessionId`、`cwd`） | 返回（首个非 undefined 生效） |
+| --- | --- | --- | --- |
+| `tui/input` | 用户输入投递前（submit 与 steer 都走） | `text`、`delivery: 'followup'\|'steer'` | `{ text }` 改写 · `{ handled: true, notice? }` 插件已自行处理 · `{ cancel: true, reason? }` 丢弃 |
+| `tui/rewind-prompt` | rewind 选中消息确认后、fork 前 | `text`、`seq` | `{ cancel: true, reason? }` 否决（picker 保持打开）· `{ modes: TuiRewindMode[] }` 在确认页提供额外回退模式（≤8 个，需 `id`+`label`） |
+| `tui/rewind-done` | rewind 完成、agent 已切换 | `text`、`mode: string\|null`、`boundarySeq`、`sourceSessionId`、`childSessionId` | 第一个非空 `string` 作为摘要 toast（6s）；其余返回忽略 |
+| `tui/session-switch` | `/new`、`/resume` 执行前（无任何副作用时） | `kind: 'new'\|'resume'`、`targetSessionId?` | `{ cancel: true, reason? }` 否决 |
+| `tui/session-switched` | `/new`、`/resume`、rewind 完成后 | `kind: 'new'\|'resume'\|'rewind'`、`sessionId`、`previousSessionId?` | 通知（parallel），返回值忽略 |
+| `tui/compact` | `/compact` 执行前 | — | `{ cancel: true, reason? }` 否决 |
+
+公共语义：
+
+- `cancel.reason` / `handled.notice` 以 toast 呈现；缺省时宿主给本地化兜底文案。
+- `tui/input` 的 `{ text }` 会被 trim；trim 后为空按"无意见"处理。改写只在
+  **投递前**生效，等待期间如果用户切了会话，这条过期输入会被丢弃并提示
+  （stale-drop），绝不会把旧会话的话发进新会话。
+- `tui/rewind-prompt` 的 modes 会在确认页渲染为选项列表（第一项恒为宿主的
+  "仅回退会话"）；用户选中后，该 `mode` id 原样出现在 `tui/rewind-done` 的
+  payload 里——插件在 done 事件里执行真正的模式逻辑（比如恢复文件）。
+- 决策监听器里**不要**做慢 I/O 而不自知：`tui/input` 在投递链之前，会实打实
+  延迟发送；要弹窗就用接缝十（它就是为此设计的）。
+
+### 示例：输入守卫 + 自定义命令输出
+
+```ts
+import type { TuiInputEvent, TuiInputDecision } from '@deepseek-harness-tui/dsh-tui/extensions'
+
+ctx.on('tui/input', (event: TuiInputEvent): TuiInputDecision | undefined => {
+  // /my-command 由插件自己接管：不入会话、不发模型
+  if (event.text.startsWith('/my-command')) {
+    void runMyCommand(event.text.slice('/my-command'.length).trim())
+    return { handled: true, notice: '已交给 my-command 处理' }
+  }
+  // 危险短语拦截
+  if (event.text.includes('rm -rf /')) {
+    return { cancel: true, reason: 'my-guard: 这条输入被安全策略拦截' }
+  }
+  // 快捷展开
+  if (event.text === '@standup') {
+    return { text: '总结这个仓库昨天的提交，写成站会汇报' }
+  }
+  return undefined // 无意见，照常投递
+})
+```
+
+## 接缝十：托管对话框（tuiDialogs）
+
+pi 的 `ctx.ui` 等价物：插件不碰渲染，只发请求；TUI 在提示框上方弹出一个
+模态面板（打开期间独占键盘），用户作答后 Promise 落定。多个插件同时发请求
+时 **FIFO 排队**，一次只显示一个。
+
+```ts
+const dialogs = ctx.get('tuiDialogs', false)
+
+// 单选：落定选项 id；取消/Esc/超时/中止 → undefined
+const id = await dialogs?.select({
+  title: '挑一个',
+  options: [
+    { id: 'fast', label: '快速模式' },
+    { id: 'safe', label: '安全模式', description: '多一道确认' },
+  ],
+  signal: abortController.signal,  // 可选：外部中止
+  timeoutMs: 30_000,               // 可选：自动取消（无头嵌入方兜底）
+})
+
+// 确认：落定 true/false；取消按 false 计（不区分"点了否"和"按了 Esc"）
+const ok = await dialogs?.confirm({
+  title: '确认覆盖？',
+  message: '目标文件已存在',
+  confirmLabel: '覆盖',   // 缺省走宿主本地化"是/否"
+  cancelLabel: '保留',
+})
+
+// 单行输入：落定文本；取消 → undefined
+const name = await dialogs?.input({
+  title: '起个名字',
+  placeholder: '回车确认，Esc 取消',
+  initial: '默认名',
+})
+```
+
+契约要点：
+
+- **永不抛错**：无标题、无有效选项等畸形请求直接落定取消值并告警——插件
+  的 await 方永远能继续。
+- 入参即被消毒：控制字符剥离、空白折叠；标题/标签 ≤120 cell、message
+  ≤400、输入 ≤500、选项 ≤100 个（超出截断）。
+- 面板按键：↑/↓ 移动、Enter 确认、Esc/Ctrl+C 取消；input 是对话框内部的
+  单行编辑（左右/Home/End/退格/删除），与主输入框互不影响。
+- 服务缺席（旧 profile）时 `ctx.get` 返回 `undefined`——插件自己决定跳过
+  交互还是走无头默认值；`timeoutMs` 是"有服务但没有 TUI 消费者"场景的
+  保险丝。
+
+典型搭配：决策事件监听器里弹窗——`ctx.on('tui/rewind-prompt', async () => … await dialogs.select(…))`，用户答完再返回决策。
+
+## 接缝十一：状态行（tuiStatus）
+
+键控的状态行贡献——pi 的 `setStatus(key, text)`。所有插件的贡献按"首次
+设置顺序"拼成一行（` · ` 连接），渲染在提示框上方：
+
+```ts
+const status = ctx.get('tuiStatus', false)
+status?.set('my-plugin', '构建中 42%')   // 设置/更新
+status?.set('my-plugin', undefined)      // 清除（传 '' 同效）
+```
+
+- key 规则：`/^[a-z][a-z0-9_-]*$/`（约定用插件名或 `插件:子项`）；最多 20
+  个 key，文本 ≤200 cell；违规拒绝并告警，不抛错。
+- 插件卸载时宿主自动清空该插件的全部贡献，不用自己擦。
+- 状态行是**纯展示**：要可点/可按键的东西请用快捷键（接缝十二）或场景
+  （接缝八）。
+
+## 接缝十二：键盘快捷键（tuiShortcuts）
+
+pi 的 `registerShortcut`：把组合键绑到处理器。
+
+```ts
+const shortcuts = ctx.get('tuiShortcuts', false)
+const dispose = shortcuts?.register('ctrl+shift+p', {
+  description: '打开我的面板',          // 必填，可发现性用
+  handler: () => { void openMyPanel() },
+})
+ctx.effect(() => () => dispose?.())     // 清理挂在【调用者】自己的 fiber 上
+```
+
+组合键语法：`ctrl`/`alt`（`meta`/`option` 同义）/`shift` + 一个字符或命名键
+（`enter`、`esc`、`tab`、`backspace`、`delete`、`up/down/left/right`、`home`、
+`end`、`pageup`、`pagedown`、`space`），如 `ctrl+shift+p`、`alt+k`、
+`ctrl+space`。
+
+规则（全部"拒绝 + 告警，不抛错"）：
+
+- **必须带 ctrl 或 alt**——裸字母是打字，裸方向键是导航。
+- **保留位不发**：TUI 内建绑定（ctrl+c/d/t/r/x/o/l/e/v/a/u/k/w、ctrl+←/→、
+  ctrl/alt+Enter、alt+↑、Esc、Tab、Shift+Tab）在注册时即被拒绝。这是
+  "本地优先"的强制面：冲突永远到不了匹配器。
+- 重复注册同一组合（规范形式）被拒绝。
+- 只在**纯对话态**派发：任何浮层（picker、审批、问卷、托管对话框、场景、
+  会话浏览器）打开期间键盘归浮层。
+- 处理器 fire-and-forget：异步拒绝被捕获，toast 提示 `description` 归属的
+  失败并告警，绝不弄坏别人的键盘。
+- `register` 返回的 dispose 由**调用者**用自己的 `ctx.effect` 挂清理（与
+  tuiScenes 同一契约）——服务方法看不到调用者的 fiber。
+
+## 接缝十三：自定义会话条目渲染器（tuiRenderers）
+
+pi 的 `registerMessageRenderer`：插件经接缝一追加的 log-only 会话事件
+（`session.append('my-plugin/event', payload)`），注册一个渲染器映射成
+**纯文本行**，Channel 就会把它投影进 transcript——实时流和回放（/resume、
+rewind）走同一条路径：
+
+```ts
+const renderers = ctx.get('tuiRenderers', false)
+const dispose = renderers?.register('my-plugin/note', (payload) => {
+  const note = payload as { text: string; ts: number }
+  return {
+    title: '便签',                       // 可选标题行
+    lines: [note.text, `记于 ${new Date(note.ts).toLocaleString()}`],
+  }
+  // 返回 undefined = 这条不渲染（按 payload 条件决定）
+})
+ctx.effect(() => () => dispose?.())
+```
+
+规则：
+
+- 类型名必须 `plugin/event` 形（kebab、恰好一个 `/`）；内建事件类型
+  （`KNOWN_SESSION_EVENT_TYPES`）与宿主特判的 `agent-preset/selected` 拒绝
+  注册——内建投影永远优先。
+- 渲染器**拿不到 React**：整屏交互面是场景（接缝八），transcript 行必须
+  纯文本——回放路径上的一次崩溃会毁掉整个屏幕。
+- 渲染器抛错：该条目跳过，每种类型**只告警一次**（粘性），回放长日志不会
+  刷屏。
+- 输出同样按不可信输入消毒（控制字符剥离、按 cell 预览截断）。
+- 事件类型注册的两条铁律（log-only + 写入 `KNOWN_SESSION_EVENT_TYPES`）仍
+  是接缝一的责任——渲染器只管"怎么显示"，不管"能不能持久化"。
 
 ## 命名与发布规范
 

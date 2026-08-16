@@ -156,6 +156,16 @@ jobs:
       # tuiWorkspaces、消费处带本地兜底、patch 保留服务行与行级顺序保证。
       - run: node scripts/verify-workspaces-degrade.mjs
 
+      # 插件扩展面回归（dsh-tui-extensions）：
+      #  - events：真 cordis 总线 + 真 channel——tui/input 改写/取消/崩溃
+      #    隔离、rewind 决策（模式列表/否决/完成后摘要）、session-switch
+      #    否决与 switched 通知、compact 否决的 serial bail 语义。
+      #  - ui：对话框 store（FIFO/AbortSignal/超时/settleAll）、runtime
+      #    校验（告警不抛）、快捷键解析/匹配/保留位/派发、渲染器注册拒绝
+      #    与粘性报错、真 Chat 驱动的对话框/状态行/快捷键端到端。
+      - run: node --import tsx/esm scripts/verify-extension-events.tsx
+      - run: node --import tsx/esm scripts/verify-extension-ui.tsx
+
       # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
       # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
       - run: node scripts/verify-session-titles.mjs

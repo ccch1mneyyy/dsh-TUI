@@ -429,6 +429,7 @@ const dict = {
   'hint-select-exit': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** to select · Esc to exit' },
   'hint-fill-exit': { zh: '**Enter** 填入命令 · Esc 退出', en: '**Enter** to insert · Esc to exit' },
   'hint-rewind-back': { zh: '**Enter** 回退 · Esc 返回', en: '**Enter** to rewind · Esc to back' },
+  'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
   'hint-expand-ctrl-o': { zh: '（ctrl+o 展开）', en: '(ctrl+o to expand)' },
@@ -463,6 +464,15 @@ const dict = {
   'rewind-last-message': { zh: '最近一条消息', en: 'last message' },
   'rewind-none': { zh: '还没有可回退的消息', en: 'Nothing to rewind yet' },
   'rewind-done': { zh: '已回退——编辑后按 Enter 重新发送', en: 'Rewound — edit and press Enter to resend' },
+  'rewind-mode-default': { zh: '仅回退会话', en: 'Conversation only' },
+  'rewind-waiting-plugins': { zh: '正在等待插件决定…（Esc 放弃等待）', en: 'Waiting for plugins… (Esc to stop waiting)' },
+
+  // ── 插件扩展缝（dsh-tui-extensions：决策事件 + 托管对话框 + 快捷键）──
+  'ext-action-cancelled': { zh: '操作已被插件取消', en: 'Action cancelled by a plugin' },
+  'ext-stale-dropped': { zh: '等待插件期间会话已切换，该条输入已丢弃', en: 'Session switched while a plugin decided — the input was dropped' },
+  'ext-shortcut-failed': { zh: '插件快捷键 {{combo}} 执行失败', en: 'Plugin shortcut {{combo}} failed' },
+  'ext-dialog-yes': { zh: '是', en: 'Yes' },
+  'ext-dialog-no': { zh: '否', en: 'No' },
 
   // ── components/ThinkingToggle.tsx + messages/AssistantThinkingMessage.tsx ──
   'thinking-title': { zh: '切换思考模式', en: 'Toggle thinking mode' },

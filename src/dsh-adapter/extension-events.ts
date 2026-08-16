@@ -1,0 +1,149 @@
+/**
+ * Decision-point events the TUI fires on the cordis bus so plugins can
+ * intercept, cancel, or customize interactive flows — the `session_before_*`
+ * style seam (pi's `session_before_fork` / `input` events) expressed in
+ * cordis dispatch semantics.
+ *
+ * All of these are FIRED BY THE CHANNEL (`ctx.serial` / `ctx.parallel`) and
+ * answered by plugins (`ctx.on`). No service row is involved: an absent
+ * listener simply means "no opinion", and the built-in flow proceeds
+ * unchanged. `serial` returns the first bail value (non-null/false/
+ * undefined) in listener order — the first plugin to decide wins; there is
+ * no chaining. A listener that throws propagates out of `ctx.serial`, so the
+ * channel wraps every dispatch in try/catch and treats a crash as
+ * "no opinion" (a broken plugin must never brick typing, rewind, or /new).
+ *
+ * Synchronous-only rule: handlers may be async, but while a decision is
+ * awaited the originating UI flow is parked (the submit is not delivered,
+ * the rewind confirm has not happened). Handlers that need user input should
+ * use the managed dialogs (`ctx.tuiDialogs`) or open a scene, then resolve.
+ */
+
+/** Shared context every decision event carries. */
+export interface TuiDecisionContext {
+  /** The live session (agent) id the flow belongs to. */
+  sessionId: string
+  /** Working directory of the session. */
+  cwd: string
+}
+
+/**
+ * Fired before user-typed text is delivered to the model (`submit` and
+ * `steer`; local `!`/`!!` shell lines never fire it — they are not model
+ * input). The message is NOT yet in the session log; nothing is observable
+ * from the transcript at this point.
+ */
+export interface TuiInputEvent extends TuiDecisionContext {
+  /** The trimmed text as typed. */
+  text: string
+  /** Where the text would go: a new turn (`followup`) or the running one. */
+  delivery: 'followup' | 'steer'
+}
+
+export type TuiInputDecision =
+  /** Replace the text; the substitute is delivered instead. */
+  | { text: string }
+  /** The plugin consumed the input itself; nothing is delivered. An optional
+   *  notice is toasted so the user is not left wondering where the line went. */
+  | { handled: true; notice?: string }
+  /** Drop the input; an optional reason is toasted as a warning. */
+  | { cancel: true; reason?: string }
+  /** No opinion — delivery proceeds unchanged. */
+  | undefined
+
+/**
+ * Fired when the rewind picker confirms a message, BEFORE the fork happens.
+ * `seq` is the session event seq of the picked user message (the fork itself
+ * lands just before its turn — see channel.rewindTo).
+ */
+export interface TuiRewindPromptEvent extends TuiDecisionContext {
+  /** Text of the picked message. */
+  text: string
+  /** Session event seq of the picked message. */
+  seq: number
+}
+
+/** One extra rewind mode offered by a plugin (e.g. "also restore files"). */
+export interface TuiRewindMode {
+  /** Stable id reported back in `TuiRewindDoneEvent.mode`. */
+  id: string
+  /** One-line label shown in the confirm pane. */
+  label: string
+  /** Optional dimmed description under the label. */
+  description?: string
+}
+
+export type TuiRewindPromptDecision =
+  /** Abort the rewind; the picker stays open. Optional reason is toasted. */
+  | { cancel: true; reason?: string }
+  /** Extra choices rendered in the confirm pane on top of the built-in
+   *  conversation-only rewind (which stays option zero). */
+  | { modes: readonly TuiRewindMode[] }
+  /** No opinion — the plain confirm pane shows, exactly as before. */
+  | undefined
+
+/**
+ * Fired after a rewind completed: the forked session is live and the
+ * transcript replayed. The first listener returning a non-empty string has
+ * it toasted as the post-rewind summary (serial bail semantics).
+ */
+export interface TuiRewindDoneEvent extends TuiDecisionContext {
+  /** Text of the message that was rewound to (back in the input). */
+  text: string
+  /** The mode id the user picked, or null for the built-in
+   *  conversation-only rewind. */
+  mode: string | null
+  /** Inclusive source seq the fork cut at (the child's seed end). */
+  boundarySeq: number
+  /** The session that was forked away from. */
+  sourceSessionId: string
+  /** The freshly created fork session — now the live one. */
+  childSessionId: string
+}
+
+/**
+ * Fired before the live session is replaced (`/new` or `/resume`; rewind has
+ * its own prompt event above). `targetSessionId` is set for resume only.
+ */
+export interface TuiSessionSwitchEvent extends TuiDecisionContext {
+  kind: 'new' | 'resume'
+  targetSessionId?: string
+}
+
+export type TuiSessionSwitchDecision =
+  /** Abort the switch; the current session stays live. Optional reason is
+   *  toasted as a warning. */
+  | { cancel: true; reason?: string }
+  | undefined
+
+/**
+ * Notification (parallel, fire-and-forget) after the live session changed.
+ * Listener errors are logged, never propagated. Rebind per-session state
+ * here; `previousSessionId` is undefined only when there was nothing live
+ * before (not currently produced — every switch has a live source).
+ */
+export interface TuiSessionSwitchedEvent extends TuiDecisionContext {
+  kind: 'new' | 'resume' | 'rewind'
+  /** The session that just went live. */
+  sessionId: string
+  previousSessionId?: string
+}
+
+/** Fired before manual `/compact` runs. */
+export interface TuiCompactEvent extends TuiDecisionContext {}
+
+export type TuiCompactDecision =
+  /** Abort the compaction; optional reason is toasted as a warning. */
+  | { cancel: true; reason?: string }
+  | undefined
+
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    'tui/input'(event: TuiInputEvent): TuiInputDecision | Promise<TuiInputDecision>
+    'tui/rewind-prompt'(event: TuiRewindPromptEvent): TuiRewindPromptDecision | Promise<TuiRewindPromptDecision>
+    'tui/rewind-done'(event: TuiRewindDoneEvent): string | undefined | Promise<string | undefined>
+    'tui/session-switch'(event: TuiSessionSwitchEvent): TuiSessionSwitchDecision | Promise<TuiSessionSwitchDecision>
+    'tui/session-switched'(event: TuiSessionSwitchedEvent): void | Promise<void>
+    'tui/compact'(event: TuiCompactEvent): TuiCompactDecision | Promise<TuiCompactDecision>
+  }
+}

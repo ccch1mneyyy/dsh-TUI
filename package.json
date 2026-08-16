@@ -45,6 +45,10 @@
       "types": "./lib/types/scenes.d.ts",
       "import": "./lib/types/scenes.js"
     },
+    "./extensions": {
+      "types": "./lib/types/extensions.d.ts",
+      "import": "./lib/types/extensions.js"
+    },
     "./jsx-runtime": {
       "types": "./lib/types/jsx-runtime.d.ts",
       "import": "./lib/types/jsx-runtime.js"
