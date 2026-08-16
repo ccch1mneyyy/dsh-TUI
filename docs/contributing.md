@@ -54,8 +54,8 @@ DeepSeek Harness 拥有，TUI 只消费它们。
   被禁用的 host 行、insert/override 语义都很关键。
 - `cordis.yml`：直接 Cordis/DSH 启动的完整裸组合示例。
 - `scripts/`：无头回归、复现环境、探针与诊断。运行前先读脚本头部说明。
-- `lib/types/`：`tsc` 的入库产物（JavaScript、声明与声明映射），由 `src/`
-  生成并随 npm 分发。
+- `lib/types/`：`tsc` 的忽略产物（JavaScript、声明与声明映射），由 `src/`
+  生成；安装和打包时通过 `prepare` 重建并随 npm 分发。
 - `lib/invariant.js`：`./invariant` 的独立打包运行时导出；普通 `pnpm build`
   不会重新生成它。
 - `README.md` 与 `README_EN.md`：中英文用户文档。行为、配置、快捷键与限制
@@ -105,17 +105,19 @@ Cordis config
 
 ## 构建与生成产物（Build And Generated Files）
 
-常规构建与类型检查关口：`pnpm build`（`tsc -p tsconfig.json`，把 `src/` 输出
-到 `lib/types/`）。仓库提交这些产物，因为发布的包直接执行它们。
+常规构建与类型检查关口：`pnpm build`。它会先删除 `lib/types/`，再执行
+`tsc -p tsconfig.json` 把 `src/` 输出到该目录，避免重命名或删除模块后留下旧文件。
+仓库不提交 `lib/types/`；`prepare` 会在本地安装、npm 打包、发布与 Git 依赖安装时
+重新生成发布所需的 JavaScript 和声明文件。
 
 生成产物规则：
 
 - 改 `src/`，**绝不直接改 `lib/types/`**。
-- 任何源码改动后运行 `pnpm build`，并提交对应的 `lib/types/` JavaScript、
-  `.d.ts` 与 `.d.ts.map` 变更。
-- `tsc` 不清理 `outDir`。重命名或删除源模块后，检查 `lib/types/` 并只删除该
-  模块的过期输出。
-- 审查生成的 diff。意外变化通常意味着编译器/配置或依赖的意外漂移。
+- 任何源码改动后运行 `pnpm build`；生成的 JavaScript、`.d.ts` 与 `.d.ts.map`
+  不加入 Git。
+- 不要跳过 `clean:types` 直接依赖旧输出；标准构建与 `prepare` 都从空目录编译。
+- 修改打包入口、导出或构建配置后运行 `pnpm verify:package`，确认 npm tarball
+  包含运行时入口、声明与 `lib/invariant.js`。
 - 纯文档、纯 workflow、纯 YAML 改动不需要重建（除非同时改了 TypeScript 输入）。
 - `lib/invariant.js` 不由 `pnpm build` 生成。若 `src/invariant.ts` 或
   `./invariant` 导出契约变化，显式保持打包文件与 `lib/types/invariant.d.ts`
@@ -152,7 +154,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 滚动/粘底行为 | `node scripts/verify-scroll.mjs`、`node scripts/verify-resticky.mjs` 及对应 `repro-*` 环境 |
 | 全屏复制即选区 | `node scripts/verify-copy-on-select.mjs` |
 
-多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
+多数用普通 `node` 调用的脚本 import `lib/types/`——干净检出后先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭
 扩展名推断输入层：例如 `verify-themes.mjs` 其实通过 tsx import `src/`。
 

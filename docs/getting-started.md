@@ -177,7 +177,8 @@ pnpm smoke
 ```
 
 `pnpm build` 执行 `tsc -p tsconfig.json`，把 `src/` 编译到 `lib/types/`。
-`lib/types/` 是提交并发布的产物；源码改动必须同步重建。
+`lib/types/` 是被 Git 忽略的生成产物；`npm pack`、`npm publish` 与 npm Git
+依赖安装会通过 `prepare` 在打包前重建它。
 
 CI 还会运行三条渲染回归：
 

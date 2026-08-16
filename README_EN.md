@@ -272,9 +272,10 @@ pnpm build
 pnpm smoke
 ```
 
-`pnpm build` compiles `src/` into the checked-in `lib/types/` output. Source
-changes must include regenerated artifacts, and rendering, questionnaire, or
-tool-card changes require the relevant regression scripts.
+`pnpm build` cleans and compiles `src/` into the ignored `lib/types/` output.
+npm packing and Git dependency installation generate these published files via
+`prepare`; rendering, questionnaire, or tool-card changes still require the
+relevant regression scripts.
 
 ## Plugin Ecosystem
 

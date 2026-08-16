@@ -68,8 +68,9 @@ boundaries and helpers over introducing parallel abstractions.
 - `cordis.yml`: full bare-composition example for direct Cordis/DSH startup.
 - `scripts/`: headless regressions, reproduction harnesses, probes, and
   diagnostics. Read each script's header before running it.
-- `lib/types/`: checked-in output from `tsc` (JavaScript, declarations, and
-  declaration maps). It is generated from `src/` and ships to npm.
+- `lib/types/`: ignored output from `tsc` (JavaScript, declarations, and
+  declaration maps). It is generated from `src/`, rebuilt by `prepare`, and
+  shipped to npm.
 - `lib/invariant.js`: separate bundled runtime export for `./invariant`; the
   normal `pnpm build` does not regenerate this file.
 - `README.md` and `README_EN.md`: Chinese and English user documentation. Keep
@@ -140,18 +141,22 @@ The normal build and type-check gate is:
 pnpm build
 ```
 
-This runs `tsc -p tsconfig.json` and emits `src/` into `lib/types/`. The project
-commits these artifacts because the published package executes them.
+This removes `lib/types/` before running `tsc -p tsconfig.json`, so renamed or
+deleted modules cannot leave stale output. The project does not commit
+`lib/types/`; `prepare` regenerates the JavaScript and declarations during
+local installation, npm packing and publishing, and Git dependency
+installation.
 
 Rules for generated output:
 
 - Edit `src/`, never `lib/types/`, to implement behavior.
-- After any source change, run `pnpm build` and include the corresponding
-  `lib/types/` JavaScript, `.d.ts`, and `.d.ts.map` changes.
-- `tsc` does not clean `outDir`. After renaming or deleting a source module,
-  inspect `lib/types/` and remove only the stale outputs for that module.
-- Review generated diffs. Unexpected changes usually indicate an accidental
-  compiler/configuration or dependency shift.
+- After any source change, run `pnpm build`; do not add the generated
+  JavaScript, `.d.ts`, or `.d.ts.map` files to Git.
+- Do not bypass `clean:types` and rely on old output. The standard build and
+  `prepare` both compile from an empty output directory.
+- After changing package entry points, exports, or build configuration, run
+  `pnpm verify:package` and confirm the tarball contains the runtime entry,
+  declarations, and `lib/invariant.js`.
 - Documentation-only, workflow-only, and YAML-only changes do not require a
   rebuild unless they also alter TypeScript inputs.
 - `lib/invariant.js` is not produced by `pnpm build`. If `src/invariant.ts` or

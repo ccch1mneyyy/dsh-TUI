@@ -56,9 +56,13 @@
     "node": "^22.19 || >=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node --import tsx/esm scripts/verify-adapter-boundary.ts && node --import tsx/esm scripts/verify-upstream-contract.ts && node --import tsx/esm scripts/verify-patch-surface.ts",
+    "clean:types": "node scripts/clean-types.mjs",
+    "build:types": "npm run clean:types && tsc -p tsconfig.json",
+    "build": "npm run build:types && node --import tsx/esm scripts/verify-adapter-boundary.ts && node --import tsx/esm scripts/verify-upstream-contract.ts && node --import tsx/esm scripts/verify-patch-surface.ts",
+    "prepare": "npm run build:types",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
+    "verify:package": "node scripts/verify-package.mjs",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
     "verify:patch-surface": "node --import tsx/esm scripts/verify-patch-surface.ts",

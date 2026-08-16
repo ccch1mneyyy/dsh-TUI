@@ -183,8 +183,8 @@ pnpm smoke
 ```
 
 `pnpm build` runs `tsc -p tsconfig.json` and emits `src/` into `lib/types/`.
-Those generated files are committed and published, so source changes must be
-followed by a rebuild.
+Git ignores those generated files. `npm pack`, `npm publish`, and npm Git
+dependency installation rebuild them through `prepare` before packaging.
 
 CI also runs three rendering regressions:
 

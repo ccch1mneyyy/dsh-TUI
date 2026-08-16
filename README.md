@@ -244,8 +244,9 @@ pnpm build
 pnpm smoke
 ```
 
-`pnpm build` 会把 `src/` 编译到已提交的 `lib/types/`。修改源码时必须同步生成产物；
-渲染、问卷和工具卡还需运行对应回归脚本。
+`pnpm build` 会先清理再把 `src/` 编译到忽略的 `lib/types/`。npm 打包和 Git
+依赖安装会通过 `prepare` 生成这些发布文件；渲染、问卷和工具卡改动还需运行对应
+回归脚本。
 
 ## 插件生态
 

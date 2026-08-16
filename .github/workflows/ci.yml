@@ -33,6 +33,10 @@ jobs:
 
       - run: pnpm build
 
+      # 发布产物由 prepare 现场生成；确认 npm tarball 包含运行时入口、类型与
+      # 独立维护的 invariant bundle。
+      - run: pnpm verify:package
+
       # 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
       # （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
       - run: node --import tsx/esm scripts/repro-askpanel.tsx
@@ -249,4 +253,3 @@ jobs:
       # 提问面板 hideCustomInput 行为回归：纯选择题隐藏输入行且 Tab/打字
       # 不劫持焦点，纯文本题忽略 hide 标记，多选题默认行为不回退。
       - run: node --import tsx/esm scripts/verify-askpanel-hide-custom-input.tsx
-
