@@ -96,8 +96,20 @@ Cordis config
   `package-lock.json` 已移除（见 #173 后续处理）。
 - 有意改依赖时：用 `pnpm add` 更新 `pnpm-lock.yaml`，检查完整 lockfile diff，
   避免无关升级。
-- `@deepseek-ai/cordis` 与 `@deepseek-ai/dsh-invariants` 同时是 peer 与 dev
-  依赖，便于本地类型检查；改版本时保持这两组声明兼容。
+- 本包运行时或发布类型引用到的 `@deepseek-ai/*` 框架包（与
+  `UPSTREAM_BLESSED_PACKAGES` 一一对应，含 `@deepseek-ai/schemastery`）必须同时
+  是 peer 与 dev 依赖：框架包由宿主提供，profile 内运行时经
+  `$DSH_HOME/profiles/node_modules` 回退树解析到宿主实例（见 #198——声明为
+  runtime dependency 会在 profile 里落下真实拷贝，与宿主形成双模块实例）；
+  dev 声明只为本地类型检查。新增此类引用时两组声明都要加、范围保持一致
+  （verify:manifest-deps 门禁会校验）。仅测试/脚本使用的框架包
+  （如 dsh-settings、dsh-tools、dsh-session-persistence-*）只需 dev 依赖，
+  不要为它们声明 peer。`dsh-working-activity` 等非宿主包仍是 runtime
+  dependency。历史例外已消除：`dsh-working-activity@0.2.4` 及更早版本会经其
+  runtime dependency 把 `@deepseek-ai/schemastery`（连带 cosmokit）的真实拷贝
+  带进 profile；0.2.5 起已 peer 化（working-activity#2），profile 内不再
+  有任何框架包拷贝。保持依赖范围不低于 `^0.2.6`（0.2.6 另修复了 web 端
+  WorkingLine 在未打补丁宿主上的空值守卫，working-activity#5）。
 - 不要暴露、持久化或打印凭证。交互启动读取 `DEEPSEEK_API_KEY`；诊断可以
   报告是否已设置，但绝不能泄露完整值。
 

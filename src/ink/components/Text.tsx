@@ -1,12 +1,20 @@
 import { c as _c } from "react/compiler-runtime";
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import React from 'react';
 import type { Color, Styles, TextStyles } from '../styles.js';
+import type { DOMElement } from '../dom.js';
 type BaseProps = {
   /**
    * Change text color. Accepts a raw color value (rgb, hex, ansi).
    */
   readonly color?: Color;
+  /**
+   * Ref to the underlying ink-text DOMElement. dsh-tui addition: lets
+   * useDeclaredCursor park the native cursor on an inline caret cell without
+   * wrapping it in a Box (a wrapper Box changes flex shrink behaviour and
+   * breaks wrapped-line layouts).
+   */
+  readonly ref?: Ref<DOMElement>;
 
   /**
    * Same as `color`, but for background.
@@ -112,7 +120,7 @@ const memoizedStylesForWrap: Record<NonNullable<Styles['textWrap']>, Styles> = {
  * This component can display text, and change its style to make it colorful, bold, underline, italic or strikethrough.
  */
 export default function Text(t0) {
-  const $ = _c(29);
+  const $ = _c(30);
   const {
     color,
     backgroundColor,
@@ -123,7 +131,8 @@ export default function Text(t0) {
     strikethrough: t3,
     inverse: t4,
     wrap: t5,
-    children
+    children,
+    ref
   } = t0;
   const italic = t1 === undefined ? false : t1;
   const underline = t2 === undefined ? false : t2;
@@ -240,14 +249,15 @@ export default function Text(t0) {
   const textStyles = t14;
   const t15 = memoizedStylesForWrap[wrap];
   let t16;
-  if ($[25] !== children || $[26] !== t15 || $[27] !== textStyles) {
-    t16 = <ink-text style={t15} textStyles={textStyles}>{children}</ink-text>;
+  if ($[25] !== children || $[26] !== t15 || $[27] !== textStyles || $[28] !== ref) {
+    t16 = <ink-text ref={ref} style={t15} textStyles={textStyles}>{children}</ink-text>;
     $[25] = children;
     $[26] = t15;
     $[27] = textStyles;
-    $[28] = t16;
+    $[28] = ref;
+    $[29] = t16;
   } else {
-    t16 = $[28];
+    t16 = $[29];
   }
   return t16;
 }

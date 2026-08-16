@@ -198,17 +198,33 @@ export function supportsExtendedKeys(): boolean {
 /**
  * True when win32-input-mode (DECSET 9001, `CSI ? 9001 h`) should drive
  * keyboard input. This is a ConPTY feature — both Windows Terminal and
- * classic conhost switch into it when the app emits the sequence, so a
- * platform check alone covers both. In this mode every key arrives as a
- * full INPUT_RECORD (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`), the only encoding that
+ * classic conhost switch into it when the app emits the sequence. In this
+ * mode every key arrives as a full INPUT_RECORD
+ * (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`), the only encoding that
  * preserves Enter's Shift/Ctrl bits on Windows (issue #147). It replaces
  * the kitty/modifyOtherKeys push — callers must treat them as mutually
  * exclusive. Non-ConPTY Windows terminals (mintty via winpty) ignore the
  * unknown private mode and fall back to classic VT input unchanged.
+ *
+ * Embedded xterm.js hosts may identify as `TERM_PROGRAM=vscode` while using
+ * the xterm.js engine version as TERM_PROGRAM_VERSION (Termy 1.4.1 reports
+ * 6.0.0). They do not provide native ConPTY's input-mode contract: enabling
+ * 9001 can reduce arrows/mouse sequences to their trailing A-D/M bytes and
+ * interfere with IME commits (issue #215). Native VS Code reports its own
+ * 1.x application version and retains win32-input-mode support.
  * @returns true on native Windows (never in WSL — platform is linux there).
  */
-export function supportsWin32InputMode(): boolean {
-  return process.platform === 'win32'
+export function supportsWin32InputMode(
+  platform: NodeJS.Platform = process.platform,
+  termProgram: string | undefined = process.env.TERM_PROGRAM,
+  termProgramVersion: string | undefined = process.env.TERM_PROGRAM_VERSION,
+): boolean {
+  if (platform !== 'win32') return false
+
+  const version = coerce(termProgramVersion)
+  const isEmbeddedXtermJs =
+    termProgram === 'vscode' && version !== null && version.major >= 5
+  return !isEmbeddedXtermJs
 }
 
 /**

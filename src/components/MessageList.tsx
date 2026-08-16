@@ -214,8 +214,12 @@ export function MessageList({
       }
     }
   }
+  const lastUnseenReportRef = React.useRef(-1)
   React.useEffect(() => {
-    onUnseenCount?.(unseenCount)
+    if (unseenCount !== lastUnseenReportRef.current) {
+      lastUnseenReportRef.current = unseenCount
+      onUnseenCount?.(unseenCount)
+    }
   })
 
   // Post-commit: measure mounted rows, derive the content-space base from

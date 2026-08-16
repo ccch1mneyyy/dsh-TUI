@@ -911,14 +911,28 @@ export function Chat({
         })
         return true
       case 'login': {
-        const key = process.env.DEEPSEEK_API_KEY
-        const lines = [
-          `${t('login-api-key', { key: key ? key.slice(0, 6) + '…' + key.slice(-4) : t('login-key-missing') })}`,
-          `${t('login-base-url', { url: process.env.DEEPSEEK_BASE_URL ?? t('login-official-endpoint') })}`,
-          t('login-source-hint'),
-        ]
         setHelpOpen(false)
-        channel.pushLocal('/login', lines)
+        void channel.describeCredential('DEEPSEEK_API_KEY')
+          .catch(() => undefined)
+          .then(status => {
+            const keyStatus = status === undefined
+              ? t('login-credentials-unavailable')
+              : status.configured
+                ? t('login-key-configured', { ref: 'DEEPSEEK_API_KEY' })
+                : t('login-key-missing')
+            channel.pushLocal('/login', [
+              t('login-api-key', { status: keyStatus }),
+              ...(status === undefined
+                ? []
+                : [
+                    t('login-credential-source', { source: status.source ?? t('login-source-none') }),
+                    t('login-credential-storage', {
+                      mode: t(status.writable ? 'login-storage-writable' : 'login-storage-read-only'),
+                    }),
+                  ]),
+              t('login-base-url', { url: process.env.DEEPSEEK_BASE_URL ?? t('login-official-endpoint') }),
+            ])
+          })
         return true
       }
       case 'logout':
@@ -1586,9 +1600,19 @@ export function Chat({
           setHistoryFocus(0)
         }
       } else if (key.leftArrow) {
-        setHistoryCursor(cursor => Math.max(0, cursor - 1))
+        // Step by code point, not UTF-16 unit: an emoji is two units, and
+        // a mid-pair caret offset would split it in the SearchBox render.
+        setHistoryCursor(cursor => {
+          if (cursor <= 0) return 0
+          const ch = [...historyQuery.slice(0, cursor)].pop()!
+          return cursor - ch.length
+        })
       } else if (key.rightArrow) {
-        setHistoryCursor(cursor => Math.min(historyQuery.length, cursor + 1))
+        setHistoryCursor(cursor => {
+          if (cursor >= historyQuery.length) return historyQuery.length
+          const ch = [...historyQuery.slice(cursor)][0]!
+          return cursor + ch.length
+        })
       } else if (key.home) {
         setHistoryCursor(0)
       } else if (key.end) {
