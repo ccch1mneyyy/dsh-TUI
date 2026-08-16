@@ -517,9 +517,18 @@ async function resolveAgent(
 ): Promise<{ agent: Agent; handle?: AgentHandle; agentPreset?: string; route?: ModelRoute }> {
   // Resume override (issue #67): cordis.yml overrides the target session's
   // recorded route only when it pins BOTH halves; undefined halves let the
-  // session's own request/header records win (issue #30).
+  // session's own request/header records win (issue #30). The agent options
+  // are the request default AND what spawned/forked subagents inherit via
+  // resolveChildAgentOptions — they must never be empty, or every subagent
+  // created from a resumed session fails with "has no provider/model".
+  // Fall back to the startup route (cordis.yml > /model pref > harness
+  // default, always complete); the status-line route below still prefers the
+  // session's own recorded route for display.
   const resumeRoute = explicitModelRoute(configuredRoute)
-  const resumeOptions = { provider: resumeRoute?.provider, model: resumeRoute?.model }
+  const resumeOptions = {
+    provider: resumeRoute?.provider ?? startupRoute.provider,
+    model: resumeRoute?.model ?? startupRoute.model,
+  }
   if (requestedSessionId !== undefined) {
     const resumeId = SessionId(requestedSessionId)
     const existing = ctx.agents.get(resumeId)
