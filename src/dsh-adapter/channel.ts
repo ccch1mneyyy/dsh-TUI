@@ -55,6 +55,7 @@ import { createLocalWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspac
 import type { TuiCommandTreeRuntime } from './command-trees.js'
 import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
+import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
 
 type ChannelImageBlock = Extract<ContentBlock, { type: 'image' }>
 type ChannelImageMediaType = ChannelImageBlock['attachment']['mediaType']
@@ -393,6 +394,22 @@ export interface Channel {
    * back to sending the line to the model).
    */
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  /**
+   * Plugin-registered full-screen scene currently replacing the conversation
+   * (the `dsh-tui-scenes` runtime), if any. The chat screen renders its
+   * component INSTEAD of the transcript — the same whole-terminal treatment
+   * the trajectory scene gets — and hands it the keyboard; `undefined`
+   * renders the conversation normally.
+   */
+  readonly pluginScene: TuiSceneDescriptor | undefined
+  /**
+   * Open a registered plugin scene by id. Plugin command handlers usually
+   * call the runtime directly (`ctx.tuiScenes.open`); this passthrough lets
+   * host-side UI code do the same without touching cordis services.
+   */
+  openPluginScene(id: string): boolean
+  /** Close the open plugin scene, if any (a no-op otherwise). */
+  closePluginScene(): void
   /** 侧问（CC /btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
   sideQuestion(
     question: string,
@@ -666,6 +683,12 @@ export interface ChannelState {
   commandCompletions(input: string): readonly CommandCompletion[]
   /** Run a plugin-registered command (see the public Channel type). */
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  /** Open plugin scene mirrored from the scenes runtime (see the public Channel type). */
+  pluginScene: TuiSceneDescriptor | undefined
+  /** Open a plugin scene by id (see the public Channel type). */
+  openPluginScene(id: string): boolean
+  /** Close the open plugin scene (see the public Channel type). */
+  closePluginScene(): void
   /** Estimated context segments by content type (pi-nano-context style bar). */
   contextSegments: {
     system: number
@@ -1081,6 +1104,10 @@ export function createChannel(
   // so compute once and cache.
   let settingsHostCache: SettingsHost | undefined
   let settingsHostResolved = false
+  // Plugin scene runtime (optional service, same degradation rule as
+  // tuiWorkspaces/tuiCommandTrees): mounted by the bundle patch's
+  // dsh-tui-scenes row; absent the row, `pluginScene` simply stays undefined.
+  const sceneRuntime = ctx.get('tuiScenes') as TuiSceneRuntime | undefined
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
   const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
@@ -2747,6 +2774,13 @@ export function createChannel(
     runExternalCommand(name, rawInput) {
       return executeRegistryCommand(name, rawInput)
     },
+    pluginScene: sceneRuntime?.active,
+    openPluginScene(id: string) {
+      return sceneRuntime?.open(id) ?? false
+    },
+    closePluginScene() {
+      sceneRuntime?.close()
+    },
     pushLocal(title, lines) {
       state.rows.push({ id: nextRowId++, kind: 'local', text: title })
       for (const line of lines) {
@@ -2934,6 +2968,7 @@ export function createChannel(
     },
     releaseContributions() {
       releaseSkillCommands()
+      unsubscribeScenes?.()
     },
     traceEvents() {
       // Immutable per-append snapshot (dsh-session caches the frozen array);
@@ -3278,6 +3313,16 @@ export function createChannel(
   }
   ctx.on('skills/change', () => {
     void refreshSkillCommands()
+  })
+  /**
+   * Mirror the scene runtime's active scene into channel state, so screens
+   * swap to it through the ordinary version-bump re-render instead of a
+   * second subscription channel.
+   */
+  const unsubscribeScenes = sceneRuntime?.subscribe(() => {
+    if (state.pluginScene === sceneRuntime.active) return
+    state.pluginScene = sceneRuntime.active
+    state.emit()
   })
   /** See {@link Channel.releaseContributions}. */
   const releaseSkillCommands = (): void => {

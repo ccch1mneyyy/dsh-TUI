@@ -41,6 +41,14 @@
       "types": "./lib/types/settings-sections.d.ts",
       "import": "./lib/types/settings-sections.js"
     },
+    "./scenes": {
+      "types": "./lib/types/scenes.d.ts",
+      "import": "./lib/types/scenes.js"
+    },
+    "./jsx-runtime": {
+      "types": "./lib/types/jsx-runtime.d.ts",
+      "import": "./lib/types/jsx-runtime.js"
+    },
     "./invariant": {
       "types": "./lib/types/dsh-adapter/invariant.d.ts",
       "default": "./lib/types/dsh-adapter/invariant.js"

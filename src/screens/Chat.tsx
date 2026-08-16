@@ -1,6 +1,7 @@
 import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, type I18nKey } from '../i18n.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
@@ -1320,6 +1321,11 @@ export function Chat({
     // Same for the settings screen: plain letters (s save / d discard) and
     // the field draft editor belong to it alone.
     if (settingsOpen) return
+    // A plugin scene (dsh-tui-scenes) or the trajectory scene owns the whole
+    // screen while open: every key belongs to it. Unguarded, an Esc meant to
+    // CLOSE the scene also reached the chat:cancel branch below whenever a
+    // turn was in flight — closing the view and killing the turn in one key.
+    if (sceneOpen || channel.pluginScene !== undefined) return
     // The questionnaire / approval panel owns the keyboard while one is
     // pending (the panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc;
     // the prompt input is unmounted, so nothing else should see these keys).
@@ -1806,6 +1812,28 @@ export function Chat({
   // Working-activity line (spinner slot): context-pressure prefix shares the
   // StatusLine thresholds (amber ≥ 80, red ≥ 95).
   const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
+
+  // A plugin scene (dsh-tui-scenes) takes the whole terminal the same way
+  // the trajectory scene does, and sits at the TOP of this return chain:
+  // an open() landing while the session browser or the trajectory scene is
+  // up must still take the screen (and the keyboard, via the useInput guard
+  // above), not queue silently behind them. Closing the plugin scene lands
+  // back on whatever screen was up before, so these early returns read as a
+  // stack. The component comes from the registry, so its identity is stable
+  // across renders and its hook state survives re-renders; it receives the
+  // TUI's own React + ui kit because a plugin importing its own React copy
+  // would die on the first hook call under this reconciler.
+  const pluginScene = channel.pluginScene
+  if (pluginScene !== undefined) {
+    const node = React.createElement(pluginScene.component, {
+      React,
+      ui: tuiKit,
+      channel,
+      close: () => channel.closePluginScene(),
+    })
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
+
   // The browser is a screen, not an overlay: it REPLACES the conversation
   // rather than floating above it. Rendering it as an early return (after
   // every hook above has run) is what makes that literal — there is no

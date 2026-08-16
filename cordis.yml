@@ -34,9 +34,12 @@
 - id: dsh-tui-settings-sections
   name: '@deepseek-harness-tui/dsh-tui/settings-sections'
 
+- id: dsh-tui-scenes
+  name: '@deepseek-harness-tui/dsh-tui/scenes'
+
 - id: dsh-tui
   name: '@deepseek-harness-tui/dsh-tui'
-  inject: [agents, tuiWorkspaces]
+  inject: [agents, tuiWorkspaces, tuiScenes]
   config:
     provider: deepseek-official
     # Alt-screen fullscreen (CC 同款): 应用内鼠标选区（选择即复制, OSC 52 +

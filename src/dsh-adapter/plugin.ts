@@ -229,6 +229,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     )
   }
   const workspaceService = mountedWorkspaceService ?? createLocalWorkspaceRuntime()
+  // Same skew guard for the plugin-scene registry (dsh-tui-scenes row): the
+  // channel degrades to never opening scenes when the service is absent, so
+  // say why on profile launches — a plugin's open() otherwise fails with only
+  // its own warn to go on.
+  if (ctx.get('tuiScenes') === undefined && resolveDshProfileName() !== undefined) {
+    ctx.logger.warn(
+      'dsh-tui: tuiScenes service is not mounted; plugin scenes will never open. ' +
+      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+    )
+  }
   const initialWorkspace = requestedWorkspace === undefined
     ? undefined
     : await workspaceService.resolve(requestedWorkspace)

@@ -211,6 +211,66 @@ if (settingsCtx.tuiSettingsSections.list().length !== 0) {
 }
 await settingsCtx.fiber.dispose()
 
+// Plugin scene seam: registration validates and dedupes ids, open/close
+// drive the subscribe feed exactly once per transition, and disposing the
+// open scene closes it instead of stranding the user on a dead screen.
+const scenesModule = await import('../src/scenes.js')
+const sceneCtx = new Context()
+await sceneCtx.plugin(scenesModule.default).await()
+const sceneRuntime = sceneCtx.tuiScenes
+let sceneNotifications = 0
+const unsubscribeScenes = sceneRuntime.subscribe(() => { sceneNotifications += 1 })
+if (sceneRuntime.active !== undefined) throw new Error('scene smoke: active scene before any open')
+if (sceneRuntime.open('missing') !== false) throw new Error('scene smoke: opening an unregistered id must fail')
+const demoScene = { id: 'demo', component: () => null }
+const disposeDemo = sceneRuntime.register(demoScene)
+if (sceneRuntime.open('DEMO') !== true || sceneRuntime.active?.id !== 'demo') {
+  throw new Error('scene smoke: ids must normalize to lowercase on open')
+}
+if (sceneNotifications !== 1) throw new Error('scene smoke: open must notify exactly once')
+sceneRuntime.open('demo')
+if (sceneNotifications !== 1) throw new Error('scene smoke: re-opening the active scene must not notify')
+sceneRuntime.close()
+if (sceneRuntime.active !== undefined || sceneNotifications !== 2) {
+  throw new Error('scene smoke: close must clear the active scene and notify')
+}
+sceneRuntime.open('demo')
+disposeDemo()
+if (sceneRuntime.active !== undefined || sceneNotifications !== 4) {
+  throw new Error('scene smoke: disposing the open scene must close it')
+}
+let invalidIdThrew = false
+try {
+  sceneRuntime.register({ id: 'not a scene id', component: () => null })
+} catch {
+  invalidIdThrew = true
+}
+if (!invalidIdThrew) throw new Error('scene smoke: invalid ids must be rejected')
+const sceneDisposeDup = sceneRuntime.register({ id: 'dup', component: () => null })
+let sceneDuplicateThrew = false
+try {
+  sceneRuntime.register({ id: 'DUP', component: () => null })
+} catch {
+  sceneDuplicateThrew = true
+}
+if (!sceneDuplicateThrew) throw new Error('scene smoke: duplicate ids must be rejected')
+sceneDisposeDup()
+unsubscribeScenes()
+await sceneCtx.fiber.dispose()
+
+// Host JSX runtime (./jsx-runtime subpath): elements it creates must carry
+// the React 19 transitional-element symbol — the only flavor this app's
+// reconciler accepts — so plugin JSX compiled with
+// `"jsxImportSource": "@deepseek-harness-tui/dsh-tui"` renders on first try.
+const jsxRuntimeModule = await import('../src/jsx-runtime.js')
+if (typeof jsxRuntimeModule.jsx !== 'function' || typeof jsxRuntimeModule.jsxs !== 'function') {
+  throw new Error('jsx-runtime smoke: jsx/jsxs factories missing')
+}
+const probe = jsxRuntimeModule.jsx('div', {}) as { $$typeof?: symbol }
+if (probe.$$typeof !== Symbol.for('react.transitional.element')) {
+  throw new Error('jsx-runtime smoke: element is not a React 19 transitional element')
+}
+
 // Generic workspace seam: prove the TUI works with only its local fallback,
 // and that an anonymous provider can add URI/path/shell behavior without the
 // TUI knowing its protocol.

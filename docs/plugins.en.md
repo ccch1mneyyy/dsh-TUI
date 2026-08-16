@@ -280,6 +280,141 @@ Rules (same as the core `cordis.patch.yml`):
   If your plugin is meant to be composed by other bundles, provide the same
   explicit subpath export.
 
+## Seam 8: Plugin Full-Screen Scenes (tuiScenes)
+
+A plugin can register a **full-screen React scene** with the TUI and open it
+from its own slash command — the same "takes the whole terminal, hands it
+back untouched" shape as `/trace` (the trajectory timeline) and `/settings`.
+Command execution stays with dsh-commands (the `command/run`/`command/done`
+pair is logged as usual); the TUI only provides the rendering surface and
+keyboard ownership. Opening/closing a scene never touches the conversation
+and appends no session events.
+
+### Three steps
+
+**1. Register the scene** (`id` is globally unique, kebab-case; duplicate or
+invalid ids throw at registration):
+
+```ts
+import type { TuiSceneProps } from '@deepseek-harness-tui/dsh-tui/scenes'
+
+ctx.inject(['tuiScenes'], (sceneCtx) => {
+  const dispose = sceneCtx.tuiScenes.register({
+    id: 'my-dashboard',
+    title: 'My dashboard',        // optional, for logs/debugging; the scene draws its own header
+    component: MyDashboard,
+  })
+  ctx.effect(() => () => dispose())   // disposing the OPEN scene closes it
+})
+```
+
+**2. Register the command that opens it** (execution and logging stay with
+dsh-commands; the handler returns a silent `success`, leaving just the
+command's own line in the transcript):
+
+```ts
+ctx.inject(['commands'], (commandCtx) => {
+  const dispose = commandCtx.commands.register({
+    name: 'dashboard',
+    description: 'Open my dashboard',
+    handler: () => {
+      const opened = sceneCtx.tuiScenes.open('my-dashboard')
+      return opened
+        ? { kind: 'success' as const }
+        : { kind: 'error' as const, text: 'dashboard scene is not registered' }
+    },
+  })
+  ctx.effect(() => () => dispose())
+})
+```
+
+**3. Write the scene component** — the props inject the host's `React` and
+`ui` kit, and that is a **hard contract** (see the next section):
+
+```tsx
+// tsconfig: "jsx": "react-jsx",
+//           "jsxImportSource": "@deepseek-harness-tui/dsh-tui"
+import type { TuiSceneProps } from '@deepseek-harness-tui/dsh-tui/scenes'
+
+export function MyDashboard({ React, ui, channel, close }: TuiSceneProps) {
+  // Hooks MUST come from the injected React; JSX goes through the host
+  // jsx-runtime via jsxImportSource.
+  const { Box, Text, useInput, useTerminalSize } = ui
+  const { columns, rows } = useTerminalSize()
+  // channel is reactive: subscribe to version like Chat does and the data
+  // follows the session live.
+  React.useSyncExternalStore(channel.subscribe, () => channel.version)
+  // The scene owns the keyboard while open — conventions like Esc/q to
+  // close are the scene's own job.
+  useInput((input, key) => {
+    if (key.escape || input === 'q') close()
+  })
+  return (
+    <Box flexDirection="column" width="100%" paddingX={1}>
+      <Text bold>My dashboard</Text>
+      <Text>{channel.rows.length} rows · {columns}×{rows}</Text>
+    </Box>
+  )
+}
+```
+
+No JSX? `React.createElement(ui.Box, …)` is equally valid (`React` IS the
+host instance, so `createElement`/`Fragment` are always safe).
+
+### The React contract (read this — violations crash on first render)
+
+The TUI's reconciler is **React 19**, and scene components run on the host's
+React instance:
+
+- **Hooks must come from the props-injected `React`.** A plugin importing its
+  own React copy from node_modules and calling its hooks hits a dispatcher
+  mismatch — invalid hook call on the very first render.
+- **Elements must be created through the host runtime.** React 19's JSX
+  factory emits `Symbol.for('react.transitional.element')` elements; JSX
+  compiled against a plugin-bundled older React (18 and below) emits
+  `Symbol.for('react.element')`, which the host reconciler rejects outright.
+  So JSX authors must point tsconfig's `jsxImportSource` at
+  `@deepseek-harness-tui/dsh-tui` (its `./jsx-runtime` subpath re-exports the
+  host's own `react/jsx-runtime` verbatim), or stick to the injected
+  `React`'s `createElement`. A plugin-owned React copy only produces legal
+  elements when it is the SAME 19.x line — and its hooks remain off-limits
+  regardless.
+
+### Runtime semantics
+
+- **Screen stack**: a plugin scene sits at the TOP of Chat's early-return
+  chain — above `/settings`, the `/resume` browser, and the trajectory
+  scene. Those screens stay mounted but yield the screen and the keyboard
+  while a scene is open; `close()` lands back on whatever was up before.
+- **Inline and fullscreen alike**: in inline mode the TUI wraps the scene in
+  `<AlternateScreen>` for you (DEC 1049 enter/exit, frame churn never reaches
+  scrollback); in fullscreen mode the host's alt screen is reused. Scene
+  components must NOT nest another `<AlternateScreen>` themselves.
+- **Async opens are safe**: handlers may be async and call `open()` after the
+  command settles — the open rides the channel's version bump into a
+  re-render, independent of the command's return timing.
+- **Graceful degradation without the service**: probe with
+  `ctx.get('tuiScenes')`; on an older patch without the `dsh-tui-scenes` row,
+  `open()` warns and returns `false` and the TUI never opens a scene — a
+  missing seam must never break startup (the #183 rule).
+- **Lifecycle**: registration and open state do NOT reset on agent swaps
+  (`/new`, `/resume`, rewind); `channel` always points at the live agent.
+  Unmounting (closing) destroys the component's hook state — reopening is a
+  fresh mount.
+
+### Scene red lines
+
+- The scene owns the WHOLE terminal while open: lay out with
+  `flexGrow`/`useTerminalSize()` instead of assuming fixed dimensions, and
+  never write to stdout (debug through `DSH_TUI_DEBUG`'s stderr).
+- A scene is an OBSERVER of the session: read from `channel` (rows, tokens,
+  working, traceEvents, …); writes (submit/steer/cancel) are available too,
+  but opening/closing itself produces no session events — never append
+  events from a scene; if you must emit, follow seam 1's log-only rules.
+- Per-frame render cost is the scene's own budget: use
+  `ui.useAnimationFrame` for motion, and keep synchronous I/O out of the
+  render path.
+
 ## Naming and Publishing Conventions
 
 - **Package name**: ecosystem convention `@dsh-tui-ecosystem/<name>` (check npm
