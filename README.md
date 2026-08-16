@@ -137,7 +137,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 |---|---|
 | 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） |
 | 状态 | `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
-| 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 · `/lang` 中英界面切换 |
+| 模型/Agent | `/model` 选择器 · `/preset` 官方预设 · `/smart` 路由增强 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 · `/lang` 中英界面切换 |
 | 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` · `/memory` |
 | 技能 | `/audit` 代码审计 · `/bug` bug 报告 · `/review` 代码评审 · `/practice` 编程练习 · `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查 |
 | 其它 | `/agents` 子代理列表 · `/update` 自动更新并重启 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` |
@@ -160,11 +160,11 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 
 ## 配置与扩展
 
-- **Agent preset**：四种官方 Agent 模式（`standard` / `code` / `minimal` / `cordis`）和
-  TUI 随包提供的“梁神模式”（`liangshen`），
-  `/preset` 切换；已产生对话的会话不可切换，空白会话立即生效。默认 preset 持久化
-  在 `~/.dsh-tui/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-tui/model.json`。
-  详见[配置参考](docs/configuration.md#agent-preset)。
+ - **Agent preset 与智能增强**：四种官方 Agent 模式以及 TUI 随包提供的
+  `liangshen`（梁神模式）由 `/preset` 选择；`/smart` 在所选 preset 上启用独立的
+  Smart 路由 overlay，通过完整 session fork 切换，并保留历史、route、cwd、preset
+  与工作流边界。`liangshen` 是上游独立 preset，不是 Smart 的别名，也不能与其叠加。
+  完整的路由、晋升和持久化规则见[配置参考](docs/configuration.md#smart-增强)。
 - **自定义主题**：`/theme` 选择器（`auto` 跟随系统/终端背景，内置 `light` / `dark` /
   `dark-ansi`），也支持 `~/.dsh-tui/themes/<名字>.json` 自定义主题，选中即热切换
   并持久化；`DSH_TUI_THEME` 环境变量 > 持久化选择 > OSC 11 终端背景自动检测。

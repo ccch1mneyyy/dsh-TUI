@@ -81,6 +81,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
   { name: 'preset', description: 'Switch the agent preset (including Liangshen mode)' },
+  { name: 'smart', description: 'DeepSeek V4 routing tuned primarily for V4 Flash' },
   { name: 'theme', description: 'Switch the color theme (auto, built-in or custom)' },
   { name: 'lang', description: 'Switch the UI language (en / zh)' },
   { name: 'model', description: 'Show the active model' },

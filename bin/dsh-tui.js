@@ -31,7 +31,13 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { shellQuote } from '../lib/types/utils/shellQuote.js'
-import { detectLegacyEnv, RENAMED_ENV } from '../lib/types/utils/paths.js'
+import {
+  DATA_DIR,
+  DATA_DIR_OVERRIDDEN,
+  LEGACY_DATA_DIR,
+  detectLegacyEnv,
+  RENAMED_ENV,
+} from '../lib/types/utils/paths.js'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 const ownVersion = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).version
@@ -181,9 +187,10 @@ const setResumeEnv = sessionId => {
   process.env.DSH_CC_RESUME_SESSION = sessionId
 }
 const readLastResumeTarget = () => {
-  for (const dir of ['.dsh-tui', '.dsh-cc']) {
+  const resumeDirs = DATA_DIR_OVERRIDDEN ? [DATA_DIR] : [DATA_DIR, LEGACY_DATA_DIR]
+  for (const dir of resumeDirs) {
     try {
-      const sessionId = readFileSync(join(homedir(), dir, 'resume.txt'), 'utf8').trim()
+      const sessionId = readFileSync(join(dir, 'resume.txt'), 'utf8').trim()
       if (sessionId) return sessionId
     } catch {
       // 没有历史会话可恢复——静默忽略，正常冷启动。

@@ -6,10 +6,11 @@
 
 ```text
 Cordis profile
-  -> src/index.ts (plugin contract and Schema)
-  -> src/plugin.ts (services, Agent, and React lifecycle)
+  -> src/index.ts (public re-export shim)
+  -> src/dsh-adapter/index.ts (plugin contract and Schema)
+  -> src/dsh-adapter/plugin.ts (services, Agent, and React lifecycle)
   -> DSH Agent / session / tool services
-  -> src/channel.ts (session/event -> Channel)
+  -> src/dsh-adapter/channel.ts (session/event -> Channel)
   -> src/screens/Chat.tsx (keyboard and mode orchestration)
   -> src/components/* (views)
   -> src/ui.ts (themed renderer facade)
@@ -21,9 +22,10 @@ Cordis profile
 
 | Module | Owns |
 | --- | --- |
-| `src/index.ts` | Cordis plugin name, injection declaration, config interface, and Schema; keep the entry small and lazy |
-| `src/plugin.ts` | TTY guard, questionnaire/skill registration, Agent create/resume, React mount, and the single cleanup funnel |
-| `src/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
+| `src/index.ts` | Public re-export shim only; it must not import official DSH packages directly |
+| `src/dsh-adapter/index.ts` | Cordis plugin name, injection declaration, config interface, Schema, and upstream version gate |
+| `src/dsh-adapter/plugin.ts` | TTY guard, questionnaire/skill registration, Agent create/resume, React mount, and the single cleanup funnel |
+| `src/dsh-adapter/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
@@ -44,7 +46,7 @@ branches.
 
 ## The session log is the source of truth
 
-`channel.ts` does not treat a React-local array as conversation truth. DSH
+`src/dsh-adapter/channel.ts` does not treat a React-local array as conversation truth. DSH
 `session/event` records own:
 
 - initial replay and incremental streaming events;
@@ -100,6 +102,7 @@ ConPTY.
 | `~/.dsh-tui/themes/` | User theme JSON files |
 | `~/.dsh-tui/working-activity.json` | Activity animation selection |
 | `~/.dsh-tui/agent-preset.json` | Default Agent preset for new sessions |
+| `~/.dsh-tui/smart.json` | Smart default and per-replacement-session state |
 
 `DSH_TUI_SESSION_ROOT` overrides the JSONL root in either composition. The
 profile defaults to `$DSH_HOME/sessions` (normally `~/.dsh/sessions/`);
@@ -142,6 +145,13 @@ visual TUI alone does not describe the effective policy.
   separate UI segment; it is included in the system/context meter.
 - `/model` switches through a session fork rather than an in-place update; the
   old session remains in `/resume`.
+- Smart owns its asset directory, mount module, and sidecar, and switches over
+  the selected base preset through a session fork. Each replacement rebuilds
+  `request/header`; old header events never become model messages. Children
+  inherit the parent's Smart state, but the overlay adds no child-local tools
+  and preserves persona plus delegation, sandbox, and approval contexts. The
+  routing, promotion, and `liangshen` compatibility rules live in
+  [Configuration](configuration.en.md#smart-enhancement).
 - `Ctrl+V` clipboard reads dispatch per platform: PowerShell `Get-Clipboard` on
   Windows (a competing process can lock the clipboard and make the read appear
   empty after retries), `osascript`/`pbpaste` on macOS, and the first usable of

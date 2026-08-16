@@ -47,6 +47,8 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-tool-ask-user',
   '@deepseek-ai/dsh-tool-bash-persistent',
   '@deepseek-ai/dsh-tool-cordis',
+  '@deepseek-ai/dsh-tool-str-replace-editor',
+  '@deepseek-ai/dsh-tools',
   '@deepseek-ai/dsh-user-approval',
   '@deepseek-ai/dsh-user-questions',
 ] as const

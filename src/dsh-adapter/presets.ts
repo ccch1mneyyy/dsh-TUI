@@ -17,10 +17,11 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { AgentSetup } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
+import { mountSmartEnhancement } from './smartEnhancement.js'
 
 const ASK_USER_TOOL = 'ask_user_question'
 
@@ -57,8 +58,15 @@ export function rosterOf(ctx: Context): AgentPresetsLike | undefined {
 export interface PresetComposition {
   /** Value for the durable header's `meta.agentPreset`; absent without a roster. */
   readonly agentPreset?: string
+  /** Enhancement state after preset compatibility rules are applied. */
+  readonly smart: boolean
   /** Factory setup hook mounting the preset onto the unpublished agent. */
   readonly setup?: AgentSetup
+}
+
+export interface PresetCompositionOptions {
+  /** Ignore inherited completion state for this enhancement's first request. */
+  readonly resetAnchored?: boolean
 }
 
 /**
@@ -74,9 +82,20 @@ export interface PresetComposition {
  * @param requested - The preset id the caller wants, or undefined for the default.
  * @returns The header value + setup hook, or an empty composition.
  */
-export async function composePreset(ctx: Context, requested?: string): Promise<PresetComposition> {
+export async function composePreset(
+  ctx: Context,
+  requested?: string,
+  smart = false,
+  options: PresetCompositionOptions = {},
+): Promise<PresetComposition> {
   const presets = rosterOf(ctx)
-  if (presets === undefined) return {}
+  if (presets === undefined) {
+    if (smart) return {
+      smart,
+      setup: agentCtx => mountSmartEnhancement(ctx, agentCtx, undefined, options),
+    }
+    return { smart }
+  }
   let resolvedId: string
   try {
     resolvedId = (await presets.resolve(requested)).id
@@ -85,12 +104,25 @@ export async function composePreset(ctx: Context, requested?: string): Promise<P
       `dsh-tui: agent preset ${requested === undefined ? '(default)' : `"${requested}"`} unavailable ` +
         `(${error instanceof Error ? error.message : String(error)}) — composing the session without a preset`,
     )
-    return {}
+    if (smart) return {
+      smart,
+      setup: agentCtx => mountSmartEnhancement(ctx, agentCtx, undefined, options),
+    }
+    return { smart }
+  }
+  // Liangshen is a complete standalone preset with its own promotion flow.
+  const compatibleSmart = resolvedId === 'liangshen' ? false : smart
+  if (smart && resolvedId === 'liangshen') {
+    ctx.logger.warn('dsh-tui: liangshen is a standalone preset; Smart is disabled for this session')
   }
   return {
     agentPreset: resolvedId,
+    smart: compatibleSmart,
     setup: async (agentCtx: Context) => {
       await presets.mount(agentCtx, resolvedId)
+      if (compatibleSmart) {
+        await mountSmartEnhancement(ctx, agentCtx, resolvedId, options)
+      }
     },
   }
 }

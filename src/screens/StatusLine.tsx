@@ -49,6 +49,15 @@ export function StatusLine({
 
   const usage = channel.lastUsage
   const contextParts: React.ReactNode[] = []
+  // Smart is an enhancement over the selected preset, so keep its state
+  // visible without encoding it in the model-facing prompt.
+  if (channel.smart) {
+    contextParts.push(
+      <Text key="enhancement" color="suggestion" bold>
+        Smart
+      </Text>,
+    )
+  }
   // Session-mode marker (Shift+Tab cycle): hidden on the unmarked base
   // mode (index 0); sage while a plan-declaring mode is in force.
   if (channel.modeIndex > 0) {

@@ -43,8 +43,20 @@ const dict = {
   'preset-pref-write-failed': { zh: '无法写入 ~/.dsh-tui/agent-preset.json，选择未保存', en: 'Cannot write ~/.dsh-tui/agent-preset.json, selection not saved' },
   'preset-locked-saved-default': { zh: '会话已开始，preset 已锁定（当前：{{current}}）· 已保存为默认：{{id}}（/new 或下次启动生效）', en: 'Session already started, preset locked (current: {{current}}) · Saved as default: {{id}} (applies on /new or next start)' },
   'preset-switch-failed': { zh: 'Preset 切换失败 · {{err}}', en: 'Preset switch failed · {{err}}' },
+  'preset-liangshen-enhancement-conflict': { zh: '梁神模式是独立 preset，不能与 Smart 叠加；请先关闭 Smart', en: 'Liangshen is a standalone preset and cannot be stacked with Smart; disable Smart first' },
   'preset-switched-pref-failed': { zh: 'Preset 已切换：{{id}}，但默认偏好写入失败（重启后不保留）', en: 'Preset switched: {{id}}, but writing the default preference failed (won\'t persist after restart)' },
   'preset-switched-saved': { zh: 'Preset 已切换：{{id}}（已保存为默认）', en: 'Preset switched: {{id}} (saved as default)' },
+  'smart-agent-running': { zh: 'Agent 运行中，无法切换 Smart', en: 'Agent is running; Smart cannot be switched' },
+  'smart-unavailable': { zh: 'Smart 切换不可用——会话 fork 服务未挂载', en: 'Smart switch unavailable — session fork services are not loaded' },
+  'smart-switch-failed': { zh: 'Smart 切换失败 · {{err}}', en: 'Smart switch failed · {{err}}' },
+  'smart-already': { zh: 'Smart 已经是 {{state}}', en: 'Smart is already {{state}}' },
+  'smart-switched': { zh: 'Smart 已切换为 {{state}}（对话已保留并保存为默认）', en: 'Smart switched {{state}} (conversation preserved and saved as default)' },
+  'smart-switched-pref-failed': { zh: 'Smart 已切换为 {{state}}，但状态偏好未完整保存', en: 'Smart switched {{state}}, but its state preference was not fully saved' },
+  'smart-current': { zh: 'Smart 增强  {{state}} · 仅支持 DeepSeek V4 模型', en: 'Smart enhancement  {{state}} · DeepSeek V4 models only' },
+  'smart-model-required': { zh: 'Smart 仅支持 DeepSeek V4 模型（V4 Flash / V4 Pro）；当前模型 {{model}}。请先用 /model 切换', en: 'Smart supports only DeepSeek V4 models (V4 Flash / V4 Pro); the current model is {{model}}. Switch with /model first' },
+  'smart-liangshen-conflict': { zh: '梁神模式有独立的首轮晋升逻辑，不能叠加 Smart；请先切换 preset', en: 'Liangshen has its own bootstrap promotion flow and cannot be stacked with Smart; switch presets first' },
+  'smart-disabled-by-model': { zh: '模型已切换为 {{model}}，Smart 与该模型不兼容，已自动关闭', en: 'Model switched to {{model}}; Smart is not tuned for it and was switched off automatically' },
+  'smart-usage': { zh: '用法：/smart [on|off|status]', en: 'Usage: /smart [on|off|status]' },
   'mcp-none-configured': { zh: '未配置 MCP 服务器。', en: 'No MCP servers configured.' },
   'mcp-insert-hint': { zh: '在 profile 补丁层（~/.dsh/profiles/dsh-tui/cordis.patch.yml）insert 一行即可，例：', en: 'Insert one line in the profile patch layer (~/.dsh/profiles/dsh-tui/cordis.patch.yml), e.g.:' },
   'mcp-readme-hint': { zh: '详见仓库 README 的 MCP 章节。', en: 'See the MCP section of the repo README.' },
@@ -255,7 +267,7 @@ const dict = {
   'tokens-usage-context': { zh: '{{usage}} · 上下文 {{percent}}%', en: '{{usage}} · {{percent}}% of context' },
 
   // ── plugin.ts — boot-time rename notices (issue #120) ───────────────
-  'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-tui 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）', en: 'Data directory copied from ~/.dsh-tui to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)' },
+  'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-cc 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）', en: 'Data directory copied from ~/.dsh-cc to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)' },
   'legacy-env-renamed': { zh: '环境变量 {{old}} 已更名为 {{new}}，旧名不再生效', en: 'Environment variable {{old}} was renamed to {{new}}; the old name no longer takes effect' },
 
   // ── plugin.ts — /update flow ───────────────────────────────────────
@@ -581,6 +593,7 @@ const dict = {
   // Model / display
   'cmd-desc-activity': { zh: '切换工作状态指示器预设' },
   'cmd-desc-preset': { zh: '切换 Agent 预设（含梁神模式）' },
+  'cmd-desc-smart': { zh: 'DeepSeek V4 路由增强，优先适配 V4 Flash', en: 'DeepSeek V4 routing tuned primarily for V4 Flash' },
   'cmd-desc-theme': { zh: '切换配色主题（auto 跟随系统，或内置/自定义）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },

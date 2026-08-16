@@ -240,6 +240,9 @@
         # 默认值。优先于持久化的 Shift+Tab 选择（~/.dsh-tui/effort.json）；
         # 同时作为顶栏/状态栏的启动显示，首个请求头回来后以实际值为准。
         effort: max
+        # Smart is an enhancement over the selected official preset, not an
+        # additional roster entry. /smart persists the default when unset.
+        smart: !!js "process.env.DSH_TUI_SMART === '1' ? true : process.env.DSH_TUI_SMART === '0' ? false : undefined"
         # Shift+Tab session-mode cycle (array order IS the cycle order;
         # absent → the built-in default/plan/full trio below). Each entry
         # may declare any subset of the plan (on/off), sandbox (read-only/

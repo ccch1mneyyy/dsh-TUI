@@ -18,6 +18,7 @@ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateMode
 import type { ModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, runningPresetOf } from './presets.js'
+import { readSmartDefault, resolvePersistedSmart, smartModeOf, writeSmartSession } from '../smartPrefs.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
@@ -237,19 +238,25 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   const sessionCwd = initialWorkspace?.cwd ?? resolveSessionCwd(config.cwd)
   const meta = { cwd: sessionCwd }
-  const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
+  const startupSmart = config.smart ?? readSmartDefault() ?? false
+  const { agent, handle, agentPreset, smart, route: createdRoute } = await resolveAgent(
     ctx,
     config.sessionId,
     configuredRoute,
     startupRoute,
     meta,
     config.preset,
+    startupSmart,
   )
   try {
     // Opening a persisted TUI session is an explicit ownership action too.
     // Older TUI versions only wrote the Session log, so attaching on every
     // startup repairs those durable-but-ungrouped sessions idempotently.
-    const attached = await attachSessionToWorkspace(ctx, meta.cwd, agent.session.id)
+    const attached = await attachSessionToWorkspace(
+      ctx,
+      agent.session.header.cwd ?? meta.cwd,
+      agent.session.id,
+    )
     if (!attached) {
       ctx.logger.warn(
         `dsh-tui: session "${agent.session.id}" has no workspace ownership because workspaceRegistry is not mounted`,
@@ -293,6 +300,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // persisted `/preset` choice; undefined adopts the roster default.
     configuredPreset: config.preset,
     agentPreset,
+    smart,
+    configuredSmart: config.smart,
     // Shift+Tab session-mode cycle (undefined → the built-in default/
     // plan/full cycle in sessionModes.ts).
     modes: config.modes,
@@ -517,7 +526,14 @@ async function resolveAgent(
   startupRoute: ModelRoute,
   meta: { cwd: string },
   configuredPreset?: string,
-): Promise<{ agent: Agent; handle?: AgentHandle; agentPreset?: string; route?: ModelRoute }> {
+  startupSmart = false,
+): Promise<{
+  agent: Agent
+  handle?: AgentHandle
+  agentPreset?: string
+  smart: boolean
+  route?: ModelRoute
+}> {
   // Resume override (issue #67): cordis.yml overrides the target session's
   // recorded route only when it pins BOTH halves; undefined halves let the
   // session's own request/header records win (issue #30).
@@ -527,7 +543,17 @@ async function resolveAgent(
     const resumeId = SessionId(requestedSessionId)
     const existing = ctx.agents.get(resumeId)
     if (existing !== undefined) {
-      return { agent: existing, agentPreset: runningPresetOf(existing.session) }
+      const agentPreset = runningPresetOf(existing.session)
+      const incompatible = agentPreset === 'liangshen'
+      const smart = incompatible ? false : smartModeOf(existing.session)
+      if (incompatible) {
+        writeSmartSession(String(resumeId), false)
+      }
+      return {
+        agent: existing,
+        agentPreset,
+        smart,
+      }
     }
     try {
       // Compat boundary: register vouched-for legacy event types before the
@@ -538,12 +564,14 @@ async function resolveAgent(
       // `agent-preset/selected` wins over the creation header), never the
       // caller's current preference.
       const persisted = await resolvePersistedPreset(ctx, resumeId)
-      const composed = await composePreset(ctx, persisted)
+      const smart = await resolvePersistedSmart(ctx, resumeId)
+      const composed = await composePreset(ctx, persisted, smart)
       const resumed = await ctx.agents.resume({
         resumeSessionId: resumeId,
         agentOptions: resumeOptions,
         ...(composed.setup === undefined ? {} : { setup: composed.setup }),
       })
+      writeSmartSession(String(resumeId), composed.smart)
       // Status-line route on resume: the route the session actually
       // continues on — a complete cordis.yml pin, else the route its own
       // request/header records carry (a bare log yields undefined and the
@@ -552,6 +580,7 @@ async function resolveAgent(
         agent: resumed.agent,
         handle: resumed,
         agentPreset: composed.agentPreset,
+        smart: composed.smart,
         route: resumeRoute ?? recordedModelRoute(resumed.agent.session.events),
       }
     } catch (error) {
@@ -563,7 +592,11 @@ async function resolveAgent(
     }
   }
   const sessionId = SessionId(randomUUID())
-  const composed = await composePreset(ctx, configuredPreset ?? readPresetPref())
+  const composed = await composePreset(
+    ctx,
+    configuredPreset ?? readPresetPref(),
+    startupSmart,
+  )
   // Fresh-session route precedence (issues #14/#30/#67): resolved atomically
   // by the caller (complete cordis.yml route > the persisted `/model` choice
   // > the harness default), then validated against the adapter catalog — a
@@ -595,7 +628,14 @@ async function resolveAgent(
       `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`,
     )
   })
-  return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
+  writeSmartSession(String(sessionId), composed.smart)
+  return {
+    agent: created.agent,
+    handle: created,
+    agentPreset: composed.agentPreset,
+    smart: composed.smart,
+    route,
+  }
 }
 
 /**

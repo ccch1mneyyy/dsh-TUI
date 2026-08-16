@@ -46,6 +46,13 @@ jobs:
       # and smoke-import the two runtime entry points.
       - run: pnpm verify:package
 
+      # Smart enhancement 资产与 Router 真实 session/event 路径回归。
+      - run: node scripts/verify-smart-assets.mjs
+      - run: node scripts/verify-smart-state.mjs
+      - run: node scripts/verify-smart-fork.mjs
+      - run: node scripts/verify-smart-request.mjs
+      - run: node scripts/verify-smart-runtime.mjs
+
       # 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
       # （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
       - run: node --import tsx/esm scripts/repro-askpanel.tsx
@@ -316,3 +323,47 @@ jobs:
       # 提问面板 hideCustomInput 行为回归：纯选择题隐藏输入行且 Tab/打字
       # 不劫持焦点，纯文本题忽略 hide 标记，多选题默认行为不回退。
       - run: node --import tsx/esm scripts/verify-askpanel-hide-custom-input.tsx
+
+  smart-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node scripts/verify-smart-assets.mjs
+      - run: node scripts/verify-smart-state.mjs
+      - run: node scripts/verify-smart-fork.mjs
+      - run: node scripts/verify-smart-request.mjs
+      - run: node scripts/verify-smart-runtime.mjs
+
+  smart-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node scripts/verify-smart-assets.mjs
+      - run: node scripts/verify-smart-state.mjs
+      - run: node scripts/verify-smart-fork.mjs
+      - run: node scripts/verify-smart-request.mjs
+      - run: node scripts/verify-smart-runtime.mjs

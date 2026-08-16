@@ -44,6 +44,9 @@
     # Shift+Tab choice (~/.dsh-tui/effort.json); also seeds the startup
     # header/statusline until the first request header reports the live value.
     effort: max
+    # Orthogonal Smart enhancement, based on dsh-routing-suite, over the
+    # selected official preset. Standard remains unchanged unless enabled.
+    smart: !!js "process.env.DSH_TUI_SMART === '1' ? true : process.env.DSH_TUI_SMART === '0' ? false : undefined"
     # Shift+Tab 会话模式循环（数组顺序即循环顺序；缺省为下面三档）。
     # 每档可声明 plan（计划模式开/关）、sandbox（read-only/
     # workspace-write/danger-full-access）、approval（ask/never）三个

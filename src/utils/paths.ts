@@ -11,7 +11,7 @@
 
 import { cpSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 /**
  * The user's home directory. `os.homedir()` first; the USERPROFILE/HOME
@@ -22,8 +22,15 @@ export function homeDir(): string {
   return homedir() || process.env.USERPROFILE || process.env.HOME || ''
 }
 
-/** Data directory all preferences/history live in (`~/.dsh-tui`). */
-export const DATA_DIR = join(homeDir(), '.dsh-tui')
+const configuredDataDir = process.env.DSH_TUI_DATA_DIR?.trim()
+
+/** Whether preference/history storage was explicitly isolated by the caller. */
+export const DATA_DIR_OVERRIDDEN = configuredDataDir !== undefined && configuredDataDir.length > 0
+
+/** Data directory all preferences/history live in (`~/.dsh-tui` by default). */
+export const DATA_DIR = DATA_DIR_OVERRIDDEN
+  ? resolve(configuredDataDir!)
+  : join(homeDir(), '.dsh-tui')
 
 /** Pre-rename data directory (`~/.dsh-cc`), read only for migration. */
 export const LEGACY_DATA_DIR = join(homeDir(), '.dsh-cc')
@@ -41,6 +48,9 @@ export function migrateLegacyDataDir(
   legacy: string = LEGACY_DATA_DIR,
   target: string = DATA_DIR,
 ): boolean {
+  // An explicitly isolated data directory must start clean. Importing the
+  // user's legacy ~/.dsh-cc state would defeat test/profile isolation.
+  if (DATA_DIR_OVERRIDDEN && legacy === LEGACY_DATA_DIR && target === DATA_DIR) return false
   if (!existsSync(legacy) || existsSync(target)) return false
   cpSync(legacy, target, { recursive: true })
   return true
@@ -56,6 +66,7 @@ export const RENAMED_ENV: Readonly<Record<string, string>> = {
   CC_TUI_LANG: 'DSH_TUI_LANG',
   CC_TUI_PERSONA: 'DSH_TUI_PERSONA',
   CC_TUI_PRESET: 'DSH_TUI_PRESET',
+  CC_TUI_SMART: 'DSH_TUI_SMART',
   CC_TUI_DISABLE_MOUSE: 'DSH_TUI_DISABLE_MOUSE',
   CC_TUI_DEBUG: 'DSH_TUI_DEBUG',
   CC_TUI_COMPACT_RATIO: 'DSH_TUI_COMPACT_RATIO',

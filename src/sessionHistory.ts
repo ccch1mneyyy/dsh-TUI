@@ -16,12 +16,15 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DATA_DIR, LEGACY_DATA_DIR } from './utils/paths.js'
+import { DATA_DIR, DATA_DIR_OVERRIDDEN, LEGACY_DATA_DIR } from './utils/paths.js'
 
 const DIR = DATA_DIR
 const RESUME_FILE = join(DIR, 'resume.txt')
 const LEGACY_RESUME_FILE = join(LEGACY_DATA_DIR, 'resume.txt')
 const LAST_USED_FILE = join(DIR, 'last-used.json')
+const RESUME_FILES = DATA_DIR_OVERRIDDEN
+  ? [RESUME_FILE]
+  : [RESUME_FILE, LEGACY_RESUME_FILE]
 
 function ensureDir(): void {
   mkdirSync(DIR, { recursive: true })
@@ -35,6 +38,7 @@ function ensureDir(): void {
 export function writeResumeTarget(sessionId: string): void {
   ensureDir()
   writeFileSync(RESUME_FILE, sessionId)
+  if (DATA_DIR_OVERRIDDEN) return
   try {
     mkdirSync(LEGACY_DATA_DIR, { recursive: true })
     writeFileSync(LEGACY_RESUME_FILE, sessionId)
@@ -45,7 +49,7 @@ export function writeResumeTarget(sessionId: string): void {
 
 /** Forget the resume marker (`/new` starts a fresh conversation). */
 export function clearResumeTarget(): void {
-  for (const file of [RESUME_FILE, LEGACY_RESUME_FILE]) {
+  for (const file of RESUME_FILES) {
     try {
       writeFileSync(file, '')
     } catch {
@@ -60,7 +64,7 @@ export function clearResumeTarget(): void {
  * @returns The stored session id, or undefined when none is set.
  */
 export function readResumeTarget(): string | undefined {
-  for (const file of [RESUME_FILE, LEGACY_RESUME_FILE]) {
+  for (const file of RESUME_FILES) {
     try {
       const value = readFileSync(file, 'utf8').trim()
       if (value) return value

@@ -175,4 +175,40 @@ function check(name, ok) {
   instance2.unmount()
 }
 
+// Enhancement state must be obvious at the input itself, not only in the
+// footer or through a subtle color change on the arrow.
+for (const [name, state] of [
+  ['Smart', { smart: true }],
+]) {
+  const { stdout, stderr, stdin } = makeStreams()
+  const channel = {
+    mode: { id: 'default', plan: false },
+    modeIndex: 0,
+    cycleMode() {},
+    working: false,
+    commandList: [],
+    notifications: [],
+    pending: [],
+    notify() {},
+    submit() {},
+    listFiles: async () => [],
+    ...state,
+  }
+  const instance = await render(
+    React.createElement(PromptInput, {
+      channel,
+      helpOpen: false,
+      onToggleHelp() {},
+      onRunCommand: () => false,
+      selectionActive: false,
+    }),
+    { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(200)
+  const frame = toPlain(stdout.frames.join(''))
+  check(`${name} label is visible in the input`, frame.includes(`${name} `))
+  check(`${name} transition pulse renders`, /[·✦◆] /.test(frame))
+  instance.unmount()
+}
+
 process.exit(failed)

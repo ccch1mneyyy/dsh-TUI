@@ -152,8 +152,14 @@ answer in a scrollable panel. Notes:
 DSH has no in-place model-switch API. The old session remains in `/resume`.
 
 `/preset` switches in place only for a blank session. In a started session,
-the choice becomes the default for the next `/new` or launch. See
-[Configuration](configuration.en.md#agent-presets).
+the choice becomes the default for the next `/new` or launch.
+
+`/smart on|off|status` controls the Smart routing overlay over the current base
+preset. It switches through a fork: the replacement agent preserves the
+conversation and base preset while reassembling prompt, context, tools, and
+services. The old session remains in `/resume`. The standalone `liangshen`
+preset cannot be stacked with Smart. See
+[Configuration](configuration.en.md#smart-enhancement) for the canonical rules.
 
 ### Workspaces
 

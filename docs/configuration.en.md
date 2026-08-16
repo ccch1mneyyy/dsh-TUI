@@ -40,6 +40,7 @@ A complete common override looks like this:
     contextBar: true
     fullscreen: false
     preset: !!js process.env.DSH_TUI_PRESET ?? undefined
+    smart: !!js "process.env.DSH_TUI_SMART === '1' ? true : process.env.DSH_TUI_SMART === '0' ? false : undefined"
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
 ```
@@ -57,6 +58,7 @@ A complete common override looks like this:
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
 | `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
+| `smart` | persisted choice or `false` | Enable Smart over the selected Agent preset |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 
 ## Live activity row
@@ -100,6 +102,75 @@ Usage rules:
   does not overwrite it with the current default.
 - Liangshen mode ships with dsh-tui and is installed into the user preset root
   at startup. An existing unmanaged directory with the same id is preserved.
+
+
+### Smart enhancement
+
+Smart is an independent routing overlay over the selected Agent preset, not an
+additional preset. `/preset` chooses the base capability. Switching Smart forks
+at the end of current history, preserves the conversation, model route, cwd,
+preset, and workflow boundaries, and reassembles the replacement agent's
+prompt, context, tool schemas, and services. The standalone `liangshen` preset
+owns its own tool surface, promotion, and compaction semantics and cannot be
+stacked with Smart.
+
+Smart is tuned only for the DeepSeek V4 family. It primarily targets V4 Flash
+while retaining a V4 Pro routing policy. The TUI hard-gates the enhancement by
+route string and accepts only recognizable DeepSeek V4 family names;
+custom-provider aliases must retain a `deepseek-v4` form.
+
+Control Smart with `/smart on|off|status`, `smart: true`, or
+`DSH_TUI_SMART=1`.
+
+Smart is based on [dsh-routing-suite](https://github.com/yjh051108/dsh-routing-suite), pinned to suite `eb1b00d` and historical Router Pro
+commit `7426c9c`. Upstream has deleted the `v0.3.0` tag, and current suite
+`a09eb0a` rolls its preset pointer back to Router v0.2. That reviewed rollback is
+explicitly excluded so the DeepSeek V4 Pro policy is not silently removed.
+Smart primarily targets V4 Flash. On `deepseek-v4-pro`, it uses Router Pro:
+maintenance/fix selects
+the RL shell/editor interface, greenfield build selects the doer write-first
+interface, and ambiguous input uses router-v2 few-shot. Flash and unknown
+models keep Router Standard. These first-request prompt/context and tool
+surfaces run only over the `standard` base preset; other presets retain their
+complete native catalogs while receiving non-destructive classification and
+near-field guidance. Top-level Standard Smart also mounts the required
+`str_replace_editor`. Skills,
+plugin tools, runtime policy contexts, and the complete Standard sections
+return after the first durable `tool/call`; a tool-less first answer promotes
+the next user turn, and `/smart on` over existing history starts promoted
+instead of pretending to be a clean first request. Router Pro does not change
+the request output budget. The suite's new `dsh-mode-boost` overlaps Router and
+currently violates this TUI's first-message, promoted-context, and shell-less
+child boundaries, so its provenance is recorded without double-mounting it.
+`dev_mode_subagent` is an isolated,
+output-bounded text consultation without a tool catalog; it is not an
+executable task worker. Super Injector v0.3.3 is not redistributed because its upstream release declares
+BSD-3-Clause but includes no LICENSE/NOTICE artifact. When the official payload
+is already installed in the active or `web` profile, Smart verifies its version and host-bundle SHA-256
+before mounting the complete upstream host tool set. `DSH_SMART_RUNTIME_PATH`
+may point to that package directory. The terminal compatibility layer does not
+start a web server, so the upstream browser settings panel is unavailable.
+Once the optional host is active, its restore/watch loop and routes, timers,
+services, or other side effects from dynamically loaded plugins may remain
+process-global. `/smart off` removes the agent-scoped Smart prompt and Router
+and hides known host management tools and context, but it does not unload
+arbitrary injected plugins. Full isolation requires a separate process/profile;
+stopping all activated host behavior requires restarting the current process.
+
+Explicit `smart` configuration wins the persisted default. State is stored in
+`~/.dsh-tui/smart.json` by default; `DSH_TUI_DATA_DIR` relocates it to an
+isolated data directory. The per-session sidecar is the sole source of truth;
+neither `request/header` nor the model-visible system prompt carries mode
+state. `/resume`, rewind, `/model`, `/new`, and workspace ownership recompose
+against the target session's sidecar. While Smart is active, the input and
+persistent status line show Smart. Entering the enhancement plays one short
+label/arrow pulse; idempotent commands and failed switches do not play a false
+transition. The default state adds no marker.
+
+Native DSH spawn, fork, and continuable children inherit the parent's Smart
+state. The overlay never registers new tools in child scope or bypasses the
+delegation `toolFilter`; child persona and delegation, sandbox, and approval
+contexts are preserved, and routing stays within the already allowed catalog.
 
 Place a custom preset at `$DSH_HOME/.agent-presets/<name>/` with an
 `agent.cordis.yml` file. Under the default DSH home this is
@@ -151,10 +222,13 @@ for the complete field reference.
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
+| `DSH_TUI_SMART` | `1`/`0`: override the Smart enhancement default for new sessions |
+| `DSH_SMART_RUNTIME_PATH` | Optional Smart host runtime package directory or `lib/index.js` path |
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`) or custom theme ahead of persisted selection |
 | `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
 | `DSH_TUI_WORKSPACE_TARGET` | Workspace path or URI resolved at startup, normally set by `dsh-tui <target>` |
+| `DSH_TUI_DATA_DIR` | Override the data directory for themes, history, the resume pointer, and the Smart sidecar; disables automatic migration from legacy `~/.dsh-cc` |
 | `DSH_TUI_SESSION_ROOT` | Override the JSONL session root; profile default `$DSH_HOME/sessions`, bare `cordis.yml` default `~/.dsh-tui/sessions` |
 | `DSH_PERMISSION_MODE` | Override non-Windows sandbox policy, such as `workspace-write` or `danger-full-access` |
 | `DSH_TUI_WORKSPACE` | Working directory used by the Windows `dsh-tui.cmd` launcher |

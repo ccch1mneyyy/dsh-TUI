@@ -169,15 +169,17 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
 
 ## Configuration & Extensions
 
-- **Agent presets**: four official agent modes (`standard` / `code` / `minimal` / `cordis`)
-  plus the TUI-bundled Liangshen mode (`liangshen`),
-  switched with `/preset`; sessions that already have a conversation cannot switch, while
-  blank sessions take effect immediately. The default preset persists in
-  `~/.dsh-tui/agent-preset.json`; `/model` selections persist in `~/.dsh-tui/model.json`.
-  See [Configuration](docs/configuration.en.md#agent-preset).
+ - **Agent presets and intelligent enhancements**: `/preset` selects one of four
+  official agent modes (`standard` / `code` / `minimal` / `cordis`) or the
+  TUI-bundled `liangshen` preset. `/smart` enables an independent Smart routing
+  overlay over the selected preset. It switches through a full-session fork
+  while preserving history, route, cwd, preset, and workflow boundaries.
+  `liangshen` remains an upstream standalone preset: it is not a Smart alias
+  and cannot be stacked with it. Routing, promotion, and persistence rules
+  live in [Configuration](docs/configuration.en.md#smart-enhancement).
 - **Custom themes**: the `/theme` picker (`auto` follows the system/terminal background,
   built-in `light` / `dark` / `dark-ansi`) also accepts custom themes from
-  `~/.dsh-tui/themes/<name>.json` — selecting one hot-swaps and persists it; precedence is
+  `~/.dsh-tui/themes/<name>.json`; selecting one hot-swaps and persists it. Precedence is
   `DSH_TUI_THEME` env var > persisted selection > OSC 11 terminal-background auto-detection.
   See [Themes](docs/themes.en.md).
 - **MCP**: servers are mounted via `@deepseek-ai/dsh-mcp-client`, with tools registered as

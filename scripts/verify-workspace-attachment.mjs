@@ -123,14 +123,21 @@ const channel = readFileSync(new URL('../src/dsh-adapter/channel.ts', import.met
 const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 assert.match(
   plugin,
-  /await attachSessionToWorkspace\(ctx, meta\.cwd, agent\.session\.id\)/,
+  /agent\.session\.header\.cwd \?\? meta\.cwd/,
   'startup attaches both newly-created and resumed sessions',
 )
 assert.doesNotMatch(plugin, /if \(created\)/, 'startup attachment must not skip resumed legacy sessions')
+const channelAttachmentCalls = [...channel.matchAll(/await attachSessionToWorkspace\(([\s\S]{0,180}?)\)/g)]
+assert.equal(channelAttachmentCalls.length, 5, 'all replacement/adoption paths attach ownership')
 assert.equal(
-  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|handle\.agent\.session\.header\.cwd \?\? state\.cwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
-  4,
-  'rewind, /resume, /new, and model-switch paths all attach ownership',
+  channelAttachmentCalls.every(match => /\.agent\.session\.header\.cwd \?\? state\.cwd/.test(match[1])),
+  true,
+  'enhancement, rewind, /resume, /new, and model-switch use each resulting session cwd',
+)
+assert.doesNotMatch(
+  channel,
+  /attachSessionToWorkspace\(ctx, options\.cwd/,
+  'replacement ownership must not reuse the launch-time cwd',
 )
 for (const id of ['storage', 'storage-json', 'storage-domain', 'workspace']) {
   assert.match(patch, new RegExp(`- id: ${id}\\n`), `profile patch mounts ${id}`)

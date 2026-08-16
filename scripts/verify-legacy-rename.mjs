@@ -15,6 +15,7 @@
  * 运行：pnpm build && node scripts/verify-legacy-rename.mjs
  */
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -49,6 +50,24 @@ check('migrate: legacy dir preserved (copy, not move)', existsSync(join(legacy, 
 check('migrate: second call is a no-op (target exists)', migrateLegacyDataDir(legacy, target) === false)
 check('migrate: missing legacy is a no-op', migrateLegacyDataDir(join(tmp, 'no-such-dir'), join(tmp, 'other')) === false)
 
+// --- 1b. Explicit data-dir isolation ---------------------------------------
+const isolated = join(tmp, 'isolated-data')
+const isolatedProbe = spawnSync(process.execPath, [
+  '--input-type=module',
+  '--eval',
+  `import { DATA_DIR, DATA_DIR_OVERRIDDEN, migrateLegacyDataDir } from ${JSON.stringify(new URL('../lib/types/utils/paths.js', import.meta.url).href)};
+   console.log(JSON.stringify({ DATA_DIR, DATA_DIR_OVERRIDDEN, migrated: migrateLegacyDataDir() }));`,
+], {
+  env: { ...process.env, DSH_TUI_DATA_DIR: isolated },
+  encoding: 'utf8',
+})
+const isolatedResult = isolatedProbe.status === 0
+  ? JSON.parse(isolatedProbe.stdout.trim())
+  : undefined
+check('data-dir override: resolves the explicit directory', isolatedResult?.DATA_DIR === isolated)
+check('data-dir override: reports isolated storage', isolatedResult?.DATA_DIR_OVERRIDDEN === true)
+check('data-dir override: never imports legacy ~/.dsh-cc', isolatedResult?.migrated === false && !existsSync(isolated))
+
 // --- 2. resume.txt 双写契约（编译产物文本断言） ------------------------------
 const history = readFileSync(join(root, 'lib', 'types', 'sessionHistory.js'), 'utf8')
 check('resume dual-write: new path ~/.dsh-tui referenced', history.includes('.dsh-tui'))
@@ -67,6 +86,7 @@ check('detectLegacyEnv: reports DSH_CC_SESSION_ROOT', found.includes('DSH_CC_SES
 check('detectLegacyEnv: DSH_CC_RESUME_SESSION not reported (dual-read contract)', !found.includes('DSH_CC_RESUME_SESSION'))
 check('detectLegacyEnv: new names not reported', !found.includes('DSH_TUI_THEME'))
 check('RENAMED_ENV: CC_TUI_THEME → DSH_TUI_THEME', RENAMED_ENV.CC_TUI_THEME === 'DSH_TUI_THEME')
+check('RENAMED_ENV: CC_TUI_SMART → DSH_TUI_SMART', RENAMED_ENV.CC_TUI_SMART === 'DSH_TUI_SMART')
 check('RENAMED_ENV: DSH_CC_SESSION_ROOT → DSH_TUI_SESSION_ROOT', RENAMED_ENV.DSH_CC_SESSION_ROOT === 'DSH_TUI_SESSION_ROOT')
 check('RENAMED_ENV: every new name starts with DSH_TUI_', Object.values(RENAMED_ENV).every(name => name.startsWith('DSH_TUI_')))
 

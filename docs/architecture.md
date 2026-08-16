@@ -6,10 +6,11 @@
 
 ```text
 Cordis profile
-  -> src/index.ts（插件契约与 Schema）
-  -> src/plugin.ts（服务、Agent、React 生命周期）
+  -> src/index.ts（公共 re-export shim）
+  -> src/dsh-adapter/index.ts（插件契约与 Schema）
+  -> src/dsh-adapter/plugin.ts（服务、Agent、React 生命周期）
   -> DSH Agent / session / tool services
-  -> src/channel.ts（session/event -> Channel）
+  -> src/dsh-adapter/channel.ts（session/event -> Channel）
   -> src/screens/Chat.tsx（键盘与模式编排）
   -> src/components/*（视图）
   -> src/ui.ts（主题化 renderer facade）
@@ -21,9 +22,10 @@ Cordis profile
 
 | 模块 | 所有权 |
 | --- | --- |
-| `src/index.ts` | Cordis 插件名称、注入声明、配置接口与 Schema；保持入口轻量并延迟加载 runtime |
-| `src/plugin.ts` | TTY 检查、问卷与 Skills 注册、Agent 创建/恢复、React 挂载、统一退出清理 |
-| `src/channel.ts` | 将 DSH 持久化事件投影为 transcript；提供 submit、steer、resume、rewind、model/preset 等动作 |
+| `src/index.ts` | 仅 re-export adapter 的公共入口；不得直接 import 官方 DSH 包 |
+| `src/dsh-adapter/index.ts` | Cordis 插件名称、注入声明、配置接口、Schema 与上游版本门禁 |
+| `src/dsh-adapter/plugin.ts` | TTY 检查、问卷与 Skills 注册、Agent 创建/恢复、React 挂载、统一退出清理 |
+| `src/dsh-adapter/channel.ts` | 将 DSH 持久化事件投影为 transcript；提供 submit、steer、resume、rewind、model/preset 等动作 |
 | `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
@@ -41,7 +43,7 @@ service、registry 或 channel seam 接入。
 
 ## Session 是真源
 
-`channel.ts` 不把 React 本地数组当作对话真相。DSH `session/event` 日志负责：
+`src/dsh-adapter/channel.ts` 不把 React 本地数组当作对话真相。DSH `session/event` 日志负责：
 
 - 初始历史回放与增量流式事件；
 - assistant/reasoning/tool 行的关联与 sequence anchor；
@@ -87,6 +89,7 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 | `~/.dsh-tui/themes/` | 用户自定义主题 JSON |
 | `~/.dsh-tui/working-activity.json` | 工作状态动画选择 |
 | `~/.dsh-tui/agent-preset.json` | 新会话默认 Agent preset |
+| `~/.dsh-tui/smart.json` | Smart 默认值与每个 replacement session 的状态 |
 
 `DSH_TUI_SESSION_ROOT` 在两种组合中都改写 JSONL 根目录。profile 默认使用
 `$DSH_HOME/sessions`（通常为 `~/.dsh/sessions/`）；直接运行根目录的
@@ -121,6 +124,11 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - 注入到 system prompt 的插件上下文不会在 UI 中单独列出，而是计入 system/context
   分段。
 - `/model` 通过 session fork 切换，不是原位修改；旧会话会留在 `/resume`。
+- Smart 拥有独立的资产目录、mount 模块和 sidecar；通过 session fork 在所选基础
+  preset 上切换。新的 `request/header` 全量重建，旧 header 不进入模型消息。子代理
+  继承父级 Smart，但 overlay 不向 child scope 新增工具，并保留 persona 与
+  delegation/sandbox/approval contexts。具体路由、晋升和 `liangshen` 兼容边界见
+  [配置参考](configuration.md#smart-增强)。
 - `Ctrl+V` 读剪贴板按平台分派：Windows 用 PowerShell `Get-Clipboard`（剪贴板被
   其他程序锁定时重试后可能静默失败并显示为空）；macOS 用 `osascript`/`pbpaste`；
   Linux/Unix 按会话顺序尝试 `wl-paste`/`xclip`/`xsel`（工具缺失跳过、会话

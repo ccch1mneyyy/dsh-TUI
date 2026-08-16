@@ -13,15 +13,20 @@
  *   5. Shift+Tab (\x1b[Z) cycles the session mode; StatusLine shows the mode
  *      label; a plan-declaring mode recolors nothing observable here but the
  *      border token changes — asserted via channel.mode.plan.
+ *   6. Smart state animates the input arrow and stays visible in
+ *      the StatusLine; the default state adds no enhancement label.
  *
  * Run with plain node against the compiled lib:
  *   node scripts/verify-effort-slider-ui.mjs
  */
 import { Writable, PassThrough } from 'node:stream'
+import xtermPkg from '@xterm/headless'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { Chat } from '../lib/types/screens/Chat.js'
 import { setLang } from '../lib/types/i18n.js'
+
+const { Terminal } = xtermPkg
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -33,12 +38,15 @@ process.exitCode = 0
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 function makeStreams() {
+  const term = new Terminal({ cols: 110, rows: 34, scrollback: 200, allowProposedApi: true })
   const stdout = new Writable({
     write(chunk, _enc, cb) {
-      stdout.frames.push(String(chunk))
-      cb()
+      const frame = String(chunk)
+      stdout.frames.push(frame)
+      term.write(frame, cb)
     },
   })
+  stdout.term = term
   stdout.columns = 110
   stdout.rows = 34
   stdout.isTTY = true
@@ -98,6 +106,7 @@ function makeChannel() {
     activityEnabled: false,
     contextBarEnabled: true,
     agentPreset: 'standard',
+    smart: false,
     goal: undefined,
     todos: [],
     commandList: [
@@ -140,6 +149,10 @@ function makeChannel() {
       return () => listeners.delete(listener)
     },
     emit() { channel.version += 1; for (const listener of listeners) listener() },
+    setEnhancement(kind) {
+      channel.smart = kind === 'smart'
+      channel.emit()
+    },
     submit() {},
     steer() {},
     removePending: () => true,
@@ -193,7 +206,15 @@ const instance = await render(
 )
 await sleep(700)
 
-const screen = () => toPlain(stdout.frames.join(''))
+const screen = () => {
+  const buffer = stdout.term.buffer.active
+  const start = Math.max(0, buffer.length - stdout.rows)
+  const rows = []
+  for (let y = start; y < buffer.length; y += 1) {
+    rows.push(buffer.getLine(y)?.translateToString(true) ?? '')
+  }
+  return toPlain(rows.join('\n'))
+}
 
 // Pin the UI language so the assertions below don't depend on the host's
 // persisted /lang choice or OS locale (the slider chrome is localized).
@@ -259,6 +280,23 @@ await sleep(300)
 s = screen()
 check('zh: Esc closed the slider', !s.includes('推理强度'), '')
 setLang('en')
+
+// 7. Enhancement chrome: a short single-cell arrow transition plus a
+// persistent mode label; default mode remains unmarked.
+stdout.frames.length = 0
+channel.setEnhancement('smart')
+await sleep(140)
+s = screen()
+check('Smart activation animates the input arrow', s.includes('›') || s.includes('»'), s.slice(-300))
+await sleep(350)
+s = screen()
+check('Smart remains visible in the status line', s.includes('Smart'), s.slice(-300))
+
+stdout.frames.length = 0
+channel.setEnhancement(undefined)
+await sleep(250)
+s = screen()
+check('default enhancement state adds no status label', !s.includes('Smart'), s.slice(-300))
 
 instance.unmount()
 process.exit(failed)

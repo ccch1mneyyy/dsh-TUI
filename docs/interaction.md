@@ -135,7 +135,12 @@ prompt + 已有历史）做一次**无工具、单轮**的模型调用，答案�
 旧会话仍保留在 `/resume` 中。
 
 `/preset` 只允许空白会话原地切换。已经开始的会话会把选择保存为下一次 `/new`
-或启动时的默认值。详细规则见[配置参考](configuration.md#agent-preset)。
+或启动时的默认值。
+
+`/smart on|off|status` 控制叠加在当前基础 preset 上的 Smart 路由 overlay。切换通过
+fork 完成：新 agent 保留当前对话和基础 preset，并重新组装 prompt、context、工具和
+相关服务；旧会话仍在 `/resume`。独立的 `liangshen` preset 不能与 Smart 叠加。
+完整规则见[配置参考](configuration.md#smart-增强)。
 
 ### 工作区
 
