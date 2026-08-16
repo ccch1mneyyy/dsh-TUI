@@ -193,8 +193,8 @@ const darkTheme: Theme = {
   diffRemovedDimmed: rgb('#362B2C'),
   diffAddedWord: rgb('#57956B'),
   diffRemovedWord: rgb('#B26671'),
-  toolCardBackground: rgb('#272C35'), // lighter card surface
-  toolCardBackgroundDim: rgb('#1E2229'), // deeper substrate
+  toolCardBackground: rgb('#242B3A'), // lighter blue-grey card surface
+  toolCardBackgroundDim: rgb('#1C2330'), // deeper blue substrate
   syntaxKeyword: rgb('#8FA8E8'), // mist blue
   syntaxString: rgb('#9FBF8F'), // soft sage
   syntaxComment: rgb('#6B7280'), // neutral grey
@@ -283,8 +283,8 @@ const lightTheme: Theme = {
   diffRemovedDimmed: rgb('#F5E6E4'),
   diffAddedWord: rgb('#A9D3B4'),
   diffRemovedWord: rgb('#E5B3AE'),
-  toolCardBackground: rgb('#F0EBDD'), // lighter warm card
-  toolCardBackgroundDim: rgb('#E8E0CD'), // deeper warm substrate
+  toolCardBackground: rgb('#E9EFF9'), // cool light blue card
+  toolCardBackgroundDim: rgb('#DEE7F4'), // deeper blue-tinted substrate
   syntaxKeyword: rgb('#4A63A8'),
   syntaxString: rgb('#4E7A4E'),
   syntaxComment: rgb('#8A8F98'),

@@ -307,7 +307,7 @@ export function AssistantToolUseMessage({
           ? 'messageActionsBackground'
           : isExpanded
             ? 'userMessageBackgroundHover'
-            : 'toolCardBackgroundDim'
+            : undefined
       }
     >
       <Box flexDirection="column" flexGrow={1}>
@@ -340,7 +340,7 @@ export function AssistantToolUseMessage({
           rendered.map((line, index) => (
             <Box key={index} flexDirection="row">
               <Box width={5} flexShrink={0}>
-                <Text dimColor>{index === 0 ? GUTTER_FIRST : GUTTER_REST}</Text>
+                <Text dimColor backgroundColor="toolCardBackgroundDim">{index === 0 ? GUTTER_FIRST : GUTTER_REST}</Text>
               </Box>
               <Box flexGrow={1}>
                 <Text
@@ -356,6 +356,7 @@ export function AssistantToolUseMessage({
                             : undefined
                   }
                   dimColor={line.tone === 'dim'}
+                  backgroundColor="toolCardBackgroundDim"
                   wrap="wrap"
                 >
                   {line.text === '' ? ' ' : line.text}

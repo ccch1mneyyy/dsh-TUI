@@ -95,19 +95,25 @@ async function renderAt(cols, tool, diffLayout = 'auto') {
     check('关键字使用语法色（syntaxKeyword）', defX > 0 && fgAt(defX, pairRow) === 0x8fa8e8, `fg=${fgAt(Math.max(defX, 0), pairRow).toString(16)}`)
   }
   if (ctxRow >= 0) {
-    check('上下文行底色为浅档卡片色', bgAt(6, ctxRow) === 0x272c35, `bg=${bgAt(6, ctxRow).toString(16)}`)
+    check('上下文行底色为浅档卡片色', bgAt(6, ctxRow) === 0x242b3a, `bg=${bgAt(6, ctxRow).toString(16)}`)
   }
-  const headerRow = lines.findIndex(line => line.includes('Edit /tmp/utils.py'))
-  check('工具卡头部带深档衬底', headerRow >= 0 && bgAt(2, headerRow) === 0x1e2229, `bg=${bgAt(Math.max(headerRow, 0), 2).toString(16)}`)
 }
 
 // ---- 3. Narrow terminal: unified fallback
 {
-  const { screen } = await renderAt(70, editTool)
+  const { lines, screen, bgAt } = await renderAt(70, editTool)
   const s = screen()
   check('窄屏回退统一式 - 行', s.includes('- def shout(text):'))
   check('窄屏回退统一式 + 行', s.includes('+ def shout(text, mark="!"):'))
   check('窄屏不出现 │ 分隔', !s.includes('│'))
+  const bodyRow = lines.findIndex(line => line.includes('# tail'))
+  if (bodyRow >= 0) {
+    const textEnd = lines[bodyRow]!.indexOf('# tail') + '# tail'.length
+    check('统一式卡体贴边底色（文本处有）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0x1c2330,
+      `bg=${bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow).toString(16)}`)
+    check('统一式卡体贴边底色（文本外无）', bgAt(Math.min(textEnd + 8, 69), bodyRow) !== 0x1c2330,
+      `bg=${bgAt(Math.min(textEnd + 8, 69), bodyRow).toString(16)}`)
+  }
 }
 
 // ---- 4. New file: only the right pane fills

@@ -663,6 +663,8 @@ export interface ChannelState {
   activityFrames: string | undefined
   /** Diff presentation preference (see the public Channel type). */
   diffLayout: 'auto' | 'split' | 'unified'
+  /** Apply a diff-layout change (see the public Channel type). */
+  setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -2323,6 +2325,11 @@ export function createChannel(
           state.emit()
         }
       }, item.timeoutMs)
+    },
+    setDiffLayout(layout) {
+      if (layout === state.diffLayout) return
+      state.diffLayout = layout
+      state.emit()
     },
     setActivityFrames(name) {
       if (!isPresetName(name)) {
