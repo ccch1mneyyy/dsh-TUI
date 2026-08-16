@@ -6,7 +6,10 @@
  *   - 参数原样透传给 `dsh --profile dsh-tui`（含空格参数不拆分）
  *   - 残骸 profile（目录在、package.json 不可读）触发重新自举，且版本号
  *     与本包对齐
- *   - profile 已装版本与启动器不一致时打印提示，但不阻塞启动
+ *   - profile 已装版本与启动器不一致时打印提示；前向错位（profile 更新）
+ *     不阻塞启动（0.7.2 起 TUI 降级可用），反向错位（profile 更旧，issue
+ *     #183）拒绝启动并给出对齐命令——dsh CLI 会从启动器拷贝读 bundle
+ *     patch 套到 profile 旧包上，启动必然 opaque 崩溃
  *   - 面向用户的消息双语：DSH_TUI_LANG=zh 输出中文，否则默认英文
  *   - shellQuote 单元（win32 的 shell:true 路径 CI 跑不到 Windows，只能靠
  *     单测覆盖转义规则本身）
@@ -109,12 +112,27 @@ r = runBin(['foo', 'a b'])
 check('passthrough: args forwarded after --profile', stubCalls().at(-1) === '<--profile><dsh-tui><foo><a b>')
 check('passthrough: silent when aligned', r.stderr.trim() === '')
 
-// --- 3. 版本不一致：打印提示但不阻塞启动 --------------------------------------
+// --- 3. 前向错位（profile 更新）：打印提示但不阻塞启动（0.7.2 起降级可用）---
+const [ownMajor, ownMinor] = ownVersion.split('-')[0].split('.').map(Number)
+const newerProfile = `${ownMajor}.${ownMinor + 1}.0`
+setProfileVersion(newerProfile)
+resetStubLog()
+r = runBin([])
+check('mismatch: hint names both versions', r.stderr.includes(`v${newerProfile}`) && r.stderr.includes(`v${ownVersion}`))
+check('mismatch: still launches', stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0)
+
+// --- 3.5 反向错位（profile 更旧，issue #183）：拒绝启动并给出对齐命令 --------
+// dsh CLI 的 bundle patch 取自启动器拷贝、插件模块取自 profile 拷贝；启动器
+// 次版本更新时 patch 可能引用旧包没有的子路径导出，启动必然 opaque 崩溃——
+// 启动器必须先于 dsh 拦截。
 setProfileVersion('0.0.0')
 resetStubLog()
 r = runBin([])
-check('mismatch: hint names both versions', r.stderr.includes('v0.0.0') && r.stderr.includes(`v${ownVersion}`))
-check('mismatch: still launches', stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0)
+check('reverse skew: refuses to launch', r.status === 1 && !stubCalls().some(c => c.includes('<--profile>')))
+check('reverse skew: names both versions', r.stderr.includes('v0.0.0') && r.stderr.includes(`v${ownVersion}`))
+check('reverse skew: prints the align command', r.stderr.includes(`add @deepseek-harness-tui/dsh-tui@${ownVersion}`))
+r = runBin([], { DSH_TUI_LANG: 'en' })
+check('reverse skew: English message', r.stderr.includes('cannot start'))
 
 // --- 4. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
 const envNoDsh = { PATH: noDshPath }

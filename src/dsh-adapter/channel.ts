@@ -1020,7 +1020,11 @@ export function createChannel(
   // command/run + command/done records). Absent the service, only the
   // built-in local commands exist.
   const commandService: CommandRuntime | undefined = ctx.get('commands')
-  const workspaceService = ctx.tuiWorkspaces ?? createLocalWorkspaceRuntime()
+  // Workspace registry runtime (optional service, issue #183): mounted by
+  // the bundle patch's dsh-tui-workspaces row; absent the row (stale patch
+  // or a bare embedder), degrade to the local-only runtime. plugin.ts owns
+  // the degraded-boot warning for profile launches.
+  const workspaceService = ctx.get('tuiWorkspaces') ?? createLocalWorkspaceRuntime()
   const commandTrees = ctx.get('tuiCommandTrees') as TuiCommandTreeRuntime | undefined
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).

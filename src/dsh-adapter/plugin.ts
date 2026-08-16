@@ -26,6 +26,7 @@ import { isLang, resolveStartupLang, setLang, t } from '../i18n.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { Chat } from '../screens/Chat.js'
 import { attachSessionToWorkspace } from './workspace.js'
+import { createLocalWorkspaceRuntime } from './workspaces.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
@@ -184,9 +185,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // see the repository, not an arbitrary launch subdirectory. Resolved ONCE
   // here — the agent meta and the channel must agree.
   const requestedWorkspace = config.workspace ?? process.env.DSH_TUI_WORKSPACE_TARGET
+  // Degraded boot (issue #183): a stale bundle patch without the
+  // dsh-tui-workspaces row leaves the service unmounted; resolve startup
+  // targets through the local-only runtime (provider URIs then fail loud
+  // below instead of crashing on an undefined service). A profile launch
+  // without the service means the patch came from an older dsh-tui copy
+  // than the running code — warn once so the skew is diagnosable. Bare
+  // embedders (no --profile) take the same fallback by design, silently.
+  const mountedWorkspaceService = ctx.get('tuiWorkspaces')
+  if (mountedWorkspaceService === undefined && resolveDshProfileName() !== undefined) {
+    ctx.logger.warn(
+      'dsh-tui: tuiWorkspaces service is not mounted; /workspace runs with the local-only fallback. ' +
+      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+    )
+  }
+  const workspaceService = mountedWorkspaceService ?? createLocalWorkspaceRuntime()
   const initialWorkspace = requestedWorkspace === undefined
     ? undefined
-    : await ctx.tuiWorkspaces.resolve(requestedWorkspace)
+    : await workspaceService.resolve(requestedWorkspace)
   if (requestedWorkspace !== undefined && initialWorkspace === undefined) {
     throw new Error(`dsh-tui: unsupported or unavailable workspace target: ${requestedWorkspace}`)
   }
