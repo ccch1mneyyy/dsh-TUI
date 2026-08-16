@@ -1,0 +1,5 @@
+{
+  "owner": "@deepseek-harness-tui/dsh-tui",
+  "preset": "liangshen",
+  "revision": "liangshen-toolcall-full-catalog-subagents-v3"
+}

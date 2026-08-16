@@ -143,6 +143,10 @@ export function SessionBrowser({
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [preview, setPreview] = React.useState<readonly PreviewEntry[]>([])
   const [previewLoading, setPreviewLoading] = React.useState(false)
+  // React batches every parsed key from one stdin chunk. Lock actions in a
+  // ref so a repeated Enter cannot start the same async operation twice
+  // before the mode change is rendered.
+  const actionPendingRef = React.useRef(false)
 
   // One clock per render pass: every relative time on screen must agree, and
   // re-reading it per row would let two rows a millisecond apart round to
@@ -283,13 +287,21 @@ export function SessionBrowser({
     topRef.current = 0
   }
 
+  const runAction = (action: () => Promise<void>): void => {
+    if (actionPendingRef.current) return
+    actionPendingRef.current = true
+    void action().finally(() => {
+      actionPendingRef.current = false
+    })
+  }
+
   /** Run one mutation, report it, and re-list — reporting a failure either way. */
   const mutate = (
     action: () => Promise<boolean>,
     done: string,
     failed: string,
   ): void => {
-    void (async () => {
+    runAction(async () => {
       let ok = false
       let reason: string | undefined
       try {
@@ -299,7 +311,7 @@ export function SessionBrowser({
       }
       report(ok ? done : reason === undefined ? failed : `${failed} · ${reason}`, ok ? 'info' : 'error')
       await reload()
-    })()
+    })
   }
 
   const runDelete = (target: SessionSummary): void =>
@@ -321,7 +333,7 @@ export function SessionBrowser({
     // below, and deleting from a list that moved under us would be a
     // destructive action aimed at whatever happens to be there now.
     const ids = [...view.emptyIds]
-    void (async () => {
+    runAction(async () => {
       let removed = 0
       for (const id of ids) {
         try {
@@ -332,10 +344,11 @@ export function SessionBrowser({
       }
       report(t('session-cleaned', { n: removed }), 'info')
       await reload()
-    })()
+    })
   }
 
   useInput((input, key) => {
+    if (actionPendingRef.current) return
     // A notice describes what the LAST action did; the next keystroke makes it
     // stale, so it goes as soon as the user acts again.
     if (notice !== undefined) setNotice(undefined)
@@ -388,19 +401,19 @@ export function SessionBrowser({
       // that explanation to the conversation the user is not looking at, and
       // leave them staring at an unchanged transcript wondering what Enter
       // did. `resumeTo` reports its own reasons; this only has to stay put.
-      void channel
-        .resumeTo(target.id)
-        .then((ok) => {
+      runAction(async () => {
+        try {
+          const ok = await channel.resumeTo(target.id)
           if (ok) {
             channel.notify(t('resume-resumed'))
             onClose()
           } else {
             setNotice({ text: t('session-resume-refused'), tone: 'error' })
           }
-        })
-        .catch((error: unknown) => {
+        } catch (error) {
           setNotice({ text: t('session-resume-failed', { err: message(error) }), tone: 'error' })
-        })
+        }
+      })
     } else if (key.escape) {
       // Esc backs out one layer at a time: a live query first, the screen
       // second. Closing on the first Esc would discard a search the user is

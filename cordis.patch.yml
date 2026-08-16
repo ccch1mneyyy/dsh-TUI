@@ -218,6 +218,16 @@
       # The entry-level dependency augments the plugin's `agents` inject and
       # prevents startup Session creation from racing WorkspaceRegistry init.
       inject: [workspaceRegistry, agents, tuiWorkspaces]
+      # `tuiWorkspaces` lives in the entry-level inject ONLY as an ordering
+      # guarantee alongside the dsh-tui-workspaces row above — it is
+      # deliberately absent from the plugin's code-level inject (issue
+      # #183): the dsh CLI may read this patch from an older copy of the
+      # package than the plugin module it loads, and a hard code-level
+      # inject then deadlocks the tree at boot ("pending (waiting for
+      # service: tuiWorkspaces)"). Without the row the TUI degrades to a
+      # local-only workspace runtime instead. (The comment sits below the
+      # inject line: verify-workspace-attachment.mjs asserts the
+      # name→inject distance.)
       config:
         provider: deepseek-official
         # Alt-screen fullscreen（CC 同款）：应用内鼠标选区（选择即复制, OSC 52 +

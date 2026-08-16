@@ -176,6 +176,21 @@ check(
   ['#/proj', 'conv', 'fork', '#/elsewhere', 'other-project'],
 )
 
+const interleavedProjects = buildView(
+  [
+    summary({ id: 'a-new', cwd: '/a', updatedAt: 30 }),
+    summary({ id: 'b-mid', cwd: '/b', updatedAt: 20 }),
+    summary({ id: 'a-old', cwd: '/a', updatedAt: 10 }),
+  ],
+  { ...DEFAULT_FILTERS, allProjects: true },
+  context,
+)
+check(
+  'all projects: interleaved MRU entries stay in one group per project',
+  interleavedProjects.rows.map(r => (r.kind === 'project' ? `#${r.project}:${r.count}` : r.session.id)),
+  ['#/a:2', 'a-new', 'a-old', '#/b:1', 'b-mid'],
+)
+
 const runs = buildView(population, { ...DEFAULT_FILTERS, showSubagents: true }, context)
 check(
   'sub-agent runs appear indented under their parent',
