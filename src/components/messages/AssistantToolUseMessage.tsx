@@ -71,8 +71,8 @@ const DIFF_BODY_MAX_LINES = 8
  *  would squeeze under ~50 columns each and the unified view reads better. */
 const SPLIT_DIFF_MIN_COLS = 110
 
-const GUTTER_FIRST = '  ⎿  '
-const GUTTER_REST = '     '
+const GUTTER_FIRST = ' ⎿ '
+const GUTTER_REST = '   '
 
 const add = (text: string): BodyLine => ({ text, tone: 'add' })
 const del = (text: string): BodyLine => ({ text, tone: 'del' })
@@ -307,7 +307,7 @@ export function AssistantToolUseMessage({
           ? 'messageActionsBackground'
           : isExpanded
             ? 'userMessageBackgroundHover'
-            : undefined
+            : 'toolCardBackgroundDim'
       }
     >
       <Box flexDirection="column" flexGrow={1}>
@@ -326,12 +326,12 @@ export function AssistantToolUseMessage({
         </Box>
         {useSplitDiff && view?.card === 'diff' ? (
           <Box flexDirection="row">
-            <Box width={5} flexShrink={0}>
+            <Box width={3} flexShrink={0}>
               <Text dimColor>{GUTTER_FIRST}</Text>
             </Box>
             <SplitDiffView
               diffs={view.diffs}
-              width={columns - 6}
+              width={columns - 4}
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
             />
@@ -339,8 +339,8 @@ export function AssistantToolUseMessage({
         ) : (
           rendered.map((line, index) => (
             <Box key={index} flexDirection="row">
-              <Box width={5} flexShrink={0}>
-                <Text dimColor backgroundColor="toolCardBackgroundDim">{index === 0 ? GUTTER_FIRST : GUTTER_REST}</Text>
+              <Box width={3} flexShrink={0}>
+                <Text dimColor>{index === 0 ? GUTTER_FIRST : GUTTER_REST}</Text>
               </Box>
               <Box flexGrow={1}>
                 <Text
@@ -356,7 +356,6 @@ export function AssistantToolUseMessage({
                             : undefined
                   }
                   dimColor={line.tone === 'dim'}
-                  backgroundColor="toolCardBackgroundDim"
                   wrap="wrap"
                 >
                   {line.text === '' ? ' ' : line.text}
@@ -367,7 +366,7 @@ export function AssistantToolUseMessage({
         )}
         {useSplitDiff && footnote !== undefined && (
           <Box flexDirection="row">
-            <Box width={5} flexShrink={0}>
+            <Box width={3} flexShrink={0}>
               <Text dimColor>{GUTTER_REST}</Text>
             </Box>
             <Text color="subtle">{footnote}</Text>

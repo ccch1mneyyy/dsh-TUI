@@ -108,11 +108,10 @@ async function renderAt(cols, tool, diffLayout = 'auto') {
   check('窄屏不出现 │ 分隔', !s.includes('│'))
   const bodyRow = lines.findIndex(line => line.includes('# tail'))
   if (bodyRow >= 0) {
-    const textEnd = lines[bodyRow]!.indexOf('# tail') + '# tail'.length
-    check('统一式卡体贴边底色（文本处有）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0x1c2330,
+    check('统一式卡体方块底色（文本处有）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0x1c2330,
       `bg=${bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow).toString(16)}`)
-    check('统一式卡体贴边底色（文本外无）', bgAt(Math.min(textEnd + 8, 69), bodyRow) !== 0x1c2330,
-      `bg=${bgAt(Math.min(textEnd + 8, 69), bodyRow).toString(16)}`)
+    check('统一式卡体方块底色（行尾也有）', bgAt(69, bodyRow) === 0x1c2330,
+      `bg=${bgAt(69, bodyRow).toString(16)}`)
   }
 }
 

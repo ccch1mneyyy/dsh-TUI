@@ -106,8 +106,8 @@ async function show(key: string, tool: Record<string, unknown>, verbose = false)
   check('编辑卡片标题为「Edit /tmp/a.ts」（非 JSON args）', s.includes('Edit /tmp/a.ts') && !s.includes('{"file_path"'))
   const delRow = rowOf('- const a = 1')
   const addRow = rowOf('+ const a = 2')
-  check('删除行带 ⎿ 缩进', delRow >= 0 && lines()[delRow]!.startsWith('  ⎿  - const a = 1'))
-  check('新增行延续缩进', addRow >= 0 && lines()[addRow]!.startsWith('     + const a = 2'))
+  check('删除行带 ⎿ 缩进', delRow >= 0 && lines()[delRow]!.startsWith(' ⎿ - const a = 1'))
+  check('新增行延续缩进', addRow >= 0 && lines()[addRow]!.startsWith('   + const a = 2'))
   check('删除行为红色系', delRow >= 0 && fgAt(7, delRow) === 0xb26671)
   check('新增行为绿色系', addRow >= 0 && fgAt(7, addRow) === 0x57956b)
 }
@@ -139,7 +139,7 @@ await show('bash', {
   const s = screen()
   check('终端卡标题为「Bash(ls -la)」', s.includes('Bash(ls -la)'))
   const outRow = rowOf('total 8')
-  check('终端输出带 ⎿ 缩进', outRow >= 0 && lines()[outRow]!.startsWith('  ⎿  total 8'))
+  check('终端输出带 ⎿ 缩进', outRow >= 0 && lines()[outRow]!.startsWith(' ⎿ total 8'))
 }
 
 // 4. Bash 非零退出：追加 Exit code 行。
@@ -166,7 +166,7 @@ await show('read', {
   const s = screen()
   check('Read 正文无信封标签', s.includes('line one') && !s.includes('<content>') && !s.includes('<path>'))
   const row = rowOf('line one')
-  check('Read 正文带 ⎿ 缩进', row >= 0 && lines()[row]!.startsWith('  ⎿  line one'))
+  check('Read 正文带 ⎿ 缩进', row >= 0 && lines()[row]!.startsWith(' ⎿ line one'))
 }
 
 // 6. 无 presenter 的工具：回退到 Name(args) + 原始结果（仍然缩进）。
@@ -178,7 +178,7 @@ await show('fallback', {
   const s = screen()
   check('无视图时回退 Name(args) 标题', s.includes('Read({"file_path":"/tmp/a.ts"})'))
   const row = rowOf('raw output here')
-  check('无视图时结果仍缩进', row >= 0 && lines()[row]!.startsWith('  ⎿  raw output here'))
+  check('无视图时结果仍缩进', row >= 0 && lines()[row]!.startsWith(' ⎿ raw output here'))
 }
 
 // 7. 折叠上限：文本正文超过 3 行折叠 + 提示；Ctrl+O 展开。
@@ -208,7 +208,7 @@ await show('error', {
 })
 {
   const row = rowOf('Error: ENOENT')
-  check('错误行带 ⎿ 缩进', row >= 0 && lines()[row]!.startsWith('  ⎿  Error: ENOENT'))
+  check('错误行带 ⎿ 缩进', row >= 0 && lines()[row]!.startsWith(' ⎿ Error: ENOENT'))
   check('错误行有颜色', row >= 0 && fgAt(7, row) !== 0)
 }
 
