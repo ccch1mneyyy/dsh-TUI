@@ -421,6 +421,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // the tree is already wrapped below, so they must not nest.
     fullscreen: config.fullscreen === true,
     onExit: () => handleExit(),
+    // Static easter-egg toggle: wins over the persisted `/easter-egg` choice.
+    easterEgg: config.easterEgg,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
     // unavailable notice instead.

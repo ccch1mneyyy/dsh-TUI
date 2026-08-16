@@ -220,7 +220,7 @@ transcript。
 | --- | --- |
 | 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`） |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
-| 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
+| 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang`、`/easter-egg` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |
 | 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit` |
@@ -231,6 +231,7 @@ transcript。
 - `/activity` 打开动画选择器；`/activity frames <name>` 直接设置；
   `/activity status` 查看状态。
 - `/preset <id>` 与 `/preset status` 见配置文档。
+- `/easter-egg on|off` 切换梁神彩蛋开关；`/easter-egg status` 查看当前状态。
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
   `/effort status` 查看当前档位。
 - `/theme <name>` 与 `/theme status` 见主题文档。

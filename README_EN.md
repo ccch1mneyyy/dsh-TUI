@@ -174,6 +174,8 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
   switched with `/preset`; sessions that already have a conversation cannot switch, while
   blank sessions take effect immediately. The default preset persists in
   `~/.dsh-tui/agent-preset.json`; `/model` selections persist in `~/.dsh-tui/model.json`.
+  `/easter-egg on` enables the Liangshen easter egg: switching to Liangshen mode plays a
+  full-screen scrolling celebration.
   See [Configuration](docs/configuration.en.md#agent-preset).
 - **Custom themes**: the `/theme` picker (`auto` follows the system/terminal background,
   built-in `light` / `dark` / `dark-ansi`) also accepts custom themes from

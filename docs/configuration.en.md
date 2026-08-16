@@ -57,6 +57,7 @@ A complete common override looks like this:
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
 | `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
+| `easterEgg` | `false` | Easter-egg toggle: when on, switching to the `liangshen` preset plays a full-screen scrolling celebration; explicit configuration wins over the persisted `/easter-egg` choice |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 
 ## Live activity row
@@ -98,6 +99,15 @@ Usage rules:
   preference, then the roster default `standard`.
 - Resuming a session restores the preset recorded in that session's log and
   does not overwrite it with the current default.
+
+### Liangshen easter egg
+
+- `/easter-egg on|off` toggles the celebration (persisted to
+  `~/.dsh-tui/easter-egg.json`); `/easter-egg status` reports the current state.
+- When on, switching to `liangshen` (Liangshen mode) plays a full-screen
+  scrolling celebration (~9 seconds; Esc ends it early).
+- Precedence is explicit `config.easterEgg`, then the persisted preference,
+  then off.
 - Liangshen mode ships with dsh-tui and is installed into the user preset root
   at startup. An existing unmanaged directory with the same id is preserved.
 

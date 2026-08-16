@@ -35,6 +35,8 @@ import type { TuiWorkspaceCommandResult, TuiWorkspaceTarget } from '../workspace
 import { ActivityPicker } from '../components/ActivityPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
+import { LiangshenEasterEgg } from '../components/LiangshenEasterEgg.js'
+import { resolveEasterEgg, writeEasterEggPref, shouldPlayEasterEgg } from '../easterEggPrefs.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
 import { AUTO_THEME_NAME, getAutoThemeBase } from '../theme.js'
 import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
@@ -139,6 +141,7 @@ export function Chat({
   onUpdate,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
+  easterEgg,
 }: {
   channel: Channel
   questionStore: QuestionStore
@@ -168,6 +171,11 @@ export function Chat({
    * persisted flag when the host does not supply one.
    */
   trajectorySeen?: boolean
+  /**
+   * cordis.yml `easterEgg` static toggle (wins over the persisted
+   * `/easter-egg` choice, which wins over off). undefined when unset.
+   */
+  easterEgg?: boolean
 }) {
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   React.useSyncExternalStore(channel.subscribe, () => channel.version)
@@ -235,6 +243,12 @@ export function Chat({
   const [presetPickerOpen, setPresetPickerOpen] = React.useState(false)
   const [presetOptions, setPresetOptions] = React.useState<readonly PresetOption[]>([])
   const [presetIndex, setPresetIndex] = React.useState(0)
+  /** Liangshen easter-egg overlay: true while the celebration plays. */
+  const [eggActive, setEggActive] = React.useState(false)
+  /** Play the egg when a liangshen switch landed and the toggle is on. */
+  const playEggIfLiangshen = React.useCallback((id: string, ok: boolean) => {
+    if (shouldPlayEasterEgg(id, ok, resolveEasterEgg(easterEgg))) setEggActive(true)
+  }, [easterEgg])
   /** `/effort` rheostat slider: adapter levels load async, focus moves ←/→. */
   const [effortSliderOpen, setEffortSliderOpen] = React.useState(false)
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
@@ -552,7 +566,7 @@ export function Chat({
         }
         if (parts.length > 0) {
           setHelpOpen(false)
-          void channel.switchPreset(parts[0])
+          void channel.switchPreset(parts[0]).then(ok => playEggIfLiangshen(parts[0], ok))
           return true
         }
         setHelpOpen(false)
@@ -567,6 +581,35 @@ export function Chat({
           const index = list.findIndex(preset => preset.id === channel.agentPreset)
           setPresetIndex(index >= 0 ? index : 0)
         })
+        return true
+      }
+      case 'easter-egg': {
+        // `/easter-egg on|off` flips the celebration toggle, persisted to
+        // ~/.dsh-tui/easter-egg.json; `/easter-egg status` prints the
+        // effective state (cordis.yml `easterEgg` wins over the choice).
+        // When on, switching to the `liangshen` preset plays the full-screen
+        // scrolling celebration.
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        if (parts[0] === 'status') {
+          setHelpOpen(false)
+          channel.pushLocal('/easter-egg', [
+            t('egg-status', { state: resolveEasterEgg(easterEgg) ? t('egg-on') : t('egg-off') }),
+            t('egg-hint'),
+          ])
+          return true
+        }
+        if (parts[0] === 'on' || parts[0] === 'off') {
+          const enabled = parts[0] === 'on'
+          setHelpOpen(false)
+          if (writeEasterEggPref(enabled)) {
+            channel.notify(enabled ? t('egg-enabled') : t('egg-disabled'), { color: 'success' })
+          } else {
+            channel.notify(t('egg-pref-write-failed'), { color: 'error' })
+          }
+          return true
+        }
+        setHelpOpen(false)
+        channel.notify(t('egg-usage'), { color: 'warning' })
         return true
       }
       case 'effort': {
@@ -1257,6 +1300,9 @@ export function Chat({
     // swallowed there). Chat registered first, so an early return here does
     // not block the event from reaching the panel.
     if (btw !== null) return
+    // The easter-egg overlay owns the screen while it plays: swallow every
+    // key (the egg itself closes on Esc or its timeout).
+    if (eggActive) return
     // Same for the session browser: it renders instead of the conversation,
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
@@ -1516,7 +1562,7 @@ export function Chat({
       } else if (plainReturn) {
         const option = presetOptions[presetIndex]
         setPresetPickerOpen(false)
-        if (option) void channel.switchPreset(option.id)
+        if (option) void channel.switchPreset(option.id).then(ok => playEggIfLiangshen(option.id, ok))
       } else if (key.escape) {
         setPresetPickerOpen(false)
       }
@@ -1721,6 +1767,13 @@ export function Chat({
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
     return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+  }
+  // Liangshen easter egg: same tree-replacement pattern as the browser — the
+  // egg owns the whole screen while it plays, and the chat tree remounts on
+  // close (React state survives; ink DOM, scroll and prompt focus rebuild).
+  if (eggActive) {
+    const egg = <LiangshenEasterEgg onDone={() => setEggActive(false)} />
+    return fullscreen ? egg : <AlternateScreen>{egg}</AlternateScreen>
   }
 
   /** Prompt input is inert while a modal dialog owns the keyboard. */

@@ -55,6 +55,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行 |
 | `fullscreen` | `false` | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
+| `easterEgg` | `false` | 彩蛋开关：开启后切到梁神模式（`liangshen`）播放全屏滚动彩蛋；显式配置优先于 `/easter-egg` 持久化偏好 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
 
 ## 工作状态行
@@ -92,6 +93,14 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 - 优先级为：显式 `config.preset` 或 `DSH_TUI_PRESET`，然后持久化偏好，最后名册
   默认值 `standard`。
 - 恢复旧会话时，以该会话日志记录的 preset 为准，不读取当前默认值覆盖它。
+
+### 梁神彩蛋
+
+- `/easter-egg on|off` 切换彩蛋开关（持久化到 `~/.dsh-tui/easter-egg.json`），
+  `/easter-egg status` 查看当前状态。
+- 开启后，切换到 `liangshen`（梁神模式）会播放全屏滚动庆祝动画（约 9 秒，
+  Esc 可提前结束）。
+- 优先级为：显式 `config.easterEgg`，然后持久化偏好，最后默认关闭。
 - “梁神模式”随 dsh-tui 包发布，启动时安装到用户 preset 根目录；已有同名且并非
   dsh-tui 托管的目录不会被覆盖。
 

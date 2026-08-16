@@ -164,6 +164,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
   TUI 随包提供的“梁神模式”（`liangshen`），
   `/preset` 切换；已产生对话的会话不可切换，空白会话立即生效。默认 preset 持久化
   在 `~/.dsh-tui/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-tui/model.json`。
+  `/easter-egg on` 开启梁神彩蛋：切到梁神模式时播放全屏滚动庆祝动画。
   详见[配置参考](docs/configuration.md#agent-preset)。
 - **自定义主题**：`/theme` 选择器（`auto` 跟随系统/终端背景，内置 `light` / `dark` /
   `dark-ansi`），也支持 `~/.dsh-tui/themes/<名字>.json` 自定义主题，选中即热切换

@@ -81,6 +81,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
   { name: 'preset', description: 'Switch the agent preset (including Liangshen mode)' },
+  { name: 'easter-egg', description: 'Toggle the Liangshen-mode easter egg (on/off/status)' },
   { name: 'theme', description: 'Switch the color theme (auto, built-in or custom)' },
   { name: 'lang', description: 'Switch the UI language (en / zh)' },
   { name: 'model', description: 'Show the active model' },

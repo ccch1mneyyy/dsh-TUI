@@ -73,6 +73,10 @@ export interface Config {
    *  persisted in `~/.dsh-tui/agent-preset.json` wins, then the roster
    *  default (`standard`). */
   preset?: string
+  /** Easter-egg toggle: when on, switching to the `liangshen` preset plays
+   *  the full-screen scrolling celebration. When absent, the `/easter-egg`
+   *  choice persisted in `~/.dsh-tui/easter-egg.json` wins, then off. */
+  easterEgg?: boolean
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
@@ -97,6 +101,7 @@ export const Config: Schema<Config> = Schema.object({
   fullscreen: Schema.boolean().default(false),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
+  easterEgg: Schema.boolean().required(false),
   modes: Schema.array(
     Schema.object({
       id: Schema.string(),

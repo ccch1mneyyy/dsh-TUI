@@ -251,7 +251,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | --- | --- |
 | Sessions | `/new`, `/resume`, `/rename`, `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`) |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
-| Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
+| Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang`, `/easter-egg` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
 | Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
@@ -262,6 +262,8 @@ Additional forms:
 - `/activity` opens the animation picker; `/activity frames <name>` selects
   directly; `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
+- `/easter-egg on|off` toggles the Liangshen easter egg; `/easter-egg status`
+  reports the current state.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live);
   `/effort <id>` sets a level directly; `/effort status` reports the current one.
 - `/theme <name>` and `/theme status` are described in the theme guide.
