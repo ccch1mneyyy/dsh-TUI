@@ -141,6 +141,10 @@ jobs:
       # TUI 创建及恢复的会话必须持久关联到 Workspace。
       - run: node scripts/verify-workspace-attachment.mjs
 
+      # tuiWorkspaces 服务可选化回归（issue #183）：代码层 inject 不含
+      # tuiWorkspaces、消费处带本地兜底、patch 保留服务行与行级顺序保证。
+      - run: node scripts/verify-workspaces-degrade.mjs
+
       # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
       # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
       - run: node scripts/verify-session-titles.mjs
@@ -218,6 +222,10 @@ jobs:
       # effort 配置链路回归（issue #51）：cordis 配置的 effort 必须进入实际
       # 请求配置，而不是只做状态栏启动显示（≤0.3.5 的 display-only 行为）。
       - run: node --import tsx/esm scripts/repro-effort.tsx
+
+      # 子代理模型路由回归（issue #191）：child scope 没有 AgentOptions 路由时，
+      # 首次请求继承 TUI 当前完整路由；显式 child 路由保持优先。
+      - run: node --import tsx/esm scripts/verify-subagent-model-route.tsx
 
       # 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
       # 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。

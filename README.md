@@ -77,7 +77,8 @@ sh install.sh
 `dsh-tui --resume` 恢复上次会话；Windows 也可用仓库里的 `dsh-tui.cmd`（等价）。
 
 在 VS Code 中运行的完整指南（内置终端直接使用 + companion 扩展
-`dsh-tui-vscode` 一键启动/恢复与编辑器集成）见
+`dsh-tui-vscode`——**真实集成终端承载、体验与 Claude Code 官方扩展几乎一致、
+已上架 VS Code Marketplace**）见
 [在 VS Code 中运行 dsh-TUI](docs/vscode.md)。
 
 TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提示，输入 `/update`
@@ -151,7 +152,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 | [主题系统](docs/themes.md) | 内置主题、自动检测、自定义 JSON 主题与校验规则 |
 | [交互与命令](docs/interaction.md) | 快捷键、鼠标、问卷、slash command 与会话工作流 |
 | [架构与限制](docs/architecture.md) | 运行链路、渲染与持久化设计、安全边界、已知限制 |
-| [VS Code 使用指南](docs/vscode.md) | 在 VS Code 集成终端运行 dsh-tui 与 companion 扩展 `dsh-tui-vscode` |
+| [VS Code 使用指南](docs/vscode.md) | 在 VS Code 集成终端运行 dsh-tui；companion 扩展 `dsh-tui-vscode` 提供与 Claude Code 官方扩展几乎一致的体验（已上架 Marketplace） |
 | [贡献与开发约定](docs/contributing.md) | 贡献流程、仓库地图、构建产物、验证矩阵与修改规则 |
 | [插件开发指南](docs/plugins.md) | 插件接缝（会话事件 / 槽位 / 技能 / 主题 / prompt 段）、契约、规范与收录 |
 
@@ -159,7 +160,8 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 
 ## 配置与扩展
 
-- **Agent preset**：四种官方 Agent 模式（`standard` / `code` / `minimal` / `cordis`），
+- **Agent preset**：四种官方 Agent 模式（`standard` / `code` / `minimal` / `cordis`）和
+  TUI 随包提供的“梁神模式”（`liangshen`），
   `/preset` 切换；已产生对话的会话不可切换，空白会话立即生效。默认 preset 持久化
   在 `~/.dsh-tui/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-tui/model.json`。
   详见[配置参考](docs/configuration.md#agent-preset)。
