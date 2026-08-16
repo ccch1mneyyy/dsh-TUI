@@ -902,6 +902,21 @@ export function Chat({
           channel.pushLocal('/agents', lines)
         })
         return true
+      case 'skills':
+        setHelpOpen(false)
+        void channel.listSkills().then((skills) => {
+          if (skills === undefined) {
+            channel.notify(t('skills-list-unavailable'), { color: 'warning' })
+            return
+          }
+          channel.pushLocal(
+            '/skills',
+            skills.length === 0
+              ? [t('skills-none')]
+              : skills.map(skill => `${skill.name} — ${skill.description}`),
+          )
+        })
+        return true
       case 'login': {
         const key = process.env.DEEPSEEK_API_KEY
         const lines = [

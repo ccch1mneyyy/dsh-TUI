@@ -26,6 +26,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 20))
 const handlers = new Map()
 const fire = event => { for (const handler of handlers.get(event) ?? []) handler() }
 // Mutable catalog: the skills/change phase re-reads this.
+const skillSnapshots = []
 const catalog = [
   { name: 'i-h', description: 'Interactive help skill', invocation: { modelInvocable: true, userInvocable: true }, content: 'HELP BODY', resourceBase: { kind: 'directory', path: '/home/u/.agents/skills/i-h' } },
   { name: 'helper', description: 'A helper skill', invocation: { modelInvocable: true, userInvocable: true } },
@@ -61,7 +62,10 @@ const ctx = {
     }
     if (name === 'skills') {
       return {
-        snapshot: async () => ({ skills: catalog, complete: true }),
+        snapshot: async options => {
+          skillSnapshots.push(options)
+          return { skills: catalog, complete: true }
+        },
         // A `get` miss models a SKILL.md deleted between listing and Enter.
         get: async skillName => catalog.find(skill => skill.name === skillName),
       }
@@ -125,6 +129,90 @@ check(
 check(
   'locals all kept',
   LOCAL_COMMANDS.every(local => names.includes(local.name)),
+)
+
+// ---- immediate skill directory query: authoritative user-facing catalog
+const snapshotsBeforeList = skillSnapshots.length
+const listedSkills = await channel.listSkills()
+const listSnapshot = skillSnapshots[snapshotsBeforeList]
+check(
+  'listSkills returns user-invocable skill',
+  Array.isArray(listedSkills) && listedSkills.some(skill => skill.name === 'i-h'),
+)
+check(
+  'listSkills preserves description',
+  Array.isArray(listedSkills) && listedSkills.some(skill =>
+    skill.name === 'i-h' && skill.description === 'Interactive help skill'),
+)
+check(
+  'listSkills excludes model-only skill',
+  Array.isArray(listedSkills) && !listedSkills.some(skill => skill.name === 'secret'),
+)
+check(
+  'listSkills keeps a skill shadowed by a registry command',
+  Array.isArray(listedSkills) && listedSkills.some(skill => skill.name === 'plan'),
+)
+check(
+  'listSkills keeps a skill shadowed by a local command',
+  Array.isArray(listedSkills) && listedSkills.some(skill => skill.name === 'review'),
+)
+check(
+  'listSkills reads through live-agent scope',
+  skillSnapshots.length === snapshotsBeforeList + 1 &&
+    listSnapshot?.scope === agent &&
+    listSnapshot?.cwd === '/tmp',
+)
+
+const originalGet = ctx.get
+ctx.get = name => {
+  if (name === 'skills') {
+    return { snapshot: async options => {
+      skillSnapshots.push(options)
+      return { skills: [], complete: true }
+    } }
+  }
+  return originalGet(name)
+}
+const emptySkills = await channel.listSkills()
+ctx.get = originalGet
+check(
+  'complete empty catalog returns an empty list',
+  Array.isArray(emptySkills) && emptySkills.length === 0,
+)
+
+ctx.get = name => {
+  if (name === 'skills') {
+    return { snapshot: async options => {
+      skillSnapshots.push(options)
+      return {
+        skills: [{ name: 'partial', description: 'Partial skill', invocation: { modelInvocable: true, userInvocable: true } }],
+        complete: false,
+      }
+    } }
+  }
+  return originalGet(name)
+}
+const incompleteSkills = await channel.listSkills()
+ctx.get = originalGet
+check(
+  'incomplete skill catalog is not exposed as authoritative',
+  incompleteSkills === undefined,
+)
+
+let listWarned = 0
+const originalLogger = ctx.logger
+ctx.logger = { warn() { listWarned += 1 } }
+ctx.get = name => {
+  if (name === 'skills') return { snapshot: async () => { throw new Error('scan failed') } }
+  return originalGet(name)
+}
+const failedSkills = await channel.listSkills()
+ctx.get = originalGet
+ctx.logger = originalLogger
+check(
+  'failed skill catalog read reports unavailable instead of throwing',
+  failedSkills === undefined && listWarned >= 1,
+  `warned=${listWarned}`,
 )
 
 // ---- live refresh: skills/change re-reads the catalog

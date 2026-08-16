@@ -64,7 +64,7 @@ function screenText(term: InstanceType<typeof XTerm>, rows: number): string {
 
 // 混合清单：内置命令 + 已收录外部命令（plan）+ 未收录外部命令。
 const commands = [
-  ...LOCAL_COMMANDS.filter(c => ['new', 'compact', 'rewind'].includes(c.name)),
+  ...LOCAL_COMMANDS.filter(c => ['new', 'compact', 'rewind', 'skills'].includes(c.name)),
   { name: 'plan', description: 'Toggle plan mode', external: true },
   { name: 'unlisted-ext', description: 'Registry fallback text', external: true },
 ]
@@ -89,7 +89,14 @@ console.log('CommandSuggestions 随 /lang 切换:')
   let text = screenText(term, ROWS)
   assert(text.includes('新开会话'), 'zh：内置命令显示中文描述（新开会话）')
   assert(text.includes('压缩会话历史'), 'zh：compact 显示中文描述')
+  assert(text.includes('查看可用技能'), 'zh：/skills 在补全菜单显示中文描述')
   assert(text.includes('切换计划模式'), 'zh：外部命令 plan 走 cmd-desc 中文映射')
+
+  // The sixth command is outside the five-row suggestion window until it is
+  // selected; keep the external fallback assertion precise as well.
+  app.rerender(React.createElement(CommandSuggestions, { commands, selectedIndex: 5, columns: COLS }))
+  await sleep(200)
+  text = screenText(term, ROWS)
   assert(text.includes('Registry fallback text'), 'zh：未收录外部命令回退注册表原文')
   assert(!text.includes('Toggle plan mode'), 'zh：已收录外部命令不再显示英文原文')
 
@@ -98,6 +105,7 @@ console.log('CommandSuggestions 随 /lang 切换:')
   await sleep(200)
   text = screenText(term, ROWS)
   assert(text.includes('Start a new conversation'), 'en：内置命令回退 LOCAL_COMMANDS 英文原文')
+  assert(text.includes('List available skills'), 'en：/skills 在补全菜单回退 LOCAL_COMMANDS 英文描述')
   assert(text.includes('Toggle plan mode'), 'en：外部命令 plan 回退注册表英文原文')
   assert(!text.includes('新开会话'), 'en：不再残留中文描述')
 
@@ -126,12 +134,14 @@ console.log('HelpMenu 随 /lang 切换:')
   let text = screenText(term, ROWS)
   assert(text.includes('/new — 新开会话'), 'zh：帮助菜单显示 /new — 新开会话')
   assert(text.includes('/rewind — 回退会话到历史消息'), 'zh：帮助菜单显示 rewind 中文描述')
+  assert(text.includes('/skills — 查看可用技能'), 'zh：帮助菜单显示 /skills 中文描述')
 
   setLang('en')
   app.rerender(React.createElement(HelpMenu, { commands }))
   await sleep(200)
   text = screenText(term, ROWS)
   assert(text.includes('/new — Start a new conversation'), 'en：帮助菜单显示英文原文')
+  assert(text.includes('/skills — List available skills'), 'en：/skills 回退 LOCAL_COMMANDS 英文描述')
 
   setLang('zh')
   app.unmount()

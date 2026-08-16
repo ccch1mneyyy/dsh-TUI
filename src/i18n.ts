@@ -572,6 +572,7 @@ const dict = {
   'cmd-desc-doctor': { zh: '运行环境检查' },
   'cmd-desc-init': { zh: '在工作目录创建 AGENTS.md' },
   'cmd-desc-agents': { zh: '查看本会话的子代理' },
+  'cmd-desc-skills': { zh: '查看可用技能' },
   // Model / display
   'cmd-desc-activity': { zh: '切换工作状态指示器预设' },
   'cmd-desc-preset': { zh: '切换 Agent 预设（standard/code/minimal/cordis）' },
@@ -614,6 +615,9 @@ const dict = {
   'cmd-desc-plan': { zh: '切换计划模式（/plan off 退出）' },
   'cmd-desc-goal': { zh: '设置或查看会话目标' },
   'cmd-desc-feedback': { zh: '提交使用反馈' },
+
+  'skills-none': { zh: '当前没有可调用的技能', en: 'No user-invocable skills are currently available' },
+  'skills-list-unavailable': { zh: '暂时无法读取完整的技能列表，请稍后重试', en: 'The complete skill list is temporarily unavailable; try again later' },
 
   // ── /lang command ───────────────────────────────────────────────────
   'lang-current': { zh: '当前语言  {{lang}}', en: 'Current language  {{lang}}' },

@@ -242,6 +242,12 @@ export interface LoadedContextSkill {
   readonly description: string
 }
 
+/** One user-invocable skill visible to the live agent. */
+export interface AvailableSkill {
+  readonly name: string
+  readonly description: string
+}
+
 /** One model-visible tool from the prompt assembly. */
 export interface LoadedContextTool {
   readonly name: string
@@ -514,6 +520,12 @@ export interface Channel {
    *  the service is absent). */
   listSubagents(): Promise<string[]>
   /**
+   * User-invocable skills visible to the live agent.
+   * `[]` means the registry is unavailable or authoritatively empty.
+   * `undefined` means a mounted registry could not provide an authoritative snapshot.
+   */
+  listSkills(): Promise<readonly AvailableSkill[] | undefined>
+  /**
    * Dispose the host-registry entries this channel registered (skill slash
    * commands).
    *
@@ -713,6 +725,8 @@ export interface ChannelState {
   doctorInfo(): string[]
   /** Subagent rows (CC's /agents). */
   listSubagents(): Promise<string[]>
+  /** See {@link Channel.listSkills}. */
+  listSkills(): Promise<readonly AvailableSkill[] | undefined>
   /** See {@link Channel.releaseContributions}. */
   releaseContributions(): void
   /** Live session event log (see the public Channel type, `/trace`). */
@@ -2776,6 +2790,24 @@ export function createChannel(
         })
       } catch (error) {
         return [t('subagent-query-failed', { err: error instanceof Error ? error.message : String(error) })]
+      }
+    },
+    async listSkills() {
+      const target = agent
+      try {
+        const registry = skillRegistryFor(target)
+        if (registry === undefined) return []
+        const observation = await registry.snapshot(skillViewOptions(target))
+        if (target !== agent || !observation.complete) return undefined
+        return observation.skills
+          .filter(skill => isUserInvocable(skill))
+          .map(skill => ({
+            name: skill.name,
+            description: skill.description,
+          }))
+      } catch (error) {
+        ctx.logger.warn('skills list: catalog read failed: %o', error)
+        return undefined
       }
     },
     releaseContributions() {

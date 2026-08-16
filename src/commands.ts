@@ -78,6 +78,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
+  { name: 'skills', description: 'List available skills' },
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
   { name: 'preset', description: 'Switch the agent preset (standard/code/minimal/cordis)' },
