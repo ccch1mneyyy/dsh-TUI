@@ -30,8 +30,10 @@ import type { Context } from '@deepseek-ai/cordis'
  * listener. Here:
  *
  * - a throwing listener is logged and the chain CONTINUES;
- * - each return value passes through `normalize` (per-event validation);
- *   "no opinion" (undefined/null/false) and invalid shapes are logged and
+ * - each return value passes through `normalize` (per-event validation)
+ *   INSIDE the same isolation boundary — a Proxy/throwing-getter return is
+ *   logged and skipped like any other invalid shape;
+ * - "no opinion" (undefined/null/false) and invalid shapes are logged and
  *   the chain CONTINUES;
  * - the first listener whose NORMALIZED decision is non-undefined wins.
  *
@@ -70,7 +72,17 @@ export async function dispatchTuiDecision<T>(
       log(`dsh-tui: ${name} listener failed; continuing with the next listener: %o`, error)
       continue
     }
-    const decision = normalize(result, what => log(`dsh-tui: ${name} listener returned ${what}; ignored`))
+    // normalize runs INSIDE the isolation boundary too: a hostile return
+    // value (a Proxy or a throwing getter) must not reject the dispatch —
+    // that would cut the chain before later veto listeners run, and leave
+    // unhandled rejections at the fire-and-forget call sites.
+    let decision: T | undefined
+    try {
+      decision = normalize(result, what => log(`dsh-tui: ${name} listener returned ${what}; ignored`))
+    } catch (error) {
+      log(`dsh-tui: ${name} listener returned a value that threw during validation; ignored: %o`, error)
+      continue
+    }
     if (decision !== undefined) return decision
   }
   return undefined

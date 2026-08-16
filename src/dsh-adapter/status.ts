@@ -25,22 +25,32 @@ const MAX_ENTRIES = 20
  *  insertion order), so a plugin's line never jumps around on updates. */
 export class TuiStatusStore {
   private readonly listeners = new Set<() => void>()
-  private readonly entries = new Map<string, string>()
+  // Each write carries a token: a disposer compares TOKENS, not text —
+  // value comparison has an ABA hole (set 'x', set 'x' again, the first
+  // disposer would wipe the second write, e.g. a hot reload restoring the
+  // same status text).
+  private readonly entries = new Map<string, { text: string; token: number }>()
   // useSyncExternalStore requires a referentially stable snapshot between
   // emits — a fresh array per call would re-render in an infinite loop.
   private snapshot: readonly TuiStatusEntry[] = []
 
   /** Set or clear (undefined/empty) one key. */
-  set(key: string, text: string | undefined): void {
+  set(key: string, text: string | undefined, token = 0): void {
     const had = this.entries.has(key)
     if (text === undefined || text === '') {
       if (!had) return
       this.entries.delete(key)
     } else {
-      if (this.entries.get(key) === text) return
-      this.entries.set(key, text)
+      const existing = this.entries.get(key)
+      if (existing?.text === text) {
+        // Same text, new write: adopt the new token so the newest disposer
+        // is the one that owns the line (no re-emit — nothing visible changed).
+        existing.token = token
+        return
+      }
+      this.entries.set(key, { text, token })
     }
-    this.snapshot = [...this.entries].map(([entryKey, entryText]) => ({ key: entryKey, text: entryText }))
+    this.snapshot = [...this.entries].map(([entryKey, entry]) => ({ key: entryKey, text: entry.text }))
     this.emit()
   }
 
@@ -49,13 +59,13 @@ export class TuiStatusStore {
     return this.snapshot
   }
 
-  /** Clear `key` only while it still holds `text` — a stale disposer must
-   *  not wipe a newer contribution set after it was created. */
-  clearIf(key: string, text: string | undefined): void {
-    if (text === undefined) return
-    if (this.entries.get(key) !== text) return
+  /** Clear `key` only while it still holds the write tagged `token` — a
+   *  stale disposer must not wipe a newer contribution (even one with
+   *  identical text). */
+  clearIf(key: string, token: number): void {
+    if (this.entries.get(key)?.token !== token) return
     this.entries.delete(key)
-    this.snapshot = [...this.entries].map(([entryKey, entryText]) => ({ key: entryKey, text: entryText }))
+    this.snapshot = [...this.entries].map(([entryKey, entry]) => ({ key: entryKey, text: entry.text }))
     this.emit()
   }
 
@@ -94,6 +104,10 @@ export class TuiStatusRuntime extends Service {
   /** The store the chat screen renders. Exposed for the host, not plugins. */
   readonly store = new TuiStatusStore()
 
+  /** Monotonic per-write token; a disposer only clears ITS write (see the
+   *  store's token comment for the same-value ABA this prevents). */
+  private nextToken = 1
+
   constructor(ctx: Context) {
     super(ctx, 'tuiStatus')
     ctx.effect(() => () => this.store.clear())
@@ -105,12 +119,12 @@ export class TuiStatusRuntime extends Service {
    * control chars are stripped and text is capped at 200 cells.
    *
    * Returns a disposer that clears the contribution IF the key still holds
-   * exactly this text (a later set wins over a stale disposer). The CALLER
-   * scopes it to its own fiber (`ctx.effect(() => dispose)`) — the same
-   * contract as `tuiShortcuts`/`tuiScenes`: a service method only sees the
-   * service's own ctx, so per-plugin cleanup cannot happen here. Without
-   * that, an unloaded or hot-reloaded plugin would leave its line behind
-   * forever.
+   * exactly this write (a later set — even of identical text — wins over a
+   * stale disposer). The CALLER scopes it to its own fiber
+   * (`ctx.effect(() => dispose)`) — the same contract as
+   * `tuiShortcuts`/`tuiScenes`: a service method only sees the service's own
+   * ctx, so per-plugin cleanup cannot happen here. Without that, an unloaded
+   * or hot-reloaded plugin would leave its line behind forever.
    */
   set(key: string, text: string | undefined): () => void {
     const noop = (): void => {}
@@ -142,8 +156,9 @@ export class TuiStatusRuntime extends Service {
         cleaned = flat
       }
     }
-    this.store.set(normalized, cleaned)
-    return () => this.store.clearIf(normalized, cleaned)
+    const token = this.nextToken++
+    this.store.set(normalized, cleaned, token)
+    return () => this.store.clearIf(normalized, token)
   }
 }
 
