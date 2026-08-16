@@ -16,6 +16,8 @@
  * Run: node --import tsx/esm scripts/verify-extension-ui.tsx
  */
 process.env.FORCE_COLOR = '3'
+// 断言针对中文 i18n 文案（对话框标题/状态行标记），与运行环境的 locale 无关。
+process.env.DSH_TUI_LANG = 'zh'
 
 // 家目录隔离（同 verify-extension-events.tsx）：Chat 加载即解析 homedir()。
 const { mkdtempSync, mkdirSync } = await import('node:fs')
@@ -244,6 +246,18 @@ await sleep(100)
     ctx.tuiStatus.store.getSnapshot()[0]?.text === '新值')
   ctx.tuiStatus.set('lifecycle', undefined)
   check('tuiStatus: explicit clear still works', ctx.tuiStatus.store.getSnapshot().length === 0)
+
+  // Same-value ABA: two writes of IDENTICAL text — the first disposer must
+  // not clear the second write (token comparison, not value comparison; a
+  // hot reload restoring the same line hits exactly this).
+  const disposeFirst = ctx.tuiStatus.set('aba', '同值')
+  const disposeSecond = ctx.tuiStatus.set('aba', '同值')
+  disposeFirst()
+  check('tuiStatus: same-value stale disposer keeps the newer write',
+    ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'aba' && e.text === '同值'))
+  disposeSecond()
+  check('tuiStatus: the owning disposer clears the same-value write',
+    !ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'aba'))
 }
 
 {

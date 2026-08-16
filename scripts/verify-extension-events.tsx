@@ -9,23 +9,30 @@
  *  2. tui/input cancel — nothing is delivered, the reason is toasted.
  *  3. tui/input crash isolation — a throwing listener degrades to
  *     "no opinion"; delivery proceeds unchanged.
- *  3b. serial chain integrity — a blank rewrite / a throw / a junk return
- *     must NOT bail the chain: later veto listeners still run (the
- *     per-listener normalize+isolate dispatch, not raw ctx.serial).
+ *  3b. serial chain integrity — a blank rewrite / a throw / a junk return /
+ *     a throwing-getter (hostile) return must NOT bail the chain: later veto
+ *     listeners still run (the per-listener normalize+isolate dispatch, not
+ *     raw ctx.serial).
  *  4. tui/rewind-prompt modes — the confirm pane renders the plugin's
  *     modes, picking one threads its id through rewindTo, and the
  *     tui/rewind-done summary + tui/session-switched('rewind') fire.
+ *     Malformed mode fields (a non-string description/label) are stripped
+ *     or dropped, never rendered raw.
  *  5. tui/rewind-prompt cancel — the rewind is vetoed before any fork.
  *  6. tui/session-switch veto + tui/session-switched on /new.
  *  7. tui/compact veto + execution through the real channel (fake
  *     compaction service via serviceForAgent's ctx.get fallback).
  *  8. compact stale-drop — a slow listener plus /new during the await must
  *     abandon the old session's compaction, never run it on the new agent.
+ *  8b. compact stale-drop ABA — /new then /resume BACK to the origin session
+ *     reuses its id; the reference-based stale check must still drop.
  *
  * Follows repro-picker-windowing.tsx: fake session event log, fake
  * sessions/agents services, plainText ANSI wash over stdout frames.
  */
 process.env.FORCE_COLOR = '3'
+// 断言针对中文 i18n 文案（toast/标题），与运行环境的 locale 无关。
+process.env.DSH_TUI_LANG = 'zh'
 
 // 家目录隔离：touchSession/clearResumeTarget（/new 与 rewind 都会走）写
 // ~/.dsh-tui 的真实文件，必须先切到临时目录再 import src。HOME 与
@@ -151,6 +158,13 @@ function makeServices(captured: { followupTexts: string[]; compactCalls: string[
         forkSeq += 1
         return { agent: makeAgent(`fork-${forkSeq}`, options.seed ?? [], captured), dispose: async () => {} }
       },
+      // Real dsh derives the agent id from the session: resuming session A
+      // yields a NEW agent object whose id equals the ORIGINAL agent's id
+      // again (A → /new → /resume A). The compact stale-drop must therefore
+      // compare agent REFERENCES, not ids — this fake reproduces the reuse.
+      async resume(options: { resumeSessionId: string }) {
+        return { agent: makeAgent(options.resumeSessionId.replace(/^s-/u, ''), makeEvents(), captured), dispose: async () => {} }
+      },
     },
     llm: {
       listProviders: () => [{ id: 'fake-provider' }],
@@ -274,6 +288,27 @@ await sleep(800)
     captured.followupTexts.some(text => text.includes('垃圾已被改写')))
   disposeJunk()
   disposeTransform()
+
+  // Hostile return value: an object whose property access THROWS (a Proxy or
+  // a throwing getter). normalize runs inside the isolation boundary, so the
+  // throw is logged and the chain still reaches the later veto — it must not
+  // reject the whole dispatch.
+  const disposeHostile = ctx.on('tui/input', event => {
+    if (event.text !== '敌意返回') return undefined
+    const hostile = {}
+    Object.defineProperty(hostile, 'text', {
+      get() { throw new Error('hostile getter') },
+    })
+    return hostile as never
+  })
+  const disposeVeto3 = ctx.on('tui/input', event =>
+    event.text === '敌意返回' ? { cancel: true, reason: '敌意后的否决生效' } : undefined)
+  channel.submit('敌意返回')
+  await sleep(300)
+  check('serial chain: a throwing-getter return is skipped, later veto still runs',
+    !captured.followupTexts.some(text => text.includes('敌意返回')) && notified('敌意后的否决生效'))
+  disposeHostile()
+  disposeVeto3()
 }
 
 // ── 4. rewind modes: picker → mode list → rewindTo(mode) → done/switched ─
@@ -285,6 +320,12 @@ await sleep(800)
       modes: [
         { id: 'files', label: '回退会话 + 恢复文件', description: '撤销此后的文件修改' },
         { id: 'branch', label: '回退并打标记' },
+        // 畸形字段必须被剥离后复制，原始对象不得进入渲染路径:description
+        // 非字符串 → 丢弃该字段但保留条目(id/label 合规);label 非字符串
+        // → 整个条目丢弃。修复前 description:{} 会在 ListItem 的 .replace
+        // 处直接崩掉确认面板。
+        { id: 'junk-desc', label: '坏描述模式', description: {} as never },
+        { id: 'junk-label', label: 42 as never },
       ],
     }
   })
@@ -311,6 +352,8 @@ await sleep(800)
   check('rewind confirm renders plugin modes',
     afterEnter.includes('回退会话 + 恢复文件') && afterEnter.includes('仅回退会话'),
     afterEnter.slice(-200))
+  check('rewind confirm: malformed description stripped, entry kept (no render crash)',
+    afterEnter.includes('坏描述模式'))
   check('tui/rewind-prompt received the picked message seq', seen.promptSeq !== undefined)
 
   // ↓ once moves to the first plugin mode; Enter rewinds with it.
@@ -401,6 +444,29 @@ await sleep(800)
   check('compact stale-drop: the old session’s compaction never ran',
     captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
   check('compact stale-drop: stale notice toasted', notified('压缩已取消'))
+  dispose()
+}
+
+// ── 8b. compact stale-drop ABA: /new then /resume BACK to the origin ─────
+// Session ids are reusable: the slow listener's await spans
+// A → /new → /resume A, after which state.agentId EQUALS the origin id again
+// (the fake agents.resume reproduces real dsh's id reuse). An id-based stale
+// check would pass here and compact the NEW agent through the OLD scope's
+// service; the reference comparison must still drop it.
+{
+  let release: (value: undefined) => void = () => {}
+  const gate = new Promise<undefined>(resolve => { release = resolve })
+  const dispose = ctx.on('tui/compact', () => gate)
+  channel.compact()
+  await sleep(200)
+  const switched = await channel.newSession()
+  check('compact ABA setup: /new succeeded mid-await', switched === true)
+  const resumed = await channel.resumeTo('s-a1')
+  check('compact ABA setup: /resume back to the origin session succeeded', resumed === true)
+  release(undefined)
+  await sleep(400)
+  check('compact ABA: id reuse does NOT revive the stale compaction',
+    captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
   dispose()
 }
 

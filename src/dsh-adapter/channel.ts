@@ -58,6 +58,7 @@ import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
 import type { TuiRendererRuntime } from './renderers.js'
 import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events.js'
+import { stringWidth } from '../ink/stringWidth.js'
 import type {
   TuiInputDecision,
   TuiRewindMode,
@@ -94,9 +95,24 @@ function normalizeInputDecision(
   return undefined
 }
 
+/** Strip C0/C1 control chars, collapse whitespace, cap width in cells —
+ *  for plugin-supplied strings bound for the render path (rewind modes). */
+function cleanRenderText(value: string, maxCells: number): string {
+  // eslint-disable-next-line no-control-regex -- deliberate: sanitize untrusted render-path text
+  const flat = value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (stringWidth(flat) <= maxCells) return flat
+  let out = ''
+  for (const ch of flat) {
+    if (stringWidth(out + ch) > maxCells - 1) break
+    out += ch
+  }
+  return `${out}…`
+}
+
 /** `tui/rewind-prompt` return normalization: cancel/modes or no opinion.
- *  Plugin-supplied modes go onto the render path: keep only well-formed
- *  entries and cap the count (the pane renders one row per mode). */
+ *  Modes are COPIED with only validated, sanitized scalar fields — the raw
+ *  plugin object must never reach the render path (a `description: {}` would
+ *  crash ListItem's `.replace`, and control chars would corrupt the pane). */
 function normalizeRewindPromptDecision(
   result: unknown,
   warn: (what: string) => void,
@@ -111,13 +127,20 @@ function normalizeRewindPromptDecision(
     return { cancel: true, ...(typeof record.reason === 'string' && record.reason !== '' ? { reason: record.reason } : {}) }
   }
   if (Array.isArray(record.modes)) {
-    const modes = (record.modes as unknown[])
-      .filter(
-        (mode): mode is TuiRewindMode =>
-          typeof (mode as TuiRewindMode)?.id === 'string' && (mode as TuiRewindMode).id !== '' &&
-          typeof (mode as TuiRewindMode)?.label === 'string' && (mode as TuiRewindMode).label !== '',
-      )
-      .slice(0, 8)
+    const modes: TuiRewindMode[] = []
+    for (const raw of record.modes as unknown[]) {
+      if (modes.length >= 8) break
+      if (raw === null || typeof raw !== 'object') continue
+      const candidate = raw as Record<string, unknown>
+      if (typeof candidate.id !== 'string' || candidate.id.trim() === '') continue
+      const label = typeof candidate.label === 'string' ? cleanRenderText(candidate.label, 120) : ''
+      if (label === '') continue
+      const description =
+        typeof candidate.description === 'string' && candidate.description.trim() !== ''
+          ? cleanRenderText(candidate.description, 400)
+          : undefined
+      modes.push({ id: candidate.id, label, ...(description === undefined ? {} : { description }) })
+    }
     if (modes.length === 0) {
       warn('an empty or invalid {modes} list')
       return undefined
@@ -1331,6 +1354,10 @@ export function createChannel(
    */
   const dispatchUserText = async (text: string, placement: PendingMessage['placement']): Promise<void> => {
     const originAgentId = state.agentId
+    // Stale detection compares the AGENT REFERENCE, not the id: session ids
+    // are reusable (A → /new → /resume A lands back on the same id with a
+    // fresh agent), so an id check has an ABA hole.
+    const originAgent = agent
     const decision = await dispatchTuiDecision(ctx, 'tui/input', {
       text,
       delivery: placement === 'steer' ? 'steer' : 'followup',
@@ -1352,7 +1379,7 @@ export function createChannel(
       }
       text = decision.text.trim()
     }
-    if (state.agentId !== originAgentId) {
+    if (agent !== originAgent) {
       state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
       return
     }
@@ -3002,6 +3029,11 @@ export function createChannel(
       // Plugin veto point (tui/compact): the first answering plugin may
       // cancel the compaction before anything runs.
       const originAgentId = state.agentId
+      // Compare the AGENT REFERENCE after the await, not the id — session
+      // ids are reusable (A → /new → /resume A returns the same id on a new
+      // agent), so an id comparison has an ABA hole that would hand the new
+      // agent to the OLD scope's compaction service.
+      const originAgent = agent
       void (async () => {
         const decision = await dispatchTuiDecision(ctx, 'tui/compact', {
           sessionId: originAgentId,
@@ -3016,7 +3048,7 @@ export function createChannel(
         // OLD agent's scope chain, and the mutable `agent` now points at the
         // new session. Running now would hand the new agent to the old
         // service (or call into an unloaded one).
-        if (state.agentId !== originAgentId) {
+        if (agent !== originAgent) {
           state.notify(t('ext-compact-stale'), { color: 'warning', timeoutMs: 4000 })
           return
         }
