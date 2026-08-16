@@ -317,6 +317,25 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     diffLayout: config.diffLayout,
     handle,
   })
+  // Register the dsh-tui settings namespace so the /settings screen can
+  // edit it (the section below was '命名空间未注册' without this): the
+  // user layer in settings.yaml wins over cordis.yml's diffLayout, and
+  // watch() lands commits on the live channel — no recompose needed.
+  ctx.inject(['settings'], (settingsCtx) => {
+    const scope = settingsCtx.settings.register(
+      settingsNamespace('dsh-tui'),
+      Schema.object({
+        diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+      }),
+    )
+    const applyLayout = (value: { diffLayout?: 'auto' | 'split' | 'unified' }): void => {
+      channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+    }
+    applyLayout(scope.get())
+    scope.watch(next => {
+      applyLayout(next)
+    })
+  })
   // The /settings screen's own section: the dsh-tui namespace comes from
   // this plugin's Config schema, and the declared select writes diffLayout
   // back through the settings service's revision-fenced mutate.
