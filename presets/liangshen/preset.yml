@@ -1,0 +1,3 @@
+name: 梁神模式
+description: 主 Agent 与子 Agent 首轮均保持 Minimal 双工具，首次工具调用后开放完整目录，压缩后重新锚定。
+order: 5

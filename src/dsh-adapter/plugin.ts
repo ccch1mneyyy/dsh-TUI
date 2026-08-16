@@ -17,7 +17,8 @@ import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
-import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
+import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, runningPresetOf } from './presets.js'
+import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
@@ -45,6 +46,24 @@ import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMult
 export async function apply(ctx: Context, config: Config): Promise<void> {
   if (!process.stdout.isTTY) {
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
+  }
+
+  // The official profile launcher owns the system preset root and replaces
+  // any bundle-supplied roots at boot. Install dsh-tui's bundled presets via
+  // the roster's supported user-root seam before resolving the first agent.
+  // Never overwrite an existing directory unless it carries our marker.
+  try {
+    for (const result of ensurePackagedPresets()) {
+      if (result.status === 'conflict') {
+        ctx.logger.warn(
+          `dsh-tui: packaged preset "${result.id}" was not installed because an unmanaged preset already uses that id`,
+        )
+      }
+    }
+  } catch (error) {
+    // A read-only home must not make the whole terminal unusable; the other
+    // official and user presets remain available.
+    ctx.logger.warn(`dsh-tui: unable to install packaged presets (${error instanceof Error ? error.message : String(error)})`)
   }
 
   // Data-directory rename (~/.dsh-cc → ~/.dsh-tui, issue #120): copy the
@@ -113,6 +132,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the inject proxy.
   const userQuestions = ctx.get('userQuestions') ?? new UserQuestionService(ctx)
   ctx.plugin(toolAskUser)
+  // The host-level tool mount above is intentional for the TUI and for user
+  // presets, but the official Minimal preset is a strict two-tool trajectory
+  // (persistent bash + str_replace_editor). Filter only that preset at the
+  // final assembly boundary. Reading the session on every assembly also makes
+  // blank-session /preset switches and resumed sessions behave correctly.
+  ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+    const assembled = await next()
+    const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
+    return filterMinimalPresetTools(assembled, presetId)
+  })
   const questionStore = new QuestionStore()
   // Packaged skills (/audit, /bug, …): contribute them through the host's
   // skill registry so they resolve with zero manual copying.
