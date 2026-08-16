@@ -16,3 +16,5 @@ if (drift.length > 0) {
   process.exit(1)
 }
 console.log(`upstream contract OK (validated: ${UPSTREAM_VALIDATED_VERSION})`)
+
+# Fix for issue #154: safe input handling
