@@ -359,5 +359,89 @@ await tick()
   check('releaseContributions leaves other owners alone', registered.has('plan'))
 }
 
+// ---- /skills: an isolated channel must discard a snapshot from its old agent
+{
+  const staleAgentA = {
+    id: 'stale-a',
+    status: 'idle',
+    session: { id: 'stale-s1', seq: 0, events: [], header: { cwd: '/tmp' } },
+    ctx: { on: () => () => {} },
+    followups: [],
+    followup(message) { this.followups.push(message) },
+  }
+  const staleAgentB = {
+    id: 'stale-b',
+    status: 'idle',
+    session: { id: 'stale-s2', seq: 0, events: [], header: { cwd: '/tmp' } },
+    ctx: { on: () => () => {} },
+    followups: [],
+    followup(message) { this.followups.push(message) },
+  }
+  let holdNextAgentASnapshot = false
+  let pendingSnapshotResolve = () => {}
+  let pendingSnapshotStarted = false
+  let lastSnapshotScope
+  const skillService = {
+    list: async () => [],
+    snapshot(options) {
+      lastSnapshotScope = options?.scope
+      if (options?.scope === staleAgentA && holdNextAgentASnapshot) {
+        holdNextAgentASnapshot = false
+        pendingSnapshotStarted = true
+        return new Promise(resolve => { pendingSnapshotResolve = resolve })
+      }
+      return Promise.resolve({
+        skills: options?.scope === staleAgentA
+          ? [{ name: 'stable', description: 'Stable skill', invocation: { modelInvocable: true, userInvocable: true } }]
+          : [{ name: 'fresh', description: 'Fresh skill', invocation: { modelInvocable: true, userInvocable: true } }],
+        complete: true,
+      })
+    },
+    get: async () => undefined,
+  }
+  const staleCtx = {
+    on: () => () => {},
+    get(name) {
+      if (name === 'agents') {
+        return {
+          create: async () => ({ agent: staleAgentB }),
+        }
+      }
+      if (name === 'skills') return skillService
+      return undefined
+    },
+    logger: { warn() {} },
+  }
+  const staleChannel = createChannel(staleCtx, staleAgentA, {
+    model: 'deepseek-chat',
+    cwd: '/tmp',
+    provider: 'deepseek',
+    activity: false,
+  })
+
+  holdNextAgentASnapshot = true
+  const pendingList = staleChannel.listSkills()
+  check(
+    'pending /skills read starts from the independent agent A',
+    pendingSnapshotStarted && lastSnapshotScope === staleAgentA,
+  )
+  const switched = await staleChannel.newSession()
+  check('newSession switches the independent channel to agent B', switched === true)
+  pendingSnapshotResolve({
+    skills: [{ name: 'stale', description: 'Stale skill', invocation: { modelInvocable: true, userInvocable: true } }],
+    complete: true,
+  })
+  const staleSkills = await pendingList
+  check(
+    'stale /skills snapshot is hidden after an agent swap',
+    staleSkills === undefined,
+  )
+  const freshSkills = await staleChannel.listSkills()
+  check(
+    'current agent B returns a fresh /skills snapshot',
+    freshSkills?.some(skill => skill.name === 'fresh') === true,
+  )
+}
+
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)

@@ -2958,11 +2958,14 @@ export function createChannel(
       // snapshot() over list(): only a COMPLETE observation is authoritative
       // (same contract as the skill-command merge above) — a partial catalog
       // must surface as "failed", not as a misleading near-empty picker.
-      const registry = skillRegistryFor(agent)
+      const target = agent
+      const registry = skillRegistryFor(target)
       if (registry === undefined) return []
       try {
-        const observation = await registry.snapshot(skillViewOptions(agent))
-        if (!observation.complete) return undefined
+        const observation = await registry.snapshot(skillViewOptions(target))
+        if (target !== agent || !observation.complete) {
+          return undefined
+        }
         return observation.skills.map(skill => ({
           name: skill.name,
           description: skill.description,
