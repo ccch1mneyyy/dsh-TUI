@@ -37,6 +37,7 @@ const [
   { TuiStatusStore, TuiStatusRuntime },
   { TuiShortcutRuntime, parseShortcutCombo, matchShortcut },
   { TuiRendererRuntime },
+  { KNOWN_SESSION_EVENT_TYPES },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -48,6 +49,7 @@ const [
   import('../src/dsh-adapter/status.js'),
   import('../src/dsh-adapter/shortcuts.js'),
   import('../src/dsh-adapter/renderers.js'),
+  import('@deepseek-ai/dsh-session'),
 ])
 
 class FakeStdout extends Writable {
@@ -141,6 +143,27 @@ const warnCount = (fragment: string) => warnings.filter(line => line.includes(fr
   store.decide(true)
   store.decide(false)
   check('dialog store: stale decide is ignored', (await stale) === true)
+
+  // Aborting the ACTIVE request must advance the queue — without advance(),
+  // the next Promise parks forever and the UI shows no dialog.
+  const abortCtl = new AbortController()
+  const victim = store.ask({ kind: 'input', title: 't9', initial: '' }, abortCtl.signal)
+  const successor = store.ask({ kind: 'confirm', title: 't10', confirmLabel: '', cancelLabel: '' })
+  abortCtl.abort()
+  check('dialog store: aborted active resolves cancelled', (await victim) === undefined)
+  check('dialog store: abort ADVANCES the queue to the next request',
+    store.getSnapshot()?.kind === 'confirm', JSON.stringify(store.getSnapshot()))
+  store.decide(true)
+  check('dialog store: the advanced request settles normally', (await successor) === true)
+
+  // Same for a timeout: the active request dies, the queued one goes live.
+  const timedOut = store.ask({ kind: 'input', title: 't11', initial: '' }, undefined, 100)
+  const afterTimeout = store.ask({ kind: 'select', title: 't12', options: [{ id: 'x', label: 'X' }] })
+  check('dialog store: timed-out active resolves cancelled', (await timedOut) === undefined)
+  check('dialog store: timeout ADVANCES the queue',
+    store.getSnapshot()?.kind === 'select', JSON.stringify(store.getSnapshot()))
+  store.cancel()
+  await afterTimeout
 }
 
 {
@@ -207,6 +230,20 @@ await sleep(100)
     ctx.tuiStatus.store.getSnapshot().length === 20 && warnCount('contributions already shown') === 1)
   ctx.tuiStatus.set('demo', undefined)
   for (let i = 0; i < 19; i++) ctx.tuiStatus.set(`plug-${String(i).padStart(2, '0')}`, undefined)
+
+  // Lifecycle disposer: clears only while the key still holds THIS text —
+  // a stale disposer must not wipe a newer contribution.
+  const disposeOld = ctx.tuiStatus.set('lifecycle', '旧值')
+  disposeOld()
+  check('tuiStatus: disposer clears its own contribution',
+    ctx.tuiStatus.store.getSnapshot().length === 0)
+  const disposeStale = ctx.tuiStatus.set('lifecycle', '旧值')
+  ctx.tuiStatus.set('lifecycle', '新值')
+  disposeStale()
+  check('tuiStatus: stale disposer keeps the newer value',
+    ctx.tuiStatus.store.getSnapshot()[0]?.text === '新值')
+  ctx.tuiStatus.set('lifecycle', undefined)
+  check('tuiStatus: explicit clear still works', ctx.tuiStatus.store.getSnapshot().length === 0)
 }
 
 {
@@ -233,6 +270,23 @@ await sleep(100)
   check('match: super flag always refuses',
     pk !== undefined && !matchShortcut(pk, 'k', { meta: true, super: true }))
 
+  // Named keys: shift must match exactly — a registered ctrl+shift+enter
+  // must NOT fire on a plain ctrl+enter press (the editor's built-in
+  // delivery would be shadowed).
+  const namedShift = parseShortcutCombo('ctrl+shift+enter')
+  check('match: named key requires the combo’s shift state',
+    namedShift !== undefined &&
+    !matchShortcut(namedShift, '', { ctrl: true, return: true }) &&
+    matchShortcut(namedShift, '', { ctrl: true, shift: true, return: true }))
+
+  // Escape combos are unregistrable: the input layer sets meta on EVERY Esc,
+  // so alt+escape would match bare Esc presses (clear-input, double-Esc
+  // rewind would be shadowed).
+  check('parse: alt+escape refused (Esc always carries meta)',
+    parseShortcutCombo('alt+escape') === undefined)
+  check('parse: ctrl+escape refused too',
+    parseShortcutCombo('ctrl+escape') === undefined)
+
   // registration rules
   const noop = () => {}
   ctx.tuiShortcuts.register('ctrl+c', { description: 'x', handler: noop })
@@ -244,8 +298,15 @@ await sleep(100)
   ctx.tuiShortcuts.register('alt+up', { description: 'x', handler: noop })
   check('tuiShortcuts: chat-global combos reserved (ctrl+o, alt+up)',
     ctx.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 3)
+  // ctrl+shift+enter is the editor's Shift+Enter newline (CSI 13;6u).
+  ctx.tuiShortcuts.register('ctrl+shift+enter', { description: 'x', handler: noop })
+  check('tuiShortcuts: editor newline combo reserved (ctrl+shift+enter)',
+    ctx.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 4)
+  ctx.tuiShortcuts.register('alt+escape', { description: 'x', handler: noop })
+  check('tuiShortcuts: alt+escape refused at registration',
+    ctx.tuiShortcuts.list().length === 0 && warnCount('need ctrl/alt plus one key') === 1)
   ctx.tuiShortcuts.register('not-a-combo', { description: 'x', handler: noop })
-  check('tuiShortcuts: malformed combo refused', warnCount('need ctrl/alt plus one key') === 1)
+  check('tuiShortcuts: malformed combo refused', warnCount('need ctrl/alt plus one key') === 2)
   ctx.tuiShortcuts.register('ctrl+g', { description: 'first', handler: noop })
   ctx.tuiShortcuts.register('ctrl+g', { description: 'second', handler: noop })
   check('tuiShortcuts: duplicate refused',
@@ -296,6 +357,35 @@ await sleep(100)
     result?.title === '便签' && result.lines.length === 2)
   check('tuiRenderers.render: unregistered type → undefined',
     ctx.tuiRenderers.render('other/thing', {}) === undefined)
+
+  // The built-in denylist is a module-load SNAPSHOT: a plugin that followed
+  // seam 1's rule (adding its type to the live KNOWN_SESSION_EVENT_TYPES
+  // before persisting events) must still be able to register a renderer for
+  // that type — the mutable set must not become a self-denial.
+  KNOWN_SESSION_EVENT_TYPES.add('my-plugin/persisted')
+  ctx.tuiRenderers.register('my-plugin/persisted', () => ({ lines: ['已登记'] }))
+  check('tuiRenderers: renderer for a plugin-REGISTERED type is accepted',
+    ctx.tuiRenderers.render('my-plugin/persisted', {})?.lines.length === 1)
+  KNOWN_SESSION_EVENT_TYPES.delete('my-plugin/persisted')
+
+  // Output validation inside the render boundary: non-string title dropped
+  // (it would crash React), lines capped, control chars stripped, non-scalar
+  // lines skipped.
+  ctx.tuiRenderers.register('big/output', () => ({
+    title: 42 as never,
+    lines: Array.from({ length: 5000 }, (_, i) => `行${i}\x07尾部`),
+  }))
+  const big = ctx.tuiRenderers.render('big/output', {})
+  check('tuiRenderers.render: non-string title dropped, no crash', big?.title === undefined)
+  check('tuiRenderers.render: lines capped at 100', big?.lines.length === 100, String(big?.lines.length))
+  check('tuiRenderers.render: control chars stripped from lines',
+    big !== undefined && !big.lines.some(line => line.includes('\x07')))
+  ctx.tuiRenderers.register('mixed/lines', () => ({
+    lines: ['文本', 42, true, null, { bad: true }, '末尾'] as never,
+  }))
+  const mixed = ctx.tuiRenderers.render('mixed/lines', {})
+  check('tuiRenderers.render: scalar lines coerced, objects skipped',
+    mixed?.lines.join('|') === '文本|42|true|末尾', JSON.stringify(mixed?.lines))
 
   // Throwing renderer: skipped, sticky-logged once per type.
   const before = warnCount('renderer for "bad/actor" threw')

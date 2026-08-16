@@ -49,6 +49,16 @@ export class TuiStatusStore {
     return this.snapshot
   }
 
+  /** Clear `key` only while it still holds `text` — a stale disposer must
+   *  not wipe a newer contribution set after it was created. */
+  clearIf(key: string, text: string | undefined): void {
+    if (text === undefined) return
+    if (this.entries.get(key) !== text) return
+    this.entries.delete(key)
+    this.snapshot = [...this.entries].map(([entryKey, entryText]) => ({ key: entryKey, text: entryText }))
+    this.emit()
+  }
+
   /** Drop everything (teardown). */
   clear(): void {
     if (this.entries.size === 0) return
@@ -93,19 +103,28 @@ export class TuiStatusRuntime extends Service {
    * Set (or clear with `undefined`) the contribution for `key`. Keys are
    * plugin-namespaced by convention (`my-plugin`, `my-plugin:detail`);
    * control chars are stripped and text is capped at 200 cells.
+   *
+   * Returns a disposer that clears the contribution IF the key still holds
+   * exactly this text (a later set wins over a stale disposer). The CALLER
+   * scopes it to its own fiber (`ctx.effect(() => dispose)`) — the same
+   * contract as `tuiShortcuts`/`tuiScenes`: a service method only sees the
+   * service's own ctx, so per-plugin cleanup cannot happen here. Without
+   * that, an unloaded or hot-reloaded plugin would leave its line behind
+   * forever.
    */
-  set(key: string, text: string | undefined): void {
+  set(key: string, text: string | undefined): () => void {
+    const noop = (): void => {}
     const normalized = String(key ?? '').trim().toLowerCase()
     if (!KEY_PATTERN.test(normalized)) {
       this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected invalid key ${JSON.stringify(key)}`)
-      return
+      return noop
     }
     if (text !== undefined && !this.store.getSnapshot().some(e => e.key === normalized)) {
       // New key beyond the cap: the line is one row of terminal — an
       // unbounded count would push the prompt off screen.
       if (this.store.getSnapshot().length >= MAX_ENTRIES) {
         this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}": ${MAX_ENTRIES} contributions already shown`)
-        return
+        return noop
       }
     }
     let cleaned: string | undefined
@@ -124,6 +143,7 @@ export class TuiStatusRuntime extends Service {
       }
     }
     this.store.set(normalized, cleaned)
+    return () => this.store.clearIf(normalized, cleaned)
   }
 }
 

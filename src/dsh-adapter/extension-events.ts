@@ -4,20 +4,92 @@
  * style seam (pi's `session_before_fork` / `input` events) expressed in
  * cordis dispatch semantics.
  *
- * All of these are FIRED BY THE CHANNEL (`ctx.serial` / `ctx.parallel`) and
- * answered by plugins (`ctx.on`). No service row is involved: an absent
- * listener simply means "no opinion", and the built-in flow proceeds
- * unchanged. `serial` returns the first bail value (non-null/false/
- * undefined) in listener order — the first plugin to decide wins; there is
- * no chaining. A listener that throws propagates out of `ctx.serial`, so the
- * channel wraps every dispatch in try/catch and treats a crash as
- * "no opinion" (a broken plugin must never brick typing, rewind, or /new).
+ * All of these are FIRED BY THE CHANNEL and answered by plugins (`ctx.on`).
+ * No service row is involved: an absent listener simply means "no opinion",
+ * and the built-in flow proceeds unchanged. Dispatch is SERIAL IN ORDER with
+ * the first VALID decision winning — see {@link dispatchTuiDecision} for why
+ * this is not raw `ctx.serial`: per-listener crash isolation and return-value
+ * normalization mean a broken or malformed listener can never skip a later
+ * (possibly safety) veto.
  *
  * Synchronous-only rule: handlers may be async, but while a decision is
  * awaited the originating UI flow is parked (the submit is not delivered,
  * the rewind confirm has not happened). Handlers that need user input should
  * use the managed dialogs (`ctx.tuiDialogs`) or open a scene, then resolve.
  */
+
+import type { Context } from '@deepseek-ai/cordis'
+
+/**
+ * Dispatch a decision event listener-by-listener in registration order.
+ *
+ * Deliberately NOT `ctx.serial`: cordis bails at ANY non-null/false/undefined
+ * return, so a malformed-but-object decision (a blank `{ text }` rewrite, a
+ * junk primitive) would cut the chain before a later veto listener runs —
+ * and one throwing listener rejects the whole dispatch, skipping every later
+ * listener. Here:
+ *
+ * - a throwing listener is logged and the chain CONTINUES;
+ * - each return value passes through `normalize` (per-event validation);
+ *   "no opinion" (undefined/null/false) and invalid shapes are logged and
+ *   the chain CONTINUES;
+ * - the first listener whose NORMALIZED decision is non-undefined wins.
+ *
+ * Listeners are resolved via the documented `EventsService.dispatch` (context
+ * filtering applied); a degraded/fake ctx resolves to zero listeners, i.e.
+ * "no opinions", matching the previous try/catch-around-serial degradation.
+ */
+export async function dispatchTuiDecision<T>(
+  ctx: Context,
+  name: string,
+  payload: Record<string, unknown>,
+  normalize: (result: unknown, warn: (what: string) => void) => T | undefined,
+): Promise<T | undefined> {
+  type Listener = (event: Record<string, unknown>) => unknown
+  let listeners: readonly Listener[]
+  try {
+    const events = (ctx as { events?: { dispatch?(type: string, args: unknown[]): unknown } }).events
+    const resolved = events?.dispatch?.('serial', [name, payload])
+    listeners = Array.isArray(resolved) ? (resolved as Listener[]) : []
+  } catch {
+    listeners = []
+  }
+  const log = (message: string, error?: unknown): void => {
+    try {
+      if (error === undefined) ctx.logger.warn(message)
+      else ctx.logger.warn(message, error)
+    } catch {
+      // Degraded ctx without a logger: warnings are best-effort.
+    }
+  }
+  for (const listener of listeners) {
+    let result: unknown
+    try {
+      result = await listener(payload)
+    } catch (error) {
+      log(`dsh-tui: ${name} listener failed; continuing with the next listener: %o`, error)
+      continue
+    }
+    const decision = normalize(result, what => log(`dsh-tui: ${name} listener returned ${what}; ignored`))
+    if (decision !== undefined) return decision
+  }
+  return undefined
+}
+
+/** Shared normalizer for the veto-only decisions (session-switch, compact):
+ *  `{ cancel: true, reason? }` or no opinion; everything else is ignored. */
+export function normalizeCancelDecision(
+  result: unknown,
+  warn: (what: string) => void,
+): { cancel: true; reason?: string } | undefined {
+  if (result === undefined || result === null || result === false) return undefined
+  if (typeof result === 'object' && (result as { cancel?: unknown }).cancel === true) {
+    const reason = (result as { reason?: unknown }).reason
+    return { cancel: true, ...(typeof reason === 'string' && reason !== '' ? { reason } : {}) }
+  }
+  warn('an unrecognized decision shape')
+  return undefined
+}
 
 /** Shared context every decision event carries. */
 export interface TuiDecisionContext {
