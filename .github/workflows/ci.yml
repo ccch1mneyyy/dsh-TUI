@@ -169,6 +169,9 @@ jobs:
       # leftArrow+ctrl 到达，isMod 跳词分支必须先于裸方向键分支；
       # 真实管线喂 ESC[1;5D/1;5C 移动光标插入标记字符后提交校验全文。
       - run: node scripts/verify-word-jump.mjs
+      # stdin 批量按键回归：同一读取内的文本、方向键、文本必须依次基于
+      # 前一事件的输入状态执行，不能因 React 批处理读取旧闭包而丢字符。
+      - run: node scripts/verify-batched-prompt-input.mjs
       # /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
       # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
       - run: node scripts/verify-resume-manage.mjs
