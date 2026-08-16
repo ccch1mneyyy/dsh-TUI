@@ -156,7 +156,7 @@ visual TUI alone does not describe the effective policy.
   answerer); `/permission` preset switching is provided by the dsh-base
   `permission-presets` plugin and works in profile compositions — the bare
   `cordis.yml` mounts only the approval service, not `permission-presets`.
-- `/vim`, `/connect`, `/hooks`, and `/memory` are compatibility placeholders,
+- `/vim`, `/connect`, and `/hooks` are compatibility placeholders,
   not evidence that those DSH capabilities are mounted.
 - There is no automated full-flow suite that requires real model credentials;
   CI uses headless rendering and fake services, while live model integration

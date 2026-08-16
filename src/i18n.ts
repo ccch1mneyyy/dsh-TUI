@@ -226,8 +226,6 @@ const dict = {
   'permissions-path-hint': { zh: '模型工具相对路径均解析自该目录；跨目录访问由 fs-policy 拦截。', en: 'Relative paths of model tools resolve from this directory; cross-directory access is blocked by fs-policy.' },
   'hooks-not-mounted': { zh: 'DSH hooks（dsh-hooks-claude / dsh-hooks-codex）未在本 leaf 挂载。', en: 'DSH hooks (dsh-hooks-claude / dsh-hooks-codex) are not mounted in this leaf.' },
   'hooks-mount-hint': { zh: '需要时可在 cordis.yml 挂载对应 hooks 插件。', en: 'Mount the matching hooks plugin in cordis.yml when needed.' },
-  'memory-none': { zh: 'DSH 暂无持久记忆服务。', en: 'DSH has no persistent memory service yet.' },
-  'memory-hint': { zh: '长期约定可写入 AGENTS.md（工作区上下文）或技能（~/.dsh/skills）。', en: 'Long-term conventions can go into AGENTS.md (workspace context) or skills (~/.dsh/skills).' },
   'update-unavailable': { zh: '当前运行方式不支持自动更新（需经 dsh --profile 启动），请在终端执行 dsh plugin --profile <name> update @deepseek-harness-tui/dsh-tui', en: 'Automatic update is unavailable in this launch mode (needs dsh --profile). Run dsh plugin --profile <name> update @deepseek-harness-tui/dsh-tui in a terminal.' },
   'update-working': { zh: '当前回合仍在运行，请等待完成后再更新 TUI。', en: 'The current turn is still running. Wait for it to finish before updating the TUI.' },
   'update-starting': { zh: '正在更新 @deepseek-harness-tui/dsh-tui，完成后会自动重启并恢复当前会话……', en: 'Updating @deepseek-harness-tui/dsh-tui. The TUI will restart and resume this session when finished…' },
@@ -605,7 +603,6 @@ const dict = {
   'cmd-desc-add-dir': { zh: '查看文件系统策略范围' },
   'cmd-desc-hooks': { zh: '查看 hooks 状态' },
   'cmd-desc-mcp': { zh: '查看 MCP 状态' },
-  'cmd-desc-memory': { zh: '查看记忆状态' },
   'cmd-desc-skills': { zh: '列出所有可用技能' },
   'cmd-desc-update': { zh: '更新 dsh-tui 并重启' },
   // Built-in skills

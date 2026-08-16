@@ -221,7 +221,7 @@ transcript。
 | 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`） |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
-| 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |
+| 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp` |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |
 | 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit` |
 | 注册表 | `/plan`、`/goal`，以及当前 DSH 组合注册的其他命令 |
@@ -245,5 +245,5 @@ transcript。
 - Skill 命令只发送激活提示；实际 skill 通过 DSH skill 注册表加载。包内
   `skills/` 会在插件启动时自动注册，也可用项目或用户目录中的同名 skill 覆盖。
 
-`/vim`、`/connect`、`/hooks` 与 `/memory` 当前是兼容占位命令；当 DSH 组合没有
+`/vim`、`/connect`、`/hooks` 当前是兼容占位命令；当 DSH 组合没有
 对应能力时会给出明确说明，而不是静默执行。

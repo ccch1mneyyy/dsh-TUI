@@ -252,7 +252,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Sessions | `/new`, `/resume`, `/rename`, `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`) |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
-| Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
+| Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
 | Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` |
 | Registry | `/plan`, `/goal`, and any other command registered by the DSH composition |
@@ -281,6 +281,6 @@ Additional forms:
   the DSH skill registry. Packaged `skills/` register at startup and may be
   overridden by same-name project or user skills.
 
-`/vim`, `/connect`, `/hooks`, and `/memory` are currently compatibility
+`/vim`, `/connect`, and `/hooks` are currently compatibility
 placeholders. When the DSH composition has no matching capability, each
 command explains that explicitly rather than silently doing nothing.

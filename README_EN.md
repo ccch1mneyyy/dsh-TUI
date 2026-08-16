@@ -147,7 +147,7 @@ so keep using `Ctrl`.
 | Session | `/new` new session · `/resume` session browser (search, preview, cross-project, sub-agent runs folded) · `/rename` rename session · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline |
 | Status | `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md |
 | Model | `/model` picker · `/thinking` thinking display · `/tokens` token details · `/theme` theme picker · `/lang` zh/en UI switch |
-| Accounts/Policy | `/provider` add a model provider · `/login` credential status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` · `/memory` |
+| Accounts/Policy | `/provider` add a model provider · `/login` credential status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/audit` code audit · `/bug` bug report · `/review` code review · `/practice` coding practice · `/pr_comments` PR comments · `/release-notes` release notes · `/vuln-check` vulnerability check |
 | Other | `/agents` subagent list · `/update` auto-update and restart · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` |
 | Registry | `/plan` `/goal` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
@@ -257,7 +257,7 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   an approval bar. `/permission` preset switching comes from dsh-base's
   `permission-presets` plugin and is available in the profile composition by default;
   the bare `cordis.yml` composition does not mount that plugin (no `/permission` command).
-- `/vim` `/connect` `/hooks` `/memory` are CC-named placeholders: the corresponding
+- `/vim` `/connect` `/hooks` are CC-named placeholders: the corresponding
   capabilities have no equivalent mechanism on the DSH side, and the commands give an
   explicit explanation rather than staying silent.
 

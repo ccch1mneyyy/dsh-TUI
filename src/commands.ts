@@ -95,7 +95,6 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'add-dir', description: 'Show the filesystem policy scope' },
   { name: 'hooks', description: 'Show hooks status' },
   { name: 'mcp', description: 'Show MCP status' },
-  { name: 'memory', description: 'Show memory status' },
   { name: 'skills', description: 'List available skills' },
   { name: 'update', description: 'Update dsh-tui and restart' },
   // Built-in skills (CC's skill commands, driven through DSH skills)
