@@ -48,6 +48,7 @@ export function MessageList({
   selectedId,
   onToggleRow,
   model,
+  diffLayout = 'auto',
   showAll,
   onToggleAll,
   onLoadOlder,
@@ -66,6 +67,8 @@ export function MessageList({
   selectedId: number | null
   onToggleRow: (rowId: number) => void
   model: string
+  /** Edit/Write diff presentation preference (forwarded to tool cards). */
+  diffLayout?: 'auto' | 'split' | 'unified'
   showAll: boolean
   onToggleAll: () => void
   /** Restore folded-away older rows from the session log (CC-style "load
@@ -316,6 +319,7 @@ export function MessageList({
               isExpanded={expandedRows.has(row.id)}
               expanded={expanded}
               model={model}
+              diffLayout={diffLayout}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
               toolName={tool?.name}
@@ -363,6 +367,8 @@ type MemoRowProps = {
   isExpanded: boolean
   expanded: boolean
   model: string
+  /** Edit/Write diff presentation preference (forwarded to tool cards). */
+  diffLayout: 'auto' | 'split' | 'unified'
   background: 'messageActionsBackground' | 'userMessageBackgroundHover' | undefined
   // ToolRow, flattened: the channel writes status/result fields in place,
   // so passing the object itself would make mutations invisible to memo.
@@ -402,6 +408,7 @@ function TranscriptRow({
   isExpanded,
   expanded,
   model,
+  diffLayout,
   background,
   toolCallId,
   toolName,
@@ -538,6 +545,7 @@ function TranscriptRow({
             isSelected={isSelected}
             isExpanded={isExpanded}
             footnote={toolFootnote}
+            diffLayout={diffLayout}
           />
         </Box>
       )

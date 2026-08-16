@@ -73,6 +73,10 @@ export interface Config {
    *  persisted in `~/.dsh-tui/agent-preset.json` wins, then the roster
    *  default (`standard`). */
   preset?: string
+  /** Edit/Write diff presentation: `auto` picks side-by-side on wide
+   *  terminals (≥110 cols) and unified below; `split`/`unified` force one
+   *  layout. Editable live from the `/settings` screen. */
+  diffLayout?: 'auto' | 'split' | 'unified'
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
@@ -97,6 +101,7 @@ export const Config: Schema<Config> = Schema.object({
   fullscreen: Schema.boolean().default(false),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
+  diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
   modes: Schema.array(
     Schema.object({
       id: Schema.string(),

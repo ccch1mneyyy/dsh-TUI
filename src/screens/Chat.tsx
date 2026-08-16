@@ -1944,6 +1944,7 @@ export function Chat({
           selectedId={selectionActive ? selectedId : null}
           onToggleRow={toggleRowExpanded}
           model={channel.model}
+          diffLayout={channel.diffLayout}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
           onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}

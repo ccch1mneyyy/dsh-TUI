@@ -50,7 +50,7 @@ const editTool = {
 }
 
 /** Boot one headless terminal at the given width and render the card. */
-async function renderAt(cols, tool) {
+async function renderAt(cols, tool, diffLayout = 'auto') {
   const rows = 30
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
@@ -60,7 +60,7 @@ async function renderAt(cols, tool) {
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, addMargin: false, verbose: false }),
+    React.createElement(AssistantToolUseMessage, { tool, addMargin: false, verbose: false, diffLayout }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // cli-highlight loads lazily on first use; give it room to land so the
@@ -126,6 +126,16 @@ async function renderAt(cols, tool) {
   const helloRow = lines.findIndex(line => line.includes('hello'))
   check('新建文件的行落在右栏', helloRow >= 0 && lines[helloRow]!.includes('│') && lines[helloRow]!.indexOf('hello') > lines[helloRow]!.indexOf('│'))
   check('新建文件左栏留空', helloRow >= 0 && lines[helloRow]!.slice(5, lines[helloRow]!.indexOf('│')).trim() !== 'hello')
+}
+
+// ---- 5. diffLayout preference overrides the width heuristic
+{
+  const { screen } = await renderAt(120, editTool, 'unified')
+  check('unified 偏好下 120 列也是统一式', screen().includes('- def shout(text):'))
+}
+{
+  const { screen } = await renderAt(90, editTool, 'split')
+  check('split 偏好下 90 列也强制双栏', screen().includes('│'))
 }
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)

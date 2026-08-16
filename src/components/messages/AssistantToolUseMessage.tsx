@@ -26,6 +26,8 @@ type Props = {
    * is worth less than mentioning it once.
    */
   footnote?: string
+  /** Diff presentation preference; `auto` picks by terminal width. */
+  diffLayout?: 'auto' | 'split' | 'unified'
 }
 
 /** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
@@ -240,6 +242,7 @@ export function AssistantToolUseMessage({
   isSelected = false,
   isExpanded = false,
   footnote,
+  diffLayout = 'auto',
 }: Props): React.ReactNode {
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
@@ -271,7 +274,8 @@ export function AssistantToolUseMessage({
   // source line per terminal row (truncate) keeps the panes row-aligned,
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
-  const useSplitDiff = !isError && view?.card === 'diff' && columns >= SPLIT_DIFF_MIN_COLS
+  const useSplitDiff = !isError && view?.card === 'diff' &&
+    (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
   let body: BodyLine[] = []
   if (isError) {
     if (tool.errorText) body = [{ text: tool.errorText, tone: 'error' }]

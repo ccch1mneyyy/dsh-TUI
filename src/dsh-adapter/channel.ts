@@ -345,6 +345,8 @@ export interface Channel {
   readonly workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
   readonly activityFrames: string | undefined
+  /** Edit/Write diff presentation preference (`auto`/`split`/`unified`). */
+  readonly diffLayout: 'auto' | 'split' | 'unified'
   /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -659,6 +661,8 @@ export interface ChannelState {
   workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset (see the public Channel type). */
   activityFrames: string | undefined
+  /** Diff presentation preference (see the public Channel type). */
+  diffLayout: 'auto' | 'split' | 'unified'
   /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -1062,6 +1066,9 @@ export function createChannel(
     /** Indicator preset for the working-activity line (`claude`/`moon`/
      *  `comet`/`dots`/… or `random`); default `claude`. */
     activityFrames?: string
+    /** Edit/Write diff presentation; default `auto` (side-by-side ≥110
+     *  columns, unified below). */
+    diffLayout?: 'auto' | 'split' | 'unified'
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
@@ -1493,6 +1500,7 @@ export function createChannel(
     modeIndex: 0,
     workingActivity: undefined,
     activityFrames: options.activityFrames,
+    diffLayout: options.diffLayout ?? 'auto',
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,
