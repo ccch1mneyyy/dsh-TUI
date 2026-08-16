@@ -1,9 +1,10 @@
 import React from 'react'
-import { Box, Text } from '../../ui.js'
+import { Box, Text, useTerminalSize } from '../../ui.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js'
 import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../dsh-adapter/channel.js'
 import { ToolUseLoader } from '../ToolUseLoader.js'
+import { SplitDiffView } from '../SplitDiffView.js'
 import { formatDuration } from '../../cc/format.js'
 
 type Props = {
@@ -64,6 +65,9 @@ const TEXT_BODY_MAX_LINES = 3
 /** Diff bodies cap at the upstream chat row's 8 (dsh-client-ui-tool's
  *  CHAT_DIFF_MAX_LINES) — denser information than log output. */
 const DIFF_BODY_MAX_LINES = 8
+/** Minimum terminal width for the two-pane diff: below this the panes
+ *  would squeeze under ~50 columns each and the unified view reads better. */
+const SPLIT_DIFF_MIN_COLS = 110
 
 const GUTTER_FIRST = '  ⎿  '
 const GUTTER_REST = '     '
@@ -263,10 +267,15 @@ export function AssistantToolUseMessage({
 
   // Body lines: the structured view first, raw result text as the fallback
   // (tools without a presenter, or a folded row awaiting loadOlder).
+  // Wide terminals render diffs as a two-pane side-by-side instead: one
+  // source line per terminal row (truncate) keeps the panes row-aligned,
+  // which the flat add/del line model cannot express.
+  const { columns } = useTerminalSize()
+  const useSplitDiff = !isError && view?.card === 'diff' && columns >= SPLIT_DIFF_MIN_COLS
   let body: BodyLine[] = []
   if (isError) {
     if (tool.errorText) body = [{ text: tool.errorText, tone: 'error' }]
-  } else {
+  } else if (!useSplitDiff) {
     if (view !== undefined) body = viewLines(view)
     if (body.length === 0 && result) {
       body = result.trimEnd().split('\n').map(dim)
@@ -311,32 +320,54 @@ export function AssistantToolUseMessage({
             </Box>
           )}
         </Box>
-        {rendered.map((line, index) => (
-          <Box key={index} flexDirection="row">
+        {useSplitDiff && view?.card === 'diff' ? (
+          <Box flexDirection="row">
             <Box width={5} flexShrink={0}>
-              <Text dimColor>{index === 0 ? GUTTER_FIRST : GUTTER_REST}</Text>
+              <Text dimColor>{GUTTER_FIRST}</Text>
             </Box>
-            <Box flexGrow={1}>
-              <Text
-                color={
-                  line.tone === 'add'
-                    ? 'diffAddedWord'
-                    : line.tone === 'del'
-                      ? 'diffRemovedWord'
-                      : line.tone === 'error'
-                        ? 'error'
-                        : line.tone === 'hint'
-                          ? 'subtle'
-                          : undefined
-                }
-                dimColor={line.tone === 'dim'}
-                wrap="wrap"
-              >
-                {line.text === '' ? ' ' : line.text}
-              </Text>
-            </Box>
+            <SplitDiffView
+              diffs={view.diffs}
+              width={columns - 6}
+              maxRows={DIFF_BODY_MAX_LINES}
+              verbose={verbose}
+            />
           </Box>
-        ))}
+        ) : (
+          rendered.map((line, index) => (
+            <Box key={index} flexDirection="row">
+              <Box width={5} flexShrink={0}>
+                <Text dimColor>{index === 0 ? GUTTER_FIRST : GUTTER_REST}</Text>
+              </Box>
+              <Box flexGrow={1}>
+                <Text
+                  color={
+                    line.tone === 'add'
+                      ? 'diffAddedWord'
+                      : line.tone === 'del'
+                        ? 'diffRemovedWord'
+                        : line.tone === 'error'
+                          ? 'error'
+                          : line.tone === 'hint'
+                            ? 'subtle'
+                            : undefined
+                  }
+                  dimColor={line.tone === 'dim'}
+                  wrap="wrap"
+                >
+                  {line.text === '' ? ' ' : line.text}
+                </Text>
+              </Box>
+            </Box>
+          ))
+        )}
+        {useSplitDiff && footnote !== undefined && (
+          <Box flexDirection="row">
+            <Box width={5} flexShrink={0}>
+              <Text dimColor>{GUTTER_REST}</Text>
+            </Box>
+            <Text color="subtle">{footnote}</Text>
+          </Box>
+        )}
       </Box>
     </Box>
   )
