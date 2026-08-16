@@ -53,6 +53,8 @@ import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
 import type { TuiCommandTreeRuntime } from './command-trees.js'
+import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-sections.js'
+import type { SettingsHost } from './settingsEditor.js'
 
 type ChannelImageBlock = Extract<ContentBlock, { type: 'image' }>
 type ChannelImageMediaType = ChannelImageBlock['attachment']['mediaType']
@@ -484,6 +486,18 @@ export interface Channel {
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */
   providerSetup(): ProviderSetupHost | undefined
+  /**
+   * Runtime capabilities for the `/settings` screen, over the settings /
+   * credentials seams; undefined when the composition lacks the settings
+   * service (the screen then renders plugin sections as unavailable and
+   * namespaces read-only).
+   */
+  settingsHost(): SettingsHost | undefined
+  /** Plugin-declared settings sections from the `tuiSettingsSections` seam
+   *  (empty when the seam or every provider is absent). */
+  settingsSections(): readonly TuiSettingsSection[]
+  /** Subscribe to settings-section register/unregister events. */
+  subscribeSettingsSections(listener: () => void): () => void
   /** Top-level entries of the session cwd for `@` file completion. */
   listFiles(): Promise<readonly string[]>
   /** Every session the persistence backend stores, classified and unfiltered
@@ -699,6 +713,12 @@ export interface ChannelState {
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
   /** `/provider` wizard capabilities (see the public Channel type). */
   providerSetup(): ProviderSetupHost | undefined
+  /** `/settings` screen capabilities (see the public Channel type). */
+  settingsHost(): SettingsHost | undefined
+  /** Plugin-declared settings sections (see the public Channel type). */
+  settingsSections(): readonly TuiSettingsSection[]
+  /** Subscribe to settings-section register/unregister events. */
+  subscribeSettingsSections(listener: () => void): () => void
   listFiles(): Promise<readonly string[]>
   listSessions(): Promise<readonly SessionSummary[]>
   /** Trailing exchanges of a persisted session (see the public Channel type). */
@@ -1037,6 +1057,13 @@ export function createChannel(
   // the degraded-boot warning for profile launches.
   const workspaceService = ctx.get('tuiWorkspaces') ?? createLocalWorkspaceRuntime()
   const commandTrees = ctx.get('tuiCommandTrees') as TuiCommandTreeRuntime | undefined
+  // The `/settings` screen reads its host on EVERY render, so the host must
+  // be a stable object: a fresh literal per call would re-fire the screen's
+  // host-keyed effects endlessly (render → new host → effect → state →
+  // render). The underlying services are fixed for the channel's lifetime,
+  // so compute once and cache.
+  let settingsHostCache: SettingsHost | undefined
+  let settingsHostResolved = false
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
   const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
@@ -2369,6 +2396,75 @@ export function createChannel(
         | undefined
       if (!credentials) return undefined
       return credentials.describe(ref)
+    },
+    settingsHost(): SettingsHost | undefined {
+      if (settingsHostResolved) return settingsHostCache
+      settingsHostResolved = true
+      // The `/settings` screen's runtime surface, over the same dsh-base
+      // seams the `/provider` wizard uses: settings (namespace descriptors +
+      // revision-fenced mutate) and credentials (secret writes). Structurally
+      // typed like the other optional seams in this file.
+      const settings = ctx.get('settings') as
+        | {
+          describe(options?: { redactSecrets?: boolean }): readonly {
+            ns: string
+            revision: number
+            applies: 'live' | 'restart'
+            value: unknown
+            user?: unknown
+          }[]
+          mutate(
+            ns: string,
+            ops: readonly (
+              | { op: 'set'; path: readonly string[]; value: unknown }
+              | { op: 'unset'; path: readonly string[] }
+            )[],
+            expectedRevision?: number,
+          ): Promise<void>
+        }
+        | undefined
+      const credentials = ctx.get('credentials') as
+        | {
+          resolve(ref: string): Promise<{ value: string } | undefined>
+          set(ref: string, value: string): Promise<void>
+        }
+        | undefined
+      if (!settings) return undefined
+      settingsHostCache = {
+        listNamespaces() {
+          // redactSecrets: the screen never renders a secret literal — secret
+          // fields are write-only controls over the credentials seam.
+          return settings.describe({ redactSecrets: true }).map(descriptor => ({
+            ns: descriptor.ns,
+            revision: descriptor.revision,
+            applies: descriptor.applies,
+            value: descriptor.value,
+            user: descriptor.user,
+          }))
+        },
+        write(ns, ops, expectedRevision) {
+          return settings.mutate(ns, ops, expectedRevision)
+        },
+        async credentialConfigured(ref) {
+          // The environment shadows the store (providerSetup.envShadows), so
+          // an env-provided key counts as configured.
+          if (process.env[ref] !== undefined) return true
+          return credentials !== undefined && (await credentials.resolve(ref)) !== undefined
+        },
+        async writeCredential(ref, value) {
+          if (!credentials) throw new Error('credentials service unavailable')
+          await credentials.set(ref, value)
+        },
+      }
+      return settingsHostCache
+    },
+    settingsSections(): readonly TuiSettingsSection[] {
+      const sections = ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined
+      return sections?.list() ?? []
+    },
+    subscribeSettingsSections(listener: () => void): () => void {
+      const sections = ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined
+      return sections?.subscribe(listener) ?? (() => {})
     },
     providerSetup(): ProviderSetupHost | undefined {
       // The `/provider` wizard's runtime surface, over the dsh-base seams:

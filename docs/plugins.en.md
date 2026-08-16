@@ -202,7 +202,55 @@ Injected content enters every request's system prompt (counts toward
 context/tokens) and **affects KV-cache stability by default** — inject only when
 necessary, and keep the text fully stable.
 
-## Seam 6: Profile Composition (cordis.patch.yml)
+## Seam 6: Plugin Settings Sections (tuiSettingsSections)
+
+A plugin with a config namespace can declare an editable section on the
+`/settings` screen (issue #165). The contract is **declarative**: the plugin
+only describes WHICH fields are editable; rendering, staged editing,
+save/discard and revision-conflict retries are all owned by the TUI host.
+Storage, schema validation and layer resolution stay with the dsh settings
+service (the kernel) — the TUI only presents.
+
+```ts
+import type { TuiSettingsSection } from '@deepseek-harness-tui/dsh-tui/settings-sections'
+
+ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
+  const unregister = settingsCtx.tuiSettingsSections.register({
+    ns: 'my-plugin',            // same namespace as ctx.settings.register
+    title: 'My plugin',         // English title (also the fallback copy)
+    descriptions: { zh: '我的插件' },
+    fields: [
+      { path: ['enabled'], label: 'Enabled', kind: 'boolean' },
+      { path: ['limit'], label: 'Retry limit', kind: 'number', hint: 'Attempts before giving up' },
+      { path: ['mode'], label: 'Mode', kind: 'select', options: [
+        { value: 'fast', label: 'Fast' },
+        { value: 'safe', label: 'Safe' },
+      ] },
+      // Secret fields never ride the settings document — a blank draft writes
+      // nothing; a typed draft writes through the credentials seam.
+      { path: ['apiKey'], label: 'API key', kind: 'text', secret: { ref: 'MY_PLUGIN_API_KEY' } },
+    ],
+  } satisfies TuiSettingsSection)
+  ctx.effect(() => () => unregister())
+})
+```
+
+Semantics (aligned with the web front door's plugin settings cards):
+
+- Editing is **staged**: typing only changes a draft; `s` saves it as one
+  revision-fenced `settings.mutate` of path ops (a conflict retries once with
+  the fresh revision).
+- A field's "overridden" badge reads **presence in the user layer** (equal to
+  the default still counts); clearing a text field stages an `unset`, letting
+  the field re-inherit the composition layer.
+- `kind` currently supports `text` / `number` / `boolean` / `select`; deeply
+  nested structures (dict/array editors) are not supported yet — users can
+  still hand-edit `~/.dsh/settings.yaml`, and namespaces without a declared
+  section render read-only with that YAML hint.
+- When the namespace is not served (the plugin registered no settings
+  section), the section shows as unavailable rather than failing.
+
+## Seam 7: Profile Composition (cordis.patch.yml)
 
 Plugins declare the rows they insert/override in the profile through their own
 `cordis.patch.yml`:

@@ -188,6 +188,11 @@
     - id: dsh-tui-command-trees
       name: '@deepseek-harness-tui/dsh-tui/command-trees'
 
+    # Optional plugins declare editable settings sections here (issue #165);
+    # storage, validation and writes remain owned by the dsh settings service.
+    - id: dsh-tui-settings-sections
+      name: '@deepseek-harness-tui/dsh-tui/settings-sections'
+
     # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
     # TUI composes every session's model-facing world from. No `roots` here —
     # the dsh CLI's profile-boot overlays its shipped `config/agent-presets/`

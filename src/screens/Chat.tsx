@@ -29,6 +29,7 @@ import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
+import { Settings } from './Settings.js'
 import { WorkspacePicker } from '../components/WorkspacePicker.js'
 import { WorkspaceFlowPicker } from '../components/WorkspaceFlowPicker.js'
 import type { TuiWorkspaceCommandResult, TuiWorkspaceTarget } from '../workspaces.js'
@@ -214,6 +215,10 @@ export function Chat({
   /** `/resume` opens the session browser, a screen rather than a panel. It
    *  owns its own selection, filters and keyboard — Chat only opens it. */
   const [browserOpen, setBrowserOpen] = React.useState(false)
+  /** `/settings` opens the plugin settings screen (issue #165) — like the
+   *  browser, a screen rather than a panel: it owns its own focus, staged
+   *  drafts and keyboard; Chat only opens it. */
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [workspacePickerOpen, setWorkspacePickerOpen] = React.useState(false)
   const [workspaceTargets, setWorkspaceTargets] = React.useState<readonly TuiWorkspaceTarget[]>([])
   const [workspaceIndex, setWorkspaceIndex] = React.useState(0)
@@ -877,6 +882,13 @@ export function Chat({
         channel.pushLocal('/cost', lines)
         return true
       }
+      case 'settings': {
+        // Plugin settings screen (issue #165): opens immediately; the screen
+        // reads sections + namespaces from the channel itself.
+        setHelpOpen(false)
+        setSettingsOpen(true)
+        return true
+      }
       case 'config': {
         const userHome = process.env.USERPROFILE ?? ''
         const lines = [
@@ -1290,6 +1302,9 @@ export function Chat({
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
     if (browserOpen) return
+    // Same for the settings screen: plain letters (s save / d discard) and
+    // the field draft editor belong to it alone.
+    if (settingsOpen) return
     // The questionnaire / approval panel owns the keyboard while one is
     // pending (the panel's own useInput handles ↑/↓/Space/Tab/Enter/Esc;
     // the prompt input is unmounted, so nothing else should see these keys).
@@ -1774,6 +1789,14 @@ export function Chat({
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
     return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+  }
+
+  // The settings screen follows the browser's rule exactly: it REPLACES the
+  // conversation (an early return after every hook above has run), so there
+  // is no transcript underneath to be repainted or bled through.
+  if (settingsOpen) {
+    const screen = <Settings channel={channel} onClose={() => setSettingsOpen(false)} />
+    return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
   }
 
   /** Prompt input is inert while a modal dialog owns the keyboard. */

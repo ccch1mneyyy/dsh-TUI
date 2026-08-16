@@ -61,6 +61,9 @@ jobs:
       # 整个 0.6.x 才被发现——挂进来防再烂。
       - run: node --import tsx/esm scripts/repro-pill.tsx
       - run: node --import tsx/esm scripts/repro-ctrlc.tsx
+      # /settings 设置屏回归（issue #165）：开屏、staged 编辑、revision 栅栏
+      # 保存、密钥走 credentials、Esc 返回会话。
+      - run: node --import tsx/esm scripts/repro-settings.tsx
       - run: node --import tsx/esm scripts/repro-inline-scrollback.tsx
       - run: node --import tsx/esm scripts/repro-inline-thirdparty.tsx
 

@@ -69,6 +69,148 @@ if (commandModule.localizedDescription({
 i18nModule.setLang('en')
 await commandTreeCtx.fiber.dispose()
 
+// Settings-sections seam (issue #165): the registry validates + dedupes
+// namespaces, notifies subscribers on register/unregister, and the React-free
+// SettingsForm turns staged drafts into revision-fenced mutate ops.
+const settingsSectionsModule = await import('../src/settings-sections.js')
+const settingsEditorModule = await import('../src/dsh-adapter/settingsEditor.js')
+const settingsCtx = new Context()
+await settingsCtx.plugin(settingsSectionsModule.default).await()
+let sectionEvents = 0
+const unsubscribeSections = settingsCtx.tuiSettingsSections.subscribe(() => { sectionEvents += 1 })
+const demoSection = {
+  ns: 'demo-plugin',
+  title: 'Demo settings',
+  descriptions: { zh: '演示设置' },
+  fields: [
+    { path: ['enabled'], label: 'Enabled', kind: 'boolean' as const },
+    { path: ['limit'], label: 'Limit', kind: 'number' as const },
+    { path: ['endpoint'], label: 'Endpoint', kind: 'text' as const },
+    { path: ['apiKey'], label: 'API key', kind: 'text' as const, secret: { ref: 'DEMO_PLUGIN_API_KEY' } },
+  ],
+}
+const unregisterSection = settingsCtx.tuiSettingsSections.register(demoSection)
+if (settingsCtx.tuiSettingsSections.list().length !== 1
+  || settingsCtx.tuiSettingsSections.section('demo-plugin')?.title !== 'Demo settings') {
+  throw new Error('settings-sections smoke: registration/listing failed')
+}
+let duplicateThrew = false
+try {
+  settingsCtx.tuiSettingsSections.register(demoSection)
+} catch {
+  duplicateThrew = true
+}
+if (!duplicateThrew) throw new Error('settings-sections smoke: duplicate namespace accepted')
+if (sectionEvents !== 1) throw new Error('settings-sections smoke: subscribe did not fire on register')
+
+// The form: seed a namespace view, stage one edit per write kind, and save.
+// A concurrent writer bumps the revision between seed and save, so the first
+// mutate conflicts and the form retries with the fresh revision.
+const mutationLog: { ns: string; ops: unknown; expected: number | undefined }[] = []
+const credentialLog: { ref: string; value: string }[] = []
+let liveRevision = 7
+const settingsView = {
+  ns: 'demo-plugin',
+  revision: 7,
+  applies: 'live' as const,
+  value: { enabled: true, limit: 3, endpoint: 'https://api.example.com' },
+  user: { enabled: true },
+}
+const settingsHost = {
+  listNamespaces: () => [{ ...settingsView, revision: liveRevision }],
+  write: (ns: string, ops: readonly unknown[], expected?: number) => {
+    mutationLog.push({ ns, ops, expected })
+    if (expected !== liveRevision) {
+      const conflict = new Error('stale revision') as Error & { code: string }
+      conflict.code = 'SETTINGS_CONFLICT'
+      return Promise.reject(conflict)
+    }
+    return Promise.resolve()
+  },
+  credentialConfigured: () => Promise.resolve(false),
+  writeCredential: (ref: string, value: string) => {
+    credentialLog.push({ ref, value })
+    return Promise.resolve()
+  },
+}
+const form = new settingsEditorModule.SettingsForm(settingsHost, settingsView, demoSection.fields)
+if (!form.available || form.shell().dirty) throw new Error('settings-form smoke: initial shell wrong')
+if (form.field(demoSection.fields[0]!).text !== 'true' || !form.field(demoSection.fields[0]!).overridden) {
+  throw new Error('settings-form smoke: seeded field state wrong')
+}
+if (form.field(demoSection.fields[1]!).overridden) {
+  // limit is absent from the user layer: inherited, not overridden — override
+  // is marked by PRESENCE, not value.
+  throw new Error('settings-form smoke: inherited field marked overridden')
+}
+form.edit(demoSection.fields[0]!, 'false') // boolean toggle → set
+form.edit(demoSection.fields[1]!, 'not-a-number')
+if (!form.invalid) throw new Error('settings-form smoke: invalid number draft accepted')
+form.edit(demoSection.fields[1]!, '10') // number → set
+form.edit(demoSection.fields[2]!, '') // empty text → clear (unset)
+form.edit(demoSection.fields[3]!, 'sk-demo') // secret → credentials seam
+if (!form.shell().dirty || form.invalid) throw new Error('settings-form smoke: staged shell wrong')
+liveRevision = 8 // a concurrent write lands between seed and save
+if (await form.save() !== true) throw new Error('settings-form smoke: save with conflict retry failed')
+if (mutationLog.length !== 2
+  || mutationLog[0]?.expected !== 7
+  || mutationLog[1]?.expected !== 8) {
+  throw new Error('settings-form smoke: conflict retry did not re-fence the write')
+}
+const savedOps = mutationLog[1]?.ops as { op: string; path: readonly string[]; value?: unknown }[]
+if (savedOps.length !== 3
+  || savedOps[0]?.op !== 'set' || savedOps[0].value !== false
+  || savedOps[1]?.op !== 'set' || savedOps[1].value !== 10
+  || savedOps[2]?.op !== 'unset' || savedOps[2].path.join('.') !== 'endpoint') {
+  throw new Error('settings-form smoke: staged drafts translated to wrong ops')
+}
+if (credentialLog.length !== 1 || credentialLog[0]?.ref !== 'DEMO_PLUGIN_API_KEY' || credentialLog[0].value !== 'sk-demo') {
+  throw new Error('settings-form smoke: secret write did not go through credentials')
+}
+if (form.shell().dirty) throw new Error('settings-form smoke: drafts survived a successful save')
+
+// A blank secret draft writes nothing (the credential stays untouched).
+form.edit(demoSection.fields[3]!, '')
+if (await form.save() !== true || credentialLog.length !== 1 || mutationLog.length !== 2) {
+  throw new Error('settings-form smoke: blank secret draft wrote something')
+}
+
+// A draft typed WHILE a save is in flight must survive that save: only the
+// edits the in-flight save snapshotted get cleared. Model the flight with a
+// deferred write; edit field B mid-flight; resolving must not drop B's draft.
+let releaseFlight: (() => void) | undefined
+const flightHost = {
+  ...settingsHost,
+  write: () => new Promise<void>(resolve => { releaseFlight = resolve }),
+}
+const flightForm = new settingsEditorModule.SettingsForm(flightHost, settingsView, demoSection.fields)
+flightForm.edit(demoSection.fields[0]!, 'false')
+const flightSave = flightForm.save()
+if (!flightForm.shell().saving) throw new Error('settings-form smoke: saving flag not set during flight')
+flightForm.edit(demoSection.fields[1]!, '42') // typed mid-flight, NOT in the snapshot
+releaseFlight!()
+if (await flightSave !== true) throw new Error('settings-form smoke: deferred save failed')
+if (flightForm.field(demoSection.fields[1]!).text !== '42' || !flightForm.isStaged(demoSection.fields[1]!)) {
+  throw new Error('settings-form smoke: mid-flight draft was dropped by the save')
+}
+if (flightForm.isStaged(demoSection.fields[0]!)) {
+  throw new Error('settings-form smoke: saved edit survived as a staged draft')
+}
+if (!flightForm.shell().dirty) throw new Error('settings-form smoke: surviving draft should keep the form dirty')
+if (flightForm.saving) throw new Error('settings-form smoke: saving flag stuck after save')
+// A re-entrant save during a flight is refused instead of double-writing.
+const secondFlight = flightForm.save()
+const concurrent = flightForm.save()
+if (await concurrent !== false) throw new Error('settings-form smoke: concurrent save not refused')
+releaseFlight!()
+if (await secondFlight !== true) throw new Error('settings-form smoke: serialized save failed')
+unsubscribeSections()
+unregisterSection()
+if (settingsCtx.tuiSettingsSections.list().length !== 0) {
+  throw new Error('settings-sections smoke: disposer did not remove the section')
+}
+await settingsCtx.fiber.dispose()
+
 // Generic workspace seam: prove the TUI works with only its local fallback,
 // and that an anonymous provider can add URI/path/shell behavior without the
 // TUI knowing its protocol.

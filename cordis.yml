@@ -29,6 +29,11 @@
 - id: dsh-tui-command-trees
   name: '@deepseek-harness-tui/dsh-tui/command-trees'
 
+# Optional plugins declare editable settings sections here (issue #165);
+# storage, validation and writes remain owned by the dsh settings service.
+- id: dsh-tui-settings-sections
+  name: '@deepseek-harness-tui/dsh-tui/settings-sections'
+
 - id: dsh-tui
   name: '@deepseek-harness-tui/dsh-tui'
   inject: [agents, tuiWorkspaces]

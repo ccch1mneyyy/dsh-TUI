@@ -177,7 +177,48 @@ ctx.inject(['systemPrompt'], (promptCtx) => {
 注入的内容会进入每个请求的 system prompt（计入上下文/token），**默认影响
 KV 缓存稳定性**——非必要不要注入，注入也要保持文本完全稳定。
 
-## 接缝六：profile 组合（cordis.patch.yml）
+## 接缝六：插件设置区块（tuiSettingsSections）
+
+带配置命名空间的插件可以向 `/settings` 设置屏声明一个可编辑区块（issue #165）。
+契约是**声明式**的：插件只描述"哪些字段可编辑"，渲染、草稿编辑、保存/放弃、
+revision 冲突重试全部由 TUI 宿主负责；存储、schema 校验、分层解析仍在 dsh
+settings 服务（内核）侧——TUI 只做展示。
+
+```ts
+import type { TuiSettingsSection } from '@deepseek-harness-tui/dsh-tui/settings-sections'
+
+ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
+  const unregister = settingsCtx.tuiSettingsSections.register({
+    ns: 'my-plugin',            // 与 ctx.settings.register 的命名空间一致
+    title: 'My plugin',         // 英文标题（也是回退文案）
+    descriptions: { zh: '我的插件' },
+    fields: [
+      { path: ['enabled'], label: 'Enabled', kind: 'boolean' },
+      { path: ['limit'], label: 'Retry limit', kind: 'number', hint: 'Attempts before giving up' },
+      { path: ['mode'], label: 'Mode', kind: 'select', options: [
+        { value: 'fast', label: 'Fast' },
+        { value: 'safe', label: 'Safe' },
+      ] },
+      // 密钥字段：永不过 settings 文档——空白草稿不写入，输入了才走 credentials 接缝
+      { path: ['apiKey'], label: 'API key', kind: 'text', secret: { ref: 'MY_PLUGIN_API_KEY' } },
+    ],
+  } satisfies TuiSettingsSection)
+  ctx.effect(() => () => unregister())
+})
+```
+
+语义（与 web 前端的插件设置卡片一致）：
+
+- 编辑是**草稿式**的：用户打字只改草稿，按 `s` 保存才落成一次 revision 栅栏的
+  `settings.mutate` path ops（冲突自动用新 revision 重试一次）。
+- 字段的"已覆盖"标记按 **user 层存在性**判断（值等于默认也算覆盖）；清空文本
+  字段会在保存时生成 `unset`，让字段回退到组合层。
+- `kind` 目前支持 `text` / `number` / `boolean` / `select`；复杂嵌套结构（dict/
+  数组编辑器）暂不支持，用户仍可手工编辑 `~/.dsh/settings.yaml`——未声明区块的
+  命名空间在设置屏里就是只读 + YAML 提示。
+- 命名空间未注册（插件未挂载 settings section）时区块显示为不可用，不报错。
+
+## 接缝七：profile 组合（cordis.patch.yml）
 
 插件包通过自己的 `cordis.patch.yml` 声明要在 profile 里插入/覆盖的行：
 

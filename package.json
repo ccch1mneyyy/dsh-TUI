@@ -37,6 +37,10 @@
       "types": "./lib/types/command-trees.d.ts",
       "import": "./lib/types/command-trees.js"
     },
+    "./settings-sections": {
+      "types": "./lib/types/settings-sections.d.ts",
+      "import": "./lib/types/settings-sections.js"
+    },
     "./invariant": {
       "types": "./lib/types/dsh-adapter/invariant.d.ts",
       "default": "./lib/types/dsh-adapter/invariant.js"
