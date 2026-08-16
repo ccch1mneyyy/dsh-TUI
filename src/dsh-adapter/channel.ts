@@ -3884,6 +3884,25 @@ ${output}
       }),
     ]
   }
+  // Subagents inherit provider/model from AgentOptions, but resumed TUI
+  // agents can legitimately carry their route only in persisted request
+  // headers. Their child scopes do not share this channel's per-agent
+  // ModelSelectionRef, so fill an otherwise incomplete first request from
+  // the active route. Keep complete child-specific routes authoritative.
+  ctx.on('agent/request', async (_payload, next) => {
+    const resolved = await next()
+    if (
+      typeof resolved.provider === 'string' && resolved.provider.length > 0 &&
+      typeof resolved.model === 'string' && resolved.model.length > 0
+    ) {
+      return resolved
+    }
+    return {
+      ...resolved,
+      provider: state.provider,
+      model: state.model,
+    }
+  })
   bindAgent()
   // Cordis owns the Channel lifetime. Rebinding handles the common case;
   // this effect closes the final timer when the Channel's context unloads.
