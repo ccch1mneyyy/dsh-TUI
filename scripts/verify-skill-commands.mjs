@@ -291,27 +291,63 @@ await tick()
       descriptor.recordInput === false,
       `recordInput=${descriptor.recordInput}`,
     )
+
+    // Kernel gesture path: the agent's tool registry exposes `skill`, so
+    // dsh-tool-skill's pre-step boundary is mounted — the handler must
+    // re-submit the gesture as a plain user message (args riding along),
+    // not inject anything itself. submit() rides the async send chain.
+    const skillsService = {
+      snapshot: async () => ({ skills: catalog, complete: true }),
+      get: async skillName => catalog.find(skill => skill.name === skillName),
+    }
+    ctx.get = name => {
+      if (name === 'commands') return commandService
+      if (name === 'skills') return skillsService
+      if (name === 'tools') return { get: toolName => (toolName === 'skill' ? {} : undefined) }
+      return undefined
+    }
     agent.followups.length = 0
-    const outcome = await descriptor.handler({ agent, signal: undefined })
-    check('invocation reports success', outcome?.kind === 'success', JSON.stringify(outcome))
-    const injected = agent.followups[0]
-    check('invocation injects exactly one message', agent.followups.length === 1)
+    const outcome = await descriptor.handler({ agent, rawInput: ' 做年终总结', signal: undefined })
+    check('kernel path reports success', outcome?.kind === 'success', JSON.stringify(outcome))
+    await tick()
+    const gesture = agent.followups[0]
+    check('kernel path delivers exactly one message', agent.followups.length === 1)
     check(
-      'the injected message carries the rendered skill body',
+      'kernel path submits the gesture as a plain user message with args',
+      gesture?.source?.kind === 'user' && gesture.content?.[0]?.text === '/i-h 做年终总结',
+      JSON.stringify({ source: gesture?.source, text: gesture?.content?.[0]?.text }),
+    )
+
+    // Fallback path: no `skill` tool (e.g. the minimal preset) → the
+    // handler injects the rendered body directly, as before.
+    ctx.get = name => {
+      if (name === 'commands') return commandService
+      if (name === 'skills') return skillsService
+      return undefined
+    }
+    agent.followups.length = 0
+    const fallbackOutcome = await descriptor.handler({ agent, rawInput: '', signal: undefined })
+    check('fallback reports success', fallbackOutcome?.kind === 'success', JSON.stringify(fallbackOutcome))
+    const injected = agent.followups[0]
+    check('fallback injects exactly one message', agent.followups.length === 1)
+    check(
+      'fallback message carries the rendered skill body',
       typeof injected?.content?.[0]?.text === 'string' && injected.content[0].text.includes('HELP BODY'),
     )
     check(
-      'the injected message is marked as a user skill invocation',
+      'fallback message is marked as a user skill invocation',
       injected?.source?.kind === 'skill-invocation' && injected.source.name === 'i-h',
       JSON.stringify(injected?.source),
     )
   }
 
-  // A SKILL.md deleted between listing and Enter must report, not throw.
+  // A SKILL.md deleted between listing and Enter must report, not throw —
+  // on the fallback path (the kernel path leaves unknown names as ordinary
+  // prose, the boundary's own contract).
   const goneIndex = catalog.findIndex(skill => skill.name === 'i-h')
   const gone = catalog[goneIndex]
   catalog.splice(goneIndex, 1)
-  const missing = await registered.get('i-h').handler({ agent, signal: undefined })
+  const missing = await registered.get('i-h').handler({ agent, rawInput: '', signal: undefined })
   check('a vanished skill reports an error instead of throwing', missing?.kind === 'error', JSON.stringify(missing))
   catalog.splice(goneIndex, 0, gone)
 
