@@ -38,6 +38,7 @@ function makeStreams() {
 }
 
 const submitted = []
+const steered = []
 const channel = {
   mode: { id: 'default', plan: false },
   modeIndex: 0,
@@ -49,7 +50,7 @@ const channel = {
   working: false,
   notify() {},
   submit(text) { submitted.push(text) },
-  steer() {},
+  steer(text) { steered.push(text) },
   interruptAndDeliver() { return 0 },
   removePending() { return false },
   stageImage() {},
@@ -92,6 +93,21 @@ check(
   'batched Termy win32 IME records preserve every committed character',
   submitted.length === 2 && submitted[1] === '你好',
   JSON.stringify(submitted),
+)
+
+// Native Windows terminals encode printable keys as individual win32-input-
+// mode records. Under streaming output, one stdin read can contain several
+// records; each edit must compose before Enter steers the text (issue #219).
+channel.working = true
+stdin.write('\x1b[78;49;110;1;0;1_\x1b[80;25;112;1;0;1_\x1b[77;50;109;1;0;1_')
+await new Promise(resolve => setTimeout(resolve, 200))
+stdin.write('\r')
+await new Promise(resolve => setTimeout(resolve, 300))
+
+check(
+  'batched Windows input while streaming preserves npm before steer',
+  steered.length === 1 && steered[0] === 'npm',
+  JSON.stringify(steered),
 )
 
 instance.unmount()
