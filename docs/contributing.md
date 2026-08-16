@@ -105,11 +105,11 @@ Cordis config
   （verify:manifest-deps 门禁会校验）。仅测试/脚本使用的框架包
   （如 dsh-settings、dsh-tools、dsh-session-persistence-*）只需 dev 依赖，
   不要为它们声明 peer。`dsh-working-activity` 等非宿主包仍是 runtime
-  dependency。
-  已知例外：`@deepseek-ai/schemastery` 目前仍会被 `dsh-working-activity` 的
-  runtime dependency 带一份拷贝进 profile 并优先于回退树被解析——在它同样
-  peer 化之前，schemastery 不是宿主单实例（生产上未观察到症状，结构性
-  风险仍在）。
+  dependency。历史例外已消除：`dsh-working-activity@0.2.4` 及更早版本会经其
+  runtime dependency 把 `@deepseek-ai/schemastery`（连带 cosmokit）的真实拷贝
+  带进 profile；0.2.5 起已 peer 化（working-activity#2），profile 内不再
+  有任何框架包拷贝。保持依赖范围不低于 `^0.2.6`（0.2.6 另修复了 web 端
+  WorkingLine 在未打补丁宿主上的空值守卫，working-activity#5）。
 - 不要暴露、持久化或打印凭证。交互启动读取 `DEEPSEEK_API_KEY`；诊断可以
   报告是否已设置，但绝不能泄露完整值。
 
