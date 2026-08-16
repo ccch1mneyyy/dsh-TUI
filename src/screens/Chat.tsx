@@ -382,10 +382,17 @@ export function Chat({
   // Spinner timing refs, fed from channel state each render (the spinner
   // only mounts while working, so values are stable for the mount).
   const responseLengthRef = React.useRef(0)
+  const uploadTokensRef = React.useRef(0)
   const loadingStartTimeRef = React.useRef(0)
   const totalPausedMsRef = React.useRef(0)
   const pauseStartTimeRef = React.useRef<number | null>(null)
   responseLengthRef.current = channel.responseChars
+  // Most recent request's real upload (input + cache read/write occupy the
+  // wire exactly like the context window); 0 until the first usage event.
+  const lastUploadTokens = channel.lastUsage === undefined
+    ? 0
+    : channel.lastUsage.input + channel.lastUsage.cacheRead + channel.lastUsage.cacheWrite
+  uploadTokensRef.current = lastUploadTokens
   loadingStartTimeRef.current = channel.turnStart
   const thinkingStatus = useThinkingStatus(channel.spinnerMode === 'thinking')
 
@@ -1879,7 +1886,11 @@ export function Chat({
                   activityFrames={channel.activityFrames}
                   warnPct={activityWarnPct}
                   warnDanger={activityWarnPct !== undefined && activityWarnPct >= 95}
-                  suffix={` · ↓ ${channel.responseChars} tokens`}
+                  // Upload = real tokens of the last request; download =
+                  // the animated chars/4 estimate, matching the classic
+                  // spinner's counter (the suffix used raw chars before,
+                  // inflating the reading next to a real upload number).
+                  suffix={`${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens`}
                 />
               </Box>
             ) : (
@@ -1887,6 +1898,7 @@ export function Chat({
                 mode={channel.spinnerMode}
                 hasActiveTools={channel.activeToolCount > 0}
                 responseLengthRef={responseLengthRef}
+                uploadTokensRef={uploadTokensRef}
                 loadingStartTimeRef={loadingStartTimeRef}
                 totalPausedMsRef={totalPausedMsRef}
                 pauseStartTimeRef={pauseStartTimeRef}

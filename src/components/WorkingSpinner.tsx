@@ -18,6 +18,7 @@ export function WorkingSpinner({
   mode,
   hasActiveTools,
   responseLengthRef,
+  uploadTokensRef,
   loadingStartTimeRef,
   totalPausedMsRef,
   pauseStartTimeRef,
@@ -26,6 +27,8 @@ export function WorkingSpinner({
   mode: SpinnerMode
   hasActiveTools: boolean
   responseLengthRef: React.RefObject<number>
+  /** Most recent request's real upload tokens; 0 until the first usage event. */
+  uploadTokensRef: React.RefObject<number>
   loadingStartTimeRef: React.RefObject<number>
   totalPausedMsRef: React.RefObject<number>
   pauseStartTimeRef: React.RefObject<number | null>
@@ -44,6 +47,7 @@ export function WorkingSpinner({
         reducedMotion={false}
         hasActiveTools={hasActiveTools}
         responseLengthRef={responseLengthRef}
+        uploadTokensRef={uploadTokensRef}
         message={message}
         messageColor="claude"
         shimmerColor="claudeShimmer"

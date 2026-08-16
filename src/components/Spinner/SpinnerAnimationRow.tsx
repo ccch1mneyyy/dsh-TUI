@@ -29,6 +29,9 @@ export type SpinnerAnimationRowProps = {
   hasActiveTools: boolean
   /** Raw response length (chars) — feeds the animated token counter. */
   responseLengthRef: React.RefObject<number>
+  /** Most recent request's real upload tokens (input + cache read/write);
+   *  0 until the first usage event lands. */
+  uploadTokensRef: React.RefObject<number>
   /** Stable within a turn. */
   message: string
   messageColor: keyof Theme
@@ -55,6 +58,7 @@ export function SpinnerAnimationRow({
   reducedMotion,
   hasActiveTools,
   responseLengthRef,
+  uploadTokensRef,
   message,
   messageColor,
   shimmerColor,
@@ -132,8 +136,13 @@ export function SpinnerAnimationRow({
   const timerWidth = stringWidth(timerText)
 
   const tokenCount = formatNumber(leaderTokens)
-  const tokensText = `${figures.arrowDown} ${tokenCount} tokens`
-  const tokensWidth = stringWidth(tokensText)
+  const uploadTokens = uploadTokensRef.current
+  // Real upload tokens (last request's input + cache) ride beside the
+  // animated download estimate; both labeled once to keep the row short.
+  const tokensLabel = uploadTokens > 0
+    ? `↑ ${formatNumber(uploadTokens)} · ↓ ${tokenCount} tokens`
+    : `↓ ${tokenCount} tokens`
+  const tokensWidth = stringWidth(tokensLabel)
 
   // === Thinking text (may shrink to fit) ===
   let thinkingText =
@@ -165,7 +174,7 @@ export function SpinnerAnimationRow({
   const usedAfterTimer = usedAfterThinking + (showTimer ? timerWidth + sep : 0)
   const showTokens =
     wantsTimerAndTokens &&
-    leaderTokens > 0 &&
+    (leaderTokens > 0 || uploadTokens > 0) &&
     availableSpace > usedAfterTimer + tokensWidth
   const thinkingOnly =
     showThinking &&
@@ -206,7 +215,7 @@ export function SpinnerAnimationRow({
       ? [
           <Box flexDirection="row" key="tokens">
             <SpinnerModeGlyph mode={mode} />
-            <Text dimColor>{tokenCount} tokens</Text>
+            <Text dimColor>{tokensLabel}</Text>
           </Box>,
         ]
       : []),
