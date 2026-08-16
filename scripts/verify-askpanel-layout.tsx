@@ -8,6 +8,8 @@
  *   4. 终端 resize 风暴（放大后连续抖动缩小）
  * 运行：node --import tsx/esm scripts/verify-askpanel-layout.tsx
  */
+export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
+
 process.env.FORCE_COLOR = '3'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
@@ -45,7 +47,10 @@ const REQUIRED = [
 ]
 
 function makeHarness(cols: number, rows: number) {
-  const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
+  // scrollback 必须 >0：xterm/headless 6.x 在 scrollback=0 时对 CSI n S
+  // （全屏滚动清空，resize 全量重绘会用）会把同一行内容复制到整个视口，
+  // 是纯 harness 假象——真实终端与 scrollback>0 的重放均无此现象。
+  const term = new XTerm({ cols, rows, scrollback: 1000, allowProposedApi: true })
   class FakeStdout extends Writable {
     columns = cols
     rows = rows
@@ -58,12 +63,15 @@ function makeHarness(cols: number, rows: number) {
     ref() { return this }
     unref() { return this }
   }
-  const stdout = new FakeStdout()
+  const stdout = new FakeStdout() as FakeStdout & NodeJS.WriteStream
+  const stdin = new FakeStdin() as FakeStdin & NodeJS.ReadStream
   const screen = (): string => {
     const buf = term.buffer.active
-    return Array.from({ length: rows }, (_, y) => buf.getLine(y)?.translateToString(true) ?? '').join('\n')
+    // 有 scrollback 时 getLine(0) 指向滚动历史顶部，视口从 viewportY 开始。
+    const vy = buf.viewportY
+    return Array.from({ length: rows }, (_, y) => buf.getLine(vy + y)?.translateToString(true) ?? '').join('\n')
   }
-  return { term, stdout, FakeStdin, screen }
+  return { term, stdout, stdin, screen }
 }
 
 function makeChannel(transcriptRows: unknown[], listeners?: Set<() => void>) {
@@ -136,11 +144,11 @@ const check = (name: string, screenText: string) => {
 
 /** 场景 1+2：静态渲染（短/长高录）。 */
 for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] as const) {
-  const { stdout, FakeStdin, screen } = makeHarness(160, 50)
+  const { stdout, stdin, screen } = makeHarness(160, 50)
   const store = new QuestionStore()
   const app = await render(
-    React.createElement(Chat, { channel: makeChannel(rows as unknown[]), questionStore: store as never }),
-    { stdout, stdin: new FakeStdin(), stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+    React.createElement(Chat, { channel: makeChannel(rows as unknown[]), questionStore: store as never, onExit: () => {} }),
+    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
   )
   await sleep(600)
   void store.ask({ questions: [EXACT_QUESTION] } as never)
@@ -152,13 +160,15 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
 
 /** 场景 3：activity 持续 tick 下的差分重绘。 */
 {
-  const { stdout, FakeStdin, screen } = makeHarness(160, 45)
+  const { stdout, stdin, screen } = makeHarness(160, 45)
   const listeners = new Set<() => void>()
-  const channel = makeChannel(tallRows, listeners)
+  // 通道桩：字段在场景推进时被直接改写，类型上视为任意记录。
+  // oxlint-disable-next-line no-explicit-any -- test stub
+  const channel: any = makeChannel(tallRows, listeners)
   const store = new QuestionStore()
   const app = await render(
-    React.createElement(Chat, { channel, questionStore: store as never }),
-    { stdout, stdin: new FakeStdin(), stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+    React.createElement(Chat, { channel, questionStore: store as never, onExit: () => {} }),
+    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
   )
   await sleep(600)
   void store.ask({ questions: [EXACT_QUESTION] } as never)
@@ -185,11 +195,11 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
 
 /** 场景 4：resize 风暴（160x50 → 200x60 → 快速抖到 130x42）。 */
 {
-  const { term, stdout, FakeStdin, screen } = makeHarness(160, 50)
+  const { term, stdout, stdin, screen } = makeHarness(160, 50)
   const store = new QuestionStore()
   const app = await render(
-    React.createElement(Chat, { channel: makeChannel(tallRows), questionStore: store as never }),
-    { stdout, stdin: new FakeStdin(), stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+    React.createElement(Chat, { channel: makeChannel(tallRows), questionStore: store as never, onExit: () => {} }),
+    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
   )
   await sleep(600)
   void store.ask({ questions: [EXACT_QUESTION] } as never)

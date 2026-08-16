@@ -72,6 +72,13 @@ jobs:
       - run: node scripts/verify-scroll.mjs
       - run: node scripts/verify-shrink.mjs
 
+      # unseen-count 上报契约回归：同值重复上报会在密集流式 commit 下把
+      # setState 派发进 commit 内，嵌套更新计数连涨越过 React #185 上限
+      # （#146 之后残留的活链）。只在计数变化时才允许上报。
+      - run: node --import tsx/esm scripts/verify-unseen-report-once.tsx
+        env:
+          NODE_ENV: production
+
       # /model 切换 scrollback 重复沉积回归：瞬态面板（补全/picker）必须
       # 走零高度浮层，帧高不随开关涨落——否则帧顶行滚进 scrollback 后被
       # 关闭重绘二次写入，每切一次 /model 多一份启动画。
@@ -169,6 +176,9 @@ jobs:
       # leftArrow+ctrl 到达，isMod 跳词分支必须先于裸方向键分支；
       # 真实管线喂 ESC[1;5D/1;5C 移动光标插入标记字符后提交校验全文。
       - run: node scripts/verify-word-jump.mjs
+      # stdin 批量按键回归：同一读取内的文本、方向键、文本必须依次基于
+      # 前一事件的输入状态执行，不能因 React 批处理读取旧闭包而丢字符。
+      - run: node scripts/verify-batched-prompt-input.mjs
       # /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
       # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
       - run: node scripts/verify-resume-manage.mjs
@@ -287,10 +297,24 @@ jobs:
       # 旧宽度的测量结果，靠 flex 仲裁的行因此由两套布局拼成。
       - run: node --import tsx/esm scripts/verify-resize-reflow.tsx
 
+      # Ctrl+T 归属回归：启动上下文面板在屏时该键属于面板（它自己在屏幕上
+      # 印着「Ctrl+T 展开」），转录有行之后才归轨迹场景。两者永不同屏——
+      # 面板只在首条消息前出现，而那正是轨迹为空的窗口。
+      - run: node --import tsx/esm scripts/verify-ctrl-t-scope.tsx
+
+      # 收缩重绘回归：一个高于视口的帧在一帧内收起，屏幕必须等于同一短状态的
+      # 全新渲染——不留旧帧、表头不出现两次。shrink-frame 家族（#38/#39/#19/
+      # #10）里步长最大的一档，不经 Chat，直接对渲染器。
+      - run: node --import tsx/esm scripts/repro-collapse-shrink.tsx
+
       # /provider 向导回归：catalog/custom 两分支的 profile 形状、凭据回滚
       # （覆盖时恢复旧 key 而非误删）、env shadow 跳过、rc.6 兼容守卫、
       # hideCustomInput 逐题标记。
       - run: node scripts/verify-provider-wizard.mjs
+
+      # /login 凭据状态回归（issue #213）：只通过 credentials.describe()
+      # 展示 configured/source/writable，managed key 不得误报或泄露值。
+      - run: node --import tsx/esm scripts/verify-login-credentials.tsx
 
       # 提问面板 hideCustomInput 行为回归：纯选择题隐藏输入行且 Tab/打字
       # 不劫持焦点，纯文本题忽略 hide 标记，多选题默认行为不回退。

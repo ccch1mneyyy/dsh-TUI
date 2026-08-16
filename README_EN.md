@@ -225,7 +225,7 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
 - **TPS meter**: based on pi-tps-meter — a streaming 1/8-block gauge, historical
   min-max sparkline, and speed-based semantic colors (≥50 green / ≥20 yellow / <20 red).
 - **working-activity ecosystem**: the working-status line reuses the pure state machine of
-  [dsh-working-activity](https://github.com/ccch1mneyyy/dsh-working-activity),
+  [dsh-working-activity](https://github.com/ccch1mneyyy/working-activity),
   deriving it in-process from base session events without writing UI state into the shared log.
 - **Terminal paste**: in raw mode `Ctrl+V` is handled by the app and reads the system
   clipboard per platform — PowerShell `Get-Clipboard` on Windows, `osascript`/`pbpaste`

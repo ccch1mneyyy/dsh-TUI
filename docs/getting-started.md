@@ -180,6 +180,31 @@ pnpm smoke
 构建门禁。npm Git URL 安装通过 `prepare` 生成同一套运行时；发布 workflow
 也会在打包前显式执行干净编译和包面验证。
 
+真实测试当前源码时，首次使用或正式模型/密钥配置变化后运行：
+
+```sh
+pnpm dev:copy-config
+```
+
+以后每次修改源码后，一条命令构建、打包、隔离安装并启动：
+
+```sh
+pnpm dev
+```
+
+`pnpm dev:copy-config` 只复制 `~/.dsh/settings.yaml` 与
+`~/.dsh/.credentials.yaml`。Unix 上文件权限设为 `0600`；Windows 使用系统管理的
+文件 ACL。`pnpm dev` 使用独立的 `HOME`、`DSH_HOME` 和会话目录，不覆盖正式
+`~/.dsh/profiles/dsh-tui`、`~/.dsh-tui` 或正式会话。默认测试目录在 Unix 的
+`$XDG_CACHE_HOME/dsh-tui-dev`（未设置时为 `~/.cache/dsh-tui-dev`），Windows
+则为 `%LOCALAPPDATA%\dsh-tui-dev`；可通过 `DSH_TUI_DEV_ROOT` 覆盖。
+
+不启动 TUI、只验证构建、打包和安装链路时运行：
+
+```sh
+pnpm dev:test
+```
+
 CI 还会运行三条渲染回归：
 
 ```sh
@@ -188,9 +213,10 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-`pnpm tui` 调用的 `scripts/run.ts` 假设包位于 DeepSeek Harness monorepo 的
-`packages/*` 布局中，不是本独立仓库的通用启动命令。独立仓库做真实集成测试时，
-应安装到 profile 后在 TTY 中启动。
+`pnpm tui` 调用的 `scripts/run.ts` 直接组合 DeepSeek Harness 源码 patch，默认假设
+包位于 Harness monorepo 的 `packages/*` 布局中；独立 checkout 需要另外设置
+`DSH_TUI_DEV_WORKSPACE` 指向 Harness 根目录。只测试本仓库当前源码时，优先使用
+上述 `pnpm dev`，它会走与用户安装一致的 profile 路径。
 
 
 ## 常见问题

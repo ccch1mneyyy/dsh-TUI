@@ -62,6 +62,10 @@ export function HistorySearchDialog({
               <ListItem
                 key={historyEntryId(entry)}
                 isFocused={absoluteIndex === focusIndex}
+                // The SearchBox owns the native-cursor declaration while this
+                // dialog is open — result rows must not park the cursor on
+                // themselves, or IME preedit lands on a list row.
+                declareCursor={false}
                 description={formatRelativeAge(entry.ts)}
                 showScrollUp={absoluteIndex === start && start > 0}
                 showScrollDown={absoluteIndex === end - 1 && end < matches.length}
