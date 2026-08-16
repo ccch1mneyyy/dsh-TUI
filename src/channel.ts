@@ -236,6 +236,17 @@ export interface LoadedContext {
 }
 
 /**
+ * Outcome of `/rename` (see {@link Channel.renameSession}): an explicit user
+ * rename pins the session title in DSH — automatic title generation stops
+ * scheduling new revisions for this session.
+ */
+export type RenameOutcome =
+  | { readonly kind: 'renamed'; readonly title: string }
+  | { readonly kind: 'empty' }
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'failed' }
+
+/**
  * The public channel surface a screen renders: the full transcript and live
  * status snapshot (tokens, spinner, working activity, goals, todos, loaded
  * context) plus every action the TUI can take (submit, steer, cancel,
@@ -423,6 +434,10 @@ export interface Channel {
   /** Create `AGENTS.md` in the session cwd (DSH workspace-context file);
    *  returns the path, `'exists'` when already present, or null on failure. */
   initWorkspace(): string | null
+  /** Rename the current session (`/rename`): writes an explicit user title
+   *  through the DSH sessionTitle service, which pins it against automatic
+   *  regeneration. See {@link RenameOutcome} for the failure modes. */
+  renameSession(title: string): RenameOutcome
   /** Environment diagnostics for `/doctor`. */
   doctorInfo(): string[]
   /** Subagent rows for `/agents` (DSH subagent service; empty message when
@@ -562,6 +577,8 @@ export interface ChannelState {
   exportSession(): string | null
   /** Create `AGENTS.md` in the session cwd (CC's /init). */
   initWorkspace(): string | null
+  /** Rename the current session (CC's /rename; see the public Channel). */
+  renameSession(title: string): RenameOutcome
   /** Environment diagnostics (CC's /doctor). */
   doctorInfo(): string[]
   /** Subagent rows (CC's /agents). */
@@ -1837,10 +1854,11 @@ export function createChannel(
             updatedAt: lastUsed[header.id] ?? header.createdAt,
           }))
           .sort((a, b) => b.updatedAt - a.updatedAt)
-        // Title = the session's FIRST user message — the picker's most
-        // useful label. persistence.load reads the whole log (zstd), so
-        // only the newest sessions pay for it; older rows keep the
-        // basename fallback. A load failure degrades silently.
+        // Title = the latest explicit `session/title` event when one was
+        // logged (/rename pins it), else the session's FIRST user message —
+        // the picker's most useful label. persistence.load reads the whole
+        // log (zstd), so only the newest sessions pay for it; older rows
+        // keep the basename fallback. A load failure degrades silently.
         const empty = new Set<string>()
         await Promise.all(
           records.slice(0, SESSION_TITLE_DEPTH).map(async (record) => {
@@ -1854,6 +1872,14 @@ export function createChannel(
                 // top forever, one per dsh-cc launch).
                 empty.add(record.id)
                 return
+              }
+              const titled = events.findLast(event => event.type === 'session/title')
+              if (titled !== undefined) {
+                const titledData = titled.data as { title?: string }
+                if (typeof titledData.title === 'string' && titledData.title.length > 0) {
+                  record.title = shortenTitle(titledData.title)
+                  return
+                }
               }
               const data = first.data as { content?: readonly ContentBlock[] }
               const text = firstTextOf(data.content)
@@ -2049,6 +2075,34 @@ export function createChannel(
         return target
       } catch {
         return null
+      }
+    },
+    renameSession(title) {
+      const normalized = title.trim()
+      if (normalized.length === 0) return { kind: 'empty' }
+      // DSH's sessionTitle service (dsh-base) owns explicit renames: a
+      // `session/title` event with the `user` source pins the title so
+      // automatic generation stops scheduling revisions. Resolve through the
+      // agent's preset scope chain first (preset realms can hide the
+      // service), like `compact` does.
+      const service = serviceForAgent<{
+        rename(session: unknown, title: string): { title: string }
+      }>(ctx, agent, 'sessionTitle')
+      if (!service) return { kind: 'unavailable' }
+      try {
+        const snapshot = service.rename(agent.session, normalized)
+        // The appended session/title event flows through the live
+        // subscription and updates state.sessionTitle; the snapshot carries
+        // the normalized, byte-capped title for the confirmation toast.
+        return { kind: 'renamed', title: snapshot.title }
+      } catch (error) {
+        // SessionTitleInvalidError blames the input (only invisible
+        // characters survive normalization); liveness/disposal failures
+        // stay plain Errors and land in `failed`.
+        if ((error as { name?: string })?.name === 'SessionTitleInvalidError') {
+          return { kind: 'empty' }
+        }
+        return { kind: 'failed' }
       }
     },
     doctorInfo() {

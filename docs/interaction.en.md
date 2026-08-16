@@ -143,7 +143,7 @@ to inspect the complete surface available in the current composition.
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/export` |
+| Sessions | `/new`, `/resume`, `/clear`, `/compact`, `/rename`, `/export` |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/memory` |
@@ -156,6 +156,9 @@ Additional forms:
 - `/activity` opens the animation picker; `/activity frames <name>` selects
   directly; `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
+- `/rename <title>` sets an explicit title for the current session and pins it
+  (no more automatic generation); bare `/rename` shows the current title. The
+  `/resume` list prefers explicit titles.
 - `/theme <name>` and `/theme status` are described in the theme guide.
 - `/lang` toggles the interface language (see “Interface language”).
 - `/plan [off|message]` and `/goal ...` are handled by DSH command plugins and

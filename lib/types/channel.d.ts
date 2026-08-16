@@ -235,6 +235,21 @@ export interface LoadedContext {
     readonly tools: readonly LoadedContextTool[];
 }
 /**
+ * Outcome of `/rename` (see {@link Channel.renameSession}): an explicit user
+ * rename pins the session title in DSH — automatic title generation stops
+ * scheduling new revisions for this session.
+ */
+export type RenameOutcome = {
+    readonly kind: 'renamed';
+    readonly title: string;
+} | {
+    readonly kind: 'empty';
+} | {
+    readonly kind: 'unavailable';
+} | {
+    readonly kind: 'failed';
+};
+/**
  * The public channel surface a screen renders: the full transcript and live
  * status snapshot (tokens, spinner, working activity, goals, todos, loaded
  * context) plus every action the TUI can take (submit, steer, cancel,
@@ -431,6 +446,10 @@ export interface Channel {
     /** Create `AGENTS.md` in the session cwd (DSH workspace-context file);
      *  returns the path, `'exists'` when already present, or null on failure. */
     initWorkspace(): string | null;
+    /** Rename the current session (`/rename`): writes an explicit user title
+     *  through the DSH sessionTitle service, which pins it against automatic
+     *  regeneration. See {@link RenameOutcome} for the failure modes. */
+    renameSession(title: string): RenameOutcome;
     /** Environment diagnostics for `/doctor`. */
     doctorInfo(): string[];
     /** Subagent rows for `/agents` (DSH subagent service; empty message when
@@ -576,6 +595,8 @@ export interface ChannelState {
     exportSession(): string | null;
     /** Create `AGENTS.md` in the session cwd (CC's /init). */
     initWorkspace(): string | null;
+    /** Rename the current session (CC's /rename; see the public Channel). */
+    renameSession(title: string): RenameOutcome;
     /** Environment diagnostics (CC's /doctor). */
     doctorInfo(): string[];
     /** Subagent rows (CC's /agents). */

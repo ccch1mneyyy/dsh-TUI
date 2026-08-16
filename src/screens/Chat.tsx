@@ -524,6 +524,39 @@ export function Chat({
         })()
         return true
       }
+      case 'rename': {
+        // `/rename <title>` writes an explicit user title through DSH's
+        // sessionTitle service (pins it — no further automatic revisions);
+        // bare `/rename` shows the current title and the usage hint. The
+        // title is free text, so the WHOLE raw input is the argument.
+        setHelpOpen(false)
+        const title = rawInput.trim()
+        if (title === '') {
+          channel.pushLocal('/rename', [
+            channel.sessionTitle
+              ? t('rename-current', { title: channel.sessionTitle })
+              : t('rename-current-none'),
+            t('rename-hint'),
+          ])
+          return true
+        }
+        const outcome = channel.renameSession(title)
+        switch (outcome.kind) {
+          case 'renamed':
+            channel.notify(t('rename-renamed', { title: outcome.title }), { color: 'success' })
+            break
+          case 'empty':
+            channel.notify(t('rename-empty'), { color: 'error' })
+            break
+          case 'unavailable':
+            channel.notify(t('rename-unavailable'), { color: 'warning' })
+            break
+          case 'failed':
+            channel.notify(t('rename-failed'), { color: 'error' })
+            break
+        }
+        return true
+      }
       case 'exit':
         onExit()
         return true

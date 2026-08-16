@@ -133,7 +133,7 @@ transcript。
 
 | 分组 | 命令 |
 | --- | --- |
-| 会话 | `/new`、`/resume`、`/clear`、`/compact`、`/export` |
+| 会话 | `/new`、`/resume`、`/clear`、`/compact`、`/rename`、`/export` |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
 | 模型与显示 | `/model`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
 | 账号与策略 | `/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/memory` |
@@ -146,6 +146,8 @@ transcript。
 - `/activity` 打开动画选择器；`/activity frames <name>` 直接设置；
   `/activity status` 查看状态。
 - `/preset <id>` 与 `/preset status` 见配置文档。
+- `/rename <标题>` 为当前会话设置显式标题并固定（不再自动生成），`/rename`
+  查看当前标题；`/resume` 列表会优先显示显式标题。
 - `/theme <name>` 与 `/theme status` 见主题文档。
 - `/lang` 切换中英界面语言（见「界面语言」）。
 - `/plan [off|message]` 与 `/goal ...` 由 DSH 命令插件处理并写入会话事件。

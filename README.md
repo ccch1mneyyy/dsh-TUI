@@ -118,7 +118,7 @@ Windows 也可用仓库里的 `dsh-cc.cmd`（等价，且 `--resume` 恢复上�
 
 | 分组 | 命令 |
 |---|---|
-| 会话 | `/new` 新会话 · `/resume` 恢复 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown |
+| 会话 | `/new` 新会话 · `/resume` 恢复 · `/clear` 清屏 · `/compact` 压缩 · `/rename` 重命名 · `/export` 导出 Markdown |
 | 状态 | `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
 | 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 · `/lang` 中英界面切换 |
 | 账号/策略 | `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` · `/memory` |
@@ -184,7 +184,8 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
   速度语义色（≥50 绿 / ≥20 黄 / <20 红）。
 - **working-activity 生态**：工作状态行消费
   [dsh-working-activity](https://github.com/ccch1mneyyy/dsh-working-activity)
-- **会话恢复**：`/resume` 列表标题 = 会话第一条 user 消息（最新 20 个会话），
+- **会话恢复**：`/resume` 列表标题 = `/rename` 设定的显式标题，否则为会话
+  第一条 user 消息（最新 20 个会话），
   8 行滚动窗口；**按最近使用排序**（发消息/恢复/切换都会把该会话提到最前，
   记录在 `~/.dsh-cc/last-used.json`，缺失时退回按创建时间）；Enter **立即切换**
   到该会话并回放历史。启动时恢复同链路：`dsh --profile cc-tui -c`（读

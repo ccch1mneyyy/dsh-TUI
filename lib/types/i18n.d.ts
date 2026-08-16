@@ -439,6 +439,34 @@ declare const dict: {
         readonly zh: "标题   {{title}}";
         readonly en: "Title   {{title}}";
     };
+    readonly 'rename-current': {
+        readonly zh: "当前标题  {{title}}";
+        readonly en: "Current title  {{title}}";
+    };
+    readonly 'rename-current-none': {
+        readonly zh: "（尚无标题）";
+        readonly en: "(no title yet)";
+    };
+    readonly 'rename-hint': {
+        readonly zh: "重命名    /rename <新标题>（固定后不再自动生成）";
+        readonly en: "Rename      /rename <new title> (pins the title — no more automatic generation)";
+    };
+    readonly 'rename-renamed': {
+        readonly zh: "会话已重命名：{{title}}";
+        readonly en: "Session renamed: {{title}}";
+    };
+    readonly 'rename-empty': {
+        readonly zh: "标题不能为空";
+        readonly en: "Title must contain visible characters";
+    };
+    readonly 'rename-unavailable': {
+        readonly zh: "重命名不可用——当前组合未挂载 sessionTitle 服务";
+        readonly en: "Rename unavailable — the sessionTitle service is not mounted in this composition";
+    };
+    readonly 'rename-failed': {
+        readonly zh: "重命名失败";
+        readonly en: "Rename failed";
+    };
     readonly 'cost-cache-hit-rate': {
         readonly zh: "缓存命中率 {{rate}}% · 缓存 {{read}} 读 / {{write}} 写";
         readonly en: "Cache hit rate {{rate}}% · cache {{read}} read / {{write}} write";
