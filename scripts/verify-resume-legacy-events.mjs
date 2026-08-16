@@ -102,7 +102,9 @@ assert.equal(loaded.events[0].type, 'activity/status')
 // 3. The shared store was never rewritten.
 assert.equal(Buffer.compare(readFileSync(legacyFile), bytesBefore), 0, 'log bytes untouched')
 assert.equal(statSync(legacyFile).mode & 0o777, modeBefore, 'log mode untouched')
-assert.equal(modeBefore, 0o600, 'fixture really exercised the 0600 contract')
+if (process.platform !== 'win32') {
+  assert.equal(modeBefore, 0o600, 'fixture really exercised the 0600 contract')
+}
 
 // 4. Fail-closed preserved: the non-whitelisted unknown still rejects.
 await assert.rejects(

@@ -39,9 +39,9 @@ export type Props = {
   readonly color?: keyof Theme | Color
 
   /**
-   * Same as `color`, but for background. Must be a theme key.
+   * Same as `color`, but for background.
    */
-  readonly backgroundColor?: keyof Theme
+  readonly backgroundColor?: keyof Theme | Color
 
   /**
    * Dim the color using the theme's inactive color.
@@ -110,9 +110,7 @@ export default function ThemedText({
       : dimColor
         ? (theme.inactive as Color)
         : resolveColor(color, theme)
-  const resolvedBackgroundColor = backgroundColor
-    ? (theme[backgroundColor] as Color)
-    : undefined
+  const resolvedBackgroundColor = resolveColor(backgroundColor, theme)
 
   return (
     <Text
