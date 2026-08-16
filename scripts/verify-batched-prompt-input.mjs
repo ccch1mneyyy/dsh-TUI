@@ -80,6 +80,20 @@ check(
   JSON.stringify(submitted),
 )
 
+// Termy 1.4.1 batches win32-input-mode records before writing to its PTY.
+// Two IME commits in one read must compose instead of both reading the empty
+// render closure and leaving only the final character (issue #215).
+stdin.write('\x1b[65;30;20320;1;0;1_\x1b[65;30;22909;1;0;1_')
+await new Promise(resolve => setTimeout(resolve, 200))
+stdin.write('\r')
+await new Promise(resolve => setTimeout(resolve, 300))
+
+check(
+  'batched Termy win32 IME records preserve every committed character',
+  submitted.length === 2 && submitted[1] === '你好',
+  JSON.stringify(submitted),
+)
+
 instance.unmount()
 
 if (failed > 0) {
