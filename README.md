@@ -159,7 +159,8 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 
 ## 配置与扩展
 
-- **Agent preset**：四种官方 Agent 模式（`standard` / `code` / `minimal` / `cordis`），
+- **Agent preset**：四种官方 Agent 模式（`standard` / `code` / `minimal` / `cordis`）和
+  TUI 随包提供的“梁神模式”（`liangshen`），
   `/preset` 切换；已产生对话的会话不可切换，空白会话立即生效。默认 preset 持久化
   在 `~/.dsh-tui/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-tui/model.json`。
   详见[配置参考](docs/configuration.md#agent-preset)。

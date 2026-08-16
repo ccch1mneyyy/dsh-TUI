@@ -9,7 +9,8 @@ const input = await new Promise((resolve, reject) => {
 })
 
 const reports = JSON.parse(input)
-const report = reports[0]
+// npm 10 emits an array while npm 11 emits an object keyed by package name.
+const report = Array.isArray(reports) ? reports[0] : Object.values(reports)[0]
 if (report === undefined || !Array.isArray(report.files)) {
   throw new Error('npm pack did not return a package file list')
 }
@@ -39,6 +40,14 @@ collectExports(manifest.exports)
 const missing = [...targets].filter(target => !packed.has(target))
 if (missing.length > 0) {
   throw new Error(`package exports missing from tarball: ${missing.join(', ')}`)
+}
+for (const presetFile of [
+  'presets/liangshen/agent.cordis.yml',
+  'presets/liangshen/preset.yml',
+  'presets/liangshen/.dsh-tui-managed.json',
+  'presets/liangshen/tool-bootstrap.mjs',
+]) {
+  if (!packed.has(presetFile)) throw new Error(`packaged preset file missing from tarball: ${presetFile}`)
 }
 if ([...packed].some(path => path.startsWith('src/'))) {
   throw new Error('npm package unexpectedly contains TypeScript sources')

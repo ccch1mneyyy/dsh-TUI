@@ -80,7 +80,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'agents', description: 'Show subagents of this session' },
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
-  { name: 'preset', description: 'Switch the agent preset (standard/code/minimal/cordis)' },
+  { name: 'preset', description: 'Switch the agent preset (including Liangshen mode)' },
   { name: 'theme', description: 'Switch the color theme (auto, built-in or custom)' },
   { name: 'lang', description: 'Switch the UI language (en / zh)' },
   { name: 'model', description: 'Show the active model' },
