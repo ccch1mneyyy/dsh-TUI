@@ -440,6 +440,7 @@ const dict = {
   'skills-loading-subtitle': { zh: '正在查询技能注册表…', en: 'Querying the skill registry…' },
   'skills-empty': { zh: '当前会话没有可用技能', en: 'No skills available in this session' },
   'skills-load-failed': { zh: '技能列表加载失败', en: 'Failed to load the skill list' },
+  'plugin-scene-crashed': { zh: '插件场景「{{id}}」渲染崩溃：{{err}}（已自动关闭）', en: 'Plugin scene "{{id}}" crashed while rendering: {{err}} (closed)' },
   'skills-source-bundled': { zh: '内置', en: 'built-in' },
   'skills-source-user': { zh: '用户', en: 'user' },
   'skills-source-project': { zh: '项目', en: 'project' },

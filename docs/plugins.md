@@ -359,6 +359,9 @@ TUI 的 reconciler 是 **React 19**，场景组件运行在宿主的 React 实�
   log-only 铁律。
 - 每一帧的重渲染成本由场景自己兜着：高频动画用 `ui.useAnimationFrame`，
   别在渲染路径里做同步 I/O。
+- **渲染期异常有边界兜底**：场景组件 render/生命周期里抛错会被
+  `PluginSceneBoundary` 接住——转录里报一条错误、场景自动关闭，不会拖垮整个
+  TUI。但 boundary 管不到 effect 与异步回调里的异常，那些仍是场景自己的责任。
 
 ## 命名与发布规范
 

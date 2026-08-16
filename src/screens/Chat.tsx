@@ -29,6 +29,7 @@ import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
+import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
 import { Settings } from './Settings.js'
@@ -1823,14 +1824,27 @@ export function Chat({
   // across renders and its hook state survives re-renders; it receives the
   // TUI's own React + ui kit because a plugin importing its own React copy
   // would die on the first hook call under this reconciler.
+  // The scene is third-party code, so it renders inside a boundary: a render
+  // crash reports to the transcript and closes the scene instead of taking
+  // the whole TUI down through ink's app-level boundary.
   const pluginScene = channel.pluginScene
   if (pluginScene !== undefined) {
-    const node = React.createElement(pluginScene.component, {
-      React,
-      ui: tuiKit,
-      channel,
-      close: () => channel.closePluginScene(),
-    })
+    const node = (
+      <PluginSceneBoundary
+        id={pluginScene.id}
+        onError={(id, error) => {
+          channel.notify(t('plugin-scene-crashed', { id, err: error.message }), { color: 'error' })
+          channel.closePluginScene()
+        }}
+      >
+        {React.createElement(pluginScene.component, {
+          React,
+          ui: tuiKit,
+          channel,
+          close: () => channel.closePluginScene(),
+        })}
+      </PluginSceneBoundary>
+    )
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }
 

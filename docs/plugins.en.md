@@ -414,6 +414,11 @@ React instance:
 - Per-frame render cost is the scene's own budget: use
   `ui.useAnimationFrame` for motion, and keep synchronous I/O out of the
   render path.
+- **Render-time exceptions are bounded**: an error thrown from the scene
+  component's render/lifecycle is caught by `PluginSceneBoundary` — the
+  transcript gets an error line, the scene closes itself, and the TUI keeps
+  running. Errors inside effects and async callbacks are beyond the
+  boundary's reach and remain the scene's own responsibility.
 
 ## Naming and Publishing Conventions
 
