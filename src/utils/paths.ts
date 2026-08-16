@@ -42,7 +42,10 @@ export function migrateLegacyDataDir(
   target: string = DATA_DIR,
 ): boolean {
   if (!existsSync(legacy) || existsSync(target)) return false
-  cpSync(legacy, target, { recursive: true })
+  // `filter` forces the JS copy path: the native cpSync fast path fails with
+  // EIO (or crashes) on Windows when the destination lives under a home
+  // directory whose name contains non-ASCII characters (e.g. `C:\Users\米`).
+  cpSync(legacy, target, { recursive: true, filter: () => true })
   return true
 }
 

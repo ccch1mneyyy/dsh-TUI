@@ -87,7 +87,10 @@ export function ensurePackagedPresets(options: PackagedPresetOptions = {}): Pack
     const target = join(targetRoot, id)
     if (!existsSync(target)) {
       mkdirSync(targetRoot, { recursive: true })
-      cpSync(source, target, { recursive: true, force: false, errorOnExist: true })
+      // `filter` forces the JS copy path (see src/utils/paths.ts): the native
+      // cpSync fast path fails with EIO or crashes under a non-ASCII home
+      // directory such as `C:\Users\米`.
+      cpSync(source, target, { recursive: true, force: false, errorOnExist: true, filter: () => true })
       results.push({ id, status: 'installed' })
       continue
     }
@@ -105,7 +108,7 @@ export function ensurePackagedPresets(options: PackagedPresetOptions = {}): Pack
     const suffix = `${process.pid}-${randomUUID()}`
     const staged = join(targetRoot, `.${id}.staged-${suffix}`)
     const backup = join(targetRoot, `.${id}.backup-${suffix}`)
-    cpSync(source, staged, { recursive: true, force: false, errorOnExist: true })
+    cpSync(source, staged, { recursive: true, force: false, errorOnExist: true, filter: () => true })
     try {
       renameSync(target, backup)
       renameSync(staged, target)
