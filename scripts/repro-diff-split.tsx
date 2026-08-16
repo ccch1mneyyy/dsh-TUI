@@ -16,12 +16,14 @@ process.env.FORCE_COLOR = '3'
 // module import resolves the startup lang (env > persisted > locale).
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }] = await Promise.all([
+const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
+  import('../src/cc/cliHighlight.js'),
+  import('../src/components/SplitDiffView.js'),
 ])
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -79,7 +81,7 @@ async function renderAt(cols, tool, diffLayout = 'auto') {
 {
   const { lines, screen, bgAt, fgAt } = await renderAt(120, editTool)
   const s = screen()
-  check('宽屏不出现统一式 - /+ 行', !s.includes('- def shout') && !s.includes('+ def shout'))
+  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith(' ⎿ - ') || line.startsWith(' ⎿ + ')))
   const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
   check('改动对在同行双栏呈现', pairRow >= 0)
   check('双栏以 │ 分隔', pairRow >= 0 && lines[pairRow]!.includes('│'))
@@ -141,6 +143,62 @@ async function renderAt(cols, tool, diffLayout = 'auto') {
 {
   const { screen } = await renderAt(90, editTool, 'split')
   check('split 偏好下 90 列也强制双栏', screen().includes('│'))
+}
+
+// ---- 6. issue #250 regression assertions
+{
+  // P1-1: 256-color SGR (tmux / FORCE_COLOR=2) must parse, not drop.
+  const runs256 = parseAnsiRuns('\x1b[38;5;147mdef\x1b[39m')
+  check('256 色 SGR 解析出 ansi256 run', runs256.some(run => run.color === 'ansi256(147)' && run.text === 'def'))
+
+  // P2-5: every documented color form produces a styling function.
+  for (const token of ['#abc', '#AABBCCDD', 'rgb( 1, 2, 3 )', 'ansi256(123)']) {
+    const styled = chalkFromToken(token)('x')
+    check(`颜色格式 ${token} 产出 SGR`, styled.includes('\x1b[') && styled !== 'x', JSON.stringify(styled))
+  }
+
+  // P2-4: unequal replacement block pairs via ci-LCS, not index zip.
+  const lcsTool = {
+    ...editTool,
+    callId: 'c3',
+    callView: {
+      card: 'diff',
+      title: 'Edit /tmp/m.py',
+      diffs: [{ path: '/tmp/m.py', oldText: 'foo\nbar', newText: 'insert\nFOO\nbar' }],
+    },
+  }
+  const { lines: lcsLines } = await renderAt(120, lcsTool)
+  const insertRow = lcsLines.findIndex(line => line.includes('insert'))
+  const pairRow = lcsLines.findIndex(line => line.includes('foo') && line.includes('FOO'))
+  check('不等长块：insert 为独立新增行', insertRow >= 0 && !lcsLines[insertRow]!.includes('foo'))
+  check('不等长块：foo ↔ FOO 成对', pairRow >= 0 && pairRow > insertRow)
+
+  // P2-7: multi-line string keeps the lexer state on later lines.
+  const mlTool = {
+    ...editTool,
+    callId: 'c4',
+    callView: {
+      card: 'diff',
+      title: 'Edit /tmp/s.py',
+      diffs: [{ path: '/tmp/s.py', oldText: null, newText: 'x = """hello\nworld\nend"""' }],
+    },
+  }
+  const { lines: mlLines, fgAt: mlFg } = await renderAt(120, mlTool)
+  const worldRow = mlLines.findIndex(line => line.includes('world'))
+  const worldX = worldRow >= 0 ? mlLines[worldRow]!.indexOf('world') : -1
+  check('多行字符串后续行带字符串色', worldX > 0 && mlFg(worldX, worldRow) === 0x9fbf8f, `fg=${worldX > 0 ? mlFg(worldX, worldRow).toString(16) : 'n/a'}`)
+
+  // P1-2: the syntax cache keys on the theme signature — a palette change
+  // must not serve stale colors.
+  const hl = await getCliHighlightPromise()
+  const chDark = { keyword: chalkFromToken('#8FA8E8') }
+  const chLight = { keyword: chalkFromToken('#4A63A8') }
+  const darkRuns = highlightLines('def f():', 'py', hl, chDark, 'sig-dark')
+  const lightRuns = highlightLines('def f():', 'py', hl, chLight, 'sig-light')
+  const darkColor = darkRuns?.[0]?.find(run => run.text === 'def')?.color
+  const lightColor = lightRuns?.[0]?.find(run => run.text === 'def')?.color
+  check('主题签名不同缓存不串色', darkColor !== undefined && lightColor !== undefined && darkColor !== lightColor,
+    `dark=${darkColor} light=${lightColor}`)
 }
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)

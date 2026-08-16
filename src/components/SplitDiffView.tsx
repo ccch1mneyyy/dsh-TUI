@@ -16,13 +16,16 @@ import { useTheme } from './design-system/ThemeProvider.js'
  * jsdiff: unchanged lines render on both panes, del-only rows fill the left
  * (old) pane, add-only rows fill the right (new) pane, and a del+add pair
  * adjacent in the diff becomes a changed-line pair with word-level
- * highlights. Row backgrounds use the dimmed palette, changed words the
- * bright word palette — same six tokens the unified view already consumes.
+ * highlights. Unequal replacement blocks pair through a case-insensitive
+ * LCS so an inserted line above an edited one cannot misalign the pair.
  *
- * On top of the diff semantics, code is syntax-highlighted with
- * cli-highlight (language from the file extension): syntax colors come from
- * the theme's syntax* tokens, so user themes (`~/.dsh-tui/themes/*.json`)
- * restyle both the diff furniture and the code. Changed words always win
+ * ToolFileDiff carries no file offsets, so the view shows a status gutter
+ * (- / + / space) instead of line numbers — a made-up number is worse than
+ * none (issue #250, P2-3).
+ *
+ * Code is syntax-highlighted with cli-highlight over the WHOLE hunk text
+ * (never per line — multi-line comments and strings need the lexer state),
+ * with colors from the theme's syntax* tokens. Changed words always win
  * over syntax colors — diff semantics outrank decoration.
  *
  * One source line = one terminal row (truncate, never wrap): the two panes
@@ -39,11 +42,17 @@ interface Segment {
   readonly color?: string
 }
 
-/** One aligned row across the two panes. */
+/** One aligned row across the two panes (text only — styling happens at
+ *  render time over the visible slice). */
 interface DiffRow {
-  readonly old?: { readonly lineNo: number; readonly segments: readonly Segment[] }
-  readonly new?: { readonly lineNo: number; readonly segments: readonly Segment[] }
   readonly kind: 'context' | 'del' | 'add' | 'change'
+  /** Which ToolFileDiff this row belongs to (syntax text lookup). */
+  readonly fileIndex: number
+  /** Line index inside the file's old/new text (syntax run lookup). */
+  readonly oldIndex?: number
+  readonly newIndex?: number
+  readonly oldWords?: readonly Segment[]
+  readonly newWords?: readonly Segment[]
 }
 
 /** Replace tabs so width math and alignment hold (pi convention). */
@@ -51,7 +60,9 @@ const expandTabs = (text: string): string => text.replaceAll('\t', '   ')
 
 // --- syntax highlighting ----------------------------------------------------
 
-/** highlight.js token classes → theme syntax tokens. */
+/** highlight.js token classes → theme syntax tokens. `default` catches
+ *  every unmapped class so cli-highlight's own yellow never leaks through
+ *  (issue #250, P2-6). */
 const SYNTAX_CLASS_TO_TOKEN: Record<string, string> = {
   keyword: 'syntaxKeyword',
   built_in: 'syntaxKeyword',
@@ -63,25 +74,40 @@ const SYNTAX_CLASS_TO_TOKEN: Record<string, string> = {
   number: 'syntaxNumber',
   title: 'syntaxFunction',
   'title.function_': 'syntaxFunction',
+  function: 'syntaxFunction',
   'title.class_': 'syntaxType',
   type: 'syntaxType',
   class: 'syntaxType',
+  tag: 'syntaxType',
+  name: 'syntaxType',
   attr: 'syntaxVariable',
   attribute: 'syntaxVariable',
   variable: 'syntaxVariable',
   'template-variable': 'syntaxVariable',
+  params: 'syntaxVariable',
   operator: 'syntaxOperator',
   punctuation: 'syntaxPunctuation',
+  meta: 'syntaxPunctuation',
   symbol: 'syntaxConstant',
   regexp: 'syntaxConstant',
+  default: 'syntaxVariable',
 }
 
-/** chalk style for one raw theme value (#hex / rgb(r,g,b) / ansi:name). */
-function chalkFromToken(token: string): (text: string) => string {
-  let match = /^#[0-9a-fA-F]{6}$/.exec(token)
-  if (match !== null) return chalk.hex(token)
-  match = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(token)
+/** chalk style for one raw theme value. Accepts every form the theme
+ *  loader documents: #rgb, #rrggbb, #rrggbbaa (alpha stripped), rgb() with
+ *  or without spaces, ansi256(n), ansi:name (issue #250, P2-5). */
+export function chalkFromToken(token: string): (text: string) => string {
+  let match = /^#([0-9a-fA-F]{3})$/.exec(token)
+  if (match !== null) {
+    const [r, g, b] = match[1]!.split('').map(c => parseInt(c + c, 16))
+    return chalk.rgb(r!, g!, b!)
+  }
+  match = /^#([0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?$/.exec(token)
+  if (match !== null) return chalk.hex(`#${match[1]}`)
+  match = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(token)
   if (match !== null) return chalk.rgb(Number(match[1]), Number(match[2]), Number(match[3]))
+  match = /^ansi256\((\d+)\)$/.exec(token)
+  if (match !== null) return chalk.ansi256(Number(match[1]))
   match = /^ansi:(\w+)$/.exec(token)
   if (match !== null) {
     const name = match[1] === 'blackBright' ? 'gray' : match[1]
@@ -99,22 +125,27 @@ const ANSI16: Record<number, string> = {
   94: 'rgb(0,0,255)', 95: 'rgb(255,0,255)', 96: 'rgb(0,255,255)', 97: 'rgb(255,255,255)',
 }
 
-/** Parse a cli-highlight ANSI line into colored runs (truecolor + 16-color). */
-function parseAnsiRuns(line: string): { text: string; color?: string }[] {
+/** Parse a cli-highlight ANSI string into colored runs, preserving open
+ *  spans across embedded newlines (multi-line strings/comments). Handles
+ *  truecolor 38;2, 256-color 38;5 (tmux / FORCE_COLOR=2, issue #250 P1-1),
+ *  and single-code 16-color SGR. */
+export function parseAnsiRuns(text: string): { text: string; color?: string }[] {
   const runs: { text: string; color?: string }[] = []
   let color: string | undefined
-  let rest = line
+  let rest = text
   // eslint-disable-next-line no-control-regex -- parsing SGR is the point
-  const sgr = /\[([0-9;]+)m/
+  const sgr = /\x1b\[([0-9;]+)m/
   while (rest.length > 0) {
     const match = sgr.exec(rest)
-    const text = match === null ? rest : rest.slice(0, match.index)
-    if (text !== '') runs.push(color === undefined ? { text } : { text, color })
+    const chunk = match === null ? rest : rest.slice(0, match.index)
+    if (chunk !== '') runs.push(color === undefined ? { text: chunk } : { text: chunk, color })
     if (match === null) break
     const codes = match[1]!.split(';').map(Number)
     if (codes.includes(0) || codes.includes(39)) color = undefined
     else if (codes[0] === 38 && codes[1] === 2 && codes.length >= 5) {
       color = `rgb(${codes[2]},${codes[3]},${codes[4]})`
+    } else if (codes[0] === 38 && codes[1] === 5 && codes.length >= 3) {
+      color = `ansi256(${codes[2]})`
     } else if (codes.length === 1 && ANSI16[codes[0]!] !== undefined) {
       color = ANSI16[codes[0]!]
     }
@@ -123,30 +154,48 @@ function parseAnsiRuns(line: string): { text: string; color?: string }[] {
   return runs
 }
 
-/** Small per-language memo: syntax runs for one source line. */
-const syntaxCache = new Map<string, readonly { text: string; color?: string }[]>()
-const SYNTAX_CACHE_MAX = 500
+/** Split flat runs into per-line run arrays at embedded newlines. */
+function splitRunsToLines(runs: readonly { text: string; color?: string }[]): { text: string; color?: string }[][] {
+  const lines: { text: string; color?: string }[][] = [[]]
+  for (const run of runs) {
+    const parts = run.text.split('\n')
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) lines.push([])
+      if (parts[i] !== '') {
+        lines[lines.length - 1]!.push(run.color === undefined ? { text: parts[i]! } : { text: parts[i]!, color: run.color })
+      }
+    }
+  }
+  return lines
+}
 
-function syntaxRuns(
+/** Whole-hunk syntax runs per line, cached per (theme signature + language
+ *  + text): one entry survives any amount of card re-rendering, and the
+ *  palette change invalidates it (issue #250, P1-2 + P2-8). */
+const syntaxCache = new Map<string, readonly { text: string; color?: string }[][]>()
+const SYNTAX_CACHE_MAX = 40
+
+export function highlightLines(
   text: string,
   language: string | undefined,
   hl: CliHighlight | null,
   chTheme: Record<string, (text: string) => string> | undefined,
-): readonly { text: string; color?: string }[] | undefined {
+  themeSig: string,
+): readonly { text: string; color?: string }[][] | undefined {
   if (hl === null || chTheme === undefined || language === undefined) return undefined
-  if (!hl.supportsLanguage(language)) return undefined
-  const key = `${language}${text}`
+  if (text === '' || !hl.supportsLanguage(language)) return undefined
+  const key = `${themeSig}${language}${text}`
   const cached = syntaxCache.get(key)
   if (cached !== undefined) return cached
-  let runs: readonly { text: string; color?: string }[]
+  let lines: readonly { text: string; color?: string }[][]
   try {
-    runs = parseAnsiRuns(hl.highlight(text, { language, theme: chTheme }))
+    lines = splitRunsToLines(parseAnsiRuns(hl.highlight(text, { language, theme: chTheme })))
   } catch {
-    runs = [{ text }]
+    return undefined
   }
   if (syntaxCache.size >= SYNTAX_CACHE_MAX) syntaxCache.clear()
-  syntaxCache.set(key, runs)
-  return runs
+  syntaxCache.set(key, lines)
+  return lines
 }
 
 /**
@@ -169,11 +218,13 @@ function mergeRuns(
     const sLen = s.text.length - sOff
     const wLen = w.text.length - wOff
     const take = Math.min(sLen, wLen)
-    out.push({
-      text: w.text.slice(wOff, wOff + take),
-      changed: w.changed,
-      color: w.changed ? undefined : s.color,
-    })
+    if (take > 0) {
+      out.push({
+        text: w.text.slice(wOff, wOff + take),
+        changed: w.changed,
+        color: w.changed ? undefined : s.color,
+      })
+    }
     sOff += take
     wOff += take
     if (sOff >= s.text.length) { si++; sOff = 0 }
@@ -208,31 +259,50 @@ const plainSegments = (line: string): readonly Segment[] => [{ text: line, chang
 
 // --- hunk alignment ---------------------------------------------------------
 
-/** Segments for one line: syntax runs merged over word flags when a
- *  highlighter is available; the word/plain segmentation otherwise. */
-function styleLine(
-  line: string,
-  words: readonly Segment[],
-  language: string | undefined,
-  hl: CliHighlight | null,
-  chTheme: Record<string, (text: string) => string> | undefined,
-): readonly Segment[] {
-  const syntax = syntaxRuns(line, language, hl, chTheme)
-  if (syntax === undefined) return words
-  return mergeRuns(syntax, words)
+/**
+ * Pair the lines of an unequal removed+added block via a case-insensitive
+ * LCS: lines equal modulo case align as change pairs, everything before the
+ * first match stays block order. An inserted line above an edited one
+ * (`foo,bar` → `insert,FOO,bar`) therefore yields `insert` add-only, then
+ * `foo ↔ FOO`, instead of the index-zip misalignment (issue #250, P2-4).
+ */
+function lcsPairs(oldLines: readonly string[], newLines: readonly string[]): [number, number][] {
+  const m = oldLines.length
+  const n = newLines.length
+  // dp[i][j] = LCS length of oldLines[i:] and newLines[j:].
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+  const eq = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i]![j] = eq(oldLines[i]!, newLines[j]!)
+        ? dp[i + 1]![j + 1]! + 1
+        : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!)
+    }
+  }
+  const pairs: [number, number][] = []
+  let i = 0
+  let j = 0
+  while (i < m && j < n) {
+    if (eq(oldLines[i]!, newLines[j]!)) {
+      pairs.push([i, j])
+      i++
+      j++
+    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+      i++
+    } else {
+      j++
+    }
+  }
+  return pairs
 }
 
-function alignFileDiff(
-  oldText: string | null,
-  newText: string,
-  language: string | undefined,
-  hl: CliHighlight | null,
-  chTheme: Record<string, (text: string) => string> | undefined,
-): DiffRow[] {
+/** Align one file's hunks into rows (plain text + word flags; styling is a
+ *  render-time concern over the visible slice). */
+function alignFileDiff(fileIndex: number, oldText: string | null, newText: string): DiffRow[] {
   const rows: DiffRow[] = []
-  let oldLineNo = 1
-  let newLineNo = 1
   const parts = JsDiff.diffLines(expandTabs(oldText ?? ''), expandTabs(newText))
+  let oldIndex = 0
+  let newIndex = 0
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i]!
     const lines = part.value.replace(/\n$/, '').split('\n')
@@ -240,8 +310,11 @@ function alignFileDiff(
       for (const line of lines) {
         rows.push({
           kind: 'context',
-          old: { lineNo: oldLineNo++, segments: styleLine(line, plainSegments(line), language, hl, chTheme) },
-          new: { lineNo: newLineNo++, segments: styleLine(line, plainSegments(line), language, hl, chTheme) },
+          fileIndex,
+          oldIndex: oldIndex++,
+          newIndex: newIndex++,
+          oldWords: plainSegments(line),
+          newWords: plainSegments(line),
         })
       }
       continue
@@ -249,26 +322,46 @@ function alignFileDiff(
     if (part.removed) {
       const addedPart = parts[i + 1]?.added === true ? parts[i + 1] : undefined
       const addedLines = addedPart === undefined ? [] : addedPart.value.replace(/\n$/, '').split('\n')
-      const pairCount = Math.min(lines.length, addedLines.length)
-      for (let p = 0; p < pairCount; p++) {
-        const segments = wordSegments(lines[p]!, addedLines[p]!)
-        rows.push({
-          kind: 'change',
-          old: { lineNo: oldLineNo++, segments: styleLine(lines[p]!, segments.old, language, hl, chTheme) },
-          new: { lineNo: newLineNo++, segments: styleLine(addedLines[p]!, segments.new, language, hl, chTheme) },
-        })
+      // Same-length replacement blocks zip index-for-index (the common
+      // edit case); unequal blocks pair through the ci-LCS so an inserted
+      // line cannot shift the alignment (issue #250, P2-4).
+      const pairs: [number, number][] = lines.length === addedLines.length
+        ? lines.map((_, index) => [index, index] as [number, number])
+        : lcsPairs(lines, addedLines)
+      // Block order: walk both lists; unpaired entries emit in place, pairs
+      // emit at the later of the two positions.
+      const events: { kind: 'del' | 'add' | 'change'; o?: number; a?: number }[] = []
+      let oi = 0
+      let ai = 0
+      for (const [o, a] of pairs) {
+        while (oi < o) events.push({ kind: 'del', o: oi++ })
+        while (ai < a) events.push({ kind: 'add', a: ai++ })
+        events.push({ kind: 'change', o: oi++, a: ai++ })
       }
-      for (let d = pairCount; d < lines.length; d++) {
-        rows.push({ kind: 'del', old: { lineNo: oldLineNo++, segments: styleLine(lines[d]!, plainSegments(lines[d]!), language, hl, chTheme) } })
-      }
-      for (let a = pairCount; a < addedLines.length; a++) {
-        rows.push({ kind: 'add', new: { lineNo: newLineNo++, segments: styleLine(addedLines[a]!, plainSegments(addedLines[a]!), language, hl, chTheme) } })
+      while (oi < lines.length) events.push({ kind: 'del', o: oi++ })
+      while (ai < addedLines.length) events.push({ kind: 'add', a: ai++ })
+      for (const event of events) {
+        if (event.kind === 'change') {
+          const segments = wordSegments(lines[event.o!]!, addedLines[event.a!]!)
+          rows.push({
+            kind: 'change',
+            fileIndex,
+            oldIndex: oldIndex++,
+            newIndex: newIndex++,
+            oldWords: segments.old,
+            newWords: segments.new,
+          })
+        } else if (event.kind === 'del') {
+          rows.push({ kind: 'del', fileIndex, oldIndex: oldIndex++, oldWords: plainSegments(lines[event.o!]!) })
+        } else {
+          rows.push({ kind: 'add', fileIndex, newIndex: newIndex++, newWords: plainSegments(addedLines[event.a!]!) })
+        }
       }
       if (addedPart !== undefined) i++
       continue
     }
     for (const line of lines) {
-      rows.push({ kind: 'add', new: { lineNo: newLineNo++, segments: styleLine(line, plainSegments(line), language, hl, chTheme) } })
+      rows.push({ kind: 'add', fileIndex, newIndex: newIndex++, newWords: plainSegments(line) })
     }
   }
   return rows
@@ -280,14 +373,12 @@ function PaneLine({
   side,
   kind,
   width,
-  lineNoWidth,
   tone,
   padLeft = false,
 }: {
-  readonly side: { readonly lineNo: number; readonly segments: readonly Segment[] } | undefined
+  readonly side: { readonly segments: readonly Segment[] } | undefined
   readonly kind: DiffRow['kind']
   readonly width: number
-  readonly lineNoWidth: number
   readonly tone: 'old' | 'new'
   readonly padLeft?: boolean
 }): React.ReactNode {
@@ -298,8 +389,10 @@ function PaneLine({
         ? 'diffRemovedDimmed'
         : 'diffAddedDimmed'
   const wordColor = tone === 'old' ? 'diffRemovedWord' : 'diffAddedWord'
-  const lineNoText = side === undefined ? '' : String(side.lineNo).padStart(lineNoWidth)
-  const prefix = padLeft ? ` ${lineNoText}` : lineNoText
+  // Status gutter instead of line numbers: ToolFileDiff has no file
+  // offsets, and an invented number misleads (issue #250, P2-3).
+  const marker = kind === 'context' ? ' ' : tone === 'old' ? '−' : '+'
+  const prefix = padLeft ? ` ${marker}` : marker
   return (
     <Box width={width} flexShrink={0} backgroundColor={backgroundColor}>
       <Text dimColor backgroundColor={backgroundColor}>{`${prefix} `}</Text>
@@ -337,8 +430,6 @@ export function SplitDiffView({
   readonly maxRows: number
   readonly verbose: boolean
 }): React.ReactNode {
-  // cli-highlight loads lazily (it pulls highlight.js); until the promise
-  // settles the view renders diff colors only, then syntax colors fade in.
   const [hl, setHl] = React.useState<CliHighlight | null>(null)
   React.useEffect(() => {
     let mounted = true
@@ -349,59 +440,87 @@ export function SplitDiffView({
   }, [])
 
   const [themeName] = useTheme()
+  // Resolved-palette signature: covers dark→light, light→dark, AND the
+  // `auto` base flip where the name never changes (issue #250, P1-2).
+  const themeSig = React.useMemo(() => {
+    const theme = getTheme(themeName) as unknown as Record<string, string>
+    return Object.values(SYNTAX_CLASS_TO_TOKEN)
+      .map(key => theme[key] ?? '')
+      .join('|')
+  }, [themeName])
   const chTheme = React.useMemo(() => {
-    const theme = getTheme(themeName)
+    const theme = getTheme(themeName) as unknown as Record<string, string>
     const out: Record<string, (text: string) => string> = {}
     for (const [tokenClass, tokenKey] of Object.entries(SYNTAX_CLASS_TO_TOKEN)) {
-      const value = (theme as unknown as Record<string, string>)[tokenKey]
+      const value = theme[tokenKey]
       if (value !== undefined) out[tokenClass] = chalkFromToken(value)
     }
     return out
-  }, [themeName])
+    // themeSig changes exactly when any syntax token's resolved value does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [themeSig])
 
+  // Alignment is text-only and capped BEFORE styling: the highlighter and
+  // word-diff work lands only on the visible slice (issue #250, P2-8).
   const rows: (DiffRow | { readonly separator: string })[] = []
   let prevPath: string | undefined
-  for (const diff of diffs) {
+  diffs.forEach((diff, fileIndex) => {
     if (diffs.length > 1) {
       if (diff.path !== prevPath) rows.push({ separator: diff.path })
       else rows.push({ separator: '⋯' })
     }
     prevPath = diff.path
-    const language = extname(diff.path).replace(/^\./, '') || undefined
-    rows.push(...alignFileDiff(diff.oldText, diff.newText, language, hl, chTheme))
-  }
+    rows.push(...alignFileDiff(fileIndex, diff.oldText, diff.newText))
+  })
 
   const totalRows = rows.length
   const capped = verbose || totalRows <= maxRows || totalRows - maxRows === 1
   const visible = capped ? rows : rows.slice(0, maxRows)
   const hidden = totalRows - visible.length
 
-  const maxLineNo = visible.reduce(
-    (acc, row) => ('separator' in row ? acc : Math.max(acc, row.old?.lineNo ?? 0, row.new?.lineNo ?? 0)),
-    1,
-  )
-  const lineNoWidth = String(maxLineNo).length
   const paneWidth = Math.max(20, Math.floor((width - 1) / 2))
+
+  // Whole-hunk highlight per file (multi-line lexer state preserved);
+  // only the visible rows merge syntax runs with word flags below.
+  const fileSyntax = diffs.map(diff => {
+    const language = extname(diff.path).replace(/^\./, '') || undefined
+    return {
+      old: highlightLines(expandTabs(diff.oldText ?? ''), language, hl, chTheme, themeSig),
+      next: highlightLines(expandTabs(diff.newText), language, hl, chTheme, themeSig),
+    }
+  })
 
   return (
     <Box flexDirection="column" width={paneWidth * 2 + 1} backgroundColor="toolCardBackgroundDim">
-      {visible.map((row, index) =>
-        'separator' in row ? (
-          <Box key={index} width={paneWidth * 2 + 1}>
-            <Text dimColor wrap="truncate">
-              {row.separator === '⋯' ? '⋯' : `  ${row.separator}`}
-            </Text>
-          </Box>
-        ) : (
+      {visible.map((row, index) => {
+        if ('separator' in row) {
+          return (
+            <Box key={index} width={paneWidth * 2 + 1}>
+              <Text dimColor wrap="truncate">
+                {row.separator === '⋯' ? '⋯' : `  ${row.separator}`}
+              </Text>
+            </Box>
+          )
+        }
+        const syntax = fileSyntax[row.fileIndex]
+        const oldRuns = row.oldIndex !== undefined ? syntax?.old?.[row.oldIndex] : undefined
+        const newRuns = row.newIndex !== undefined ? syntax?.next?.[row.newIndex] : undefined
+        const oldSide = row.oldWords === undefined
+          ? undefined
+          : { segments: oldRuns !== undefined ? mergeRuns(oldRuns, row.oldWords) : row.oldWords }
+        const newSide = row.newWords === undefined
+          ? undefined
+          : { segments: newRuns !== undefined ? mergeRuns(newRuns, row.newWords) : row.newWords }
+        return (
           <Box key={index} flexDirection="row">
-            <PaneLine side={row.old} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} lineNoWidth={lineNoWidth} />
+            <PaneLine side={oldSide} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} />
             <Box width={1} flexShrink={0} backgroundColor="toolCardBackgroundDim">
               <Text dimColor>│</Text>
             </Box>
-            <PaneLine side={row.new} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} lineNoWidth={lineNoWidth} padLeft />
+            <PaneLine side={newSide} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} padLeft />
           </Box>
-        ),
-      )}
+        )
+      })}
       {hidden > 0 && (
         <Text dimColor>{`… +${hidden} lines (ctrl+o to expand)`}</Text>
       )}
