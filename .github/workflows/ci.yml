@@ -141,6 +141,10 @@ jobs:
       # TUI 创建及恢复的会话必须持久关联到 Workspace。
       - run: node scripts/verify-workspace-attachment.mjs
 
+      # tuiWorkspaces 服务可选化回归（issue #183）：代码层 inject 不含
+      # tuiWorkspaces、消费处带本地兜底、patch 保留服务行与行级顺序保证。
+      - run: node scripts/verify-workspaces-degrade.mjs
+
       # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
       # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
       - run: node scripts/verify-session-titles.mjs
@@ -219,6 +223,10 @@ jobs:
       # 请求配置，而不是只做状态栏启动显示（≤0.3.5 的 display-only 行为）。
       - run: node --import tsx/esm scripts/repro-effort.tsx
 
+      # 子代理模型路由回归（issue #191）：child scope 没有 AgentOptions 路由时，
+      # 首次请求继承 TUI 当前完整路由；显式 child 路由保持优先。
+      - run: node --import tsx/esm scripts/verify-subagent-model-route.tsx
+
       # 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
       # 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
       - run: node --import tsx/esm scripts/verify-child-stderr.tsx
@@ -230,6 +238,10 @@ jobs:
       # CJK 显示宽度截断回归（issue #41）：4 处描述按终端显示宽度处理，
       # CJK 不劈字、窄终端布局不破。
       - run: node --import tsx/esm scripts/verify-cjk-truncate.tsx
+
+      # 启动上下文摘要窄终端回归（issue #167）：摘要与 Ctrl+T 提示必须
+      # 作为一条可截断文本布局，不能换行后互相穿插。
+      - run: node --import tsx/esm scripts/verify-loaded-context-width.tsx
 
       # thinking spinner 残影回归（issue #72）：text-default emoji（✳）
       # 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
@@ -259,6 +271,10 @@ jobs:
       # 线）。注意必须走 tsx——脚本直接 import src/customTheme.ts。
       - run: node --import tsx/esm scripts/verify-themes.mjs
 
+      # Text 背景色回归（issue #166）：公开 themed Text 与 Box 一致支持
+      # 原始颜色值，且必须把对应 ANSI 背景色写入终端。
+      - run: node --import tsx/esm scripts/verify-text-background.tsx
+
       # 轨迹场景回归（issue #80 演进，取代 repro-trace）：xterm headless 驱动
       # 真实场景——账本行/耗时/光标、窗口滚动、检视窗跟随光标且高度恒定、
       # 查询过滤、时序⇄热点切换，以及备用屏进出后主屏逐字节还原、
@@ -270,6 +286,16 @@ jobs:
       # 树内每个测量所依据的宽度失效，而没有任何节点被标脏，文本节点会沿用
       # 旧宽度的测量结果，靠 flex 仲裁的行因此由两套布局拼成。
       - run: node --import tsx/esm scripts/verify-resize-reflow.tsx
+
+      # Ctrl+T 归属回归：启动上下文面板在屏时该键属于面板（它自己在屏幕上
+      # 印着「Ctrl+T 展开」），转录有行之后才归轨迹场景。两者永不同屏——
+      # 面板只在首条消息前出现，而那正是轨迹为空的窗口。
+      - run: node --import tsx/esm scripts/verify-ctrl-t-scope.tsx
+
+      # 收缩重绘回归：一个高于视口的帧在一帧内收起，屏幕必须等于同一短状态的
+      # 全新渲染——不留旧帧、表头不出现两次。shrink-frame 家族（#38/#39/#19/
+      # #10）里步长最大的一档，不经 Chat，直接对渲染器。
+      - run: node --import tsx/esm scripts/repro-collapse-shrink.tsx
 
       # /provider 向导回归：catalog/custom 两分支的 profile 形状、凭据回滚
       # （覆盖时恢复旧 key 而非误删）、env shadow 跳过、rc.6 兼容守卫、

@@ -80,6 +80,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `code` | PTC 模式 | 标准能力，加 Code Mode SDK 呈现工具，可用 TypeScript 组合多步操作 |
 | `minimal` | 极简模式 | 仅持久 Bash 与 `str_replace_editor`，不带 compaction |
 | `cordis` | 创造模式 | 标准能力，加运行时检查与插件实验工具 |
+| `liangshen` | 梁神模式 | 主 Agent 与子 Agent 首轮均保持 Minimal 双工具，首次工具调用后开放完整目录，压缩后重新锚定 |
 
 使用方式：
 
@@ -91,6 +92,8 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 - 优先级为：显式 `config.preset` 或 `DSH_TUI_PRESET`，然后持久化偏好，最后名册
   默认值 `standard`。
 - 恢复旧会话时，以该会话日志记录的 preset 为准，不读取当前默认值覆盖它。
+- “梁神模式”随 dsh-tui 包发布，启动时安装到用户 preset 根目录；已有同名且并非
+  dsh-tui 托管的目录不会被覆盖。
 
 自定义 preset 放在 `$DSH_HOME/.agent-presets/<name>/`，目录中应包含
 `agent.cordis.yml`。默认 `DSH_HOME` 下的路径即 `~/.dsh/.agent-presets/`。

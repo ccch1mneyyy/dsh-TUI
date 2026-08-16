@@ -17,7 +17,8 @@ import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
-import { composePreset, resolvePersistedPreset, runningPresetOf } from './presets.js'
+import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, runningPresetOf } from './presets.js'
+import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
@@ -26,6 +27,7 @@ import { isLang, resolveStartupLang, setLang, t } from '../i18n.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { Chat } from '../screens/Chat.js'
 import { attachSessionToWorkspace } from './workspace.js'
+import { createLocalWorkspaceRuntime } from './workspaces.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
@@ -44,6 +46,24 @@ import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMult
 export async function apply(ctx: Context, config: Config): Promise<void> {
   if (!process.stdout.isTTY) {
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
+  }
+
+  // The official profile launcher owns the system preset root and replaces
+  // any bundle-supplied roots at boot. Install dsh-tui's bundled presets via
+  // the roster's supported user-root seam before resolving the first agent.
+  // Never overwrite an existing directory unless it carries our marker.
+  try {
+    for (const result of ensurePackagedPresets()) {
+      if (result.status === 'conflict') {
+        ctx.logger.warn(
+          `dsh-tui: packaged preset "${result.id}" was not installed because an unmanaged preset already uses that id`,
+        )
+      }
+    }
+  } catch (error) {
+    // A read-only home must not make the whole terminal unusable; the other
+    // official and user presets remain available.
+    ctx.logger.warn(`dsh-tui: unable to install packaged presets (${error instanceof Error ? error.message : String(error)})`)
   }
 
   // Data-directory rename (~/.dsh-cc → ~/.dsh-tui, issue #120): copy the
@@ -112,6 +132,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the inject proxy.
   const userQuestions = ctx.get('userQuestions') ?? new UserQuestionService(ctx)
   ctx.plugin(toolAskUser)
+  // The host-level tool mount above is intentional for the TUI and for user
+  // presets, but the official Minimal preset is a strict two-tool trajectory
+  // (persistent bash + str_replace_editor). Filter only that preset at the
+  // final assembly boundary. Reading the session on every assembly also makes
+  // blank-session /preset switches and resumed sessions behave correctly.
+  ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+    const assembled = await next()
+    const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
+    return filterMinimalPresetTools(assembled, presetId)
+  })
   const questionStore = new QuestionStore()
   // Packaged skills (/audit, /bug, …): contribute them through the host's
   // skill registry so they resolve with zero manual copying.
@@ -184,9 +214,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // see the repository, not an arbitrary launch subdirectory. Resolved ONCE
   // here — the agent meta and the channel must agree.
   const requestedWorkspace = config.workspace ?? process.env.DSH_TUI_WORKSPACE_TARGET
+  // Degraded boot (issue #183): a stale bundle patch without the
+  // dsh-tui-workspaces row leaves the service unmounted; resolve startup
+  // targets through the local-only runtime (provider URIs then fail loud
+  // below instead of crashing on an undefined service). A profile launch
+  // without the service means the patch came from an older dsh-tui copy
+  // than the running code — warn once so the skew is diagnosable. Bare
+  // embedders (no --profile) take the same fallback by design, silently.
+  const mountedWorkspaceService = ctx.get('tuiWorkspaces')
+  if (mountedWorkspaceService === undefined && resolveDshProfileName() !== undefined) {
+    ctx.logger.warn(
+      'dsh-tui: tuiWorkspaces service is not mounted; /workspace runs with the local-only fallback. ' +
+      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+    )
+  }
+  const workspaceService = mountedWorkspaceService ?? createLocalWorkspaceRuntime()
   const initialWorkspace = requestedWorkspace === undefined
     ? undefined
-    : await ctx.tuiWorkspaces.resolve(requestedWorkspace)
+    : await workspaceService.resolve(requestedWorkspace)
   if (requestedWorkspace !== undefined && initialWorkspace === undefined) {
     throw new Error(`dsh-tui: unsupported or unavailable workspace target: ${requestedWorkspace}`)
   }
@@ -293,6 +338,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
   let updateRequested = false
+  let updateTargetVersion: string | undefined
   // The profile this process was booted with (`dsh --profile <name>`); dsh
   // exposes it nowhere else, and /update must update the installation the
   // user is actually running, not a hard-coded one.
@@ -332,7 +378,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           config.fullscreen === true,
           'Updating @deepseek-harness-tui/dsh-tui and restarting…',
           undefined,
-          () => runUpdate(ctx, profile, channel.agentId),
+          () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
         )
         return
       }
@@ -392,6 +438,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }
         if (target.kind === 'unknown') {
           channel.notify(t('update-check-failed'))
+        } else {
+          updateTargetVersion = target.latest
         }
         channel.notify(t('update-starting'))
         updateRequested = true
@@ -710,13 +758,18 @@ function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
   })
 }
 
-function runUpdate(ctx: Context, profile: string | undefined, sessionId: string): void {
+function runUpdate(
+  ctx: Context,
+  profile: string | undefined,
+  sessionId: string,
+  targetVersion: string | undefined,
+): void {
   disposeRootAndThen(ctx, () => {
     if (profile === undefined) {
       process.stderr.write(`\n${t('update-aborted-no-profile')}\n`)
       process.exit(1)
     }
-    void updateTuiAndRestart(sessionId, profile).then(
+    void updateTuiAndRestart(sessionId, profile, targetVersion).then(
       ({ updateCode, restartCode }) => {
         if (updateCode !== 0) {
           process.stderr.write(

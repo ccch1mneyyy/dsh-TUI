@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "MIT",
   "repository": {
@@ -49,6 +49,7 @@
     "lib",
     "cordis.patch.yml",
     "cordis.yml",
+    "presets",
     "skills"
   ],
   "engines": {
@@ -61,10 +62,13 @@
     "build": "npm run compile && npm run verify:build",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:patch-surface",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:patch-surface && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
     "verify:patch-surface": "node --import tsx/esm scripts/verify-patch-surface.ts",
+    "verify:packaged-presets": "node scripts/verify-packaged-presets.mjs",
+    "verify:minimal-preset-tools": "node scripts/verify-minimal-preset-tools.mjs",
+    "verify:liangshen-bootstrap": "node scripts/verify-liangshen-bootstrap.mjs",
     "verify:package": "npm pack --dry-run --json --ignore-scripts | node scripts/verify-package.mjs",
     "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts"
   },

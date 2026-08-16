@@ -72,11 +72,26 @@ function makeHarness(cols: number, rows: number, scrollback = 200) {
   }
   const stdin = new FakeStdin()
   const screen = (): string => {
+    // getLine() indexes the WHOLE buffer, scrollback included; the viewport
+    // starts at baseY. Reading from 0 after a frame taller than the terminal
+    // returns the PREVIOUS, larger frame's rows — which reads exactly like a
+    // repaint bug and is not one.
     const buffer = term.buffer.active
-    return Array.from({ length: rows }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '')
+    return Array.from({ length: rows }, (_, y) => buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '')
       .join('\n')
   }
-  return { term, stdout: new FakeStdout(), stdin, screen, writes }
+  /**
+   * The same rows counted from the top of the buffer.
+   *
+   * Part A mounts the scene BARE, without the `<AlternateScreen>` the product
+   * wraps it in, so the park newline scrolls its first row out of the window
+   * here and nowhere else. The alternate screen has no scrollback, so reading
+   * from 0 is what that part is actually about.
+   */
+  const screenFromTop = (): string =>
+    Array.from({ length: rows }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '')
+      .join('\n')
+  return { term, stdout: new FakeStdout(), stdin, screen, screenFromTop, writes }
 }
 
 const T0 = 1_700_000_000_000
@@ -186,7 +201,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 // ───────────────────────── part A: the scene ────────────────────────────────
 
 {
-  const { stdout, stdin, screen, term } = makeHarness(120, 30)
+  const { stdout, stdin, screenFromTop: screen, term } = makeHarness(120, 30)
   const instance = await render(
     React.createElement(TrajectoryScene, {
       channel: makeChannel() as never,

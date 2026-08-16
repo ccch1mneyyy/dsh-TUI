@@ -574,7 +574,7 @@ const dict = {
   'cmd-desc-agents': { zh: '查看本会话的子代理' },
   // Model / display
   'cmd-desc-activity': { zh: '切换工作状态指示器预设' },
-  'cmd-desc-preset': { zh: '切换 Agent 预设（standard/code/minimal/cordis）' },
+  'cmd-desc-preset': { zh: '切换 Agent 预设（含梁神模式）' },
   'cmd-desc-theme': { zh: '切换配色主题（auto 跟随系统，或内置/自定义）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },

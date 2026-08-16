@@ -84,6 +84,7 @@ Each session composes its model-visible tools and prompt through
 | `code` | PTC | Standard plus Code Mode SDK presentation for composing operations in TypeScript |
 | `minimal` | Minimal | Persistent Bash and `str_replace_editor` only, without compaction |
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
+| `liangshen` | Liangshen mode | Minimal's two-tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
 
 Usage rules:
 
@@ -97,6 +98,8 @@ Usage rules:
   preference, then the roster default `standard`.
 - Resuming a session restores the preset recorded in that session's log and
   does not overwrite it with the current default.
+- Liangshen mode ships with dsh-tui and is installed into the user preset root
+  at startup. An existing unmanaged directory with the same id is preserved.
 
 Place a custom preset at `$DSH_HOME/.agent-presets/<name>/` with an
 `agent.cordis.yml` file. Under the default DSH home this is

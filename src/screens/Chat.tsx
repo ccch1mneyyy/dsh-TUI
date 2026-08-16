@@ -307,6 +307,14 @@ export function Chat({
   }, [])
   /** Startup context panel: expanded by header click or Ctrl+T. */
   const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
+  /**
+   * Whether the startup context panel is on screen. Derived once and read by
+   * BOTH the Ctrl+T handler and the render below: the key's meaning depends on
+   * the panel being visible, so a second copy of this condition is a place for
+   * the two to disagree — which is how the key came to advertise one thing and
+   * do another in the first place.
+   */
+  const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -1619,11 +1627,25 @@ export function Chat({
       return
     }
     if (isMod(key) && input === 't') {
-      // Ctrl+T opens the trajectory scene (issue #80 evolution). It used to
-      // toggle the startup loaded-context panel — which only ever renders
-      // before the first message (see the render below), so the binding was
-      // dead for the whole rest of a session. The panel keeps its header
-      // click-to-toggle; the key now has a meaning that always applies.
+      // Ctrl+T means "expand what is in front of you", and the two things it
+      // can expand never share the screen.
+      //
+      // The startup loaded-context panel renders only while the transcript is
+      // empty (see the render below) — and that is exactly the window where
+      // the trajectory has nothing in it yet, since the trajectory is folded
+      // from the session's own events. So the panel wins while it is up, and
+      // the scene takes over for the rest of the session.
+      //
+      // Claiming the key outright for the scene was wrong even though the
+      // panel binding looked dead: the panel prints its own `（Ctrl+T 展开）`
+      // hint, so the key still had a visible promise attached to it, and the
+      // scene it opened instead was necessarily empty at that moment. That
+      // left the panel reachable only by clicking its header, which is not a
+      // keyboard path at all.
+      if (loadedContextVisible) {
+        setLoadedContextOpen(previous => !previous)
+        return
+      }
       openScene()
       return
     }
@@ -1777,7 +1799,7 @@ export function Chat({
             transcript is empty, so the collapsed summary of what this
             conversation will load (system prompt, workspace instructions,
             skills, tools) sits at the top; the first rows take over. */}
-        {channel.rows.length === 0 && channel.loadedContext !== undefined && (
+        {loadedContextVisible && (
           <LoadedContextPanel
             context={channel.loadedContext}
             open={loadedContextOpen}

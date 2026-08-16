@@ -80,8 +80,9 @@ commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 the repository's `dsh-tui.cmd` works the same way.
 
 For running dsh-TUI inside VS Code — directly in the integrated terminal or
-via the `dsh-tui-vscode` companion extension (one-click start/resume and
-editor integration) — see
+via the `dsh-tui-vscode` companion extension (real-integrated-terminal
+sessions, an experience almost identical to the official Claude Code
+extension; available on the VS Code Marketplace) — see
 [Running dsh-TUI in VS Code](docs/vscode.en.md).
 
 See [Getting started](docs/getting-started.en.md) for profile composition,
@@ -160,7 +161,7 @@ so keep using `Ctrl`.
 | [Themes](docs/themes.en.md) | Built-in themes, background detection, custom JSON themes, validation |
 | [Interaction and commands](docs/interaction.en.md) | Keyboard, mouse, questionnaires, slash commands, session workflows |
 | [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
-| [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal and the `dsh-tui-vscode` companion extension |
+| [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers an experience almost identical to the official Claude Code extension (on the Marketplace) |
 | [Contributing](docs/contributing.en.md) | Contribution workflow, repository map, build artifacts, verification matrix, change rules |
 | [Plugin development](docs/plugins.en.md) | Plugin seams (session events / slots / skills / themes / prompt sections), contract, conventions, listing |
 
@@ -169,6 +170,7 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
 ## Configuration & Extensions
 
 - **Agent presets**: four official agent modes (`standard` / `code` / `minimal` / `cordis`)
+  plus the TUI-bundled Liangshen mode (`liangshen`),
   switched with `/preset`; sessions that already have a conversation cannot switch, while
   blank sessions take effect immediately. The default preset persists in
   `~/.dsh-tui/agent-preset.json`; `/model` selections persist in `~/.dsh-tui/model.json`.
