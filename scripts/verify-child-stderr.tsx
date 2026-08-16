@@ -90,7 +90,7 @@ async function runDriver(): Promise<void> {
   reporter.push(failing)
   await sleep(150)
   check('去重：同一行连发 3 次只出一条通知', notices.length === 1)
-  check('去重：通知带重复计数（重复 3 次）', notices[0]?.includes('重复 3 次') ?? false)
+  check('去重：通知带重复计数（重复 3 次）', /(?:重复 3 次|repeated 3×)/u.test(notices[0] ?? ''))
 
   reporter.push(failing)
   await sleep(150)
