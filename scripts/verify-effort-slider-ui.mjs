@@ -163,7 +163,7 @@ function makeChannel() {
     switchPreset: async () => false,
     switchModel: async () => false,
     rewindTo: async () => null,
-    resumeTo: async () => false,
+    resumeTo: async () => ({ ok: false, reason: 'unavailable' }),
     newSession: async () => false,
     compact() {},
     setEffortCalls,

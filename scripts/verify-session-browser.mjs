@@ -194,7 +194,11 @@ function makeChannel() {
     switchPreset: async () => false,
     switchModel: async () => false,
     rewindTo: async () => null,
-    resumeTo: async () => false,
+    resumeTo: async () => ({
+      ok: false,
+      reason: 'failed',
+      error: 'corrupt session log: seq gap in committed region',
+    }),
     newSession: async () => false,
     compact() {},
     calls,
@@ -344,6 +348,21 @@ check(
 s = screen()
 check('the browser says what it did, on the screen the user is looking at', /Deleted session betarenamed/.test(flat(s)), flat(s).slice(-200))
 check('the deleted row leaves the list', /2 sessions/.test(flat(s)) && !s.split('\n').some(l => /^[❯\s]*betarenamed/.test(l)), flat(s).slice(0, 200))
+
+// ── resume failure detail ──────────────────────────────────────────────────
+await windowed(() => stdin.write('\r'), 500)
+s = screen()
+check('a failed resume stays in the browser', /Resume session/.test(flat(s)), flat(s).slice(0, 180))
+check(
+  'the browser shows the real resume failure',
+  /corrupt session log: seq gap in committed region/.test(flat(s)),
+  flat(s).slice(-220),
+)
+check(
+  'the browser does not misreport every failure as a running model',
+  !/model is working/.test(flat(s)),
+  flat(s).slice(-220),
+)
 
 // ── leaving ─────────────────────────────────────────────────────────────
 await windowed(() => stdin.write('\x1b'), 500)

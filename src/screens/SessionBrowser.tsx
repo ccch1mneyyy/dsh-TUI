@@ -403,12 +403,17 @@ export function SessionBrowser({
       // did. `resumeTo` reports its own reasons; this only has to stay put.
       runAction(async () => {
         try {
-          const ok = await channel.resumeTo(target.id)
-          if (ok) {
+          const result = await channel.resumeTo(target.id)
+          if (result.ok) {
             channel.notify(t('resume-resumed'))
             onClose()
           } else {
-            setNotice({ text: t('session-resume-refused'), tone: 'error' })
+            const text = result.reason === 'working'
+              ? t('resume-while-working')
+              : result.reason === 'unavailable'
+                ? t('resume-unavailable')
+                : t('session-resume-failed', { err: result.error })
+            setNotice({ text, tone: 'error' })
           }
         } catch (error) {
           setNotice({ text: t('session-resume-failed', { err: message(error) }), tone: 'error' })

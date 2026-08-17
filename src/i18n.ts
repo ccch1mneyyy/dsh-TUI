@@ -392,7 +392,6 @@ const dict = {
   // ── 会话浏览器：行、计数、筛选、预览 ───────────────────────────────
   'session-loading': { zh: '正在读取会话…', en: 'Reading sessions…' },
   'session-list-failed': { zh: '无法读取会话列表 · {{err}}', en: 'Could not read the session list · {{err}}' },
-  'session-resume-refused': { zh: '无法恢复这个会话——原因已记录在对话里（模型正在工作时无法切换）', en: 'That session could not be resumed — the reason is in the conversation (switching is refused while the model is working)' },
   'session-resume-failed': { zh: '恢复会话失败 · {{err}}', en: 'Resuming the session failed · {{err}}' },
   'session-when-now': { zh: '刚刚', en: 'just now' },
   'session-when-minutes': { zh: '{{n}} 分钟前', en: '{{n}}m ago' },
