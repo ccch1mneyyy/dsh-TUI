@@ -88,9 +88,18 @@ const summary = (over) => ({
 })
 
 function makeChannel() {
-  // MRU order: gamma (newest) → beta → alpha, plus two delegated runs under
-  // beta and one boot artifact holding no conversation.
+  // The live session is a model-switch fork. Its current lineage must not be
+  // offered as a separate resumable conversation; the remaining MRU order is
+  // gamma (newest) → beta → alpha, plus two delegated runs under beta and one
+  // boot artifact holding no conversation.
   let sessions = [
+    summary({
+      id: 'live-session',
+      kind: { kind: 'fork', parent: 'live-parent' },
+      title: { text: 'after model switch', source: 'auto' },
+      updatedAt: 8,
+    }),
+    summary({ id: 'live-parent', title: { text: 'before model switch', source: 'auto' }, updatedAt: 7 }),
     summary({ id: 's-new', title: { text: 'gamma', source: 'auto' }, updatedAt: 5 }),
     summary({ id: 's-mid', title: { text: 'beta', source: 'auto' }, updatedAt: 4, childCount: 2 }),
     summary({ id: 's-old', title: { text: 'alpha', source: 'auto' }, updatedAt: 3 }),
@@ -252,6 +261,7 @@ await windowed(() => stdin.write('\r'), 600)
 let s = screen()
 check('the browser opens as a screen', /Resume session/.test(flat(s)), flat(s).slice(0, 120))
 check('conversations are listed', /gamma/.test(s) && /beta/.test(s) && /alpha/.test(s))
+check('the current model-switch lineage is not offered as another conversation', !/before model switch/.test(s) && !/after model switch/.test(s))
 check('delegated runs are NOT listed by default', !/delegated one/.test(s) && !/delegated two/.test(s))
 check('but they are counted', /2 runs folded/.test(flat(s)), flat(s).slice(0, 200))
 check('a session with no conversation is never a row', !/^\s*❯?\s*tmp\b/m.test(s))
