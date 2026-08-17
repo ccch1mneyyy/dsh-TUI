@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
+import type { KeybindingConfig } from '../keybindings.js'
 
 export const name = 'dsh-tui'
 // `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
@@ -77,6 +78,8 @@ export interface Config {
    *  terminals (≥110 cols) and unified below; `split`/`unified` force one
    *  layout. Editable live from the `/settings` screen. */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Optional high-frequency global shortcut overrides (issue #113). */
+  keybindings?: KeybindingConfig
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
@@ -102,6 +105,11 @@ export const Config: Schema<Config> = Schema.object({
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+  keybindings: Schema.object({
+    historySearch: Schema.string().required(false),
+    toggleDetails: Schema.string().required(false),
+    interrupt: Schema.string().required(false),
+  }).required(false),
   modes: Schema.array(
     Schema.object({
       id: Schema.string(),

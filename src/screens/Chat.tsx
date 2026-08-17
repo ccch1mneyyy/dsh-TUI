@@ -57,6 +57,7 @@ import type { SessionEvent } from '../dsh-adapter/types.js'
 import { LoadingState } from '../components/design-system/LoadingState.js'
 import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'
+import { DEFAULT_KEYBINDINGS, matchesKeybinding, resolveKeybindings, type KeybindingConfig } from '../keybindings.js'
 
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
@@ -143,6 +144,7 @@ export function Chat({
   onUpdate,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
+  keybindings,
 }: {
   channel: Channel
   questionStore: QuestionStore
@@ -172,6 +174,8 @@ export function Chat({
    * persisted flag when the host does not supply one.
    */
   trajectorySeen?: boolean
+  /** Optional high-frequency shortcut overrides from the plugin config. */
+  keybindings?: KeybindingConfig
 }) {
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   React.useSyncExternalStore(channel.subscribe, () => channel.version)
@@ -191,6 +195,10 @@ export function Chat({
   const approvalSnapshot = React.useSyncExternalStore(
     listener => approvals.subscribe(listener),
     () => approvals.getSnapshot(),
+  )
+  const effectiveKeybindings = React.useMemo(
+    () => resolveKeybindings(keybindings).bindings,
+    [keybindings?.historySearch, keybindings?.toggleDetails, keybindings?.interrupt],
   )
   // When a questionnaire batch completes, fold a Q&A summary into the
   // transcript (the tool card itself is hidden from the message list).
@@ -1335,6 +1343,18 @@ export function Chat({
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
     if (plainReturn) lastModalEnterAtRef.current = returnNow
+    const interruptKey = matchesKeybinding(
+      effectiveKeybindings.interrupt,
+      DEFAULT_KEYBINDINGS.interrupt,
+      input,
+      key,
+    )
+    const historySearchKey = matchesKeybinding(
+      effectiveKeybindings.historySearch,
+      DEFAULT_KEYBINDINGS.historySearch,
+      input,
+      key,
+    )
     // Mouse wheel scrolls the transcript — in fullscreen there is no
     // terminal scrollback (alt-screen), so this is the only way back.
     // Imperative scrollBy: no React re-render per notch (CC semantics).
@@ -1644,7 +1664,7 @@ export function Chat({
         setHistoryFocus(index =>
           historyMatches.length === 0 ? 0 : (index <= 0 ? historyMatches.length - 1 : index - 1),
         )
-      } else if (key.downArrow || (isMod(key) && input === 'r')) {
+      } else if (key.downArrow || historySearchKey) {
         // CC's historySearch:next — ↓ and repeat ctrl+r walk to the next match.
         setHistoryFocus(index =>
           historyMatches.length === 0 ? 0 : (index >= historyMatches.length - 1 ? 0 : index + 1),
@@ -1735,12 +1755,13 @@ export function Chat({
       openScene()
       return
     }
-    if (isMod(key) && input === 'r' && !helpOpen) {
+    if (historySearchKey && !helpOpen) {
       setHistoryQuery('')
       setHistoryCursor(0)
       setHistoryFocus(0)
       setHistoryEntries(loadHistory())
       setHistoryOpen(true)
+      event.stopImmediatePropagation()
       return
     }
     if (key.shift && key.upArrow && !selectionActive) {
@@ -1770,9 +1791,15 @@ export function Chat({
         channel.cancel()
       }
       event.stopImmediatePropagation()
-    } else if (isMod(key) && input === 'o') {
+    } else if (matchesKeybinding(
+      effectiveKeybindings.toggleDetails,
+      DEFAULT_KEYBINDINGS.toggleDetails,
+      input,
+      key,
+    )) {
       // Leaving transcript mode (Ctrl+O) — search was already handled above.
       setExpanded(previous => !previous)
+      event.stopImmediatePropagation()
     } else if (input === '/' && !key.ctrl && !key.meta && !key.super) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
       // search is active on the transcript screen where `/` isn't a command).
@@ -1785,14 +1812,14 @@ export function Chat({
         setSearchOpen(true)
         event.stopImmediatePropagation()
       }
-    } else if (key.ctrl && (input === 'c' || input === 'd')) {
+    } else if (interruptKey || (key.ctrl && input === 'd')) {
       // CC's app:exit — ctrl+c interrupts a running turn; idle ctrl+c
       // CLEARS a non-empty prompt (single press) and only arms the
       // double-press exit when the input is empty; ctrl+d keeps the
       // time-based double-press exit regardless.
       if (channel.working) {
         channel.cancel()
-      } else if (input === 'c' && promptControllerRef.current?.hasText()) {
+      } else if (interruptKey && promptControllerRef.current?.hasText()) {
         promptControllerRef.current.clear()
         // A pending exit arm no longer makes sense once the user is editing.
         exitPendingRef.current = false
@@ -1800,6 +1827,7 @@ export function Chat({
       } else {
         requestExit()
       }
+      event.stopImmediatePropagation()
     } else if (isMod(key) && input === 'l') {
       // CC's app:redraw — clear the physical terminal and repaint.
       instances.get(process.stdout)?.forceRedraw()
@@ -2038,6 +2066,7 @@ export function Chat({
         ) : (
           <PromptInput
             channel={channel}
+            keybindings={effectiveKeybindings}
             helpOpen={helpOpen}
             onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
             onRunCommand={runCommand}

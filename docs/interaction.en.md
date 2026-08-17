@@ -25,6 +25,11 @@
 | `?` | Open shortcut and command help when the input is empty |
 | `Shift+Up` | Enter message selection; arrows move, `Enter` expands one row, `Esc` exits |
 
+`Ctrl+R` (history search), `Ctrl+O` (detail toggle), and `Ctrl+C`
+(interrupt/clear/double-press exit) can be remapped through
+[`keybindings`](configuration.en.md#custom-keybindings). `Ctrl+D` always remains
+an idle double-press exit fallback.
+
 `/` has two meanings. In normal input it opens slash-command completion. In
 the `Ctrl+O` transcript view it opens full-session search; use `n` and `N` to
 move forward and backward through matches.
