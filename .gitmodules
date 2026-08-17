@@ -1,0 +1,3 @@
+[submodule "dsh-ecosystem-spec"]
+	path = dsh-ecosystem-spec
+	url = https://github.com/T-Auto/dsh-ecosystem-spec.git
