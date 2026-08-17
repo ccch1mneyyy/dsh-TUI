@@ -413,7 +413,7 @@ const cleanup: string[] = [fakeHome]
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
   const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'ecosystem-spec') })
   check1('tampered private definition dropped',
-    tampered.dropped.includes('x-ccch1mneyyy.tui/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
+    tampered.dropped.includes('tui.dsh/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
   check1('tamper warning names the profileHash drift', tampered.warnings.some(w => w.includes('profile hash drifted')))
   check1('tampered surface keeps only the untampered contracts',
     tampered.descriptor.contracts.length === HOST_SUPPORTED_CONTRACTS.length - 1

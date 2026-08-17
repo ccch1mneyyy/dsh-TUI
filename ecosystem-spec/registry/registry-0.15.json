@@ -41,10 +41,10 @@
     {
       "name": "tui.decision-events",
       "authority": "dsh-tui",
-      "coordinates": {"apiVersion": "x-ccch1mneyyy.tui/v1alpha1", "kind": "DecisionEvents"},
+      "coordinates": {"apiVersion": "tui.dsh/v1alpha1", "kind": "DecisionEvents"},
       "kind": "capability",
       "profile": "registry/contracts/decision-events-v1alpha1.json",
-      "profileHash": "sha256:a9fe0a94efafa2e3890c4b1c36f7a6b902ab1f001b94647b5ce95c1e792d90cd",
+      "profileHash": "sha256:56440dde1b00c210b22761a0cba139ce0a20207330567777cebe1e48b494ceb0",
       "permissions": [
         "session.input.intercept",
         "session.rewind.intercept",

@@ -5,7 +5,7 @@
     {"name":"storage.local.write","default":"deny","revocable":true,"scope":"plugin namespace"},
     {"name":"commands.invoke","default":"allow","revocable":true,"scope":"declared command id","rationale":"调用由宿主或用户通过一次 invocation 主动发起，不同于数据访问类权限——插件无法仅凭此权限被动读取任何数据，故默认允许；撤销只关闭该 command ID 的调用入口"},
     {"name":"messages.observe.read","default":"deny","revocable":true,"scope":"message observation scope"},
-    {"name":"session.input.intercept","default":"deny","revocable":true,"scope":"decision event subscription","rationale":"拦截类订阅（RFC 0005 D-7）：能否决/改写用户输入，严格强于观察，故默认拒绝；TUI 实验实现见 x-ccch1mneyyy.tui.decision-events"},
+    {"name":"session.input.intercept","default":"deny","revocable":true,"scope":"decision event subscription","rationale":"拦截类订阅（RFC 0005 D-7）：能否决/改写用户输入，严格强于观察，故默认拒绝；TUI 实验实现见 tui.dsh/v1alpha1#DecisionEvents"},
     {"name":"session.rewind.intercept","default":"deny","revocable":true,"scope":"decision event subscription","rationale":"同 session.input.intercept——可否决会话回退或注入回退模式"},
     {"name":"session.switch.intercept","default":"deny","revocable":true,"scope":"decision event subscription","rationale":"同 session.input.intercept——可否决会话切换"},
     {"name":"session.compact.intercept","default":"deny","revocable":true,"scope":"decision event subscription","rationale":"同 session.input.intercept——可否决手动压缩"}

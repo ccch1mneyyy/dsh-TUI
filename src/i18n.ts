@@ -479,8 +479,8 @@ const dict = {
     en: 'Command "/{{name}}" invocation denied — its owner plugin "{{owner}}" lost commands.invoke',
   },
   'plugins-check-tui-extension': {
-    zh: '注：该 manifest 依赖 TUI 宿主扩展面（x-ccch1mneyyy.tui/v1alpha1 DecisionEvents / session.*.intercept 权限），判定基于宿主扩展覆盖层而非 vendored 社区注册表。',
-    en: 'Note: this manifest relies on the TUI host-extension surface (x-ccch1mneyyy.tui/v1alpha1 DecisionEvents / session.*.intercept permissions); the verdict used the host extension overlay, not the vendored community registry.',
+    zh: '注：该 manifest 依赖 TUI 宿主扩展面（tui.dsh/v1alpha1 DecisionEvents / session.*.intercept 权限），判定基于宿主扩展覆盖层而非 vendored 社区注册表。',
+    en: 'Note: this manifest relies on the TUI host-extension surface (tui.dsh/v1alpha1 DecisionEvents / session.*.intercept permissions); the verdict used the host extension overlay, not the vendored community registry.',
   },
   // /plugins 诊断面（C-070 信任披露 + 协商诊断）
   'plugins-trust-banner': {

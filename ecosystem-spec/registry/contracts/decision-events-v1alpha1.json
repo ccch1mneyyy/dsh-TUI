@@ -1,6 +1,6 @@
 {
   "name":"tui.decision-events","version":"v1alpha1","kind":"capability",
-  "coordinates":{"apiVersion":"x-ccch1mneyyy.tui/v1alpha1","kind":"DecisionEvents"},
+  "coordinates":{"apiVersion":"tui.dsh/v1alpha1","kind":"DecisionEvents"},
   "caller":"authorized TUI decision-point dispatcher",
   "permissions":["session.input.intercept","session.rewind.intercept","session.switch.intercept","session.compact.intercept"],
   "operations":[{"name":"decide","input":{"event":"private decision envelope"},"output":{"decision":"event-point-defined decision or no-opinion"}}],

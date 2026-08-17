@@ -232,7 +232,7 @@ export function registerDecisionHandler(
     throw new Error('DecisionEvents registration identity is not bound to the calling activation')
   }
   if (!requiresDecisionEvents(identity)) {
-    throw new Error('DecisionEvents registration requires x-ccch1mneyyy.tui/v1alpha1#DecisionEvents')
+    throw new Error('DecisionEvents registration requires tui.dsh/v1alpha1#DecisionEvents')
   }
   if (!TUI_DECISION_EVENT_NAMES.includes(event as typeof TUI_DECISION_EVENT_NAMES[number])) {
     throw new TypeError(`unknown TUI DecisionEvents point: ${event}`)

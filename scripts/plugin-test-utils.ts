@@ -63,4 +63,4 @@ export async function mountAdmitted(
 export const STORAGE_COORDINATE = { apiVersion: 'storage.dsh/v1alpha1', kind: 'LocalStorage' } as const
 export const COMMAND_COORDINATE = { apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' } as const
 export const MESSAGE_COORDINATE = { apiVersion: 'messages.dsh/v1alpha1', kind: 'MessageObserver' } as const
-export const DECISION_COORDINATE = { apiVersion: 'x-ccch1mneyyy.tui/v1alpha1', kind: 'DecisionEvents' } as const
+export const DECISION_COORDINATE = { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' } as const

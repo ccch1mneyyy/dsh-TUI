@@ -9,7 +9,7 @@
 - TUI 自有协议；
 - 将上述内容与 dsh-std 一起执行的 conformance fixtures。
 
-私有协议使用普通的 `apiVersion + kind` 坐标，并注册到 dsh-std `ProtocolCatalog`。`x-ccch1mneyyy.tui/*` 只表示其兼容性由 dsh-TUI 维护，不会获得另一套发现、协商或生命周期机制。
+TUI 扩展使用普通的 `apiVersion + kind` 坐标，并注册到 dsh-std `ProtocolCatalog`。`tui.dsh/*` 表示交互式终端 UI 协议域；在它被公共目录收录前，兼容性仍由 dsh-TUI profile 维护，不会获得另一套发现、协商或生命周期机制。
 
 当前规范和测试均为 Experimental，不代表 dsh 官方认证，也不构成安全隔离。
 

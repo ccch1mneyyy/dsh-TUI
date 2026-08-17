@@ -136,5 +136,5 @@ export function declaresObserverScope(identity: VerifiedComponentIdentity, actua
 
 export function requiresDecisionEvents(identity: VerifiedComponentIdentity): boolean {
   return identity.manifest.requires.contracts.some(requirement =>
-    requirement.apiVersion === 'x-ccch1mneyyy.tui/v1alpha1' && requirement.kind === 'DecisionEvents')
+    requirement.apiVersion === 'tui.dsh/v1alpha1' && requirement.kind === 'DecisionEvents')
 }

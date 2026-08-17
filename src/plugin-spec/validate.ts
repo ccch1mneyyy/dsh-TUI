@@ -83,7 +83,7 @@ export function validatePlugin(index: ContractIndex, manifest: PluginManifest): 
   const knownPermissions = new Set(index.permissions.permissions.map(permission => permission.name))
   const commandIds = new Set(manifest.contributes.commands.map(command => command.id))
   const requiresDecisionEvents = manifest.requires.contracts.some(requirement =>
-    requirement.apiVersion === 'x-ccch1mneyyy.tui/v1alpha1' && requirement.kind === 'DecisionEvents')
+    requirement.apiVersion === 'tui.dsh/v1alpha1' && requirement.kind === 'DecisionEvents')
   for (const permission of manifest.permissions) {
     if (!knownPermissions.has(permission.name)) {
       throw new Error(`permission is not admitted by the TUI profile: ${permission.name}`)
@@ -95,7 +95,7 @@ export function validatePlugin(index: ContractIndex, manifest: PluginManifest): 
       throw new Error(`commands.invoke scope is not a declared command: ${permission.scope}`)
     }
     if (INTERCEPT_PERMISSIONS.has(permission.name) && !requiresDecisionEvents) {
-      throw new Error(`${permission.name} requires x-ccch1mneyyy.tui/v1alpha1#DecisionEvents`)
+      throw new Error(`${permission.name} requires tui.dsh/v1alpha1#DecisionEvents`)
     }
   }
   for (const commandId of commandIds) {

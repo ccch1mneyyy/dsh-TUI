@@ -13,7 +13,7 @@ export const HOST_SUPPORTED_CONTRACTS: readonly ContractCoordinate[] = Object.fr
   { apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' },
   { apiVersion: 'storage.dsh/v1alpha1', kind: 'LocalStorage' },
   { apiVersion: 'messages.dsh/v1alpha1', kind: 'MessageObserver' },
-  { apiVersion: 'x-ccch1mneyyy.tui/v1alpha1', kind: 'DecisionEvents' },
+  { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
 ])
 
 /** The facet version is part of the host identity, not a protocol definition.
@@ -65,7 +65,7 @@ export function readOwnPackageVersion(): string {
 }
 
 function supportSpec(coordinate: ContractCoordinate): unknown {
-  if (coordinate.apiVersion === 'x-ccch1mneyyy.tui/v1alpha1' && coordinate.kind === 'DecisionEvents') {
+  if (coordinate.apiVersion === 'tui.dsh/v1alpha1' && coordinate.kind === 'DecisionEvents') {
     return { features: [...TUI_DECISION_EVENT_NAMES] }
   }
   return undefined
