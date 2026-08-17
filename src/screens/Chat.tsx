@@ -294,15 +294,9 @@ export function Chat({
   /**
    * Close the scene.
    *
-   * Leaving the alternate screen makes the terminal restore the main buffer
-   * itself; Ink then repaints once, because `setAltScreenActive(false)` blanks
-   * its front frame. In inline mode that costs one frame of scrollback per
-   * round trip — the same, already-accepted cost as the Ctrl+X external-editor
-   * handoff, and bounded per OPEN rather than per keystroke. Making it zero
-   * needs the render core to save and restore the pre-alt front frame, which
-   * is a separate change to `setAltScreenActive` and deliberately not made
-   * here. `verify-trace-scene` pins the property that matters meanwhile:
-   * navigating inside the scene adds nothing at all.
+   * Leaving the alternate screen makes the terminal restore the main buffer;
+   * Ink restores the matching saved frame and diffs any conversation changes
+   * that happened while the scene was open.
    */
   const closeScene = React.useCallback(() => {
     setSceneOpen(false)

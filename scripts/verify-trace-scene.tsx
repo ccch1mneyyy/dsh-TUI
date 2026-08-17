@@ -321,7 +321,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   // into an obvious number rather than hiding as a rounding error.
   for (let round = 0; round < 20; round++) {
     stdin.write('\x14') // Ctrl+T
-    await sleep(60)
+    await sleep(round === 0 ? 160 : 60)
     if (round === 0) {
       // Assert the PROTOCOL, not the pixels. `<AlternateScreen>` notifies the
       // Ink instance via `instances.get(process.stdout)`, and this harness
@@ -391,6 +391,134 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 
   stdin.write('q')
   await sleep(120)
+  instance.unmount()
+  instances.delete(process.stdout)
+  term.dispose()
+}
+
+// ───────────────────────── part B2: main-screen frame restore ─────────────
+
+{
+  const { stdout, stdin, screen, term, writes } = makeHarness(120, 30, 500)
+  const marker = 'unchanged conversation marker'
+  const listeners = new Set<() => void>()
+  const channel = makeChannel({
+    traceEvents: () => [],
+    working: false,
+    rows: [{ id: 1, kind: 'assistant', text: marker }],
+    subscribe(listener: () => void): () => void {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  })
+  const publish = (changes: Record<string, unknown>): void => {
+    Object.assign(channel, changes)
+    channel.version = Number(channel.version) + 1
+    for (const listener of listeners) listener()
+  }
+  const instance = await render(
+    React.createElement(Chat, {
+      channel: channel as never,
+      questionStore: new QuestionStore() as never,
+      onExit: () => {},
+      fullscreen: false,
+      trajectorySeen: true,
+    }),
+    { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  await sleep(500)
+  writes.length = 0
+
+  stdin.write('\x14')
+  await sleep(250)
+  check('frame-restore probe enters the alternate screen', term.buffer.active.type === 'alternate')
+  instances.get(process.stdout)?.resetPools()
+  stdin.write('q')
+  await sleep(500)
+
+  const roundTrip = writes.join('')
+  const exitIndex = roundTrip.lastIndexOf('\x1b[?1049l')
+  const afterExit = exitIndex < 0 ? roundTrip : roundTrip.slice(exitIndex + '\x1b[?1049l'.length)
+  const afterExitText = afterExit
+    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+  check(
+    'an unchanged main screen is not repainted after DEC 1049 restores it',
+    exitIndex >= 0 && !afterExitText.includes(marker),
+    `post-exit bytes=${afterExit.length}`,
+  )
+
+  const reasoning = Array.from({ length: 80 }, (_, index) =>
+    `reasoning line ${String(index).padStart(2, '0')}`,
+  ).join('\n')
+  publish({
+    working: true,
+    spinnerMode: 'thinking',
+    rows: [
+      { id: 1, kind: 'user', text: 'investigate the rendering issue' },
+      { id: 2, kind: 'reasoning', text: reasoning.split('\n').slice(0, 40).join('\n'), streaming: true },
+    ],
+    lastUserText: 'investigate the rendering issue',
+  })
+  await sleep(500)
+  stdin.write('\x14')
+  await sleep(250)
+  publish({
+    rows: [
+      { id: 1, kind: 'user', text: 'investigate the rendering issue' },
+      { id: 2, kind: 'reasoning', text: reasoning, streaming: true },
+    ],
+  })
+  await sleep(250)
+  publish({
+    spinnerMode: 'requesting',
+    rows: [
+      { id: 1, kind: 'user', text: 'investigate the rendering issue' },
+      { id: 2, kind: 'reasoning', text: reasoning, streaming: false, durationMs: 12_000 },
+      { id: 3, kind: 'assistant', text: 'FIRST RESPONSE SECTION', streaming: true },
+    ],
+  })
+  await sleep(250)
+  stdin.write('q')
+  await sleep(400)
+  publish({
+    rows: [
+      { id: 1, kind: 'user', text: 'investigate the rendering issue' },
+      { id: 2, kind: 'reasoning', text: reasoning, streaming: false, durationMs: 12_000 },
+      { id: 3, kind: 'assistant', text: 'FIRST RESPONSE SECTION\n\nSECOND RESPONSE SECTION', streaming: true },
+    ],
+  })
+  await sleep(400)
+
+  const buffer = term.buffer.active
+  const lines = Array.from({ length: buffer.length }, (_, row) =>
+    buffer.getLine(row)?.translateToString(true) ?? '',
+  )
+  const secondIndex = lines.findLastIndex(line => line.includes('SECOND RESPONSE SECTION'))
+  let firstIndex = -1
+  for (let index = secondIndex - 1; index >= 0; index--) {
+    if (lines[index]?.includes('FIRST RESPONSE SECTION')) {
+      firstIndex = index
+      break
+    }
+  }
+  const gap = firstIndex < 0 || secondIndex < 0
+    ? Number.POSITIVE_INFINITY
+    : lines.slice(firstIndex + 1, secondIndex).filter(line => line.trim() === '').length
+  check(
+    'reasoning that settles in the trajectory leaves no blank answer gap',
+    firstIndex >= 0 && secondIndex >= 0 && gap <= 1,
+    `first=${firstIndex}, second=${secondIndex}, blank=${gap}, buffer=${buffer.length}`,
+  )
+
+  stdin.write('\x0f') // Ctrl+O
+  await sleep(400)
+  check('Ctrl+O expands settled reasoning after the round trip', screen().includes('reasoning line 79'))
+  stdin.write('\x0f')
+  await sleep(400)
+  check('a second Ctrl+O folds settled reasoning again', !screen().includes('reasoning line 79'))
+
   instance.unmount()
   instances.delete(process.stdout)
   term.dispose()
