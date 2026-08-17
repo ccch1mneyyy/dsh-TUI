@@ -5,6 +5,7 @@ import type { LocalCommand } from '../commands.js'
 import { localizedDescription } from '../commands.js'
 import { t } from '../i18n.js'
 import { modLabel } from '../utils/modifiers.js'
+import { keybindingLabel, resolveKeybindings, type KeybindingConfig } from '../keybindings.js'
 
 /**
  * The `?` help menu, mirroring Claude Code's `PromptInputHelpMenu.tsx`
@@ -18,10 +19,13 @@ import { modLabel } from '../utils/modifiers.js'
  */
 export function HelpMenu({
   commands,
+  keybindings,
 }: {
   commands: readonly LocalCommand[]
+  keybindings?: KeybindingConfig
 }): React.ReactNode {
   const chrome = commands.filter(command => !command.skill)
+  const effective = resolveKeybindings(keybindings).bindings
   return (
     <Box paddingX={2} flexDirection="row" gap={4}>
       <Box flexDirection="column" width={26} flexShrink={0}>
@@ -32,16 +36,16 @@ export function HelpMenu({
           <Text dimColor>{t('help-this-help')}</Text>
         </Box>
         <Box>
-          <Text dimColor>{t('help-verbose-output', { mod: modLabel })}</Text>
+          <Text dimColor>{t('help-verbose-output', { key: keybindingLabel(effective.toggleDetails) })}</Text>
         </Box>
         <Box>
           <Text dimColor>{t('help-toggle-context', { mod: modLabel })}</Text>
         </Box>
         <Box>
-          <Text dimColor>{t('help-search-history', { mod: modLabel })}</Text>
+          <Text dimColor>{t('help-search-history', { key: keybindingLabel(effective.historySearch) })}</Text>
         </Box>
         <Box>
-          <Text dimColor>{t('help-interrupt')}</Text>
+          <Text dimColor>{t('help-interrupt', { key: keybindingLabel(effective.interrupt) })}</Text>
         </Box>
         <Box>
           <Text dimColor>{t('help-exit')}</Text>

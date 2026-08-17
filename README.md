@@ -112,6 +112,9 @@ TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提�
 | `?` | 快捷键菜单 |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
 
+`Ctrl+R`、`Ctrl+O`、`Ctrl+C` 对应的高频动作可通过
+[`keybindings` 配置](docs/configuration.md#自定义快捷键)重新绑定；未配置时保持上表默认值。
+
 **macOS 修饰键**：上表中 Windows/Linux 的 `Ctrl+<键>` 在 macOS 上同时可用 `⌘<键>`
 （如 `⌘V` 粘贴、`⌘O` 展开详情、`⌘Enter` 立即发送）；仅 `Ctrl+C` / `Ctrl+D`
 （中断/退出）保持 Ctrl 不变，避免与 macOS 系统级 `⌘C` 复制等肌肉记忆冲突。

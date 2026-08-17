@@ -99,6 +99,9 @@ jobs:
       # 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
       # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
       - run: node --import tsx/esm scripts/verify-keys.tsx
+      # 可配置快捷键（issue #113）：非法/冲突回退、真实 stdin 动作路径、
+      # 帮助菜单显示最终生效 chord。
+      - run: node --import tsx/esm scripts/verify-keybindings.tsx
 
       # 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
       # 回复只进 querier，不回显成终端残影。

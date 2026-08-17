@@ -331,10 +331,10 @@ const dict = {
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
   'help-this-help': { zh: '? 查看本帮助', en: '? for this help' },
-  'help-verbose-output': { zh: '{{mod}}o 详细输出', en: '{{mod}}o for verbose output' },
+  'help-verbose-output': { zh: '{{key}} 详细输出', en: '{{key}} for verbose output' },
   'help-toggle-context': { zh: '{{mod}}t 切换上下文', en: '{{mod}}t to toggle context' },
-  'help-search-history': { zh: '{{mod}}r 搜索历史', en: '{{mod}}r to search history' },
-  'help-interrupt': { zh: 'ctrl+c 打断', en: 'ctrl+c to interrupt' },
+  'help-search-history': { zh: '{{key}} 搜索历史', en: '{{key}} to search history' },
+  'help-interrupt': { zh: '{{key}} 打断', en: '{{key}} to interrupt' },
   'help-exit': { zh: 'ctrl+d 退出', en: 'ctrl+d to exit' },
   'help-redraw': { zh: '{{mod}}l 重绘', en: '{{mod}}l to redraw' },
   'help-clear-input': { zh: 'esc 清空输入', en: 'esc to clear input' },
@@ -345,6 +345,8 @@ const dict = {
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
   'help-open-editor': { zh: 'ctrl+x 打开编辑器', en: 'ctrl+x to open editor' },
   'help-commands-title': { zh: '命令：', en: 'commands:' },
+  'keybinding-invalid': { zh: '快捷键 {{action}} 的配置“{{value}}”无效，已回退为 {{fallback}}', en: 'Invalid {{action}} shortcut "{{value}}"; using {{fallback}}' },
+  'keybinding-conflict': { zh: '快捷键 {{action}} 的配置“{{value}}”与 {{other}} 冲突，已回退为 {{fallback}}', en: '{{action}} shortcut "{{value}}" conflicts with {{other}}; using {{fallback}}' },
 
   // ── components/InterruptedByUser.tsx ────────────────────────────────
   'interrupted-by-user': { zh: '已打断 ', en: 'Interrupted ' },

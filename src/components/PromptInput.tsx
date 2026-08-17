@@ -16,6 +16,7 @@ import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
 import { OverlayAbove } from './OverlayAbove.js'
+import { DEFAULT_KEYBINDINGS, matchesKeybinding, resolveKeybindings, type KeybindingConfig } from '../keybindings.js'
 
 const HISTORY_LIMIT = 50
 
@@ -70,6 +71,8 @@ export interface PromptController {
 
 export interface PromptInputProps {
   channel: Channel
+  /** Effective global shortcuts displayed by the help menu. */
+  keybindings?: KeybindingConfig
   /** Whether the `?` help menu is open (state lives in the Chat screen). */
   helpOpen: boolean
   onToggleHelp(): void
@@ -125,6 +128,7 @@ export interface PromptInputProps {
  */
 export function PromptInput({
   channel,
+  keybindings,
   helpOpen,
   onToggleHelp,
   onRunCommand,
@@ -134,6 +138,10 @@ export function PromptInput({
   onRewindRequest,
   controllerRef,
 }: PromptInputProps) {
+  const effectiveKeybindings = React.useMemo(
+    () => resolveKeybindings(keybindings).bindings,
+    [keybindings?.historySearch, keybindings?.toggleDetails, keybindings?.interrupt],
+  )
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
   const valueRef = React.useRef(value)
@@ -404,6 +412,11 @@ export function PromptInput({
     // outcome lands — drop any key squeezed into that gap so the prompt's
     // setValue can never overwrite fresh typing (and vice versa).
     if (editorBusyRef.current) return
+    if (
+      matchesKeybinding(effectiveKeybindings.historySearch, DEFAULT_KEYBINDINGS.historySearch, input, key)
+      || matchesKeybinding(effectiveKeybindings.toggleDetails, DEFAULT_KEYBINDINGS.toggleDetails, input, key)
+      || matchesKeybinding(effectiveKeybindings.interrupt, DEFAULT_KEYBINDINGS.interrupt, input, key)
+    ) return
 
     // App deliberately dispatches every parsed key from one stdin read in a
     // single React update. Read the synchronous mirrors so each event sees
@@ -940,7 +953,7 @@ export function PromptInput({
       <OverlayAbove maxHeight={Math.max(terminalRows - 6, 4)}>
         {helpOpen && (
           <Box marginBottom={1}>
-            <HelpMenu commands={channel.commandList} />
+            <HelpMenu commands={channel.commandList} keybindings={keybindings} />
           </Box>
         )}
         {channel.pending.length > 0 && (
