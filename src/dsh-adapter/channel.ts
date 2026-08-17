@@ -187,6 +187,19 @@ export interface TokenUsage {
   output: number
 }
 
+/**
+ * DeepSeek 官方账户余额快照（host 层查询，key 不进 React 层）。
+ * `undefined` 表示不可用（非官方 base URL / 无 key / 查询失败，整行隐藏）。
+ */
+export interface Balance {
+  /** 总余额（total_balance，数值）。 */
+  total: number
+  /** 货币（`CNY`/`USD`，缺省 CNY）。 */
+  currency: string
+  /** 账户是否有余额可供调用（`is_available`，false = 欠费/不可用预警）。 */
+  isAvailable: boolean
+}
+
 /** In-process working-line snapshot derived from the base session stream. */
 export type ActivityStatus = ActivityState
 
@@ -352,6 +365,14 @@ export interface Channel {
   /** Whether the segmented context bar row shows in the status footer
    *  (config.contextBar; the status/mode lines are unaffected). */
   readonly contextBarEnabled: boolean
+  /**
+   * DeepSeek 官方账户余额（host 层每 5 分钟查询），未启用官方 base URL /
+   * 无 key / 查询失败时为 undefined（状态栏整行隐藏）。
+   */
+  readonly balance: Balance | undefined
+  /** 余额预警阈值（cordis.yml `balanceThreshold`，默认 10）：余额低于该值
+   *  状态栏余额转琥珀并一次性通知。 */
+  readonly balanceThreshold: number
   /**
    * Current same-session goal projection, when a goal exists. Derived live
    * from the durable `goal/change` context events (round-zero goal-sourced
@@ -669,6 +690,12 @@ export interface ChannelState {
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
   contextBarEnabled: boolean
+  /** Balance snapshot (see the public Channel type). */
+  balance: Balance | undefined
+  /** Balance threshold (see the public Channel type). */
+  balanceThreshold: number
+  /** Push a fresh balance snapshot from the host layer. */
+  setBalance(balance: Balance | undefined): void
   /** Current same-session goal projection (see the public Channel type). */
   goal: ChannelGoal | undefined
   /** Latest todo-list snapshot (see the public Channel type). */
@@ -1074,6 +1101,11 @@ export function createChannel(
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
+    /** 余额预警阈值；默认 10。 */
+    balanceThreshold?: number
+    /** 每轮对话结束（turn/end，含中断）后触发的 host 回调——余额监控用它
+     *  立即刷新（60s 查询缓存自动防抖）。 */
+    onTurnEnd?: () => void
     /** cordis.yml's static preset choice (`preset` key): wins over the
      *  persisted `/preset` preference for NEW sessions this channel starts. */
     configuredPreset?: string
@@ -1505,6 +1537,22 @@ export function createChannel(
     diffLayout: options.diffLayout ?? 'auto',
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
+    balanceThreshold: options.balanceThreshold ?? 10,
+    balance: undefined,
+    setBalance(balance) {
+      const prev = state.balance
+      if (
+        prev !== undefined &&
+        balance !== undefined &&
+        prev.total === balance.total &&
+        prev.currency === balance.currency &&
+        prev.isAvailable === balance.isAvailable
+      ) {
+        return
+      }
+      state.balance = balance
+      state.emit()
+    },
     agentPreset: options.agentPreset,
     goal: undefined,
     todos: [],
@@ -3884,6 +3932,9 @@ ${output}
         settleStreaming()
         state.working = false
         state.activeToolCount = 0
+        // 对话结束（含中断）：通知 host 刷新余额，消耗立即反映。
+        options.onTurnEnd?.()
+
         if (tpsTurn !== undefined && tpsTurn === event.data.turn) {
           if (tpsTurnSampled && tpsTurnDecodeMs > 0) {
             const turnTps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)

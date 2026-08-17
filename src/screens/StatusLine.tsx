@@ -5,6 +5,7 @@ import { t } from '../i18n.js'
 import { Byline } from '../components/design-system/Byline.js'
 import { KeyboardShortcutHint } from '../components/design-system/KeyboardShortcutHint.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
+import { formatBalance } from '../dsh-adapter/balance.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
@@ -124,6 +125,13 @@ export function StatusLine({
     <Text key="tokens" color="inactiveShimmer">
       {formatTokens(channel.tokens.input)}→{formatTokens(channel.tokens.output)}
     </Text>,
+    ...(channel.balance !== undefined
+      ? [
+          <Text key="balance" color={balanceColor(channel.balance, channel.balanceThreshold)}>
+            {formatBalance(channel.balance)}
+          </Text>,
+        ]
+      : []),
   ]
 
   // Right group: git branch in muted steel blue, cwd a soft white, the
@@ -251,4 +259,14 @@ export function StatusLine({
 function basename(path: string): string {
   const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] ?? path
+}
+
+/** 余额预警配色：账户不可用 → 红（最严重）；低于阈值 → 琥珀；正常 → 常态。 */
+function balanceColor(
+  balance: { total: number; isAvailable: boolean },
+  threshold: number,
+): 'error' | 'warning' | 'inactiveShimmer' {
+  if (!balance.isAvailable) return 'error'
+  if (balance.total < threshold) return 'warning'
+  return 'inactiveShimmer'
 }

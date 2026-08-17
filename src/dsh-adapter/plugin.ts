@@ -9,6 +9,7 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
+import { formatBalance, queryBalance, startBalanceMonitor } from './balance.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { logForDebugging } from '../utils/debug.js'
 import { QuestionStore } from './questions.js'
@@ -305,6 +306,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
     // Static footer preference: cordis.yml `contextBar` (schema default on).
     contextBar: config.contextBar,
+    // 余额预警阈值（cordis.yml `balanceThreshold`，默认 10）。
+    balanceThreshold: config.balanceThreshold,
+    // 每轮对话结束立即刷新余额（60s 查询缓存自动防抖）。
+    onTurnEnd: () => {
+      void queryBalance(ctx).then((balance) => channel.setBalance(balance))
+    },
     // Same precedence for the agent preset: cordis.yml `preset` over the
     // persisted `/preset` choice; undefined adopts the roster default.
     configuredPreset: config.preset,
@@ -317,6 +324,42 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     diffLayout: config.diffLayout,
     handle,
   })
+  // DeepSeek 官方余额监控（host 层查询，key 不进 React 层）：立即查一次，
+  // 之后每 5 分钟刷新；非官方 base URL / 无 key / 失败静默隐藏。
+  // 预警只在状态变化时通知一次（转不可用 / 跌破阈值），恢复后再次跌破会重报。
+  ctx.effect(() => {
+    let unavailableReported = false
+    let lowReported = false
+    return startBalanceMonitor(ctx, (balance) => {
+      channel.setBalance(balance)
+      if (balance === undefined) return
+      const threshold = channel.balanceThreshold
+      if (!balance.isAvailable) {
+        if (!unavailableReported) {
+          unavailableReported = true
+          lowReported = true
+          channel.notify(t('balance-warning-unavailable'), { color: 'error' })
+        }
+        return
+      }
+      unavailableReported = false
+      if (balance.total < threshold) {
+        if (!lowReported) {
+          lowReported = true
+          channel.notify(
+            t('balance-warning-low', {
+              total: formatBalance(balance),
+              threshold: String(threshold),
+            }),
+            { color: 'warning', timeoutMs: 8000 },
+          )
+        }
+      } else {
+        lowReported = false
+      }
+    })
+  })
+
   // Register the dsh-tui settings namespace so the /settings screen can
   // edit it (the section below was '命名空间未注册' without this): the
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and

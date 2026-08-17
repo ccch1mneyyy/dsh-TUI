@@ -666,6 +666,16 @@ const dict = {
   // ── screens/StatusLine.tsx ───────────────────────────────────────────
   'status-cache-label': { zh: '缓存 ', en: 'cache ' },
 
+  // ── 余额预警（host 层 balance 监控）───────────────────────────────────
+  'balance-warning-low': {
+    zh: '余额偏低：{{total}}（低于预警阈值 {{threshold}}）',
+    en: 'Low balance: {{total}} (below threshold {{threshold}})',
+  },
+  'balance-warning-unavailable': {
+    zh: '余额预警：账户不可用，API 调用将被拒绝',
+    en: 'Balance alert: account unavailable, API calls will be rejected',
+  },
+
   // ── screens/TrajectoryScene.tsx（issue #80 演进：全屏轨迹场景）──────────
   'traj-title': { zh: '轨迹', en: 'Trajectory' },
   'traj-totals': { zh: '{{turns}} 轮 · {{steps}} 步', en: '{{turns}} turns · {{steps}} rows' },

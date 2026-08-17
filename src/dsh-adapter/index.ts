@@ -63,6 +63,10 @@ export interface Config {
    *  `ctx used/window` readout) in the status footer; off hides that row
    *  while the status/mode lines stay (issue #29). */
   contextBar?: boolean
+  /** 余额预警阈值：总余额低于该值（按 currency 数值比较）时状态栏余额转琥珀
+   *  并一次性通知；`is_available=false`（账户不可用）时转红，不受阈值影响。
+   *  默认 10。 */
+  balanceThreshold?: number
   /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
   fullscreen?: boolean
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
@@ -98,6 +102,7 @@ export const Config: Schema<Config> = Schema.object({
   activity: Schema.boolean().default(true),
   activityFrames: Schema.string().required(false),
   contextBar: Schema.boolean().default(true),
+  balanceThreshold: Schema.number().default(10),
   fullscreen: Schema.boolean().default(false),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
