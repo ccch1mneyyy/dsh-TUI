@@ -45,6 +45,10 @@
       "types": "./lib/types/scenes.d.ts",
       "import": "./lib/types/scenes.js"
     },
+    "./status-items": {
+      "types": "./lib/types/status-items.d.ts",
+      "import": "./lib/types/status-items.js"
+    },
     "./jsx-runtime": {
       "types": "./lib/types/jsx-runtime.d.ts",
       "import": "./lib/types/jsx-runtime.js"

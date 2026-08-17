@@ -113,6 +113,19 @@ export function StatusLine({
     }
   }
 
+  // Plugin-contributed status items (dsh-tui-status-items runtime) sit
+  // between the built-in context fields and the token counter: they are
+  // glanceable health signals (connection state, latency) of the same rank.
+  const pluginParts = channel.statusItems.map(item => (
+    <Text
+      key={`plugin-${item.id}`}
+      color={item.color as React.ComponentProps<typeof Text>['color']}
+      dimColor={item.dimColor}
+    >
+      {item.text}
+    </Text>
+  ))
+
   // Left group: every field sits at soft white (inactiveShimmer) instead of
   // the previous uniform dim grey — readable against dark terminals.
   const leftParts = [
@@ -121,6 +134,7 @@ export function StatusLine({
     </Text>,
     ...tpsParts,
     ...contextParts,
+    ...pluginParts,
     <Text key="tokens" color="inactiveShimmer">
       {formatTokens(channel.tokens.input)}→{formatTokens(channel.tokens.output)}
     </Text>,

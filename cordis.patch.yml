@@ -198,6 +198,11 @@
     - id: dsh-tui-scenes
       name: '@deepseek-harness-tui/dsh-tui/scenes'
 
+    # Optional plugins contribute status-bar items here; layout, separators
+    # and truncation remain owned by the TUI's StatusLine footer.
+    - id: dsh-tui-status-items
+      name: '@deepseek-harness-tui/dsh-tui/status-items'
+
     # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
     # TUI composes every session's model-facing world from. No `roots` here —
     # the dsh CLI's profile-boot overlays its shipped `config/agent-presets/`

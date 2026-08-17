@@ -37,6 +37,12 @@
 - id: dsh-tui-scenes
   name: '@deepseek-harness-tui/dsh-tui/scenes'
 
+# Optional plugins contribute status-bar items (connection badges, latency
+# readouts, …) here; layout, separators and truncation remain owned by the
+# TUI's StatusLine footer.
+- id: dsh-tui-status-items
+  name: '@deepseek-harness-tui/dsh-tui/status-items'
+
 - id: dsh-tui
   name: '@deepseek-harness-tui/dsh-tui'
   inject: [agents, tuiWorkspaces, tuiScenes]

@@ -245,6 +245,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
     )
   }
+  // Same skew guard for the status-items registry (dsh-tui-status-items row):
+  // absent the service the footer shows no plugin items, with no other hint.
+  if (ctx.get('tuiStatusItems') === undefined && resolveDshProfileName() !== undefined) {
+    ctx.logger.warn(
+      'dsh-tui: tuiStatusItems service is not mounted; plugin status-bar items will never render. ' +
+      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+    )
+  }
   const initialWorkspace = requestedWorkspace === undefined
     ? undefined
     : await workspaceService.resolve(requestedWorkspace)

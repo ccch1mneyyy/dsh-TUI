@@ -56,6 +56,7 @@ import type { TuiCommandTreeRuntime } from './command-trees.js'
 import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
+import type { TuiStatusItem, TuiStatusItemsRuntime } from './status-items.js'
 
 type ChannelImageBlock = Extract<ContentBlock, { type: 'image' }>
 type ChannelImageMediaType = ChannelImageBlock['attachment']['mediaType']
@@ -405,6 +406,13 @@ export interface Channel {
    */
   readonly pluginScene: TuiSceneDescriptor | undefined
   /**
+   * Plugin-contributed status-bar items (the `dsh-tui-status-items` runtime),
+   * in registration order. The StatusLine footer renders them after the
+   * built-in model/tps fields; empty when no plugin contributes items or the
+   * service is not mounted.
+   */
+  readonly statusItems: readonly TuiStatusItem[]
+  /**
    * Open a registered plugin scene by id. Plugin command handlers usually
    * call the runtime directly (`ctx.tuiScenes.open`); this passthrough lets
    * host-side UI code do the same without touching cordis services.
@@ -691,6 +699,8 @@ export interface ChannelState {
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
   /** Open plugin scene mirrored from the scenes runtime (see the public Channel type). */
   pluginScene: TuiSceneDescriptor | undefined
+  /** Plugin-contributed status-bar items (see the public Channel type). */
+  statusItems: readonly TuiStatusItem[]
   /** Open a plugin scene by id (see the public Channel type). */
   openPluginScene(id: string): boolean
   /** Close the open plugin scene (see the public Channel type). */
@@ -1117,6 +1127,10 @@ export function createChannel(
   // tuiWorkspaces/tuiCommandTrees): mounted by the bundle patch's
   // dsh-tui-scenes row; absent the row, `pluginScene` simply stays undefined.
   const sceneRuntime = ctx.get('tuiScenes') as TuiSceneRuntime | undefined
+  // Status-bar item registry (optional service, same degradation rule as
+  // tuiScenes): mounted by the bundle patch's dsh-tui-status-items row;
+  // absent the row, `statusItems` simply stays empty.
+  const statusItemsRuntime = ctx.get('tuiStatusItems') as TuiStatusItemsRuntime | undefined
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
   const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
@@ -2790,6 +2804,7 @@ export function createChannel(
       return executeRegistryCommand(name, rawInput)
     },
     pluginScene: sceneRuntime?.active,
+    statusItems: statusItemsRuntime?.items() ?? [],
     openPluginScene(id: string) {
       return sceneRuntime?.open(id) ?? false
     },
@@ -2984,6 +2999,7 @@ export function createChannel(
     releaseContributions() {
       releaseSkillCommands()
       unsubscribeScenes?.()
+      unsubscribeStatusItems?.()
     },
     traceEvents() {
       // Immutable per-append snapshot (dsh-session caches the frozen array);
@@ -3337,6 +3353,16 @@ export function createChannel(
   const unsubscribeScenes = sceneRuntime?.subscribe(() => {
     if (state.pluginScene === sceneRuntime.active) return
     state.pluginScene = sceneRuntime.active
+    state.emit()
+  })
+  /**
+   * Mirror the status-items runtime's aggregated list into channel state,
+   * same version-bump re-render path as the scene mirror above. The runtime
+   * only notifies on register/dispose/provider change, so every notification
+   * here is a real update.
+   */
+  const unsubscribeStatusItems = statusItemsRuntime?.subscribe(() => {
+    state.statusItems = statusItemsRuntime.items()
     state.emit()
   })
   /** See {@link Channel.releaseContributions}. */
