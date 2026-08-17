@@ -224,6 +224,28 @@ await show('running-diff', {
 })
 check('运行中展示待定 diff', rowOf('- old') >= 0 && rowOf('+ new') >= 0)
 
+// 10. 状态点：分类定色、失败红 ✗。
+await show('dot-bash', { name: 'bash', argsText: '{"command":"ls"}' })
+{
+  const row = rowOf('Bash')
+  check('bash 点为鼠尾草绿小点', row >= 0 && lines()[row]!.includes('•') && fgAt(lines()[row]!.indexOf('•'), row) === 0x7fae99)
+}
+await show('dot-read', { name: 'read' })
+{
+  const row = rowOf('Read')
+  check('read 点为青蓝小点', row >= 0 && fgAt(lines()[row]!.indexOf('•'), row) === 0x82b8c7)
+}
+await show('dot-edit', { name: 'edit' })
+{
+  const row = rowOf('Edit')
+  check('edit 点为雾紫小点', row >= 0 && fgAt(lines()[row]!.indexOf('•'), row) === 0xb3a0d4)
+}
+await show('dot-error', { name: 'bash', status: 'error', errorText: 'boom' })
+{
+  const row = rowOf('Bash')
+  check('失败点变红 ✗', row >= 0 && lines()[row]!.includes('✗') && fgAt(lines()[row]!.indexOf('✗'), row) === 0xda8a93)
+}
+
 // 10. 多 hunk 编辑（settled contextual diff）：同文件相邻 hunk 用 ⋯ 分隔。
 await show('multi-hunk', {
   name: 'edit',

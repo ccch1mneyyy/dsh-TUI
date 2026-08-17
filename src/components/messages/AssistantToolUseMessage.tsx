@@ -316,6 +316,7 @@ export function AssistantToolUseMessage({
             shouldAnimate={isRunning}
             isUnresolved={isRunning}
             isError={isError}
+            toolName={tool.name}
           />
           <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} displayArgs={displayArgs} />
           {!isRunning && (

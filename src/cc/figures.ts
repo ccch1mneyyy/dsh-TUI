@@ -20,6 +20,10 @@ export const POINTER = '\u276f' // ❯
 export const TICK = '\u2713' // ✓
 /** Small dot for separating operators (`∙`). */
 export const BULLET_OPERATOR = '\u2219' // ∙
+/** Settled tool-status dot, smaller than the running pulse (`•`). */
+export const BULLET = '\u2022' // •
+/** Failed tool status (`✗`). */
+export const MULTIPLICATION_X = '\u2717' // ✗
 /** Teardrop asterisk, decorative list marker (`✻`). */
 export const TEARDROP_ASTERISK = '\u273b' // ✻
 /** Lightning bolt, "fast / hot" marker (`↯`). */

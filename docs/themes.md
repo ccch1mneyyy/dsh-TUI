@@ -84,6 +84,7 @@ DSH_TUI_THEME
 | 分组 | 键 |
 | --- | --- |
 | 工具卡衬底（深浅两档） | `toolCardBackground`、`toolCardBackgroundDim` |
+| 工具状态点（按分类） | `toolDotExec`、`toolDotRead`、`toolDotWrite`、`toolDotWeb`、`toolDotTask` |
 | diff 行色 | `diffAdded`、`diffRemoved`、`diffAddedDimmed`、`diffRemovedDimmed`、`diffAddedWord`、`diffRemovedWord` |
 | diff 语法高亮 | `syntaxKeyword`、`syntaxString`、`syntaxComment`、`syntaxNumber`、`syntaxFunction`、`syntaxType`、`syntaxVariable`、`syntaxOperator`、`syntaxPunctuation`、`syntaxConstant` |
 
