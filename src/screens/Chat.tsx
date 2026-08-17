@@ -57,6 +57,7 @@ import type { SessionEvent } from '../dsh-adapter/types.js'
 import { LoadingState } from '../components/design-system/LoadingState.js'
 import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'
+import { formatLoadedContextReport } from '../utils/loaded-context.js'
 
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
@@ -317,15 +318,7 @@ export function Chat({
     })
     setSceneOpen(true)
   }, [])
-  /** Startup context panel: expanded by header click or Ctrl+T. */
-  const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
-  /**
-   * Whether the startup context panel is on screen. Derived once and read by
-   * BOTH the Ctrl+T handler and the render below: the key's meaning depends on
-   * the panel being visible, so a second copy of this condition is a place for
-   * the two to disagree — which is how the key came to advertise one thing and
-   * do another in the first place.
-   */
+  /** The startup summary gives way to transcript rows after the first local command or message. */
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
   const [searchOpen, setSearchOpen] = React.useState(false)
@@ -727,6 +720,16 @@ export function Chat({
         setHelpOpen(false)
         openScene()
         return true
+      case 'context': {
+        setHelpOpen(false)
+        const context = channel.loadedContext
+        if (context === undefined) {
+          channel.notify(t('context-unavailable'), { color: 'warning' })
+          return true
+        }
+        channel.pushLocal('/context', formatLoadedContextReport(context))
+        return true
+      }
       case 'help':
         setHelpOpen(true)
         return true
@@ -1713,25 +1716,7 @@ export function Chat({
       return
     }
     if (isMod(key) && input === 't') {
-      // Ctrl+T means "expand what is in front of you", and the two things it
-      // can expand never share the screen.
-      //
-      // The startup loaded-context panel renders only while the transcript is
-      // empty (see the render below) — and that is exactly the window where
-      // the trajectory has nothing in it yet, since the trajectory is folded
-      // from the session's own events. So the panel wins while it is up, and
-      // the scene takes over for the rest of the session.
-      //
-      // Claiming the key outright for the scene was wrong even though the
-      // panel binding looked dead: the panel prints its own `（Ctrl+T 展开）`
-      // hint, so the key still had a visible promise attached to it, and the
-      // scene it opened instead was necessarily empty at that moment. That
-      // left the panel reachable only by clicking its header, which is not a
-      // keyboard path at all.
-      if (loadedContextVisible) {
-        setLoadedContextOpen(previous => !previous)
-        return
-      }
+      // Ctrl+T has one stable meaning; loaded-context details live at /context.
       openScene()
       return
     }
@@ -1924,16 +1909,12 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
         />
-        {/* The startup loaded-context panel: before the first message the
-            transcript is empty, so the collapsed summary of what this
+        {/* The startup loaded-context summary: before the first message the
+            transcript is empty, so the one-line inventory of what this
             conversation will load (system prompt, workspace instructions,
             skills, tools) sits at the top; the first rows take over. */}
         {loadedContextVisible && (
-          <LoadedContextPanel
-            context={channel.loadedContext}
-            open={loadedContextOpen}
-            onToggle={() => { setLoadedContextOpen(previous => !previous) }}
-          />
+          <LoadedContextPanel context={channel.loadedContext} />
         )}
         <MessageList
           rows={channel.rows}

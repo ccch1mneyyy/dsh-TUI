@@ -35,7 +35,7 @@ export function HelpMenu({
           <Text dimColor>{t('help-verbose-output', { mod: modLabel })}</Text>
         </Box>
         <Box>
-          <Text dimColor>{t('help-toggle-context', { mod: modLabel })}</Text>
+          <Text dimColor>{t('help-open-trajectory', { mod: modLabel })}</Text>
         </Box>
         <Box>
           <Text dimColor>{t('help-search-history', { mod: modLabel })}</Text>
