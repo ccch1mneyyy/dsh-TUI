@@ -36,6 +36,7 @@ import { loadSpecData, verifyContractProfiles, verifyRegistry } from '../plugin-
 import { readGrantStore, type GrantStore } from './grants.js'
 import { buildHostDescriptor, type HostDescriptorBuild } from './host-descriptor.js'
 import { TuiPluginStorageRuntime } from './plugin-storage.js'
+import { TuiMessageObserverRuntime } from './message-observer.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -108,4 +109,7 @@ export function apply(ctx: Context): void {
   ctx.plugin(TuiPluginHostRuntime)
   // storage.local (C-040): per-plugin private persistence.
   ctx.plugin(TuiPluginStorageRuntime)
+  // messages.observe (C-042): the grant-gated observation broker the
+  // channel publishes mapped session events into.
+  ctx.plugin(TuiMessageObserverRuntime)
 }

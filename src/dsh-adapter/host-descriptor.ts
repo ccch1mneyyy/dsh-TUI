@@ -29,15 +29,16 @@ import { digestFile, loadSpecData } from '../plugin-spec/registry.js'
 import { createContractIndex } from '../plugin-spec/validate.js'
 
 /**
- * Contracts this build of the TUI actually provides. Currently: Command
+ * Contracts this build of the TUI actually provides: Command
  * (registration/invoke via the official dsh-commands spine; error-code
  * standardization — DUPLICATE_CONTRIBUTION_ID — lands with the effect
- * ledger batch) and LocalStorage (./plugin-storage.js). messages.observe
- * joins when its broker lands.
+ * ledger batch), LocalStorage (./plugin-storage.js), and MessageObserver
+ * (./message-observer.js).
  */
 export const HOST_SUPPORTED_CONTRACTS: readonly ContractCoordinate[] = [
   { apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' },
   { apiVersion: 'storage.dsh/v1alpha1', kind: 'LocalStorage' },
+  { apiVersion: 'messages.dsh/v1alpha1', kind: 'MessageObserver' },
 ]
 
 export interface HostDescriptorOptions {

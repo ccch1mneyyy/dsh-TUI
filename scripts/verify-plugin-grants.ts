@@ -272,12 +272,12 @@ const cleanup: string[] = [fakeHome]
   check1('missing spec data degrades to empty surface', missing.descriptor.contracts.length === 0)
   check1('missing spec data warns', missing.warnings.some(w => w.includes('unavailable')))
 
-  // D4. 与 negotiate 组合：valid-plugin 需要 observe（我们只有 Command）→ degraded。
+  // D4. 与 negotiate 组合：descriptor 现声明全部三契约，valid-plugin 的
+  // 必填（Command）与可选（observe）都可满足 → compatible。
   const validPlugin = JSON.parse(readFileSync(join(specDir, 'conformance/fixtures/valid-plugin.json'), 'utf8'))
   const decision = negotiate(index, validPlugin, d)
-  check1('negotiate against the built descriptor: compatible_degraded',
-    decision.decision === 'compatible_degraded'
-    && JSON.stringify((decision as { missingOptional?: string[] }).missingOptional) === JSON.stringify(['messages.dsh/v1alpha1#MessageObserver']),
+  check1('negotiate against the built descriptor: compatible',
+    decision.decision === 'compatible',
     JSON.stringify(decision))
 }
 

@@ -100,7 +100,7 @@ Loader）负责，**加载时强制不在本仓库**。本仓库提供的是校�
 （trusted-in-process，C-070）：授权是行为约束，不是安全隔离边界。
 
 当前对齐进度：校验/协商库、vendored 数据、统一授权存储、Host
-Descriptor 构建与 `storage.local` 契约面已落地；`messages.observe`、
+Descriptor 构建、`storage.local` 与 `messages.observe` 契约面已落地；
 效果台账与 `/plugins` 诊断命令在后续批次跟进。
 
 授权存储（`~/.dsh-tui/extension-grants.json`）统一回答全部 8 个注册
@@ -136,6 +136,19 @@ PERMISSION_NOT_GRANTED / INVALID_KEY / QUOTA_EXCEEDED /
 STORAGE_UNAVAILABLE。值必须 JSON 可序列化；key 与 value 永不进日志
 （privacyClass sensitive）。同 namespace 的操作按调用序串行；插件
 卸载即关闭其 handle，数据保留。
+
+`messages.observe`（C-042）：消息观察 broker，经
+`ctx.get('tuiMessageObserver', false)` 的 `subscribe(ctx, listener)`
+订阅（身份=传入 ctx 的 fiber.name）。映射刻意收窄：`user/message` →
+`message.received`、`assistant/message` → `message.sent`；流式 chunk、
+工具与边界事件一律不产出。envelope 逐条过 vendored schema 才投递：
+`scope=session:<id>`、`sequence`=会话事件自身 seq（单调可留洞）、
+`eventId=<sessionId>:<seq>`；privacyClass 一律 `sensitive`（保守起步，
+细分留待后续）；content 只产 text block，summary=消毒后前 200 cell，
+超长打 `truncated`。授权 `messages.observe.read`：订阅时快速失败
+（noop disposer + 告警），投递时逐订阅复检——撤销即释放订阅
+（contract cleanup）。listener 抛错被隔离续投；at-most-once、无重放；
+broker 零持久化（contract retention）。
 
 ## 接缝总览
 

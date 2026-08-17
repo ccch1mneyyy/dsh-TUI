@@ -1223,6 +1223,10 @@ export function createChannel(
   // command/run + command/done records). Absent the service, only the
   // built-in local commands exist.
   const commandService: CommandRuntime | undefined = ctx.get('commands')
+  // messages.observe broker (optional service, C-042): mounted by the
+  // dsh-tui-plugin-host row; absent the row, publish is a no-op and nothing
+  // else changes (soft degradation, #183).
+  const messageObserver = ctx.get('tuiMessageObserver')
   // Workspace registry runtime (optional service, issue #183): mounted by
   // the bundle patch's dsh-tui-workspaces row; absent the row (stale patch
   // or a bare embedder), degrade to the local-only runtime. plugin.ts owns
@@ -4526,6 +4530,10 @@ ${output}
       })(),
       ctx.on('session/event', (session, event) => {
         if (session !== agent.session) return
+        // Observation broker (C-042): maps user/message + assistant/message
+        // into grant-gated envelopes; every other event type is a no-op, and
+        // publish never throws into this arm.
+        messageObserver?.publish(session, event)
         activityTracker.onSessionEvent(event)
         renderWorkingActivity()
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the

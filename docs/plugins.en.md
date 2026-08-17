@@ -117,8 +117,8 @@ a security boundary.
 
 Current alignment status: the validation/negotiation library, vendored data,
 the unified grant store, Host Descriptor construction, and the
-`storage.local` contract surface are in place; `messages.observe`, the
-effect ledger, and the `/plugins` diagnostic command follow in later
+`storage.local` and `messages.observe` contract surfaces are in place; the
+effect ledger and the `/plugins` diagnostic command follow in later
 batches.
 
 The grant store (`~/.dsh-tui/extension-grants.json`) answers for all 8
@@ -161,6 +161,23 @@ STORAGE_UNAVAILABLE. Values must be JSON-serializable; keys and values are
 never logged (privacyClass sensitive). Operations on one namespace serialize
 in invocation order; unloading the plugin closes its handle while the data
 is retained.
+
+`messages.observe` (C-042): the message-observation broker, subscribed via
+`ctx.get('tuiMessageObserver', false)` → `subscribe(ctx, listener)`
+(identity = the passed context's fiber.name). The mapping is deliberately
+narrow: `user/message` → `message.received`, `assistant/message` →
+`message.sent`; streaming chunks, tool and boundary events never produce
+envelopes. Every envelope passes the vendored schema before delivery:
+`scope=session:<id>`, `sequence` = the session event's own seq (monotonic,
+gaps allowed), `eventId=<sessionId>:<seq>`; privacyClass is always
+`sensitive` (conservative first step — finer classification is future
+work); content carries text blocks only, summary is the sanitized first
+200 cells with a `truncated` flag when clipped. The
+`messages.observe.read` grant is checked at subscribe time (fast fail:
+no-op disposer + warning) and re-checked per subscription at deliver time —
+a revocation releases the subscription (contract cleanup). A throwing
+listener is isolated while delivery continues; at-most-once, no replay;
+the broker persists nothing (contract retention).
 
 ## Seam Overview
 
