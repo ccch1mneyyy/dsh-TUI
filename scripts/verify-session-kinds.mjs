@@ -146,6 +146,18 @@ check(
   ['conv', 'fork'],
 )
 check('a rewind fork survives the sub-agent filter', base.rows.some(r => r.kind === 'session' && r.session.id === 'fork'), true)
+const modelSwitchLineage = [
+  summary({ id: 'model-v3', updatedAt: 100, kind: { kind: 'fork', parent: 'model-v2' } }),
+  summary({ id: 'model-v2', updatedAt: 90, kind: { kind: 'fork', parent: 'model-root' } }),
+  summary({ id: 'model-root', updatedAt: 80 }),
+  summary({ id: 'other-fork', updatedAt: 70, kind: { kind: 'fork', parent: 'other-root' } }),
+]
+check(
+  'current conversation ancestors are not resume targets, while unrelated forks remain visible',
+  buildView(modelSwitchLineage, DEFAULT_FILTERS, { ...context, currentId: 'model-v3' })
+    .rows.filter(r => r.kind === 'session').map(r => r.session.id),
+  ['other-fork'],
+)
 check('delegated runs are counted, not merely dropped', base.hiddenSubagents, 2)
 check('sessions with no conversation are counted', base.emptyCount, 1)
 check('and named, so they can be cleaned', base.emptyIds, ['empty'])
