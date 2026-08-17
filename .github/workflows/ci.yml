@@ -339,3 +339,17 @@ jobs:
       # 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
       # onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
       - run: node --import tsx/esm scripts/verify-plugin-scene-boundary.tsx
+      # 会话树（双击 Esc）回归：纯模型（分叉缝合/锚点上溯/过滤器/回退边界/
+      # firstTurn 标记）、无头 Chat 冒烟（打开/搜索/确认/忙座位/拒绝通知/
+      # 40 列与 20 列窄终端单行渲染）、compat 日志读取器（packed 行展开/
+      # 事件预算边界/扫描预算拦住 ignorable 洪泛/plain+zstd 双布局/分块读取/
+      # 原子替换失败清理）、channel 级预算记账（直播会话只计保留
+      # 尾部；全局扫描预算跨日志封顶，洪泛之后的兄弟分支被跳过）、交换锁
+      # （并发 /new、/resume、/model、回退互斥；create 期间易主则弃置新建
+      # agent；回退路径不再触碰 sessions.fork，杜绝幽灵分支）。
+      - run: npm run typecheck
+      - run: npm run tree-check
+      - run: npm run channel-tree-check
+      - run: npm run tree-smoke
+      - run: npm run sessionlog-check
+

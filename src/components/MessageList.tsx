@@ -60,6 +60,7 @@ export function MessageList({
   onUnseenCount,
   failureHintRowId,
   failureHint,
+  transcriptKey,
 }: {
   rows: readonly ChatRow[]
   expanded: boolean
@@ -94,6 +95,14 @@ export function MessageList({
   failureHintRowId?: number | null
   /** Footnote text, e.g. `ctrl+t for the full trajectory`. */
   failureHint?: string
+  /**
+   * Identity of the transcript being rendered (the channel's agent id). An
+   * agent swap (rewind, /new, /resume, /model) REPLACES the rows array and
+   * restarts row ids from 0, so every cached measurement belongs to the
+   * previous transcript's rows — same id, different content. A change here
+   * drops all measured state (see the reset below).
+   */
+  transcriptKey?: string
 }) {
   const hiddenCount = rows.length - MAX_RENDERED_ROWS
   // The thinking filter runs BEFORE virtualization so window indices line up.
@@ -142,6 +151,22 @@ export function MessageList({
   const lastColumns = React.useRef(columns)
   if (lastColumns.current !== columns) {
     lastColumns.current = columns
+    heightsRef.current.clear()
+    baseRef.current = null
+  }
+
+  // An agent swap REPLACES the transcript (rows rebuild from id 0 — rewind,
+  // /new, /resume, /model all go through adoptAgent): every cached height now
+  // names a DIFFERENT row, and the virtualization invariant "row ids grow
+  // monotonically, rows are never removed" is void. Stale heights mis-size
+  // the spacer geometry (a 500-row log's cache on a 30-row replacement), the
+  // renderer's shrink guard then freezes the old scrollTop past the end of
+  // the shorter content (white screen), and each scroll step re-measures a
+  // few more rows, shifting `total` under the viewport (scroll ping-pong).
+  // Drop all measured state so the replacement transcript estimates fresh.
+  const lastTranscriptKey = React.useRef(transcriptKey)
+  if (lastTranscriptKey.current !== transcriptKey) {
+    lastTranscriptKey.current = transcriptKey
     heightsRef.current.clear()
     baseRef.current = null
   }

@@ -17,14 +17,15 @@ import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
 type SideQuestionLlm = {
   stream(options: object): AsyncIterable<StreamChunk>
 }
-import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
 import { completeCommands, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../sessionHistory.js'
-import { appendSessionTitle, deleteSessionLog, ensureLegacySessionEventTypes, sessionsRoots } from './compat/index.js'
+import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
+import { buildSessionTree, coalesceReplayEvents, liveTailWindow, rewindTarget, turnUserText, type FamilySession, type SessionTreeData } from './sessionTree.js'
 import {
   listSummaries,
   locateSession,
@@ -442,10 +443,18 @@ export interface Channel {
    *  with queued input): each text is re-queued as a followup once the abort
    *  settles, so the new turn starts immediately. Returns the count queued. */
   interruptAndDeliver(texts: readonly string[]): number
-  /** Rewind the conversation to a past user message (CC's double-Esc rewind):
-   *  forks the session through that message, swaps in a fresh agent, and
-   *  returns the message text for re-editing — or `null` when unwritable. */
-  rewindTo(row: ChatRow): Promise<string | null>
+  /** Assemble the session family tree for the double-Esc panel: the live
+   *  session plus every persisted session in this cwd linked by
+   *  parentSession/seedLength. Strictly read-only and cost-bounded: history
+   *  logs are decoded tolerantly via compat/sessionLog (never repaired,
+   *  never load-triggered cold recovery), frame decode stops at the event
+   *  budget, and the live session contributes only its tail when oversized. */
+  buildSessionTree(): Promise<SessionTreeData | null>
+  /** Rewind the conversation to any tree entry (CC's double-Esc rewind,
+   *  pi's tree navigation): forks a fresh session ending just before the
+   *  entry's turn, swaps in a new agent, and returns the turn's user text
+   *  for re-editing ('' when the turn had none) — or `null` on failure. */
+  rewindToNode(sessionId: string, seq: number): Promise<string | null>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<boolean>
   /** Start a fresh conversation (`/new`): a brand-new agent + session, the
@@ -717,7 +726,10 @@ export interface ChannelState {
   cancel(): void
   /** @internal interrupt-and-deliver (see the public Channel type). */
   interruptAndDeliver(texts: readonly string[]): number
-  rewindTo(row: ChatRow): Promise<string | null>
+  /** @internal session family tree (see the public Channel type). */
+  buildSessionTree(): Promise<SessionTreeData | null>
+  /** @internal cross-session rewind (see the public Channel type). */
+  rewindToNode(sessionId: string, seq: number): Promise<string | null>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<boolean>
   /** Start a fresh conversation (`/new`). */
@@ -969,51 +981,6 @@ function restoreToolResult(row: ChatRow, event: SessionEvent<'tool/result'>): vo
 }
 
 
-/**
- * Coalesce runs of same-type assistant/chunk deltas into single synthetic
- * events for REPLAY only. A streamed turn logs one event per token (~100k
- * events in long sessions); replaying them one at a time costs per-chunk
- * string growth on every row (quadratic in the turn's length). Merging is
- * outcome-identical: ensureStreaming/ensureReasoning only read chunk.type
- * and the concatenated text, and the row's seq comes from the run's FIRST
- * chunk (the fork boundary rewindTo derives from it). Parts join once —
- * no quadratic concat. Live events never go through this.
- */
-function coalesceReplayEvents(events: readonly SessionEvent[]): SessionEvent[] {
-  type ChunkEvent = Extract<SessionEvent, { type: 'assistant/chunk' }>
-  const out: SessionEvent[] = []
-  let run: { event: ChunkEvent; type: string; parts: string[] } | null = null
-  const flush = (): void => {
-    if (run === null) return
-    const chunk = run.event.data.chunk
-    out.push({
-      ...run.event,
-      data: { ...run.event.data, chunk: { ...chunk, text: run.parts.join('') } },
-    } as ChunkEvent)
-    run = null
-  }
-  for (const event of events) {
-    if (
-      event.type === 'assistant/chunk' &&
-      (event.data.chunk.type === 'text-delta' || event.data.chunk.type === 'reasoning-delta')
-    ) {
-      if (run !== null && run.type === event.data.chunk.type) {
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
-        run.parts.push(event.data.chunk.text ?? '')
-        continue
-      }
-      flush()
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
-      run = { event, type: event.data.chunk.type, parts: [event.data.chunk.text ?? ''] }
-      continue
-    }
-    flush()
-    out.push(event)
-  }
-  flush()
-  return out
-}
-
 /** Buffer below the context window at which CC warns (autoCompact.ts). */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
 
@@ -1039,6 +1006,7 @@ async function waitForTurnEnd(
   }
   return false
 }
+
 
 /**
  * Create the live channel state for one agent session: replay the durable
@@ -1473,6 +1441,23 @@ export function createChannel(
     await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
   }
 
+  /** Agent-swap serialization: rewindToNode/resumeTo/newSession/switchModel
+   *  all spend most of their body in awaits (log load, preset compose, agent
+   *  create) and end by adopting a fresh handle. Two swaps in flight would
+   *  each create a session and the loser's adopt would dispose the winner's
+   *  agent — and a create completing after another swap's adopt leaves an
+   *  orphaned durable branch the session tree and /resume then list. The
+   *  flag makes the second caller fail fast instead of interleaving. */
+  let swapInFlight = false
+  const claimSwap = (): boolean => {
+    if (swapInFlight) return false
+    swapInFlight = true
+    return true
+  }
+  const releaseSwap = (): void => {
+    swapInFlight = false
+  }
+
   const state: ChannelState = {
     version: 0,
     rows: [],
@@ -1688,149 +1673,581 @@ export function createChannel(
       }
       return queued.length
     },
-    async rewindTo(row: ChatRow): Promise<string | null> {
-      if (row.seq === undefined) return null
-      const sessions = ctx.get('sessions') as
-        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
+    async buildSessionTree(): Promise<SessionTreeData | null> {
+      const persistence = ctx.get('sessionPersistence') as
+        | {
+          list(signal?: AbortSignal): Promise<readonly SessionHeader[]>
+          // Optional at runtime: fakes and third-party backends may not
+          // implement the full coordinator surface.
+          inspect?(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[] }>
+          // Backend-resolved per-session artifact path (undefined for
+          // per-session-file-less backends like sqlite).
+          locate?(meta: SessionHeader): { readonly kind: string; readonly path: string } | undefined
+        }
         | undefined
+      if (!persistence) {
+        state.notify('Session tree unavailable — session persistence not loaded', { color: 'error' })
+        return null
+      }
+      // Pin the live session snapshot NOW: every await below (list/inspect)
+      // is a window in which a fire-and-forget switch (/new, /resume,
+      // /model) can swap `agent`. Reading agent.session piecemeal would
+      // stitch the NEW session's events under the OLD session's id — a
+      // confirm would then rewind from the wrong persisted log. Everything
+      // below reads this snapshot, and the result is discarded if the live
+      // session moved on before the build finished.
+      const liveSession = agent.session
+      const currentId = String(liveSession.id)
+      let headers: readonly SessionHeader[] = []
+      try {
+        headers = await persistence.list()
+      } catch {
+        // A listing failure degrades the tree to the live session only.
+      }
+      // Same cwd scoping as /resume (Claude Code's project dimension): forks
+      // inherit cwd, so the family never crosses projects — and the match is
+      // the project-aware one /resume uses, so a pre-upgrade subdirectory
+      // path, Windows separators, or a case variant on one header cannot
+      // quietly amputate the ancestors and siblings it records. Subagent
+      // child sessions carry parentSession too, but they are delegation
+      // artifacts, not rewind branches — exclude them from the family.
+      const local = headers.filter(header =>
+        sessionCwdMatches(state.cwd, header.cwd ?? '') &&
+        header.origin !== 'subagent' &&
+        (header.delegationDepth ?? 0) === 0,
+      )
+      const headerById = new Map(local.map(header => [String(header.id), header]))
+      // The live session's header may not be materialized in list() yet
+      // (the jsonl backend writes on first append) — overlay the in-memory
+      // header so the ancestor walk below still finds a fresh fork's parent.
+      const liveMeta = (liveSession as { header?: SessionHeader }).header
+      if (!headerById.has(currentId) && liveMeta !== undefined) {
+        headerById.set(currentId, liveMeta)
+      }
+      // Family = the live session's ancestor chain PLUS every descendant of
+      // its topmost known ancestor (siblings and cousins included).
+      const childrenByParent = new Map<string, string[]>()
+      for (const header of local) {
+        if (header.parentSession === undefined) continue
+        const key = String(header.parentSession)
+        const list = childrenByParent.get(key)
+        if (list === undefined) childrenByParent.set(key, [String(header.id)])
+        else list.push(String(header.id))
+      }
+      const ancestorIds: string[] = []
+      {
+        const visited = new Set<string>([currentId])
+        let cursor = headerById.get(currentId)
+        while (cursor?.parentSession !== undefined) {
+          const parentId = String(cursor.parentSession)
+          if (visited.has(parentId)) break
+          visited.add(parentId)
+          if (!headerById.has(parentId)) break
+          ancestorIds.push(parentId)
+          cursor = headerById.get(parentId)
+        }
+      }
+      // BFS from the topmost ancestor. The scan must NOT be gated by family
+      // membership: ancestor-chain nodes are already in the family, and
+      // skipping them here would never enumerate their other children —
+      // siblings/cousins forking off a MIDDLE ancestor would be lost.
+      const family = new Set<string>([currentId, ...ancestorIds])
+      {
+        const scanned = new Set<string>()
+        const queue = [ancestorIds.at(-1) ?? currentId]
+        while (queue.length > 0) {
+          const id = queue.shift()!
+          if (scanned.has(id)) continue
+          scanned.add(id)
+          family.add(id)
+          for (const child of childrenByParent.get(id) ?? []) {
+            queue.push(child)
+          }
+        }
+      }
+      // Processing order is TOPOLOGICAL (a parent before its children): the
+      // coverage bookkeeping below — which seq range each chain already
+      // shows — feeds the next read's inherited-prefix skip, so a parent
+      // must be read before its forks. Within each sibling group the live
+      // chain wins, then newest first (the same priority the read budget
+      // always had).
+      const ancestorSet = new Set(ancestorIds)
+      const priorityOf = (a: string, b: string): number => {
+        const aChain = a === currentId || ancestorSet.has(a)
+        const bChain = b === currentId || ancestorSet.has(b)
+        if (aChain !== bChain) return aChain ? -1 : 1
+        return (headerById.get(b)?.createdAt ?? 0) - (headerById.get(a)?.createdAt ?? 0)
+      }
+      const kidsOf = new Map<string, string[]>()
+      const familyRoots: string[] = []
+      for (const id of family) {
+        const parent = headerById.get(id)?.parentSession
+        const parentId = parent !== undefined ? String(parent) : undefined
+        if (parentId !== undefined && parentId !== id && family.has(parentId)) {
+          const list = kidsOf.get(parentId)
+          if (list === undefined) kidsOf.set(parentId, [id])
+          else list.push(id)
+        } else {
+          familyRoots.push(id)
+        }
+      }
+      familyRoots.sort(priorityOf)
+      for (const list of kidsOf.values()) list.sort(priorityOf)
+      const ordered: string[] = []
+      {
+        const seen = new Set<string>()
+        const stack = [...familyRoots].reverse()
+        while (stack.length > 0) {
+          const id = stack.pop()!
+          if (seen.has(id)) continue
+          seen.add(id)
+          ordered.push(id)
+          const kids = kidsOf.get(id)
+          if (kids !== undefined) {
+            for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!)
+          }
+        }
+        // Cycle-broken leftovers (corrupt parent headers) — never drop one.
+        for (const id of [...family].sort(priorityOf)) {
+          if (!seen.has(id)) ordered.push(id)
+        }
+      }
+      // Caps: the ancestor chain + live session ALWAYS stay selected — the
+      // structural invariant (the live branch must reach the family root)
+      // outranks the session cap, which therefore evicts only non-ancestors.
+      // The event budget bounds the READ cost too: non-live logs decode
+      // lazily and stop at the remaining budget (see below), the live
+      // session keeps only its tail.
+      const MAX_TREE_SESSIONS = 24
+      const MAX_TREE_EVENTS = 200_000
+      // The event budget alone does NOT bound read cost: skipped envelopes
+      // (ignorable frames, headers) are paid for but never collected, so a
+      // noisy log can return ZERO events and leave the next log a full scan
+      // allowance — 23 logs × ~800k envelopes would block the TUI for
+      // seconds. scanBudget caps the TOTAL envelopes inspected across all
+      // logs (the reader reports its real scanned count); per-log caps
+      // derive from the event budget as before, and the smaller of the two
+      // applies, so one flood cannot starve every later sibling either.
+      const MAX_TREE_SCANNED = defaultMaxScanned(MAX_TREE_EVENTS)
+      let scanBudget = MAX_TREE_SCANNED
+      const selected = new Set<string>()
+      let slots = MAX_TREE_SESSIONS
+      for (const id of ordered) {
+        const chain = id === currentId || ancestorSet.has(id)
+        if (chain || slots > 0) {
+          selected.add(id)
+          if (!chain) slots -= 1
+        }
+      }
+      // The live session's events come from memory (its header may not be
+      // materialized yet — the jsonl backend writes on first append).
+      const liveHeader = headerById.get(currentId)
+      const familySessions: FamilySession[] = []
+      let truncated = selected.size < family.size
+      let eventBudget = 0
+      // Coverage bookkeeping: coveredThrough(S) = the highest K such that
+      // [0..K] is already displayed by S's chain or an ancestor's. A fork's
+      // inherited seed prefix duplicates that range, so non-live reads SKIP
+      // it (the reader's skipBelowSeq): the prefix still costs scan budget
+      // (its bytes are read and parsed) but NOT the event budget — a fork
+      // of a huge parent pays only for its OWN events, so two small forks
+      // of a 70k-event parent both stay visible. Unreadable/unloaded
+      // sessions are transparent: they claim nothing beyond what their own
+      // ancestors covered, so a fork of a dead branch dedups against the
+      // grandparent instead of hiding its self-contained history.
+      const coveredThrough = new Map<string, number>()
+      for (const id of ordered) {
+        if (!selected.has(id)) continue
+        const header = headerById.get(id)
+        if (id === currentId) {
+          const liveParent = liveHeader?.parentSession ?? liveMeta?.parentSession
+          const liveParentId = liveParent !== undefined ? String(liveParent) : undefined
+          const parentCovered = liveParentId !== undefined
+            ? (coveredThrough.get(liveParentId) ?? -1)
+            : -1
+          const liveEvents = liveSession.events
+          const remaining = Math.max(0, MAX_TREE_EVENTS - eventBudget)
+          // The live session's in-memory log is SELF-CONTAINED: a fork's
+          // events still carry the inherited seed prefix, which the parent's
+          // chain already displays (and already charged to the budget).
+          // Skipping it exactly like the non-live reads do keeps a live fork
+          // of a huge parent from spending the whole family budget on
+          // duplicated history and evicting its own siblings.
+          const liveSeed = liveHeader?.seedLength ?? liveMeta?.seedLength
+          const skipBelow =
+            liveParentId !== undefined && liveSeed !== undefined
+              ? Math.min(liveSeed, parentCovered + 1)
+              : 0
+          const own = skipBelow > 0 ? liveEvents.filter(event => event.seq >= skipBelow) : liveEvents
+          // A live session larger than the remaining budget keeps its TAIL,
+          // aligned to whole turns (sessionTree.liveTailWindow): leftover
+          // entries of a turn whose turn/start was cut away render as
+          // selectable rows that can never rewind; a window holding no
+          // turn/start at all (one oversized LAST turn spans the budget)
+          // retries over the earlier complete turns instead of blacking the
+          // session out. Rewind itself never reads this copy (rewindToNode
+          // forks the real session), so the slice only narrows what the tree
+          // can display.
+          const events = liveTailWindow(own, remaining)
+          // Charge the KEPT tail, not the in-memory length: extraction only
+          // ever touches `events`, and charging the full log would black out
+          // every other family member's budget behind a discarded prefix.
+          eventBudget += events.length
+          if (events.length !== own.length) truncated = true
+          familySessions.push({
+            id,
+            createdAt: liveHeader?.createdAt ?? liveMeta?.createdAt ?? Date.now(),
+            ...(liveParentId !== undefined ? { parentSession: liveParentId } : {}),
+            ...(liveHeader?.seedLength !== undefined || liveMeta?.seedLength !== undefined
+              ? { seedLength: liveHeader?.seedLength ?? liveMeta!.seedLength }
+              : {}),
+            events,
+            live: true,
+            // The in-memory log always reaches the tip (liveTailWindow trims
+            // the head only), so the adopt/warning UX facts are derivable.
+            tailComplete: true,
+          })
+          // A kept tail cut off the front connects to nothing — coverage
+          // stays at the parent's (a fork of the live session re-reads the
+          // hidden prefix from its own log).
+          const firstKept = events.length > 0 ? events[0]!.seq : Number.POSITIVE_INFINITY
+          const lastKept = events.length > 0 ? events[events.length - 1]!.seq : -1
+          coveredThrough.set(
+            id,
+            firstKept <= parentCovered + 1 ? Math.max(parentCovered, lastKept) : parentCovered,
+          )
+          continue
+        }
+        const parentId = header?.parentSession !== undefined ? String(header.parentSession) : undefined
+        const parentCovered = parentId !== undefined ? (coveredThrough.get(parentId) ?? -1) : -1
+        // Never skip past the seed prefix: events beyond it are this
+        // session's OWN — no ancestor can show them. A parent that was never
+        // read (evicted, or outside the family) covers nothing (skip 0).
+        const skipBelow =
+          parentId !== undefined && header?.seedLength !== undefined
+            ? Math.min(header.seedLength, parentCovered + 1)
+            : 0
+        const facts = {
+          id,
+          createdAt: header?.createdAt ?? 0,
+          ...(parentId !== undefined ? { parentSession: parentId } : {}),
+          ...(header?.seedLength !== undefined ? { seedLength: header.seedLength } : {}),
+        }
+        if (eventBudget >= MAX_TREE_EVENTS || scanBudget <= 0) {
+          // Budget spent: keep the STRUCTURE — the session degrades to an
+          // unloaded placeholder so its branch (and any ancestor chain
+          // through it) stays visible instead of vanishing from the tree.
+          truncated = true
+          familySessions.push({ ...facts, events: [], live: false, unloaded: true })
+          coveredThrough.set(id, parentCovered)
+          continue
+        }
+        // Read-only, tolerant, bounded: the compat reader decodes frames
+        // lazily and stops at the remaining event budget. Browsing the tree
+        // must never REWRITE history logs (the ignorable-marking repair
+        // stays on the explicit resume/rewind path), and the strict backend
+        // inspect would both reject third-party event types wholesale and
+        // parse chunk-heavy logs whole. Header facts come from list().
+        const remaining = MAX_TREE_EVENTS - eventBudget
+        // Source precedence, all read-only:
+        //  1. persistence.locate — the backend's OWN artifact resolution is
+        //     authoritative (custom root, workspace-key scheme). When it
+        //     names a path, ONLY that file is read: falling back to a
+        //     same-id copy under the stock root could surface a STALE log
+        //     from another backend configuration. A locate miss or an ABSENT
+        //     file falls through to inspect, never to the stock scan.
+        //  2. Stock root scan — only for backends WITHOUT locate (fakes,
+        //     older custom implementations).
+        //  3. inspect — the backend's strict read (non-file backends), with
+        //     the same budget enforced on what we keep — and ONLY when the
+        //     file read found NOTHING (undefined). A read that failed on a
+        //     safety cap or corruption (failed) must never escalate here:
+        //     inspect parses the WHOLE log up front, so falling through
+        //     would re-read unboundedly exactly the logs the caps exist to
+        //     bound (64 MiB frames, decode bombs) — degrade to a placeholder
+        //     instead.
+        let events: readonly SessionEvent[] | undefined
+        let complete = true
+        let failed = false
+        // First seq the chosen source actually covers: the file readers start
+        // at the inherited-prefix skip, inspect always hands the whole log.
+        let readFrom = 0
+        // Per-log scan allowance: the usual 4×-of-remaining derivation,
+        // clamped to what the tree-level scan budget still has.
+        const scanAllowance = Math.min(defaultMaxScanned(remaining), scanBudget)
+        const locate = persistence.locate
+        const hasLocate = typeof locate === 'function'
+        if (hasLocate && header !== undefined) {
+          let locatedPath: string | undefined
+          try {
+            const location = locate.call(persistence, header)
+            // Only the jsonl kind enters the compat file layer — a foreign
+            // kind's artifact is the backend's own format (inspect below).
+            if (location !== undefined && location.kind === 'jsonl') {
+              locatedPath = location.path
+            }
+          } catch {
+            // Best effort — a locate hiccup falls through to inspect.
+          }
+          if (locatedPath !== undefined) {
+            const viaPath = readSessionEventsFromFile(locatedPath, remaining, scanAllowance, skipBelow)
+            if (viaPath !== undefined) {
+              scanBudget -= viaPath.scanned
+              if (viaPath.failed === true) failed = true
+              else {
+                events = viaPath.events
+                complete = viaPath.complete
+                readFrom = skipBelow
+              }
+            }
+          }
+        } else if (!hasLocate) {
+          const read = readSessionEventsFromLog(id, remaining, scanAllowance, skipBelow)
+          if (read !== undefined) {
+            scanBudget -= read.scanned
+            if (read.failed === true) failed = true
+            else {
+              events = read.events
+              complete = read.complete
+              readFrom = skipBelow
+            }
+          }
+        }
+        if (!failed && events === undefined && typeof persistence.inspect === 'function') {
+          try {
+            const inspection = await persistence.inspect(SessionId(id))
+            // inspect parses the WHOLE log up front: charge the full length
+            // to the scan budget (may overdraw; the next iterations skip).
+            scanBudget -= inspection.events.length
+            // Non-file backends hand back the self-contained log from seq 0:
+            // the inherited-prefix skip the file readers got must apply here
+            // too, or a long prefix would fill the slice and the branch's OWN
+            // events — the only ones nobody else displays — would be cut.
+            const all = skipBelow > 0 ? inspection.events.filter(event => event.seq >= skipBelow) : inspection.events
+            readFrom = skipBelow
+            events = all
+            if (events.length > remaining) {
+              events = events.slice(0, remaining)
+              complete = false
+            }
+          } catch {
+            events = undefined
+          }
+        }
+        if (failed || events === undefined) {
+          // An unreadable log keeps the branch structure, no entries — and
+          // stays transparent for coverage, so a fork of this branch dedups
+          // against the grandparent instead of hiding its own history.
+          familySessions.push({ ...facts, events: [], live: false, unreadable: true })
+          coveredThrough.set(id, parentCovered)
+          continue
+        }
+        eventBudget += events.length
+        if (!complete) truncated = true
+        // tailComplete gates the branch-adopt target and the drop-turn
+        // warning: a budget-sliced read lost the tail, and a tip computed
+        // from it would fork mid-branch while claiming to keep everything.
+        familySessions.push({ ...facts, events, live: false, ...(complete ? { tailComplete: true } : {}) })
+        const lastRead = events.length > 0 ? events[events.length - 1]!.seq : -1
+        coveredThrough.set(
+          id,
+          readFrom <= parentCovered + 1 ? Math.max(parentCovered, lastRead) : parentCovered,
+        )
+      }
+      // A session swap mid-build invalidates the whole assembly (it mixes
+      // the snapshot's lineage with headers listed for the OLD cwd state):
+      // drop it silently — the reopened tree rebuilds on the new session.
+      if (agent.session !== liveSession) return null
+      return buildSessionTree(familySessions, currentId, truncated)
+    },
+    async rewindToNode(sessionId: string, seq: number): Promise<string | null> {
       const agents = ctx.get('agents') as
         | { create(options: CreateAgentOptions): Promise<AgentHandle> }
         | undefined
-      if (!sessions || !agents) {
+      if (!agents) {
         state.notify(t('rewind-unavailable'), { color: 'error' })
         return null
       }
-      // Stop a running turn first and WAIT for its turn/end to land — fork
-      // rejects boundaries inside open turns, and Agent.cancel() closes the
-      // turn asynchronously (a long thinking turn can take seconds to settle).
-      const wasWorking = state.working
-      const cancelSeq = agent.session.seq
-      if (wasWorking) agent.cancel({ kind: 'user' })
-      if (wasWorking) {
-        const turnSettled = await waitForTurnEnd(agent.session, cancelSeq, 30000)
-        if (!turnSettled) {
-          state.notify(t('rewind-settling'), { color: 'error' })
+      // Agent swaps serialize: the awaits below (log load, preset compose,
+      // agent create) are windows in which a fire-and-forget /new, /resume
+      // or /model could otherwise interleave — two swaps would each create
+      // a session and the loser's adopt would dispose the winner's agent,
+      // leaving an orphaned branch behind.
+      if (!claimSwap()) {
+        state.notify(t('swap-in-progress'), { color: 'warning' })
+        return null
+      }
+      try {
+        // Pin the entry-time session: the awaits below (log load, preset
+        // compose, agent create) are windows in which a fire-and-forget switch
+        // (/new, /resume, /model) can swap `agent`. The boundary and restored
+        // text derive from THIS session's log — forking or disposing whatever
+        // agent happens to be current at the end would rewind the wrong
+        // session, so a swap anywhere along the way aborts the rewind.
+        const entrySession = agent.session
+        const currentId = String(entrySession.id)
+        const childId = SessionId(randomUUID())
+        // Source events: the live session from memory; any other family member
+        // from its durable log (legacy event types registered first — the same
+        // in-process compat seam as resumeTo, since load validates known types).
+        let sourceEvents: readonly SessionEvent[]
+        let sourceCwd = state.cwd
+        let forkFromLive = true
+        if (sessionId === currentId) {
+          sourceEvents = entrySession.events
+        } else {
+          forkFromLive = false
+          const persistence = ctx.get('sessionPersistence') as
+            | {
+              load(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>
+            }
+            | undefined
+          if (!persistence) {
+            state.notify(t('rewind-no-persistence'), { color: 'error' })
+            return null
+          }
+          try {
+            ensureLegacySessionEventTypes()
+            const loaded = await persistence.load(SessionId(sessionId))
+            sourceEvents = loaded.events
+            sourceCwd = loaded.meta.cwd ?? state.cwd
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            state.notify(t('rewind-load-failed', { err: message }), { color: 'error' })
+            return null
+          }
+        }
+        // DSH event order is `turn/start → user/message → … → turn/end`, and a
+        // fork seed must not end inside an open turn. pi's navigateTree
+        // semantics mapped onto that constraint (sessionTree.rewindTarget): a
+        // USER message drops its turn — the boundary sits just before the
+        // turn/start and the prompt comes back into the input for re-editing;
+        // any OTHER entry keeps through its enclosing STEP — a mid-turn cut at
+        // the step/end with the turn closed synthetically (DSH agentic turns
+        // span thousands of events, so turn-granular keeping would barely move
+        // the visible history). The prompt text returns only when the entry's
+        // turn was dropped.
+        const target = rewindTarget(sourceEvents, seq)
+        const boundary = target.boundary
+        if (boundary < 0) {
+          state.notify(t('rewind-first-message'), { color: 'error' })
           return null
         }
-      }
-      const childId = SessionId(randomUUID())
-      // DSH event order is `turn/start → user/message → … → turn/end`, so a
-      // message's own seq always sits inside its turn — forking there would
-      // hit OPEN_TURN. Rewind to just BEFORE the message's turn/start: the
-      // conversation restarts at that point and the message itself comes
-      // back into the input for re-editing (CC's rewind semantics).
-      const events = agent.session.events
-      let boundary = row.seq
-      for (let i = row.seq; i >= 0; i--) {
-        const event = events[i]
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: seq may exceed events
-        if (event === undefined) break
-        if (event.type === 'turn/start') {
-          boundary = event.seq - 1
-          break
+        // Keeping the entry can still be a NO-OP: when nothing message-bearing
+        // follows the boundary (only a turn/end, or nothing at all), the fork's
+        // transcript would be identical to the live one. pi truncates to right
+        // after the entry; DSH's step/turn-closed seed cannot always express
+        // that, so the honest answer is to say there is nothing to rewind. A
+        // DEAD session's tip still forks: that adopts the branch, a real
+        // switch.
+        if (forkFromLive && !sourceEvents.some(event =>
+          event.seq > boundary &&
+          (event.type === 'user/message' || event.type === 'assistant/message' ||
+            event.type === 'tool/call' || event.type === 'tool/result'))) {
+          state.notify(t('rewind-noop'), { color: 'warning' })
+          return null
         }
-        if (event.type === 'turn/end') break
-      }
-      // Slice the seed ourselves instead of storing a fork: agents.create
-      // must own the session (a pre-created fork session would collide on
-      // the same id). The create boundary validates the seed (contiguous
-      // from seq 0, no open turns), which our boundary already guarantees.
-      let seed: readonly SessionEvent[]
-      try {
-        if (boundary < 0) {
-          throw new Error('cannot rewind to the very first message')
+        // The dropped turn's own prompt text, restored into the input after
+        // the swap ('' whenever the turn was kept — or had no human-typed
+        // text to restore).
+        const restoredText = turnUserText(sourceEvents, seq)
+        // The fork continues under the source session's own preset: switches
+        // are blank-only, so every `agent-preset/selected` event predates any
+        // rewind boundary and the source log resolves the exact composition.
+        // The route likewise stays the live one — a rewind continues the same
+        // conversation, so a `/model` switch must survive it (issue #30).
+        const sourcePreset = forkFromLive
+          ? runningPresetOf(entrySession)
+          : ((await resolvePersistedPreset(ctx, SessionId(sessionId))) ?? runningPresetOf(entrySession))
+        const rewindComposed = await composePreset(ctx, sourcePreset)
+        // Everything fallible is done — only NOW stop a running turn (a load
+        // or preset failure above must not kill it). But bail first when the
+        // live session was swapped during those awaits: cancelling/forking
+        // now would hit the NEW session with THIS session's boundary.
+        if (agent.session !== entrySession) {
+          state.notify(t('rewind-session-changed'), { color: 'error' })
+          return null
         }
-        seed = sessions.fork(agent.session, boundary).events
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        state.notify(t('rewind-fork-failed', { err: message }), { color: 'error' })
-        return null
+        // WAIT for its turn/end to
+        // land: fork rejects boundaries inside open turns, and Agent.cancel()
+        // closes the turn asynchronously (a long thinking turn can take
+        // seconds to settle). Cross-session rewinds need this too: the live
+        // agent is about to be disposed, and its turn must close cleanly.
+        const wasWorking = state.working
+        const cancelSeq = agent.session.seq
+        if (wasWorking) agent.cancel({ kind: 'user' })
+        if (wasWorking) {
+          const turnSettled = await waitForTurnEnd(agent.session, cancelSeq, 30000)
+          if (!turnSettled) {
+            state.notify(t('rewind-settling'), { color: 'error' })
+            return null
+          }
+        }
+        // Slice the seed from the PINNED event snapshot. Never sessions.fork
+        // here: upstream fork() is not a slicer — it creates and announces a
+        // REAL child session in the store (durable header included) whose
+        // events we would then discard, so every rewind leaking through it
+        // left an orphaned branch the session tree and /resume then listed.
+        // agents.create validates the seed itself (contiguous from seq 0, no
+        // open turns) — a mid-turn cut (closeTurn set) ends inside an open
+        // turn, so close it with the exact event a real user interrupt writes
+        // (the persistence layer closes crash-orphaned turns the same way).
+        const seed = sourceEvents.filter(event => event.seq <= boundary)
+        if (target.closeTurn !== undefined) {
+          const last = seed[seed.length - 1]
+          if (last !== undefined) {
+            seed.push({
+              type: 'turn/end',
+              seq: last.seq + 1,
+              time: last.time + 1,
+              data: { turn: target.closeTurn, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+            })
+          }
+        }
+        let handle: AgentHandle
+        try {
+          handle = await agents.create({
+            sessionId: childId,
+            seed,
+            meta: {
+              cwd: sourceCwd,
+              parentSession: SessionId(sessionId),
+              seedLength: seed.length,
+              ...(rewindComposed.agentPreset === undefined
+                ? {}
+                : { agentPreset: rewindComposed.agentPreset }),
+            },
+            agentOptions: { provider: state.provider, model: state.model },
+            ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
+          })
+        } catch {
+          state.notify(t('rewind-create-failed'), { color: 'error' })
+          return null
+        }
+        try {
+          await attachSessionToWorkspace(ctx, sourceCwd, childId)
+        } catch (error) {
+          state.notify(
+            t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+            { color: 'warning', timeoutMs: 8000 },
+          )
+        }
+        // The create await was another swap window: adopting now would dispose
+        // the NEW session's agent. Free the fork we just made and bail.
+        if (agent.session !== entrySession) {
+          void handle.dispose().catch(() => {})
+          state.notify(t('rewind-session-changed'), { color: 'error' })
+          return null
+        }
+        // Replay the forked history into a fresh transcript (tokens/spinner
+        // counters land back at the rewind point, matching the fork).
+        adoptAgent(handle, { replay: seed, agentPreset: rewindComposed.agentPreset })
+        // The forked session (rewind) becomes the most recently used.
+        touchSession(childId)
+        return restoredText
+      } finally {
+        releaseSwap()
       }
-      let handle: AgentHandle
-      // The fork continues under the source session's own preset: switches
-      // are blank-only, so every `agent-preset/selected` event predates any
-      // rewind boundary and the source log resolves the exact composition.
-      // The route likewise stays the live one — a rewind continues the same
-      // conversation, so a `/model` switch must survive it (issue #30).
-      const rewindComposed = await composePreset(ctx, runningPresetOf(agent.session))
-      try {
-        handle = await agents.create({
-          sessionId: childId,
-          seed,
-          meta: {
-            cwd: state.cwd,
-            parentSession: agent.session.id,
-            seedLength: seed.length,
-            ...(rewindComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: rewindComposed.agentPreset }),
-          },
-          agentOptions: { provider: state.provider, model: state.model },
-          ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
-        })
-      } catch {
-        state.notify(t('rewind-create-failed'), { color: 'error' })
-        return null
-      }
-      try {
-        await attachSessionToWorkspace(ctx, state.cwd, childId)
-      } catch (error) {
-        state.notify(
-          t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      // Replay the forked history into a fresh transcript (tokens/spinner
-      // counters land back at the rewind point, matching the fork).
-      streaming = undefined
-      reasoning = undefined
-      toolCards.clear()
-      nextRowId = 0
-      state.rows.length = 0
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.spinnerMode = 'requesting'
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.agentPreset = rewindComposed.agentPreset
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      for (const event of coalesceReplayEvents(seed)) renderEvent(event)
-      // Rebind subscriptions to the new agent, then free the old one.
-      const oldHandle = currentHandle
-      agent = handle.agent
-      currentHandle = handle
-      bindAgent()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      // The forked session (rewind) becomes the most recently used.
-      touchSession(childId)
-      state.emit()
-      void oldHandle?.dispose().catch(() => {})
-      return row.text
     },
     async resumeTo(sessionId: string): Promise<boolean> {
       // Switch the live agent to a persisted session: /resume picker Enter
@@ -1853,130 +2270,138 @@ export function createChannel(
         state.notify(t('resume-unavailable'), { color: 'error' })
         return false
       }
-      let handle: AgentHandle
-      // Compat boundary: register vouched-for legacy event types (e.g.
-      // activity/status from pre-#143 logs) in every reachable dsh-session
-      // copy before ANY strict read path (preset lookup below, then the
-      // harness seed validation) loads the target — the plugin's #119
-      // registration never ran in processes where it is unmounted (issue
-      // #153). In-process only: the shared log is never rewritten.
-      ensureLegacySessionEventTypes()
-      // The target session's own preset (from its persisted log) — never the
-      // current preference: a resume re-enters the composition its history
-      // was produced under. Same rule for the route: only an explicit
-      // cordis.yml provider/model overrides the route the target's own
-      // request/header records (issue #30) — and only as a COMPLETE pair
-      // (issue #67): a provider-only pin must not merge with the recorded
-      // model half into a route no adapter recognizes.
-      const resumeComposed = await composePreset(
-        ctx,
-        await resolvePersistedPreset(ctx, SessionId(sessionId)),
-      )
-      const resumeRoute = explicitModelRoute({
-        provider: options.configuredProvider,
-        model: options.configuredModel,
-      })
-      try {
-        handle = await agents.resume({
-          resumeSessionId: SessionId(sessionId),
-          agentOptions: { provider: resumeRoute?.provider, model: resumeRoute?.model },
-          ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
-        })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        state.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+      if (!claimSwap()) {
+        state.notify(t('swap-in-progress'), { color: 'warning' })
         return false
       }
       try {
-        // `/resume` is an explicit adoption of this persisted conversation.
-        // This also repairs sessions created by TUI versions that predate the
-        // separate workspace ownership ledger.
-        await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
-      } catch (error) {
-        state.notify(
-          t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
+        let handle: AgentHandle
+        // Compat boundary: register vouched-for legacy event types (e.g.
+        // activity/status from pre-#143 logs) in every reachable dsh-session
+        // copy before ANY strict read path (preset lookup below, then the
+        // harness seed validation) loads the target — the plugin's #119
+        // registration never ran in processes where it is unmounted (issue
+        // #153). In-process only: the shared log is never rewritten.
+        ensureLegacySessionEventTypes()
+        // The target session's own preset (from its persisted log) — never the
+        // current preference: a resume re-enters the composition its history
+        // was produced under. Same rule for the route: only an explicit
+        // cordis.yml provider/model overrides the route the target's own
+        // request/header records (issue #30) — and only as a COMPLETE pair
+        // (issue #67): a provider-only pin must not merge with the recorded
+        // model half into a route no adapter recognizes.
+        const resumeComposed = await composePreset(
+          ctx,
+          await resolvePersistedPreset(ctx, SessionId(sessionId)),
         )
+        const resumeRoute = explicitModelRoute({
+          provider: options.configuredProvider,
+          model: options.configuredModel,
+        })
+        try {
+          handle = await agents.resume({
+            resumeSessionId: SessionId(sessionId),
+            agentOptions: { provider: resumeRoute?.provider, model: resumeRoute?.model },
+            ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          state.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+          return false
+        }
+        try {
+          // `/resume` is an explicit adoption of this persisted conversation.
+          // This also repairs sessions created by TUI versions that predate the
+          // separate workspace ownership ledger.
+          await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
+        } catch (error) {
+          state.notify(
+            t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+            { color: 'warning', timeoutMs: 8000 },
+          )
+        }
+        // Replay the persisted history into a fresh transcript (same reset as
+        // rewindTo, plus the context window which the replay re-derives).
+        streaming = undefined
+        reasoning = undefined
+        toolCards.clear()
+        nextRowId = 0
+        state.rows.length = 0
+        // Goal/todo/title are session-scoped; the replay re-derives them for
+        // the session being entered (or leaves them empty).
+        state.todos = []
+        // Queued-but-undelivered messages live in the OLD agent's inbox; the
+        // swap must drop their previews or they linger forever (unretirable —
+        // retire events are filtered to the new agent, unwithdrawable — the
+        // new inbox never heard of them).
+        state.pending = []
+        state.goal = undefined
+        state.sessionTitle = ''
+        state.tokens = { input: 0, output: 0 }
+        state.responseChars = 0
+        state.activeToolCount = 0
+        state.lastUserText = ''
+        state.working = false
+        state.spinnerMode = 'requesting'
+        state.status = handle.agent.status
+        state.agentId = handle.agent.id
+        // Adopt the resumed session's persisted cwd (issue #96): pre-upgrade
+        // sessions recorded the LAUNCH directory (often a repo subdirectory),
+        // so keeping the freshly resolved root would split @ expansion / file
+        // completion (state.cwd) from the agent's own workspace record — and
+        // drop the session back out of the /resume filter. The branch
+        // breadcrumb follows the adopted cwd.
+        state.cwd = handle.agent.session.header.cwd ?? state.cwd
+        state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
+        refreshGitBranch()
+        state.agentPreset = resumeComposed.agentPreset
+        // Status-line route follows the resumed session (review feedback): the
+        // route it actually continues on — a complete cordis.yml pin, else the
+        // route its own request/header records carry. A bare log (no turn ever
+        // started) records none; keep the current display as best effort.
+        const resumedRoute = resumeRoute ?? recordedModelRoute(handle.agent.session.events)
+        if (resumedRoute !== undefined) {
+          state.provider = resumedRoute.provider
+          state.model = resumedRoute.model
+        }
+        state.tps = undefined
+        state.tpsSamples = []
+        state.lastUsage = undefined
+        state.workingActivity = undefined
+        state.contextWindow = undefined
+        state.contextSegments = {
+          system: 0,
+          prompt: 0,
+          assistant: 0,
+          thinking: 0,
+          tools: 0,
+        }
+        for (const event of coalesceReplayEvents(handle.agent.session.events)) renderEvent(event)
+        settleStreaming()
+        // Rebind subscriptions to the resumed agent, then free the old one.
+        const oldHandle = currentHandle
+        agent = handle.agent
+        currentHandle = handle
+        bindAgent()
+        refreshCommandList()
+        void refreshLoadedContext()
+        void refreshSkillCommands()
+        // Keep the `--resume` launcher contract pointing at the same session.
+        writeResumeTarget(sessionId)
+        // The resumed session is now the most recently used.
+        touchSession(sessionId)
+        state.emit()
+        void oldHandle?.dispose().catch(() => {})
+        clearStagedImages()
+        return true
+      } finally {
+        releaseSwap()
       }
-      // Replay the persisted history into a fresh transcript (same reset as
-      // rewindTo, plus the context window which the replay re-derives).
-      streaming = undefined
-      reasoning = undefined
-      toolCards.clear()
-      nextRowId = 0
-      state.rows.length = 0
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.spinnerMode = 'requesting'
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      // Adopt the resumed session's persisted cwd (issue #96): pre-upgrade
-      // sessions recorded the LAUNCH directory (often a repo subdirectory),
-      // so keeping the freshly resolved root would split @ expansion / file
-      // completion (state.cwd) from the agent's own workspace record — and
-      // drop the session back out of the /resume filter. The branch
-      // breadcrumb follows the adopted cwd.
-      state.cwd = handle.agent.session.header.cwd ?? state.cwd
-      state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
-      refreshGitBranch()
-      state.agentPreset = resumeComposed.agentPreset
-      // Status-line route follows the resumed session (review feedback): the
-      // route it actually continues on — a complete cordis.yml pin, else the
-      // route its own request/header records carry. A bare log (no turn ever
-      // started) records none; keep the current display as best effort.
-      const resumedRoute = resumeRoute ?? recordedModelRoute(handle.agent.session.events)
-      if (resumedRoute !== undefined) {
-        state.provider = resumedRoute.provider
-        state.model = resumedRoute.model
-      }
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.contextWindow = undefined
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      for (const event of coalesceReplayEvents(handle.agent.session.events)) renderEvent(event)
-      settleStreaming()
-      // Rebind subscriptions to the resumed agent, then free the old one.
-      const oldHandle = currentHandle
-      agent = handle.agent
-      currentHandle = handle
-      bindAgent()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      // Keep the `--resume` launcher contract pointing at the same session.
-      writeResumeTarget(sessionId)
-      // The resumed session is now the most recently used.
-      touchSession(sessionId)
-      state.emit()
-      void oldHandle?.dispose().catch(() => {})
-      clearStagedImages()
-      return true
     },
     async newSession(): Promise<boolean> {
       // `/new` — start a fresh conversation: brand-new agent + session, the
       // transcript reset, the `--resume` marker forgotten (the old session
-      // stays persisted for /resume). Same reset shape as rewindTo/resumeTo.
+      // stays persisted for /resume). Same reset shape as rewindToNode/resumeTo.
       if (state.working) {
         state.notify(t('new-session-while-working'), {
           color: 'warning',
@@ -1992,119 +2417,127 @@ export function createChannel(
         })
         return false
       }
-      const sessionId = SessionId(randomUUID())
-      let handle: AgentHandle
-      // A fresh session composes the caller's DEFAULT preset: the cordis.yml
-      // `preset` key wins over the persisted `/preset` choice, which wins
-      // over the roster default (same precedence as activityFrames).
-      const newComposed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
-      // Same precedence for the route (issues #14/#30/#67): the pair resolves
-      // atomically — a complete cordis.yml route wins whole, else the
-      // persisted `/model` choice (a switch earlier in this run just wrote
-      // it, so `/new` follows the live model) wins whole, else the startup
-      // route. A stale persisted choice that the adapter catalog rejects
-      // falls back to the startup route wholesale, with a warning.
-      const newResolved = resolveModelRoute(
-        { provider: options.configuredProvider, model: options.configuredModel },
-        readModelPref(),
-        { provider: options.provider, model: options.model },
-      )
-      const newLlm = ctx.get('llm') as
-        | { listModels(provider: string): Promise<readonly { id: string }[]> }
-        | undefined
-      const { route, rejected } = await validateModelRoute(newLlm, newResolved, {
-        provider: options.provider,
-        model: options.model,
-      })
-      if (rejected !== undefined) {
-        state.notify(
-          t('model-route-invalid', {
-            provider: rejected.provider,
-            model: rejected.model,
-            fallback: `${route.provider}/${route.model}`,
-          }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      try {
-        handle = await agents.create({
-          sessionId,
-          meta: {
-            cwd: state.cwd,
-            ...(newComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: newComposed.agentPreset }),
-          },
-          agentOptions: route,
-          ...(newComposed.setup === undefined ? {} : { setup: newComposed.setup }),
-        })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        state.notify(t('new-session-failed', { err: message }), {
-          color: 'error',
-          timeoutMs: 8000,
-        })
+      if (!claimSwap()) {
+        state.notify(t('swap-in-progress'), { color: 'warning' })
         return false
       }
       try {
-        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
-      } catch (error) {
-        state.notify(
-          t('new-session-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
+        const sessionId = SessionId(randomUUID())
+        let handle: AgentHandle
+        // A fresh session composes the caller's DEFAULT preset: the cordis.yml
+        // `preset` key wins over the persisted `/preset` choice, which wins
+        // over the roster default (same precedence as activityFrames).
+        const newComposed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+        // Same precedence for the route (issues #14/#30/#67): the pair resolves
+        // atomically — a complete cordis.yml route wins whole, else the
+        // persisted `/model` choice (a switch earlier in this run just wrote
+        // it, so `/new` follows the live model) wins whole, else the startup
+        // route. A stale persisted choice that the adapter catalog rejects
+        // falls back to the startup route wholesale, with a warning.
+        const newResolved = resolveModelRoute(
+          { provider: options.configuredProvider, model: options.configuredModel },
+          readModelPref(),
+          { provider: options.provider, model: options.model },
         )
+        const newLlm = ctx.get('llm') as
+          | { listModels(provider: string): Promise<readonly { id: string }[]> }
+          | undefined
+        const { route, rejected } = await validateModelRoute(newLlm, newResolved, {
+          provider: options.provider,
+          model: options.model,
+        })
+        if (rejected !== undefined) {
+          state.notify(
+            t('model-route-invalid', {
+              provider: rejected.provider,
+              model: rejected.model,
+              fallback: `${route.provider}/${route.model}`,
+            }),
+            { color: 'warning', timeoutMs: 8000 },
+          )
+        }
+        try {
+          handle = await agents.create({
+            sessionId,
+            meta: {
+              cwd: state.cwd,
+              ...(newComposed.agentPreset === undefined
+                ? {}
+                : { agentPreset: newComposed.agentPreset }),
+            },
+            agentOptions: route,
+            ...(newComposed.setup === undefined ? {} : { setup: newComposed.setup }),
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          state.notify(t('new-session-failed', { err: message }), {
+            color: 'error',
+            timeoutMs: 8000,
+          })
+          return false
+        }
+        try {
+          await attachSessionToWorkspace(ctx, state.cwd, sessionId)
+        } catch (error) {
+          state.notify(
+            t('new-session-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+            { color: 'warning', timeoutMs: 8000 },
+          )
+        }
+        streaming = undefined
+        reasoning = undefined
+        toolCards.clear()
+        nextRowId = 0
+        state.rows.length = 0
+        // Goal/todo/title are session-scoped; the replay re-derives them for
+        // the session being entered (or leaves them empty).
+        state.todos = []
+        // Queued-but-undelivered messages live in the OLD agent's inbox; the
+        // swap must drop their previews or they linger forever (unretirable —
+        // retire events are filtered to the new agent, unwithdrawable — the
+        // new inbox never heard of them).
+        state.pending = []
+        state.goal = undefined
+        state.sessionTitle = ''
+        state.tokens = { input: 0, output: 0 }
+        state.responseChars = 0
+        state.activeToolCount = 0
+        state.lastUserText = ''
+        state.working = false
+        state.spinnerMode = 'requesting'
+        state.status = handle.agent.status
+        state.agentId = handle.agent.id
+        state.agentPreset = newComposed.agentPreset
+        state.model = route.model
+        state.provider = route.provider
+        state.tps = undefined
+        state.tpsSamples = []
+        state.lastUsage = undefined
+        state.workingActivity = undefined
+        state.contextWindow = undefined
+        state.contextSegments = {
+          system: 0,
+          prompt: 0,
+          assistant: 0,
+          thinking: 0,
+          tools: 0,
+        }
+        const oldHandle = currentHandle
+        agent = handle.agent
+        currentHandle = handle
+        bindAgent()
+        refreshCommandList()
+        void refreshLoadedContext()
+        void refreshSkillCommands()
+        clearResumeTarget()
+        // The brand-new session becomes the most recently used.
+        touchSession(handle.agent.id)
+        void oldHandle?.dispose().catch(() => {})
+        clearStagedImages()
+        return true
+      } finally {
+        releaseSwap()
       }
-      streaming = undefined
-      reasoning = undefined
-      toolCards.clear()
-      nextRowId = 0
-      state.rows.length = 0
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.spinnerMode = 'requesting'
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.agentPreset = newComposed.agentPreset
-      state.model = route.model
-      state.provider = route.provider
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.contextWindow = undefined
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      const oldHandle = currentHandle
-      agent = handle.agent
-      currentHandle = handle
-      bindAgent()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      clearResumeTarget()
-      // The brand-new session becomes the most recently used.
-      touchSession(handle.agent.id)
-      void oldHandle?.dispose().catch(() => {})
-      clearStagedImages()
-      return true
     },
     listWorkspaces() {
       return workspaceService.list(state.cwd)
@@ -2167,7 +2600,7 @@ export function createChannel(
     async switchModel(provider: string, model: string): Promise<boolean> {
       // `/model` picker Enter — switch the live model by forking the
       // conversation at its current end and continuing with a new agent
-      // routed to the chosen model. Same reset shape as rewindTo/resumeTo;
+      // routed to the chosen model. Same reset shape as rewindToNode/resumeTo.
       // the history replays unchanged, only the request model changes.
       if (state.working) {
         state.notify(t('model-switch-while-working'), {
@@ -2175,120 +2608,122 @@ export function createChannel(
         })
         return false
       }
-      const sessions = ctx.get('sessions') as
-        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
-        | undefined
       const agents = ctx.get('agents') as
         | { create(options: CreateAgentOptions): Promise<AgentHandle> }
         | undefined
-      if (!sessions || !agents) {
+      if (!agents) {
         state.notify(t('model-switch-unavailable'), {
           color: 'error',
         })
         return false
       }
-      let seed: readonly SessionEvent[]
-      try {
-        // No boundary = fork the whole log (continue the conversation).
-        seed = sessions.fork(agent.session).events
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        state.notify(t('model-switch-fork-failed', { err: message }), { color: 'error' })
-        return false
-      }
-      const childId = SessionId(randomUUID())
-      let handle: AgentHandle
-      // The forked conversation keeps the session's own preset — only the
-      // request route changes (same rule as rewindTo).
-      const modelComposed = await composePreset(ctx, runningPresetOf(agent.session))
-      try {
-        handle = await agents.create({
-          sessionId: childId,
-          seed,
-          meta: {
-            cwd: state.cwd,
-            parentSession: agent.session.id,
-            seedLength: seed.length,
-            ...(modelComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: modelComposed.agentPreset }),
-          },
-          agentOptions: { provider, model },
-          ...(modelComposed.setup === undefined ? {} : { setup: modelComposed.setup }),
-        })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        state.notify(t('model-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+      if (!claimSwap()) {
+        state.notify(t('swap-in-progress'), { color: 'warning' })
         return false
       }
       try {
-        await attachSessionToWorkspace(ctx, state.cwd, childId)
-      } catch (error) {
-        state.notify(
-          t('model-switch-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
+        // Copy the whole log (the switch continues the conversation) instead
+        // of sessions.fork: upstream fork() is not a slicer — it creates and
+        // announces a REAL child session whose events we would discard, so
+        // every model switch leaked an orphaned branch (see rewindToNode).
+        // agents.create validates the seed itself (contiguous from seq 0).
+        const seed = agent.session.events.slice()
+        const childId = SessionId(randomUUID())
+        let handle: AgentHandle
+        // The forked conversation keeps the session's own preset — only the
+        // request route changes (same rule as rewindToNode).
+        const modelComposed = await composePreset(ctx, runningPresetOf(agent.session))
+        try {
+          handle = await agents.create({
+            sessionId: childId,
+            seed,
+            meta: {
+              cwd: state.cwd,
+              parentSession: agent.session.id,
+              seedLength: seed.length,
+              ...(modelComposed.agentPreset === undefined
+                ? {}
+                : { agentPreset: modelComposed.agentPreset }),
+            },
+            agentOptions: { provider, model },
+            ...(modelComposed.setup === undefined ? {} : { setup: modelComposed.setup }),
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          state.notify(t('model-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+          return false
+        }
+        try {
+          await attachSessionToWorkspace(ctx, state.cwd, childId)
+        } catch (error) {
+          state.notify(
+            t('model-switch-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+            { color: 'warning', timeoutMs: 8000 },
+          )
+        }
+        streaming = undefined
+        reasoning = undefined
+        toolCards.clear()
+        nextRowId = 0
+        state.rows.length = 0
+        // Goal/todo/title are session-scoped; the replay re-derives them for
+        // the session being entered (or leaves them empty).
+        state.todos = []
+        // Queued-but-undelivered messages live in the OLD agent's inbox; the
+        // swap must drop their previews or they linger forever (unretirable —
+        // retire events are filtered to the new agent, unwithdrawable — the
+        // new inbox never heard of them).
+        state.pending = []
+        state.goal = undefined
+        state.sessionTitle = ''
+        state.tokens = { input: 0, output: 0 }
+        state.responseChars = 0
+        state.activeToolCount = 0
+        state.lastUserText = ''
+        state.working = false
+        state.spinnerMode = 'requesting'
+        state.status = handle.agent.status
+        state.agentId = handle.agent.id
+        state.agentPreset = modelComposed.agentPreset
+        state.model = model
+        state.provider = provider
+        state.tps = undefined
+        state.tpsSamples = []
+        state.lastUsage = undefined
+        state.workingActivity = undefined
+        state.contextWindow = undefined
+        state.contextSegments = {
+          system: 0,
+          prompt: 0,
+          assistant: 0,
+          thinking: 0,
+          tools: 0,
+        }
+        for (const event of coalesceReplayEvents(seed)) renderEvent(event)
+        settleStreaming()
+        const oldHandle = currentHandle
+        agent = handle.agent
+        currentHandle = handle
+        bindAgent()
+        refreshCommandList()
+        void refreshLoadedContext()
+        void refreshSkillCommands()
+        // The model-switched fork becomes the most recently used.
+        touchSession(childId)
+        state.emit()
+        void oldHandle?.dispose().catch(() => {})
+        // Persist the choice so the next boot and `/new` start on it (same
+        // contract as /preset and /effort; issues #14/#30). A failed
+        // write keeps the live switch but warns it will not survive a restart.
+        if (!writeModelPref(provider, model)) {
+          state.notify(t('model-pref-write-failed'), {
+            color: 'warning',
+          })
+        }
+        return true
+      } finally {
+        releaseSwap()
       }
-      streaming = undefined
-      reasoning = undefined
-      toolCards.clear()
-      nextRowId = 0
-      state.rows.length = 0
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.spinnerMode = 'requesting'
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.agentPreset = modelComposed.agentPreset
-      state.model = model
-      state.provider = provider
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.contextWindow = undefined
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      for (const event of coalesceReplayEvents(seed)) renderEvent(event)
-      settleStreaming()
-      const oldHandle = currentHandle
-      agent = handle.agent
-      currentHandle = handle
-      bindAgent()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      // The model-switched fork becomes the most recently used.
-      touchSession(childId)
-      state.emit()
-      void oldHandle?.dispose().catch(() => {})
-      // Persist the choice so the next boot and `/new` start on it (same
-      // contract as /preset and /effort; issues #14/#30). A failed
-      // write keeps the live switch but warns it will not survive a restart.
-      if (!writeModelPref(provider, model)) {
-        state.notify(t('model-pref-write-failed'), {
-          color: 'warning',
-        })
-      }
-      return true
     },
     listEfforts,
     setEffort,
@@ -3599,6 +4034,80 @@ ${output}
         roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
       }
     }
+  }
+
+  /**
+   * Shared tail of rewindToNode/resumeTo/newSession/switchModel: reset the
+   * transcript state, replay `replay` into fresh rows, swap `handle` in as
+   * the live agent, and dispose the old one. Per-caller specifics (route
+   * override, context-window reset, settle, resume marker, MRU touch) stay
+   * at the call sites.
+   */
+  const adoptAgent = (
+    handle: AgentHandle,
+    opts: {
+      readonly replay?: readonly SessionEvent[]
+      readonly agentPreset: string | undefined
+      readonly route?: { provider: string; model: string }
+      readonly resetContextWindow?: boolean
+      readonly settle?: boolean
+      readonly emitFinal?: boolean
+    },
+  ): void => {
+    streaming = undefined
+    reasoning = undefined
+    toolCards.clear()
+    nextRowId = 0
+    state.rows.length = 0
+    // Goal/todo/title are session-scoped; the replay re-derives them for
+    // the session being entered (or leaves them empty).
+    state.todos = []
+    // Queued-but-undelivered messages live in the OLD agent's inbox; the
+    // swap must drop their previews or they linger forever (unretirable —
+    // retire events are filtered to the new agent, unwithdrawable — the
+    // new inbox never heard of them).
+    state.pending = []
+    state.goal = undefined
+    state.sessionTitle = ''
+    state.tokens = { input: 0, output: 0 }
+    state.responseChars = 0
+    state.activeToolCount = 0
+    state.lastUserText = ''
+    state.working = false
+    state.spinnerMode = 'requesting'
+    state.status = handle.agent.status
+    state.agentId = handle.agent.id
+    state.agentPreset = opts.agentPreset
+    if (opts.route !== undefined) {
+      state.provider = opts.route.provider
+      state.model = opts.route.model
+    }
+    state.tps = undefined
+    state.tpsSamples = []
+    state.lastUsage = undefined
+    state.workingActivity = undefined
+    if (opts.resetContextWindow === true) state.contextWindow = undefined
+    state.contextSegments = {
+      system: 0,
+      prompt: 0,
+      assistant: 0,
+      thinking: 0,
+      tools: 0,
+    }
+    if (opts.replay !== undefined) {
+      for (const event of coalesceReplayEvents(opts.replay)) renderEvent(event)
+    }
+    if (opts.settle === true) settleStreaming()
+    // Rebind subscriptions to the new agent, then free the old one.
+    const oldHandle = currentHandle
+    agent = handle.agent
+    currentHandle = handle
+    bindAgent()
+    refreshCommandList()
+    void refreshLoadedContext()
+    void refreshSkillCommands()
+    if (opts.emitFinal !== false) state.emit()
+    void oldHandle?.dispose().catch(() => {})
   }
 
   const renderEvent = (event: SessionEvent): void => {

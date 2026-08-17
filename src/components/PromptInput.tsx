@@ -87,7 +87,7 @@ export interface PromptInputProps {
    */
   fillText?: string | null
   onFillConsumed?(): void
-  /** Double-tap Esc with an empty input: open the rewind picker (CC rewind). */
+  /** Double-tap Esc with an empty input: open the session tree (pi parity). */
   onRewindRequest?(): void
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
@@ -804,7 +804,7 @@ export function PromptInput({
         return
       }
       // A single Esc clears the current input (if any); the double-tap
-      // path below handles rewind/clear on an already-empty input.
+      // path below handles tree/clear on an already-empty input.
       if (value.length > 0) {
         setInput('', 0)
         setSelectedCommand(0)
@@ -812,8 +812,8 @@ export function PromptInput({
         return
       }
       // Double-tap Esc: clear the input when it has content; when empty,
-      // open the rewind picker (CC's "Double-tap esc to rewind the code
-      // and/or conversation to a previous point in time").
+      // open the session tree (pi's Session Tree — the family-wide rewind
+      // panel, this project's take on CC's "double-tap esc to rewind").
       if (escPendingRef.current) {
         escPendingRef.current = false
         if (escTimerRef.current) clearTimeout(escTimerRef.current)
@@ -827,7 +827,7 @@ export function PromptInput({
       escPendingRef.current = true
       channel.notify(
         value.length === 0
-          ? 'Press Esc again to rewind'
+          ? 'Press Esc again for the session tree'
           : 'Press Esc again to clear',
       )
       escTimerRef.current = setTimeout(() => {

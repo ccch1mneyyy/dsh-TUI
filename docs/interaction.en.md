@@ -15,7 +15,7 @@
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
 | `Ctrl+V` | Insert clipboard text or files; images are sent as durable attachments |
 | `Ctrl+X` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR` → vi); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft |
-| `Esc` | Close the active menu, selection, or modal; clear input; interrupt a working model; double-tap on empty input to rewind |
+| `Esc` | Close the active menu, selection, or modal; clear input; interrupt a working model; double-tap on empty input to open the session tree |
 | `Ctrl+C` | Interrupt while working; clear non-empty idle input; press twice on empty input to exit |
 | `Ctrl+D` | Press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output |
@@ -94,10 +94,19 @@ only their boot policy and hold no conversation are never listed, only counted,
 with `ctrl+x` to clear them (scoped to the current list, never across
 projects).
 
+Rewound branches fold into **families**: a session forked by a rewind is not a
+new conversation but another branch of the same one, so the list shows only the
+family's most recently active member (badged `▸N`, where N is the family size)
+and tucks the rest underneath. `→` on the family row expands every member as an
+indented row; `←` folds it back — from a member row it folds the family and
+returns the cursor to the family row. Folding lifts while a search query is
+live, so a folded member stays directly reachable and resumable.
+
 | Key | Action |
 | --- | --- |
 | Type | Live search over titles, directories, branches, models |
 | `↑` `↓` / `PgUp` `PgDn` | Move, page |
+| `→` / `←` | Expand / fold the selected session's rewind-branch family (on a member row, `←` folds it and lands on the family row) |
 | `Enter` | Resume the selected session |
 | `Tab` | Preview that session's last few exchanges |
 | `ctrl+a` | Toggle this project / all projects (grouped by directory) |
@@ -121,15 +130,62 @@ On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
 `~/.dsh-tui/resume.txt` (also dual-written to the old path
 `~/.dsh-cc/resume.txt` for older launchers that only read it).
 
-### Rewind
+### Session tree (rewind)
 
-Double-tap `Esc` on an empty editor to open the user-message list. After a
-selection is confirmed, the TUI:
+Double-tap `Esc` on an empty editor (or run `/tree`; `/rewind` is an alias)
+to open the session tree: the session family of the current directory
+stitched into one branching view — every rewind spawns a new session with a
+`parentSession` link, and the tree reassembles ancestors and sibling
+branches, with `•` marking the active path to the live session.
 
-1. Finds the beginning of the turn containing that message.
-2. Creates a branch session through DSH session fork.
+Keys: `↑/↓` move (wrapping); `PgUp/PgDn` or `←/→` page; type to search
+(multi-token AND); `Backspace` edits the query; `Ctrl+O` cycles the filter
+(default → no tools → user only → all); `Ctrl+B` switches to the focused
+entry's branch whole (keeping all its content — see below); `Enter` selects
+with a confirmation; `Esc` clears a non-empty query first, then closes.
+
+The confirmation says what the pick actually does, per entry kind: a user
+message "drops the whole turn containing this message"; an assistant/tool
+entry "keeps through the end of its step"; a cross-branch pick names the
+source session. When the branch's entire own content sits inside the turn
+being dropped (the common shape: the branch ran exactly one turn), the
+confirmation additionally warns that the new session will not contain it —
+that is exactly the "picked the branch's first message and the branch
+vanished" trap. To move to a dead branch WITH all its content, use `Ctrl+B`:
+it forks a new session at the branch tip and drops nothing (the gesture
+refuses with a reason when the branch log wasn't fully loaded).
+
+The rewind semantics follow pi's navigateTree: **selecting a user message**
+drops its whole turn (rewind to the turn's start) and restores that turn's
+prompt into the editor for revision; **selecting an assistant/tool/notice
+entry keeps through the end of its enclosing step** (rewind to that step's
+`step/end`), so the picked AI answer or tool call stays in history while the
+turn's later steps are dropped. A DSH agentic turn can span many steps and
+thousands of events per prompt, so turn-granular keeping would barely move
+the visible history for a mid-turn pick; the step is the finest unit that
+cuts safely and never dangles an unanswered tool call. When the cut lands
+mid-turn, the fork seed appends a synthetic `turn/end` (`aborted/user` — the
+exact shape a real Esc interrupt writes) to close the turn. After
+confirmation, the TUI:
+
+1. Computes the boundary: just before the owning turn's start for a user
+   message; the enclosing step's `step/end` for anything else (or the owning
+   turn's `turn/end` when no step marker stands between the entry and the
+   turn's end).
+2. Creates a branch session seeded up to that boundary (the header records
+   `parentSession` + `seedLength`; a mid-turn cut first appends the
+   synthetic `turn/end`).
 3. Replays history before the boundary.
-4. Restores the original message to the editor for revision and resubmission.
+4. Restores the original message to the editor only when the entry's turn
+   was dropped.
+
+The very first turn's user message cannot be rewound (there is nothing
+earlier to keep); selecting an entry inside the live session's last turn
+would drop nothing, so the panel reports "already at the latest state"
+instead of forking an identical branch.
+
+Selecting an entry on another session (a dead branch) works the same way —
+the fork starts from that session's point.
 
 ### Side question /btw
 
@@ -249,7 +305,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `/new`, `/resume`, `/rename`, `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`) |
+| Sessions | `/new`, `/resume`, `/rename`, `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`), `/tree` (session tree, `/rewind` alias, also double-`Esc`) |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp` |

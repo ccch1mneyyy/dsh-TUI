@@ -12,7 +12,8 @@
  *  - ModelPicker：30 个**带 description** 的模型，首/中焦点在屏；
  *  - HistorySearchDialog：30 条历史（每项恒 2 行 + 容器 gap=1），首/中/末焦点在屏；
  *  - ThemePicker：displayName 含内部换行的自定义主题单行渲染（生产路径）；
- *  - RewindPicker：30 条用户消息，首/中/末焦点在屏（首项带 'last message' 描述）。
+ *  - SessionTree（RewindPicker 的继任者，双击 Esc）：30 个用户条目，
+ *    首/中/末焦点在屏（打开即聚焦 live tip = 最新一条）。
  *
  * "在屏"判定：焦点行的 ❯/正文是 suggestion 主题色（#ABC2EC），逐单元格
  * 比对前景色——转录里同文本的用户消息回显行（灰底）不会误判为在屏。
@@ -265,7 +266,7 @@ for (const c of winCases) {
 }
 
 // ----------------------------------------------------------------- app 场景
-// 30 轮用户消息垫底（rewind 数据源；rewind 列表 = 用户消息新→旧）。
+// 30 轮用户消息垫底（会话树数据源；树行旧→新自上而下，live tip = 最新一条）。
 const events: Array<Record<string, unknown>> = []
 for (let i = 0; i < 30; i++) {
   events.push(
@@ -305,6 +306,11 @@ const services: Record<string, unknown> = {
   llm: {
     listProviders: () => [{ id: 'fake-provider' }],
     listModels: async () => MODELS,
+  },
+  // 会话树的数据源（RewindPicker 时代不需要）：空后端——隔离 HOME 下没有
+  // 持久化会话文件，家族 = live 会话自己。
+  sessionPersistence: {
+    list: async () => [],
   },
 }
 const ctx = {
@@ -393,34 +399,106 @@ const typeKeys = async (s: string, stepMs = 40) => {
   await sleep(400)
 }
 
-// ------------------------------------------------------------ RewindPicker
+// ------------------------------------------------------------ SessionTree
+// RewindPicker 的继任者（双击 Esc 会话树）：同一份窗口化回归——30 个用户
+// 条目（30 轮各一条），焦点必须始终随窗口在屏。树行旧→新，光标初始落在
+// live tip（最新一条）；无 description 行，改断言面板标题。
 {
   const bufBefore = term.buffer.active.length
-  stdin.write('\x1b') // 双击 Esc（空输入）打开 rewind
+  stdin.write('\x1b') // 双击 Esc（空输入）打开会话树
   await sleep(100)
   stdin.write('\x1b')
   await sleep(600)
-  // 焦点 0 = 最新用户消息；首项带 'last message' 描述（2 行）。
-  check('rewind 焦点 0 在屏（首项 2 行）', focusLineVisible('rewind 消息 29'))
-  check('rewind 首项描述行在屏', screenLines().some(l => l.includes('最近一条消息')))
-  check('rewind 打开缓冲区零增长', term.buffer.active.length === bufBefore,
+  check('tree 打开即聚焦 live tip（最新用户消息）', focusLineVisible('rewind 消息 29'))
+  check('tree 面板标题在屏', screenLines().some(l => l.includes('会话树')))
+  check('tree 打开缓冲区零增长', term.buffer.active.length === bufBefore,
     `${bufBefore} → ${term.buffer.active.length}`)
-  dump('rewind focus 0')
-  stdin.write('\x1b[A') // ↑ 回绕到末项 = 最老一条
+  dump('tree focus tip')
+  stdin.write('\x1b[B') // ↓ 从末项回绕到首项 = 最老一条
   await sleep(300)
-  check('rewind ↑ 回绕末项焦点在屏', focusLineVisible('rewind 消息 00'))
-  stdin.write('\x1b[B') // ↓ 回绕回 0
+  check('tree ↓ 回绕首项焦点在屏', focusLineVisible('rewind 消息 00'))
+  stdin.write('\x1b[A') // ↑ 回绕回末项
   await sleep(200)
-  for (let i = 0; i < 15; i++) { stdin.write('\x1b[B'); await sleep(25) }
+  for (let i = 0; i < 15; i++) { stdin.write('\x1b[A'); await sleep(25) }
   await sleep(300)
-  // 索引 15 = rewind 消息 14（索引 0 是最新的 29）。
-  check('rewind ↓×15 焦点 15 在屏', focusLineVisible('rewind 消息 14'))
-  dump('rewind focus 15')
+  // 末项（索引 29）回退 15 行 = 索引 14。
+  check('tree ↑×15 焦点 14 在屏', focusLineVisible('rewind 消息 14'))
+  dump('tree focus 14')
   stdin.write('\x1b')
   await sleep(400)
 }
 
 instance.unmount()
+
+// ------------------------------------------------------ 回退白屏（swap 重置）
+// 生产事故回归：回退把一个短得多的转录换上（adoptAgent 从 id 0 重建 rows），
+// 但 ScrollBox 的 scrollTop 还停在旧长日志底部，渲染器的 shrink 保护冻结该
+// 帧——视口落在替换内容末尾之外（白屏直到下次输入），逐行重测又顶着回收 id
+// 的旧高度把 total 推来推去（滚动抖动）。修复 = MessageList 测量缓存随
+// transcriptKey 失效 + Chat 在 agentId 变化时 scrollToBottom 重钉。此处用
+// 真实 rewindToNode 走完整 adoptAgent 路径：40 轮长转录 → 回退到 turn 1 的
+// user 消息 → 替换为只剩 turn 0 的短转录。
+{
+  const term3 = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  class FakeStdout3 extends Writable {
+    columns = COLS
+    rows = ROWS
+    isTTY = true
+    _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
+      term3.write(String(chunk), () => cb())
+    }
+  }
+  const screen3 = (): string[] => {
+    const buf = term3.buffer.active
+    const out: string[] = []
+    for (let y = buf.baseY; y < buf.baseY + ROWS; y++) out.push(buf.getLine(y)?.translateToString(true) ?? '')
+    return out
+  }
+  // 每轮 5 行回答 × 40 轮：转录远超视口，回退前底部 scrollTop 远大于 0。
+  const bigEvents: Array<Record<string, unknown>> = []
+  for (let i = 0; i < 40; i++) {
+    bigEvents.push(
+      { seq: i * 4, time: NOW + i * 40, type: 'turn/start', data: { turn: i } },
+      {
+        seq: i * 4 + 1, time: NOW + i * 40 + 5, type: 'user/message',
+        data: { source: { kind: 'user' }, content: [{ type: 'text', text: `长屏 问题 ${String(i).padStart(2, '0')}` }] },
+      },
+      {
+        seq: i * 4 + 2, time: NOW + i * 40 + 10, type: 'assistant/message',
+        data: {
+          turn: i, step: 0,
+          message: { role: 'assistant', content: [{ type: 'text', text: `回答 ${String(i).padStart(2, '0')}\n第二行\n第三行\n第四行\n第五行` }] },
+        },
+      },
+      { seq: i * 4 + 3, time: NOW + i * 40 + 15, type: 'turn/end', data: { turn: i, reason: { kind: 'completed' } } },
+    )
+  }
+  const channel3 = createChannel(ctx as never, makeAgent('big', bigEvents) as never, {
+    model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
+  })
+  const stdout3 = new FakeStdout3()
+  const instance3 = await render(
+    <Chat channel={channel3 as never} questionStore={new QuestionStore()} onExit={() => {}} />,
+    { stdout: stdout3 as never, stdin: new FakeStdin(), stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(1500)
+  const pre = screen3()
+  check('白屏回归预检：长转录尾部在屏', pre.some(l => l.includes('回答 39')))
+  check('白屏回归预检：开头不在屏（转录确长）', !pre.some(l => l.includes('长屏 问题 00')))
+  // 真实回退：选中 turn 1 的 ASSISTANT 消息（seq 6）→ 保留 turn 0+1，其余
+  // 丢弃。两个生产病理条件缺一不可：① fork 前缀与旧转录逐行相同（重测高度
+  // 无变化，不触发重绘）② 非 user 条目（restoredText 为空，输入框回填也不
+  // 触发重绘）——没有修复时 shrink 帧冻结的 scrollTop 没有任何后续帧纠正。
+  await channel3.rewindToNode('s-big', 6)
+  await sleep(1200)
+  const post = screen3()
+  check('回退后短转录头部在屏（无白屏）', post.some(l => l.includes('长屏 问题 00')),
+    post.map(l => l.trim()).filter(Boolean).slice(0, 6).join(' | '))
+  check('回退后短转录尾部在屏', post.some(l => l.includes('回答 01')))
+  check('回退后旧尾部已替换', !post.some(l => l.includes('回答 39')) && !post.some(l => l.includes('回答 02')))
+  instance3.unmount()
+}
+
 // 先恢复再断言：恢复后产生的错误走原生 console.error 直接可见，不会被吞；
 // 若上面任一阶段抛异常，顶层未捕获即以非零退出，CI 照样红。
 console.error = origConsoleError

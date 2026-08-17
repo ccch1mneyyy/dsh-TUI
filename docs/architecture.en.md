@@ -25,6 +25,7 @@ Cordis profile
 | `src/plugin.ts` | TTY guard, questionnaire/skill registration, Agent create/resume, React mount, and the single cleanup funnel |
 | `src/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
+| `src/dsh-adapter/sessionTree.ts` | Pure session-family-tree model (double-Esc panel): cross-session stitching, entry extraction, tree flattening and filtering; no Ink dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |

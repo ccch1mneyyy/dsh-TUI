@@ -42,8 +42,8 @@ the interface, and removing it leaves no core modifications behind.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
 - **Complete session workflow**: `/resume`, `/new`, `/workspace`, `/compact`, `/export`, the
-  `/btw` side question, model switching, and double-`Esc` rewind through a
-  session fork.
+  `/btw` side question, model switching, and the double-`Esc` session family
+  tree (cross-branch search, filters, and rewind forks).
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
   and registries.

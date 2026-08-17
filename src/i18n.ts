@@ -94,9 +94,14 @@ const dict = {
   'context-low-warning': { zh: '上下文即将耗尽（剩余 {{percent}}%）· 运行 /clear 或新建会话', en: 'Context low ({{percent}}% remaining) · Run /clear or start a new session' },
   'rewind-unavailable': { zh: '回退不可用——会话服务未加载', en: 'Rewind unavailable — session services not loaded' },
   'rewind-settling': { zh: '无法回退——回合仍在收尾，请稍候再试', en: 'Cannot rewind — the turn is still settling, try again in a moment' },
-  'rewind-fork-failed': { zh: '无法回退到该处 · {{err}}', en: 'Cannot rewind to this point · {{err}}' },
   'rewind-create-failed': { zh: '回退失败——无法创建替代会话', en: 'Rewind failed — could not create the replacement session' },
   'rewind-attach-failed': { zh: '已回退，但工作区挂载失败 · {{err}}', en: 'Session rewound, but workspace attachment failed · {{err}}' },
+  'rewind-no-persistence': { zh: '回退不可用——持久化服务未加载', en: 'Rewind unavailable — persistence service not loaded' },
+  'rewind-load-failed': { zh: '回退失败——无法读取源会话日志 · {{err}}', en: 'Rewind failed — could not read the source session log · {{err}}' },
+  'rewind-first-message': { zh: '无法回退到第一条消息之前', en: 'Cannot rewind to before the first message' },
+  'rewind-noop': { zh: '该条目已是最新状态，没有可回退的内容', en: 'That entry is already at the latest state — nothing to rewind' },
+  'rewind-session-changed': { zh: '无法回退——会话已切换，请重试', en: 'Cannot rewind — the session changed underneath, try again' },
+  'swap-in-progress': { zh: '另一个会话切换正在进行，请稍候', en: 'Another session switch is in progress, try again in a moment' },
   'resume-while-working': { zh: '回合运行中，无法恢复会话', en: 'Cannot resume while a turn is running' },
   'resume-unavailable': { zh: '恢复不可用——agents 服务未加载', en: 'Resume unavailable — agents service not loaded' },
   'resume-failed': { zh: '恢复失败 · {{err}}', en: 'Resume failed · {{err}}' },
@@ -419,8 +424,8 @@ const dict = {
   // Three widths of the same hint. The browser picks the widest that fits the
   // terminal, because a hint that wraps costs the rows the list needs and can
   // push its own tail off the bottom of the screen.
-  'session-hint-list': { zh: '**Enter** 恢复 · Tab 预览 · {{mod}}a 全部项目（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · Tab preview · {{mod}}a all projects ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}d delete · {{mod}}x clean · Esc exit' },
-  'session-hint-list-mid': { zh: '**Enter** 恢复 · Tab 预览 · {{mod}}a 全部项目 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · Tab preview · {{mod}}a projects · {{mod}}s runs · {{mod}}r rename · {{mod}}d delete · Esc exit' },
+  'session-hint-list': { zh: '**Enter** 恢复 · ←→ 分支 · Tab 预览 · {{mod}}a 全部项目（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · ←→ branches · Tab preview · {{mod}}a all projects ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}d delete · {{mod}}x clean · Esc exit' },
+  'session-hint-list-mid': { zh: '**Enter** 恢复 · ←→ 分支 · Tab 预览 · {{mod}}a 全部项目 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · ←→ branches · Tab preview · {{mod}}a projects · {{mod}}s runs · {{mod}}r rename · {{mod}}d delete · Esc exit' },
   'session-hint-list-short': { zh: '**Enter** 恢复 · Tab 预览 · Esc 退出', en: '**Enter** resume · Tab preview · Esc exit' },
 
   // ── picker 通用快捷键提示（整句本地化，zh 不用 "to" 结构；**段** 渲染为粗体主快捷键）─
@@ -453,16 +458,6 @@ const dict = {
   'model-loading-subtitle': { zh: '正在查询 provider…', en: 'Querying the provider…' },
   'model-switching': { zh: '正在切换模型到 {{name}}…', en: 'Switching model to {{name}}…' },
   'model-switched': { zh: '模型已切换为 {{name}}', en: 'Model switched to {{name}}' },
-
-  // ── components/RewindPicker.tsx ─────────────────────────────────────
-  'rewind-title': { zh: '回退', en: 'Rewind' },
-  'rewind-subtitle': { zh: '选择一条消息，将对话回退到该处', en: 'Pick a message to rewind the conversation to' },
-  'rewind-confirm-title': { zh: '将对话回退到这条消息？', en: 'Rewind conversation to this message?' },
-  'rewind-confirm-desc': { zh: '对话从此处重新开始', en: 'conversation restarts here' },
-  'rewind-empty': { zh: '没有可回退的消息', en: 'No messages to rewind to' },
-  'rewind-last-message': { zh: '最近一条消息', en: 'last message' },
-  'rewind-none': { zh: '还没有可回退的消息', en: 'Nothing to rewind yet' },
-  'rewind-done': { zh: '已回退——编辑后按 Enter 重新发送', en: 'Rewound — edit and press Enter to resend' },
 
   // ── components/ThinkingToggle.tsx + messages/AssistantThinkingMessage.tsx ──
   'thinking-title': { zh: '切换思考模式', en: 'Toggle thinking mode' },
@@ -602,7 +597,8 @@ const dict = {
   'cmd-desc-rename': { zh: '重命名当前会话' },
   'cmd-desc-quit': { zh: '退出 dsh-tui' },
   'cmd-desc-q': { zh: '退出 dsh-tui' },
-  'cmd-desc-rewind': { zh: '回退会话到历史消息' },
+  'cmd-desc-rewind': { zh: '打开会话树（/tree 的别名）' },
+  'cmd-desc-tree': { zh: '显示会话家族树，回退到任意节点' },
   'cmd-desc-export': { zh: '导出会话为 Markdown 文件' },
   // Session / environment
   'cmd-desc-status': { zh: '查看会话状态' },
@@ -701,6 +697,47 @@ const dict = {
   },
   'traj-empty': { zh: '暂无轨迹事件', en: 'No trajectory events yet' },
   'traj-hint-failure': { zh: '{{key}} 看完整轨迹', en: '{{key}} for the full trajectory' },
+
+  // ── components/SessionTreePanel.tsx (double-Esc session tree) ───────
+  'tree-title': { zh: '会话树', en: 'Session tree' },
+  'tree-subtitle': { zh: '当前目录 · {{sessions}} 个会话 · 过滤：{{filter}}', en: 'Current directory · {{sessions}} sessions · filter: {{filter}}' },
+  'tree-loading': { zh: '正在加载会话树…', en: 'Loading session tree…' },
+  'tree-rewinding': { zh: '正在回退并分叉…', en: 'Rewinding…' },
+  'tree-empty': { zh: '没有可显示的条目', en: 'No entries to show' },
+  'tree-truncated': { zh: '· 家族过大已截断', en: '· family truncated' },
+  'tree-search': { zh: '搜索：{{query}}', en: 'Search: {{query}}' },
+  'tree-filter-default': { zh: '默认', en: 'default' },
+  'tree-filter-no-tools': { zh: '无工具', en: 'no tools' },
+  'tree-filter-user-only': { zh: '仅用户', en: 'user only' },
+  'tree-filter-all': { zh: '全部', en: 'all' },
+  'tree-kind-user': { zh: '用户消息', en: 'user message' },
+  'tree-kind-assistant': { zh: '助手回复', en: 'assistant message' },
+  'tree-kind-tool': { zh: '工具调用', en: 'tool call' },
+  'tree-kind-compact': { zh: '压缩检查点', en: 'compaction checkpoint' },
+  'tree-kind-interrupt': { zh: '中断', en: 'interrupt' },
+  'tree-kind-notice': { zh: '通知', en: 'notice' },
+  'tree-empty-fork': { zh: '（空分叉）', en: '(empty fork)' },
+  'tree-unreadable': { zh: '（日志无法读取）', en: '(unreadable log)' },
+  'tree-unloaded': { zh: '（超出预算未加载）', en: '(not loaded — over budget)' },
+  'tree-fork-point': { zh: '（分叉点）', en: '(fork point)' },
+  'tree-confirm-title': { zh: '回退到此处？', en: 'Rewind to this point?' },
+  'tree-confirm-here': { zh: '将从该点分叉新会话，原会话保留为分支', en: 'Forks a new session from this point; the original stays as a branch' },
+  'tree-confirm-drop-turn': { zh: '将丢弃这条消息所在的整轮，提示词回填输入框重编', en: 'Drops the whole turn containing this message; its prompt goes back into the input for re-editing' },
+  'tree-confirm-keep-step': { zh: '将保留到所属 step 结束，其后同轮内容被丢弃', en: 'Keeps through the end of its step; the rest of the turn is dropped' },
+  'tree-confirm-keep-turn': { zh: '将保留到该轮结束，其后的内容被丢弃', en: 'Keeps through the end of its turn; whatever follows is dropped' },
+  'tree-confirm-cross': { zh: '分叉自会话 {{id}}', en: 'Forks from session {{id}}' },
+  'tree-confirm-keep-original': { zh: '原会话保留为分支，随时可切回', en: 'The original session stays as a branch you can return to' },
+  'tree-confirm-drops-branch': { zh: '注意：此分支的内容都在这一轮内——新会话将看不到它', en: 'Note: everything this branch shows is inside that turn — the new session will not contain it' },
+  'tree-adopt-title': { zh: '切换到该分支？', en: 'Switch to this branch?' },
+  'tree-adopt-body': { zh: '保留该分支的全部内容，从分支尖端分叉新会话', en: 'Keeps the branch’s full content, forking a new session at its tip' },
+  'tree-adopt-live': { zh: '已在该分支上', en: 'Already on this branch' },
+  'tree-adopt-unavailable': { zh: '该分支内容未完整加载，无法整体切换', en: 'Branch content is not fully loaded — cannot switch to it whole' },
+  'tree-adopted': { zh: '已切到该分支，内容完整保留', en: 'Switched to the branch; its content is fully kept' },
+  'tree-rewound': { zh: '已回退：新会话已分叉，该轮消息已回填到输入框', en: 'Rewound: forked a new session; the turn’s message is back in the input' },
+  'tree-rewound-no-text': { zh: '已回退：新会话已从该点分叉', en: 'Rewound: forked a new session from that point' },
+  'tree-rewind-failed': { zh: '回退失败：{{message}}', en: 'Rewind failed: {{message}}' },
+  'tree-first-message': { zh: '无法回退到第一条消息之前', en: 'Cannot rewind to before the first message' },
+  'tree-load-failed': { zh: '会话树加载失败', en: 'Failed to load the session tree' },
 } as const
 
 export type I18nKey = keyof typeof dict

@@ -40,7 +40,20 @@ export const DEFAULT_FILTERS: BrowserFilters = {
 /** One line in the browser's list. */
 export type BrowserRow =
   | { readonly kind: 'project'; readonly project: string; readonly count: number }
-  | { readonly kind: 'session'; readonly session: SessionSummary; readonly depth: number }
+  | {
+    readonly kind: 'session'
+    readonly session: SessionSummary
+    readonly depth: number
+    /**
+     * Fork-family membership. A family is one conversation plus every rewind
+     * fork descending from it; the list folds it to its newest member. `rep`
+     * marks the row standing in for the folded family (carries the size and
+     * the expand state); `member` marks a row revealed by expanding one.
+     */
+    readonly family?:
+      | { readonly role: 'rep'; readonly anchor: string; readonly size: number; readonly expanded: boolean }
+      | { readonly role: 'member'; readonly anchor: string; readonly rep: string }
+  }
 
 /** The rendered list plus what it left out and why. */
 export interface BrowserView {
@@ -78,12 +91,16 @@ function matches(session: SessionSummary, needle: string): boolean {
  * @param context - The session doing the browsing: its working directory
  *   anchors the default project filter, its branch the branch filter, and its
  *   own id is never offered (a live session cannot be resumed into itself).
+ * @param expandedFamilies - Anchors of fork families currently expanded by
+ *   the user. A family is one conversation plus every rewind fork descending
+ *   from it; collapsed it shows only its newest member.
  * @returns The flat row list and the counts behind what it hides.
  */
 export function buildView(
   sessions: readonly SessionSummary[],
   filters: BrowserFilters,
   context: { cwd: string; branch: string | undefined; currentId: string; sameProject: (a: string, b: string) => boolean },
+  expandedFamilies: ReadonlySet<string> = new Set<string>(),
 ): BrowserView {
   const needle = filters.query.trim().toLowerCase()
 
@@ -115,24 +132,84 @@ export function buildView(
   const conversations = eligible.filter(session => session.kind.kind !== 'subagent')
   const runs = eligible.filter(session => session.kind.kind === 'subagent')
 
+  // ── fork families ──────────────────────────────────────────────────────
+  // A rewind fork is a branch of its parent conversation, not a new
+  // conversation: folding each family to its most recently active member
+  // keeps one rewind per retry from walling the list off behind copies of
+  // the same chat. Anchors walk the FULL session list — a fork whose parent
+  // was deleted (or lives outside this view's project scope) anchors at
+  // itself, which is simply a family of one. Folding lifts while a search
+  // query is live: a folded member matching the query must stay directly
+  // reachable.
+  const folding = needle.length === 0
+  const byId = new Map(sessions.map(session => [session.id, session] as const))
+  const anchorOf = (session: SessionSummary): string => {
+    let current = session
+    const seen = new Set<string>([current.id])
+    while (current.kind.kind === 'fork') {
+      const parent = byId.get(current.kind.parent)
+      if (parent === undefined || seen.has(parent.id)) return current.id
+      seen.add(parent.id)
+      current = parent
+    }
+    return current.id
+  }
+  const familyOf = new Map<string, SessionSummary[]>()
+  for (const session of conversations) {
+    const anchor = folding ? anchorOf(session) : session.id
+    const members = familyOf.get(anchor)
+    if (members === undefined) familyOf.set(anchor, [session])
+    else members.push(session)
+  }
+  interface Family {
+    readonly anchor: string
+    /** The family's row: its most recently active member (MRU tip). */
+    readonly rep: SessionSummary
+    /** Every member, newest first — `members[0]` is the rep. */
+    readonly members: readonly SessionSummary[]
+  }
+  const families: Family[] = []
+  for (const [anchor, members] of familyOf) {
+    const ordered = [...members].sort((left, right) => right.updatedAt - left.updatedAt)
+    families.push({ anchor, rep: ordered[0]!, members: ordered })
+  }
+  const familyByRep = new Map(families.map(family => [family.rep.id, family] as const))
+  const representatives = families.map(family => family.rep)
+
+  // Conversation rows this view will emit: one rep per family, plus every
+  // member of an expanded family. Runs attach only to emitted rows — a run
+  // whose parent is folded away waits for the expansion with its parent,
+  // instead of surfacing as a top-level orphan with no context.
+  const emittedIds = new Set<string>()
+  const foldedMemberIds = new Set<string>()
+  for (const family of families) {
+    emittedIds.add(family.rep.id)
+    const expand = family.members.length > 1 && expandedFamilies.has(family.anchor)
+    for (const member of family.members) {
+      if (expand) emittedIds.add(member.id)
+      else if (member.id !== family.rep.id) foldedMemberIds.add(member.id)
+    }
+  }
+
   // A run is shown under its parent; one whose parent is not in this view
   // (filtered out, or never listed) would otherwise be unreachable, so it is
   // offered at the top level instead of silently dropped.
   const byParent = new Map<string, SessionSummary[]>()
   const orphans: SessionSummary[] = []
-  const visibleIds = new Set(conversations.map(session => session.id))
   for (const run of runs) {
     const parent = run.kind.kind === 'subagent' ? run.kind.parent : undefined
-    if (parent !== undefined && visibleIds.has(parent)) {
+    if (parent !== undefined && emittedIds.has(parent)) {
       const siblings = byParent.get(parent)
       if (siblings === undefined) byParent.set(parent, [run])
       else siblings.push(run)
+    } else if (parent !== undefined && foldedMemberIds.has(parent)) {
+      // Folded with its parent — the family's expansion reveals both.
     } else {
       orphans.push(run)
     }
   }
 
-  const top = filters.showSubagents ? [...conversations, ...orphans] : conversations
+  const top = filters.showSubagents ? [...representatives, ...orphans] : representatives
   const visible = top.filter(session => {
     if (matches(session, needle)) return true
     // A parent whose own text does not match is still shown when one of its
@@ -167,8 +244,34 @@ export function buildView(
         count: visible.filter(other => other.cwd === session.cwd).length,
       })
     }
-    rows.push({ kind: 'session', session, depth: 0 })
+    const family = familyByRep.get(session.id)
+    const expanded = family !== undefined && family.members.length > 1 && expandedFamilies.has(family.anchor)
+    rows.push({
+      kind: 'session',
+      session,
+      depth: 0,
+      ...(family !== undefined && family.members.length > 1
+        ? { family: { role: 'rep' as const, anchor: family.anchor, size: family.members.length, expanded } }
+        : {}),
+    })
     shown += 1
+    if (expanded && family !== undefined) {
+      for (const member of family.members) {
+        if (member.id === session.id) continue
+        rows.push({
+          kind: 'session',
+          session: member,
+          depth: 1,
+          family: { role: 'member' as const, anchor: family.anchor, rep: session.id },
+        })
+        shown += 1
+        if (!filters.showSubagents) continue
+        for (const run of (byParent.get(member.id) ?? []).filter(child => matches(child, needle) || matches(member, needle))) {
+          rows.push({ kind: 'session', session: run, depth: 2 })
+          shown += 1
+        }
+      }
+    }
     if (!filters.showSubagents) continue
     for (const run of (byParent.get(session.id) ?? []).filter(child => matches(child, needle) || matches(session, needle))) {
       rows.push({ kind: 'session', session: run, depth: 1 })

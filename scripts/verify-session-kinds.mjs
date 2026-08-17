@@ -15,8 +15,9 @@
  * which field decided it.
  *
  * Also covers the pure view layer: search, project scoping, sub-agent
- * folding, and the variable-height windowing that keeps a fixed-height list
- * box from rendering two rows onto the same line.
+ * folding, fork-family folding (collapsed by default, `→` expands, a live
+ * search lifts the fold), and the variable-height windowing that keeps a
+ * fixed-height list box from rendering two rows onto the same line.
  *
  * Run: `node scripts/verify-session-kinds.mjs`
  * Exits non-zero on any assertion failure (CI gate).
@@ -143,9 +144,13 @@ const base = buildView(population, DEFAULT_FILTERS, context)
 check(
   'default view: this project, conversations only, live session excluded',
   base.rows.filter(r => r.kind === 'session').map(r => r.session.id),
-  ['conv', 'fork'],
+  ['conv'],
 )
-check('a rewind fork survives the sub-agent filter', base.rows.some(r => r.kind === 'session' && r.session.id === 'fork'), true)
+check(
+  'a rewind fork is NOT filtered out with the runs — it folds into its family',
+  base.rows.find(r => r.kind === 'session' && r.session.id === 'conv')?.family,
+  { role: 'rep', anchor: 'conv', size: 2, expanded: false },
+)
 check('delegated runs are counted, not merely dropped', base.hiddenSubagents, 2)
 check('sessions with no conversation are counted', base.emptyCount, 1)
 check('and named, so they can be cleaned', base.emptyIds, ['empty'])
@@ -173,7 +178,7 @@ const all = buildView(population, { ...DEFAULT_FILTERS, allProjects: true }, con
 check(
   'all projects: other directories appear, each under its own header',
   all.rows.map(r => (r.kind === 'project' ? `#${r.project}` : r.session.id)),
-  ['#/proj', 'conv', 'fork', '#/elsewhere', 'other-project'],
+  ['#/proj', 'conv', '#/elsewhere', 'other-project'],
 )
 
 const interleavedProjects = buildView(
@@ -195,7 +200,7 @@ const runs = buildView(population, { ...DEFAULT_FILTERS, showSubagents: true }, 
 check(
   'sub-agent runs appear indented under their parent',
   runs.rows.filter(r => r.kind === 'session').map(r => [r.session.id, r.depth]),
-  [['conv', 0], ['run1', 1], ['run2', 1], ['fork', 0]],
+  [['conv', 0], ['run1', 1], ['run2', 1]],
 )
 check('nothing is hidden once runs are shown', runs.hiddenSubagents, 0)
 
@@ -239,14 +244,97 @@ check(
   [['run', 0]],
 )
 
+// ── 3b. Fork-family folding ─────────────────────────────────────────────
+// A rewind fork is another branch of its parent's conversation, not a new
+// one: the list folds each family to its most recently active member and
+// reveals the rest on demand. tip → mid → base is one chain, side branches
+// off base; solo is unrelated.
+const famPop = [
+  summary({ id: 'tip', updatedAt: 50, kind: { kind: 'fork', parent: 'mid' } }),
+  summary({ id: 'solo', updatedAt: 40 }),
+  summary({ id: 'side', updatedAt: 30, kind: { kind: 'fork', parent: 'base' } }),
+  summary({ id: 'mid', updatedAt: 20, kind: { kind: 'fork', parent: 'base' } }),
+  summary({ id: 'base', updatedAt: 10, title: { text: 'database work', source: 'auto' } }),
+]
+
+const folded = buildView(famPop, DEFAULT_FILTERS, context)
+check(
+  'a family folds to its most recently active member',
+  folded.rows.filter(r => r.kind === 'session').map(r => r.session.id),
+  ['tip', 'solo'],
+)
+check(
+  'the family row carries the fold state and size',
+  folded.rows.find(r => r.kind === 'session' && r.session.id === 'tip')?.family,
+  { role: 'rep', anchor: 'base', size: 4, expanded: false },
+)
+check(
+  'a lone conversation carries no family marker',
+  folded.rows.find(r => r.kind === 'session' && r.session.id === 'solo')?.family,
+  undefined,
+)
+
+const famExpanded = buildView(famPop, DEFAULT_FILTERS, context, new Set(['base']))
+check(
+  'expanding reveals every member under the rep, newest first',
+  famExpanded.rows.filter(r => r.kind === 'session').map(r => [r.session.id, r.depth]),
+  [['tip', 0], ['side', 1], ['mid', 1], ['base', 1], ['solo', 0]],
+)
+check(
+  'a member row names its family and rep',
+  famExpanded.rows.find(r => r.kind === 'session' && r.session.id === 'base')?.family,
+  { role: 'member', anchor: 'base', rep: 'tip' },
+)
+
+// A fork whose parent was deleted (or lives outside this view) anchors at
+// itself — a family of one, shown whole rather than folded into nothing.
+const brokenChain = buildView(
+  [summary({ id: 'leaf', kind: { kind: 'fork', parent: 'gone' } })],
+  DEFAULT_FILTERS,
+  context,
+)
+check(
+  'a fork whose parent is gone anchors at itself',
+  brokenChain.rows.find(r => r.kind === 'session')?.family,
+  undefined,
+)
+
+// Runs of a folded member wait for the expansion with their parent, instead
+// of surfacing as top-level orphans with no context around them.
+const withMemberRun = [
+  ...famPop,
+  summary({ id: 'run-of-mid', kind: { kind: 'subagent', parent: 'mid', depth: 1 } }),
+]
+check(
+  'a run whose parent is folded away waits with it',
+  buildView(withMemberRun, { ...DEFAULT_FILTERS, showSubagents: true }, context).rows
+    .some(r => r.kind === 'session' && r.session.id === 'run-of-mid'),
+  false,
+)
+check(
+  'the expansion reveals both, the run under its own parent',
+  buildView(withMemberRun, { ...DEFAULT_FILTERS, showSubagents: true }, context, new Set(['base'])).rows
+    .filter(r => r.kind === 'session').map(r => [r.session.id, r.depth]),
+  [['tip', 0], ['side', 1], ['mid', 1], ['run-of-mid', 2], ['base', 1], ['solo', 0]],
+)
+
+// A live query lifts the fold: a folded member matching the search stays
+// directly reachable, as its own top-level row with no badge.
+const famSearch = buildView(famPop, { ...DEFAULT_FILTERS, query: 'database' }, context)
+check(
+  'a live query never folds',
+  famSearch.rows.filter(r => r.kind === 'session').map(r => [r.session.id, r.depth, r.family]),
+  [['base', 0, undefined]],
+)
+
 // ── 4. Selection and windowing ──────────────────────────────────────────
 const rows = all.rows
 check('project headers are not selectable', sessionAt(rows, 0), undefined)
 check('seek finds the first selectable row', seekSelectable(rows, 0, 1), 1)
 check('seek backwards from the end', seekSelectable(rows, rows.length - 1, -1), rows.length - 1)
 check('seek off the end reports -1', seekSelectable(rows, rows.length, 1), -1)
-check('moving down skips the header between groups', moveSelection(rows, 2, 1), 4)
-check('moving up skips it too', moveSelection(rows, 4, -1), 2)
+check('moving down skips the header between groups', moveSelection(rows, 1, 1), 3)
+check('moving up skips it too', moveSelection(rows, 3, -1), 1)
 check('moving past the end wraps to the first selectable row', moveSelection(rows, rows.length - 1, 1), 1)
 check('moving before the start wraps to the last', moveSelection(rows, 1, -1), rows.length - 1)
 
@@ -254,11 +342,11 @@ check('moving before the start wraps to the last', moveSelection(rows, 1, -1), r
 // A budget of 5 lines holds a 1-line header plus two 2-line sessions.
 check('window start stays at 0 while the focus fits', anchorTop(rows, 1, 5, 0), 0)
 check('window end is measured in lines, not rows', windowEnd(rows, 0, 5), 3)
-check('a budget of 4 lines cannot hold the third row', windowEnd(rows, 0, 4), 2)
-check('scrolling down moves the start only as far as it must', anchorTop(rows, 4, 5, 0), 2)
+check('a budget of 3 lines cannot hold the third row', windowEnd(rows, 0, 3), 2)
+check('scrolling down moves the start only as far as it must', anchorTop(rows, 3, 5, 0), 1)
 check('a focus above the window pulls the start up to it', anchorTop(rows, 1, 5, 3), 1)
 check('with room to spare the start reaches the very top', anchorTop(rows, 1, 9, 3), 0)
-check('slack below the last row is reclaimed by pulling the start back', anchorTop(rows, 4, 99, 3), 0)
+check('slack below the last row is reclaimed by pulling the start back', anchorTop(rows, 3, 99, 3), 0)
 check('an empty list windows to nothing', anchorTop([], 0, 10, 0), 0)
 check('a zero budget never divides by it', anchorTop(rows, 2, 0, 0), 0)
 check(

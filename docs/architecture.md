@@ -25,6 +25,7 @@ Cordis profile
 | `src/plugin.ts` | TTY 检查、问卷与 Skills 注册、Agent 创建/恢复、React 挂载、统一退出清理 |
 | `src/channel.ts` | 将 DSH 持久化事件投影为 transcript；提供 submit、steer、resume、rewind、model/preset 等动作 |
 | `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
+| `src/dsh-adapter/sessionTree.ts` | 会话家族树纯模型（双击 Esc 面板）：跨会话缝合、条目提取、树形压平与过滤；无 Ink 依赖 |
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
 | `src/ui.ts` | 主题化 `Box`/`Text`、render、选择、滚动等公共 facade |

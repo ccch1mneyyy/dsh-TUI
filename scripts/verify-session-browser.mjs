@@ -15,7 +15,11 @@
  *      to the top of the list — the cursor tracks identity, not position;
  *   6. delete: the confirmation names the focused session, Ctrl+Enter must
  *      NOT confirm an irreversible action, Esc cancels, and repeated Enter
- *      commits the action only once.
+ *      commits the action only once;
+ *   7. fork families fold to their newest member with a ▸N badge, → expands
+ *      them (indented), Enter on a member resumes THAT session, ← folds back
+ *      onto the family row, and a live search lifts the fold so folded
+ *      members stay reachable.
  *
  * Assertion discipline: ink repaints only changed lines, so each step opens a
  * FRESH output window and asserts on what that window painted; checks that
@@ -87,10 +91,10 @@ const summary = (over) => ({
   ...over,
 })
 
-function makeChannel() {
+function makeChannel(initialSessions) {
   // MRU order: gamma (newest) → beta → alpha, plus two delegated runs under
   // beta and one boot artifact holding no conversation.
-  let sessions = [
+  let sessions = initialSessions ?? [
     summary({ id: 's-new', title: { text: 'gamma', source: 'auto' }, updatedAt: 5 }),
     summary({ id: 's-mid', title: { text: 'beta', source: 'auto' }, updatedAt: 4, childCount: 2 }),
     summary({ id: 's-old', title: { text: 'alpha', source: 'auto' }, updatedAt: 3 }),
@@ -98,7 +102,7 @@ function makeChannel() {
     summary({ id: 's-run2', title: { text: 'delegated two', source: 'prompt' }, updatedAt: 1, kind: { kind: 'subagent', parent: 's-mid', depth: 1 } }),
     summary({ id: 's-boot', title: { text: 'tmp', source: 'fallback' }, updatedAt: 6, hasPrompt: false }),
   ]
-  const calls = { rename: [], delete: [], preview: [] }
+  const calls = { rename: [], delete: [], preview: [], resume: [] }
   const listeners = new Set()
   const rows = []
   const channel = {
@@ -194,7 +198,10 @@ function makeChannel() {
     switchPreset: async () => false,
     switchModel: async () => false,
     rewindTo: async () => null,
-    resumeTo: async () => false,
+    // Refuse, but record: the family section asserts WHICH session an Enter
+    // on a folded/expanded row actually targets, and a refusal keeps the
+    // screen open so the checks after it still have a browser to drive.
+    resumeTo: async (id) => { calls.resume.push(id); return false },
     newSession: async () => false,
     compact() {},
     calls,
@@ -351,6 +358,79 @@ s = screen()
 check('Esc leaves the browser and restores the conversation', !/Resume session/.test(flat(s)), flat(s).slice(0, 160))
 
 instance.unmount()
+instances.delete(process.stdout)
+
+// ══ fork-family folding ═════════════════════════════════════════════════
+// One conversation rewound three times: s-root → s-f1 → s-f2, plus s-f3 off
+// the root. The four are ONE family; the list must fold it to its newest
+// member instead of spending four rows on four copies of the same chat.
+const fam = makeStreams()
+const famChannel = makeChannel([
+  summary({ id: 's-f2', title: { text: 'second retry', source: 'auto' }, updatedAt: 5, kind: { kind: 'fork', parent: 's-f1' } }),
+  summary({ id: 's-other', title: { text: 'unrelated', source: 'auto' }, updatedAt: 4 }),
+  summary({ id: 's-f3', title: { text: 'side branch', source: 'auto' }, updatedAt: 3, kind: { kind: 'fork', parent: 's-root' } }),
+  summary({ id: 's-f1', title: { text: 'first retry', source: 'auto' }, updatedAt: 2, kind: { kind: 'fork', parent: 's-root' } }),
+  summary({ id: 's-root', title: { text: 'base convo', source: 'auto' }, updatedAt: 1 }),
+])
+const famInstance = await render(
+  React.createElement(Chat, {
+    channel: famChannel,
+    questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+    onExit() {},
+  }),
+  { stdout: fam.stdout, stderr: fam.stderr, stdin: fam.stdin, exitOnCtrlC: false, patchConsole: false },
+)
+for (const value of instances.values()) instances.set(process.stdout, value)
+await sleep(700)
+
+const famScreen = () => {
+  const buf = fam.stdout.term.buffer.active
+  return Array.from({ length: fam.stdout.term.rows }, (_, y) =>
+    (buf.getLine(y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
+    .join('\n')
+}
+async function famWindowed(action, settle = 300) {
+  fam.stdout.frames.length = 0
+  action()
+  await sleep(settle)
+  return toPlain(fam.stdout.frames.join(''))
+}
+
+await famWindowed(() => fam.stdin.write('/resume'), 250)
+await famWindowed(() => fam.stdin.write('\r'), 600)
+s = famScreen()
+check('a fork family folds to its newest member', /second retry/.test(s) && !/first retry|side branch|base convo/.test(s), flat(s).slice(0, 200))
+check('the fold says how many it hides', /second retry ▸4/.test(s), s.split('\n').find(l => l.includes('second retry')) ?? 'row missing')
+check('other conversations still list normally', /unrelated/.test(s) && /2 sessions/.test(flat(s)), flat(s).slice(0, 200))
+
+await famWindowed(() => fam.stdin.write('\x1b[C'), 400) // → expands
+s = famScreen()
+check('→ expands the family in place', /second retry ▾4/.test(s) && /first retry/.test(s) && /side branch/.test(s) && /base convo/.test(s), flat(s).slice(0, 300))
+const memberLine = s.split('\n').find(l => l.includes('first retry')) ?? ''
+check('expanded members indent under the family row', /^ {4}⑃ first retry/m.test(s), JSON.stringify(memberLine))
+check('the expansion counts what it shows', /5 sessions/.test(flat(s)), flat(s).slice(0, 200))
+
+await famWindowed(() => fam.stdin.write('\x1b[B'), 350) // ↓ onto 'side branch'
+await famWindowed(() => fam.stdin.write('\r'), 500) // Enter resumes THAT branch
+check(
+  'Enter on an expanded member resumes that session, not the family rep',
+  famChannel.calls.resume.length === 1 && famChannel.calls.resume[0] === 's-f3',
+  JSON.stringify(famChannel.calls.resume),
+)
+s = famScreen()
+check('the cursor stays on the member after the refusal', /❯\s*⑃ side branch/.test(s), s.split('\n').filter(l => l.includes('❯')).join('|'))
+
+await famWindowed(() => fam.stdin.write('\x1b[D'), 400) // ← folds the family back
+s = famScreen()
+check('← on a member folds the family', !/first retry|base convo/.test(s) && /second retry ▸4/.test(s), flat(s).slice(0, 200))
+check('and lands the cursor on the family row', /❯\s*⑃ second retry/.test(s), s.split('\n').filter(l => l.includes('❯')).join('|'))
+
+await famWindowed(() => fam.stdin.write('base'), 400) // search lifts the fold
+s = famScreen()
+check('search reaches inside a folded family', /❯\s*base convo/.test(s), flat(s).slice(0, 200))
+check('and no badge pretends there is nothing folded', !/▸|▾/.test(s), s.split('\n').filter(l => /▸|▾/.test(l)).join('|'))
+
+famInstance.unmount()
 instances.delete(process.stdout)
 
 if (failed > 0) {

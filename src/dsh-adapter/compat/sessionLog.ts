@@ -36,14 +36,27 @@
  * a wrong session. Retires the day upstream's shared catalog adopts the
  * type or ships a real registration API (the add() calls become no-ops).
  *
+ * The second half of this module is the bounded, tolerant, read-only log
+ * reader behind the session tree (buildSessionTree): 64 KiB chunked I/O,
+ * lazy per-frame zstd decode over an RFC 8878 structural frame walk (a torn
+ * final frame — crash mid-flush — is dropped as uncommitted, never fatal),
+ * packed-row expansion, an event budget plus a scanned-envelope budget so
+ * ignorable-heavy logs cannot multiply the cost of opening the panel, and
+ * an inherited-prefix skip so a fork's event budget pays only for its OWN
+ * events. It never writes; both stock encodings are read.
+ *
  * @module @deepseek-harness-tui/dsh-tui/compat/sessionLog
  */
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { createRequire } from 'node:module'
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
 } from 'node:fs'
@@ -59,8 +72,43 @@ import { homeDir } from '../../utils/paths.js'
  */
 export const LEGACY_SESSION_EVENT_TYPES: readonly string[] = ['activity/status']
 
+/**
+ * decodeStorageRecord comes in LAZILY through the module's own tree: this
+ * module must stay importable against ANY reachable dsh-session copy —
+ * ensureLegacySessionEventTypes walks foreign/minimal copies whose only
+ * contract is exposing KNOWN_SESSION_EVENT_TYPES (see the split-tree
+ * verifier's stub packages), so no static runtime import of the package
+ * is allowed here. The log readers only run where the plugin's own real
+ * dsh-session is installed.
+ */
+type StorageDecoder = (value: unknown) => SessionEvent[]
+let cachedDecoder: StorageDecoder | undefined
+function decodeStorageRecord(value: unknown): SessionEvent[] {
+  if (cachedDecoder === undefined) {
+    const req = createRequire(import.meta.url)
+    cachedDecoder = (req('@deepseek-ai/dsh-session') as { decodeStorageRecord: StorageDecoder }).decodeStorageRecord
+  }
+  return cachedDecoder(value)
+}
+
 /** Zstd frame magic number, little-endian (0xFD2FB528). */
 const ZSTD_MAGIC = 0xfd2fb528
+
+/** I/O slice for streamed log reads. */
+const READ_CHUNK = 64 * 1024
+
+/**
+ * Compressed-size cap for a single zstd frame, checked DURING accumulation
+ * (before any decompress attempt): a bare magic prefix followed by inert
+ * bytes must bail instead of buffering unboundedly.
+ */
+const MAX_FRAME_BYTES = 64 * 1024 * 1024
+
+/**
+ * Decompressed-size cap for a single frame: a tiny on-disk bomb must be
+ * refused, not exploded into memory.
+ */
+const MAX_FRAME_TEXT_BYTES = 64 * 1024 * 1024
 
 /**
  * Session-log storage roots, in priority order, mirroring the persistence
@@ -116,33 +164,540 @@ export function findSessionLogFile(sessionId: string): string | undefined {
   return undefined
 }
 
+/** A located session log and its on-disk encoding. */
+interface SessionLogFile {
+  readonly path: string
+  /** true for session.jsonl.zstd (default), false for compression:"none". */
+  readonly compressed: boolean
+}
+
 /**
- * Decode a (possibly multi-frame) zstd jsonl log. Frames are split by magic
- * scan; any frame failing to decode or any line failing to parse throws, so
- * callers abort instead of acting on a log they did not fully understand.
+ * Dual-encoding sibling of {@link findSessionLogFile} for the bounded tree
+ * reader: also probes `session.jsonl` (a `compression:"none"` backend),
+ * which the rename/delete/title-string path has no use for. Same multi-root
+ * scan and id whitelist; compressed still wins when both exist.
+ * @param sessionId - Session id (directory name under each workspace dir).
+ * @returns The log path and encoding, or undefined when absent.
+ */
+function findSessionLogFileAnyEncoding(sessionId: string): SessionLogFile | undefined {
+  if (!isSafeSessionId(sessionId)) return undefined
+  for (const root of sessionsRoots()) {
+    let workspaces: string[]
+    try {
+      workspaces = readdirSync(root)
+    } catch {
+      continue
+    }
+    for (const ws of workspaces) {
+      const dir = join(root, ws, sessionId)
+      const compressed = join(dir, 'session.jsonl.zstd')
+      if (existsSync(compressed)) return { path: compressed, compressed: true }
+      const plain = join(dir, 'session.jsonl')
+      if (existsSync(plain)) return { path: plain, compressed: false }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Yield a file's bytes in READ_CHUNK slices. Each yielded buffer is freshly
+ * allocated, so consumers may hold frames/lines across yields.
+ * @param fd - Open file descriptor (closed by the caller).
+ * @yields Raw byte slices in file order.
+ */
+function* fileChunks(fd: number): Generator<Buffer, void, undefined> {
+  for (;;) {
+    const buf = Buffer.allocUnsafe(READ_CHUNK)
+    const n = readSync(fd, buf, 0, READ_CHUNK, null)
+    if (n === 0) return
+    yield buf.subarray(0, n)
+  }
+}
+
+/**
+ * Iterate the concatenated zstd frames of a log lazily, over byte chunks,
+ * walking each frame's RFC 8878 structure instead of scanning for magic
+ * bytes: magic (4) → frame header descriptor → window descriptor →
+ * dictionary id → frame content size → data blocks (3-byte little-endian
+ * header: last-block flag, block type, block size) until the last block →
+ * optional 4-byte content checksum. Structure walking wins over a magic
+ * scan twice over: a magic sequence inside a COMPRESSED payload no longer
+ * mis-splits its frame, and the exact frame end is known — so a crash
+ * mid-flush leaves a torn FINAL frame that is dropped like the plain
+ * reader's unterminated tail line (uncommitted), keeping every committed
+ * frame before it readable. Frame bytes accumulate as SEGMENTS (references
+ * into the 64 KiB read chunks) with one concat per completed frame; the
+ * MAX_FRAME_BYTES cap is checked on the running length, so it fires while
+ * the frame is still being read, not after it is buffered. Throws when no
+ * complete frame exists at all (not a zstd log / nothing committed), on
+ * structural corruption (a reserved block type, non-magic bytes at a frame
+ * boundary), or when one frame grows past MAX_FRAME_BYTES.
+ * @param chunks - Raw file bytes, in order.
+ * @yields Each frame's original compressed byte span, in log order.
+ */
+function* zstdFrames(chunks: Iterable<Buffer>): Generator<Buffer, void, undefined> {
+  const stream = chunks[Symbol.iterator]()
+  let current: Buffer | null = null
+  let pos = 0
+  const advance = (): boolean => {
+    const next = stream.next()
+    if (next.done === true) {
+      current = null
+      return false
+    }
+    current = next.value
+    pos = 0
+    return true
+  }
+  let segments: Buffer[] = []
+  let frameLength = 0
+  const append = (bytes: Buffer): void => {
+    if (bytes.length === 0) return
+    segments.push(bytes)
+    frameLength += bytes.length
+    if (frameLength > MAX_FRAME_BYTES) {
+      throw new Error(`zstd frame exceeds the ${MAX_FRAME_BYTES}-byte browse cap`)
+    }
+  }
+  /** Pull exactly n structural bytes (≤ 18, concatenating across chunk
+   *  boundaries); fewer only at EOF. The bytes join the current frame. */
+  const field = (n: number): Buffer => {
+    const parts: Buffer[] = []
+    let left = n
+    while (left > 0) {
+      if (current === null && !advance()) break
+      if (current === null || current.length === pos) {
+        current = null
+        continue
+      }
+      const take = Math.min(current.length - pos, left)
+      parts.push(current.subarray(pos, pos + take))
+      pos += take
+      left -= take
+    }
+    const out = parts.length === 1 ? parts[0]! : Buffer.concat(parts)
+    append(out)
+    return out
+  }
+  /** Swallow exactly n payload bytes into the current frame, in per-chunk
+   *  pieces (no concat — payloads can be megabytes). Returns the shortfall
+   *  at EOF (0 when the payload was fully consumed). */
+  const payload = (n: number): number => {
+    let left = n
+    while (left > 0) {
+      if (current === null && !advance()) return left
+      if (current === null || current.length === pos) {
+        current = null
+        continue
+      }
+      const take = Math.min(current.length - pos, left)
+      append(current.subarray(pos, pos + take))
+      pos += take
+      left -= take
+    }
+    return 0
+  }
+  // EOF partway through a frame is a torn write: committed frames already
+  // yielded stay yielded, the partial frame is dropped. Before the FIRST
+  // frame completes it instead means "nothing committed" — the old magic
+  // scan threw in that case, and the contract is kept.
+  let frames = 0
+  const torn = (): boolean => frames > 0
+  for (;;) {
+    const magic = field(4)
+    if (magic.length < 4) {
+      // Clean EOF at a frame boundary, or a 1–3 byte torn tail.
+      if (magic.length === 0 && frames === 0) throw new Error('no zstd frame found')
+      if (!torn()) throw new Error('no complete zstd frame found')
+      return
+    }
+    if (magic.readUInt32LE(0) !== ZSTD_MAGIC) {
+      throw new Error('non-zstd bytes at a frame boundary')
+    }
+    const descriptor = field(1)
+    if (descriptor.length < 1) {
+      if (!torn()) throw new Error('no complete zstd frame found')
+      return
+    }
+    const d = descriptor[0]!
+    const fcsFlag = d >>> 6
+    const singleSegment = (d & 0x20) !== 0
+    const hasChecksum = (d & 0x04) !== 0
+    // Dictionary_ID flag: 0/1/2/3 → 0/1/2/4 bytes.
+    const dictIdBytes = (d & 0x03) === 3 ? 4 : d & 0x03
+    // Frame_Content_Size: flag 0 → 1 byte only for single-segment frames;
+    // flags 1/2/3 → 2/4/8 bytes.
+    const fcsBytes = fcsFlag === 0 ? (singleSegment ? 1 : 0) : fcsFlag === 1 ? 2 : fcsFlag === 2 ? 4 : 8
+    const headerBytes = (singleSegment ? 0 : 1) + dictIdBytes + fcsBytes
+    if (field(headerBytes).length < headerBytes) {
+      if (!torn()) throw new Error('no complete zstd frame found')
+      return
+    }
+    for (;;) {
+      const blockHeader = field(3)
+      if (blockHeader.length < 3) {
+        if (!torn()) throw new Error('no complete zstd frame found')
+        return
+      }
+      const packed = blockHeader[0]! | (blockHeader[1]! << 8) | (blockHeader[2]! << 16)
+      const lastBlock = (packed & 1) !== 0
+      const blockType = (packed >>> 1) & 0x03
+      if (blockType === 3) throw new Error('reserved zstd block type')
+      // RLE blocks carry a single byte; raw/compressed carry Block_Size.
+      if (payload(blockType === 1 ? 1 : packed >>> 3) > 0) {
+        if (!torn()) throw new Error('no complete zstd frame found')
+        return
+      }
+      if (lastBlock) break
+    }
+    if (hasChecksum && field(4).length < 4) {
+      if (!torn()) throw new Error('no complete zstd frame found')
+      return
+    }
+    frames += 1
+    yield Buffer.concat(segments)
+    segments = []
+    frameLength = 0
+  }
+}
+
+/**
+ * Iterate the lines of a plain-text (compression:"none") log lazily. A
+ * streaming UTF-8 decoder keeps multi-byte characters intact across read
+ * chunks. An unterminated FINAL line is a torn write (a crash mid-append):
+ * the backend's own reader ignores uncommitted records, and so does this
+ * one — the tree must never show events persistence.load() would not
+ * acknowledge.
+ * @param chunks - Raw file bytes, in order.
+ * @yields Each non-empty newline-terminated line's text, in log order.
+ */
+function* plainLines(chunks: Iterable<Buffer>): Generator<string, void, undefined> {
+  const decoder = new TextDecoder('utf-8')
+  let pending = ''
+  for (const chunk of chunks) {
+    pending += decoder.decode(chunk, { stream: true })
+    let idx = pending.indexOf('\n')
+    while (idx !== -1) {
+      const line = pending.slice(0, idx)
+      pending = pending.slice(idx + 1)
+      if (line.length > 0) yield line
+      idx = pending.indexOf('\n')
+    }
+  }
+  // `pending` here (plus any partial code point in the decoder) is the
+  // unterminated torn tail — dropped, not yielded.
+}
+
+/**
+ * Iterate the lines of a decoded zstd frame lazily: lines are located by
+ * indexOf as the consumer pulls, so a reader stopping at its event budget
+ * never allocates the frame's remaining line strings (a single flush can be
+ * many MB of text). A COMPLETE frame must end newline-terminated — the
+ * backend flushes whole frames, so an unterminated tail line inside one is
+ * corruption (the strict backend rejects it too), never a torn write. The
+ * check runs UP FRONT, before the first line is yielded: a budget-limited
+ * reader returning early must not skip it and misjudge a corrupt frame as
+ * merely truncated.
+ * @param text - The frame's full decoded text.
+ * @yields Each non-empty line's text, in order. Throws on a torn frame.
+ */
+function* frameLines(text: string): Generator<string, void, undefined> {
+  if (text.length > 0 && !text.endsWith('\n')) {
+    throw new Error('unterminated record inside a zstd frame')
+  }
+  let pos = 0
+  for (;;) {
+    const nl = text.indexOf('\n', pos)
+    if (nl === -1) return
+    if (nl > pos) yield text.slice(pos, nl)
+    pos = nl + 1
+  }
+}
+
+/**
+ * Parse one log's storage records (one JSON value per line) lazily, in log
+ * order, from whichever on-disk encoding was located. Decompression and
+ * parsing happen per frame/line as the consumer pulls, so stopping early
+ * (event budget reached) stops the I/O too — with one honest exception: a
+ * zstd FRAME is the atomic unit. The next magic (or EOF) delimits it and the
+ * whole frame is decompressed and stringified before its first line exists,
+ * so a single giant flush (a big seed write, a batched append) costs its
+ * full frame size in time and memory regardless of the budget. The budget
+ * bounds ACROSS frames; within one frame it only stops line splitting and
+ * JSON parsing early.
+ * @param fd - Open file descriptor of the log.
+ * @param compressed - Whether the log is zstd-framed (vs plain jsonl text).
+ * @yields Each line's JSON.parse result, unvalidated.
+ */
+function* logRecords(fd: number, compressed: boolean): Generator<unknown, void, undefined> {
+  if (compressed) {
+    for (const frame of zstdFrames(fileChunks(fd))) {
+      // maxOutputLength is the REAL resource bound: repetitive chunk deltas
+      // compress ~56×, so the compressed-byte cap alone says nothing about
+      // the text a frame inflates into. Over the limit zstd throws — the
+      // log degrades to unreadable rather than ballooning the TUI's RSS.
+      const text = zstdDecompressSync(frame, { maxOutputLength: MAX_FRAME_TEXT_BYTES }).toString('utf8')
+      for (const line of frameLines(text)) {
+        yield JSON.parse(line)
+      }
+    }
+  } else {
+    for (const line of plainLines(fileChunks(fd))) {
+      yield JSON.parse(line)
+    }
+  }
+}
+
+/**
+ * Sniff a located artifact's encoding from its first bytes: zstd framing
+ * declares itself with the magic number; anything else is plain JSONL text.
+ * @param path - Candidate log path (must exist).
+ * @returns The path with its detected encoding, or undefined when unreadable.
+ */
+function sniffLogFile(path: string): SessionLogFile | undefined {
+  let fd: number | undefined
+  try {
+    fd = openSync(path, 'r')
+    const head = Buffer.alloc(4)
+    const n = readSync(fd, head, 0, 4, 0)
+    return { path, compressed: n === 4 && head.readUInt32LE(0) === ZSTD_MAGIC }
+  } catch {
+    return undefined
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        // A close failure leaves nothing actionable.
+      }
+    }
+  }
+}
+
+/**
+ * Resolve a `persistence.locate()` hint to a readable log. The hint may name
+ * the physical artifact directly or the backend's LOGICAL name for it (the
+ * jsonl backend's raw-artifact filename carries no encoding suffix), so the
+ * compressed twin is probed as well. Encoding is sniffed from content, never
+ * inferred from the extension.
+ * @param hint - Absolute path from SessionPersistence.locate().
+ * @returns The readable log, or undefined when nothing materialized there.
+ */
+function resolveLocatedPath(hint: string): SessionLogFile | undefined {
+  const direct = existsSync(hint) ? sniffLogFile(hint) : undefined
+  if (direct !== undefined) return direct
+  const twin = `${hint}.zstd`
+  if (existsSync(twin)) return { path: twin, compressed: true }
+  return undefined
+}
+
+/** Outcome of reading an EXISTING log through the bounded reader. */
+export interface SessionLogRead {
+  readonly events: readonly SessionEvent[]
+  /** False when the read stopped early (event/scan budget) — a plain
+   *  truncation; the collected prefix is fully usable. */
+  readonly complete: boolean
+  /** Envelopes inspected (collected or skipped) — the real read cost. */
+  readonly scanned: number
+  /** True when an EXISTING log could not be read: corruption, a torn first
+   *  frame, an over-cap frame, a decode bomb. Distinct from ABSENT (which
+   *  reports `undefined`): a failed log must degrade to a structure-only
+   *  placeholder and must NOT be retried through an unbounded strict read —
+   *  that fallback would defeat every cap this reader exists to enforce.
+   *  `events` keeps the partial prefix collected before the failure, for
+   *  diagnostics; callers building trees ignore it. */
+  readonly failed?: boolean
+}
+
+/**
+ * Shared bounded read loop over a located log. See readSessionEventsFromLog
+ * for the contract; this is the file-level entry for backend-resolved paths.
+ * Returns undefined ONLY when the log vanished between the location scan and
+ * the open — every other failure lands in {@link SessionLogRead.failed}.
+ */
+function readEvents(
+  file: SessionLogFile,
+  maxEvents: number,
+  maxScanned: number,
+  skipBelowSeq: number,
+): SessionLogRead | undefined {
+  let fd: number | undefined
+  try {
+    fd = openSync(file.path, 'r')
+  } catch {
+    return undefined
+  }
+  let scanned = 0
+  const events: SessionEvent[] = []
+  try {
+    for (const record of logRecords(fd, file.compressed)) {
+      for (const event of decodeStorageRecord(record)) {
+        // The SCAN budget bounds the real cost drivers — I/O, decompression,
+        // JSON.parse — which are paid for EVERY envelope, collected or not.
+        // Without it, a log carrying hundreds of thousands of skipped rows
+        // (ignorable-marked activity frames) forces a full parse just
+        // to collect a handful of events, blocking the TUI on panel open.
+        scanned += 1
+        if (scanned > maxScanned) return { events, complete: false, scanned }
+        const envelope = event as Record<string, unknown>
+        if (typeof envelope['seq'] !== 'number' || envelope['ignorable'] === true) continue
+        // Inherited-prefix skip (session-tree dedup): seqs an ancestor
+        // already shows are not collected. They still cost the scan budget
+        // (their bytes were read and parsed), but NOT the event budget — a
+        // fork of a huge parent is charged only for its OWN events, so two
+        // small forks of a 70k-event parent both stay visible. Titles still
+        // collect below the cutoff: branch-head labels need them and they
+        // never extract into entries.
+        if ((envelope['seq'] as number) < skipBelowSeq && envelope['type'] !== 'session/title') continue
+        // Budget check BEFORE the push: an exact-fit log reports complete,
+        // and only a surviving (maxEvents+1)-th event marks truncation.
+        if (events.length >= maxEvents) return { events, complete: false, scanned }
+        events.push(event)
+      }
+    }
+    return { events, complete: true, scanned }
+  } catch {
+    // An EXISTING but undecodable log (corruption, over-cap frame, decode
+    // bomb): fail closed — never silently empty, never eligible for an
+    // unbounded fallback re-read.
+    return { events, complete: false, scanned, failed: true }
+  } finally {
+    try {
+      closeSync(fd)
+    } catch {
+      // A close failure leaves nothing actionable — the read already ended.
+    }
+  }
+}
+
+/**
+ * Default scan budget derived from the event budget: 4× headroom over the
+ * collectible events (legitimate logs interleave a modest share of skipped
+ * rows — headers, repair-marked ignorable frames), plus a floor so even a
+ * tiny `maxEvents` tolerates a noisy prefix. Unbounded reads stay unbounded.
+ */
+export function defaultMaxScanned(maxEvents: number): number {
+  return Number.isFinite(maxEvents) ? maxEvents * 4 + 4096 : Number.POSITIVE_INFINITY
+}
+
+/**
+ * File-level sibling of {@link readSessionEventsFromLog} for paths resolved
+ * by the backend itself (`persistence.locate`) — covers a custom-configured
+ * root that none of the stock sessionsRoots() candidates describes.
+ * @param path - Absolute artifact path (physical or logical name).
+ * @param maxEvents - Stop before collecting more than this many events.
+ * @param maxScanned - Stop after INSPECTING this many envelopes, collected
+ *   or skipped (default: {@link defaultMaxScanned} of maxEvents).
+ * @param skipBelowSeq - Inherited-prefix cutoff (session-tree dedup):
+ *   seq'd events below it are skipped without spending the event budget —
+ *   they still count against maxScanned. `session/title` events are always
+ *   collected (branch-head labels need them; they never become entries).
+ * @returns The read outcome, or undefined ONLY when nothing materialized at
+ *   the path — an existing-but-undecodable log reports `failed: true`.
+ */
+export function readSessionEventsFromFile(
+  path: string,
+  maxEvents: number = Number.POSITIVE_INFINITY,
+  maxScanned: number = defaultMaxScanned(maxEvents),
+  skipBelowSeq: number = 0,
+): SessionLogRead | undefined {
+  const file = resolveLocatedPath(path)
+  if (file === undefined) return undefined
+  return readEvents(file, maxEvents, maxScanned, skipBelowSeq)
+}
+/**
+ * Read a session's events from its persisted log — tolerant, read-only, and
+ * cost-bounded. Built for the session tree (buildSessionTree), whose browse
+ * must satisfy three constraints the strict backend read cannot:
+ *
+ *  - READ-ONLY: `persistence.inspect` rejects logs carrying third-party
+ *    event types (working-activity's `activity/status`), and the resume
+ *    seam's answer (in-process type registration, issue #153) must not be
+ *    inverted here: opening a picker never rewrites a history log. This
+ *    reader never writes; unknown types are simply passed through
+ *    (extractEntries skips what it does not know).
+ *  - TOLERANT: envelope-shape or decode anomalies degrade to
+ *    `failed: true` (a structure-only tree node) instead of rejecting the
+ *    whole log — and a torn FINAL zstd frame (crash mid-flush) is dropped
+ *    as uncommitted, keeping the frames before it readable.
+ *  - BOUNDED: the file is read in 64 KiB slices and frames decode lazily,
+ *    stopping the moment `maxEvents` events have been collected — a
+ *    200k-event log costs budget × per-event work, not a whole-file read +
+ *    decompress + parse. `complete: false` marks the early stop (the caller
+ *    surfaces it as `truncated`). One honest exception: a single zstd FRAME
+ *    is the atomic unit (see logRecords) — the budget bounds work ACROSS
+ *    frames, never inside one giant flush.
+ *
+ * Packed rows are expanded with the backend's own `decodeStorageRecord`:
+ * the packChunks writer folds each run of same-block delta chunks into ONE
+ * `text-chunks`/`reasoning-chunks`/`tool-call-chunks` line (the default —
+ * the finding that motivated this reader's third revision), so a line is a
+ * storage record, not an event, and seq-less rows must not be dropped as if
+ * they were headers. The budget counts EXPANDED events, matching the tree's
+ * per-event cost. Malformed packed rows throw inside decodeStorageRecord —
+ * corrupt storage degrades to `undefined`, never to silently dropped runs.
+ *
+ * Torn-tail semantics mirror the backend's own reader: a plain log's
+ * unterminated final line (crash mid-append) is uncommitted data and
+ * ignored, while an unterminated record INSIDE a complete zstd frame is
+ * corruption and fails the read.
+ *
+ * Envelopes with `ignorable: true` are skipped (the read path's own skip
+ * signal) and the seq-less header row is metadata, not an event. Skipped
+ * envelopes still count against the SCAN budget (maxScanned): skipping is
+ * not free — the I/O, decompress and JSON.parse for them have already been
+ * paid — so an ignorable-heavy log cannot bypass the cost bound by keeping
+ * its collectible count low. Never throws; returns undefined ONLY when the
+ * log is absent — an existing-but-undecodable log returns `failed: true`
+ * so the caller degrades to a placeholder instead of escalating to an
+ * unbounded strict re-read.
+ * @param sessionId - Session whose log should be read.
+ * @param maxEvents - Stop before collecting more than this many events
+ *   (default: unbounded). 0 collects nothing and reports complete: false
+ *   whenever the log holds any collectible event.
+ * @param maxScanned - Stop after INSPECTING this many envelopes, collected
+ *   or skipped (default: 4× maxEvents + 4096; unbounded when maxEvents is).
+ * @param skipBelowSeq - Inherited-prefix cutoff (session-tree dedup):
+ *   seq'd events below it are skipped without spending the event budget —
+ *   they still count against maxScanned. `session/title` events are always
+ *   collected (branch-head labels need them; they never become entries).
+ * @returns The read outcome — events, completeness, real scan cost, and a
+ *   `failed` marker for safety-cap/corruption bailouts.
+ */
+export function readSessionEventsFromLog(
+  sessionId: string,
+  maxEvents: number = Number.POSITIVE_INFINITY,
+  maxScanned: number = defaultMaxScanned(maxEvents),
+  skipBelowSeq: number = 0,
+): SessionLogRead | undefined {
+  const file = findSessionLogFileAnyEncoding(sessionId)
+  if (file === undefined) return undefined
+  return readEvents(file, maxEvents, maxScanned, skipBelowSeq)
+}
+
+/**
+ * Decode a (possibly multi-frame) zstd jsonl log. Frames are split by the
+ * structural walker (a torn final frame — crash mid-flush — is dropped as
+ * uncommitted); any frame failing to decode or any line failing to parse
+ * throws, so callers abort instead of acting on a log they did not fully
+ * understand.
  * @param buf - Raw file bytes.
  * @returns Parsed event envelopes, in log order.
  */
 function decodeEvents(buf: Buffer): Record<string, unknown>[] {
-  const offsets: number[] = []
-  for (let i = 0; i + 4 <= buf.length; i++) {
-    if (buf.readUInt32LE(i) === ZSTD_MAGIC) offsets.push(i)
+  const out: Record<string, unknown>[] = []
+  for (const frame of zstdFrames([buf])) {
+    const text = zstdDecompressSync(frame).toString('utf8')
+    for (const line of text.split('\n')) {
+      if (line.length === 0) continue
+      const parsed: unknown = JSON.parse(line)
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('session log line is not an event envelope')
+      }
+      out.push(parsed as Record<string, unknown>)
+    }
   }
-  if (offsets.length === 0) throw new Error('no zstd frame found')
-  return offsets.flatMap((start, i) => {
-    const end = i + 1 < offsets.length ? offsets[i + 1]! : buf.length
-    const text = zstdDecompressSync(buf.subarray(start, end)).toString('utf8')
-    return text
-      .split('\n')
-      .filter((line) => line.length > 0)
-      .map((line) => {
-        const parsed: unknown = JSON.parse(line)
-        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          throw new Error('session log line is not an event envelope')
-        }
-        return parsed as Record<string, unknown>
-      })
-  })
+  return out
 }
 
 /**
@@ -204,7 +759,9 @@ export function ensureLegacySessionEventTypes(): void {
  *
  * Why not `persistence.load()`: the backend validates every event against
  * KNOWN_SESSION_EVENT_TYPES and throws the WHOLE load when a third-party
- * plugin wrote an unmarked unknown type. A picker label is
+ * plugin wrote an unmarked unknown type (e.g. activity/status before the
+ * resume repair touched it) — which is exactly why pickers fell back to the
+ * cwd basename for every working-activity session. A picker label is
  * read-only UI state: decoding frames directly here keeps titles working
  * for logs the strict path refuses, now and for future plugin event types.
  *
@@ -212,35 +769,77 @@ export function ensureLegacySessionEventTypes(): void {
  * overrides the first-prompt auto title), falling back to the first user
  * message text. `hasUserMessage` drives the picker's launch-artifact filter.
  * @param sessionId - Session whose log should be read.
+ * @param locatedPath - Three-state `persistence.locate` outcome: a string is
+ *   the AUTHORITATIVE artifact path (used as-is, never falls back to the
+ *   stock root — a same-id copy there could be stale); null means the
+ *   backend authoritatively owns no per-session file (nothing to read);
+ *   undefined means no locate information (stock root scan applies).
  * @returns The title info, or undefined when the log is absent/undecodable.
  */
 export function readSessionTitleFromLog(
   sessionId: string,
+  locatedPath?: string | null,
 ): { title?: string; hasUserMessage: boolean } | undefined {
+  let fd: number | undefined
   try {
-    const file = findSessionLogFile(sessionId)
+    if (locatedPath === null) return undefined
+    const file =
+      locatedPath !== undefined
+        ? resolveLocatedPath(locatedPath)
+        : findSessionLogFileAnyEncoding(sessionId)
     if (file === undefined) return undefined
-    const events = decodeEvents(readFileSync(file))
-    let titled: string | undefined
-    let firstUser: string | undefined
-    let hasUserMessage = false
-    for (const event of events) {
-      if (event['type'] === 'session/title') {
-        const title = (event['data'] as { title?: unknown } | undefined)?.['title']
-        if (typeof title === 'string' && title.trim().length > 0) titled = title
-      } else if (event['type'] === 'user/message') {
-        hasUserMessage = true
-        if (firstUser === undefined) {
-          firstUser = firstTextOfContent(
-            (event['data'] as { content?: unknown } | undefined)?.['content'],
-          )
-        }
+    fd = openSync(file.path, 'r')
+    // decodeStorageRecord expands packed runs; titles and user messages are
+    // never packed, but expansion keeps the scan correct on any log.
+    const fdHeld = fd
+    const resolved = file
+    function* decoded(): Generator<SessionEvent, void, undefined> {
+      for (const record of logRecords(fdHeld, resolved.compressed)) {
+        yield* decodeStorageRecord(record)
       }
     }
-    return { title: titled ?? firstUser, hasUserMessage }
+    return titleFromEvents(decoded())
   } catch {
     return undefined
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        // A close failure leaves nothing actionable — the read already ended.
+      }
+    }
   }
+}
+
+/**
+ * Derive the picker label from decoded session events — the shared core of
+ * the file reader above and the backend-event (inspect) path the /resume
+ * picker uses for non-JSONL backends (sqlite/foreign locate kinds), where
+ * the compat file layer authoritatively owns nothing.
+ * @param events - Decoded session events, in log order.
+ * @returns Title info; `hasUserMessage` false marks a launch artifact.
+ */
+export function titleFromEvents(
+  events: Iterable<SessionEvent>,
+): { title?: string; hasUserMessage: boolean } {
+  let titled: string | undefined
+  let firstUser: string | undefined
+  let hasUserMessage = false
+  for (const event of events) {
+    if (event['type'] === 'session/title') {
+      const title = (event['data'] as { title?: unknown } | undefined)?.['title']
+      if (typeof title === 'string' && title.trim().length > 0) titled = title
+    } else if (event['type'] === 'user/message') {
+      hasUserMessage = true
+      if (firstUser === undefined) {
+        firstUser = firstTextOfContent(
+          (event['data'] as { content?: unknown } | undefined)?.['content'],
+        )
+      }
+    }
+  }
+  return { title: titled ?? firstUser, hasUserMessage }
 }
 
 /**

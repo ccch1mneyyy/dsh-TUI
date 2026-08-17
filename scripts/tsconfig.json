@@ -1,0 +1,20 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // Type-check the harness scripts without emitting into lib/types. Living
+    // INSIDE scripts/ lets tsserver auto-discover this project for the files
+    // it includes (tsserver only auto-discovers tsconfig.json filenames), so
+    // editor diagnostics match `npm run typecheck`. Only whitelisted scripts
+    // are included — the rest of this directory is unaudited scratch.
+    "noEmit": true,
+    "rootDir": ".."
+  },
+  "include": [
+    "../src",
+    "tree-check.ts",
+    "channel-tree-check.ts",
+    "tree-smoke.tsx",
+    "sessionlog-check.ts",
+    "picker-check.ts"
+  ]
+}

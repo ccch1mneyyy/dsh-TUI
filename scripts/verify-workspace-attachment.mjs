@@ -128,7 +128,9 @@ assert.match(
 )
 assert.doesNotMatch(plugin, /if \(created\)/, 'startup attachment must not skip resumed legacy sessions')
 assert.equal(
-  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|handle\.agent\.session\.header\.cwd \?\? state\.cwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
+  // rewind attaches the SOURCE session's cwd (sourceCwd) — a cross-session
+  // fork belongs to the branch's own project, not necessarily state.cwd.
+  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|sourceCwd|handle\.agent\.session\.header\.cwd \?\? state\.cwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
   4,
   'rewind, /resume, /new, and model-switch paths all attach ownership',
 )

@@ -88,7 +88,12 @@
     "verify:liangshen-bootstrap": "node scripts/verify-liangshen-bootstrap.mjs",
     "verify:package": "npm pack --dry-run --json --ignore-scripts | node scripts/verify-package.mjs",
     "verify:prompt-debug": "npm run build && node scripts/verify-prompt-debug.mjs",
-    "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts"
+    "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts",
+    "tree-check": "node --import tsx/esm scripts/tree-check.ts",
+    "channel-tree-check": "node --import tsx/esm scripts/channel-tree-check.ts",
+    "tree-smoke": "node --import tsx/esm scripts/tree-smoke.tsx",
+    "sessionlog-check": "node --import tsx/esm scripts/sessionlog-check.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p scripts/tsconfig.json"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

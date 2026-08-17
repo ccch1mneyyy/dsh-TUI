@@ -127,6 +127,10 @@ export function SessionBrowser({
   // stays on the session you were looking at" true by construction instead of
   // something every mutation has to remember to restore.
   const [focusId, setFocusId] = React.useState<string | undefined>(undefined)
+  // Anchors of the fork families the user has opened with →. Held as identity
+  // (anchor session id) for the same reason the cursor is: rows reorder under
+  // every mutation, the expansion must survive them.
+  const [expandedFamilies, setExpandedFamilies] = React.useState<ReadonlySet<string>>(() => new Set())
   // The window start is a scroll anchor, not state: it is derived from the
   // focus every render and only ever read back to keep a stationary cursor
   // from re-shuffling the screen. Holding it in state would mean setting
@@ -195,8 +199,8 @@ export function SessionBrowser({
         branch: channel.gitBranch,
         currentId: channel.agentId,
         sameProject,
-      }),
-    [sessions, filters, channel.cwd, channel.gitBranch, channel.agentId, sameProject],
+      }, expandedFamilies),
+    [sessions, filters, channel.cwd, channel.gitBranch, channel.agentId, sameProject, expandedFamilies],
   )
 
   // Resolve identity to a position once per render. A cursor whose session is
@@ -393,6 +397,32 @@ export function SessionBrowser({
       // A page is "as many rows as the window holds", taken as repeated single
       // steps so it lands on a selectable row like every other move.
       step(key.pageDown ? 1 : -1, Math.max(1, Math.floor(listHeight / 2)))
+    } else if (key.rightArrow || key.leftArrow) {
+      // Fork-family folding. → opens the folded family under the cursor; ←
+      // closes it — from anywhere inside it, so a member row's ← lands the
+      // cursor on the family's row rather than on a row that just folded away.
+      const row = view.rows[focusRef.current]
+      const family = row?.kind === 'session' ? row.family : undefined
+      if (family !== undefined) {
+        if (key.rightArrow && family.role === 'rep' && !family.expanded && family.size > 1) {
+          const { anchor } = family
+          setExpandedFamilies(current => new Set(current).add(anchor))
+        } else if (key.leftArrow && (family.role === 'member' || family.expanded)) {
+          const { anchor } = family
+          setExpandedFamilies(current => {
+            const next = new Set(current)
+            next.delete(anchor)
+            return next
+          })
+          if (family.role === 'member') {
+            setFocusId(family.rep)
+            // Rows above the family are untouched by the fold, so the rep's
+            // index in the current rows is its index after it too.
+            const repIndex = view.rows.findIndex(r => r.kind === 'session' && r.session.id === family.rep)
+            if (repIndex >= 0) focusRef.current = repIndex
+          }
+        }
+      }
     } else if (isPlainReturn(key)) {
       if (focused === undefined) return
       const target = focused
@@ -534,6 +564,8 @@ export function SessionBrowser({
                 depth={row.depth}
                 focused={windowTop + index === focus}
                 now={now}
+                familySize={row.family?.role === 'rep' ? row.family.size : undefined}
+                familyExpanded={row.family?.role === 'rep' ? row.family.expanded : undefined}
               />
             ),
           )}

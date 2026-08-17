@@ -125,7 +125,7 @@ console.log('HelpMenu 随 /lang 切换:')
   await sleep(200)
   let text = screenText(term, ROWS)
   assert(text.includes('/new — 新开会话'), 'zh：帮助菜单显示 /new — 新开会话')
-  assert(text.includes('/rewind — 回退会话到历史消息'), 'zh：帮助菜单显示 rewind 中文描述')
+  assert(text.includes('/rewind — 打开会话树（/tree 的别名）'), 'zh：帮助菜单显示 rewind 中文描述')
 
   setLang('en')
   app.rerender(React.createElement(HelpMenu, { commands }))

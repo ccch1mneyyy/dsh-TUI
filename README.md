@@ -17,11 +17,11 @@
 
 # dsh-TUI
 
->一个美观且实用的 Claude Code 风格 TUI 插件：像素鲸鱼顶栏、双流光大字、实时工作状态行、思考流式展开、双击 Esc 时间回溯、蓝白上下文进度条 + TPS 仪表。
+>一个美观且实用的 Claude Code 风格 TUI 插件：像素鲸鱼顶栏、双流光大字、实时工作状态行、思考流式展开、双击 Esc 会话树、蓝白上下文进度条 + TPS 仪表。
 >零核心改动，纯插件挂载。安装插件即可启用，卸载后不会留下核心补丁。
 >献给钟爱tui的各位极客们~
 >
->A beautiful, practical Claude Code-style TUI plugin: pixel whale top bar, dual flowing-glow title, real-time status line, streaming thought expansion, double-Esc time rewind, blue-white context progress bar + TPS gauge.
+>A beautiful, practical Claude Code-style TUI plugin: pixel whale top bar, dual flowing-glow title, real-time status line, streaming thought expansion, double-Esc session tree, blue-white context progress bar + TPS gauge.
 >Zero core changes, pure plugin mounting. Install to enable; uninstall leaves no core patches.
 >For all TUI-loving geeks~
 
@@ -47,7 +47,7 @@
   - **可观察的 Agent 状态**：实时工作状态、上下文分段进度、TPS、缓存命中率、
     推理等级、输入/输出 token 与 Git/会话信息。
   - **完整会话工作流**：`/resume`、`/new`、`/compact`、`/export`、`/btw` 侧问、
-    模型切换，以及双击 `Esc` 发起的会话 rewind/fork。
+    模型切换，以及双击 `Esc` 打开的会话家族树（跨分支搜索、过滤与回退分叉）。
   - **DSH 官方能力接入**：Agent preset、Skills、MCP、Goals、Todos、子代理、
     `ask_user_question` 问卷都通过现有服务或注册表连接。
   - **为长会话设计**：事件驱动投影、差分终端输出、消息虚拟化、回放合并与有界缓存，
@@ -102,7 +102,7 @@ TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提�
 |---|---|
 | `Enter` | 发送（`Shift+Enter` 换行）；命令菜单打开时执行选中项 |
 | `Ctrl+C` | 中断当前回合；空闲时连按两次退出 |
-| `Esc` | 关闭命令/文件菜单；空闲双击清空输入；**空输入双击 = 时间回溯** |
+| `Esc` | 关闭命令/文件菜单；空闲双击清空输入；**空输入双击 = 会话树（回退/分叉）** |
 | `Ctrl+O` | 展开/收起详情（思考全文、工具参数与输出） |
 | `Ctrl+R` | 历史消息搜索 |
 | `/` | 会话内全文搜索（`n`/`N` 跳转） |
@@ -141,7 +141,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 
 | 分组 | 命令 |
 |---|---|
-| 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） |
+| 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） · `/tree` 会话树（`/rewind` 别名，亦可双击 Esc） |
 | 状态 | `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
 | 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 · `/lang` 中英界面切换 |
 | 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` |

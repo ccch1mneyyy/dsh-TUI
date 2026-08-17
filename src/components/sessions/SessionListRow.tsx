@@ -29,20 +29,32 @@ export function SessionListRow({
   depth,
   focused,
   now,
+  familySize,
+  familyExpanded,
 }: {
   session: SessionSummary
   /** Columns available to the row, indentation included. */
   width: number
-  /** 0 for a conversation, 1 for a sub-agent run under its parent. */
+  /** 0 for a conversation, 1 for a nested run or fork-family member, 2 for a run under a member. */
   depth: number
   focused: boolean
   /** Epoch ms used for every relative time in this render pass. */
   now: number
+  /** Folded fork-family size; when > 1 the row shows a ▸N/▾N badge. */
+  familySize?: number
+  /** Whether that family is currently expanded. */
+  familyExpanded?: boolean
 }): React.ReactNode {
   const indent = depth * 2
-  // Two cells for the focus marker, plus the indent for a nested run.
+  // Two cells for the focus marker, plus the indent for a nested row.
   const body = Math.max(8, width - 2 - indent)
   const mark = kindMark(session.kind)
+  // The badge sits after the title and must never squeeze it past usefulness,
+  // so its width comes out of the title's budget up front.
+  const badge = familySize !== undefined && familySize > 1
+    ? `${familyExpanded === true ? '▾' : '▸'}${familySize}`
+    : undefined
+  const badgeCells = badge === undefined ? 0 : badge.length + 1
 
   const facts: string[] = [formatWhen(session.updatedAt, now)]
   if (session.branch !== undefined) facts.push(session.branch)
@@ -63,9 +75,10 @@ export function SessionListRow({
         <Text color={titleColor(session.title.source, focused)} bold={focused}>
           {truncateWidth(
             session.label ?? session.title.text,
-            body - (mark === undefined ? 0 : 2),
+            body - (mark === undefined ? 0 : 2) - badgeCells,
           )}
         </Text>
+        {badge !== undefined && <Text dimColor>{` ${badge}`}</Text>}
       </Box>
       <Box>
         <Text dimColor>
