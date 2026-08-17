@@ -20,6 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify generated output is not checked in
+        run: test -z "$(git ls-files -- lib)"
+
       - uses: pnpm/action-setup@v4
         with:
           version: 11
