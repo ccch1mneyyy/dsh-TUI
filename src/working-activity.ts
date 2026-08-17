@@ -15,4 +15,30 @@
  * resolves under every package-manager layout.
  * @module @deepseek-harness-tui/dsh-tui/working-activity
  */
+import {
+  apply as applyUpstream,
+  Config,
+  name,
+  type Config as WorkingActivityConfig,
+} from 'dsh-working-activity'
+import { t } from './i18n.js'
+
 export * from 'dsh-working-activity'
+export { Config, name }
+
+/** Mount working-activity with narration localized by the live TUI language. */
+export function apply(
+  ctx: Parameters<typeof applyUpstream>[0],
+  config: WorkingActivityConfig = {},
+): void {
+  applyUpstream(ctx, { ...config, narrate: false })
+  if (config.narrate === false) return
+
+  ctx.inject(['systemPrompt'], (promptCtx) => {
+    promptCtx.systemPrompt.section({
+      name: 'working-activity:narrate',
+      order: 60,
+      text: () => t('working-activity-narrate-instruction'),
+    })
+  })
+}

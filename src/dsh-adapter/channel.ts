@@ -46,10 +46,11 @@ import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
-import { t } from '../i18n.js'
+import { getLang, subscribeLang, t } from '../i18n.js'
+import { formatDuration } from '../cc/format.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
-import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
+import { ActivityTracker, type ActivityState, type TurnStats } from 'dsh-working-activity/status'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
 import type { TuiCommandTreeRuntime } from './command-trees.js'
@@ -189,6 +190,56 @@ export interface TokenUsage {
 
 /** In-process working-line snapshot derived from the base session stream. */
 export type ActivityStatus = ActivityState
+
+/** Replace dependency-owned Chinese copy while the TUI is in English mode. */
+function localizeActivityState(activity: ActivityState, stats: TurnStats, nowMs: number): ActivityState {
+  if (getLang() !== 'en') return activity
+  if (activity.phase === 'waiting' || activity.phase === 'thinking') {
+    const total = t('working-activity-total', {
+      duration: formatDuration(activity.turnElapsedMs),
+    })
+    if (activity.phrase !== undefined && activity.line.startsWith('⏵ ')) {
+      return { ...activity, line: `⏵ ${activity.phrase} · ${total}`, label: undefined }
+    }
+    const label = activity.phase === 'waiting'
+      ? t('working-activity-waiting')
+      : t('working-activity-thinking')
+    return {
+      ...activity,
+      line: `${label} · ${total}`,
+      label,
+      phrase: undefined,
+    }
+  }
+  if (activity.phase === 'tool') {
+    const label = t('working-activity-running-tool')
+    const narration = activity.phrase === undefined ? '' : `⏵ ${activity.phrase} · `
+    const detail = activity.detail === undefined ? '' : ` ${activity.detail}`
+    const git = activity.line.endsWith(' · git') ? ' · git' : ''
+    return {
+      ...activity,
+      line: `${narration}${label}${detail} · ${formatDuration(nowMs - activity.phaseStartedAt)}${git}`,
+      label,
+    }
+  }
+  if (activity.phase === 'done') {
+    const tools = t(
+      stats.toolCount === 1 ? 'working-activity-tool-count-one' : 'working-activity-tool-count-many',
+      { count: stats.toolCount },
+    )
+    const tokens = activity.line.match(/ · 🔥 [^·]+$/)?.[0] ?? ''
+    return {
+      ...activity,
+      line: t('working-activity-done', {
+        tools,
+        thinking: formatDuration(stats.thinkingMs),
+        tooling: formatDuration(stats.toolMs),
+      }) + tokens,
+      phrase: undefined,
+    }
+  }
+  return activity
+}
 
 /** A transient status message shown above the prompt input. */
 export interface NotificationItem {
@@ -4004,7 +4055,8 @@ ${output}
       state.workingActivity = undefined
       return undefined
     }
-    const rendered = activityTracker.render()
+    const nowMs = Date.now()
+    const rendered = localizeActivityState(activityTracker.render(nowMs), activityTracker.stats(), nowMs)
     state.workingActivity = rendered
     return rendered
   }
@@ -4062,6 +4114,10 @@ ${output}
     refreshMode()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),
+      subscribeLang(() => {
+        renderWorkingActivity()
+        state.emit()
+      }),
       ctx.on('agent/status', ({ agent: subject, status }) => {
         if (subject !== agent) return
         state.status = status

@@ -9,7 +9,8 @@ const testHome = mkdtempSync(join(tmpdir(), 'dsh-tui-activity-home-'))
 process.env.HOME = testHome
 process.env.USERPROFILE = testHome
 const { createChannel } = await import('../lib/types/dsh-adapter/channel.js')
-const { apply: applyWorkingActivity } = await import('dsh-working-activity')
+const { setLang } = await import('../lib/types/i18n.js')
+const { apply: applyWorkingActivity } = await import('../lib/types/working-activity.js')
 
 // Both shipped compositions explicitly keep persistence disabled.
 for (const configFile of ['cordis.patch.yml', 'cordis.yml']) {
@@ -24,16 +25,28 @@ for (const configFile of ['cordis.patch.yml', 'cordis.yml']) {
 const pluginHandlers = new Map()
 const pluginEffects = []
 let appendCalls = 0
+let narrationSection
 const pluginCtx = {
   get() { return undefined },
-  inject() {},
+  inject(dependencies, callback) {
+    assert.deepEqual(dependencies, ['systemPrompt'])
+    callback({ systemPrompt: { section(section) { narrationSection = section } } })
+  },
   on(event, handler) {
     pluginHandlers.set(event, handler)
     return () => pluginHandlers.delete(event)
   },
   effect(setup) { pluginEffects.push(setup()) },
 }
-applyWorkingActivity(pluginCtx, { publish: false, narrate: false, tickMs: 500 })
+applyWorkingActivity(pluginCtx, { publish: false, narrate: true, tickMs: 500 })
+const renderNarration = () => typeof narrationSection?.text === 'function'
+  ? narrationSection.text({})
+  : narrationSection?.text
+setLang('en')
+assert.match(renderNarration(), /^\[Status line\]/)
+assert.doesNotMatch(renderNarration(), /[\p{Script=Han}]/u)
+setLang('zh')
+assert.match(renderNarration(), /^\[状态栏\]/)
 const pluginSession = { append() { appendCalls += 1 } }
 pluginHandlers.get('agent/status')({ agent: { session: pluginSession }, status: 'running' })
 pluginHandlers.get('session/event')(pluginSession, {
@@ -80,6 +93,7 @@ function makeAgent(id, sessionId) {
 }
 
 const agent = makeAgent('agent-1', 'session-1')
+setLang('en')
 const channel = createChannel(ctx, agent, {
   model: 'test-model',
   provider: 'test-provider',
@@ -93,6 +107,12 @@ assert.ok(sessionEvent())
 
 status()({ agent, status: 'running' })
 assert.equal(channel.workingActivity?.phase, 'waiting')
+assert.doesNotMatch(channel.workingActivity?.line, /[\p{Script=Han}]/u)
+assert.match(channel.workingActivity?.line, /^Waiting for model/)
+setLang('zh')
+assert.match(channel.workingActivity?.line, /[\p{Script=Han}]/u)
+setLang('en')
+assert.match(channel.workingActivity?.line, /^Waiting for model/)
 
 const startedAt = Date.now()
 sessionEvent()(agent.session, {
@@ -106,19 +126,29 @@ sessionEvent()(agent.session, {
   data: { turn: 'turn-1', step: 'step-1', chunk: { type: 'text-delta', text: 'hello' } },
 })
 assert.equal(channel.workingActivity?.phase, 'thinking')
+assert.doesNotMatch(channel.workingActivity?.line, /[\p{Script=Han}]/u)
+assert.match(channel.workingActivity?.line, /^Thinking/)
 
 sessionEvent()(agent.session, {
-  type: 'tool/call', seq: 2, time: startedAt + 2,
+  type: 'assistant/chunk', seq: 2, time: startedAt + 2,
+  data: { turn: 'turn-1', step: 'step-1', chunk: { type: 'text-delta', text: '\n⏵ Inspecting auth\n' } },
+})
+assert.match(channel.workingActivity?.line, /^⏵ Inspecting auth · total \d+s$/)
+
+sessionEvent()(agent.session, {
+  type: 'tool/call', seq: 3, time: startedAt + 3,
   data: { turn: 'turn-1', step: 'step-1', callId: 'call-1', name: 'bash', arguments: '{"command":"npm test"}' },
 })
 assert.equal(channel.workingActivity?.phase, 'tool')
+assert.doesNotMatch(channel.workingActivity?.line, /[\p{Script=Han}]/u)
+assert.match(channel.workingActivity?.line, /Running tool npm test/)
 
 const elapsedBeforeTick = channel.workingActivity.turnElapsedMs
 await new Promise((resolve) => setTimeout(resolve, 550))
 assert.ok(channel.workingActivity.turnElapsedMs >= elapsedBeforeTick + 450, '500 ms timer refreshes elapsed state')
 
 sessionEvent()(agent.session, {
-  type: 'tool/result', seq: 3, time: Date.now(),
+  type: 'tool/result', seq: 4, time: Date.now(),
   data: {
     turn: 'turn-1', step: 'step-1',
     message: {
@@ -131,16 +161,18 @@ sessionEvent()(agent.session, {
 assert.equal(channel.workingActivity?.phase, 'thinking')
 
 sessionEvent()(agent.session, {
-  type: 'turn/end', seq: 4, time: Date.now(),
+  type: 'turn/end', seq: 5, time: Date.now(),
   data: { turn: 'turn-1', reason: { kind: 'completed' } },
 })
 status()({ agent, status: 'idle' })
 assert.equal(channel.workingActivity?.phase, 'done')
+assert.doesNotMatch(channel.workingActivity?.line, /[\p{Script=Han}]/u)
+assert.match(channel.workingActivity?.line, /^Finished · 1 tool · thought \d+s worked \d+s/)
 
 // A legacy persisted snapshot is ignored; it cannot overwrite derived state.
 const doneLine = channel.workingActivity.line
 sessionEvent()(agent.session, {
-  type: 'activity/status', seq: 5, time: Date.now(),
+  type: 'activity/status', seq: 6, time: Date.now(),
   data: { phase: 'tool', line: 'PERSISTED STATUS MUST NOT WIN' },
 })
 assert.equal(channel.workingActivity?.phase, 'done')
