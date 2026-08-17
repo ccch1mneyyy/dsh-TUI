@@ -1,0 +1,17 @@
+{
+  "$schema":"https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id":"com.example.compound",
+  "name":"Compound Unknown Plugin",
+  "version":"0.1.0",
+  "manifestVersion":"0.15",
+  "facets":{"host":{"entry":"dist/main.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[
+    {"apiVersion":"storage.dsh/v2beta1","kind":"LocalStorage"},
+    {"apiVersion":"messages.dsh/v1alpha1","kind":"MessageObserver"}
+  ]},
+  "permissions":[],
+  "contributes":{"commands":[]},
+  "subscriptions":[],
+  "license":"MIT",
+  "source":{"repository":"https://example.com/compound"}
+}

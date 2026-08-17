@@ -1,0 +1,17 @@
+{
+  "$schema":"https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id":"com.example.nofallback",
+  "name":"No Fallback Plugin",
+  "version":"0.1.0",
+  "manifestVersion":"0.15",
+  "facets":{"host":{"entry":"dist/main.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[
+    {"apiVersion":"commands.dsh/v1alpha1","kind":"Command"},
+    {"apiVersion":"messages.dsh/v1alpha1","kind":"MessageObserver","optional":true}
+  ]},
+  "permissions":[{"name":"commands.invoke","scope":"com.example.nofallback.ping","reason":"invoke the declared action"}],
+  "contributes":{"commands":[{"id":"com.example.nofallback.ping","title":"Ping"}]},
+  "subscriptions":[],
+  "license":"MIT",
+  "source":{"repository":"https://example.com/nofallback"}
+}

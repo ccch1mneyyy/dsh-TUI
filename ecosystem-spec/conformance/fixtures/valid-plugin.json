@@ -1,0 +1,18 @@
+{
+  "$schema":"https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id":"com.example.echo",
+  "name":"Echo Plugin",
+  "version":"0.1.0",
+  "manifestVersion":"0.15",
+  "facets":{"host":{"entry":"dist/main.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[
+    {"apiVersion":"commands.dsh/v1alpha1","kind":"Command"},
+    {"apiVersion":"messages.dsh/v1alpha1","kind":"MessageObserver","optional":true,"fallback":"run without message observation"}
+  ]},
+  "permissions":[{"name":"commands.invoke","scope":"com.example.echo.ping","reason":"invoke the declared action"}],
+  "contributes":{"commands":[{"id":"com.example.echo.ping","title":"Ping"}]},
+  "subscriptions":["messages.observe"],
+  "license":"MIT",
+  "source":{"repository":"https://example.com/echo","revision":"abc123"},
+  "artifact":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","algorithm":"sha256","path":"dist/plugin.tgz"}
+}

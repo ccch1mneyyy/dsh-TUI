@@ -1,0 +1,12 @@
+{
+  "$schema":"https://dsh.community/schemas/host-descriptor-0.15.json",
+  "hostId":"dsh-badhost",
+  "hostVersion":"0.1.0-experimental",
+  "facetApiVersions":["v1alpha1"],
+  "contracts":[
+    {"apiVersion":"storage.dsh/v1alpha1","kind":"LocalStorage","version":"0.15","schemaHash":"sha256:a43bd499060013f599496e70b03cedde34739bc299ee83304ffcc42675fcf35b","permissions":["storage.local.read","storage.local.write","totally.made.up.permission"]}
+  ],
+  "runtime":{"location":"local","generationId":"example-generation-1","headless":true},
+  "trustLevel":"trusted-in-process",
+  "platform":{"os":"linux","arch":"x64","node":">=18"}
+}

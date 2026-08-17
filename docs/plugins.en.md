@@ -71,6 +71,55 @@ Minimal `package.json` skeleton (full reference:
 TypeScript relative imports must carry the `.js` suffix (ESM); build with `tsc`
 into `lib/types/`.
 
+## Community Consensus Spec (v0.15)
+
+dsh-TUI aligns with the community ecosystem meta-protocol
+[T-Auto/dsh-ecosystem-spec](https://github.com/T-Auto/dsh-ecosystem-spec)
+v0.15. The essentials:
+
+- Contracts are identified by **coordinates** (`apiVersion + kind`, e.g.
+  `commands.dsh/v1alpha1` + `Command`); the registry pins a `schemaHash` per
+  contract, and a host declaration that disagrees with the registry is treated
+  as unavailable (fail closed).
+- A plugin manifest (`dsh-plugin.json`) declares `facets.host` (entry +
+  apiVersion), `requires.contracts` (optional references must carry a
+  fallback), `permissions`, and `subscriptions`; `provides`/`services` and
+  client/worker facets are rejected outright in v0.15.
+- A host publishes a **Host Descriptor** stating its contract surface, facet
+  versions, and `runtime.generationId`.
+- Negotiation yields five states: `compatible / compatible_degraded /
+  waiting_authorization / rejected / unknown`, with priority
+  `unknown > rejected > waiting_authorization > compatible_degraded >
+  compatible` — a reference outside the registry is answered `unknown`, not
+  `rejected` (unjudgeable is not the same as judged incompatible).
+
+What lives in this repository:
+
+- `ecosystem-spec/` — vendored read-only data (registry / schemas /
+  conformance fixtures); the sync baseline and update flow are documented in
+  that directory's README. After an upstream update, overwrite the tree and
+  run `npm run verify:plugin-spec` as the drift alarm (schemaHash recompute +
+  the full fixture matrix).
+- `src/plugin-spec/` — a zero-dependency validation/negotiation library: a
+  JSON Schema checker (the subset used by the vendored schemas),
+  `validatePlugin`/`validateHost` semantic checks, the five-state `negotiate`,
+  and registry/contract-profile self-checks. Proven fixture-by-fixture
+  equivalent to the upstream conformance reference implementation (38 battery
+  assertions).
+
+**Boundary declaration**: plugin discovery, installation, and loading belong
+to the dsh CLI (the `@deepseek-ai/dsh` Loader) — **load-time enforcement is
+not in this repository**. What this repository provides is the validation
+library, a diagnostics surface, and runtime degradation: a non-compliant
+plugin simply does not get contract capabilities inside the TUI. The trust
+model is trusted-in-process (C-070): grants are a behavioral constraint, not
+a security boundary.
+
+Current alignment status: the validation/negotiation library and vendored
+data are in place; the unified grant store, Host Descriptor construction, the
+`storage.local` / `messages.observe` contract surfaces, the effect ledger,
+and the `/plugins` diagnostic command follow in later batches.
+
 ## Seam Overview
 
 | Seam | Shape | Purpose |

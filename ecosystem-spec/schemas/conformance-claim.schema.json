@@ -1,0 +1,15 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://dsh.community/schemas/conformance-claim-0.15.json",
+  "title":"DSH Conformance Claim v0.15",
+  "type":"object","additionalProperties":false,
+  "required":["claimVersion","subject","specVersion","hostDescriptorDigest","artifactDigest","suiteVersion","evidenceLevel","result","testedAt"],
+  "properties":{
+    "claimVersion":{"const":"0.15"},"subject":{"type":"string"},"specVersion":{"const":"community-v0.15"},
+    "hostDescriptorDigest":{"type":"string","pattern":"^sha256:[a-f0-9]{64}$"},"artifactDigest":{"type":"string","pattern":"^sha256:[a-f0-9]{64}$"},
+    "suiteVersion":{"type":"string"},"evidenceLevel":{"enum":["Declared","Parsed","Negotiated","Tested","Observed","Attested"]},
+    "result":{"enum":["pass","fail"]},"testedAt":{"type":"string","format":"date-time"},"runtime":{"type":"string"},
+    "signer":{"type":"string"},"expiresAt":{"type":"string","format":"date-time"},"revoked":{"type":"boolean"},
+    "failedRequirements":{"type":"array","items":{"type":"string"}}
+  }
+}

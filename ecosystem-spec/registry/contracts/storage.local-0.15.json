@@ -1,0 +1,14 @@
+{
+  "name":"storage.local","version":"0.15","kind":"capability",
+  "coordinates":{"apiVersion":"storage.dsh/v1alpha1","kind":"LocalStorage"},
+  "caller":"activated plugin instance",
+  "permissions":["storage.local.read","storage.local.write"],
+  "scope":"Component namespace within one host installation (per-plugin-ID namespace; cross-plugin access MUST be rejected)",
+  "operations":[{"name":"get","input":{"key":"string"},"output":{"value":"JSON value or null"}},{"name":"set","input":{"key":"string","value":"JSON value"},"output":{"stored":"boolean"}},{"name":"delete","input":{"key":"string"},"output":{"deleted":"boolean"}}],
+  "errors":["PERMISSION_NOT_GRANTED","INVALID_KEY","QUOTA_EXCEEDED","STORAGE_UNAVAILABLE"],
+  "concurrency":"operations on one key are serialized in invocation order",
+  "timeout":"host-defined and declared in Host Descriptor extension",
+  "cleanup":"deactivate retains data; uninstall follows declared retention; purge removes namespace after confirmation",
+  "privacyClass":"sensitive",
+  "securityBoundary":false
+}

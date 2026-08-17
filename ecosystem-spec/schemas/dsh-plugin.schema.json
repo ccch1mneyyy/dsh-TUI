@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "title": "DSH Plugin Manifest v0.15",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "id", "name", "version", "manifestVersion", "facets", "requires", "permissions", "contributes", "subscriptions", "license", "source"],
+  "properties": {
+    "$schema": {"type":"string","const":"https://dsh.community/schemas/dsh-plugin-0.15.json"},
+    "id": {"type":"string","pattern":"^[a-z0-9]+([.-][a-z0-9]+)*$","minLength":3,"maxLength":128},
+    "name": {"type":"string","minLength":1,"maxLength":128},
+    "version": {"type":"string","pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"},
+    "manifestVersion": {"type":"string","const":"0.15"},
+    "facets": {"$ref":"#/$defs/facets"},
+    "requires": {"$ref":"#/$defs/requirements"},
+    "permissions": {"type":"array","items":{"$ref":"#/$defs/permission"},"uniqueItems":true},
+    "contributes": {"$ref":"#/$defs/contributes"},
+    "subscriptions": {"type":"array","items":{"$ref":"#/$defs/subscription"},"uniqueItems":true},
+    "license": {"type":"string","minLength":1,"maxLength":128},
+    "source": {"type":"object","additionalProperties":false,"required":["repository"],"properties":{"repository":{"type":"string","format":"uri"},"revision":{"type":"string","minLength":1}}},
+    "artifact": {"$ref":"#/$defs/artifact"},
+    "compat": {"type":"object","additionalProperties":false,"properties":{"hosts":{"type":"array","items":{"type":"string"}}}},
+    "overrides": {"type":"array","items":{"type":"object","additionalProperties":false,"required":["target","kind"],"properties":{"target":{"type":"string"},"kind":{"enum":["patch","native","build"]},"description":{"type":"string"}}}}
+  },
+  "$defs": {
+    "facets": {
+      "type":"object",
+      "additionalProperties":false,
+      "description":"v0.15 only normates the host facet. client/worker are reserved names for RFC 0002 and are rejected here (fail closed).",
+      "required":["host"],
+      "properties": {
+        "host": {"type":"object","additionalProperties":false,"required":["entry","apiVersion"],"properties":{
+          "entry":{"type":"string","pattern":"^(?!/)(?!.*\\.\\.).+$"},
+          "apiVersion":{"type":"string","pattern":"^v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$"}
+        }}
+      }
+    },
+    "contractRef": {
+      "type":"object",
+      "additionalProperties":false,
+      "description":"Meta-protocol contract reference: K8s-style coordinate (apiVersion + kind). Schema shape is validated here; group/kind existence is enforced by the registry (see conformance runner).",
+      "required":["apiVersion","kind"],
+      "properties":{
+        "apiVersion":{"type":"string","pattern":"^[a-z0-9.-]+\\.[a-z0-9]+/v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$"},
+        "kind":{"type":"string","pattern":"^[A-Z][A-Za-z0-9]*$","minLength":1,"maxLength":64},
+        "optional":{"type":"boolean"},
+        "fallback":{"type":"string","minLength":1,"maxLength":512}
+      }
+    },
+    "requirements": {
+      "type":"object",
+      "additionalProperties":false,
+      "required":["contracts"],
+      "properties":{
+        "contracts":{"type":"array","items":{"$ref":"#/$defs/contractRef"},"uniqueItems":true},
+        "services":{"type":"array","maxItems":0}
+      }
+    },
+    "permission": {"type":"object","additionalProperties":false,"required":["name","scope"],"properties":{"name":{"type":"string","enum":["messages.observe.read","storage.local.read","storage.local.write","commands.invoke"]},"scope":{"type":"string","minLength":1,"maxLength":256},"reason":{"type":"string","minLength":1,"maxLength":512}}},
+    "contributes": {"type":"object","additionalProperties":false,"required":["commands"],"properties":{"commands":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","title"],"properties":{"id":{"type":"string","pattern":"^[a-z0-9]+([.-][a-z0-9]+)*\\.[a-z0-9]+([.-][a-z0-9]+)*$"},"title":{"type":"string","minLength":1,"maxLength":128},"description":{"type":"string","maxLength":512}}},"uniqueItems":true},"panels":{"type":"array","maxItems":0}}},
+    "subscription": {
+      "description":"Coordinate object is the canonical form. The flat legacy-name string (e.g. \"messages.observe\") is accepted for upstream v0.15 draft compatibility until the community settles the subscription reference format (v0.15 §9).",
+      "oneOf":[
+        {"type":"object","additionalProperties":false,"required":["apiVersion","kind"],"properties":{"apiVersion":{"type":"string","pattern":"^[a-z0-9.-]+\\.[a-z0-9]+/v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$"},"kind":{"type":"string","pattern":"^[A-Z][A-Za-z0-9]*$","minLength":1,"maxLength":64},"scope":{"type":"string","minLength":1,"maxLength":256}}},
+        {"type":"string","minLength":1,"maxLength":128}
+      ]
+    },
+    "artifact": {"type":"object","additionalProperties":false,"required":["digest","algorithm","path"],"properties":{"digest":{"type":"string","pattern":"^sha256:[a-f0-9]{64}$"},"algorithm":{"const":"sha256"},"path":{"type":"string","minLength":1}}}
+  }
+}

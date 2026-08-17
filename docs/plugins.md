@@ -62,6 +62,47 @@ export function apply(ctx: Context, config: Config): void { … }  // 入口
 
 TypeScript 相对导入必须带 `.js` 后缀（ESM）；构建用 `tsc` 输出到 `lib/types/`。
 
+## 社区互操作规范（Community Consensus v0.15）
+
+dsh-TUI 对齐社区生态元协议
+[T-Auto/dsh-ecosystem-spec](https://github.com/T-Auto/dsh-ecosystem-spec)
+v0.15。要点：
+
+- 契约以**坐标**标识（`apiVersion + kind`，如 `commands.dsh/v1alpha1` +
+  `Command`）；注册表为每个契约钉死 `schemaHash`，宿主声明与注册表不一致
+  即视为不可用（fail closed）。
+- 插件 manifest（`dsh-plugin.json`）声明 `facets.host`（entry + apiVersion）、
+  `requires.contracts`（optional 引用必须带 fallback）、`permissions`、
+  `subscriptions`；`provides`/`services` 与 client/worker facet 在 v0.15
+  直接拒绝。
+- 宿主以 **Host Descriptor** 声明自己支持的契约面、facet 版本与
+  `runtime.generationId`。
+- 协商结果为五态：`compatible / compatible_degraded /
+  waiting_authorization / rejected / unknown`，优先级
+  `unknown > rejected > waiting_authorization > compatible_degraded >
+  compatible`——引用落在注册表之外时回答 `unknown` 而不是 `rejected`
+  （无法判定不等于判定不兼容）。
+
+仓库内的落地物：
+
+- `ecosystem-spec/` — vendored 只读数据（registry / schemas / conformance
+  fixtures），同步基线与更新流程见该目录 README；上游更新后整目录覆盖，
+  `npm run verify:plugin-spec` 即漂移报警器（schemaHash 重算比对 +
+  fixtures 全矩阵）。
+- `src/plugin-spec/` — 零依赖校验/协商纯库：JSON Schema check（vendored
+  schema 子集）、`validatePlugin`/`validateHost` 语义校验、五态
+  `negotiate`、registry/contract profile 自检。与上游 conformance 参考
+  实现逐 fixture 等价（38 项电池断言）。
+
+**边界声明**：插件的发现、安装与加载由 dsh CLI（`@deepseek-ai/dsh` 的
+Loader）负责，**加载时强制不在本仓库**。本仓库提供的是校验库 + 诊断面 +
+运行时降级——不合规插件在 TUI 内拿不到契约能力。信任模型为同进程信任
+（trusted-in-process，C-070）：授权是行为约束，不是安全隔离边界。
+
+当前对齐进度：校验/协商库与 vendored 数据已落地；统一授权存储、Host
+Descriptor 构建、`storage.local` / `messages.observe` 契约面、效果台账与
+`/plugins` 诊断命令在后续批次跟进。
+
 ## 接缝总览
 
 | 接缝 | 形态 | 用途 |

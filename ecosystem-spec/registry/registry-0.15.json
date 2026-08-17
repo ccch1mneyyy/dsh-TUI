@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "registryVersion": "0.15",
+  "entries": [
+    {
+      "name": "storage.local",
+      "coordinates": {
+        "apiVersion": "storage.dsh/v1alpha1",
+        "kind": "LocalStorage"
+      },
+      "kind": "capability",
+      "version": "0.15",
+      "schema": "registry/contracts/storage.local-0.15.json",
+      "schemaHash": "sha256:a43bd499060013f599496e70b03cedde34739bc299ee83304ffcc42675fcf35b",
+      "permissions": [
+        "storage.local.read",
+        "storage.local.write"
+      ],
+      "requiredHostBehavior": [
+        "namespace-by-component",
+        "repeatable-cleanup"
+      ]
+    },
+    {
+      "name": "commands",
+      "coordinates": {
+        "apiVersion": "commands.dsh/v1alpha1",
+        "kind": "Command"
+      },
+      "kind": "capability",
+      "version": "0.15",
+      "schema": "registry/contracts/commands-0.15.json",
+      "schemaHash": "sha256:9a67c445c0442e9797f953413c03f582a004276271fd6ab14a86c830f54e3152",
+      "permissions": [
+        "commands.invoke"
+      ],
+      "requiredHostBehavior": [
+        "flat-action-leaf",
+        "reject-duplicate-id"
+      ]
+    },
+    {
+      "name": "messages.observe",
+      "coordinates": {
+        "apiVersion": "messages.dsh/v1alpha1",
+        "kind": "MessageObserver"
+      },
+      "kind": "event",
+      "version": "0.15",
+      "schema": "registry/contracts/messages.observe-0.15.json",
+      "schemaHash": "sha256:28743d6c81970c4da7a37254bbade4908d94a1f6e20f6404c875f7d2066c63b5",
+      "permissions": [
+        "messages.observe.read"
+      ],
+      "eventEnvelope": "schemas/messages-observe-envelope.schema.json",
+      "requiredHostBehavior": [
+        "monotonic-sequence-per-scope",
+        "redact-sensitive-fields",
+        "fail-closed-unknown-privacy"
+      ]
+    }
+  ],
+  "facetApiVersions": [
+    "v1alpha1"
+  ]
+}
