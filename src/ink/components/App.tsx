@@ -261,7 +261,11 @@ export default class App extends PureComponent<Props, State> {
 		if (this.props.stdout.isTTY) {
 			this.props.stdout.write(SHOW_CURSOR);
 		}
+		this.detachForShutdown();
+	}
 
+	/** Release timers and stdin ownership without requiring a React unmount. */
+	detachForShutdown() {
 		// Clear any pending timers
 		if (this.incompleteEscapeTimer) {
 			clearTimeout(this.incompleteEscapeTimer);
