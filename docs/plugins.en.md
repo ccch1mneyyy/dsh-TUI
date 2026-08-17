@@ -125,7 +125,8 @@ Standing discipline for the whole extension surface (not repeated per seam):
   are caught, logged, and treated as "no opinion" or "skip this entry". A
   decision event still pending after ~400ms surfaces a "waiting for a plugin
   decision" parked indicator (RFC 0005 D-8), so a slow plugin never makes the
-  UI look dead.
+  UI look dead. The indicator stays up until the decision SETTLES (it never
+  auto-expires mid-wait): as long as the flow is parked, the wait is visible.
 
 ## Seam 1: Session Events (consumed natively by dsh-TUI)
 
@@ -523,13 +524,19 @@ Shared semantics:
   { "grants": { "my-guard": ["session.input.intercept"] } }
   ```
 
-  The file is read once when the extensions row mounts; changing grants means
-  editing the file and restarting. A missing or corrupt file fails CLOSED
-  (deny all).
+  The file is read once when the gate is installed (BOTH the extensions row
+  and the channel install it — idempotent per cordis root, first installer
+  wins — so even a stale bundle patch missing the extensions row leaves the
+  gate up: the channel installs it as the backstop and decision events never
+  become allow-by-default); changing grants means editing the file and
+  restarting. A missing or corrupt file fails CLOSED (deny all).
 - **Ordering guarantee**: decisions and deliveries are serialized in
   submission order — a slow decision on an earlier input holds back the
   decision AND delivery of later ones, so the model always receives messages
-  in the order the user submitted them.
+  in the order the user submitted them. Every submission binds its origin
+  session AT ENQUEUE: even when it runs only after a slow predecessor and
+  the user has switched sessions by then, the stale input is dropped with a
+  notice instead of reaching the new session.
 - `cancel.reason` / `handled.notice` / the `tui/rewind-done` summary are
   toasted; the host supplies a localized fallback when absent (a bare
   `{ cancel: true }` / `{ handled: true }` never makes the typed line vanish
@@ -539,8 +546,14 @@ Shared semantics:
   The rewrite applies only BEFORE delivery — if the user switched sessions
   mid-await, the stale input is dropped with a notice (stale-drop) instead of
   leaking the old conversation's words into the new session. Same for
-  `tui/session-switch`: if another switch completed while the decision was
-  parked, the stale switch request is dropped outright.
+  `tui/session-switch` and `tui/rewind-prompt`: if another switch completed
+  while the decision was parked, the stale switch/rewind request is dropped
+  outright (compared by agent REFERENCE — session-id reuse cannot fool it).
+- `tui/rewind-done` is dispatched DECOUPLED from the rewind result: the
+  rewound message text returns to the draft immediately — a slow or
+  never-settling summary listener neither delays the draft restore nor holds
+  back the following `tui/session-switched`; the summary string toasts
+  whenever the listener settles.
 - Submit, steer, AND Ctrl+Enter (the interruptAndDeliver re-queue) all pass
   through `tui/input` — there is no send path that bypasses a plugin veto.
 - `tui/rewind-prompt` modes render as a choice list in the confirm pane (the

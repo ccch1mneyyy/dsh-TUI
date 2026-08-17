@@ -712,6 +712,78 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
     (await pending) === nearCap)
 }
 
+// Batched keys in ONE stdin chunk: a terminal delivers a chunk as several
+// key events inside a single React batch, so state queued by the first
+// event is invisible to the second. The handlers must act on synchronously
+// updated state (refs): ↓+Enter settles the NEW focus, not the stale one.
+{
+  const pending = ctx.tuiDialogs.select({
+    title: '同批选择',
+    options: [
+      { id: 'first', label: '第一项' },
+      { id: 'second', label: '第二项' },
+    ],
+  })
+  await sleep(300)
+  stdin.write('\x1b[B\r') // Down + Enter in one chunk
+  check('ui: batched ↓+Enter settles the NEW focus, not the stale one',
+    (await pending) === 'second')
+  await sleep(200)
+}
+{
+  const pending = ctx.tuiDialogs.confirm({ title: '同批确认' })
+  await sleep(300)
+  stdin.write('\x1b[C\r') // Right + Enter in one chunk → focus 否 → false
+  check('ui: batched →+Enter settles the moved focus', (await pending) === false)
+  await sleep(200)
+}
+// Two Backspaces in one chunk must BOTH delete (each seeing the other's
+// result), not compute from the same stale base.
+{
+  const pending = ctx.tuiDialogs.input({ title: '同批退格', initial: 'abcd' })
+  await sleep(300)
+  stdin.write('\x7f\x7f')
+  await sleep(150)
+  stdin.write('\r')
+  check('ui: batched Backspace×2 deletes both characters', (await pending) === 'ab')
+}
+
+// Code-point editing: an emoji is ONE step — Backspace removes the whole
+// surrogate pair (never a lone half), and arrow keys never land the cursor
+// inside a pair.
+{
+  const pending = ctx.tuiDialogs.input({ title: '表情退格', initial: 'a😊b' })
+  await sleep(300)
+  stdin.write('\x1b[D') // left: cursor between 😊 and b
+  await sleep(120)
+  stdin.write('\x7f') // backspace deletes the whole emoji
+  await sleep(120)
+  stdin.write('\r')
+  check('ui: Backspace deletes a whole emoji (no lone surrogate)',
+    (await pending) === 'ab')
+}
+{
+  const pending = ctx.tuiDialogs.input({ title: '表情清空', initial: '😊' })
+  await sleep(300)
+  stdin.write('\x7f') // single backspace at end of the sole emoji
+  await sleep(150)
+  stdin.write('\r')
+  check('ui: Backspace on the sole emoji empties the value', (await pending) === '')
+}
+{
+  const pending = ctx.tuiDialogs.input({ title: '表情步进', initial: '😊x' })
+  await sleep(300)
+  // Left ×2 from the end: code-point steps land BEFORE the emoji (a UTF-16
+  // step would park the cursor mid-surrogate and split the pair on insert).
+  stdin.write('\x1b[D\x1b[D')
+  await sleep(120)
+  stdin.write('z')
+  await sleep(120)
+  stdin.write('\r')
+  check('ui: arrow keys step by code point (insert never splits a pair)',
+    (await pending) === 'z😊x')
+}
+
 // Status line: appears on set, disappears on clear.
 {
   ctx.tuiStatus.set('demo-plugin', '构建中 42%')

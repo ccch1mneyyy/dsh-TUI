@@ -27,6 +27,23 @@
  *  8b. compact stale-drop ABA — /new then /resume BACK to the origin session
  *     reuses its id; the reference-based stale check must still drop.
  *
+ *  9. session-switch stale-drop — a parked /resume must not roll over a
+ *     newer session that completed mid-await (D-6, reference comparison).
+ *  9b. enqueue-time origin binding — a submission queued behind a slow
+ *     decision stays bound to the session it was typed in (D-6).
+ *  9c. rewind-prompt stale-drop — a parked rewind decision cancels when the
+ *     session changes mid-await.
+ *  9d. rewind-done decoupled — the summary listener must not delay the
+ *     picked text's return nor park tui/session-switched.
+ * 10. D-8 — the parked indicator covers the WHOLE decision wait (sticky
+ *     until the decision settles).
+ *
+ * D-7 note: this battery mounts NO extensions row, so the decision guard
+ * comes from createChannel itself (the P1 backstop for a stale patch /
+ * bare embed). The harness subscribes on the ROOT context, so the isolated
+ * home carries an extension-grants.json granting root the four intercept
+ * permissions; an ungranted named plugin is asserted denied.
+ *
  * Follows repro-picker-windowing.tsx: fake session event log, fake
  * sessions/agents services, plainText ANSI wash over stdout frames.
  */
@@ -37,13 +54,28 @@ process.env.DSH_TUI_LANG = 'zh'
 // 家目录隔离：touchSession/clearResumeTarget（/new 与 rewind 都会走）写
 // ~/.dsh-tui 的真实文件，必须先切到临时目录再 import src。HOME 与
 // USERPROFILE 必须成对设置（POSIX 读 HOME、Windows 读 USERPROFILE）。
-const { mkdtempSync, mkdirSync } = await import('node:fs')
+const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
 const { join: joinPath } = await import('node:path')
 const isolatedHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-ext-events-home-'))
 process.env.HOME = isolatedHome
 process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
+// createChannel installs the D-7 decision guard itself (the backstop for a
+// missing dsh-tui-extensions row — this battery mounts none, so it exercises
+// exactly that path). The guard reads this file at channel creation; the
+// harness subscribes on the ROOT context, so root needs the grants the
+// production default-deny posture would otherwise refuse.
+writeFileSync(joinPath(isolatedHome, '.dsh-tui', 'extension-grants.json'), JSON.stringify({
+  grants: {
+    root: [
+      'session.input.intercept',
+      'session.rewind.intercept',
+      'session.switch.intercept',
+      'session.compact.intercept',
+    ],
+  },
+}))
 
 const [
   { PassThrough, Writable },
@@ -204,6 +236,24 @@ const instance = await render(
   { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
 await sleep(800)
+
+// ── 0. D-7 backstop: NO extensions row is mounted in this battery, yet an
+// ungranted plugin's intercept subscription is still denied — the guard
+// comes from createChannel itself (the stale-patch / bare-embed path) ─────
+{
+  ctx.plugin({
+    name: 'ungranted-probe',
+    apply: (c: Context) => {
+      c.on('tui/input', () => ({ cancel: true }))
+    },
+  })
+  await sleep(150)
+  channel.submit('穿透检查')
+  await sleep(400)
+  check('decision guard (no extensions row): ungranted plugin subscription denied',
+    captured.followupTexts.some(text => text.includes('穿透检查')),
+    JSON.stringify(captured.followupTexts))
+}
 
 // ── 1. tui/input transform ──────────────────────────────────────────────
 {
@@ -580,6 +630,101 @@ await sleep(800)
   const resumed = await resumePromise
   check('session-switch stale: the parked /resume is dropped', resumed === false)
   check('session-switch stale: stale notice toasted', notified('等待插件期间会话已切换'))
+  dispose()
+}
+
+// ── 9b. enqueue-time origin binding: a submission queued behind a slow
+// decision stays bound to the session it was typed in — a mid-wait /new
+// must drop BOTH, never deliver the follower's text into the new session ──
+{
+  let release: (value: undefined) => void = () => {}
+  const gate = new Promise<undefined>(resolve => { release = resolve })
+  const dispose = ctx.on('tui/input', async event => {
+    if (event.text === '旧会话首条') await gate
+    return undefined
+  })
+  const before = captured.followupTexts.length
+  channel.submit('旧会话首条')
+  channel.submit('旧会话次条')
+  await sleep(300) // the predecessor's decision is parked on the gate
+  const switched = await channel.newSession()
+  check('enqueue origin setup: /new succeeded while the predecessor parked', switched === true)
+  release(undefined)
+  await sleep(500)
+  check('enqueue-time origin: the parked predecessor is dropped as stale',
+    !captured.followupTexts.some(text => text.includes('旧会话首条')),
+    JSON.stringify(captured.followupTexts.slice(before)))
+  check('enqueue-time origin: the queued follower never reaches the new session',
+    captured.followupTexts.length === before, JSON.stringify(captured.followupTexts.slice(before)))
+  dispose()
+}
+
+// ── 9c. rewind-prompt stale-drop: a parked rewind decision cancels when the
+// session changes mid-await (same D-6 identity check as the other points) ─
+{
+  let release: (value: undefined) => void = () => {}
+  const gate = new Promise<undefined>(resolve => { release = resolve })
+  const dispose = ctx.on('tui/rewind-prompt', () => gate)
+  const promptPromise = channel.promptRewind({ seq: 1, text: '消息 00' } as never)
+  await sleep(300)
+  const switched = await channel.newSession()
+  check('rewind stale setup: /new succeeded while the rewind decision parked', switched === true)
+  release(undefined)
+  const result = await promptPromise
+  check('rewind-prompt stale: the parked decision resolves to cancel',
+    result === 'cancel', JSON.stringify(result))
+  check('rewind-prompt stale: stale notice toasted', notified('等待插件期间会话已切换'))
+  dispose()
+}
+
+// ── 9d. rewind-done decoupled: the summary listener must NOT delay the
+// picked text's return to the draft, and tui/session-switched must not wait
+// for it either (a hung listener would otherwise park both forever) ───────
+{
+  let release: (value: string) => void = () => {}
+  const gate = new Promise<string>(resolve => { release = resolve })
+  let doneStarted = false
+  const disposeDone = ctx.on('tui/rewind-done', () => {
+    doneStarted = true
+    return gate
+  })
+  const switchedKinds: string[] = []
+  const disposeSwitched = ctx.on('tui/session-switched', event => {
+    switchedKinds.push(event.kind)
+  })
+  const rewindPromise = channel.rewindTo({ seq: 4, text: '回退恢复文本' } as never, null)
+  const text = await Promise.race([rewindPromise, sleep(900).then(() => 'TIMEOUT' as const)])
+  check('rewind-done decoupled: rewindTo returns the picked text without waiting for the listener',
+    text === '回退恢复文本', String(text))
+  check('rewind-done decoupled: the summary listener was still dispatched', doneStarted)
+  check('rewind-done decoupled: session-switched did not wait for the listener',
+    switchedKinds.includes('rewind'), switchedKinds.join(','))
+  release('迟到摘要')
+  await sleep(300)
+  check('rewind-done decoupled: the late summary still toasts', notified('迟到摘要'))
+  disposeDone()
+  disposeSwitched()
+}
+
+// ── 10. D-8: the parked indicator covers the WHOLE decision wait — sticky
+// while parked (no ~4s auto-expiry), dismissed the moment it settles ──────
+{
+  let release: (value: undefined) => void = () => {}
+  const gate = new Promise<undefined>(resolve => { release = resolve })
+  const dispose = ctx.on('tui/input', event => (event.text === '超长等待' ? gate : undefined))
+  channel.submit('超长等待')
+  await sleep(600) // past the 400ms threshold: the indicator is up
+  check('pending indicator: raised past the threshold', notified('正在等待插件决定（tui/input）'))
+  await sleep(4400) // well past the old 4s auto-expiry — the decision is still parked
+  check('pending indicator: still up while the decision is parked',
+    notified('正在等待插件决定（tui/input）'))
+  release(undefined)
+  await sleep(400)
+  check('pending indicator: dismissed when the decision finally settles',
+    !(channel as unknown as { notifications: readonly { text: string }[] }).notifications
+      .some(item => item.text.includes('正在等待插件决定')))
+  check('pending indicator: the settled input is delivered',
+    captured.followupTexts.some(text => text.includes('超长等待')))
   dispose()
 }
 

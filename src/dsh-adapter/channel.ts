@@ -58,6 +58,7 @@ import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
 import type { TuiRendererRuntime } from './renderers.js'
 import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events.js'
+import { installDecisionGuard, readExtensionGrants } from './decision-guard.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
   TuiInputDecision,
@@ -297,7 +298,8 @@ export interface NotificationItem {
   text: string
   /** Theme color key; defaults to dim. */
   color?: 'error' | 'warning' | 'success'
-  /** Auto-dismiss after this many ms (default 4000). */
+  /** Auto-dismiss after this many ms (default 4000); 0 = sticky, removed
+   *  only through the early-dismiss handle. */
   timeoutMs: number
 }
 
@@ -1207,6 +1209,13 @@ export function createChannel(
 ): ChannelState {
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
+  // D-7 backstop: the extensions row installs the decision-subscription
+  // gate, but the channel IS the dispatch path — a stale patch without that
+  // row (or a bare embed mounting neither) would otherwise leave tui/input
+  // & friends subscribable by default, silently voiding the default-deny
+  // posture. Idempotent per cordis root, so the full-patch path installs
+  // exactly once whichever side runs first.
+  installDecisionGuard(ctx, readExtensionGrants())
   // The DSH slash-command registry (optional service): /plan, /goal and
   // friends register here; the TUI merges their descriptors into the slash
   // menu and dispatches through `execute` (which logs the paired
@@ -1347,11 +1356,17 @@ export function createChannel(
   const withDecisionPending = <T>(name: string, pending: Promise<T>): Promise<T> => {
     let dismiss: (() => void) | undefined
     const timer = setTimeout(() => {
-      dismiss = state.notify(t('ext-decision-pending', { event: name }), { timeoutMs: 4000 })
+      // Sticky (timeoutMs 0), D-8: the indicator must cover the WHOLE wait —
+      // an auto-expiring notice would vanish after ~4s while the decision,
+      // the delivery and every queued FIFO task behind them stay parked,
+      // leaving the user with no sign the flow is still waiting. It comes
+      // down only when the decision settles (finally below); a decision
+      // that never settles keeps its indicator up, which is the truthful
+      // state.
+      dismiss = state.notify(t('ext-decision-pending', { event: name }), { timeoutMs: 0 })
     }, DECISION_PENDING_MS)
     // Both exits are covered: a fast decision clears the timer before it
-    // fires; a slow one dismisses the indicator it raised (the 4s timeout is
-    // only the backstop for a dismiss that never runs).
+    // fires; a slow one dismisses the indicator it raised.
     return pending.finally(() => {
       clearTimeout(timer)
       dismiss?.()
@@ -1369,17 +1384,24 @@ export function createChannel(
    * Decision AND delivery enter one FIFO chain in submission order: a slow
    * listener on A parks A's delivery AND any later submissions behind it —
    * without the chain, B's decision could resolve first and the model would
-   * receive B before A. Each delivery re-reads the live agent after the
-   * await, so a mid-await session switch drops the stale text with a notice
-   * instead of sending the old conversation's words to the new session.
+   * receive B before A. Each submission binds its origin agent AT ENQUEUE,
+   * so a session switch landing before OR during its decision drops the
+   * stale text with a notice instead of sending the old conversation's
+   * words to the new session.
    */
   let inputChain: Promise<void> = Promise.resolve()
-  const runUserTextDecision = async (text: string, placement: PendingMessage['placement']): Promise<void> => {
-    const originAgentId = state.agentId
+  const runUserTextDecision = async (
+    text: string,
+    placement: PendingMessage['placement'],
+    originAgent: Agent,
+    originAgentId: string,
+  ): Promise<void> => {
     // Stale detection compares the AGENT REFERENCE, not the id: session ids
     // are reusable (A → /new → /resume A lands back on the same id with a
-    // fresh agent), so an id check has an ABA hole.
-    const originAgent = agent
+    // fresh agent), so an id check has an ABA hole. Both origin values are
+    // ENQUEUE-time captures (see dispatchUserText): a decision parked behind
+    // a slow predecessor must still be judged against the session its text
+    // was typed in, not whichever session is live when it finally runs.
     const decision = await withDecisionPending('tui/input', dispatchTuiDecision(ctx, 'tui/input', {
       text,
       delivery: placement === 'steer' ? 'steer' : 'followup',
@@ -1407,7 +1429,14 @@ export function createChannel(
     deliverUserText(text, placement)
   }
   const dispatchUserText = (text: string, placement: PendingMessage['placement']): void => {
-    inputChain = inputChain.then(() => runUserTextDecision(text, placement)).catch((error: unknown) => {
+    // D-6: bind the submission to the session it was typed in AT ENQUEUE
+    // TIME. The FIFO chain may park this task behind a slow predecessor
+    // while the user /new's away — capturing the agent at run time would
+    // adopt the NEW session as this text's origin and deliver the old
+    // conversation's words into it.
+    const originAgent = agent
+    const originAgentId = state.agentId
+    inputChain = inputChain.then(() => runUserTextDecision(text, placement, originAgent, originAgentId)).catch((error: unknown) => {
       // The chain must survive a failed decision: log, then continue with
       // the next queued submission.
       ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
@@ -1942,12 +1971,23 @@ export function createChannel(
      */
     async promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null> {
       if (row.seq === undefined) return null
+      // D-6, same as the other decision points: a slow /new or /resume can
+      // replace the agent while this decision parks. Without the identity
+      // check the picker would go on to show the OLD session's row in the
+      // confirm pane and rewindTo would cut the NEW session at the old
+      // seq — a wrong rewind or a fork failure. Compare agent REFERENCES
+      // (session ids are reusable — ABA) and stale-cancel.
+      const originAgent = agent
       const decision = await withDecisionPending('tui/rewind-prompt', dispatchTuiDecision(ctx, 'tui/rewind-prompt', {
         text: row.text,
         seq: row.seq,
         sessionId: state.agentId,
         cwd: state.cwd,
       }, normalizeRewindPromptDecision))
+      if (agent !== originAgent) {
+        state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+        return 'cancel'
+      }
       if (decision === undefined) return null
       if ('cancel' in decision) {
         state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
@@ -2103,16 +2143,35 @@ export function createChannel(
       // e.g. a plugin reporting restored files) and the generic
       // `tui/session-switched` notification. Listener failures are logged,
       // never surfaced — the rewind itself already succeeded.
-      const summary = await dispatchTuiDecision(ctx, 'tui/rewind-done', {
-        text: row.text,
-        mode,
-        boundarySeq: boundary,
-        sourceSessionId,
-        childSessionId: String(childId),
-        sessionId: String(childId),
-        cwd: state.cwd,
-      }, normalizeRewindDoneSummary)
-      if (summary !== undefined) state.notify(summary, { timeoutMs: 6000 })
+      //
+      // rewind-done is a post-hoc summary, NOT a gate, so it is dispatched
+      // DECOUPLED from the return value: the picker is already closed and
+      // PromptInput is live — awaiting a slow listener here would delay the
+      // picked text's return to the draft, letting its late arrival
+      // overwrite whatever the user typed meanwhile, and a listener that
+      // never settles would park tui/session-switched forever. The summary
+      // toasts whenever it lands.
+      try {
+        void dispatchTuiDecision(ctx, 'tui/rewind-done', {
+          text: row.text,
+          mode,
+          boundarySeq: boundary,
+          sourceSessionId,
+          childSessionId: String(childId),
+          sessionId: String(childId),
+          cwd: state.cwd,
+        }, normalizeRewindDoneSummary)
+          .then(summary => {
+            if (summary !== undefined) state.notify(summary, { timeoutMs: 6000 })
+          })
+          .catch((error: unknown) => {
+            ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error)
+          })
+      } catch (error) {
+        // A bare embedder's context may lack the event bus entirely; the
+        // rewind itself already succeeded, so this stays a log line.
+        ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error)
+      }
       notifySessionSwitched('rewind', String(childId), sourceSessionId)
       return row.text
     },
@@ -2620,11 +2679,14 @@ export function createChannel(
           state.emit()
         }
       }
-      const expire = setTimeout(remove, item.timeoutMs)
+      // timeoutMs 0 = sticky: no expiry timer, the dismiss handle is the
+      // only way out (a decision-parked indicator must outlive the wait it
+      // describes — auto-expiring it would hide a still-parked flow, D-8).
+      const expire = item.timeoutMs > 0 ? setTimeout(remove, item.timeoutMs) : undefined
       // Early-dismiss handle for flows that know their notice went stale
       // (e.g. a decision-parked indicator whose decision just landed).
       return () => {
-        clearTimeout(expire)
+        if (expire !== undefined) clearTimeout(expire)
         remove()
       }
     },

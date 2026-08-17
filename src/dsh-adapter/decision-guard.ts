@@ -23,11 +23,12 @@
  * warning naming the plugin, the event, and the missing grant.
  *
  * Re-check semantics (D-7: subscription, revocation, scope change): the
- * grants file is read once when the extensions row mounts, so revocation is
- * a restart — every subscription is checked at subscribe time, and a scope
- * change (plugin fiber reload) re-subscribes and is checked again. The file
- * is host-owned and read-only at runtime BY DESIGN: there is no in-session
- * mutation API to race against.
+ * grants file is read once when the gate is installed (the extensions row
+ * or the channel, whichever mounts first — see installDecisionGuard), so
+ * revocation is a restart — every subscription is checked at subscribe
+ * time, and a scope change (plugin fiber reload) re-subscribes and is
+ * checked again. The file is host-owned and read-only at runtime BY
+ * DESIGN: there is no in-session mutation API to race against.
  *
  * Mechanism: cordis bails `internal/listener` on EVERY `ctx.on` before
  * registering, with `this` bound to the subscribing context; a truthy bail
@@ -100,8 +101,27 @@ export function readExtensionGrants(dir: string = DATA_DIR): ExtensionGrants {
  * against `grants` at subscribe time. Registered with `global` so context
  * filtering can never hide a plugin's subscription from the gate, and
  * `prepend` so it decides before any later internal/listener hook.
+ *
+ * Idempotent per cordis root: BOTH the extensions row and createChannel
+ * call this — the channel is the dispatch path, so a stale patch without
+ * the extensions row (or a bare embed mounting neither) must not leave
+ * decision events subscribable-by-default. The first installer wins; both
+ * production call sites read the same host-owned grants file, so which one
+ * lands first is unobservable.
  */
+const guardedRoots = new WeakSet<object>()
+
 export function installDecisionGuard(ctx: Context, grants: ExtensionGrants): void {
+  // Degraded/fake contexts (minimal embedders, test harnesses) may lack
+  // `root` or `on` entirely — the gate is best-effort there, matching the
+  // channel's soft-degradation posture: no dedup bookkeeping without a root
+  // object, no hook without an `on`.
+  const root: unknown = (ctx as { root?: unknown }).root ?? ctx
+  if (typeof root === 'object' && root !== null) {
+    if (guardedRoots.has(root)) return
+    guardedRoots.add(root)
+  }
+  if (typeof (ctx as { on?: unknown }).on !== 'function') return
   ctx.on('internal/listener', function (this: Context, name: unknown): (() => boolean) | undefined {
     if (typeof name !== 'string') return undefined
     const permission = DECISION_EVENT_PERMISSIONS[name]

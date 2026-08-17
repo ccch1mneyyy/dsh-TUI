@@ -14,12 +14,15 @@
  * The decision-point events (`tui/input`, `tui/rewind-prompt`, …) need no
  * service — they are fired by the channel and answered with `ctx.on`; their
  * types ride along in this module's public surface (`./extensions` export).
- * Subscribing to them IS gated, though: this row also installs the RFC 0005
- * D-7 authorization hook (see ./decision-guard.js) — intercept-class events
+ * Subscribing to them IS gated, though: this row installs the RFC 0005 D-7
+ * authorization hook (see ./decision-guard.js) — intercept-class events
  * require an explicit grant in `~/.dsh-tui/extension-grants.json`, default
- * deny. The hook lives HERE (not in the channel) so a profile launching
- * without the channel still enforces the gate, and the shipped patch mounts
- * this row ahead of any third-party plugin row.
+ * deny. The channel installs the SAME hook (idempotent per cordis root, so
+ * exactly one installation lands): this row covers profiles launching
+ * without the channel, and the channel covers the skew path where THIS row
+ * is missing (a stale patch or bare embed must not leave decision events
+ * subscribable by default). The shipped patch mounts this row ahead of any
+ * third-party plugin row.
  *
  * Every consumer (`channel.ts`, `Chat.tsx`) reads these with `ctx.get`
  * softly: without this row the TUI degrades to no dialogs/status/shortcuts/

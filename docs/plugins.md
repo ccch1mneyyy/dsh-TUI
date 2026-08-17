@@ -109,7 +109,9 @@ profile 可能还没有这一行，探测不到就静默降级（#183 原则）�
   `src/dsh-adapter/sanitize.ts`，所有接缝共用。
 - **插件崩溃不拖垮 TUI**：监听器/处理器抛错被宿主捕获、告警、按"无意见"
   或"跳过该条目"处理。决策事件等待超过约 400ms 会 toast 一个"正在等待
-  插件决定"的驻留指示（RFC 0005 D-8），慢插件不会让界面看起来像死了。
+  插件决定"的驻留指示（RFC 0005 D-8），慢插件不会让界面看起来像死了；
+  该指示一直驻留到决策落定才撤下（不会中途自动消失），决策一天不定，
+  等待状态就一天可见。
 
 ## 接缝一：会话事件（dsh-TUI 原生消费）
 
@@ -455,18 +457,26 @@ pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交�
   { "grants": { "my-guard": ["session.input.intercept"] } }
   ```
 
-  文件在 extensions 行挂载时读取一次；改授权 = 改文件 + 重启。损坏或缺失
-  的文件按"全部拒绝"处理（fail closed）。
+  文件在授权门安装时读取一次（extensions 行与 channel 都会安装，按
+  cordis root 幂等、先到者生效——即使 bundle patch 过旧缺少 extensions
+  行，channel 也会兜底装门，决策事件不会变成默认允许）；改授权 = 改文件
+  + 重启。损坏或缺失的文件按"全部拒绝"处理（fail closed）。
 - **顺序保证**：决策与投递按提交顺序串行——前一条输入的慢决策会拦住
-  后一条的决策与投递，模型收到的消息顺序恒等于用户提交顺序。
+  后一条的决策与投递，模型收到的消息顺序恒等于用户提交顺序。每条输入
+  在**入队时**就绑定其来源会话：即使它排在慢决策后面、等到执行时用户
+  已经切了会话，这条过期输入也会被丢弃并提示，绝不会发进新会话。
 - `cancel.reason` / `handled.notice` / `tui/rewind-done` 的 summary 以 toast
   呈现；缺省时宿主给本地化兜底文案（裸 `{ cancel: true }` /
   `{ handled: true }` 不会让输入静默消失）。这些文本同样按不可信输入
   消毒（控制字符剥离、≤200 cell）。
 - `tui/input` 的 `{ text }` 会被 trim；trim 后为空按"无意见"处理。改写只在
   **投递前**生效，等待期间如果用户切了会话，这条过期输入会被丢弃并提示
-  （stale-drop），绝不会把旧会话的话发进新会话。`tui/session-switch` 同理：
-  慢决策等待期间发生了别的会话切换，这条过期的切换请求直接丢弃。
+  （stale-drop），绝不会把旧会话的话发进新会话。`tui/session-switch` 与
+  `tui/rewind-prompt` 同理：慢决策等待期间发生了别的会话切换，这条过期的
+  切换/回退请求直接丢弃（按 agent 引用比较，会话 id 复用骗不过去）。
+- `tui/rewind-done` 与回退结果**解耦**派发：被回退的消息文本立即回到输入框，
+  摘要监听器慢或不返回都不会延迟草稿恢复，也不会挡住随后的
+  `tui/session-switched`；摘要字符串在监听器落定后再 toast。
 - submit、steer 与 Ctrl+Enter（interruptAndDeliver 的重排队）**都**经过
   `tui/input`——没有能绕过插件拦截的发送路径。
 - `tui/rewind-prompt` 的 modes 会在确认页渲染为选项列表（第一项恒为宿主的

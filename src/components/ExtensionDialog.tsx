@@ -12,6 +12,18 @@
  * the same contract as ApprovalPanel/AskUserQuestionPanel: Chat's global
  * handler early-returns while a snapshot is pending.
  *
+ * Two input-pipeline rules shape every handler below:
+ *
+ * - BATCHED KEYS: a terminal delivers one stdin chunk as several key events
+ *   inside a single React batch (Down+Enter arrives together), so state
+ *   queued by the first event is NOT visible to the second. Every piece of
+ *   editing state the handlers act on (focus, value, cursor) therefore
+ *   lives in a ref mutated SYNCHRONOUSLY per event; the useState mirror
+ *   only exists to re-render.
+ * - CODE POINTS: cursor movement and deletion step over whole code points
+ *   (`[...s]` iteration, same contract as the transcript search box), so an
+ *   emoji can never be split into a lone surrogate.
+ *
  * All text arrives pre-sanitized from TuiDialogRuntime (control chars
  * stripped, cell-width capped); the panel still renders everything through
  * ListItem's single-line truncation.
@@ -57,6 +69,14 @@ function SelectDialog({
   onCancel: () => void
 }): React.ReactNode {
   const [focusIndex, setFocusIndex] = React.useState(0)
+  // Synchronous source of truth for the handlers (see the module header):
+  // Down+Enter in one stdin chunk must move AND read the new focus.
+  const focusRef = React.useRef(0)
+  const moveFocus = (delta: number): void => {
+    const next = (focusRef.current + delta + dialog.options.length) % dialog.options.length
+    focusRef.current = next
+    setFocusIndex(next)
+  }
   const { rows: terminalRows } = useTerminalSize()
 
   useInput((input, key, event) => {
@@ -65,17 +85,17 @@ function SelectDialog({
       return
     }
     if (key.upArrow) {
-      setFocusIndex(index => (index + dialog.options.length - 1) % dialog.options.length)
+      moveFocus(-1)
       return
     }
     if (key.downArrow) {
-      setFocusIndex(index => (index + 1) % dialog.options.length)
+      moveFocus(1)
       return
     }
     // isPasted lives on the InputEvent, not the key: a bracketed paste that
     // is all line breaks is pasted content, never an Enter press.
     if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
-      const option = dialog.options[focusIndex]
+      const option = dialog.options[focusRef.current]
       if (option !== undefined) onDecide(option.id)
     }
   }, { isActive: true })
@@ -127,10 +147,18 @@ function ConfirmDialog({
   onCancel: () => void
 }): React.ReactNode {
   const [focusIndex, setFocusIndex] = React.useState(0)
+  // Synchronous source of truth for the handlers (see the module header):
+  // Right+Enter in one stdin chunk must settle the NEW row, not the old.
+  const focusRef = React.useRef(0)
   const labels = [
     dialog.confirmLabel || t('ext-dialog-yes'),
     dialog.cancelLabel || t('ext-dialog-no'),
   ]
+  const moveFocus = (delta: number): void => {
+    const next = (focusRef.current + delta + labels.length) % labels.length
+    focusRef.current = next
+    setFocusIndex(next)
+  }
 
   useInput((input, key, event) => {
     if (key.escape || (key.ctrl && input === 'c')) {
@@ -138,17 +166,17 @@ function ConfirmDialog({
       return
     }
     if (key.upArrow || key.leftArrow) {
-      setFocusIndex(index => (index + labels.length - 1) % labels.length)
+      moveFocus(-1)
       return
     }
     if (key.downArrow || key.rightArrow) {
-      setFocusIndex(index => (index + 1) % labels.length)
+      moveFocus(1)
       return
     }
     // isPasted lives on the InputEvent, not the key: a bracketed paste that
     // is all line breaks must not confirm on the default focus.
     if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
-      onDecide(focusIndex === 0)
+      onDecide(focusRef.current === 0)
     }
   }, { isActive: true })
 
@@ -184,7 +212,19 @@ function InputDialog({
   onCancel: () => void
 }): React.ReactNode {
   const [value, setValue] = React.useState(dialog.initial)
-  const [cursor, setCursor] = React.useState(dialog.initial.length)
+  const [cursor, setCursor] = React.useState<number>(() => [...dialog.initial].length)
+  // Synchronous source of truth for the handlers (see the module header):
+  // two Backspaces in one stdin chunk must BOTH delete, each seeing the
+  // other's result. The cursor counts CODE POINTS, not UTF-16 units — an
+  // emoji is one step and can never be split into a lone surrogate.
+  const valueRef = React.useRef(dialog.initial)
+  const cursorRef = React.useRef([...dialog.initial].length)
+  const applyEdit = (nextValue: string, nextCursor: number): void => {
+    valueRef.current = nextValue
+    cursorRef.current = nextCursor
+    setValue(nextValue)
+    setCursor(nextCursor)
+  }
 
   useInput((input, key, event) => {
     if (key.escape || (key.ctrl && input === 'c')) {
@@ -194,35 +234,40 @@ function InputDialog({
     // isPasted lives on the InputEvent, not the key: a bracketed paste that
     // is all line breaks is inserted as text, not submitted.
     if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
-      onDecide(value)
+      onDecide(valueRef.current)
       return
     }
+    const points = [...valueRef.current]
+    const at = cursorRef.current
     // Single-line editing, same key set as the transcript search bar.
     if (key.backspace) {
-      if (cursor > 0) {
-        setValue(value.slice(0, cursor - 1) + value.slice(cursor))
-        setCursor(cursor - 1)
+      if (at > 0) {
+        points.splice(at - 1, 1)
+        applyEdit(points.join(''), at - 1)
       }
       return
     }
     if (key.delete) {
-      if (cursor < value.length) setValue(value.slice(0, cursor) + value.slice(cursor + 1))
+      if (at < points.length) {
+        points.splice(at, 1)
+        applyEdit(points.join(''), at)
+      }
       return
     }
     if (key.leftArrow) {
-      setCursor(current => Math.max(0, current - 1))
+      if (at > 0) applyEdit(valueRef.current, at - 1)
       return
     }
     if (key.rightArrow) {
-      setCursor(current => Math.min(value.length, current + 1))
+      if (at < points.length) applyEdit(valueRef.current, at + 1)
       return
     }
     if (key.home) {
-      setCursor(0)
+      applyEdit(valueRef.current, 0)
       return
     }
     if (key.end) {
-      setCursor(value.length)
+      applyEdit(valueRef.current, points.length)
       return
     }
     if (input && !key.ctrl && !key.meta && !key.super && !key.tab && !key.escape) {
@@ -232,19 +277,19 @@ function InputDialog({
       // keeps the documented bound: typing past the cap is ignored, an
       // oversized paste is truncated (never silently unbounded).
       const chunk = event.isPasted ? flattenInline(input) : input
-      const candidate = value.slice(0, cursor) + chunk + value.slice(cursor)
+      const chunkPoints = [...chunk].length
+      const candidate = points.slice(0, at).join('') + chunk + points.slice(at).join('')
       if (stringWidth(candidate) <= INPUT_CELLS) {
-        setValue(candidate)
-        setCursor(cursor + chunk.length)
+        applyEdit(candidate, at + chunkPoints)
       } else if (event.isPasted) {
         const capped = capCells(candidate, INPUT_CELLS)
-        setValue(capped)
-        setCursor(Math.min(cursor + chunk.length, capped.length))
+        applyEdit(capped, Math.min(at + chunkPoints, [...capped].length))
       }
     }
   }, { isActive: true })
 
   const shown = value === '' && dialog.placeholder !== undefined ? dialog.placeholder : value
+  const shownPoints = [...shown]
   return (
     <Pane color="permission">
       <Box flexDirection="column">
@@ -255,10 +300,12 @@ function InputDialog({
         </Box>
         <Text>
           {/* The caret is the inverted cell under the cursor (CC's block
-              cursor); at end of line it inverts the trailing space. */}
-          <Text dimColor={value === ''}>{shown.slice(0, cursor)}</Text>
-          <Text inverse>{shown[cursor] ?? ' '}</Text>
-          <Text>{shown.slice(cursor + 1)}</Text>
+              cursor); at end of line it inverts the trailing space. Splits
+              are code-point safe — the caret never lands inside a surrogate
+              pair. */}
+          <Text dimColor={value === ''}>{shownPoints.slice(0, cursor).join('')}</Text>
+          <Text inverse>{shownPoints[cursor] ?? ' '}</Text>
+          <Text>{shownPoints.slice(cursor + 1).join('')}</Text>
         </Text>
       </Box>
       <Text dimColor italic>
