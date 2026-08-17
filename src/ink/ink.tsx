@@ -152,6 +152,16 @@ export default class Ink {
   // Set alongside altScreenActive so SIGCONT resume knows whether to
   // re-enable mouse tracking (not all <AlternateScreen> uses want it).
   private altScreenMouseTracking = false;
+  // DEC 1049 preserves the physical main screen and cursor. Keep the matching
+  // renderer state while an inline full-screen view is active so its exit can
+  // diff from what the terminal actually restores instead of printing a full
+  // duplicate frame into main-screen scrollback.
+  private mainScreenFrameState: {
+    frontFrame: Frame;
+    displayCursor: { x: number; y: number } | null;
+    columns: number;
+    rows: number;
+  } | null = null;
   // True when the previous frame's screen buffer cannot be trusted for
   // blit — selection overlay mutated it, resetFramesForAltScreen()
   // replaced it with blanks, or forceRedraw() reset it to 0×0. Forces
@@ -905,18 +915,38 @@ export default class Ink {
   /**
    * Called by the <AlternateScreen> component on mount/unmount.
    * Controls cursor.y clamping in the renderer and gates alt-screen-aware
-   * behavior in SIGCONT/resize/unmount handlers. Repaints on change so
-   * the first alt-screen frame (and first main-screen frame on exit) is
-   * a full redraw with no stale diff state.
+   * behavior in SIGCONT/resize/unmount handlers. The first alt-screen frame
+   * redraws from blank; exit restores the saved main frame for a physical-
+   * screen-matched diff, with repaint as the resize fallback.
    */
   setAltScreenActive(active: boolean, mouseTracking = false): void {
     if (this.altScreenActive === active) return;
     this.altScreenActive = active;
     this.altScreenMouseTracking = active && mouseTracking;
     if (active) {
+      this.mainScreenFrameState = {
+        frontFrame: this.frontFrame,
+        displayCursor: this.displayCursor,
+        columns: this.terminalColumns,
+        rows: this.terminalRows
+      };
       this.resetFramesForAltScreen();
     } else {
-      this.repaint();
+      const saved = this.mainScreenFrameState;
+      this.mainScreenFrameState = null;
+      if (saved && saved.columns === this.terminalColumns && saved.rows === this.terminalRows) {
+        this.frontFrame = saved.frontFrame;
+        this.displayCursor = saved.displayCursor;
+        this.log.reset();
+        // The main React subtree may have changed while the alternate screen
+        // was mounted. Disable blitting once, but keep the restored frame as
+        // the diff baseline that matches the terminal's physical contents.
+        this.prevFrameContaminated = true;
+      } else {
+        // A resize reflows the terminal's saved main buffer, so the old frame
+        // is no longer a trustworthy physical baseline.
+        this.repaint();
+      }
     }
   }
   get isAltScreenActive(): boolean {
@@ -1673,6 +1703,9 @@ export default class Ink {
     // them at the new pools so the next frame's IDs are comparable.
     this.backFrame.screen.charPool = this.charPool;
     this.backFrame.screen.hyperlinkPool = this.hyperlinkPool;
+    if (this.mainScreenFrameState) {
+      migrateScreenPools(this.mainScreenFrameState.frontFrame.screen, this.charPool, this.hyperlinkPool);
+    }
   }
   patchConsole(): () => void {
     // biome-ignore lint/suspicious/noConsole: intentionally patching global console
