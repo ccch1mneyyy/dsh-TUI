@@ -29,6 +29,7 @@ import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersion
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { DEFAULT_STATUS_BAR, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
+import { attachHerdrIntegration } from '../herdr.js'
 import { Chat } from '../screens/Chat.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
@@ -659,6 +660,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.on('approval/request', (req, next) =>
       String(req.agent.id) === channel.agentId ? approvalStore.park(req) : next())
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
+  }
+  const herdr = attachHerdrIntegration({
+    channel,
+    questions: questionStore,
+    approvals: approvalStore,
+  })
+  if (herdr !== undefined) {
+    ctx.effect(() => () => herdr.dispose())
   }
   // Positional command-line arguments are the initial prompt (issue #53):
   // `dsh-tui "run the tests"` forwards positionals through the dsh CLI,

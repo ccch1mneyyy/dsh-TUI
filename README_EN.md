@@ -89,6 +89,16 @@ commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 `dsh-tui --resume` restores the most recently selected session; on Windows
 the repository's `dsh-tui.cmd` works the same way.
 
+### Herdr
+
+Run `dsh-tui` directly in a [Herdr](https://herdr.dev) pane; no extra setup is
+required. dsh-TUI reports `idle`, `working`, and `blocked` through Herdr's local
+integration API and marks questionnaires and tool approvals as `blocked`. The
+integration is completely inactive outside Herdr. `herdr agent start --kind
+dsh-tui`, session identity, and automatic restoration after a Herdr server
+restart still require a native dsh-TUI agent kind upstream; manually launched
+panes already retain, reconnect, and expose their live state.
+
 For running dsh-TUI inside VS Code — directly in the integrated terminal or
 via the `dsh-tui-vscode` companion extension (real-integrated-terminal
 sessions, an experience almost identical to the official Claude Code
