@@ -14,3 +14,7 @@
 | **deepseek-harness-ux** | <https://github.com/ayuanwong/deepseek-harness-ux> | 让你的 DeepSeek Harness 工作过程一目了然！ |
 | **dsh-tianshu-tui** | <https://github.com/huiliyi37/dsh-tianshu-tui> | Tianshu 风格的 dsh-tui |
 | **dsh-data-agent** | <https://github.com/omdsh-dev/dsh-data-agent> | 让 AI 帮你连数据库 |
+
+> 本页是社区与第三方项目的链接罗列。所列项目与组织由各自的维护者独立维护，
+> dsh-TUI 仓库与其不存在隶属关系，也不对其内容、质量或安全作任何担保，使用前
+> 请自行评估。

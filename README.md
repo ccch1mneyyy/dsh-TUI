@@ -265,7 +265,9 @@ pnpm smoke
 - **模板仓库**：[plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)（从模板起步，5 分钟出一个插件）
 - **参考实现**：`dsh-working-activity`（实时工作状态行：TUI 槽位 + `activity/status` 会话事件双出口）
 
-核心仓库不迁移、社区插件独立成仓——组织只负责收录与背书，插件作者对自己的仓库保持完全所有权。
+核心仓库不迁移、社区插件独立成仓。组织只维护收录列表与准入规范，不对社区插件
+的功能、质量或安全作背书或担保；插件作者对自己的仓库保持完全所有权，并自行承担
+维护与安全责任。
 
 ## 社区
 

@@ -403,3 +403,7 @@ DSH_TUI_DEBUG=1 dsh --profile dsh-tui      # 需要调试时
   - 主仓库的 [`docs/links.md`](links.md)（PR 到 `ccch1mneyyy/dsh-TUI`）
   - 组织主页 README 的收录列表（PR 到 `dsh-tui-ecosystem`）
 - 在 README 里注明依赖的 dsh-TUI 版本下限，随主包版本更新做兼容性说明。
+
+收录只做链接罗列，不包含代码审查或运行验证。收录本身不代表 dsh-TUI、生态组织
+或其成员对插件的功能、质量或安全作任何背书或担保；插件由各自作者维护，使用者
+安装社区插件前请自行评估。

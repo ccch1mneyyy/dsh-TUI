@@ -465,3 +465,8 @@ package's CI regressions (see [Contributing](contributing.en.md#verification)).
   - The organization README's listing (PR to `dsh-tui-ecosystem`)
 - State the minimum dsh-TUI version your plugin requires, and document
   compatibility as the core evolves.
+
+Listing is link-only: it involves no code review or runtime verification, and
+implies no endorsement or warranty of a plugin's functionality, quality, or
+safety by dsh-TUI, the organization, or its members. Plugins are maintained by
+their respective authors; evaluate a community plugin before installing it.
