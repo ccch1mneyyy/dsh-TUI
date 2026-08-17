@@ -61,6 +61,7 @@ import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events
 import { installDecisionGuard } from './decision-guard.js'
 import { readGrantStore } from './grants.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
+import { pluginsInfoLines } from './plugins-info.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
   TuiInputDecision,
@@ -682,6 +683,9 @@ export interface Channel {
   initWorkspace(): string | null
   /** Environment diagnostics for `/doctor`. */
   doctorInfo(): string[]
+  /** Plugin contract/grant/ledger diagnostics for `/plugins` (C-070 trust
+   *  banner first line; `check <path>` runs validatePlugin + negotiate). */
+  pluginsInfo(args: string): string[]
   /** Subagent rows for `/agents` (DSH subagent service; empty message when
    *  the service is absent). */
   listSubagents(): Promise<string[]>
@@ -905,6 +909,8 @@ export interface ChannelState {
   initWorkspace(): string | null
   /** Environment diagnostics (CC's /doctor). */
   doctorInfo(): string[]
+  /** Plugin diagnostics (/plugins); see the public Channel type. */
+  pluginsInfo(args: string): string[]
   /** Subagent rows (CC's /agents). */
   listSubagents(): Promise<string[]>
   /** See {@link Channel.releaseContributions}. */
@@ -3369,7 +3375,22 @@ export function createChannel(
       if (existsSync(LEGACY_DATA_DIR)) {
         lines.push(t('doctor-legacy-dir'))
       }
+      // Plugin-spec diagnostics (v0.15): the runtime generation and the
+      // vendored registry self-check, both soft-probed (#183 discipline).
+      const pluginHost = ctx.get('tuiPluginHost')
+      lines.push(t('doctor-plugin-generation', { id: pluginHost?.generationId ?? t('doctor-plugin-host-missing') }))
+      const violations = pluginHost?.selfCheck()
+      lines.push(t('doctor-plugin-registry', {
+        state: violations === undefined ? t('doctor-plugin-host-missing') : violations.length === 0 ? '✓' : `✗ ${violations.length}`,
+      }))
       return lines
+    },
+    pluginsInfo(args: string) {
+      const host = ctx.get('tuiPluginHost')
+      return pluginsInfoLines(args, {
+        grants: host?.grants ?? grantStore,
+        host: host?.describe(),
+      })
     },
     async listSubagents() {
       const subagents = ctx.get('subagents') as

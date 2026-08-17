@@ -1000,6 +1000,13 @@ export function Chat({
         setHelpOpen(false)
         channel.pushLocal('/doctor', channel.doctorInfo())
         return true
+      case 'plugins':
+        // Plugin diagnostics (C-070): trust banner first, then descriptor /
+        // grant matrix / ledger tail — or validate+negotiate for
+        // `/plugins check <path>` (rawInput carries the subcommand).
+        setHelpOpen(false)
+        channel.pushLocal('/plugins', channel.pluginsInfo(rawInput))
+        return true
       case 'export': {
         const target = channel.exportSession()
         channel.notify(

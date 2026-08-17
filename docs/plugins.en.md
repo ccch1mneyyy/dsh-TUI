@@ -118,8 +118,7 @@ a security boundary.
 Current alignment status: the validation/negotiation library, vendored data,
 the unified grant store, Host Descriptor construction, the `storage.local`
 and `messages.observe` contract surfaces, the commands error-code alignment,
-and the effect ledger are in place; the `/plugins` diagnostic command
-follows in a later batch.
+the effect ledger, and the `/plugins` diagnostics surface are all in place.
 
 The grant store (`~/.dsh-tui/extension-grants.json`) answers for all 8
 registered permissions with defaults driven by the vendored permission
@@ -210,6 +209,21 @@ managed services (tuiScenes / tuiShortcuts / tuiStatus / tuiRenderers) take
 an optional trailing `identity?: Context` on their register-style methods —
 pass your own ctx so ledger entries attribute correctly; omitting it records
 `'undeclared'` and remains fully usable (non-breaking).
+
+The `/plugins` diagnostics surface (C-070 + C-030): the first line is always
+the trust-disclosure banner (in-process execution, grants are not a security
+boundary, passing validation ≠ a safe plugin); then a Host Descriptor
+summary (coordinates, generation, drift-dropped entries), the grant matrix
+(effective values over the registered permissions; the plugin set is the
+FOOTPRINT UNION — grants-file keys ∪ ledger pluginIds ∪ storage directory
+names — and the header says so honestly, because the host cannot enumerate
+installed plugins: that knowledge lives in the dsh CLI Loader), and the last
+5 ledger records. `/plugins check <path>` runs the vendored schema,
+validatePlugin, and the five-state negotiate over any dsh-plugin.json
+(grants are the store's current answers for that manifest id) and prints
+the decision with its reason codes; manifests are untrusted input — every
+derived line passes cleanScalarText. `/doctor` gains two lines: the plugin
+runtime generation and the registry self-check.
 
 ## Seam Overview
 

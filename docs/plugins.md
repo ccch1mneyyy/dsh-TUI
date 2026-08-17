@@ -101,8 +101,7 @@ Loader）负责，**加载时强制不在本仓库**。本仓库提供的是校�
 
 当前对齐进度：校验/协商库、vendored 数据、统一授权存储、Host
 Descriptor 构建、`storage.local` 与 `messages.observe` 契约面、
-commands 错误码对齐与效果台账已落地；`/plugins` 诊断命令在后续批次
-跟进。
+commands 错误码对齐、效果台账与 `/plugins` 诊断面已全部落地。
 
 授权存储（`~/.dsh-tui/extension-grants.json`）统一回答全部 8 个注册
 权限：默认值由 vendored 权限注册表驱动（7 个默认拒绝；
@@ -174,6 +173,17 @@ schema 缺失时全部写入被抑制（fail closed）。四个托管服务
 （tuiScenes / tuiShortcuts / tuiStatus / tuiRenderers）的 register 系
 方法带可选末参 `identity?: Context`——传自己的 ctx 即让台账归属
 正确，省略记 `'undeclared'`，不传也完全可用（非破坏）。
+
+`/plugins` 诊断面（C-070 + C-030）：首行固定为信任披露 banner（同进程
+运行、授权非安全隔离、通过校验 ≠ 插件安全）；随后是 Host Descriptor
+摘要（坐标、generation、漂移剔除项）、授权矩阵（8 个注册权限的有效
+值；插件集合 = 授权文件键 ∪ 台账 pluginId ∪ 存储目录名的**足迹并
+集**，标头如实声明——宿主无法枚举已安装插件，那是 dsh CLI Loader 的
+知识）与台账尾 5 条。`/plugins check <path>` 对任意 dsh-plugin.json
+依次跑 vendored schema、validatePlugin 语义校验与五态 negotiate（授权
+取自授权存储对该 manifest id 的现有答案），输出状态与 reasonCode；
+manifest 是不可信输入，所有派生行过 cleanScalarText。`/doctor` 追加
+插件运行时 generation 与注册表自检两行。
 
 ## 接缝总览
 
