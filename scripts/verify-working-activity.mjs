@@ -184,6 +184,30 @@ assert.equal(channel.agentId, 'agent-2')
 assert.equal(channel.workingActivity?.phase, 'idle')
 assert.equal(channel.workingActivity?.line, '')
 
+// Parallel tools retain the primary (earliest) tool's elapsed time. The
+// tracker's phaseStartedAt moves when the second tool starts, so rebuilding
+// from that field would under-report the primary tool by one second here.
+status()({ agent: replacementAgent, status: 'running' })
+const parallelNow = Date.now()
+sessionEvent()(replacementAgent.session, {
+  type: 'turn/start', seq: 0, time: parallelNow - 4000,
+  data: { turn: 'parallel-turn' },
+})
+sessionEvent()(replacementAgent.session, {
+  type: 'tool/call', seq: 1, time: parallelNow - 3000,
+  data: { turn: 'parallel-turn', step: 'step-1', callId: 'parallel-1', name: 'bash', arguments: '{"command":"first"}' },
+})
+sessionEvent()(replacementAgent.session, {
+  type: 'tool/call', seq: 2, time: parallelNow - 2000,
+  data: { turn: 'parallel-turn', step: 'step-1', callId: 'parallel-2', name: 'bash', arguments: '{"command":"second"}' },
+})
+assert.match(channel.workingActivity?.line, /^Running tool first · 3s$/)
+
+// Context disposal must remove the module-level language listener. Otherwise
+// a later /lang switch mutates and retains a Channel that has already unloaded.
+const lineBeforeDispose = channel.workingActivity.line
 for (const dispose of effects.reverse()) dispose()
+setLang('zh')
+assert.equal(channel.workingActivity?.line, lineBeforeDispose)
 rmSync(testHome, { recursive: true, force: true })
 console.log('verify-working-activity: OK')

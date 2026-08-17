@@ -192,7 +192,7 @@ export interface TokenUsage {
 export type ActivityStatus = ActivityState
 
 /** Replace dependency-owned Chinese copy while the TUI is in English mode. */
-function localizeActivityState(activity: ActivityState, stats: TurnStats, nowMs: number): ActivityState {
+function localizeActivityState(activity: ActivityState, stats: TurnStats): ActivityState {
   if (getLang() !== 'en') return activity
   if (activity.phase === 'waiting' || activity.phase === 'thinking') {
     const total = t('working-activity-total', {
@@ -216,9 +216,11 @@ function localizeActivityState(activity: ActivityState, stats: TurnStats, nowMs:
     const narration = activity.phrase === undefined ? '' : `⏵ ${activity.phrase} · `
     const detail = activity.detail === undefined ? '' : ` ${activity.detail}`
     const git = activity.line.endsWith(' · git') ? ' · git' : ''
+    const lineWithoutGit = git === '' ? activity.line : activity.line.slice(0, -git.length)
+    const elapsed = lineWithoutGit.slice(lineWithoutGit.lastIndexOf(' · ') + 3)
     return {
       ...activity,
-      line: `${narration}${label}${detail} · ${formatDuration(nowMs - activity.phaseStartedAt)}${git}`,
+      line: `${narration}${label}${detail} · ${elapsed}${git}`,
       label,
     }
   }
@@ -4043,6 +4045,11 @@ ${output}
   })
   let activityTickTimer: NodeJS.Timeout | undefined
 
+  const disposeAgentSubscriptions = (): void => {
+    for (const dispose of agentSubscriptions) dispose()
+    agentSubscriptions = []
+  }
+
   const stopActivityTick = (): void => {
     if (activityTickTimer === undefined) return
     clearInterval(activityTickTimer)
@@ -4056,13 +4063,13 @@ ${output}
       return undefined
     }
     const nowMs = Date.now()
-    const rendered = localizeActivityState(activityTracker.render(nowMs), activityTracker.stats(), nowMs)
+    const rendered = localizeActivityState(activityTracker.render(nowMs), activityTracker.stats())
     state.workingActivity = rendered
     return rendered
   }
 
   const bindAgent = (): void => {
-    for (const dispose of agentSubscriptions) dispose()
+    disposeAgentSubscriptions()
     stopActivityTick()
     activityTracker = new ActivityTracker({
       phrases: true,
@@ -4198,7 +4205,10 @@ ${output}
   const effect = (ctx as Context & {
     effect?: (setup: () => () => void, label?: string) => void
   }).effect
-  effect?.call(ctx, () => () => { stopActivityTick() }, 'dsh-tui activity timer')
+  effect?.call(ctx, () => () => {
+    stopActivityTick()
+    disposeAgentSubscriptions()
+  }, 'dsh-tui activity timer and subscriptions')
   // Statusline breadcrumb: current git branch of the session cwd (best-effort).
   // Re-run when an agent swap adopts a different persisted cwd (/resume,
   // issue #96) so the breadcrumb never shows the previous workspace's branch.
