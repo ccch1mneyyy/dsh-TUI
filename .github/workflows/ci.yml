@@ -186,6 +186,9 @@ jobs:
       # stdin 批量按键回归：同一读取内的文本、方向键、文本必须依次基于
       # 前一事件的输入状态执行，不能因 React 批处理读取旧闭包而丢字符。
       - run: node scripts/verify-batched-prompt-input.mjs
+      # 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
+      # ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
+      - run: node scripts/verify-prompt-history-draft.mjs
       # /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
       # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
       - run: node scripts/verify-resume-manage.mjs
