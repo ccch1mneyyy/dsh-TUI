@@ -110,6 +110,33 @@ check(
   JSON.stringify(steered),
 )
 
+// Terminals that cannot report modified Enter keys still expose Ctrl+J as a
+// bare LF, while the physical Enter key arrives as CR. Ctrl+J must therefore
+// remain a usable multiline fallback instead of submitting the first line.
+channel.working = false
+const multilineCases = [
+  ['Ctrl+J', '\n', 'ctrl'],
+  ['Option+Enter', '\x1b\r', 'option'],
+  ['Shift+Enter', '\x1b[13;2u', 'shift'],
+]
+for (const [index, [label, newlineKey, prefix]] of multilineCases.entries()) {
+  stdin.write(`${prefix} first`)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  stdin.write(newlineKey)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  stdin.write(`${prefix} second`)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  stdin.write('\r')
+  await new Promise(resolve => setTimeout(resolve, 300))
+
+  check(
+    `${label} inserts a newline before Enter submits the multiline draft`,
+    submitted.length === index + 3
+      && submitted[index + 2] === `${prefix} first\n${prefix} second`,
+    JSON.stringify(submitted),
+  )
+}
+
 instance.unmount()
 
 if (failed > 0) {

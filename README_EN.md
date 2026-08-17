@@ -105,7 +105,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 
 | Key | Action |
 |---|---|
-| `Enter` | Send (`Shift+Enter` for a newline); executes the selected item when a command menu is open |
+| `Enter` | Send (`Shift+Enter` for a newline, or `Ctrl+J` when the terminal cannot report modified Enter); executes the selected item when a command menu is open |
 | `Ctrl+C` | Interrupt the current turn; press twice while idle to exit |
 | `Esc` | Close the command/file menu; double-press while idle clears the input; **double-press on empty input = time rewind** |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
