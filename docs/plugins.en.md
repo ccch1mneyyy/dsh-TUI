@@ -126,8 +126,13 @@ registry (7 default deny; `commands.invoke` defaults allow — a plugin cannot
 read anything passively with it alone). The `grants` section explicitly
 grants deny-default permissions; the optional `denies` section revokes
 allow-default ones; unregistered permission names are always denied (even if
-explicitly granted in the file); an unparseable file denies everything,
-including allow-default permissions (fail closed):
+explicitly granted in the file). The three file states are strictly
+distinguished: **missing** (ENOENT) = all defaults (the natural pre-grant
+posture); **unparseable** = fail closed, denying even allow-default
+permissions; **any other read failure** (EACCES/EISDIR/I/O — the file
+exists but cannot be evaluated) is treated as corrupt and fails closed too,
+never silently falling back to defaults (otherwise `denies` would quietly
+stop applying after a single I/O error):
 
 ```json
 {
@@ -140,8 +145,13 @@ The `dsh-tui-plugin-host` row (already in cordis.patch.yml, ahead of the
 extensions row) provides `ctx.tuiPluginHost`: the runtime generationId
 (C-050, one UUID per activation), the unified grant store instance, Host
 Descriptor construction (advertising only contracts the running code
-actually provides; a drifted vendored contract file is dropped fail-closed
-with a warning), and the registry self-check. Consumers always soft-probe
+actually provides — on a context without the commands service the Command
+contract is excluded with a warning; a drifted vendored contract file is
+dropped fail-closed with a warning), and the registry self-check. The
+vendored data itself is treated as untrusted in shape: a parseable but
+structurally wrong registry/permissions file counts as unavailable
+(soft-degrading to an empty contract surface) rather than blowing up as a
+TypeError inside a self-check. Consumers always soft-probe
 with `ctx.get('tuiPluginHost', false)` (#183 discipline); the service never
 enters any inject list.
 
@@ -156,38 +166,64 @@ file locking; quota 256 keys / 256 KiB; a corrupt file is never overwritten
 silently — operations report STORAGE_UNAVAILABLE and the bytes stay on disk
 for manual recovery). Errors carry the contract codes:
 PERMISSION_NOT_GRANTED / INVALID_KEY / QUOTA_EXCEEDED /
-STORAGE_UNAVAILABLE. Values must be JSON-serializable; keys and values are
+STORAGE_UNAVAILABLE. Values must be **exact JSON values** — inputs that
+JSON.stringify would silently mutate (undefined, NaN/±Infinity, functions,
+symbols, BigInt, class instances, sparse arrays, cycles) are rejected with
+INVALID_KEY instead of round-tripping a value the plugin never stored; and
+keys colliding with Object.prototype names (`__proto__`, `toString`,
+`constructor`) are ordinary data (null-prototype tables + own-property
+membership — no prototype reads, no fake membership). Keys and values are
 never logged (privacyClass sensitive). Operations on one namespace serialize
 in invocation order; unloading the plugin closes its handle while the data
 is retained.
 
 `messages.observe` (C-042): the message-observation broker, subscribed via
-`ctx.get('tuiMessageObserver', false)` → `subscribe(ctx, listener)`
-(identity = the passed context's fiber.name). The mapping is deliberately
+`ctx.get('tuiMessageObserver', false)` → `subscribe(ctx, listener, { scope })`
+(identity = the passed context's fiber.name). **The scope is required and
+matched exactly** (e.g. `session:<id>`) — a subscription only ever receives
+envelopes of its own scope, so another session's sensitive content is
+unreachable by construction (C-042 scope isolation); a blank or overlong
+scope is refused (no-op disposer + warning). The mapping is deliberately
 narrow: `user/message` → `message.received`, `assistant/message` →
 `message.sent`; streaming chunks, tool and boundary events never produce
 envelopes. Every envelope passes the vendored schema before delivery:
 `scope=session:<id>`, `sequence` = the session event's own seq (monotonic,
-gaps allowed), `eventId=<sessionId>:<seq>`; privacyClass is always
+gaps allowed — image reads are async, so envelope builds serialize
+broker-wide and delivery order stays the publish order),
+`eventId=<sessionId>:<seq>`; privacyClass is always
 `sensitive` (conservative first step — finer classification is future
-work); content carries text blocks only, summary is the sanitized first
+work); content is the text/image subset — a pure-text message keeps its
+single text block, and session image blocks (`{type:'image', attachment}`
+references) resolve through the attachments service into base64 image
+blocks (192 KiB per-image budget; unreadable/oversize/bad-mime images are
+dropped and mark `truncated`); summary is the sanitized first
 200 cells with a `truncated` flag when clipped. The
 `messages.observe.read` grant is checked at subscribe time (fast fail:
 no-op disposer + warning) and re-checked per subscription at deliver time —
-a revocation releases the subscription (contract cleanup). A throwing
+a revocation releases the subscription (contract cleanup). A successful
+subscribe and every release path (disposer, unload, revoke — one funnel)
+land in the effect ledger (bind/release subscription), so /plugins can
+reverse-lookup active subscriptions. A throwing
 listener is isolated while delivery continues; at-most-once, no replay;
 the broker persists nothing (contract retention).
 
-`commands` (C-041): at the host-mediated registration points, a duplicate
-registration arriving as a plain-message Error from dsh-commands is mapped
-onto an error carrying `code: 'DUPLICATE_CONTRIBUTION_ID'`
-(`src/dsh-adapter/command-errors.js` — `mapCommandError` /
-`withCommandErrorMapping`). Before executing a registry command, the host
-passes an invoke checkpoint consulting the `commands.invoke` grant (allow
-by default, revocable through `denies`; a revoked checkpoint skips execution
-with a notice). Plugins calling `ctx.commands` directly bypass both points
+`commands` (C-041): plugins register commands through the plugin-host row's
+**mediated surface** `ctx.tuiPluginHost.registerCommand(pluginCtx,
+definition)` — a successful registration stamps the command's owner as the
+caller's fiber.name (dsh-commands itself has no owner concept; the
+attribution ledger lives in `src/dsh-adapter/command-attribution.js`), a
+duplicate registration throws the mapped error carrying
+`code: 'DUPLICATE_CONTRIBUTION_ID'`
+(`src/dsh-adapter/command-errors.js`), and the returned disposer lifts the
+stamp. Before executing a registry command, the host passes an invoke
+checkpoint: first the `root` `commands.invoke` grant (allow
+by default, revocable through `denies`), then — for ATTRIBUTED commands —
+the owner plugin's same grant, so denying a plugin `commands.invoke` closes
+the host-mediated invocation of ITS commands (C-041 revocation semantics).
+Plugins calling `ctx.get('commands').register/execute` directly bypass both
+attribution and checkpoint
 (the declared C-070 trusted-in-process boundary — platform behavior, not a
-bug).
+bug; attribution only ever tightens the check, never widens it).
 
 Effect ledger (C-060): an append-only JSONL journal at
 `~/.dsh-tui/effect-ledger.jsonl`, written through
@@ -221,7 +257,12 @@ installed plugins: that knowledge lives in the dsh CLI Loader), and the last
 5 ledger records. `/plugins check <path>` runs the vendored schema,
 validatePlugin, and the five-state negotiate over any dsh-plugin.json
 (grants are the store's current answers for that manifest id) and prints
-the decision with its reason codes; manifests are untrusted input — every
+the decision with its reason codes; each stage retries ONCE against the
+**TUI host-extension overlay** (`src/plugin-spec/tui-extension.js` — the
+admission path for the `session.*.intercept` permission names and `tui/*`
+event subscriptions the core registry does not carry), and the output says
+so when a verdict relied on the overlay; when both sides fail, the reported
+error is the vendored core one. Manifests are untrusted input — every
 derived line passes cleanScalarText. `/doctor` gains two lines: the plugin
 runtime generation and the registry self-check.
 
@@ -822,8 +863,10 @@ ctx.effect(() => () => dispose?.())   // cleanup hangs on the CALLER's fiber
 status?.set('my-plugin', undefined)        // clear explicitly ('' works too)
 ```
 
-- Key rule: `/^[a-z][a-z0-9_-]*$/` (convention: the plugin name, or
-  `plugin:sub-item`); at most 20 keys, text ≤200 cells; violations are
+- Key rule: `/^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/` (the colon segments
+  grammaticalize the `plugin:sub-item` namespacing convention; uppercase
+  case-folds to lowercase per the standing discipline); at most 20 keys,
+  text ≤200 cells; violations are
   refused with a warning, never a throw. Text is scalar-only
   (string/number/boolean coerced to string); a non-scalar is **refused**,
   not treated as a clear.

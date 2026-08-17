@@ -17,7 +17,9 @@ export interface TuiStatusEntry {
   readonly text: string
 }
 
-const KEY_PATTERN = /^[a-z][a-z0-9_-]*$/u
+// Colon-separated segments are the documented namespacing convention
+// (`plugin:sub-item`); each segment stays a lowercase slug.
+const KEY_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/u
 const TEXT_CELLS = 200
 const MAX_ENTRIES = 20
 

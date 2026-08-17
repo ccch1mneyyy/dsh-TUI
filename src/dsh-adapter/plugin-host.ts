@@ -15,6 +15,11 @@
  *   built lazily and cached; drifted contracts are dropped fail-closed.
  * - `selfCheck()` — vendored registry + contract-profile violations
  *   (schemaHash drift, ten-point incompleteness, parity mismatches).
+ * - `registerCommand(pluginCtx, definition)` — the MEDIATED command
+ *   registration surface (C-041 attribution): stamps each command with the
+ *   caller's fiber.name so the invoke checkpoint can enforce per-owner
+ *   denies (./command-attribution.js). Direct `ctx.get('commands')`
+ *   registrations stay unattributed — the documented C-070 boundary.
  *
  * Discipline notes:
  *
@@ -31,13 +36,16 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
+import type { CommandDefinition } from '@deepseek-ai/dsh-commands'
 import type { HostDescriptor } from '../plugin-spec/types.js'
 import { loadSpecData, verifyContractProfiles, verifyRegistry } from '../plugin-spec/registry.js'
 import { readGrantStore, type GrantStore } from './grants.js'
-import { buildHostDescriptor, type HostDescriptorBuild } from './host-descriptor.js'
+import { buildHostDescriptor, HOST_SUPPORTED_CONTRACTS, type HostDescriptorBuild } from './host-descriptor.js'
 import { TuiEffectLedgerRuntime } from './effect-ledger.js'
 import { TuiPluginStorageRuntime } from './plugin-storage.js'
 import { TuiMessageObserverRuntime } from './message-observer.js'
+import { fiberNameOf, stampCommandOwner, unstampCommandOwner } from './command-attribution.js'
+import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -81,12 +89,78 @@ export class TuiPluginHostRuntime extends Service {
 
   private build(): HostDescriptorBuild {
     if (this.descriptorBuild === undefined) {
-      this.descriptorBuild = buildHostDescriptor({ generationId: this.generationId })
+      // C-010 honesty: advertise Command only when the commands service is
+      // actually mounted — a bare/embedded context without dsh-commands must
+      // not negotiate `compatible` for a capability plugins will never get.
+      // Probed here (first build is lazy), not in the constructor: sibling
+      // services mounted later by the same apply() are invisible to
+      // constructors (cordis).
+      const commandsMounted = this.ctx.get('commands') !== undefined
+      const supported = HOST_SUPPORTED_CONTRACTS.filter(contract => contract.kind !== 'Command' || commandsMounted)
+      this.descriptorBuild = buildHostDescriptor({ generationId: this.generationId, supported })
+      if (!commandsMounted) {
+        this.ctx.logger.warn(
+          'dsh-tui: host descriptor: commands.dsh/v1alpha1#Command excluded — the commands service is not mounted on this context',
+        )
+      }
       for (const warning of this.descriptorBuild.warnings) {
         this.ctx.logger.warn(`dsh-tui: host descriptor: ${warning}`)
       }
     }
     return this.descriptorBuild
+  }
+
+  /**
+   * Mediated command registration (C-041 attribution): registers through
+   * the commands service and, on success, stamps the command's owner as
+   * the PASSED context's fiber.name — so the channel's invoke checkpoint
+   * can enforce per-owner `commands.invoke` denies on the host-mediated
+   * path. Mirrors the honest-identity pattern of storage.open /
+   * messages.observe subscribe: there is no parameter to impersonate
+   * another plugin. The returned disposer unregisters AND lifts the stamp
+   * (idempotent). Duplicates throw the mapped DUPLICATE_CONTRIBUTION_ID
+   * error; a missing commands service fails loud (the descriptor's
+   * Command contract is excluded in that situation anyway).
+   */
+  registerCommand(pluginCtx: Context, definition: CommandDefinition): () => void {
+    const commands = this.ctx.get('commands')
+    if (commands === undefined) {
+      throw new Error('dsh-tui: registerCommand unavailable — the commands service is not mounted on this context')
+    }
+    const owner = fiberNameOf(pluginCtx)
+    const name = typeof definition?.name === 'string' ? definition.name : 'unknown'
+    let dispose: () => void
+    try {
+      dispose = commands.register(definition)
+    } catch (error) {
+      const mapped = mapCommandError(error)
+      this.ctx.get('tuiEffectLedger')?.record(
+        {
+          operation: 'create',
+          resource: { kind: 'command', id: name },
+          result: 'failed',
+          errorCode: hasCommandErrorCode(mapped, 'DUPLICATE_CONTRIBUTION_ID') ? 'DUPLICATE_CONTRIBUTION_ID' : 'COMMAND_FAILED',
+        },
+        pluginCtx,
+      )
+      throw mapped
+    }
+    stampCommandOwner(this.ctx, name, owner)
+    this.ctx.get('tuiEffectLedger')?.record(
+      { operation: 'create', resource: { kind: 'command', id: name }, result: 'applied' },
+      pluginCtx,
+    )
+    let disposed = false
+    return () => {
+      if (disposed) return
+      disposed = true
+      dispose()
+      unstampCommandOwner(this.ctx, name, owner)
+      this.ctx.get('tuiEffectLedger')?.record(
+        { operation: 'release', resource: { kind: 'command', id: name }, result: 'applied' },
+        pluginCtx,
+      )
+    }
   }
 
   /**

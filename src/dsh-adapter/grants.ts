@@ -125,16 +125,23 @@ export function parseGrantStore(text: string, registry?: PermissionRegistry): Gr
 }
 
 /**
- * Read `extension-grants.json` from the data dir. A missing file is an
- * empty (all-defaults) store — the pre-grant posture; a corrupt file is
- * deny-all.
+ * Read `extension-grants.json` from the data dir. A missing file (ENOENT) is
+ * an empty (all-defaults) store — the pre-grant posture; a corrupt file is
+ * deny-all. ANY OTHER read failure (EACCES, EISDIR, I/O) means a grants
+ * file exists but could not be evaluated — fail closed like a corrupt one,
+ * or `denies` would silently stop applying (commands.invoke falling back to
+ * allow).
  * @param dir - Data directory (injectable for tests).
  * @param registry - Permission registry (injectable for tests).
  */
 export function readGrantStore(dir: string = DATA_DIR, registry?: PermissionRegistry): GrantStore {
+  let text: string
   try {
-    return parseGrantStore(readFileSync(join(dir, EXTENSION_GRANTS_FILE), 'utf8'), registry)
-  } catch {
-    return parseGrantStore('', registry)
+    text = readFileSync(join(dir, EXTENSION_GRANTS_FILE), 'utf8')
+  } catch (error) {
+    // The unparseable sentinel routes non-ENOENT failures through the same
+    // corrupt (deny-all) path as a malformed file.
+    return parseGrantStore((error as NodeJS.ErrnoException).code === 'ENOENT' ? '' : '{unreadable', registry)
   }
+  return parseGrantStore(text, registry)
 }

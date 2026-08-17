@@ -278,6 +278,22 @@ await sleep(100)
 {
   ctx.tuiStatus.set('Bad Key!', 'nope')
   check('tuiStatus: invalid key refused + warn', ctx.tuiStatus.store.getSnapshot().length === 0 && warnCount('tuiStatus.set rejected invalid key') === 1)
+  // P2-9：文档的 plugin:sub-item 冒号命名约定合法（逐段 slug 校验）。
+  ctx.tuiStatus.set('my-plugin:sub-item', 'colon ok')
+  check('tuiStatus: colon-namespaced key accepted (documented convention)',
+    ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'my-plugin:sub-item' && e.text === 'colon ok'))
+  ctx.tuiStatus.set('my-plugin:sub-item', undefined)
+  // 大写按既有 case-fold 纪律归一为小写后接受。
+  ctx.tuiStatus.set('My-Plugin:Sub-Item', 'folded')
+  check('tuiStatus: uppercase colon key case-folds and is accepted',
+    ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'my-plugin:sub-item' && e.text === 'folded'))
+  ctx.tuiStatus.set('My-Plugin:Sub-Item', undefined)
+  // 归一化后仍畸形的（空段/连冒号/空格）拒绝。
+  for (const bad of ['trail:', ':lead', 'double::colon', 'has space:x']) {
+    const before = warnCount('tuiStatus.set rejected invalid key')
+    ctx.tuiStatus.set(bad, 'nope')
+    check(`tuiStatus: malformed colon key "${bad}" refused`, warnCount('tuiStatus.set rejected invalid key') === before + 1)
+  }
   ctx.tuiStatus.set('demo', '构建\x1b[31m中')
   check('tuiStatus: control chars stripped',
     ctx.tuiStatus.store.getSnapshot()[0]?.text === '构建 [31m中', JSON.stringify(ctx.tuiStatus.store.getSnapshot()[0]?.text))

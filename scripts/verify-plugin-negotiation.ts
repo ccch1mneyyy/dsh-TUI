@@ -189,6 +189,74 @@ const overview = () => pluginsInfoLines('', { grants, host })
   check1('no control characters in any output line', all.every(line => !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(line)))
 }
 
+// ── E2. TUI 宿主扩展覆盖层（P2-11）────────────────────────────────────────
+{
+  const extensionCheck = (path: string, store = grants) =>
+    pluginsInfoLines(`check ${path}`, { grants: store, host }).slice(1) // 去 banner
+  // 遵循文档的插件：声明 session.input.intercept 并订阅 tui/input——
+  // vendored 核心面答不出（schema 枚举仅 4 个核心权限名、registry 无
+  // tui/* 条目），必须走 TUI 扩展覆盖层，且输出要如实声明这一点。
+  const tuiPlugin = join(fakeHome, 'tui-extension-plugin.json')
+  writeFileSync(tuiPlugin, JSON.stringify({
+    $schema: 'https://dsh.community/schemas/dsh-plugin-0.15.json',
+    id: 'com.example.input-guard',
+    name: 'Input Guard',
+    version: '0.1.0',
+    manifestVersion: '0.15',
+    facets: { host: { entry: 'dist/main.js', apiVersion: 'v1alpha1' } },
+    requires: { contracts: [{ apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' }] },
+    permissions: [{ name: 'session.input.intercept', scope: 'tui/input', reason: 'guard user input' }],
+    contributes: { commands: [] },
+    subscriptions: ['tui/input'],
+    license: 'MIT',
+    source: { repository: 'https://example.com/guard', revision: 'abc123' },
+  }))
+  const ungranted = extensionCheck(tuiPlugin)
+  check1('extension manifest reaches negotiation (no schema/semantic failure)',
+    !ungranted.some(line => line.includes('schema 校验失败') || line.includes('语义校验失败')), ungranted.join(' | '))
+  check1('ungranted intercept permission answers waiting_authorization naming it',
+    ungranted.some(line => line.includes('waiting_authorization') && line.includes('session.input.intercept')),
+    ungranted.join(' | '))
+  check1('the overlay note is disclosed', ungranted.some(line => line.includes('宿主扩展覆盖层')))
+  // 授予后翻 compatible（intercept 权限在覆盖层 descriptor 里是 host-declared）。
+  writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
+    grants: { ...grantsTable, 'com.example.input-guard': ['session.input.intercept'] },
+    denies: { evil: ['commands.invoke'] },
+  }))
+  const grantedLines = extensionCheck(tuiPlugin, readGrantStore())
+  check1('granting the intercept permission flips the extension manifest to compatible',
+    grantedLines.some(line => line.includes('协商结果：compatible') && !line.includes('degraded')), grantedLines.join(' | '))
+  // 还原足迹布景
+  writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
+    grants: grantsTable,
+    denies: { evil: ['commands.invoke'] },
+  }))
+  // 双侧都失败的 manifest（未注册权限名）→ 报 base 错误，绝不靠覆盖层放行。
+  const bogusPlugin = join(fakeHome, 'bogus-permission-plugin.json')
+  writeFileSync(bogusPlugin, JSON.stringify({
+    $schema: 'https://dsh.community/schemas/dsh-plugin-0.15.json',
+    id: 'com.example.bogus',
+    name: 'Bogus',
+    version: '0.1.0',
+    manifestVersion: '0.15',
+    facets: { host: { entry: 'dist/main.js', apiVersion: 'v1alpha1' } },
+    requires: { contracts: [{ apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' }] },
+    permissions: [{ name: 'bogus.permission', scope: 'x' }],
+    contributes: { commands: [] },
+    subscriptions: [],
+    license: 'MIT',
+    source: { repository: 'https://example.com/bogus' },
+  }))
+  const bogus = extensionCheck(bogusPlugin)
+  check1('an unregistered permission name still fails with the base schema error',
+    bogus.some(line => line.includes('schema 校验失败')) && !bogus.some(line => line.includes('宿主扩展覆盖层')),
+    bogus.join(' | '))
+  // 纯核心 manifest 不带覆盖层注记（既有行为不变）。
+  const coreLines = extensionCheck(fixture('valid-plugin.json'))
+  check1('core manifests carry no overlay note',
+    !coreLines.some(line => line.includes('宿主扩展覆盖层')) && coreLines.some(line => line.includes('协商结果：compatible')))
+}
+
 // ── F. 接线断言 ───────────────────────────────────────────────────────────
 {
   const commands = readFileSync(join(root, 'src/commands.ts'), 'utf8')

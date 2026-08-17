@@ -33,7 +33,9 @@ import { createContractIndex } from '../plugin-spec/validate.js'
  * (registration/invoke via the official dsh-commands spine; error-code
  * standardization — DUPLICATE_CONTRIBUTION_ID — lands with the effect
  * ledger batch), LocalStorage (./plugin-storage.js), and MessageObserver
- * (./message-observer.js).
+ * (./message-observer.js). The plugin-host runtime additionally FILTERS
+ * this list by runtime reality before building (e.g. Command drops out
+ * when the commands service is not mounted on the context).
  */
 export const HOST_SUPPORTED_CONTRACTS: readonly ContractCoordinate[] = [
   { apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' },

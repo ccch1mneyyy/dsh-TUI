@@ -59,6 +59,7 @@ import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
 import type { TuiRendererRuntime } from './renderers.js'
 import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events.js'
 import { installDecisionGuard } from './decision-guard.js'
+import { commandOwner } from './command-attribution.js'
 import { readGrantStore } from './grants.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
 import { pluginsInfoLines } from './plugins-info.js'
@@ -1652,6 +1653,29 @@ export function createChannel(
         ctx,
       )
       return t('command-invoke-denied')
+    }
+    // Per-owner gate (C-041): a command REGISTERED BY A PLUGIN through the
+    // plugin-host row's mediated registerCommand (see command-attribution.js)
+    // is additionally gated on the OWNER's grant, so a denies entry for the
+    // plugin closes the host-mediated invocation of ITS commands.
+    // Unattributed commands (host-side or direct ctx.get registrations —
+    // the documented C-070 boundary) fall back to the root check only;
+    // attribution only ever TIGHTENS the check, never widens it.
+    const owner = commandOwner(ctx, name)
+    if (owner !== undefined && owner !== 'root' && !grantStore.allows(owner, 'commands.invoke')) {
+      ctx.logger.warn(
+        `dsh-tui: registry command "/${name}" invocation denied — owner plugin "${owner}" lost commands.invoke (grants file denies)`,
+      )
+      ctx.get('tuiEffectLedger')?.record(
+        {
+          operation: 'bind',
+          resource: { kind: 'permission', id: `${owner}:commands.invoke` },
+          result: 'failed',
+          errorCode: 'PERMISSION_NOT_GRANTED',
+        },
+        ctx,
+      )
+      return t('command-invoke-denied-owner', { name, owner })
     }
     try {
       const execution = await commandService.execute(

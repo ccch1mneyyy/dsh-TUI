@@ -169,6 +169,41 @@ await openAs('gamma')
   await expectCode('circular value rejected', 'INVALID_KEY', () => alpha.set('bad-value', circular))
   await expectCode('bigint value rejected', 'INVALID_KEY', () => alpha.set('bad-value', 1n))
   check1('rejections left no residue key', (await alpha.get('bad-value')) === null)
+
+  // P2-6：JSON.stringify 会静默变形的输入一律拒绝（往返不得说谎）。
+  await expectCode('NaN rejected', 'INVALID_KEY', () => alpha.set('bad-nan', Number.NaN))
+  await expectCode('Infinity rejected', 'INVALID_KEY', () => alpha.set('bad-inf', Number.POSITIVE_INFINITY))
+  await expectCode('-Infinity rejected', 'INVALID_KEY', () => alpha.set('bad-neg-inf', Number.NEGATIVE_INFINITY))
+  await expectCode('undefined array item rejected', 'INVALID_KEY', () => alpha.set('bad-arr', [1, undefined, 3]))
+  await expectCode('undefined object property rejected', 'INVALID_KEY', () => alpha.set('bad-obj', { a: undefined }))
+  // eslint-disable-next-line no-sparse-arrays
+  await expectCode('sparse array rejected', 'INVALID_KEY', () => alpha.set('bad-sparse', new Array(3)))
+  await expectCode('function value rejected', 'INVALID_KEY', () => alpha.set('bad-fn', () => 1))
+  await expectCode('symbol value rejected', 'INVALID_KEY', () => alpha.set('bad-sym', Symbol('s')))
+  class SomeClass { a = 1 }
+  await expectCode('class instance rejected', 'INVALID_KEY', () => alpha.set('bad-class', new SomeClass()))
+  await expectCode('toJSON-carrying object rejected', 'INVALID_KEY', () => alpha.set('bad-tojson', { toJSON: () => ({}) }))
+  // DAG（共享引用无环）合法——stringify 展开重复，不说谎。
+  const shared = { x: 1 }
+  check1('DAG (shared reference, no cycle) accepted', (await alpha.set('dag', { left: shared, right: shared })) === true)
+  check1('DAG round-trips expanded',
+    JSON.stringify(await alpha.get('dag')) === JSON.stringify({ left: { x: 1 }, right: { x: 1 } }))
+
+  // P2-5：原型链名就是普通数据——不读宿主原型、不伪造存在性、不污染。
+  check1('get("toString") on an empty key is null (no prototype leak)', (await alpha.get('toString')) === null)
+  check1('get("constructor") is null', (await alpha.get('constructor')) === null)
+  check1('delete("toString") is false (no fake membership)', (await alpha.delete('toString')) === false)
+  check1('set("__proto__") stores ordinary data', (await alpha.set('__proto__', { polluted: false })) === true)
+  check1('get("__proto__") returns the stored own value',
+    JSON.stringify(await alpha.get('__proto__')) === JSON.stringify({ polluted: false }))
+  check1('Object.prototype untouched by the __proto__ write',
+    ({} as { polluted?: unknown }).polluted === undefined)
+  check1('delete("__proto__") is true', (await alpha.delete('__proto__')) === true)
+  check1('post-delete get("__proto__") is null', (await alpha.get('__proto__')) === null)
+  // 落盘往返后仍是自有属性语义（readTable 的 null 原型重建）。
+  check1('set("toString") shadows the prototype as own data', (await alpha.set('toString', 'own')) === true)
+  check1('get("toString") returns the stored string', (await alpha.get('toString')) === 'own')
+  check1('delete("toString") now true', (await alpha.delete('toString')) === true)
 }
 
 // ── D. namespace 隔离与文件名清洗 ─────────────────────────────────────────

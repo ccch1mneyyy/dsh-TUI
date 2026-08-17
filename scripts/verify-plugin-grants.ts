@@ -17,7 +17,7 @@
  * Run via `node --import tsx/esm scripts/verify-plugin-grants.ts`.
  */
 import assert from 'node:assert/strict'
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,7 +33,7 @@ const { parseGrantStore, readGrantStore, EXTENSION_GRANTS_FILE } = await import(
 const { installDecisionGuard, DECISION_EVENT_PERMISSIONS } = await import('../src/dsh-adapter/decision-guard.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { buildHostDescriptor, HOST_SUPPORTED_CONTRACTS, readOwnPackageVersion } = await import('../src/dsh-adapter/host-descriptor.js')
-const { loadSpecData, digestFile } = await import('../src/plugin-spec/registry.js')
+const { loadSpecData, digestFile, verifyRegistry, verifyContractProfiles } = await import('../src/plugin-spec/registry.js')
 const { createContractIndex, validateHost } = await import('../src/plugin-spec/validate.js')
 const { check } = await import('../src/plugin-spec/schema-check.js')
 const { negotiate } = await import('../src/plugin-spec/negotiate.js')
@@ -129,6 +129,17 @@ const cleanup: string[] = [fakeHome]
   const missing = readGrantStore(missingDir)
   check1('missing file is not corrupt', !missing.corrupt)
   check1('missing file gives registry defaults', missing.allows('anyone', 'commands.invoke') && !missing.allows('anyone', 'session.input.intercept'))
+
+  // A10. readGrantStore：非 ENOENT 读取失败（EISDIR：授权路径是个目录）
+  // = corrupt fail-closed——绝不能静默回退全默认（否则 denies 失效、
+  // commands.invoke 回落 allow，撤销机制被一次 I/O 错误击穿）。
+  const unreadableDir = mkdtempSync(join(tmpdir(), 'dsh-grants-unreadable-'))
+  cleanup.push(unreadableDir)
+  mkdirSync(join(unreadableDir, EXTENSION_GRANTS_FILE))
+  const unreadable = readGrantStore(unreadableDir)
+  check1('non-ENOENT read failure (EISDIR) is corrupt fail-closed', unreadable.corrupt)
+  check1('non-ENOENT read failure denies allow-default too', !unreadable.allows('anyone', 'commands.invoke'))
+  check1('non-ENOENT read failure denies deny-default', !unreadable.allows('anyone', 'storage.local.read'))
 }
 
 // ── B. decision-guard 薄壳后行为不变（真文件路径）────────────────────────
@@ -201,7 +212,37 @@ const cleanup: string[] = [fakeHome]
     check1('service descriptor passes vendored schema + validateHost', descriptorError === '', descriptorError)
     check1('descriptor generationId is the runtime generation', descriptor.runtime.generationId === service.generationId)
     check1('descriptor cached (same object)', service.hostDescriptor() === descriptor)
-    check1('no boot warnings on clean data', hostWarnings.length === 0, hostWarnings.join(' | '))
+    // P2-8：这个 bare ctx 没有 commands 服务——descriptor 必须剔除 Command
+    //（C-010 只宣告运行中真实提供的能力），并如实 warn 一次。
+    check1('Command excluded when the commands service is not mounted',
+      !descriptor.contracts.some(contract => contract.kind === 'Command')
+      && descriptor.contracts.length === HOST_SUPPORTED_CONTRACTS.length - 1,
+      JSON.stringify(descriptor.contracts.map(contract => contract.kind)))
+    check1('Command exclusion warns exactly that',
+      hostWarnings.length === 1 && hostWarnings[0]!.includes('commands service is not mounted'), hostWarnings.join(' | '))
+  }
+
+  // P2-8 正例：commands 服务在首次 build 前挂载 → Command 正常宣告、零 warn。
+  //（生产路径：descriptor 懒构建，/plugins 首查时 channel 早已装好 commands。）
+  {
+    const { Service } = await import('@deepseek-ai/cordis')
+    class FakeCommands extends Service {
+      constructor(ctx: InstanceType<typeof Context>) {
+        super(ctx, 'commands')
+      }
+    }
+    const withCommands = new Context()
+    const withCommandsWarnings: string[] = []
+    withCommands.logger.warn = (format: unknown, ...params: unknown[]) => {
+      withCommandsWarnings.push([format, ...params].map(String).join(' '))
+    }
+    withCommands.plugin(FakeCommands)
+    withCommands.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+    await sleep(50)
+    const descriptor = withCommands.get('tuiPluginHost')?.hostDescriptor()
+    check1('Command advertised when the commands service is mounted',
+      descriptor?.contracts.some(contract => contract.kind === 'Command') === true)
+    check1('no boot warnings with commands mounted', withCommandsWarnings.length === 0, withCommandsWarnings.join(' | '))
   }
 
   // 跨激活 generationId 不同（两个独立 root 各挂一次）。
@@ -279,6 +320,41 @@ const cleanup: string[] = [fakeHome]
   check1('negotiate against the built descriptor: compatible',
     decision.decision === 'compatible',
     JSON.stringify(decision))
+
+  // D5. P2-10：可解析但结构错误的 vendored 数据 = 不可用（undefined），
+  // 绝不把 TypeError 留到 verify*/boot 自检里炸出来（fail-soft）。
+  const malformedRoot = mkdtempSync(join(tmpdir(), 'dsh-spec-malformed-'))
+  cleanup.push(malformedRoot)
+  cpSync(specDir, join(malformedRoot, 'ecosystem-spec'), { recursive: true })
+  writeFileSync(join(malformedRoot, 'ecosystem-spec', 'registry', 'registry-0.15.json'),
+    JSON.stringify({ registryVersion: '0.15', entries: null }))
+  check1('structurally malformed registry loads as unavailable',
+    loadSpecData(join(malformedRoot, 'ecosystem-spec')) === undefined)
+  const malformedBuild = buildHostDescriptor({ generationId: 'test-gen-4', specDir: join(malformedRoot, 'ecosystem-spec') })
+  check1('malformed data degrades the descriptor to an empty surface (no throw)',
+    malformedBuild.descriptor.contracts.length === 0 && malformedBuild.warnings.length > 0)
+  // verify* 对手工构造的坏数据也只回违规字符串。
+  let verifyThrew = ''
+  try {
+    const fakeData = { dir: specDir, registry: { entries: null }, permissions: { permissions: [] }, schemas: {} }
+    const violations = verifyRegistry(fakeData as never)
+    check1('verifyRegistry reports malformed entries as a violation string',
+      violations.length === 1 && violations[0]!.includes('entries'))
+    const profileViolations = verifyContractProfiles(fakeData as never)
+    check1('verifyContractProfiles reports malformed entries as a violation string',
+      profileViolations.length === 1 && profileViolations[0]!.includes('entries'))
+  } catch (error) {
+    verifyThrew = error instanceof Error ? error.message : String(error)
+  }
+  check1('verify* never throw on malformed data', verifyThrew === '', verifyThrew)
+  // 权限注册表 malformed（permissions 不是数组）同样整体不可用。
+  const malformedPermsRoot = mkdtempSync(join(tmpdir(), 'dsh-spec-malformed-perms-'))
+  cleanup.push(malformedPermsRoot)
+  cpSync(specDir, join(malformedPermsRoot, 'ecosystem-spec'), { recursive: true })
+  writeFileSync(join(malformedPermsRoot, 'ecosystem-spec', 'registry', 'permissions-0.1.json'),
+    JSON.stringify({ registryVersion: '0.1', permissions: 'nope' }))
+  check1('structurally malformed permissions load as unavailable',
+    loadSpecData(join(malformedPermsRoot, 'ecosystem-spec')) === undefined)
 }
 
 // ── E. patch 面与 exports 接线 ────────────────────────────────────────────

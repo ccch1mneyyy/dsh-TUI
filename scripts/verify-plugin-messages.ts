@@ -7,12 +7,17 @@
  *   B. sequence=event.seq 单调含 gap（非映射事件留洞）；
  *   C. 无 grant：订阅快速失败（noop disposer + warn），零投递；
  *   D. 投递时撤销：store 翻转后订阅被释放 + warn，后续零投递；
- *   E. scope 按 session 正确标注（跨会话不串）；
+ *   E. scope 隔离（C-042）：订阅必须带精确 scope；只收同 scope 的
+ *      envelope，跨会话零泄漏；空 scope 拒绝（noop disposer + warn）；
  *   F. listener 抛错/拒绝被隔离，其他订阅续投；
  *   G. 截断：长文 summary 截断 + payload.truncated；短文无标记；
  *   H. 非映射事件零产出；session 无 id 丢弃；eventId 字符拍平；
  *   I. schema 缺失 fail-closed（suppress + warn）；畸形 schema 丢 envelope；
  *   J. 零持久化（broker 不落任何文件）；disposer 幂等。
+ *   K. 图片块：attachment 引用经 attachments 服务解析为 base64 image
+ *      block（过 schema）；不可读/超大/坏媒体型 → 丢弃 + truncated；
+ *   L. 台账：subscribe 成功落 bind、disposer 落 release（恰一次）、
+ *      scope 拒绝不落 bind。
  *
  * HOME/USERPROFILE 在导入 src 前隔离。
  *
@@ -29,7 +34,7 @@ process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
 
-const { Context } = await import('@deepseek-ai/cordis')
+const { Context, Service } = await import('@deepseek-ai/cordis')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { TuiMessageObserverRuntime, OBSERVE_SUMMARY_CELLS } = await import('../src/dsh-adapter/message-observer.js')
 const { loadSpecData } = await import('../src/plugin-spec/registry.js')
@@ -53,10 +58,15 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   if (!ok) failures.push(`${name}${detail ? `: ${detail}` : ''}`)
 }
 
-// ── 授权文件：alpha/beta 授予 messages.observe.read；spy 无授权 ──────────
+// ── 授权文件：alpha/beta/carol/dave 授予 messages.observe.read；spy 无授权 ──
 mkdirSync(DATA_DIR, { recursive: true })
 writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
-  grants: { alpha: ['messages.observe.read'], beta: ['messages.observe.read'] },
+  grants: {
+    alpha: ['messages.observe.read'],
+    beta: ['messages.observe.read'],
+    carol: ['messages.observe.read'],
+    dave: ['messages.observe.read'],
+  },
 }))
 
 const hostCtx = new Context()
@@ -73,7 +83,11 @@ if (broker === undefined) {
 }
 
 const received = new Map<string, MessagesObserveEnvelope[]>()
-const subscribeAs = async (plugin: string, listener?: (envelope: MessagesObserveEnvelope) => void): Promise<() => void> => {
+const subscribeAs = async (
+  plugin: string,
+  listener?: (envelope: MessagesObserveEnvelope) => void,
+  scope = 'session:sess-1',
+): Promise<() => void> => {
   let disposer: () => void = () => false
   hostCtx.plugin({
     name: plugin,
@@ -83,7 +97,7 @@ const subscribeAs = async (plugin: string, listener?: (envelope: MessagesObserve
         list.push(envelope)
         received.set(plugin, list)
         listener?.(envelope)
-      })
+      }, { scope })
     },
   })
   await sleep(30)
@@ -185,7 +199,7 @@ await subscribeAs('alpha')
   }
   const runtime = new TuiMessageObserverRuntime(freshCtx, { grants: mutableGrants })
   const envelopes: MessagesObserveEnvelope[] = []
-  runtime.subscribe(freshCtx, envelope => { envelopes.push(envelope) })
+  runtime.subscribe(freshCtx, envelope => { envelopes.push(envelope) }, { scope: 'session:sess-x' })
   runtime.publish(session('sess-x'), userEvent(1, 'before revocation'))
   await sleep(20)
   check1('deliver-time: granted delivery works', envelopes.length === 1)
@@ -202,19 +216,40 @@ await subscribeAs('alpha')
   check1('release is terminal (re-grant does not resurrect)', envelopes.length === 1)
 }
 
-// ── E. scope 按 session 正确标注 ──────────────────────────────────────────
+// ── E. scope 隔离（C-042）：只收同 scope，跨会话零泄漏 ────────────────────
 {
-  const before = (received.get('alpha') ?? []).length
+  await subscribeAs('carol', undefined, 'session:sess-A')
+  await subscribeAs('dave', undefined, 'session:sess-B')
   broker.publish(session('sess-A'), userEvent(1, 'text of A'))
   broker.publish(session('sess-B'), userEvent(1, 'text of B'))
   await sleep(20)
-  const [a, b] = (received.get('alpha') ?? []).slice(before)
-  check1('same seq in two sessions stays distinct by scope',
-    a?.scope === 'session:sess-A' && b?.scope === 'session:sess-B'
-    && a?.eventId === 'sess-A:1' && b?.eventId === 'sess-B:1')
-  check1('payloads do not cross sessions',
-    (a?.payload.content[0] as { text: string }).text === 'text of A'
-    && (b?.payload.content[0] as { text: string }).text === 'text of B')
+  const carolList = received.get('carol') ?? []
+  const daveList = received.get('dave') ?? []
+  check1('a subscription receives ONLY its own scope', carolList.length === 1 && daveList.length === 1,
+    `carol=${carolList.length} dave=${daveList.length}`)
+  check1('scope labeled session:<id>, eventId per scope',
+    carolList[0]?.scope === 'session:sess-A' && daveList[0]?.scope === 'session:sess-B'
+    && carolList[0]?.eventId === 'sess-A:1' && daveList[0]?.eventId === 'sess-B:1')
+  check1('payloads never cross scopes',
+    (carolList[0]?.payload.content[0] as { text: string }).text === 'text of A'
+    && (daveList[0]?.payload.content[0] as { text: string }).text === 'text of B')
+  check1('a sess-1 subscription sees nothing from sess-A/sess-B',
+    !(received.get('alpha') ?? []).some(envelope => envelope.scope !== 'session:sess-1'))
+}
+
+// ── E2. 空/缺失 scope 拒绝（订阅不成立，不落 bind 记录）────────────────────
+{
+  const warnBefore = hostWarnings.length
+  let refusedDisposer: (() => boolean) | undefined
+  hostCtx.plugin({
+    name: 'carol',
+    apply: (c: InstanceType<typeof Context>) => {
+      refusedDisposer = c.get('tuiMessageObserver').subscribe(c, () => {}, { scope: '   ' }) as unknown as () => boolean
+    },
+  })
+  await sleep(30)
+  check1('blank scope is refused with a noop disposer', refusedDisposer?.() === false)
+  check1('blank scope refusal warns', hostWarnings.slice(warnBefore).some(line => line.includes('options.scope')))
 }
 
 // ── F. listener 抛错被隔离，续投不断 ──────────────────────────────────────
@@ -249,16 +284,23 @@ await subscribeAs('alpha')
 
 // ── H. 非映射事件零产出 / 无 id session / eventId 拍平 ────────────────────
 {
-  const before = (received.get('alpha') ?? []).length
+  const beforeAlpha = (received.get('alpha') ?? []).length
   broker.publish(session('sess-1'), { type: 'tool/call', seq: 40, time: 0, data: {} })
   broker.publish(session('sess-1'), { type: 'user/message', seq: 'not-a-number', time: 0, data: {} })
   broker.publish({ noId: true }, userEvent(41, 'no session id'))
+  await sleep(20)
+  check1('non-mapped events, bad seq and id-less sessions produce nothing',
+    (received.get('alpha') ?? []).length === beforeAlpha,
+    `got ${(received.get('alpha') ?? []).length - beforeAlpha}`)
+  // eventId 拍平：订阅该 scope（carol 的第二订阅）后投递。
+  const beforeCarol = (received.get('carol') ?? []).length
+  await subscribeAs('carol', undefined, 'session:sess/unsafe id')
   broker.publish(session('sess/unsafe id'), userEvent(42, 'unsafe session id'))
   await sleep(20)
-  const list = (received.get('alpha') ?? []).slice(before)
-  check1('non-mapped events, bad seq and id-less sessions produce nothing', list.length === 1, `got ${list.length}`)
+  const list = (received.get('carol') ?? []).slice(beforeCarol)
   check1('eventId flattens schema-unsafe characters',
-    list[0]?.eventId === 'sess_unsafe_id:42' && /^[A-Za-z0-9._:-]+$/.test(list[0]?.eventId ?? ''))
+    list.length === 1 && list[0]?.eventId === 'sess_unsafe_id:42' && /^[A-Za-z0-9._:-]+$/.test(list[0]?.eventId ?? ''),
+    list[0]?.eventId)
 }
 
 // ── I. schema 缺失 fail-closed / 畸形 schema 丢 envelope ──────────────────
@@ -274,7 +316,7 @@ await subscribeAs('alpha')
     grants: { allows: () => true, defaultOf: () => 'allow' as const, knownPermissions: () => [], corrupt: false },
   })
   const blindEnvelopes: MessagesObserveEnvelope[] = []
-  blind.subscribe(noSchemaCtx, envelope => { blindEnvelopes.push(envelope) })
+  blind.subscribe(noSchemaCtx, envelope => { blindEnvelopes.push(envelope) }, { scope: 'session:sess-1' })
   blind.publish(session('sess-1'), userEvent(1, 'suppressed'))
   blind.publish(session('sess-1'), userEvent(2, 'still suppressed'))
   await sleep(20)
@@ -292,7 +334,7 @@ await subscribeAs('alpha')
     grants: { allows: () => true, defaultOf: () => 'allow' as const, knownPermissions: () => [], corrupt: false },
   })
   const strictEnvelopes: MessagesObserveEnvelope[] = []
-  strict.subscribe(strictCtx, envelope => { strictEnvelopes.push(envelope) })
+  strict.subscribe(strictCtx, envelope => { strictEnvelopes.push(envelope) }, { scope: 'session:sess-1' })
   strict.publish(session('sess-1'), userEvent(1, 'dropped by self-check'))
   await sleep(20)
   check1('failing self-check drops the envelope', strictEnvelopes.length === 0)
@@ -312,6 +354,113 @@ await subscribeAs('alpha')
   const disposer = await subscribeAs('beta') // beta 有授权；第二个同名订阅
   check1('first release returns true', disposer() === true)
   check1('second release is a harmless false', disposer() === false)
+}
+
+// ── K. 图片块：attachment 引用 → base64；失败即弃 + truncated ──────────────
+{
+  class FakeAttachments extends Service {
+    constructor(ctx: InstanceType<typeof Context>) {
+      super(ctx, 'attachments')
+    }
+    async readImage(ref: unknown): Promise<{ data: Uint8Array }> {
+      if ((ref as { attachmentId?: unknown }).attachmentId === 'broken') throw new Error('read failed')
+      return { data: new Uint8Array([1, 2, 3]) }
+    }
+  }
+  hostCtx.plugin(FakeAttachments)
+  await sleep(30)
+  const imgEvent = (seq: number, blocks: unknown[], id = `img-${seq}`) => ({
+    type: 'user/message',
+    seq,
+    time: 1_700_100_000_000 + seq,
+    data: { id, role: 'user', content: blocks, source: { kind: 'user' } },
+  })
+  const beforeDave = (received.get('dave') ?? []).length
+  await subscribeAs('dave', undefined, 'session:sess-img')
+  broker.publish(session('sess-img'), imgEvent(1, [
+    { type: 'text', text: 'see ' },
+    { type: 'image', attachment: { attachmentId: 'a1', mediaType: 'image/png', bytes: 3, width: 1, height: 1 } },
+    { type: 'text', text: ' done' },
+  ]))
+  await sleep(30)
+  const img1 = (received.get('dave') ?? []).slice(beforeDave)[0]
+  const blocks = img1?.payload.content ?? []
+  check1('image attachment resolves to a base64 image block in place',
+    blocks.length === 3 && blocks[0]?.type === 'text' && blocks[1]?.type === 'image' && blocks[2]?.type === 'text',
+    JSON.stringify(blocks.map(block => block.type)))
+  check1('image data is base64 of the attachment bytes, mimeType from the ref',
+    (blocks[1] as { data?: string } | undefined)?.data === 'AQID'
+    && (blocks[1] as { mimeType?: string } | undefined)?.mimeType === 'image/png')
+  check1('no truncation on a readable image', img1?.payload.truncated === undefined)
+  let imgSchemaError = ''
+  try {
+    check(img1, data.schemas.message, data.schemas.message)
+  } catch (error) {
+    imgSchemaError = error instanceof Error ? error.message : String(error)
+  }
+  check1('mixed text/image envelope passes the vendored schema', imgSchemaError === '', imgSchemaError)
+
+  // 超大（bytes 超预算——读取前即拒）→ 丢弃 + truncated，两侧文本合一。
+  broker.publish(session('sess-img'), imgEvent(2, [
+    { type: 'text', text: 'before ' },
+    { type: 'image', attachment: { attachmentId: 'big', mediaType: 'image/png', bytes: 192 * 1024 + 1 } },
+    { type: 'text', text: ' after' },
+  ]))
+  // 读取失败（attachments 服务抛错）→ 丢弃 + truncated。
+  broker.publish(session('sess-img'), imgEvent(3, [
+    { type: 'text', text: 'broken image follows' },
+    { type: 'image', attachment: { attachmentId: 'broken', mediaType: 'image/png', bytes: 3 } },
+  ]))
+  // 坏媒体型（不过 schema 的 mimeType 模式）→ 读取前即弃。
+  broker.publish(session('sess-img'), imgEvent(4, [
+    { type: 'image', attachment: { attachmentId: 'a2', mediaType: 'image/png; injected', bytes: 3 } },
+  ]))
+  await sleep(30)
+  const dropped = (received.get('dave') ?? []).slice(beforeDave)
+  const oversize = dropped.find(envelope => envelope.sequence === 2)
+  check1('oversize image drops before any read, text blocks merge',
+    oversize?.payload.content.length === 1 && oversize.payload.content[0].type === 'text'
+    && (oversize.payload.content[0] as { text: string }).text === 'before  after')
+  check1('oversize image marks truncated', oversize?.payload.truncated === true)
+  const broken = dropped.find(envelope => envelope.sequence === 3)
+  check1('unreadable image drops with truncated (text survives)',
+    broken?.payload.truncated === true && broken.payload.content.length === 1
+    && broken.payload.content[0].type === 'text')
+  const badMime = dropped.find(envelope => envelope.sequence === 4)
+  check1('bad-mime image drops; zero surviving blocks collapse to one empty text block',
+    badMime?.payload.truncated === true && badMime.payload.content.length === 1
+    && badMime.payload.content[0].type === 'text'
+    && (badMime.payload.content[0] as { text: string }).text === '')
+}
+
+// ── M. 台账：subscribe bind / disposer release / 拒绝路径 ──────────────────
+{
+  const records = readFileSync(join(DATA_DIR, 'effect-ledger.jsonl'), 'utf8')
+    .split('\n')
+    .filter(line => line.trim() !== '')
+    .map(line => JSON.parse(line) as {
+      operation?: string
+      pluginId?: string
+      result?: string
+      errorCode?: string
+      resource?: { kind?: string; id?: string }
+    })
+  const subscriptionBinds = records.filter(record =>
+    record.operation === 'bind' && record.resource?.kind === 'subscription' && record.result === 'applied')
+  const subscriptionReleases = records.filter(record =>
+    record.operation === 'release' && record.resource?.kind === 'subscription' && record.result === 'applied')
+  check1('a successful subscribe lands a bind/subscription record',
+    subscriptionBinds.some(record => record.pluginId === 'alpha' && record.resource?.id === 'alpha'))
+  check1('the disposed beta subscription lands exactly one release record',
+    subscriptionReleases.filter(record => record.pluginId === 'beta').length === 1)
+  check1('a denied subscribe records permission bind failed (never a subscription bind)',
+    !subscriptionBinds.some(record => record.pluginId === 'spy')
+    && records.some(record =>
+      record.pluginId === 'spy' && record.resource?.kind === 'permission'
+      && record.result === 'failed' && record.errorCode === 'PERMISSION_NOT_GRANTED'))
+  check1('a refused (blank-scope) subscribe leaves no bind record',
+    subscriptionBinds.filter(record => record.pluginId === 'carol').length === 2,
+    `carol binds: ${subscriptionBinds.filter(record => record.pluginId === 'carol').length} (2 legitimate, refusal must add none)`)
 }
 
 // ── 汇总 ──────────────────────────────────────────────────────────────────

@@ -11,6 +11,15 @@ export * from './dsh-adapter/plugin-storage.js'
 export * from './dsh-adapter/message-observer.js'
 export * from './dsh-adapter/effect-ledger.js'
 export * from './dsh-adapter/command-errors.js'
+export { commandOwner, fiberNameOf, stampCommandOwner, unstampCommandOwner } from './dsh-adapter/command-attribution.js'
+export {
+  TUI_EXTENSION_API_VERSION,
+  TUI_EXTENSION_ENTRIES,
+  TUI_EXTENSION_PERMISSION_NAMES,
+  extendHostDescriptorForTui,
+  extendPluginSchemaForTui,
+  extendRegistryForTui,
+} from './plugin-spec/tui-extension.js'
 // The spec vocabulary the descriptor/grant answers are phrased in.
 export type {
   ContractCoordinate,

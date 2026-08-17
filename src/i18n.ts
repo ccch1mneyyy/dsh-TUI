@@ -474,6 +474,14 @@ const dict = {
   'ext-compact-stale': { zh: '等待插件期间会话已切换，压缩已取消', en: 'Session switched while a plugin decided — compaction abandoned' },
   'ext-shortcut-failed': { zh: '插件快捷键 {{combo}} 执行失败', en: 'Plugin shortcut {{combo}} failed' },
   'command-invoke-denied': { zh: '命令调用已被授权文件拒绝（commands.invoke 已撤销）', en: 'Command invocation denied by the grants file (commands.invoke revoked)' },
+  'command-invoke-denied-owner': {
+    zh: '命令 "/{{name}}" 的调用已被拒绝——注册它的插件 "{{owner}}" 已被撤销 commands.invoke',
+    en: 'Command "/{{name}}" invocation denied — its owner plugin "{{owner}}" lost commands.invoke',
+  },
+  'plugins-check-tui-extension': {
+    zh: '注：该 manifest 依赖 TUI 宿主扩展面（tui.dsh/v1alpha1 事件 / session.*.intercept 权限），判定基于宿主扩展覆盖层而非 vendored 社区注册表。',
+    en: 'Note: this manifest relies on the TUI host-extension surface (tui.dsh/v1alpha1 events / session.*.intercept permissions); the verdict used the host extension overlay, not the vendored community registry.',
+  },
   // /plugins 诊断面（C-070 信任披露 + 协商诊断）
   'plugins-trust-banner': {
     zh: '插件与宿主同进程运行：授权是行为约束而非安全隔离；通过校验 ≠ 插件安全（C-070）。',

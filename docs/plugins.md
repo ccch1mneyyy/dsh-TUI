@@ -107,8 +107,11 @@ commands 错误码对齐、效果台账与 `/plugins` 诊断面已全部落地�
 权限：默认值由 vendored 权限注册表驱动（7 个默认拒绝；
 `commands.invoke` 默认允许——插件无法仅凭它被动读取数据）。`grants`
 段显式授予默认拒绝的权限；可选 `denies` 段撤销默认允许的权限；未注册
-的权限名一律拒绝（即使文件里显式授予）；文件不可解析连默认允许的权限
-也一并拒绝（fail closed）：
+的权限名一律拒绝（即使文件里显式授予）。三种文件状态严格区分：
+**缺失**（ENOENT）= 全默认（尚未授权的自然姿态）；**不可解析** =
+fail closed，连默认允许也一并拒绝；**其他读取失败**（EACCES/EISDIR/
+I/O——文件存在却无法求值）同样视同损坏 fail closed，绝不静默回落
+全默认（否则 denies 会在一次 I/O 错误后悄然失效）：
 
 ```json
 {
@@ -120,9 +123,12 @@ commands 错误码对齐、效果台账与 `/plugins` 诊断面已全部落地�
 `dsh-tui-plugin-host` 行（cordis.patch.yml 已带，位于 extensions 行
 之前）提供 `ctx.tuiPluginHost`：runtime generationId（C-050，每次激活
 一个 UUID）、统一授权存储实例、Host Descriptor 构建（只声明运行代码
-真实提供的契约；vendored 契约文件哈希漂移即 fail-closed 剔除并告警）
-与注册表自检。消费一律 `ctx.get('tuiPluginHost', false)` 软探测
-（#183 纪律），不进入任何 inject 列表。
+真实提供的契约——commands 服务未挂载的上下文里 Command 契约会被
+剔除并告警；vendored 契约文件哈希漂移即 fail-closed 剔除并告警）
+与注册表自检。vendored 数据本身也按不可信处理：可解析但结构错误的
+registry/permissions 文件视同整体缺失（软降级为空契约面），绝不把
+TypeError 留到自检里炸出来。消费一律 `ctx.get('tuiPluginHost', false)`
+软探测（#183 纪律），不进入任何 inject 列表。
 
 `storage.local`（C-040）：插件私有持久化，经
 `ctx.get('tuiPluginStorage', false)` 的 `open(ctx)` 获得
@@ -133,30 +139,50 @@ commands 错误码对齐、效果台账与 `/plugins` 诊断面已全部落地�
 文件锁；配额 256 键 / 256 KiB；损坏文件永不自动覆盖，报
 STORAGE_UNAVAILABLE 并保留字节供人工恢复）。错误带契约 code：
 PERMISSION_NOT_GRANTED / INVALID_KEY / QUOTA_EXCEEDED /
-STORAGE_UNAVAILABLE。值必须 JSON 可序列化；key 与 value 永不进日志
+STORAGE_UNAVAILABLE。值必须是**精确 JSON 值**——JSON.stringify 会
+静默变形的输入（undefined、NaN/±Infinity、函数、Symbol、BigInt、类
+实例、稀疏数组、环）一律拒绝（INVALID_KEY），绝不往返出一个插件从未
+存过的值；键名即使撞上 Object.prototype 的名字（`__proto__`、
+`toString`、`constructor`）也只是普通数据（null 原型表 + 自有属性
+判定，不读宿主原型、不伪造存在性）。key 与 value 永不进日志
 （privacyClass sensitive）。同 namespace 的操作按调用序串行；插件
 卸载即关闭其 handle，数据保留。
 
 `messages.observe`（C-042）：消息观察 broker，经
-`ctx.get('tuiMessageObserver', false)` 的 `subscribe(ctx, listener)`
-订阅（身份=传入 ctx 的 fiber.name）。映射刻意收窄：`user/message` →
-`message.received`、`assistant/message` → `message.sent`；流式 chunk、
-工具与边界事件一律不产出。envelope 逐条过 vendored schema 才投递：
-`scope=session:<id>`、`sequence`=会话事件自身 seq（单调可留洞）、
-`eventId=<sessionId>:<seq>`；privacyClass 一律 `sensitive`（保守起步，
-细分留待后续）；content 只产 text block，summary=消毒后前 200 cell，
-超长打 `truncated`。授权 `messages.observe.read`：订阅时快速失败
-（noop disposer + 告警），投递时逐订阅复检——撤销即释放订阅
-（contract cleanup）。listener 抛错被隔离续投；at-most-once、无重放；
-broker 零持久化（contract retention）。
+`ctx.get('tuiMessageObserver', false)` 的
+`subscribe(ctx, listener, { scope })` 订阅（身份=传入 ctx 的
+fiber.name）。**scope 必填且精确匹配**（如 `session:<id>`）——订阅
+只收同 scope 的 envelope，跨会话的敏感内容按构造不可达（C-042 范围
+隔离）；空/超长 scope 直接拒绝（noop disposer + 告警）。映射刻意收窄：
+`user/message` → `message.received`、`assistant/message` →
+`message.sent`；流式 chunk、工具与边界事件一律不产出。envelope 逐条
+过 vendored schema 才投递：`scope=session:<id>`、`sequence`=会话事件
+自身 seq（单调可留洞；图片读取是异步的，broker 内构建串行化，投递
+顺序恒等于发布顺序）、`eventId=<sessionId>:<seq>`；privacyClass 一律
+`sensitive`（保守起步，细分留待后续）；content 是 text/image 子集
+——纯文本消息保持单 text block；会话图片以 `{type:'image',
+attachment}` 引用形式存在，broker 经 attachments 服务解析为 base64
+image block（单图 192 KiB 预算，不可读/超大/坏媒体型即弃并打
+`truncated`）；summary=消毒后前 200 cell。授权
+`messages.observe.read`：订阅时快速失败（noop disposer + 告警），
+投递时逐订阅复检——撤销即释放订阅（contract cleanup）。订阅成立与
+释放（disposer、卸载、撤销三条路径汇一处）都会落效果台账
+（bind/release subscription），/plugins 可反查活跃订阅。listener
+抛错被隔离续投；at-most-once、无重放；broker 零持久化（contract
+retention）。
 
-`commands`（C-041）：宿主经手的命令注册点把 dsh-commands 的重复注册
-纯文案 Error 映射为带 `code: 'DUPLICATE_CONTRIBUTION_ID'` 的错误
-（`src/dsh-adapter/command-errors.js`，`mapCommandError` /
-`withCommandErrorMapping`）；宿主执行注册命令前过 invoke 检查点查
-`commands.invoke`（默认允许、可经 `denies` 撤销，撤销后不再执行并
-提示）。插件直调 `ctx.commands` 不经这两个点（C-070 同进程信任边界，
-已声明为平台行为）。
+`commands`（C-041）：插件注册命令应走 plugin-host 行的**托管面**
+`ctx.tuiPluginHost.registerCommand(pluginCtx, definition)`——成功注册
+会把命令归属打上调用方 fiber.name 的印（dsh-commands 本身没有 owner
+概念；归属台账见 `src/dsh-adapter/command-attribution.js`），重复注册
+抛带 `code: 'DUPLICATE_CONTRIBUTION_ID'` 的映射错误（
+`src/dsh-adapter/command-errors.js`），返回的 disposer 同时摘印。宿主
+执行注册命令前过 invoke 检查点：先查 `root` 的 `commands.invoke`
+（默认允许、可经 `denies` 撤销），再对**已归属**命令查其 owner 插件的
+同一权限——denies 掉某插件的 `commands.invoke` 即关闭它的命令在
+TUI 里的宿主调用入口（C-041 的撤销语义）。插件直调
+`ctx.get('commands').register/execute` 不经归属与检查点（C-070 同进程
+信任边界，已声明为平台行为；归属只会收紧、绝不放宽检查）。
 
 效果台账（C-060）：`~/.dsh-tui/effect-ledger.jsonl` 追加式 JSONL，
 经 `ctx.get('tuiEffectLedger', false)` 的 `record(entry, identity?)`
@@ -182,6 +208,10 @@ schema 缺失时全部写入被抑制（fail closed）。四个托管服务
 知识）与台账尾 5 条。`/plugins check <path>` 对任意 dsh-plugin.json
 依次跑 vendored schema、validatePlugin 语义校验与五态 negotiate（授权
 取自授权存储对该 manifest id 的现有答案），输出状态与 reasonCode；
+每个阶段在 vendored 核心面失败后还会对 **TUI 宿主扩展覆盖层**重试
+一次（`src/plugin-spec/tui-extension.js`——核心注册表不承载的
+`session.*.intercept` 权限名与 `tui/*` 事件订阅由此准入），判定依赖
+覆盖层时输出会如实注明；两侧都失败时报告的是 vendored 核心面的错误。
 manifest 是不可信输入，所有派生行过 cleanScalarText。`/doctor` 追加
 插件运行时 generation 与注册表自检两行。
 
@@ -700,7 +730,8 @@ ctx.effect(() => () => dispose?.())   // 清理挂在【调用者】自己的 fi
 status?.set('my-plugin', undefined)      // 主动清除（传 '' 同效）
 ```
 
-- key 规则：`/^[a-z][a-z0-9_-]*$/`（约定用插件名或 `插件:子项`）；最多 20
+- key 规则：`/^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/`（冒号分段即
+  `插件:子项` 命名约定的语法化；大小写按既有纪律归一为小写）；最多 20
   个 key，文本 ≤200 cell；违规拒绝并告警，不抛错。文本只接受标量
   （string/number/boolean 强制为字符串），非标量**拒绝**而非清除。
 - **生命周期是调用者的责任**（与 tuiShortcuts/tuiScenes 同一契约）：

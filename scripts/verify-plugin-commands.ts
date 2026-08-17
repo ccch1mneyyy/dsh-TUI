@@ -159,6 +159,53 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   check1('the denied plugin itself is blocked', !others.allows('evil-plugin', 'commands.invoke'))
 }
 
+// ── F2. 命令归属（C-041 per-owner 检查点的数据源）─────────────────────────
+{
+  const { commandOwner } = await import('../src/dsh-adapter/command-attribution.js')
+  const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
+  const attrCtx = new Context()
+  attrCtx.plugin(CommandRuntime)
+  attrCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+  await sleep(50)
+  const host = attrCtx.get('tuiPluginHost')
+  check1('registerCommand surface exists on the plugin-host row', typeof host?.registerCommand === 'function')
+
+  // 经托管面注册 → 打 fiber.name 印。
+  let registerVia: ((definition: unknown) => () => void) | undefined
+  attrCtx.plugin({
+    name: 'evil-plugin',
+    apply: (c: InstanceType<typeof Context>) => {
+      registerVia = (definition: unknown) =>
+        c.get('tuiPluginHost').registerCommand(c, definition as never)
+    },
+  })
+  await sleep(30)
+  const disposer = registerVia!({ name: 'evil-cmd', description: '归属探针', handler: () => ({ kind: 'success' }) })
+  check1('mediated registration attributes the command to the plugin fiber',
+    commandOwner(attrCtx, 'evil-cmd') === 'evil-plugin')
+
+  // 直接 ctx.get('commands') 注册 → 未归属（文档化 C-070 边界）。
+  attrCtx.get('commands')?.register({ name: 'accessor-cmd', description: '直接注册', handler: () => ({ kind: 'success' }) } as never)
+  check1('direct ctx.get registration stays unattributed (documented boundary)',
+    commandOwner(attrCtx, 'accessor-cmd') === undefined)
+
+  // 托管面重复注册 → 映射为 DUPLICATE_CONTRIBUTION_ID，原印不动。
+  let duplicateMapped = false
+  try {
+    registerVia!({ name: 'evil-cmd', description: '再注册一次', handler: () => ({ kind: 'success' }) })
+  } catch (error) {
+    duplicateMapped = hasCommandErrorCode(error, 'DUPLICATE_CONTRIBUTION_ID')
+  }
+  check1('mediated duplicate registration throws DUPLICATE_CONTRIBUTION_ID', duplicateMapped)
+  check1('the failed duplicate left the original stamp intact', commandOwner(attrCtx, 'evil-cmd') === 'evil-plugin')
+
+  // disposer 摘印且幂等。
+  disposer()
+  check1('the mediated disposer lifts the stamp', commandOwner(attrCtx, 'evil-cmd') === undefined)
+  disposer()
+  check1('double dispose stays harmless (no stamp, no throw)', commandOwner(attrCtx, 'evil-cmd') === undefined)
+}
+
 // ── G. channel 接线断言 ───────────────────────────────────────────────────
 {
   const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
@@ -175,6 +222,21 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     channel.includes("? 'DUPLICATE_CONTRIBUTION_ID' : 'COMMAND_FAILED'"))
   check1('command-errors imported by channel.ts',
     channel.includes("import { hasCommandErrorCode, mapCommandError } from './command-errors.js'"))
+  check1('command-attribution imported by channel.ts',
+    channel.includes("import { commandOwner } from './command-attribution.js'"))
+  const ownerCheckpoint = channel.indexOf('commandOwner(ctx, name)')
+  check1('per-owner checkpoint present', ownerCheckpoint !== -1)
+  check1('per-owner checkpoint runs BEFORE commandService.execute',
+    channel.indexOf('commandService.execute(', ownerCheckpoint) > ownerCheckpoint)
+  check1("owner deny path returns t('command-invoke-denied-owner')",
+    channel.includes("return t('command-invoke-denied-owner'"))
+  check1('owner deny recorded with the owner-scoped permission id',
+    channel.includes("id: `${owner}:commands.invoke`"))
+  const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
+  check1('the plugin-host row exposes the mediated registerCommand',
+    pluginHost.includes('registerCommand(pluginCtx: Context'))
+  check1('registerCommand stamps the owner on success', pluginHost.includes('stampCommandOwner(this.ctx, name, owner)'))
+  check1('registerCommand maps duplicate errors', pluginHost.includes('mapCommandError(error)'))
 
   const i18n = readFileSync(join(root, 'src/i18n.ts'), 'utf8')
   const keyIdx = i18n.indexOf("'command-invoke-denied'")
@@ -182,6 +244,11 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   const entry = i18n.slice(keyIdx, keyIdx + 400)
   check1('zh translation present', /zh:\s*'[^']*授权文件拒绝[^']*'/.test(entry))
   check1('en translation present', /en:\s*'[^']*grants file[^']*'/.test(entry))
+  const ownerIdx = i18n.indexOf("'command-invoke-denied-owner'")
+  check1("i18n key 'command-invoke-denied-owner' exists", ownerIdx !== -1)
+  const ownerEntry = i18n.slice(ownerIdx, ownerIdx + 500)
+  check1('owner deny zh translation names the owner', ownerEntry.includes('{{owner}}'))
+  check1('owner deny en translation present', /en:\s*'[^']*owner plugin[^']*'/.test(ownerEntry))
 }
 
 // ── H. 非破坏签名（不传 identity 照旧可用）──────────────────────────────────

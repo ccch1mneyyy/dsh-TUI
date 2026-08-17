@@ -18,7 +18,12 @@
  *
  * `/plugins check <path>` runs the vendored schema + validatePlugin +
  * negotiate over any dsh-plugin.json and prints the five-state decision
- * with its reason codes. Manifests and on-disk files are UNTRUSTED input:
+ * with its reason codes. Each stage retries ONCE against the TUI
+ * host-extension overlay (../plugin-spec/tui-extension.js) — the vendored
+ * data covers the cross-host core only, and a manifest declaring
+ * session.*.intercept permissions or tui/* subscriptions is host-
+ * extension territory; the report says when the verdict relied on the
+ * overlay. Manifests and on-disk files are UNTRUSTED input:
  * every derived line passes cleanScalarText before it reaches the
  * transcript.
  */
@@ -30,6 +35,11 @@ import { t } from '../i18n.js'
 import { loadSpecData } from '../plugin-spec/registry.js'
 import { createContractIndex, validatePlugin } from '../plugin-spec/validate.js'
 import { negotiate } from '../plugin-spec/negotiate.js'
+import {
+  extendHostDescriptorForTui,
+  extendPluginSchemaForTui,
+  extendRegistryForTui,
+} from '../plugin-spec/tui-extension.js'
 import { check } from '../plugin-spec/schema-check.js'
 import type { NegotiationDecision, PluginManifest } from '../plugin-spec/types.js'
 import { cleanScalarText } from './sanitize.js'
@@ -146,29 +156,60 @@ function checkManifestLines(pathArg: string, deps: PluginsInfoDeps): string[] {
     lines.push(t('plugins-check-spec-unavailable'))
     return lines
   }
-  // Stage 1: the vendored dsh-plugin schema (structural).
+  // Stage 1: the vendored dsh-plugin schema (structural). On failure, ONE
+  // retry against the TUI-extension overlay (the vendored permission-name
+  // enum covers only the 4 core permissions; a manifest declaring
+  // session.*.intercept is host-extension territory, P2-11). The base
+  // error is the one reported when both fail.
+  let extended = false
   try {
     check(manifest, data.schemas.plugin, data.schemas.plugin)
-  } catch (error) {
-    lines.push(t('plugins-check-schema-failed', { err: cell(error instanceof Error ? error.message : String(error)) }))
-    return lines
+  } catch (baseError) {
+    const extendedSchema = extendPluginSchemaForTui(data.schemas.plugin)
+    let passed = false
+    if (extendedSchema !== undefined) {
+      try {
+        check(manifest, extendedSchema, extendedSchema)
+        passed = true
+        extended = true
+      } catch {
+        // Fall through to the base error below.
+      }
+    }
+    if (!passed) {
+      lines.push(t('plugins-check-schema-failed', { err: cell(baseError instanceof Error ? baseError.message : String(baseError)) }))
+      return lines
+    }
   }
-  const index = createContractIndex(data.registry, data.permissions)
-  // Stage 2: semantic validation (C-003 facet, fallback-mandatory, …).
+  // Stage 2: semantic validation (C-003 facet, fallback-mandatory, …) with
+  // the same base-first-then-extension retry (tui/* event subscriptions
+  // resolve only against the extended registry).
+  let index = createContractIndex(data.registry, data.permissions)
   try {
     validatePlugin(index, manifest as PluginManifest)
-  } catch (error) {
-    lines.push(t('plugins-check-invalid', { err: cell(error instanceof Error ? error.message : String(error)) }))
-    return lines
+  } catch (baseError) {
+    const extendedIndex = createContractIndex(extendRegistryForTui(data.registry), data.permissions)
+    try {
+      validatePlugin(extendedIndex, manifest as PluginManifest)
+      index = extendedIndex
+      extended = true
+    } catch {
+      lines.push(t('plugins-check-invalid', { err: cell(baseError instanceof Error ? baseError.message : String(baseError)) }))
+      return lines
+    }
   }
   // Stage 3: negotiate against the host descriptor (the row's when mounted,
-  // else a one-shot build — both re-digest the vendored contracts).
+  // else a one-shot build — both re-digest the vendored contracts). An
+  // extension-reliant manifest negotiates against the extension overlay so
+  // its intercept permissions are host-declared (grant-satisfiable).
   const host = deps.host ?? buildHostDescriptor({ generationId: 'plugins-check' })
   const typed = manifest as PluginManifest
   const granted = index.permissions.permissions
     .map(permission => permission.name)
     .filter(permission => deps.grants.allows(typed.id, permission))
-  const decision = negotiate(index, typed, host.descriptor, granted)
+  const descriptor = extended ? extendHostDescriptorForTui(host.descriptor) : host.descriptor
+  const decision = negotiate(index, typed, descriptor, granted)
+  if (extended) lines.push(t('plugins-check-tui-extension'))
   lines.push(...decisionLines(decision))
   if (host.dropped.length > 0) {
     lines.push(t('plugins-check-dropped', { dropped: cell(host.dropped.join(', ')) }))

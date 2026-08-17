@@ -22,6 +22,12 @@
  * - QUOTA (host-defined): 256 keys AND 256 KiB of serialized content per
  *   namespace; a `set` that would cross either fails with QUOTA_EXCEEDED and
  *   changes nothing.
+ * - Keys stay ordinary data even when they collide with Object.prototype
+ *   names ("__proto__", "toString", "constructor"): namespace tables are
+ *   null-prototype and membership is decided with Object.hasOwn. Values
+ *   must be EXACT JSON values — inputs JSON.stringify would silently
+ *   mutate (undefined, NaN/±Infinity, functions, class instances, sparse
+ *   arrays, cycles) are rejected instead of round-tripping a lie.
  * - A corrupt namespace file is NEVER overwritten silently: every operation
  *   fails with STORAGE_UNAVAILABLE and the bytes stay on disk for manual
  *   recovery. Closing a handle (plugin unload) retains data (contract
@@ -95,18 +101,66 @@ function assertKey(key: unknown): asserts key is string {
   }
 }
 
+/**
+ * Exact JSON values only. JSON.stringify silently MUTATES edge inputs
+ * (NaN/±Infinity → null, undefined array items → null, undefined object
+ * properties dropped, class instances reduced to own fields) — a storage
+ * contract must not round-trip a value the caller never stored, so those
+ * inputs are rejected instead. Accepts: null, boolean, string, finite
+ * number, arrays (dense), and plain objects (Object.prototype or null
+ * prototype only — a function-valued property such as toJSON fails too);
+ * rejects cycles and anything whose inspection throws (hostile getters).
+ */
 function assertJsonValue(value: unknown): void {
-  let rendered: string | undefined
+  let ok = false
   try {
-    rendered = JSON.stringify(value)
+    ok = isJsonValue(value, new Set())
   } catch {
-    rendered = undefined
+    ok = false
   }
-  if (rendered === undefined) {
-    // undefined / functions / circular / BigInt — not a JSON value. The
-    // contract offers no INVALID_VALUE code; argument validation failures
-    // report under INVALID_KEY.
-    throw new PluginStorageError('INVALID_KEY', 'storage values must be JSON-serializable')
+  if (!ok) {
+    // The contract offers no INVALID_VALUE code; argument validation
+    // failures report under INVALID_KEY.
+    throw new PluginStorageError(
+      'INVALID_KEY',
+      'storage values must be exact JSON values (no undefined, functions, symbols, BigInt, NaN/Infinity, class instances, sparse arrays, or cycles)',
+    )
+  }
+}
+
+function isJsonValue(value: unknown, seen: Set<object>): boolean {
+  if (value === null) return true
+  switch (typeof value) {
+    case 'boolean':
+    case 'string':
+      return true
+    case 'number':
+      return Number.isFinite(value)
+    case 'object': {
+      const object = value as object
+      if (seen.has(object)) return false
+      seen.add(object)
+      try {
+        if (Array.isArray(value)) {
+          for (let index = 0; index < value.length; index++) {
+            // A sparse hole would serialize as null — a value never stored.
+            if (!(index in value)) return false
+            if (!isJsonValue(value[index], seen)) return false
+          }
+          return true
+        }
+        const proto: unknown = Object.getPrototypeOf(value)
+        if (proto !== Object.prototype && proto !== null) return false
+        return Object.values(value as Record<string, unknown>).every(item => isJsonValue(item, seen))
+      } finally {
+        // DAGs (shared references without cycles) serialize fine — only
+        // reject a value reachable from ITSELF.
+        seen.delete(object)
+      }
+    }
+    default:
+      // undefined / function / symbol / bigint
+      return false
   }
 }
 
@@ -229,7 +283,13 @@ export class TuiPluginStorageRuntime extends Service {
           `storage namespace "${plugin}" holds a non-object document; the file was left untouched for manual recovery`,
         )
       }
-      return parsed as Record<string, unknown>
+      // Rebuild on a NULL-PROTOTYPE table: key membership is decided with
+      // Object.hasOwn, and keys like "__proto__" / "toString" must behave
+      // as ordinary data (a prototype-chain read would leak host objects
+      // into plugin results and fake membership for never-stored keys).
+      const table: Record<string, unknown> = Object.create(null)
+      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) table[key] = value
+      return table
     }
 
     const requireGrant = (permission: 'storage.local.read' | 'storage.local.write') => {
@@ -264,7 +324,7 @@ export class TuiPluginStorageRuntime extends Service {
         assertKey(key)
         requireGrant('storage.local.read')
         const table = readTable()
-        return key in table ? table[key] : null
+        return Object.hasOwn(table, key) ? table[key] : null
       }),
       set: (key: unknown, value: unknown) => enqueue(async () => {
         assertKey(key)
@@ -273,7 +333,7 @@ export class TuiPluginStorageRuntime extends Service {
         ensureDir()
         return withFileLock(file, async () => {
           const table = readTable()
-          const isNewKey = !(key in table)
+          const isNewKey = !Object.hasOwn(table, key)
           if (isNewKey && Object.keys(table).length >= STORAGE_MAX_KEYS) {
             throw new PluginStorageError('QUOTA_EXCEEDED', `storage namespace "${plugin}" holds ${STORAGE_MAX_KEYS} keys already`)
           }
@@ -293,7 +353,7 @@ export class TuiPluginStorageRuntime extends Service {
         ensureDir()
         return withFileLock(file, async () => {
           const table = readTable()
-          if (!(key in table)) return false
+          if (!Object.hasOwn(table, key)) return false
           delete table[key]
           await writeFileAtomic(file, JSON.stringify(table), { mode: 0o600, dirMode: 0o700 })
           return true
