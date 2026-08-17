@@ -28,6 +28,7 @@ export function SessionListRow({
   width,
   depth,
   focused,
+  current = false,
   now,
 }: {
   session: SessionSummary
@@ -36,6 +37,8 @@ export function SessionListRow({
   /** 0 for a conversation, 1 for a sub-agent run under its parent. */
   depth: number
   focused: boolean
+  /** Whether this is the live session in a `/tree` view. */
+  current?: boolean
   /** Epoch ms used for every relative time in this render pass. */
   now: number
 }): React.ReactNode {
@@ -45,6 +48,7 @@ export function SessionListRow({
   const mark = kindMark(session.kind)
 
   const facts: string[] = [formatWhen(session.updatedAt, now)]
+  if (current) facts.push(t('session-tree-current'))
   if (session.branch !== undefined) facts.push(session.branch)
   const size = formatBytes(session.bytes)
   if (size !== undefined) facts.push(size)

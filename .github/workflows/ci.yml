@@ -213,6 +213,12 @@ jobs:
       # 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
       - run: node scripts/verify-session-browser-layout.mjs
 
+      # #81 会话分支：纯 lineage 投影 + 真实 channel fork 保真，以及真实
+      # Chat 键盘流的 /tree 导航、Enter 切换、/fork 与 40x8 布局。
+      - run: node --import tsx/esm scripts/verify-session-tree.tsx
+
+      - run: node --import tsx/esm scripts/verify-session-tree-ui.tsx
+
       # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
       # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
       # installModelSelection、#34 的投递异步化都没被它们拦下），挂进来

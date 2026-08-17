@@ -41,9 +41,9 @@ the interface, and removing it leaves no core modifications behind.
   zh/en UI language switching.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
-- **Complete session workflow**: `/resume`, `/new`, `/workspace`, `/compact`, `/export`, the
-  `/btw` side question, model switching, and double-`Esc` rewind through a
-  session fork.
+- **Complete session workflow**: `/resume`, `/new`, `/tree` branch navigation,
+  `/fork`, `/workspace`, `/compact`, `/export`, the `/btw` side question,
+  model switching, and double-`Esc` rewind.
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
   and registries.
@@ -148,7 +148,7 @@ so keep using `Ctrl`.
 
 | Group | Commands |
 |---|---|
-| Session | `/new` new session · `/resume` session browser (search, preview, cross-project, sub-agent runs folded) · `/rename` rename session · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline |
+| Session | `/new` new session · `/resume` session browser (search, preview, cross-project, sub-agent runs folded) · `/tree` branch tree · `/fork` fork current history · `/rename` rename session · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline |
 | Status | `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md |
 | Model | `/model` picker · `/thinking` thinking display · `/tokens` token details · `/theme` theme picker · `/lang` zh/en UI switch |
 | Accounts/Policy | `/provider` add a model provider · `/login` credential status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |

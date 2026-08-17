@@ -32,6 +32,7 @@ import { ModelPicker } from '../components/ModelPicker.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
+import { SessionTree } from './SessionTree.js'
 import { Settings } from './Settings.js'
 import { WorkspacePicker } from '../components/WorkspacePicker.js'
 import { WorkspaceFlowPicker } from '../components/WorkspaceFlowPicker.js'
@@ -222,6 +223,8 @@ export function Chat({
   /** `/resume` opens the session browser, a screen rather than a panel. It
    *  owns its own selection, filters and keyboard — Chat only opens it. */
   const [browserOpen, setBrowserOpen] = React.useState(false)
+  /** `/tree` opens the current conversation's fork lineage. */
+  const [treeOpen, setTreeOpen] = React.useState(false)
   /** `/settings` opens the plugin settings screen (issue #165) — like the
    *  browser, a screen rather than a panel: it owns its own focus, staged
    *  drafts and keyboard; Chat only opens it. */
@@ -807,6 +810,14 @@ export function Chat({
         setBrowserOpen(true)
         return true
       }
+      case 'tree':
+        setHelpOpen(false)
+        setTreeOpen(true)
+        return true
+      case 'fork':
+        setHelpOpen(false)
+        void channel.forkSession()
+        return true
       case 'workspace': {
         setHelpOpen(false)
         const trimmed = rawInput.trim()
@@ -1318,7 +1329,7 @@ export function Chat({
     // Same for the session browser: it renders instead of the conversation,
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
-    if (browserOpen) return
+    if (browserOpen || treeOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
     // the field draft editor belong to it alone.
     if (settingsOpen) return
@@ -1864,6 +1875,11 @@ export function Chat({
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
     return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+  }
+
+  if (treeOpen) {
+    const tree = <SessionTree channel={channel} onClose={() => setTreeOpen(false)} />
+    return fullscreen ? tree : <AlternateScreen>{tree}</AlternateScreen>
   }
 
   // The settings screen follows the browser's rule exactly: it REPLACES the

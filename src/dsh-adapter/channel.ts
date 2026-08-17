@@ -451,6 +451,8 @@ export interface Channel {
   /** Start a fresh conversation (`/new`): a brand-new agent + session, the
    *  transcript cleared, the resume marker forgotten. */
   newSession(): Promise<boolean>
+  /** Fork the complete current history into a new session and enter it. */
+  forkSession(): Promise<boolean>
   /** Workspace targets contributed by the TUI and optional providers. */
   listWorkspaces(): Promise<readonly TuiWorkspaceTarget[]>
   /** Resolve an absolute path, file URL, or provider URI. */
@@ -722,14 +724,21 @@ export interface ChannelState {
   resumeTo(sessionId: string): Promise<boolean>
   /** Start a fresh conversation (`/new`). */
   newSession(): Promise<boolean>
+  /** Fork the complete current history into a new session. */
+  forkSession(): Promise<boolean>
   listWorkspaces(): Promise<readonly TuiWorkspaceTarget[]>
   resolveWorkspace(uri: string): Promise<TuiWorkspaceTarget | undefined>
   switchWorkspace(target: TuiWorkspaceTarget): Promise<boolean>
   renameWorkspace(title: string): Promise<boolean>
   workspaceCommands(): readonly Pick<TuiWorkspaceCommand, 'name' | 'aliases' | 'description'>[]
   runWorkspaceCommand(name: string, input: string): Promise<TuiWorkspaceCommandResult | undefined>
-  /** Switch the live model (`/model` picker). */
-  switchModel(provider: string, model: string): Promise<boolean>
+  /** Switch the live model (`/model` picker). The internal options let
+   *  `/fork` reuse the same agent replacement without changing preferences. */
+  switchModel(
+    provider: string,
+    model: string,
+    options?: { intent?: 'model' | 'fork'; persistPreference?: boolean },
+  ): Promise<boolean>
   /** The route's effort levels for `/effort` (see the public Channel type). */
   listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }>
   /** Set one effort level by id (see the public Channel type). */
@@ -2164,13 +2173,24 @@ export function createChannel(
     runWorkspaceCommand(name: string, input: string) {
       return workspaceService.runCommand(name, input, state.cwd)
     },
-    async switchModel(provider: string, model: string): Promise<boolean> {
+    forkSession(): Promise<boolean> {
+      return state.switchModel(state.provider, state.model, {
+        intent: 'fork',
+        persistPreference: false,
+      })
+    },
+    async switchModel(
+      provider: string,
+      model: string,
+      internal = { intent: 'model' as const, persistPreference: true },
+    ): Promise<boolean> {
       // `/model` picker Enter — switch the live model by forking the
       // conversation at its current end and continuing with a new agent
       // routed to the chosen model. Same reset shape as rewindTo/resumeTo;
       // the history replays unchanged, only the request model changes.
+      const forking = internal.intent === 'fork'
       if (state.working) {
-        state.notify(t('model-switch-while-working'), {
+        state.notify(t(forking ? 'fork-while-working' : 'model-switch-while-working'), {
           color: 'warning',
         })
         return false
@@ -2182,7 +2202,7 @@ export function createChannel(
         | { create(options: CreateAgentOptions): Promise<AgentHandle> }
         | undefined
       if (!sessions || !agents) {
-        state.notify(t('model-switch-unavailable'), {
+        state.notify(t(forking ? 'fork-unavailable' : 'model-switch-unavailable'), {
           color: 'error',
         })
         return false
@@ -2193,7 +2213,10 @@ export function createChannel(
         seed = sessions.fork(agent.session).events
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        state.notify(t('model-switch-fork-failed', { err: message }), { color: 'error' })
+        state.notify(
+          t(forking ? 'fork-source-failed' : 'model-switch-fork-failed', { err: message }),
+          { color: 'error' },
+        )
         return false
       }
       const childId = SessionId(randomUUID())
@@ -2218,14 +2241,19 @@ export function createChannel(
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        state.notify(t('model-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+        state.notify(
+          t(forking ? 'fork-create-failed' : 'model-switch-failed', { err: message }),
+          { color: 'error', timeoutMs: 8000 },
+        )
         return false
       }
       try {
         await attachSessionToWorkspace(ctx, state.cwd, childId)
       } catch (error) {
         state.notify(
-          t('model-switch-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+          t(forking ? 'fork-attach-failed' : 'model-switch-attach-failed', {
+            err: error instanceof Error ? error.message : String(error),
+          }),
           { color: 'warning', timeoutMs: 8000 },
         )
       }
@@ -2283,7 +2311,8 @@ export function createChannel(
       // Persist the choice so the next boot and `/new` start on it (same
       // contract as /preset and /effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
-      if (!writeModelPref(provider, model)) {
+      if (forking) state.notify(t('fork-done'))
+      if (internal.persistPreference !== false && !writeModelPref(provider, model)) {
         state.notify(t('model-pref-write-failed'), {
           color: 'warning',
         })

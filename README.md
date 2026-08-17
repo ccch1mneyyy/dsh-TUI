@@ -46,8 +46,8 @@
     inline/alternate-screen 两种渲染模式，以及 `/lang` 中英界面语言切换。
   - **可观察的 Agent 状态**：实时工作状态、上下文分段进度、TPS、缓存命中率、
     推理等级、输入/输出 token 与 Git/会话信息。
-  - **完整会话工作流**：`/resume`、`/new`、`/compact`、`/export`、`/btw` 侧问、
-    模型切换，以及双击 `Esc` 发起的会话 rewind/fork。
+  - **完整会话工作流**：`/resume`、`/new`、`/tree` 分支树、`/fork` 分叉、
+    `/compact`、`/export`、`/btw` 侧问、模型切换，以及双击 `Esc` 发起的 rewind。
   - **DSH 官方能力接入**：Agent preset、Skills、MCP、Goals、Todos、子代理、
     `ask_user_question` 问卷都通过现有服务或注册表连接。
   - **为长会话设计**：事件驱动投影、差分终端输出、消息虚拟化、回放合并与有界缓存，
@@ -141,7 +141,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 
 | 分组 | 命令 |
 |---|---|
-| 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） |
+| 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/tree` 查看分支树 · `/fork` 从当前历史分叉 · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） |
 | 状态 | `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
 | 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 · `/lang` 中英界面切换 |
 | 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` |

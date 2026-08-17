@@ -117,6 +117,16 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的
 3. 回放该边界前的历史。
 4. 把原消息放回输入框供修改和重发。
 
+### 分支树与 Fork
+
+`/fork` 在当前会话的稳定末尾复制完整事件历史，创建新的子会话并立即进入。新分支
+保留当前工作区、模型和 Agent preset；原会话不变，仍可从 `/resume` 或 `/tree`
+返回。回合运行中不会分叉，以免把尚未闭合的 turn 写入 seed。
+
+`/tree` 打开当前会话所属的全屏分支树。树沿 session header 的 `parentSession`
+关系展示根会话、当前分支、兄弟分支和后代；默认聚焦当前节点，`↑`/`↓` 移动，
+`Enter` 切换分支，`Esc` 返回。子代理会话不混入这棵树，继续由 `/agents` 展示。
+
 ### 侧问 /btw
 
 `/btw <问题>` 发起一次不打扰主任务的快速侧问：复用当前会话上下文（system
@@ -218,7 +228,7 @@ transcript。
 
 | 分组 | 命令 |
 | --- | --- |
-| 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`） |
+| 会话 | `/new`、`/resume`、`/tree`、`/fork`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`） |
 | 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp` |

@@ -131,6 +131,20 @@ selection is confirmed, the TUI:
 3. Replays history before the boundary.
 4. Restores the original message to the editor for revision and resubmission.
 
+### Branch tree and fork
+
+`/fork` copies the complete event history at the current session's stable end,
+creates a child session, and enters it immediately. The new branch keeps the
+current workspace, model, and Agent preset; the source remains available from
+`/resume` or `/tree`. Forking is refused while a turn is running so an open
+turn never enters the seed.
+
+`/tree` opens the full-screen branch tree containing the current session. It
+follows `parentSession` links from session headers to show the root, current
+branch, siblings, and descendants. Focus starts on the current node; `↑`/`↓`
+moves, `Enter` switches branches, and `Esc` returns. Sub-agent sessions stay
+out of this tree and remain available through `/agents`.
+
 ### Side question /btw
 
 `/btw <question>` asks a quick side question without disturbing the main
@@ -249,7 +263,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `/new`, `/resume`, `/rename`, `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`) |
+| Sessions | `/new`, `/resume`, `/tree`, `/fork`, `/rename`, `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`) |
 | Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp` |
