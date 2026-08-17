@@ -1,88 +1,72 @@
-/**
- * Unified plugin grant store (Community Consensus v0.15 §permissions): ONE
- * host-owned file `~/.dsh-tui/extension-grants.json` answers for every
- * registered permission, with defaults driven by the vendored permission
- * registry (`ecosystem-spec/registry/permissions-0.1.json`):
- *
- * ```json
- * {
- *   "grants": { "my-guard": ["session.input.intercept"] },
- *   "denies": { "noisy": ["commands.invoke"] }
- * }
- * ```
- *
- * Effective answer for `allows(plugin, permission)`:
- *
- *   1. permission not in the registry → DENY (fail closed — an unregistered
- *      permission name is a defect, not an implicit allow);
- *   2. the store is corrupt (unparseable JSON) → DENY everything, including
- *      allow-default permissions (a broken host-owned file must never open
- *      doors; wrong-shaped-but-parseable content is NOT corrupt — it just
- *      contributes no entries);
- *   3. `denies[plugin]` lists it → DENY (explicit revocation of an
- *      allow-default permission wins over everything else);
- *   4. `grants[plugin]` lists it → ALLOW (explicit grant of a deny-default
- *      permission — the v0.1..v0.8 `extension-grants.json` format carries
- *      over unchanged, zero migration);
- *   5. otherwise → the registry default (7 of 8 permissions default deny;
- *      `commands.invoke` defaults allow with a rationale).
- *
- * Registry unavailability (vendored data missing — a packaging accident) is
- * fail-closed too: every permission is unknown then, so every answer is deny.
- *
- * The file is host-owned and read-only at runtime BY DESIGN: it is read once
- * per store instance, revocation is a restart, and there is no in-session
- * mutation API to race against (D-7 re-check semantics: subscription-time
- * for intercept, call-time for storage/invoke, deliver-time for observe —
- * each checkpoint queries its own store instance).
- */
+/** Live, scoped plugin grant evaluation. */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, unwatchFile, watchFile } from 'node:fs'
 import { join } from 'node:path'
 import type { PermissionRegistry } from '../plugin-spec/types.js'
+import { normalizePermissionScope, permissionScopeCovers } from '../plugin-spec/permission-scope.js'
 import { loadSpecData } from '../plugin-spec/registry.js'
 import { DATA_DIR } from '../utils/paths.js'
 
-/** The grants file consulted by {@link readGrantStore}. */
 export const EXTENSION_GRANTS_FILE = 'extension-grants.json'
 
+export interface GrantPrincipal {
+  componentId: string
+  activationId?: string
+}
+
 export interface GrantStore {
-  /** Effective answer for `plugin` + `permission` (see module doc). */
-  allows(plugin: string, permission: string): boolean
-  /**
-   * Registry default for `permission`; `'deny'` when the permission is
-   * unregistered or the registry itself is unavailable.
-   */
+  /** Evaluate one concrete operation scope. Missing/unsupported scopes deny. */
+  allows(principal: GrantPrincipal | string, permission: string, scope: string): boolean
   defaultOf(permission: string): 'allow' | 'deny'
-  /** Permission names the registry knows (empty when registry unavailable). */
   knownPermissions(): readonly string[]
-  /** True when the file existed but was not parseable JSON (deny-all). */
+  /** Subscribe to file changes. Used to actively release grant-owned effects. */
+  onChange?(listener: () => void): () => void
   readonly corrupt: boolean
 }
 
+interface GrantRule {
+  permission: string
+  scope?: string
+  activationId?: string
+  legacy: boolean
+}
+
 interface GrantTable {
-  grants: Map<string, ReadonlySet<string>>
-  denies: Map<string, ReadonlySet<string>>
+  grants: Map<string, readonly GrantRule[]>
+  denies: Map<string, readonly GrantRule[]>
   corrupt: boolean
 }
 
+function parseRule(value: unknown): GrantRule | undefined {
+  if (typeof value === 'string') return { permission: value, legacy: true }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  if (Object.keys(record).some(key => !['name', 'scope', 'activationId'].includes(key))) return undefined
+  if (typeof record.name !== 'string' || typeof record.scope !== 'string') return undefined
+  if (record.activationId !== undefined && typeof record.activationId !== 'string') return undefined
+  return {
+    permission: record.name,
+    scope: record.scope,
+    ...(record.activationId === undefined ? {} : { activationId: record.activationId }),
+    legacy: false,
+  }
+}
+
 function parseTable(text: string): GrantTable {
-  const grants = new Map<string, ReadonlySet<string>>()
-  const denies = new Map<string, ReadonlySet<string>>()
+  const grants = new Map<string, readonly GrantRule[]>()
+  const denies = new Map<string, readonly GrantRule[]>()
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
-    // Unparseable JSON → corrupt → deny-all (fail closed). A MISSING file is
-    // not corrupt: readGrantStore substitutes an empty document for it.
     return { grants, denies, corrupt: true }
   }
-  const readSection = (key: 'grants' | 'denies', target: Map<string, ReadonlySet<string>>) => {
+  const readSection = (key: 'grants' | 'denies', target: Map<string, readonly GrantRule[]>): void => {
     const section = (parsed as Record<string, unknown> | null)?.[key]
     if (section === null || typeof section !== 'object' || Array.isArray(section)) return
-    for (const [plugin, permissions] of Object.entries(section as Record<string, unknown>)) {
-      if (!Array.isArray(permissions)) continue
-      target.set(plugin, new Set(permissions.filter((entry): entry is string => typeof entry === 'string')))
+    for (const [componentId, values] of Object.entries(section as Record<string, unknown>)) {
+      if (!Array.isArray(values)) continue
+      target.set(componentId, values.map(parseRule).filter((rule): rule is GrantRule => rule !== undefined))
     }
   }
   readSection('grants', grants)
@@ -94,54 +78,139 @@ function resolveRegistry(registry?: PermissionRegistry): PermissionRegistry | un
   return registry ?? loadSpecData()?.permissions
 }
 
-/**
- * Parse the grants file into a GrantStore.
- * @param text - Raw file contents ('' parses as an empty, non-corrupt store
- *               via the JSON error path — callers substitute it for missing
- *               files; see readGrantStore for the missing-vs-corrupt split).
- * @param registry - Permission registry (injectable for tests; defaults to
- *                   the vendored permissions-0.1.json).
- */
-export function parseGrantStore(text: string, registry?: PermissionRegistry): GrantStore {
-  // '' is the "missing file" placeholder, not corruption.
-  const table = text === ''
-    ? { grants: new Map<string, ReadonlySet<string>>(), denies: new Map<string, ReadonlySet<string>>(), corrupt: false }
-    : parseTable(text)
-  const permissions = resolveRegistry(registry)
-  const known = new Map((permissions?.permissions ?? []).map(entry => [entry.name, entry.default] as const))
+function principalParts(principal: GrantPrincipal | string): GrantPrincipal {
+  return typeof principal === 'string' ? { componentId: principal } : principal
+}
+
+function ruleMatches(
+  rule: GrantRule,
+  principal: GrantPrincipal,
+  permission: string,
+  scope: string,
+  mode: 'grant' | 'deny' = 'grant',
+): boolean {
+  if (rule.permission !== permission) return false
+  if (rule.activationId !== undefined && rule.activationId !== principal.activationId) return false
+  const actual = normalizePermissionScope(permission, scope, principal.componentId)
+  if (actual === undefined) return false
+  // A legacy string row carries no resource/session/command scope. Treating a
+  // legacy GRANT as a wildcard would silently enlarge a grant during the v0.15
+  // migration, so it never authorizes. A legacy DENY is safe to apply
+  // conservatively to every enforceable scope: it can reduce availability but
+  // cannot widen access or make revocation ineffective.
+  if (rule.legacy) return mode === 'deny'
+  const declared = normalizePermissionScope(permission, rule.scope ?? '', principal.componentId)
+  return declared !== undefined && permissionScopeCovers(permission, declared, actual)
+}
+
+/** An unbound/diagnostic principal cannot safely inherit a default or an
+ * unscoped rule when an activation-specific rule could apply. Returning deny
+ * here is conservative: callers must admit a real activation before using a
+ * grant whose lifetime is activation-scoped. */
+function hasUnknownActivationRule(
+  rules: readonly GrantRule[],
+  principal: GrantPrincipal,
+  permission: string,
+  scope: string,
+): boolean {
+  if (principal.activationId !== undefined) return false
+  const actual = normalizePermissionScope(permission, scope, principal.componentId)
+  if (actual === undefined) return false
+  return rules.some(rule => {
+    if (rule.legacy || rule.permission !== permission || rule.activationId === undefined) return false
+    const declared = normalizePermissionScope(permission, rule.scope ?? '', principal.componentId)
+    return declared !== undefined && permissionScopeCovers(permission, declared, actual)
+  })
+}
+
+function storeFrom(
+  table: () => GrantTable,
+  registry: PermissionRegistry | undefined,
+  onChange: GrantStore['onChange'],
+): GrantStore {
+  const known = new Map((registry?.permissions ?? []).map(entry => [entry.name, entry.default] as const))
   return {
-    corrupt: table.corrupt,
-    allows: (plugin, permission) => {
-      if (table.corrupt) return false
-      const registered = known.get(permission)
-      if (registered === undefined) return false
-      if (table.denies.get(plugin)?.has(permission) === true) return false
-      if (table.grants.get(plugin)?.has(permission) === true) return true
-      return registered === 'allow'
+    get corrupt() {
+      return table().corrupt
+    },
+    allows(principalValue, permission, scope) {
+      const current = table()
+      if (current.corrupt || known.get(permission) === undefined) return false
+      const principal = principalParts(principalValue)
+      if (normalizePermissionScope(permission, scope, principal.componentId) === undefined) return false
+      const denies = current.denies.get(principal.componentId) ?? []
+      const grants = current.grants.get(principal.componentId) ?? []
+      if (hasUnknownActivationRule(denies, principal, permission, scope)
+        || hasUnknownActivationRule(grants, principal, permission, scope)) return false
+      if (denies.some(rule => ruleMatches(rule, principal, permission, scope, 'deny'))) return false
+      if (grants.some(rule => ruleMatches(rule, principal, permission, scope, 'grant'))) return true
+      return known.get(permission) === 'allow'
     },
     defaultOf: permission => known.get(permission) ?? 'deny',
     knownPermissions: () => [...known.keys()],
+    onChange,
   }
 }
 
+/** Parse a fixed snapshot, primarily for deterministic tests. */
+export function parseGrantStore(text: string, registry?: PermissionRegistry): GrantStore {
+  const parsed = text === ''
+    ? { grants: new Map(), denies: new Map(), corrupt: false } as GrantTable
+    : parseTable(text)
+  return storeFrom(() => parsed, resolveRegistry(registry), () => () => undefined)
+}
+
 /**
- * Read `extension-grants.json` from the data dir. A missing file (ENOENT) is
- * an empty (all-defaults) store — the pre-grant posture; a corrupt file is
- * deny-all. ANY OTHER read failure (EACCES, EISDIR, I/O) means a grants
- * file exists but could not be evaluated — fail closed like a corrupt one,
- * or `denies` would silently stop applying (commands.invoke falling back to
- * allow).
- * @param dir - Data directory (injectable for tests).
- * @param registry - Permission registry (injectable for tests).
+ * Read grants on every decision. File changes therefore affect the next
+ * operation without a restart. onChange uses a non-persistent watcher so
+ * grant-owned subscriptions can be released even when no event is flowing.
  */
 export function readGrantStore(dir: string = DATA_DIR, registry?: PermissionRegistry): GrantStore {
-  let text: string
-  try {
-    text = readFileSync(join(dir, EXTENSION_GRANTS_FILE), 'utf8')
-  } catch (error) {
-    // The unparseable sentinel routes non-ENOENT failures through the same
-    // corrupt (deny-all) path as a malformed file.
-    return parseGrantStore((error as NodeJS.ErrnoException).code === 'ENOENT' ? '' : '{unreadable', registry)
+  const file = join(dir, EXTENSION_GRANTS_FILE)
+  const readCurrent = (): { table: GrantTable; signature: string } => {
+    let text: string
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch (error) {
+      const missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
+      text = missing ? '' : '{unreadable'
+    }
+    return {
+      table: text === ''
+        ? { grants: new Map(), denies: new Map(), corrupt: false }
+        : parseTable(text),
+      signature: text,
+    }
   }
-  return parseGrantStore(text, registry)
+  const listeners = new Set<() => void>()
+  let watching = false
+  let signature = readCurrent().signature
+  const changed = (): void => {
+    const next = readCurrent().signature
+    if (next === signature) return
+    signature = next
+    for (const listener of [...listeners]) {
+      try {
+        listener()
+      } catch {
+        // A lifecycle observer is advisory; one faulty cleanup callback must
+        // not prevent the remaining subscriptions from seeing revocation.
+      }
+    }
+  }
+  const onChange = (listener: () => void): (() => void) => {
+    listeners.add(listener)
+    if (!watching) {
+      watching = true
+      watchFile(file, { interval: 100, persistent: false }, changed)
+    }
+    return () => {
+      listeners.delete(listener)
+      if (watching && listeners.size === 0) {
+        watching = false
+        unwatchFile(file, changed)
+      }
+    }
+  }
+  return storeFrom(() => readCurrent().table, resolveRegistry(registry), onChange)
 }

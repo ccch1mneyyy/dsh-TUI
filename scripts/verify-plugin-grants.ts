@@ -16,7 +16,6 @@
  *
  * Run via `node --import tsx/esm scripts/verify-plugin-grants.ts`.
  */
-import assert from 'node:assert/strict'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -37,6 +36,8 @@ const { loadSpecData, digestFile, verifyRegistry, verifyContractProfiles } = awa
 const { createContractIndex, validateHost } = await import('../src/plugin-spec/validate.js')
 const { check } = await import('../src/plugin-spec/schema-check.js')
 const { negotiate } = await import('../src/plugin-spec/negotiate.js')
+const { DATA_DIR } = await import('../src/utils/paths.js')
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const specDir = join(root, 'ecosystem-spec')
@@ -48,6 +49,21 @@ if (!data) {
 const index = createContractIndex(data.registry, data.permissions)
 const REGISTRY_PERMISSIONS = data.permissions.permissions.map(p => p.name)
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const scoped = (name: string, scope: string, activationId?: string) => ({
+  name,
+  scope,
+  ...(activationId === undefined ? {} : { activationId }),
+})
+const principal = (componentId: string, activationId?: string) => ({
+  componentId,
+  ...(activationId === undefined ? {} : { activationId }),
+})
+const scopeFor = (permission: string, componentId: string): string => {
+  if (permission.startsWith('storage.local.')) return componentId
+  if (permission === 'commands.invoke') return `${componentId}.command`
+  if (permission === 'messages.observe.read') return 'session:*'
+  return 'session:*'
+}
 
 let checks = 0
 const failures: string[] = []
@@ -59,16 +75,18 @@ const cleanup: string[] = [fakeHome]
 
 // ── A. GrantStore 语义 ────────────────────────────────────────────────────
 {
-  // A1. 旧格式文件（仅 grants 段，4 个 intercept 权限授给 root）行为逐条一致。
+  // A1. 旧字符串格式没有 scope，迁移时必须 fail closed。
   const oldFormat = JSON.stringify({
     grants: { root: ['session.input.intercept', 'session.rewind.intercept', 'session.switch.intercept', 'session.compact.intercept'] },
   })
   const oldStore = parseGrantStore(oldFormat)
   for (const permission of Object.values(DECISION_EVENT_PERMISSIONS)) {
-    check1(`old format: root holds ${permission}`, oldStore.allows('root', permission))
-    check1(`old format: other plugin denied ${permission}`, !oldStore.allows('other', permission))
+    check1(`legacy unscoped row does not enlarge ${permission}`,
+      !oldStore.allows(principal('root'), permission, 'session:*'))
+    check1(`old format: other plugin denied ${permission}`,
+      !oldStore.allows(principal('other'), permission, 'session:*'))
   }
-  check1('old format: storage stays denied', !oldStore.allows('root', 'storage.local.read'))
+  check1('old format: storage stays denied', !oldStore.allows(principal('root'), 'storage.local.read', 'root'))
   check1('old format: not corrupt', !oldStore.corrupt)
 
   // A2. 默认值 registry 驱动：空 store（= 文件缺失）→ 7 deny + invoke allow。
@@ -76,7 +94,7 @@ const cleanup: string[] = [fakeHome]
   for (const entry of data.permissions.permissions) {
     check1(`registry default: ${entry.name} = ${entry.default}`, empty.defaultOf(entry.name) === entry.default)
     check1(`empty store: ${entry.name} ${entry.default === 'allow' ? 'allowed' : 'denied'} by default`,
-      empty.allows('anyone', entry.name) === (entry.default === 'allow'))
+      empty.allows(principal('anyone'), entry.name, scopeFor(entry.name, 'anyone')) === (entry.default === 'allow'))
   }
   check1('knownPermissions mirrors the vendored registry',
     JSON.stringify(empty.knownPermissions()) === JSON.stringify(REGISTRY_PERMISSIONS))
@@ -84,51 +102,61 @@ const cleanup: string[] = [fakeHome]
 
   // A3. denies 撤销 allow-default；显式 grant 授予 deny-default。
   const mixed = parseGrantStore(JSON.stringify({
-    grants: { guard: ['session.input.intercept'] },
-    denies: { noisy: ['commands.invoke'], conflicted: ['commands.invoke'] },
+    grants: { guard: [scoped('session.input.intercept', 'tui/input')] },
+    denies: {
+      noisy: [scoped('commands.invoke', 'noisy.command')],
+      conflicted: [scoped('commands.invoke', 'conflicted.command')],
+    },
   }))
-  check1('denies revokes allow-default', !mixed.allows('noisy', 'commands.invoke'))
-  check1('denies does not affect other plugins', mixed.allows('other', 'commands.invoke'))
-  check1('grant of deny-default allowed', mixed.allows('guard', 'session.input.intercept'))
+  check1('denies revokes allow-default only at its scope',
+    !mixed.allows(principal('noisy'), 'commands.invoke', 'noisy.command')
+    && mixed.allows(principal('noisy'), 'commands.invoke', 'noisy.other'))
+  check1('denies does not affect other plugins', mixed.allows(principal('other'), 'commands.invoke', 'other.command'))
+  check1('grant of deny-default allowed', mixed.allows(principal('guard'), 'session.input.intercept', 'tui/input'))
 
   // A4. grants 与 denies 同列同权限 → denies 优先（撤销是安全操作）。
   const conflict = parseGrantStore(JSON.stringify({
-    grants: { conflicted: ['commands.invoke'] },
-    denies: { conflicted: ['commands.invoke'] },
+    grants: { conflicted: [scoped('commands.invoke', 'conflicted.command')] },
+    denies: { conflicted: [scoped('commands.invoke', 'conflicted.command')] },
   }))
-  check1('deny wins over grant on conflict', !conflict.allows('conflicted', 'commands.invoke'))
+  check1('deny wins over grant on conflict',
+    !conflict.allows(principal('conflicted'), 'commands.invoke', 'conflicted.command'))
 
   // A5. 未注册权限一律 deny——即使文件里显式授予。
   const bogus = parseGrantStore(JSON.stringify({ grants: { root: ['bogus.permission'] } }))
-  check1('unregistered permission denied even when granted', !bogus.allows('root', 'bogus.permission'))
+  check1('unregistered permission denied even when granted', !bogus.allows(principal('root'), 'bogus.permission', 'x'))
   check1('defaultOf unregistered is deny', bogus.defaultOf('bogus.permission') === 'deny')
 
   // A6. 损坏 fail-closed：连 allow-default 也拒。
   const corrupt = parseGrantStore('{ not json')
   check1('corrupt store flagged', corrupt.corrupt)
-  check1('corrupt store denies deny-default', !corrupt.allows('root', 'session.input.intercept'))
-  check1('corrupt store denies allow-default too', !corrupt.allows('root', 'commands.invoke'))
+  check1('corrupt store denies deny-default', !corrupt.allows(principal('root'), 'session.input.intercept', 'tui/input'))
+  check1('corrupt store denies allow-default too', !corrupt.allows(principal('root'), 'commands.invoke', 'root.command'))
 
   // A7. wrong-shape 不算 corrupt——只是没有条目，走 registry 默认。
   const wrongShape = parseGrantStore(JSON.stringify({ grants: [1, 2, 3], denies: 'nope' }))
   check1('wrong-shape is not corrupt', !wrongShape.corrupt)
-  check1('wrong-shape falls back to defaults (invoke allow)', wrongShape.allows('anyone', 'commands.invoke'))
-  check1('wrong-shape falls back to defaults (intercept deny)', !wrongShape.allows('anyone', 'session.input.intercept'))
+  check1('wrong-shape falls back to defaults (invoke allow)',
+    wrongShape.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
+  check1('wrong-shape falls back to defaults (intercept deny)',
+    !wrongShape.allows(principal('anyone'), 'session.input.intercept', 'tui/input'))
 
   // A8. 注入 registry 证明 store 完全 registry 驱动（无硬编码权限名）。
   const custom = parseGrantStore('', {
     registryVersion: 'test',
     permissions: [{ name: 'custom.allow', default: 'allow', revocable: true, scope: 'test' }],
   })
-  check1('injected registry: custom permission allow-default', custom.allows('p', 'custom.allow'))
-  check1('injected registry: vendored names unknown', !custom.allows('p', 'commands.invoke'))
+  check1('adapter rejects a custom scope it cannot enforce', !custom.allows(principal('p'), 'custom.allow', 'test'))
+  check1('injected registry: vendored names unknown', !custom.allows(principal('p'), 'commands.invoke', 'p.command'))
 
   // A9. readGrantStore：缺失文件 = 全默认（非 corrupt）。
   const missingDir = mkdtempSync(join(tmpdir(), 'dsh-grants-missing-'))
   cleanup.push(missingDir)
   const missing = readGrantStore(missingDir)
   check1('missing file is not corrupt', !missing.corrupt)
-  check1('missing file gives registry defaults', missing.allows('anyone', 'commands.invoke') && !missing.allows('anyone', 'session.input.intercept'))
+  check1('missing file gives registry defaults',
+    missing.allows(principal('anyone'), 'commands.invoke', 'anyone.command')
+    && !missing.allows(principal('anyone'), 'session.input.intercept', 'tui/input'))
 
   // A10. readGrantStore：非 ENOENT 读取失败（EISDIR：授权路径是个目录）
   // = corrupt fail-closed——绝不能静默回退全默认（否则 denies 失效、
@@ -138,30 +166,80 @@ const cleanup: string[] = [fakeHome]
   mkdirSync(join(unreadableDir, EXTENSION_GRANTS_FILE))
   const unreadable = readGrantStore(unreadableDir)
   check1('non-ENOENT read failure (EISDIR) is corrupt fail-closed', unreadable.corrupt)
-  check1('non-ENOENT read failure denies allow-default too', !unreadable.allows('anyone', 'commands.invoke'))
-  check1('non-ENOENT read failure denies deny-default', !unreadable.allows('anyone', 'storage.local.read'))
+  check1('non-ENOENT read failure denies allow-default too',
+    !unreadable.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
+  check1('non-ENOENT read failure denies deny-default',
+    !unreadable.allows(principal('anyone'), 'storage.local.read', 'anyone'))
+
+  // A11. 文件存储每次重读，并在变化时主动通知持有订阅的服务。
+  const liveDir = mkdtempSync(join(tmpdir(), 'dsh-grants-live-'))
+  cleanup.push(liveDir)
+  const liveFile = join(liveDir, EXTENSION_GRANTS_FILE)
+  writeFileSync(liveFile, JSON.stringify({
+    grants: { live: [scoped('messages.observe.read', 'session:one')] },
+  }))
+  const live = readGrantStore(liveDir)
+  let changeCount = 0
+  const stopWatching = live.onChange?.(() => { changeCount += 1 })
+  check1('live store initially grants the exact scope',
+    live.allows(principal('live'), 'messages.observe.read', 'session:one'))
+  check1('scoped grant does not authorize another session',
+    !live.allows(principal('live'), 'messages.observe.read', 'session:two'))
+  writeFileSync(liveFile, JSON.stringify({ grants: { live: [] } }))
+  check1('revocation affects the next operation without restart',
+    !live.allows(principal('live'), 'messages.observe.read', 'session:one'))
+  await sleep(250)
+  check1('revocation notifies grant-owned effects', changeCount > 0)
+  stopWatching?.()
+
+  // A12. Activation-scoped policy must be evaluated against the verified
+  // activation instance; an unbound diagnostic principal cannot inherit it.
+  const activationScoped = parseGrantStore(JSON.stringify({
+    grants: { scoped: [scoped('messages.observe.read', 'session:one', 'act-1')] },
+  }))
+  check1('activation-scoped grant matches the exact activation',
+    activationScoped.allows(principal('scoped', 'act-1'), 'messages.observe.read', 'session:one'))
+  check1('activation-scoped grant rejects another activation',
+    !activationScoped.allows(principal('scoped', 'act-2'), 'messages.observe.read', 'session:one'))
+  check1('activation-scoped grant rejects an unbound diagnostic principal',
+    !activationScoped.allows(principal('scoped'), 'messages.observe.read', 'session:one'))
+
+  // A13. A broad event grant may cover a concrete session, but a narrow deny
+  // must still win at that concrete scope.
+  const eventGrantSessionDeny = parseGrantStore(JSON.stringify({
+    grants: { scoped: [scoped('session.input.intercept', 'tui/input')] },
+    denies: { scoped: [scoped('session.input.intercept', 'session:secret')] },
+  }))
+  check1('event grant covers an ordinary session',
+    eventGrantSessionDeny.allows(principal('scoped'), 'session.input.intercept', 'session:ordinary'))
+  check1('session deny overrides the broad event grant',
+    !eventGrantSessionDeny.allows(principal('scoped'), 'session.input.intercept', 'session:secret'))
 }
 
 // ── B. decision-guard 薄壳后行为不变（真文件路径）────────────────────────
 {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-grants-guard-'))
-  cleanup.push(dir)
-  writeFileSync(join(dir, EXTENSION_GRANTS_FILE), JSON.stringify({
-    grants: { 'my-guard': ['session.input.intercept'] },
+  mkdirSync(DATA_DIR, { recursive: true })
+  const grantsFile = join(DATA_DIR, EXTENSION_GRANTS_FILE)
+  writeFileSync(grantsFile, JSON.stringify({
+    grants: { 'com.example.guard': [scoped('session.input.intercept', 'tui/input', 'act-guard')] },
   }))
   const guardCtx = new Context()
   const guardWarnings: string[] = []
   guardCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
     guardWarnings.push([format, ...params].map(String).join(' '))
   }
-  installDecisionGuard(guardCtx, readGrantStore(dir))
-  guardCtx.plugin({
-    name: 'my-guard',
-    apply: (c: InstanceType<typeof Context>) => {
-      c.on('tui/input', (event: { text?: string }) =>
-        event.text === '拦截' ? { cancel: true, reason: '授权拦截' } : undefined)
-    },
-  })
+  guardCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+  await sleep(50)
+  const admitted = await mountAdmitted(guardCtx, 'cordis-export-name', testManifest({
+    id: 'com.example.guard',
+    requires: [DECISION_COORDINATE],
+    permissions: [{ name: 'session.input.intercept', scope: 'tui/input' }],
+  }), 'test:cordis-export-name/dsh-plugin.json', { activationId: 'act-guard' })
+  const release = guardCtx.get('tuiPluginHost')?.subscribeDecision(
+    admitted.context,
+    'tui/input',
+    event => event.text === '拦截' ? { cancel: true, reason: '授权拦截' } : undefined,
+  )
   guardCtx.plugin({
     name: 'evil-plugin',
     apply: (c: InstanceType<typeof Context>) => {
@@ -171,14 +249,19 @@ const cleanup: string[] = [fakeHome]
   await sleep(100)
   const { dispatchTuiDecision } = await import('../src/dsh-adapter/extension-events.js')
   const passThrough = (result: unknown): unknown => result
-  check1('guard via GrantStore: granted subscription enters the chain',
-    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '拦截' }, passThrough)) !== undefined)
-  // '别的' 只有授权的 guard 看到（它不拦截）；evil-plugin 若混进链会无条件
-  // 拦截——undefined 证明它从未注册。
-  check1('guard via GrantStore: ungranted subscription never enters the chain',
-    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '别的' }, passThrough)) === undefined)
-  check1('guard via GrantStore: denial warns with plugin + grant',
-    guardWarnings.some(line => line.includes('"evil-plugin"') && line.includes('session.input.intercept')))
+  check1('admitted Component uses manifest id instead of the Cordis export name',
+    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '拦截', sessionId: 'sess-guard' }, passThrough)) !== undefined)
+  check1('raw ctx.on subscription never enters the mediated chain',
+    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '别的', sessionId: 'sess-guard' }, passThrough)) === undefined)
+  check1('raw subscription denial names the plugin and mediated surface',
+    guardWarnings.some(line => line.includes('"evil-plugin"') && line.includes('mediated DecisionEvents')))
+
+  writeFileSync(grantsFile, JSON.stringify({ grants: { 'com.example.guard': [] } }))
+  check1('running decision grant revocation blocks the next dispatch',
+    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '拦截', sessionId: 'sess-guard' }, passThrough)) === undefined)
+  await sleep(250)
+  check1('revocation actively removes the decision handler', release?.() === false)
+  await Promise.resolve(admitted.fiber.dispose())
 }
 
 // ── C. plugin-host row ────────────────────────────────────────────────────
@@ -199,7 +282,8 @@ const cleanup: string[] = [fakeHome]
     check1('grants store is callable', typeof service.grants.allows === 'function')
     // 隔离 HOME 里无 grants 文件 → registry 默认（invoke allow / intercept deny）。
     check1('service grants: registry defaults from empty HOME',
-      service.grants.allows('root', 'commands.invoke') && !service.grants.allows('root', 'session.input.intercept'))
+      service.grants.allows(principal('root'), 'commands.invoke', 'root.command')
+      && !service.grants.allows(principal('root'), 'session.input.intercept', 'tui/input'))
 
     const descriptor = service.hostDescriptor()
     let descriptorError = ''
@@ -245,6 +329,32 @@ const cleanup: string[] = [fakeHome]
     check1('no boot warnings with commands mounted', withCommandsWarnings.length === 0, withCommandsWarnings.join(' | '))
   }
 
+  // A lazy descriptor must also follow services that appear or disappear
+  // after its first read, instead of retaining the first capability snapshot.
+  {
+    const { Service } = await import('@deepseek-ai/cordis')
+    class DynamicCommands extends Service {
+      constructor(ctx: InstanceType<typeof Context>) {
+        super(ctx, 'commands')
+      }
+    }
+    const dynamicCtx = new Context()
+    dynamicCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+    await sleep(30)
+    const dynamicHost = dynamicCtx.get('tuiPluginHost')
+    const withoutCommands = dynamicHost?.hostDescriptor()
+    const commandsFiber = dynamicCtx.plugin(DynamicCommands)
+    await sleep(30)
+    const withCommands = dynamicHost?.hostDescriptor()
+    check1('descriptor rebuilds when commands mounts after the first read',
+      withCommands !== withoutCommands && withCommands?.contracts.some(contract => contract.kind === 'Command') === true)
+    await Promise.resolve(commandsFiber.dispose())
+    await sleep(30)
+    const afterUnmount = dynamicHost?.hostDescriptor()
+    check1('descriptor rebuilds when commands unmounts after the first read',
+      afterUnmount !== withCommands && !afterUnmount?.contracts.some(contract => contract.kind === 'Command'))
+  }
+
   // 跨激活 generationId 不同（两个独立 root 各挂一次）。
   const secondCtx = new Context()
   secondCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
@@ -283,23 +393,31 @@ const cleanup: string[] = [fakeHome]
     d.contracts.length === HOST_SUPPORTED_CONTRACTS.length
     && d.contracts.every(c => HOST_SUPPORTED_CONTRACTS.some(s => s.apiVersion === c.apiVersion && s.kind === c.kind)))
   const command = d.contracts.find(c => c.kind === 'Command')
-  check1('Command contract pinned to the registry hash',
-    command !== undefined && command.schemaHash === digestFile(specDir, 'registry/contracts/commands-0.15.json'))
+  check1('Command contract identifies the official dsh-std definition',
+    command?.definition.source === 'dsh-std'
+    && command.definition.package === '@dsh-std/command')
   check1('Command contract carries registry permissions',
     JSON.stringify(command?.permissions) === JSON.stringify(['commands.invoke']))
+  const decisionEvents = d.contracts.find(c => c.kind === 'DecisionEvents')
+  const decisionEntry = data.registry.definitions.find(entry => entry.coordinates.kind === 'DecisionEvents')
+  check1('DecisionEvents pins the private profile definition hash',
+    decisionEvents?.definition.source === 'tui-profile'
+    && decisionEntry !== undefined
+    && decisionEvents.definition.profileHash === digestFile(specDir, decisionEntry.profile))
 
   // D2. 篡改 contract 文件 → 剔除 + warn（fail closed），descriptor 仍过 schema。
   const tamperedRoot = mkdtempSync(join(tmpdir(), 'dsh-descriptor-tamper-'))
   cleanup.push(tamperedRoot)
   cpSync(specDir, join(tamperedRoot, 'ecosystem-spec'), { recursive: true })
-  const target = join(tamperedRoot, 'ecosystem-spec', 'registry', 'contracts', 'commands-0.15.json')
+  const target = join(tamperedRoot, 'ecosystem-spec', 'registry', 'contracts', 'decision-events-v1alpha1.json')
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
   const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'ecosystem-spec') })
-  check1('tampered contract dropped', tampered.dropped.includes('commands.dsh/v1alpha1#Command'), tampered.dropped.join(' | '))
-  check1('tamper warning names the drift', tampered.warnings.some(w => w.includes('schemaHash drifted')))
+  check1('tampered private definition dropped',
+    tampered.dropped.includes('x-ccch1mneyyy.tui/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
+  check1('tamper warning names the profileHash drift', tampered.warnings.some(w => w.includes('profile hash drifted')))
   check1('tampered surface keeps only the untampered contracts',
     tampered.descriptor.contracts.length === HOST_SUPPORTED_CONTRACTS.length - 1
-    && !tampered.descriptor.contracts.some(c => c.kind === 'Command'))
+    && !tampered.descriptor.contracts.some(c => c.kind === 'DecisionEvents'))
   let tamperedError = ''
   try {
     check(tampered.descriptor, data.schemas.host, data.schemas.host)
@@ -327,7 +445,7 @@ const cleanup: string[] = [fakeHome]
   cleanup.push(malformedRoot)
   cpSync(specDir, join(malformedRoot, 'ecosystem-spec'), { recursive: true })
   writeFileSync(join(malformedRoot, 'ecosystem-spec', 'registry', 'registry-0.15.json'),
-    JSON.stringify({ registryVersion: '0.15', entries: null }))
+    JSON.stringify({ profileVersion: 'tui-admission/0.15', std: {}, imports: null, definitions: [], facetApiVersions: [] }))
   check1('structurally malformed registry loads as unavailable',
     loadSpecData(join(malformedRoot, 'ecosystem-spec')) === undefined)
   const malformedBuild = buildHostDescriptor({ generationId: 'test-gen-4', specDir: join(malformedRoot, 'ecosystem-spec') })
@@ -336,13 +454,18 @@ const cleanup: string[] = [fakeHome]
   // verify* 对手工构造的坏数据也只回违规字符串。
   let verifyThrew = ''
   try {
-    const fakeData = { dir: specDir, registry: { entries: null }, permissions: { permissions: [] }, schemas: {} }
+    const fakeData = {
+      dir: specDir,
+      registry: { imports: null, definitions: null },
+      permissions: { permissions: [] },
+      schemas: {},
+    }
     const violations = verifyRegistry(fakeData as never)
     check1('verifyRegistry reports malformed entries as a violation string',
-      violations.length === 1 && violations[0]!.includes('entries'))
+      violations.length === 1 && violations[0]!.includes('registry'))
     const profileViolations = verifyContractProfiles(fakeData as never)
     check1('verifyContractProfiles reports malformed entries as a violation string',
-      profileViolations.length === 1 && profileViolations[0]!.includes('entries'))
+      profileViolations.length === 1 && profileViolations[0]!.includes('registry'))
   } catch (error) {
     verifyThrew = error instanceof Error ? error.message : String(error)
   }

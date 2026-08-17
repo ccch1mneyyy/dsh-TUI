@@ -1,0 +1,30 @@
+{
+  "$schema": "urn:dsh-std:community-draft:dsh-plugin:0.15",
+  "id": "com.example.tui-aware",
+  "name": "TUI-aware Plugin",
+  "version": "0.1.0",
+  "manifestVersion": "0.15",
+  "facets": {
+    "host": {
+      "entry": "dist/main.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "requires": {
+    "contracts": [
+      {
+        "apiVersion": "x-ccch1mneyyy.tui/v1alpha1",
+        "kind": "DecisionEvents"
+      }
+    ]
+  },
+  "permissions": [],
+  "contributes": {
+    "commands": []
+  },
+  "subscriptions": [],
+  "license": "MIT",
+  "source": {
+    "repository": "https://example.com/tui-aware"
+  }
+}

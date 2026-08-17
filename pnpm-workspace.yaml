@@ -1,3 +1,12 @@
+packages:
+  - 'vendor/dsh-std/packages/core'
+  - 'vendor/dsh-std/packages/manifest'
+  - 'vendor/dsh-std/packages/connection'
+  - 'vendor/dsh-std/packages/presentation'
+  - 'vendor/dsh-std/packages/command'
+  - 'vendor/dsh-std/packages/storage'
+  - 'vendor/dsh-std/packages/messages'
+
 allowBuilds:
   esbuild: false
   koffi: false

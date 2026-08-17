@@ -40,6 +40,7 @@ const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcu
 const { loadSpecData } = await import('../src/plugin-spec/registry.js')
 const { check: schemaCheck } = await import('../src/plugin-spec/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
+const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('./plugin-test-utils.js')
 import type { LedgerEntry } from '../src/dsh-adapter/effect-ledger.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -74,18 +75,14 @@ interface FileRecord {
 const readRecords = (file: string): FileRecord[] =>
   readFileSync(file, 'utf8').split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line) as FileRecord)
 
-/** 一个带命名 fiber 的插件上下文（fiber.name = plugin）。 */
-const namedCtx = async (host: InstanceType<typeof Context>, plugin: string): Promise<InstanceType<typeof Context>> => {
-  let captured: InstanceType<typeof Context> | undefined
-  host.plugin({
-    name: plugin,
-    apply: (c: InstanceType<typeof Context>) => {
-      captured = c
-    },
-  })
-  await sleep(30)
-  if (captured === undefined) throw new Error(`fiber ${plugin} did not apply`)
-  return captured
+/** 一个已通过官方 parser/admission 的插件上下文。 */
+const namedCtx = async (host: InstanceType<typeof Context>, plugin: string, id = `com.example.${plugin}`,
+  permissions: readonly { name: string; scope: string }[] = []): Promise<InstanceType<typeof Context>> => {
+  const admitted = await mountAdmitted(host, plugin, testManifest({
+    id,
+    permissions,
+  }))
+  return admitted.context
 }
 
 // ── A/B/C/D 用独立文件，避免互相干扰 ─────────────────────────────────────
@@ -95,7 +92,10 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
 {
   const ctx = new Context()
   const ledger = new TuiEffectLedgerRuntime(ctx, { file: fileA, generationId: 'gen-battery' })
-  const alpha = await namedCtx(ctx, 'alpha')
+  const admissionRoot = new Context()
+  admissionRoot.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+  await sleep(50)
+  const alpha = await namedCtx(admissionRoot, 'alpha')
   const entries: LedgerEntry[] = [
     { operation: 'create', resource: { kind: 'scene', id: 'scene-a' }, result: 'applied' },
     { operation: 'bind', resource: { kind: 'shortcut', id: 'ctrl+shift+z' }, result: 'applied' },
@@ -123,16 +123,17 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   check1('every persisted record passes the vendored schema independently', schemaPassed === records.length, `${schemaPassed}/${records.length}`)
 
   // ── B. 三元组 ──
-  const beta = await namedCtx(ctx, 'beta')
+  const beta = await namedCtx(admissionRoot, 'beta')
   ledger.record({ operation: 'bind', resource: { kind: 'shortcut', id: 'ctrl+alt+b' }, result: 'applied' }, beta)
   ledger.record({ operation: 'bind', resource: { kind: 'shortcut', id: 'ctrl+alt+c' }, result: 'applied' }) // 无 identity
   ledger.record({ operation: 'bind', resource: { kind: 'shortcut', id: 'ctrl+alt+d' }, result: 'applied' }, ctx) // root fiber
   const all = readRecords(fileA)
-  const alphaRecords = all.filter(r => r.pluginId === 'alpha')
-  check1('pluginId = fiber.name', alphaRecords.length === 5, `${alphaRecords.length}`)
+  const alphaRecords = all.filter(r => r.pluginId === 'com.example.alpha')
+  check1('pluginId = verified manifest Component identity',
+    alphaRecords.length === 5 && alphaRecords.every(r => r.pluginId === 'com.example.alpha'), `${alphaRecords.length}`)
   check1('activationInstance stable per fiber', new Set(alphaRecords.map(r => r.activationInstance)).size === 1)
-  const betaRecord = all.find(r => r.pluginId === 'beta')
-  check1('second fiber gets a distinct activationInstance',
+  const betaRecord = all.find(r => r.pluginId === 'com.example.beta')
+  check1('second activation gets a distinct activationInstance',
     betaRecord !== undefined && betaRecord.activationInstance !== alphaRecords[0]?.activationInstance)
   const undeclared = all.find(r => r.resource.id === 'ctrl+alt+c')
   check1("missing identity records 'undeclared'",
@@ -199,7 +200,12 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
 {
   mkdirSync(DATA_DIR, { recursive: true })
   writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
-    grants: { alpha: ['storage.local.read', 'storage.local.write'] },
+    grants: {
+      'com.example.alpha': [
+        { name: 'storage.local.read', scope: 'com.example.alpha' },
+        { name: 'storage.local.write', scope: 'com.example.alpha' },
+      ],
+    },
   }))
   const ctx = new Context()
   // 生产接线：整行挂载（host → ledger → storage → observer），台账的
@@ -208,15 +214,18 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   await sleep(50)
   const ledger = ctx.get('tuiEffectLedger')
   check1('ledger service mounts via the plugin-host row', ledger !== undefined)
-  const alpha = await namedCtx(ctx, 'alpha')
-  const gamma = await namedCtx(ctx, 'gamma')
+  const alpha = await namedCtx(ctx, 'alpha', 'com.example.alpha', [
+    { name: 'storage.local.read', scope: 'com.example.alpha' },
+    { name: 'storage.local.write', scope: 'com.example.alpha' },
+  ])
+  const gamma = await namedCtx(ctx, 'gamma', 'com.example.gamma')
 
   const storage = ctx.get('tuiPluginStorage')
   if (storage === undefined) throw new Error('tuiPluginStorage not mounted by the row')
   storage.open(alpha)
   const gammaHandle = storage.open(gamma)
   try {
-    await gammaHandle.get('k')
+    await gammaHandle.get({ key: 'k' })
     failures.push('gamma.get should have been denied')
     checks += 1
   } catch {
@@ -237,15 +246,15 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
 
   const nsCreates = byKind('storage-namespace').filter(r => r.operation === 'create')
   check1('storage open records namespace create per plugin',
-    nsCreates.some(r => r.resource.id === 'alpha' && r.pluginId === 'alpha') &&
-    nsCreates.some(r => r.resource.id === 'gamma' && r.pluginId === 'gamma'))
+    nsCreates.some(r => r.resource.id === 'com.example.alpha' && r.pluginId === 'com.example.alpha') &&
+    nsCreates.some(r => r.resource.id === 'com.example.gamma' && r.pluginId === 'com.example.gamma'))
   const deny = byKind('permission', 'storage.local.read')
   check1('grant deny recorded with PERMISSION_NOT_GRANTED against the denied plugin',
-    deny.some(r => r.result === 'failed' && r.errorCode === 'PERMISSION_NOT_GRANTED' && r.pluginId === 'gamma'))
+    deny.some(r => r.result === 'failed' && r.errorCode === 'PERMISSION_NOT_GRANTED' && r.pluginId === 'com.example.gamma'))
 
   const shortcutBinds = byKind('shortcut', 'ctrl+shift+z')
   check1('shortcut register records bind applied with the plugin identity',
-    shortcutBinds.some(r => r.operation === 'bind' && r.result === 'applied' && r.pluginId === 'alpha'))
+    shortcutBinds.some(r => r.operation === 'bind' && r.result === 'applied' && r.pluginId === 'com.example.alpha'))
   check1('shortcut dispose records release applied',
     shortcutBinds.some(r => r.operation === 'release' && r.result === 'applied'))
 
@@ -255,7 +264,7 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   check1('status overwrite records replace with replaces.resourceId', replace?.replaces?.resourceId === 'alpha-line')
   check1('stale status disposer records nothing', !statusRecords.some(r => r.operation === 'release'))
 
-  const alphaWired = records.filter(r => r.pluginId === 'alpha')
+  const alphaWired = records.filter(r => r.pluginId === 'com.example.alpha')
   check1('wired records share one activationInstance per fiber', new Set(alphaWired.map(r => r.activationInstance)).size === 1)
   check1('wired records carry the host generationId',
     alphaWired.every(r => typeof r.runtimeGenerationId === 'string' && r.runtimeGenerationId !== '' && r.runtimeGenerationId !== 'unknown-generation'))

@@ -8,7 +8,7 @@
  *   C. 无 grant：订阅快速失败（noop disposer + warn），零投递；
  *   D. 投递时撤销：store 翻转后订阅被释放 + warn，后续零投递；
  *   E. scope 隔离（C-042）：订阅必须带精确 scope；只收同 scope 的
- *      envelope，跨会话零泄漏；空 scope 拒绝（noop disposer + warn）；
+ *      envelope，跨会话零泄漏；过长 session scope 与空 scope 均拒绝；
  *   F. listener 抛错/拒绝被隔离，其他订阅续投；
  *   G. 截断：长文 summary 截断 + payload.truncated；短文无标记；
  *   H. 非映射事件零产出；session 无 id 丢弃；eventId 字符拍平；
@@ -36,10 +36,12 @@ process.env.DSH_TUI_LANG = 'zh'
 
 const { Context, Service } = await import('@deepseek-ai/cordis')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
-const { TuiMessageObserverRuntime, OBSERVE_SUMMARY_CELLS } = await import('../src/dsh-adapter/message-observer.js')
+const { TuiMessageObserverRuntime, OBSERVE_SCOPE_MAX_CHARS, OBSERVE_SUMMARY_CELLS } = await import('../src/dsh-adapter/message-observer.js')
 const { loadSpecData } = await import('../src/plugin-spec/registry.js')
 const { check } = await import('../src/plugin-spec/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
+const { mountAdmitted, testManifest, MESSAGE_COORDINATE } = await import('./plugin-test-utils.js')
+const { validateMessageEvent } = await import('@dsh-std/messages')
 import type { MessagesObserveEnvelope } from '../src/dsh-adapter/message-observer.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -58,14 +60,16 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   if (!ok) failures.push(`${name}${detail ? `: ${detail}` : ''}`)
 }
 
-// ── 授权文件：alpha/beta/carol/dave 授予 messages.observe.read；spy 无授权 ──
+// ── 授权文件：按 manifest Component ID 与订阅 scope 授权 ──
 mkdirSync(DATA_DIR, { recursive: true })
+const componentId = (plugin: string) => `com.example.${plugin}`
+const observeGrant = (plugin: string, scope: string) => ({ name: 'messages.observe.read', scope })
 writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
   grants: {
-    alpha: ['messages.observe.read'],
-    beta: ['messages.observe.read'],
-    carol: ['messages.observe.read'],
-    dave: ['messages.observe.read'],
+    'com.example.alpha': [observeGrant('alpha', 'session:*')],
+    'com.example.beta': [observeGrant('beta', 'session:*')],
+    'com.example.carol': [observeGrant('carol', 'session:*')],
+    'com.example.dave': [observeGrant('dave', 'session:*')],
   },
 }))
 
@@ -83,24 +87,29 @@ if (broker === undefined) {
 }
 
 const received = new Map<string, MessagesObserveEnvelope[]>()
+const admittedContexts = new Map<string, InstanceType<typeof Context>>()
 const subscribeAs = async (
   plugin: string,
   listener?: (envelope: MessagesObserveEnvelope) => void,
   scope = 'session:sess-1',
-): Promise<() => void> => {
-  let disposer: () => void = () => false
-  hostCtx.plugin({
-    name: plugin,
-    apply: (c: InstanceType<typeof Context>) => {
-      disposer = c.get('tuiMessageObserver').subscribe(c, envelope => {
-        const list = received.get(plugin) ?? []
-        list.push(envelope)
-        received.set(plugin, list)
-        listener?.(envelope)
-      }, { scope })
-    },
-  })
-  await sleep(30)
+  options: { declarePermission?: boolean; declareSubscription?: boolean; declaredScope?: string } = {},
+): Promise<() => boolean> => {
+  const declaredScope = options.declaredScope ?? scope
+  const admitted = await mountAdmitted(hostCtx, plugin, testManifest({
+    id: componentId(plugin),
+    requires: [MESSAGE_COORDINATE],
+    permissions: options.declarePermission === false ? [] : [observeGrant(plugin, declaredScope)],
+    subscriptions: options.declareSubscription === false ? [] : [
+      { apiVersion: MESSAGE_COORDINATE.apiVersion, kind: MESSAGE_COORDINATE.kind, scope: declaredScope },
+    ],
+  }))
+  admittedContexts.set(plugin, admitted.context)
+  const disposer = admitted.context.get('tuiMessageObserver').subscribe(admitted.context, envelope => {
+    const list = received.get(plugin) ?? []
+    list.push(envelope)
+    received.set(plugin, list)
+    listener?.(envelope)
+  }, { scope })
   return disposer
 }
 
@@ -148,12 +157,12 @@ await subscribeAs('alpha')
   let schemaError = ''
   for (const envelope of list) {
     try {
-      check(envelope, data.schemas.message, data.schemas.message)
+      validateMessageEvent(envelope)
     } catch (error) {
       schemaError = error instanceof Error ? error.message : String(error)
     }
   }
-  check1('delivered envelopes pass the vendored schema independently', schemaError === '', schemaError)
+  check1('delivered envelopes pass the official validator independently', schemaError === '', schemaError)
 }
 
 // ── B. sequence 单调含 gap ────────────────────────────────────────────────
@@ -173,12 +182,15 @@ await subscribeAs('alpha')
 // ── C. 无 grant：快速失败 + 零投递 ────────────────────────────────────────
 {
   const warnBefore = hostWarnings.length
-  await subscribeAs('spy')
+  await subscribeAs('spy', undefined, 'session:sess-1', {
+    declarePermission: false,
+    declareSubscription: false,
+  })
   broker.publish(session('sess-1'), userEvent(10, 'spy must not see this'))
   await sleep(20)
   check1('ungranted subscription delivers nothing', (received.get('spy') ?? []).length === 0)
-  check1('subscribe-time denial warns with plugin + grant',
-    hostWarnings.slice(warnBefore).some(line => line.includes('"spy"') && line.includes('messages.observe.read')))
+  check1('subscribe-time denial names the verified Component',
+    hostWarnings.slice(warnBefore).some(line => line.includes('"com.example.spy"') && line.includes('statically declared')))
 }
 
 // ── D. 投递时撤销：订阅被释放 + warn ──────────────────────────────────────
@@ -187,7 +199,8 @@ await subscribeAs('alpha')
   // 新 store；这里用可变 store 精确命中复检逻辑）。
   let granted = true
   const mutableGrants = {
-    allows: (_plugin: string, permission: string) => permission === 'messages.observe.read' && granted,
+    allows: (_principal: unknown, permission: string, scope: string) =>
+      permission === 'messages.observe.read' && scope === 'session:sess-1' && granted,
     defaultOf: () => 'deny' as const,
     knownPermissions: () => ['messages.observe.read'],
     corrupt: false,
@@ -199,19 +212,19 @@ await subscribeAs('alpha')
   }
   const runtime = new TuiMessageObserverRuntime(freshCtx, { grants: mutableGrants })
   const envelopes: MessagesObserveEnvelope[] = []
-  runtime.subscribe(freshCtx, envelope => { envelopes.push(envelope) }, { scope: 'session:sess-x' })
-  runtime.publish(session('sess-x'), userEvent(1, 'before revocation'))
+  runtime.subscribe(admittedContexts.get('alpha')!, envelope => { envelopes.push(envelope) }, { scope: 'session:sess-1' })
+  runtime.publish(session('sess-1'), userEvent(1, 'before revocation'))
   await sleep(20)
   check1('deliver-time: granted delivery works', envelopes.length === 1)
   granted = false
-  runtime.publish(session('sess-x'), userEvent(2, 'after revocation'))
+  runtime.publish(session('sess-1'), userEvent(2, 'after revocation'))
   await sleep(20)
   check1('deliver-time: revoked subscription delivers nothing more', envelopes.length === 1)
   check1('deliver-time: revocation releases with a warning',
     freshWarnings.some(line => line.includes('released') && line.includes('revoked')))
   // 释放后再授予也不再投递（release 是终态，contract cleanup）。
   granted = true
-  runtime.publish(session('sess-x'), userEvent(3, 're-granted'))
+  runtime.publish(session('sess-1'), userEvent(3, 're-granted'))
   await sleep(20)
   check1('release is terminal (re-grant does not resurrect)', envelopes.length === 1)
 }
@@ -241,15 +254,26 @@ await subscribeAs('alpha')
 {
   const warnBefore = hostWarnings.length
   let refusedDisposer: (() => boolean) | undefined
-  hostCtx.plugin({
-    name: 'carol',
-    apply: (c: InstanceType<typeof Context>) => {
-      refusedDisposer = c.get('tuiMessageObserver').subscribe(c, () => {}, { scope: '   ' }) as unknown as () => boolean
-    },
-  })
-  await sleep(30)
+  refusedDisposer = broker.subscribe(admittedContexts.get('carol')!, () => {}, { scope: '   ' }) as () => boolean
   check1('blank scope is refused with a noop disposer', refusedDisposer?.() === false)
-  check1('blank scope refusal warns', hostWarnings.slice(warnBefore).some(line => line.includes('options.scope')))
+  check1('blank scope refusal warns',
+    hostWarnings.slice(warnBefore).some(line => line.includes('not statically declared')),
+    hostWarnings.slice(warnBefore).join(' | '))
+}
+
+// ── E3. 超长 session id 不得截断成另一个订阅 scope ─────────────────────────
+{
+  const sessionIdLimit = OBSERVE_SCOPE_MAX_CHARS - 'session:'.length
+  const truncatedScope = `session:${'x'.repeat(sessionIdLimit)}`
+  const before = (received.get('beta') ?? []).length
+  const warningsBefore = hostWarnings.length
+  await subscribeAs('beta', undefined, truncatedScope, { declaredScope: 'session:*' })
+  // The previous slice() implementation delivered this into truncatedScope.
+  broker.publish(session(`${'x'.repeat(sessionIdLimit)}y`), userEvent(1, 'must not cross long scope'))
+  await sleep(20)
+  check1('overlong session scope produces no envelope', (received.get('beta') ?? []).length === before)
+  check1('overlong session scope is warned without logging the id',
+    hostWarnings.slice(warningsBefore).some(line => line.includes('session scope exceeds')))
 }
 
 // ── F. listener 抛错被隔离，续投不断 ──────────────────────────────────────
@@ -261,7 +285,7 @@ await subscribeAs('alpha')
   check1('throwing listener does not block other subscribers',
     ((received.get('alpha') ?? []).some(e => e.sequence === 20)))
   check1('throwing listener is warned and isolated',
-    hostWarnings.slice(warnBefore).some(line => line.includes('"beta"') && line.includes('isolated')))
+    hostWarnings.slice(warnBefore).some(line => line.includes('"com.example.beta"') && line.includes('delivery continues')))
   broker.publish(session('sess-1'), userEvent(21, 'delivery continues'))
   await sleep(20)
   check1('delivery continues after a throw',
@@ -316,7 +340,7 @@ await subscribeAs('alpha')
     grants: { allows: () => true, defaultOf: () => 'allow' as const, knownPermissions: () => [], corrupt: false },
   })
   const blindEnvelopes: MessagesObserveEnvelope[] = []
-  blind.subscribe(noSchemaCtx, envelope => { blindEnvelopes.push(envelope) }, { scope: 'session:sess-1' })
+  blind.subscribe(admittedContexts.get('alpha')!, envelope => { blindEnvelopes.push(envelope) }, { scope: 'session:sess-1' })
   blind.publish(session('sess-1'), userEvent(1, 'suppressed'))
   blind.publish(session('sess-1'), userEvent(2, 'still suppressed'))
   await sleep(20)
@@ -334,11 +358,11 @@ await subscribeAs('alpha')
     grants: { allows: () => true, defaultOf: () => 'allow' as const, knownPermissions: () => [], corrupt: false },
   })
   const strictEnvelopes: MessagesObserveEnvelope[] = []
-  strict.subscribe(strictCtx, envelope => { strictEnvelopes.push(envelope) }, { scope: 'session:sess-1' })
+  strict.subscribe(admittedContexts.get('alpha')!, envelope => { strictEnvelopes.push(envelope) }, { scope: 'session:sess-1' })
   strict.publish(session('sess-1'), userEvent(1, 'dropped by self-check'))
   await sleep(20)
   check1('failing self-check drops the envelope', strictEnvelopes.length === 0)
-  check1('self-check drop warns', strictWarnings.some(line => line.includes('vendored schema')))
+  check1('self-check drop warns', strictWarnings.some(line => line.includes('standard validator')))
 }
 
 // ── J. 零持久化 / disposer 幂等 ───────────────────────────────────────────
@@ -394,11 +418,11 @@ await subscribeAs('alpha')
   check1('no truncation on a readable image', img1?.payload.truncated === undefined)
   let imgSchemaError = ''
   try {
-    check(img1, data.schemas.message, data.schemas.message)
+    validateMessageEvent(img1)
   } catch (error) {
     imgSchemaError = error instanceof Error ? error.message : String(error)
   }
-  check1('mixed text/image envelope passes the vendored schema', imgSchemaError === '', imgSchemaError)
+  check1('mixed text/image envelope passes the official validator', imgSchemaError === '', imgSchemaError)
 
   // 超大（bytes 超预算——读取前即拒）→ 丢弃 + truncated，两侧文本合一。
   broker.publish(session('sess-img'), imgEvent(2, [
@@ -450,17 +474,17 @@ await subscribeAs('alpha')
   const subscriptionReleases = records.filter(record =>
     record.operation === 'release' && record.resource?.kind === 'subscription' && record.result === 'applied')
   check1('a successful subscribe lands a bind/subscription record',
-    subscriptionBinds.some(record => record.pluginId === 'alpha' && record.resource?.id === 'alpha'))
+    subscriptionBinds.some(record => record.pluginId === 'com.example.alpha' && record.resource?.id === 'com.example.alpha'))
   check1('the disposed beta subscription lands exactly one release record',
-    subscriptionReleases.filter(record => record.pluginId === 'beta').length === 1)
+    subscriptionReleases.filter(record => record.pluginId === 'com.example.beta').length === 1)
   check1('a denied subscribe records permission bind failed (never a subscription bind)',
-    !subscriptionBinds.some(record => record.pluginId === 'spy')
+    !subscriptionBinds.some(record => record.pluginId === 'com.example.spy')
     && records.some(record =>
-      record.pluginId === 'spy' && record.resource?.kind === 'permission'
+      record.pluginId === 'com.example.spy' && record.resource?.kind === 'permission'
       && record.result === 'failed' && record.errorCode === 'PERMISSION_NOT_GRANTED'))
   check1('a refused (blank-scope) subscribe leaves no bind record',
-    subscriptionBinds.filter(record => record.pluginId === 'carol').length === 2,
-    `carol binds: ${subscriptionBinds.filter(record => record.pluginId === 'carol').length} (2 legitimate, refusal must add none)`)
+    subscriptionBinds.filter(record => record.pluginId === 'com.example.carol').length === 2,
+    `carol binds: ${subscriptionBinds.filter(record => record.pluginId === 'com.example.carol').length} (2 legitimate, refusal must add none)`)
 }
 
 // ── 汇总 ──────────────────────────────────────────────────────────────────

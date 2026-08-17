@@ -10,6 +10,25 @@
 
 type JsonSchema = Record<string, unknown>
 
+/** Canonical JSON encoding for `uniqueItems`.  JSON object member order is not
+ * semantically significant, while `JSON.stringify` preserves insertion order
+ * and therefore lets equivalent objects evade duplicate detection. */
+function canonicalJson(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  switch (typeof value) {
+    case 'object': {
+      const record = value as Record<string, unknown>
+      return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+    }
+    case 'string': return JSON.stringify(value)
+    case 'number': return JSON.stringify(value) ?? 'null'
+    case 'boolean': return value ? 'true' : 'false'
+    case 'undefined': return 'undefined'
+    default: return `${typeof value}:${String(value)}`
+  }
+}
+
 function resolveRef(rootSchema: JsonSchema, ref: string): JsonSchema {
   if (!ref.startsWith('#/')) {
     throw new Error(`external ref is not supported by the zero-dependency checker: ${ref}`)
@@ -102,7 +121,7 @@ export function check(value: unknown, schema: JsonSchema, rootSchema: JsonSchema
       check(value[i], schema.items as JsonSchema, rootSchema, `${where}[${i}]`)
     }
     if (schema.uniqueItems === true) {
-      const encoded = value.map(item => JSON.stringify(item))
+      const encoded = value.map(canonicalJson)
       if (new Set(encoded).size !== encoded.length) throw new Error(`${where}: duplicate items`)
     }
     return

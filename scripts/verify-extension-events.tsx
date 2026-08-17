@@ -63,16 +63,16 @@ process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 // createChannel installs the D-7 decision guard itself (the backstop for a
 // missing dsh-tui-extensions row — this battery mounts none, so it exercises
-// exactly that path). The guard reads this file at channel creation; the
-// harness subscribes on the ROOT context, so root needs the grants the
-// production default-deny posture would otherwise refuse.
+// exactly that path). Intentional handlers below are mounted through an
+// admitted Component and the host-mediated DecisionEvents API; the root
+// context remains unprivileged for the denial probe.
 writeFileSync(joinPath(isolatedHome, '.dsh-tui', 'extension-grants.json'), JSON.stringify({
   grants: {
-    root: [
-      'session.input.intercept',
-      'session.rewind.intercept',
-      'session.switch.intercept',
-      'session.compact.intercept',
+    'event-probe': [
+      { name: 'session.input.intercept', scope: 'tui/input', activationId: 'events-act' },
+      { name: 'session.rewind.intercept', scope: 'tui/rewind-prompt', activationId: 'events-act' },
+      { name: 'session.switch.intercept', scope: 'tui/session-switch', activationId: 'events-act' },
+      { name: 'session.compact.intercept', scope: 'tui/compact', activationId: 'events-act' },
     ],
   },
 }))
@@ -94,6 +94,8 @@ const [
   import('../src/dsh-adapter/questions.js'),
   import('../src/dsh-adapter/channel.js'),
 ])
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
+const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 
 class FakeStdout extends Writable {
   columns = 100
@@ -225,9 +227,40 @@ for (const [key, value] of Object.entries(services)) {
   ;(ctx as unknown as { provide(name: string, value: unknown): () => void }).provide(key, value)
 }
 
+// Mount the host row before the channel so the admitted test Component gets
+// the same verified identity and live grant store as a production plugin.
+ctx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+await sleep(60)
+
 const channel = createChannel(ctx as never, makeAgent('a1', makeEvents(), captured) as never, {
   model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
 })
+
+const admitted = await mountAdmitted(ctx, 'event-export-name', testManifest({
+  id: 'event-probe',
+  requires: [DECISION_COORDINATE],
+  permissions: [
+    { name: 'session.input.intercept', scope: 'tui/input' },
+    { name: 'session.rewind.intercept', scope: 'tui/rewind-prompt' },
+    { name: 'session.switch.intercept', scope: 'tui/session-switch' },
+    { name: 'session.compact.intercept', scope: 'tui/compact' },
+  ],
+}), 'test:event-probe/dsh-plugin.json', { activationId: 'events-act' })
+const host = ctx.get('tuiPluginHost')
+if (host === undefined) throw new Error('tuiPluginHost was not mounted')
+let decisionOrder = 0
+const subscribe = (
+  event: string,
+  listener: (payload: Record<string, any>) => unknown,
+  options: { scope?: string } = {},
+): (() => boolean) => host.subscribeDecision(admitted.context, event, listener, {
+  ...options,
+  order: `battery-${String(decisionOrder++).padStart(4, '0')}`,
+})
+
+// Use a mediated facade for all intentional handlers. Keep the root `ctx`
+// for the separate raw-subscription denial probe below.
+const decisionCtx = { on: subscribe }
 
 const stdout = new FakeStdout()
 const stdin = new FakeStdin()
@@ -257,7 +290,7 @@ await sleep(800)
 
 // ── 1. tui/input transform ──────────────────────────────────────────────
 {
-  const dispose = ctx.on('tui/input', event => {
+  const dispose = decisionCtx.on('tui/input', event => {
     if (event.text === '原始输入') return { text: '改写后的输入' }
     return undefined
   })
@@ -274,7 +307,7 @@ await sleep(800)
 // ── 2. tui/input cancel (+ reason toast) ────────────────────────────────
 {
   const before = captured.followupTexts.length
-  const dispose = ctx.on('tui/input', event =>
+  const dispose = decisionCtx.on('tui/input', event =>
     event.text === '别发这个' ? { cancel: true, reason: '插件拦截了这条输入' } : undefined)
   channel.submit('别发这个')
   await sleep(300)
@@ -288,7 +321,7 @@ await sleep(800)
 {
   // A veto reason is toast-bound plugin text: control chars are stripped
   // before it reaches the notification queue.
-  const dispose = ctx.on('tui/input', event =>
+  const dispose = decisionCtx.on('tui/input', event =>
     event.text === '消毒检查' ? { cancel: true, reason: '拦截\x1b[31m\x07原因' } : undefined)
   channel.submit('消毒检查')
   await sleep(300)
@@ -300,7 +333,7 @@ await sleep(800)
 
   // D-8: a decision still pending past 400ms surfaces a parked indicator.
   // The listener resolves at ~600ms — deterministically beyond the threshold.
-  const disposeSlow = ctx.on('tui/input', async event => {
+  const disposeSlow = decisionCtx.on('tui/input', async event => {
     if (event.text !== '慢决定') return undefined
     await sleep(600)
     return { cancel: true, reason: '慢否决落地' } as const
@@ -322,7 +355,7 @@ await sleep(800)
 
 // ── 2c. bare intercepts toast the host-localized fallback ───────────────
 {
-  const disposeCancel = ctx.on('tui/input', event =>
+  const disposeCancel = decisionCtx.on('tui/input', event =>
     event.text === '无声拦截' ? { cancel: true } : undefined)
   channel.submit('无声拦截')
   await sleep(400)
@@ -331,7 +364,7 @@ await sleep(800)
     && !captured.followupTexts.some(text => text.includes('无声拦截')))
   disposeCancel()
 
-  const disposeHandled = ctx.on('tui/input', event =>
+  const disposeHandled = decisionCtx.on('tui/input', event =>
     event.text === '无声接管' ? { handled: true } : undefined)
   channel.submit('无声接管')
   await sleep(400)
@@ -343,7 +376,7 @@ await sleep(800)
 
 // ── 2d. decision+delivery FIFO: a slow A never lets B overtake ──────────
 {
-  const dispose = ctx.on('tui/input', async event => {
+  const dispose = decisionCtx.on('tui/input', async event => {
     if (event.text === '慢条甲') await sleep(400)
     return undefined
   })
@@ -359,7 +392,7 @@ await sleep(800)
 
 // ── 2e. Ctrl+Enter re-queue passes through tui/input ─────────────────────
 {
-  const dispose = ctx.on('tui/input', event =>
+  const dispose = decisionCtx.on('tui/input', event =>
     event.text === '插队文本' ? { cancel: true, reason: '插队被拦截' } : undefined)
   const before = captured.followupTexts.length
   channel.interruptAndDeliver(['插队文本'])
@@ -376,7 +409,7 @@ await sleep(800)
 
 // ── 3. tui/input crash isolation ────────────────────────────────────────
 {
-  const dispose = ctx.on('tui/input', () => {
+  const dispose = decisionCtx.on('tui/input', () => {
     throw new Error('plugin exploded')
   })
   channel.submit('照常发送')
@@ -392,9 +425,9 @@ await sleep(800)
 {
   // Blank rewrite first, veto second: the blank {text} is ignored and the
   // chain continues to the veto.
-  const disposeBlank = ctx.on('tui/input', event =>
+  const disposeBlank = decisionCtx.on('tui/input', event =>
     event.text === '空白改写' ? { text: '   ' } : undefined)
-  const disposeVeto = ctx.on('tui/input', event =>
+  const disposeVeto = decisionCtx.on('tui/input', event =>
     event.text === '空白改写' ? { cancel: true, reason: '安全否决生效' } : undefined)
   const before = captured.followupTexts.length
   channel.submit('空白改写')
@@ -406,11 +439,11 @@ await sleep(800)
 
   // Throwing listener first, veto second: the crash is isolated, the veto
   // still runs.
-  const disposeThrow = ctx.on('tui/input', event => {
+  const disposeThrow = decisionCtx.on('tui/input', event => {
     if (event.text === '崩溃在前') throw new Error('exploded')
     return undefined
   })
-  const disposeVeto2 = ctx.on('tui/input', event =>
+  const disposeVeto2 = decisionCtx.on('tui/input', event =>
     event.text === '崩溃在前' ? { cancel: true, reason: '崩溃后的否决生效' } : undefined)
   channel.submit('崩溃在前')
   await sleep(300)
@@ -420,9 +453,9 @@ await sleep(800)
   disposeVeto2()
 
   // Junk primitive return first, transform second: junk is ignored.
-  const disposeJunk = ctx.on('tui/input', event =>
+  const disposeJunk = decisionCtx.on('tui/input', event =>
     event.text === '垃圾返回' ? (true as never) : undefined)
-  const disposeTransform = ctx.on('tui/input', event =>
+  const disposeTransform = decisionCtx.on('tui/input', event =>
     event.text === '垃圾返回' ? { text: '垃圾已被改写' } : undefined)
   channel.submit('垃圾返回')
   await sleep(300)
@@ -435,7 +468,7 @@ await sleep(800)
   // a throwing getter). normalize runs inside the isolation boundary, so the
   // throw is logged and the chain still reaches the later veto — it must not
   // reject the whole dispatch.
-  const disposeHostile = ctx.on('tui/input', event => {
+  const disposeHostile = decisionCtx.on('tui/input', event => {
     if (event.text !== '敌意返回') return undefined
     const hostile = {}
     Object.defineProperty(hostile, 'text', {
@@ -443,7 +476,7 @@ await sleep(800)
     })
     return hostile as never
   })
-  const disposeVeto3 = ctx.on('tui/input', event =>
+  const disposeVeto3 = decisionCtx.on('tui/input', event =>
     event.text === '敌意返回' ? { cancel: true, reason: '敌意后的否决生效' } : undefined)
   channel.submit('敌意返回')
   await sleep(300)
@@ -456,7 +489,7 @@ await sleep(800)
 // ── 4. rewind modes: picker → mode list → rewindTo(mode) → done/switched ─
 {
   const seen: { promptSeq?: number; doneMode?: string | null; switchedKind?: string } = {}
-  const disposePrompt = ctx.on('tui/rewind-prompt', event => {
+  const disposePrompt = decisionCtx.on('tui/rewind-prompt', event => {
     seen.promptSeq = event.seq
     return {
       modes: [
@@ -471,11 +504,11 @@ await sleep(800)
       ],
     }
   })
-  const disposeDone = ctx.on('tui/rewind-done', event => {
+  const disposeDone = decisionCtx.on('tui/rewind-done', event => {
     seen.doneMode = event.mode
     return event.mode === 'files' ? '已恢复 2 个文件' : undefined
   })
-  const disposeSwitched = ctx.on('tui/session-switched', event => {
+  const disposeSwitched = decisionCtx.on('tui/session-switched', event => {
     seen.switchedKind = event.kind
   })
 
@@ -513,7 +546,7 @@ await sleep(800)
 
 // ── 5. rewind veto: picker stays open, no fork ───────────────────────────
 {
-  const disposePrompt = ctx.on('tui/rewind-prompt', () => ({ cancel: true, reason: '该消息不可回退' }))
+  const disposePrompt = decisionCtx.on('tui/rewind-prompt', () => ({ cancel: true, reason: '该消息不可回退' }))
   const forkCountBefore = captured.followupTexts.length // proxy for "nothing happened"
   // The section-4 rewind restored the picked message into the input for
   // re-editing: the first Esc clears it, then the double-Esc opens the
@@ -538,7 +571,7 @@ await sleep(800)
 // ── 6. session-switch veto + switched on /new ────────────────────────────
 {
   const seen: string[] = []
-  const disposeSwitch = ctx.on('tui/session-switch', event => {
+  const disposeSwitch = decisionCtx.on('tui/session-switch', event => {
     seen.push(`veto:${event.kind}`)
     return { cancel: true, reason: '本工作区禁止开会话' }
   })
@@ -547,7 +580,7 @@ await sleep(800)
   check('tui/session-switch veto: reason toasted', notified('本工作区禁止开会话'))
   disposeSwitch()
 
-  const disposeSwitched = ctx.on('tui/session-switched', event => {
+  const disposeSwitched = decisionCtx.on('tui/session-switched', event => {
     seen.push(`switched:${event.kind}`)
   })
   const switched = await channel.newSession()
@@ -559,7 +592,7 @@ await sleep(800)
 
 // ── 7. tui/compact veto + execution through the real channel ─────────────
 {
-  const dispose = ctx.on('tui/compact', () => ({ cancel: true, reason: '禁止压缩' }))
+  const dispose = decisionCtx.on('tui/compact', () => ({ cancel: true, reason: '禁止压缩' }))
   channel.compact()
   await sleep(300)
   check('tui/compact veto: compaction never ran', captured.compactCalls.length === 0)
@@ -576,7 +609,7 @@ await sleep(800)
 {
   let release: (value: undefined) => void = () => {}
   const gate = new Promise<undefined>(resolve => { release = resolve })
-  const dispose = ctx.on('tui/compact', () => gate)
+  const dispose = decisionCtx.on('tui/compact', () => gate)
   channel.compact()
   await sleep(200)
   const switched = await channel.newSession()
@@ -598,7 +631,7 @@ await sleep(800)
 {
   let release: (value: undefined) => void = () => {}
   const gate = new Promise<undefined>(resolve => { release = resolve })
-  const dispose = ctx.on('tui/compact', () => gate)
+  const dispose = decisionCtx.on('tui/compact', () => gate)
   channel.compact()
   await sleep(200)
   const switched = await channel.newSession()
@@ -620,7 +653,7 @@ await sleep(800)
   check('switch stale setup: /new off the origin succeeded', moved === true)
   let release: (value: undefined) => void = () => {}
   const gate = new Promise<undefined>(resolve => { release = resolve })
-  const dispose = ctx.on('tui/session-switch', event =>
+  const dispose = decisionCtx.on('tui/session-switch', event =>
     event.kind === 'resume' ? gate : undefined)
   const resumePromise = channel.resumeTo('s-a1')
   await sleep(200)
@@ -639,7 +672,7 @@ await sleep(800)
 {
   let release: (value: undefined) => void = () => {}
   const gate = new Promise<undefined>(resolve => { release = resolve })
-  const dispose = ctx.on('tui/input', async event => {
+  const dispose = decisionCtx.on('tui/input', async event => {
     if (event.text === '旧会话首条') await gate
     return undefined
   })
@@ -664,7 +697,7 @@ await sleep(800)
 {
   let release: (value: undefined) => void = () => {}
   const gate = new Promise<undefined>(resolve => { release = resolve })
-  const dispose = ctx.on('tui/rewind-prompt', () => gate)
+  const dispose = decisionCtx.on('tui/rewind-prompt', () => gate)
   const promptPromise = channel.promptRewind({ seq: 1, text: '消息 00' } as never)
   await sleep(300)
   const switched = await channel.newSession()
@@ -684,12 +717,12 @@ await sleep(800)
   let release: (value: string) => void = () => {}
   const gate = new Promise<string>(resolve => { release = resolve })
   let doneStarted = false
-  const disposeDone = ctx.on('tui/rewind-done', () => {
+  const disposeDone = decisionCtx.on('tui/rewind-done', () => {
     doneStarted = true
     return gate
   })
   const switchedKinds: string[] = []
-  const disposeSwitched = ctx.on('tui/session-switched', event => {
+  const disposeSwitched = decisionCtx.on('tui/session-switched', event => {
     switchedKinds.push(event.kind)
   })
   const rewindPromise = channel.rewindTo({ seq: 4, text: '回退恢复文本' } as never, null)
@@ -706,21 +739,24 @@ await sleep(800)
   disposeSwitched()
 }
 
-// ── 10. D-8: the parked indicator covers the WHOLE decision wait — sticky
-// while parked (no ~4s auto-expiry), dismissed the moment it settles ──────
+// ── 10. D-8: the parked indicator covers the bounded decision wait and is
+// dismissed as soon as that wait settles (the handler budget is 1s) ────────
 {
   let release: (value: undefined) => void = () => {}
   const gate = new Promise<undefined>(resolve => { release = resolve })
-  const dispose = ctx.on('tui/input', event => (event.text === '超长等待' ? gate : undefined))
+  const dispose = decisionCtx.on('tui/input', event => (event.text === '超长等待' ? gate : undefined))
   channel.submit('超长等待')
   await sleep(600) // past the 400ms threshold: the indicator is up
   check('pending indicator: raised past the threshold', notified('正在等待插件决定（tui/input）'))
-  await sleep(4400) // well past the old 4s auto-expiry — the decision is still parked
-  check('pending indicator: still up while the decision is parked',
+  // The standard single-handler deadline is 1s. The indicator must remain
+  // visible until that deadline resolves the never-settling callback; it is
+  // not allowed to disappear on the ordinary 4s notification timer first.
+  await sleep(250)
+  check('pending indicator: still up while the bounded decision is parked',
     notified('正在等待插件决定（tui/input）'))
   release(undefined)
-  await sleep(400)
-  check('pending indicator: dismissed when the decision finally settles',
+  await sleep(500)
+  check('pending indicator: dismissed when the deadline settles the decision',
     !(channel as unknown as { notifications: readonly { text: string }[] }).notifications
       .some(item => item.text.includes('正在等待插件决定')))
   check('pending indicator: the settled input is delivered',

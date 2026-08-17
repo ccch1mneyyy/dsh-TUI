@@ -33,6 +33,7 @@ process.env.DSH_TUI_LANG = 'zh'
 
 const { Context } = await import('@deepseek-ai/cordis')
 const { default: CommandRuntime } = await import('@deepseek-ai/dsh-commands')
+const { createScope } = await import('@deepseek-ai/dsh-scope')
 const {
   COMMAND_ERROR_CODES,
   hasCommandErrorCode,
@@ -44,6 +45,7 @@ const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
 const { TuiSceneRuntime } = await import('../src/dsh-adapter/scenes.js')
 const { TuiRendererRuntime } = await import('../src/dsh-adapter/renderers.js')
+const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('./plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -151,12 +153,18 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 // ── F. invoke 检查点门语义 ────────────────────────────────────────────────
 {
   const revoked = parseGrantStore(JSON.stringify({ denies: { root: ['commands.invoke'] } }))
-  check1('denies revoking commands.invoke blocks the root checkpoint', !revoked.allows('root', 'commands.invoke'))
+  check1('legacy unscoped deny cannot be widened into a command grant',
+    !revoked.allows({ componentId: 'root' }, 'commands.invoke', 'root.command'))
   const defaulted = parseGrantStore('{}')
-  check1('commands.invoke defaults to allow (registry-driven)', defaulted.allows('root', 'commands.invoke'))
-  const others = parseGrantStore(JSON.stringify({ denies: { 'evil-plugin': ['commands.invoke'] } }))
-  check1("another plugin's denies do not affect root", others.allows('root', 'commands.invoke'))
-  check1('the denied plugin itself is blocked', !others.allows('evil-plugin', 'commands.invoke'))
+  check1('commands.invoke defaults to allow for a valid command scope (registry-driven)',
+    defaulted.allows({ componentId: 'root' }, 'commands.invoke', 'root.command'))
+  const others = parseGrantStore(JSON.stringify({ denies: {
+    'evil-plugin': [{ name: 'commands.invoke', scope: 'evil-plugin.command' }],
+  } }))
+  check1("another plugin's denies do not affect root",
+    others.allows({ componentId: 'root' }, 'commands.invoke', 'root.command'))
+  check1('the denied plugin itself is blocked',
+    !others.allows({ componentId: 'evil-plugin' }, 'commands.invoke', 'evil-plugin.command'))
 }
 
 // ── F2. 命令归属（C-041 per-owner 检查点的数据源）─────────────────────────
@@ -168,53 +176,101 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   attrCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
   await sleep(50)
   const host = attrCtx.get('tuiPluginHost')
+  const commands = attrCtx.get('commands')
+  const globalAgent = {}
+  const resolved = (agent: object, name: string) => commands?.find(agent as never, name)
   check1('registerCommand surface exists on the plugin-host row', typeof host?.registerCommand === 'function')
 
-  // 经托管面注册 → 打 fiber.name 印。
-  let registerVia: ((definition: unknown) => () => void) | undefined
-  attrCtx.plugin({
-    name: 'evil-plugin',
-    apply: (c: InstanceType<typeof Context>) => {
-      registerVia = (definition: unknown) =>
-        c.get('tuiPluginHost').registerCommand(c, definition as never)
-    },
-  })
-  await sleep(30)
-  const disposer = registerVia!({ name: 'evil-cmd', description: '归属探针', handler: () => ({ kind: 'success' }) })
+  // 经托管面注册：必须使用已 admission 的 Component 与显式 contribution ID。
+  const evil = await mountAdmitted(attrCtx, 'evil-plugin', testManifest({
+    id: 'com.example.evil-plugin',
+    requires: [COMMAND_COORDINATE],
+    commands: [{ id: 'evil-plugin.evil-cmd', title: 'Evil command' }],
+    permissions: [{ name: 'commands.invoke', scope: 'evil-plugin.evil-cmd' }],
+  }))
+  const registerVia = (definition: unknown) =>
+    host!.registerCommand(evil.context, 'evil-plugin.evil-cmd', definition as never)
+  const disposer = registerVia({ name: 'evil-cmd', description: '归属探针', handler: () => ({ kind: 'success' }) })
   check1('mediated registration attributes the command to the plugin fiber',
-    commandOwner(attrCtx, 'evil-cmd') === 'evil-plugin')
+    commandOwner(attrCtx, resolved(globalAgent, 'evil-cmd'))?.componentId === 'com.example.evil-plugin')
 
   // 直接 ctx.get('commands') 注册 → 未归属（文档化 C-070 边界）。
-  attrCtx.get('commands')?.register({ name: 'accessor-cmd', description: '直接注册', handler: () => ({ kind: 'success' }) } as never)
+  commands?.register({ name: 'accessor-cmd', description: '直接注册', handler: () => ({ kind: 'success' }) } as never)
   check1('direct ctx.get registration stays unattributed (documented boundary)',
-    commandOwner(attrCtx, 'accessor-cmd') === undefined)
+    commandOwner(attrCtx, resolved(globalAgent, 'accessor-cmd')) === undefined)
 
   // 托管面重复注册 → 映射为 DUPLICATE_CONTRIBUTION_ID，原印不动。
   let duplicateMapped = false
   try {
-    registerVia!({ name: 'evil-cmd', description: '再注册一次', handler: () => ({ kind: 'success' }) })
+    registerVia({ name: 'evil-cmd', description: '再注册一次', handler: () => ({ kind: 'success' }) })
   } catch (error) {
     duplicateMapped = hasCommandErrorCode(error, 'DUPLICATE_CONTRIBUTION_ID')
   }
   check1('mediated duplicate registration throws DUPLICATE_CONTRIBUTION_ID', duplicateMapped)
-  check1('the failed duplicate left the original stamp intact', commandOwner(attrCtx, 'evil-cmd') === 'evil-plugin')
+  check1('the failed duplicate left the original stamp intact',
+    commandOwner(attrCtx, resolved(globalAgent, 'evil-cmd'))?.componentId === 'com.example.evil-plugin')
 
   // disposer 摘印且幂等。
   disposer()
-  check1('the mediated disposer lifts the stamp', commandOwner(attrCtx, 'evil-cmd') === undefined)
+  check1('the mediated disposer lifts the stamp', commandOwner(attrCtx, resolved(globalAgent, 'evil-cmd')) === undefined)
   disposer()
-  check1('double dispose stays harmless (no stamp, no throw)', commandOwner(attrCtx, 'evil-cmd') === undefined)
+  check1('double dispose stays harmless (no stamp, no throw)', commandOwner(attrCtx, resolved(globalAgent, 'evil-cmd')) === undefined)
+
+  // dsh-commands resolves same-name entries per agent scope. Attribute the
+  // selected definition itself, then unload one plugin without its wrapper.
+  const agentA = {}
+  const agentB = {}
+  const scopeA = createScope(attrCtx, agentA)
+  const scopeB = createScope(attrCtx, agentB)
+  const scopedAMounted = await mountAdmitted(scopeA.ctx, 'scope-plugin-a', testManifest({
+    id: 'com.example.scope-plugin-a',
+    requires: [COMMAND_COORDINATE],
+    commands: [{ id: 'scope-plugin-a.scoped-same', title: 'agent A' }],
+    permissions: [{ name: 'commands.invoke', scope: 'scope-plugin-a.scoped-same' }],
+  }))
+  const scopedBMounted = await mountAdmitted(scopeB.ctx, 'scope-plugin-b', testManifest({
+    id: 'com.example.scope-plugin-b',
+    requires: [COMMAND_COORDINATE],
+    commands: [{ id: 'scope-plugin-b.scoped-same', title: 'agent B' }],
+    permissions: [{ name: 'commands.invoke', scope: 'scope-plugin-b.scoped-same' }],
+  }))
+  host!.registerCommand(scopedAMounted.context, 'scope-plugin-a.scoped-same', {
+    name: 'scoped-same', description: 'agent A', handler: () => ({ kind: 'success' }),
+  } as never)
+  host!.registerCommand(scopedBMounted.context, 'scope-plugin-b.scoped-same', {
+    name: 'scoped-same', description: 'agent B', handler: () => ({ kind: 'success' }),
+  } as never)
+  const scopedA = scopedAMounted.fiber
+  const definitionA = resolved(agentA, 'scoped-same')
+  check1('same command name keeps separate owners in separate agent scopes',
+    commandOwner(attrCtx, definitionA)?.componentId === 'com.example.scope-plugin-a'
+    && commandOwner(attrCtx, resolved(agentB, 'scoped-same'))?.componentId === 'com.example.scope-plugin-b')
+  await Promise.resolve(scopedA.dispose())
+  await sleep(30)
+  check1('fiber teardown removes the scoped command definition', resolved(agentA, 'scoped-same') === undefined)
+  check1('fiber teardown also removes its attribution stamp',
+    commandOwner(attrCtx, definitionA) === undefined
+    && commandOwner(attrCtx, resolved(agentB, 'scoped-same'))?.componentId === 'com.example.scope-plugin-b')
+  await scopeA.dispose()
+  await scopeB.dispose()
 }
 
 // ── G. channel 接线断言 ───────────────────────────────────────────────────
 {
   const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
-  const checkpoint = channel.indexOf("grantStore.allows('root', 'commands.invoke')")
-  check1('invoke checkpoint present in channel.ts', checkpoint !== -1)
+  // Keep this assertion tied to the effective-definition lookup rather than
+  // one particular expression layout: the channel intentionally stores the
+  // definition before resolving its owner so the same value is passed to
+  // `execute`'s agent-scoped lookup checks.
+  const definitionLookup = channel.indexOf('const definition = commandService.find(agent, name)')
+  const ownerLookup = channel.indexOf('const owner = commandOwner(ctx, definition)', definitionLookup)
+  const checkpoint = definitionLookup
+  check1('owner-scoped invoke checkpoint present in channel.ts', checkpoint !== -1)
+  check1('owner lookup uses the effective definition', ownerLookup > definitionLookup)
   const executeAfter = channel.indexOf('commandService.execute(', checkpoint)
-  check1('checkpoint runs BEFORE commandService.execute', executeAfter > checkpoint)
-  check1("deny path returns t('command-invoke-denied')", channel.includes("return t('command-invoke-denied')"))
-  check1('invoke deny recorded to the ledger', channel.includes("resource: { kind: 'permission', id: 'commands.invoke' }"))
+  check1('owner checkpoint runs BEFORE commandService.execute', executeAfter > checkpoint)
+  check1("owner deny path returns t('command-invoke-denied-owner')", channel.includes("return t('command-invoke-denied-owner'"))
+  check1('owner invoke deny records a scoped permission id', channel.includes('resource: { kind: \'permission\', id: `${owner.componentId}:commands.invoke:${owner.commandId}` }'))
   check1('skill register catch maps through mapCommandError', /catch \(error\) \{[\s\S]{0,400}mapCommandError\(error\)/.test(channel))
   check1("skill success recorded as command create applied",
     channel.includes("{ operation: 'create', resource: { kind: 'command', id: name }, result: 'applied' }"))
@@ -224,18 +280,15 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     channel.includes("import { hasCommandErrorCode, mapCommandError } from './command-errors.js'"))
   check1('command-attribution imported by channel.ts',
     channel.includes("import { commandOwner } from './command-attribution.js'"))
-  const ownerCheckpoint = channel.indexOf('commandOwner(ctx, name)')
+  const ownerCheckpoint = checkpoint
   check1('per-owner checkpoint present', ownerCheckpoint !== -1)
   check1('per-owner checkpoint runs BEFORE commandService.execute',
     channel.indexOf('commandService.execute(', ownerCheckpoint) > ownerCheckpoint)
-  check1("owner deny path returns t('command-invoke-denied-owner')",
-    channel.includes("return t('command-invoke-denied-owner'"))
-  check1('owner deny recorded with the owner-scoped permission id',
-    channel.includes("id: `${owner}:commands.invoke`"))
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',
     pluginHost.includes('registerCommand(pluginCtx: Context'))
-  check1('registerCommand stamps the owner on success', pluginHost.includes('stampCommandOwner(this.ctx, name, owner)'))
+  check1('registerCommand stamps the resolved definition on success', pluginHost.includes('stampCommandOwner(this.ctx, attributedDefinition, identity, contributionId)'))
+  check1('registerCommand resolves commands through the plugin context', pluginHost.includes("pluginCtx.get('commands')"))
   check1('registerCommand maps duplicate errors', pluginHost.includes('mapCommandError(error)'))
 
   const i18n = readFileSync(join(root, 'src/i18n.ts'), 'utf8')

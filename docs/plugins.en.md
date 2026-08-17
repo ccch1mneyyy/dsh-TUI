@@ -78,9 +78,10 @@ dsh-TUI aligns with the community ecosystem meta-protocol
 v0.15. The essentials:
 
 - Contracts are identified by **coordinates** (`apiVersion + kind`, e.g.
-  `commands.dsh/v1alpha1` + `Command`); the registry pins a `schemaHash` per
-  contract, and a host declaration that disagrees with the registry is treated
-  as unavailable (fail closed).
+  `commands.dsh/v1alpha1` + `Command`); imported definitions carry their
+  pinned `@dsh-std/*` package identity and TUI-owned definitions carry an
+  immutable profile hash. A host declaration that disagrees with the registry
+  is treated as unavailable (fail closed).
 - A plugin manifest (`dsh-plugin.json`) declares `facets.host` (entry +
   apiVersion), `requires.contracts` (optional references must carry a
   fallback), `permissions`, and `subscriptions`; `provides`/`services` and
@@ -95,17 +96,14 @@ v0.15. The essentials:
 
 What lives in this repository:
 
-- `ecosystem-spec/` — vendored read-only data (registry / schemas /
-  conformance fixtures); the sync baseline and update flow are documented in
-  that directory's README. After an upstream update, overwrite the tree and
-  run `npm run verify:plugin-spec` as the drift alarm (schemaHash recompute +
-  the full fixture matrix).
-- `src/plugin-spec/` — a zero-dependency validation/negotiation library: a
-  JSON Schema checker (the subset used by the vendored schemas),
-  `validatePlugin`/`validateHost` semantic checks, the five-state `negotiate`,
-  and registry/contract-profile self-checks. Proven fixture-by-fixture
-  equivalent to the upstream conformance reference implementation (38 battery
-  assertions).
+- `vendor/dsh-std/` — the pinned-revision official protocol packages
+  (manifest parser, projection, ProtocolCatalog, and contract validators).
+- `ecosystem-spec/` — the pinned admission-profile registry, schemas, and
+  conformance fixtures; `npm run verify:plugin-spec` checks profile hashes and
+  fixture drift.
+- `src/plugin-spec/` — the validation/negotiation layer: the official parser
+  owns manifest shape, `validatePlugin`/`validateHost` own profile semantics,
+  and five-state `negotiate` uses the same `ProtocolCatalog`.
 
 **Boundary declaration**: plugin discovery, installation, and loading belong
 to the dsh CLI (the `@deepseek-ai/dsh` Loader) — **load-time enforcement is
@@ -136,10 +134,20 @@ stop applying after a single I/O error):
 
 ```json
 {
-  "grants": { "my-guard": ["session.input.intercept"] },
-  "denies": { "noisy": ["commands.invoke"] }
+  "grants": {
+    "my-guard": [{ "name": "session.input.intercept", "scope": "tui/input" }]
+  },
+  "denies": {
+    "noisy": [{ "name": "commands.invoke", "scope": "com.example.noisy.run" }]
+  }
 }
 ```
+
+Rules retain the permission definition's resource/session/command scope and may
+carry an `activationId`. Diagnostic calls without a real activation identity
+fail closed when an activation-scoped rule could apply; the live store makes
+file changes effective on the next operation and releases related
+DecisionEvents/observer registrations.
 
 The `dsh-tui-plugin-host` row (already in cordis.patch.yml, ahead of the
 extensions row) provides `ctx.tuiPluginHost`: the runtime generationId
@@ -157,19 +165,22 @@ enters any inject list.
 
 `storage.local` (C-040): per-plugin private persistence, obtained from
 `ctx.get('tuiPluginStorage', false)` via `open(ctx)` →
-`{ get, set, delete }` — the namespace IS the caller context's fiber.name
-(there is no parameter to name another plugin, so cross-plugin access is
-rejected by construction). `get` requires `storage.local.read`;
-`set`/`delete` require `storage.local.write`, checked on every call. The
-backend is `~/.dsh-tui/plugin-storage/<namespace>.json` (atomic writes +
-file locking; quota 256 keys / 256 KiB; a corrupt file is never overwritten
-silently — operations report STORAGE_UNAVAILABLE and the bytes stay on disk
-for manual recovery). Errors carry the contract codes:
-PERMISSION_NOT_GRANTED / INVALID_KEY / QUOTA_EXCEEDED /
+`{ get, set, delete }`. The namespace comes from the verified Component
+identity bound to the passed activation; callers cannot name another plugin.
+The standard operation shapes are `get({ key }) -> { value }`,
+`set({ key, value }) -> { stored: true }`, and
+`delete({ key }) -> { deleted }`. `get` requires `storage.local.read`;
+`set`/`delete` require `storage.local.write`, checked on every call against
+the live grant store. The backend is
+`~/.dsh-tui/plugin-storage/<namespace>.json` (atomic writes + file locking;
+quota 256 keys / 256 KiB; a corrupt file is never overwritten silently —
+operations report STORAGE_UNAVAILABLE and the bytes stay on disk for manual
+recovery). Errors carry the contract codes:
+PERMISSION_NOT_GRANTED / INVALID_KEY / INVALID_VALUE / QUOTA_EXCEEDED /
 STORAGE_UNAVAILABLE. Values must be **exact JSON values** — inputs that
 JSON.stringify would silently mutate (undefined, NaN/±Infinity, functions,
 symbols, BigInt, class instances, sparse arrays, cycles) are rejected with
-INVALID_KEY instead of round-tripping a value the plugin never stored; and
+INVALID_VALUE instead of round-tripping a value the plugin never stored; and
 keys colliding with Object.prototype names (`__proto__`, `toString`,
 `constructor`) are ordinary data (null-prototype tables + own-property
 membership — no prototype reads, no fake membership). Keys and values are
@@ -178,15 +189,17 @@ in invocation order; unloading the plugin closes its handle while the data
 is retained.
 
 `messages.observe` (C-042): the message-observation broker, subscribed via
-`ctx.get('tuiMessageObserver', false)` → `subscribe(ctx, listener, { scope })`
-(identity = the passed context's fiber.name). **The scope is required and
-matched exactly** (e.g. `session:<id>`) — a subscription only ever receives
-envelopes of its own scope, so another session's sensitive content is
-unreachable by construction (C-042 scope isolation); a blank or overlong
-scope is refused (no-op disposer + warning). The mapping is deliberately
-narrow: `user/message` → `message.received`, `assistant/message` →
-`message.sent`; streaming chunks, tool and boundary events never produce
-envelopes. Every envelope passes the vendored schema before delivery:
+`ctx.get('tuiMessageObserver', false)` → `subscribe(ctx, listener, { scope })`.
+The caller must have a verified Component identity. The requested scope must
+be covered by a static `MessageObserver` subscription in the manifest and by
+the manifest permission; it is then matched exactly (or by an explicit
+`session:*` declaration). A subscription only ever receives envelopes of its
+own scope, so another session's sensitive content is unreachable by
+construction (C-042 scope isolation); a blank or overlong scope is refused
+(no-op disposer + warning). The mapping is deliberately narrow:
+`user/message` → `message.received`, `assistant/message` → `message.sent`;
+streaming chunks, tool and boundary events never produce envelopes. Every
+envelope passes the pinned standard validator before delivery:
 `scope=session:<id>`, `sequence` = the session event's own seq (monotonic,
 gaps allowed — image reads are async, so envelope builds serialize
 broker-wide and delivery order stays the publish order),
@@ -200,18 +213,20 @@ dropped and mark `truncated`); summary is the sanitized first
 200 cells with a `truncated` flag when clipped. The
 `messages.observe.read` grant is checked at subscribe time (fast fail:
 no-op disposer + warning) and re-checked per subscription at deliver time —
-a revocation releases the subscription (contract cleanup). A successful
-subscribe and every release path (disposer, unload, revoke — one funnel)
-land in the effect ledger (bind/release subscription), so /plugins can
-reverse-lookup active subscriptions. A throwing
-listener is isolated while delivery continues; at-most-once, no replay;
-the broker persists nothing (contract retention).
+a revocation releases the subscription (contract cleanup). Each callback gets
+its own frozen envelope copy, so one listener cannot mutate another listener's
+input. Callbacks have a bounded budget and queue; a timeout closes the
+subscription while later subscriptions continue. A successful subscribe and
+every release path (disposer, unload, revoke — one funnel) land in the effect
+ledger (bind/release subscription), so /plugins can reverse-lookup active
+subscriptions. A throwing listener is isolated while delivery continues;
+at-most-once, no replay; the broker persists nothing (contract retention).
 
 `commands` (C-041): plugins register commands through the plugin-host row's
 **mediated surface** `ctx.tuiPluginHost.registerCommand(pluginCtx,
-definition)` — a successful registration stamps the command's owner as the
-caller's fiber.name (dsh-commands itself has no owner concept; the
-attribution ledger lives in `src/dsh-adapter/command-attribution.js`), a
+definition)` — a successful registration stamps the command's owner with the
+verified Component identity and activation (dsh-commands itself has no owner
+concept; the attribution ledger lives in `src/dsh-adapter/command-attribution.js`), a
 duplicate registration throws the mapped error carrying
 `code: 'DUPLICATE_CONTRIBUTION_ID'`
 (`src/dsh-adapter/command-errors.js`), and the returned disposer lifts the
@@ -229,9 +244,9 @@ Effect ledger (C-060): an append-only JSONL journal at
 `~/.dsh-tui/effect-ledger.jsonl`, written through
 `ctx.get('tuiEffectLedger', false)` → `record(entry, identity?)`; it never
 throws into the caller. Every record carries the lifecycle triple: pluginId
-(the passed identity's fiber.name; root fiber → `'host'`; omitted →
-`'undeclared'`), activationInstance (first-seen per fiber, stable for the
-process; a hot reload is a new instance), and runtimeGenerationId (C-050).
+(the passed verified Component id; root fiber → `'host'`; omitted →
+`'undeclared'`), activationInstance (the admitted activation id, or a
+first-seen fallback for undeclared contexts), and runtimeGenerationId (C-050).
 The five operations — create / bind / replace / release / cleanup-failed —
 cover scenes, shortcuts, status lines, renderers, commands, storage
 namespaces, and grant denials (PERMISSION_NOT_GRANTED). Records are built
@@ -257,12 +272,10 @@ installed plugins: that knowledge lives in the dsh CLI Loader), and the last
 5 ledger records. `/plugins check <path>` runs the vendored schema,
 validatePlugin, and the five-state negotiate over any dsh-plugin.json
 (grants are the store's current answers for that manifest id) and prints
-the decision with its reason codes; each stage retries ONCE against the
-**TUI host-extension overlay** (`src/plugin-spec/tui-extension.js` — the
-admission path for the `session.*.intercept` permission names and `tui/*`
-event subscriptions the core registry does not carry), and the output says
-so when a verdict relied on the overlay; when both sides fail, the reported
-error is the vendored core one. Manifests are untrusted input — every
+the decision with its reason codes. The parser, projection, and public/private
+protocol definitions all come from the pinned revision; the TUI
+`DecisionEvents` definition is registered in the same ProtocolCatalog rather
+than handled by a second checker. Manifests are untrusted input — every
 derived line passes cleanScalarText. `/doctor` gains two lines: the plugin
 runtime generation and the registry self-check.
 
@@ -674,10 +687,11 @@ React instance:
 
 ## Seam 9: Decision Events (tui/input · rewind · session-switch · compact)
 
-pi-style before-events: the TUI hands plugins the decision BEFORE executing
-key actions. Decision events are awaited listener-by-listener in registration
-order, and the **first VALID decision wins** — unlike raw `ctx.serial`, the
-host normalizes and isolates per listener:
+pi-style before-events: the TUI hands admitted Components the decision BEFORE
+executing key actions. Decision handlers are awaited in a deterministic order
+key (never installation/load order), with a per-handler budget and a total
+dispatch deadline. The **first VALID decision wins** — unlike raw `ctx.serial`,
+the host normalizes and isolates per handler:
 
 - `undefined`/`null`/`false` means "no opinion"; the chain continues;
 - **Malformed returns are not decisions** — a blank `{ text }` rewrite, a
@@ -712,30 +726,32 @@ Shared semantics:
   `tui/input` → `session.input.intercept`, `tui/rewind-prompt` →
   `session.rewind.intercept`, `tui/session-switch` → `session.switch.intercept`,
   `tui/compact` → `session.compact.intercept`. Notification-class events
-  (`tui/rewind-done`, `tui/session-switched`) are not gated. The grants file
-  is keyed by plugin name (the cordis row's `name` export):
+  (`tui/rewind-done`, `tui/session-switched`) are not gated. Registration is
+  through the host-mediated `subscribeDecision` surface (the compatibility
+  `ctx.on` facade is denied unless it resolves to the same admitted identity,
+  static declaration, scope, and grant checks). The grants file is keyed by
+  verified Component id and uses scoped rules:
 
   ```json
-  { "grants": { "my-guard": ["session.input.intercept"] } }
+  { "grants": { "com.example.guard": [{ "name": "session.input.intercept", "scope": "tui/input" }] } }
   ```
 
-  The file is read once when the gate is installed (BOTH the extensions row
-  and the channel install it — idempotent per cordis root, first installer
-  wins — so even a stale bundle patch missing the extensions row leaves the
-  gate up: the channel installs it as the backstop and decision events never
-  become allow-by-default); changing grants means editing the file and
-  restarting. A missing file falls back to the registry defaults (intercept
-  permissions default deny); an unparseable file denies everything, including
+  The store is read live for each authorization checkpoint. Editing or
+  removing a rule therefore blocks the next operation without a restart and
+  releases grant-owned handlers/subscriptions through the same lifecycle
+  funnel. A missing file uses registry defaults (intercept permissions default
+  deny); an unreadable or unparseable file denies everything, including
   allow-default permissions (fail closed). The file is the unified
   8-permission grant store (with a `denies` revocation section) — full
-  semantics in the "Community Consensus Spec" section.
-- **Ordering guarantee**: decisions and deliveries are serialized in
-  submission order — a slow decision on an earlier input holds back the
-  decision AND delivery of later ones, so the model always receives messages
-  in the order the user submitted them. Every submission binds its origin
-  session AT ENQUEUE: even when it runs only after a slow predecessor and
-  the user has switched sessions by then, the stale input is dropped with a
-  notice instead of reaching the new session.
+  semantics are in the "Community Consensus Spec" section.
+- **Ordering and deadlines**: handlers are sorted by their explicit stable
+  `order` key, then Component/activation identity. A slow handler is treated as
+  no opinion after the per-handler budget; once the total budget is exhausted,
+  remaining handlers are skipped. Input submissions and their deliveries still
+  use a FIFO chain, so the model receives them in submission order. Every
+  submission binds its origin session AT ENQUEUE: even when it runs only after
+  a slow predecessor and the user has switched sessions by then, stale input
+  is dropped with a notice instead of reaching the new session.
 - `cancel.reason` / `handled.notice` / the `tui/rewind-done` summary are
   toasted; the host supplies a localized fallback when absent (a bare
   `{ cancel: true }` / `{ handled: true }` never makes the typed line vanish
@@ -760,15 +776,17 @@ Shared semantics:
   echoed back in `tui/rewind-done`'s payload — the plugin performs the actual
   mode logic (e.g. restoring files) in the done listener.
 - Be deliberate about slow work in decision listeners: `tui/input` sits in
-  front of the delivery chain and genuinely delays sending; when you need to
-  ask the user, use seam 10 (it exists for exactly this).
+  front of the delivery chain and genuinely delays sending, but the host still
+  applies the handler and total deadlines. When you need to ask the user, use
+  seam 10 (it exists for exactly this).
 
 ### Example: input guard + custom command output
 
 ```ts
 import type { TuiInputEvent, TuiInputDecision } from '@deepseek-harness-tui/dsh-tui/extensions'
 
-ctx.on('tui/input', (event: TuiInputEvent): TuiInputDecision | undefined => {
+const host = ctx.get('tuiPluginHost', false)
+host?.subscribeDecision(ctx, 'tui/input', (event: TuiInputEvent): TuiInputDecision | undefined => {
   // /my-command is handled by the plugin itself: no session, no model
   if (event.text.startsWith('/my-command')) {
     void runMyCommand(event.text.slice('/my-command'.length).trim())
@@ -797,7 +815,7 @@ requests queue **FIFO**, one visible at a time.
 const dialogs = ctx.get('tuiDialogs', false)
 
 // Single choice: resolves the option id; cancel/Esc/timeout/abort → undefined
-const id = await dialogs?.select({
+const id = await dialogs?.select(ctx, {
   title: 'Pick one',
   options: [
     { id: 'fast', label: 'Fast mode' },
@@ -809,7 +827,7 @@ const id = await dialogs?.select({
 
 // Confirm: resolves true/false; cancel counts as false (Esc and "No" are
 // deliberately indistinguishable)
-const ok = await dialogs?.confirm({
+const ok = await dialogs?.confirm(ctx, {
   title: 'Overwrite?',
   message: 'The target file already exists',
   confirmLabel: 'Overwrite',   // defaults fall back to the host's localized Yes/No
@@ -817,7 +835,7 @@ const ok = await dialogs?.confirm({
 })
 
 // Single-line input: resolves the text; cancel → undefined
-const name = await dialogs?.input({
+const name = await dialogs?.input(ctx, {
   title: 'Give it a name',
   placeholder: 'Enter to confirm, Esc to cancel',
   initial: 'default-name',
@@ -842,13 +860,19 @@ Contract points:
   typed text; a paste that is all line breaks is NEVER read as Enter — the
   confirm's default focus cannot be tripped by one paste, likewise for
   select/input.
+- Each request is owned by the calling activation. Deactivation aborts the
+  active or queued request, removes it from the FIFO queue, and settles its
+  Promise; no dialog effect survives plugin unload. The explicit `ctx` overload
+  shown above is useful for retained service references; a normal Cordis
+  traceable service call also binds the caller context.
 - When the service is absent (older profiles) `ctx.get` returns `undefined` —
   the plugin decides whether to skip interaction or fall back to a headless
-  default; `timeoutMs` is the fuse for "service present but no TUI consumer".
+  default. Requests without a signal or timeout still get the host's bounded
+  default timeout; `timeoutMs` can provide a shorter fuse.
 
-Typical pairing: a decision-event listener that asks first —
-`ctx.on('tui/rewind-prompt', async () => … await dialogs.select(…))` — then
-returns its decision once the user answers.
+Typical pairing: a mediated DecisionEvents handler that asks first —
+`host?.subscribeDecision(ctx, 'tui/rewind-prompt', async () => … await dialogs.select(ctx, …))` —
+then returns its decision once the user answers.
 
 ## Seam 11: Status Line (tuiStatus)
 

@@ -5,11 +5,10 @@
  *
  * Every record carries the lifecycle triple:
  *
- * - `pluginId` — derived from the PASSED identity context's `fiber.name`
- *   (the same honest-identity rule as storage.local: there is no parameter
- *   to impersonate another plugin). `'host'` when the host itself records
- *   (root fiber), `'undeclared'` when a plugin-facing method was called
- *   without the optional `identity` argument.
+ * - `pluginId` — derived from the verified Component identity bound to the
+ *   PASSED activation. `'host'` is used for host/root records and
+ *   `'undeclared'` for a plugin-facing call without a verified identity; a
+ *   display fiber name is never trusted as authorization identity.
  * - `activationInstance` — stable per cordis fiber for the lifetime of this
  *   process (first-seen assignment from a WeakMap), so a hot-reloaded plugin
  *   shows up as a NEW instance while all effects of one activation share one
@@ -42,6 +41,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { DATA_DIR } from '../utils/paths.js'
 import { loadSpecData } from '../plugin-spec/registry.js'
 import { check } from '../plugin-spec/schema-check.js'
+import { componentIdentityOf } from './component-identity.js'
 
 /** Default ledger file (JSONL, one record per line). */
 export const EFFECT_LEDGER_FILE = join(DATA_DIR, 'effect-ledger.jsonl')
@@ -132,13 +132,14 @@ export class TuiEffectLedgerRuntime extends Service {
         return
       }
       const fiber = this.fiberOf(identity)
-      const pluginId = this.pluginIdOf(identity, fiber)
+      const verified = identity === undefined ? undefined : componentIdentityOf(identity)
+      const pluginId = this.pluginIdOf(identity, fiber, verified?.componentId)
       const record = {
         ledgerVersion: '0.15',
         sequence: this.sequence,
         timestamp: new Date().toISOString(),
         pluginId,
-        activationInstance: this.activationOf(fiber, pluginId),
+        activationInstance: verified?.activationId ?? this.activationOf(fiber, pluginId),
         runtimeGenerationId: this.generation(),
         operation: entry.operation,
         resource: {
@@ -222,16 +223,20 @@ export class TuiEffectLedgerRuntime extends Service {
     }
   }
 
-  private pluginIdOf(identity: Context | undefined, fiber: object | undefined): string {
+  private pluginIdOf(identity: Context | undefined, fiber: object | undefined, verifiedComponentId?: string): string {
     if (identity === undefined) return 'undeclared'
+    if (verifiedComponentId !== undefined) return cleanField(verifiedComponentId, 128, 'undeclared')
     let name = ''
     try {
       name = typeof identity.fiber?.name === 'string' ? identity.fiber.name : ''
     } catch {
       name = ''
     }
+    // A non-root fiber without a verified Component is intentionally not
+    // attributed by its Cordis export name.  Names are display metadata and
+    // can differ from the manifest identity (or be impersonated).
     if (fiber === undefined || name === '' || name === 'root') return 'host'
-    return cleanField(name, 128, 'host')
+    return 'undeclared'
   }
 
   private activationOf(fiber: object | undefined, pluginId: string): string {

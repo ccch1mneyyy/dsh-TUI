@@ -10,7 +10,7 @@
  * - EVERYTHING ELSE (assistant/chunk streaming, tool/*, turn/*, mode
  *   events, …) produces NO envelope — observation starts conservative.
  *
- * Envelope rules (vendored schema `messages-observe-envelope-0.15.json`):
+ * Envelope rules (the pinned `@dsh-std/messages` v0.15 definition):
  *
  * - `scope` = `session:<sessionId>`; `sequence` = the session event's own
  *   `seq` (monotonic within scope, gaps allowed — unmapped events simply
@@ -25,7 +25,7 @@
  *   an unreadable/oversize image is dropped and marks `truncated`.
  *   `summary` is the sanitized first 200 cells of the joined text;
  *   `truncated` marks summary, content, or image-drop truncation.
- * - EVERY produced envelope passes the vendored schema before delivery;
+ * - EVERY produced envelope passes the official pinned validator before delivery;
  *   a malformed envelope is dropped with a warning, never delivered.
  *
  * Scope isolation (C-042): `subscribe` requires an exact `scope` string
@@ -53,11 +53,22 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import { validateMessageEvent } from '@dsh-std/messages'
 import { check } from '../plugin-spec/schema-check.js'
-import { loadSpecData } from '../plugin-spec/registry.js'
 import { cleanScalarText } from './sanitize.js'
 import { readGrantStore, type GrantStore } from './grants.js'
 import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
+import {
+  declaresObserverScope,
+  declaresPermission,
+  requireComponentIdentity,
+  type VerifiedComponentIdentity,
+} from './component-identity.js'
+import {
+  normalizePermissionScope,
+  scopeCovers,
+  SESSION_SCOPE_MAX_CHARS,
+} from '../plugin-spec/permission-scope.js'
 
 /** Envelope content block (MCP ContentBlock text/image subset). */
 export type MessagesObserveContentBlock =
@@ -91,15 +102,76 @@ export const OBSERVE_SUMMARY_CELLS = 200
 /** Content text bound (chars; schema maxLength 262144). */
 export const OBSERVE_CONTENT_MAX_CHARS = 262144
 /** Scope bound (schema maxLength 256). */
-export const OBSERVE_SCOPE_MAX_CHARS = 256
+export const OBSERVE_SCOPE_MAX_CHARS = SESSION_SCOPE_MAX_CHARS
 /** messageId bound (schema maxLength 256). */
 export const OBSERVE_ID_MAX_CHARS = 256
 /** Raw image byte budget per block (192 KiB → ≤262144 base64 chars). */
 export const OBSERVE_IMAGE_MAX_BYTES = 192 * 1024
 /** Base64 length bound implied by OBSERVE_IMAGE_MAX_BYTES. */
 export const OBSERVE_IMAGE_BASE64_MAX_CHARS = 262144
+/** Per-callback budget; timeout closes the subscription deterministically. */
+export const OBSERVE_CALLBACK_TIMEOUT_MS = 1500
+/** Bound queued callbacks per subscription so a stalled listener cannot grow
+ * an unbounded Promise chain before its timeout closes the subscription. */
+export const OBSERVE_CALLBACK_QUEUE_LIMIT = 32
 /** The envelope schema's mimeType pattern (image blocks). */
 const OBSERVE_MIME_PATTERN = /^[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+$/
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value
+  Object.freeze(value)
+  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child)
+  return value
+}
+
+function freezeEnvelope(envelope: MessagesObserveEnvelope): MessagesObserveEnvelope {
+  return deepFreeze(structuredClone(envelope))
+}
+
+/** Session events are untrusted at this boundary. Never coerce arbitrary
+ * objects through `String()` because a hostile `toString` can fabricate
+ * message text (or throw) before the envelope validator sees it. */
+function sourceBlockType(value: unknown): 'text' | 'image' | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  try {
+    const type = (value as { type?: unknown }).type
+    return type === 'text' || type === 'image' ? type : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function sourceText(value: unknown): string | undefined {
+  try {
+    const text = (value as { text?: unknown }).text
+    return typeof text === 'string' ? text : undefined
+  } catch {
+    return undefined
+  }
+}
+
+type BoundedCallbackResult =
+  | { kind: 'fulfilled' }
+  | { kind: 'rejected'; error: unknown }
+  | { kind: 'timeout' }
+
+async function runWithBudget(
+  task: () => void | Promise<void>,
+  timeoutMs: number,
+): Promise<BoundedCallbackResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const work: Promise<BoundedCallbackResult> = Promise.resolve()
+    .then(task)
+    .then(() => ({ kind: 'fulfilled' as const }), error => ({ kind: 'rejected' as const, error }))
+  const timeout = new Promise<BoundedCallbackResult>(resolve => {
+    timer = setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs)
+  })
+  try {
+    return await Promise.race([work, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
 
 /** Structural view of the attachments service (soft-probed — an unmounted
  *  attachment store simply means image blocks resolve to "dropped"). */
@@ -109,17 +181,29 @@ interface ObserveAttachmentReader {
 
 interface Subscription {
   plugin: string
-  /** The subscriber's own context — kept so the deliver-time revoke path can
-   *  record the release against the right ledger identity (it has no other
-   *  access to the plugin's fiber). */
-  identity: Context
-  /** Exact envelope scope this subscription receives (e.g. "session:<id>").
-   *  Subscriptions NEVER cross scopes (C-042 isolation). */
+  identity: VerifiedComponentIdentity
+  ownerContext: Context
+  /** Requested envelope scope (e.g. "session:<id>" or the explicit
+   *  "session:*" parent). Subscriptions NEVER exceed this scope (C-042
+   *  isolation). */
   scope: string
   listener: MessagesObserveListener
   /** Per-subscription serial chain (contract concurrency rule). */
   chain: Promise<unknown>
+  pendingCallbacks: number
   closed: boolean
+  stopGrantWatch?: () => void
+}
+
+/** Match a requested observer scope against the concrete scope of an
+ * envelope.  `session:*` is an explicit, grantable parent scope; all other
+ * scopes remain exact.  Keeping this relation in the broker means a wildcard
+ * declaration cannot accidentally become global unless both the manifest and
+ * the current grant cover it. */
+function observerScopeCovers(subscriptionScope: string, envelopeScope: string): boolean {
+  const declared = normalizePermissionScope('messages.observe.read', subscriptionScope, 'host')
+  const actual = normalizePermissionScope('messages.observe.read', envelopeScope, 'host')
+  return declared !== undefined && actual !== undefined && scopeCovers(declared, actual)
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -140,21 +224,38 @@ export class TuiMessageObserverRuntime extends Service {
   private readonly fallbackGrants: GrantStore
   private readonly ledgerOption: TuiEffectLedgerRuntime | undefined
   private readonly subscriptions = new Set<Subscription>()
-  private readonly envelopeSchema: Record<string, unknown> | undefined
+  private readonly validateEnvelope: (value: unknown) => void
+  private readonly validatorUnavailable: boolean
+  private validatorWarned = false
   private buildChain: Promise<unknown> = Promise.resolve()
-  private warnedNoSchema = false
 
   constructor(
     ctx: Context,
-    options: { grants?: GrantStore; ledger?: TuiEffectLedgerRuntime; envelopeSchema?: Record<string, unknown> } = {},
+    options: {
+      grants?: GrantStore
+      ledger?: TuiEffectLedgerRuntime
+      validateEnvelope?: (value: unknown) => void
+      /** @deprecated compatibility alias; prefer validateEnvelope. */
+      envelopeSchema?: Record<string, unknown>
+    } = {},
   ) {
     super(ctx, 'tuiMessageObserver')
     this.grantsOption = options.grants
     this.fallbackGrants = readGrantStore()
     this.ledgerOption = options.ledger
-    // `'envelopeSchema' in options` lets a caller force-undefined (fail-closed
-    // path under test); an absent key loads the vendored schema.
-    this.envelopeSchema = 'envelopeSchema' in options ? options.envelopeSchema : loadSpecData()?.schemas.message
+    if (Object.hasOwn(options, 'validateEnvelope')) {
+      this.validatorUnavailable = options.validateEnvelope === undefined
+      this.validateEnvelope = options.validateEnvelope ?? (() => { throw new Error('standard envelope validator unavailable') })
+    } else if (Object.hasOwn(options, 'envelopeSchema')) {
+      const schema = options.envelopeSchema
+      this.validatorUnavailable = schema === undefined
+      this.validateEnvelope = schema === undefined
+        ? (() => { throw new Error('vendored envelope schema unavailable') })
+        : (value: unknown) => check(value, schema, schema)
+    } else {
+      this.validatorUnavailable = false
+      this.validateEnvelope = (value: unknown) => { validateMessageEvent(value) }
+    }
   }
 
   /** Grants: the plugin-host row's store when mounted, else a private read.
@@ -171,8 +272,9 @@ export class TuiMessageObserverRuntime extends Service {
   }
 
   /**
-   * Subscribe to observation envelopes for ONE scope. Identity = the PASSED
-   * context's fiber.name (same honest-identity rule as storage); the scope
+   * Subscribe to observation envelopes for ONE scope. Identity = the verified
+   * Component bound to the PASSED activation (the same identity rule as
+   * storage); the scope
    * is required and matched exactly — a plugin moving between sessions
    * subscribes per scope and never receives another scope's sensitive
    * content (C-042 isolation). A denied subscription fast-fails: no-op
@@ -180,14 +282,9 @@ export class TuiMessageObserverRuntime extends Service {
    * unloads.
    */
   subscribe(pluginCtx: Context, listener: MessagesObserveListener, options: { scope: string }): () => void {
-    let plugin = 'root'
-    try {
-      const resolved: unknown = pluginCtx.fiber?.name
-      if (typeof resolved === 'string' && resolved !== '') plugin = resolved
-    } catch {
-      // Degraded context without fiber access: 'root'.
-    }
-    const scope = typeof options?.scope === 'string' ? options.scope.trim() : ''
+    const identity = requireComponentIdentity(pluginCtx)
+    const plugin = identity.componentId
+    const scope = typeof options?.scope === 'string' ? options.scope : ''
     if (scope === '' || scope.length > OBSERVE_SCOPE_MAX_CHARS) {
       this.ctx.logger.warn(
         `dsh-tui: messages.observe subscription from plugin "${plugin}" refused — options.scope must be a ` +
@@ -195,10 +292,17 @@ export class TuiMessageObserverRuntime extends Service {
       )
       return () => false
     }
-    if (!this.grants().allows(plugin, 'messages.observe.read')) {
+    if (typeof listener !== 'function'
+      || !declaresObserverScope(identity, scope)
+      || !declaresPermission(identity, 'messages.observe.read', scope)
+      || !this.grants().allows(
+        { componentId: identity.componentId, activationId: identity.activationId },
+        'messages.observe.read',
+        scope,
+      )) {
       this.ctx.logger.warn(
-        `dsh-tui: messages.observe subscription from plugin "${plugin}" denied — grant "messages.observe.read" ` +
-        `for "${plugin}" in ~/.dsh-tui/extension-grants.json first; the listener was NOT registered`,
+        `dsh-tui: messages.observe subscription from Component "${plugin}" denied — ` +
+        'the scope is not statically declared or the current grant does not cover it; the listener was NOT registered',
       )
       this.ledger()?.record(
         {
@@ -211,7 +315,16 @@ export class TuiMessageObserverRuntime extends Service {
       )
       return () => false
     }
-    const subscription: Subscription = { plugin, identity: pluginCtx, scope, listener, chain: Promise.resolve(), closed: false }
+    const subscription: Subscription = {
+      plugin,
+      identity,
+      ownerContext: pluginCtx,
+      scope,
+      listener,
+      chain: Promise.resolve(),
+      pendingCallbacks: 0,
+      closed: false,
+    }
     this.subscriptions.add(subscription)
     this.ledger()?.record(
       { operation: 'bind', resource: { kind: 'subscription', id: plugin }, result: 'applied' },
@@ -222,6 +335,13 @@ export class TuiMessageObserverRuntime extends Service {
       this.drop(subscription)
       return true
     }
+    subscription.stopGrantWatch = this.grants().onChange?.(() => {
+      if (!this.grants().allows(
+        { componentId: identity.componentId, activationId: identity.activationId },
+        'messages.observe.read',
+        scope,
+      )) release()
+    })
     try {
       pluginCtx.effect(() => release)
     } catch {
@@ -261,26 +381,24 @@ export class TuiMessageObserverRuntime extends Service {
       this.ctx.logger.warn('dsh-tui: messages.observe publish skipped — the session carries no string id')
       return
     }
-    if (this.envelopeSchema === undefined) {
-      if (!this.warnedNoSchema) {
-        this.warnedNoSchema = true
-        this.ctx.logger.warn(
-          'dsh-tui: messages.observe broker cannot self-check (vendored envelope schema unavailable); ' +
-          'envelopes are suppressed fail-closed until the installation is repaired',
-        )
-      }
-      return
-    }
-
     const data = (record.data ?? {}) as Record<string, unknown>
     const message = (kind === 'message.sent' ? data.message : data) as
       | { id?: unknown; content?: unknown }
       | undefined
 
-    const scope = `session:${sessionId}`.slice(0, OBSERVE_SCOPE_MAX_CHARS)
+    const scope = `session:${sessionId}`
+    // Never truncate a session identity into the schema's scope bound: two
+    // distinct long ids can otherwise collapse into one subscription scope.
+    if (scope.length > OBSERVE_SCOPE_MAX_CHARS) {
+      this.ctx.logger.warn(
+        `dsh-tui: messages.observe publish skipped — the session scope exceeds ${OBSERVE_SCOPE_MAX_CHARS} characters`,
+      )
+      return
+    }
     // C-042 isolation: match subscriptions BEFORE building anything — a
     // subscription for another scope must never see this scope's content.
-    const matched = [...this.subscriptions].filter(subscription => !subscription.closed && subscription.scope === scope)
+    const matched = [...this.subscriptions].filter(subscription =>
+      !subscription.closed && observerScopeCovers(subscription.scope, scope))
     if (matched.length === 0) return
 
     // Builds serialize broker-wide so delivery order stays the publish
@@ -325,13 +443,19 @@ export class TuiMessageObserverRuntime extends Service {
         },
       }
 
-      // Self-check EVERY envelope against the vendored schema; a malformed
-      // envelope is dropped, never delivered.
+      // Self-check EVERY envelope with the pinned @dsh-std/messages validator.
+      if (this.validatorUnavailable) {
+        if (!this.validatorWarned) {
+          this.validatorWarned = true
+          this.ctx.logger.warn('dsh-tui: standard message envelope validator unavailable — delivery is fail-closed')
+        }
+        return
+      }
       try {
-        check(envelope, this.envelopeSchema as Record<string, unknown>, this.envelopeSchema as Record<string, unknown>)
+        this.validateEnvelope(envelope)
       } catch (error) {
         this.ctx.logger.warn(
-          `dsh-tui: messages.observe envelope failed the vendored schema and was dropped: ${error instanceof Error ? error.message : String(error)}`,
+          `dsh-tui: messages.observe envelope failed the standard validator and was dropped: ${error instanceof Error ? error.message : String(error)}`,
         )
         return
       }
@@ -340,20 +464,48 @@ export class TuiMessageObserverRuntime extends Service {
         if (subscription.closed) continue
         // Deliver-time grant re-check: a revoked grant RELEASES the
         // subscription (contract cleanup rule), with one warning.
-        if (!this.grants().allows(subscription.plugin, 'messages.observe.read')) {
+        if (!this.grants().allows(
+          { componentId: subscription.identity.componentId, activationId: subscription.identity.activationId },
+          'messages.observe.read',
+          scope,
+        )) {
           this.ctx.logger.warn(
             `dsh-tui: messages.observe subscription of plugin "${subscription.plugin}" released — the grant was revoked`,
           )
           this.drop(subscription)
           continue
         }
-        const run = subscription.chain.then(() => subscription.listener(envelope))
-        subscription.chain = run.catch(error => {
+        if (subscription.pendingCallbacks >= OBSERVE_CALLBACK_QUEUE_LIMIT) {
           this.ctx.logger.warn(
-            `dsh-tui: messages.observe listener of plugin "${subscription.plugin}" threw (isolated, delivery continues): ` +
-            `${error instanceof Error ? error.message : String(error)}`,
+            `dsh-tui: messages.observe listener of Component "${subscription.plugin}" reached its ` +
+            `${OBSERVE_CALLBACK_QUEUE_LIMIT}-callback queue limit; this envelope was skipped`,
           )
+          continue
+        }
+        subscription.pendingCallbacks += 1
+        const run = subscription.chain.then(async () => {
+          if (subscription.closed) return
+          const isolated = freezeEnvelope(envelope)
+          const result = await runWithBudget(
+            () => subscription.listener(isolated),
+            OBSERVE_CALLBACK_TIMEOUT_MS,
+          )
+          if (result.kind === 'timeout') {
+            this.ctx.logger.warn(
+              `dsh-tui: messages.observe listener of Component "${subscription.plugin}" exceeded ` +
+              `${OBSERVE_CALLBACK_TIMEOUT_MS}ms and the subscription was closed`,
+            )
+            this.drop(subscription)
+          } else if (result.kind === 'rejected') {
+            this.ctx.logger.warn(
+              `dsh-tui: messages.observe listener of Component "${subscription.plugin}" failed; delivery continues: ` +
+              `${result.error instanceof Error ? result.error.message : String(result.error)}`,
+            )
+          }
         })
+        subscription.chain = run.catch(error => {
+          this.ctx.logger.warn(`dsh-tui: messages.observe delivery failed: ${error instanceof Error ? error.message : String(error)}`)
+        }).finally(() => { subscription.pendingCallbacks -= 1 })
       }
     } catch (error) {
       this.ctx.logger.warn(
@@ -366,22 +518,25 @@ export class TuiMessageObserverRuntime extends Service {
   private drop(subscription: Subscription): void {
     if (subscription.closed) return
     subscription.closed = true
+    subscription.stopGrantWatch?.()
+    subscription.stopGrantWatch = undefined
     this.subscriptions.delete(subscription)
     this.ledger()?.record(
       { operation: 'release', resource: { kind: 'subscription', id: subscription.plugin }, result: 'applied' },
-      subscription.identity,
+      subscription.ownerContext,
     )
   }
 
   /** Join the text blocks of a session message's content (text-only view). */
   private textOf(content: unknown): string {
     if (!Array.isArray(content)) return ''
-    return content
-      .map(block => (block !== null && typeof block === 'object' && (block as { type?: unknown }).type === 'text'
-        ? String((block as { text?: unknown }).text ?? '')
-        : ''))
-      .join('')
-      .trim()
+    let text = ''
+    for (const block of content) {
+      if (sourceBlockType(block) !== 'text') continue
+      const value = sourceText(block)
+      if (value !== undefined) text += value
+    }
+    return text.trim()
   }
 
   /**
@@ -398,23 +553,41 @@ export class TuiMessageObserverRuntime extends Service {
     const blocks: MessagesObserveContentBlock[] = []
     let pendingText = ''
     let truncated = false
+    const appendText = (value: string): void => {
+      const remaining = OBSERVE_CONTENT_MAX_CHARS - pendingText.length
+      if (remaining <= 0) {
+        truncated = true
+        return
+      }
+      if (value.length > remaining) {
+        pendingText += value.slice(0, remaining)
+        truncated = true
+        return
+      }
+      pendingText += value
+    }
     const flushText = (): void => {
       const run = pendingText.trim()
       pendingText = ''
       if (run === '') return
-      blocks.push({ type: 'text', text: run.length > OBSERVE_CONTENT_MAX_CHARS ? run.slice(0, OBSERVE_CONTENT_MAX_CHARS) : run })
-      if (run.length > OBSERVE_CONTENT_MAX_CHARS) truncated = true
+      blocks.push({ type: 'text', text: run })
     }
     if (Array.isArray(content)) {
       for (const raw of content) {
-        if (raw === null || typeof raw !== 'object') continue
-        const block = raw as { type?: unknown }
-        if (block.type === 'text') {
-          pendingText += String((block as { text?: unknown }).text ?? '')
+        const type = sourceBlockType(raw)
+        if (type === 'text') {
+          const text = sourceText(raw)
+          if (text === undefined) {
+            // A declared text block with a non-string body is malformed source
+            // data, not the literal string "[object Object]".
+            truncated = true
+            continue
+          }
+          appendText(text)
           continue
         }
-        if (block.type === 'image') {
-          const image = await this.imageBlockOf(block as Record<string, unknown>)
+        if (type === 'image') {
+          const image = await this.imageBlockOf(raw)
           if (image === undefined) {
             truncated = true
             continue
@@ -434,27 +607,29 @@ export class TuiMessageObserverRuntime extends Service {
   /** Resolve a session image block (`{type:'image', attachment}` — a
    *  REFERENCE, never inline data) to an envelope image block; undefined =
    *  drop (unreadable, oversize, bad media type, no attachment store). */
-  private async imageBlockOf(block: Record<string, unknown>): Promise<MessagesObserveContentBlock | undefined> {
-    const attachment = block.attachment as { mediaType?: unknown; bytes?: unknown } | null | undefined
-    if (attachment === null || attachment === undefined || typeof attachment !== 'object') return undefined
-    const mediaType = attachment.mediaType
-    if (typeof mediaType !== 'string' || !OBSERVE_MIME_PATTERN.test(mediaType)) return undefined
-    const bytes = attachment.bytes
-    if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0 || bytes > OBSERVE_IMAGE_MAX_BYTES) return undefined
-    const reader = this.ctx.get('attachments') as ObserveAttachmentReader | undefined
-    if (typeof reader?.readImage !== 'function') return undefined
-    // A failing read drops ONLY this image (the envelope survives with the
-    // truncation mark) — one corrupt attachment must not nuke the message.
-    let stored: unknown
+  private async imageBlockOf(block: unknown): Promise<MessagesObserveContentBlock | undefined> {
     try {
-      stored = await reader.readImage(attachment)
+      if (block === null || typeof block !== 'object') return undefined
+      const attachment = (block as { attachment?: unknown }).attachment as { mediaType?: unknown; bytes?: unknown } | null | undefined
+      if (attachment === null || attachment === undefined || typeof attachment !== 'object') return undefined
+      const mediaType = attachment.mediaType
+      if (typeof mediaType !== 'string' || !OBSERVE_MIME_PATTERN.test(mediaType)) return undefined
+      const bytes = attachment.bytes
+      if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0 || bytes > OBSERVE_IMAGE_MAX_BYTES) return undefined
+      const reader = this.ctx.get('attachments') as ObserveAttachmentReader | undefined
+      if (typeof reader?.readImage !== 'function') return undefined
+      // A failing read drops ONLY this image (the envelope survives with the
+      // truncation mark) — one corrupt attachment must not nuke the message.
+      const stored = await reader.readImage(attachment)
+      const data = (stored as { data?: unknown } | undefined)?.data
+      if (!(data instanceof Uint8Array) || data.byteLength > OBSERVE_IMAGE_MAX_BYTES) return undefined
+      const base64 = Buffer.from(data).toString('base64')
+      if (base64.length > OBSERVE_IMAGE_BASE64_MAX_CHARS) return undefined
+      return { type: 'image', data: base64, mimeType: mediaType }
     } catch {
+      // Source content and attachment service output are untrusted here.
+      // Drop only this block and let the enclosing envelope carry truncated.
       return undefined
     }
-    const data = (stored as { data?: unknown } | undefined)?.data
-    if (!(data instanceof Uint8Array) || data.byteLength > OBSERVE_IMAGE_MAX_BYTES) return undefined
-    const base64 = Buffer.from(data).toString('base64')
-    if (base64.length > OBSERVE_IMAGE_BASE64_MAX_CHARS) return undefined
-    return { type: 'image', data: base64, mimeType: mediaType }
   }
 }

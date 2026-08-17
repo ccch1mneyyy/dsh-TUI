@@ -69,8 +69,9 @@ dsh-TUI 对齐社区生态元协议
 v0.15。要点：
 
 - 契约以**坐标**标识（`apiVersion + kind`，如 `commands.dsh/v1alpha1` +
-  `Command`）；注册表为每个契约钉死 `schemaHash`，宿主声明与注册表不一致
-  即视为不可用（fail closed）。
+  `Command`）；导入定义携带固定的 `@dsh-std/*` package identity，TUI
+  私有定义携带不可变 profile hash，宿主声明与注册表不一致即视为不可用
+  （fail closed）。
 - 插件 manifest（`dsh-plugin.json`）声明 `facets.host`（entry + apiVersion）、
   `requires.contracts`（optional 引用必须带 fallback）、`permissions`、
   `subscriptions`；`provides`/`services` 与 client/worker facet 在 v0.15
@@ -85,14 +86,14 @@ v0.15。要点：
 
 仓库内的落地物：
 
-- `ecosystem-spec/` — vendored 只读数据（registry / schemas / conformance
-  fixtures），同步基线与更新流程见该目录 README；上游更新后整目录覆盖，
-  `npm run verify:plugin-spec` 即漂移报警器（schemaHash 重算比对 +
-  fixtures 全矩阵）。
-- `src/plugin-spec/` — 零依赖校验/协商纯库：JSON Schema check（vendored
-  schema 子集）、`validatePlugin`/`validateHost` 语义校验、五态
-  `negotiate`、registry/contract profile 自检。与上游 conformance 参考
-  实现逐 fixture 等价（38 项电池断言）。
+- `vendor/dsh-std/` — 固定 revision 的官方协议包（manifest parser、
+  projection、ProtocolCatalog 与各契约 validator）。
+- `ecosystem-spec/` — 固定 admission profile 的只读 registry / schema /
+  conformance fixtures；`npm run verify:plugin-spec` 检查 profile hash 与
+  fixtures 漂移。
+- `src/plugin-spec/` — 校验/协商纯库：官方 parser 负责 manifest 形状，
+  `validatePlugin`/`validateHost` 负责 profile 语义，五态 `negotiate` 使用
+  同一 `ProtocolCatalog`。
 
 **边界声明**：插件的发现、安装与加载由 dsh CLI（`@deepseek-ai/dsh` 的
 Loader）负责，**加载时强制不在本仓库**。本仓库提供的是校验库 + 诊断面 +
@@ -115,10 +116,19 @@ I/O——文件存在却无法求值）同样视同损坏 fail closed，绝不�
 
 ```json
 {
-  "grants": { "my-guard": ["session.input.intercept"] },
-  "denies": { "noisy": ["commands.invoke"] }
+  "grants": {
+    "my-guard": [{ "name": "session.input.intercept", "scope": "tui/input" }]
+  },
+  "denies": {
+    "noisy": [{ "name": "commands.invoke", "scope": "com.example.noisy.run" }]
+  }
 }
 ```
+
+每条规则保留 permission definition 的资源/session/command scope，并可带
+`activationId`。没有真实 activation identity 的诊断调用会对
+activation-scoped 规则 fail closed；授权文件由 live store 读取，变更会
+立即影响下一次操作，并释放关联的 DecisionEvents/observer registration。
 
 `dsh-tui-plugin-host` 行（cordis.patch.yml 已带，位于 extensions 行
 之前）提供 `ctx.tuiPluginHost`：runtime generationId（C-050，每次激活
@@ -132,16 +142,18 @@ TypeError 留到自检里炸出来。消费一律 `ctx.get('tuiPluginHost', fals
 
 `storage.local`（C-040）：插件私有持久化，经
 `ctx.get('tuiPluginStorage', false)` 的 `open(ctx)` 获得
-`{ get, set, delete }`——namespace 即调用方 ctx 的 fiber.name（没有
-参数可指名别的插件，跨插件读写按构造拒绝）。`get` 需
+`{ get, set, delete }`——namespace 来自 admission 后绑定的 Component
+identity（没有参数可指名别的插件，跨插件读写按构造拒绝）。标准调用形状是
+`get({ key }) -> { value }`、`set({ key, value }) -> { stored: true }`、
+`delete({ key }) -> { deleted }`。`get` 需
 `storage.local.read`、`set`/`delete` 需 `storage.local.write`，每次调用
 现查。后端 `~/.dsh-tui/plugin-storage/<namespace>.json`（原子写 +
 文件锁；配额 256 键 / 256 KiB；损坏文件永不自动覆盖，报
 STORAGE_UNAVAILABLE 并保留字节供人工恢复）。错误带契约 code：
-PERMISSION_NOT_GRANTED / INVALID_KEY / QUOTA_EXCEEDED /
+PERMISSION_NOT_GRANTED / INVALID_KEY / INVALID_VALUE / QUOTA_EXCEEDED /
 STORAGE_UNAVAILABLE。值必须是**精确 JSON 值**——JSON.stringify 会
 静默变形的输入（undefined、NaN/±Infinity、函数、Symbol、BigInt、类
-实例、稀疏数组、环）一律拒绝（INVALID_KEY），绝不往返出一个插件从未
+实例、稀疏数组、环）一律拒绝（INVALID_VALUE），绝不往返出一个插件从未
 存过的值；键名即使撞上 Object.prototype 的名字（`__proto__`、
 `toString`、`constructor`）也只是普通数据（null 原型表 + 自有属性
 判定，不读宿主原型、不伪造存在性）。key 与 value 永不进日志
@@ -150,13 +162,14 @@ STORAGE_UNAVAILABLE。值必须是**精确 JSON 值**——JSON.stringify 会
 
 `messages.observe`（C-042）：消息观察 broker，经
 `ctx.get('tuiMessageObserver', false)` 的
-`subscribe(ctx, listener, { scope })` 订阅（身份=传入 ctx 的
-fiber.name）。**scope 必填且精确匹配**（如 `session:<id>`）——订阅
+`subscribe(ctx, listener, { scope })` 订阅（身份=传入 ctx 的 verified
+Component）。**scope 必须同时出现在 manifest 的 MessageObserver 声明中且
+精确匹配**（如 `session:<id>`）——订阅
 只收同 scope 的 envelope，跨会话的敏感内容按构造不可达（C-042 范围
 隔离）；空/超长 scope 直接拒绝（noop disposer + 告警）。映射刻意收窄：
 `user/message` → `message.received`、`assistant/message` →
 `message.sent`；流式 chunk、工具与边界事件一律不产出。envelope 逐条
-过 vendored schema 才投递：`scope=session:<id>`、`sequence`=会话事件
+过固定 revision 的 `@dsh-std/messages` validator 才投递：`scope=session:<id>`、`sequence`=会话事件
 自身 seq（单调可留洞；图片读取是异步的，broker 内构建串行化，投递
 顺序恒等于发布顺序）、`eventId=<sessionId>:<seq>`；privacyClass 一律
 `sensitive`（保守起步，细分留待后续）；content 是 text/image 子集
@@ -165,7 +178,9 @@ attachment}` 引用形式存在，broker 经 attachments 服务解析为 base64
 image block（单图 192 KiB 预算，不可读/超大/坏媒体型即弃并打
 `truncated`）；summary=消毒后前 200 cell。授权
 `messages.observe.read`：订阅时快速失败（noop disposer + 告警），
-投递时逐订阅复检——撤销即释放订阅（contract cleanup）。订阅成立与
+投递时逐订阅复检——撤销即释放订阅（contract cleanup）；每个 callback 有
+明确 timeout 与队列上限，超时关闭该 subscription。每个订阅者收到独立且
+冻结的 envelope 副本，不能篡改其他订阅者的 payload。订阅成立与
 释放（disposer、卸载、撤销三条路径汇一处）都会落效果台账
 （bind/release subscription），/plugins 可反查活跃订阅。listener
 抛错被隔离续投；at-most-once、无重放；broker 零持久化（contract
@@ -173,7 +188,7 @@ retention）。
 
 `commands`（C-041）：插件注册命令应走 plugin-host 行的**托管面**
 `ctx.tuiPluginHost.registerCommand(pluginCtx, definition)`——成功注册
-会把命令归属打上调用方 fiber.name 的印（dsh-commands 本身没有 owner
+会把命令归属打上 verified Component/activation 的印（dsh-commands 本身没有 owner
 概念；归属台账见 `src/dsh-adapter/command-attribution.js`），重复注册
 抛带 `code: 'DUPLICATE_CONTRIBUTION_ID'` 的映射错误（
 `src/dsh-adapter/command-errors.js`），返回的 disposer 同时摘印。宿主
@@ -187,14 +202,14 @@ TUI 里的宿主调用入口（C-041 的撤销语义）。插件直调
 效果台账（C-060）：`~/.dsh-tui/effect-ledger.jsonl` 追加式 JSONL，
 经 `ctx.get('tuiEffectLedger', false)` 的 `record(entry, identity?)`
 写入，永不向调用方抛错。每条带生命周期三元组：pluginId（传入
-identity 的 fiber.name；root fiber→`'host'`；省略→`'undeclared'`）+
+Component id；root fiber→`'host'`；未绑定→`'undeclared'`）+
 activationInstance（按 fiber 首见分配，进程内稳定，热重载即新实例）+
 runtimeGenerationId（C-050）。五种 operation：create / bind / replace /
 release / cleanup-failed；覆盖场景、快捷键、状态行、渲染器、命令、
 存储 namespace 与授权拒绝（PERMISSION_NOT_GRANTED）。每条写入前过
-vendored ledger schema——记录按 allowlist 逐字段构造，叠加 schema 的
+固定 revision ledger schema——记录按 allowlist 逐字段构造，叠加 schema 的
 `additionalProperties: false`，结构性禁止夹带秘密材料；校验失败的
-记录丢弃不落盘。sequence 跨重启续号；损坏行跳过不改写；vendored
+记录丢弃不落盘。sequence 跨重启续号；损坏行跳过不改写；schema
 schema 缺失时全部写入被抑制（fail closed）。四个托管服务
 （tuiScenes / tuiShortcuts / tuiStatus / tuiRenderers）的 register 系
 方法带可选末参 `identity?: Context`——传自己的 ctx 即让台账归属
@@ -205,14 +220,11 @@ schema 缺失时全部写入被抑制（fail closed）。四个托管服务
 摘要（坐标、generation、漂移剔除项）、授权矩阵（8 个注册权限的有效
 值；插件集合 = 授权文件键 ∪ 台账 pluginId ∪ 存储目录名的**足迹并
 集**，标头如实声明——宿主无法枚举已安装插件，那是 dsh CLI Loader 的
-知识）与台账尾 5 条。`/plugins check <path>` 对任意 dsh-plugin.json
-依次跑 vendored schema、validatePlugin 语义校验与五态 negotiate（授权
-取自授权存储对该 manifest id 的现有答案），输出状态与 reasonCode；
-每个阶段在 vendored 核心面失败后还会对 **TUI 宿主扩展覆盖层**重试
-一次（`src/plugin-spec/tui-extension.js`——核心注册表不承载的
-`session.*.intercept` 权限名与 `tui/*` 事件订阅由此准入），判定依赖
-覆盖层时输出会如实注明；两侧都失败时报告的是 vendored 核心面的错误。
-manifest 是不可信输入，所有派生行过 cleanScalarText。`/doctor` 追加
+知识）与台账尾 5 条。`/plugins check <path>` 先用固定 revision 的
+`@dsh-std/manifest.parseManifest` 与 `projectManifest` 解析，再用统一
+`ProtocolCatalog`、profile 语义校验与五态 negotiate；没有 activation
+identity 时，activation-scoped grant 按 fail-closed 诊断。manifest 是
+不可信输入，所有派生行过 cleanScalarText。`/doctor` 追加
 插件运行时 generation 与注册表自检两行。
 
 ## 接缝总览
@@ -569,15 +581,17 @@ TUI 的 reconciler 是 **React 19**，场景组件运行在宿主的 React 实�
 
 ## 接缝九：决策事件（tui/input · rewind · session-switch · compact）
 
-pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交给插件。决策
-事件按注册顺序**逐个 await（serial 顺序）**，**第一个返回有效决策的插件
-生效**；与裸 `ctx.serial` 不同，宿主做了逐监听器归一化与隔离：
+pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交给已 admission
+的 Component。决策事件按稳定的 `order -> componentId -> activationId`
+顺序逐个 await，并受单 handler/总 deadline 约束；**第一个返回有效决策的
+handler 生效**。宿主做了逐 handler 归一化与隔离：
 
 - 返回 `undefined`/`null`/`false` = 无意见，链继续；
 - **畸形返回不算决策**——空白 `{ text }` 改写、非对象值、空的 `modes`
   列表等会被忽略并告警，链**继续**（一个写错的插件不可能把后面的安全
   否决插件跳过去）；
-- 监听器抛异常只跳过该监听器并告警，链**继续**；
+- handler 抛异常或超时只跳过该 handler 并告警，链**继续**；总 deadline
+  到期后剩余 handler 按 no-opinion 处理；
 - 全部无意见则按默认行为放行。
 
 配套的通知事件（`tui/rewind-done` 的摘要返回值除外）是 **parallel** 语义：
@@ -603,17 +617,17 @@ pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交�
   `tui/input` → `session.input.intercept`、`tui/rewind-prompt` →
   `session.rewind.intercept`、`tui/session-switch` → `session.switch.intercept`、
   `tui/compact` → `session.compact.intercept`。通知类事件
-  （`tui/rewind-done`、`tui/session-switched`）不受限。授权文件按插件名
-  （cordis 行的 `name` 导出） keyed：
+  （`tui/rewind-done`、`tui/session-switched`）仍要求私有 DecisionEvents
+  contract，但不需要 intercept grant。授权文件按 verified Component id
+  keyed，规则保留 event/session scope 并可绑定 activationId：
 
   ```json
-  { "grants": { "my-guard": ["session.input.intercept"] } }
+  { "grants": { "my-guard": [{ "name": "session.input.intercept", "scope": "tui/input" }] } }
   ```
 
-  文件在授权门安装时读取一次（extensions 行与 channel 都会安装，按
-  cordis root 幂等、先到者生效——即使 bundle patch 过旧缺少 extensions
-  行，channel 也会兜底装门，决策事件不会变成默认允许）；改授权 = 改文件
-  + 重启。文件缺失 = 按注册表默认值（拦截类默认拒绝）；文件不可解析 =
+  授权门由 extensions 行与 channel 共同安装（按 cordis root 幂等），但
+  GrantStore 对每次操作读取 live policy；改授权无需重启，撤销会主动释放
+  handler。文件缺失 = 按注册表默认值（拦截类默认拒绝）；文件不可解析 =
   全部拒绝，连默认允许的权限也拒（fail closed）。该文件是统一的 8 权限
   授权存储（另有撤销段 `denies`），完整语义见"社区互操作规范"一节。
 - **顺序保证**：决策与投递按提交顺序串行——前一条输入的慢决策会拦住
@@ -716,7 +730,10 @@ const name = await dialogs?.input({
   交互还是走无头默认值；`timeoutMs` 是"有服务但没有 TUI 消费者"场景的
   保险丝。
 
-典型搭配：决策事件监听器里弹窗——`ctx.on('tui/rewind-prompt', async () => … await dialogs.select(…))`，用户答完再返回决策。
+典型搭配：在 admitted handler 里弹窗——`await dialogs.select(…)`。traceable
+service 会把调用者 Context 绑定到 dialog 生命周期；插件 deactivate 后，排队
+和 active dialog 都会以取消值结算，不会留下占键盘的请求。没有 traceable
+proxy 的 embedder 可显式调用 `dialogs.select(ctx, request)`。
 
 ## 接缝十一：状态行（tuiStatus）
 

@@ -1,13 +1,44 @@
 {
-  "$schema":"https://dsh.community/schemas/host-descriptor-0.15.json",
-  "hostId":"dsh-tui",
-  "hostVersion":"0.1.0-experimental",
-  "facetApiVersions":["v1alpha1"],
-  "contracts":[
-    {"apiVersion":"storage.dsh/v1alpha1","kind":"LocalStorage","version":"0.15","schemaHash":"sha256:a43bd499060013f599496e70b03cedde34739bc299ee83304ffcc42675fcf35b","permissions":["storage.local.read","storage.local.write"]},
-    {"apiVersion":"commands.dsh/v1alpha1","kind":"Command","version":"0.15","schemaHash":"sha256:9a67c445c0442e9797f953413c03f582a004276271fd6ab14a86c830f54e3152","permissions":["commands.invoke"]}
+  "$schema": "urn:dsh-tui:host-descriptor:0.15",
+  "hostId": "dsh-tui-minimal",
+  "hostVersion": "0.1.0-experimental",
+  "facetApiVersions": [
+    "v1alpha1"
   ],
-  "runtime":{"location":"remote","generationId":"example-generation-1","headless":true,"remoteAttach":true},
-  "trustLevel":"trusted-in-process",
-  "platform":{"os":"linux","arch":"x64","node":">=18"}
+  "contracts": [
+    {
+      "apiVersion": "storage.dsh/v1alpha1",
+      "kind": "LocalStorage",
+      "definition": {
+        "source": "dsh-std",
+        "package": "@dsh-std/storage"
+      },
+      "permissions": [
+        "storage.local.read",
+        "storage.local.write"
+      ]
+    },
+    {
+      "apiVersion": "commands.dsh/v1alpha1",
+      "kind": "Command",
+      "definition": {
+        "source": "dsh-std",
+        "package": "@dsh-std/command"
+      },
+      "permissions": [
+        "commands.invoke"
+      ]
+    }
+  ],
+  "runtime": {
+    "location": "local",
+    "generationId": "minimal-1",
+    "headless": true
+  },
+  "trustLevel": "trusted-in-process",
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": ">=22.19"
+  }
 }

@@ -16,32 +16,22 @@
  *    Loader). The header says so honestly.
  * 4. LEDGER TAIL — the last 5 effect-ledger records.
  *
- * `/plugins check <path>` runs the vendored schema + validatePlugin +
- * negotiate over any dsh-plugin.json and prints the five-state decision
- * with its reason codes. Each stage retries ONCE against the TUI
- * host-extension overlay (../plugin-spec/tui-extension.js) — the vendored
- * data covers the cross-host core only, and a manifest declaring
- * session.*.intercept permissions or tui/* subscriptions is host-
- * extension territory; the report says when the verdict relied on the
- * overlay. Manifests and on-disk files are UNTRUSTED input:
+ * `/plugins check <path>` uses the parser and projection from the pinned
+ * @dsh-std/manifest revision, then evaluates every public/private protocol
+ * through one ProtocolCatalog. Manifests and on-disk files are UNTRUSTED input:
  * every derived line passes cleanScalarText before it reaches the
  * transcript.
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { parseManifest, projectManifest } from '@dsh-std/manifest'
 import { DATA_DIR } from '../utils/paths.js'
 import { t } from '../i18n.js'
 import { loadSpecData } from '../plugin-spec/registry.js'
 import { createContractIndex, validatePlugin } from '../plugin-spec/validate.js'
 import { negotiate } from '../plugin-spec/negotiate.js'
-import {
-  extendHostDescriptorForTui,
-  extendPluginSchemaForTui,
-  extendRegistryForTui,
-} from '../plugin-spec/tui-extension.js'
-import { check } from '../plugin-spec/schema-check.js'
-import type { NegotiationDecision, PluginManifest } from '../plugin-spec/types.js'
+import type { NegotiationDecision } from '../plugin-spec/types.js'
 import { cleanScalarText } from './sanitize.js'
 import type { GrantStore } from './grants.js'
 import type { HostDescriptorBuild } from './host-descriptor.js'
@@ -136,7 +126,7 @@ function footprintPlugins(deps: PluginsInfoDeps, dataDir: string, ledgerFile: st
   return [...found].sort()
 }
 
-/** `/plugins check <path>`: vendored schema + validatePlugin + negotiate. */
+/** `/plugins check <path>`: official parse/projection + profile validation + negotiation. */
 function checkManifestLines(pathArg: string, deps: PluginsInfoDeps): string[] {
   const lines: string[] = []
   const target = resolve(pathArg)
@@ -144,9 +134,9 @@ function checkManifestLines(pathArg: string, deps: PluginsInfoDeps): string[] {
     lines.push(t('plugins-check-not-found', { path: cell(pathArg) }))
     return lines
   }
-  let manifest: unknown
+  let source: string
   try {
-    manifest = JSON.parse(readFileSync(target, 'utf8'))
+    source = readFileSync(target, 'utf8')
   } catch (error) {
     lines.push(t('plugins-check-invalid-json', { err: cell(error instanceof Error ? error.message : String(error)) }))
     return lines
@@ -156,60 +146,38 @@ function checkManifestLines(pathArg: string, deps: PluginsInfoDeps): string[] {
     lines.push(t('plugins-check-spec-unavailable'))
     return lines
   }
-  // Stage 1: the vendored dsh-plugin schema (structural). On failure, ONE
-  // retry against the TUI-extension overlay (the vendored permission-name
-  // enum covers only the 4 core permissions; a manifest declaring
-  // session.*.intercept is host-extension territory, P2-11). The base
-  // error is the one reported when both fail.
-  let extended = false
+  let manifest
   try {
-    check(manifest, data.schemas.plugin, data.schemas.plugin)
-  } catch (baseError) {
-    const extendedSchema = extendPluginSchemaForTui(data.schemas.plugin)
-    let passed = false
-    if (extendedSchema !== undefined) {
-      try {
-        check(manifest, extendedSchema, extendedSchema)
-        passed = true
-        extended = true
-      } catch {
-        // Fall through to the base error below.
-      }
-    }
-    if (!passed) {
-      lines.push(t('plugins-check-schema-failed', { err: cell(baseError instanceof Error ? baseError.message : String(baseError)) }))
-      return lines
-    }
+    manifest = parseManifest(source, { source: target })
+    // Projection is an explicit admission stage. validatePlugin performs its
+    // own defensive projection too, but keeping this call here makes parser
+    // and projection failures distinguishable at the user-facing boundary.
+    projectManifest(manifest)
+  } catch (error) {
+    const message = cell(error instanceof Error ? error.message : String(error))
+    lines.push(error instanceof SyntaxError
+      ? t('plugins-check-invalid-json', { err: message })
+      : t('plugins-check-schema-failed', { err: message }))
+    return lines
   }
-  // Stage 2: semantic validation (C-003 facet, fallback-mandatory, …) with
-  // the same base-first-then-extension retry (tui/* event subscriptions
-  // resolve only against the extended registry).
-  let index = createContractIndex(data.registry, data.permissions)
+  const index = createContractIndex(data.registry, data.permissions)
   try {
-    validatePlugin(index, manifest as PluginManifest)
-  } catch (baseError) {
-    const extendedIndex = createContractIndex(extendRegistryForTui(data.registry), data.permissions)
-    try {
-      validatePlugin(extendedIndex, manifest as PluginManifest)
-      index = extendedIndex
-      extended = true
-    } catch {
-      lines.push(t('plugins-check-invalid', { err: cell(baseError instanceof Error ? baseError.message : String(baseError)) }))
-      return lines
-    }
+    validatePlugin(index, manifest)
+  } catch (error) {
+    lines.push(t('plugins-check-invalid', { err: cell(error instanceof Error ? error.message : String(error)) }))
+    return lines
   }
-  // Stage 3: negotiate against the host descriptor (the row's when mounted,
-  // else a one-shot build — both re-digest the vendored contracts). An
-  // extension-reliant manifest negotiates against the extension overlay so
-  // its intercept permissions are host-declared (grant-satisfiable).
   const host = deps.host ?? buildHostDescriptor({ generationId: 'plugins-check' })
-  const typed = manifest as PluginManifest
-  const granted = index.permissions.permissions
-    .map(permission => permission.name)
-    .filter(permission => deps.grants.allows(typed.id, permission))
-  const descriptor = extended ? extendHostDescriptorForTui(host.descriptor) : host.descriptor
-  const decision = negotiate(index, typed, descriptor, granted)
-  if (extended) lines.push(t('plugins-check-tui-extension'))
+  const granted = manifest.permissions
+    .map(request => ({
+      name: request.name,
+      scope: request.scope,
+      // `/plugins check` has no live activation instance. Passing an
+      // activation-less principal makes GrantStore fail closed when policy
+      // contains activation-scoped rules instead of treating them as global.
+      granted: deps.grants.allows({ componentId: manifest.id }, request.name, request.scope),
+    }))
+  const decision = negotiate(index, manifest, host.descriptor, granted)
   lines.push(...decisionLines(decision))
   if (host.dropped.length > 0) {
     lines.push(t('plugins-check-dropped', { dropped: cell(host.dropped.join(', ')) }))
@@ -273,7 +241,10 @@ export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] 
     lines.push(`Host Descriptor: ${cell(descriptor.hostId)} v${cell(descriptor.hostVersion)} · generation ${cell(descriptor.runtime.generationId)}`)
     lines.push(`  facets: ${cell(descriptor.facetApiVersions.join(', ') || '—')}`)
     for (const contract of descriptor.contracts) {
-      lines.push(`  ${cell(contract.apiVersion)}#${cell(contract.kind)} · hash ${cell(contract.schemaHash.slice(0, 12))}… · perms ${cell(contract.permissions.join(', ') || '—')}`)
+      const definition = contract.definition.source === 'dsh-std'
+        ? contract.definition.package
+        : contract.definition.profileHash.slice(0, 19) + '…'
+      lines.push(`  ${cell(contract.apiVersion)}#${cell(contract.kind)} · definition ${cell(definition)} · perms ${cell(contract.permissions.join(', ') || '—')}`)
     }
     for (const coordinate of dropped) {
       lines.push(`  ${cell(coordinate)} · ${t('plugins-contract-dropped')}`)
@@ -293,7 +264,14 @@ export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] 
     const shown = plugins.slice(0, PLUGINS_MATRIX_MAX_ROWS)
     const width = Math.max(...shown.map(plugin => plugin.length), 8)
     for (const plugin of shown) {
-      const marks = permissions.map(permission => (deps.grants.allows(plugin, permission) ? '✓' : '·')).join(' ')
+      const diagnosticScope = (permission: string): string => {
+        if (permission === 'storage.local.read' || permission === 'storage.local.write') return plugin
+        if (permission === 'commands.invoke') return 'diagnostic.command'
+        return 'session:*'
+      }
+      const marks = permissions.map(permission => (
+        deps.grants.allows({ componentId: plugin }, permission, diagnosticScope(permission)) ? '✓' : '·'
+      )).join(' ')
       lines.push(`  ${cell(plugin).padEnd(width)}  ${marks}`)
     }
     if (plugins.length > shown.length) {

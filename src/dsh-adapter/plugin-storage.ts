@@ -5,14 +5,12 @@
  *
  * The plugin-facing API is `open(ctx)` → `{ get, set, delete }`:
  *
- * - HONEST IDENTITY: the namespace is derived from the PASSED context's
- *   `ctx.fiber.name` (the row's `name` export, nearest named ancestor, else
- *   'root') — there is no parameter to name another plugin, so cross-plugin
- *   access is rejected by construction (contract scope rule).
+ * - VERIFIED IDENTITY: the namespace is derived from the admitted Component
+ *   identity bound to the PASSED activation — there is no parameter to name
+ *   another plugin, so cross-plugin access is rejected by construction.
  * - GRANTS AT CALL TIME: `get` requires `storage.local.read`, `set`/`delete`
- *   require `storage.local.write` — checked per call against the grant store
- *   (a revoked grant = edit + restart = every later call fails with
- *   PERMISSION_NOT_GRANTED).
+ *   require `storage.local.write` — checked per call against the live grant
+ *   store (a revoked grant blocks the very next operation without restart).
  * - Backend: `~/.dsh-tui/plugin-storage/<namespace>.json`, one flat JSON
  *   object per namespace. Writes go through dsh-atomic-write (`withFileLock`
  *   for the read-modify-write cycle + `writeFileAtomic` for the commit), and
@@ -39,7 +37,16 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { Context, Service } from '@deepseek-ai/cordis'
+import {
+  validateDeleteInput,
+  validateGetInput,
+  validateSetInput,
+  validateGetOutput,
+  validateSetOutput,
+  validateDeleteOutput,
+} from '@dsh-std/storage'
 import { DATA_DIR } from '../utils/paths.js'
+import { declaresPermission, requireComponentIdentity, type VerifiedComponentIdentity } from './component-identity.js'
 import { readGrantStore, type GrantStore } from './grants.js'
 import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
 
@@ -53,6 +60,7 @@ export const STORAGE_KEY_MAX_LENGTH = 128
 export type PluginStorageErrorCode =
   | 'PERMISSION_NOT_GRANTED'
   | 'INVALID_KEY'
+  | 'INVALID_VALUE'
   | 'QUOTA_EXCEEDED'
   | 'STORAGE_UNAVAILABLE'
 
@@ -68,12 +76,9 @@ export class PluginStorageError extends Error {
 
 /** The per-namespace handle returned by {@link TuiPluginStorageRuntime.open}. */
 export interface TuiPluginStorage {
-  /** The stored JSON value, or null when the key is absent. */
-  get(key: string): Promise<unknown>
-  /** Store a JSON-serializable value; resolves true when written. */
-  set(key: string, value: unknown): Promise<boolean>
-  /** Delete a key; resolves true when the key existed. */
-  delete(key: string): Promise<boolean>
+  get(input: { key: string }): Promise<{ value: unknown | null }>
+  set(input: { key: string; value: unknown }): Promise<{ stored: true }>
+  delete(input: { key: string }): Promise<{ deleted: boolean }>
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -101,6 +106,33 @@ function assertKey(key: unknown): asserts key is string {
   }
 }
 
+function validateStorageInput(
+  operation: 'get' | 'set' | 'delete',
+  input: unknown,
+): asserts input is { key: string; value?: unknown } {
+  try {
+    if (operation === 'get') validateGetInput(input)
+    else if (operation === 'set') validateSetInput(input)
+    else validateDeleteInput(input)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (operation !== 'set') throw new PluginStorageError('INVALID_KEY', message)
+    // The standard validator intentionally reports exact-record failures in a
+    // single stream. Preserve the contract's distinction: malformed/missing
+    // `key` is INVALID_KEY; once the key itself is valid, every value/shape
+    // failure (including a missing `value`) is INVALID_VALUE.
+    let keyValid = false
+    try {
+      const candidate = input as { key?: unknown }
+      assertKey(candidate?.key)
+      keyValid = true
+    } catch {
+      keyValid = false
+    }
+    throw new PluginStorageError(keyValid ? 'INVALID_VALUE' : 'INVALID_KEY', message)
+  }
+}
+
 /**
  * Exact JSON values only. JSON.stringify silently MUTATES edge inputs
  * (NaN/±Infinity → null, undefined array items → null, undefined object
@@ -108,8 +140,10 @@ function assertKey(key: unknown): asserts key is string {
  * contract must not round-trip a value the caller never stored, so those
  * inputs are rejected instead. Accepts: null, boolean, string, finite
  * number, arrays (dense), and plain objects (Object.prototype or null
- * prototype only — a function-valued property such as toJSON fails too);
- * rejects cycles and anything whose inspection throws (hostile getters).
+ * prototype only). Every own property is inspected because JSON.stringify
+ * ignores array side-properties, symbols, and non-enumerable fields, while
+ * accessors/toJSON can replace the value being serialized. Those inputs,
+ * cycles, and anything whose inspection throws are rejected.
  */
 function assertJsonValue(value: unknown): void {
   let ok = false
@@ -119,10 +153,8 @@ function assertJsonValue(value: unknown): void {
     ok = false
   }
   if (!ok) {
-    // The contract offers no INVALID_VALUE code; argument validation
-    // failures report under INVALID_KEY.
     throw new PluginStorageError(
-      'INVALID_KEY',
+      'INVALID_VALUE',
       'storage values must be exact JSON values (no undefined, functions, symbols, BigInt, NaN/Infinity, class instances, sparse arrays, or cycles)',
     )
   }
@@ -142,16 +174,40 @@ function isJsonValue(value: unknown, seen: Set<object>): boolean {
       seen.add(object)
       try {
         if (Array.isArray(value)) {
+          // Array subclasses/custom prototypes can supply an inherited toJSON
+          // hook. JSON would serialize its replacement, not this array.
+          if (Object.getPrototypeOf(value) !== Array.prototype) return false
+          if (Object.getOwnPropertySymbols(value).length > 0) return false
+          const ownNames = Object.getOwnPropertyNames(value)
+          for (const name of ownNames) {
+            if (name === 'length') continue
+            const descriptor = Object.getOwnPropertyDescriptor(value, name)
+            // JSON arrays serialize only their indexed elements. Any other
+            // own property (especially toJSON) would be silently lost.
+            const index = Number(name)
+            if (descriptor === undefined || !('value' in descriptor) ||
+                !Number.isSafeInteger(index) || index < 0 || String(index) !== name || index >= value.length) return false
+          }
           for (let index = 0; index < value.length; index++) {
             // A sparse hole would serialize as null — a value never stored.
-            if (!(index in value)) return false
-            if (!isJsonValue(value[index], seen)) return false
+            const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+            if (descriptor === undefined || !('value' in descriptor)) return false
+            if (!isJsonValue(descriptor.value, seen)) return false
           }
           return true
         }
         const proto: unknown = Object.getPrototypeOf(value)
         if (proto !== Object.prototype && proto !== null) return false
-        return Object.values(value as Record<string, unknown>).every(item => isJsonValue(item, seen))
+        // A modified Object.prototype can add an inherited toJSON hook; own
+        // non-enumerable/accessor properties are likewise not exact JSON.
+        if (typeof (value as { toJSON?: unknown }).toJSON === 'function') return false
+        if (Object.getOwnPropertySymbols(value).length > 0) return false
+        for (const name of Object.getOwnPropertyNames(value)) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, name)
+          if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) return false
+          if (!isJsonValue(descriptor.value, seen)) return false
+        }
+        return true
       } finally {
         // DAGs (shared references without cycles) serialize fine — only
         // reject a value reachable from ITSELF.
@@ -205,18 +261,13 @@ export class TuiPluginStorageRuntime extends Service {
 
   /**
    * Open the caller's private namespace. Identity = the PASSED context's
-   * fiber name (honest API — no way to name another plugin). The handle
+   * verified Component identity (no way to name another plugin). The handle
    * closes automatically when the caller's context unloads (idempotent
    * disposer); data is retained (contract cleanup rule).
    */
   open(pluginCtx: Context): TuiPluginStorage {
-    let plugin = 'root'
-    try {
-      const resolved: unknown = pluginCtx.fiber?.name
-      if (typeof resolved === 'string' && resolved !== '') plugin = resolved
-    } catch {
-      // Degraded context without fiber access: 'root' namespace.
-    }
+    const identity = requireComponentIdentity(pluginCtx)
+    const plugin = identity.componentId
     let state = this.namespaces.get(plugin)
     if (state === undefined) {
       state = { chain: Promise.resolve() }
@@ -262,7 +313,7 @@ export class TuiPluginStorageRuntime extends Service {
       try {
         raw = readFileSync(file, 'utf8')
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Object.create(null) as Record<string, unknown>
         throw new PluginStorageError(
           'STORAGE_UNAVAILABLE',
           `storage namespace "${plugin}" is unreadable; the file was left untouched for manual recovery`,
@@ -293,7 +344,12 @@ export class TuiPluginStorageRuntime extends Service {
     }
 
     const requireGrant = (permission: 'storage.local.read' | 'storage.local.write') => {
-      if (!grants().allows(plugin, permission)) {
+      if (!declaresPermission(identity, permission, plugin)
+        || !grants().allows(
+          { componentId: identity.componentId, activationId: identity.activationId },
+          permission,
+          plugin,
+        )) {
         ledger()?.record(
           {
             operation: 'bind',
@@ -320,13 +376,22 @@ export class TuiPluginStorageRuntime extends Service {
     }
 
     return {
-      get: (key: unknown) => enqueue(async () => {
+      get: (input: { key: string }) => enqueue(async () => {
+        validateStorageInput('get', input)
+        const key = input.key
         assertKey(key)
         requireGrant('storage.local.read')
         const table = readTable()
-        return Object.hasOwn(table, key) ? table[key] : null
+        const output = { value: Object.hasOwn(table, key) ? table[key] : null }
+        try { validateGetOutput(output) } catch {
+          throw new PluginStorageError('STORAGE_UNAVAILABLE', `storage namespace "${plugin}" contains an invalid JSON value`)
+        }
+        return output
       }),
-      set: (key: unknown, value: unknown) => enqueue(async () => {
+      set: (input: { key: string; value: unknown }) => enqueue(async () => {
+        validateStorageInput('set', input)
+        const key = input.key
+        const value = input.value
         assertKey(key)
         assertJsonValue(value)
         requireGrant('storage.local.write')
@@ -344,19 +409,29 @@ export class TuiPluginStorageRuntime extends Service {
           }
           // 0o600/0o700: the namespace is privacyClass sensitive.
           await writeFileAtomic(file, content, { mode: 0o600, dirMode: 0o700 })
-          return true
+          const output = { stored: true as const }
+          validateSetOutput(output)
+          return output
         })
       }),
-      delete: (key: unknown) => enqueue(async () => {
+      delete: (input: { key: string }) => enqueue(async () => {
+        validateStorageInput('delete', input)
+        const key = input.key
         assertKey(key)
         requireGrant('storage.local.write')
         ensureDir()
         return withFileLock(file, async () => {
           const table = readTable()
-          if (!Object.hasOwn(table, key)) return false
+          if (!Object.hasOwn(table, key)) {
+            const output = { deleted: false }
+            validateDeleteOutput(output)
+            return output
+          }
           delete table[key]
           await writeFileAtomic(file, JSON.stringify(table), { mode: 0o600, dirMode: 0o700 })
-          return true
+          const output = { deleted: true }
+          validateDeleteOutput(output)
+          return output
         })
       }),
     }

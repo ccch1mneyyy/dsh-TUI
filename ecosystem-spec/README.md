@@ -1,23 +1,37 @@
-# ecosystem-spec/ — vendored 社区互操作规范数据（只读）
+# dsh-ecosystem-spec
 
-本目录是 [T-Auto/dsh-ecosystem-spec](https://github.com/T-Auto/dsh-ecosystem-spec)
-（Community Consensus v0.15）的**运行时数据子集**拷贝，供 dsh-TUI 代码消费：
+`dsh-ecosystem-spec` 是建立在 [dsh-std](https://github.com/Yan-Zero/dsh-std) 之上的 dsh-TUI 插件准入 profile 与一致性测试库。
 
-- `registry/` — 契约注册表（坐标 + schemaHash）、权限注册表、三个 contract
-  profile、TUI Host Descriptor 示例；
-- `schemas/` — manifest / host descriptor / envelope / ledger / claim 五个
-  JSON Schema；
-- `conformance/fixtures/` — 一致性 fixtures（**仅仓库内测试消费，不进 npm 包**；
-  `scripts/verify-plugin-spec.ts` 用它们跑全量 validate/negotiate 矩阵）。
+本仓库不另行定义 Manifest、元协议、composition、lifecycle 或 Community v0.15 领域协议。公共协议由 [`vendor/dsh-std`](vendor/dsh-std) submodule 固定；本仓库只规定：
 
-同步基线：上游 `main@279cbba`（2026-08-17，v0.15 + 红队验收修复）。
+- dsh-TUI 市场和推荐列表采用的额外准入条件；
+- TUI Host Descriptor、验证声明和 effect ledger profile；
+- TUI 自有协议；
+- 将上述内容与 dsh-std 一起执行的 conformance fixtures。
 
-## 更新流程
+私有协议使用普通的 `apiVersion + kind` 坐标，并注册到 dsh-std `ProtocolCatalog`。`x-ccch1mneyyy.tui/*` 只表示其兼容性由 dsh-TUI 维护，不会获得另一套发现、协商或生命周期机制。
 
-1. 上游发版后整目录覆盖拷贝（保持相对路径不变）；
-2. 更新本文件的同步基线；
-3. 跑 `node --import tsx/esm scripts/verify-plugin-spec.ts` —— fixtures 矩阵
-   与 schemaHash 自检即漂移报警器。
+当前规范和测试均为 Experimental，不代表 dsh 官方认证，也不构成安全隔离。
 
-本目录**不承载规范文档**；规范阅读与修订走上游仓库。任何手改都会在下次
-覆盖时丢失——不要在这里改内容。
+## 验证
+
+```sh
+git submodule update --init
+corepack enable
+pnpm test
+```
+
+`pnpm test` 会按 submodule 固定的 revision 安装并构建 dsh-std，然后运行 TUI admission suite。生成的 `lib` 只存在于 submodule 工作区，不提交到本仓库。
+
+## 文档
+
+| 路径 | 内容 |
+|---|---|
+| [`spec/community-consensus-v0.15.md`](spec/community-consensus-v0.15.md) | dsh-std 公共基线的稳定引用入口 |
+| [`spec/tui-admission-v0.15.md`](spec/tui-admission-v0.15.md) | dsh-TUI 产品准入要求 |
+| [`registry/registry-0.15.json`](registry/registry-0.15.json) | 本 profile 导入的 std 定义与自有定义 |
+| [`protocols/profile-definitions.js`](protocols/profile-definitions.js) | 可由 dsh-std core 装载的 TUI 私有定义 |
+| [`conformance/`](conformance) | fixtures、requirement matrix 与测试 runner |
+| [`rfc/`](rfc) | TUI 增量协议及保留的历史 RFC 路径 |
+
+规范优先级依次为实际执行环境与安全边界、固定的 dsh-std revision、TUI admission profile、实验提案和实现细节。

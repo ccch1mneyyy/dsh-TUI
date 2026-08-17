@@ -1,15 +1,24 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://dsh.community/schemas/host-descriptor-0.15.json",
-  "title":"DSH Host Descriptor v0.15",
+  "$id":"urn:dsh-tui:host-descriptor:0.15",
+  "title":"dsh-TUI Admission Host Descriptor v0.15",
   "type":"object","additionalProperties":false,
   "required":["$schema","hostId","hostVersion","facetApiVersions","contracts","runtime","trustLevel","platform"],
   "properties":{
-    "$schema":{"type":"string","const":"https://dsh.community/schemas/host-descriptor-0.15.json"},
+    "$schema":{"type":"string","const":"urn:dsh-tui:host-descriptor:0.15"},
     "hostId":{"type":"string","pattern":"^[a-z0-9]+([.-][a-z0-9]+)*$"},
     "hostVersion":{"type":"string","minLength":1},
     "facetApiVersions":{"type":"array","items":{"type":"string","pattern":"^v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$"},"minItems":1,"uniqueItems":true},
-    "contracts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["apiVersion","kind","schemaHash","permissions"],"properties":{"apiVersion":{"type":"string","pattern":"^[a-z0-9.-]+\\.[a-z0-9]+/v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$"},"kind":{"type":"string","pattern":"^[A-Z][A-Za-z0-9]*$","minLength":1,"maxLength":64},"version":{"type":"string","pattern":"^[0-9]+\\.[0-9]+$"},"schemaHash":{"type":"string","pattern":"^sha256:[a-f0-9]{64}$"},"permissions":{"type":"array","items":{"type":"string"},"uniqueItems":true}}},"uniqueItems":true},
+    "contracts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["apiVersion","kind","definition","permissions"],"properties":{
+      "apiVersion":{"type":"string","pattern":"^[a-z][a-z0-9.-]*/v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?$"},
+      "kind":{"type":"string","pattern":"^[A-Z][A-Za-z0-9]*$"},
+      "spec":{},
+      "definition":{"oneOf":[
+        {"type":"object","additionalProperties":false,"required":["source","package"],"properties":{"source":{"const":"dsh-std"},"package":{"type":"string","pattern":"^@dsh-std/"}}},
+        {"type":"object","additionalProperties":false,"required":["source","profileHash"],"properties":{"source":{"const":"tui-profile"},"profileHash":{"type":"string","pattern":"^sha256:[a-f0-9]{64}$"}}}
+      ]},
+      "permissions":{"type":"array","items":{"type":"string"},"uniqueItems":true}
+    }},"uniqueItems":true},
     "runtime":{"type":"object","additionalProperties":false,"required":["location","generationId","headless"],"properties":{"location":{"enum":["local","remote","container"]},"generationId":{"type":"string","pattern":"^[A-Za-z0-9._:-]+$"},"headless":{"type":"boolean"},"remoteAttach":{"type":"boolean"}}},
     "trustLevel":{"enum":["trusted-in-process"]},
     "platform":{"type":"object","additionalProperties":false,"required":["os","arch"],"properties":{"os":{"type":"string"},"arch":{"type":"string"},"node":{"type":"string"}}}

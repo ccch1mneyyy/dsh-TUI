@@ -20,7 +20,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
 // 家目录隔离（同 verify-extension-events.tsx）：Chat 加载即解析 homedir()。
-const { mkdtempSync, mkdirSync } = await import('node:fs')
+const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
 const { join: joinPath } = await import('node:path')
 const isolatedHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-ext-ui-home-'))
@@ -39,7 +39,7 @@ const [
   { TuiStatusStore, TuiStatusRuntime },
   { TuiShortcutRuntime, parseShortcutCombo, matchShortcut },
   { TuiRendererRuntime },
-  { installDecisionGuard, parseExtensionGrants },
+  { parseExtensionGrants },
   { dispatchTuiDecision, normalizeCancelDecision },
   { stringWidth },
   { KNOWN_SESSION_EVENT_TYPES },
@@ -59,6 +59,9 @@ const [
   import('../src/ink/stringWidth.js'),
   import('@deepseek-ai/dsh-session'),
 ])
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
+const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
+const { DATA_DIR } = await import('../src/utils/paths.js')
 
 class FakeStdout extends Writable {
   columns = 100
@@ -516,31 +519,44 @@ await sleep(100)
 
 // ── B2. RFC 0005 D-7: intercept subscriptions require explicit grants ────
 {
-  // A fresh root: the guard hooks internal/listener on this context tree.
+  // A fresh root: the host row installs the guard and owns the same live
+  // grant store used by admission and runtime dispatch.
   const guardCtx = new Context()
   const guardWarnings: string[] = []
   guardCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
     guardWarnings.push([format, ...params].map(String).join(' '))
   }
-  installDecisionGuard(guardCtx, parseExtensionGrants(JSON.stringify({
-    grants: { 'my-guard': ['session.input.intercept'] },
-  })))
-
-  // Granted plugin: the subscription registers and answers decisions.
-  guardCtx.plugin({
-    name: 'my-guard',
-    apply: (c: Context) => {
-      c.on('tui/input', (event: { text?: string }) =>
-        event.text === '拦截' ? { cancel: true, reason: '授权拦截' } : undefined)
+  mkdirSync(DATA_DIR, { recursive: true })
+  writeFileSync(joinPath(DATA_DIR, 'extension-grants.json'), JSON.stringify({
+    grants: {
+      'my-guard': [{ name: 'session.input.intercept', scope: 'tui/input', activationId: 'ui-guard-act' }],
     },
-  })
-  await sleep(100)
+  }))
+  guardCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+  await sleep(50)
+  const admitted = await mountAdmitted(guardCtx, 'my-guard-export', testManifest({
+    id: 'my-guard',
+    requires: [DECISION_COORDINATE],
+    permissions: [{ name: 'session.input.intercept', scope: 'tui/input' }],
+  }), 'test:my-guard/dsh-plugin.json', { activationId: 'ui-guard-act' })
+  const host = guardCtx.get('tuiPluginHost')
+  if (host === undefined) throw new Error('tuiPluginHost was not mounted')
+
+  // Granted plugin: the mediated subscription registers and answers decisions.
+  const release = host.subscribeDecision(
+    admitted.context,
+    'tui/input',
+    (event: Record<string, unknown>) => event.text === '拦截'
+      ? { cancel: true, reason: '授权拦截' }
+      : undefined,
+    { order: 'ui-granted' },
+  )
   const passThrough = (result: unknown): unknown => result
   check('decision guard: granted subscription enters the chain',
-    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '拦截' }, passThrough)) !== undefined)
+    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '拦截', sessionId: 'ui-session' }, passThrough)) !== undefined)
 
-  // Denied plugin (no grants): the listeners never register — dispatch sees
-  // "no opinion", and the warn names the plugin + the missing grant.
+  // A denied raw plugin has no verified Component identity; its listeners
+  // never enter the mediated registry.
   guardCtx.plugin({
     name: 'evil-plugin',
     apply: (c: Context) => {
@@ -550,17 +566,27 @@ await sleep(100)
   })
   await sleep(100)
   check('decision guard: ungranted subscription never enters the chain',
-    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '别的' }, passThrough)) === undefined
-    && (await dispatchTuiDecision(guardCtx, 'tui/compact', {}, normalizeCancelDecision)) === undefined)
+    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '别的', sessionId: 'ui-session' }, passThrough)) === undefined
+    && (await dispatchTuiDecision(guardCtx, 'tui/compact', { sessionId: 'ui-session' }, normalizeCancelDecision)) === undefined)
   check('decision guard: denial warns with plugin + grant',
     guardWarnings.some(line => line.includes('"evil-plugin"') && line.includes('session.input.intercept'))
     && guardWarnings.some(line => line.includes('session.compact.intercept')))
 
-  // Observe-class events are NOT gated.
-  guardCtx.on('tui/session-switched', () => {})
+  // Observe-class events still require an admitted DecisionEvents identity,
+  // but do not require an intercept grant.
+  let observed = false
+  const observeRelease = host.subscribeDecision(
+    admitted.context,
+    'tui/session-switched',
+    () => { observed = true },
+    { order: 'ui-observe' },
+  )
+  await dispatchTuiDecision(guardCtx, 'tui/session-switched', { sessionId: 'ui-session' }, () => undefined)
   await sleep(20)
   check('decision guard: observe-class events stay ungated',
-    !guardWarnings.some(line => line.includes('tui/session-switched')))
+    observed && !guardWarnings.some(line => line.includes('tui/session-switched')))
+  observeRelease()
+  release()
 
   // A corrupt grants file fails CLOSED (deny-all), never open.
   check('decision guard: corrupt grants parse as deny-all',

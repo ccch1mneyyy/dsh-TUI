@@ -1,61 +1,45 @@
-/**
- * 五态协商器——上游 run.js 的 negotiate() 保真 TS 移植（C-030）。
- *
- * 判定顺序即优先级 `unknown > rejected > waiting_authorization >
- * compatible_degraded > compatible`：
- *
- * 1. unknown：任一引用落在注册表之外（已知 group+kind 的未注册版本）——
- *    无法判定，回答 rejected 等于假装知道它不兼容；
- * 2. rejected：manifest 的 facet apiVersion 不在宿主声明面内（C-010/C-003，
- *    fail closed），或必填契约在宿主侧不可用（宿主未声明，或声明的
- *    schemaHash 与注册表钉死值不一致）；
- * 3. waiting_authorization：契约齐了，但有权限未授予——宿主未声明该权限，
- *    或权限定义缺失/default=deny 且不在 grants 里；
- * 4. compatible_degraded / compatible：只差 optional 与否。
- */
+/** Five-state admission decision using dsh-std projection and ProtocolCatalog. */
 
+import { defineProtocolDeclaration } from '@dsh-std/core'
+import { projectManifest } from '@dsh-std/manifest'
 import type { ContractIndex } from './validate.js'
-import type { HostDescriptor, NegotiationDecision, PluginManifest } from './types.js'
+import { rawScopeCovers } from './permission-scope.js'
+import type { HostDescriptor, ManifestPermission, NegotiationDecision, PluginManifest } from './types.js'
 
-const coordinateKey = (ref: { apiVersion: string; kind: string }): string =>
-  `${ref.apiVersion}#${ref.kind}`
+const coordinateKey = (ref: { apiVersion: string; kind: string }): string => `${ref.apiVersion}#${ref.kind}`
 
-/**
- * Negotiate a validated manifest against a Host Descriptor.
- * `grants` = 已授予的权限名集合（GrantStore 在批 2 提供；库层面保持
- * run.js 的数组签名）。
- */
+export interface GrantedPermission {
+  name: string
+  scope: string
+  /** Explicit effective answer. Omitted means a legacy positive grant row. */
+  granted?: boolean
+}
+
 export function negotiate(
   index: ContractIndex,
   manifest: PluginManifest,
   host: HostDescriptor,
-  grants: readonly string[] = [],
+  grants: readonly GrantedPermission[] = [],
 ): NegotiationDecision {
   const supported = new Map(host.contracts.map(contract => [coordinateKey(contract), contract]))
-  const required = manifest.requires.contracts.filter(ref => !ref.optional)
-  const optional = manifest.requires.contracts.filter(ref => ref.optional)
+  const required = manifest.requires.contracts.filter(reference => reference.optional !== true)
+  const optional = manifest.requires.contracts.filter(reference => reference.optional === true)
 
-  // `unknown` outranks every other outcome (C-030 priority): a referenced
-  // version outside the registry cannot be judged — answering rejected here
-  // would pretend we KNOW it is incompatible.
-  const unjudgable = manifest.requires.contracts.filter(ref => {
+  const unknown = manifest.requires.contracts.filter(reference => {
     try {
-      return index.resolveContractRef(ref).unregisteredVersion
+      return index.resolveContractRef(reference).unregisteredVersion
     } catch {
       return false
     }
   })
-  if (unjudgable.length > 0) {
+  if (unknown.length > 0) {
     return {
       decision: 'unknown',
-      reasonCode: 'UNKNOWN_CONTRACT',
-      unknownContracts: unjudgable.map(coordinateKey),
+      reasonCode: 'UNKNOWN_PROTOCOL_VERSION',
+      unknownContracts: unknown.map(coordinateKey),
     }
   }
 
-  // C-010/C-003: the manifest's facet host API version must be within the
-  // host's declared facet API surface — otherwise the requested Host API
-  // range is unavailable (fail closed).
   if (!host.facetApiVersions.includes(manifest.facets.host.apiVersion)) {
     return {
       decision: 'rejected',
@@ -65,36 +49,67 @@ export function negotiate(
     }
   }
 
-  const available = (ref: { apiVersion: string; kind: string }): boolean => {
-    const hostContract = supported.get(coordinateKey(ref))
-    const registryEntry = index.lookupContract(ref)
-    return Boolean(hostContract && registryEntry && hostContract.schemaHash === registryEntry.schemaHash)
-  }
-  const missingRequired = required.filter(ref => !available(ref))
-  const missingOptional = optional.filter(ref => !available(ref))
-
-  const hostPermissions = new Set(host.contracts.flatMap(contract => contract.permissions))
-  const granted = new Set(grants)
-  const deniedPermissions = manifest.permissions.filter(permission => {
-    if (!hostPermissions.has(permission.name)) return true
-    const definition = index.permissions.permissions.find(item => item.name === permission.name)
-    return !definition || (definition.default === 'deny' && !granted.has(permission.name))
-  })
-
+  const missingRequired = required.filter(reference => !supported.has(coordinateKey(reference)))
+  const missingOptional = optional.filter(reference => !supported.has(coordinateKey(reference)))
   if (missingRequired.length > 0) {
     return {
       decision: 'rejected',
-      reasonCode: 'REQUIRED_CONTRACT_UNAVAILABLE',
+      reasonCode: 'REQUIRED_PROTOCOL_UNAVAILABLE',
       missingRequired: missingRequired.map(coordinateKey),
     }
   }
-  if (deniedPermissions.length > 0) {
+
+  const projected = projectManifest(manifest)
+  const facet = projected.spec.facets.find(candidate => candidate.name === 'host')
+  const supportedKeys = new Set(host.contracts.map(contract => coordinateKey(contract)))
+  const declaration = defineProtocolDeclaration({
+    participant: { id: manifest.id },
+    // An optional protocol that is absent is intentionally omitted from the
+    // evaluator input; its degraded state was already recorded above. This
+    // keeps ProtocolCatalog's required-support error meaningful for every
+    // remaining requirement.
+    requires: (facet?.protocols?.requires ?? []).filter(reference =>
+      reference.optional !== true || supportedKeys.has(coordinateKey(reference))),
+  })
+  const hostDeclaration = defineProtocolDeclaration({
+    participant: { id: host.hostId },
+    supports: host.contracts.map(contract => ({
+      apiVersion: contract.apiVersion,
+      kind: contract.kind,
+      ...(Object.hasOwn(contract, 'spec') ? { spec: contract.spec } : {}),
+    })),
+  })
+  const report = index.protocols.negotiate([declaration, hostDeclaration])
+  if (!report.compatible) {
+    return {
+      decision: 'rejected',
+      reasonCode: 'PROTOCOL_NEGOTIATION_FAILED',
+      issues: report.issues,
+    }
+  }
+
+  const hostPermissions = new Set(host.contracts.flatMap(contract => contract.permissions))
+  const denied = manifest.permissions.filter((request: ManifestPermission) => {
+    if (!hostPermissions.has(request.name)) return true
+    const definition = index.permissions.permissions.find(permission => permission.name === request.name)
+    if (definition === undefined) return true
+    const matching = grants.filter(grant => grant.name === request.name
+      && rawScopeCovers(grant.name, grant.scope, request.scope, manifest.id))
+    // Explicit revocation wins over an allow-default permission. This keeps
+    // admission diagnostics aligned with the runtime checkpoint instead of
+    // reporting a plugin as compatible until its first invocation fails.
+    if (matching.some(grant => grant.granted === false)) return true
+    if (definition.default === 'allow') return false
+    return !matching.some(grant => grant.granted !== false)
+  })
+  if (denied.length > 0) {
     return {
       decision: 'waiting_authorization',
       reasonCode: 'PERMISSION_NOT_GRANTED',
-      deniedPermissions: deniedPermissions.map(permission => permission.name),
+      deniedPermissions: denied.map(request => `${request.name}@${request.scope}`),
     }
   }
+
   return missingOptional.length > 0
     ? { decision: 'compatible_degraded', missingOptional: missingOptional.map(coordinateKey) }
     : { decision: 'compatible' }

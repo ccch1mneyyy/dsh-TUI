@@ -48,11 +48,14 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 
 // ── 足迹布景：grants + denies + 台账 + 存储目录 ──────────────────────────
 mkdirSync(DATA_DIR, { recursive: true })
-const grantsTable: Record<string, string[]> = { alpha: ['storage.local.read', 'storage.local.write'] }
+const scoped = (name: string, scope: string) => ({ name, scope })
+const grantsTable: Record<string, object[]> = {
+  alpha: [scoped('storage.local.read', 'alpha'), scoped('storage.local.write', 'alpha')],
+}
 for (let index = 1; index <= 21; index += 1) grantsTable[`p${String(index).padStart(2, '0')}`] = []
 writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
   grants: grantsTable,
-  denies: { evil: ['commands.invoke'] },
+  denies: { evil: [scoped('commands.invoke', 'diagnostic.command')] },
 }))
 mkdirSync(join(DATA_DIR, PLUGIN_STORAGE_DIR), { recursive: true })
 writeFileSync(join(DATA_DIR, PLUGIN_STORAGE_DIR, 'gamma.json'), '{}')
@@ -148,12 +151,12 @@ const overview = () => pluginsInfoLines('', { grants, host })
     waiting.join(' | '))
   const unknown = checkLines(fixture('unknown-version-plugin.json'))
   check1('unregistered version answers unknown (never rejected)',
-    unknown.some(line => line.includes('unknown') && line.includes('UNKNOWN_CONTRACT') && line.includes('storage.dsh/v2beta1#LocalStorage')),
+    unknown.some(line => line.includes('unknown') && line.includes('UNKNOWN_PROTOCOL_VERSION') && line.includes('storage.dsh/v2beta1#LocalStorage')),
     unknown.join(' | '))
 
   // grants 翻转：授予 com.example.observer 后同 fixture 变 compatible
   writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
-    grants: { 'com.example.observer': ['messages.observe.read'] },
+    grants: { 'com.example.observer': [scoped('messages.observe.read', 'session:*')] },
   }))
   const flipped = pluginsInfoLines('check ' + fixture('waiting-authorization-plugin.json'), { grants: readGrantStore(), host }).slice(1)
   check1('granting the permission flips the same fixture to compatible',
@@ -161,12 +164,12 @@ const overview = () => pluginsInfoLines('', { grants, host })
   // 还原足迹布景
   writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
     grants: grantsTable,
-    denies: { evil: ['commands.invoke'] },
+    denies: { evil: [scoped('commands.invoke', 'diagnostic.command')] },
   }))
 
   const semantic = checkLines(fixture('invalid-plugin-duplicate-command.json'))
-  check1('duplicate command id fails semantic validation',
-    semantic.some(line => line.includes('语义校验失败') && line.includes('duplicate command id')), semantic.join(' | '))
+  check1('duplicate command id is rejected by the official manifest parser',
+    semantic.some(line => line.includes('schema 校验失败')), semantic.join(' | '))
   const schemaFail = checkLines(fixture('invalid-plugin-client-facet.json'))
   check1('client facet fails the vendored schema',
     schemaFail.some(line => line.includes('schema 校验失败')), schemaFail.join(' | '))
@@ -191,50 +194,63 @@ const overview = () => pluginsInfoLines('', { grants, host })
 
 // ── E2. TUI 宿主扩展覆盖层（P2-11）────────────────────────────────────────
 {
-  const extensionCheck = (path: string, store = grants) =>
-    pluginsInfoLines(`check ${path}`, { grants: store, host }).slice(1) // 去 banner
+  const extensionCheck = (path: string, store = grants, targetHost = host) =>
+    pluginsInfoLines(`check ${path}`, { grants: store, host: targetHost }).slice(1) // 去 banner
+  const privateFixture = fixture('valid-private-protocol-plugin.json')
+  const noDecisionHost = {
+    descriptor: JSON.parse(readFileSync(fixture('host-no-observe.example.json'), 'utf8')),
+    dropped: [],
+    warnings: [],
+  }
+  const unavailable = extensionCheck(privateFixture, grants, noDecisionHost)
+  check1('the current-schema private fixture reaches negotiation',
+    !unavailable.some(line => line.includes('schema 校验失败') || line.includes('语义校验失败')), unavailable.join(' | '))
+  check1('a host without DecisionEvents rejects the required private protocol',
+    unavailable.some(line => line.includes('rejected')
+      && line.includes('REQUIRED_PROTOCOL_UNAVAILABLE')
+      && line.includes('x-ccch1mneyyy.tui/v1alpha1#DecisionEvents')), unavailable.join(' | '))
   // 遵循文档的插件：声明 session.input.intercept 并订阅 tui/input——
   // vendored 核心面答不出（schema 枚举仅 4 个核心权限名、registry 无
   // tui/* 条目），必须走 TUI 扩展覆盖层，且输出要如实声明这一点。
   const tuiPlugin = join(fakeHome, 'tui-extension-plugin.json')
   writeFileSync(tuiPlugin, JSON.stringify({
-    $schema: 'https://dsh.community/schemas/dsh-plugin-0.15.json',
+    $schema: 'urn:dsh-std:community-draft:dsh-plugin:0.15',
     id: 'com.example.input-guard',
     name: 'Input Guard',
     version: '0.1.0',
     manifestVersion: '0.15',
     facets: { host: { entry: 'dist/main.js', apiVersion: 'v1alpha1' } },
-    requires: { contracts: [{ apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' }] },
+    requires: { contracts: [{ apiVersion: 'x-ccch1mneyyy.tui/v1alpha1', kind: 'DecisionEvents' }] },
     permissions: [{ name: 'session.input.intercept', scope: 'tui/input', reason: 'guard user input' }],
     contributes: { commands: [] },
-    subscriptions: ['tui/input'],
+    subscriptions: [],
     license: 'MIT',
     source: { repository: 'https://example.com/guard', revision: 'abc123' },
   }))
-  const ungranted = extensionCheck(tuiPlugin)
+  const decisionBuild = buildHostDescriptor({ generationId: 'decision-battery' })
+  const ungranted = extensionCheck(tuiPlugin, grants, decisionBuild)
   check1('extension manifest reaches negotiation (no schema/semantic failure)',
     !ungranted.some(line => line.includes('schema 校验失败') || line.includes('语义校验失败')), ungranted.join(' | '))
   check1('ungranted intercept permission answers waiting_authorization naming it',
-    ungranted.some(line => line.includes('waiting_authorization') && line.includes('session.input.intercept')),
+    ungranted.some(line => line.includes('waiting_authorization') && line.includes('session.input.intercept@tui/input')),
     ungranted.join(' | '))
-  check1('the overlay note is disclosed', ungranted.some(line => line.includes('宿主扩展覆盖层')))
   // 授予后翻 compatible（intercept 权限在覆盖层 descriptor 里是 host-declared）。
   writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
-    grants: { ...grantsTable, 'com.example.input-guard': ['session.input.intercept'] },
-    denies: { evil: ['commands.invoke'] },
+    grants: { ...grantsTable, 'com.example.input-guard': [scoped('session.input.intercept', 'tui/input')] },
+    denies: { evil: [scoped('commands.invoke', 'diagnostic.command')] },
   }))
-  const grantedLines = extensionCheck(tuiPlugin, readGrantStore())
-  check1('granting the intercept permission flips the extension manifest to compatible',
+  const grantedLines = extensionCheck(tuiPlugin, readGrantStore(), decisionBuild)
+  check1('granting the exact event scope flips DecisionEvents to compatible',
     grantedLines.some(line => line.includes('协商结果：compatible') && !line.includes('degraded')), grantedLines.join(' | '))
   // 还原足迹布景
   writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
     grants: grantsTable,
-    denies: { evil: ['commands.invoke'] },
+    denies: { evil: [scoped('commands.invoke', 'diagnostic.command')] },
   }))
   // 双侧都失败的 manifest（未注册权限名）→ 报 base 错误，绝不靠覆盖层放行。
   const bogusPlugin = join(fakeHome, 'bogus-permission-plugin.json')
   writeFileSync(bogusPlugin, JSON.stringify({
-    $schema: 'https://dsh.community/schemas/dsh-plugin-0.15.json',
+    $schema: 'urn:dsh-std:community-draft:dsh-plugin:0.15',
     id: 'com.example.bogus',
     name: 'Bogus',
     version: '0.1.0',
@@ -247,14 +263,13 @@ const overview = () => pluginsInfoLines('', { grants, host })
     license: 'MIT',
     source: { repository: 'https://example.com/bogus' },
   }))
-  const bogus = extensionCheck(bogusPlugin)
-  check1('an unregistered permission name still fails with the base schema error',
-    bogus.some(line => line.includes('schema 校验失败')) && !bogus.some(line => line.includes('宿主扩展覆盖层')),
+  const bogus = extensionCheck(bogusPlugin, grants, decisionBuild)
+  check1('an unregistered permission fails profile semantic validation',
+    bogus.some(line => line.includes('语义校验失败') && line.includes('bogus.permission')),
     bogus.join(' | '))
-  // 纯核心 manifest 不带覆盖层注记（既有行为不变）。
   const coreLines = extensionCheck(fixture('valid-plugin.json'))
-  check1('core manifests carry no overlay note',
-    !coreLines.some(line => line.includes('宿主扩展覆盖层')) && coreLines.some(line => line.includes('协商结果：compatible')))
+  check1('public manifests still negotiate through the same catalog',
+    coreLines.some(line => line.includes('协商结果：compatible')))
 }
 
 // ── F. 接线断言 ───────────────────────────────────────────────────────────

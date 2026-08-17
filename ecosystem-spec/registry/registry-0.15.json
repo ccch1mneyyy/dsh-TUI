@@ -1,66 +1,57 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "registryVersion": "0.15",
-  "entries": [
-    {
-      "name": "storage.local",
-      "coordinates": {
-        "apiVersion": "storage.dsh/v1alpha1",
-        "kind": "LocalStorage"
-      },
-      "kind": "capability",
-      "version": "0.15",
-      "schema": "registry/contracts/storage.local-0.15.json",
-      "schemaHash": "sha256:a43bd499060013f599496e70b03cedde34739bc299ee83304ffcc42675fcf35b",
-      "permissions": [
-        "storage.local.read",
-        "storage.local.write"
-      ],
-      "requiredHostBehavior": [
-        "namespace-by-component",
-        "repeatable-cleanup"
-      ]
-    },
+  "profileVersion": "tui-admission/0.15",
+  "std": {
+    "repository": "https://github.com/Yan-Zero/dsh-std",
+    "submodule": "vendor/dsh-std",
+    "manifestVersion": "0.15"
+  },
+  "imports": [
     {
       "name": "commands",
-      "coordinates": {
-        "apiVersion": "commands.dsh/v1alpha1",
-        "kind": "Command"
-      },
+      "coordinates": {"apiVersion": "commands.dsh/v1alpha1", "kind": "Command"},
+      "package": "@dsh-std/command",
       "kind": "capability",
-      "version": "0.15",
-      "schema": "registry/contracts/commands-0.15.json",
-      "schemaHash": "sha256:9a67c445c0442e9797f953413c03f582a004276271fd6ab14a86c830f54e3152",
-      "permissions": [
-        "commands.invoke"
-      ],
-      "requiredHostBehavior": [
-        "flat-action-leaf",
-        "reject-duplicate-id"
-      ]
+      "permissions": ["commands.invoke"]
+    },
+    {
+      "name": "storage.local",
+      "coordinates": {"apiVersion": "storage.dsh/v1alpha1", "kind": "LocalStorage"},
+      "package": "@dsh-std/storage",
+      "kind": "capability",
+      "permissions": ["storage.local.read", "storage.local.write"]
     },
     {
       "name": "messages.observe",
-      "coordinates": {
-        "apiVersion": "messages.dsh/v1alpha1",
-        "kind": "MessageObserver"
-      },
+      "coordinates": {"apiVersion": "messages.dsh/v1alpha1", "kind": "MessageObserver"},
+      "package": "@dsh-std/messages",
       "kind": "event",
-      "version": "0.15",
-      "schema": "registry/contracts/messages.observe-0.15.json",
-      "schemaHash": "sha256:28743d6c81970c4da7a37254bbade4908d94a1f6e20f6404c875f7d2066c63b5",
+      "permissions": ["messages.observe.read"],
+      "eventEnvelope": "@dsh-std/messages/schema/message-observer-envelope-0.15.json"
+    },
+    {
+      "name": "presentation.open-external",
+      "coordinates": {"apiVersion": "presentation.dsh/v1alpha1", "kind": "OpenExternal"},
+      "package": "@dsh-std/presentation",
+      "kind": "capability",
+      "permissions": []
+    }
+  ],
+  "definitions": [
+    {
+      "name": "tui.decision-events",
+      "authority": "dsh-tui",
+      "coordinates": {"apiVersion": "x-ccch1mneyyy.tui/v1alpha1", "kind": "DecisionEvents"},
+      "kind": "capability",
+      "profile": "registry/contracts/decision-events-v1alpha1.json",
+      "profileHash": "sha256:a9fe0a94efafa2e3890c4b1c36f7a6b902ab1f001b94647b5ce95c1e792d90cd",
       "permissions": [
-        "messages.observe.read"
-      ],
-      "eventEnvelope": "schemas/messages-observe-envelope.schema.json",
-      "requiredHostBehavior": [
-        "monotonic-sequence-per-scope",
-        "redact-sensitive-fields",
-        "fail-closed-unknown-privacy"
+        "session.input.intercept",
+        "session.rewind.intercept",
+        "session.switch.intercept",
+        "session.compact.intercept"
       ]
     }
   ],
-  "facetApiVersions": [
-    "v1alpha1"
-  ]
+  "facetApiVersions": ["v1alpha1"]
 }

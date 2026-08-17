@@ -79,7 +79,8 @@
   },
   "scripts": {
     "clean": "node scripts/clean-lib.mjs",
-    "compile": "npm run clean && tsc -p tsconfig.json",
+    "build:dsh-std": "pnpm --dir vendor/dsh-std install --frozen-lockfile --ignore-scripts && pnpm --dir vendor/dsh-std --filter @dsh-std/core --filter @dsh-std/manifest --filter @dsh-std/connection --filter @dsh-std/presentation --filter @dsh-std/command --filter @dsh-std/storage --filter @dsh-std/messages -r build",
+    "compile": "npm run build:dsh-std && npm run clean && tsc -p tsconfig.json",
     "prepare": "npm run compile",
     "build": "npm run compile && npm run verify:build",
     "dev": "node scripts/dev-test.mjs",
@@ -135,6 +136,13 @@
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "dependencies": {
+    "@dsh-std/command": "workspace:*",
+    "@dsh-std/connection": "workspace:*",
+    "@dsh-std/core": "workspace:*",
+    "@dsh-std/manifest": "workspace:*",
+    "@dsh-std/messages": "workspace:*",
+    "@dsh-std/presentation": "workspace:*",
+    "@dsh-std/storage": "workspace:*",
     "@alcalzone/ansi-tokenize": "^0.3.0",
     "auto-bind": "^4.0.0 || ^5.0.0",
     "bidi-js": "^1.0.0",
@@ -162,6 +170,15 @@
     "usehooks-ts": "^3.1.0",
     "wrap-ansi": "^8.0.0 || ^9.0.0"
   },
+  "bundledDependencies": [
+    "@dsh-std/command",
+    "@dsh-std/connection",
+    "@dsh-std/core",
+    "@dsh-std/manifest",
+    "@dsh-std/messages",
+    "@dsh-std/presentation",
+    "@dsh-std/storage"
+  ],
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/cordis-plugin-include": "^1.0.6",

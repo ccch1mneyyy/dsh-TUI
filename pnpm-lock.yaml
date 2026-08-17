@@ -11,6 +11,27 @@ importers:
       '@alcalzone/ansi-tokenize':
         specifier: ^0.3.0
         version: 0.3.0
+      '@dsh-std/command':
+        specifier: workspace:*
+        version: link:vendor/dsh-std/packages/command
+      '@dsh-std/connection':
+        specifier: workspace:*
+        version: link:vendor/dsh-std/packages/connection
+      '@dsh-std/core':
+        specifier: workspace:*
+        version: link:vendor/dsh-std/packages/core
+      '@dsh-std/manifest':
+        specifier: workspace:*
+        version: link:vendor/dsh-std/packages/manifest
+      '@dsh-std/messages':
+        specifier: workspace:*
+        version: link:vendor/dsh-std/packages/messages
+      '@dsh-std/presentation':
+        specifier: workspace:*
+        version: link:vendor/dsh-std/packages/presentation
+      '@dsh-std/storage':
+        specifier: workspace:*
+        version: link:vendor/dsh-std/packages/storage
       auto-bind:
         specifier: ^4.0.0 || ^5.0.0
         version: 5.0.1
@@ -246,6 +267,56 @@ importers:
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
+
+  vendor/dsh-std/packages/command:
+    dependencies:
+      '@dsh-std/connection':
+        specifier: workspace:*
+        version: link:../connection
+      '@dsh-std/core':
+        specifier: workspace:*
+        version: link:../core
+      '@dsh-std/manifest':
+        specifier: workspace:*
+        version: link:../manifest
+      '@dsh-std/presentation':
+        specifier: workspace:*
+        version: link:../presentation
+
+  vendor/dsh-std/packages/connection:
+    dependencies:
+      '@dsh-std/core':
+        specifier: workspace:*
+        version: link:../core
+
+  vendor/dsh-std/packages/core: {}
+
+  vendor/dsh-std/packages/manifest:
+    dependencies:
+      '@dsh-std/core':
+        specifier: workspace:*
+        version: link:../core
+
+  vendor/dsh-std/packages/messages:
+    dependencies:
+      '@dsh-std/core':
+        specifier: workspace:*
+        version: link:../core
+
+  vendor/dsh-std/packages/presentation:
+    dependencies:
+      '@dsh-std/connection':
+        specifier: workspace:*
+        version: link:../connection
+      '@dsh-std/core':
+        specifier: workspace:*
+        version: link:../core
+
+  vendor/dsh-std/packages/storage:
+    dependencies:
+      '@dsh-std/core':
+        specifier: workspace:*
+        version: link:../core
 
 packages:
 

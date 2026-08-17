@@ -57,7 +57,7 @@ import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-
 import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
 import type { TuiRendererRuntime } from './renderers.js'
-import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events.js'
+import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
 import { readGrantStore } from './grants.js'
@@ -1225,8 +1225,13 @@ export function createChannel(
   // posture. Idempotent per cordis root, so the full-patch path installs
   // exactly once whichever side runs first. One store instance serves both
   // the gate and the invoke checkpoint below.
-  const grantStore = ctx.get('tuiPluginHost')?.grants ?? readGrantStore()
-  installDecisionGuard(ctx, grantStore)
+  // Keep a private fallback for bare embedders, but resolve the host-owned
+  // store on every operation so a plugin-host row mounted later (or a custom
+  // live GrantStore) is not shadowed by an early snapshot.
+  const fallbackGrantStore = readGrantStore()
+  const currentGrantStore = (): ReturnType<typeof readGrantStore> =>
+    ctx.get('tuiPluginHost')?.grants ?? fallbackGrantStore
+  installDecisionGuard(ctx, currentGrantStore())
   // The DSH slash-command registry (optional service): /plan, /goal and
   // friends register here; the TUI merges their descriptors into the slash
   // menu and dispatches through `execute` (which logs the paired
@@ -1490,12 +1495,10 @@ export function createChannel(
    *  state rebinds here. Listener failures are logged, never propagated —
    *  the switch itself already succeeded. */
   const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind', sessionId: string, previousSessionId: string): void => {
-    try {
-      void Promise.resolve(
-        ctx.parallel('tui/session-switched', { kind, sessionId, previousSessionId, cwd: state.cwd }),
-      ).catch((error: unknown) => {
-        ctx.logger.warn('dsh-tui: tui/session-switched listener failed: %o', error)
-      })
+      try {
+        void dispatchTuiNotification(ctx, 'tui/session-switched', { kind, sessionId, previousSessionId, cwd: state.cwd }).catch((error: unknown) => {
+          ctx.logger.warn('dsh-tui: tui/session-switched listener failed: %o', error)
+        })
     } catch (error) {
       // A bare embedder's context may lack the event bus entirely; the
       // switch itself already succeeded, so this stays a log line.
@@ -1637,16 +1640,29 @@ export function createChannel(
    *  command is not registered, and the error message when it throws. */
   const executeRegistryCommand = async (name: string, rawInput: string): Promise<string | undefined> => {
     if (!commandService) return undefined
-    // Invoke checkpoint (C-041): the host executes registry commands under
-    // the 'root' identity — allow by default, revocable through the grants
-    // file's "denies" section. Plugins calling ctx.commands.execute directly
-    // bypass this checkpoint (declared C-070 trusted-in-process boundary).
-    if (!grantStore.allows('root', 'commands.invoke')) {
+    // Resolve the exact definition that execute() will select for this agent.
+    // Same names may exist in distinct agent scopes, so a name-only lookup can
+    // apply another scope's owner policy.
+    const definition = commandService.find(agent, name)
+    const owner = commandOwner(ctx, definition)
+    // The root checkpoint covers host/direct registrations.  A built-in name
+    // is not necessarily a namespaced contribution id, so use a deterministic
+    // host scope for that case; legacy unscoped denies still conservatively
+    // revoke every valid command scope.
+    const rootScope = owner?.commandId
+      ?? (/^[a-z][a-z0-9]*(?:[.-][a-z0-9][a-z0-9-]*)+$/u.test(name)
+        ? name
+        : `dsh-tui.${name.toLowerCase().replace(/[^a-z0-9-]+/gu, '-').replace(/^-+|-+$/gu, '') || 'command'}`)
+    if (!currentGrantStore().allows(
+      { componentId: 'root' },
+      'commands.invoke',
+      rootScope,
+    )) {
       ctx.logger.warn('dsh-tui: registry command invocation denied (commands.invoke revoked for "root" in the grants file)')
       ctx.get('tuiEffectLedger')?.record(
         {
           operation: 'bind',
-          resource: { kind: 'permission', id: 'commands.invoke' },
+          resource: { kind: 'permission', id: `root:commands.invoke:${rootScope}` },
           result: 'failed',
           errorCode: 'PERMISSION_NOT_GRANTED',
         },
@@ -1658,24 +1674,26 @@ export function createChannel(
     // plugin-host row's mediated registerCommand (see command-attribution.js)
     // is additionally gated on the OWNER's grant, so a denies entry for the
     // plugin closes the host-mediated invocation of ITS commands.
-    // Unattributed commands (host-side or direct ctx.get registrations —
-    // the documented C-070 boundary) fall back to the root check only;
-    // attribution only ever TIGHTENS the check, never widens it.
-    const owner = commandOwner(ctx, name)
-    if (owner !== undefined && owner !== 'root' && !grantStore.allows(owner, 'commands.invoke')) {
+    // Unattributed host/direct registrations remain inside the documented
+    // trusted-in-process boundary and have no plugin grant to evaluate.
+    if (owner !== undefined && !currentGrantStore().allows(
+      { componentId: owner.componentId, activationId: owner.activationId },
+      'commands.invoke',
+      owner.commandId,
+    )) {
       ctx.logger.warn(
-        `dsh-tui: registry command "/${name}" invocation denied — owner plugin "${owner}" lost commands.invoke (grants file denies)`,
+        `dsh-tui: registry command "/${name}" invocation denied — owner Component "${owner.componentId}" lost commands.invoke for "${owner.commandId}"`,
       )
       ctx.get('tuiEffectLedger')?.record(
         {
           operation: 'bind',
-          resource: { kind: 'permission', id: `${owner}:commands.invoke` },
+          resource: { kind: 'permission', id: `${owner.componentId}:commands.invoke:${owner.commandId}` },
           result: 'failed',
           errorCode: 'PERMISSION_NOT_GRANTED',
         },
         ctx,
       )
-      return t('command-invoke-denied-owner', { name, owner })
+      return t('command-invoke-denied-owner', { name, owner: owner.componentId })
     }
     try {
       const execution = await commandService.execute(
@@ -3412,7 +3430,7 @@ export function createChannel(
     pluginsInfo(args: string) {
       const host = ctx.get('tuiPluginHost')
       return pluginsInfoLines(args, {
-        grants: host?.grants ?? grantStore,
+        grants: host?.grants ?? currentGrantStore(),
         host: host?.describe(),
       })
     },

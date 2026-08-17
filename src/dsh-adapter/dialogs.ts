@@ -93,6 +93,7 @@ interface PendingDialog {
   /** AbortSignal/timeout callback: remove + settle cancelled + re-render. */
   onAbort: () => void
   timer: ReturnType<typeof setTimeout> | undefined
+  ownerCleanup?: () => unknown
 }
 
 /** Distributive Omit: `Omit` over a union collapses to the shared members
@@ -113,6 +114,8 @@ const MESSAGE_CELLS = 400
  *  a larger value. */
 export const INPUT_CELLS = 500
 const MAX_OPTIONS = 100
+/** Bound a request that omits both signal and timeout. */
+export const DIALOG_DEFAULT_TIMEOUT_MS = 30_000
 
 let nextDialogId = 1
 
@@ -130,6 +133,7 @@ export class TuiDialogStore {
     snapshot: WithoutKey<TuiDialogSnapshot>,
     signal?: AbortSignal,
     timeoutMs?: number,
+    owner?: Context,
   ): Promise<TuiDialogAnswer> {
     if (signal?.aborted) return Promise.resolve(undefined)
     return new Promise<TuiDialogAnswer>((resolve) => {
@@ -142,6 +146,7 @@ export class TuiDialogStore {
         settle: () => {},
         onAbort: () => {},
         timer: undefined,
+        ownerCleanup: undefined,
       }
       pending.snapshot = { ...snapshot, key: pending.key } as TuiDialogSnapshot
       pending.settle = (value: TuiDialogAnswer): void => {
@@ -149,9 +154,16 @@ export class TuiDialogStore {
         settled = true
         if (pending.timer !== undefined) clearTimeout(pending.timer)
         signal?.removeEventListener('abort', pending.onAbort)
+        const ownerCleanup = pending.ownerCleanup
+        pending.ownerCleanup = undefined
+        ownerCleanup?.()
         resolve(value)
       }
       pending.onAbort = () => {
+        // Normal completion also disposes the owner effect. The effect's
+        // cleanup must not re-enter the abort path and advance the queue a
+        // second time.
+        if (settled) return
         // Aborted while queued: drop silently. Aborted while active: close
         // the dialog and advance the queue.
         const index = this.queue.indexOf(pending)
@@ -167,6 +179,16 @@ export class TuiDialogStore {
       signal?.addEventListener('abort', pending.onAbort, { once: true })
       if (timeoutMs !== undefined && timeoutMs > 0) {
         pending.timer = setTimeout(pending.onAbort, timeoutMs)
+      }
+      if (owner !== undefined) {
+        try {
+          const disposer = owner.effect(() => pending.onAbort)
+          pending.ownerCleanup = typeof disposer === 'function' ? disposer : undefined
+        } catch {
+          // An inactive activation must never leave an orphan in the queue.
+          pending.onAbort()
+          return
+        }
       }
       this.queue.push(pending)
       this.advance()
@@ -256,8 +278,25 @@ export class TuiDialogRuntime extends Service {
     ctx.effect(() => () => this.store.settleAll())
   }
 
+  /** Cordis traceable services normally provide the caller through `this.ctx`;
+   * the explicit overloads below make ownership unambiguous for embedders and
+   * tests that retain the service instance directly. */
+  private callContext(value: unknown): Context {
+    return Context.is(value) ? value : this.ctx
+  }
+
+  private timeoutOf(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+      ? Math.min(Math.floor(value), 24 * 60 * 60 * 1000)
+      : DIALOG_DEFAULT_TIMEOUT_MS
+  }
+
   /** Pick one of `options`; resolves the option id, or undefined on cancel. */
-  select(request: TuiDialogSelectRequest): Promise<string | undefined> {
+  select(request: TuiDialogSelectRequest): Promise<string | undefined>
+  select(owner: Context, request: TuiDialogSelectRequest): Promise<string | undefined>
+  select(ownerOrRequest: Context | TuiDialogSelectRequest, explicitRequest?: TuiDialogSelectRequest): Promise<string | undefined> {
+    const owner = this.callContext(ownerOrRequest)
+    const request = (explicitRequest ?? ownerOrRequest) as TuiDialogSelectRequest
     const title = clean(request?.title, TITLE_CELLS)
     const rawOptions = Array.isArray(request?.options) ? request.options : []
     const options: TuiDialogSelectOption[] = []
@@ -278,12 +317,16 @@ export class TuiDialogRuntime extends Service {
       return Promise.resolve(undefined)
     }
     return this.store
-      .ask({ kind: 'select', title, options }, request.signal, request.timeoutMs)
+      .ask({ kind: 'select', title, options }, request.signal, this.timeoutOf(request.timeoutMs), owner)
       .then(value => (typeof value === 'string' ? value : undefined))
   }
 
   /** Yes/no question; resolves the boolean, false on cancel. */
-  confirm(request: TuiDialogConfirmRequest): Promise<boolean> {
+  confirm(request: TuiDialogConfirmRequest): Promise<boolean>
+  confirm(owner: Context, request: TuiDialogConfirmRequest): Promise<boolean>
+  confirm(ownerOrRequest: Context | TuiDialogConfirmRequest, explicitRequest?: TuiDialogConfirmRequest): Promise<boolean> {
+    const owner = this.callContext(ownerOrRequest)
+    const request = (explicitRequest ?? ownerOrRequest) as TuiDialogConfirmRequest
     const title = clean(request?.title, TITLE_CELLS)
     if (!title) {
       this.ctx.logger.warn('dsh-tui: tuiDialogs.confirm called without a title; cancelled')
@@ -302,13 +345,18 @@ export class TuiDialogRuntime extends Service {
           cancelLabel,
         },
         request.signal,
-        request.timeoutMs,
+        this.timeoutOf(request.timeoutMs),
+        owner,
       )
       .then(value => value === true)
   }
 
   /** Free-text input; resolves the text, or undefined on cancel. */
-  input(request: TuiDialogInputRequest): Promise<string | undefined> {
+  input(request: TuiDialogInputRequest): Promise<string | undefined>
+  input(owner: Context, request: TuiDialogInputRequest): Promise<string | undefined>
+  input(ownerOrRequest: Context | TuiDialogInputRequest, explicitRequest?: TuiDialogInputRequest): Promise<string | undefined> {
+    const owner = this.callContext(ownerOrRequest)
+    const request = (explicitRequest ?? ownerOrRequest) as TuiDialogInputRequest
     const title = clean(request?.title, TITLE_CELLS)
     if (!title) {
       this.ctx.logger.warn('dsh-tui: tuiDialogs.input called without a title; cancelled')
@@ -320,7 +368,8 @@ export class TuiDialogRuntime extends Service {
       .ask(
         { kind: 'input', title, ...(placeholder === '' ? {} : { placeholder }), initial },
         request.signal,
-        request.timeoutMs,
+        this.timeoutOf(request.timeoutMs),
+        owner,
       )
       .then(value => (typeof value === 'string' ? value : undefined))
   }

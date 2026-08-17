@@ -1,12 +1,29 @@
 {
-  "$schema":"https://dsh.community/schemas/host-descriptor-0.15.json",
-  "hostId":"dsh-badhost",
-  "hostVersion":"0.1.0-experimental",
-  "facetApiVersions":["v1alpha1"],
-  "contracts":[
-    {"apiVersion":"storage.dsh/v1alpha1","kind":"LocalStorage","version":"0.15","schemaHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","permissions":["storage.local.read","storage.local.write"]}
+  "$schema": "urn:dsh-tui:host-descriptor:0.15",
+  "hostId": "invalid.hash",
+  "hostVersion": "0.1.0",
+  "facetApiVersions": [
+    "v1alpha1"
   ],
-  "runtime":{"location":"local","generationId":"example-generation-1","headless":true},
-  "trustLevel":"trusted-in-process",
-  "platform":{"os":"linux","arch":"x64","node":">=18"}
+  "contracts": [
+    {
+      "apiVersion": "x-ccch1mneyyy.tui/v1alpha1",
+      "kind": "DecisionEvents",
+      "definition": {
+        "source": "tui-profile",
+        "profileHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "permissions": []
+    }
+  ],
+  "runtime": {
+    "location": "local",
+    "generationId": "invalid-2",
+    "headless": true
+  },
+  "trustLevel": "trusted-in-process",
+  "platform": {
+    "os": "linux",
+    "arch": "x64"
+  }
 }

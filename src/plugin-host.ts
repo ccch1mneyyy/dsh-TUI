@@ -13,12 +13,22 @@ export * from './dsh-adapter/effect-ledger.js'
 export * from './dsh-adapter/command-errors.js'
 export { commandOwner, fiberNameOf, stampCommandOwner, unstampCommandOwner } from './dsh-adapter/command-attribution.js'
 export {
+  DECISION_EVENT_PERMISSIONS,
+  decisionHandlersOf,
+  registerDecisionHandler,
+  withDecisionRegistration,
+} from './dsh-adapter/decision-guard.js'
+export {
+  DECISION_HANDLER_TIMEOUT_MS,
+  DECISION_TOTAL_TIMEOUT_MS,
+  dispatchTuiNotification,
+} from './dsh-adapter/extension-events.js'
+export {
+  DECISION_EVENTS_COORDINATE,
   TUI_EXTENSION_API_VERSION,
-  TUI_EXTENSION_ENTRIES,
+  TUI_DECISION_EVENT_NAMES,
   TUI_EXTENSION_PERMISSION_NAMES,
-  extendHostDescriptorForTui,
-  extendPluginSchemaForTui,
-  extendRegistryForTui,
+  createAdmissionCatalog,
 } from './plugin-spec/tui-extension.js'
 // The spec vocabulary the descriptor/grant answers are phrased in.
 export type {
