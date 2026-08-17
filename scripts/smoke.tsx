@@ -491,8 +491,8 @@ console.log('--- has interrupted?', plain.includes('Interrupted') && plain.inclu
 console.log('--- has notification?', plain.includes('Test notification'))
 console.log('--- has help menu?', plain.includes('/ for commands') || true)
 
-// Startup loaded-context panel: collapsed by default, Ctrl+T (byte 0x14)
-// expands and collapses it — the keyboard path for mouse-less terminals.
+// Startup loaded-context summary: details live behind the one-shot `/context`
+// command; Ctrl+T remains exclusively owned by the trajectory scene.
 const panelChannel = {
   ...channel,
   version: 1,
@@ -520,15 +520,8 @@ const panelInstance = await render(
 )
 await new Promise(resolve => setTimeout(resolve, 600))
 const collapsed = plainText(panelStdout.frames)
-console.log('--- panel collapsed?', collapsed.includes('已加载上下文'), collapsed.includes('点击展开 · Ctrl+T'), !collapsed.includes('▼'))
-panelStdin.write(Buffer.from([0x14])) // Ctrl+T
-await new Promise(resolve => setTimeout(resolve, 400))
-const expanded = plainText(panelStdout.frames)
-console.log('--- panel expanded by Ctrl+T?', expanded.includes('▼'), expanded.includes('系统提示词 · 1 段'), expanded.includes('You are DeepSeek Harness.'))
-panelStdin.write(Buffer.from([0x14])) // Ctrl+T again
-await new Promise(resolve => setTimeout(resolve, 400))
-const recollapsed = plainText(panelStdout.frames)
-console.log('--- panel recollapsed by Ctrl+T?', recollapsed.includes('▶'))
+const hasContextSummary = collapsed.includes('已加载上下文') || collapsed.includes('Context loaded')
+console.log('--- context summary?', hasContextSummary, collapsed.includes('/context'), !collapsed.includes('Ctrl+T'))
 // ── Interaction panels: plan review + approval ─────────────────────────
 // Drives a third Chat with real QuestionStore/ApprovalStore instances. The
 // fake channel needs pushLocal: resolving a question folds a Q&A summary

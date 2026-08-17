@@ -291,7 +291,6 @@ const dict = {
   'logo-tip-model': { zh: '切换模型', en: 'switch model' },
   'logo-tip-help': { zh: '查看命令', en: 'view commands' },
   'logo-tip-tab': { zh: '自动补全', en: 'autocomplete' },
-  'logo-tip-trace': { zh: '会话轨迹', en: 'trajectory' },
   'logo-tip-prefix': { zh: '提示：', en: 'Tip: ' },
 
   // ── components/PromptInput.tsx ──────────────────────────────────────
@@ -332,7 +331,7 @@ const dict = {
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
   'help-this-help': { zh: '? 查看本帮助', en: '? for this help' },
   'help-verbose-output': { zh: '{{mod}}o 详细输出', en: '{{mod}}o for verbose output' },
-  'help-toggle-context': { zh: '{{mod}}t 切换上下文', en: '{{mod}}t to toggle context' },
+  'help-open-trajectory': { zh: '{{mod}}t 打开会话轨迹', en: '{{mod}}t to open trajectory' },
   'help-search-history': { zh: '{{mod}}r 搜索历史', en: '{{mod}}r to search history' },
   'help-interrupt': { zh: 'ctrl+c 打断', en: 'ctrl+c to interrupt' },
   'help-exit': { zh: 'ctrl+d 退出', en: 'ctrl+d to exit' },
@@ -500,8 +499,7 @@ const dict = {
   'theme-user-base': { zh: '{{base}} 基底 · ~/.dsh-tui/themes/{{name}}.json', en: '{{base}} base · ~/.dsh-tui/themes/{{name}}.json' },
 
   // ── components/LoadedContextPanel.tsx ───────────────────────────────
-  'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
-  'context-panel-expand': { zh: '展开', en: 'Expand' },
+  'context-unavailable': { zh: '当前会话没有已加载的上下文', en: 'No loaded context is available for this session' },
   'context-panel-sections': { zh: '系统提示词 · {{n}} 段', en: 'System prompt · {{n}} sections' },
   'context-panel-files': { zh: '工作区指令 · {{n}} 个文件', en: 'Workspace instructions · {{n}} files' },
   'context-panel-runtime': { zh: '运行时上下文 · {{n}} 项', en: 'Runtime context · {{n}} items' },
@@ -605,6 +603,7 @@ const dict = {
   'cmd-desc-rewind': { zh: '回退会话到历史消息' },
   'cmd-desc-export': { zh: '导出会话为 Markdown 文件' },
   // Session / environment
+  'cmd-desc-context': { zh: '查看已加载的上下文明细' },
   'cmd-desc-status': { zh: '查看会话状态' },
   'cmd-desc-cost': { zh: '查看会话 token 用量' },
   'cmd-desc-config': { zh: '查看 dsh-tui 配置来源' },
