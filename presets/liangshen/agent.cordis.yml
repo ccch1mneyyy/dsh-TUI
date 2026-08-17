@@ -151,15 +151,17 @@
 # Windows-only `bash` tool (see custom-bash.mjs): registers the SAME
 # tool name as the persistent shell with a Minimal-compatible description, but
 # executes through the ordinary cross-platform subprocess seam (`bash -c`)
-# instead of a PTY. `bashPath` defaults to `bash` on PATH; point it at Git
-# Bash explicitly when the WSL shim would otherwise be picked up. No OS
-# sandbox confinement on Windows (landlock is linux-only); the tool
+# instead of a PTY. The Git Bash executable is DISCOVERED at preset mount:
+# an explicit `config.bashPath` (or DSH_TUI_LIANGSHEN_BASH_PATH) is honored as
+# the only candidate, otherwise a PATH git.exe is followed to its install tree
+# (installer/portable/Scoop layouts, Scoop shims followed), then conventional
+# roots, then bare `bash` — never the System32 WSL launcher. A miss warns and
+# skips registration, which fails the bootstrap open to the full catalog.
+# No OS sandbox confinement on Windows (landlock is linux-only); the tool
 # description says so.
 - id: custom-bash
   name: ./custom-bash.mjs
   disabled: !!js process.platform !== 'win32'
-  config:
-    bashPath: 'C:\Program Files\Git\bin\bash.exe'
 
 # ── filesystem ──────────────────────────────────────────────────────────────
 
