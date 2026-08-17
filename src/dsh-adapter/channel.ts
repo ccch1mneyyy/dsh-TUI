@@ -56,6 +56,7 @@ import type { TuiCommandTreeRuntime } from './command-trees.js'
 import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
+import { projectReadOnlyTranscript } from './transcript.js'
 
 type ChannelImageBlock = Extract<ContentBlock, { type: 'image' }>
 type ChannelImageMediaType = ChannelImageBlock['attachment']['mediaType']
@@ -173,6 +174,28 @@ export interface ChatRow {
   /** True when loadOlder() restored this row from the log; restored rows are
    *  exempt from the next fold pass so a restore is not instantly undone. */
   restored?: boolean
+}
+
+/** One durable child row returned by the DSH subagent catalog. */
+export type SubagentListItem =
+  | {
+      readonly kind: 'child'
+      readonly id: string
+      readonly activity: 'running' | 'inactive'
+      readonly hasChildren: boolean
+      readonly mode: 'one-shot' | 'continuable'
+      readonly label?: string
+    }
+  | {
+      readonly kind: 'diagnostic'
+      readonly id: string
+      readonly reason: 'corrupt' | 'unsupported' | 'unavailable'
+    }
+
+/** Detached, read-only projection of one child session inspection. */
+export interface SubagentSessionView {
+  readonly id: string
+  readonly rows: readonly ChatRow[]
 }
 
 /**
@@ -567,9 +590,11 @@ export interface Channel {
   initWorkspace(): string | null
   /** Environment diagnostics for `/doctor`. */
   doctorInfo(): string[]
-  /** Subagent rows for `/agents` (DSH subagent service; empty message when
-   *  the service is absent). */
-  listSubagents(): Promise<string[]>
+  /** Structured child catalog for the `/agents` scene; undefined when the
+   *  composition has no subagent service. */
+  listSubagents(): Promise<readonly SubagentListItem[] | undefined>
+  /** Inspect and project one child session without resuming or owning it. */
+  readSubagentSession(sessionId: string): Promise<SubagentSessionView | undefined>
   /**
    * Dispose the host-registry entries this channel registered (skill slash
    * commands).
@@ -788,8 +813,10 @@ export interface ChannelState {
   initWorkspace(): string | null
   /** Environment diagnostics (CC's /doctor). */
   doctorInfo(): string[]
-  /** Subagent rows (CC's /agents). */
-  listSubagents(): Promise<string[]>
+  /** Structured child catalog (CC's /agents). */
+  listSubagents(): Promise<readonly SubagentListItem[] | undefined>
+  /** Detached read-only child transcript. */
+  readSubagentSession(sessionId: string): Promise<SubagentSessionView | undefined>
   /** See {@link Channel.releaseContributions}. */
   releaseContributions(): void
   /** Live session event log (see the public Channel type, `/trace`). */
@@ -2958,27 +2985,53 @@ export function createChannel(
           ): Promise<
             Array<{
               kind: string
-              mode: string
+              mode?: string
               label?: string
-              activity: string
+              activity?: string
+              hasChildren?: boolean
+              reason?: string
               id: string | { value?: string }
             }>
           >
         }
         | undefined
-      if (!subagents) return [t('subagent-not-mounted')]
-      try {
-        const children = await subagents.listChildren(agent.session.id)
-        if (children.length === 0) return [t('subagent-none')]
-        return children.map((child) => {
-          const id =
-            typeof child.id === 'string' ? child.id : (child.id.value ?? '')
-          const label = child.label ? `「${child.label}」` : ''
-          const mode = child.mode === 'continuable' ? t('subagent-resumable') : t('subagent-oneshot')
-          return `${t('subagent-row', { mode, label, activity: child.activity === 'running' ? t('subagent-running') : t('subagent-archived'), id: id.slice(0, 8) })}`
-        })
-      } catch (error) {
-        return [t('subagent-query-failed', { err: error instanceof Error ? error.message : String(error) })]
+      if (!subagents) return undefined
+      const children = await subagents.listChildren(agent.session.id)
+      return children.map((child): SubagentListItem => {
+        const id = typeof child.id === 'string' ? child.id : (child.id.value ?? '')
+        if (child.kind === 'diagnostic') {
+          const reason = child.reason === 'unsupported' || child.reason === 'unavailable'
+            ? child.reason
+            : 'corrupt'
+          return { kind: 'diagnostic', id, reason }
+        }
+        return {
+          kind: 'child',
+          id,
+          mode: child.mode === 'continuable' ? 'continuable' : 'one-shot',
+          activity: child.activity === 'running' ? 'running' : 'inactive',
+          hasChildren: child.hasChildren === true,
+          ...(child.label !== undefined ? { label: child.label } : {}),
+        }
+      })
+    },
+    async readSubagentSession(sessionId) {
+      const persistence = ctx.get('sessionPersistence') as
+        | {
+          inspect(
+            id: unknown,
+            signal?: AbortSignal,
+          ): Promise<{ readonly events: readonly SessionEvent[] }>
+        }
+        | undefined
+      if (!persistence) return undefined
+      const inspection = await persistence.inspect(SessionId(sessionId))
+      return {
+        id: sessionId,
+        rows: projectReadOnlyTranscript(inspection.events, {
+          call: presentCallView,
+          result: presentResultView,
+        }),
       }
     },
     releaseContributions() {
