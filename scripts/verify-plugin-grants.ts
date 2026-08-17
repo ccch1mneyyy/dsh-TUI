@@ -256,7 +256,9 @@ const cleanup: string[] = [fakeHome]
   const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'ecosystem-spec') })
   check1('tampered contract dropped', tampered.dropped.includes('commands.dsh/v1alpha1#Command'), tampered.dropped.join(' | '))
   check1('tamper warning names the drift', tampered.warnings.some(w => w.includes('schemaHash drifted')))
-  check1('tampered surface is empty', tampered.descriptor.contracts.length === 0)
+  check1('tampered surface keeps only the untampered contracts',
+    tampered.descriptor.contracts.length === HOST_SUPPORTED_CONTRACTS.length - 1
+    && !tampered.descriptor.contracts.some(c => c.kind === 'Command'))
   let tamperedError = ''
   try {
     check(tampered.descriptor, data.schemas.host, data.schemas.host)

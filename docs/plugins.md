@@ -99,8 +99,8 @@ Loader）负责，**加载时强制不在本仓库**。本仓库提供的是校�
 运行时降级——不合规插件在 TUI 内拿不到契约能力。信任模型为同进程信任
 （trusted-in-process，C-070）：授权是行为约束，不是安全隔离边界。
 
-当前对齐进度：校验/协商库、vendored 数据、统一授权存储与 Host
-Descriptor 构建已落地；`storage.local` / `messages.observe` 契约面、
+当前对齐进度：校验/协商库、vendored 数据、统一授权存储、Host
+Descriptor 构建与 `storage.local` 契约面已落地；`messages.observe`、
 效果台账与 `/plugins` 诊断命令在后续批次跟进。
 
 授权存储（`~/.dsh-tui/extension-grants.json`）统一回答全部 8 个注册
@@ -123,6 +123,19 @@ Descriptor 构建已落地；`storage.local` / `messages.observe` 契约面、
 真实提供的契约；vendored 契约文件哈希漂移即 fail-closed 剔除并告警）
 与注册表自检。消费一律 `ctx.get('tuiPluginHost', false)` 软探测
 （#183 纪律），不进入任何 inject 列表。
+
+`storage.local`（C-040）：插件私有持久化，经
+`ctx.get('tuiPluginStorage', false)` 的 `open(ctx)` 获得
+`{ get, set, delete }`——namespace 即调用方 ctx 的 fiber.name（没有
+参数可指名别的插件，跨插件读写按构造拒绝）。`get` 需
+`storage.local.read`、`set`/`delete` 需 `storage.local.write`，每次调用
+现查。后端 `~/.dsh-tui/plugin-storage/<namespace>.json`（原子写 +
+文件锁；配额 256 键 / 256 KiB；损坏文件永不自动覆盖，报
+STORAGE_UNAVAILABLE 并保留字节供人工恢复）。错误带契约 code：
+PERMISSION_NOT_GRANTED / INVALID_KEY / QUOTA_EXCEEDED /
+STORAGE_UNAVAILABLE。值必须 JSON 可序列化；key 与 value 永不进日志
+（privacyClass sensitive）。同 namespace 的操作按调用序串行；插件
+卸载即关闭其 handle，数据保留。
 
 ## 接缝总览
 

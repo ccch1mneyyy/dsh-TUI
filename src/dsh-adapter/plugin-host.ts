@@ -35,6 +35,7 @@ import type { HostDescriptor } from '../plugin-spec/types.js'
 import { loadSpecData, verifyContractProfiles, verifyRegistry } from '../plugin-spec/registry.js'
 import { readGrantStore, type GrantStore } from './grants.js'
 import { buildHostDescriptor, type HostDescriptorBuild } from './host-descriptor.js'
+import { TuiPluginStorageRuntime } from './plugin-storage.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -101,5 +102,10 @@ export class TuiPluginHostRuntime extends Service {
 export const name = 'dsh-tui-plugin-host'
 
 export function apply(ctx: Context): void {
+  // The plugin-host service first — the contract surfaces mounted below
+  // read its grant store (they fall back to a private read only when mounted
+  // standalone, e.g. in tests).
   ctx.plugin(TuiPluginHostRuntime)
+  // storage.local (C-040): per-plugin private persistence.
+  ctx.plugin(TuiPluginStorageRuntime)
 }

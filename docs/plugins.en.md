@@ -116,9 +116,10 @@ model is trusted-in-process (C-070): grants are a behavioral constraint, not
 a security boundary.
 
 Current alignment status: the validation/negotiation library, vendored data,
-the unified grant store, and Host Descriptor construction are in place; the
-`storage.local` / `messages.observe` contract surfaces, the effect ledger,
-and the `/plugins` diagnostic command follow in later batches.
+the unified grant store, Host Descriptor construction, and the
+`storage.local` contract surface are in place; `messages.observe`, the
+effect ledger, and the `/plugins` diagnostic command follow in later
+batches.
 
 The grant store (`~/.dsh-tui/extension-grants.json`) answers for all 8
 registered permissions with defaults driven by the vendored permission
@@ -144,6 +145,22 @@ actually provides; a drifted vendored contract file is dropped fail-closed
 with a warning), and the registry self-check. Consumers always soft-probe
 with `ctx.get('tuiPluginHost', false)` (#183 discipline); the service never
 enters any inject list.
+
+`storage.local` (C-040): per-plugin private persistence, obtained from
+`ctx.get('tuiPluginStorage', false)` via `open(ctx)` →
+`{ get, set, delete }` — the namespace IS the caller context's fiber.name
+(there is no parameter to name another plugin, so cross-plugin access is
+rejected by construction). `get` requires `storage.local.read`;
+`set`/`delete` require `storage.local.write`, checked on every call. The
+backend is `~/.dsh-tui/plugin-storage/<namespace>.json` (atomic writes +
+file locking; quota 256 keys / 256 KiB; a corrupt file is never overwritten
+silently — operations report STORAGE_UNAVAILABLE and the bytes stay on disk
+for manual recovery). Errors carry the contract codes:
+PERMISSION_NOT_GRANTED / INVALID_KEY / QUOTA_EXCEEDED /
+STORAGE_UNAVAILABLE. Values must be JSON-serializable; keys and values are
+never logged (privacyClass sensitive). Operations on one namespace serialize
+in invocation order; unloading the plugin closes its handle while the data
+is retained.
 
 ## Seam Overview
 
