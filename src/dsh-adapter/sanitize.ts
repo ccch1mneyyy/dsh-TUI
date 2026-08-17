@@ -39,3 +39,27 @@ export function cleanScalarText(value: unknown, maxCells: number): string {
   if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') return ''
   return cleanRenderText(String(value), maxCells)
 }
+
+/**
+ * Truncate to a cell budget WITHOUT ellipsis, whitespace folding, or any
+ * other mutation — the editing-path counterpart of {@link cleanRenderText}.
+ * An input panel caps what the user types/pastes; inserting '…' or
+ * collapsing their spaces would corrupt text they can still edit.
+ */
+export function capCells(value: string, maxCells: number): string {
+  if (stringWidth(value) <= maxCells) return value
+  let out = ''
+  for (const ch of value) {
+    if (stringWidth(out + ch) > maxCells) break
+    out += ch
+  }
+  return out
+}
+
+/** C0/C1 control chars → space, nothing else touched. The single-line
+ *  input panel flattens pasted chunks with this (newlines become spaces —
+ *  the panel has no second row for them). */
+export function flattenInline(value: string): string {
+  // eslint-disable-next-line no-control-regex -- deliberate: sanitize untrusted render-path text
+  return value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')
+}

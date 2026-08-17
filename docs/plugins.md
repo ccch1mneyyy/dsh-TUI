@@ -441,12 +441,34 @@ pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交�
 
 公共语义：
 
+- **拦截类订阅需要显式授权（RFC 0005 D-7，默认拒绝）**：订阅 `tui/input`、
+  `tui/rewind-prompt`、`tui/session-switch`、`tui/compact` 的插件必须在
+  `~/.dsh-tui/extension-grants.json` 里持有对应 grant，否则订阅不进入决策
+  链（视同未注册）并告警。权限命名 `domain.resource.intercept`：
+  `tui/input` → `session.input.intercept`、`tui/rewind-prompt` →
+  `session.rewind.intercept`、`tui/session-switch` → `session.switch.intercept`、
+  `tui/compact` → `session.compact.intercept`。通知类事件
+  （`tui/rewind-done`、`tui/session-switched`）不受限。授权文件按插件名
+  （cordis 行的 `name` 导出） keyed：
+
+  ```json
+  { "grants": { "my-guard": ["session.input.intercept"] } }
+  ```
+
+  文件在 extensions 行挂载时读取一次；改授权 = 改文件 + 重启。损坏或缺失
+  的文件按"全部拒绝"处理（fail closed）。
+- **顺序保证**：决策与投递按提交顺序串行——前一条输入的慢决策会拦住
+  后一条的决策与投递，模型收到的消息顺序恒等于用户提交顺序。
 - `cancel.reason` / `handled.notice` / `tui/rewind-done` 的 summary 以 toast
-  呈现；缺省时宿主给本地化兜底文案。这些文本同样按不可信输入消毒（控制
-  字符剥离、≤200 cell）。
+  呈现；缺省时宿主给本地化兜底文案（裸 `{ cancel: true }` /
+  `{ handled: true }` 不会让输入静默消失）。这些文本同样按不可信输入
+  消毒（控制字符剥离、≤200 cell）。
 - `tui/input` 的 `{ text }` 会被 trim；trim 后为空按"无意见"处理。改写只在
   **投递前**生效，等待期间如果用户切了会话，这条过期输入会被丢弃并提示
-  （stale-drop），绝不会把旧会话的话发进新会话。
+  （stale-drop），绝不会把旧会话的话发进新会话。`tui/session-switch` 同理：
+  慢决策等待期间发生了别的会话切换，这条过期的切换请求直接丢弃。
+- submit、steer 与 Ctrl+Enter（interruptAndDeliver 的重排队）**都**经过
+  `tui/input`——没有能绕过插件拦截的发送路径。
 - `tui/rewind-prompt` 的 modes 会在确认页渲染为选项列表（第一项恒为宿主的
   "仅回退会话"）；用户选中后，该 `mode` id 原样出现在 `tui/rewind-done` 的
   payload 里——插件在 done 事件里执行真正的模式逻辑（比如恢复文件）。
@@ -517,9 +539,14 @@ const name = await dialogs?.input({
 - **永不抛错**：无标题、无有效选项等畸形请求直接落定取消值并告警——插件
   的 await 方永远能继续。
 - 入参即被消毒：控制字符剥离、空白折叠；标题/标签 ≤120 cell、message
-  ≤400、输入 ≤500、选项 ≤100 个（超出截断）。
+  ≤400、输入 ≤500、选项 ≤100 个（超出截断）。**例外：select 的选项
+  `id` 不参与渲染**，只做类型+非空校验并**原样返回**——它是插件回查自己
+  options 的 opaque token，消毒会把长 id 或带空白的 id 变成另一个值。
 - 面板按键：↑/↓ 移动、Enter 确认、Esc/Ctrl+C 取消；input 是对话框内部的
   单行编辑（左右/Home/End/退格/删除），与主输入框互不影响。
+- 粘贴防护：bracketed paste 进单行输入会被压平（换行/控制字符 → 空格）并
+  与逐字输入同受 ≤500 cell 上限约束；纯换行的粘贴**不会**被当成 Enter——
+  confirm 的默认焦点不会被一次粘贴误触发，select/input 同理。
 - 服务缺席（旧 profile）时 `ctx.get` 返回 `undefined`——插件自己决定跳过
   交互还是走无头默认值；`timeoutMs` 是"有服务但没有 TUI 消费者"场景的
   保险丝。
@@ -573,7 +600,10 @@ ctx.effect(() => () => dispose?.())     // 清理挂在【调用者】自己的 
 - **必须带 ctrl 或 alt**——裸字母是打字，裸方向键是导航。
 - **保留位不发**：TUI 内建绑定（ctrl+c/d/t/r/x/o/l/e/v/a/u/k/w、ctrl+←/→、
   ctrl/alt+Enter、alt+↑、Esc、Tab、Shift+Tab）在注册时即被拒绝。这是
-  "本地优先"的强制面：冲突永远到不了匹配器。
+  "本地优先"的强制面：冲突永远到不了匹配器。内建匹配是**修饰键子集**
+  判定（`isMod && 字符`，不排除额外 Shift），所以保留位的 shift 超集
+  同样被拒——`ctrl+shift+x` 在不区分 Shift 的终端上就是 Ctrl+X，注册了
+  只会遮蔽内建或永远不响。
 - 重复注册同一组合（规范形式）被拒绝。
 - 只在**纯对话态**派发：任何浮层（picker、审批、问卷、托管对话框、场景、
   会话浏览器）打开期间键盘归浮层。

@@ -468,6 +468,7 @@ const dict = {
 
   // ── 插件扩展缝（dsh-tui-extensions：决策事件 + 托管对话框 + 快捷键）──
   'ext-action-cancelled': { zh: '操作已被插件取消', en: 'Action cancelled by a plugin' },
+  'ext-action-handled': { zh: '输入已由插件处理', en: 'Input handled by a plugin' },
   'ext-decision-pending': { zh: '正在等待插件决定（{{event}}）…', en: 'Waiting for a plugin decision ({{event}})…' },
   'ext-stale-dropped': { zh: '等待插件期间会话已切换，该条输入已丢弃', en: 'Session switched while a plugin decided — the input was dropped' },
   'ext-compact-stale': { zh: '等待插件期间会话已切换，压缩已取消', en: 'Session switched while a plugin decided — compaction abandoned' },

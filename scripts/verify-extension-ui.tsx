@@ -35,10 +35,13 @@ const [
   { render },
   { Chat },
   { QuestionStore },
-  { TuiDialogStore, TuiDialogRuntime },
+  { TuiDialogStore, TuiDialogRuntime, INPUT_CELLS },
   { TuiStatusStore, TuiStatusRuntime },
   { TuiShortcutRuntime, parseShortcutCombo, matchShortcut },
   { TuiRendererRuntime },
+  { installDecisionGuard, parseExtensionGrants },
+  { dispatchTuiDecision, normalizeCancelDecision },
+  { stringWidth },
   { KNOWN_SESSION_EVENT_TYPES },
 ] = await Promise.all([
   import('node:stream'),
@@ -51,6 +54,9 @@ const [
   import('../src/dsh-adapter/status.js'),
   import('../src/dsh-adapter/shortcuts.js'),
   import('../src/dsh-adapter/renderers.js'),
+  import('../src/dsh-adapter/decision-guard.js'),
+  import('../src/dsh-adapter/extension-events.js'),
+  import('../src/ink/stringWidth.js'),
   import('@deepseek-ai/dsh-session'),
 ])
 
@@ -108,10 +114,10 @@ const warnCount = (fragment: string) => warnings.filter(line => line.includes(fr
   const first = store.ask({ kind: 'select', title: 't1', options: [{ id: 'a', label: 'A' }] })
   const second = store.ask({ kind: 'confirm', title: 't2', confirmLabel: '', cancelLabel: '' })
   check('dialog store: FIFO — first request is active', store.getSnapshot()?.kind === 'select')
-  store.decide('a')
+  store.decide(store.getSnapshot()?.key ?? '', 'a')
   check('dialog store: decide resolves the active request', (await first) === 'a')
   check('dialog store: queue advances to the second request', store.getSnapshot()?.kind === 'confirm')
-  store.cancel()
+  store.cancel(store.getSnapshot()?.key ?? '')
   check('dialog store: cancel resolves undefined', (await second) === undefined)
   check('dialog store: queue drained', store.getSnapshot() === null)
 
@@ -142,9 +148,32 @@ const warnCount = (fragment: string) => warnings.filter(line => line.includes(fr
 
   // Stale decide is a no-op (double-settle protection).
   const stale = store.ask({ kind: 'confirm', title: 't8', confirmLabel: '', cancelLabel: '' })
-  store.decide(true)
-  store.decide(false)
+  const staleKey = store.getSnapshot()?.key ?? ''
+  store.decide(staleKey, true)
+  store.decide(staleKey, false)
   check('dialog store: stale decide is ignored', (await stale) === true)
+
+  // Key isolation (ConPTY CR+LF double-fire): one Enter must never settle
+  // TWO consecutive dialogs — the old panel's second callback carries its
+  // own (now-stale) key and is ignored; the successor survives.
+  const victimA = store.ask({ kind: 'confirm', title: 'k1', confirmLabel: '', cancelLabel: '' })
+  const survivorB = store.ask({ kind: 'confirm', title: 'k2', confirmLabel: '', cancelLabel: '' })
+  const keyA = store.getSnapshot()?.key ?? ''
+  store.decide(keyA, true)
+  store.decide(keyA, false) // the batched second fire from the OLD panel
+  check('dialog store: one Enter settles only the first dialog', (await victimA) === true)
+  check('dialog store: the successor survives the batched Enter',
+    store.getSnapshot()?.kind === 'confirm' && store.getSnapshot()?.title === 'k2')
+  store.decide(store.getSnapshot()?.key ?? '', false)
+  check('dialog store: the successor settles on ITS key', (await survivorB) === false)
+  // A wrong key never settles anything.
+  const wrongKey = store.ask({ kind: 'confirm', title: 'k3', confirmLabel: '', cancelLabel: '' })
+  store.decide('dlg-999999', true)
+  check('dialog store: a foreign key is ignored', store.getSnapshot()?.title === 'k3')
+  store.cancel('dlg-999999')
+  check('dialog store: a foreign cancel key is ignored', store.getSnapshot()?.title === 'k3')
+  store.cancel(store.getSnapshot()?.key ?? '')
+  check('dialog store: the keyed cancel settles', (await wrongKey) === undefined)
 
   // Aborting the ACTIVE request must advance the queue — without advance(),
   // the next Promise parks forever and the UI shows no dialog.
@@ -155,7 +184,7 @@ const warnCount = (fragment: string) => warnings.filter(line => line.includes(fr
   check('dialog store: aborted active resolves cancelled', (await victim) === undefined)
   check('dialog store: abort ADVANCES the queue to the next request',
     store.getSnapshot()?.kind === 'confirm', JSON.stringify(store.getSnapshot()))
-  store.decide(true)
+  store.decide(store.getSnapshot()?.key ?? '', true)
   check('dialog store: the advanced request settles normally', (await successor) === true)
 
   // Same for a timeout: the active request dies, the queued one goes live.
@@ -164,7 +193,7 @@ const warnCount = (fragment: string) => warnings.filter(line => line.includes(fr
   check('dialog store: timed-out active resolves cancelled', (await timedOut) === undefined)
   check('dialog store: timeout ADVANCES the queue',
     store.getSnapshot()?.kind === 'select', JSON.stringify(store.getSnapshot()))
-  store.cancel()
+  store.cancel(store.getSnapshot()?.key ?? '')
   await afterTimeout
 }
 
@@ -223,6 +252,27 @@ await sleep(100)
   check('tuiDialogs.select: malformed options filtered',
     snapshot?.kind === 'select' && snapshot.options.length === 1)
   check('tuiDialogs.select: timeout still applies through the runtime', (await pending) === undefined)
+
+  // Option ids are opaque tokens, NOT render-path data: whitespace/control
+  // chars are NOT sanitized away and long ids are NOT truncated — the promise
+  // resolves with the exact string the plugin registered.
+  const opaqueId = '  spaced id\t带 空白  '
+  const longId = 'x'.repeat(300)
+  const pick = ctx.tuiDialogs.select({
+    title: ' opaque ids ',
+    options: [
+      { id: opaqueId, label: '空白 id' },
+      { id: longId, label: '长 id' },
+    ],
+    timeoutMs: 200,
+  })
+  const opaqueSnapshot = ctx.tuiDialogs.store.getSnapshot()
+  check('tuiDialogs.select: option ids kept verbatim in the snapshot',
+    opaqueSnapshot?.kind === 'select'
+    && opaqueSnapshot.options[0]?.id === opaqueId
+    && opaqueSnapshot.options[1]?.id === longId)
+  ctx.tuiDialogs.store.cancel(ctx.tuiDialogs.store.getSnapshot()?.key ?? '')
+  check('tuiDialogs.select: cleanup cancel still resolves undefined', (await pick) === undefined)
 }
 
 {
@@ -237,8 +287,9 @@ await sleep(100)
   check('tuiStatus: non-scalar text refused + warn',
     !ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'scalar')
     && warnCount('tuiStatus.set rejected non-scalar text') === 1)
-  // …but a number/boolean coerces (genuine scalars, not objects).
-  ctx.tuiStatus.set('scalar', 42 as unknown as string)
+  // …but a number/boolean coerces (genuine scalars, not objects) — and the
+  // public signature accepts them directly, no cast needed.
+  ctx.tuiStatus.set('scalar', 42)
   check('tuiStatus: numeric text coerces',
     ctx.tuiStatus.store.getSnapshot().find(e => e.key === 'scalar')?.text === '42')
   ctx.tuiStatus.set('scalar', undefined)
@@ -333,6 +384,21 @@ await sleep(100)
   ctx.tuiShortcuts.register('ctrl+shift+enter', { description: 'x', handler: noop })
   check('tuiShortcuts: editor newline combo reserved (ctrl+shift+enter)',
     ctx.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 4)
+  // Built-ins match a modifier SUBSET (isMod && char, Shift never excluded):
+  // a shift-superset of a reserved combo collides with the built-in on
+  // terminals that don't report Shift distinctly — refused too.
+  ctx.tuiShortcuts.register('ctrl+shift+x', { description: 'x', handler: noop })
+  ctx.tuiShortcuts.register('ctrl+shift+t', { description: 'x', handler: noop })
+  check('tuiShortcuts: shift-supersets of reserved combos refused (ctrl+shift+x/t)',
+    ctx.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 6)
+  // …but a shift-superset of a NON-reserved combo still registers (and its
+  // disposer removes it, keeping the registry empty for later sections).
+  const disposeShiftG = ctx.tuiShortcuts.register('ctrl+shift+g', { description: 'ok', handler: noop })
+  check('tuiShortcuts: shift-superset of a free combo registers',
+    ctx.tuiShortcuts.list().length === 1)
+  disposeShiftG()
+  check('tuiShortcuts: the shift-superset disposes cleanly',
+    ctx.tuiShortcuts.list().length === 0)
   ctx.tuiShortcuts.register('alt+escape', { description: 'x', handler: noop })
   check('tuiShortcuts: alt+escape refused at registration',
     ctx.tuiShortcuts.list().length === 0 && warnCount('need ctrl/alt plus one key') === 1)
@@ -430,6 +496,59 @@ await sleep(100)
   ctx.tuiRenderers.register('weird/result', () => ({ title: 'x' }) as never)
   check('tuiRenderers.render: malformed result → undefined',
     ctx.tuiRenderers.render('weird/result', {}) === undefined)
+}
+
+// ── B2. RFC 0005 D-7: intercept subscriptions require explicit grants ────
+{
+  // A fresh root: the guard hooks internal/listener on this context tree.
+  const guardCtx = new Context()
+  const guardWarnings: string[] = []
+  guardCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
+    guardWarnings.push([format, ...params].map(String).join(' '))
+  }
+  installDecisionGuard(guardCtx, parseExtensionGrants(JSON.stringify({
+    grants: { 'my-guard': ['session.input.intercept'] },
+  })))
+
+  // Granted plugin: the subscription registers and answers decisions.
+  guardCtx.plugin({
+    name: 'my-guard',
+    apply: (c: Context) => {
+      c.on('tui/input', (event: { text?: string }) =>
+        event.text === '拦截' ? { cancel: true, reason: '授权拦截' } : undefined)
+    },
+  })
+  await sleep(100)
+  const passThrough = (result: unknown): unknown => result
+  check('decision guard: granted subscription enters the chain',
+    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '拦截' }, passThrough)) !== undefined)
+
+  // Denied plugin (no grants): the listeners never register — dispatch sees
+  // "no opinion", and the warn names the plugin + the missing grant.
+  guardCtx.plugin({
+    name: 'evil-plugin',
+    apply: (c: Context) => {
+      c.on('tui/input', () => ({ cancel: true, reason: '不该生效' }))
+      c.on('tui/compact', () => ({ cancel: true }))
+    },
+  })
+  await sleep(100)
+  check('decision guard: ungranted subscription never enters the chain',
+    (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '别的' }, passThrough)) === undefined
+    && (await dispatchTuiDecision(guardCtx, 'tui/compact', {}, normalizeCancelDecision)) === undefined)
+  check('decision guard: denial warns with plugin + grant',
+    guardWarnings.some(line => line.includes('"evil-plugin"') && line.includes('session.input.intercept'))
+    && guardWarnings.some(line => line.includes('session.compact.intercept')))
+
+  // Observe-class events are NOT gated.
+  guardCtx.on('tui/session-switched', () => {})
+  await sleep(20)
+  check('decision guard: observe-class events stay ungated',
+    !guardWarnings.some(line => line.includes('tui/session-switched')))
+
+  // A corrupt grants file fails CLOSED (deny-all), never open.
+  check('decision guard: corrupt grants parse as deny-all',
+    !parseExtensionGrants('{ not json').allows('my-guard', 'session.input.intercept'))
 }
 
 // ── C. Chat UI integration ───────────────────────────────────────────────
@@ -545,6 +664,52 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   await sleep(150)
   stdin.write('\r')
   check('ui: input initial pre-fills and edits', (await pending) === '原')
+}
+
+// Bracketed paste: a chunk that is all line breaks is TEXT, not an Enter
+// press (isPasted lives on the InputEvent, not the key) — the confirm must
+// survive it, on its default Yes focus.
+{
+  const pending = ctx.tuiDialogs.confirm({ title: '粘贴确认' })
+  await sleep(300)
+  stdin.write('\x1b[200~\r\n\r\n\x1b[201~')
+  await sleep(250)
+  check('ui: pure-newline paste does NOT confirm the dialog',
+    ctx.tuiDialogs.store.getSnapshot()?.kind === 'confirm')
+  stdin.write('\x1b') // cleanup: Esc cancels it
+  const resolvedPasteConfirm = await pending
+  check('ui: paste-surviving dialog cancels normally', resolvedPasteConfirm === false, JSON.stringify(resolvedPasteConfirm))
+}
+
+// Bracketed paste into the single-line input: newlines/control chars are
+// flattened, and the whole value is capped at INPUT_CELLS cells so the
+// resolved answer keeps the documented ≤500-cell bound.
+{
+  const pending = ctx.tuiDialogs.input({ title: '粘贴输入', initial: '' })
+  await sleep(300)
+  const chunk = '多行\n粘贴\x07' + '长'.repeat(600)
+  stdin.write(`\x1b[200~${chunk}\x1b[201~`)
+  await sleep(250)
+  stdin.write('\r')
+  const resolved = await pending
+  // eslint-disable-next-line no-control-regex -- asserting the absence of control chars
+  check('ui: paste flattened to one line (no control chars survive)',
+    resolved !== undefined && !/[\x00-\x1f\x7f-\x9f]/u.test(resolved), JSON.stringify(resolved?.slice(0, 30)))
+  check('ui: paste capped at INPUT_CELLS cells',
+    resolved !== undefined && stringWidth(resolved) <= INPUT_CELLS, String(resolved?.length))
+}
+
+// A typed keystroke past the cap is ignored (the panel never grows beyond
+// INPUT_CELLS even without paste).
+{
+  const nearCap = '字'.repeat(250) // 500 cells exactly (wide chars)
+  const pending = ctx.tuiDialogs.input({ title: '顶格输入', initial: nearCap })
+  await sleep(300)
+  stdin.write('x')
+  await sleep(150)
+  stdin.write('\r')
+  check('ui: typing past the cell cap is ignored',
+    (await pending) === nearCap)
 }
 
 // Status line: appears on set, disappears on clear.

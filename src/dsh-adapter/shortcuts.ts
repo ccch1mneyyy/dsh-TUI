@@ -91,8 +91,12 @@ const NAMED_KEYS: Record<string, keyof TuiShortcutKey> = {
 /**
  * Combos the TUI owns, globally or inside the prompt editor (the editor's
  * bindings are checked AFTER plugin shortcuts, so refusing them here is
- * what keeps "locals win" true). Modifier-only differences count: ctrl+x
- * is reserved, ctrl+shift+x is not.
+ * what keeps "locals win" true). Built-in handlers match a MODIFIER SUBSET
+ * (`isMod(key) && input === 'x'` — they never exclude an extra Shift), so
+ * the reserved check below refuses a plugin combo whose SHIFTLESS form is
+ * reserved: ctrl+shift+x would shadow Ctrl+X on terminals that report both
+ * as the same keypress (ConPTY does), and would be dead weight on terminals
+ * that don't.
  */
 const RESERVED_COMBOS = new Set([
   'ctrl+c', // interrupt / clear
@@ -245,7 +249,12 @@ export class TuiShortcutRuntime extends Service {
       return () => {}
     }
     const key = comboKey(parsed)
-    if (RESERVED_CANONICAL.has(key)) {
+    // Built-ins match a modifier subset (see RESERVED_COMBOS): a combo whose
+    // SHIFTLESS form is reserved collides with the built-in on terminals that
+    // don't report Shift distinctly, so it is refused too. The exact form is
+    // still checked for combos reserved WITH shift (ctrl+shift+return).
+    const shiftlessKey = comboKey({ ...parsed, shift: false })
+    if (RESERVED_CANONICAL.has(key) || RESERVED_CANONICAL.has(shiftlessKey)) {
       this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${combo}" — reserved by a built-in binding`)
       return () => {}
     }

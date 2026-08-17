@@ -108,7 +108,10 @@ const clean = cleanScalarText
 const TITLE_CELLS = 120
 const LABEL_CELLS = 120
 const MESSAGE_CELLS = 400
-const INPUT_CELLS = 500
+/** The documented bound of the resolved input text; the panel enforces it
+ *  on every edit path (typing AND paste) so the promise never resolves with
+ *  a larger value. */
+export const INPUT_CELLS = 500
 const MAX_OPTIONS = 100
 
 let nextDialogId = 1
@@ -175,19 +178,28 @@ export class TuiDialogStore {
     return this.active?.snapshot ?? null
   }
 
-  /** Settle the active dialog with the user's answer (no-op when stale). */
-  decide(value: TuiDialogAnswer): void {
+  /**
+   * Settle the active dialog with the user's answer. The caller passes the
+   * key of the snapshot IT rendered; a mismatched key is a stale callback
+   * and ignored. This is not paranoia: ConPTY can deliver one Enter as a
+   * same-batch CR+LF pair, firing the old panel's handler twice before
+   * React unmounts it — an unkeyed decide would settle the active dialog
+   * AND the successor the first call just promoted (one Enter answering two
+   * consecutive dialogs).
+   */
+  decide(key: string, value: TuiDialogAnswer): void {
     const pending = this.active
-    if (pending === null) return
+    if (pending === null || pending.key !== key) return
     this.active = null
     pending.settle(value)
     this.advance()
   }
 
-  /** Cancel the active dialog (Esc). */
-  cancel(): void {
+  /** Cancel the active dialog (Esc). Keyed like {@link decide}: a stale
+   *  panel's Esc must not close the successor it never rendered. */
+  cancel(key: string): void {
     const pending = this.active
-    if (pending === null) return
+    if (pending === null || pending.key !== key) return
     this.active = null
     pending.settle(undefined)
     this.advance()
@@ -250,9 +262,13 @@ export class TuiDialogRuntime extends Service {
     const rawOptions = Array.isArray(request?.options) ? request.options : []
     const options: TuiDialogSelectOption[] = []
     for (const raw of rawOptions.slice(0, MAX_OPTIONS)) {
-      const id = clean(raw?.id, LABEL_CELLS)
+      // The id is NOT render-path data — it is the opaque token the promise
+      // resolves with, matched by the plugin against its own options. Sanitizing
+      // it (whitespace collapse, cell truncation) would hand back a DIFFERENT
+      // string the plugin cannot look up; validate and keep it verbatim.
+      const id = raw?.id
       const label = clean(raw?.label, LABEL_CELLS)
-      if (!id || !label) continue
+      if (typeof id !== 'string' || id === '' || !label) continue
       // '' (absent, blank, or a dropped non-scalar) means no description row.
       const description = clean(raw?.description, MESSAGE_CELLS)
       options.push({ id, label, ...(description === '' ? {} : { description }) })

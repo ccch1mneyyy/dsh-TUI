@@ -144,6 +144,8 @@ function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { fo
       captured.followupTexts.push(text)
     },
     steer() {},
+    // interruptAndDeliver aborts before re-queueing.
+    cancel() {},
     inbox: { remove: () => true },
   }
 }
@@ -260,7 +262,66 @@ await sleep(800)
   await sleep(400)
   check('pending decision: the slow veto still lands',
     notified('慢否决落地') && !captured.followupTexts.some(text => text.includes('慢决定')))
+  // …and the indicator is dismissed the moment the decision lands — it must
+  // not linger for its 4s timeout after the flow already continued.
+  check('pending decision: the parked indicator is dismissed on resolution',
+    !(channel as unknown as { notifications: readonly { text: string }[] }).notifications
+      .some(item => item.text.includes('正在等待插件决定')))
   disposeSlow()
+}
+
+// ── 2c. bare intercepts toast the host-localized fallback ───────────────
+{
+  const disposeCancel = ctx.on('tui/input', event =>
+    event.text === '无声拦截' ? { cancel: true } : undefined)
+  channel.submit('无声拦截')
+  await sleep(400)
+  check('tui/input cancel without reason: host fallback toasted',
+    notified('操作已被插件取消')
+    && !captured.followupTexts.some(text => text.includes('无声拦截')))
+  disposeCancel()
+
+  const disposeHandled = ctx.on('tui/input', event =>
+    event.text === '无声接管' ? { handled: true } : undefined)
+  channel.submit('无声接管')
+  await sleep(400)
+  check('tui/input handled without notice: host fallback toasted',
+    notified('输入已由插件处理')
+    && !captured.followupTexts.some(text => text.includes('无声接管')))
+  disposeHandled()
+}
+
+// ── 2d. decision+delivery FIFO: a slow A never lets B overtake ──────────
+{
+  const dispose = ctx.on('tui/input', async event => {
+    if (event.text === '慢条甲') await sleep(400)
+    return undefined
+  })
+  channel.submit('慢条甲')
+  channel.submit('快条乙')
+  await sleep(900)
+  const indexA = captured.followupTexts.findIndex(text => text.includes('慢条甲'))
+  const indexB = captured.followupTexts.findIndex(text => text.includes('快条乙'))
+  check('fifo: a slow decision on A does not let B overtake',
+    indexA !== -1 && indexB !== -1 && indexA < indexB, JSON.stringify(captured.followupTexts))
+  dispose()
+}
+
+// ── 2e. Ctrl+Enter re-queue passes through tui/input ─────────────────────
+{
+  const dispose = ctx.on('tui/input', event =>
+    event.text === '插队文本' ? { cancel: true, reason: '插队被拦截' } : undefined)
+  const before = captured.followupTexts.length
+  channel.interruptAndDeliver(['插队文本'])
+  await sleep(700) // the fake has no whenIdle → 200ms fallback timer + decision
+  check('interruptAndDeliver: the tui/input veto applies to the Ctrl+Enter path',
+    captured.followupTexts.length === before && notified('插队被拦截'))
+  dispose()
+
+  channel.interruptAndDeliver(['插队放行'])
+  await sleep(700)
+  check('interruptAndDeliver: the re-queue delivers without a veto',
+    captured.followupTexts.some(text => text.includes('插队放行')))
 }
 
 // ── 3. tui/input crash isolation ────────────────────────────────────────
@@ -498,6 +559,27 @@ await sleep(800)
   await sleep(400)
   check('compact ABA: id reuse does NOT revive the stale compaction',
     captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
+  dispose()
+}
+
+// ── 9. session-switch stale-drop: a parked /resume must not roll over a
+// newer session that completed mid-await (D-6, reference comparison) ──────
+{
+  // Live is s-a1 here (section 8b resumed back to it); move off it first.
+  const moved = await channel.newSession()
+  check('switch stale setup: /new off the origin succeeded', moved === true)
+  let release: (value: undefined) => void = () => {}
+  const gate = new Promise<undefined>(resolve => { release = resolve })
+  const dispose = ctx.on('tui/session-switch', event =>
+    event.kind === 'resume' ? gate : undefined)
+  const resumePromise = channel.resumeTo('s-a1')
+  await sleep(200)
+  const switched = await channel.newSession()
+  check('switch stale setup: a second /new completed mid-await', switched === true)
+  release(undefined)
+  const resumed = await resumePromise
+  check('session-switch stale: the parked /resume is dropped', resumed === false)
+  check('session-switch stale: stale notice toasted', notified('等待插件期间会话已切换'))
   dispose()
 }
 

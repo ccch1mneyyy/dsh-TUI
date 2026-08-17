@@ -116,7 +116,10 @@ export class TuiStatusRuntime extends Service {
   /**
    * Set (or clear with `undefined`) the contribution for `key`. Keys are
    * plugin-namespaced by convention (`my-plugin`, `my-plugin:detail`);
-   * control chars are stripped and text is capped at 200 cells.
+   * control chars are stripped and text is capped at 200 cells. Text is
+   * scalar-only: string/number/boolean are coerced to string, anything else
+   * is refused with a warning (never rendered as "[object Object]", never
+   * silently treated as a clear).
    *
    * Returns a disposer that clears the contribution IF the key still holds
    * exactly this write (a later set — even of identical text — wins over a
@@ -126,7 +129,7 @@ export class TuiStatusRuntime extends Service {
    * ctx, so per-plugin cleanup cannot happen here. Without that, an unloaded
    * or hot-reloaded plugin would leave its line behind forever.
    */
-  set(key: string, text: string | undefined): () => void {
+  set(key: string, text: string | number | boolean | undefined): () => void {
     const noop = (): void => {}
     const normalized = String(key ?? '').trim().toLowerCase()
     if (!KEY_PATTERN.test(normalized)) {

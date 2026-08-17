@@ -2130,8 +2130,8 @@ export function Chat({
           <ExtensionDialog
             key={dialogSnapshot.key}
             dialog={dialogSnapshot}
-            onDecide={value => dialogs.decide(value)}
-            onCancel={() => dialogs.cancel()}
+            onDecide={value => dialogs.decide(dialogSnapshot.key, value)}
+            onCancel={() => dialogs.cancel(dialogSnapshot.key)}
           />
         ) : btw !== null ? (
           <Box flexDirection="column" marginTop={1}>

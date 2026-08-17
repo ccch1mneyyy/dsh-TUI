@@ -507,13 +507,42 @@ are **parallel**: after-the-fact broadcasts with no decision power.
 
 Shared semantics:
 
+- **Intercept subscriptions require an explicit grant (RFC 0005 D-7, default
+  deny)**: a plugin subscribing to `tui/input`, `tui/rewind-prompt`,
+  `tui/session-switch`, or `tui/compact` must hold the matching grant in
+  `~/.dsh-tui/extension-grants.json`; otherwise the subscription never enters
+  the decision chain (treated as unregistered) and a warning is logged.
+  Permission names follow `domain.resource.intercept`:
+  `tui/input` → `session.input.intercept`, `tui/rewind-prompt` →
+  `session.rewind.intercept`, `tui/session-switch` → `session.switch.intercept`,
+  `tui/compact` → `session.compact.intercept`. Notification-class events
+  (`tui/rewind-done`, `tui/session-switched`) are not gated. The grants file
+  is keyed by plugin name (the cordis row's `name` export):
+
+  ```json
+  { "grants": { "my-guard": ["session.input.intercept"] } }
+  ```
+
+  The file is read once when the extensions row mounts; changing grants means
+  editing the file and restarting. A missing or corrupt file fails CLOSED
+  (deny all).
+- **Ordering guarantee**: decisions and deliveries are serialized in
+  submission order — a slow decision on an earlier input holds back the
+  decision AND delivery of later ones, so the model always receives messages
+  in the order the user submitted them.
 - `cancel.reason` / `handled.notice` / the `tui/rewind-done` summary are
-  toasted; the host supplies a localized fallback when absent. These texts are
-  sanitized as untrusted input too (control chars stripped, ≤200 cells).
+  toasted; the host supplies a localized fallback when absent (a bare
+  `{ cancel: true }` / `{ handled: true }` never makes the typed line vanish
+  silently). These texts are sanitized as untrusted input too (control chars
+  stripped, ≤200 cells).
 - A `{ text }` rewrite is trimmed; an empty result counts as "no opinion".
   The rewrite applies only BEFORE delivery — if the user switched sessions
   mid-await, the stale input is dropped with a notice (stale-drop) instead of
-  leaking the old conversation's words into the new session.
+  leaking the old conversation's words into the new session. Same for
+  `tui/session-switch`: if another switch completed while the decision was
+  parked, the stale switch request is dropped outright.
+- Submit, steer, AND Ctrl+Enter (the interruptAndDeliver re-queue) all pass
+  through `tui/input` — there is no send path that bypasses a plugin veto.
 - `tui/rewind-prompt` modes render as a choice list in the confirm pane (the
   host's "Conversation only" entry always comes first); the picked mode id is
   echoed back in `tui/rewind-done`'s payload — the plugin performs the actual
@@ -589,10 +618,18 @@ Contract points:
   the cancelled value with a warning — the awaiting plugin always continues.
 - Inputs are sanitized on arrival: control chars stripped, whitespace
   collapsed; title/label ≤120 cells, message ≤400, input ≤500, ≤100 options
-  (truncated beyond).
+  (truncated beyond). **Exception: a select option's `id` is not rendered** —
+  it is only type/non-empty checked and returned VERBATIM. It is the opaque
+  token the plugin matches against its own options; sanitizing it would hand
+  back a different string for long or whitespace-carrying ids.
 - Panel keys: ↑/↓ to move, Enter to confirm, Esc/Ctrl+C to cancel; `input`
   is a single-line editor inside the dialog (arrows/Home/End/backspace/
   delete), independent of the main prompt.
+- Paste protection: a bracketed paste into the single-line input is flattened
+  (newlines/control chars → spaces) and held to the same ≤500-cell cap as
+  typed text; a paste that is all line breaks is NEVER read as Enter — the
+  confirm's default focus cannot be tripped by one paste, likewise for
+  select/input.
 - When the service is absent (older profiles) `ctx.get` returns `undefined` —
   the plugin decides whether to skip interaction or fall back to a headless
   default; `timeoutMs` is the fuse for "service present but no TUI consumer".
@@ -655,7 +692,11 @@ Rules (all "refuse + warn, never throw"):
 - **Reserved combos are refused at registration**: the TUI's own bindings
   (ctrl+c/d/t/r/x/o/l/e/v/a/u/k/w, ctrl+←/→, ctrl/alt+Enter, alt+↑, Esc, Tab,
   Shift+Tab). This is the enforcement of "locals win": a collision can never
-  reach the matcher.
+  reach the matcher. Built-ins match a MODIFIER SUBSET (`isMod && char`,
+  never excluding an extra Shift), so SHIFT-SUPERSETS of reserved combos are
+  refused too — `ctrl+shift+x` IS Ctrl+X on terminals that don't report
+  Shift distinctly, and registering it would either shadow the built-in or
+  never fire.
 - Re-registering the same canonical combo is refused.
 - Dispatch happens only in the PLAIN chat state: any overlay (pickers,
   approvals, questionnaires, managed dialogs, scenes, the session browser)

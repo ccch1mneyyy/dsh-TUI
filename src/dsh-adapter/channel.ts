@@ -610,8 +610,9 @@ export interface Channel {
    * the whole log is already materialized.
    */
   loadOlder(): number
-  /** Push a transient notification above the prompt input. */
-  notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
+  /** Push a transient notification above the prompt input. Returns an
+   *  early-dismiss handle (the auto-timeout still runs as the backstop). */
+  notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): () => void
   /** Switch the working-activity indicator preset (`/activity`): validates
    *  the name, persists it to `~/.dsh-tui/working-activity.json`, and
    *  re-renders the indicator immediately; false when the name is unknown
@@ -861,7 +862,7 @@ export interface ChannelState {
   clear(): void
   /** @internal older-row restoration (see the public Channel.loadOlder). */
   loadOlder(): number
-  notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): void
+  notify(text: string, options?: { color?: NotificationItem['color']; timeoutMs?: number }): () => void
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
@@ -1344,10 +1345,17 @@ export function createChannel(
    */
   const DECISION_PENDING_MS = 400
   const withDecisionPending = <T>(name: string, pending: Promise<T>): Promise<T> => {
+    let dismiss: (() => void) | undefined
     const timer = setTimeout(() => {
-      state.notify(t('ext-decision-pending', { event: name }), { timeoutMs: 4000 })
+      dismiss = state.notify(t('ext-decision-pending', { event: name }), { timeoutMs: 4000 })
     }, DECISION_PENDING_MS)
-    return pending.finally(() => clearTimeout(timer))
+    // Both exits are covered: a fast decision clears the timer before it
+    // fires; a slow one dismisses the indicator it raised (the 4s timeout is
+    // only the backstop for a dismiss that never runs).
+    return pending.finally(() => {
+      clearTimeout(timer)
+      dismiss?.()
+    })
   }
   /**
    * The `tui/input` decision event (pi's `input` seam): the FIRST plugin
@@ -1358,13 +1366,15 @@ export function createChannel(
    * (dispatchTuiDecision isolates crashes and normalizes returns per
    * listener instead of bailing on the first object).
    *
-   * The event fires BEFORE the sendChain: a slow handler (e.g. one showing
-   * a managed dialog) parks this submit without blocking the next one —
-   * each delivery re-reads the live agent after the await, so a mid-await
-   * session switch drops the stale text with a notice instead of sending
-   * the old conversation's words to the new session.
+   * Decision AND delivery enter one FIFO chain in submission order: a slow
+   * listener on A parks A's delivery AND any later submissions behind it —
+   * without the chain, B's decision could resolve first and the model would
+   * receive B before A. Each delivery re-reads the live agent after the
+   * await, so a mid-await session switch drops the stale text with a notice
+   * instead of sending the old conversation's words to the new session.
    */
-  const dispatchUserText = async (text: string, placement: PendingMessage['placement']): Promise<void> => {
+  let inputChain: Promise<void> = Promise.resolve()
+  const runUserTextDecision = async (text: string, placement: PendingMessage['placement']): Promise<void> => {
     const originAgentId = state.agentId
     // Stale detection compares the AGENT REFERENCE, not the id: session ids
     // are reusable (A → /new → /resume A lands back on the same id with a
@@ -1377,16 +1387,15 @@ export function createChannel(
       cwd: state.cwd,
     }, normalizeInputDecision))
     if (decision !== undefined) {
+      // Both intercepts toast — a bare {cancel}/{handled} must not make the
+      // typed line vanish silently (the host-localized fallback mirrors the
+      // other decision events' ext-action-cancelled handling).
       if ('cancel' in decision) {
-        if (decision.reason !== undefined) {
-          state.notify(decision.reason, { color: 'warning', timeoutMs: 4000 })
-        }
+        state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
         return
       }
       if ('handled' in decision) {
-        if (decision.notice !== undefined) {
-          state.notify(decision.notice, { timeoutMs: 4000 })
-        }
+        state.notify(decision.notice ?? t('ext-action-handled'), { timeoutMs: 4000 })
         return
       }
       text = decision.text.trim()
@@ -1397,6 +1406,13 @@ export function createChannel(
     }
     deliverUserText(text, placement)
   }
+  const dispatchUserText = (text: string, placement: PendingMessage['placement']): void => {
+    inputChain = inputChain.then(() => runUserTextDecision(text, placement)).catch((error: unknown) => {
+      // The chain must survive a failed decision: log, then continue with
+      // the next queued submission.
+      ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
+    })
+  }
   /**
    * The `tui/session-switch` decision event (pi's `session_before_switch`),
    * fired before `/new` or `/resume` replaces the live session (rewind has
@@ -1404,12 +1420,22 @@ export function createChannel(
    * the reason is toasted here so the fallback string stays host-localized.
    */
   const sessionSwitchVetoed = async (kind: 'new' | 'resume', targetSessionId?: string): Promise<boolean> => {
+    // D-6 stale detection captures the AGENT REFERENCE (session ids are
+    // reusable — ABA): a slow decision must not let an older /resume roll
+    // over a newer session the user already switched to mid-await.
+    const originAgent = agent
     const decision = await withDecisionPending('tui/session-switch', dispatchTuiDecision(ctx, 'tui/session-switch', {
       kind,
       ...(targetSessionId === undefined ? {} : { targetSessionId }),
       sessionId: state.agentId,
       cwd: state.cwd,
     }, normalizeCancelDecision))
+    if (agent !== originAgent) {
+      // The world changed while the decision parked: drop the pending
+      // switch instead of replacing the user's newer session.
+      state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+      return true
+    }
     if (decision !== undefined) {
       state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
       return true
@@ -1891,7 +1917,10 @@ export function createChannel(
         if (interruptSeq !== token) return
         for (const text of queued) {
           touchSession(state.agentId)
-          deliverUserText(text, 'followup')
+          // Same tui/input decision pass as a typed submit: Ctrl+Enter must
+          // not bypass a plugin's cancel/transform policy, and re-queued
+          // texts keep submission order through the one FIFO chain.
+          dispatchUserText(text, 'followup')
         }
       }
       if (typeof whenIdle === 'function') {
@@ -2584,13 +2613,20 @@ export function createChannel(
       }
       state.notifications.push(item)
       state.emit()
-      setTimeout(() => {
+      const remove = (): void => {
         const index = state.notifications.indexOf(item)
         if (index >= 0) {
           state.notifications.splice(index, 1)
           state.emit()
         }
-      }, item.timeoutMs)
+      }
+      const expire = setTimeout(remove, item.timeoutMs)
+      // Early-dismiss handle for flows that know their notice went stale
+      // (e.g. a decision-parked indicator whose decision just landed).
+      return () => {
+        clearTimeout(expire)
+        remove()
+      }
     },
     setDiffLayout(layout) {
       if (layout === state.diffLayout) return

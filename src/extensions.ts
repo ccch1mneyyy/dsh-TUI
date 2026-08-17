@@ -10,3 +10,6 @@ export * from './dsh-adapter/dialogs.js'
 export * from './dsh-adapter/status.js'
 export * from './dsh-adapter/shortcuts.js'
 export * from './dsh-adapter/renderers.js'
+// The D-7 permission vocabulary (which grant each decision event needs) is
+// part of the plugin-facing contract too.
+export { DECISION_EVENT_PERMISSIONS } from './dsh-adapter/decision-guard.js'

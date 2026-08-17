@@ -20,12 +20,14 @@
 import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { stringWidth } from '../ink/stringWidth.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
 import { listWindow } from './listWindow.js'
-import type { TuiDialogAnswer, TuiDialogSnapshot } from '../dsh-adapter/dialogs.js'
+import { INPUT_CELLS, type TuiDialogAnswer, type TuiDialogSnapshot } from '../dsh-adapter/dialogs.js'
+import { capCells, flattenInline } from '../dsh-adapter/sanitize.js'
 
 export type ExtensionDialogProps = {
   /** The pending dialog (TuiDialogStore snapshot; `key` remounts per dialog). */
@@ -57,7 +59,7 @@ function SelectDialog({
   const [focusIndex, setFocusIndex] = React.useState(0)
   const { rows: terminalRows } = useTerminalSize()
 
-  useInput((input, key) => {
+  useInput((input, key, event) => {
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel()
       return
@@ -70,7 +72,9 @@ function SelectDialog({
       setFocusIndex(index => (index + 1) % dialog.options.length)
       return
     }
-    if (isPlainReturnInput(input, key)) {
+    // isPasted lives on the InputEvent, not the key: a bracketed paste that
+    // is all line breaks is pasted content, never an Enter press.
+    if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
       const option = dialog.options[focusIndex]
       if (option !== undefined) onDecide(option.id)
     }
@@ -128,7 +132,7 @@ function ConfirmDialog({
     dialog.cancelLabel || t('ext-dialog-no'),
   ]
 
-  useInput((input, key) => {
+  useInput((input, key, event) => {
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel()
       return
@@ -141,7 +145,9 @@ function ConfirmDialog({
       setFocusIndex(index => (index + 1) % labels.length)
       return
     }
-    if (isPlainReturnInput(input, key)) {
+    // isPasted lives on the InputEvent, not the key: a bracketed paste that
+    // is all line breaks must not confirm on the default focus.
+    if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
       onDecide(focusIndex === 0)
     }
   }, { isActive: true })
@@ -180,12 +186,14 @@ function InputDialog({
   const [value, setValue] = React.useState(dialog.initial)
   const [cursor, setCursor] = React.useState(dialog.initial.length)
 
-  useInput((input, key) => {
+  useInput((input, key, event) => {
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel()
       return
     }
-    if (isPlainReturnInput(input, key)) {
+    // isPasted lives on the InputEvent, not the key: a bracketed paste that
+    // is all line breaks is inserted as text, not submitted.
+    if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
       onDecide(value)
       return
     }
@@ -218,8 +226,21 @@ function InputDialog({
       return
     }
     if (input && !key.ctrl && !key.meta && !key.super && !key.tab && !key.escape) {
-      setValue(value.slice(0, cursor) + input + value.slice(cursor))
-      setCursor(cursor + input.length)
+      // A bracketed paste arrives as one chunk and may carry newlines/control
+      // chars — this is a single-line panel, so flatten them to spaces. Every
+      // edit path holds the value at INPUT_CELLS cells so the resolved answer
+      // keeps the documented bound: typing past the cap is ignored, an
+      // oversized paste is truncated (never silently unbounded).
+      const chunk = event.isPasted ? flattenInline(input) : input
+      const candidate = value.slice(0, cursor) + chunk + value.slice(cursor)
+      if (stringWidth(candidate) <= INPUT_CELLS) {
+        setValue(candidate)
+        setCursor(cursor + chunk.length)
+      } else if (event.isPasted) {
+        const capped = capCells(candidate, INPUT_CELLS)
+        setValue(capped)
+        setCursor(Math.min(cursor + chunk.length, capped.length))
+      }
     }
   }, { isActive: true })
 
