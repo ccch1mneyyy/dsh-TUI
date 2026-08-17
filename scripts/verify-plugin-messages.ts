@@ -18,7 +18,7 @@
  *
  * Run via `node --import tsx/esm scripts/verify-plugin-messages.ts`.
  */
-import { mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -301,8 +301,14 @@ await subscribeAs('alpha')
 
 // ── J. 零持久化 / disposer 幂等 ───────────────────────────────────────────
 {
-  const files = readdirSync(DATA_DIR)
-  check1('the broker persists nothing', files.length === 1 && files[0] === 'extension-grants.json', files.join(','))
+  const files = readdirSync(DATA_DIR).sort()
+  // 批 5 起授权拒绝/撤销会落效果台账（宿主观测面，C-060）——允许台账文件，
+  // 但 broker 自身依旧零历史，且台账里绝不允许出现消息内容。
+  check1('the broker persists nothing beyond the host effect ledger',
+    JSON.stringify(files) === JSON.stringify(['effect-ledger.jsonl', 'extension-grants.json'].sort()), files.join(','))
+  const ledgerText = readFileSync(join(DATA_DIR, 'effect-ledger.jsonl'), 'utf8')
+  const payloads = ['hello broker', 'spy must not see this', 'text of A', 'text of B', 'beta throws on this', 'delivery continues', 'unsafe session id']
+  check1('no message payload reaches the ledger file', payloads.every(text => !ledgerText.includes(text)))
   const disposer = await subscribeAs('beta') // beta 有授权；第二个同名订阅
   check1('first release returns true', disposer() === true)
   check1('second release is a harmless false', disposer() === false)

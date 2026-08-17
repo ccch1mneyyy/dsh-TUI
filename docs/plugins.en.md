@@ -116,10 +116,10 @@ model is trusted-in-process (C-070): grants are a behavioral constraint, not
 a security boundary.
 
 Current alignment status: the validation/negotiation library, vendored data,
-the unified grant store, Host Descriptor construction, and the
-`storage.local` and `messages.observe` contract surfaces are in place; the
-effect ledger and the `/plugins` diagnostic command follow in later
-batches.
+the unified grant store, Host Descriptor construction, the `storage.local`
+and `messages.observe` contract surfaces, the commands error-code alignment,
+and the effect ledger are in place; the `/plugins` diagnostic command
+follows in a later batch.
 
 The grant store (`~/.dsh-tui/extension-grants.json`) answers for all 8
 registered permissions with defaults driven by the vendored permission
@@ -178,6 +178,38 @@ no-op disposer + warning) and re-checked per subscription at deliver time —
 a revocation releases the subscription (contract cleanup). A throwing
 listener is isolated while delivery continues; at-most-once, no replay;
 the broker persists nothing (contract retention).
+
+`commands` (C-041): at the host-mediated registration points, a duplicate
+registration arriving as a plain-message Error from dsh-commands is mapped
+onto an error carrying `code: 'DUPLICATE_CONTRIBUTION_ID'`
+(`src/dsh-adapter/command-errors.js` — `mapCommandError` /
+`withCommandErrorMapping`). Before executing a registry command, the host
+passes an invoke checkpoint consulting the `commands.invoke` grant (allow
+by default, revocable through `denies`; a revoked checkpoint skips execution
+with a notice). Plugins calling `ctx.commands` directly bypass both points
+(the declared C-070 trusted-in-process boundary — platform behavior, not a
+bug).
+
+Effect ledger (C-060): an append-only JSONL journal at
+`~/.dsh-tui/effect-ledger.jsonl`, written through
+`ctx.get('tuiEffectLedger', false)` → `record(entry, identity?)`; it never
+throws into the caller. Every record carries the lifecycle triple: pluginId
+(the passed identity's fiber.name; root fiber → `'host'`; omitted →
+`'undeclared'`), activationInstance (first-seen per fiber, stable for the
+process; a hot reload is a new instance), and runtimeGenerationId (C-050).
+The five operations — create / bind / replace / release / cleanup-failed —
+cover scenes, shortcuts, status lines, renderers, commands, storage
+namespaces, and grant denials (PERMISSION_NOT_GRANTED). Records are built
+field-by-field from an allowlist and validated against the vendored ledger
+schema before every append — together with the schema's
+`additionalProperties: false` this structurally bans smuggled material; a
+record that fails is dropped, never written. The sequence continues across
+restarts; corrupt lines are skipped, never rewritten; when the vendored
+schema is unavailable, all writes are suppressed (fail closed). The four
+managed services (tuiScenes / tuiShortcuts / tuiStatus / tuiRenderers) take
+an optional trailing `identity?: Context` on their register-style methods —
+pass your own ctx so ledger entries attribute correctly; omitting it records
+`'undeclared'` and remains fully usable (non-breaking).
 
 ## Seam Overview
 

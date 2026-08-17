@@ -35,6 +35,7 @@ import type { HostDescriptor } from '../plugin-spec/types.js'
 import { loadSpecData, verifyContractProfiles, verifyRegistry } from '../plugin-spec/registry.js'
 import { readGrantStore, type GrantStore } from './grants.js'
 import { buildHostDescriptor, type HostDescriptorBuild } from './host-descriptor.js'
+import { TuiEffectLedgerRuntime } from './effect-ledger.js'
 import { TuiPluginStorageRuntime } from './plugin-storage.js'
 import { TuiMessageObserverRuntime } from './message-observer.js'
 
@@ -107,6 +108,9 @@ export function apply(ctx: Context): void {
   // read its grant store (they fall back to a private read only when mounted
   // standalone, e.g. in tests).
   ctx.plugin(TuiPluginHostRuntime)
+  // Effect ledger (C-060): mounted before the surfaces below so they can
+  // soft-probe it at construction; generation comes from the host service.
+  ctx.plugin(TuiEffectLedgerRuntime)
   // storage.local (C-040): per-plugin private persistence.
   ctx.plugin(TuiPluginStorageRuntime)
   // messages.observe (C-042): the grant-gated observation broker the

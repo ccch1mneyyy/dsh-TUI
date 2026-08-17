@@ -47,6 +47,7 @@ import { check } from '../plugin-spec/schema-check.js'
 import { loadSpecData } from '../plugin-spec/registry.js'
 import { cleanScalarText } from './sanitize.js'
 import { readGrantStore, type GrantStore } from './grants.js'
+import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
 
 /** Envelope content block (MCP ContentBlock text/image subset). */
 export type MessagesObserveContentBlock =
@@ -86,6 +87,10 @@ export const OBSERVE_ID_MAX_CHARS = 256
 
 interface Subscription {
   plugin: string
+  /** The subscriber's own context — kept so the deliver-time revoke path can
+   *  record the release against the right ledger identity (it has no other
+   *  access to the plugin's fiber). */
+  identity: Context
   listener: MessagesObserveListener
   /** Per-subscription serial chain (contract concurrency rule). */
   chain: Promise<unknown>
@@ -106,17 +111,37 @@ declare module '@deepseek-ai/cordis' {
  * is ever delivered (a host that cannot self-check must not emit).
  */
 export class TuiMessageObserverRuntime extends Service {
-  private readonly grants: GrantStore
+  private readonly grantsOption: GrantStore | undefined
+  private readonly fallbackGrants: GrantStore
+  private readonly ledgerOption: TuiEffectLedgerRuntime | undefined
   private readonly subscriptions = new Set<Subscription>()
   private readonly envelopeSchema: Record<string, unknown> | undefined
   private warnedNoSchema = false
 
-  constructor(ctx: Context, options: { grants?: GrantStore; envelopeSchema?: Record<string, unknown> } = {}) {
+  constructor(
+    ctx: Context,
+    options: { grants?: GrantStore; ledger?: TuiEffectLedgerRuntime; envelopeSchema?: Record<string, unknown> } = {},
+  ) {
     super(ctx, 'tuiMessageObserver')
-    this.grants = options.grants ?? ctx.get('tuiPluginHost')?.grants ?? readGrantStore()
+    this.grantsOption = options.grants
+    this.fallbackGrants = readGrantStore()
+    this.ledgerOption = options.ledger
     // `'envelopeSchema' in options` lets a caller force-undefined (fail-closed
     // path under test); an absent key loads the vendored schema.
     this.envelopeSchema = 'envelopeSchema' in options ? options.envelopeSchema : loadSpecData()?.schemas.message
+  }
+
+  /** Grants: the plugin-host row's store when mounted, else a private read.
+   *  Resolved PER CALL — sibling services mounted later by the same apply()
+   *  are not visible to constructors (cordis), so a constructor-time probe
+   *  would silently stick to the fallback. */
+  private grants(): GrantStore {
+    return this.grantsOption ?? this.ctx.get('tuiPluginHost')?.grants ?? this.fallbackGrants
+  }
+
+  /** Optional observability; a bare mount (tests) simply records nothing. */
+  private ledger(): TuiEffectLedgerRuntime | undefined {
+    return this.ledgerOption ?? this.ctx.get('tuiEffectLedger')
   }
 
   /**
@@ -133,14 +158,23 @@ export class TuiMessageObserverRuntime extends Service {
     } catch {
       // Degraded context without fiber access: 'root'.
     }
-    if (!this.grants.allows(plugin, 'messages.observe.read')) {
+    if (!this.grants().allows(plugin, 'messages.observe.read')) {
       this.ctx.logger.warn(
         `dsh-tui: messages.observe subscription from plugin "${plugin}" denied — grant "messages.observe.read" ` +
         `for "${plugin}" in ~/.dsh-tui/extension-grants.json first; the listener was NOT registered`,
       )
+      this.ledger()?.record(
+        {
+          operation: 'bind',
+          resource: { kind: 'permission', id: 'messages.observe.read' },
+          result: 'failed',
+          errorCode: 'PERMISSION_NOT_GRANTED',
+        },
+        pluginCtx,
+      )
       return () => false
     }
-    const subscription: Subscription = { plugin, listener, chain: Promise.resolve(), closed: false }
+    const subscription: Subscription = { plugin, identity: pluginCtx, listener, chain: Promise.resolve(), closed: false }
     this.subscriptions.add(subscription)
     const release = (): boolean => {
       if (subscription.closed) return false
@@ -250,11 +284,15 @@ export class TuiMessageObserverRuntime extends Service {
     for (const subscription of [...this.subscriptions]) {
       // Deliver-time grant re-check: a revoked grant RELEASES the
       // subscription (contract cleanup rule), with one warning.
-      if (!this.grants.allows(subscription.plugin, 'messages.observe.read')) {
+      if (!this.grants().allows(subscription.plugin, 'messages.observe.read')) {
         this.subscriptions.delete(subscription)
         subscription.closed = true
         this.ctx.logger.warn(
           `dsh-tui: messages.observe subscription of plugin "${subscription.plugin}" released — the grant was revoked`,
+        )
+        this.ledger()?.record(
+          { operation: 'release', resource: { kind: 'subscription', id: subscription.plugin }, result: 'applied' },
+          subscription.identity,
         )
         continue
       }

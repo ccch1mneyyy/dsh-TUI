@@ -100,8 +100,9 @@ Loader）负责，**加载时强制不在本仓库**。本仓库提供的是校�
 （trusted-in-process，C-070）：授权是行为约束，不是安全隔离边界。
 
 当前对齐进度：校验/协商库、vendored 数据、统一授权存储、Host
-Descriptor 构建、`storage.local` 与 `messages.observe` 契约面已落地；
-效果台账与 `/plugins` 诊断命令在后续批次跟进。
+Descriptor 构建、`storage.local` 与 `messages.observe` 契约面、
+commands 错误码对齐与效果台账已落地；`/plugins` 诊断命令在后续批次
+跟进。
 
 授权存储（`~/.dsh-tui/extension-grants.json`）统一回答全部 8 个注册
 权限：默认值由 vendored 权限注册表驱动（7 个默认拒绝；
@@ -149,6 +150,30 @@ STORAGE_UNAVAILABLE。值必须 JSON 可序列化；key 与 value 永不进日�
 （noop disposer + 告警），投递时逐订阅复检——撤销即释放订阅
 （contract cleanup）。listener 抛错被隔离续投；at-most-once、无重放；
 broker 零持久化（contract retention）。
+
+`commands`（C-041）：宿主经手的命令注册点把 dsh-commands 的重复注册
+纯文案 Error 映射为带 `code: 'DUPLICATE_CONTRIBUTION_ID'` 的错误
+（`src/dsh-adapter/command-errors.js`，`mapCommandError` /
+`withCommandErrorMapping`）；宿主执行注册命令前过 invoke 检查点查
+`commands.invoke`（默认允许、可经 `denies` 撤销，撤销后不再执行并
+提示）。插件直调 `ctx.commands` 不经这两个点（C-070 同进程信任边界，
+已声明为平台行为）。
+
+效果台账（C-060）：`~/.dsh-tui/effect-ledger.jsonl` 追加式 JSONL，
+经 `ctx.get('tuiEffectLedger', false)` 的 `record(entry, identity?)`
+写入，永不向调用方抛错。每条带生命周期三元组：pluginId（传入
+identity 的 fiber.name；root fiber→`'host'`；省略→`'undeclared'`）+
+activationInstance（按 fiber 首见分配，进程内稳定，热重载即新实例）+
+runtimeGenerationId（C-050）。五种 operation：create / bind / replace /
+release / cleanup-failed；覆盖场景、快捷键、状态行、渲染器、命令、
+存储 namespace 与授权拒绝（PERMISSION_NOT_GRANTED）。每条写入前过
+vendored ledger schema——记录按 allowlist 逐字段构造，叠加 schema 的
+`additionalProperties: false`，结构性禁止夹带秘密材料；校验失败的
+记录丢弃不落盘。sequence 跨重启续号；损坏行跳过不改写；vendored
+schema 缺失时全部写入被抑制（fail closed）。四个托管服务
+（tuiScenes / tuiShortcuts / tuiStatus / tuiRenderers）的 register 系
+方法带可选末参 `identity?: Context`——传自己的 ctx 即让台账归属
+正确，省略记 `'undeclared'`，不传也完全可用（非破坏）。
 
 ## 接缝总览
 

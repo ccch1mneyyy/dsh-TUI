@@ -61,12 +61,13 @@ export class TuiStatusStore {
 
   /** Clear `key` only while it still holds the write tagged `token` — a
    *  stale disposer must not wipe a newer contribution (even one with
-   *  identical text). */
-  clearIf(key: string, token: number): void {
-    if (this.entries.get(key)?.token !== token) return
+   *  identical text). Returns true when this call actually cleared. */
+  clearIf(key: string, token: number): boolean {
+    if (this.entries.get(key)?.token !== token) return false
     this.entries.delete(key)
     this.snapshot = [...this.entries].map(([entryKey, entry]) => ({ key: entryKey, text: entry.text }))
     this.emit()
+    return true
   }
 
   /** Drop everything (teardown). */
@@ -128,8 +129,12 @@ export class TuiStatusRuntime extends Service {
    * `tuiShortcuts`/`tuiScenes`: a service method only sees the service's own
    * ctx, so per-plugin cleanup cannot happen here. Without that, an unloaded
    * or hot-reloaded plugin would leave its line behind forever.
+   *
+   * The optional trailing `identity` (the plugin's own ctx) only feeds the
+   * effect ledger's pluginId — omitting it records `undeclared`, never a
+   * guess (C-060 honest identity).
    */
-  set(key: string, text: string | number | boolean | undefined): () => void {
+  set(key: string, text: string | number | boolean | undefined, identity?: Context): () => void {
     const noop = (): void => {}
     const normalized = String(key ?? '').trim().toLowerCase()
     if (!KEY_PATTERN.test(normalized)) {
@@ -156,8 +161,30 @@ export class TuiStatusRuntime extends Service {
       cleaned = cleanScalarText(text, TEXT_CELLS)
     }
     const token = this.nextToken++
+    const had = this.store.getSnapshot().some(entry => entry.key === normalized)
     this.store.set(normalized, cleaned, token)
-    return () => this.store.clearIf(normalized, token)
+    const ledger = this.ctx.get('tuiEffectLedger')
+    if (cleaned === undefined) {
+      if (had) ledger?.record({ operation: 'release', resource: { kind: 'status', id: normalized }, result: 'applied' }, identity)
+    } else {
+      ledger?.record(
+        {
+          operation: had ? 'replace' : 'bind',
+          resource: { kind: 'status', id: normalized },
+          result: 'applied',
+          ...(had ? { replaces: { resourceId: normalized } } : {}),
+        },
+        identity,
+      )
+    }
+    return () => {
+      if (this.store.clearIf(normalized, token)) {
+        this.ctx.get('tuiEffectLedger')?.record(
+          { operation: 'release', resource: { kind: 'status', id: normalized }, result: 'applied' },
+          identity,
+        )
+      }
+    }
   }
 }
 

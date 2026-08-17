@@ -9,6 +9,8 @@ export * from './dsh-adapter/grants.js'
 export * from './dsh-adapter/host-descriptor.js'
 export * from './dsh-adapter/plugin-storage.js'
 export * from './dsh-adapter/message-observer.js'
+export * from './dsh-adapter/effect-ledger.js'
+export * from './dsh-adapter/command-errors.js'
 // The spec vocabulary the descriptor/grant answers are phrased in.
 export type {
   ContractCoordinate,

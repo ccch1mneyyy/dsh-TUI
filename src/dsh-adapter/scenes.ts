@@ -67,15 +67,40 @@ export class TuiSceneRuntime extends Service {
     super(ctx, 'tuiScenes')
   }
 
-  register(descriptor: TuiSceneDescriptor): () => void {
+  /**
+   * Register a full-screen scene; returns the dispose function (caller
+   * scopes it with `ctx.effect`). The optional trailing `identity` (the
+   * plugin's own ctx) only feeds the effect ledger's pluginId — omitting it
+   * records `undeclared` (C-060).
+   */
+  register(descriptor: TuiSceneDescriptor, identity?: Context): () => void {
     const id = descriptor.id.trim().toLowerCase()
     if (!/^[a-z][a-z0-9_-]*$/u.test(id)) throw new TypeError(`invalid TUI scene id: ${descriptor.id}`)
-    if (this.scenes.has(id)) throw new Error(`TUI scene "${id}" is already registered`)
+    if (this.scenes.has(id)) {
+      this.ctx.get('tuiEffectLedger')?.record(
+        {
+          operation: 'create',
+          resource: { kind: 'scene', id },
+          result: 'failed',
+          errorCode: 'DUPLICATE_CONTRIBUTION_ID',
+        },
+        identity,
+      )
+      throw new Error(`TUI scene "${id}" is already registered`)
+    }
     const normalized = { ...descriptor, id }
     this.scenes.set(id, normalized)
+    this.ctx.get('tuiEffectLedger')?.record(
+      { operation: 'create', resource: { kind: 'scene', id }, result: 'applied' },
+      identity,
+    )
     return () => {
       if (this.scenes.get(id) !== normalized) return
       this.scenes.delete(id)
+      this.ctx.get('tuiEffectLedger')?.record(
+        { operation: 'release', resource: { kind: 'scene', id }, result: 'applied' },
+        identity,
+      )
       // Disposing the open scene must not strand the user on a dead screen.
       if (this.current === normalized) {
         this.current = undefined

@@ -239,8 +239,11 @@ export class TuiShortcutRuntime extends Service {
    * (`ctx.effect(() => dispose)`) — the same contract as `tuiScenes`
    * registration. (A service method only sees the service's own ctx, so
    * caller-fiber cleanup cannot happen here.)
+   *
+   * The optional trailing `identity` (the plugin's own ctx) only feeds the
+   * effect ledger's pluginId — omitting it records `undeclared` (C-060).
    */
-  register(combo: string, options: TuiShortcutOptions): () => void {
+  register(combo: string, options: TuiShortcutOptions, identity?: Context): () => void {
     const parsed = parseShortcutCombo(combo)
     if (parsed === undefined) {
       this.ctx.logger.warn(
@@ -260,6 +263,15 @@ export class TuiShortcutRuntime extends Service {
     }
     if (this.shortcuts.has(key)) {
       this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${combo}" — already registered`)
+      this.ctx.get('tuiEffectLedger')?.record(
+        {
+          operation: 'bind',
+          resource: { kind: 'shortcut', id: key },
+          result: 'failed',
+          errorCode: 'DUPLICATE_CONTRIBUTION_ID',
+        },
+        identity,
+      )
       return () => {}
     }
     const description = cleanScalarText(options?.description, 120)
@@ -269,8 +281,17 @@ export class TuiShortcutRuntime extends Service {
     }
     const entry: RegisteredShortcut = { combo: parsed, description, handler: options.handler }
     this.shortcuts.set(key, entry)
+    this.ctx.get('tuiEffectLedger')?.record(
+      { operation: 'bind', resource: { kind: 'shortcut', id: key }, result: 'applied' },
+      identity,
+    )
     return (): void => {
-      if (this.shortcuts.get(key) === entry) this.shortcuts.delete(key)
+      if (this.shortcuts.get(key) !== entry) return
+      this.shortcuts.delete(key)
+      this.ctx.get('tuiEffectLedger')?.record(
+        { operation: 'release', resource: { kind: 'shortcut', id: key }, result: 'applied' },
+        identity,
+      )
     }
   }
 

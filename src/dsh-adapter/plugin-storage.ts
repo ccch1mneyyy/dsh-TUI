@@ -35,6 +35,7 @@ import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { DATA_DIR } from '../utils/paths.js'
 import { readGrantStore, type GrantStore } from './grants.js'
+import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
 
 /** Quota: max distinct keys per namespace. */
 export const STORAGE_MAX_KEYS = 256
@@ -121,14 +122,31 @@ interface NamespaceState {
  * (normal path) or a private read otherwise (bare mounts in tests).
  */
 export class TuiPluginStorageRuntime extends Service {
-  private readonly grants: GrantStore
+  private readonly grantsOption: GrantStore | undefined
+  private readonly fallbackGrants: GrantStore
+  private readonly ledgerOption: TuiEffectLedgerRuntime | undefined
   private readonly namespaces = new Map<string, NamespaceState>()
   private readonly dir: string
 
-  constructor(ctx: Context, options: { dir?: string; grants?: GrantStore } = {}) {
+  constructor(ctx: Context, options: { dir?: string; grants?: GrantStore; ledger?: TuiEffectLedgerRuntime } = {}) {
     super(ctx, 'tuiPluginStorage')
-    this.grants = options.grants ?? ctx.get('tuiPluginHost')?.grants ?? readGrantStore()
+    this.grantsOption = options.grants
+    this.fallbackGrants = readGrantStore()
+    this.ledgerOption = options.ledger
     this.dir = options.dir ?? join(DATA_DIR, PLUGIN_STORAGE_DIR)
+  }
+
+  /** Grants: the plugin-host row's store when mounted, else a private read.
+   *  Resolved PER CALL — sibling services mounted later by the same apply()
+   *  are not visible to constructors (cordis), so a constructor-time probe
+   *  would silently stick to the fallback. */
+  private grants(): GrantStore {
+    return this.grantsOption ?? this.ctx.get('tuiPluginHost')?.grants ?? this.fallbackGrants
+  }
+
+  /** Optional observability; a bare mount (tests) simply records nothing. */
+  private ledger(): TuiEffectLedgerRuntime | undefined {
+    return this.ledgerOption ?? this.ctx.get('tuiEffectLedger')
   }
 
   /**
@@ -150,6 +168,10 @@ export class TuiPluginStorageRuntime extends Service {
       state = { chain: Promise.resolve() }
       this.namespaces.set(plugin, state)
     }
+    this.ledger()?.record(
+      { operation: 'create', resource: { kind: 'storage-namespace', id: plugin }, result: 'applied' },
+      pluginCtx,
+    )
     // `closed` is PER HANDLE, not per namespace: unloading one fiber must not
     // kill another handle opened on the same namespace. Close on unload;
     // idempotent (a double-close stays harmless by design); degraded contexts
@@ -157,13 +179,19 @@ export class TuiPluginStorageRuntime extends Service {
     let closed = false
     try {
       pluginCtx.effect(() => () => {
+        if (closed) return
         closed = true
+        this.ledger()?.record(
+          { operation: 'release', resource: { kind: 'storage-namespace', id: plugin }, result: 'applied' },
+          pluginCtx,
+        )
       })
     } catch {
       // Degraded context: the handle lives until process end.
     }
     const file = join(this.dir, `${storageFileName(plugin)}.json`)
-    const grants = this.grants
+    const grants = (): GrantStore => this.grants()
+    const ledger = (): TuiEffectLedgerRuntime | undefined => this.ledger()
 
     const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
       if (closed) {
@@ -205,7 +233,16 @@ export class TuiPluginStorageRuntime extends Service {
     }
 
     const requireGrant = (permission: 'storage.local.read' | 'storage.local.write') => {
-      if (!grants.allows(plugin, permission)) {
+      if (!grants().allows(plugin, permission)) {
+        ledger()?.record(
+          {
+            operation: 'bind',
+            resource: { kind: 'permission', id: permission },
+            result: 'failed',
+            errorCode: 'PERMISSION_NOT_GRANTED',
+          },
+          pluginCtx,
+        )
         throw new PluginStorageError(
           'PERMISSION_NOT_GRANTED',
           `storage.${permission.endsWith('.read') ? 'get' : 'set/delete'} from plugin "${plugin}" denied — grant "${permission}" ` +

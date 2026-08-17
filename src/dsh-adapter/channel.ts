@@ -60,6 +60,7 @@ import type { TuiRendererRuntime } from './renderers.js'
 import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { readGrantStore } from './grants.js'
+import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
   TuiInputDecision,
@@ -1215,8 +1216,10 @@ export function createChannel(
   // row (or a bare embed mounting neither) would otherwise leave tui/input
   // & friends subscribable by default, silently voiding the default-deny
   // posture. Idempotent per cordis root, so the full-patch path installs
-  // exactly once whichever side runs first.
-  installDecisionGuard(ctx, readGrantStore())
+  // exactly once whichever side runs first. One store instance serves both
+  // the gate and the invoke checkpoint below.
+  const grantStore = ctx.get('tuiPluginHost')?.grants ?? readGrantStore()
+  installDecisionGuard(ctx, grantStore)
   // The DSH slash-command registry (optional service): /plan, /goal and
   // friends register here; the TUI merges their descriptors into the slash
   // menu and dispatches through `execute` (which logs the paired
@@ -1627,6 +1630,23 @@ export function createChannel(
    *  command is not registered, and the error message when it throws. */
   const executeRegistryCommand = async (name: string, rawInput: string): Promise<string | undefined> => {
     if (!commandService) return undefined
+    // Invoke checkpoint (C-041): the host executes registry commands under
+    // the 'root' identity — allow by default, revocable through the grants
+    // file's "denies" section. Plugins calling ctx.commands.execute directly
+    // bypass this checkpoint (declared C-070 trusted-in-process boundary).
+    if (!grantStore.allows('root', 'commands.invoke')) {
+      ctx.logger.warn('dsh-tui: registry command invocation denied (commands.invoke revoked for "root" in the grants file)')
+      ctx.get('tuiEffectLedger')?.record(
+        {
+          operation: 'bind',
+          resource: { kind: 'permission', id: 'commands.invoke' },
+          result: 'failed',
+          errorCode: 'PERMISSION_NOT_GRANTED',
+        },
+        ctx,
+      )
+      return t('command-invoke-denied')
+    }
     try {
       const execution = await commandService.execute(
         agent,
@@ -3722,9 +3742,30 @@ export function createChannel(
           },
         })
         skillCommands.set(name, { dispose, description })
+        ctx.get('tuiEffectLedger')?.record(
+          { operation: 'create', resource: { kind: 'command', id: name }, result: 'applied' },
+          ctx,
+        )
       } catch (error) {
+        // C-041: a duplicate registration arrives as a plain-message Error
+        // from dsh-commands; map it onto the contract code before handling
+        // (the refusal path itself is unchanged).
+        const mapped = mapCommandError(error)
         skillCommandsRefused.add(name)
-        ctx.logger.warn(`skill commands: "${name}" not registrable: %o`, error)
+        ctx.logger.warn(
+          `skill commands: "${name}" not registrable%s: %o`,
+          hasCommandErrorCode(mapped, 'DUPLICATE_CONTRIBUTION_ID') ? ' (DUPLICATE_CONTRIBUTION_ID)' : '',
+          mapped,
+        )
+        ctx.get('tuiEffectLedger')?.record(
+          {
+            operation: 'create',
+            resource: { kind: 'command', id: name },
+            result: 'failed',
+            errorCode: hasCommandErrorCode(mapped, 'DUPLICATE_CONTRIBUTION_ID') ? 'DUPLICATE_CONTRIBUTION_ID' : 'COMMAND_FAILED',
+          },
+          ctx,
+        )
       }
     }
   }

@@ -74,9 +74,11 @@ export class TuiRendererRuntime extends Service {
   /**
    * Map a log-only session event type to transcript rows. Returns the
    * dispose function (caller scopes it with `ctx.effect`, same contract as
-   * `tuiScenes`). Refusals warn instead of throwing.
+   * `tuiScenes`). Refusals warn instead of throwing. The optional trailing
+   * `identity` (the plugin's own ctx) only feeds the effect ledger's
+   * pluginId — omitting it records `undeclared` (C-060).
    */
-  register(type: string, renderer: TuiEntryRenderer): () => void {
+  register(type: string, renderer: TuiEntryRenderer, identity?: Context): () => void {
     const normalized = String(type ?? '').trim().toLowerCase()
     if (!TYPE_PATTERN.test(normalized)) {
       this.ctx.logger.warn(`dsh-tui: tuiRenderers.register rejected invalid event type ${JSON.stringify(type)}`)
@@ -93,6 +95,15 @@ export class TuiRendererRuntime extends Service {
     }
     if (this.renderers.has(normalized)) {
       this.ctx.logger.warn(`dsh-tui: tuiRenderers.register rejected "${normalized}" — already registered`)
+      this.ctx.get('tuiEffectLedger')?.record(
+        {
+          operation: 'create',
+          resource: { kind: 'renderer', id: normalized },
+          result: 'failed',
+          errorCode: 'DUPLICATE_CONTRIBUTION_ID',
+        },
+        identity,
+      )
       return () => {}
     }
     if (typeof renderer !== 'function') {
@@ -100,8 +111,17 @@ export class TuiRendererRuntime extends Service {
       return () => {}
     }
     this.renderers.set(normalized, renderer)
+    this.ctx.get('tuiEffectLedger')?.record(
+      { operation: 'create', resource: { kind: 'renderer', id: normalized }, result: 'applied' },
+      identity,
+    )
     return () => {
-      if (this.renderers.get(normalized) === renderer) this.renderers.delete(normalized)
+      if (this.renderers.get(normalized) !== renderer) return
+      this.renderers.delete(normalized)
+      this.ctx.get('tuiEffectLedger')?.record(
+        { operation: 'release', resource: { kind: 'renderer', id: normalized }, result: 'applied' },
+        identity,
+      )
     }
   }
 
