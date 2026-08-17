@@ -27,6 +27,10 @@ the interface, and removing it leaves no core modifications behind.
 > [Architecture and limitations](docs/architecture.en.md) before relying on its
 > permission model or terminal-specific behavior.
 
+<p align="center">
+  <a href="https://dshfind.com/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=en" alt="dsh-TUI on dshfind"></a>
+</p>
+
 ## Highlights
 
 - **Terminal-native interaction**: streaming Markdown, structured tool cards,
