@@ -4276,11 +4276,12 @@ function usageOutputTokens(usage: unknown): number | undefined {
 }
 
 /**
- * Recursive `@` file listing through the leaf's fs service (dsh-fs-local):
- * walks up to MAX_DEPTH levels below `root`, skipping VCS/dependency dirs,
- * returning relative paths (directories with a trailing `/`, matching the
- * FileSuggestions tag logic) capped at MAX_FILES entries. Best-effort —
- * unreadable subtrees are skipped, not fatal.
+ * `@` file listing through the leaf's fs service (dsh-fs-local): skips
+ * VCS/dependency/build dirs and rotates across directory listings so one
+ * large subtree cannot consume the global MAX_FILES budget. That budget also
+ * bounds directory reads without imposing an arbitrary source-tree depth.
+ * Relative directories retain the trailing `/` that FileSuggestions expects.
+ * Unreadable subtrees are skipped, not fatal.
  */
 async function listFilesDeep(
   fs: {
@@ -4297,38 +4298,58 @@ async function listFilesDeep(
 ): Promise<string[]> {
   if (!fs) return []
   const out: string[] = []
-  const SKIP = new Set(['node_modules', '.git', '.hg', '.svn', '.DS_Store', 'dist', 'build'])
-  const MAX_DEPTH = 3
+  const SKIP = new Set(['node_modules', '.git', '.hg', '.svn', '.DS_Store', 'dist'])
+  const BUILD_DIR = /^(?:build(?:[-_].*)?|cmake-build(?:[-_].*)?)$/i
   const MAX_FILES = 100
 
-  const walk = async (dir: string, prefix: string, depth: number): Promise<void> => {
-    if (depth > MAX_DEPTH || out.length >= MAX_FILES) return
-    let entries: Array<{
-      name: string
-      type: 'file' | 'directory' | 'other'
-      target: { displayPath: string }
-    }> = []
-    try {
-      const target = await fs.resolve(dir)
-      entries = await fs.listDir(target)
-    } catch {
-      return // unreadable subtree — skip
-    }
-    for (const entry of entries) {
-      if (out.length >= MAX_FILES) return
-      if (SKIP.has(entry.name)) continue
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
-      if (entry.type === 'directory') {
-        out.push(`${rel}/`)
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: symlink targets optional
-        await walk(entry.target?.displayPath ?? join(dir, entry.name), rel, depth + 1)
-      } else if (entry.type === 'file') {
-        out.push(rel)
+  type Entry = {
+    name: string
+    type: 'file' | 'directory' | 'other'
+    target: { displayPath: string }
+  }
+  type Directory = {
+    dir: string
+    prefix: string
+    entries?: Entry[]
+    index: number
+  }
+  const directories: Directory[] = [{ dir: root, prefix: '', index: 0 }]
+
+  while (directories.length > 0 && out.length < MAX_FILES) {
+    const current = directories.shift()
+    if (!current) continue
+    if (!current.entries) {
+      try {
+        const target = await fs.resolve(current.dir)
+        current.entries = await fs.listDir(target)
+      } catch {
+        continue // unreadable subtree — skip
       }
     }
-  }
 
-  await walk(root, '', 1)
+    let entry: Entry | undefined
+    while (current.index < current.entries.length) {
+      const candidate = current.entries[current.index++]
+      if (SKIP.has(candidate.name) || BUILD_DIR.test(candidate.name)) continue
+      entry = candidate
+      break
+    }
+    if (!entry) continue
+    if (current.index < current.entries.length) directories.push(current)
+
+    const rel = current.prefix ? `${current.prefix}/${entry.name}` : entry.name
+    if (entry.type === 'directory') {
+      out.push(`${rel}/`)
+      directories.push({
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: symlink targets optional
+        dir: entry.target?.displayPath ?? join(current.dir, entry.name),
+        prefix: rel,
+        index: 0,
+      })
+    } else if (entry.type === 'file') {
+      out.push(rel)
+    }
+  }
   return out
 }
 
