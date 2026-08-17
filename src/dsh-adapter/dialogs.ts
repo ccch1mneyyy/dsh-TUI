@@ -20,7 +20,7 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import { stringWidth } from '../ink/stringWidth.js'
+import { cleanScalarText } from './sanitize.js'
 
 /** Option of a select dialog. `id` is what the promise resolves with. */
 export interface TuiDialogSelectOption {
@@ -99,19 +99,11 @@ interface PendingDialog {
  *  only, which would strip kind-specific fields from the ask() input. */
 type WithoutKey<T> = T extends unknown ? Omit<T, 'key'> : never
 
-/** Render-path strings are untrusted: strip C0/C1 control chars, collapse
- *  whitespace, cap width. Width is terminal CELLS, not string.length. */
-function cleanText(value: string, maxCells: number): string {
-  // eslint-disable-next-line no-control-regex -- deliberate: sanitize untrusted render-path text
-  const flat = value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
-  if (stringWidth(flat) <= maxCells) return flat
-  let out = ''
-  for (const ch of flat) {
-    if (stringWidth(out + ch) > maxCells - 1) break
-    out += ch
-  }
-  return `${out}…`
-}
+/** Render-path strings are untrusted: sanitization (control-char stripping,
+ *  cell-width caps, scalar-only coercion) lives in ./sanitize.js — the one
+ *  implementation of the Track A contract. `clean` drops non-scalars to ''
+ *  so callers take their refuse path instead of rendering "[object Object]". */
+const clean = cleanScalarText
 
 const TITLE_CELLS = 120
 const LABEL_CELLS = 120
@@ -254,18 +246,16 @@ export class TuiDialogRuntime extends Service {
 
   /** Pick one of `options`; resolves the option id, or undefined on cancel. */
   select(request: TuiDialogSelectRequest): Promise<string | undefined> {
-    const title = cleanText(String(request?.title ?? ''), TITLE_CELLS)
+    const title = clean(request?.title, TITLE_CELLS)
     const rawOptions = Array.isArray(request?.options) ? request.options : []
     const options: TuiDialogSelectOption[] = []
     for (const raw of rawOptions.slice(0, MAX_OPTIONS)) {
-      const id = cleanText(String(raw?.id ?? ''), LABEL_CELLS)
-      const label = cleanText(String(raw?.label ?? ''), LABEL_CELLS)
+      const id = clean(raw?.id, LABEL_CELLS)
+      const label = clean(raw?.label, LABEL_CELLS)
       if (!id || !label) continue
-      const description =
-        raw?.description === undefined
-          ? undefined
-          : cleanText(String(raw.description), MESSAGE_CELLS)
-      options.push({ id, label, ...(description === undefined ? {} : { description }) })
+      // '' (absent, blank, or a dropped non-scalar) means no description row.
+      const description = clean(raw?.description, MESSAGE_CELLS)
+      options.push({ id, label, ...(description === '' ? {} : { description }) })
     }
     if (!title || options.length === 0) {
       this.ctx.logger.warn('dsh-tui: tuiDialogs.select called without a title or options; cancelled')
@@ -278,21 +268,20 @@ export class TuiDialogRuntime extends Service {
 
   /** Yes/no question; resolves the boolean, false on cancel. */
   confirm(request: TuiDialogConfirmRequest): Promise<boolean> {
-    const title = cleanText(String(request?.title ?? ''), TITLE_CELLS)
+    const title = clean(request?.title, TITLE_CELLS)
     if (!title) {
       this.ctx.logger.warn('dsh-tui: tuiDialogs.confirm called without a title; cancelled')
       return Promise.resolve(false)
     }
-    const message =
-      request.message === undefined ? undefined : cleanText(String(request.message), MESSAGE_CELLS)
-    const confirmLabel = cleanText(String(request.confirmLabel ?? ''), LABEL_CELLS)
-    const cancelLabel = cleanText(String(request.cancelLabel ?? ''), LABEL_CELLS)
+    const message = clean(request?.message, MESSAGE_CELLS)
+    const confirmLabel = clean(request?.confirmLabel, LABEL_CELLS)
+    const cancelLabel = clean(request?.cancelLabel, LABEL_CELLS)
     return this.store
       .ask(
         {
           kind: 'confirm',
           title,
-          ...(message === undefined ? {} : { message }),
+          ...(message === '' ? {} : { message }),
           confirmLabel,
           cancelLabel,
         },
@@ -304,19 +293,16 @@ export class TuiDialogRuntime extends Service {
 
   /** Free-text input; resolves the text, or undefined on cancel. */
   input(request: TuiDialogInputRequest): Promise<string | undefined> {
-    const title = cleanText(String(request?.title ?? ''), TITLE_CELLS)
+    const title = clean(request?.title, TITLE_CELLS)
     if (!title) {
       this.ctx.logger.warn('dsh-tui: tuiDialogs.input called without a title; cancelled')
       return Promise.resolve(undefined)
     }
-    const placeholder =
-      request.placeholder === undefined
-        ? undefined
-        : cleanText(String(request.placeholder), LABEL_CELLS)
-    const initial = cleanText(String(request.initial ?? ''), INPUT_CELLS)
+    const placeholder = clean(request?.placeholder, LABEL_CELLS)
+    const initial = clean(request?.initial, INPUT_CELLS)
     return this.store
       .ask(
-        { kind: 'input', title, ...(placeholder === undefined ? {} : { placeholder }), initial },
+        { kind: 'input', title, ...(placeholder === '' ? {} : { placeholder }), initial },
         request.signal,
         request.timeoutMs,
       )

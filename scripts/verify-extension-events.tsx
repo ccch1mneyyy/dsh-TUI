@@ -232,6 +232,37 @@ await sleep(800)
   dispose()
 }
 
+// ── 2b. decision text sanitization + parked-state indicator (RFC 0005 D-8) ─
+{
+  // A veto reason is toast-bound plugin text: control chars are stripped
+  // before it reaches the notification queue.
+  const dispose = ctx.on('tui/input', event =>
+    event.text === '消毒检查' ? { cancel: true, reason: '拦截\x1b[31m\x07原因' } : undefined)
+  channel.submit('消毒检查')
+  await sleep(300)
+  check('tui/input cancel: reason sanitized before toasting',
+    notified('拦截 [31m 原因')
+    && !(channel as unknown as { notifications: readonly { text: string }[] }).notifications
+      .some(item => item.text.includes('\x1b')))
+  dispose()
+
+  // D-8: a decision still pending past 400ms surfaces a parked indicator.
+  // The listener resolves at ~600ms — deterministically beyond the threshold.
+  const disposeSlow = ctx.on('tui/input', async event => {
+    if (event.text !== '慢决定') return undefined
+    await sleep(600)
+    return { cancel: true, reason: '慢否决落地' } as const
+  })
+  channel.submit('慢决定')
+  await sleep(550)
+  check('pending decision: parked indicator toasted past 400ms',
+    notified('正在等待插件决定（tui/input）'))
+  await sleep(400)
+  check('pending decision: the slow veto still lands',
+    notified('慢否决落地') && !captured.followupTexts.some(text => text.includes('慢决定')))
+  disposeSlow()
+}
+
 // ── 3. tui/input crash isolation ────────────────────────────────────────
 {
   const dispose = ctx.on('tui/input', () => {

@@ -9,7 +9,7 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import { stringWidth } from '../ink/stringWidth.js'
+import { cleanScalarText } from './sanitize.js'
 
 /** One rendered contribution. */
 export interface TuiStatusEntry {
@@ -143,18 +143,14 @@ export class TuiStatusRuntime extends Service {
     }
     let cleaned: string | undefined
     if (text !== undefined) {
-      // eslint-disable-next-line no-control-regex -- deliberate: sanitize untrusted render-path text
-      const flat = String(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
-      if (stringWidth(flat) > TEXT_CELLS) {
-        cleaned = ''
-        for (const ch of flat) {
-          if (stringWidth(cleaned + ch) > TEXT_CELLS - 1) break
-          cleaned += ch
-        }
-        cleaned = `${cleaned}…`
-      } else {
-        cleaned = flat
+      // Scalar-only coercion (Track A contract): a non-scalar text (an
+      // object would otherwise render as "[object Object]") is REFUSED with
+      // a warning — it must not silently become a clear, either.
+      if (typeof text !== 'string' && typeof text !== 'number' && typeof text !== 'boolean') {
+        this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected non-scalar text for "${normalized}"`)
+        return noop
       }
+      cleaned = cleanScalarText(text, TEXT_CELLS)
     }
     const token = this.nextToken++
     this.store.set(normalized, cleaned, token)

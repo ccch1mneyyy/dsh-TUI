@@ -21,6 +21,7 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import { cleanScalarText } from './sanitize.js'
 
 /** Minimal shape of the ink Key flags the matcher reads (kept structurally
  *  compatible with `Key` from the ui kit without importing React-facing
@@ -252,11 +253,12 @@ export class TuiShortcutRuntime extends Service {
       this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${combo}" — already registered`)
       return () => {}
     }
-    if (typeof options?.handler !== 'function' || typeof options?.description !== 'string' || options.description.trim() === '') {
+    const description = cleanScalarText(options?.description, 120)
+    if (typeof options?.handler !== 'function' || description === '') {
       this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${combo}" — needs a description and a handler`)
       return () => {}
     }
-    const entry: RegisteredShortcut = { combo: parsed, description: options.description.trim(), handler: options.handler }
+    const entry: RegisteredShortcut = { combo: parsed, description, handler: options.handler }
     this.shortcuts.set(key, entry)
     return (): void => {
       if (this.shortcuts.get(key) === entry) this.shortcuts.delete(key)

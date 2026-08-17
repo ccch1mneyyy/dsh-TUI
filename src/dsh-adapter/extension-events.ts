@@ -19,6 +19,11 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { cleanScalarText } from './sanitize.js'
+
+/** Toast-bound plugin text (veto reasons) is render-path data: sanitized
+ *  with the one shared implementation, capped at toast width. */
+const NOTICE_CELLS = 200
 
 /**
  * Dispatch a decision event listener-by-listener in registration order.
@@ -89,15 +94,17 @@ export async function dispatchTuiDecision<T>(
 }
 
 /** Shared normalizer for the veto-only decisions (session-switch, compact):
- *  `{ cancel: true, reason? }` or no opinion; everything else is ignored. */
+ *  `{ cancel: true, reason? }` or no opinion; everything else is ignored.
+ *  The reason is toast-bound plugin text — sanitized (a veto must not
+ *  smuggle control sequences onto the screen). */
 export function normalizeCancelDecision(
   result: unknown,
   warn: (what: string) => void,
 ): { cancel: true; reason?: string } | undefined {
   if (result === undefined || result === null || result === false) return undefined
   if (typeof result === 'object' && (result as { cancel?: unknown }).cancel === true) {
-    const reason = (result as { reason?: unknown }).reason
-    return { cancel: true, ...(typeof reason === 'string' && reason !== '' ? { reason } : {}) }
+    const reason = cleanScalarText((result as { reason?: unknown }).reason, NOTICE_CELLS)
+    return { cancel: true, ...(reason === '' ? {} : { reason }) }
   }
   warn('an unrecognized decision shape')
   return undefined

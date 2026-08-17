@@ -201,6 +201,12 @@ await sleep(100)
   check('tuiDialogs.input: no title → cancelled',
     (await ctx.tuiDialogs.input({ title: '   ' })) === undefined)
 
+  // Scalar-only coercion: a non-scalar title is REFUSED (warn + cancelled),
+  // never coerced to "[object Object]" onto the screen.
+  check('tuiDialogs.confirm: object title refused, not coerced',
+    (await ctx.tuiDialogs.confirm({ title: { nope: true } as unknown as string })) === false
+    && warnCount('tuiDialogs.confirm called without a title') === 2)
+
   // Sanitization: control chars stripped, malformed options dropped.
   const pending = ctx.tuiDialogs.select({
     title: '带\x07铃声\n的标题',
@@ -225,6 +231,17 @@ await sleep(100)
   ctx.tuiStatus.set('demo', '构建\x1b[31m中')
   check('tuiStatus: control chars stripped',
     ctx.tuiStatus.store.getSnapshot()[0]?.text === '构建 [31m中', JSON.stringify(ctx.tuiStatus.store.getSnapshot()[0]?.text))
+  // Scalar-only coercion: a non-scalar text is refused with a warn — never
+  // rendered as "[object Object]", and NOT treated as a clear either.
+  ctx.tuiStatus.set('scalar', { nope: true } as unknown as string)
+  check('tuiStatus: non-scalar text refused + warn',
+    !ctx.tuiStatus.store.getSnapshot().some(e => e.key === 'scalar')
+    && warnCount('tuiStatus.set rejected non-scalar text') === 1)
+  // …but a number/boolean coerces (genuine scalars, not objects).
+  ctx.tuiStatus.set('scalar', 42 as unknown as string)
+  check('tuiStatus: numeric text coerces',
+    ctx.tuiStatus.store.getSnapshot().find(e => e.key === 'scalar')?.text === '42')
+  ctx.tuiStatus.set('scalar', undefined)
   // Beyond MAX_ENTRIES (20): the 21st NEW key is refused.
   for (let i = 0; i < 19; i++) ctx.tuiStatus.set(`plug-${String(i).padStart(2, '0')}`, 'x')
   ctx.tuiStatus.set('one-too-many', 'x')

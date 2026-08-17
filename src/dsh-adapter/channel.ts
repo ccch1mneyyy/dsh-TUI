@@ -58,7 +58,7 @@ import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
 import type { TuiRendererRuntime } from './renderers.js'
 import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events.js'
-import { stringWidth } from '../ink/stringWidth.js'
+import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
   TuiInputDecision,
   TuiRewindMode,
@@ -79,10 +79,12 @@ function normalizeInputDecision(
   }
   const record = result as Record<string, unknown>
   if (record.cancel === true) {
-    return { cancel: true, ...(typeof record.reason === 'string' && record.reason !== '' ? { reason: record.reason } : {}) }
+    const reason = cleanScalarText(record.reason, NOTICE_CELLS)
+    return { cancel: true, ...(reason === '' ? {} : { reason }) }
   }
   if (record.handled === true) {
-    return { handled: true, ...(typeof record.notice === 'string' && record.notice !== '' ? { notice: record.notice } : {}) }
+    const notice = cleanScalarText(record.notice, NOTICE_CELLS)
+    return { handled: true, ...(notice === '' ? {} : { notice }) }
   }
   if (typeof record.text === 'string') {
     if (record.text.trim() === '') {
@@ -95,24 +97,12 @@ function normalizeInputDecision(
   return undefined
 }
 
-/** Strip C0/C1 control chars, collapse whitespace, cap width in cells —
- *  for plugin-supplied strings bound for the render path (rewind modes). */
-function cleanRenderText(value: string, maxCells: number): string {
-  // eslint-disable-next-line no-control-regex -- deliberate: sanitize untrusted render-path text
-  const flat = value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
-  if (stringWidth(flat) <= maxCells) return flat
-  let out = ''
-  for (const ch of flat) {
-    if (stringWidth(out + ch) > maxCells - 1) break
-    out += ch
-  }
-  return `${out}…`
-}
-
 /** `tui/rewind-prompt` return normalization: cancel/modes or no opinion.
  *  Modes are COPIED with only validated, sanitized scalar fields — the raw
  *  plugin object must never reach the render path (a `description: {}` would
- *  crash ListItem's `.replace`, and control chars would corrupt the pane). */
+ *  crash ListItem's `.replace`, and control chars would corrupt the pane).
+ *  Notices/reasons are toast-bound plugin text: sanitized too (see
+ *  ./sanitize.js — the one implementation of the render-path contract). */
 function normalizeRewindPromptDecision(
   result: unknown,
   warn: (what: string) => void,
@@ -124,7 +114,8 @@ function normalizeRewindPromptDecision(
   }
   const record = result as Record<string, unknown>
   if (record.cancel === true) {
-    return { cancel: true, ...(typeof record.reason === 'string' && record.reason !== '' ? { reason: record.reason } : {}) }
+    const reason = cleanScalarText(record.reason, NOTICE_CELLS)
+    return { cancel: true, ...(reason === '' ? {} : { reason }) }
   }
   if (Array.isArray(record.modes)) {
     const modes: TuiRewindMode[] = []
@@ -151,11 +142,18 @@ function normalizeRewindPromptDecision(
   return undefined
 }
 
+/** Toast-bound plugin text (veto reasons, handled notices, rewind summaries)
+ *  is render-path data too: same sanitization, toast-width cap. */
+const NOTICE_CELLS = 200
+
 /** `tui/rewind-done` return normalization: the first non-empty STRING is the
  *  summary; anything else is not a decision. */
 function normalizeRewindDoneSummary(result: unknown, warn: (what: string) => void): string | undefined {
   if (result === undefined || result === null || result === false) return undefined
-  if (typeof result === 'string') return result === '' ? undefined : result
+  if (typeof result === 'string') {
+    const summary = cleanRenderText(result, NOTICE_CELLS)
+    return summary === '' ? undefined : summary
+  }
   warn('a non-string summary')
   return undefined
 }
@@ -1338,6 +1336,20 @@ export function createChannel(
     })
   }
   /**
+   * RFC 0005 D-8: a flow parked on a plugin decision must be user-observable.
+   * Decisions normally resolve in milliseconds, so the notice only fires
+   * once the wait crosses a threshold — a slow plugin (e.g. one showing a
+   * managed dialog) then explains the pause instead of looking like the TUI
+   * ate the input.
+   */
+  const DECISION_PENDING_MS = 400
+  const withDecisionPending = <T>(name: string, pending: Promise<T>): Promise<T> => {
+    const timer = setTimeout(() => {
+      state.notify(t('ext-decision-pending', { event: name }), { timeoutMs: 4000 })
+    }, DECISION_PENDING_MS)
+    return pending.finally(() => clearTimeout(timer))
+  }
+  /**
    * The `tui/input` decision event (pi's `input` seam): the FIRST plugin
    * returning a valid decision wins — transform the text, mark it handled,
    * or cancel it. No listeners (or only crashing/malformed ones) means
@@ -1358,12 +1370,12 @@ export function createChannel(
     // are reusable (A → /new → /resume A lands back on the same id with a
     // fresh agent), so an id check has an ABA hole.
     const originAgent = agent
-    const decision = await dispatchTuiDecision(ctx, 'tui/input', {
+    const decision = await withDecisionPending('tui/input', dispatchTuiDecision(ctx, 'tui/input', {
       text,
       delivery: placement === 'steer' ? 'steer' : 'followup',
       sessionId: originAgentId,
       cwd: state.cwd,
-    }, normalizeInputDecision)
+    }, normalizeInputDecision))
     if (decision !== undefined) {
       if ('cancel' in decision) {
         if (decision.reason !== undefined) {
@@ -1392,12 +1404,12 @@ export function createChannel(
    * the reason is toasted here so the fallback string stays host-localized.
    */
   const sessionSwitchVetoed = async (kind: 'new' | 'resume', targetSessionId?: string): Promise<boolean> => {
-    const decision = await dispatchTuiDecision(ctx, 'tui/session-switch', {
+    const decision = await withDecisionPending('tui/session-switch', dispatchTuiDecision(ctx, 'tui/session-switch', {
       kind,
       ...(targetSessionId === undefined ? {} : { targetSessionId }),
       sessionId: state.agentId,
       cwd: state.cwd,
-    }, normalizeCancelDecision)
+    }, normalizeCancelDecision))
     if (decision !== undefined) {
       state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
       return true
@@ -1901,12 +1913,12 @@ export function createChannel(
      */
     async promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null> {
       if (row.seq === undefined) return null
-      const decision = await dispatchTuiDecision(ctx, 'tui/rewind-prompt', {
+      const decision = await withDecisionPending('tui/rewind-prompt', dispatchTuiDecision(ctx, 'tui/rewind-prompt', {
         text: row.text,
         seq: row.seq,
         sessionId: state.agentId,
         cwd: state.cwd,
-      }, normalizeRewindPromptDecision)
+      }, normalizeRewindPromptDecision))
       if (decision === undefined) return null
       if ('cancel' in decision) {
         state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
@@ -3035,10 +3047,10 @@ export function createChannel(
       // agent to the OLD scope's compaction service.
       const originAgent = agent
       void (async () => {
-        const decision = await dispatchTuiDecision(ctx, 'tui/compact', {
+        const decision = await withDecisionPending('tui/compact', dispatchTuiDecision(ctx, 'tui/compact', {
           sessionId: originAgentId,
           cwd: state.cwd,
-        }, normalizeCancelDecision)
+        }, normalizeCancelDecision))
         if (decision !== undefined) {
           state.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
           return

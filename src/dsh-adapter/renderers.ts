@@ -24,7 +24,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
-import { stringWidth } from '../ink/stringWidth.js'
+import { cleanRenderText } from './sanitize.js'
 
 /** What a renderer returns: an optional title row plus body lines. */
 export interface TuiEntryRenderResult {
@@ -51,23 +51,10 @@ const BUILTIN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set(KNOWN_SESSION_E
 
 /** Output bounds (render-path hygiene): a renderer runs on the REPLAY path
  *  too, where an unbounded result would synchronously create thousands of
- *  transcript rows. */
+ *  transcript rows. Sanitization itself lives in ./sanitize.js. */
 const MAX_RENDER_LINES = 100
 const TITLE_CELLS = 120
 const LINE_CELLS = 400
-
-/** Strip C0/C1 control chars, collapse whitespace, cap width in cells. */
-function cleanLine(value: string, maxCells: number): string {
-  // eslint-disable-next-line no-control-regex -- deliberate: sanitize untrusted render-path text
-  const flat = value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
-  if (stringWidth(flat) <= maxCells) return flat
-  let out = ''
-  for (const ch of flat) {
-    if (stringWidth(out + ch) > maxCells - 1) break
-    out += ch
-  }
-  return `${out}…`
-}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -141,9 +128,9 @@ export class TuiRendererRuntime extends Service {
       for (const line of raw.lines) {
         if (lines.length >= MAX_RENDER_LINES) break
         if (typeof line !== 'string' && typeof line !== 'number' && typeof line !== 'boolean') continue
-        lines.push(cleanLine(String(line), LINE_CELLS))
+        lines.push(cleanRenderText(String(line), LINE_CELLS))
       }
-      const title = typeof raw.title === 'string' ? cleanLine(raw.title, TITLE_CELLS) : undefined
+      const title = typeof raw.title === 'string' ? cleanRenderText(raw.title, TITLE_CELLS) : undefined
       return { ...(title === undefined || title === '' ? {} : { title }), lines }
     } catch (error) {
       if (!this.failedTypes.has(type)) {

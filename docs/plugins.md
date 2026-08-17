@@ -102,9 +102,14 @@ profile 可能还没有这一行，探测不到就静默降级（#183 原则）�
 - **本地优先**：插件永远遮蔽不了内建——快捷键保留位、内建事件类型、内建
   命令全都先于插件生效；冲突注册被拒绝并告警，不抛错。
 - **渲染路径字符串按不可信输入处理**：宿主统一剥离 C0/C1 控制字符、折叠
-  空白、按 terminal cell（不是 `string.length`）截断。
+  空白、按 terminal cell（不是 `string.length`）截断。只接受标量——
+  string/number/boolean 会被强制为字符串，对象/数组等非标量**直接丢弃或
+  拒绝**（绝不变成 `"[object Object]"` 出现在屏幕上）。决策事件的
+  reason/notice/summary 等 toast 文本走同一套消毒。实现只有一个：
+  `src/dsh-adapter/sanitize.ts`，所有接缝共用。
 - **插件崩溃不拖垮 TUI**：监听器/处理器抛错被宿主捕获、告警、按"无意见"
-  或"跳过该条目"处理。
+  或"跳过该条目"处理。决策事件等待超过约 400ms 会 toast 一个"正在等待
+  插件决定"的驻留指示（RFC 0005 D-8），慢插件不会让界面看起来像死了。
 
 ## 接缝一：会话事件（dsh-TUI 原生消费）
 
@@ -436,7 +441,9 @@ pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交�
 
 公共语义：
 
-- `cancel.reason` / `handled.notice` 以 toast 呈现；缺省时宿主给本地化兜底文案。
+- `cancel.reason` / `handled.notice` / `tui/rewind-done` 的 summary 以 toast
+  呈现；缺省时宿主给本地化兜底文案。这些文本同样按不可信输入消毒（控制
+  字符剥离、≤200 cell）。
 - `tui/input` 的 `{ text }` 会被 trim；trim 后为空按"无意见"处理。改写只在
   **投递前**生效，等待期间如果用户切了会话，这条过期输入会被丢弃并提示
   （stale-drop），绝不会把旧会话的话发进新会话。
@@ -532,7 +539,8 @@ status?.set('my-plugin', undefined)      // 主动清除（传 '' 同效）
 ```
 
 - key 规则：`/^[a-z][a-z0-9_-]*$/`（约定用插件名或 `插件:子项`）；最多 20
-  个 key，文本 ≤200 cell；违规拒绝并告警，不抛错。
+  个 key，文本 ≤200 cell；违规拒绝并告警，不抛错。文本只接受标量
+  （string/number/boolean 强制为字符串），非标量**拒绝**而非清除。
 - **生命周期是调用者的责任**（与 tuiShortcuts/tuiScenes 同一契约）：
   `set` 返回的 disposer 只会在 key 仍持有该文本时清除（后被覆盖的值不受
   旧 disposer 影响）；不用 `ctx.effect` 挂清理的话，插件卸载/热重载后旧

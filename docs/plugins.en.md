@@ -115,9 +115,17 @@ Standing discipline for the whole extension surface (not repeated per seam):
   conflicting registrations are refused with a warning, never a throw.
 - **Render-path strings are untrusted input**: the host strips C0/C1 control
   characters, collapses whitespace, and truncates by terminal CELL (never
-  `string.length`).
+  `string.length`). Scalars only — string/number/boolean values are coerced
+  to strings; objects/arrays and other non-scalars are **dropped or refused**
+  (they never appear on screen as `"[object Object]"`). Decision-event
+  reason/notice/summary toasts go through the same sanitization. There is
+  exactly one implementation — `src/dsh-adapter/sanitize.ts` — shared by
+  every seam.
 - **A crashing plugin never takes the TUI down**: listener/handler exceptions
-  are caught, logged, and treated as "no opinion" or "skip this entry".
+  are caught, logged, and treated as "no opinion" or "skip this entry". A
+  decision event still pending after ~400ms surfaces a "waiting for a plugin
+  decision" parked indicator (RFC 0005 D-8), so a slow plugin never makes the
+  UI look dead.
 
 ## Seam 1: Session Events (consumed natively by dsh-TUI)
 
@@ -499,8 +507,9 @@ are **parallel**: after-the-fact broadcasts with no decision power.
 
 Shared semantics:
 
-- `cancel.reason` / `handled.notice` are toasted; the host supplies a
-  localized fallback when absent.
+- `cancel.reason` / `handled.notice` / the `tui/rewind-done` summary are
+  toasted; the host supplies a localized fallback when absent. These texts are
+  sanitized as untrusted input too (control chars stripped, ≤200 cells).
 - A `{ text }` rewrite is trimmed; an empty result counts as "no opinion".
   The rewrite applies only BEFORE delivery — if the user switched sessions
   mid-await, the stale input is dropped with a notice (stale-drop) instead of
@@ -607,7 +616,9 @@ status?.set('my-plugin', undefined)        // clear explicitly ('' works too)
 
 - Key rule: `/^[a-z][a-z0-9_-]*$/` (convention: the plugin name, or
   `plugin:sub-item`); at most 20 keys, text ≤200 cells; violations are
-  refused with a warning, never a throw.
+  refused with a warning, never a throw. Text is scalar-only
+  (string/number/boolean coerced to string); a non-scalar is **refused**,
+  not treated as a clear.
 - **Lifecycle is the caller's responsibility** (same contract as
   tuiShortcuts/tuiScenes): the disposer returned by `set` clears the key only
   while it still holds exactly that text (a later set is unaffected by a
