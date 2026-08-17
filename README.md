@@ -82,6 +82,14 @@ sh install.sh
 
 `dsh-tui --resume` 恢复上次会话；Windows 也可用仓库里的 `dsh-tui.cmd`（等价）。
 
+### Herdr
+
+在 [Herdr](https://herdr.dev) pane 中直接运行 `dsh-tui` 即可，无需额外配置。
+dsh-TUI 会通过 Herdr 提供的本地接口上报 `idle`、`working`、`blocked` 状态；
+问卷或工具审批出现时标记为 `blocked`。离开 Herdr 运行时该集成完全不启用。
+Herdr 的 `agent start --kind dsh-tui`、session 身份与服务重启后自动恢复仍需 Herdr
+上游加入原生 agent kind；当前可正常保活、重连和观察手工启动的 pane。
+
 在 VS Code 中运行的完整指南（内置终端直接使用 + companion 扩展
 `dsh-tui-vscode`——**真实集成终端承载、体验与 Claude Code 官方扩展几乎一致、
 已上架 VS Code Marketplace**）见
