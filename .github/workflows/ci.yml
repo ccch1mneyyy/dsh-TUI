@@ -303,6 +303,11 @@ jobs:
       # scrollback 零增量、动效帧只含 SGR。
       - run: node --import tsx/esm scripts/verify-trace-scene.tsx
 
+      # 子代理会话视图回归（issue #223）：真实 Chat + xterm 驱动
+      # /agents 列表、结构化状态、Enter 进入只读 transcript、两级 Esc
+      # 返回，并覆盖完整/运行中/空/诊断/服务缺失场景。
+      - run: node --import tsx/esm scripts/verify-subagent-session-view.tsx
+
       # 缩放重排回归（实机反馈：打开长会话后最大化窗口）：判据是终局等价
       # ——缩放后的物理终端必须等于在新尺寸上全新渲染的同一状态。缩放会让
       # 树内每个测量所依据的宽度失效，而没有任何节点被标脏，文本节点会沿用
