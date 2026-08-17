@@ -198,6 +198,15 @@
     - id: dsh-tui-scenes
       name: '@deepseek-harness-tui/dsh-tui/scenes'
 
+    # Plugin-interop anchor (Community Consensus v0.15): the unified grant
+    # store, runtime generation id, and Host Descriptor live here; later
+    # contract surfaces (plugin storage, message observation, effect
+    # ledger) mount off THIS row's apply, so the patch surface changes only
+    # once for the whole alignment. Mounted ahead of the extensions row and
+    # any third-party plugin row.
+    - id: dsh-tui-plugin-host
+      name: '@deepseek-harness-tui/dsh-tui/plugin-host'
+
     # Plugin-facing UI seams (the pi-style extension surface): managed
     # dialogs (select/confirm/input), keyed status-line contributions,
     # keyboard shortcuts, and custom session-entry text renderers. The

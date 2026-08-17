@@ -115,10 +115,35 @@ plugin simply does not get contract capabilities inside the TUI. The trust
 model is trusted-in-process (C-070): grants are a behavioral constraint, not
 a security boundary.
 
-Current alignment status: the validation/negotiation library and vendored
-data are in place; the unified grant store, Host Descriptor construction, the
+Current alignment status: the validation/negotiation library, vendored data,
+the unified grant store, and Host Descriptor construction are in place; the
 `storage.local` / `messages.observe` contract surfaces, the effect ledger,
 and the `/plugins` diagnostic command follow in later batches.
+
+The grant store (`~/.dsh-tui/extension-grants.json`) answers for all 8
+registered permissions with defaults driven by the vendored permission
+registry (7 default deny; `commands.invoke` defaults allow — a plugin cannot
+read anything passively with it alone). The `grants` section explicitly
+grants deny-default permissions; the optional `denies` section revokes
+allow-default ones; unregistered permission names are always denied (even if
+explicitly granted in the file); an unparseable file denies everything,
+including allow-default permissions (fail closed):
+
+```json
+{
+  "grants": { "my-guard": ["session.input.intercept"] },
+  "denies": { "noisy": ["commands.invoke"] }
+}
+```
+
+The `dsh-tui-plugin-host` row (already in cordis.patch.yml, ahead of the
+extensions row) provides `ctx.tuiPluginHost`: the runtime generationId
+(C-050, one UUID per activation), the unified grant store instance, Host
+Descriptor construction (advertising only contracts the running code
+actually provides; a drifted vendored contract file is dropped fail-closed
+with a warning), and the registry self-check. Consumers always soft-probe
+with `ctx.get('tuiPluginHost', false)` (#183 discipline); the service never
+enters any inject list.
 
 ## Seam Overview
 
@@ -578,7 +603,11 @@ Shared semantics:
   wins — so even a stale bundle patch missing the extensions row leaves the
   gate up: the channel installs it as the backstop and decision events never
   become allow-by-default); changing grants means editing the file and
-  restarting. A missing or corrupt file fails CLOSED (deny all).
+  restarting. A missing file falls back to the registry defaults (intercept
+  permissions default deny); an unparseable file denies everything, including
+  allow-default permissions (fail closed). The file is the unified
+  8-permission grant store (with a `denies` revocation section) — full
+  semantics in the "Community Consensus Spec" section.
 - **Ordering guarantee**: decisions and deliveries are serialized in
   submission order — a slow decision on an earlier input holds back the
   decision AND delivery of later ones, so the model always receives messages

@@ -58,7 +58,8 @@ import type { SettingsHost } from './settingsEditor.js'
 import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
 import type { TuiRendererRuntime } from './renderers.js'
 import { dispatchTuiDecision, normalizeCancelDecision } from './extension-events.js'
-import { installDecisionGuard, readExtensionGrants } from './decision-guard.js'
+import { installDecisionGuard } from './decision-guard.js'
+import { readGrantStore } from './grants.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
   TuiInputDecision,
@@ -1215,7 +1216,7 @@ export function createChannel(
   // & friends subscribable by default, silently voiding the default-deny
   // posture. Idempotent per cordis root, so the full-patch path installs
   // exactly once whichever side runs first.
-  installDecisionGuard(ctx, readExtensionGrants())
+  installDecisionGuard(ctx, readGrantStore())
   // The DSH slash-command registry (optional service): /plan, /goal and
   // friends register here; the TUI merges their descriptors into the slash
   // menu and dispatches through `execute` (which logs the paired

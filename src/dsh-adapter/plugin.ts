@@ -258,6 +258,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
     )
   }
+  // Same skew guard for the plugin-host row (dsh-tui-plugin-host): without
+  // it there is no runtime generation id, no unified grant store service,
+  // and no Host Descriptor — plugin interop surfaces degrade silently
+  // otherwise. The D-7 decision gate does NOT depend on this row (the
+  // channel installs its own), so interception gating stays intact either
+  // way — what breaks is everything that rides on tuiPluginHost.
+  if (ctx.get('tuiPluginHost') === undefined && resolveDshProfileName() !== undefined) {
+    ctx.logger.warn(
+      'dsh-tui: tuiPluginHost service is not mounted; plugin grant store, runtime generation and Host Descriptor are unavailable. ' +
+      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+    )
+  }
   const initialWorkspace = requestedWorkspace === undefined
     ? undefined
     : await workspaceService.resolve(requestedWorkspace)

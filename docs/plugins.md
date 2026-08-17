@@ -99,9 +99,30 @@ Loader）负责，**加载时强制不在本仓库**。本仓库提供的是校�
 运行时降级——不合规插件在 TUI 内拿不到契约能力。信任模型为同进程信任
 （trusted-in-process，C-070）：授权是行为约束，不是安全隔离边界。
 
-当前对齐进度：校验/协商库与 vendored 数据已落地；统一授权存储、Host
-Descriptor 构建、`storage.local` / `messages.observe` 契约面、效果台账与
-`/plugins` 诊断命令在后续批次跟进。
+当前对齐进度：校验/协商库、vendored 数据、统一授权存储与 Host
+Descriptor 构建已落地；`storage.local` / `messages.observe` 契约面、
+效果台账与 `/plugins` 诊断命令在后续批次跟进。
+
+授权存储（`~/.dsh-tui/extension-grants.json`）统一回答全部 8 个注册
+权限：默认值由 vendored 权限注册表驱动（7 个默认拒绝；
+`commands.invoke` 默认允许——插件无法仅凭它被动读取数据）。`grants`
+段显式授予默认拒绝的权限；可选 `denies` 段撤销默认允许的权限；未注册
+的权限名一律拒绝（即使文件里显式授予）；文件不可解析连默认允许的权限
+也一并拒绝（fail closed）：
+
+```json
+{
+  "grants": { "my-guard": ["session.input.intercept"] },
+  "denies": { "noisy": ["commands.invoke"] }
+}
+```
+
+`dsh-tui-plugin-host` 行（cordis.patch.yml 已带，位于 extensions 行
+之前）提供 `ctx.tuiPluginHost`：runtime generationId（C-050，每次激活
+一个 UUID）、统一授权存储实例、Host Descriptor 构建（只声明运行代码
+真实提供的契约；vendored 契约文件哈希漂移即 fail-closed 剔除并告警）
+与注册表自检。消费一律 `ctx.get('tuiPluginHost', false)` 软探测
+（#183 纪律），不进入任何 inject 列表。
 
 ## 接缝总览
 
@@ -501,7 +522,9 @@ pi 风格的 before-event：TUI 在关键动作的**执行前**把决策权交�
   文件在授权门安装时读取一次（extensions 行与 channel 都会安装，按
   cordis root 幂等、先到者生效——即使 bundle patch 过旧缺少 extensions
   行，channel 也会兜底装门，决策事件不会变成默认允许）；改授权 = 改文件
-  + 重启。损坏或缺失的文件按"全部拒绝"处理（fail closed）。
+  + 重启。文件缺失 = 按注册表默认值（拦截类默认拒绝）；文件不可解析 =
+  全部拒绝，连默认允许的权限也拒（fail closed）。该文件是统一的 8 权限
+  授权存储（另有撤销段 `denies`），完整语义见"社区互操作规范"一节。
 - **顺序保证**：决策与投递按提交顺序串行——前一条输入的慢决策会拦住
   后一条的决策与投递，模型收到的消息顺序恒等于用户提交顺序。每条输入
   在**入队时**就绑定其来源会话：即使它排在慢决策后面、等到执行时用户

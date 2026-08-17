@@ -7,16 +7,11 @@
  * actually does. So `tui/input`, `tui/rewind-prompt`, `tui/session-switch`
  * and `tui/compact` are NOT free-for-all `ctx.on` targets: the subscribing
  * plugin (identified by its cordis context name — the row's `name` export)
- * must hold the matching `domain.resource.intercept` grant in the
- * host-owned grants file `~/.dsh-tui/extension-grants.json`:
- *
- * ```json
- * {
- *   "grants": {
- *     "my-guard": ["session.input.intercept", "session.switch.intercept"]
- *   }
- * }
- * ```
+ * must hold the matching `domain.resource.intercept` grant. Grant answers
+ * come from the unified 8-permission GrantStore in ./grants.js (registry-
+ * driven defaults, `grants`/`denies` sections, corrupt fail-closed) — this
+ * module is only the subscribe-time CHECKPOINT: which event needs which
+ * permission, and the cordis bail hook that enforces it.
  *
  * A denied subscription never enters the dispatch chain — it is "as if
  * unregistered" (D-7) and the caller gets a no-op disposer plus a logger
@@ -36,10 +31,13 @@
  * the whole hook — no patching of the events service.
  */
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { DATA_DIR } from '../utils/paths.js'
+import {
+  EXTENSION_GRANTS_FILE,
+  parseGrantStore,
+  readGrantStore,
+  type GrantStore,
+} from './grants.js'
 
 /** The intercept permission each decision event requires (D-7 naming:
  *  `domain.resource.intercept`). Observe-class events (tui/rewind-done,
@@ -51,50 +49,20 @@ export const DECISION_EVENT_PERMISSIONS: Readonly<Record<string, string>> = {
   'tui/compact': 'session.compact.intercept',
 }
 
-/** The grants file consulted by {@link readExtensionGrants}. */
-export const EXTENSION_GRANTS_FILE = 'extension-grants.json'
+// ── Compatibility aliases (pre-GrantStore names) ────────────────────────────
+// The grant-file format and these entry points predate the unified store;
+// keep them working — verify batteries and any embedder code import them
+// from this module.
+export { EXTENSION_GRANTS_FILE }
 
-export interface ExtensionGrants {
-  /** True when `plugin` (cordis context name) holds `permission`. */
-  allows(plugin: string, permission: string): boolean
-}
+/** @deprecated Use GrantStore from ./grants.js (same shape, plus more). */
+export type ExtensionGrants = GrantStore
 
-/**
- * Parse the grants file; anything malformed yields a deny-all map (a
- * corrupt grants file must fail CLOSED, never open).
- * @param text - Raw file contents.
- */
-export function parseExtensionGrants(text: string): ExtensionGrants {
-  const table = new Map<string, ReadonlySet<string>>()
-  try {
-    const parsed: unknown = JSON.parse(text)
-    const grants = (parsed as { grants?: unknown } | null)?.grants
-    if (grants !== null && typeof grants === 'object' && !Array.isArray(grants)) {
-      for (const [plugin, permissions] of Object.entries(grants as Record<string, unknown>)) {
-        if (!Array.isArray(permissions)) continue
-        table.set(plugin, new Set(permissions.filter((entry): entry is string => typeof entry === 'string')))
-      }
-    }
-  } catch {
-    // Fall through with the empty (deny-all) table.
-  }
-  return {
-    allows: (plugin, permission) => table.get(plugin)?.has(permission) === true,
-  }
-}
+/** @deprecated Use parseGrantStore from ./grants.js. */
+export const parseExtensionGrants: (text: string) => GrantStore = parseGrantStore
 
-/**
- * Read `extension-grants.json` from the data dir. A missing file is an
- * empty (deny-all) map — the default posture before any grant exists.
- * @param dir - Data directory (injectable for tests).
- */
-export function readExtensionGrants(dir: string = DATA_DIR): ExtensionGrants {
-  try {
-    return parseExtensionGrants(readFileSync(join(dir, EXTENSION_GRANTS_FILE), 'utf8'))
-  } catch {
-    return parseExtensionGrants('')
-  }
-}
+/** @deprecated Use readGrantStore from ./grants.js. */
+export const readExtensionGrants: (dir?: string) => GrantStore = readGrantStore
 
 /**
  * Install the D-7 gate: every subscription to a decision event is checked
@@ -111,7 +79,7 @@ export function readExtensionGrants(dir: string = DATA_DIR): ExtensionGrants {
  */
 const guardedRoots = new WeakSet<object>()
 
-export function installDecisionGuard(ctx: Context, grants: ExtensionGrants): void {
+export function installDecisionGuard(ctx: Context, grants: GrantStore): void {
   // Degraded/fake contexts (minimal embedders, test harnesses) may lack
   // `root` or `on` entirely — the gate is best-effort there, matching the
   // channel's soft-degradation posture: no dedup bookkeeping without a root
