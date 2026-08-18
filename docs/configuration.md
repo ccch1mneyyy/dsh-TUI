@@ -57,6 +57,13 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
 
+`modes` 中声明 `plan: true` 的那一档定义了计划模式的强制边界：进入计划模式
+（`/plan`、Shift+Tab、恢复计划中会话）时，TUI 自动应用该档声明的
+`sandbox`/`approval` 原子并记住进入前的状态；计划评审批准或 `/plan off`
+退出时恢复。内置计划档为 `read-only + ask`，并叠加工具门禁（仅放行
+`exit_plan_mode`、`ask_user_question` 与只读工具），因此确认计划前不会执行
+文件修改。计划档未声明 `sandbox`/`approval` 时仍按"未声明的原子不动"处理。
+
 ## 工作状态行
 
 `dsh-working-activity` 随包安装，并由本包 patch 插入。只需要按 ID 覆盖参数：

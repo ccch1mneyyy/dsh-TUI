@@ -226,6 +226,20 @@ FIFO order. A compact Q&A summary is added to the local transcript afterward.
 
 ## Plan review
 
+Entering plan mode (`/plan`, Shift+Tab, or resuming a session already in plan
+mode) makes plan mode a hard gate like qwen-code: the TUI automatically
+applies the `sandbox`/`approval` atoms declared by the configured plan mode
+(the built-in trio is **read-only sandbox + approval ask**) and remembers the
+pre-plan sandbox and approval policy. The built-in plan entry also installs a
+monotonic tool gate that only admits `exit_plan_mode`, `ask_user_question`, and
+read-only tools (`read`/`grep`/`glob`/`web_search`, …); `write`/`edit`/`bash`/
+subagents and unknown MCP tools are rejected. The model therefore cannot
+modify files before you approve the plan; only an approved `exit_plan_mode`
+review (or `/plan off`) leaves plan mode and restores the previous permission
+state. A custom `modes` entry whose plan mode declares no
+`sandbox`/`approval` keeps the previous “undeclared atoms are not touched”
+semantics.
+
 When the model calls `exit_plan_mode` in plan mode, the full plan is rendered
 as markdown in the review panel (the dedicated decision layout for
 `intent: plan-review`):

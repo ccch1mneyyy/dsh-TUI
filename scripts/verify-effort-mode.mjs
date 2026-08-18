@@ -34,12 +34,13 @@ function check(name, ok, extra = '') {
  * and an agent whose session append both joins the log and replays through
  * the captured session/event handler (exactly what dsh-session + cordis do).
  */
-function makeEnv({ withCommands = true, withApproval = true } = {}) {
+function makeEnv({ withCommands = true, withApproval = true, withSandboxPolicy = true, withTools = true } = {}) {
   const commands = []
   const approvalPolicies = []
   const appended = []
   const handlers = new Map()
   const events = []
+  const guards = []
   const llm = {
     resolveModelInfo: async () => ({
       reasoning: {
@@ -54,10 +55,24 @@ function makeEnv({ withCommands = true, withApproval = true } = {}) {
   }
   const services = {
     llm,
+    ...(withTools
+      ? {
+          tools: {
+            guard(guard) {
+              guards.push(guard)
+              return () => {}
+            },
+          },
+        }
+      : {}),
+    ...(withSandboxPolicy
+      ? { sandboxPolicy: { defaultMode: 'workspace-write' } }
+      : {}),
     ...(withCommands
       ? {
           commands: {
             list: () => [],
+            find: (_agent, name) => (name === 'plan' ? { name: 'plan', handler() {} } : undefined),
             execute: async (agent, line, _signal) => {
               commands.push(line)
               if (line.startsWith('/plan')) {
@@ -72,7 +87,12 @@ function makeEnv({ withCommands = true, withApproval = true } = {}) {
         }
       : {}),
     ...(withApproval
-      ? { approval: { setPolicy: (agent, policy) => { approvalPolicies.push(policy); agent.session.append('approval/policy', { policy }) } } }
+      ? {
+          approval: {
+            config: { policy: 'ask' },
+            setPolicy: (agent, policy) => { approvalPolicies.push(policy); agent.session.append('approval/policy', { policy }) },
+          },
+        }
       : {}),
   }
   const ctx = {
@@ -101,7 +121,7 @@ function makeEnv({ withCommands = true, withApproval = true } = {}) {
     },
     ctx: { on: () => () => {} },
   }
-  return { ctx, agent, commands, approvalPolicies, appended, events }
+  return { ctx, agent, commands, approvalPolicies, appended, events, guards }
 }
 
 const baseOptions = {
@@ -249,6 +269,141 @@ const baseOptions = {
   check(
     'abort warned',
     channel.notifications.some(n => n.text.includes('/plan')),
+    JSON.stringify(channel.notifications.map(n => n.text)),
+  )
+}
+
+// ---- bare /plan runs the same guard as Shift+Tab ---------------------------
+{
+  const { ctx, agent, approvalPolicies, appended } = makeEnv()
+  const channel = createChannel(ctx, agent, baseOptions)
+  // Simulate a non-default pre-plan state so the restore target is visible.
+  agent.session.append('sandbox/mode', { mode: 'danger-full-access' })
+  agent.session.append('approval/policy', { policy: 'never' })
+  await channel.runExternalCommand('plan', '')
+  check(
+    'bare /plan locks sandbox read-only',
+    appended.some(e => e.type === 'sandbox/mode' && e.data.mode === 'read-only'),
+    JSON.stringify(appended.filter(e => e.type === 'sandbox/mode')),
+  )
+  check(
+    'bare /plan switches approval to ask',
+    approvalPolicies.at(-1) === 'ask',
+    JSON.stringify(approvalPolicies),
+  )
+  check('bare /plan lands mode indicator on plan', channel.mode.id === 'plan' && channel.modeIndex === 1, `${channel.mode.id}/${channel.modeIndex}`)
+  check(
+    'bare /plan posts the plan-lock notification',
+    channel.notifications.some(n => n.text.includes('计划') || n.text.includes('Plan mode locked')),
+    JSON.stringify(channel.notifications.map(n => n.text)),
+  )
+
+  await channel.runExternalCommand('plan', ' off')
+  check(
+    'bare /plan off restores pre-plan sandbox',
+    appended.at(-2)?.type === 'sandbox/mode' && appended.at(-2)?.data.mode === 'danger-full-access',
+    JSON.stringify(appended.filter(e => e.type === 'sandbox/mode')),
+  )
+  check(
+    'bare /plan off restores pre-plan approval',
+    approvalPolicies.at(-1) === 'never',
+    JSON.stringify(approvalPolicies),
+  )
+  check('bare /plan off restores the pre-plan mode indicator', channel.mode.id === 'full' && channel.modeIndex === 2, `${channel.mode.id}/${channel.modeIndex}`)
+}
+
+// ---- plan-mode tool gate: mutations fail closed until approval -------------
+{
+  const { ctx, agent, guards } = makeEnv()
+  const channel = createChannel(ctx, agent, baseOptions)
+  check('tool guard registered', guards.length === 1, String(guards.length))
+  const guard = guards[0]
+  check('tool guard idle before plan mode', guard({ name: 'write', agent }) === undefined, String(guard({ name: 'write', agent })))
+  await channel.runExternalCommand('plan', '')
+  check(
+    'tool guard blocks write in plan mode',
+    typeof guard({ name: 'write', agent }) === 'string',
+    String(guard({ name: 'write', agent })),
+  )
+  check(
+    'tool guard blocks bash in plan mode',
+    typeof guard({ name: 'bash', agent }) === 'string',
+    String(guard({ name: 'bash', agent })),
+  )
+  check(
+    'tool guard blocks unknown/MCP tools in plan mode',
+    typeof guard({ name: 'mcp__example_mutate', agent }) === 'string',
+    String(guard({ name: 'mcp__example_mutate', agent })),
+  )
+  check('tool guard allows read in plan mode', guard({ name: 'read', agent }) === undefined, String(guard({ name: 'read', agent })))
+  check('tool guard allows exit_plan_mode', guard({ name: 'exit_plan_mode', agent }) === undefined, String(guard({ name: 'exit_plan_mode', agent })))
+  check('tool guard allows ask_user_question', guard({ name: 'ask_user_question', agent }) === undefined, String(guard({ name: 'ask_user_question', agent })))
+  await channel.runExternalCommand('plan', ' off')
+  check('tool guard released after plan exit', guard({ name: 'write', agent }) === undefined, String(guard({ name: 'write', agent })))
+}
+
+// ---- resumed plan-active session re-asserts the lock, then restores --------
+{
+  const { ctx, agent, appended, approvalPolicies } = makeEnv()
+  // Simulate a persisted session that entered plan mode before this boot.
+  agent.session.events.push(
+    { type: 'plan/mode', seq: 1, time: Date.now(), data: { active: true } },
+  )
+  const channel = createChannel(ctx, agent, baseOptions)
+  check('resumed plan session derives plan mode', channel.mode.id === 'plan' && channel.modeIndex === 1, `${channel.mode.id}/${channel.modeIndex}`)
+  check(
+    'resumed plan session re-asserts sandbox read-only',
+    appended.some(e => e.type === 'sandbox/mode' && e.data.mode === 'read-only'),
+    JSON.stringify(appended),
+  )
+  check(
+    'resumed plan session re-asserts approval ask',
+    approvalPolicies.at(-1) === 'ask',
+    JSON.stringify(approvalPolicies),
+  )
+
+  agent.session.append('plan/mode', { active: false })
+  check(
+    'resumed plan exit restores the base atoms',
+    appended.some(e => e.type === 'sandbox/mode' && e.data.mode === 'workspace-write'),
+    JSON.stringify(appended.filter(e => e.type === 'sandbox/mode')),
+  )
+  check('resumed plan exit lands on default', channel.mode.id === 'default' && channel.modeIndex === 0, `${channel.mode.id}/${channel.modeIndex}`)
+}
+
+// ---- custom plan mode honours only its declared enforcement atoms ----------
+{
+  const { ctx, agent, appended, approvalPolicies } = makeEnv()
+  const channel = createChannel(ctx, agent, {
+    ...baseOptions,
+    modes: [
+      { id: 'base', sandbox: 'workspace-write', approval: 'never' },
+      { id: 'plan-soft-ro', plan: true, sandbox: 'read-only' },
+    ],
+  })
+  await channel.runExternalCommand('plan', '')
+  check(
+    'custom plan mode applies its declared sandbox',
+    appended.some(e => e.type === 'sandbox/mode' && e.data.mode === 'read-only'),
+    JSON.stringify(appended),
+  )
+  check(
+    'custom plan mode leaves undeclared approval untouched',
+    approvalPolicies.length === 0,
+    JSON.stringify(approvalPolicies),
+  )
+  check('custom plan mode derives its configured mode', channel.mode.id === 'plan-soft-ro' && channel.modeIndex === 1, `${channel.mode.id}/${channel.modeIndex}`)
+}
+
+// ---- Shift+Tab path keeps the single mode-switched notification ------------
+{
+  const { ctx, agent, commands } = makeEnv()
+  const channel = createChannel(ctx, agent, baseOptions)
+  await channel.cycleMode()
+  check('Shift+Tab into plan dispatches /plan', commands.length === 1 && commands[0] === '/plan', JSON.stringify(commands))
+  check(
+    'Shift+Tab into plan does not double-notify the plan lock',
+    channel.notifications.filter(n => n.text.includes('→')).length === 1,
     JSON.stringify(channel.notifications.map(n => n.text)),
   )
 }
