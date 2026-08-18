@@ -690,7 +690,8 @@ export function Chat({
       case 'lang': {
         // `/lang` shows the current UI language, `/lang en|zh` switches
         // (hot-swap, persisted to ~/.dsh-tui/lang.json). Precedence on next
-        // launch: DSH_TUI_LANG > cordis.yml `lang` > the persisted choice.
+        // launch: DSH_TUI_LANG > settings.yaml `dsh-tui.lang` > cordis.yml
+        // `lang` > the persisted choice.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -706,6 +707,16 @@ export function Chat({
           if (isLang(parts[0])) {
             const ok = writeLangPref(parts[0])
             setLang(parts[0])
+            // Mirror into the dsh-tui settings namespace when it is served,
+            // so /settings and the next boot see the same last-write-wins
+            // choice (best effort; lang.json stays the fallback).
+            const settingsHost = channel.settingsHost()
+            const tuiView = settingsHost?.listNamespaces().find(entry => entry.ns === 'dsh-tui')
+            if (settingsHost !== undefined && tuiView !== undefined) {
+              void settingsHost
+                .write('dsh-tui', [{ op: 'set', path: ['lang'], value: parts[0] }], tuiView.revision)
+                .catch(() => {})
+            }
             channel.notify(
               ok ? t('lang-switched', { lang: parts[0] }) : t('lang-switch-failed', { lang: parts[0] }),
               { color: ok ? 'success' : 'error' },

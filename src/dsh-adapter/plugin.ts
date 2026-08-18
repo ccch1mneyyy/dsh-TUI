@@ -26,7 +26,7 @@ import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
-import { isLang, resolveStartupLang, setLang, t } from '../i18n.js'
+import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { Chat } from '../screens/Chat.js'
 import type { TuiDialogRuntime } from './dialogs.js'
@@ -78,10 +78,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // and the user deletes the legacy directory themselves.
   const migrated = migrateLegacyDataDir()
 
-  // UI language resolution: DSH_TUI_LANG env var wins, then cordis.yml
-  // `lang`, then the persisted `/lang` choice, then `zh`. Must settle
-  // before the first render so every module resolves strings in the same
-  // language.
+  // UI language resolution: DSH_TUI_LANG env var wins, then the
+  // settings.yaml `dsh-tui.lang` user layer (applied once the settings
+  // namespace registers below), then cordis.yml `lang`, then the
+  // persisted `/lang` choice, then `zh`. Must settle before the first
+  // render so every module resolves strings in the same language.
   const envLang = process.env.DSH_TUI_LANG
   setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
 
@@ -351,19 +352,39 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       settingsNamespace('dsh-tui'),
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+        // No default on purpose: an unset `lang` keeps the field showing
+        // the effective language (see the section's format below) and lets
+        // cordis.yml / lang.json keep their precedence.
+        lang: Schema.union(['zh', 'en']),
       }),
     )
     const applyLayout = (value: { diffLayout?: 'auto' | 'split' | 'unified' }): void => {
       channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
     }
-    applyLayout(scope.get())
-    scope.watch(next => {
+    // The /settings language field writes `lang` through the settings
+    // service (user layer): apply it live and mirror it to lang.json so
+    // the /lang command and next-boot resolution agree. DSH_TUI_LANG
+    // stays the top precedence — a pinned env is never overridden by the
+    // document.
+    const applyLang = (value: { lang?: 'zh' | 'en' }): void => {
+      if (!isLang(process.env.DSH_TUI_LANG) && isLang(value.lang)) {
+        setLang(value.lang)
+        writeLangPref(value.lang)
+      }
+    }
+    const apply = (next: { diffLayout?: 'auto' | 'split' | 'unified'; lang?: 'zh' | 'en' }): void => {
       applyLayout(next)
+      applyLang(next)
+    }
+    apply(scope.get())
+    scope.watch(next => {
+      apply(next)
     })
   })
   // The /settings screen's own section: the dsh-tui namespace comes from
-  // this plugin's Config schema, and the declared select writes diffLayout
-  // back through the settings service's revision-fenced mutate.
+  // the settings registration above, and the declared selects write `lang`
+  // and `diffLayout` back through the settings service's revision-fenced
+  // mutate (the watch applies both live).
   const settingsSections = ctx.get('tuiSettingsSections') as
     | { register(section: {
         ns: string
@@ -377,6 +398,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       ns: 'dsh-tui',
       title: 'dsh-tui',
       fields: [
+        {
+          path: ['lang'],
+          label: 'Language',
+          descriptions: { zh: '界面语言' },
+          hint: 'UI language for the whole interface — applies immediately and is saved.',
+          hintDescriptions: { zh: '整个界面的显示语言——立即生效并保存。' },
+          kind: 'select',
+          options: [
+            { value: 'zh', label: '中文', descriptions: { zh: '中文' } },
+            { value: 'en', label: 'English', descriptions: { zh: '英文' } },
+          ],
+          format(value: unknown): string {
+            // Unset in settings.yaml: show the effective UI language
+            // (env / cordis.yml / lang.json resolution) instead of a
+            // blank "unset" that hides the current choice.
+            return value === undefined || value === null ? getLang() : String(value)
+          },
+        },
         {
           path: ['diffLayout'],
           label: 'Diff layout',

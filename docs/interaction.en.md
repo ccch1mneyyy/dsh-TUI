@@ -67,7 +67,10 @@ the prompt sends a real image block. The prompt never contains base64.
 ## Interface language
 
 `/lang` toggles the UI between Simplified Chinese and English (affects all UI
-strings); the choice persists across restarts (0.3.7+).
+strings); the choice persists across restarts (0.3.7+). The **dsh-tui →
+Language** select in `/settings` switches it too (applies immediately and saves
+to `dsh-tui.lang` in `~/.dsh/settings.yaml`; the `DSH_TUI_LANG` env var always
+wins).
 
 ## Message delivery semantics
 
