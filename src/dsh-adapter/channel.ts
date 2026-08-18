@@ -448,6 +448,9 @@ export interface Channel {
   readonly contextWindow: number | undefined
   /** Reasoning effort of the latest request header, when the adapter sets one. */
   readonly reasoningEffort: string | undefined
+  /** The live route's reasoning-effort level ids, low → high (the last entry
+   *  is the top tier). Consumed by top-tier-triggered UI (effort ignition). */
+  readonly effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits come from
    *  this, not the running totals — each request's input IS the context). */
   readonly lastUsage:
@@ -778,6 +781,8 @@ export interface ChannelState {
   contextWindow: number | undefined
   /** Reasoning effort of the latest request header, when the adapter sets one. */
   reasoningEffort: string | undefined
+  /** The live route's reasoning-effort level ids, low → high. */
+  effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits). */
   lastUsage:
     | { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -1597,6 +1602,7 @@ export function createChannel(
     if (llmRuntime === undefined) return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
+      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
       return {
         efforts: info.reasoning?.efforts ?? [],
         defaultEffort: info.reasoning?.defaultEffort,
@@ -1855,6 +1861,7 @@ export function createChannel(
     agentId: agent.id,
     model: options.model,
     provider: options.provider,
+    effortLevels: undefined,
     tokens: { input: 0, output: 0 },
     cwd: options.cwd,
     displayCwd: workspaceService.describe(options.cwd).description ?? options.cwd,
