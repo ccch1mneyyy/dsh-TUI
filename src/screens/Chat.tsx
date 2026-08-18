@@ -1428,6 +1428,16 @@ export function Chat({
     // CLOSE the scene also reached the chat:cancel branch below whenever a
     // turn was in flight — closing the view and killing the turn in one key.
     if (sceneOpen || channel.pluginScene !== undefined) return
+    // Mouse wheel scrolls the transcript even while a question/approval/
+    // dialog panel is open — those panels own arrow/Enter/Esc keys, but the
+    // transcript above them should still be scrollable in fullscreen mode.
+    // Events only arrive with mouse tracking on; inline mode never sees
+    // them, so this is a no-op there.
+    if (key.wheelUp || key.wheelDown) {
+      handle?.scrollBy(key.wheelUp ? -3 : 3)
+      event.stopImmediatePropagation()
+      return
+    }
     // The questionnaire / approval panel / managed plugin dialog owns the
     // keyboard while one is pending (the panel's own useInput handles
     // ↑/↓/Space/Tab/Enter/Esc; the prompt input is unmounted, so nothing
@@ -1437,16 +1447,6 @@ export function Chat({
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
     if (plainReturn) lastModalEnterAtRef.current = returnNow
-    // Mouse wheel scrolls the transcript — in fullscreen there is no
-    // terminal scrollback (alt-screen), so this is the only way back.
-    // Imperative scrollBy: no React re-render per notch (CC semantics).
-    // Events only arrive with mouse tracking on; inline mode never sees
-    // them, so this is a no-op there.
-    if (key.wheelUp || key.wheelDown) {
-      handle?.scrollBy(key.wheelUp ? -3 : 3)
-      event.stopImmediatePropagation()
-      return
-    }
     // Esc clears a settled mouse selection first (CC precedence), ahead of
     // every other Esc meaning below (close pickers, interrupt the turn).
     // hasSelection() is an imperative read — no subscription needed.
