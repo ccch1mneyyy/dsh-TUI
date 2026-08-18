@@ -1744,6 +1744,201 @@ export function createChannel(
     return policy
   }
 
+  // ── Plan-mode guard ──────────────────────────────────────────────────────
+  // dsh-plan-mode itself is soft guidance (it only logs `plan/mode` and shows
+  // the exit_plan_mode review). qwen-code's plan mode is a hard gate: while
+  // planning, every mutation tool is blocked until the user approves the plan
+  // through exit_plan_mode, and approving restores the pre-plan permission
+  // state. The TUI reproduces that with the planes DSH exposes — the first
+  // configured mode declaring `plan: true` supplies the enforcement atoms
+  // (the built-in cycle uses sandbox read-only + approval ask), and the
+  // pre-plan sandbox/approval values are restored when plan mode is left.
+  // This runs for EVERY `plan/mode` transition, so bare `/plan`, Shift+Tab,
+  // and the model's approved exit_plan_mode all pass through the same gate.
+  type SandboxModeValue = NonNullable<SessionModeSpec['sandbox']>
+  type ApprovalPolicyValue = NonNullable<SessionModeSpec['approval']>
+  const isSandboxModeValue = (value: unknown): value is SandboxModeValue =>
+    value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access'
+  const isApprovalPolicyValue = (value: unknown): value is ApprovalPolicyValue =>
+    value === 'ask' || value === 'never'
+
+  /** Optional service seams: sandboxPolicy exposes the deployment default,
+   *  approval owns the policy switch with model narration. Both are mounted
+   *  by the official profile; bare leaves degrade to raw durable events. */
+  const sandboxPolicyService = ctx.get('sandboxPolicy') as
+    | { readonly defaultMode?: unknown }
+    | undefined
+  const approvalService = ctx.get('approval') as
+    | {
+        readonly config?: { readonly policy?: unknown }
+        setPolicy(agent: Agent, policy: ApprovalPolicyValue): void
+      }
+    | undefined
+
+  /** Fallbacks when neither the log nor the services pin a value. Index 0 is
+   *  the unmarked base mode; built-in default is workspace-write + ask. */
+  const fallbackSandboxMode: SandboxModeValue = sessionModes[0]?.sandbox ?? 'workspace-write'
+  const fallbackApprovalPolicy: ApprovalPolicyValue = sessionModes[0]?.approval ?? 'ask'
+
+  const resolvedSandboxMode = (events: readonly SessionEvent[]): SandboxModeValue => {
+    const folded = foldSandboxMode(events)
+    if (isSandboxModeValue(folded)) return folded
+    if (isSandboxModeValue(sandboxPolicyService?.defaultMode)) return sandboxPolicyService.defaultMode
+    return fallbackSandboxMode
+  }
+  const resolvedApprovalPolicy = (events: readonly SessionEvent[]): ApprovalPolicyValue => {
+    const folded = foldApprovalPolicy(events)
+    if (isApprovalPolicyValue(folded)) return folded
+    if (isApprovalPolicyValue(approvalService?.config?.policy)) return approvalService.config.policy
+    return fallbackApprovalPolicy
+  }
+
+  /** The configured mode that defines what "plan" means for enforcement.
+   *  Undefined when the user configured a cycle with no plan:true mode —
+   *  then DSH's soft guidance remains untouched, matching the documented
+   *  "undeclared atoms are not touched" contract. */
+  const planModeSpec = sessionModes.find(spec => spec.plan === true)
+
+  const setSandboxMode = (mode: SandboxModeValue): void => {
+    if (foldSandboxMode(agent.session.events) === mode) return
+    ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+      'sandbox/mode',
+      { mode },
+    )
+  }
+  const setApprovalPolicy = (policy: ApprovalPolicyValue): void => {
+    if (foldApprovalPolicy(agent.session.events) === policy) return
+    if (approvalService) {
+      approvalService.setPolicy(agent, policy)
+    } else {
+      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+        'approval/policy',
+        { policy },
+      )
+    }
+  }
+
+  /** Values in force just before plan mode was entered. Derived from the
+   *  durable log so resume/fork recover the restore target without a live
+   *  mirror; falls back to the resolved defaults for sessions whose log
+   *  never recorded a sandbox/approval switch before entering plan mode. */
+  const planGuardFromLog = (
+    events: readonly SessionEvent[],
+  ): { sandbox: SandboxModeValue; approval: ApprovalPolicyValue } | undefined => {
+    let active = false
+    let sandbox: SandboxModeValue = isSandboxModeValue(sandboxPolicyService?.defaultMode)
+      ? sandboxPolicyService.defaultMode
+      : fallbackSandboxMode
+    let approval: ApprovalPolicyValue = isApprovalPolicyValue(approvalService?.config?.policy)
+      ? approvalService.config.policy
+      : fallbackApprovalPolicy
+    let snapshot: { sandbox: SandboxModeValue; approval: ApprovalPolicyValue } | undefined
+    for (const event of events) {
+      const type = (event as { type: string }).type
+      if (type === 'sandbox/mode') {
+        const value = (event.data as unknown as { mode?: unknown }).mode
+        if (isSandboxModeValue(value)) sandbox = value
+        continue
+      }
+      if (type === 'approval/policy') {
+        const value = (event.data as unknown as { policy?: unknown }).policy
+        if (isApprovalPolicyValue(value)) approval = value
+        continue
+      }
+      if (type === 'plan/mode') {
+        const next = (event.data as unknown as { active?: boolean }).active === true
+        if (next && !active) snapshot = { sandbox, approval }
+        active = next
+      }
+    }
+    return active ? snapshot : undefined
+  }
+
+  /** qwen-code-style enforcement: apply the configured plan mode's
+   *  sandbox/approval atoms while plan mode is active. With the built-in
+   *  cycle this is read-only + ask, so mutation tools fail or prompt until
+   *  the user approves the plan via exit_plan_mode. */
+  const enforcePlanRestrictions = (): void => {
+    if (planModeSpec?.sandbox !== undefined) setSandboxMode(planModeSpec.sandbox)
+    if (planModeSpec?.approval !== undefined) setApprovalPolicy(planModeSpec.approval)
+  }
+
+  const restorePlanState = (): void => {
+    const snapshot = planGuard
+    planGuard = undefined
+    if (snapshot === undefined) return
+    setSandboxMode(snapshot.sandbox)
+    setApprovalPolicy(snapshot.approval)
+  }
+
+  /** Live `plan/mode` tracking (re-derived from the log on every event).
+   *  Entering plan mode snapshots the current state, then locks it; leaving
+   *  plan mode restores the snapshot. Initialization below seeds these two
+   *  variables from the resumed log before any live event arrives. */
+  let planGuard = planGuardFromLog(agent.session.events)
+  let planWasActive = foldPlanActive(agent.session.events)
+  /** True while applyMode is in flight: its own mode-switched notification
+   *  is enough, so the guard's extra plan-lock notification is skipped. */
+  let applyingSessionMode = false
+
+  /** Hard tool gate while the configured plan mode locks the sandbox to
+   *  read-only: only plan-lifecycle, clarification, and read-only tools run.
+   *  Mirrors qwen-code's `isPlanModeBlocked` (everything except exit_plan_mode
+   *  / ask_user_question / read-only info tools). */
+  let planMutationLocked = false
+  const handlePlanModeChange = (): void => {
+    const active = foldPlanActive(agent.session.events)
+    if (active && !planWasActive) {
+      planGuard = {
+        sandbox: resolvedSandboxMode(agent.session.events),
+        approval: resolvedApprovalPolicy(agent.session.events),
+      }
+      enforcePlanRestrictions()
+      planMutationLocked = planModeSpec?.sandbox === 'read-only'
+      if (!applyingSessionMode && (planModeSpec?.sandbox !== undefined || planModeSpec?.approval !== undefined)) {
+        state.notify(t('plan-guard-engaged'), { color: 'success', timeoutMs: 5000 })
+      }
+    } else if (!active && planWasActive) {
+      restorePlanState()
+      planMutationLocked = false
+    }
+    planWasActive = active
+    refreshMode()
+  }
+
+  /** Tool names allowed while `planMutationLocked` is on. Unknown names
+   *  (including MCP tools) fail closed — a plan-mode gate must not let a
+   *  third-party mutation tool through on a name miss. */
+  const PLAN_MODE_ALLOWED_TOOLS = new Set([
+    'exit_plan_mode',
+    'ask_user_question',
+    'read',
+    'read_image',
+    'grep',
+    'glob',
+    'web_search',
+    'web_fetch',
+    'skill',
+    'skill_search',
+    'skill_load',
+    'get_goal',
+    'job_list',
+    'job_output',
+  ])
+
+  const toolRuntime = ctx.get('tools') as
+    | { guard(guard: (execution: Readonly<{ name: string; agent?: unknown }>) => string | undefined): () => void }
+    | undefined
+  let disposePlanToolGuard: (() => void) | undefined
+  if (toolRuntime) {
+    disposePlanToolGuard = toolRuntime.guard(execution => {
+      if (!planMutationLocked) return undefined
+      if (execution.agent !== agent) return undefined
+      if (PLAN_MODE_ALLOWED_TOOLS.has(execution.name)) return undefined
+      return t('plan-guard-tool-blocked', { tool: execution.name })
+    })
+  }
+
   /** First configured mode whose declared atoms all match the folds;
    *  undeclared atoms are wildcards; no match → index 0 (the base mode).
    *  Matching is exact: a fresh session has no `approval/policy` event, so
@@ -1770,40 +1965,24 @@ export function createChannel(
    *  durable session-log override events). A failing plan toggle aborts the
    *  whole switch so the session never lands in a half-applied mode. */
   const applyMode = async (spec: SessionModeSpec): Promise<void> => {
-    if (spec.plan !== undefined && foldPlanActive(agent.session.events) !== spec.plan) {
-      const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
-      if (text === undefined) {
-        // The active preset registers no /plan.
-        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
-        return
+    applyingSessionMode = true
+    try {
+      if (spec.plan !== undefined && foldPlanActive(agent.session.events) !== spec.plan) {
+        const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
+        if (text === undefined) {
+          // The active preset registers no /plan.
+          state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+          return
+        }
       }
+      if (spec.sandbox !== undefined) setSandboxMode(spec.sandbox)
+      if (spec.approval !== undefined) setApprovalPolicy(spec.approval)
+      refreshMode()
+      state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
+      state.emit()
+    } finally {
+      applyingSessionMode = false
     }
-    // The durable sandbox override is one session event (dsh-sandbox-policy's
-    // own write path); the session/event arm picks it up immediately.
-    if (spec.sandbox !== undefined && foldSandboxMode(agent.session.events) !== spec.sandbox) {
-      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-        'sandbox/mode',
-        { mode: spec.sandbox },
-      )
-    }
-    // Prefer the approval service (it narrates the switch to the model);
-    // the raw durable event is the fallback when it is unmounted.
-    if (spec.approval !== undefined && foldApprovalPolicy(agent.session.events) !== spec.approval) {
-      const approval = ctx.get('approval') as
-        | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
-        | undefined
-      if (approval) {
-        approval.setPolicy(agent, spec.approval)
-      } else {
-        ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-          'approval/policy',
-          { policy: spec.approval },
-        )
-      }
-    }
-    refreshMode()
-    state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
-    state.emit()
   }
 
   /** Shift+Tab: advance to the next configured session mode. Cycling starts
@@ -4592,6 +4771,19 @@ ${output}
       selection.current = { provider: state.provider, model: state.model }
     }
     void applyPreferredEffort()
+    // Re-seed the plan-mode guard from the (possibly replacement) agent's
+    // durable log before any live event: a resumed session that is already
+    // in plan mode keeps its pre-plan restore target, and if the log says
+    // plan mode is active the configured restrictions are re-asserted even
+    // when the profile that wrote the log did not enforce them.
+    planGuard = planGuardFromLog(agent.session.events)
+    planWasActive = foldPlanActive(agent.session.events)
+    if (planWasActive) {
+      enforcePlanRestrictions()
+      planMutationLocked = planModeSpec?.sandbox === 'read-only'
+    } else {
+      planMutationLocked = false
+    }
     refreshMode()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),
@@ -4641,9 +4833,14 @@ ${output}
         activityTracker.onSessionEvent(event)
         renderWorkingActivity()
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
-        // moment they land (whether appended by cycleMode or by hand).
+        // moment they land (whether appended by cycleMode or by hand). A
+        // `plan/mode` transition also runs the plan guard: entering plan
+        // mode locks sandbox/approval until the plan is approved, leaving
+        // it restores the pre-plan values (qwen-code plan-mode semantics).
         const eventType = (event as { type: string }).type
-        if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
+        if (eventType === 'plan/mode') {
+          handlePlanModeChange()
+        } else if (eventType === 'sandbox/mode' || eventType === 'approval/policy') {
           refreshMode()
         }
         renderEvent(event)
@@ -4679,7 +4876,10 @@ ${output}
   const effect = (ctx as Context & {
     effect?: (setup: () => () => void, label?: string) => void
   }).effect
-  effect?.call(ctx, () => () => { stopActivityTick() }, 'dsh-tui activity timer')
+  effect?.call(ctx, () => () => {
+    stopActivityTick()
+    disposePlanToolGuard?.()
+  }, 'dsh-tui activity timer')
   // Statusline breadcrumb: current git branch of the session cwd (best-effort).
   // Re-run when an agent swap adopts a different persisted cwd (/resume,
   // issue #96) so the breadcrumb never shows the previous workspace's branch.

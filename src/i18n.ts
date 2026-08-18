@@ -285,6 +285,8 @@ const dict = {
   'mode-plan': { zh: '计划模式', en: 'plan mode' },
   'mode-full': { zh: '完全访问', en: 'full access' },
   'mode-plan-unavailable': { zh: '当前 preset 未注册 /plan 命令，无法切换计划模式', en: 'The active preset does not register /plan; cannot toggle plan mode' },
+  'plan-guard-engaged': { zh: '已锁定计划模式：确认计划前修改类工具一律拒绝（只读沙箱 + 审批询问 + 工具门禁）', en: 'Plan mode locked: mutation tools are rejected until you approve the plan (read-only sandbox + approval ask + tool gate)' },
+  'plan-guard-tool-blocked': { zh: '计划模式已锁定：工具 {{tool}} 被拦截。先通过 exit_plan_mode 提交计划并等待批准，再执行修改。', en: 'Plan mode is locked: tool {{tool}} was blocked. Submit the plan through exit_plan_mode and wait for approval before making changes.' },
 
   // ── components/LogoV2.tsx ───────────────────────────────────────────
   'logo-tagline': { zh: '探索未至之境！', en: 'Explore the uncharted!' },

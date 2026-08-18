@@ -59,6 +59,16 @@ A complete common override looks like this:
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 
+The `modes` entry declaring `plan: true` defines plan mode's hard boundary:
+entering plan mode (`/plan`, Shift+Tab, or resuming a plan-active session)
+automatically applies the `sandbox`/`approval` atoms that entry declares and
+remembers the pre-plan state; an approved plan review or `/plan off` restores
+it. The built-in plan entry is `read-only + ask` and adds a tool gate (only
+`exit_plan_mode`, `ask_user_question`, and read-only tools are admitted), so no
+file modification runs before the plan is confirmed. A plan entry that
+declares no `sandbox`/`approval` keeps the documented “undeclared atoms are
+not touched” behavior.
+
 ## Live activity row
 
 `dsh-working-activity` is installed with the package and inserted by its patch.

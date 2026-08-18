@@ -196,6 +196,16 @@ transcript。
 
 ## 计划评审（plan review）
 
+进入计划模式时（`/plan`、Shift+Tab 或恢复一个已处于计划模式的会话），TUI 会
+像 qwen-code 一样把计划模式当成硬门禁：自动套用配置中计划模式声明的
+`sandbox`/`approval` 原子（内置三档为 **只读沙箱 + 审批询问**），并记住进入前的
+沙箱与审批策略。内置计划档还会挂载一个单调工具门禁：只放行
+`exit_plan_mode`、`ask_user_question` 与只读工具（`read`/`grep`/`glob`/
+`web_search` 等），`write`/`edit`/`bash`/子代理以及未知的 MCP 工具一律拒绝。
+因此模型在用户批准计划之前无法直接修改文件；只有 `exit_plan_mode` 评审通过
+（或 `/plan off`）后才会退出计划模式并恢复之前的权限状态。若自定义 `modes`
+中的计划模式没有声明 `sandbox`/`approval`，则保持"未声明的原子不动"的旧语义。
+
 计划模式下模型调用 `exit_plan_mode` 时，计划全文以 markdown 渲染在评审面板中
 （`intent: plan-review` 的专用决策布局）：
 
