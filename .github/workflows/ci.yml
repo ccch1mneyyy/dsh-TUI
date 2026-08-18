@@ -326,6 +326,9 @@ jobs:
       # repaint、恰占一行、播完自卸载；负路径（冷启动顶档/单档表/
       # 无档位表/离开顶档）不触发；挂载/卸载帧不得滚动 scrollback。
       - run: node --import tsx/esm scripts/verify-effort-ignition.tsx
+      # 前缀充能回归：四态（非顶档原样/充能期强调/稳态保持/离开恢复）
+      # + 充能窗内的真实前景色采样断言（暗→全值单调爬升）。
+      - run: node --import tsx/esm scripts/verify-effort-accent.tsx
 
       # 缩放重排回归（实机反馈：打开长会话后最大化窗口）：判据是终局等价
       # ——缩放后的物理终端必须等于在新尺寸上全新渲染的同一状态。缩放会让

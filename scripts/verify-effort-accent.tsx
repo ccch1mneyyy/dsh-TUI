@@ -104,9 +104,29 @@ render(<Driver />, {
 
 await sleep(200)
 check('off the top tier: plain prefix, no accent', firstRow().startsWith('❯') && !prefixFgTruecolor() && !prefixBold())
-await sleep(230)
+
+// Sample the prefix's actual FG colour across the charge window's tail and
+// the settle: a constant colour or a reversed ramp must fail here, not just
+// a missing accent. luma(Rec.601) is the ramp's monotone observable — dim
+// (band-tinted) is darker than full (hues[0]).
+const luma = (rgb: number): number =>
+  0.299 * ((rgb >> 16) & 0xff) + 0.587 * ((rgb >> 8) & 0xff) + 0.114 * (rgb & 0xff)
+const samples: number[] = []
+await sleep(120)
+for (let i = 0; i < 8; i++) {
+  const line = term.buffer.active.getLine(term.buffer.active.baseY)
+  const cell = line?.getCell(0)
+  if (cell !== undefined && cell.isFgRGB()) samples.push(cell.getFgColor())
+  await sleep(28)
+}
 check('charging onto the top tier: bold + truecolor accent', prefixFgTruecolor() && prefixBold())
-await sleep(400)
+check('charge ramps dark→full (sampled, monotone)',
+  samples.length >= 3
+  && luma(samples[0]!) < luma(samples[samples.length - 1]!)
+  && samples.slice(1).some((value, index) => luma(value) >= luma(samples[index]!)),
+  `${samples.length} samples, luma ${samples.length ? Math.round(luma(samples[0]!)) : '?'}→${samples.length ? Math.round(luma(samples[samples.length - 1]!)) : '?'}`)
+
+await sleep(300)
 check('past the charge window: accent stays solid', prefixFgTruecolor() && prefixBold())
 await sleep(500)
 check('off the top tier again: accent gone', !prefixFgTruecolor() && !prefixBold())
