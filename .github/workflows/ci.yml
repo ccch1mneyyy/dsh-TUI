@@ -19,6 +19,8 @@ jobs:
       DSH_TUI_LANG: zh
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Verify generated output is not checked in
         run: test -z "$(git ls-files -- lib)"
