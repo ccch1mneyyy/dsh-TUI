@@ -267,6 +267,10 @@
         # Edit/Write diff 呈现：auto（≥110 列双栏对照，窄屏统一式）/
         # split（强制双栏）/ unified（强制统一式）。/settings 屏可实时改。
         # diffLayout: auto
+        # 回合结束（以及 agent 卡在审批/提问上）时向终端发通知，并驱动终端
+        # 进度指示：unfocused（默认，仅窗口失焦时）/ always / off。
+        # /settings 屏可实时改。
+        # notify: unfocused
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
         # （deepseek: off/high/max）——不在档位表里的值被忽略，回落 adapter
         # 默认值。优先于持久化的 Shift+Tab 选择（~/.dsh-tui/effort.json）；

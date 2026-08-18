@@ -37,6 +37,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
     activityFrames: claude
     contextBar: true
     fullscreen: false
+    notify: unfocused
     preset: !!js process.env.DSH_TUI_PRESET ?? undefined
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
@@ -54,8 +55,28 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `activityFrames` | 持久化选择或 `claude` | 工作状态动画预设；也可通过 `/activity` 修改 |
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行 |
 | `fullscreen` | `false` | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
+| `notify` | `unfocused` | 回合结束（以及卡在审批/提问上）时向终端发通知，并驱动终端进度指示；`always` 每次都通知，`off` 全部关闭。`/settings` 可实时改 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
+
+## 回合通知
+
+`notify` 控制 TUI 什么时候向终端"要注意力"：回合结束、工具审批弹出、模型
+发起 `ask_user_question` 这三个时刻各发一次，长任务跑着时你可以切去干别的。
+
+- `unfocused`（默认）：仅在终端窗口失焦时通知。焦点状态来自 DECSET 1004
+  焦点上报——终端不支持时按"已聚焦"处理，也就是不打扰。
+- `always`：每次都通知。
+- `off`：通知与进度指示全部关闭。
+
+通知走终端原生协议，按环境变量选择：iTerm2 与 WezTerm 用 OSC 9，kitty 用
+OSC 99，Ghostty 用 OSC 777；识别不出的终端退回 BEL（``）——在 tmux 里
+BEL 会变成窗口活动标记。tmux/screen 内层 `TERM` 被改写、`TERM_PROGRAM`
+不一定透传，所以复用会话通常落在 BEL 分支。
+
+工作期间还会打终端进度指示（OSC 9;4 indeterminate），回合结束清除。该序列
+只在 ConEmu、Ghostty 1.2.0+、iTerm2 3.6.6+ 上发出；Windows Terminal 把
+OSC 9;4 当通知解释，因此被显式排除。
 
 ## 工作状态行
 

@@ -8,6 +8,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
+import type { NotifyMode } from '../notifications.js'
 import type { SessionModeSpec } from '../sessionModes.js'
 
 export const name = 'dsh-tui'
@@ -77,6 +78,12 @@ export interface Config {
    *  terminals (≥110 cols) and unified below; `split`/`unified` force one
    *  layout. Editable live from the `/settings` screen. */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** When a finished turn — or an agent blocked on an approval or an
+   *  `ask_user_question` — asks the terminal for attention: `unfocused`
+   *  (default) only while the window is not focused, `always` every time,
+   *  `off` never (progress reporting included). Editable live from the
+   *  `/settings` screen. */
+  notify?: NotifyMode
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
@@ -102,6 +109,7 @@ export const Config: Schema<Config> = Schema.object({
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+  notify: Schema.union(['off', 'unfocused', 'always']).default('unfocused'),
   modes: Schema.array(
     Schema.object({
       id: Schema.string(),

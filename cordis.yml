@@ -57,6 +57,11 @@
     # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
     # inline 渲染, 鼠标交给终端模拟器原生选择。
     fullscreen: true
+    # Turn notification: notify the terminal when a turn ends (or the agent
+    # blocks on an approval / question), and drive the terminal progress
+    # indicator. `unfocused` (default) only while the window is not focused,
+    # `always`, or `off`. Editable live from the /settings screen.
+    # notify: unfocused
     # Reasoning effort applied to every request, validated against the live
     # route's adapter levels (deepseek: off/high/max) — an unlisted level is
     # ignored and the adapter default applies. Wins over the persisted

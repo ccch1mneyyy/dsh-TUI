@@ -22,6 +22,7 @@ import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
+import { useTurnNotification } from '../hooks/useTurnNotification.js'
 import { useCopyOnSelect } from '../ink/hooks/use-copy-on-select.js'
 import { useSelection } from '../ink/hooks/use-selection.js'
 import { NoSelect } from '../ink/components/NoSelect.js'
@@ -490,6 +491,17 @@ export function Chat({
   useTerminalTitle(
     `${titlePrefix} 🐋 ${channel.sessionTitle}`,
   )
+  // Attention outside the viewport: a finished turn (or an agent blocked on
+  // an approval/questionnaire) notifies the terminal, and the working state
+  // drives the terminal's own progress indicator. Both are gated on
+  // `notifyMode` — `unfocused` by default, so nothing fires while the user
+  // is watching the stream.
+  useTurnNotification(channel.notifyMode, {
+    working: channel.working,
+    awaitingApproval: approvalSnapshot !== null,
+    awaitingQuestion: questionSnapshot !== null,
+    title: channel.sessionTitle,
+  })
 
   const handleWorkspaceResult = (result: TuiWorkspaceCommandResult): void => {
     workspaceFlowAbortRef.current = null

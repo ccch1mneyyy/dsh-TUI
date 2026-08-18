@@ -17,6 +17,7 @@ import { registerPackagedSkills } from './packaged-skills.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
+import { DEFAULT_NOTIFY_MODE, type NotifyMode } from '../notifications.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
@@ -341,6 +342,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Edit/Write diff presentation (schema default 'auto'); the /settings
     // screen edits this key live through the dsh-tui namespace.
     diffLayout: config.diffLayout,
+    // Turn-notification mode (schema default 'unfocused'); edited live from
+    // the same namespace.
+    notifyMode: config.notify,
     handle,
   })
   // Register the dsh-tui settings namespace so the /settings screen can
@@ -352,6 +356,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       settingsNamespace('dsh-tui'),
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+        notify: Schema.union(['off', 'unfocused', 'always']).default('unfocused'),
         // No default on purpose: an unset `lang` keeps the field showing
         // the effective language (see the section's format below) and lets
         // cordis.yml / lang.json keep their precedence.
@@ -360,6 +365,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     )
     const applyLayout = (value: { diffLayout?: 'auto' | 'split' | 'unified' }): void => {
       channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+    }
+    const applyNotify = (value: { notify?: NotifyMode }): void => {
+      channel.setNotifyMode(value.notify ?? config.notify ?? DEFAULT_NOTIFY_MODE)
     }
     // The /settings language field writes `lang` through the settings
     // service (user layer): apply it live and mirror it to lang.json so
@@ -372,8 +380,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         writeLangPref(value.lang)
       }
     }
-    const apply = (next: { diffLayout?: 'auto' | 'split' | 'unified'; lang?: 'zh' | 'en' }): void => {
+    const apply = (next: {
+      diffLayout?: 'auto' | 'split' | 'unified'
+      notify?: NotifyMode
+      lang?: 'zh' | 'en'
+    }): void => {
       applyLayout(next)
+      applyNotify(next)
       applyLang(next)
     }
     apply(scope.get())
@@ -427,6 +440,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'auto', label: 'Auto (by width)', descriptions: { zh: '自动（按宽度）' } },
             { value: 'split', label: 'Side-by-side', descriptions: { zh: '双栏对照' } },
             { value: 'unified', label: 'Unified', descriptions: { zh: '统一式' } },
+          ],
+        },
+        {
+          path: ['notify'],
+          label: 'Turn notification',
+          descriptions: { zh: '回合通知' },
+          hint: 'Notify the terminal when a turn ends or the agent needs you; also drives the terminal progress indicator.',
+          hintDescriptions: { zh: '回合结束或 agent 需要你时通知终端；同时驱动终端进度指示。' },
+          kind: 'select',
+          options: [
+            { value: 'unfocused', label: 'When unfocused', descriptions: { zh: '仅窗口失焦时' } },
+            { value: 'always', label: 'Always', descriptions: { zh: '总是' } },
+            { value: 'off', label: 'Off', descriptions: { zh: '关闭' } },
           ],
         },
       ],

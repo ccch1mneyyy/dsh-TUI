@@ -48,6 +48,7 @@ import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
 import { t } from '../i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import { DEFAULT_NOTIFY_MODE, type NotifyMode } from '../notifications.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 import { attachSessionToWorkspace } from './workspace.js'
@@ -462,6 +463,8 @@ export interface Channel {
   readonly activityFrames: string | undefined
   /** Edit/Write diff presentation preference (`auto`/`split`/`unified`). */
   readonly diffLayout: 'auto' | 'split' | 'unified'
+  /** When a finished turn (or a blocked agent) notifies the terminal. */
+  readonly notifyMode: NotifyMode
   /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -793,6 +796,10 @@ export interface ChannelState {
   diffLayout: 'auto' | 'split' | 'unified'
   /** Apply a diff-layout change (see the public Channel type). */
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
+  /** Notification preference (see the public Channel type). */
+  notifyMode: NotifyMode
+  /** Apply a notification-mode change (see the public Channel type). */
+  setNotifyMode(mode: NotifyMode): void
   /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -1219,6 +1226,8 @@ export function createChannel(
     /** Edit/Write diff presentation; default `auto` (side-by-side ≥110
      *  columns, unified below). */
     diffLayout?: 'auto' | 'split' | 'unified'
+    /** When a finished turn notifies the terminal; default `unfocused`. */
+    notifyMode?: NotifyMode
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
@@ -1871,6 +1880,7 @@ export function createChannel(
     workingActivity: undefined,
     activityFrames: options.activityFrames,
     diffLayout: options.diffLayout ?? 'auto',
+    notifyMode: options.notifyMode ?? DEFAULT_NOTIFY_MODE,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,
@@ -2793,6 +2803,11 @@ export function createChannel(
     setDiffLayout(layout) {
       if (layout === state.diffLayout) return
       state.diffLayout = layout
+      state.emit()
+    },
+    setNotifyMode(mode) {
+      if (mode === state.notifyMode) return
+      state.notifyMode = mode
       state.emit()
     },
     setActivityFrames(name) {

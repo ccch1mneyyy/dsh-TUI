@@ -262,6 +262,11 @@ const dict = {
   // ── plugin.ts — /update flow ───────────────────────────────────────
   'update-aborted-no-profile': { zh: 'dsh-tui 更新中止：未解析到 dsh profile。', en: 'dsh-tui update aborted: no dsh profile resolved.' },
 
+  // ── hooks/useTurnNotification.ts ─────────────────────────────────────
+  'notify-turn-done': { zh: '本回合已完成', en: 'Turn complete' },
+  'notify-approval': { zh: '等待工具审批', en: 'Waiting for tool approval' },
+  'notify-question': { zh: '模型正在提问', en: 'The model is asking a question' },
+
   // ── components/ActivityLine.tsx ──────────────────────────────────────
   'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
 

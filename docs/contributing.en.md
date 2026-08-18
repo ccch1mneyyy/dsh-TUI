@@ -212,6 +212,7 @@ change, also run the closest focused script:
 | Theme loading and persistence | `node --import tsx/esm scripts/verify-themes.mjs` |
 | Scrolling/sticky-bottom behavior | `node scripts/verify-scroll.mjs`, `node scripts/verify-resticky.mjs`, and the matching `repro-*` harness |
 | Fullscreen copy-on-select | `node scripts/verify-copy-on-select.mjs` |
+| Turn notifications and terminal progress | `node scripts/verify-notifications.mjs` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the

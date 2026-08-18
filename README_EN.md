@@ -184,6 +184,13 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
   `~/.dsh-tui/themes/<name>.json` — selecting one hot-swaps and persists it; precedence is
   `DSH_TUI_THEME` env var > persisted selection > OSC 11 terminal-background auto-detection.
   See [Themes](docs/themes.en.md).
+- **Turn notifications**: the terminal is asked for attention when a turn ends, a tool
+  approval parks, or the model asks a question, and the working state drives the terminal
+  progress indicator. The default `unfocused` only notifies while the window is not
+  focused, so watching the stream is never interrupted; `/settings` switches it to
+  `always` or `off`. iTerm2 / WezTerm / kitty / Ghostty use their native notification
+  protocols; every other terminal falls back to BEL (a window activity flag inside tmux).
+  See [Configuration](docs/configuration.en.md#turn-notifications).
 - **MCP**: servers are mounted via `@deepseek-ai/dsh-mcp-client`, with tools registered as
   `mcp__<server>__<tool>`; `/mcp` shows connection status.
   See [Configuration](docs/configuration.en.md#mcp).

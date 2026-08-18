@@ -112,6 +112,10 @@ jobs:
       # Alt+numpad 两轮合成。
       - run: node --import tsx/esm scripts/verify-win32-input.tsx
 
+      # 回合通知回归：协议按终端选择、只在状态边沿发（挂载进行中的回合
+      # 不发）、unfocused 尊重 DECSET 1004 焦点、off 连进度指示一起关。
+      - run: node scripts/verify-notifications.mjs
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 

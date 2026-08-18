@@ -189,6 +189,11 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
   `dark-ansi`），也支持 `~/.dsh-tui/themes/<名字>.json` 自定义主题，选中即热切换
   并持久化；`DSH_TUI_THEME` 环境变量 > 持久化选择 > OSC 11 终端背景自动检测。
   详见[主题系统](docs/themes.md)。
+- **回合通知**：回合结束、工具审批弹出、模型提问时向终端要一次注意力，工作
+  期间还会驱动终端进度指示。默认 `unfocused`——只在窗口失焦时通知，你盯着
+  屏幕看时不打扰；`/settings` 里可改成 `always` 或 `off`。iTerm2 / WezTerm /
+  kitty / Ghostty 走各自的原生通知协议，其余终端退回 BEL（tmux 内会变成窗口
+  活动标记）。详见[配置参考](docs/configuration.md#回合通知)。
 - **MCP**：通过 `@deepseek-ai/dsh-mcp-client` 挂载服务器，工具以
   `mcp__<服务器>__<工具>` 注册；`/mcp` 查看连接状态。
   详见[配置参考](docs/configuration.md#mcp)。

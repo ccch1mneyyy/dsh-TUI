@@ -39,6 +39,7 @@ A complete common override looks like this:
     activityFrames: claude
     contextBar: true
     fullscreen: false
+    notify: unfocused
     preset: !!js process.env.DSH_TUI_PRESET ?? undefined
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
@@ -56,8 +57,33 @@ A complete common override looks like this:
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
 | `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
+| `notify` | `unfocused` | Notify the terminal when a turn ends (or the agent blocks on an approval/question) and drive the terminal progress indicator; `always` notifies every time, `off` disables both. Editable live from `/settings` |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
+
+## Turn notifications
+
+`notify` controls when the TUI asks the terminal for attention: once when a
+turn ends, once when a tool approval parks, and once when the model opens an
+`ask_user_question` — so a long task can run while you look elsewhere.
+
+- `unfocused` (default): only while the terminal window is not focused.
+  Focus comes from DECSET 1004 focus reporting; a terminal that does not
+  report is treated as focused, i.e. left alone.
+- `always`: notify every time.
+- `off`: no notification and no progress reporting.
+
+The notification uses the terminal's own protocol, chosen from environment
+markers: OSC 9 for iTerm2 and WezTerm, OSC 99 for kitty, OSC 777 for
+Ghostty. Anything unrecognized falls back to BEL (``), which tmux turns
+into a window activity flag. Inside tmux/screen the inner `TERM` is
+rewritten and `TERM_PROGRAM` is not always forwarded, so multiplexed
+sessions usually land on BEL.
+
+While a turn runs the terminal progress indicator is driven too (OSC 9;4
+indeterminate), cleared when the turn ends. That sequence is only emitted on
+ConEmu, Ghostty 1.2.0+, and iTerm2 3.6.6+; Windows Terminal reads OSC 9;4 as
+a notification and is excluded explicitly.
 
 ## Live activity row
 
