@@ -109,14 +109,19 @@ export function EffortIgnitionLine({
   })
   const runs = toRuns(colors)
   if (runs.length === 0) return null
+  // Painted runs use the `▁` lower-block glyph with a FOREGROUND colour: fg
+  // is the channel every other live element (spinner, wake, context bar)
+  // already rides, while pure-background cells proved unreliable under the
+  // fullscreen log-update pipeline. The glyph is constant — frames change
+  // colours only, so the SGR-only rule still holds.
   return (
     <Box height={1} width="100%" flexShrink={0}>
       {runs.map((run, index) =>
         run.color === undefined ? (
           <Text key={index}>{' '.repeat(run.len)}</Text>
         ) : (
-          <Text key={index} backgroundColor={run.color}>
-            {' '.repeat(run.len)}
+          <Text key={index} color={run.color}>
+            {'▁'.repeat(run.len)}
           </Text>
         ),
       )}

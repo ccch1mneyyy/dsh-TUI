@@ -12,7 +12,7 @@
  *   not whichever one `Math.random` picked this time.
  * - **Animation patches, never repaints.** While the band plays, the write
  *   stream contains no line erase, screen clear, or scroll — frames change
- *   background colours only, glyphs are always spaces.
+ *   foreground colours only, glyphs are always spaces.
  * - **Mount and unmount never scroll.** The band's one-shot insert/remove
  *   frames are the exact family that once sank the UI into scrollback
  *   (#38/#39/#19/#10); the whole stream, mounting included, must contain
@@ -110,12 +110,12 @@ async function makeHarness(cols: number, rows: number) {
     ref(): this { return this }
     unref(): this { return this }
   }
-  const rgbBgRows = (): number =>
+  const rgbFgRows = (): number =>
     Array.from({ length: rows }, (_, y) => {
       const line = term.buffer.active.getLine(term.buffer.active.baseY + y)
       if (line === undefined) return false
       for (let x = 0; x < cols; x++) {
-        if (line.getCell(x)?.isBgRGB()) return true
+        if (line.getCell(x)?.isFgRGB()) return true
       }
       return false
     }).filter(Boolean).length
@@ -126,7 +126,7 @@ async function makeHarness(cols: number, rows: number) {
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  return { term, writes, rgbBgRows, instance }
+  return { term, writes, rgbFgRows, instance }
 }
 
 /** Driver slot: the harness mounts one driver; scenarios swap what it renders. */
@@ -156,14 +156,14 @@ async function runBandScenario(style: 'wave' | 'aurora' | 'pulse') {
   const harness = await makeHarness(cols, 8)
   try {
     await sleep(200)
-    const darkBefore = harness.rgbBgRows()
+    const darkBefore = harness.rgbFgRows()
     // One-row check sits in the styles' COMMON on-screen window at t=550ms:
     // pulse's ring leaves a 60-col screen around t=665ms (radius ≥ width/2
     // + half-width), wave's crest has entered from the left, aurora always
     // paints. The capture window below still holds frames for every style
     // (pulse paints until ~665ms, wave/aurora to their totals).
     await sleep(350)
-    const paintedMidBand = harness.rgbBgRows()
+    const paintedMidBand = harness.rgbFgRows()
     harness.writes.length = 0
     await sleep(420)
     const stream = harness.writes.join('')
@@ -176,16 +176,16 @@ async function runBandScenario(style: 'wave' | 'aurora' | 'pulse') {
     const offenders = repaints.filter(([, pattern]) => pattern.test(stream)).map(([name]) => name)
     check(`${style}: no repaint escapes while playing`, offenders.length === 0,
       offenders.length === 0 ? `${stream.length} bytes over the band` : offenders.join(', '))
-    check(`${style}: paints truecolor backgrounds`, /\x1b\[48;2;/.test(stream), `${stream.length} bytes`)
+    check(`${style}: paints truecolor foregrounds`, /\x1b\[38;2;/.test(stream), `${stream.length} bytes`)
     check(`${style}: exactly one painted row`, paintedMidBand === 1, `${paintedMidBand} rows`)
     check(`${style}: dark before the switch`, darkBefore === 0)
     // Self-unmount: past every style's total (≤1300ms from the 300ms switch,
     // so t=1650ms is past all of them), plus a quiet tail.
     await sleep(700)
-    check(`${style}: self-unmounts after its total`, harness.rgbBgRows() === 0, `${harness.rgbBgRows()} rows`)
+    check(`${style}: self-unmounts after its total`, harness.rgbFgRows() === 0, `${harness.rgbFgRows()} rows`)
     harness.writes.length = 0
     await sleep(300)
-    check(`${style}: write stream goes quiet`, !/\x1b\[48;2;/.test(harness.writes.join('')))
+    check(`${style}: write stream goes quiet`, !/\x1b\[38;2;/.test(harness.writes.join('')))
   } finally {
     harness.instance.unmount()
     driverElement = null
@@ -206,7 +206,7 @@ async function runDarkScenario(name: string, makeDriver: () => React.ReactNode) 
     await sleep(1300)
     const stream = harness.writes.join('')
     check(`${name}: no ignition at all`,
-      harness.rgbBgRows() === 0 && !/\x1b\[48;2;/.test(stream))
+      harness.rgbFgRows() === 0 && !/\x1b\[38;2;/.test(stream))
   } finally {
     harness.instance.unmount()
     driverElement = null
