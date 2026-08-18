@@ -3,6 +3,7 @@ import { readFile, unlink } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
@@ -1043,7 +1044,11 @@ export function PromptInput({
         width="100%"
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
-          <Text dimColor={channel.working}>❯ </Text>
+          <EffortChargeGlyph
+            effort={channel.reasoningEffort}
+            levels={channel.effortLevels}
+            working={channel.working}
+          />
           <Box ref={valueBoxRef} flexGrow={1} flexShrink={1}>
             {value.length === 0 ? (
               // Solid block caret on a BLANK cell: the terminal paints the
