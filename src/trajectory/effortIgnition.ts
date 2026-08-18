@@ -50,20 +50,32 @@ const PULSE_HALF_WIDTH = 4.5
 
 /**
  * 最高档色板：三 hue 按列权重混合。深色背景用亮暖橙系，浅色背景换深
- * 暖橙系（对齐 Codex Max 档的两个变体——浅底上亮橙没有对比度）。
+ * 暖橙系（对齐 Codex Max 档的两个变体——浅底上亮橙没有对比度）。模块
+ * 级常量：每帧调用零分配。
  */
+const HUES_DARK: readonly [RGBColor, RGBColor, RGBColor] = [
+  { r: 255, g: 178, b: 66 },
+  { r: 255, g: 214, b: 120 },
+  { r: 255, g: 120, b: 60 },
+]
+const HUES_LIGHT: readonly [RGBColor, RGBColor, RGBColor] = [
+  { r: 176, g: 98, b: 0 },
+  { r: 150, g: 110, b: 0 },
+  { r: 200, g: 70, b: 20 },
+]
+
 export function ignitionHues(onLight: boolean): readonly [RGBColor, RGBColor, RGBColor] {
-  return onLight
-    ? [
-        { r: 176, g: 98, b: 0 },
-        { r: 150, g: 110, b: 0 },
-        { r: 200, g: 70, b: 20 },
-      ]
-    : [
-        { r: 255, g: 178, b: 66 },
-        { r: 255, g: 214, b: 120 },
-        { r: 255, g: 120, b: 60 },
-      ]
+  return onLight ? HUES_LIGHT : HUES_DARK
+}
+
+/**
+ * 充能色对（前缀强调用）：从带底色调的暗强调到全强调，与波共用
+ * hues[0]（同一瞬间前缀与波是同一种橙）。
+ * @param onLight - 浅色主题用浅底色板。
+ */
+export function accentRamp(onLight: boolean): { dim: RGBColor; full: RGBColor } {
+  const band = onLight ? BAND_RGB_LIGHT : BAND_RGB_DARK
+  return { dim: blend(band, ignitionHues(onLight)[0]!, 0.45), full: ignitionHues(onLight)[0]! }
 }
 
 /**
@@ -73,9 +85,10 @@ export function ignitionHues(onLight: boolean): readonly [RGBColor, RGBColor, RG
 const BAND_RGB_DARK: RGBColor = { r: 27, g: 30, b: 40 }
 const BAND_RGB_LIGHT: RGBColor = { r: 240, g: 240, b: 242 }
 
-/** 余弦钟形：`crest(0)=1`、`crest(1)=0`、之外为 0。 */
+/** 余弦钟形：`crest(0)=1`、`crest(±1)=0`、之外为 0（负距离同样静默——
+ * 现有调用方都传 `Math.abs`，这里兜底防未来调用方拿到全强度）。 */
 export function crest(distance: number): number {
-  if (distance >= 1) return 0
+  if (distance >= 1 || distance <= -1) return 0
   return 0.5 * (1 + Math.cos(Math.PI * distance))
 }
 
@@ -102,13 +115,14 @@ export function easeInOutCubic(progress: number): number {
 
 /**
  * 一次性包络：`[0, total]` 外为 0，进入段按 `fadeIn` 线性升起、离开段
- * 按 `fadeOut` 线性落下，取两者较小值。
+ * 按 `fadeOut` 线性落下，取两者**较小**值（对齐上游：任意时刻受两段
+ * 斜坡中较缓的一侧约束）。
  */
 export function envelope(elapsed: number, total: number, fadeIn: number, fadeOut: number): number {
   if (elapsed <= 0 || elapsed >= total) return 0
   const inPart = elapsed / Math.max(fadeIn, Number.EPSILON)
   const outPart = (total - elapsed) / Math.max(fadeOut, Number.EPSILON)
-  return Math.min(1, Math.max(0, inPart, outPart))
+  return Math.min(1, Math.max(0, Math.min(inPart, outPart)))
 }
 
 /** 单列对全部波带的采样结果：三 hue 各自的权重（未归一）。 */
@@ -179,7 +193,7 @@ export function ignitionLineColors(options: {
   const { style, elapsedMs, width, onLight } = options
   const total = IGNITION_TOTAL_MS[style] / 1000
   const elapsed = elapsedMs / 1000
-  if (width <= 0 || elapsed <= 0 || elapsed >= total) return []
+  if (width <= 0 || !Number.isFinite(elapsed) || elapsed <= 0 || elapsed >= total) return []
   const hues = ignitionHues(onLight)
   const bandRgb = onLight ? BAND_RGB_LIGHT : BAND_RGB_DARK
   const fade =
@@ -204,9 +218,15 @@ export function ignitionLineColors(options: {
     const alpha =
       style === 'aurora' ? Math.min(weight * 0.4, 0.5) * fade : weight * 0.55
     // 波按强度淡入带底色：alpha=1 是纯 hue，alpha→0 收敛回本底。上限
-    // 0.6（同 Codex）——满强度也留一点底色，不刺眼。
+    // 0.6（同 Codex）——满强度也留一点底色，不刺眼。输出前通道量化到
+    // 8 步长：渐变列因此能合并成长段（渲染层 RLE 段数降一个数量级），
+    // 8/256 的色差在终端 cell 分辨率下不可辨。
     const tinted = blend(bandRgb, hue, Math.min(alpha, 0.6))
-    colors[column] = rgbString(tinted)
+    colors[column] = rgbString({
+      r: Math.round(tinted.r / 8) * 8,
+      g: Math.round(tinted.g / 8) * 8,
+      b: Math.round(tinted.b / 8) * 8,
+    })
   }
   return colors
 }

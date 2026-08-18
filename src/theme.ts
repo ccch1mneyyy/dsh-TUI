@@ -482,6 +482,26 @@ export function getTheme(themeName: ThemeName): Theme {
 let customThemeResolver: ((name: string) => Theme | undefined) | undefined
 
 /**
+ * Whether the active theme's RESOLVED palette renders on a light background.
+ * Keyed off the palette's own `background` colour, never the theme NAME —
+ * `useTheme()` returns the literal `'auto'` for the auto theme and the file
+ * name for custom themes, so name comparisons miss auto-with-light-terminal
+ * and light custom palettes. Colour-pair variants (effort ignition hues)
+ * consume this signal.
+ * @param themeName - The theme name as `useTheme()` reports it.
+ * @returns True when the resolved palette's background is light (same Rec.601
+ *   luma test and dark-biased threshold as ThemeProvider's detector).
+ */
+export function isLightThemeActive(themeName: ThemeName): boolean {
+  const background = getTheme(themeName).background
+  if (!background.startsWith('#') || background.length !== 7) return themeName === 'light'
+  const r = Number.parseInt(background.slice(1, 3), 16)
+  const g = Number.parseInt(background.slice(3, 5), 16)
+  const b = Number.parseInt(background.slice(5, 7), 16)
+  return 0.299 * r + 0.587 * g + 0.114 * b > 140
+}
+
+/**
  * Register the custom-theme resolver. Called once by ThemeProvider; the
  * resolver must return `undefined` for names it does not know so getTheme
  * falls back to `dark`.

@@ -40,6 +40,7 @@ export function EffortIgnitionLine({
   levels,
   columns,
   onLight,
+  style,
 }: {
   /** 当前思考强度档 id；`undefined` 表示路线未声明。 */
   effort: string | undefined
@@ -47,34 +48,36 @@ export function EffortIgnitionLine({
   levels: readonly string[] | undefined
   columns: number
   onLight: boolean
+  /** 固定风格（验证脚本逐风格回归用）；缺省随机且不与上次重复。 */
+  style?: IgnitionStyle
 }): React.ReactNode {
   const clock = useContext(ClockContext)
   const [ignition, setIgnition] = useState<{ style: IgnitionStyle; startedAtMs: number } | null>(
     null,
   )
-  const prevEffort = useRef<string | undefined>(undefined)
+  const [prevEffort, setPrevEffort] = useState(effort)
   const prevStyle = useRef<IgnitionStyle | undefined>(undefined)
   const [, forceRender] = useReducer((tick: number) => tick + 1, 0)
 
-  // 触发判定放 effect（commit 后跑，晚一帧 ≈16ms，不影响观感）：从「有
-  // 档位」变为「另一档位」且新档位是末位最高档。首次载入 / 单档表 /
-  // 档位表未知都不触发。
-  useEffect(() => {
-    const previous = prevEffort.current
-    prevEffort.current = effort
+  // 触发判定在渲染期做（React 官方的「props 变化即调整 state」模式），
+  // 不放 effect——effect 晚一帧，effort 变化的首帧会以旧状态闪现。从
+  // 「已有档位」变为「另一档位」且新档位是末位最高档才触发；首次载入
+  // / 单档表 / 档位表未知 / 无共享时钟（headless 嵌入，帧永不到来，
+  // 冻结的着色行永不退场）都不触发。
+  if (effort !== prevEffort) {
+    setPrevEffort(effort)
     if (
+      clock !== null &&
       effort !== undefined &&
-      previous !== undefined &&
-      effort !== previous &&
       levels !== undefined &&
       levels.length > 1 &&
       effort === levels[levels.length - 1]
     ) {
-      const style = randomIgnitionStyle(prevStyle.current)
-      prevStyle.current = style
-      setIgnition({ style, startedAtMs: clock?.now() ?? Date.now() })
+      const nextStyle = style ?? randomIgnitionStyle(prevStyle.current)
+      prevStyle.current = nextStyle
+      setIgnition({ style: nextStyle, startedAtMs: clock.now() })
     }
-  }, [effort, levels, clock])
+  }
 
   // 动画期间才订阅共享时钟：帧回调只强制重渲染，不持任何状态。波本身
   // 是活动内容，keepAlive=true——否则在没有任何其他动画组件的场景（如
@@ -85,8 +88,11 @@ export function EffortIgnitionLine({
   }, [ignition, clock])
 
   const totalMs = ignition === null ? 0 : IGNITION_TOTAL_MS[ignition.style]
+  // Clamp at zero: the shared clock can hand back a stale tickTime for one
+  // frame after waking from pause, which would read as a large negative
+  // elapsed; the band renders empty and self-heals next tick regardless.
   const elapsedMs =
-    ignition === null ? Infinity : (clock?.now() ?? Date.now()) - ignition.startedAtMs
+    ignition === null ? Infinity : Math.max(0, (clock?.now() ?? Date.now()) - ignition.startedAtMs)
 
   // 播完即净：置回 null，行随之卸载（一次性布局变化，不在 SGR-only
   // 约束的帧间动画之内）。
