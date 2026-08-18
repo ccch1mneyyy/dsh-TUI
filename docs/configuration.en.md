@@ -142,6 +142,48 @@ Run `/mcp` to inspect connected servers and tool counts. Consult the
 [DeepSeek Harness configuration catalog](https://deepseek-harness.github.io/deepseek-harness/reference/config-catalog#deepseek-ai-dsh-mcp-client)
 for the complete field reference.
 
+## Spend estimates and the usage ledger
+
+DSH meters tokens and exposes no cost API, so the amounts in `/cost` and
+`/usage` are **estimates** computed from a local price list; your provider's
+bill is authoritative.
+
+`/cost` covers the live session: token usage, cache hit rate, estimated
+spend, and which price list produced it (source + transcription date).
+`/usage` covers every session: turns, tokens, and spend for today / the last
+7 days / the last 30 days / all time, plus a per-model breakdown.
+
+The ledger lives at `~/.dsh-tui/usage.jsonl`, one line per turn, written at
+`turn/end` and priced at the rate in force right then — a long session
+straddling the off-peak boundary is not re-priced wholesale. It only knows
+about turns run on this machine since the feature landed; deleting the file
+starts the history over. Past 4 MiB it is trimmed to the newest 10,000
+records.
+
+The built-in list is transcribed from DeepSeek's published pricing page (the
+module header carries the date) and **will** go stale. Override any part of
+it in `~/.dsh-tui/pricing.json`, applied on the next launch:
+
+```json
+{
+  "currency": "USD",
+  "asOf": "2026-08-18",
+  "peakWindowsUtc": [["01:00", "04:00"], ["06:00", "10:00"]],
+  "offPeakFactor": 0.5,
+  "models": {
+    "deepseek-v4-pro": { "cacheHitInput": 0.044, "input": 1.32, "output": 3.96 }
+  }
+}
+```
+
+Rates are **peak** prices per 1M tokens; outside the windows they are
+multiplied by `offPeakFactor`. `models` merges by id (naming one model keeps
+the rest), and ids match by longest prefix, so `deepseek-v4-pro-0813`
+inherits the `deepseek-v4-pro` rates. `cacheWriteInput` is optional and
+defaults to the `input` (cache-miss) rate, which is how DeepSeek bills. A
+malformed model entry is dropped on its own rather than invalidating the
+whole file.
+
 ## Environment variables
 
 | Variable | Purpose |

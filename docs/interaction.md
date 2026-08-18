@@ -231,7 +231,7 @@ transcript。
 | 分组 | 命令 |
 | --- | --- |
 | 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`） |
-| 状态 | `/context`、`/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
+| 状态 | `/context`、`/status`、`/cost`、`/usage`、`/config`、`/doctor`、`/init`、`/agents` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp` |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |

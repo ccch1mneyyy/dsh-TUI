@@ -74,7 +74,8 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Session / environment
   { name: 'context', description: 'Show loaded context details' },
   { name: 'status', description: 'Show session status' },
-  { name: 'cost', description: 'Show session token usage' },
+  { name: 'cost', description: 'Show session token usage and estimated spend' },
+  { name: 'usage', description: 'Show token usage and estimated spend across sessions' },
   { name: 'config', description: 'Show the dsh-tui configuration source' },
   { name: 'settings', description: 'View and edit plugin settings' },
   { name: 'doctor', description: 'Run environment checks' },

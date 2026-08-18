@@ -48,6 +48,8 @@ import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
 import { t } from '../i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import { estimateCost, loadPriceTable, type PricedUsage, type PriceTable } from '../pricing.js'
+import { appendUsageRecord } from '../usageLedger.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 import { attachSessionToWorkspace } from './workspace.js'
@@ -293,6 +295,34 @@ export interface TokenUsage {
   output: number
 }
 
+/**
+ * Running spend estimate for the live session. Summed per turn at the rate
+ * in force when that turn ended, so a session straddling the provider's
+ * off-peak boundary is not re-priced wholesale (see pricing.ts).
+ */
+export interface SessionCost {
+  /** Estimated spend in `currency`. */
+  amount: number
+  /** Currency of `amount` — the active price table's. */
+  currency: string
+  /** Turns priced against a matching model entry. */
+  pricedTurns: number
+  /** Turns left out: the price table has no entry for their model. */
+  unpricedTurns: number
+  /** Cache-hit input tokens this session (`tokens` carries only in/out). */
+  cacheRead: number
+  /** Cache-write tokens this session. */
+  cacheWrite: number
+}
+
+/**
+ * A zeroed spend estimate for a fresh session.
+ * @param currency - Currency of the active price table.
+ */
+function emptySessionCost(currency: string): SessionCost {
+  return { amount: 0, currency, pricedTurns: 0, unpricedTurns: 0, cacheRead: 0, cacheWrite: 0 }
+}
+
 /** In-process working-line snapshot derived from the base session stream. */
 export type ActivityStatus = ActivityState
 
@@ -423,6 +453,10 @@ export interface Channel {
   readonly provider: string
   /** Running token totals across the session's assistant messages. */
   readonly tokens: TokenUsage
+  /** Running spend estimate for this session (`/cost`). */
+  readonly cost: SessionCost
+  /** The price table the estimate uses, for provenance in the readout. */
+  readonly priceTable: PriceTable
   /** Working directory of the session. */
   readonly cwd: string
   /** Human-facing cwd (remote POSIX path/URI instead of a host alias). */
@@ -763,6 +797,10 @@ export interface ChannelState {
   model: string
   provider: string
   tokens: TokenUsage
+  /** Running spend estimate (see the public Channel type). */
+  cost: SessionCost
+  /** Active price table (see the public Channel type). */
+  priceTable: PriceTable
   cwd: string
   displayCwd: string
   gitBranch: string | undefined
@@ -1841,6 +1879,12 @@ export function createChannel(
     await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
   }
 
+  // The price table is read once per channel: `/cost` names its `asOf` and
+  // source so a stale number is traceable, and a pricing.json edit takes
+  // effect on the next launch rather than mid-session (which would make two
+  // turns of the same session disagree for no visible reason).
+  const priceTable = loadPriceTable()
+
   const state: ChannelState = {
     version: 0,
     rows: [],
@@ -1850,6 +1894,8 @@ export function createChannel(
     model: options.model,
     provider: options.provider,
     tokens: { input: 0, output: 0 },
+    cost: emptySessionCost(priceTable.currency),
+    priceTable,
     cwd: options.cwd,
     displayCwd: workspaceService.describe(options.cwd).description ?? options.cwd,
     gitBranch: undefined,
@@ -2205,6 +2251,7 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
+      state.cost = emptySessionCost(state.priceTable.currency)
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
@@ -2224,7 +2271,7 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of coalesceReplayEvents(seed)) renderEvent(event)
+      replayEvents(seed)
       // Rebind subscriptions to the new agent, then free the old one.
       const oldHandle = currentHandle
       const sourceSessionId = String(agent.session.id)
@@ -2363,6 +2410,7 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
+      state.cost = emptySessionCost(state.priceTable.currency)
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
@@ -2401,7 +2449,7 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of coalesceReplayEvents(handle.agent.session.events)) renderEvent(event)
+      replayEvents(handle.agent.session.events)
       settleStreaming()
       // Rebind subscriptions to the resumed agent, then free the old one.
       const oldHandle = currentHandle
@@ -2522,6 +2570,7 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
+      state.cost = emptySessionCost(state.priceTable.currency)
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
@@ -2699,6 +2748,7 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.tokens = { input: 0, output: 0 }
+      state.cost = emptySessionCost(state.priceTable.currency)
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
@@ -2721,7 +2771,7 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of coalesceReplayEvents(seed)) renderEvent(event)
+      replayEvents(seed)
       settleStreaming()
       const oldHandle = currentHandle
       agent = handle.agent
@@ -3968,6 +4018,46 @@ ${output}
   const sealedReasoning: ChatRow[] = []
   /** Wall-clock start of the current reasoning row (durationMs on settle). */
   let reasoningStart = 0
+  /** This turn's token usage, folded into the session estimate and the
+   *  usage ledger at turn/end. Accumulated per assistant message rather
+   *  than written per message: one append per turn keeps the ledger off the
+   *  streaming path. */
+  let turnUsage: PricedUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  /**
+   * True while a durable log is being replayed through `renderEvent`
+   * (boot, /resume, rewind, model switch). The session estimate is REBUILT
+   * from a replay — it describes the whole session — but the usage ledger
+   * must not be: those turns were recorded when they ran, and appending
+   * them again would inflate `/usage` once per resume.
+   */
+  let replaying = false
+  /**
+   * Fold the finished turn's tokens into the session estimate and, for a
+   * live turn, the usage ledger; then clear the accumulator. A turn that
+   * consumed nothing (an immediate abort, a local command) records nothing,
+   * so an idle session never grows the ledger.
+   * @param at - Epoch milliseconds of the turn's end.
+   */
+  const settleTurnCost = (at: number): void => {
+    const spent = turnUsage
+    turnUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    if (spent.input + spent.output + spent.cacheRead + spent.cacheWrite === 0) return
+    const amount = estimateCost(state.priceTable, state.model, spent, at)
+    if (amount === undefined) state.cost.unpricedTurns += 1
+    else {
+      state.cost.amount += amount
+      state.cost.pricedTurns += 1
+    }
+    if (replaying) return
+    appendUsageRecord({
+      at,
+      session: String(agent.session.id),
+      provider: state.provider,
+      model: state.model,
+      ...spent,
+      ...(amount === undefined ? {} : { amount, currency: state.priceTable.currency }),
+    })
+  }
   /** Decode-throughput fold for the current turn. DSH defines one step as
    *  one model call plus its tools; summing only first-token → message spans
    *  excludes tool execution and per-request TTFT from generation speed. */
@@ -4282,6 +4372,14 @@ ${output}
             cacheRead: usage.cacheReadTokens ?? 0,
             cacheWrite: usage.cacheWriteTokens ?? 0,
           }
+          // Cache tokens are billed at their own rates, so the spend estimate
+          // needs all four counters — `state.tokens` only carries in/out.
+          turnUsage.input += state.lastUsage.input
+          turnUsage.output += state.lastUsage.output
+          turnUsage.cacheRead += state.lastUsage.cacheRead
+          turnUsage.cacheWrite += state.lastUsage.cacheWrite
+          state.cost.cacheRead += state.lastUsage.cacheRead
+          state.cost.cacheWrite += state.lastUsage.cacheWrite
         }
         const tpsMessageStep = tpsStep
         if (
@@ -4400,6 +4498,7 @@ ${output}
       }
       case 'turn/start': {
         state.working = true
+        turnUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
         state.turnStart = Date.now()
         state.responseChars = 0
         state.spinnerMode = 'requesting'
@@ -4417,6 +4516,9 @@ ${output}
         settleStreaming()
         state.working = false
         state.activeToolCount = 0
+        // Price and record the turn before the reason branches — an aborted
+        // or failed turn still burned the tokens it burned.
+        settleTurnCost(event.time)
         if (tpsTurn !== undefined && tpsTurn === event.data.turn) {
           if (tpsTurnSampled && tpsTurnDecodeMs > 0) {
             const turnTps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
@@ -4533,8 +4635,22 @@ ${output}
     }
   }
 
+  /**
+   * Render a durable log without re-recording its turns in the usage ledger
+   * (see `replaying`). Every replay path goes through here.
+   * @param events - The log to replay.
+   */
+  const replayEvents = (events: readonly SessionEvent[]): void => {
+    replaying = true
+    try {
+      for (const event of coalesceReplayEvents(events)) renderEvent(event)
+    } finally {
+      replaying = false
+    }
+  }
+
   // Replay the durable transcript first, then follow live events.
-  for (const event of coalesceReplayEvents(agent.session.events)) renderEvent(event)
+  replayEvents(agent.session.events)
   settleStreaming()
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.

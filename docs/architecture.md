@@ -87,6 +87,8 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 | `~/.dsh-tui/themes/` | 用户自定义主题 JSON |
 | `~/.dsh-tui/working-activity.json` | 工作状态动画选择 |
 | `~/.dsh-tui/agent-preset.json` | 新会话默认 Agent preset |
+| `~/.dsh-tui/usage.jsonl` | `/usage` 的本地用量账本（每回合一行，超过 4 MiB 裁到最近 10000 条） |
+| `~/.dsh-tui/pricing.json` | 覆盖内置价目表的可选用户文件（`/cost`、`/usage`） |
 
 `DSH_TUI_SESSION_ROOT` 在两种组合中都改写 JSONL 根目录。profile 默认使用
 `$DSH_HOME/sessions`（通常为 `~/.dsh/sessions/`）；直接运行根目录的

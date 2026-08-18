@@ -112,6 +112,10 @@ jobs:
       # Alt+numpad 两轮合成。
       - run: node --import tsx/esm scripts/verify-win32-input.tsx
 
+      # 花费估算与用量账本回归：错峰边界、模型前缀匹配、pricing.json
+      # 覆盖合并（坏条目只丢自己）、账本截断行容错与窗口汇总。
+      - run: node scripts/verify-cost.mjs
+
       # 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
       - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
 

@@ -5,6 +5,8 @@ import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
+import { formatAmount } from '../pricing.js'
+import { readUsageRecords, summarizeUsage, type UsageWindow } from '../usageLedger.js'
 import { homeDir } from '../utils/paths.js'
 import type { LlmModelInfo } from '../dsh-adapter/types.js'
 import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
@@ -968,6 +970,7 @@ export function Chat({
       }
       case 'cost': {
         const usage = channel.lastUsage
+        const cost = channel.cost
         const lines = [
           `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
         ]
@@ -976,9 +979,66 @@ export function Chat({
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
           lines.push(t('cost-cache-hit-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
         }
+        if (cost.pricedTurns > 0) {
+          lines.push(t('cost-estimate', {
+            amount: formatAmount(cost.amount, cost.currency),
+            model: channel.model,
+            turns: cost.pricedTurns,
+          }))
+        }
+        if (cost.unpricedTurns > 0) {
+          lines.push(t('cost-unpriced', { turns: cost.unpricedTurns, model: channel.model }))
+        }
+        lines.push(t('cost-table', {
+          source: channel.priceTable.source,
+          asOf: channel.priceTable.asOf,
+          path: `${homeDir()}/.dsh-tui/pricing.json`,
+        }))
         lines.push(t('cost-note'))
         setHelpOpen(false)
         channel.pushLocal('/cost', lines)
+        return true
+      }
+      case 'usage': {
+        // Cross-session rollup from the TUI's own ledger (usageLedger.ts).
+        // Read on demand rather than held in state: the file only changes
+        // between turns, and /usage is not a hot path.
+        setHelpOpen(false)
+        const ledgerPath = `${homeDir()}/.dsh-tui/usage.jsonl`
+        const summary = summarizeUsage(readUsageRecords(), Date.now())
+        if (summary.all.turns === 0) {
+          channel.pushLocal('/usage', [t('usage-empty', { path: ledgerPath })])
+          return true
+        }
+        const windowLine = (key: 'usage-today' | 'usage-week' | 'usage-month' | 'usage-all', w: UsageWindow) => {
+          const tokens = w.input + w.output + w.cacheRead + w.cacheWrite
+          const line = t(key, {
+            turns: w.turns,
+            tokens: formatTokens(tokens),
+            amount: formatAmount(w.amount, summary.currency),
+          })
+          return w.unpriced > 0 ? `${line} ${t('usage-unpriced', { turns: w.unpriced })}` : line
+        }
+        const lines = [
+          windowLine('usage-today', summary.today),
+          windowLine('usage-week', summary.week),
+          windowLine('usage-month', summary.month),
+          windowLine('usage-all', summary.all),
+          '',
+          t('usage-by-model'),
+          ...summary.models.map(entry => t('usage-model-row', {
+            model: entry.model,
+            turns: entry.turns,
+            tokens: formatTokens(entry.tokens),
+            amount: formatAmount(entry.amount, summary.currency),
+          })),
+          '',
+          t('usage-ledger-note', {
+            path: ledgerPath,
+            since: new Date(summary.since ?? Date.now()).toLocaleDateString(),
+          }),
+        ]
+        channel.pushLocal('/usage', lines)
         return true
       }
       case 'settings': {

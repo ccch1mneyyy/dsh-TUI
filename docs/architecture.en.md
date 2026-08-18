@@ -100,6 +100,8 @@ ConPTY.
 | `~/.dsh-tui/themes/` | User theme JSON files |
 | `~/.dsh-tui/working-activity.json` | Activity animation selection |
 | `~/.dsh-tui/agent-preset.json` | Default Agent preset for new sessions |
+| `~/.dsh-tui/usage.jsonl` | Local usage ledger behind `/usage` (one line per turn; trimmed to the newest 10,000 past 4 MiB) |
+| `~/.dsh-tui/pricing.json` | Optional user file overriding the built-in price list (`/cost`, `/usage`) |
 
 `DSH_TUI_SESSION_ROOT` overrides the JSONL root in either composition. The
 profile defaults to `$DSH_HOME/sessions` (normally `~/.dsh/sessions/`);

@@ -133,6 +133,40 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 [DeepSeek Harness 配置目录](https://deepseek-harness.github.io/deepseek-harness/reference/config-catalog#deepseek-ai-dsh-mcp-client)
 为准。
 
+## 花费估算与用量账本
+
+DSH 只计量 token，不提供费用接口，所以 `/cost` 与 `/usage` 的金额都是本地
+价目表算出来的**估算**，以 provider 账单为准。
+
+`/cost` 报本会话：token 用量、缓存命中率、估算花费，以及用的是哪张价目表
+（来源 + 转录日期）。`/usage` 报跨会话：今日 / 近 7 天 / 近 30 天 / 全部的
+回合数、token 与花费，外加按模型的分布。
+
+账本在 `~/.dsh-tui/usage.jsonl`，一个回合一行，在 `turn/end` 写入并按当时
+的档位计价——横跨错峰边界的长会话不会被整体重算。它只记录本机、本功能上线
+之后的回合；删掉文件就从头开始。文件超过 4 MiB 时自动裁到最近 10000 条。
+
+内置价目表转录自 DeepSeek 官方定价页（模块头注明转录日期），**一定会过时**。
+用 `~/.dsh-tui/pricing.json` 覆盖任意部分，重启生效：
+
+```json
+{
+  "currency": "USD",
+  "asOf": "2026-08-18",
+  "peakWindowsUtc": [["01:00", "04:00"], ["06:00", "10:00"]],
+  "offPeakFactor": 0.5,
+  "models": {
+    "deepseek-v4-pro": { "cacheHitInput": 0.044, "input": 1.32, "output": 3.96 }
+  }
+}
+```
+
+费率是**高峰期**单价、每 1M token；峰外乘 `offPeakFactor`。`models` 按模型 id
+合并（只写一个模型不会清掉其他），模型 id 支持前缀匹配，所以
+`deepseek-v4-pro-0813` 会继承 `deepseek-v4-pro` 的费率。`cacheWriteInput`
+可选，缺省按 `input`（cache miss）计——DeepSeek 就是这么算的。单条 model
+写坏（缺费率）只丢这一条，不会让整张表失效。
+
 ## 环境变量
 
 | 变量 | 用途 |
