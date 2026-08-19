@@ -6,7 +6,7 @@
  */
 import React from 'react'
 import { PassThrough } from 'node:stream'
-import { render, Text } from '../src/ui.js'
+import { render, Text, useInput } from '../src/ui.js'
 import instances from '../src/ink/instances.js'
 
 let failures = 0
@@ -20,8 +20,30 @@ const originalStderrWrite = process.stderr.write
 const originalConsoleLog = console.log
 const stdout = new PassThrough() as unknown as NodeJS.WriteStream
 Object.assign(stdout, {isTTY: true, columns: 80, rows: 24})
-const instance = await render(React.createElement(Text, null, 'shutdown regression'), {
+
+class FakeStdin extends PassThrough {
+  isTTY = true
+  isRaw = false
+
+  setRawMode(value: boolean): this {
+    this.isRaw = value
+    return this
+  }
+
+  ref(): this { return this }
+  unref(): this { return this }
+}
+
+const stdin = new FakeStdin()
+let receivedInput = ''
+function InputProbe(): React.ReactNode {
+  useInput(input => { receivedInput += input })
+  return React.createElement(Text, null, 'shutdown regression')
+}
+
+const instance = await render(React.createElement(InputProbe), {
   stdout,
+  stdin: stdin as unknown as NodeJS.ReadStream,
   exitOnCtrlC: false,
   patchConsole: true,
 })
@@ -31,6 +53,7 @@ check('Ink installs the stderr guard while the TUI is mounted', patchedStderrWri
 
 const sigcontListenersBefore = process.listenerCount('SIGCONT')
 const resizeListenersBefore = stdout.listenerCount('resize')
+const stdinListenersBefore = stdin.listenerCount('readable')
 const runtime = instances.get(stdout)
 runtime?.detachForShutdown()
 
@@ -38,6 +61,12 @@ check('shutdown detach restores process.stderr.write before post-exit work', pro
 check('shutdown detach restores console output before post-exit work', console.log === originalConsoleLog)
 check('shutdown detach removes the SIGCONT listener', process.listenerCount('SIGCONT') < sigcontListenersBefore)
 check('shutdown detach removes the stdout resize listener', stdout.listenerCount('resize') < resizeListenersBefore)
+check('Ink owns a stdin reader before shutdown detach', stdinListenersBefore > 0)
+check('shutdown detach removes the stdin reader', stdin.listenerCount('readable') < stdinListenersBefore)
+
+stdin.write('x')
+await new Promise(resolve => setImmediate(resolve))
+check('detached Ink does not consume input meant for the replacement process', receivedInput === '')
 
 // detach intentionally makes unmount a no-op. Remove the test-only map entry
 // without attempting a second terminal cleanup.

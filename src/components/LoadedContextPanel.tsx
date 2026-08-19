@@ -36,13 +36,13 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * The startup context panel: a collapsed one-line summary of what a
  * fresh conversation will load for the current agent (system prompt
  * sections, workspace instruction files, dynamic context, skill catalog,
- * tools). Toggle with Ctrl+T (see HelpMenu; the ported ink core has no
- * mouse-click handling, so the header is not clickable); the panel renders
- * only while the transcript is still empty — the first message's rows take
- * over. Renders nothing for an empty snapshot.
+ * tools), expandable to the grouped details with Ctrl+P. The `/context`
+ * local command still prints the same details as a transcript report.
+ * The panel renders only while the transcript is still empty — the first
+ * message's rows take over. Renders nothing for an empty snapshot.
  * @param context - the channel's loaded-context snapshot.
  * @param open - whether the grouped details are shown.
- * @param onToggle - flips `open`; fired by the Ctrl+T keybinding.
+ * @param onToggle - flips `open`; fired by the Ctrl+P keybinding.
  */
 export function LoadedContextPanel({
   context,
@@ -58,9 +58,8 @@ export function LoadedContextPanel({
   return (
     <Box flexDirection="column" marginTop={1} marginBottom={1}>
       <Box paddingX={1} backgroundColor={open ? 'userMessageBackground' : undefined}>
-        <Text wrap="truncate" bold={open}>
-          {open ? '▼' : '▶'} {t('context-loaded')} · {summary}
-          <Text dimColor> （Ctrl+T{open ? t('context-panel-collapse') : t('context-panel-expand')}）</Text>
+        <Text bold={open} wrap="truncate">
+          {open ? '▼' : '▶'} <Text dimColor>（Ctrl+P{open ? t('context-panel-collapse') : t('context-panel-expand')}）</Text> {t('context-loaded')} · {summary}
         </Text>
       </Box>
       {open && (
@@ -116,6 +115,7 @@ export function LoadedContextPanel({
               ))}
             </Group>
           )}
+          <Text dimColor>· /context</Text>
         </Box>
       )}
     </Box>

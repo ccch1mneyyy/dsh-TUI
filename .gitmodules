@@ -1,0 +1,7 @@
+[submodule "dsh-ecosystem-spec"]
+	path = dsh-ecosystem-spec
+	url = https://github.com/T-Auto/dsh-ecosystem-spec.git
+
+[submodule "vendor/dsh-std"]
+	path = vendor/dsh-std
+	url = https://github.com/Yan-Zero/dsh-std.git

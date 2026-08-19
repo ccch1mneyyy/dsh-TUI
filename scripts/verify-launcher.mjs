@@ -27,6 +27,8 @@ import { shellQuote } from '../lib/types/utils/shellQuote.js'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const bin = join(root, 'bin', 'dsh-tui.js')
 const ownVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
+const PROFILE = 'dsh-tui'
+const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PKG_DIR = join('profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
 
 let failures = 0
@@ -124,14 +126,24 @@ check('nonzero exit: stderr gives the direct command', r.stderr.includes('dsh --
 r = runBin([], { DSH_STUB_EXIT: '42', DSH_TUI_LANG: 'zh' })
 check('nonzero exit: Chinese message names the status', r.stderr.includes('退出码 42'))
 
-// --- 3. 前向错位（profile 更新）：打印提示但不阻塞启动（0.7.2 起降级可用）---
+// --- 3. 前向错位（profile 更新）：必须指向「更新全局 Launcher」------------
+// 0.8.3 起修复方向按版本方向区分：profile 比 Launcher 新时再让用户跑
+// /update 会得到 "Already up to date" 循环——必须给精确的全局升级命令。
 const [ownMajor, ownMinor] = ownVersion.split('-')[0].split('.').map(Number)
 const newerProfile = `${ownMajor}.${ownMinor + 1}.0`
 setProfileVersion(newerProfile)
 resetStubLog()
 r = runBin([])
-check('mismatch: hint names both versions', r.stderr.includes(`v${newerProfile}`) && r.stderr.includes(`v${ownVersion}`))
-check('mismatch: still launches', stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0)
+check('forward skew: hint names both versions', r.stderr.includes(`v${newerProfile}`) && r.stderr.includes(`v${ownVersion}`))
+check(
+  'forward skew: tells user to align the global launcher',
+  r.stderr.includes(`npm install -g ${PACKAGE}@${newerProfile}`),
+)
+check(
+  'forward skew: never tells user to update the profile again',
+  !r.stderr.includes('/update') && !r.stderr.includes(`plugin --profile ${PROFILE}`),
+)
+check('forward skew: still launches', stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0)
 
 // --- 3.5 反向错位（profile 更旧，issue #183）：拒绝启动并给出对齐命令 --------
 // dsh CLI 的 bundle patch 取自启动器拷贝、插件模块取自 profile 拷贝；启动器
@@ -145,6 +157,36 @@ check('reverse skew: names both versions', r.stderr.includes('v0.0.0') && r.stde
 check('reverse skew: prints the align command', r.stderr.includes(`add @deepseek-harness-tui/dsh-tui@${ownVersion}`))
 r = runBin([], { DSH_TUI_LANG: 'en' })
 check('reverse skew: English message', r.stderr.includes('cannot start'))
+
+// --- 3.6 同 minor 反向 patch-skew（0.8.2 Launcher / 0.8.1 Profile）---------
+// 非致命：允许启动，但应把 profile 对齐到启动器（用 prerelease 构造
+// "同 core、较旧"的 semver——对稳定发布 x.y.z，x.y.z-0 一定更旧且 major/
+// minor 相同）。
+const olderSameMinorProfile = `${ownVersion}-0`
+setProfileVersion(olderSameMinorProfile)
+resetStubLog()
+r = runBin([])
+check(
+  'patch skew: older profile still launches',
+  stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0,
+)
+check(
+  'patch skew: tells user to align the profile to the launcher',
+  r.stderr.includes(`dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`),
+)
+check(
+  'patch skew: does not tell user to update the global launcher',
+  !r.stderr.includes('npm install -g'),
+)
+
+// --- 3.7 Launcher→runtime 契约：子进程必须收到 DSH_TUI_LAUNCHER_VERSION ---
+// 让 /update 能诊断「全局 Launcher 是否落后于刚装的 profile」。先做源码
+// 静态断言，更强的 e2e（stub 记录子进程 env）后续再补。
+const launcherSource = readFileSync(bin, 'utf8')
+check(
+  'launcher env: child receives DSH_TUI_LAUNCHER_VERSION',
+  launcherSource.includes('process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion'),
+)
 
 // --- 5. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
 const envNoDsh = { PATH: noDshPath }

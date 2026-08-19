@@ -77,6 +77,10 @@ export interface Config {
    *  terminals (≥110 cols) and unified below; `split`/`unified` force one
    *  layout. Editable live from the `/settings` screen. */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Thinking-block display: `preview` (default) streams a 2-3 line live
+   *  preview and folds each step when it settles; `full` keeps thinking
+   *  expanded until the whole turn ends. Editable live from `/settings`. */
+  thinkingFold?: 'preview' | 'full'
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
@@ -102,6 +106,7 @@ export const Config: Schema<Config> = Schema.object({
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+  thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   modes: Schema.array(
     Schema.object({
       id: Schema.string(),

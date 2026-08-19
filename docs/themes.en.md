@@ -87,6 +87,7 @@ Common override groups:
 | Group | Keys |
 | --- | --- |
 | Tool card surfaces (two depths) | `toolCardBackground`, `toolCardBackgroundDim` |
+| Tool status dots (by category) | `toolDotExec`, `toolDotRead`, `toolDotWrite`, `toolDotWeb`, `toolDotTask` |
 | Diff rows | `diffAdded`, `diffRemoved`, `diffAddedDimmed`, `diffRemovedDimmed`, `diffAddedWord`, `diffRemovedWord` |
 | Diff syntax highlighting | `syntaxKeyword`, `syntaxString`, `syntaxComment`, `syntaxNumber`, `syntaxFunction`, `syntaxType`, `syntaxVariable`, `syntaxOperator`, `syntaxPunctuation`, `syntaxConstant` |
 

@@ -71,6 +71,14 @@ dsh 不设 profile 环境变量）；源码运行/--config 直启时 onUpdate �
      （避免赋值 undefined 变字符串泄漏给子进程）；现版本未严格新于标记值时
      logger.warn + stderr 中文提示（"可能是镜像 registry 未同步，请稍后重试
      或检查 registry 配置"）
+  -> 0.8.3 Launcher 对齐桥接（同一核验区块）：/update 只替换 profile 内
+     的包，全局 dsh-tui Launcher 是独立安装。Launcher（bin/dsh-tui.js，
+     >=0.8.3）spawn dsh 前设置 DSH_TUI_LAUNCHER_VERSION；更新成功后若该
+     marker 缺失（旧 Launcher <=0.8.2 不设置），给一次性"如果你使用全局
+     dsh-tui，请同步更新"提示；若 marker 明确比新 Profile 旧，给精确的
+     `npm install -g @deepseek-harness-tui/dsh-tui@<profile版本>` 命令。
+     marker 非一次性，后续 /update 重启需继承，才能知道外层 Launcher
+     是否落后。
 ```
 
 失败路径（src/plugin.ts:236-244）：updateCode 非 0 时不重启，打印 'cc-tui update

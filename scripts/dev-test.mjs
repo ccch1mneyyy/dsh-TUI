@@ -87,7 +87,11 @@ try {
 
   run('pnpm', ['install', '--frozen-lockfile'])
   run('pnpm', ['build'])
-  run('pnpm', ['pack', '--pack-destination', packDir], { stdio: 'ignore' })
+  // npm pack, not pnpm: @dsh-std/* are bundledDependencies (#308) and pnpm
+  // refuses to pack them under the isolated linker
+  // (ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED) - same reason publish.yml
+  // switched to npm publish (1801177).
+  run('npm', ['pack', '--pack-destination', packDir])
 
   const tarballs = readdirSync(packDir)
     .filter(file => file.endsWith('.tgz'))

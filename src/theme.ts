@@ -54,6 +54,12 @@ export type Theme = {
   // shade, diff context rows the lighter one, changed rows the diff palette)
   toolCardBackground: string
   toolCardBackgroundDim: string
+  // Tool status dots, by tool category (error always wins with a red ✗)
+  toolDotExec: string
+  toolDotRead: string
+  toolDotWrite: string
+  toolDotWeb: string
+  toolDotTask: string
   // Diff syntax highlighting (user themes may override any of these)
   syntaxKeyword: string
   syntaxString: string
@@ -195,6 +201,11 @@ const darkTheme: Theme = {
   diffRemovedWord: rgb('#B26671'),
   toolCardBackground: rgb('#242B3A'), // lighter blue-grey card surface
   toolCardBackgroundDim: rgb('#1C2330'), // deeper blue substrate
+  toolDotExec: rgb('#7FAE99'), // sage green — bash/pwsh
+  toolDotRead: rgb('#82B8C7'), // cyan blue — read/grep/glob
+  toolDotWrite: rgb('#B3A0D4'), // soft violet — edit/write
+  toolDotWeb: rgb('#7DA1DE'), // mist blue — web search/fetch
+  toolDotTask: rgb('#D194AE'), // mist rose — subagent/jobs
   syntaxKeyword: rgb('#8FA8E8'), // mist blue
   syntaxString: rgb('#9FBF8F'), // soft sage
   syntaxComment: rgb('#6B7280'), // neutral grey
@@ -285,6 +296,11 @@ const lightTheme: Theme = {
   diffRemovedWord: rgb('#E5B3AE'),
   toolCardBackground: rgb('#E9EFF9'), // cool light blue card
   toolCardBackgroundDim: rgb('#DEE7F4'), // deeper blue-tinted substrate
+  toolDotExec: rgb('#4E7A4E'),
+  toolDotRead: rgb('#3F7E8F'),
+  toolDotWrite: rgb('#7A5CA8'),
+  toolDotWeb: rgb('#4A63A8'),
+  toolDotTask: rgb('#B04A5A'),
   syntaxKeyword: rgb('#4A63A8'),
   syntaxString: rgb('#4E7A4E'),
   syntaxComment: rgb('#8A8F98'),
@@ -377,6 +393,11 @@ const darkAnsiTheme: Theme = {
   diffRemovedWord: 'ansi:redBright',
   toolCardBackground: 'ansi:blackBright',
   toolCardBackgroundDim: 'ansi:black',
+  toolDotExec: 'ansi:greenBright',
+  toolDotRead: 'ansi:cyanBright',
+  toolDotWrite: 'ansi:magentaBright',
+  toolDotWeb: 'ansi:blueBright',
+  toolDotTask: 'ansi:redBright',
   syntaxKeyword: 'ansi:blueBright',
   syntaxString: 'ansi:greenBright',
   syntaxComment: 'ansi:blackBright',

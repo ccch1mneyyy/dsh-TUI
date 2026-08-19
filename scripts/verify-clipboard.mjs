@@ -395,6 +395,17 @@ exit 1
     "process.stdout.write(Buffer.from([0xE5])); setTimeout(() => { process.stdout.write(Buffer.from([0x89, 0xAA])); }, 60)",
   ])
   check('execFileNoThrow decodes UTF-8 across chunk boundaries', r.stdout === '剪', `got ${JSON.stringify(r.stdout)}`)
+
+  const closedStdin = await execFileNoThrow(
+    process.execPath,
+    ['-e', 'process.stdin.destroy(); setTimeout(() => process.exit(0), 50)'],
+    { input: 'x'.repeat(16 * 1024 * 1024) },
+  )
+  check(
+    'execFileNoThrow survives a child closing stdin before the input is written',
+    closedStdin.code === 0,
+    `got ${JSON.stringify(closedStdin)}`,
+  )
 }
 
 if (failed > 0) {

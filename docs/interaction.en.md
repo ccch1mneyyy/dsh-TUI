@@ -9,7 +9,7 @@
 | `Enter` | Send while idle; steer text into the running turn at its next step boundary; confirm an open menu |
 | `Tab` | Complete a `/` command or `@` file; while the model is working, queue non-empty input as a post-turn follow-up |
 | `Ctrl+Enter` | Interrupt the running turn and process the input immediately |
-| `Shift+Enter` | Insert a newline at the caret |
+| `Shift+Enter` / `Ctrl+J` | Insert a newline at the caret; `Ctrl+J` (LF) is the fallback when the terminal cannot report the Shift modifier |
 | `Shift+Tab` | Cycle the configured session modes (default: default → plan → full-access) |
 | `Alt/Option+Up` | Pull the latest undelivered message back into the editor |
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
@@ -28,6 +28,13 @@
 `/` has two meanings. In normal input it opens slash-command completion. In
 the `Ctrl+O` transcript view it opens full-session search; use `n` and `N` to
 move forward and backward through matches.
+
+Plugins may register additional combos through the `tuiShortcuts` seam (they
+must carry Ctrl or Alt); built-in bindings always win and conflicting combos
+are refused at registration. A managed plugin dialog (select/confirm/input)
+owns the keyboard while open: `↑`/`↓` to move, `Enter` to confirm, `Esc` to
+cancel. Plugins may also contribute display-only text to the status line
+above the prompt.
 
 ## Editing keys
 
@@ -60,7 +67,10 @@ the prompt sends a real image block. The prompt never contains base64.
 ## Interface language
 
 `/lang` toggles the UI between Simplified Chinese and English (affects all UI
-strings); the choice persists across restarts (0.3.7+).
+strings); the choice persists across restarts (0.3.7+). The **dsh-tui →
+Language** select in `/settings` switches it too (applies immediately and saves
+to `dsh-tui.lang` in `~/.dsh/settings.yaml`; the `DSH_TUI_LANG` env var always
+wins).
 
 ## Message delivery semantics
 
@@ -130,6 +140,13 @@ selection is confirmed, the TUI:
 2. Creates a branch session through DSH session fork.
 3. Replays history before the boundary.
 4. Restores the original message to the editor for revision and resubmission.
+
+Plugins can intervene (`tui/rewind-prompt` decision event): veto the rewind
+(with a reason), or offer extra rewind modes in the confirm pane — e.g.
+"rewind the conversation AND restore the files changed since". The first
+option is always "Conversation only"; when a plugin mode is picked, the
+plugin receives `tui/rewind-done` (with the chosen mode id and both session
+ids) once the rewind completes, and may reply with a summary toast.
 
 ### Side question /btw
 
@@ -250,7 +267,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Group | Commands |
 | --- | --- |
 | Sessions | `/new`, `/resume`, `/rename`, `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`) |
-| Status | `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
+| Status | `/context`, `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp` |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
