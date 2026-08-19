@@ -10,6 +10,8 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
+import { activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import { componentIdentityOf } from './component-identity.js'
 
 /** One rendered contribution. */
 export interface TuiStatusEntry {
@@ -22,6 +24,7 @@ export interface TuiStatusEntry {
 const KEY_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/u
 const TEXT_CELLS = 200
 const MAX_ENTRIES = 20
+const HOST_STATUS_OWNER = Object.freeze({ kind: 'host-status-owner' })
 
 /** Cordis-free keyed-text store. Render order is first-set order (Map
  *  insertion order), so a plugin's line never jumps around on updates. */
@@ -31,13 +34,13 @@ export class TuiStatusStore {
   // value comparison has an ABA hole (set 'x', set 'x' again, the first
   // disposer would wipe the second write, e.g. a hot reload restoring the
   // same status text).
-  private readonly entries = new Map<string, { text: string; token: number }>()
+  private readonly entries = new Map<string, { text: string; token: number; owner: object }>()
   // useSyncExternalStore requires a referentially stable snapshot between
   // emits — a fresh array per call would re-render in an infinite loop.
   private snapshot: readonly TuiStatusEntry[] = []
 
   /** Set or clear (undefined/empty) one key. */
-  set(key: string, text: string | undefined, token = 0): void {
+  set(key: string, text: string | undefined, token = 0, owner: object = HOST_STATUS_OWNER): void {
     const had = this.entries.has(key)
     if (text === undefined || text === '') {
       if (!had) return
@@ -50,7 +53,7 @@ export class TuiStatusStore {
         existing.token = token
         return
       }
-      this.entries.set(key, { text, token })
+      this.entries.set(key, { text, token, owner })
     }
     this.snapshot = [...this.entries].map(([entryKey, entry]) => ({ key: entryKey, text: entry.text }))
     this.emit()
@@ -61,10 +64,17 @@ export class TuiStatusStore {
     return this.snapshot
   }
 
+  /** Host runtime uses this to enforce that one activation cannot rewrite or
+   * clear another activation's keyed contribution. */
+  ownerOf(key: string): object | undefined {
+    return this.entries.get(key)?.owner
+  }
+
   /** Clear `key` only while it still holds the write tagged `token` — a
    *  stale disposer must not wipe a newer contribution (even one with
    *  identical text). Returns true when this call actually cleared. */
-  clearIf(key: string, token: number): boolean {
+  clearIf(key: string, token: number, owner?: object): boolean {
+    if (owner !== undefined && this.entries.get(key)?.owner !== owner) return false
     if (this.entries.get(key)?.token !== token) return false
     this.entries.delete(key)
     this.snapshot = [...this.entries].map(([entryKey, entry]) => ({ key: entryKey, text: entry.text }))
@@ -104,16 +114,14 @@ declare module '@deepseek-ai/cordis' {
  * a status line must never take the TUI down.
  */
 export class TuiStatusRuntime extends Service {
-  /** The store the chat screen renders. Exposed for the host, not plugins. */
-  readonly store = new TuiStatusStore()
-
-  /** Monotonic per-write token; a disposer only clears ITS write (see the
-   *  store's token comment for the same-value ABA this prevents). */
-  private nextToken = 1
-
   constructor(ctx: Context) {
     super(ctx, 'tuiStatus')
-    ctx.effect(() => () => this.store.clear())
+    compositionRoot(ctx)
+    // Keep host state out of the traceable service object. A WeakMap also
+    // works with Cordis's caller-bound method proxy (unlike `#private`).
+    const state: StatusState = { store: new TuiStatusStore(), nextToken: 1 }
+    hostStatusStores.set(this, state)
+    ctx.effect(() => () => state.store.clear())
   }
 
   /**
@@ -138,16 +146,46 @@ export class TuiStatusRuntime extends Service {
    */
   set(key: string, text: string | number | boolean | undefined, identity?: Context): () => void {
     const noop = (): void => {}
-    const normalized = String(key ?? '').trim().toLowerCase()
-    if (!KEY_PATTERN.test(normalized)) {
-      this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected invalid key ${JSON.stringify(key)}`)
+    let caller: Context
+    try {
+      caller = requirePluginCaller(this.ctx, 'tuiStatus.set', this)
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiStatus.set requires a live non-root plugin activation')
       return noop
     }
-    if (text !== undefined && !this.store.getSnapshot().some(e => e.key === normalized)) {
+    const state = statusStateFor(this)
+    const store = state.store
+    const callerIdentity = componentIdentityOf(caller)
+    const suppliedIdentity = identity === undefined ? callerIdentity : componentIdentityOf(identity)
+    if (identity !== undefined) {
+      try {
+        assertCallerContext(caller, identity, 'tuiStatus.set')
+      } catch {
+        caller.logger.warn('dsh-tui: tuiStatus.set rejected an identity belonging to another activation')
+        return noop
+      }
+    }
+    const owner = activationFiber(caller)
+    if (owner === undefined) {
+      caller.logger.warn('dsh-tui: tuiStatus.set requires a live activation owner')
+      return noop
+    }
+    let normalized: string
+    try {
+      normalized = String(key ?? '').trim().toLowerCase()
+    } catch {
+      caller.logger.warn('dsh-tui: tuiStatus.set rejected an uncoercible key')
+      return noop
+    }
+    if (!KEY_PATTERN.test(normalized)) {
+      caller.logger.warn('dsh-tui: tuiStatus.set rejected an invalid key')
+      return noop
+    }
+    if (text !== undefined && !store.getSnapshot().some(e => e.key === normalized)) {
       // New key beyond the cap: the line is one row of terminal — an
       // unbounded count would push the prompt off screen.
-      if (this.store.getSnapshot().length >= MAX_ENTRIES) {
-        this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}": ${MAX_ENTRIES} contributions already shown`)
+      if (store.getSnapshot().length >= MAX_ENTRIES) {
+        caller.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}": ${MAX_ENTRIES} contributions already shown`)
         return noop
       }
     }
@@ -157,15 +195,19 @@ export class TuiStatusRuntime extends Service {
       // object would otherwise render as "[object Object]") is REFUSED with
       // a warning — it must not silently become a clear, either.
       if (typeof text !== 'string' && typeof text !== 'number' && typeof text !== 'boolean') {
-        this.ctx.logger.warn(`dsh-tui: tuiStatus.set rejected non-scalar text for "${normalized}"`)
+        caller.logger.warn(`dsh-tui: tuiStatus.set rejected non-scalar text for "${normalized}"`)
         return noop
       }
       cleaned = cleanScalarText(text, TEXT_CELLS)
     }
-    const token = this.nextToken++
-    const had = this.store.getSnapshot().some(entry => entry.key === normalized)
-    this.store.set(normalized, cleaned, token)
-    const ledger = this.ctx.get('tuiEffectLedger')
+    const token = state.nextToken++
+    const had = store.getSnapshot().some(entry => entry.key === normalized)
+    if (store.ownerOf(normalized) !== undefined && store.ownerOf(normalized) !== owner) {
+      caller.logger.warn(`dsh-tui: tuiStatus.set rejected "${normalized}" — the contribution belongs to another activation`)
+      return noop
+    }
+    store.set(normalized, cleaned, token, owner)
+    const ledger = caller.get('tuiEffectLedger')
     if (cleaned === undefined) {
       if (had) ledger?.record({ operation: 'release', resource: { kind: 'status', id: normalized }, result: 'applied' }, identity)
     } else {
@@ -179,14 +221,39 @@ export class TuiStatusRuntime extends Service {
         identity,
       )
     }
-    return () => {
-      if (this.store.clearIf(normalized, token)) {
-        this.ctx.get('tuiEffectLedger')?.record(
+    const dispose = () => {
+      if (store.clearIf(normalized, token, owner)) {
+        caller.get('tuiEffectLedger')?.record(
           { operation: 'release', resource: { kind: 'status', id: normalized }, result: 'applied' },
           identity,
         )
       }
     }
+    bindCallerEffect(caller, dispose)
+    return dispose
+  }
+}
+
+/** Host-only status store accessor; not part of the package export map. */
+interface StatusState {
+  readonly store: TuiStatusStore
+  nextToken: number
+}
+
+const hostStatusStores = new WeakMap<TuiStatusRuntime, StatusState>()
+
+function statusStateFor(runtime: TuiStatusRuntime): StatusState {
+  const store = hostStatusStores.get(concreteService(runtime))
+  if (store === undefined) throw new Error('tuiStatus host store is unavailable')
+  return store
+}
+
+export function getHostStatusStore(runtime: TuiStatusRuntime | undefined): TuiStatusStore | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    return hostStatusStores.get(concreteService(runtime))?.store
+  } catch {
+    return undefined
   }
 }
 

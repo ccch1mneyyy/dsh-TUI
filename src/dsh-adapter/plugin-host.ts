@@ -59,29 +59,53 @@ import {
   bindComponentIdentity,
   declaresCommand,
   requiresDecisionEvents,
+  requiresContract,
   requireComponentIdentity,
   type VerifiedComponentIdentity,
 } from './component-identity.js'
+import { activationContext, activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
+
+/** Public, mediated plugin-host capability. Loader-only admission remains
+ * behind getHostAdmission(), which is deliberately omitted from the package
+ * export surface. */
+export interface TuiPluginHost {
+  readonly generationId: string
+  readonly grants: GrantStore
+  hostDescriptor(): HostDescriptor
+  describe(): HostDescriptorBuild
+  subscribeDecision(
+    pluginCtx: Context,
+    event: string,
+    listener: (payload: Record<string, unknown>) => unknown,
+    options?: { scope?: string; order?: string },
+  ): () => boolean
+  registerCommand(pluginCtx: Context, definition: CommandDefinition): () => void
+  registerCommand(pluginCtx: Context, contributionId: string, definition: CommandDefinition): () => void
+  selfCheck(): string[]
+}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    tuiPluginHost: TuiPluginHostRuntime
+    tuiPluginHost: TuiPluginHost
   }
 }
 
 /** `ctx.tuiPluginHost` — plugin-interop anchor (generation, grants, descriptor). */
-export class TuiPluginHostRuntime extends Service {
+export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
   /** Runtime generation id (C-050): fresh per activation of this row. */
-  readonly generationId = randomUUID()
+  get generationId(): string { return hostStateFor(this).generationId }
   /** Live scoped grant store; every operation observes the current file. */
-  readonly grants: GrantStore
-
-  private descriptorBuild: HostDescriptorBuild | undefined
-  private descriptorCommandsMounted: boolean | undefined
+  get grants(): GrantStore { return hostStateFor(this).grants }
 
   constructor(ctx: Context) {
     super(ctx, 'tuiPluginHost')
-    this.grants = readGrantStore()
+    hostStates.set(this, {
+hostContext: compositionRoot(ctx),
+      generationId: randomUUID(),
+      grants: Object.freeze(readGrantStore()),
+      descriptorBuild: undefined,
+      descriptorTopology: undefined,
+    })
     // The host row may be mounted without the extensions row or a channel;
     // decision registration must remain mediated in that degraded topology.
     installDecisionGuard(ctx, this.grants)
@@ -108,26 +132,44 @@ export class TuiPluginHostRuntime extends Service {
   }
 
   private build(): HostDescriptorBuild {
-    // C-010 honesty: advertise Command only when the commands service is
-    // actually mounted — a bare/embedded context without dsh-commands must
-    // not negotiate `compatible` for a capability plugins will never get.
-    // Probed on every descriptor request: the service can mount or unmount
-    // after the first lazy build.
-    const commandsMounted = this.ctx.get('commands') !== undefined
-    if (this.descriptorBuild === undefined || this.descriptorCommandsMounted !== commandsMounted) {
-      const supported = HOST_SUPPORTED_CONTRACTS.filter(contract => contract.kind !== 'Command' || commandsMounted)
-      this.descriptorBuild = buildHostDescriptor({ generationId: this.generationId, supported })
-      this.descriptorCommandsMounted = commandsMounted
+    const state = hostStateFor(this)
+    const host = state.hostContext
+    // C-010 honesty: advertise a runtime capability only while its service is
+    // actually mounted. Probed on every descriptor request because sibling
+    // rows can mount after this service, and embedders can unload them later.
+    const commandsMounted = host.get('commands') !== undefined
+    const storageMounted = host.get('tuiPluginStorage') !== undefined
+    const observerMounted = host.get('tuiMessageObserver') !== undefined
+    const topology = `${Number(commandsMounted)}:${Number(storageMounted)}:${Number(observerMounted)}`
+    if (state.descriptorBuild === undefined || state.descriptorTopology !== topology) {
+      const supported = HOST_SUPPORTED_CONTRACTS.filter(contract => {
+        if (contract.kind === 'Command') return commandsMounted
+        if (contract.kind === 'LocalStorage') return storageMounted
+        if (contract.kind === 'MessageObserver') return observerMounted
+        return true
+      })
+      state.descriptorBuild = buildHostDescriptor({ generationId: state.generationId, supported })
+      state.descriptorTopology = topology
       if (!commandsMounted) {
-        this.ctx.logger.warn(
+        host.logger.warn(
           'dsh-tui: host descriptor: commands.dsh/v1alpha1#Command excluded — the commands service is not mounted on this context',
         )
       }
-      for (const warning of this.descriptorBuild.warnings) {
-        this.ctx.logger.warn(`dsh-tui: host descriptor: ${warning}`)
+      if (!storageMounted) {
+        host.logger.warn(
+          'dsh-tui: host descriptor: storage.dsh/v1alpha1#LocalStorage excluded — the tuiPluginStorage service is not mounted on this context',
+        )
+      }
+      if (!observerMounted) {
+        host.logger.warn(
+          'dsh-tui: host descriptor: messages.dsh/v1alpha1#MessageObserver excluded — the tuiMessageObserver service is not mounted on this context',
+        )
+      }
+      for (const warning of state.descriptorBuild.warnings) {
+        host.logger.warn(`dsh-tui: host descriptor: ${warning}`)
       }
     }
-    return this.descriptorBuild
+    return state.descriptorBuild
   }
 
   /**
@@ -139,6 +181,30 @@ export class TuiPluginHostRuntime extends Service {
     source: string,
     options: { source?: string; activationId?: string } = {},
   ): VerifiedComponentIdentity {
+    // Admission binds an untrusted manifest to a privileged activation.  A
+    // plugin-facing service proxy must not be able to choose another
+    // component's id and inherit its grants, so the loader uses the
+    // host-only accessor below instead of this public compatibility method.
+    void pluginCtx
+    void source
+    void options
+    throw new Error(
+      'dsh-tui: admission is host-owned; the loader must use its admission capability',
+    )
+  }
+
+  /** @internal Host loader entry; the unexported token prevents proxy calls. */
+  admitInternal(
+    pluginCtx: Context,
+    source: string,
+    options: { source?: string; activationId?: string } = {},
+    token?: symbol,
+  ): VerifiedComponentIdentity {
+    if (token !== HOST_ADMISSION_TOKEN) {
+      throw new Error('dsh-tui: admission capability is host-owned')
+    }
+    const host = hostContextFor(this)
+    const caller = assertActivationContext(host, pluginCtx)
     const manifest = parseManifest(source, { source: options.source })
     // The host owns the activation instance identity. Embedders may provide a
     // pre-issued id when policy has an activation-scoped grant; otherwise a
@@ -146,6 +212,10 @@ export class TuiPluginHostRuntime extends Service {
     const activationId = options.activationId ?? randomUUID()
     const data = loadSpecData()
     if (data === undefined) throw new Error('dsh-tui: admission profile is unavailable')
+    const specViolations = [...verifyRegistry(data), ...verifyContractProfiles(data)]
+    if (specViolations.length > 0) {
+      throw new Error(`dsh-tui: admission profile self-check failed: ${specViolations.join(' | ')}`)
+    }
     const index = createContractIndex(data.registry, data.permissions)
     validatePlugin(index, manifest)
     const projection = projectManifest(manifest)
@@ -153,7 +223,7 @@ export class TuiPluginHostRuntime extends Service {
       .map(request => ({
         name: request.name,
         scope: request.scope,
-        granted: this.grants.allows(
+        granted: hostStateFor(this).grants.allows(
           { componentId: manifest.id, activationId },
           request.name,
           request.scope,
@@ -163,7 +233,7 @@ export class TuiPluginHostRuntime extends Service {
     if (decision.decision !== 'compatible' && decision.decision !== 'compatible_degraded') {
       throw new Error(`dsh-tui: Component ${manifest.id} admission ${decision.decision}: ${'reasonCode' in decision ? decision.reasonCode : 'incompatible'}`)
     }
-    return bindComponentIdentity(pluginCtx, manifest, projection, activationId)
+    return bindComponentIdentity(caller, manifest, projection, activationId)
   }
 
   /**
@@ -179,23 +249,26 @@ export class TuiPluginHostRuntime extends Service {
     listener: (payload: Record<string, unknown>) => unknown,
     options: DecisionRegistrationOptions = {},
   ): () => boolean {
-    const identity = requireComponentIdentity(pluginCtx)
+    const host = hostContextFor(this)
+    const caller = assertActivationContext(host, pluginCtx)
+    assertCallerContext(this.ctx, caller, 'DecisionEvents.subscribe', this)
+    const identity = requireComponentIdentity(caller)
     if (!requiresDecisionEvents(identity)) {
       throw new Error(
         `dsh-tui: Component "${identity.componentId}" must require tui.dsh/v1alpha1#DecisionEvents before subscribing`,
       )
     }
     const previousMetadata = decisionHandlerMetadataOf(listener)
-    const release = withDecisionRegistration(pluginCtx, () => registerDecisionHandler(
-      pluginCtx,
+    const release = withDecisionRegistration(caller, () => registerDecisionHandler(
+      caller,
       identity,
       event,
       listener,
       options,
       () => {
-        this.ctx.get('tuiEffectLedger')?.record(
+        host.get('tuiEffectLedger')?.record(
           { operation: 'release', resource: { kind: 'decision-handler', id: `${identity.componentId}:${event}` }, result: 'applied' },
-          pluginCtx,
+          caller,
         )
       },
     ))
@@ -208,20 +281,20 @@ export class TuiPluginHostRuntime extends Service {
       && metadata.activationId === identity.activationId
       && metadata.event === event
     if (!registered) {
-      this.ctx.get('tuiEffectLedger')?.record(
+      host.get('tuiEffectLedger')?.record(
         {
           operation: 'bind',
           resource: { kind: 'permission', id: `${event}` },
           result: 'failed',
           errorCode: 'PERMISSION_NOT_GRANTED',
         },
-        pluginCtx,
+        caller,
       )
       return () => false
     }
-    this.ctx.get('tuiEffectLedger')?.record(
+    host.get('tuiEffectLedger')?.record(
       { operation: 'bind', resource: { kind: 'decision-handler', id: `${identity.componentId}:${event}` }, result: 'applied' },
-      pluginCtx,
+      caller,
     )
     return release
   }
@@ -245,14 +318,22 @@ export class TuiPluginHostRuntime extends Service {
     contributionOrDefinition: string | CommandDefinition,
     explicitDefinition?: CommandDefinition,
   ): () => void {
+    const host = hostContextFor(this)
+    const caller = assertActivationContext(host, pluginCtx)
+    assertCallerContext(this.ctx, caller, 'commands.register', this)
     // Resolve through the registrant context so dsh-commands attaches the
     // registration to that agent's scoped layer rather than the host-global
     // layer. Its traceable service proxy carries this context into register().
-    const commands = pluginCtx.get('commands')
+    const commands = caller.get('commands')
     if (commands === undefined) {
       throw new Error('dsh-tui: registerCommand unavailable — the commands service is not mounted on this context')
     }
-    const identity = requireComponentIdentity(pluginCtx)
+    const identity = requireComponentIdentity(caller)
+    if (!requiresContract(identity, 'commands.dsh/v1alpha1', 'Command')) {
+      throw new Error(
+        `dsh-tui: Component "${identity.componentId}" must require commands.dsh/v1alpha1#Command before registering commands`,
+      )
+    }
     const definition = typeof contributionOrDefinition === 'string' ? explicitDefinition : contributionOrDefinition
     if (definition === undefined) throw new TypeError('dsh-tui: registerCommand requires a command definition')
     const name = typeof definition.name === 'string' ? definition.name : 'unknown'
@@ -282,40 +363,36 @@ export class TuiPluginHostRuntime extends Service {
       dispose = commands.register(attributedDefinition)
     } catch (error) {
       const mapped = mapCommandError(error)
-      this.ctx.get('tuiEffectLedger')?.record(
+      host.get('tuiEffectLedger')?.record(
         {
           operation: 'create',
           resource: { kind: 'command', id: contributionId },
           result: 'failed',
           errorCode: hasCommandErrorCode(mapped, 'DUPLICATE_CONTRIBUTION_ID') ? 'DUPLICATE_CONTRIBUTION_ID' : 'COMMAND_FAILED',
         },
-        pluginCtx,
+        caller,
       )
       throw mapped
     }
-    stampCommandOwner(this.ctx, attributedDefinition, identity, contributionId)
-    this.ctx.get('tuiEffectLedger')?.record(
+    stampCommandOwner(host, attributedDefinition, identity, contributionId)
+    host.get('tuiEffectLedger')?.record(
       { operation: 'create', resource: { kind: 'command', id: contributionId }, result: 'applied' },
-      pluginCtx,
+      caller,
     )
     let released = false
     const release = () => {
       if (released) return
       released = true
-      unstampCommandOwner(this.ctx, attributedDefinition, identity.activationId)
-      this.ctx.get('tuiEffectLedger')?.record(
+      unstampCommandOwner(host, attributedDefinition, identity.activationId)
+      host.get('tuiEffectLedger')?.record(
         { operation: 'release', resource: { kind: 'command', id: contributionId }, result: 'applied' },
-        pluginCtx,
+      caller,
       )
     }
     // commands.register() already belongs to pluginCtx and therefore removes
     // the definition on fiber teardown. Keep the attribution in that same
     // lifecycle even when the caller never invokes our returned wrapper.
-    try {
-      pluginCtx.effect(() => release)
-    } catch {
-      // Degraded contexts retain the wrapper-only cleanup path below.
-    }
+    bindCallerEffect(caller, release)
     let disposed = false
     return () => {
       if (disposed) return
@@ -335,8 +412,81 @@ export class TuiPluginHostRuntime extends Service {
    */
   selfCheck(): string[] {
     const data = loadSpecData()
-    if (data === undefined) return ['vendored spec data unavailable (ecosystem-spec/)']
+    if (data === undefined) return ['vendored spec data unavailable (dsh-ecosystem-spec/)']
     return [...verifyRegistry(data), ...verifyContractProfiles(data)]
+  }
+}
+
+const HOST_ADMISSION_TOKEN = Symbol('dsh-tui.host-admission')
+
+interface HostState {
+  readonly hostContext: Context
+  readonly generationId: string
+  readonly grants: GrantStore
+  descriptorBuild: HostDescriptorBuild | undefined
+  descriptorTopology: string | undefined
+}
+
+const hostStates = new WeakMap<TuiPluginHostRuntime, HostState>()
+
+function hostStateFor(runtime: TuiPluginHostRuntime): HostState {
+  const state = hostStates.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiPluginHost host state is unavailable')
+  return state
+}
+
+function hostContextFor(runtime: TuiPluginHostRuntime): Context {
+  return hostStateFor(runtime).hostContext
+}
+
+/**
+ * Loader-only admission capability.  It is intentionally omitted from the
+ * package `plugin-host` export; tests and the in-process loader can obtain it
+ * from this adapter module, while a plugin calling the public service proxy
+ * receives a deterministic denial instead of being able to impersonate a
+ * different manifest identity.
+ */
+export interface HostAdmission {
+  admit(
+    pluginCtx: Context,
+    source: string,
+    options?: { source?: string; activationId?: string },
+  ): VerifiedComponentIdentity
+}
+
+export function getHostAdmission(runtime: TuiPluginHost | TuiPluginHostRuntime | undefined): HostAdmission | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    const concrete = concreteService(runtime) as TuiPluginHostRuntime
+    return {
+      admit: (pluginCtx, source, options = {}) => concrete.admitInternal(pluginCtx, source, options, HOST_ADMISSION_TOKEN),
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/** A mediated capability must be bound to a live non-root activation in the
+ * same Cordis composition as the host row. In particular, accepting
+ * `ctx.root` would leave identity, commands, or handlers alive after the
+ * plugin fiber unloads. */
+function assertActivationContext(hostCtx: Context, pluginCtx: Context): Context {
+  try {
+    const root = compositionRoot(hostCtx)
+    const caller = Context.is(pluginCtx) ? activationContext(pluginCtx) : undefined
+    const rootFiber = activationFiber(root)
+    const callerFiber = caller === undefined ? undefined : activationFiber(caller)
+    if (caller === undefined
+      || compositionRoot(caller) !== root
+      || caller === root
+      || callerFiber === undefined
+      || callerFiber === rootFiber) {
+      throw new Error('dsh-tui: mediated capability requires a non-root activation context from the host composition')
+    }
+    return caller
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('dsh-tui:')) throw error
+    throw new Error('dsh-tui: mediated capability requires a live activation context')
   }
 }
 

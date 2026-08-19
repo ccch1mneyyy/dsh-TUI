@@ -173,7 +173,45 @@ export async function dispatchTuiNotification(
   name: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  await dispatchTuiDecision(ctx, name, payload, () => undefined)
+  const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
+  const scope = sessionId === undefined ? undefined : `session:${sessionId}`
+  const listeners = decisionHandlersOf(ctx, name, scope)
+  const log = (message: string, error?: unknown): void => {
+    try {
+      if (error === undefined) ctx.logger.warn(message)
+      else ctx.logger.warn(message, error)
+    } catch {
+      // Degraded ctx without a logger: warnings are best-effort.
+    }
+  }
+  const started = Date.now()
+
+  // Notifications have no return-value or ordering semantics. Start every
+  // listener from the same snapshot so one slow plugin cannot delay another
+  // plugin's session rebind (or make a fire-and-forget dispatch look stuck).
+  await Promise.all(listeners.map(async handler => {
+    const permission = DECISION_EVENT_PERMISSIONS[name]
+    const principal = { componentId: handler.componentId, activationId: handler.activationId }
+    if (permission !== undefined
+      && !decisionRegistryOf(ctx).grants.allows(principal, permission, scope ?? handler.scope)) {
+      log(`dsh-tui: ${name} handler from Component "${handler.componentId}" skipped after grant revocation`)
+      return
+    }
+    const remaining = DECISION_TOTAL_TIMEOUT_MS - (Date.now() - started)
+    if (remaining <= 0) {
+      log(`dsh-tui: ${name} total decision budget exceeded; handler skipped`)
+      return
+    }
+    const bounded = await runBounded(
+      () => handler.listener(freezeClone(payload)),
+      Math.min(DECISION_HANDLER_TIMEOUT_MS, remaining),
+    )
+    if (bounded.kind === 'timeout') {
+      log(`dsh-tui: ${name} handler from Component "${handler.componentId}" exceeded ${DECISION_HANDLER_TIMEOUT_MS}ms; continuing`)
+    } else if (bounded.kind === 'error') {
+      log(`dsh-tui: ${name} listener failed; continuing with the other listeners: %o`, bounded.error)
+    }
+  }))
 }
 
 /** Shared normalizer for the veto-only decisions (session-switch, compact):

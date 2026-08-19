@@ -24,11 +24,28 @@ const [{ PassThrough, Writable }, { resolve }, { Context }, React, { render }, {
   import('../src/utils/modifiers.js'),
 ])
 
+type CordisContext = import('@deepseek-ai/cordis').Context
+
+async function activate(root: CordisContext, dependencies: readonly string[]): Promise<{
+  ctx: CordisContext
+  fiber: { dispose(): unknown }
+}> {
+  let active: CordisContext | undefined
+  const fiber = root.inject(dependencies, (ctx) => {
+    active = ctx
+  })
+  await fiber
+  if (active === undefined) throw new Error(`smoke: activation did not start for ${dependencies.join(', ')}`)
+  return { ctx: active, fiber }
+}
+
 const commandTreeModule = await import('../src/command-trees.js')
 const i18nModule = await import('../src/i18n.js')
 const commandTreeCtx = new Context()
 await commandTreeCtx.plugin(commandTreeModule.default).await()
-commandTreeCtx.tuiCommandTrees.register({
+const commandTreeActivation = await activate(commandTreeCtx, ['tuiCommandTrees'])
+const commandTreePlugin = commandTreeActivation.ctx
+commandTreePlugin.tuiCommandTrees.register({
   root: 'settings',
   descriptions: { en: 'Manage settings', zh: '管理设置' },
   children: path => path.length === 1
@@ -40,7 +57,7 @@ commandTreeCtx.tuiCommandTrees.register({
 const commandTreeCompletion = commandModule.completeCommands(
   '/settings set nat',
   [{ name: 'settings', description: 'Manage settings', external: true }],
-  path => commandTreeCtx.tuiCommandTrees.children(path),
+  path => commandTreePlugin.tuiCommandTrees.children(path),
 )
 if (commandTreeCompletion[0]?.replacement !== '/settings set native-compaction ') {
   throw new Error('command-tree smoke: nested provider completion failed')
@@ -50,10 +67,10 @@ const statusCompletion = commandModule.completeCommands(
   [{
     name: 'settings',
     description: 'Manage settings',
-    descriptions: commandTreeCtx.tuiCommandTrees.descriptions('settings'),
+    descriptions: commandTreePlugin.tuiCommandTrees.descriptions('settings'),
     external: true,
   }],
-  path => commandTreeCtx.tuiCommandTrees.children(path),
+  path => commandTreePlugin.tuiCommandTrees.children(path),
 )
 i18nModule.setLang('zh')
 if (commandModule.localizedDescription(statusCompletion[0]!) !== '查看状态') {
@@ -62,11 +79,12 @@ if (commandModule.localizedDescription(statusCompletion[0]!) !== '查看状态')
 if (commandModule.localizedDescription({
   name: 'settings',
   description: 'Manage settings',
-  descriptions: commandTreeCtx.tuiCommandTrees.descriptions('settings'),
+  descriptions: commandTreePlugin.tuiCommandTrees.descriptions('settings'),
 }) !== '管理设置') {
   throw new Error('command-tree smoke: root provider translation was not selected')
 }
 i18nModule.setLang('en')
+await commandTreeActivation.fiber.dispose()
 await commandTreeCtx.fiber.dispose()
 
 // Settings-sections seam (issue #165): the registry validates + dedupes
@@ -76,8 +94,10 @@ const settingsSectionsModule = await import('../src/settings-sections.js')
 const settingsEditorModule = await import('../src/dsh-adapter/settingsEditor.js')
 const settingsCtx = new Context()
 await settingsCtx.plugin(settingsSectionsModule.default).await()
+const settingsActivation = await activate(settingsCtx, ['tuiSettingsSections'])
+const settingsPlugin = settingsActivation.ctx
 let sectionEvents = 0
-const unsubscribeSections = settingsCtx.tuiSettingsSections.subscribe(() => { sectionEvents += 1 })
+const unsubscribeSections = settingsPlugin.tuiSettingsSections.subscribe(() => { sectionEvents += 1 })
 const demoSection = {
   ns: 'demo-plugin',
   title: 'Demo settings',
@@ -89,14 +109,14 @@ const demoSection = {
     { path: ['apiKey'], label: 'API key', kind: 'text' as const, secret: { ref: 'DEMO_PLUGIN_API_KEY' } },
   ],
 }
-const unregisterSection = settingsCtx.tuiSettingsSections.register(demoSection)
-if (settingsCtx.tuiSettingsSections.list().length !== 1
-  || settingsCtx.tuiSettingsSections.section('demo-plugin')?.title !== 'Demo settings') {
+const unregisterSection = settingsPlugin.tuiSettingsSections.register(demoSection)
+if (settingsPlugin.tuiSettingsSections.list().length !== 1
+  || settingsPlugin.tuiSettingsSections.section('demo-plugin')?.title !== 'Demo settings') {
   throw new Error('settings-sections smoke: registration/listing failed')
 }
 let duplicateThrew = false
 try {
-  settingsCtx.tuiSettingsSections.register(demoSection)
+  settingsPlugin.tuiSettingsSections.register(demoSection)
 } catch {
   duplicateThrew = true
 }
@@ -206,9 +226,10 @@ releaseFlight!()
 if (await secondFlight !== true) throw new Error('settings-form smoke: serialized save failed')
 unsubscribeSections()
 unregisterSection()
-if (settingsCtx.tuiSettingsSections.list().length !== 0) {
+if (settingsPlugin.tuiSettingsSections.list().length !== 0) {
   throw new Error('settings-sections smoke: disposer did not remove the section')
 }
+await settingsActivation.fiber.dispose()
 await settingsCtx.fiber.dispose()
 
 // Plugin scene seam: registration validates and dedupes ids, open/close
@@ -217,7 +238,8 @@ await settingsCtx.fiber.dispose()
 const scenesModule = await import('../src/scenes.js')
 const sceneCtx = new Context()
 await sceneCtx.plugin(scenesModule.default).await()
-const sceneRuntime = sceneCtx.tuiScenes
+const sceneActivation = await activate(sceneCtx, ['tuiScenes'])
+const sceneRuntime = sceneActivation.ctx.tuiScenes
 let sceneNotifications = 0
 const unsubscribeScenes = sceneRuntime.subscribe(() => { sceneNotifications += 1 })
 if (sceneRuntime.active !== undefined) throw new Error('scene smoke: active scene before any open')
@@ -256,6 +278,7 @@ try {
 if (!sceneDuplicateThrew) throw new Error('scene smoke: duplicate ids must be rejected')
 sceneDisposeDup()
 unsubscribeScenes()
+await sceneActivation.fiber.dispose()
 await sceneCtx.fiber.dispose()
 
 // Host JSX runtime (./jsx-runtime subpath): elements it creates must carry
@@ -276,12 +299,14 @@ if (probe.$$typeof !== Symbol.for('react.transitional.element')) {
 // TUI knowing its protocol.
 const workspaceCtx = new Context()
 await workspaceCtx.plugin(workspaceModule.default).await()
+const workspaceActivation = await activate(workspaceCtx, ['tuiWorkspaces'])
+const workspacePlugin = workspaceActivation.ctx
 const localCwd = process.cwd()
-const localTarget = await workspaceCtx.tuiWorkspaces.resolve('.', localCwd)
+const localTarget = await workspacePlugin.tuiWorkspaces.resolve('.', localCwd)
 if (localTarget?.cwd !== localCwd || localTarget.kind !== 'local') {
   throw new Error('workspace smoke: relative local path resolution failed')
 }
-const fileTarget = await workspaceCtx.tuiWorkspaces.resolve(workspaceModule.localWorkspaceUri(localCwd))
+const fileTarget = await workspacePlugin.tuiWorkspaces.resolve(workspaceModule.localWorkspaceUri(localCwd))
 if (fileTarget?.cwd !== localCwd) throw new Error('workspace smoke: file URL resolution failed')
 const providerCwd = resolve(localCwd, '.provider-alias')
 const providerTarget = {
@@ -297,7 +322,7 @@ const providerShell = {
   run: async () => ({ exitCode: 0, stdout: { text: 'ok' }, stderr: { text: '' }, timedOut: false }),
 }
 let providerTitle = providerTarget.label
-const unregisterWorkspaceProvider = workspaceCtx.tuiWorkspaces.register({
+const unregisterWorkspaceProvider = workspacePlugin.tuiWorkspaces.register({
   schemes: ['example'],
   list: () => [providerTarget],
   resolve: (uri: string) => uri === providerTarget.uri ? providerTarget : undefined,
@@ -324,19 +349,19 @@ const unregisterWorkspaceProvider = workspaceCtx.tuiWorkspaces.register({
     }),
   }],
 })
-if ((await workspaceCtx.tuiWorkspaces.resolve(providerTarget.uri))?.cwd !== providerCwd) {
+if ((await workspacePlugin.tuiWorkspaces.resolve(providerTarget.uri))?.cwd !== providerCwd) {
   throw new Error('workspace smoke: provider URI resolution failed')
 }
-if ((await workspaceCtx.tuiWorkspaces.resolve('..', providerCwd))?.description !== '/') {
+if ((await workspacePlugin.tuiWorkspaces.resolve('..', providerCwd))?.description !== '/') {
   throw new Error('workspace smoke: provider-relative path resolution failed')
 }
-if (await workspaceCtx.tuiWorkspaces.commandShell(providerCwd) !== providerShell) {
+if (await workspacePlugin.tuiWorkspaces.commandShell(providerCwd) !== providerShell) {
   throw new Error('workspace smoke: provider command routing failed')
 }
-if ((await workspaceCtx.tuiWorkspaces.rename(providerCwd, 'Renamed')).label !== 'Renamed' || providerTitle !== 'Renamed') {
+if ((await workspacePlugin.tuiWorkspaces.rename(providerCwd, 'Renamed')).label !== 'Renamed' || providerTitle !== 'Renamed') {
   throw new Error('workspace smoke: provider rename failed')
 }
-const workspaceFlow = await workspaceCtx.tuiWorkspaces.runCommand('connect', '', localCwd)
+const workspaceFlow = await workspacePlugin.tuiWorkspaces.runCommand('connect', '', localCwd)
 if (workspaceFlow?.kind !== 'choices' || workspaceFlow.choices.length !== 1) {
   throw new Error('workspace smoke: provider subcommand failed')
 }
@@ -347,7 +372,7 @@ if (workspaceChoice?.kind !== 'target' || workspaceChoice.target.cwd !== provide
 const completionChildren = (path: readonly string[]) => path.length === 1 && path[0] === 'workspace'
   ? [
       { name: 'resume', description: 'switch workspace' },
-      ...workspaceCtx.tuiWorkspaces.commands(),
+      ...workspacePlugin.tuiWorkspaces.commands(),
     ]
   : []
 const rootCompletion = commandModule.completeCommands('/work', commandModule.LOCAL_COMMANDS, completionChildren)
@@ -366,6 +391,7 @@ if (!modifierModule.isPlainReturnInput('\r', {}) || modifierModule.isPlainReturn
   throw new Error('modal input smoke: raw CR recognition failed')
 }
 unregisterWorkspaceProvider()
+await workspaceActivation.fiber.dispose()
 await workspaceCtx.fiber.dispose()
 
 class FakeStdout extends Writable {
@@ -491,8 +517,8 @@ console.log('--- has interrupted?', plain.includes('Interrupted') && plain.inclu
 console.log('--- has notification?', plain.includes('Test notification'))
 console.log('--- has help menu?', plain.includes('/ for commands') || true)
 
-// Startup loaded-context summary: details live behind the one-shot `/context`
-// command; Ctrl+T remains exclusively owned by the trajectory scene.
+// Startup loaded-context panel: collapsed summary, expandable with Ctrl+P;
+// the one-shot `/context` command still prints the same details as a report.
 const panelChannel = {
   ...channel,
   version: 1,
@@ -521,7 +547,7 @@ const panelInstance = await render(
 await new Promise(resolve => setTimeout(resolve, 600))
 const collapsed = plainText(panelStdout.frames)
 const hasContextSummary = collapsed.includes('已加载上下文') || collapsed.includes('Context loaded')
-console.log('--- context summary?', hasContextSummary, collapsed.includes('/context'), !collapsed.includes('Ctrl+T'))
+console.log('--- context summary?', hasContextSummary, collapsed.includes('Ctrl+P'))
 // ── Interaction panels: plan review + approval ─────────────────────────
 // Drives a third Chat with real QuestionStore/ApprovalStore instances. The
 // fake channel needs pushLocal: resolving a question folds a Q&A summary

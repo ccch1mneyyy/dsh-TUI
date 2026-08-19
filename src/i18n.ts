@@ -142,6 +142,8 @@ const dict = {
   'skill-release-notes-prompt': { zh: '请使用 release-notes 技能为当前项目生成发布说明。', en: 'Use the release-notes skill to generate release notes for the current project.' },
   'skill-vuln-check-prompt': { zh: '请使用 vuln-check 技能对当前项目做一次安全漏洞检查。', en: 'Use the vuln-check skill to run a security vulnerability check on the current project.' },
   'context-loaded': { zh: '已加载上下文', en: 'Context loaded' },
+  'context-panel-expand': { zh: '展开', en: 'Expand' },
+  'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
   'copied-chars': { zh: '已复制 {{n}} 个字符', en: 'Copied {{n}} characters' },
   'activity-usage-name': { zh: '/activity frames <名>', en: '/activity frames <name>' },
   'activity-current-preset': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
@@ -232,6 +234,9 @@ const dict = {
   'update-available': { zh: '发现新版本：v{{latest}}（当前 v{{current}}）· 输入 /update 更新 TUI', en: 'New version available: v{{latest}} (current v{{current}}) · type /update to update the TUI' },
   'update-already-latest': { zh: '当前已是最新版本（v{{current}}）。', en: 'Already on the latest version (v{{current}}).' },
   'update-check-failed': { zh: '无法确认新版本（网络或 registry 不可达），已尝试直接更新……', en: 'Could not confirm a newer version (network or registry unreachable); attempting the update anyway…' },
+  'update-refused-deadlock': { zh: '已取消更新：镜像 registry 目前只能装到 v{{latest}}，而该版本在旧全局启动器的 patch 下会启动死锁（#183/#307）；官方最新为 v{{authoritative}}，待镜像同步后再 /update。', en: 'Update cancelled: the mirror registry can only serve v{{latest}}, which deadlocks boot under older global-launcher patches (#183/#307); official latest is v{{authoritative}} — retry /update after the mirror syncs.' },
+  'update-mirror-lag': { zh: '镜像 registry 滞后：本次安装 v{{latest}}；官方最新 v{{authoritative}}，镜像同步后可再 /update。', en: 'Mirror registry lag: installing v{{latest}} now; official latest is v{{authoritative}} — run /update again once the mirror syncs.' },
+  'streaming-folded': { zh: '…（前 {{count}} 字符流式期间已折叠，落定后完整显示）', en: '…(first {{count}} chars folded while streaming; full text renders once the turn settles)' },
   'vim-not-implemented': { zh: 'vim 模式暂未实现', en: 'vim mode not implemented yet' },
   'terminal-setup-hint': { zh: '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。', en: 'Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).' },
   'terminal-paste-hint': { zh: '{{mod}}V 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。', en: '{{mod}}V pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works.' },
@@ -258,6 +263,16 @@ const dict = {
 
   // ── plugin.ts — /update flow ───────────────────────────────────────
   'update-aborted-no-profile': { zh: 'dsh-tui 更新中止：未解析到 dsh profile。', en: 'dsh-tui update aborted: no dsh profile resolved.' },
+  // 0.8.3 launcher alignment bridge: /update only replaces the profile
+  // copy; the global `dsh-tui` launcher must be aligned separately.
+  'update-launcher-align-unknown': {
+    zh: 'Profile 已更新到 v{{version}}。如果你平时使用全局 dsh-tui 命令启动，请同步更新全局启动器：\n  npm install -g @deepseek-harness-tui/dsh-tui@{{version}}',
+    en: 'The profile is now v{{version}}. If you normally launch with the global dsh-tui command, align the global launcher too:\n  npm install -g @deepseek-harness-tui/dsh-tui@{{version}}',
+  },
+  'update-launcher-outdated': {
+    zh: 'Profile 已更新到 v{{profile}}，但全局启动器仍是 v{{launcher}}。请同步更新：\n  npm install -g @deepseek-harness-tui/dsh-tui@{{profile}}',
+    en: 'The profile is now v{{profile}}, but the global launcher is still v{{launcher}}. Align it with:\n  npm install -g @deepseek-harness-tui/dsh-tui@{{profile}}',
+  },
 
   // ── components/ActivityLine.tsx ──────────────────────────────────────
   'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
@@ -393,7 +408,6 @@ const dict = {
   // ── 会话浏览器：行、计数、筛选、预览 ───────────────────────────────
   'session-loading': { zh: '正在读取会话…', en: 'Reading sessions…' },
   'session-list-failed': { zh: '无法读取会话列表 · {{err}}', en: 'Could not read the session list · {{err}}' },
-  'session-resume-refused': { zh: '无法恢复这个会话——原因已记录在对话里（模型正在工作时无法切换）', en: 'That session could not be resumed — the reason is in the conversation (switching is refused while the model is working)' },
   'session-resume-failed': { zh: '恢复会话失败 · {{err}}', en: 'Resuming the session failed · {{err}}' },
   'session-when-now': { zh: '刚刚', en: 'just now' },
   'session-when-minutes': { zh: '{{n}} 分钟前', en: '{{n}}m ago' },
@@ -501,7 +515,7 @@ const dict = {
   'plugins-check-usage': { zh: '用法：/plugins check <dsh-plugin.json 路径>', en: 'Usage: /plugins check <path-to-dsh-plugin.json>' },
   'plugins-check-not-found': { zh: '文件不存在：{{path}}', en: 'File not found: {{path}}' },
   'plugins-check-invalid-json': { zh: '不是可解析的 JSON：{{err}}', en: 'Not parseable JSON: {{err}}' },
-  'plugins-check-spec-unavailable': { zh: 'vendored 规范数据不可用（ecosystem-spec/），无法校验。', en: 'Vendored spec data unavailable (ecosystem-spec/); cannot validate.' },
+  'plugins-check-spec-unavailable': { zh: 'vendored 规范数据不可用（dsh-ecosystem-spec/），无法校验。', en: 'Vendored spec data unavailable (dsh-ecosystem-spec/); cannot validate.' },
   'plugins-check-schema-failed': { zh: 'schema 校验失败：{{err}}', en: 'Schema validation failed: {{err}}' },
   'plugins-check-invalid': { zh: '语义校验失败：{{err}}', en: 'Semantic validation failed: {{err}}' },
   'plugins-check-state': { zh: '协商结果：{{state}}', en: 'Negotiation decision: {{state}}' },

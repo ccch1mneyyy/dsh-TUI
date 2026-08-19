@@ -79,7 +79,7 @@ function makeChannel() {
       { role: 'assistant', text: 'A reply long enough to need wrapping inside the preview pane at every width this sweep visits.', at: 2 },
     ],
     notify() {},
-    resumeTo: async () => true,
+    resumeTo: async () => ({ ok: true }),
     deleteSession: async () => true,
     renameSessionTo: async () => true,
   }

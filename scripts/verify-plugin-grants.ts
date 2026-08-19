@@ -40,10 +40,10 @@ const { DATA_DIR } = await import('../src/utils/paths.js')
 const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const specDir = join(root, 'ecosystem-spec')
+const specDir = join(root, 'dsh-ecosystem-spec')
 const data = loadSpecData(specDir)
 if (!data) {
-  console.error('vendored spec data unreadable (ecosystem-spec/)')
+  console.error('vendored spec data unreadable (dsh-ecosystem-spec/)')
   process.exit(1)
 }
 const index = createContractIndex(data.registry, data.permissions)
@@ -72,6 +72,13 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   if (!ok) failures.push(`${name}${detail ? `: ${detail}` : ''}`)
 }
 const cleanup: string[] = [fakeHome]
+
+// The permission map is part of the public vocabulary but also feeds the
+// host's authorization checkpoint. Readonly TypeScript annotations do not
+// protect a runtime object exposed to plugin code.
+check1('decision permission map is immutable',
+  Object.isFrozen(DECISION_EVENT_PERMISSIONS)
+  && DECISION_EVENT_PERMISSIONS['tui/input'] === 'session.input.intercept')
 
 // ── A. GrantStore 语义 ────────────────────────────────────────────────────
 {
@@ -133,13 +140,25 @@ const cleanup: string[] = [fakeHome]
   check1('corrupt store denies deny-default', !corrupt.allows(principal('root'), 'session.input.intercept', 'tui/input'))
   check1('corrupt store denies allow-default too', !corrupt.allows(principal('root'), 'commands.invoke', 'root.command'))
 
-  // A7. wrong-shape 不算 corrupt——只是没有条目，走 registry 默认。
+  // A7. JSON 语法正确但结构错误仍必须 fail closed。静默丢弃坏 section/
+  // rule 会让 commands.invoke 回落 allow-default，等价于撤销失效。
   const wrongShape = parseGrantStore(JSON.stringify({ grants: [1, 2, 3], denies: 'nope' }))
-  check1('wrong-shape is not corrupt', !wrongShape.corrupt)
-  check1('wrong-shape falls back to defaults (invoke allow)',
-    wrongShape.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
-  check1('wrong-shape falls back to defaults (intercept deny)',
-    !wrongShape.allows(principal('anyone'), 'session.input.intercept', 'tui/input'))
+  check1('wrong-shaped sections are corrupt', wrongShape.corrupt)
+  check1('wrong-shaped sections deny allow-default too',
+    !wrongShape.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
+  const malformedRule = parseGrantStore(JSON.stringify({
+    grants: { anyone: [{ name: 'commands.invoke' }] },
+  }))
+  check1('a malformed rule makes the whole file corrupt', malformedRule.corrupt)
+  check1('a malformed rule cannot restore invoke defaults',
+    !malformedRule.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
+  const malformedComponent = parseGrantStore(JSON.stringify({ grants: { anyone: {} } }))
+  check1('a non-array Component rule list is corrupt', malformedComponent.corrupt)
+  const unknownRootField = parseGrantStore(JSON.stringify({ grants: {}, typo: {} }))
+  check1('an unknown top-level grant-store field is corrupt', unknownRootField.corrupt)
+  const emptyObject = parseGrantStore('{}')
+  check1('an empty object is a valid default-only store',
+    !emptyObject.corrupt && emptyObject.allows(principal('anyone'), 'commands.invoke', 'anyone.command'))
 
   // A8. 注入 registry 证明 store 完全 registry 驱动（无硬编码权限名）。
   const custom = parseGrantStore('', {
@@ -329,6 +348,22 @@ const cleanup: string[] = [fakeHome]
     check1('no boot warnings with commands mounted', withCommandsWarnings.length === 0, withCommandsWarnings.join(' | '))
   }
 
+  // Partial embed: mounting only the host anchor does not magically provide
+  // the sibling storage/observer services. The descriptor must reflect that
+  // live topology instead of advertising registry entries as implementations.
+  {
+    const partialCtx = new Context()
+    partialCtx.logger.warn = () => undefined
+    partialCtx.plugin(pluginHostRow.TuiPluginHostRuntime)
+    await sleep(30)
+    const descriptor = partialCtx.get('tuiPluginHost')?.hostDescriptor()
+    check1('partial host excludes unmounted storage and observer contracts',
+      descriptor !== undefined
+      && !descriptor.contracts.some(contract => contract.kind === 'LocalStorage')
+      && !descriptor.contracts.some(contract => contract.kind === 'MessageObserver')
+      && descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'))
+  }
+
   // A lazy descriptor must also follow services that appear or disappear
   // after its first read, instead of retaining the first capability snapshot.
   {
@@ -408,10 +443,10 @@ const cleanup: string[] = [fakeHome]
   // D2. 篡改 contract 文件 → 剔除 + warn（fail closed），descriptor 仍过 schema。
   const tamperedRoot = mkdtempSync(join(tmpdir(), 'dsh-descriptor-tamper-'))
   cleanup.push(tamperedRoot)
-  cpSync(specDir, join(tamperedRoot, 'ecosystem-spec'), { recursive: true })
-  const target = join(tamperedRoot, 'ecosystem-spec', 'registry', 'contracts', 'decision-events-v1alpha1.json')
+  cpSync(specDir, join(tamperedRoot, 'dsh-ecosystem-spec'), { recursive: true })
+  const target = join(tamperedRoot, 'dsh-ecosystem-spec', 'registry', 'contracts', 'decision-events-v1alpha1.json')
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
-  const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'ecosystem-spec') })
+  const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'dsh-ecosystem-spec') })
   check1('tampered private definition dropped',
     tampered.dropped.includes('tui.dsh/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
   check1('tamper warning names the profileHash drift', tampered.warnings.some(w => w.includes('profile hash drifted')))
@@ -443,12 +478,12 @@ const cleanup: string[] = [fakeHome]
   // 绝不把 TypeError 留到 verify*/boot 自检里炸出来（fail-soft）。
   const malformedRoot = mkdtempSync(join(tmpdir(), 'dsh-spec-malformed-'))
   cleanup.push(malformedRoot)
-  cpSync(specDir, join(malformedRoot, 'ecosystem-spec'), { recursive: true })
-  writeFileSync(join(malformedRoot, 'ecosystem-spec', 'registry', 'registry-0.15.json'),
+  cpSync(specDir, join(malformedRoot, 'dsh-ecosystem-spec'), { recursive: true })
+  writeFileSync(join(malformedRoot, 'dsh-ecosystem-spec', 'registry', 'registry-0.15.json'),
     JSON.stringify({ profileVersion: 'tui-admission/0.15', std: {}, imports: null, definitions: [], facetApiVersions: [] }))
   check1('structurally malformed registry loads as unavailable',
-    loadSpecData(join(malformedRoot, 'ecosystem-spec')) === undefined)
-  const malformedBuild = buildHostDescriptor({ generationId: 'test-gen-4', specDir: join(malformedRoot, 'ecosystem-spec') })
+    loadSpecData(join(malformedRoot, 'dsh-ecosystem-spec')) === undefined)
+  const malformedBuild = buildHostDescriptor({ generationId: 'test-gen-4', specDir: join(malformedRoot, 'dsh-ecosystem-spec') })
   check1('malformed data degrades the descriptor to an empty surface (no throw)',
     malformedBuild.descriptor.contracts.length === 0 && malformedBuild.warnings.length > 0)
   // verify* 对手工构造的坏数据也只回违规字符串。
@@ -473,11 +508,11 @@ const cleanup: string[] = [fakeHome]
   // 权限注册表 malformed（permissions 不是数组）同样整体不可用。
   const malformedPermsRoot = mkdtempSync(join(tmpdir(), 'dsh-spec-malformed-perms-'))
   cleanup.push(malformedPermsRoot)
-  cpSync(specDir, join(malformedPermsRoot, 'ecosystem-spec'), { recursive: true })
-  writeFileSync(join(malformedPermsRoot, 'ecosystem-spec', 'registry', 'permissions-0.1.json'),
+  cpSync(specDir, join(malformedPermsRoot, 'dsh-ecosystem-spec'), { recursive: true })
+  writeFileSync(join(malformedPermsRoot, 'dsh-ecosystem-spec', 'registry', 'permissions-0.1.json'),
     JSON.stringify({ registryVersion: '0.1', permissions: 'nope' }))
   check1('structurally malformed permissions load as unavailable',
-    loadSpecData(join(malformedPermsRoot, 'ecosystem-spec')) === undefined)
+    loadSpecData(join(malformedPermsRoot, 'dsh-ecosystem-spec')) === undefined)
 }
 
 // ── E. patch 面与 exports 接线 ────────────────────────────────────────────
@@ -492,6 +527,12 @@ const cleanup: string[] = [fakeHome]
   check1('exports exposes ./plugin-host',
     manifest.exports?.['./plugin-host']?.import === './lib/types/plugin-host.js')
   check1('compiled entry exists after build', existsSync(join(root, 'lib/types/plugin-host.js')))
+  const publicHostShim = readFileSync(join(root, 'src/plugin-host.ts'), 'utf8')
+  check1('public plugin-host shim exports the narrowed capability type',
+    publicHostShim.includes('TuiPluginHost') && !publicHostShim.includes('TuiPluginHostRuntime'))
+  const publicHostDeclaration = readFileSync(join(root, 'lib/types/plugin-host.d.ts'), 'utf8')
+  check1('public plugin-host declaration hides loader-only admitInternal',
+    !publicHostDeclaration.includes('admitInternal') && !publicHostDeclaration.includes('TuiPluginHostRuntime'))
   const snapshot = JSON.parse(readFileSync(join(root, 'patch-surface.snapshot.json'), 'utf8'))
   check1('snapshot records the insert before extensions',
     snapshot.inserts.indexOf('dsh-tui-plugin-host') !== -1

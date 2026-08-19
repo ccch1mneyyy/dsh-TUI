@@ -21,6 +21,7 @@ import {
 } from './screen.js'
 import {
   CURSOR_HOME,
+  cursorDown,
   cursorUp,
   eraseToEndOfScreen,
   scrollDown as csiScrollDown,
@@ -38,6 +39,11 @@ type State = {
    *  the physical cursor position instead of diffing. See
    *  requestViewportReanchor. */
   reanchorPending: boolean
+  /** Rows of the current frame whose live copies live in terminal
+   *  scrollback (set by shrinkAnchoredRepaint): the diff loop's viewportY
+   *  must skip them and every height-based offset shifts down by this
+   *  amount. Cleared by resize resets (fresh alignment). */
+  anchoredPad: number
 }
 
 type Options = {
@@ -59,6 +65,7 @@ export class LogUpdate {
     this.state = {
       previousOutput: '',
       reanchorPending: false,
+      anchoredPad: 0,
     }
   }
 
@@ -102,6 +109,11 @@ export class LogUpdate {
   /** Drop the previous-output state after the process resumes from suspension (SIGCONT) so terminal content is not clobbered. */
   reset(): void {
     this.state.previousOutput = ''
+    // Any anchored-pad offset is void: the next frame repaints from the
+    // physical cursor without it (SIGCONT resume, repaint(), forceRedraw,
+    // and alt-screen entry all land here — without the clear, rows the
+    // repaint just drew at the viewport top would stay marked unreachable).
+    this.state.anchoredPad = 0
   }
 
   private renderFullFrame(frame: Frame): Diff {
@@ -191,9 +203,14 @@ export class LogUpdate {
     // _after_ the viewport change which means calcuating text wrapping.
     // Resizing is a rare enough event that it's not practically a big issue.
     if (
-      next.viewport.height < prev.viewport.height ||
+      next.viewport.height !== prev.viewport.height ||
       (prev.viewport.width !== 0 && next.viewport.width !== prev.viewport.width)
     ) {
+      // A resize re-aligns the whole terminal (reflow rewraps scrollback):
+      // any anchored-pad offset from a previous shrink repaint is void.
+      // Height-only growth is included: the shrink branches below would
+      // otherwise mix the old and new viewport heights in their geometry.
+      this.state.anchoredPad = 0
       return fullResetSequence_CAUSES_FLICKER(next, 'resize', stylePool)
     }
 
@@ -206,6 +223,15 @@ export class LogUpdate {
     // mutually exclusive anyway).
     if (this.state.reanchorPending && !altScreen) {
       this.state.reanchorPending = false
+      // Plain in-place viewport repaint, and the anchored layout (if any)
+      // is superseded: pad 0. An earlier revision routed pad>0 frames
+      // through shrinkAnchoredRepaint here to preserve the anchored layout
+      // — empirically that occasionally painted nothing after alt-screen
+      // exits (verify-trace-scene's settle-gap check, ~15% flake), while
+      // the plain path is verified stable; a reanchor-with-pad is rare
+      // (idle gap right after a settle shrink) and its cost is one stale
+      // scrollback copy, not a lost paint.
+      this.state.anchoredPad = 0
       return repaintViewportInPlace(prev, next, stylePool)
     }
 
@@ -273,21 +299,40 @@ export class LogUpdate {
     const isShrinking = next.screen.height < prev.screen.height
     const nextFitsViewport = next.screen.height <= prev.viewport.height
 
-    // When shrinking from above-viewport to at-or-below-viewport, content
-    // that was in scrollback stays there — terminal clears can't pull it
-    // back — but the viewport itself can be rebuilt in place: the cursor is
-    // parked at the physical bottom (prevHadScrollback implies it), so the
-    // viewport rows are all reachable. Repainting them directly avoids the
-    // former full reset here, whose clearTerminal + whole-frame reprint
-    // deposited one stale UI copy into the scrollback per shrink.
+    // When shrinking from above-viewport to at-or-below-viewport, the rows
+    // that scrolled into scrollback during growth come BACK into the live
+    // frame, so their scrollback snapshots are now duplicates (seen as the
+    // duplicated whale logo after the first turn). Use a clear-terminal
+    // reset, not an in-place repaint: at this point the UI's scrollback
+    // footprint is at most a viewport tall (prev was at most one row past
+    // the viewport), which is exactly what the clear sequence blanks — the
+    // in-place repaint kept both copies (snapshot + live). The former full
+    // reset here was once changed to an in-place repaint to stop the
+    // per-shrink stale-copy deposits (#38 #39 #19), but that fix traded
+    // them for a different duplication: the repainted viewport overlaps
+    // rows whose growth snapshots are still in scrollback.
     // Use <= (not <) because even when next height equals viewport height,
     // the scrollback depth from the previous render differs from a fresh
     // render.
-    if (prevHadScrollback && nextFitsViewport && isShrinking) {
-      logForDebugging(
-        `Viewport repaint (shrink->below): prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${prev.viewport.height}`,
+    if (!altScreen && prevHadScrollback && nextFitsViewport && isShrinking) {
+      // Anchored tail repaint (see shrinkAnchoredRepaint): rows already in
+      // scrollback keep their originals; only the changed tail is
+      // repainted. The former full reset here reprinted the whole short
+      // frame from the viewport top — duplicating every pre-shrink row the
+      // user scrolls up to (the whale-logo / duplicated-transcript
+      // reports).
+      const scrollbackRows = Math.max(
+        0,
+        Math.max(prev.screen.height, next.screen.height) -
+          next.viewport.height +
+          (prevHadScrollback ? 1 : 0),
       )
-      return repaintViewportInPlace(prev, next, stylePool)
+      const { patches, anchoredPad } = shrinkAnchoredRepaint(prev, next, stylePool, scrollbackRows)
+      this.state.anchoredPad = anchoredPad
+      logForDebugging(
+        `Anchored shrink repaint (shrink->below): prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${prev.viewport.height}, skip=${anchoredPad}`,
+      )
+      return patches
     }
 
     // Steady-state scrollback check removed: rows above the viewport used
@@ -314,27 +359,54 @@ export class LogUpdate {
 
       // Main-screen mode + content taller than the viewport: the terminal
       // viewport does NOT follow the content bottom when content shrinks —
-      // a diff-loop path would write rows at stale physical offsets. But
-      // when the cursor sits on its park row (the invariant the renderer
-      // maintains every main-screen frame), the whole viewport is directly
-      // addressable: repaint it in place. This branch fires on EVERY turn
-      // (thinking fold, spinner/esc-hint unmount, markdown reflow shrink
-      // the frame by a row or two while it is taller than the viewport) —
-      // the former full reset here was the copy machine behind the
-      // duplicated-UI scrollback reports (#38 #39 #19). Fall back to the
-      // full reset only if the cursor is somewhere unexpected.
-      if (!altScreen && prev.screen.height > prev.viewport.height) {
-        if (cursorAtBottom) {
-          logForDebugging(
-            `Viewport repaint (shrink tall): prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${prev.viewport.height}`,
-          )
-          return repaintViewportInPlace(prev, next, this.options.stylePool)
-        }
-        return fullResetSequence_CAUSES_FLICKER(
-          next,
-          'offscreen',
-          this.options.stylePool,
+      // a diff-loop path would write rows at stale physical offsets. Two
+      // sub-cases:
+      //
+      // 1. Frame shrinks but stays >= viewport height: take the ordinary
+      //    diff loop. Its viewportY bookkeeping (the shrinking formula plus
+      //    cursorRestoreScroll below) addresses rows through the parked
+      //    cursor correctly, and the diff only touches the few rows that
+      //    actually changed. A viewport repaint here re-paints the whole
+      //    window from the viewport top while the frame top sits a few rows
+      //    ABOVE it (frame is taller than the window) — the growth frames
+      //    around the shrink freeze those overlapped rows into scrollback
+      //    as snapshots while the same rows stay live in the window, which
+      //    the user sees as duplicated transcript rows when scrolling up.
+      // 2. Frame shrinks to BELOW the viewport (content now fits): the rows
+      //    that scrolled into scrollback during growth come BACK into the
+      //    live frame, so their scrollback snapshots are now duplicates
+      //    (seen as the duplicated whale logo after the first turn). Use a
+      //    clear-terminal reset here, not an in-place repaint: at this
+      //    point the UI's scrollback footprint is at most a viewport tall,
+      //    which is exactly what the clear sequence blanks, while the
+      //    in-place repaint would keep both copies. Only fires early in a
+      //    session (frame ~= viewport); once the transcript outgrows the
+      //    viewport, case 1 handles every shrink.
+      if (
+        !altScreen &&
+        prev.screen.height > prev.viewport.height &&
+        next.screen.height < next.viewport.height
+      ) {
+        // Same anchored tail repaint as the shrink->below branch above —
+        // rows already in scrollback keep their originals; only the
+        // non-scrollback tail is repainted. The former full reset
+        // reprinted the whole frame, duplicating the scrollback rows
+        // (whale-logo / duplicated-transcript reports).
+        const scrollbackRows = Math.max(
+          0,
+          prev.screen.height - prev.viewport.height + cursorRestoreScroll,
         )
+        const { patches, anchoredPad } = shrinkAnchoredRepaint(
+          prev,
+          next,
+          this.options.stylePool,
+          scrollbackRows,
+        )
+        this.state.anchoredPad = anchoredPad
+        logForDebugging(
+          `Anchored shrink repaint (shrink to fit): prevHeight=${prev.screen.height}, nextHeight=${next.screen.height}, viewport=${prev.viewport.height}, skip=${anchoredPad}`,
+        )
+        return patches
       }
 
       // eraseLines only works within the viewport - it can't clear scrollback.
@@ -367,14 +439,24 @@ export class LogUpdate {
     // an additional row out of view at the end of the previous frame. Without
     // this, the diff loop treats that row as reachable — but the cursor clamps
     // at viewport top, causing writes to land 1 row off and garbling the output.
-    const viewportY = growing
-      ? Math.max(
-          0,
-          prev.screen.height - prev.viewport.height + cursorRestoreScroll,
-        )
-      : Math.max(prev.screen.height, next.screen.height) -
-        next.viewport.height +
-        cursorRestoreScroll
+    // Unreachable frame rows = terminal scrollback. Two contributors, take
+    // the MAX, never the sum: after an anchored shrink repaint the pad rows
+    // ARE the scrollback (heights undercount while H < V); once growth
+    // scrolls the blank band away, the heights formula takes over (summing
+    // would overcount and skip REACHABLE viewport rows — changes inside
+    // the viewport would never paint, scrambling the layout on mid-frame
+    // edits like Ctrl+O expansion).
+    const viewportY = Math.max(
+      this.state.anchoredPad,
+      growing
+        ? Math.max(
+            0,
+            prev.screen.height - prev.viewport.height + cursorRestoreScroll,
+          )
+        : Math.max(prev.screen.height, next.screen.height) -
+          next.viewport.height +
+          cursorRestoreScroll,
+    )
 
     // Rows above viewportY live in terminal scrollback and are skipped by the
     // diff loop (see below). Clip the damage region to the visible area so the
@@ -669,8 +751,87 @@ function fullResetSequence_CAUSES_FLICKER(
   const contentRows = Math.min(height, Math.max(1, frame.viewport.height - 1))
   const startY = height - contentRows
   const screen = new VirtualScreen({ x: 0, y: startY }, frame.viewport.width)
-  renderFrameSlice(screen, frame, startY, height, stylePool)
+  renderFrameSlice(screen, frame, startY, height, stylePool, false)
   return [{ type: 'clearTerminal', reason, debug }, ...screen.diff]
+}
+
+/**
+ * Anchored tail repaint for shrink-to-fit frames — the fix for the
+ * duplicated-whale/duplicated-transcript family. When growth pushed frame
+ * rows into terminal scrollback and a shrink then brings the frame back
+ * below the viewport, repainting the whole (short) frame from the viewport
+ * top re-prints rows whose originals already sit in scrollback — the user
+ * scrolls up and sees every pre-shrink row twice.
+ *
+ * Two layouts, decided by content:
+ *  - The new frame's top rows are UNCHANGED from the previous frame (the
+ *    common small shrink — a fold, a spinner unmounting): those rows
+ *    already live in scrollback and keep their originals. Erase the
+ *    viewport in place (no 2J — history untouched) and repaint ONLY the
+ *    changed tail, anchored at the viewport BOTTOM so the frame continues
+ *    the scrollback seamlessly. The leading blank band is recorded as
+ *    `anchoredPad` so later frames' viewportY math skips the scrollback
+ *    rows and relative addressing stays consistent (the band scrolls away
+ *    naturally as the next turn grows).
+ *  - The frame's top content CHANGED (a panel collapsing, 38 rows → 2):
+ *    nothing in scrollback represents the new frame — repaint the whole
+ *    short frame top-anchored, matching a fresh render (collapse-shrink's
+ *    contract), pad 0.
+ */
+function shrinkAnchoredRepaint(
+  prev: Frame,
+  next: Frame,
+  stylePool: StylePool,
+  scrollbackRows: number,
+): { patches: Diff; anchoredPad: number } {
+  // Seam check, not prefix equality: the scrollback's DEEPEST row (old row
+  // skip-1) sits directly above the region we are about to paint — if it
+  // equals the new frame's row at the same index, the frame's lineage is
+  // intact (the shrink removed rows from the bottom region) and the
+  // scrollback originals stay authoritative. Volatile top rows (the
+  // status header's ticking counters) don't matter — only the seam does.
+  // Walk the skip down until the seam matches; 0 means the frame's top
+  // content changed (a collapsing panel) and the whole short frame gets a
+  // top-anchored repaint instead.
+  const width = Math.min(prev.screen.width, next.screen.width)
+  const rowsDiffer = (y: number): boolean => {
+    if (y >= prev.screen.height || y >= next.screen.height) return true
+    const po = y * prev.screen.width * 2
+    const no = y * next.screen.width * 2
+    for (let x = 0; x < width * 2; x++) {
+      if (prev.screen.cells[po + x] !== next.screen.cells[no + x]) return true
+    }
+    return false
+  }
+  let skip = Math.min(scrollbackRows, next.screen.height)
+  while (skip > 0 && rowsDiffer(skip - 1)) skip -= 1
+
+  const viewportHeight = prev.viewport.height
+  const height = next.screen.height
+  if (skip <= 0) {
+    // Top-anchored whole-frame repaint — the fresh-render layout.
+    const contentRows = Math.min(height, Math.max(1, viewportHeight - 1))
+    const startY = height - contentRows
+    const anchor = CURSOR_HOME + eraseToEndOfScreen()
+    const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
+    renderFrameSlice(screen, next, startY, height, stylePool, false)
+    return { patches: [{ type: 'stdout', content: anchor }, ...screen.diff], anchoredPad: 0 }
+  }
+
+  const rowsToPaint = Math.max(1, Math.min(height, viewportHeight - 1, height - skip))
+  const startY = height - rowsToPaint
+  const blankBand = Math.max(0, viewportHeight - 1 - rowsToPaint)
+  const anchor =
+    CURSOR_HOME + eraseToEndOfScreen() + (blankBand > 0 ? cursorDown(blankBand) : '')
+  const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
+  renderFrameSlice(screen, next, startY, height, stylePool, false)
+  return {
+    patches: [{ type: 'stdout', content: anchor }, ...screen.diff],
+    // Cap at height-1: a seam that matches every row of a very short frame
+    // must not mark the WHOLE frame as scrollback — the last row (the
+    // input area) stays live and repaintable.
+    anchoredPad: Math.min(skip, height - 1),
+  }
 }
 
 /**
@@ -745,22 +906,24 @@ function viewportRepaintPatches(
   // steady state, where the park LF materializes one row below the frame).
   const contentRows = Math.min(height, viewportHeight - 1)
   const startY = height - contentRows
-  // A standalone recovery starts at the parked physical bottom row and must
-  // reach the viewport top. An appended repaint starts at next.cursor (the
-  // frame end), so moving up contentRows reaches the actual visible-frame
-  // start for both short and overflowing frames without crossing into shell
-  // history. Erase down from there (BCE fill — the SGR reset guarantees the
-  // default background). The erase also blanks the park row, so no stale
+  // Anchor with CSI H (cursor to viewport origin) instead of a RELATIVE
+  // cursor-up walk. The relative form assumed the physical cursor sits
+  // exactly on the park row — an assumption that breaks after a terminal
+  // reflow (a width change rewraps scrollback, shifting the buffer/cursor
+  // bookkeeping by a row or two). The over-shot cursor-up lands ABOVE the
+  // viewport top, and the subsequent erase+repaint writes a full UI copy
+  // into the scrollback (duplicated-history reports). CSI H has absolute
+  // semantics — it always lands on the current viewport's top-left — so the
+  // repaint can never cross into scrollback regardless of cursor drift.
+  // Erase down from there (BCE fill — the SGR reset guarantees the default
+  // background). The erase also blanks the park row, so no stale
   // prompt/status pixels survive below short content.
-  const rowsToStart =
-    origin === 'viewport-bottom' ? viewportHeight - 1 : contentRows
   const anchor =
     (resetPrefix ? SGR_RESET + LINK_END : '') +
-    '\r' +
-    cursorUp(rowsToStart) +
+    CURSOR_HOME +
     eraseToEndOfScreen()
   const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
-  renderFrameSlice(screen, next, startY, height, stylePool)
+  renderFrameSlice(screen, next, startY, height, stylePool, false)
   return [{ type: 'stdout', content: anchor }, ...screen.diff]
 }
 
@@ -774,6 +937,18 @@ function renderFrameSlice(
   startY: number,
   endY: number,
   stylePool: StylePool,
+  /**
+   * When false (repaint / full-reset paths), advance rows with
+   * CR + cursor-down instead of bare LFs. The repaint paints exactly a
+   * viewport of rows starting at the viewport top; a trailing LF on the
+   * bottom row SCROLLS the terminal, pushing a copy of the just-painted
+   * rows into the scrollback that the cursor bookkeeping never accounted
+   * for — every later relative move lands offset, writing content into
+   * the history (duplicated transcript rows on scroll-up). cursor-down
+   * clamps at the bottom margin instead of scrolling, so the physical
+   * cursor stays exactly where the model expects it.
+   */
+  allowScroll = true,
 ): VirtualScreen {
   let currentStyleId = stylePool.none
   let currentHyperlink: Hyperlink = undefined
@@ -785,22 +960,29 @@ function renderFrameSlice(
 
   let index = startY * screenWidth
   for (let y = startY; y < endY; y += 1) {
-    // Advance cursor to this row using LF (not CSI CUD / cursor-down).
-    // CSI CUD stops at the viewport bottom margin and cannot scroll,
-    // but LF scrolls the viewport to create new lines. Without this,
+    // Advance cursor to this row. With allowScroll, use LF (not CSI CUD /
+    // cursor-down): CSI CUD stops at the viewport bottom margin and cannot
+    // scroll, but LF scrolls the viewport to create new lines. Without this,
     // when the cursor is at the viewport bottom, moveCursorTo's
     // cursor-down silently fails, creating a permanent off-by-one
     // between the virtual cursor and the real terminal cursor.
     if (screen.cursor.y < y) {
       const rowsToAdvance = y - screen.cursor.y
-      screen.txn(prev => {
-        const patches: Diff = new Array<Diff[number]>(1 + rowsToAdvance)
-        patches[0] = CARRIAGE_RETURN
-        for (let i = 0; i < rowsToAdvance; i++) {
-          patches[1 + i] = NEWLINE
-        }
-        return [patches, { dx: -prev.x, dy: rowsToAdvance }]
-      })
+      if (allowScroll) {
+        screen.txn(prev => {
+          const patches: Diff = new Array<Diff[number]>(1 + rowsToAdvance)
+          patches[0] = CARRIAGE_RETURN
+          for (let i = 0; i < rowsToAdvance; i++) {
+            patches[1 + i] = NEWLINE
+          }
+          return [patches, { dx: -prev.x, dy: rowsToAdvance }]
+        })
+      } else {
+        screen.txn(prev => [
+          [CARRIAGE_RETURN, { type: 'cursorMove', x: 0, y: rowsToAdvance }],
+          { dx: -prev.x, dy: rowsToAdvance },
+        ])
+      }
     }
     // Reset at start of each line — no cell rendered yet
     lastRenderedStyleId = -1
@@ -853,10 +1035,18 @@ function renderFrameSlice(
       currentHyperlink,
       undefined,
     )
-    // CR+LF at end of row — \r resets to column 0, \n moves to next line.
-    // Without \r, the terminal cursor stays at whatever column content ended
-    // (since we skip trailing spaces, this can be mid-row).
-    screen.txn(prev => [[CARRIAGE_RETURN, NEWLINE], { dx: -prev.x, dy: 1 }])
+    // CR+LF (or CR+cursor-down for non-scrolling slices) at end of row —
+    // \r resets to column 0. Without \r, the terminal cursor stays at
+    // whatever column content ended (since we skip trailing spaces, this
+    // can be mid-row).
+    if (allowScroll) {
+      screen.txn(prev => [[CARRIAGE_RETURN, NEWLINE], { dx: -prev.x, dy: 1 }])
+    } else {
+      screen.txn(prev => [
+        [CARRIAGE_RETURN, { type: 'cursorMove', x: 0, y: 1 }],
+        { dx: -prev.x, dy: 1 },
+      ])
+    }
   }
 
   // Reset any open style/hyperlink at end of slice

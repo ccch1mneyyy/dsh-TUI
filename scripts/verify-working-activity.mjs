@@ -43,6 +43,35 @@ await new Promise((resolve) => queueMicrotask(resolve))
 assert.equal(appendCalls, 0, 'publish:false produces no activity/status log event')
 for (const dispose of pluginEffects.reverse()) dispose()
 
+// The TUI mount point (./working-activity re-export) must force publish off
+// even when a stale global-launcher patch row passes publish:true — the
+// dsh CLI resolves the patch anchor-first, so a ≤0.6.x launcher copy still
+// carried publish:true on this row over an up-to-date profile (issue #153
+// recurrence). The wrapper swallows the flag; only the bare package mount
+// can publish.
+const tuiMount = await import('../lib/types/working-activity.js')
+const mountHandlers = new Map()
+const mountEffects = []
+let mountAppendCalls = 0
+const mountCtx = {
+  get() { return undefined },
+  inject() {},
+  on(event, handler) {
+    mountHandlers.set(event, handler)
+    return () => mountHandlers.delete(event)
+  },
+  effect(setup) { mountEffects.push(setup()) },
+}
+tuiMount.apply(mountCtx, { publish: true, narrate: false, tickMs: 500 })
+const mountSession = { append() { mountAppendCalls += 1 } }
+mountHandlers.get('agent/status')({ agent: { session: mountSession }, status: 'running' })
+mountHandlers.get('session/event')(mountSession, {
+  type: 'turn/start', seq: 0, time: Date.now(), data: { turn: 'mount-turn' },
+})
+await new Promise((resolve) => queueMicrotask(resolve))
+assert.equal(mountAppendCalls, 0, 'mount point forces publish:false even when the row config says true')
+for (const dispose of mountEffects.reverse()) dispose()
+
 const handlers = new Map()
 const effects = []
 let replacementAgent

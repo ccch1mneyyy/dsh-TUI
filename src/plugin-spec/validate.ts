@@ -83,7 +83,18 @@ export function validatePlugin(index: ContractIndex, manifest: PluginManifest): 
   const knownPermissions = new Set(index.permissions.permissions.map(permission => permission.name))
   const commandIds = new Set(manifest.contributes.commands.map(command => command.id))
   const requiresDecisionEvents = manifest.requires.contracts.some(requirement =>
-    requirement.apiVersion === 'tui.dsh/v1alpha1' && requirement.kind === 'DecisionEvents')
+    requirement.kind === 'DecisionEvents'
+    && groupOf(requirement.apiVersion) === groupOf('tui.dsh/v1alpha1'))
+  const capabilityForPermission: Readonly<Record<string, { apiVersion: string; kind: string }>> = {
+    'commands.invoke': { apiVersion: 'commands.dsh/v1alpha1', kind: 'Command' },
+    'storage.local.read': { apiVersion: 'storage.dsh/v1alpha1', kind: 'LocalStorage' },
+    'storage.local.write': { apiVersion: 'storage.dsh/v1alpha1', kind: 'LocalStorage' },
+    'messages.observe.read': { apiVersion: 'messages.dsh/v1alpha1', kind: 'MessageObserver' },
+    'session.input.intercept': { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
+    'session.rewind.intercept': { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
+    'session.switch.intercept': { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
+    'session.compact.intercept': { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
+  }
   for (const permission of manifest.permissions) {
     if (!knownPermissions.has(permission.name)) {
       throw new Error(`permission is not admitted by the TUI profile: ${permission.name}`)
@@ -96,6 +107,15 @@ export function validatePlugin(index: ContractIndex, manifest: PluginManifest): 
     }
     if (INTERCEPT_PERMISSIONS.has(permission.name) && !requiresDecisionEvents) {
       throw new Error(`${permission.name} requires tui.dsh/v1alpha1#DecisionEvents`)
+    }
+    const capability = capabilityForPermission[permission.name]
+    // An otherwise valid contract reference may use an unregistered version
+    // from the same protocol group. Keep that manifest structurally valid so
+    // negotiation can return UNKNOWN_PROTOCOL_VERSION rather than letting the
+    // permission/capability cross-check mask the version-drift decision.
+    if (capability !== undefined && !manifest.requires.contracts.some(requirement =>
+      requirement.kind === capability.kind && groupOf(requirement.apiVersion) === groupOf(capability.apiVersion))) {
+      throw new Error(`${permission.name} requires ${capability.apiVersion}#${capability.kind}`)
     }
   }
   for (const commandId of commandIds) {

@@ -177,6 +177,15 @@ export function createChildStderrReporter(
         groups.delete(line)
         // A burst inside the cooldown window is counted but stays silent.
         if ((mutedUntil.get(line) ?? 0) > Date.now()) return
+        // Prune expired cooldowns on the way in: entries are child-stderr
+        // lines and a long-lived MCP reconnect loop would otherwise grow the
+        // dedup table without bound.
+        if (mutedUntil.size > 64) {
+          const now = Date.now()
+          for (const [key, until] of mutedUntil) {
+            if (until <= now) mutedUntil.delete(key)
+          }
+        }
         mutedUntil.set(line, Date.now() + cooldownMs)
         const text =
           group.count > 1

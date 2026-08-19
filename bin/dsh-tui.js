@@ -30,6 +30,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gt, valid } from 'semver'
 import { shellQuote } from '../lib/types/utils/shellQuote.js'
 import { detectLegacyEnv, RENAMED_ENV } from '../lib/types/utils/paths.js'
 
@@ -63,15 +64,32 @@ const MSG = {
     en: `[dsh-tui] Plugin install failed. Retry manually later:\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${ownVersion}`,
     zh: `[dsh-tui] 插件安装失败。可稍后手工重试：\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${ownVersion}`,
   },
-  versionMismatch: {
+  // Non-fatal skew comes in two directions and each needs its own repair:
+  // a profile NEWER than the launcher (typical after /update) must point at
+  // the global install, while a profile older only in patch must point back
+  // at the profile. The old generic message told forward-skew users to run
+  // /update again — an "Already up to date" loop.
+  profileOutdated: {
     en: (installed, own) =>
       `[dsh-tui] note: the profile is running v${installed} but this launcher is v${own}.\n` +
-      `  To update the profile: run /update inside the TUI, or:\n` +
-      `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@latest`,
+      `  Align the profile to this launcher:\n` +
+      `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${own}`,
     zh: (installed, own) =>
-      `[dsh-tui] 提示：profile 内运行的是 v${installed}，而启动器是 v${own}。\n` +
-      `  更新 profile：在 TUI 内执行 /update，或运行：\n` +
-      `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@latest`,
+      `[dsh-tui] 提示：profile 内运行的是 v${installed}，启动器是 v${own}。\n` +
+      `  请把 profile 对齐到启动器版本：\n` +
+      `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${own}`,
+  },
+  launcherOutdated: {
+    en: (installed, own) =>
+      `[dsh-tui] note: the profile is already v${installed}, but the global launcher is still v${own}.\n` +
+      `  Align the global dsh-tui launcher to the profile:\n` +
+      `  npm install -g ${PACKAGE}@${installed}\n` +
+      `  (if you installed it globally with pnpm: pnpm add -g ${PACKAGE}@${installed})`,
+    zh: (installed, own) =>
+      `[dsh-tui] 提示：profile 已是 v${installed}，但全局启动器仍是 v${own}。\n` +
+      `  请把全局 dsh-tui 启动器对齐到 profile 版本：\n` +
+      `  npm install -g ${PACKAGE}@${installed}\n` +
+      `  （如果你使用 pnpm 全局安装：pnpm add -g ${PACKAGE}@${installed}）`,
   },
   // Reverse skew (issue #183): the dsh CLI reads the bundle patch from the
   // FIRST copy found from its own install anchor — this globally installed
@@ -182,7 +200,19 @@ if (installedVersion === undefined) {
     console.error(MSG.profileOlderThanLauncher[lang](installedVersion, ownVersion))
     process.exit(1)
   }
-  console.error(MSG.versionMismatch[lang](installedVersion, ownVersion))
+
+  // Non-fatal skew: repair in the direction the versions actually moved.
+  // A profile NEWER than the launcher (e.g. right after /update) means the
+  // GLOBAL launcher is stale — never point those users back at /update.
+  // Exact versions only: @latest could skip past the alignment point if a
+  // newer release or a mirror dist-tag is in play.
+  const installedSemver = valid(installedVersion)
+  const ownSemver = valid(ownVersion)
+  if (installedSemver !== null && ownSemver !== null && gt(installedSemver, ownSemver)) {
+    console.error(MSG.launcherOutdated[lang](installedVersion, ownVersion))
+  } else {
+    console.error(MSG.profileOutdated[lang](installedVersion, ownVersion))
+  }
 }
 
 // --- 3. --resume 拦截 ---------------------------------------------------------
@@ -240,6 +270,12 @@ for (const oldName of detectLegacyEnv()) {
 }
 
 // --- 4. 启动 ------------------------------------------------------------------
+// Contract for the profile runtime: lets /update diagnose whether the
+// global dsh-tui launcher is older than the profile it just installed.
+// Not a one-shot marker — it must survive restarts so the runtime always
+// knows the launcher generation it boots under.
+process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion
+
 const child = spawn(...cmd('dsh', ['--profile', PROFILE, ...args]), {
   stdio: 'inherit',
   env: process.env,

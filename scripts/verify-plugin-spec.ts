@@ -9,7 +9,7 @@
  *   3. 8 个 negotiate 场景与 run.js 期望逐字段 deepEqual；
  *   4. 篡改任一 contract 文件后 verifyRegistry 必败（fail-closed 自检）。
  *
- * 上游 ecosystem-spec 更新整目录覆盖后，本电池即漂移报警器。
+ * 上游 dsh-ecosystem-spec 更新整目录覆盖后，本电池即漂移报警器。
  *
  * Run via `node --import tsx/esm scripts/verify-plugin-spec.ts`.
  */
@@ -28,13 +28,13 @@ const { parseManifest } = await import('@dsh-std/manifest')
 const { validateMessageEvent } = await import('@dsh-std/messages')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const specDir = join(root, 'ecosystem-spec')
+const specDir = join(root, 'dsh-ecosystem-spec')
 const load = (relative: string) => JSON.parse(readFileSync(join(specDir, relative), 'utf8'))
 const fixture = (name: string) => load(`conformance/fixtures/${name}`)
 
 const data = loadSpecData(specDir)
 if (!data) {
-  console.error('vendored spec data unreadable (ecosystem-spec/)')
+  console.error('vendored spec data unreadable (dsh-ecosystem-spec/)')
   process.exit(1)
 }
 const index = createContractIndex(data.registry, data.permissions)
@@ -200,11 +200,11 @@ negotiateCase(
 // --- 4. 篡改必败（fail-closed 自检） ---------------------------------------
 const tamperedRoot = mkdtempSync(join(tmpdir(), 'dsh-plugin-spec-tamper-'))
 try {
-  cpSync(specDir, join(tamperedRoot, 'ecosystem-spec'), { recursive: true })
+  cpSync(specDir, join(tamperedRoot, 'dsh-ecosystem-spec'), { recursive: true })
   const privateEntry = data.registry.definitions[0]
-  const target = join(tamperedRoot, 'ecosystem-spec', privateEntry.profile)
+  const target = join(tamperedRoot, 'dsh-ecosystem-spec', privateEntry.profile)
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
-  const tampered = loadSpecData(join(tamperedRoot, 'ecosystem-spec'))
+  const tampered = loadSpecData(join(tamperedRoot, 'dsh-ecosystem-spec'))
   const drift = tampered ? verifyRegistry(tampered) : ['tampered copy unreadable']
   expect('tampered private profile detected', drift.length === 1 && drift[0].includes(privateEntry.name), drift.join(' | '))
 } finally {
@@ -214,7 +214,7 @@ try {
 // --- 5. 可解析但错误形状的数据也必须 soft-fail -------------------------------
 const malformedRoot = mkdtempSync(join(tmpdir(), 'dsh-plugin-spec-malformed-'))
 try {
-  const malformedSpecDir = join(malformedRoot, 'ecosystem-spec')
+  const malformedSpecDir = join(malformedRoot, 'dsh-ecosystem-spec')
   cpSync(specDir, malformedSpecDir, { recursive: true })
   const registryFile = join(malformedSpecDir, 'registry', 'registry-0.15.json')
   const registry = JSON.parse(readFileSync(registryFile, 'utf8')) as Record<string, unknown>
@@ -223,6 +223,23 @@ try {
   expect('object-shaped facetApiVersions makes vendored data unavailable', loadSpecData(malformedSpecDir) === undefined)
 } finally {
   rmSync(malformedRoot, { recursive: true, force: true })
+}
+
+const policyTamperRoot = mkdtempSync(join(tmpdir(), 'dsh-plugin-spec-policy-tamper-'))
+try {
+  const policySpecDir = join(policyTamperRoot, 'dsh-ecosystem-spec')
+  cpSync(specDir, policySpecDir, { recursive: true })
+  const permissionsFile = join(policySpecDir, 'registry', 'permissions-0.1.json')
+  const permissions = JSON.parse(readFileSync(permissionsFile, 'utf8')) as {
+    permissions: Array<{ name: string; default: string }>
+  }
+  const readPermission = permissions.permissions.find(permission => permission.name === 'storage.local.read')
+  if (readPermission === undefined) throw new Error('storage.local.read policy missing from fixture')
+  readPermission.default = 'allow'
+  writeFileSync(permissionsFile, JSON.stringify(permissions))
+  expect('permission default drift makes vendored data unavailable', loadSpecData(policySpecDir) === undefined)
+} finally {
+  rmSync(policyTamperRoot, { recursive: true, force: true })
 }
 
 // --- 汇总 ------------------------------------------------------------------

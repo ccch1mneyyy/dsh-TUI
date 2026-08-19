@@ -19,6 +19,11 @@ jobs:
       DSH_TUI_LANG: zh
     steps:
       - uses: actions/checkout@v4
+        with:
+          # vendor/dsh-std 是 @dsh-std/* workspace 依赖的来源（#308）：
+          # 不拉子模块时 prepare→compile 在空目录上构建出悬空链接，
+          # tsc 全线 TS2307。
+          submodules: recursive
 
       - uses: pnpm/action-setup@v4
         with:
@@ -58,6 +63,11 @@ jobs:
       - run: node scripts/verify-provider-wizard.mjs
       - run: node --import tsx/esm scripts/verify-askpanel-hide-custom-input.tsx
 
-      - run: pnpm publish --no-git-checks --access public --provenance
+      # 用 npm 而非 pnpm 发布：@dsh-std/* 是 bundledDependencies（workspace
+      # v0.0.0 包，#308），pnpm 在 isolated linker 下拒绝
+      # （ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED），npm 原生跟随
+      # workspace 符号链接打包（dry-run 实证 7 包全入、无 vendor 杂物）。
+      # prepare（compile）在 CI 的 pnpm@11 下可正常运行。
+      - run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

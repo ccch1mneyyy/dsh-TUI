@@ -5,7 +5,14 @@ import { env } from '../utils/env.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
-import { cursorMove, cursorTo, eraseLines, SGR_RESET } from './termio/csi.js'
+import {
+  CURSOR_HOME,
+  cursorMove,
+  cursorTo,
+  ERASE_SCREEN,
+  eraseLines,
+  SGR_RESET,
+} from './termio/csi.js'
 import { BSU, ESU, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js'
 import { link } from './termio/osc.js'
 
@@ -365,12 +372,31 @@ export function writeDiffToTerminal(
         }
         break
       case 'clearTerminal':
-        // Pass the live row count: the blank only needs one viewport worth
-        // of scroll (see getClearTerminalSequence on why overshooting
-        // evicts the user's real scrollback).
-        buffer += getClearTerminalSequence(
-          (terminal.stdout as unknown as { rows?: number }).rows,
-        )
+        // Hard clear of screen + scrollback. MUST run OUTSIDE the BSU/ESU
+        // sync block: Windows Terminal snaps the viewport back to the top
+        // when 2J/3J execute inside a synchronized-update block
+        // (claude-code#35580) — the reason the scrollUp-based "soft" clear
+        // existed at all. Close the block, clear, reopen. Everything stays
+        // in the SAME write, so the terminal processes it with no
+        // intermediate paint. The hard clear actually removes the UI's
+        // scrollback snapshots (the duplicated whale-logo class of bugs);
+        // the old soft clear (CSI n S) PUSHED the live viewport into the
+        // scrollback instead, depositing a fresh full-UI copy per reset.
+        // Screen-only hard clear: 2J + home, NO 3J. Erasing the scrollback
+        // here destroyed the user's entire visible history on every settle
+        // shrink (the "context lost / cannot scroll" reports) — the inline
+        // transcript IS the scrollback; wiping it to avoid duplicate
+        // snapshots is never an acceptable trade. 2J clears the screen for
+        // the repaint while everything above the viewport survives.
+        // Executed OUTSIDE the DEC 2026 sync block (split begin/end): WT
+        // yanks the viewport to top when 2J runs inside a synchronized
+        // update (claude-code#35580).
+        buffer +=
+          (useSync ? ESU : '') +
+          SGR_RESET +
+          ERASE_SCREEN +
+          CURSOR_HOME +
+          (useSync ? BSU : '')
         break
       case 'cursorHide':
         buffer += HIDE_CURSOR

@@ -141,12 +141,25 @@ dsh-tui.cmd --resume
 项目迭代很快，更新复用安装命令，显式指定 `@latest`：
 
 ```sh
+# 更新 Profile runtime（TUI 内 /update 做的就是这件事）
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
+```
+
+如果你通过全局 `dsh-tui` 命令启动，还需要让 Launcher 对齐（TUI 内的
+`/update` 只更新 profile，不会动全局安装）：
+
+```sh
+npm install -g @deepseek-harness-tui/dsh-tui@latest
+# 或（原本用 pnpm 全局安装时）
+pnpm add -g @deepseek-harness-tui/dsh-tui@latest
 ```
 
 - 不带 `@latest` 时 pnpm 会按 profile `package.json` 里已记录的版本范围
   （如 `^0.1.4`）就地解析，可能停留在旧的主线上——这是"重复执行安装命令
   但版本没变"的常见原因。
+- 修复"版本不一致"时，优先使用启动器打印的"精确版本"命令（例如
+  `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`）；日常主动升级才
+  使用 `@latest`。
 - 确认生效：启动横幅右上角显示当前版本（`✦ dsh-TUI vX.Y.Z`）。
 - 用户覆盖层 `cordis.patch.yml` 在更新中原样保留；会话数据的存放位置
   可能随版本变化（如 0.3.7 起 `/resume` 改用与 dsh web 共享的 JSONL

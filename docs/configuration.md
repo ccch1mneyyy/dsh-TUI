@@ -101,6 +101,11 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 - 恢复旧会话时，以该会话日志记录的 preset 为准，不读取当前默认值覆盖它。
 - “梁神模式”随 dsh-tui 包发布，启动时安装到用户 preset 根目录；已有同名且并非
   dsh-tui 托管的目录不会被覆盖。
+- 梁神模式在 Windows 的首轮 `bash` 通过自动发现的 Git Bash 执行：依次尝试 PATH 上的
+  `git.exe` 所在安装树（安装器/便携/Scoop 布局通用，会穿透 Scoop shim）、常规安装位置
+  与 Scoop 约定目录，最后兜底 PATH 上的裸 `bash`，且始终拒绝把 System32 的 WSL 启动器
+  当作 Git Bash。可用环境变量 `DSH_TUI_LIANGSHEN_BASH_PATH` 显式指定 `bash.exe` 绝对
+  路径（设置后即为唯一候选，找不到即告警并跳过注册，首轮直接放开完整工具目录）。
 
 自定义 preset 放在 `$DSH_HOME/.agent-presets/<name>/`，目录中应包含
 `agent.cordis.yml`。默认 `DSH_HOME` 下的路径即 `~/.dsh/.agent-presets/`。

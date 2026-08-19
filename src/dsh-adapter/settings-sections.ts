@@ -12,6 +12,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { LocalizedDescriptions } from '../commands.js'
+import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 /** Control kinds the TUI settings screen knows how to render. */
 export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
@@ -88,6 +89,13 @@ export interface TuiSettingsSection {
   fields: readonly TuiSettingsField[]
 }
 
+/** Host-only settings-section controls used by the TUI bootstrap/channel. */
+export interface TuiSettingsSectionsHost {
+  register(section: TuiSettingsSection): () => void
+  list(): readonly TuiSettingsSection[]
+  subscribe(listener: () => void): () => void
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     tuiSettingsSections: TuiSettingsSectionsRuntime
@@ -101,36 +109,50 @@ export const name = 'dsh-tui-settings-sections'
  * the dsh settings service (`ctx.settings`).
  */
 export class TuiSettingsSectionsRuntime extends Service {
-  private readonly sections = new Map<string, TuiSettingsSection>()
-  private readonly listeners = new Set<() => void>()
-
   constructor(ctx: Context) {
     super(ctx, 'tuiSettingsSections')
+    compositionRoot(ctx)
+    const runtime = this
+    const state: SettingsSectionState = { sections: new Map(), owners: new Map(), listeners: new Set(), host: undefined }
+    state.host = Object.freeze({
+      register(section: TuiSettingsSection) {
+        return registerSection(runtime, section)
+      },
+      list() {
+        return [...settingsSectionStateFor(runtime).sections.values()]
+      },
+      subscribe(listener: () => void) {
+        return subscribeSections(runtime, listener)
+      },
+    })
+    settingsSectionStates.set(this, state)
   }
 
   register(section: TuiSettingsSection): () => void {
-    const ns = section.ns.trim()
-    if (!/^[a-z][a-z0-9_-]*$/u.test(ns)) throw new TypeError(`invalid TUI settings-section namespace: ${section.ns}`)
-    if (this.sections.has(ns)) throw new Error(`TUI settings section "${ns}" is already registered`)
-    const normalized = { ...section, ns }
-    this.sections.set(ns, normalized)
-    this.emit()
-    return () => {
-      if (this.sections.get(ns) === normalized) {
-        this.sections.delete(ns)
-        this.emit()
-      }
-    }
+    const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.register', this)
+    const owner = activationFiber(caller)
+    if (owner === undefined) throw new Error('dsh-tui: tuiSettingsSections.register requires a live activation')
+    const dispose = registerSection(this, section, owner)
+    bindCallerEffect(caller, dispose)
+    return dispose
   }
 
   /** Registered sections in registration order. */
   list(): readonly TuiSettingsSection[] {
-    return [...this.sections.values()]
+    const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.list', this)
+    const owner = activationFiber(caller)
+    return owner === undefined ? [] : [...settingsSectionStateFor(this).sections.entries()]
+      .filter(([ns]) => settingsSectionStateFor(this).owners.get(ns) === owner)
+      .map(([, section]) => section)
   }
 
   /** The section registered for a namespace, if any. */
   section(ns: string): TuiSettingsSection | undefined {
-    return this.sections.get(ns.trim())
+    const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.section', this)
+    const owner = activationFiber(caller)
+    const state = settingsSectionStateFor(this)
+    const normalized = ns.trim()
+    return owner !== undefined && state.owners.get(normalized) === owner ? state.sections.get(normalized) : undefined
   }
 
   /**
@@ -138,14 +160,84 @@ export class TuiSettingsSectionsRuntime extends Service {
    * re-read the section list (a plugin (un)loading mid-session changes it).
    */
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener)
-    return () => {
-      this.listeners.delete(listener)
-    }
+    const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.subscribe', this)
+    const owner = activationFiber(caller)
+    if (owner === undefined) return () => {}
+    const dispose = subscribeSections(this, listener, owner)
+    bindCallerEffect(caller, dispose)
+    return dispose
   }
 
-  private emit(): void {
-    for (const listener of this.listeners) listener()
+}
+
+interface SettingsSectionState {
+  readonly sections: Map<string, TuiSettingsSection>
+  readonly owners: Map<string, object>
+  readonly listeners: Set<{ owner: object | undefined; listener: () => void }>
+  host: TuiSettingsSectionsHost | undefined
+}
+
+const settingsSectionStates = new WeakMap<TuiSettingsSectionsRuntime, SettingsSectionState>()
+
+function settingsSectionStateFor(runtime: TuiSettingsSectionsRuntime): SettingsSectionState {
+  const state = settingsSectionStates.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiSettingsSections host state is unavailable')
+  return state
+}
+
+function registerSection(runtime: TuiSettingsSectionsRuntime, section: TuiSettingsSection, owner?: object): () => void {
+  const state = settingsSectionStateFor(runtime)
+  const ns = section.ns.trim()
+  if (!/^[a-z][a-z0-9_-]*$/u.test(ns)) throw new TypeError(`invalid TUI settings-section namespace: ${section.ns}`)
+  if (state.sections.has(ns)) throw new Error(`TUI settings section "${ns}" is already registered`)
+  const normalized = Object.freeze({
+    ...section,
+    ns,
+    descriptions: section.descriptions === undefined ? undefined : Object.freeze({ ...section.descriptions }),
+    fields: Object.freeze(section.fields.map(field => Object.freeze({
+      ...field,
+      path: Object.freeze([...field.path]),
+      descriptions: field.descriptions === undefined ? undefined : Object.freeze({ ...field.descriptions }),
+      hintDescriptions: field.hintDescriptions === undefined ? undefined : Object.freeze({ ...field.hintDescriptions }),
+      options: field.options === undefined
+        ? undefined
+        : Object.freeze(field.options.map(option => Object.freeze({ ...option, descriptions: option.descriptions === undefined ? undefined : Object.freeze({ ...option.descriptions }) }))),
+      secret: field.secret === undefined ? undefined : Object.freeze({ ...field.secret }),
+    }))),
+  })
+  state.sections.set(ns, normalized)
+  if (owner !== undefined) state.owners.set(ns, owner)
+  emitSections(state, owner)
+  return () => {
+    if (state.sections.get(ns) !== normalized) return
+    state.sections.delete(ns)
+    state.owners.delete(ns)
+    emitSections(state, owner)
+  }
+}
+
+function subscribeSections(runtime: TuiSettingsSectionsRuntime, listener: () => void, owner?: object): () => void {
+  const state = settingsSectionStateFor(runtime)
+  const entry = { owner, listener }
+  state.listeners.add(entry)
+  return () => {
+    state.listeners.delete(entry)
+  }
+}
+
+function emitSections(state: SettingsSectionState, changedOwner?: object): void {
+  for (const entry of state.listeners) {
+    if (entry.owner !== undefined && entry.owner !== changedOwner) continue
+    entry.listener()
+  }
+}
+
+export function getHostSettingsSections(runtime: TuiSettingsSectionsRuntime | undefined): TuiSettingsSectionsHost | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    return settingsSectionStateFor(runtime).host ?? undefined
+  } catch {
+    return undefined
   }
 }
 

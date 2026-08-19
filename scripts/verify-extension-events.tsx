@@ -262,6 +262,31 @@ const subscribe = (
 // for the separate raw-subscription denial probe below.
 const decisionCtx = { on: subscribe }
 
+// Notification listeners are a broadcast, not a decision chain. A slow
+// first registration must not postpone the next plugin's session rebind.
+{
+  const { dispatchTuiNotification } = await import('../src/dsh-adapter/extension-events.js')
+  let firstDone = false
+  let secondStartedBeforeFirstDone = false
+  let secondDone = false
+  const disposeFirst = decisionCtx.on('tui/session-switched', async () => {
+    await sleep(120)
+    firstDone = true
+  })
+  const disposeSecond = decisionCtx.on('tui/session-switched', async () => {
+    secondStartedBeforeFirstDone = !firstDone
+    await sleep(10)
+    secondDone = true
+  })
+  await dispatchTuiNotification(ctx, 'tui/session-switched', {
+    kind: 'new', sessionId: 's-a1', previousSessionId: 's-before', cwd: '/tmp/demo',
+  })
+  check('tui/session-switched notifications launch listeners in parallel',
+    firstDone && secondDone && secondStartedBeforeFirstDone)
+  disposeSecond()
+  disposeFirst()
+}
+
 const stdout = new FakeStdout()
 const stdin = new FakeStdin()
 const instance = await render(
@@ -637,7 +662,7 @@ await sleep(800)
   const switched = await channel.newSession()
   check('compact ABA setup: /new succeeded mid-await', switched === true)
   const resumed = await channel.resumeTo('s-a1')
-  check('compact ABA setup: /resume back to the origin session succeeded', resumed === true)
+  check('compact ABA setup: /resume back to the origin session succeeded', resumed.ok === true)
   release(undefined)
   await sleep(400)
   check('compact ABA: id reuse does NOT revive the stale compaction',
@@ -661,7 +686,7 @@ await sleep(800)
   check('switch stale setup: a second /new completed mid-await', switched === true)
   release(undefined)
   const resumed = await resumePromise
-  check('session-switch stale: the parked /resume is dropped', resumed === false)
+  check('session-switch stale: the parked /resume is dropped', !resumed.ok && resumed.reason === 'cancelled')
   check('session-switch stale: stale notice toasted', notified('等待插件期间会话已切换'))
   dispose()
 }

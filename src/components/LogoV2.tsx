@@ -8,6 +8,7 @@ import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
 import { renderBigText } from './bigfont.js'
+import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { OPENING_SEQUENCE } from './whaleFrames.js'
@@ -37,13 +38,16 @@ const WHALE_MIN_COLUMNS = 64
 const FULL_WHALE_WIDTH = 40
 
 /**
- * Leading spaces that center the welcome line under the drawn whale: the
- * art's bounding box spans sprite columns 3..34 (center 18.5) of the
- * 40-wide box, and the tagline measure 14
- * columns — 18.5 − 7 = 11.5 → 12. Centered on the full 40-column box
- * instead would need 13, which reads one column right of the whale body.
+ * Center of the whale art's bounding box: sprite columns 3..34 (center
+ * 18.5) of the 40-wide box. The welcome tagline is indented so its own
+ * center lands on this column — for the 14-column Chinese tagline that is
+ * 18.5 − 7 = 11.5 → 12 leading spaces. (Centering on the full 40-column
+ * box would need 13, which reads one column right of the whale body.)
+ * The pad is recomputed from the rendered tagline's display width so
+ * longer locales — e.g. the 21-column English tagline → 8 — stay
+ * centered under the art too.
  */
-const WELCOME_PAD = 12
+const WHALE_CENTER = 18.5
 
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
@@ -109,6 +113,12 @@ export function LogoV2({
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
 
+  const tagline = tr('logo-tagline')
+  // Indent that centers the tagline under the whale art's bounding box.
+  const welcomePad = showWhale
+    ? Math.max(0, Math.round(WHALE_CENTER - stringWidth(tagline) / 2))
+    : 2
+
   const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 60)
   const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 60)
 
@@ -149,8 +159,8 @@ export function LogoV2({
           </Text>
         </Box>
       </Box>
-      <Box marginTop={1} paddingLeft={showWhale ? WELCOME_PAD : 2}>
-        <Text>{sweep(tr('logo-tagline'), t, taglineRGB, FLASH, 60)}</Text>
+      <Box marginTop={1} paddingLeft={welcomePad}>
+        <Text>{sweep(tagline, t, taglineRGB, FLASH, 60)}</Text>
       </Box>
     </Box>
   )
