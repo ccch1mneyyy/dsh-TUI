@@ -20,7 +20,7 @@ import type { ToolBackground } from '../tuiDisplayPrefs.js'
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
  * on a grey bubble with a `❯` pointer, assistant text with a `●` bullet and
- * markdown, thinking folded to `∴ Thinking (ctrl+o to expand)`, tool calls as
+ * markdown, thinking folded to `⚓ Thinking (ctrl+o to expand)`, tool calls as
  * status-dot cards. `expanded` (Ctrl+O) shows full reasoning + full tool
  * args/results; `expandedRows` (message-selection mode, Enter) expands single
  * rows; `selectedId` highlights the selected row.
@@ -120,12 +120,11 @@ export function MessageList({
       prev = row.kind
     }
   }
-  // CC's expanded rows keep a persistent hover-grey background (VirtualItem:
-  // `expanded ? userMessageBackgroundHover : undefined`).
+  // Selection keeps its highlight; expanded rows render with no fill (the
+  // diff line tints inside cards are the only backgrounds in the transcript).
   const rowBackground = (rowId: number) => {
     const isSelected = selectedId === rowId
     if (isSelected) return 'messageActionsBackground'
-    if (expandedRows.has(rowId)) return 'userMessageBackgroundHover'
     return undefined
   }
 
@@ -480,7 +479,7 @@ type MemoRowProps = {
   diffLayout: 'auto' | 'split' | 'unified'
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
-  background: 'messageActionsBackground' | 'userMessageBackgroundHover' | undefined
+  background: 'messageActionsBackground' | undefined
   // ToolRow, flattened: the channel writes status/result fields in place,
   // so passing the object itself would make mutations invisible to memo.
   toolCallId: string | undefined
@@ -557,7 +556,6 @@ function TranscriptRow({
             text={text}
             addMargin={addMargin}
             isSelected={isSelected}
-            isExpanded={isExpanded}
             onClick={onClick}
           />
         </Box>
@@ -613,6 +611,7 @@ function TranscriptRow({
           <AssistantThinkingMessage
             thinking={text}
             addMargin={addMargin}
+            streaming={streaming}
             preview={
               streaming &&
               thinkingFold === 'preview' &&

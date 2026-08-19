@@ -29,8 +29,8 @@ function resolveColor(
   ) {
     return color as Color
   }
-  // It's a theme key - resolve it
-  return theme[color as keyof Theme] as Color
+  // It's a theme key - resolve it ('' means "no color" in that theme)
+  return (theme[color as keyof Theme] as Color) || undefined
 }
 
 export type Props = {
