@@ -154,7 +154,7 @@ for the complete field reference.
 
 | Variable | Purpose |
 | --- | --- |
-| `VISUAL` / `EDITOR` | External editor opened by `Ctrl+X` (`VISUAL` wins; arguments like `code --wait` are allowed; POSIX falls back to `vi`) |
+| `VISUAL` / `EDITOR` | External editor opened by `Ctrl+G` (`VISUAL` wins; arguments like `code --wait` are allowed; with neither set the TUI prompts you to configure one — no `vi` fallback) |
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |

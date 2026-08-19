@@ -122,7 +122,7 @@ npm install -g @deepseek-harness-tui/dsh-tui@<profile-version>
 | `Ctrl+R` | 历史消息搜索 |
 | `/` | 会话内全文搜索（`n`/`N` 跳转） |
 | `Ctrl+V` | 粘贴文本或文件管理器中的文件；图片显示为 `[Image #N]` 并作为持久附件发送 |
-| `Ctrl+X` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
+| `Ctrl+G` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
 | `?` | 快捷键菜单（仅输入框为空时响应） |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
 | `Ctrl+P` | 切换启动时 loaded-context 面板（面板在屏时有效） |

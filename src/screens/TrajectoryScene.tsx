@@ -285,12 +285,14 @@ export function TrajectoryScene({
     if (key.downArrow) return move(1)
     if (key.pageUp) return move(-ledgerRows)
     if (key.pageDown) return move(ledgerRows)
-    if (input === 'g') {
+    // Bare-letter jumps must not fire on Ctrl+G (the prompt's external-editor
+    // key) or other modified chords that share the letter.
+    if (input === 'g' && !key.ctrl && !key.meta && !key.super) {
       setCursor(0)
       setFollow(false)
       return
     }
-    if (input === 'G') {
+    if (input === 'G' && !key.ctrl && !key.meta && !key.super) {
       setCursor(Math.max(0, filtered.length - 1))
       setFollow(true)
       return

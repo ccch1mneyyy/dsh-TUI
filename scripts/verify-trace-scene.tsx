@@ -387,7 +387,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   // Scrollback accounting. Leaving the alternate screen makes the terminal
   // restore the main buffer, and Ink then repaints once because its front
   // frame was blanked — one frame per ROUND TRIP in inline mode, the same cost
-  // the Ctrl+X editor handoff already pays. What must never happen is growth
+  // the Ctrl+G editor handoff already pays. What must never happen is growth
   // that scales with USE: the old inline overlay churned the frame on every
   // keystroke, and that is the family this view exists to escape.
   const perTrip = (rowsOf() - scrollbackBefore) / 20

@@ -252,9 +252,9 @@ output and smooth draining — handled in `src/ink/` under the
 scrolling, and double-Esc time travel behave the same as in a standalone
 terminal.
 
-### Make `Ctrl+X` edit the current input in VS Code
+### Make `Ctrl+G` edit the current input in VS Code
 
-The TUI's `Ctrl+X` uses `$VISUAL`/`$EDITOR`. To edit in VS Code, export
+The TUI's `Ctrl+G` uses `$VISUAL`/`$EDITOR`. To edit in VS Code, export
 `code -w` in the terminal environment (`settings.json`, key
 `terminal.integrated.env.<platform>`):
 

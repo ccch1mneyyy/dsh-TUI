@@ -143,8 +143,8 @@ stdinObj.write('什么是cordis')
 await sleep(300)
 check('预备: 草稿已入输入框', screenHas('什么是cordis'))
 
-// Ctrl+X → 假编辑器（600ms 后写盘退出）
-stdinObj.write('\x18')
+// Ctrl+G → 假编辑器（600ms 后写盘退出）
+stdinObj.write('\x07')
 await sleep(250)
 // 交接会话期间的残留字节：若无 drain/抑制，恢复后双击 Esc = 清输入 +
 // 空输入再 Esc = 打开 rewind 选择器。

@@ -1,10 +1,10 @@
 /**
- * 外部编辑器回归（issue #123）：Ctrl+X 的 $VISUAL/$EDITOR 解析与临时文件
+ * 外部编辑器回归（issue #123）：Ctrl+G 的 $VISUAL/$EDITOR 解析与临时文件
  * 往返。覆盖：
  *
  * - splitEditorCommand：空白拆分 + 单双引号（`code --wait`、带空格路径）
- * - resolveEditorCommand：VISUAL 优先于 EDITOR、空白值跳过、POSIX 回退
- *   vi、Windows 无编辑器 → undefined
+ * - resolveEditorCommand：VISUAL 优先于 EDITOR、空白值跳过、未设置
+ *   VISUAL/EDITOR → undefined（无 vi 兜底）
  * - resolveWindowsShim：PATH/PATHEXT 解析（code → code.cmd 走 cmd.exe，
  *   code.exe 直接 spawn），显式扩展名原样通过
  * - cross-spawn 引用协议：cmdEscapeCommand/cmdEscapeArgument 的
@@ -61,10 +61,7 @@ check('split: 空引号 → 空串参数', eq(splitEditorCommand('""'), ['']))
 check('resolve: VISUAL 优先', eq(resolveEditorCommand({ VISUAL: 'vim', EDITOR: 'nano' }), ['vim']))
 check('resolve: VISUAL 空白跳过用 EDITOR', eq(resolveEditorCommand({ VISUAL: '  ', EDITOR: 'nano' }), ['nano']))
 check('resolve: 带参数整串解析', eq(resolveEditorCommand({ EDITOR: 'code --wait' }), ['code', '--wait']))
-check('resolve: Windows 无编辑器 → undefined', resolveEditorCommand({}, 'win32') === undefined)
-if (process.platform !== 'win32') {
-  check('resolve: POSIX 兜底 vi', eq(resolveEditorCommand({}), ['vi']))
-}
+check('resolve: 未设置 VISUAL/EDITOR → undefined（无 vi 兜底）', resolveEditorCommand({}) === undefined)
 
 // ── cross-spawn 引用协议（纯函数）──────────────────────────────────────
 check(

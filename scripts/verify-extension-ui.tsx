@@ -445,19 +445,19 @@ const plugin = pluginCtx
   plugin.tuiShortcuts.register('ctrl+shift+enter', { description: 'x', handler: noop })
   check('tuiShortcuts: editor newline combo reserved (ctrl+shift+enter)',
     plugin.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 4)
-  // Built-ins match a modifier SUBSET (isMod && char, Shift never excluded):
+  // Built-ins match a modifier SUBSET (ctrl && char, Shift never excluded):
   // a shift-superset of a reserved combo collides with the built-in on
   // terminals that don't report Shift distinctly — refused too.
-  plugin.tuiShortcuts.register('ctrl+shift+x', { description: 'x', handler: noop })
+  plugin.tuiShortcuts.register('ctrl+shift+g', { description: 'x', handler: noop })
   plugin.tuiShortcuts.register('ctrl+shift+t', { description: 'x', handler: noop })
-  check('tuiShortcuts: shift-supersets of reserved combos refused (ctrl+shift+x/t)',
+  check('tuiShortcuts: shift-supersets of reserved combos refused (ctrl+shift+g/t)',
     plugin.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 6)
   // …but a shift-superset of a NON-reserved combo still registers (and its
   // disposer removes it, keeping the registry empty for later sections).
-  const disposeShiftG = plugin.tuiShortcuts.register('ctrl+shift+g', { description: 'ok', handler: noop })
+  const disposeShiftX = plugin.tuiShortcuts.register('ctrl+shift+x', { description: 'ok', handler: noop })
   check('tuiShortcuts: shift-superset of a free combo registers',
     plugin.tuiShortcuts.list().length === 1)
-  disposeShiftG()
+  disposeShiftX()
   check('tuiShortcuts: the shift-superset disposes cleanly',
     plugin.tuiShortcuts.list().length === 0)
   plugin.tuiShortcuts.register('alt+escape', { description: 'x', handler: noop })
@@ -465,8 +465,8 @@ const plugin = pluginCtx
     plugin.tuiShortcuts.list().length === 0 && warnCount('need ctrl/alt plus one key') === 1)
   plugin.tuiShortcuts.register('not-a-combo', { description: 'x', handler: noop })
   check('tuiShortcuts: malformed combo refused', warnCount('need ctrl/alt plus one key') === 2)
-  plugin.tuiShortcuts.register('ctrl+g', { description: 'first', handler: noop })
-  plugin.tuiShortcuts.register('ctrl+g', { description: 'second', handler: noop })
+  plugin.tuiShortcuts.register('ctrl+b', { description: 'first', handler: noop })
+  plugin.tuiShortcuts.register('ctrl+b', { description: 'second', handler: noop })
   check('tuiShortcuts: duplicate refused',
     plugin.tuiShortcuts.list().length === 1 && warnCount('already registered') === 1)
   plugin.tuiShortcuts.register('ctrl+h', { description: '  ', handler: noop })

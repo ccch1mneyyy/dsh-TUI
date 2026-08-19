@@ -781,11 +781,11 @@ ctx.effect(() => () => dispose?.())     // 清理挂在【调用者】自己的 
 规则（全部"拒绝 + 告警，不抛错"）：
 
 - **必须带 ctrl 或 alt**——裸字母是打字，裸方向键是导航。
-- **保留位不发**：TUI 内建绑定（ctrl+c/d/t/r/x/o/l/e/v/a/u/k/w、ctrl+←/→、
+- **保留位不发**：TUI 内建绑定（ctrl+c/d/t/r/g/o/l/e/v/a/u/k/w、ctrl+←/→、
   ctrl/alt+Enter、alt+↑、Esc、Tab、Shift+Tab）在注册时即被拒绝。这是
   "本地优先"的强制面：冲突永远到不了匹配器。内建匹配是**修饰键子集**
   判定（`isMod && 字符`，不排除额外 Shift），所以保留位的 shift 超集
-  同样被拒——`ctrl+shift+x` 在不区分 Shift 的终端上就是 Ctrl+X，注册了
+  同样被拒——`ctrl+shift+g` 在不区分 Shift 的终端上就是 Ctrl+G，注册了
   只会遮蔽内建或永远不响。
 - 重复注册同一组合（规范形式）被拒绝。
 - 只在**纯对话态**派发：任何浮层（picker、审批、问卷、托管对话框、场景、

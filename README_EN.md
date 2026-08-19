@@ -121,7 +121,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+R` | History search |
 | `/` | In-session full-text search (`n`/`N` to jump) |
 | `Ctrl+V` | Paste text or files from the file manager; images show as `[Image #N]` and are sent as durable attachments |
-| `Ctrl+X` | Edit the current input with `$VISUAL`/`$EDITOR` (e.g. nvim); content is filled back in on save and exit |
+| `Ctrl+G` | Edit the current input with `$VISUAL`/`$EDITOR` (e.g. nvim); content is filled back in on save and exit |
 | `?` | Keybinding menu (responds only when the input is empty) |
 | `Shift+↑` | Message selection mode (`Enter` expands a single message) |
 | `Ctrl+P` | Toggle the startup loaded-context panel (effective while the panel is on screen) |

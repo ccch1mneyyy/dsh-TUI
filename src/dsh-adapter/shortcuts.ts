@@ -101,9 +101,9 @@ const NAMED_KEYS: Record<string, keyof TuiShortcutKey> = {
  * Combos the TUI owns, globally or inside the prompt editor (the editor's
  * bindings are checked AFTER plugin shortcuts, so refusing them here is
  * what keeps "locals win" true). Built-in handlers match a MODIFIER SUBSET
- * (`isMod(key) && input === 'x'` — they never exclude an extra Shift), so
+ * (`key.ctrl && input === 'g'` — they never exclude an extra Shift), so
  * the reserved check below refuses a plugin combo whose SHIFTLESS form is
- * reserved: ctrl+shift+x would shadow Ctrl+X on terminals that report both
+ * reserved: ctrl+shift+g would shadow Ctrl+G on terminals that report both
  * as the same keypress (ConPTY does), and would be dead weight on terminals
  * that don't.
  */
@@ -112,7 +112,7 @@ const RESERVED_COMBOS = new Set([
   'ctrl+d', // exit on empty input
   'ctrl+t', // startup context panel
   'ctrl+r', // history search
-  'ctrl+x', // external editor
+  'ctrl+g', // external editor
   'ctrl+o', // transcript mode toggle
   'ctrl+l', // terminal redraw
   'ctrl+e', // show all messages / line end

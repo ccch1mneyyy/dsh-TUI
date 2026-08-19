@@ -211,9 +211,9 @@ truecolor 配色、OSC 8 链接（由 VS Code 直接渲染为可点击）、OSC 
 `src/ink/` 中按 `TERM_PROGRAM=vscode` 探测分支处理。流式 Markdown、工具卡、
 滚动、双击 Esc 时间回溯等行为与独立终端一致。
 
-### 让 `Ctrl+X` 用 VS Code 编辑当前输入
+### 让 `Ctrl+G` 用 VS Code 编辑当前输入
 
-TUI 的 `Ctrl+X` 走 `$VISUAL`/`$EDITOR`。想让它在 VS Code 里编辑，把
+TUI 的 `Ctrl+G` 走 `$VISUAL`/`$EDITOR`。想让它在 VS Code 里编辑，把
 `code -w` 写进终端环境（`settings.json` 中按平台设置，键名
 `terminal.integrated.env.<platform>`）：
 

@@ -928,11 +928,11 @@ Rules (all "refuse + warn, never throw"):
 - **ctrl or alt is mandatory** — bare letters are typing, bare arrows are
   navigation.
 - **Reserved combos are refused at registration**: the TUI's own bindings
-  (ctrl+c/d/t/r/x/o/l/e/v/a/u/k/w, ctrl+←/→, ctrl/alt+Enter, alt+↑, Esc, Tab,
+  (ctrl+c/d/t/r/g/o/l/e/v/a/u/k/w, ctrl+←/→, ctrl/alt+Enter, alt+↑, Esc, Tab,
   Shift+Tab). This is the enforcement of "locals win": a collision can never
   reach the matcher. Built-ins match a MODIFIER SUBSET (`isMod && char`,
   never excluding an extra Shift), so SHIFT-SUPERSETS of reserved combos are
-  refused too — `ctrl+shift+x` IS Ctrl+X on terminals that don't report
+  refused too — `ctrl+shift+g` IS Ctrl+G on terminals that don't report
   Shift distinctly, and registering it would either shadow the built-in or
   never fire.
 - Re-registering the same canonical combo is refused.

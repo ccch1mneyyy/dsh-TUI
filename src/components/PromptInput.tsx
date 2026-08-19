@@ -108,7 +108,7 @@ export interface PromptInputProps {
  * the input spans multiple lines (history/command selection otherwise); the
  * visible window scrolls to keep the caret row on screen past
  * MAX_VISIBLE_LINES. Enter submits, backspace/delete edit, ←/→ move the
- * cursor, Tab completes the selected command, Ctrl+X opens the draft in the
+ * cursor, Tab completes the selected command, Ctrl+G opens the draft in the
  * external editor ($VISUAL/$EDITOR), Escape clears (or closes the help
  * menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
  * whole lines with the Enter key lost: a trailing CR/LF in the input marks
@@ -179,7 +179,7 @@ export function PromptInput({
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
   const clipboardBusyRef = React.useRef(false)
-  /** True while the external editor owns the terminal (Ctrl+X round-trip). */
+  /** True while the external editor owns the terminal (Ctrl+G round-trip). */
   const editorBusyRef = React.useRef(false)
   /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
   const lastEnterAtRef = React.useRef(0)
@@ -486,14 +486,14 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+X / Cmd+X: edit the current draft in $VISUAL/$EDITOR (issue #123,
+    // Ctrl+G: edit the current draft in $VISUAL/$EDITOR (issue #123,
     // readline's edit-and-execute-command). The draft is written to a temp
     // file, the terminal is handed to the editor (Ink's alt-screen handoff),
     // and the saved text replaces the input when it differs. The util maps
     // every failure to an outcome, but the catch/finally here is the hard
     // guarantee: a rejected promise must never kill the process, and the
-    // busy flag must always clear or Ctrl+X stays locked forever.
-    if (isMod(key) && input === 'x') {
+    // busy flag must always clear or Ctrl+G stays locked forever.
+    if (key.ctrl && input === 'g') {
       editorBusyRef.current = true
       void (async () => {
         try {

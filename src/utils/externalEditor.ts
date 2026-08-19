@@ -1,5 +1,5 @@
 /**
- * External editor round-trip for the prompt input (issue #123): Ctrl+X dumps
+ * External editor round-trip for the prompt input (issue #123): Ctrl+G dumps
  * the current draft into a temp file, hands the terminal to `$VISUAL` /
  * `$EDITOR` (nvim, vim, nano, `code --wait`, …), and returns the saved text
  * for the input to adopt.
@@ -16,11 +16,12 @@
  * failing restore never overrides the outcome.
  *
  * Editor resolution order mirrors readline's edit-and-execute-command:
- * `$VISUAL` → `$EDITOR` → `vi` on POSIX (always present). Windows has no
- * console-editor guarantee and `notepad` does not block, so an unresolved
- * editor there reports `unavailable` and the UI asks the user to set
- * `$EDITOR`. The variable may carry arguments (`EDITOR="code --wait"`), so
- * the command line is split quote-aware before spawning.
+ * `$VISUAL` → `$EDITOR`. There is deliberately NO fallback editor: an
+ * unresolved editor reports `unavailable` and the UI asks the user to set
+ * `$VISUAL` or `$EDITOR` (dropping someone into an unconfigured `vi` is a
+ * trap for users who don't know how to quit it). The variable may carry
+ * arguments (`EDITOR="code --wait"`), so the command line is split
+ * quote-aware before spawning.
  *
  * Windows launch: libuv resolves bare names to `.exe` on PATH but will NOT
  * execute `.cmd`/`.bat` shims (VS Code's `code` on PATH is `code.cmd`), and
@@ -46,7 +47,8 @@ import { cmdEscapeArgument, cmdEscapeCommand } from './shellQuote.js'
  * - `edited`: the saved content differs from the draft — adopt `text`
  * - `unchanged`: the file matches the draft (modulo newline convention), or
  *   the editor exited non-zero (`:cq` abort semantics) — keep the draft
- * - `unavailable`: no editor could be resolved (Windows without `$EDITOR`)
+ * - `unavailable`: no editor could be resolved (neither `$VISUAL` nor
+ *   `$EDITOR` is set)
  * - `failed`: the editor process or the temp-file round-trip errored
  *   (`message` names the failed command or carries the fs error)
  */
@@ -90,20 +92,18 @@ export function splitEditorCommand(commandLine: string): string[] {
 
 /**
  * Resolve the editor argv from the environment. `$VISUAL` wins over
- * `$EDITOR` (readline convention); POSIX falls back to `vi`, Windows has no
- * blocking console editor fallback and returns undefined. `platform` is a
- * parameter so the Windows branch is unit-testable from CI's Linux runners.
+ * `$EDITOR` (readline convention); when neither is set there is no fallback
+ * editor — returns undefined and the caller reports `unavailable`.
  */
 export function resolveEditorCommand(
   env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
 ): string[] | undefined {
   const raw = (env.VISUAL ?? '').trim() || (env.EDITOR ?? '').trim()
   if (raw !== '') {
     const args = splitEditorCommand(raw)
     return args.length > 0 ? args : undefined
   }
-  return platform === 'win32' ? undefined : ['vi']
+  return undefined
 }
 
 /**
