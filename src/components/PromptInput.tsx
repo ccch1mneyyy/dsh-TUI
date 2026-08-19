@@ -160,6 +160,7 @@ export function PromptInput({
   const [selectedCommand, setSelectedCommand] = React.useState(0)
   const history = React.useRef<string[]>([])
   const historyIndex = React.useRef(-1)
+  const historyDraft = React.useRef('')
   // ctrl+r history fill: replace the input when a new fill arrives, then
   // tell the caller to clear it.
   const lastFill = React.useRef<string | null>(null)
@@ -564,11 +565,18 @@ export function PromptInput({
       if (!tryRunCommand(value)) submitText(value)
     }
 
+    // Ctrl+J is the only portable multiline fallback when a terminal cannot
+    // report modifiers on Enter. The parser names its bare LF `enter`, while
+    // the physical Enter key arrives as CR (`return`).
+    if (input === '\n' && event?.keypress.name === 'enter') {
+      insertAtCaret('\n')
+      return
+    }
+
     // Whole-line input from Windows ConPTY pipelines (cmd batch -> node):
-    // the trailing CR/LF marks a complete line to submit. A bare Enter
-    // arrives as `\r`/`\n`/`\r\n` — treat it as Enter, NOT a direct
-    // submit. Only real multi-char piped lines keep the legacy
-    // direct-submit path.
+    // the trailing CR/LF marks a complete line to submit. A bare CR/CRLF is
+    // Enter, while real multi-char piped lines keep the legacy direct-submit
+    // path.
     if (input.includes('\n') || input.includes('\r')) {
       if (/^[\r\n]+$/.test(input)) {
         handleEnter()
@@ -659,9 +667,12 @@ export function PromptInput({
         return
       }
       if (history.current.length === 0) return
-      historyIndex.current = historyIndex.current < 0
-        ? history.current.length - 1
-        : Math.max(0, historyIndex.current - 1)
+      if (historyIndex.current < 0) {
+        historyDraft.current = value
+        historyIndex.current = history.current.length - 1
+      } else {
+        historyIndex.current = Math.max(0, historyIndex.current - 1)
+      }
       const entry = history.current[historyIndex.current] ?? ''
       setInput(entry)
       return
@@ -692,11 +703,13 @@ export function PromptInput({
         return
       }
       if (historyIndex.current < 0) return
-      historyIndex.current += 1
-      const entry = historyIndex.current >= history.current.length
-        ? ''
-        : (history.current[historyIndex.current] ?? '')
-      setInput(entry)
+      if (historyIndex.current >= history.current.length - 1) {
+        historyIndex.current = -1
+        setInput(historyDraft.current)
+      } else {
+        historyIndex.current += 1
+        setInput(history.current[historyIndex.current] ?? '')
+      }
       return
     }
     if (isMod(key) && key.leftArrow) {

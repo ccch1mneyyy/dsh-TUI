@@ -88,9 +88,18 @@ const summary = (over) => ({
 })
 
 function makeChannel() {
-  // MRU order: gamma (newest) → beta → alpha, plus two delegated runs under
-  // beta and one boot artifact holding no conversation.
+  // The live session is a model-switch fork. Its current lineage must not be
+  // offered as a separate resumable conversation; the remaining MRU order is
+  // gamma (newest) → beta → alpha, plus two delegated runs under beta and one
+  // boot artifact holding no conversation.
   let sessions = [
+    summary({
+      id: 'live-session',
+      kind: { kind: 'fork', parent: 'live-parent' },
+      title: { text: 'after model switch', source: 'auto' },
+      updatedAt: 8,
+    }),
+    summary({ id: 'live-parent', title: { text: 'before model switch', source: 'auto' }, updatedAt: 7 }),
     summary({ id: 's-new', title: { text: 'gamma', source: 'auto' }, updatedAt: 5 }),
     summary({ id: 's-mid', title: { text: 'beta', source: 'auto' }, updatedAt: 4, childCount: 2 }),
     summary({ id: 's-old', title: { text: 'alpha', source: 'auto' }, updatedAt: 3 }),
@@ -194,7 +203,11 @@ function makeChannel() {
     switchPreset: async () => false,
     switchModel: async () => false,
     rewindTo: async () => null,
-    resumeTo: async () => false,
+    resumeTo: async () => ({
+      ok: false,
+      reason: 'failed',
+      error: 'corrupt session log: seq gap in committed region',
+    }),
     newSession: async () => false,
     compact() {},
     calls,
@@ -252,6 +265,7 @@ await windowed(() => stdin.write('\r'), 600)
 let s = screen()
 check('the browser opens as a screen', /Resume session/.test(flat(s)), flat(s).slice(0, 120))
 check('conversations are listed', /gamma/.test(s) && /beta/.test(s) && /alpha/.test(s))
+check('the current model-switch lineage is not offered as another conversation', !/before model switch/.test(s) && !/after model switch/.test(s))
 check('delegated runs are NOT listed by default', !/delegated one/.test(s) && !/delegated two/.test(s))
 check('but they are counted', /2 runs folded/.test(flat(s)), flat(s).slice(0, 200))
 check('a session with no conversation is never a row', !/^\s*❯?\s*tmp\b/m.test(s))
@@ -344,6 +358,21 @@ check(
 s = screen()
 check('the browser says what it did, on the screen the user is looking at', /Deleted session betarenamed/.test(flat(s)), flat(s).slice(-200))
 check('the deleted row leaves the list', /2 sessions/.test(flat(s)) && !s.split('\n').some(l => /^[❯\s]*betarenamed/.test(l)), flat(s).slice(0, 200))
+
+// ── resume failure detail ──────────────────────────────────────────────────
+await windowed(() => stdin.write('\r'), 500)
+s = screen()
+check('a failed resume stays in the browser', /Resume session/.test(flat(s)), flat(s).slice(0, 180))
+check(
+  'the browser shows the real resume failure',
+  /corrupt session log: seq gap in committed region/.test(flat(s)),
+  flat(s).slice(-220),
+)
+check(
+  'the browser does not misreport every failure as a running model',
+  !/model is working/.test(flat(s)),
+  flat(s).slice(-220),
+)
 
 // ── leaving ─────────────────────────────────────────────────────────────
 await windowed(() => stdin.write('\x1b'), 500)

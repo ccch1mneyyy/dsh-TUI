@@ -1,13 +1,12 @@
 import type { LoadedContext } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
 
-/** Per-entry display cap: the panel shows the beginning of long texts. */
+/** Per-entry display cap: `/context` shows the beginning of long texts. */
 export const CONTEXT_ENTRY_MAX_CHARS = 800
 
 /**
  * Truncate one entry's text for the panel body. The model-visible text is
- * the source of truth and stays complete in the session log; the panel only
- * bounds its own rendering.
+ * the source of truth; the local report only bounds its own rendering.
  * @param text - the interpolated model-visible text.
  * @param max - character cap, defaults to {@link CONTEXT_ENTRY_MAX_CHARS}.
  * @returns the text, or its head plus a truncation marker.
@@ -31,4 +30,40 @@ export function summarizeLoadedContext(context: LoadedContext): string {
   if (context.skills.length > 0) parts.push(t('context-skills', { n: context.skills.length }))
   if (context.tools.length > 0) parts.push(t('context-tools', { n: context.tools.length }))
   return parts.join(' · ')
+}
+
+/**
+ * Format the loaded-context snapshot for the local `/context` report.
+ * The report preserves the former startup panel's grouping and truncation
+ * without keeping a second expandable surface in the transcript header.
+ */
+export function formatLoadedContextReport(context: LoadedContext): string[] {
+  const lines: string[] = []
+  const appendEntry = (name: string, text: string, max = CONTEXT_ENTRY_MAX_CHARS): void => {
+    lines.push(`  ${name}`)
+    lines.push(...truncateContextText(text, max).split('\n').map(line => `    ${line}`))
+  }
+
+  if (context.sections.length > 0) {
+    lines.push(t('context-panel-sections', { n: context.sections.length }))
+    for (const section of context.sections) appendEntry(section.name, section.text)
+  }
+  if (context.files.length > 0) {
+    lines.push(t('context-panel-files', { n: context.files.length }))
+    lines.push(...context.files.map(file => `  ${file.displayPath}`))
+  }
+  if (context.contexts.length > 0) {
+    lines.push(t('context-panel-runtime', { n: context.contexts.length }))
+    for (const entry of context.contexts) appendEntry(entry.name, entry.text)
+  }
+  if (context.skills.length > 0) {
+    lines.push(t('context-panel-skills', { n: context.skills.length }))
+    for (const skill of context.skills) appendEntry(skill.name, skill.description)
+  }
+  if (context.tools.length > 0) {
+    lines.push(t('context-panel-tools', { n: context.tools.length }))
+    for (const tool of context.tools) appendEntry(tool.name, tool.description, 160)
+  }
+
+  return lines
 }

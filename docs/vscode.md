@@ -91,6 +91,7 @@ npm run package && code --install-extension dsh-tui-vscode-0.5.1.vsix --force
 | `dsh-tui-vscode.kill` | Terminate session / 终止会话 | 向最近终端发送 Ctrl+C |
 | `dsh-tui-vscode.refreshSessions` | Refresh sessions / 刷新会话列表 | 手动刷新侧边栏 |
 | `dsh-tui-vscode.resumeSession` | Resume session / 恢复会话 | 恢复指定会话（侧边栏点击） |
+| `dsh-tui-vscode.insertAtMention` | Insert @-mention / 插入 @文件引用 | 编辑器聚焦时按 `Ctrl+Alt+K`（macOS `Cmd+Alt+K`）或编辑器右键：把当前文件/选中代码以 `@绝对路径 L起-止` 插入 dsh-tui 输入框（绝对路径与 dsh-tui 会话 cwd 无关；未选中引用整个文件；无运行会话回退为复制到剪贴板） |
 
 ### 架构与机制
 

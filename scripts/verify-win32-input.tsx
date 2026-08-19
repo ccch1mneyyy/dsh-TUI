@@ -273,6 +273,26 @@ check('IME-composed CJK arrives via Uc', new Feeder().feed(`${CSI}65;30;20320;1;
   wchar('你'),
 ])
 
+// A native Windows paste can split a win32-input-mode record after ESC.
+// When the 50ms escape timer fires before the tail arrives, the tokenizer
+// has already emitted Escape; the later `[Vk;Sc;Uc;Kd;Cs;Rc_` tail must
+// still be recognized instead of leaking the protocol bytes into the input.
+{
+  const f = new Feeder()
+  check('split win32 record: ESC waits for its tail', f.feed('\x1b'), [])
+  check('split win32 record: timeout releases Escape', f.feed(null), [
+    wkey('escape', {}, '\x1b'),
+  ])
+  check('split win32 record: late CJK tail is recovered', f.feed('[0;0;36825;1;0;1_'), [
+    wchar('这'),
+  ])
+}
+check(
+  'split win32 records: adjacent late tails are all recovered',
+  new Feeder().feed('[0;0;36825;1;0;1_[0;0;26679;1;0;1_'),
+  [wchar('这'), wchar('样')],
+)
+
 // --- 7. orphaned low surrogates never reach the Vk table ----------------------
 
 check('orphaned low surrogate with Vk=32 is swallowed (not Space)', new Feeder().feed(`${CSI}32;57;56832;1;0;1_`), [])

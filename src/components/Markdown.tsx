@@ -132,8 +132,15 @@ function renderTokensToNodes(
 /**
  * 混合渲染 Markdown 内容：表格用带边框的 flexbox 组件，其余内容由
  * formatToken 生成 ANSI 字符串放入 Text。高亮对象异步就绪后自动刷新。
+ *
+ * memo by content: finished transcript blocks render with the SAME string
+ * identity for the whole session (StreamingMarkdown keeps its stable prefix
+ * identity-stable precisely to hit this); without the memo every parent
+ * re-render re-ran the full token→ANSI→yoga pipeline for every settled
+ * block — the dominant long-output stall (string-width via wrap-ansi, 60%+
+ * of CPU in streaming profiles).
  */
-export function Markdown({ children, dimColor = false, cacheTokens = true }: Props): React.ReactNode {
+function MarkdownImpl({ children, dimColor = false, cacheTokens = true }: Props): React.ReactNode {
   const [highlight, setHighlight] = React.useState<CliHighlight | null>(null)
 
   React.useEffect(() => {
@@ -163,3 +170,15 @@ export function Markdown({ children, dimColor = false, cacheTokens = true }: Pro
     </Box>
   )
 }
+
+/**
+ * Memoized Markdown: skips the whole token→ANSI→layout pipeline when the
+ * content string is the same reference (see MarkdownImpl's doc comment).
+ */
+export const Markdown = React.memo(
+  MarkdownImpl,
+  (prev, next) =>
+    prev.children === next.children &&
+    prev.dimColor === next.dimColor &&
+    prev.cacheTokens === next.cacheTokens,
+)

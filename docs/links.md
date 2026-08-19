@@ -14,3 +14,9 @@
 | **deepseek-harness-ux** | <https://github.com/ayuanwong/deepseek-harness-ux> | 让你的 DeepSeek Harness 工作过程一目了然！ |
 | **dsh-tianshu-tui** | <https://github.com/huiliyi37/dsh-tianshu-tui> | Tianshu 风格的 dsh-tui |
 | **dsh-data-agent** | <https://github.com/omdsh-dev/dsh-data-agent> | 让 AI 帮你连数据库 |
+| **cc-dsh-notifier** | <https://github.com/baobaolaodie/cc-dsh-notifier> | DeepSeek Harness / Claude Code 会话失焦时的 Windows 原生 Toast 通知与点击跳回（web 与 dsh-tui 双 profile） |
+| **YesPlayMusic ypm skill** | <https://github.com/nagi-studio/YesPlayMusic/tree/master/skills/ypm> | 让 dsh 的 agent 控制本机 YesPlayMusic 音乐播放：查询在放的歌、暂停/继续、切歌（SKILL.md 直接可用） |
+
+> 本页是社区与第三方项目的链接罗列。所列项目与组织由各自的维护者独立维护，
+> dsh-TUI 仓库与其不存在隶属关系，也不对其内容、质量或安全作任何担保，使用前
+> 请自行评估。

@@ -37,9 +37,20 @@
 - id: dsh-tui-scenes
   name: '@deepseek-harness-tui/dsh-tui/scenes'
 
+# Plugin-interop anchor (v0.15): unified grant store, runtime generation
+# id, Host Descriptor; later contract surfaces mount off this row's apply.
+- id: dsh-tui-plugin-host
+  name: '@deepseek-harness-tui/dsh-tui/plugin-host'
+
+# Plugin-facing UI seams: managed dialogs, status-line contributions,
+# keyboard shortcuts, custom session-entry renderers (decision events are
+# fired by the channel and need no row).
+- id: dsh-tui-extensions
+  name: '@deepseek-harness-tui/dsh-tui/extensions'
+
 - id: dsh-tui
   name: '@deepseek-harness-tui/dsh-tui'
-  inject: [agents, tuiWorkspaces, tuiScenes]
+  inject: [agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers]
   config:
     provider: deepseek-official
     # Alt-screen fullscreen (CC 同款): 应用内鼠标选区（选择即复制, OSC 52 +

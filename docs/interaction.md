@@ -9,7 +9,7 @@
 | `Enter` | 空闲时发送；模型工作时把文本 steer 到当前回合的下一步边界；菜单打开时确认选项 |
 | `Tab` | 补全 `/` 命令或 `@` 文件；模型工作且输入非空时排入当前回合之后的 follow-up |
 | `Ctrl+Enter` | 打断当前回合并立即处理输入消息 |
-| `Shift+Enter` | 在光标处插入换行 |
+| `Shift+Enter` / `Ctrl+J` | 在光标处插入换行；终端无法上报 Shift 修饰键时可用 `Ctrl+J`（LF）兜底 |
 | `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问） |
 | `Alt/Option+Up` | 把最后一条尚未处理的消息取回输入框编辑 |
 | `Up/Down` | 菜单选择；普通输入中浏览历史或在多行文本间移动 |
@@ -27,6 +27,11 @@
 
 `/` 有两种语义：普通输入模式中打开 slash command 补全；`Ctrl+O` 的
 transcript 模式中打开会话全文搜索。全文搜索使用 `n`/`N` 在结果间前后跳转。
+
+插件可以经 `tuiShortcuts` 接缝注册额外组合键（必须带 Ctrl 或 Alt）；内建绑定
+永远优先，冲突的组合在注册时就会被拒绝。插件弹出的托管对话框
+（select/confirm/input）打开期间独占键盘：`↑`/`↓` 移动、`Enter` 确认、
+`Esc` 取消；插件在状态行（提示框上方）也可能有纯展示的贡献文本。
 
 ## 输入编辑
 
@@ -57,7 +62,9 @@ Bracketed paste（右键或终端原生粘贴）会原样插入，包括换行�
 ## 界面语言
 
 `/lang` 在简体中文与英文界面之间切换（影响所有 UI 文案），选择持久化，重启后
-沿用（0.3.7+）。
+沿用（0.3.7+）。`/settings` 的 **dsh-tui → 界面语言** 下拉项同样可以切换
+（立即生效并保存到 `~/.dsh/settings.yaml` 的 `dsh-tui.lang`；`DSH_TUI_LANG`
+环境变量始终优先）。
 
 ## 消息投递语义
 
@@ -116,6 +123,11 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的
 2. 通过 DSH session fork 创建分支会话。
 3. 回放该边界前的历史。
 4. 把原消息放回输入框供修改和重发。
+
+插件可以介入这一步（`tui/rewind-prompt` 决策事件）：否决此次回退（给出原因），
+或在确认页提供额外的回退模式——例如"回退会话 + 恢复此间修改的文件"。确认页
+第一项恒为"仅回退会话"；选择插件模式后，回退完成时插件会收到
+`tui/rewind-done` 通知（带所选模式 id 与新旧会话 id）并可回执一条摘要。
 
 ### 侧问 /btw
 
@@ -219,7 +231,7 @@ transcript。
 | 分组 | 命令 |
 | --- | --- |
 | 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`） |
-| 状态 | `/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
+| 状态 | `/context`、`/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp` |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |

@@ -1,7 +1,7 @@
 /**
  * Upstream compatibility contract.
  *
- * The TUI is validated against one upstream release line (0.1.0-rc.6).
+ * The TUI is validated against one upstream release line (0.1.0-rc.7).
  * Every official package this adapter touches is blessed here; anything
  * else must go through upstream channels or the adapter, never the UI.
  *
@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-export const UPSTREAM_VALIDATED_VERSION = '0.1.0-rc.6'
+export const UPSTREAM_VALIDATED_VERSION = '0.1.0-rc.7'
 
 /**
  * Framework packages version on their own lines; the contract validates

@@ -198,6 +198,24 @@
     - id: dsh-tui-scenes
       name: '@deepseek-harness-tui/dsh-tui/scenes'
 
+    # Plugin-interop anchor (Community Consensus v0.15): the unified grant
+    # store, runtime generation id, and Host Descriptor live here; later
+    # contract surfaces (plugin storage, message observation, effect
+    # ledger) mount off THIS row's apply, so the patch surface changes only
+    # once for the whole alignment. Mounted ahead of the extensions row and
+    # any third-party plugin row.
+    - id: dsh-tui-plugin-host
+      name: '@deepseek-harness-tui/dsh-tui/plugin-host'
+
+    # Plugin-facing UI seams (the pi-style extension surface): managed
+    # dialogs (select/confirm/input), keyed status-line contributions,
+    # keyboard shortcuts, and custom session-entry text renderers. The
+    # decision events (tui/input, tui/rewind-prompt, tui/session-switch,
+    # tui/compact, …) are fired by the channel on the cordis bus directly
+    # and need no row.
+    - id: dsh-tui-extensions
+      name: '@deepseek-harness-tui/dsh-tui/extensions'
+
     # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
     # TUI composes every session's model-facing world from. No `roots` here —
     # the dsh CLI's profile-boot overlays its shipped `config/agent-presets/`
@@ -227,8 +245,9 @@
       name: '@deepseek-harness-tui/dsh-tui'
       # The entry-level dependency augments the plugin's `agents` inject and
       # prevents startup Session creation from racing WorkspaceRegistry init.
-      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes]
-      # `tuiWorkspaces`/`tuiScenes` live in the entry-level inject ONLY as an
+      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers]
+      # `tuiWorkspaces`/`tuiScenes` (and the dsh-tui-extensions services)
+      # live in the entry-level inject ONLY as an
       # ordering (and reload-rebind) guarantee alongside their service rows
       # above — they are deliberately absent from the plugin's code-level
       # inject (issue #183): the dsh CLI may read this patch from an older

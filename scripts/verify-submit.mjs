@@ -121,12 +121,7 @@ check('refused pull-back keeps pending', channel.removePending(channel.pending[0
 inboxRemoveResult = true
 check('pull-back succeeds once unclaimed', channel.removePending(channel.pending[0]?.id ?? '') === true && channel.pending.length === 0)
 
-// ---- interruptAndDeliver: cancel + re-queue once the abort settles ----
-// The harness parks kept inbox work until an unrelated wake (official
-// cancel.spec: "keepInbox parks queued work after an active turn aborts"),
-// and a wake issued while the driver still runs is ignored — so delivery
-// is deferred to `whenIdle`, whose re-queue IS the wake that starts the
-// new turn.
+// ---- interruptAndDeliver: cancel + re-queue through the convergence latch ----
 const interruptCalls = []
 const interruptFollowups = []
 let resolveIdle
@@ -153,11 +148,10 @@ const interruptChannel = createChannel(ctx, interruptAgent, {
 })
 check('interruptAndDeliver trims and counts', interruptChannel.interruptAndDeliver(['插话一', '   ', '插话二']) === 2)
 check('interruptAndDeliver cancels without keepInbox', interruptCalls.length === 1 && interruptCalls[0].options === undefined, JSON.stringify(interruptCalls))
-check('delivery waits for the abort to settle', interruptFollowups.length === 0 && interruptChannel.pending.length === 0, JSON.stringify(interruptFollowups))
-resolveIdle()
 await sleep(10)
-check('re-queued after idle (all texts)', interruptFollowups.length === 2 && interruptChannel.pending.length === 2, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
+check('re-queued without waiting for idle (all texts)', interruptFollowups.length === 2 && interruptChannel.pending.length === 2, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
 check('re-queued as followup', interruptChannel.pending.every(p => p.placement === 'followup'))
+resolveIdle?.()
 
 // A second interrupt while the first abort is still settling must not
 // double-deliver: only the latest request's re-queue runs (both share the
@@ -189,7 +183,35 @@ resolveIdle2()
 await sleep(10)
 check('double interrupt does not double-deliver', interruptFollowups.filter(m => m.content?.[0]?.text === 'x').length === 0 && interruptFollowups.filter(m => m.content?.[0]?.text === 'y').length === 1, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
 
-// No whenIdle (defensive): the re-queue waits a beat for the abort.
+// dsh-agent's cancel-convergence wake latch accepts a followup submitted
+// immediately after cancel. Waiting for whenIdle is unsafe: the promise can
+// cover replacement work (or never settle), leaving the user's requeued text
+// undispatched and the TUI stuck in the working state.
+const convergenceFollowups = []
+const convergenceAgent = {
+  id: 'a1',
+  status: 'running',
+  session: { id: 's1', seq: 0, events: [] },
+  ctx: stubAgentCtx,
+  cancel() {},
+  whenIdle() {
+    return new Promise(() => {})
+  },
+  followup(message) {
+    convergenceFollowups.push(message)
+  },
+}
+const convergenceChannel = createChannel(ctx, convergenceAgent, {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+})
+convergenceChannel.interruptAndDeliver(['取消后立即恢复'])
+await sleep(10)
+check('cancel convergence does not depend on whenIdle', convergenceFollowups.length === 1 && convergenceChannel.pending.length === 1, JSON.stringify(convergenceFollowups))
+
+// No whenIdle observer: delivery still uses the same convergence wake.
 const fallbackCalls = []
 const fallbackAgent = {
   id: 'a1',
@@ -208,7 +230,7 @@ const fallbackChannel = createChannel(ctx, fallbackAgent, {
   activity: false,
 })
 fallbackChannel.interruptAndDeliver(['兜底投递'])
-await sleep(300)
-check('no-whenIdle fallback delivers after a beat', fallbackCalls.length === 1 && fallbackChannel.pending.length === 1, JSON.stringify(fallbackCalls))
+await sleep(10)
+check('no-whenIdle agent still receives the wake', fallbackCalls.length === 1 && fallbackChannel.pending.length === 1, JSON.stringify(fallbackCalls))
 
 process.exit(failed)

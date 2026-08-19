@@ -51,6 +51,9 @@ export function execFileNoThrow(
     child.stderr.on('data', (chunk: Buffer) => {
       stderrChunks.push(chunk)
     })
+    // A child may exit before consuming the supplied input. The resulting
+    // EPIPE/EOF belongs to that child outcome and must not crash the caller.
+    child.stdin.on('error', () => {})
     child.on('error', () => {
       resolve({
         code: 1,
