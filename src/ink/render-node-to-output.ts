@@ -872,7 +872,9 @@ function renderNodeToOutput(
         const pending = node.pendingScrollDelta
         const cMin = node.scrollClampMin
         const cMax = node.scrollClampMax
-        const haveClamp = cMin !== undefined && cMax !== undefined
+        // Single-sided clamps are valid: sticky virtualization sets only the
+        // min (scroll-up protection during the sticky->manual transition)
+        // and leaves the max open for bottom-follow.
         if (pending !== undefined && pending !== 0) {
           // Drain continues even past the clamp — the render-clamp below
           // holds the VISUAL at the mounted edge regardless. Hard-stopping
@@ -887,8 +889,8 @@ function renderNodeToOutput(
           // frame, roughly matching React's slide rate so the gap stays
           // bounded and catch-up is quick once input stops.
           const pastClamp =
-            haveClamp &&
-            ((pending < 0 && cur < cMin) || (pending > 0 && cur > cMax))
+            (pending < 0 && cMin !== undefined && cur < cMin) ||
+            (pending > 0 && cMax !== undefined && cur > cMax)
           const eff = pastClamp ? Math.min(4, innerHeight >> 3) : innerHeight
           cur += isXtermJsHost()
             ? drainAdaptive(node, pending, eff)
@@ -910,9 +912,10 @@ function renderNodeToOutput(
         // the right range. Not scheduling scrollDrainNode here keeps the
         // clamp passive — React's commit → resetAfterCommit → onRender will
         // paint again with fresh bounds.
-        const clamped = haveClamp
-          ? Math.max(cMin, Math.min(scrollTop, cMax))
-          : scrollTop
+        const clamped = Math.max(
+          cMin ?? -Infinity,
+          Math.min(scrollTop, cMax ?? Infinity),
+        )
         node.scrollTop = scrollTop
         // Clamp hitting top/bottom consumes any remainder. Set drainPending
         // only after clamp so a wasted no-op frame isn't scheduled.
@@ -992,6 +995,14 @@ function renderNodeToOutput(
           const scrollHeight = contentYoga.getComputedHeight()
           const prevHeight = contentCached?.height ?? scrollHeight
           const heightDelta = scrollHeight - prevHeight
+          // NOTE: scroll-up + streaming growth (delta < 0, heightDelta > 0)
+          // deliberately stays OUT of the fast path. Virtualization moves the
+          // topPad spacer on the same frame (every mounted row's yogaTop
+          // shifts), so the appended-content screen mapping is not derivable
+          // from prevHeight - a widened edge region misses rows and leaves
+          // blitted stale copies next to the new ones (content duplication).
+          // Upstream observed the same class of bug ("content bleeding
+          // through during scroll-up + streaming") and chose the full path.
           const safeForFastPath =
             !hint ||
             heightDelta === 0 ||

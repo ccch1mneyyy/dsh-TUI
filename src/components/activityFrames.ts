@@ -40,6 +40,9 @@ export const FRAME_PRESETS: Record<string, FramePreset> = {
   },
   hamburger: { frames: ['☱', '☲', '☴'], intervalMs: 220 },
   moon: { frames: ['◐', '◓', '◑', '◒'], intervalMs: 240 },
+  // kimi-code MoonLoader 同款：8 帧 emoji 月相，120ms 一帧，比半圆版更丝滑。
+  // 不带 \uFE0E：保留彩色 emoji 渲染（Windows Terminal 等现代终端效果最佳）。
+  moon8: { frames: ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'], intervalMs: 120 },
   comet: {
     frames: ['●    ', ' ●   ', '  ●  ', '   ● ', '    ●', '   ● ', '  ●  ', ' ●   '],
     intervalMs: 160,
@@ -64,7 +67,7 @@ export const FRAME_PRESETS: Record<string, FramePreset> = {
 }
 
 /** The pi extension's default preset. */
-export const DEFAULT_PRESET = 'moon'
+export const DEFAULT_PRESET = 'moon8'
 
 /** Every selectable preset name, `random` first (the pi selector order). */
 export const PRESET_NAMES: readonly string[] = ['random', ...Object.keys(FRAME_PRESETS)]

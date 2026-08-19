@@ -34,9 +34,13 @@ const { buildHostDescriptor } = await import('../src/dsh-adapter/host-descriptor
 const { DATA_DIR } = await import('../src/utils/paths.js')
 const { PLUGIN_STORAGE_DIR } = await import('../src/dsh-adapter/plugin-storage.js')
 const { EFFECT_LEDGER_FILE } = await import('../src/dsh-adapter/effect-ledger.js')
+const { parseManifest } = await import('@dsh-std/manifest')
+const { loadSpecData } = await import('../src/plugin-spec/registry.js')
+const { createContractIndex, validatePlugin } = await import('../src/plugin-spec/validate.js')
+const { negotiate } = await import('../src/plugin-spec/negotiate.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const fixture = (name: string) => join(root, 'ecosystem-spec', 'conformance', 'fixtures', name)
+const fixture = (name: string) => join(root, 'dsh-ecosystem-spec', 'conformance', 'fixtures', name)
 const cleanup: string[] = [fakeHome]
 
 let checks = 0
@@ -242,6 +246,43 @@ const overview = () => pluginsInfoLines('', { grants, host })
   const grantedLines = extensionCheck(tuiPlugin, readGrantStore(), decisionBuild)
   check1('granting the exact event scope flips DecisionEvents to compatible',
     grantedLines.some(line => line.includes('协商结果：compatible') && !line.includes('degraded')), grantedLines.join(' | '))
+
+  // 未注册的同 group 版本先通过结构/权限闭包校验，再由协商明确返回
+  // UNKNOWN_PROTOCOL_VERSION；不能把版本协商掩盖成“缺少 v1alpha1”。
+  const unknownDecisionManifest = parseManifest(JSON.stringify({
+    $schema: 'urn:dsh-std:community-draft:dsh-plugin:0.15',
+    id: 'com.example.future-input-guard',
+    name: 'Future Input Guard',
+    version: '0.1.0',
+    manifestVersion: '0.15',
+    facets: { host: { entry: 'dist/main.js', apiVersion: 'v1alpha1' } },
+    requires: { contracts: [{ apiVersion: 'tui.dsh/v2beta1', kind: 'DecisionEvents' }] },
+    permissions: [{ name: 'session.input.intercept', scope: 'tui/input', reason: 'guard user input' }],
+    contributes: { commands: [] },
+    subscriptions: [],
+    license: 'MIT',
+    source: { repository: 'https://example.com/future-guard', revision: 'abc123' },
+  }), { source: 'future-decision-events.json' })
+  const spec = loadSpecData()
+  if (spec === undefined) throw new Error('plugin negotiation battery cannot load the pinned registry')
+  const contractIndex = createContractIndex(spec.registry, spec.permissions)
+  let futureValidationError: unknown
+  try {
+    validatePlugin(contractIndex, unknownDecisionManifest)
+  } catch (error) {
+    futureValidationError = error
+  }
+  check1('unknown DecisionEvents version passes validatePlugin permission closure', futureValidationError === undefined,
+    futureValidationError instanceof Error ? futureValidationError.message : String(futureValidationError ?? ''))
+  const futureDecision = negotiate(contractIndex, unknownDecisionManifest, decisionBuild.descriptor, [
+    { name: 'session.input.intercept', scope: 'tui/input', granted: true },
+  ])
+  check1('unknown DecisionEvents version negotiates UNKNOWN_PROTOCOL_VERSION',
+    futureDecision.decision === 'unknown'
+    && futureDecision.reasonCode === 'UNKNOWN_PROTOCOL_VERSION'
+    && futureDecision.unknownContracts.includes('tui.dsh/v2beta1#DecisionEvents'),
+    JSON.stringify(futureDecision))
+
   // 还原足迹布景
   writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
     grants: grantsTable,

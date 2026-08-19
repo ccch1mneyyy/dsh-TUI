@@ -10,6 +10,10 @@
  * - isVersionNewer() requires a strictly greater valid semver
  * - update command args pin the preflight target version, with --latest as the
  *   fallback when preflight could not resolve one
+ * - isBootDeadlockTarget() flags exactly the 0.7.0–0.7.1 hard-inject range
+ * - DSH_TUI_UPDATED_FROM is stamped from the pre-update version: the stamp
+ *   read happens before the first installer child runs and the restart env
+ *   reuses that captured value (issue #307's new-vs-new false alarm)
  *
  * Run: node scripts/verify-update.mjs
  */
@@ -28,6 +32,7 @@ const {
   installedTuiVersion,
   resolveRegistryBase,
   isVersionNewer,
+  isBootDeadlockTarget,
   resolveDshProfileName,
   shellQuote,
   tuiUpdatePluginArgs,
@@ -213,6 +218,14 @@ check(
   `got ${JSON.stringify(fallbackUpdateArgs)}`,
 )
 
+// ---- isBootDeadlockTarget: the 0.7.0–0.7.1 hard-inject range only
+check('deadlock: 0.7.0 is refused', isBootDeadlockTarget('0.7.0'))
+check('deadlock: 0.7.1 is refused', isBootDeadlockTarget('0.7.1'))
+check('deadlock: 0.6.1 predates the inject and is fine', !isBootDeadlockTarget('0.6.1'))
+check('deadlock: 0.7.2 dropped the hard inject', !isBootDeadlockTarget('0.7.2'))
+check('deadlock: 0.8.0 is fine', !isBootDeadlockTarget('0.8.0'))
+check('deadlock: invalid input is never a deadlock target', !isBootDeadlockTarget('banana'))
+
 const compiledSource = readFileSync(compiledModulePath, 'utf8')
 // P1: the node restart must NOT go through a shell — assert the compiled
 // restart spawn call has no shell option while the dsh call does.
@@ -227,6 +240,27 @@ check(
 check(
   'P1: node restart spawn has no shell (space-safe exec path)',
   !/shell/.test(nodeSegment.replace(/shellQuote/g, '')),
+)
+
+// ---- DSH_TUI_UPDATED_FROM stamping (issue #307): the pre-update version is
+// captured before the installer child runs and reused in the restart env —
+// a post-update read already sees the replaced manifest (new-vs-new).
+const stampRead = compiledSource.indexOf('const updatedFrom = installedTuiVersion()')
+check(
+  'stamp: pre-update version is captured before the installer runs',
+  stampRead !== -1 && stampRead < dshSpawn,
+)
+check(
+  'stamp: restart env reuses the captured value, not a fresh read',
+  /\[UPDATED_FROM_ENV\]:\s*updatedFrom/.test(nodeSegment),
+)
+// The --latest fallback (preflight failed) can also land on the deadlock
+// range on a stale mirror: the post-install guard must refuse a restart
+// into a version that JUST moved into 0.7.0–0.7.1. Two occurrences = the
+// export plus the call inside updateTuiAndRestart.
+check(
+  'deadlock: post-install guard refuses a fresh landing on the range',
+  (compiledSource.match(/isBootDeadlockTarget/g) ?? []).length >= 2,
 )
 
 // ---- isTransientUpdateFailure: the Windows tmp-rename race (issue #225)

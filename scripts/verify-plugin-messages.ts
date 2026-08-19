@@ -36,7 +36,12 @@ process.env.DSH_TUI_LANG = 'zh'
 
 const { Context, Service } = await import('@deepseek-ai/cordis')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
-const { TuiMessageObserverRuntime, OBSERVE_SCOPE_MAX_CHARS, OBSERVE_SUMMARY_CELLS } = await import('../src/dsh-adapter/message-observer.js')
+const {
+  TuiMessageObserverRuntime,
+  getHostMessageObserver,
+  OBSERVE_SCOPE_MAX_CHARS,
+  OBSERVE_SUMMARY_CELLS,
+} = await import('../src/dsh-adapter/message-observer.js')
 const { loadSpecData } = await import('../src/plugin-spec/registry.js')
 const { check } = await import('../src/plugin-spec/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
@@ -45,9 +50,9 @@ const { validateMessageEvent } = await import('@dsh-std/messages')
 import type { MessagesObserveEnvelope } from '../src/dsh-adapter/message-observer.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const data = loadSpecData(join(root, 'ecosystem-spec'))
+const data = loadSpecData(join(root, 'dsh-ecosystem-spec'))
 if (!data) {
-  console.error('vendored spec data unreadable (ecosystem-spec/)')
+  console.error('vendored spec data unreadable (dsh-ecosystem-spec/)')
   process.exit(1)
 }
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -85,6 +90,13 @@ if (broker === undefined) {
   console.error('tuiMessageObserver not mounted')
   process.exit(1)
 }
+const publish = (runtime: InstanceType<typeof TuiMessageObserverRuntime>, session: unknown, event: unknown): void => {
+  const host = getHostMessageObserver(runtime)
+  if (host === undefined) throw new Error('message observer host ingress unavailable')
+  host.publish(session, event)
+}
+check1('host-only publish ingress is absent from the plugin-visible broker',
+  !('publish' in (broker as object)) && !('publishGuarded' in (broker as object)))
 
 const received = new Map<string, MessagesObserveEnvelope[]>()
 const admittedContexts = new Map<string, InstanceType<typeof Context>>()
@@ -135,8 +147,8 @@ await subscribeAs('alpha')
 
 // ── A. 双映射 + envelope 逐字段 + 独立 schema 校验 ───────────────────────
 {
-  broker.publish(session('sess-1'), userEvent(1, '  hello broker  ', 'm-user-1'))
-  broker.publish(session('sess-1'), assistantEvent(2, 'reply text', 'm-asst-2'))
+  publish(broker, session('sess-1'), userEvent(1, '  hello broker  ', 'm-user-1'))
+  publish(broker, session('sess-1'), assistantEvent(2, 'reply text', 'm-asst-2'))
   await sleep(20)
   const list = received.get('alpha') ?? []
   check1('two mapped envelopes delivered', list.length === 2, `got ${list.length}`)
@@ -168,10 +180,10 @@ await subscribeAs('alpha')
 // ── B. sequence 单调含 gap ────────────────────────────────────────────────
 {
   const before = (received.get('alpha') ?? []).length
-  broker.publish(session('sess-1'), { type: 'assistant/chunk', seq: 3, time: 0, data: {} })
-  broker.publish(session('sess-1'), { type: 'turn/start', seq: 4, time: 0, data: {} })
-  broker.publish(session('sess-1'), userEvent(5, 'after gap'))
-  broker.publish(session('sess-1'), assistantEvent(9, 'further'))
+  publish(broker, session('sess-1'), { type: 'assistant/chunk', seq: 3, time: 0, data: {} })
+  publish(broker, session('sess-1'), { type: 'turn/start', seq: 4, time: 0, data: {} })
+  publish(broker, session('sess-1'), userEvent(5, 'after gap'))
+  publish(broker, session('sess-1'), assistantEvent(9, 'further'))
   await sleep(20)
   const list = (received.get('alpha') ?? []).slice(before)
   check1('unmapped events leave gaps (no envelopes)', list.length === 2, `got ${list.length}`)
@@ -186,7 +198,7 @@ await subscribeAs('alpha')
     declarePermission: false,
     declareSubscription: false,
   })
-  broker.publish(session('sess-1'), userEvent(10, 'spy must not see this'))
+  publish(broker, session('sess-1'), userEvent(10, 'spy must not see this'))
   await sleep(20)
   check1('ungranted subscription delivers nothing', (received.get('spy') ?? []).length === 0)
   check1('subscribe-time denial names the verified Component',
@@ -205,26 +217,25 @@ await subscribeAs('alpha')
     knownPermissions: () => ['messages.observe.read'],
     corrupt: false,
   }
-  const freshCtx = new Context()
-  const freshWarnings: string[] = []
-  freshCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
-    freshWarnings.push([format, ...params].map(String).join(' '))
-  }
+  // Keep the isolated broker in the host composition so the explicit
+  // activation context remains valid while the test swaps its grant source.
+  const freshCtx = hostCtx.isolate('tuiMessageObserver')
+  const freshWarningsBefore = hostWarnings.length
   const runtime = new TuiMessageObserverRuntime(freshCtx, { grants: mutableGrants })
   const envelopes: MessagesObserveEnvelope[] = []
   runtime.subscribe(admittedContexts.get('alpha')!, envelope => { envelopes.push(envelope) }, { scope: 'session:sess-1' })
-  runtime.publish(session('sess-1'), userEvent(1, 'before revocation'))
+  publish(runtime, session('sess-1'), userEvent(1, 'before revocation'))
   await sleep(20)
   check1('deliver-time: granted delivery works', envelopes.length === 1)
   granted = false
-  runtime.publish(session('sess-1'), userEvent(2, 'after revocation'))
+  publish(runtime, session('sess-1'), userEvent(2, 'after revocation'))
   await sleep(20)
   check1('deliver-time: revoked subscription delivers nothing more', envelopes.length === 1)
   check1('deliver-time: revocation releases with a warning',
-    freshWarnings.some(line => line.includes('released') && line.includes('revoked')))
+    hostWarnings.slice(freshWarningsBefore).some(line => line.includes('released') && line.includes('revoked')))
   // 释放后再授予也不再投递（release 是终态，contract cleanup）。
   granted = true
-  runtime.publish(session('sess-1'), userEvent(3, 're-granted'))
+  publish(runtime, session('sess-1'), userEvent(3, 're-granted'))
   await sleep(20)
   check1('release is terminal (re-grant does not resurrect)', envelopes.length === 1)
 }
@@ -233,8 +244,8 @@ await subscribeAs('alpha')
 {
   await subscribeAs('carol', undefined, 'session:sess-A')
   await subscribeAs('dave', undefined, 'session:sess-B')
-  broker.publish(session('sess-A'), userEvent(1, 'text of A'))
-  broker.publish(session('sess-B'), userEvent(1, 'text of B'))
+  publish(broker, session('sess-A'), userEvent(1, 'text of A'))
+  publish(broker, session('sess-B'), userEvent(1, 'text of B'))
   await sleep(20)
   const carolList = received.get('carol') ?? []
   const daveList = received.get('dave') ?? []
@@ -269,7 +280,7 @@ await subscribeAs('alpha')
   const warningsBefore = hostWarnings.length
   await subscribeAs('beta', undefined, truncatedScope, { declaredScope: 'session:*' })
   // The previous slice() implementation delivered this into truncatedScope.
-  broker.publish(session(`${'x'.repeat(sessionIdLimit)}y`), userEvent(1, 'must not cross long scope'))
+  publish(broker, session(`${'x'.repeat(sessionIdLimit)}y`), userEvent(1, 'must not cross long scope'))
   await sleep(20)
   check1('overlong session scope produces no envelope', (received.get('beta') ?? []).length === before)
   check1('overlong session scope is warned without logging the id',
@@ -280,13 +291,13 @@ await subscribeAs('alpha')
 {
   await subscribeAs('beta', () => { throw new Error('listener exploded') })
   const warnBefore = hostWarnings.length
-  broker.publish(session('sess-1'), userEvent(20, 'beta throws on this'))
+  publish(broker, session('sess-1'), userEvent(20, 'beta throws on this'))
   await sleep(30)
   check1('throwing listener does not block other subscribers',
     ((received.get('alpha') ?? []).some(e => e.sequence === 20)))
   check1('throwing listener is warned and isolated',
     hostWarnings.slice(warnBefore).some(line => line.includes('"com.example.beta"') && line.includes('delivery continues')))
-  broker.publish(session('sess-1'), userEvent(21, 'delivery continues'))
+  publish(broker, session('sess-1'), userEvent(21, 'delivery continues'))
   await sleep(20)
   check1('delivery continues after a throw',
     ((received.get('alpha') ?? []).some(e => e.sequence === 21))
@@ -297,7 +308,7 @@ await subscribeAs('alpha')
 {
   const before = (received.get('alpha') ?? []).length
   const longText = '长'.repeat(OBSERVE_SUMMARY_CELLS * 4) // CJK：每字 2 cell，确保超 200 cell
-  broker.publish(session('sess-1'), userEvent(30, longText))
+  publish(broker, session('sess-1'), userEvent(30, longText))
   await sleep(20)
   const envelope = (received.get('alpha') ?? []).slice(before)[0]
   check1('long text marks truncated', envelope?.payload.truncated === true)
@@ -309,9 +320,9 @@ await subscribeAs('alpha')
 // ── H. 非映射事件零产出 / 无 id session / eventId 拍平 ────────────────────
 {
   const beforeAlpha = (received.get('alpha') ?? []).length
-  broker.publish(session('sess-1'), { type: 'tool/call', seq: 40, time: 0, data: {} })
-  broker.publish(session('sess-1'), { type: 'user/message', seq: 'not-a-number', time: 0, data: {} })
-  broker.publish({ noId: true }, userEvent(41, 'no session id'))
+  publish(broker, session('sess-1'), { type: 'tool/call', seq: 40, time: 0, data: {} })
+  publish(broker, session('sess-1'), { type: 'user/message', seq: 'not-a-number', time: 0, data: {} })
+  publish(broker, { noId: true }, userEvent(41, 'no session id'))
   await sleep(20)
   check1('non-mapped events, bad seq and id-less sessions produce nothing',
     (received.get('alpha') ?? []).length === beforeAlpha,
@@ -319,7 +330,7 @@ await subscribeAs('alpha')
   // eventId 拍平：订阅该 scope（carol 的第二订阅）后投递。
   const beforeCarol = (received.get('carol') ?? []).length
   await subscribeAs('carol', undefined, 'session:sess/unsafe id')
-  broker.publish(session('sess/unsafe id'), userEvent(42, 'unsafe session id'))
+  publish(broker, session('sess/unsafe id'), userEvent(42, 'unsafe session id'))
   await sleep(20)
   const list = (received.get('carol') ?? []).slice(beforeCarol)
   check1('eventId flattens schema-unsafe characters',
@@ -330,39 +341,33 @@ await subscribeAs('alpha')
 // ── I. schema 缺失 fail-closed / 畸形 schema 丢 envelope ──────────────────
 {
   // schema 不可用：suppress + warn once。
-  const noSchemaCtx = new Context()
-  const noSchemaWarnings: string[] = []
-  noSchemaCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
-    noSchemaWarnings.push([format, ...params].map(String).join(' '))
-  }
+  const noSchemaCtx = hostCtx.isolate('tuiMessageObserver')
+  const noSchemaWarningsBefore = hostWarnings.length
   const blind = new TuiMessageObserverRuntime(noSchemaCtx, {
     envelopeSchema: undefined,
     grants: { allows: () => true, defaultOf: () => 'allow' as const, knownPermissions: () => [], corrupt: false },
   })
   const blindEnvelopes: MessagesObserveEnvelope[] = []
   blind.subscribe(admittedContexts.get('alpha')!, envelope => { blindEnvelopes.push(envelope) }, { scope: 'session:sess-1' })
-  blind.publish(session('sess-1'), userEvent(1, 'suppressed'))
-  blind.publish(session('sess-1'), userEvent(2, 'still suppressed'))
+  publish(blind, session('sess-1'), userEvent(1, 'suppressed'))
+  publish(blind, session('sess-1'), userEvent(2, 'still suppressed'))
   await sleep(20)
   check1('missing schema suppresses all envelopes (fail closed)', blindEnvelopes.length === 0)
-  check1('missing schema warns once', noSchemaWarnings.filter(line => line.includes('fail-closed')).length === 1)
+  check1('missing schema warns once', hostWarnings.slice(noSchemaWarningsBefore).filter(line => line.includes('fail-closed')).length === 1)
 
   // 畸形 schema（永败）：envelope 产出后被丢弃 + warn。
-  const strictCtx = new Context()
-  const strictWarnings: string[] = []
-  strictCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
-    strictWarnings.push([format, ...params].map(String).join(' '))
-  }
+  const strictCtx = hostCtx.isolate('tuiMessageObserver')
+  const strictWarningsBefore = hostWarnings.length
   const strict = new TuiMessageObserverRuntime(strictCtx, {
     envelopeSchema: { type: 'object', required: ['never-present'] },
     grants: { allows: () => true, defaultOf: () => 'allow' as const, knownPermissions: () => [], corrupt: false },
   })
   const strictEnvelopes: MessagesObserveEnvelope[] = []
   strict.subscribe(admittedContexts.get('alpha')!, envelope => { strictEnvelopes.push(envelope) }, { scope: 'session:sess-1' })
-  strict.publish(session('sess-1'), userEvent(1, 'dropped by self-check'))
+  publish(strict, session('sess-1'), userEvent(1, 'dropped by self-check'))
   await sleep(20)
   check1('failing self-check drops the envelope', strictEnvelopes.length === 0)
-  check1('self-check drop warns', strictWarnings.some(line => line.includes('standard validator')))
+  check1('self-check drop warns', hostWarnings.slice(strictWarningsBefore).some(line => line.includes('standard validator')))
 }
 
 // ── J. 零持久化 / disposer 幂等 ───────────────────────────────────────────
@@ -401,7 +406,7 @@ await subscribeAs('alpha')
   })
   const beforeDave = (received.get('dave') ?? []).length
   await subscribeAs('dave', undefined, 'session:sess-img')
-  broker.publish(session('sess-img'), imgEvent(1, [
+  publish(broker, session('sess-img'), imgEvent(1, [
     { type: 'text', text: 'see ' },
     { type: 'image', attachment: { attachmentId: 'a1', mediaType: 'image/png', bytes: 3, width: 1, height: 1 } },
     { type: 'text', text: ' done' },
@@ -425,18 +430,18 @@ await subscribeAs('alpha')
   check1('mixed text/image envelope passes the official validator', imgSchemaError === '', imgSchemaError)
 
   // 超大（bytes 超预算——读取前即拒）→ 丢弃 + truncated，两侧文本合一。
-  broker.publish(session('sess-img'), imgEvent(2, [
+  publish(broker, session('sess-img'), imgEvent(2, [
     { type: 'text', text: 'before ' },
     { type: 'image', attachment: { attachmentId: 'big', mediaType: 'image/png', bytes: 192 * 1024 + 1 } },
     { type: 'text', text: ' after' },
   ]))
   // 读取失败（attachments 服务抛错）→ 丢弃 + truncated。
-  broker.publish(session('sess-img'), imgEvent(3, [
+  publish(broker, session('sess-img'), imgEvent(3, [
     { type: 'text', text: 'broken image follows' },
     { type: 'image', attachment: { attachmentId: 'broken', mediaType: 'image/png', bytes: 3 } },
   ]))
   // 坏媒体型（不过 schema 的 mimeType 模式）→ 读取前即弃。
-  broker.publish(session('sess-img'), imgEvent(4, [
+  publish(broker, session('sess-img'), imgEvent(4, [
     { type: 'image', attachment: { attachmentId: 'a2', mediaType: 'image/png; injected', bytes: 3 } },
   ]))
   await sleep(30)

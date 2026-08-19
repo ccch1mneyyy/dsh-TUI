@@ -9,7 +9,7 @@
 | `Enter` | Send while idle; steer text into the running turn at its next step boundary; confirm an open menu |
 | `Tab` | Complete a `/` command or `@` file; while the model is working, queue non-empty input as a post-turn follow-up |
 | `Ctrl+Enter` | Interrupt the running turn and process the input immediately |
-| `Shift+Enter` | Insert a newline at the caret |
+| `Shift+Enter` / `Ctrl+J` | Insert a newline at the caret; `Ctrl+J` (LF) is the fallback when the terminal cannot report the Shift modifier |
 | `Shift+Tab` | Cycle the configured session modes (default: default → plan → full-access) |
 | `Alt/Option+Up` | Pull the latest undelivered message back into the editor |
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
@@ -67,7 +67,10 @@ the prompt sends a real image block. The prompt never contains base64.
 ## Interface language
 
 `/lang` toggles the UI between Simplified Chinese and English (affects all UI
-strings); the choice persists across restarts (0.3.7+).
+strings); the choice persists across restarts (0.3.7+). The **dsh-tui →
+Language** select in `/settings` switches it too (applies immediately and saves
+to `dsh-tui.lang` in `~/.dsh/settings.yaml`; the `DSH_TUI_LANG` env var always
+wins).
 
 ## Message delivery semantics
 

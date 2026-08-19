@@ -176,6 +176,18 @@ function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] 
  *  (`Edit /path`, `Read /path (1 - 100)`) with the first word bold. The
  *  result view's title replaces the call view's only when present — a
  *  settled terminal card carries output but no title of its own. */
+/** Header args display budget: the parenthesized summary is a pointer, not
+ * the payload — full args live in the verbose/expanded body. A streaming
+ * tool call's args can grow to hundreds of KB, and wrapping that in the
+ * header Text every frame was the dominant long-output stall (string-width
+ * via wrap-ansi, 60%+ of CPU in profiles). */
+const HEADER_ARGS_BUDGET = 480
+
+function clipHeaderArgs(args: string): string {
+  if (args.length <= HEADER_ARGS_BUDGET) return args
+  return `${args.slice(0, HEADER_ARGS_BUDGET)}…`
+}
+
 function HeaderTitle({ name, title, isTerminal, displayArgs }: {
   name: string
   title: string | undefined
@@ -190,7 +202,7 @@ function HeaderTitle({ name, title, isTerminal, displayArgs }: {
         </Box>
         {displayArgs !== '' && (
           <Box flexWrap="nowrap">
-            <Text>({displayArgs})</Text>
+            <Text>({clipHeaderArgs(displayArgs)})</Text>
           </Box>
         )}
       </>

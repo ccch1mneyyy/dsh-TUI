@@ -1,3 +1,0 @@
-{
-  "eventType":"messages.observe","eventVersion":"0.15","eventId":"evt-4","scope":"session:demo","sequence":3,"privacyClass":"internal","summary":"mixed block fields","payload":{"kind":"message.received","messageId":"msg-4","content":[{"type":"text","text":"x","data":"AAAA","mimeType":"image/png"}]}
-}

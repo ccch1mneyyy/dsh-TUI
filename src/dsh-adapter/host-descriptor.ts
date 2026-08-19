@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ContractCoordinate, HostContract, HostDescriptor } from '../plugin-spec/types.js'
-import { digestFile, loadSpecData } from '../plugin-spec/registry.js'
+import { digestFile, loadSpecData, verifyContractProfiles } from '../plugin-spec/registry.js'
 import { TUI_DECISION_EVENT_NAMES } from '../plugin-spec/tui-extension.js'
 import { createContractIndex, validateHost } from '../plugin-spec/validate.js'
 import { check } from '../plugin-spec/schema-check.js'
@@ -33,8 +33,15 @@ export interface HostDescriptorOptions {
 
 export interface HostDescriptorBuild {
   descriptor: HostDescriptor
-  dropped: string[]
-  warnings: string[]
+  readonly dropped: readonly string[]
+  readonly warnings: readonly string[]
+}
+
+function freezeDeep<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== 'object' || seen.has(value as object)) return value
+  seen.add(value as object)
+  for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child, seen)
+  return Object.freeze(value)
 }
 
 export function readOwnPackageVersion(): string {
@@ -76,14 +83,16 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
   const dropped: string[] = []
   const contracts: HostContract[] = []
   const data = loadSpecData(options.specDir)
-  const advertisedFacets = data?.registry.facetApiVersions
-    ?.filter(version => /^v[0-9]+(?:alpha[0-9]+|beta[0-9]+)$/u.test(version))
-  const facetApiVersions = advertisedFacets !== undefined && advertisedFacets.length > 0
-    ? advertisedFacets
-    : [...HOST_FACET_API_VERSIONS]
+  // `loadSpecData` rejects malformed/empty facet declarations. Preserve the
+  // pinned values exactly when data is valid; use the schema-valid fallback
+  // only for the completely unavailable/degraded path.
+  const facetApiVersions = data === undefined
+    ? [...HOST_FACET_API_VERSIONS]
+    : [...data.registry.facetApiVersions]
+  const profileFailures = data === undefined ? [] : verifyContractProfiles(data)
 
   if (data === undefined) {
-    warnings.push('admission profile unavailable (ecosystem-spec/); advertising an empty protocol surface')
+    warnings.push('admission profile unavailable (dsh-ecosystem-spec/); advertising an empty protocol surface')
   } else {
     const index = createContractIndex(data.registry, data.permissions)
     for (const coordinate of options.supported ?? HOST_SUPPORTED_CONTRACTS) {
@@ -96,6 +105,11 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
         continue
       }
       if ('profile' in entry) {
+        if (profileFailures.length > 0) {
+          dropped.push(key)
+          warnings.push(`${key}: TUI contract profile self-check failed (${profileFailures.join(' | ')})`)
+          continue
+        }
         let actual: string
         try {
           actual = digestFile(data.dir, entry.profile)
@@ -158,5 +172,13 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
       descriptor.contracts.length = 0
     }
   }
-  return { descriptor, dropped, warnings }
+  // The descriptor is handed to untrusted admission/diagnostic callers.  A
+  // cached mutable object would let one caller delete contracts or forge the
+  // runtime generation for every later negotiation, so freeze the complete
+  // graph and return immutable diagnostic arrays as well.
+  return Object.freeze({
+    descriptor: freezeDeep(descriptor),
+    dropped: Object.freeze(dropped),
+    warnings: Object.freeze(warnings),
+  })
 }

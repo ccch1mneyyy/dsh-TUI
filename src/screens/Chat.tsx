@@ -11,7 +11,7 @@ import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type 
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore } from '../dsh-adapter/status.js'
-import type { TuiShortcutRuntime } from '../dsh-adapter/shortcuts.js'
+import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
 import { ApprovalStore } from '../dsh-adapter/approvals.js'
@@ -178,8 +178,8 @@ export function Chat({
   extensionDialogs?: TuiDialogStore
   /** Plugin status-line contributions (tuiStatus service's store). */
   extensionStatus?: TuiStatusStore
-  /** Plugin keyboard shortcut registry (tuiShortcuts service). */
-  extensionShortcuts?: TuiShortcutRuntime
+  /** Host-only keyboard shortcut dispatch path. */
+  extensionShortcuts?: TuiShortcutHost
   onExit: () => void
   /** Update the installed package and restart the current TUI process. */
   onUpdate?: () => void
@@ -242,12 +242,9 @@ export function Chat({
   // outlives its channel.
   React.useEffect(() => {
     if (extensionShortcuts === undefined) return
-    extensionShortcuts.onError = combo => {
+    return extensionShortcuts.setErrorHandler(combo => {
       channel.notify(t('ext-shortcut-failed', { combo }), { color: 'error', timeoutMs: 4000 })
-    }
-    return () => {
-      extensionShortcuts.onError = undefined
-    }
+    })
   }, [extensionShortcuts, channel])
   // When a questionnaire batch completes, fold a Q&A summary into the
   // transcript (the tool card itself is hidden from the message list).
@@ -362,15 +359,9 @@ export function Chat({
   /**
    * Close the scene.
    *
-   * Leaving the alternate screen makes the terminal restore the main buffer
-   * itself; Ink then repaints once, because `setAltScreenActive(false)` blanks
-   * its front frame. In inline mode that costs one frame of scrollback per
-   * round trip — the same, already-accepted cost as the Ctrl+X external-editor
-   * handoff, and bounded per OPEN rather than per keystroke. Making it zero
-   * needs the render core to save and restore the pre-alt front frame, which
-   * is a separate change to `setAltScreenActive` and deliberately not made
-   * here. `verify-trace-scene` pins the property that matters meanwhile:
-   * navigating inside the scene adds nothing at all.
+   * Leaving the alternate screen makes the terminal restore the main buffer;
+   * Ink restores the matching saved frame and diffs any conversation changes
+   * that happened while the scene was open.
    */
   const closeScene = React.useCallback(() => {
     setSceneOpen(false)
@@ -387,6 +378,8 @@ export function Chat({
   }, [])
   /** The startup summary gives way to transcript rows after the first local command or message. */
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
+  /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
+  const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -690,7 +683,8 @@ export function Chat({
       case 'lang': {
         // `/lang` shows the current UI language, `/lang en|zh` switches
         // (hot-swap, persisted to ~/.dsh-tui/lang.json). Precedence on next
-        // launch: DSH_TUI_LANG > cordis.yml `lang` > the persisted choice.
+        // launch: DSH_TUI_LANG > settings.yaml `dsh-tui.lang` > cordis.yml
+        // `lang` > the persisted choice.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts[0] === 'status') {
           setHelpOpen(false)
@@ -706,6 +700,16 @@ export function Chat({
           if (isLang(parts[0])) {
             const ok = writeLangPref(parts[0])
             setLang(parts[0])
+            // Mirror into the dsh-tui settings namespace when it is served,
+            // so /settings and the next boot see the same last-write-wins
+            // choice (best effort; lang.json stays the fallback).
+            const settingsHost = channel.settingsHost()
+            const tuiView = settingsHost?.listNamespaces().find(entry => entry.ns === 'dsh-tui')
+            if (settingsHost !== undefined && tuiView !== undefined) {
+              void settingsHost
+                .write('dsh-tui', [{ op: 'set', path: ['lang'], value: parts[0] }], tuiView.revision)
+                .catch(() => {})
+            }
             channel.notify(
               ok ? t('lang-switched', { lang: parts[0] }) : t('lang-switch-failed', { lang: parts[0] }),
               { color: ok ? 'success' : 'error' },
@@ -1841,8 +1845,15 @@ export function Chat({
       return
     }
     if (isMod(key) && input === 't') {
-      // Ctrl+T has one stable meaning; loaded-context details live at /context.
+      // Ctrl+T opens the trajectory scene at any point in the session.
       openScene()
+      return
+    }
+    if (isMod(key) && input === 'p' && loadedContextVisible) {
+      // Ctrl+P toggles the startup loaded-context panel while it is on
+      // screen (transcript still empty); once rows take over and the
+      // panel disappears the key has nothing left to do.
+      setLoadedContextOpen(previous => !previous)
       return
     }
     if (isMod(key) && input === 'r' && !helpOpen) {
@@ -1883,6 +1894,16 @@ export function Chat({
     } else if (isMod(key) && input === 'o') {
       // Leaving transcript mode (Ctrl+O) — search was already handled above.
       setExpanded(previous => !previous)
+      // The toggle rewrites every thinking row's layout at once. The
+      // ordinary scroll-based diff pushes rows into terminal scrollback on
+      // each expand and nothing removes them on collapse — rapid toggling
+      // drifts the virtual↔scrollback mapping until writes misland
+      // (garbled transcript, duplicated rows). Re-anchor the next frame:
+      // in-place viewport repaint, nothing added to scrollback. Lookup
+      // falls back to the only live instance for embedders whose stdout
+      // isn't process.stdout (test harnesses).
+      const ink = instances.get(process.stdout) ?? instances.values().next().value
+      ink?.reanchorViewport()
     } else if (input === '/' && !key.ctrl && !key.meta && !key.super) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
       // search is active on the transcript screen where `/` isn't a command).
@@ -2042,12 +2063,17 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
         />
-        {/* The startup loaded-context summary: before the first message the
-            transcript is empty, so the one-line inventory of what this
-            conversation will load (system prompt, workspace instructions,
-            skills, tools) sits at the top; the first rows take over. */}
+        {/* The startup loaded-context panel: before the first message the
+            transcript is empty, so the inventory of what this conversation
+            will load (system prompt, workspace instructions, skills, tools)
+            sits at the top, collapsed to a summary line and expandable with
+            Ctrl+P; the first rows take over. */}
         {loadedContextVisible && (
-          <LoadedContextPanel context={channel.loadedContext} />
+          <LoadedContextPanel
+            context={channel.loadedContext}
+            open={loadedContextOpen}
+            onToggle={() => { setLoadedContextOpen(previous => !previous) }}
+          />
         )}
         <MessageList
           rows={channel.rows}
@@ -2059,6 +2085,7 @@ export function Chat({
           onToggleRow={toggleRowExpanded}
           model={channel.model}
           diffLayout={channel.diffLayout}
+          thinkingFold={channel.thinkingFold}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
           onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}

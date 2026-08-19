@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { gt, valid } from 'semver'
+import { gte, gt, lt, valid } from 'semver'
 import { shellQuote } from './utils/shellQuote.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
@@ -23,7 +23,7 @@ export interface TuiUpdateInfo {
 
 /** What a fresh registry lookup says about this install. */
 export type TuiUpdateTarget =
-  | { kind: 'update'; current: string; latest: string }
+  | { kind: 'update'; current: string; latest: string; authoritative?: string }
   | { kind: 'latest'; current: string }
   | { kind: 'unknown' }
 
@@ -105,16 +105,31 @@ export function isVersionNewer(current: string, previous: string): boolean {
   return a !== null && b !== null && gt(a, b)
 }
 
+/**
+ * Versions whose compiled plugin hard-injects `tuiWorkspaces`
+ * ('0.7.0'–'0.7.1'; removed in 0.7.2). Installing one while the globally
+ * installed launcher copy predates the `dsh-tui-workspaces` patch row
+ * deadlocks boot forever at "pending (waiting for service: tuiWorkspaces)"
+ * (issues #183/#307) — and /update reaching such a target is exactly how
+ * stale-mirror installs stranded users. /update must refuse them.
+ * @param version - the candidate install target.
+ * @returns true for the known boot-deadlock version range.
+ */
+export function isBootDeadlockTarget(version: string): boolean {
+  const v = valid(version)
+  return v !== null && gte(v, '0.7.0') && lt(v, '0.7.2')
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-/** Fetch `latest` from the configured registry; undefined on any failure. */
-async function fetchLatestVersion(): Promise<string | undefined> {
+/** Fetch `latest` from a registry; undefined on any failure. */
+async function fetchLatestVersion(registryBase: string): Promise<string | undefined> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS)
   try {
-    const response = await fetch(`${resolveRegistryBase()}/${PACKAGE_NAME}/latest`, {
+    const response = await fetch(`${registryBase}/${PACKAGE_NAME}/latest`, {
       headers: { accept: 'application/json' },
       signal: controller.signal,
     })
@@ -135,16 +150,29 @@ async function fetchLatestVersion(): Promise<string | undefined> {
  * Classify this install against a fresh registry lookup: an update is
  * available, the install is already latest, or the answer is unknown
  * (offline / registry error / unreadable own version).
+ *
+ * The configured registry decides the install target (pnpm must be able to
+ * fetch it), but when that registry is a mirror it can lag behind npmjs —
+ * issue #307's users were pinned onto stale versions this way. A
+ * best-effort npmjs.org check runs in parallel and surfaces as
+ * `authoritative` when it knows a strictly newer release, so callers can
+ * say "installing X now, official latest is Y" instead of silently
+ * upgrading to yesterday's version.
  */
 export async function resolveTuiUpdateTarget(): Promise<TuiUpdateTarget> {
   const current = installedTuiVersion()
   const currentVersion = current === undefined ? null : valid(current)
   if (currentVersion === null) return { kind: 'unknown' }
 
-  const latest = await fetchLatestVersion()
+  const registryBase = resolveRegistryBase()
+  const [latest, official] = await Promise.all([
+    fetchLatestVersion(registryBase),
+    registryBase === DEFAULT_REGISTRY ? undefined : fetchLatestVersion(DEFAULT_REGISTRY),
+  ])
   if (latest === undefined) return { kind: 'unknown' }
   if (!gt(latest, currentVersion)) return { kind: 'latest', current: currentVersion }
-  return { kind: 'update', current: currentVersion, latest }
+  const authoritative = official !== undefined && gt(official, latest) ? official : undefined
+  return { kind: 'update', current: currentVersion, latest, ...(authoritative === undefined ? {} : { authoritative }) }
 }
 
 /**
@@ -260,6 +288,12 @@ export async function updateTuiAndRestart(
   profile: string,
   targetVersion?: string,
 ): Promise<TuiUpdateResult> {
+  // Stamp the pre-update version BEFORE pnpm runs: it reads this package's
+  // manifest from disk, which the update replaces on the fly — a
+  // post-update read already sees the NEW version, and the restarted
+  // process then compares new-vs-new and false-alarms "version did not
+  // advance" on every successful update (issue #307's screenshots).
+  const updatedFrom = installedTuiVersion() ?? ''
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
   let updateStderr = ''
@@ -274,6 +308,23 @@ export async function updateTuiAndRestart(
     updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
   }
   if (updateCode !== 0) return { updateCode, restartCode: updateCode }
+
+  // A --latest fallback (preflight failed) on a stale mirror can still land
+  // on the 0.7.0–0.7.1 hard-inject range — restarting into it under an older
+  // global-launcher patch is the permanent boot deadlock of issues
+  // #183/#307. Refuse the restart when the version JUST moved there; a user
+  // who was already on it keeps their restart (their combo demonstrably
+  // boots) and gets the repair hint on the next /update instead.
+  const installedNow = installedTuiVersion()
+  if (installedNow !== undefined && installedNow !== updatedFrom && isBootDeadlockTarget(installedNow)) {
+    process.stderr.write(
+      `dsh-tui: update landed on ${installedNow}, which can permanently deadlock boot under older launcher patches ` +
+        `(#183/#307) — NOT restarting into it. Repair with:\n` +
+        `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@latest\n` +
+        `(if the mirror has not synced the latest release yet, retry later)\n`,
+    )
+    return { updateCode: 1, restartCode: 1 }
+  }
 
   // Post-update verification (issue #225): pnpm can report success yet leave
   // the profile half-updated (manifest old / lockfile new). Verify against
@@ -303,7 +354,7 @@ export async function updateTuiAndRestart(
       // still-old TUI build reads only DSH_CC_RESUME_SESSION.
       DSH_TUI_RESUME_SESSION: sessionId,
       DSH_CC_RESUME_SESSION: sessionId,
-      [UPDATED_FROM_ENV]: installedTuiVersion() ?? '',
+      [UPDATED_FROM_ENV]: updatedFrom,
     },
   })
   return { updateCode, restartCode }

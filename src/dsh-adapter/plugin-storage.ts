@@ -46,7 +46,8 @@ import {
   validateDeleteOutput,
 } from '@dsh-std/storage'
 import { DATA_DIR } from '../utils/paths.js'
-import { declaresPermission, requireComponentIdentity, type VerifiedComponentIdentity } from './component-identity.js'
+import { activationContext, assertCallerContext, bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
+import { declaresPermission, requireComponentIdentity, requiresContract, type VerifiedComponentIdentity } from './component-identity.js'
 import { readGrantStore, type GrantStore } from './grants.js'
 import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
 
@@ -72,6 +73,23 @@ export class PluginStorageError extends Error {
     this.name = 'PluginStorageError'
     this.code = code
   }
+}
+
+interface StorageState {
+  readonly hostContext: Context
+  readonly grantsOption: GrantStore | undefined
+  readonly fallbackGrants: GrantStore
+  readonly ledgerOption: TuiEffectLedgerRuntime | undefined
+  readonly namespaces: Map<string, NamespaceState>
+  readonly dir: string
+}
+
+const storageStates = new WeakMap<TuiPluginStorageRuntime, StorageState>()
+
+function storageStateFor(runtime: TuiPluginStorageRuntime): StorageState {
+  const state = storageStates.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiPluginStorage host state is unavailable')
+  return state
 }
 
 /** The per-namespace handle returned by {@link TuiPluginStorageRuntime.open}. */
@@ -232,18 +250,16 @@ interface NamespaceState {
  * (normal path) or a private read otherwise (bare mounts in tests).
  */
 export class TuiPluginStorageRuntime extends Service {
-  private readonly grantsOption: GrantStore | undefined
-  private readonly fallbackGrants: GrantStore
-  private readonly ledgerOption: TuiEffectLedgerRuntime | undefined
-  private readonly namespaces = new Map<string, NamespaceState>()
-  private readonly dir: string
-
   constructor(ctx: Context, options: { dir?: string; grants?: GrantStore; ledger?: TuiEffectLedgerRuntime } = {}) {
     super(ctx, 'tuiPluginStorage')
-    this.grantsOption = options.grants
-    this.fallbackGrants = readGrantStore()
-    this.ledgerOption = options.ledger
-    this.dir = options.dir ?? join(DATA_DIR, PLUGIN_STORAGE_DIR)
+    storageStates.set(this, {
+hostContext: compositionRoot(ctx),
+      grantsOption: options.grants,
+      fallbackGrants: readGrantStore(),
+      ledgerOption: options.ledger,
+      namespaces: new Map(),
+      dir: options.dir ?? join(DATA_DIR, PLUGIN_STORAGE_DIR),
+    })
   }
 
   /** Grants: the plugin-host row's store when mounted, else a private read.
@@ -251,12 +267,14 @@ export class TuiPluginStorageRuntime extends Service {
    *  are not visible to constructors (cordis), so a constructor-time probe
    *  would silently stick to the fallback. */
   private grants(): GrantStore {
-    return this.grantsOption ?? this.ctx.get('tuiPluginHost')?.grants ?? this.fallbackGrants
+    const state = storageStateFor(this)
+    return state.grantsOption ?? state.hostContext.get('tuiPluginHost')?.grants ?? state.fallbackGrants
   }
 
   /** Optional observability; a bare mount (tests) simply records nothing. */
   private ledger(): TuiEffectLedgerRuntime | undefined {
-    return this.ledgerOption ?? this.ctx.get('tuiEffectLedger')
+    const state = storageStateFor(this)
+    return state.ledgerOption ?? state.hostContext.get('tuiEffectLedger')
   }
 
   /**
@@ -266,35 +284,41 @@ export class TuiPluginStorageRuntime extends Service {
    * disposer); data is retained (contract cleanup rule).
    */
   open(pluginCtx: Context): TuiPluginStorage {
-    const identity = requireComponentIdentity(pluginCtx)
+    const caller = activationContext(pluginCtx)
+    if (caller === undefined) throw new PluginStorageError('STORAGE_UNAVAILABLE', 'storage.local.open requires a live activation context')
+    assertCallerContext(this.ctx, caller, 'storage.local.open', this)
+    const state = storageStateFor(this)
+    const identity = requireComponentIdentity(caller)
+    if (!requiresContract(identity, 'storage.dsh/v1alpha1', 'LocalStorage')) {
+      throw new PluginStorageError(
+        'PERMISSION_NOT_GRANTED',
+        'storage.local requires the storage.dsh/v1alpha1#LocalStorage contract in the admitted manifest',
+      )
+    }
     const plugin = identity.componentId
-    let state = this.namespaces.get(plugin)
-    if (state === undefined) {
-      state = { chain: Promise.resolve() }
-      this.namespaces.set(plugin, state)
+    let namespace = state.namespaces.get(plugin)
+    if (namespace === undefined) {
+      namespace = { chain: Promise.resolve() }
+      state.namespaces.set(plugin, namespace)
     }
     this.ledger()?.record(
       { operation: 'create', resource: { kind: 'storage-namespace', id: plugin }, result: 'applied' },
-      pluginCtx,
+      caller,
     )
     // `closed` is PER HANDLE, not per namespace: unloading one fiber must not
     // kill another handle opened on the same namespace. Close on unload;
-    // idempotent (a double-close stays harmless by design); degraded contexts
-    // without `effect` simply never auto-close.
+    // idempotent (a double-close stays harmless by design).
     let closed = false
-    try {
-      pluginCtx.effect(() => () => {
-        if (closed) return
-        closed = true
-        this.ledger()?.record(
-          { operation: 'release', resource: { kind: 'storage-namespace', id: plugin }, result: 'applied' },
-          pluginCtx,
-        )
-      })
-    } catch {
-      // Degraded context: the handle lives until process end.
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      this.ledger()?.record(
+        { operation: 'release', resource: { kind: 'storage-namespace', id: plugin }, result: 'applied' },
+        caller,
+      )
     }
-    const file = join(this.dir, `${storageFileName(plugin)}.json`)
+    bindCallerEffect(caller, close)
+    const file = join(state.dir, `${storageFileName(plugin)}.json`)
     const grants = (): GrantStore => this.grants()
     const ledger = (): TuiEffectLedgerRuntime | undefined => this.ledger()
 
@@ -302,9 +326,9 @@ export class TuiPluginStorageRuntime extends Service {
       if (closed) {
         return Promise.reject(new PluginStorageError('STORAGE_UNAVAILABLE', `storage namespace "${plugin}" handle is closed`))
       }
-      const run = state.chain.then(operation)
+      const run = namespace!.chain.then(operation)
       // Keep the chain alive after a failure without unhandled rejections.
-      state.chain = run.catch(() => {})
+      namespace!.chain = run.catch(() => {})
       return run
     }
 
@@ -357,7 +381,7 @@ export class TuiPluginStorageRuntime extends Service {
             result: 'failed',
             errorCode: 'PERMISSION_NOT_GRANTED',
           },
-          pluginCtx,
+          caller,
         )
         throw new PluginStorageError(
           'PERMISSION_NOT_GRANTED',
@@ -372,7 +396,7 @@ export class TuiPluginStorageRuntime extends Service {
     // path (read paths tolerate ENOENT as an empty namespace and never
     // materialize the tree).
     const ensureDir = (): void => {
-      mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+      mkdirSync(state.dir, { recursive: true, mode: 0o700 })
     }
 
     return {

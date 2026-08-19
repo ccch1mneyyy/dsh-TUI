@@ -56,12 +56,14 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { validateMessageEvent } from '@dsh-std/messages'
 import { check } from '../plugin-spec/schema-check.js'
 import { cleanScalarText } from './sanitize.js'
+import { activationContext, assertCallerContext, bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
 import { readGrantStore, type GrantStore } from './grants.js'
 import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
 import {
   declaresObserverScope,
   declaresPermission,
   requireComponentIdentity,
+  requiresContract,
   type VerifiedComponentIdentity,
 } from './component-identity.js'
 import {
@@ -97,6 +99,12 @@ export interface MessagesObserveEnvelope {
 
 export type MessagesObserveListener = (envelope: MessagesObserveEnvelope) => void | Promise<void>
 
+/** Host-only session-event ingress. Plugins receive only `subscribe`; the
+ * channel uses this capability to publish events after its own identity check. */
+export interface TuiMessageObserverHost {
+  publish(session: unknown, event: unknown): void
+}
+
 /** Summary bound (cells; schema maxLength 1024 chars — 200 cells ≤ 1024). */
 export const OBSERVE_SUMMARY_CELLS = 200
 /** Content text bound (chars; schema maxLength 262144). */
@@ -114,6 +122,9 @@ export const OBSERVE_CALLBACK_TIMEOUT_MS = 1500
 /** Bound queued callbacks per subscription so a stalled listener cannot grow
  * an unbounded Promise chain before its timeout closes the subscription. */
 export const OBSERVE_CALLBACK_QUEUE_LIMIT = 32
+/** Attachment reads are part of the broker build chain and therefore need an
+ * independent bound; a wedged reader must not stall every later envelope. */
+export const OBSERVE_IMAGE_READ_TIMEOUT_MS = 1500
 /** The envelope schema's mimeType pattern (image blocks). */
 const OBSERVE_MIME_PATTERN = /^[A-Za-z0-9.+-]+\/[A-Za-z0-9.+-]+$/
 
@@ -220,15 +231,6 @@ declare module '@deepseek-ai/cordis' {
  * is ever delivered (a host that cannot self-check must not emit).
  */
 export class TuiMessageObserverRuntime extends Service {
-  private readonly grantsOption: GrantStore | undefined
-  private readonly fallbackGrants: GrantStore
-  private readonly ledgerOption: TuiEffectLedgerRuntime | undefined
-  private readonly subscriptions = new Set<Subscription>()
-  private readonly validateEnvelope: (value: unknown) => void
-  private readonly validatorUnavailable: boolean
-  private validatorWarned = false
-  private buildChain: Promise<unknown> = Promise.resolve()
-
   constructor(
     ctx: Context,
     options: {
@@ -240,22 +242,41 @@ export class TuiMessageObserverRuntime extends Service {
     } = {},
   ) {
     super(ctx, 'tuiMessageObserver')
-    this.grantsOption = options.grants
-    this.fallbackGrants = readGrantStore()
-    this.ledgerOption = options.ledger
+    const state: ObserverState = {
+hostContext: compositionRoot(ctx),
+      grantsOption: options.grants,
+      fallbackGrants: readGrantStore(),
+      ledgerOption: options.ledger,
+      subscriptions: new Set(),
+      validateEnvelope: validateMessageEvent,
+      validatorUnavailable: false,
+      validatorWarned: false,
+      buildChain: Promise.resolve(),
+    }
+    const runtime = this
+    const host: TuiMessageObserverHost = Object.freeze({
+      publish: (session, event) => {
+        try {
+          runtime.#publishGuarded(session, event)
+        } catch (error) {
+          runtime.ctx.logger.warn(
+            'dsh-tui: messages.observe publish failed (event dropped)',
+          )
+        }
+      },
+    })
+    hostMessageObservers.set(runtime, host)
     if (Object.hasOwn(options, 'validateEnvelope')) {
-      this.validatorUnavailable = options.validateEnvelope === undefined
-      this.validateEnvelope = options.validateEnvelope ?? (() => { throw new Error('standard envelope validator unavailable') })
+      state.validatorUnavailable = options.validateEnvelope === undefined
+      state.validateEnvelope = options.validateEnvelope ?? (() => { throw new Error('standard envelope validator unavailable') })
     } else if (Object.hasOwn(options, 'envelopeSchema')) {
       const schema = options.envelopeSchema
-      this.validatorUnavailable = schema === undefined
-      this.validateEnvelope = schema === undefined
+      state.validatorUnavailable = schema === undefined
+      state.validateEnvelope = schema === undefined
         ? (() => { throw new Error('vendored envelope schema unavailable') })
         : (value: unknown) => check(value, schema, schema)
-    } else {
-      this.validatorUnavailable = false
-      this.validateEnvelope = (value: unknown) => { validateMessageEvent(value) }
     }
+    observerStates.set(this, state)
   }
 
   /** Grants: the plugin-host row's store when mounted, else a private read.
@@ -263,12 +284,14 @@ export class TuiMessageObserverRuntime extends Service {
    *  are not visible to constructors (cordis), so a constructor-time probe
    *  would silently stick to the fallback. */
   private grants(): GrantStore {
-    return this.grantsOption ?? this.ctx.get('tuiPluginHost')?.grants ?? this.fallbackGrants
+    const state = observerStateFor(this)
+    return state.grantsOption ?? state.hostContext.get('tuiPluginHost')?.grants ?? state.fallbackGrants
   }
 
   /** Optional observability; a bare mount (tests) simply records nothing. */
   private ledger(): TuiEffectLedgerRuntime | undefined {
-    return this.ledgerOption ?? this.ctx.get('tuiEffectLedger')
+    const state = observerStateFor(this)
+    return state.ledgerOption ?? state.hostContext.get('tuiEffectLedger')
   }
 
   /**
@@ -282,11 +305,21 @@ export class TuiMessageObserverRuntime extends Service {
    * unloads.
    */
   subscribe(pluginCtx: Context, listener: MessagesObserveListener, options: { scope: string }): () => void {
-    const identity = requireComponentIdentity(pluginCtx)
+    const caller = activationContext(pluginCtx)
+    if (caller === undefined) throw new Error('dsh-tui: messages.observe.subscribe requires a live activation context')
+    assertCallerContext(this.ctx, caller, 'messages.observe.subscribe', this)
+    const identity = requireComponentIdentity(caller)
     const plugin = identity.componentId
+    if (!requiresContract(identity, 'messages.dsh/v1alpha1', 'MessageObserver')) {
+      observerStateFor(this).hostContext.logger.warn(
+        `dsh-tui: messages.observe subscription from Component "${plugin}" denied — ` +
+        'the messages.dsh/v1alpha1#MessageObserver contract was not required',
+      )
+      return () => false
+    }
     const scope = typeof options?.scope === 'string' ? options.scope : ''
     if (scope === '' || scope.length > OBSERVE_SCOPE_MAX_CHARS) {
-      this.ctx.logger.warn(
+      observerStateFor(this).hostContext.logger.warn(
         `dsh-tui: messages.observe subscription from plugin "${plugin}" refused — options.scope must be a ` +
         `non-empty string of at most ${OBSERVE_SCOPE_MAX_CHARS} characters (e.g. "session:<id>")`,
       )
@@ -300,7 +333,7 @@ export class TuiMessageObserverRuntime extends Service {
         'messages.observe.read',
         scope,
       )) {
-      this.ctx.logger.warn(
+      observerStateFor(this).hostContext.logger.warn(
         `dsh-tui: messages.observe subscription from Component "${plugin}" denied — ` +
         'the scope is not statically declared or the current grant does not cover it; the listener was NOT registered',
       )
@@ -311,24 +344,24 @@ export class TuiMessageObserverRuntime extends Service {
           result: 'failed',
           errorCode: 'PERMISSION_NOT_GRANTED',
         },
-        pluginCtx,
+        caller,
       )
       return () => false
     }
     const subscription: Subscription = {
       plugin,
       identity,
-      ownerContext: pluginCtx,
+      ownerContext: caller,
       scope,
       listener,
       chain: Promise.resolve(),
       pendingCallbacks: 0,
       closed: false,
     }
-    this.subscriptions.add(subscription)
+    observerStateFor(this).subscriptions.add(subscription)
     this.ledger()?.record(
       { operation: 'bind', resource: { kind: 'subscription', id: plugin }, result: 'applied' },
-      pluginCtx,
+      caller,
     )
     const release = (): boolean => {
       if (subscription.closed) return false
@@ -342,31 +375,13 @@ export class TuiMessageObserverRuntime extends Service {
         scope,
       )) release()
     })
-    try {
-      pluginCtx.effect(() => release)
-    } catch {
-      // Degraded context: the subscription lives until process end.
-    }
+    bindCallerEffect(caller, release)
     return release
   }
 
-  /**
-   * Publish a session event (channel `session/event` arm). Non-mapped
-   * event types return immediately; everything else never throws into the
-   * caller — problems are warned, not raised.
-   */
-  publish(session: unknown, event: unknown): void {
-    try {
-      this.publishGuarded(session, event)
-    } catch (error) {
-      this.ctx.logger.warn(
-        `dsh-tui: messages.observe publish failed (event dropped): ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-  }
-
-  private publishGuarded(session: unknown, event: unknown): void {
-    if (this.subscriptions.size === 0) return
+  #publishGuarded(session: unknown, event: unknown): void {
+    const state = observerStateFor(this)
+    if (state.subscriptions.size === 0) return
     const record = event as { type?: unknown; seq?: unknown; data?: unknown }
     const kind = record.type === 'user/message'
       ? 'message.received' as const
@@ -378,7 +393,7 @@ export class TuiMessageObserverRuntime extends Service {
 
     const sessionId = (session as { id?: unknown })?.id
     if (typeof sessionId !== 'string' || sessionId === '') {
-      this.ctx.logger.warn('dsh-tui: messages.observe publish skipped — the session carries no string id')
+      observerStateFor(this).hostContext.logger.warn('dsh-tui: messages.observe publish skipped — the session carries no string id')
       return
     }
     const data = (record.data ?? {}) as Record<string, unknown>
@@ -390,20 +405,20 @@ export class TuiMessageObserverRuntime extends Service {
     // Never truncate a session identity into the schema's scope bound: two
     // distinct long ids can otherwise collapse into one subscription scope.
     if (scope.length > OBSERVE_SCOPE_MAX_CHARS) {
-      this.ctx.logger.warn(
+      observerStateFor(this).hostContext.logger.warn(
         `dsh-tui: messages.observe publish skipped — the session scope exceeds ${OBSERVE_SCOPE_MAX_CHARS} characters`,
       )
       return
     }
     // C-042 isolation: match subscriptions BEFORE building anything — a
     // subscription for another scope must never see this scope's content.
-    const matched = [...this.subscriptions].filter(subscription =>
+    const matched = [...state.subscriptions].filter(subscription =>
       !subscription.closed && observerScopeCovers(subscription.scope, scope))
     if (matched.length === 0) return
 
     // Builds serialize broker-wide so delivery order stays the publish
     // order even though image reads are async (sequence stays monotonic).
-    this.buildChain = this.buildChain.then(() => this.buildAndDeliver(kind, sessionId, scope, record.seq as number, message, matched))
+    state.buildChain = state.buildChain.then(() => this.buildAndDeliver(kind, sessionId, scope, record.seq as number, message, matched))
   }
 
   private async buildAndDeliver(
@@ -414,6 +429,7 @@ export class TuiMessageObserverRuntime extends Service {
     message: { id?: unknown; content?: unknown } | undefined,
     matched: Subscription[],
   ): Promise<void> {
+    const state = observerStateFor(this)
     try {
       const text = this.textOf(message?.content)
       const { blocks, truncated: contentTruncated } = await this.contentOf(message?.content)
@@ -444,18 +460,18 @@ export class TuiMessageObserverRuntime extends Service {
       }
 
       // Self-check EVERY envelope with the pinned @dsh-std/messages validator.
-      if (this.validatorUnavailable) {
-        if (!this.validatorWarned) {
-          this.validatorWarned = true
-          this.ctx.logger.warn('dsh-tui: standard message envelope validator unavailable — delivery is fail-closed')
+      if (state.validatorUnavailable) {
+        if (!state.validatorWarned) {
+          state.validatorWarned = true
+          observerStateFor(this).hostContext.logger.warn('dsh-tui: standard message envelope validator unavailable — delivery is fail-closed')
         }
         return
       }
       try {
-        this.validateEnvelope(envelope)
+        state.validateEnvelope(envelope)
       } catch (error) {
-        this.ctx.logger.warn(
-          `dsh-tui: messages.observe envelope failed the standard validator and was dropped: ${error instanceof Error ? error.message : String(error)}`,
+        observerStateFor(this).hostContext.logger.warn(
+          'dsh-tui: messages.observe envelope failed the standard validator and was dropped',
         )
         return
       }
@@ -469,14 +485,14 @@ export class TuiMessageObserverRuntime extends Service {
           'messages.observe.read',
           scope,
         )) {
-          this.ctx.logger.warn(
+          observerStateFor(this).hostContext.logger.warn(
             `dsh-tui: messages.observe subscription of plugin "${subscription.plugin}" released — the grant was revoked`,
           )
           this.drop(subscription)
           continue
         }
         if (subscription.pendingCallbacks >= OBSERVE_CALLBACK_QUEUE_LIMIT) {
-          this.ctx.logger.warn(
+          observerStateFor(this).hostContext.logger.warn(
             `dsh-tui: messages.observe listener of Component "${subscription.plugin}" reached its ` +
             `${OBSERVE_CALLBACK_QUEUE_LIMIT}-callback queue limit; this envelope was skipped`,
           )
@@ -485,31 +501,45 @@ export class TuiMessageObserverRuntime extends Service {
         subscription.pendingCallbacks += 1
         const run = subscription.chain.then(async () => {
           if (subscription.closed) return
+          // Re-check at the actual callback boundary as well as at enqueue
+          // time. A grant may be revoked while an earlier callback is still
+          // running; queued envelopes must then be skipped rather than
+          // delivered from the stale pre-revocation snapshot.
+          if (!this.grants().allows(
+            { componentId: subscription.identity.componentId, activationId: subscription.identity.activationId },
+            'messages.observe.read',
+            scope,
+          )) {
+            observerStateFor(this).hostContext.logger.warn(
+              `dsh-tui: messages.observe subscription of plugin "${subscription.plugin}" released — the grant was revoked`,
+            )
+            this.drop(subscription)
+            return
+          }
           const isolated = freezeEnvelope(envelope)
           const result = await runWithBudget(
             () => subscription.listener(isolated),
             OBSERVE_CALLBACK_TIMEOUT_MS,
           )
           if (result.kind === 'timeout') {
-            this.ctx.logger.warn(
+            observerStateFor(this).hostContext.logger.warn(
               `dsh-tui: messages.observe listener of Component "${subscription.plugin}" exceeded ` +
               `${OBSERVE_CALLBACK_TIMEOUT_MS}ms and the subscription was closed`,
             )
             this.drop(subscription)
           } else if (result.kind === 'rejected') {
-            this.ctx.logger.warn(
-              `dsh-tui: messages.observe listener of Component "${subscription.plugin}" failed; delivery continues: ` +
-              `${result.error instanceof Error ? result.error.message : String(result.error)}`,
+            observerStateFor(this).hostContext.logger.warn(
+              `dsh-tui: messages.observe listener of Component "${subscription.plugin}" failed; delivery continues`,
             )
           }
         })
         subscription.chain = run.catch(error => {
-          this.ctx.logger.warn(`dsh-tui: messages.observe delivery failed: ${error instanceof Error ? error.message : String(error)}`)
+          observerStateFor(this).hostContext.logger.warn('dsh-tui: messages.observe delivery failed')
         }).finally(() => { subscription.pendingCallbacks -= 1 })
       }
     } catch (error) {
-      this.ctx.logger.warn(
-        `dsh-tui: messages.observe publish failed (event dropped): ${error instanceof Error ? error.message : String(error)}`,
+      observerStateFor(this).hostContext.logger.warn(
+        'dsh-tui: messages.observe publish failed (event dropped)',
       )
     }
   }
@@ -520,7 +550,7 @@ export class TuiMessageObserverRuntime extends Service {
     subscription.closed = true
     subscription.stopGrantWatch?.()
     subscription.stopGrantWatch = undefined
-    this.subscriptions.delete(subscription)
+    observerStateFor(this).subscriptions.delete(subscription)
     this.ledger()?.record(
       { operation: 'release', resource: { kind: 'subscription', id: subscription.plugin }, result: 'applied' },
       subscription.ownerContext,
@@ -616,11 +646,19 @@ export class TuiMessageObserverRuntime extends Service {
       if (typeof mediaType !== 'string' || !OBSERVE_MIME_PATTERN.test(mediaType)) return undefined
       const bytes = attachment.bytes
       if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0 || bytes > OBSERVE_IMAGE_MAX_BYTES) return undefined
-      const reader = this.ctx.get('attachments') as ObserveAttachmentReader | undefined
+      const reader = observerStateFor(this).hostContext.get('attachments') as ObserveAttachmentReader | undefined
       if (typeof reader?.readImage !== 'function') return undefined
       // A failing read drops ONLY this image (the envelope survives with the
       // truncation mark) — one corrupt attachment must not nuke the message.
-      const stored = await reader.readImage(attachment)
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const read = Promise.resolve().then(() => reader.readImage(attachment))
+      const timeout = new Promise<undefined>(resolve => {
+        timer = setTimeout(() => resolve(undefined), OBSERVE_IMAGE_READ_TIMEOUT_MS)
+      })
+      const stored = await Promise.race([read, timeout])
+      if (timer !== undefined) clearTimeout(timer)
+      // `read` has an attached rejection handler through the race's promise
+      // chain; late completion after a timeout is deliberately ignored.
       const data = (stored as { data?: unknown } | undefined)?.data
       if (!(data instanceof Uint8Array) || data.byteLength > OBSERVE_IMAGE_MAX_BYTES) return undefined
       const base64 = Buffer.from(data).toString('base64')
@@ -632,4 +670,36 @@ export class TuiMessageObserverRuntime extends Service {
       return undefined
     }
   }
+}
+
+/** Host-only ingress accessor; deliberately omitted from `./plugin-host`. */
+const hostMessageObservers = new WeakMap<TuiMessageObserverRuntime, TuiMessageObserverHost>()
+
+export function getHostMessageObserver(runtime: TuiMessageObserverRuntime | undefined): TuiMessageObserverHost | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    return hostMessageObservers.get(concreteService(runtime))
+  } catch {
+    return undefined
+  }
+}
+
+interface ObserverState {
+  readonly hostContext: Context
+  readonly grantsOption: GrantStore | undefined
+  readonly fallbackGrants: GrantStore
+  readonly ledgerOption: TuiEffectLedgerRuntime | undefined
+  readonly subscriptions: Set<Subscription>
+  validateEnvelope: (value: unknown) => void
+  validatorUnavailable: boolean
+  validatorWarned: boolean
+  buildChain: Promise<unknown>
+}
+
+const observerStates = new WeakMap<TuiMessageObserverRuntime, ObserverState>()
+
+function observerStateFor(runtime: TuiMessageObserverRuntime): ObserverState {
+  const state = observerStates.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiMessageObserver host state is unavailable')
+  return state
 }

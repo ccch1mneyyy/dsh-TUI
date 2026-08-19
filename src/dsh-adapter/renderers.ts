@@ -25,6 +25,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
 import { cleanRenderText } from './sanitize.js'
+import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 /** What a renderer returns: an optional title row plus body lines. */
 export interface TuiEntryRenderResult {
@@ -35,6 +36,12 @@ export interface TuiEntryRenderResult {
 }
 
 export type TuiEntryRenderer = (payload: unknown) => TuiEntryRenderResult | undefined
+
+/** Host-only transcript projection path. Plugins can register a renderer but
+ * cannot invoke an arbitrary registered renderer on demand. */
+export interface TuiRendererHost {
+  render(type: string, payload: unknown): TuiEntryRenderResult | undefined
+}
 
 const TYPE_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/u
 
@@ -64,11 +71,19 @@ declare module '@deepseek-ai/cordis' {
 
 /** `ctx.tuiRenderers` — custom session-entry text renderers. */
 export class TuiRendererRuntime extends Service {
-  private readonly renderers = new Map<string, TuiEntryRenderer>()
-  private readonly failedTypes = new Set<string>()
-
   constructor(ctx: Context) {
     super(ctx, 'tuiRenderers')
+    compositionRoot(ctx)
+    const runtime = this
+    const state: RendererState = {
+      renderers: new Map(),
+      failedTypes: new Set(),
+      host: undefined,
+      logger: ctx.logger,
+    }
+    const host: TuiRendererHost = Object.freeze({ render: (type, payload) => renderEntry(runtime, type, payload) })
+    state.host = host
+    hostRenderers.set(runtime, state)
   }
 
   /**
@@ -79,9 +94,23 @@ export class TuiRendererRuntime extends Service {
    * pluginId — omitting it records `undeclared` (C-060).
    */
   register(type: string, renderer: TuiEntryRenderer, identity?: Context): () => void {
-    const normalized = String(type ?? '').trim().toLowerCase()
+    let caller: Context
+    try {
+      caller = requirePluginCaller(this.ctx, 'tuiRenderers.register', this)
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiRenderers.register requires a live non-root plugin activation')
+      return () => {}
+    }
+    const state = rendererStateFor(this)
+    let normalized: string
+    try {
+      normalized = String(type ?? '').trim().toLowerCase()
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiRenderers.register rejected an uncoercible event type')
+      return () => {}
+    }
     if (!TYPE_PATTERN.test(normalized)) {
-      this.ctx.logger.warn(`dsh-tui: tuiRenderers.register rejected invalid event type ${JSON.stringify(type)}`)
+      this.ctx.logger.warn('dsh-tui: tuiRenderers.register rejected an invalid event type')
       return () => {}
     }
     // The channel's own projection (its renderEvent switch plus special-
@@ -93,7 +122,7 @@ export class TuiRendererRuntime extends Service {
       this.ctx.logger.warn(`dsh-tui: tuiRenderers.register rejected "${normalized}" — built-in event types keep their own projection`)
       return () => {}
     }
-    if (this.renderers.has(normalized)) {
+    if (state.renderers.has(normalized)) {
       this.ctx.logger.warn(`dsh-tui: tuiRenderers.register rejected "${normalized}" — already registered`)
       this.ctx.get('tuiEffectLedger')?.record(
         {
@@ -110,55 +139,72 @@ export class TuiRendererRuntime extends Service {
       this.ctx.logger.warn(`dsh-tui: tuiRenderers.register rejected "${normalized}" — renderer must be a function`)
       return () => {}
     }
-    this.renderers.set(normalized, renderer)
+    state.renderers.set(normalized, renderer)
     this.ctx.get('tuiEffectLedger')?.record(
       { operation: 'create', resource: { kind: 'renderer', id: normalized }, result: 'applied' },
       identity,
     )
-    return () => {
-      if (this.renderers.get(normalized) !== renderer) return
-      this.renderers.delete(normalized)
+    const dispose = () => {
+      if (state.renderers.get(normalized) !== renderer) return
+      state.renderers.delete(normalized)
       this.ctx.get('tuiEffectLedger')?.record(
         { operation: 'release', resource: { kind: 'renderer', id: normalized }, result: 'applied' },
         identity,
       )
     }
+    bindCallerEffect(caller, dispose)
+    return dispose
   }
+}
 
-  /**
-   * Project one event; undefined when no renderer applies, the renderer has
-   * no opinion, or it failed (failure is sticky-logged once per type so a
-   * replayed log does not spam the warn stream per event).
-   *
-   * The result is validated and sanitized INSIDE the try boundary: the title
-   * must be a string (anything else is dropped — a non-string would crash
-   * the React render path), lines are kept to scalars, control chars are
-   * stripped, and the count/width caps bound what a replay can synchronously
-   * lay out.
-   */
-  render(type: string, payload: unknown): TuiEntryRenderResult | undefined {
-    const renderer = this.renderers.get(type)
-    if (renderer === undefined) return undefined
-    try {
-      const result = renderer(payload)
-      if (result === undefined) return undefined
-      const raw = result as { title?: unknown; lines?: unknown }
-      if (!Array.isArray(raw.lines)) return undefined
-      const lines: string[] = []
-      for (const line of raw.lines) {
-        if (lines.length >= MAX_RENDER_LINES) break
-        if (typeof line !== 'string' && typeof line !== 'number' && typeof line !== 'boolean') continue
-        lines.push(cleanRenderText(String(line), LINE_CELLS))
-      }
-      const title = typeof raw.title === 'string' ? cleanRenderText(raw.title, TITLE_CELLS) : undefined
-      return { ...(title === undefined || title === '' ? {} : { title }), lines }
-    } catch (error) {
-      if (!this.failedTypes.has(type)) {
-        this.failedTypes.add(type)
-        this.ctx.logger.warn(`dsh-tui: renderer for "${type}" threw; its entries are skipped: %o`, error)
-      }
-      return undefined
+/** Host-only renderer dispatcher; not included in the package export map. */
+interface RendererState {
+  readonly renderers: Map<string, TuiEntryRenderer>
+  readonly failedTypes: Set<string>
+  host: TuiRendererHost | undefined
+  readonly logger: Context['logger']
+}
+
+const hostRenderers = new WeakMap<TuiRendererRuntime, RendererState>()
+
+function rendererStateFor(runtime: TuiRendererRuntime): RendererState {
+  const state = hostRenderers.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiRenderers host state is unavailable')
+  return state
+}
+
+function renderEntry(runtime: TuiRendererRuntime, type: string, payload: unknown): TuiEntryRenderResult | undefined {
+  const state = rendererStateFor(runtime)
+  const renderer = state.renderers.get(type)
+  if (renderer === undefined) return undefined
+  try {
+    const result = renderer(payload)
+    if (result === undefined) return undefined
+    const raw = result as { title?: unknown; lines?: unknown }
+    if (!Array.isArray(raw.lines)) return undefined
+    const lines: string[] = []
+    for (const line of raw.lines) {
+      if (lines.length >= MAX_RENDER_LINES) break
+      if (typeof line !== 'string' && typeof line !== 'number' && typeof line !== 'boolean') continue
+      lines.push(cleanRenderText(String(line), LINE_CELLS))
     }
+    const title = typeof raw.title === 'string' ? cleanRenderText(raw.title, TITLE_CELLS) : undefined
+    return { ...(title === undefined || title === '' ? {} : { title }), lines }
+  } catch (error) {
+    if (!state.failedTypes.has(type)) {
+      state.failedTypes.add(type)
+      state.logger.warn(`dsh-tui: renderer for "${type}" threw; its entries are skipped: %o`, error)
+    }
+    return undefined
+  }
+}
+
+export function getHostRenderers(runtime: TuiRendererRuntime | undefined): TuiRendererHost | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    return hostRenderers.get(concreteService(runtime))?.host
+  } catch {
+    return undefined
   }
 }
 
