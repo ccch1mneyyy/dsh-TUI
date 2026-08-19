@@ -3,6 +3,11 @@ import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import { StreamingMarkdown } from '../StreamingMarkdown.js'
 import { formatDuration } from '../../cc/format.js'
+import {
+  THINKING_SPINNER_FRAMES,
+  THINKING_SPINNER_INTERVAL_MS,
+  THINKING_SETTLED_MARKER,
+} from '../../cc/figures.js'
 
 /** Preview body rows — a FIXED row count (kimicode-style constant-height
  *  ticker). Ink's truncate slices the whole string across newlines as one
@@ -18,6 +23,10 @@ type Props = {
   addMargin: boolean
   /** True when Ctrl+O transcript/verbose mode is on — show the full text. */
   verbose: boolean
+  /** True while the reasoning block is still streaming — the leading anchor
+   *  becomes a rotating braille spinner (Kimi Code style) and settles back
+   *  to the anchor once the step ends. */
+  streaming?: boolean
   /** Streaming compact mode (thinkingFold=preview): a 3-row live ticker of
    *  the model's latest reasoning lines instead of the full block —
    *  kimicode-style constant height; the block never resizes mid-stream. */
@@ -30,22 +39,38 @@ type Props = {
 }
 
 /**
- * Thinking block: folded `∴ Thinking (ctrl+o to expand)`, expanded shows the
- * full reasoning text indented under `∴ Thinking…`, mirroring Claude Code's
- * `messages/AssistantThinkingMessage.tsx`. When the channel records the
- * reasoning duration, the label carries it (`∴ Thinking · 12s …`) — dsh-tui's
- * take on making thinking time visible in the transcript.
+ * Thinking block: folded `⚓ Thinking (ctrl+o to expand)`, expanded shows the
+ * full reasoning text indented under `⚓ Thinking…`. While the reasoning
+ * streams the leading mark is a rotating braille spinner (`⠋⠙⠹…`, Kimi Code
+ * style), settling back to the static anchor (`⚓`) once the turn ends. When
+ * the channel records the reasoning duration, the label carries it
+ * (`⚓ Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
+ * the transcript.
  */
 export function AssistantThinkingMessage({
   thinking,
   addMargin,
   verbose,
+  streaming = false,
   preview = false,
   durationMs,
   isSelected = false,
   onClick,
 }: Props): React.ReactNode {
   if (!thinking) return null
+
+  // Spinner frame (80ms cadence, only while the reasoning is still
+  // streaming — same pattern as BtwPanel's answering spinner).
+  const [frame, setFrame] = React.useState(0)
+  React.useEffect(() => {
+    if (!streaming) return
+    const interval = setInterval(() => setFrame(f => f + 1), THINKING_SPINNER_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [streaming])
+
+  const marker = streaming
+    ? THINKING_SPINNER_FRAMES[frame % THINKING_SPINNER_FRAMES.length]!
+    : THINKING_SETTLED_MARKER
 
   const duration =
     durationMs !== undefined && durationMs >= 1000
@@ -77,7 +102,7 @@ export function AssistantThinkingMessage({
         onClick={onClick}
       >
         <Text dimColor italic>
-          ∴ {t('thinking-label')}{duration}…
+          {marker} {t('thinking-label')}{duration}…
         </Text>
         <Box
           flexDirection="column"
@@ -109,7 +134,7 @@ export function AssistantThinkingMessage({
         onClick={onClick}
       >
         <Text dimColor italic>
-          ∴ {t('thinking-label')}{duration} {t('hint-expand-ctrl-o')}
+          {marker} {t('thinking-label')}{duration} {t('hint-expand-ctrl-o')}
         </Text>
       </Box>
     )
@@ -125,7 +150,7 @@ export function AssistantThinkingMessage({
       onClick={onClick}
     >
       <Text dimColor italic>
-        ∴ {t('thinking-label')}{duration}…
+        {marker} {t('thinking-label')}{duration}…
       </Text>
       <Box paddingLeft={2}>
         {/* StreamingMarkdown: the live thinking text grows per token — the

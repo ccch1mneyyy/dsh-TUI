@@ -89,3 +89,27 @@ export const BRIDGE_SPINNER_FRAMES = [
 export const BRIDGE_READY_INDICATOR = '\u00b7\u2714\ufe0e\u00b7'
 /** Bridge failed indicator (`×`). */
 export const BRIDGE_FAILED_INDICATOR = '\u00d7'
+
+// Thinking spinner (Kimi Code style braille cycle, shown while reasoning
+// streams; the static anchor takes over once the step settles). Each frame
+// is padded to 2 columns so it matches the settled ⚓ anchor exactly — a
+// 1-col frame would shift the whole label right by one column the moment
+// the step settles.
+export const THINKING_SPINNER_FRAMES = [
+  '\u280b ', // ⠋
+  '\u2819 ', // ⠙
+  '\u2839 ', // ⠹
+  '\u2838 ', // ⠸
+  '\u283c ', // ⠼
+  '\u2834 ', // ⠴
+  '\u2826 ', // ⠦
+  '\u2827 ', // ⠧
+  '\u2807 ', // ⠇
+  '\u280f ', // ⠏
+]
+export const THINKING_SPINNER_INTERVAL_MS = 80
+/** Thinking settled marker: anchor (`⚓`) — the static end-state glyph after
+ *  the reasoning block stops streaming. U+2693 is Emoji_Presentation in
+ *  ink/stringWidth, so it measures 2 columns; the braille spinner frames
+ *  above are padded to the same width to keep the label stationary. */
+export const THINKING_SETTLED_MARKER = '\u2693' // ⚓
