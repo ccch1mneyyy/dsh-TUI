@@ -7,6 +7,9 @@ import type { ToolFileDiff } from '../dsh-adapter/channel.js'
 import type { Color } from '../ink/styles.js'
 import { getCliHighlightPromise, type CliHighlight } from '../cc/cliHighlight.js'
 import { SYNTAX_CLASS_TO_TOKEN, chalkFromToken } from '../cc/syntaxTheme.js'
+// Backward-compatible re-export: repro scripts import chalkFromToken from
+// this module's old home.
+export { chalkFromToken } from '../cc/syntaxTheme.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
