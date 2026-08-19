@@ -339,7 +339,7 @@ const lightTheme: Theme = {
   rate_limit_empty: rgb('#DDD5C7'),
   fastMode: rgb('#D98E4A'),
   fastModeShimmer: rgb('#E2A465'),
-  briefLabelYou: rgb('#8A5A00'),
+  briefLabelYou: rgb('#A67600'),
   briefLabelClaude: rgb('#3F6CC4'),
   rainbow_red: rgb('#D98888'),
   rainbow_orange: rgb('#D9A276'),
