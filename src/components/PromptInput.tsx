@@ -2,7 +2,7 @@ import React from 'react'
 import { readFile, unlink } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { t } from '../i18n.js'
-import { Box, Text, useInput, useTerminalSize, useTheme } from '../ui.js'
+import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
@@ -194,6 +194,11 @@ export function PromptInput({
     }
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
+  const helpScrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  // OverlayAbove reserves six terminal rows for the composer/status chrome;
+  // the help block also keeps one row below it. Its own final row is a
+  // persistent navigation hint, leaving the remainder to ScrollBox.
+  const helpViewportHeight = Math.max(3, Math.max(terminalRows - 6, 4) - 1)
 
   const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
   const overlayOpen =
@@ -491,6 +496,15 @@ export function PromptInput({
       return
     }
 
+    // Help is modal for modified keys and every Enter variant. Ctrl+V above
+    // is the intentional exception: paste closes Help and inserts visibly.
+    // Swallow here before editor/submit/interrupt branches can mutate hidden
+    // composer or working-turn state; plain typing still dismisses Help below.
+    if (helpOpen && (key.ctrl || key.meta || key.super || key.return || input.includes('\n') || input.includes('\r'))) {
+      event.stopImmediatePropagation()
+      return
+    }
+
     // Ctrl+G: edit the current draft in $VISUAL/$EDITOR (issue #123,
     // readline's edit-and-execute-command). The draft is written to a temp
     // file, the terminal is handed to the editor (Ink's alt-screen handoff),
@@ -619,6 +633,12 @@ export function PromptInput({
       handleEnter()
       return
     }
+    // Help is modal over the composer. Backtab must not cycle the session
+    // mode invisibly behind it, and plain Tab has no Help action.
+    if (helpOpen && key.tab) {
+      event.stopImmediatePropagation()
+      return
+    }
     // Shift+Tab cycles the configured session modes (default: 默认 →
     // 计划模式 → 完全访问; each mode bundles plan/sandbox/approval atoms —
     // see the `modes` config). Must precede the plain-Tab arms — the parser
@@ -642,6 +662,37 @@ export function PromptInput({
     if (key.tab && channel.working && value.trim() !== '') {
       queueSend(value)
       return
+    }
+    // Help is a viewport, not prompt history. It deliberately owns every
+    // vertical navigation event while visible; otherwise Up/Down silently
+    // walk the input history and the clipped command rows remain unreachable.
+    if (helpOpen) {
+      const page = Math.max(1, helpViewportHeight - 2)
+      if (key.upArrow || key.wheelUp) {
+        helpScrollRef.current?.scrollBy(key.wheelUp ? -3 : -1)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.downArrow || key.wheelDown) {
+        helpScrollRef.current?.scrollBy(key.wheelDown ? 3 : 1)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.pageUp || key.pageDown) {
+        helpScrollRef.current?.scrollBy(key.pageUp ? -page : page)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.home) {
+        helpScrollRef.current?.scrollTo(0)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.end) {
+        helpScrollRef.current?.scrollToBottom()
+        event.stopImmediatePropagation()
+        return
+      }
     }
     if (key.meta && key.upArrow) {
       // Alt+Up: pull the last pending message back for editing (pi/Codex).
@@ -956,10 +1007,15 @@ export function PromptInput({
       <OverlayAbove maxHeight={Math.max(terminalRows - 6, 4)}>
         {helpOpen && (
           <Box marginBottom={1}>
-            <HelpMenu commands={channel.commandList} />
+            <HelpMenu
+              commands={channel.commandList}
+              viewportHeight={helpViewportHeight}
+              viewportWidth={columns}
+              scrollRef={helpScrollRef}
+            />
           </Box>
         )}
-        {channel.pending.length > 0 && (
+        {!helpOpen && channel.pending.length > 0 && (
           <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
             {channel.pending.some(item => item.placement === 'steer') && (
               <Box flexDirection="column">

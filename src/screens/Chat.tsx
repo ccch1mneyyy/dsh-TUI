@@ -1465,13 +1465,21 @@ export function Chat({
     // Mouse wheel scrolls the transcript even while a question/approval/
     // dialog panel is open — those panels own arrow/Enter/Esc keys, but the
     // transcript above them should still be scrollable in fullscreen mode.
+    // Help is different: its own ScrollBox owns wheel input, so Chat must
+    // yield before stopping propagation or both covered layers would move.
     // Events only arrive with mouse tracking on; inline mode never sees
     // them, so this is a no-op there.
     if (key.wheelUp || key.wheelDown) {
+      if (helpOpen) return
       handle?.scrollBy(key.wheelUp ? -3 : 3)
       event.stopImmediatePropagation()
       return
     }
+    // Help is modal over Chat. Chat's listener registers before PromptInput's,
+    // so yield every remaining key before any global/custom shortcut, search,
+    // selection, or working-turn cancellation branch can mutate hidden state.
+    // PromptInput then owns Esc, navigation, Tab guards, and ordinary typing.
+    if (helpOpen) return
     // The questionnaire / approval panel / managed plugin dialog owns the
     // keyboard while one is pending (the panel's own useInput handles
     // ↑/↓/Space/Tab/Enter/Esc; the prompt input is unmounted, so nothing
@@ -1883,7 +1891,7 @@ export function Chat({
       setHistoryOpen(true)
       return
     }
-    if (key.shift && key.upArrow && !selectionActive) {
+    if (key.shift && key.upArrow && !selectionActive && !helpOpen) {
       enterSelection()
     } else if (selectionActive) {
       if (key.upArrow) {
@@ -1896,7 +1904,7 @@ export function Chat({
         setSelectionActive(false)
         setSelectedId(null)
       }
-    } else if (key.escape && channel.working) {
+    } else if (key.escape && channel.working && !helpOpen) {
       // CC's chat:cancel — esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
       // With messages queued for delivery, interrupt-and-deliver them right
@@ -1910,8 +1918,11 @@ export function Chat({
         channel.cancel()
       }
       event.stopImmediatePropagation()
-    } else if (isMod(key) && input === 'o') {
+    } else if (isMod(key) && input === 'o' && !helpOpen) {
       // Leaving transcript mode (Ctrl+O) — search was already handled above.
+      // Help is modal: toggling this state behind the overlay is invisible,
+      // then the next `/` unexpectedly opens transcript search instead of
+      // slash-command completion after Help closes.
       setExpanded(previous => !previous)
       // The toggle rewrites every thinking row's layout at once. The
       // ordinary scroll-based diff pushes rows into terminal scrollback on
@@ -1923,7 +1934,7 @@ export function Chat({
       // isn't process.stdout (test harnesses).
       const ink = instances.get(process.stdout) ?? instances.values().next().value
       ink?.reanchorViewport()
-    } else if (input === '/' && !key.ctrl && !key.meta && !key.super) {
+    } else if (input === '/' && !key.ctrl && !key.meta && !key.super && !helpOpen) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
       // search is active on the transcript screen where `/` isn't a command).
       if (expanded) {

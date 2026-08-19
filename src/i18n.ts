@@ -359,6 +359,10 @@ const dict = {
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
   'help-open-editor': { zh: 'ctrl+g 打开编辑器', en: 'ctrl+g to open editor' },
   'help-commands-title': { zh: '命令：', en: 'commands:' },
+  'help-scroll-hint': {
+    zh: '↑/↓ 滚动 · PgUp/PgDn 翻页 · Home/End 首尾 · Esc 关闭',
+    en: '↑/↓ scroll · PgUp/PgDn page · Home/End jump · Esc close',
+  },
   'tips-title': { zh: '使用技巧（快捷键 · 命令 · 工作流 · 个性化 · 避坑）', en: 'Usage tips (shortcuts · commands · workflow · display · gotchas)' },
   'tips-hint': { zh: '↑/↓ 滚动 · Esc 关闭', en: '↑/↓ scroll · Esc to close' },
 

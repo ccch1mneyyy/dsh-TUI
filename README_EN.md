@@ -146,7 +146,7 @@ so keep using `Ctrl`.
 |---|---|
 | Drag to select | In-app text selection, **copied on release** (OSC 52 with native `wl-copy`/`xclip`/`xsel` fallback; `load-buffer -w` inside tmux); the selection is cleared after copying and a "Copied N characters" notice pops up |
 | Double / triple click | Select word / line, copied on selection just the same |
-| Scroll wheel | Scroll the message list (±3 lines per notch) |
+| Scroll wheel | Only with fullscreen mouse tracking: scroll Help while it is open, otherwise scroll messages (±3 lines per notch); default inline mode does not deliver wheel events to the TUI |
 | `Esc` | Cancel an in-progress drag selection (no copy) |
 | Single-click a message line | Expand/collapse that line |
 | Click "load earlier messages" / "ctrl+e show previous N" | Load earlier messages / expand all |

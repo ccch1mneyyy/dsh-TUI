@@ -291,6 +291,11 @@ jobs:
       # /lang 中英切换，外部命令查不到映射回退注册表原文，窄终端中文不劈字。
       - run: node --import tsx/esm scripts/verify-i18n-command-descriptions.tsx
 
+      # /help 长命令面回归（issue #368）：80×24/80×18/60×18 均须保留提示，
+      # ↑/↓、翻页、Home/End 与滚轮可达首尾且不滚动底层 transcript；关闭重开
+      # 回顶，pending 预览只在 help 关闭后恢复，组合键不改写背后的 Chat 状态。
+      - run: node --import tsx/esm scripts/verify-help-scroll.tsx
+
       # 外部编辑器回归（issue #123）：Ctrl+G 的 $VISUAL/$EDITOR 解析
       # （引号拆分、优先级、未配置时 unavailable——无 vi 兜底）与临时文件
       # 往返（edited/unchanged/非零退出/启动失败）。假编辑器进程，无需 TTY。

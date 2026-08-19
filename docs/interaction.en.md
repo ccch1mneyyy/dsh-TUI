@@ -24,6 +24,7 @@
 | `Ctrl+R` | Open input-history search; repeat or press `Down` for the next result |
 | `Ctrl+L` | Clear and force a physical terminal redraw |
 | `?` | Open shortcut and command help when the input is empty |
+| In Help: `↑/↓`, `PgUp/PgDn`, `Home/End` | Scroll by line, page, or jump to either end; `Esc` closes |
 | `Shift+Up` | Enter message selection; arrows move, `Enter` expands one row, `Esc` exits |
 
 `/` has two meanings. In normal input it opens slash-command completion. In
