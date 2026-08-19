@@ -1,5 +1,6 @@
 import React from 'react'
-import { t as tr } from '../i18n.js'
+import { getLang, t as tr } from '../i18n.js'
+import { pickRandomTip, type Tip } from '../tips.js'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -73,12 +74,15 @@ export function LogoV2({
   effort,
   cwd,
   skipIntro = false,
+  tip,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
   /** Test seam: mount straight into the settled header (probes skip the intro). */
   skipIntro?: boolean
+  /** Test seam: pin the startup tip line (probes need a deterministic tip). */
+  tip?: Tip
 }): React.ReactNode {
   const [step, setStep] = React.useState(skipIntro ? OPENING_SEQUENCE.length : 0)
   const settled = step >= OPENING_SEQUENCE.length
@@ -114,6 +118,10 @@ export function LogoV2({
   const t = settled ? 0 : time
 
   const tagline = tr('logo-tagline')
+  // One random tip per mount: the settled header must not re-roll on every
+  // repaint (language switch, terminal resize), or the line would flicker.
+  // `tip` is a test seam; production always passes undefined and rolls.
+  const [randomTip] = React.useState<Tip>(() => tip ?? pickRandomTip())
   // Indent that centers the tagline under the whale art's bounding box.
   const welcomePad = showWhale
     ? Math.max(0, Math.round(WHALE_CENTER - stringWidth(tagline) / 2))
@@ -150,12 +158,8 @@ export function LogoV2({
           </Text>
           <Text wrap="truncate-end">
             <Text dimColor>{tr('logo-tip-prefix')}</Text>
-            /model
-            <Text dimColor> {tr('logo-tip-model')} · </Text>
-            /help
-            <Text dimColor> {tr('logo-tip-help')} · </Text>
-            Tab
-            <Text dimColor> {tr('logo-tip-tab')}</Text>
+            {getLang() === 'zh' ? randomTip.zh : randomTip.en}
+            <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
           </Text>
         </Box>
       </Box>

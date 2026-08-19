@@ -9,16 +9,17 @@
 | `Enter` | 空闲时发送；模型工作时把文本 steer 到当前回合的下一步边界；菜单打开时确认选项 |
 | `Tab` | 补全 `/` 命令或 `@` 文件；模型工作且输入非空时排入当前回合之后的 follow-up |
 | `Ctrl+Enter` | 打断当前回合并立即处理输入消息 |
-| `Shift+Enter` / `Ctrl+J` | 在光标处插入换行；终端无法上报 Shift 修饰键时可用 `Ctrl+J`（LF）兜底 |
+| `Shift+Enter` / `Ctrl+J` | 在光标处插入换行；终端无法上报 Shift 修饰键时可用 `Ctrl+J`（LF）兜底，macOS Terminal.app 用 `Option+Enter` |
 | `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问） |
 | `Alt/Option+Up` | 把最后一条尚未处理的消息取回输入框编辑 |
 | `Up/Down` | 菜单选择；普通输入中浏览历史或在多行文本间移动 |
 | `Ctrl+V` | 从系统剪贴板插入文本或文件；图片作为持久附件发送 |
 | `Ctrl+X` | 用外部编辑器（`$VISUAL` → `$EDITOR` → vi）编辑当前输入，保存退出后回填；`:cq` 或非零退出保留原稿 |
-| `Esc` | 按当前模式关闭菜单/选区/弹窗；有输入时清空；模型工作时中断；空输入连续两次打开 rewind |
+| `Esc` | 层级：关帮助 → 关命令菜单 → 关文件菜单（仅当前 `@` token）→ 中断回合并重投 pending 消息 → 有输入时清空 → 空输入连续两次 = 时间回溯 rewind；fullscreen 下有鼠标选区时优先取消选区（不复制） |
 | `Ctrl+C` | 工作时中断；空闲且有输入时清空；空输入时连续两次退出 |
 | `Ctrl+D` | 空闲时连续两次退出 |
 | `Ctrl+O` | 切换 transcript/verbose 详情，展开思考与完整工具参数/输出 |
+| `Ctrl+P` | 切换启动时加载的 loaded-context 面板（面板在屏时有效） |
 | `Ctrl+T` | 打开轨迹场景（等同 `/trace`）；场景内 `q`/`Esc` 返回对话 |
 | `Ctrl+R` | 打开输入历史搜索；重复按或 `Down` 移到下一项 |
 | `Ctrl+L` | 强制清理并重绘物理终端 |
@@ -51,7 +52,8 @@ Bracketed paste（右键或终端原生粘贴）会原样插入，包括换行�
 ## @ 文件引用
 
 在消息**任意位置**输入 `@` 会打开文件补全菜单：继续输入路径片段过滤，`Tab`/
-`Enter` 选择，目录可继续深入。发送消息时，文本文件内容或目录列表会自动附加
+`Enter` 选择，目录可继续深入。匹配路径前缀**或 basename**（`@ink` 命中
+`src/ink/Box.js`）；`Esc` 只关当前 `@` token 的菜单。发送消息时，文本文件内容或目录列表会自动附加
 到消息中；PNG、JPEG、WebP、GIF 会通过 Harness 附件库作为真正的图片块发送。
 文件读取走当前 workspace 的 FS 服务，提供者管理的 workspace 同样适用。
 
@@ -124,6 +126,11 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的
 3. 回放该边界前的历史。
 4. 把原消息放回输入框供修改和重发。
 
+- 边界取该消息所属回合**开始之前**；**不能回退到第一条消息**。
+- 若模型正在工作：先取消回合并等落定（最长 30s）。
+- 回退后的分支不算子 agent（只写 `parentSession`，无 origin 标记），继续用
+  当前模型路由 + 会话自己的 preset。
+
 插件可以介入这一步（`tui/rewind-prompt` 决策事件）：否决此次回退（给出原因），
 或在确认页提供额外的回退模式——例如"回退会话 + 恢复此间修改的文件"。确认页
 第一项恒为"仅回退会话"；选择插件模式后，回退完成时插件会收到
@@ -140,6 +147,32 @@ prompt + 已有历史）做一次**无工具、单轮**的模型调用，答案�
 - **不打断主回合**：模型正在流式输出时也可以触发，主任务继续运行。
 - 面板内 `↑`/`↓` 滚动，`Space`/`Enter`/`Esc` 关闭，`c` 复制答案；等待答案
   时 `Esc` 取消。
+- 再次触发 `/btw` 会中止上一个侧问。
+
+### 轨迹场景（/trace / Ctrl+T）
+
+整屏场景（不污染 scrollback），查看会话全程的时间线：
+
+| 按键 | 作用 |
+| --- | --- |
+| `←`/`→`（或 `h`） | 切换 时间线 / 热点 视图 |
+| `↑` `↓` / `PgUp` `PgDn` | 移动、翻页 |
+| `[` / `]` | 跳上 / 下一个失败点 |
+| `{` / `}` | 跳上一轮 / 下一轮 |
+| `/` | 查询行：`tool:` `kind:` `turn:` `err:` `run:` `>10s` `tok>1k` 前缀，多条 AND，命中列原位高亮 |
+| `m` | 循环投影模式（等分 / 墙钟 / 压缩空闲） |
+| `g` / `G` | 跳到顶部 / 底部 |
+| `Enter` | 展开详情；`j`/`k` 在详情内翻页 |
+| `t`（热点视图） | 循环排序（耗时 / 次数 / token） |
+| `q` / `Esc` | 退出；Esc 三层：收详情 → 清查询 → 关闭 |
+
+### /settings 设置编辑器
+
+`/settings` 打开插件设置编辑器，按命名空间读取/编辑。编辑是**暂存制**：
+`↑`/`↓` 移动、`Enter` 展开/切换/编辑，`s` 保存 / `d` 放弃 / `Esc` 先丢弃
+脏区再退出。dsh-tui 自身命名空间的字段写入 settings.yaml 用户层并**实时生效**
+（`lang`、`statusBar.*` 等）；未声明 TUI 区块的命名空间以只读形式列出，需
+手工编辑 `~/.dsh/settings.yaml`。
 
 ### Model 与 preset
 
@@ -176,7 +209,12 @@ scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识�
 | 滚轮 | 滚动会话消息列表 |
 | 拖拽 | 选择文本，松开后立即复制并清除选区 |
 | 双击/三击 | 选择单词/整行并复制 |
-| `Esc` | 取消正在进行的拖拽，不复制 |
+| `Esc` | 取消正在进行的拖拽（或现有选区），不复制 |
+| 单击消息行 | 展开 / 收起该行 |
+| 单击「加载更早消息」/「ctrl+e 显示前 N 条」 | 加载更早消息 / 展开全部 |
+| 单击 StickyHeader / 「↓ N new messages」 | 跳回固定消息处 / 滚动到底部 |
+| 单击超链接 | 打开浏览器 |
+| 键盘扩展选区 | 有选区时 `Shift+←/→/↑/↓/Home/End` 扩展 / 收缩（跨行环绕） |
 
 复制优先使用 OSC 52；本地终端可回退到 `wl-copy`、`xclip` 或 `xsel`，tmux 使用
 `load-buffer -w`。设置 `DSH_TUI_DISABLE_MOUSE=1` 可临时关闭 fullscreen 鼠标。
@@ -192,6 +230,9 @@ scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识�
 | `Tab` | 切换到自定义文本回答 |
 | `Enter` | 提交当前题 |
 | `Esc` | 取消整批提问，模型收到 `ASK_CANCELLED`（harness 侧中止仍报 `ASK_ABORTED`） |
+
+**最后一行是自由输入行**：直接在选项行打字 = 附加该选项标签 + 自定义文本一起
+提交（不必先 `Tab`），`Tab` 直达输入行。
 
 一批多题以及并发子代理提问会按 FIFO 逐题显示。完成后，问答摘要折叠进本地
 transcript。
@@ -232,6 +273,8 @@ transcript。
 | `Enter` | 提交当前焦点项 |
 | `Esc` / `Ctrl+C` | 拒绝（fail closed） |
 
+协议只有「允许一次 / 拒绝」两种结果，**没有「总是允许」**。
+
 ## Slash Commands
 
 命令菜单由本地命令与 DSH 命令注册表合并而成。输入 `/` 查看当前组合真正可用的
@@ -240,23 +283,29 @@ transcript。
 
 | 分组 | 命令 |
 | --- | --- |
-| 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`） |
-| 状态 | `/context`、`/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents` |
+| 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`）、`/rewind`（时间回溯，同空输入双击 `Esc`） |
+| 状态 | `/context`、`/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents`、`/settings` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
-| 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp` |
+| 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/skills`、`/plugins`（`check <路径>` 校验插件清单） |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |
-| 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit` |
+| 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit`（别名 `/quit`、`/q`） |
 | 注册表 | `/plan`、`/goal`，以及当前 DSH 组合注册的其他命令 |
 
 补充语法：
 
-- `/activity` 打开动画选择器；`/activity frames <name>` 直接设置；
-  `/activity status` 查看状态。
+- `/activity` 打开动画选择器；`/activity frames <name>` 直接设置（帧名
+  30 个：`random` 随机 + `claude` `star2` `sand` `triangle` `box` `box2`
+  `corners` `point` `layer` `flip` `aesthetic` `hamburger` `moon` `moon8`
+  `comet` `breathe` `dots` `arrow` `spark` `bar` `braille` `arc` `circle`
+  `grow` `noise` `bounce` `rainbow` `dqpb` `toggle`，默认 `moon8`）；
+  `/activity status` 查看当前选择。
 - `/preset <id>` 与 `/preset status` 见配置文档。
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
   `/effort status` 查看当前档位。
 - `/theme <name>` 与 `/theme status` 见主题文档。
 - `/lang` 切换中英界面语言（见「界面语言」）。
+- `/compact` 压缩会话历史；minimal preset（仅 bash+编辑器）下不可用。
+- `/thinking` 扩展思考显示开关，仅本次界面状态、**不持久化**。
 - 启动后会后台检查 npm 新版本；发现更新时会提示。检测遵循 npm registry
   配置（`NPM_CONFIG_REGISTRY` 或 `~/.npmrc`），镜像源用户看到的就是安装源
   的最新版。`/update` 更新已安装的

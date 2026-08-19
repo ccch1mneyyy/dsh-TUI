@@ -115,6 +115,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'workspace', description: 'Resume, rename, or open a workspace' },
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
+  { name: 'tips', description: 'Show usage tips and shortcuts' },
   { name: 'exit', description: 'Exit dsh-tui' },
   { name: 'quit', description: 'Exit dsh-tui', tag: 'alias of /exit' },
   { name: 'q', description: 'Exit dsh-tui', tag: 'alias of /exit' },

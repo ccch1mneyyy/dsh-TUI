@@ -43,6 +43,16 @@ export const FRAME_PRESETS: Record<string, FramePreset> = {
   // kimi-code MoonLoader 同款：8 帧 emoji 月相，120ms 一帧，比半圆版更丝滑。
   // 不带 \uFE0E：保留彩色 emoji 渲染（Windows Terminal 等现代终端效果最佳）。
   moon8: { frames: ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'], intervalMs: 120 },
+  // 鲸鱼喷水：🐳 固定，水柱升起（· → | → ║）再回落，顶珠 ° 模拟水花（对齐 pi 版）。
+  'whale-spout': {
+    frames: ['🐳  ', '🐳° ', '🐳|°', '🐳║°', '🐳|°', '🐳° ', '🐳  '],
+    intervalMs: 160,
+  },
+  // 鲸鱼转圈：🐳 + 环绕方向指示（逆时针转圈语义，对齐 pi 版）。
+  'whale-spin': {
+    frames: ['🐳→', '🐳↘', '🐳↓', '🐳↙', '🐳←', '🐳↖', '🐳↑', '🐳↗'],
+    intervalMs: 150,
+  },
   comet: {
     frames: ['●    ', ' ●   ', '  ●  ', '   ● ', '    ●', '   ● ', '  ●  ', ' ●   '],
     intervalMs: 160,

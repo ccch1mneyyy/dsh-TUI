@@ -839,9 +839,7 @@ export function PromptInput({
       }
       escPendingRef.current = true
       channel.notify(
-        value.length === 0
-          ? 'Press Esc again to rewind'
-          : 'Press Esc again to clear',
+        value.length === 0 ? t('esc-again-rewind') : t('esc-again-clear'),
       )
       escTimerRef.current = setTimeout(() => {
         escPendingRef.current = false

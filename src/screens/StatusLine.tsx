@@ -152,11 +152,11 @@ export function StatusLine({
   // summary (the live working line itself moves to the spinner slot above
   // the input while a turn runs, so the two never duplicate).
   const hint = selectionActive
-    ? 'esc to return to input'
+    ? t('statusline-hint-select')
     : channel.working
-      ? 'esc to interrupt'
+      ? t('statusline-hint-working')
       : !helpOpen
-        ? '? for shortcuts'
+        ? t('statusline-hint-shortcuts')
         : ''
   const activity = channel.workingActivity
   const showActivity =

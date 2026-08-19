@@ -51,6 +51,7 @@ import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
 import { BtwPanel } from '../components/BtwPanel.js'
+import { TipsPanel } from '../components/TipsPanel.js'
 import { setClipboard } from '../ink/termio/osc.js'
 import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
@@ -347,6 +348,8 @@ export function Chat({
     btwAbortRef.current = null
     setBtw(null)
   }
+  /** /tips usage-tips overlay: pure UI state, no session side effects. */
+  const [tipsOpen, setTipsOpen] = React.useState(false)
   React.useEffect(() => () => btwAbortRef.current?.abort(), [])
   /**
    * The trajectory scene (issue #80 evolution). Unlike every other overlay
@@ -1137,6 +1140,10 @@ export function Chat({
         })
         return true
       }
+      case 'tips':
+        setHelpOpen(false)
+        setTipsOpen(true)
+        return true
       case 'connect':
         setHelpOpen(false)
         channel.pushLocal('/connect', [t('connect-none')])
@@ -2017,7 +2024,7 @@ export function Chat({
   const promptSelectionActive =
     selectionActive || modelPickerOpen || skillsPickerOpen || workspacePickerOpen || workspaceFlow !== null || activityPickerOpen ||
     effortSliderOpen || presetPickerOpen || themePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen ||
-    btw !== null
+    btw !== null || tipsOpen
 
   // The trajectory scene replaces the conversation for as long as it is open.
   // Rendering it INSTEAD of (not above) the transcript is what makes it a
@@ -2042,7 +2049,7 @@ export function Chat({
     modelPickerOpen || skillsPickerOpen ||
     activityPickerOpen || (effortSliderOpen && effortOptions.length > 1) ||
     (presetPickerOpen && presetOptions.length > 0) || themePickerOpen || historyOpen ||
-    rewindOpen || searchOpen
+    rewindOpen || searchOpen || tipsOpen
 
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
@@ -2167,6 +2174,10 @@ export function Chat({
             onDecide={value => dialogs.decide(dialogSnapshot.key, value)}
             onCancel={() => dialogs.cancel(dialogSnapshot.key)}
           />
+        ) : tipsOpen ? (
+          <Box flexDirection="column" marginTop={1}>
+            <TipsPanel onClose={() => setTipsOpen(false)} />
+          </Box>
         ) : btw !== null ? (
           <Box flexDirection="column" marginTop={1}>
             <BtwPanel
