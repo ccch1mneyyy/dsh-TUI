@@ -39,48 +39,113 @@ export function attachHerdrIntegration(
 
   const run = options.run ?? ((file, args) => execFileNoThrow(file, args, { timeout: 2000 }))
   let sequence = 0
-  let pending = Promise.resolve()
-  let lastReport = ''
-  const report = (): void => {
+  let lastConfirmedReport = ''
+  let disposed = false
+
+  let running = false
+  let notifySettled: (() => void) | undefined
+  let settledPromise: Promise<void> = Promise.resolve()
+
+  const ensureSettledPromise = (): void => {
+    if (!notifySettled) {
+      settledPromise = new Promise<void>((resolve) => {
+        notifySettled = resolve
+      })
+    }
+  }
+
+  const triggerSettled = (): void => {
+    if (notifySettled) {
+      const fn = notifySettled
+      notifySettled = undefined
+      fn()
+    }
+  }
+
+  const computeState = (): { state: 'idle' | 'working' | 'blocked'; blocked: boolean } => {
     const blocked = options.questions.getSnapshot() !== null || options.approvals.getSnapshot() !== null
     const state = blocked ? 'blocked' : options.channel.working ? 'working' : 'idle'
-    if (state === lastReport) return
-    lastReport = state
-    const seq = String(++sequence)
-    pending = pending.then(async () => {
-      await run(executable, [
-        'pane', 'report-agent', paneId,
-        '--source', 'custom:dsh-tui',
-        '--agent', 'dsh-tui',
-        '--state', state,
-        ...(blocked ? ['--message', 'Waiting for user input'] : []),
-        '--seq', seq,
-      ])
-    })
+    return { state, blocked }
   }
+
+  const processQueue = async (): Promise<void> => {
+    if (running) return
+    running = true
+
+    try {
+      while (!disposed) {
+        const { state, blocked } = computeState()
+        if (state === lastConfirmedReport) {
+          break
+        }
+
+        const seq = String(++sequence)
+        try {
+          const res = await run(executable, [
+            'pane', 'report-agent', paneId,
+            '--source', 'custom:dsh-tui',
+            '--agent', 'dsh-tui',
+            '--state', state,
+            ...(blocked ? ['--message', 'Waiting for user input'] : []),
+            '--seq', seq,
+          ])
+          if (res?.code === 0) {
+            lastConfirmedReport = state
+          } else {
+            break
+          }
+        } catch {
+          break
+        }
+      }
+    } finally {
+      running = false
+      triggerSettled()
+    }
+  }
+
+  const report = (): void => {
+    if (disposed) return
+    const { state } = computeState()
+    if (state === lastConfirmedReport && !running) return
+
+    ensureSettledPromise()
+    void processQueue()
+  }
+
   const unsubscribes = [
     options.channel.subscribe(report),
     options.questions.subscribe(report),
     options.approvals.subscribe(report),
   ]
   report()
+
   let disposePromise: Promise<void> | undefined
 
   return {
-    settled: () => pending,
+    settled: () => (running ? settledPromise : Promise.resolve()),
     dispose: () => {
       if (disposePromise !== undefined) return disposePromise
+      disposed = true
       for (const unsubscribe of unsubscribes) unsubscribe()
-      const seq = String(++sequence)
-      pending = pending.then(async () => {
-        await run(executable, [
-          'pane', 'release-agent', paneId,
-          '--source', 'custom:dsh-tui',
-          '--agent', 'dsh-tui',
-          '--seq', seq,
-        ])
-      })
-      disposePromise = pending
+
+      disposePromise = (async () => {
+        while (running) {
+          await settledPromise
+        }
+        const seq = String(++sequence)
+        try {
+          await run(executable, [
+            'pane', 'release-agent', paneId,
+            '--source', 'custom:dsh-tui',
+            '--agent', 'dsh-tui',
+            '--seq', seq,
+          ])
+        } catch {
+          // Rejection isolated
+        }
+      })()
+
       return disposePromise
     },
   }
