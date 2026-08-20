@@ -167,7 +167,7 @@ const stubAgentCtx = { on: () => () => {} }
 
 let forkSeq = 0
 
-function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { followupTexts: string[] }) {
+function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { followupTexts: string[]; cancelCalls: number }) {
   return {
     id,
     status: 'idle',
@@ -179,7 +179,7 @@ function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { fo
     },
     steer() {},
     // interruptAndDeliver aborts before re-queueing.
-    cancel() {},
+    cancel() { captured.cancelCalls += 1 },
     inbox: { remove: () => true },
   }
 }
@@ -219,7 +219,7 @@ function makeServices(captured: { followupTexts: string[]; compactCalls: string[
 
 // ── harness: real cordis root + real channel + real Chat ────────────────
 const ctx = new Context()
-const captured = { followupTexts: [] as string[], compactCalls: [] as string[] }
+const captured = { followupTexts: [] as string[], compactCalls: [] as string[], cancelCalls: 0 }
 const services = makeServices(captured)
 for (const [key, value] of Object.entries(services)) {
   // Plain-data services: provide them on the root so channel's ctx.get
@@ -232,7 +232,8 @@ for (const [key, value] of Object.entries(services)) {
 ctx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
 await sleep(60)
 
-const channel = createChannel(ctx as never, makeAgent('a1', makeEvents(), captured) as never, {
+const liveAgent = makeAgent('a1', makeEvents(), captured)
+const channel = createChannel(ctx as never, liveAgent as never, {
   model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
 })
 
@@ -420,6 +421,7 @@ await sleep(800)
   const dispose = decisionCtx.on('tui/input', event =>
     event.text === '插队文本' ? { cancel: true, reason: '插队被拦截' } : undefined)
   const before = captured.followupTexts.length
+  const cancelBefore = captured.cancelCalls
   channel.interruptAndDeliver(['插队文本'])
   await sleep(700) // the fake has no whenIdle → 200ms fallback timer + decision
   check('interruptAndDeliver: the tui/input veto applies to the Ctrl+Enter path',
@@ -430,6 +432,21 @@ await sleep(800)
   await sleep(700)
   check('interruptAndDeliver: the re-queue delivers without a veto',
     captured.followupTexts.some(text => text.includes('插队放行')))
+  check('interruptAndDeliver: a vetoed retry remains deliverable and cancel runs once',
+    captured.cancelCalls === cancelBefore + 1, String(captured.cancelCalls))
+
+  // The fake does not emit turn/end on cancel. Once a real turn/end arrives,
+  // the next interrupt must be allowed to start a fresh cancellation.
+  ;(ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(
+    'session/event',
+    liveAgent.session,
+    { type: 'turn/end', data: { turn: 99, reason: { kind: 'completed' } } },
+  )
+  channel.interruptAndDeliver(['终止后新插队'])
+  await sleep(700)
+  check('interruptAndDeliver: turn/end permits a fresh cancel',
+    captured.cancelCalls === cancelBefore + 2 && captured.followupTexts.some(text => text.includes('终止后新插队')),
+    JSON.stringify({ cancelCalls: captured.cancelCalls, followups: captured.followupTexts }))
 }
 
 // ── 3. tui/input crash isolation ────────────────────────────────────────

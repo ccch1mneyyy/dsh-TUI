@@ -2194,15 +2194,19 @@ export function createChannel(
     },
     interruptAndDeliver(texts: readonly string[]): number {
       const queued = texts.map(text => text.trim()).filter(text => text !== '')
-      if (queued.length === 0 || cancelInFlight) return 0
+      if (queued.length === 0) return 0
       // No keepInbox: the parked copies are dropped (their discard events
       // retire the preview), then each text is re-queued as a fresh
       // followup. dsh-agent's cancel-convergence wake latch accepts this
       // wake immediately after cancel and starts it once the aborted turn
       // retires; waiting for whenIdle is unsafe because it also follows
-      // replacement work and may never settle.
-      cancelInFlight = true
-      agent.cancel({ kind: 'user' })
+      // replacement work and may never settle. If cancellation is already
+      // in flight, keep the existing abort and still replace the pending
+      // interrupt delivery; fake/embedded agents may not emit turn/end.
+      if (!cancelInFlight) {
+        cancelInFlight = true
+        agent.cancel({ kind: 'user' })
+      }
       const token = ++interruptSeq
       const deliver = (): void => {
         // A second interrupt while the abort is still settling must not
