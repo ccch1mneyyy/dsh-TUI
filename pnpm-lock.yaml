@@ -54,8 +54,8 @@ importers:
         specifier: ^8.0.4
         version: 8.0.4
       dsh-working-activity:
-        specifier: ^0.3.2
-        version: 0.3.2(a4d371ed020b800e4748372543b5e822)
+        specifier: ^0.3.3
+        version: 0.3.3(a4d371ed020b800e4748372543b5e822)
       emoji-regex:
         specifier: ^10.0.0
         version: 10.6.0
@@ -2005,8 +2005,8 @@ packages:
     resolution: {integrity: sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==}
     engines: {node: '>=0.3.1'}
 
-  dsh-working-activity@0.3.2:
-    resolution: {integrity: sha512-IF/WoSUupujUK6fxnxjAkuo2u4cfrM87xkZkk6Df9j3e1A9SJYgM1I4wQsvrEATtPuoEDPotfonFyeNXK3eYsQ==}
+  dsh-working-activity@0.3.3:
+    resolution: {integrity: sha512-jirrLTkQ+8nYLp66b6ImFM2ogSvYLa0CPSi1mtqJneKsE4PuNTYNIxfnMCHcaZDhlMPCFOMyM2jc69rOYq7Dbg==}
     engines: {node: ^22.19 || >=24}
     peerDependencies:
       '@deepseek-ai/cordis': ^4.0.1
@@ -4098,7 +4098,7 @@ snapshots:
 
   diff@9.0.0: {}
 
-  dsh-working-activity@0.3.2(a4d371ed020b800e4748372543b5e822):
+  dsh-working-activity@0.3.3(a4d371ed020b800e4748372543b5e822):
     dependencies:
       '@deepseek-ai/cordis': 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
       '@deepseek-ai/dsh-agent': 0.1.0-rc.6(8ed22869c606962877dc3554f51d04e3)

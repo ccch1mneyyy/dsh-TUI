@@ -161,7 +161,7 @@
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^3.0.0 || ^4.0.0",
     "diff": "^8.0.4",
-    "dsh-working-activity": "^0.3.2",
+    "dsh-working-activity": "^0.3.3",
     "emoji-regex": "^10.0.0",
     "figures": "^6.1.0",
     "get-east-asian-width": "^1.0.0",
