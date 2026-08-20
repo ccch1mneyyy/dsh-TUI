@@ -6,6 +6,10 @@ import { extname } from 'node:path'
 import type { ToolFileDiff } from '../dsh-adapter/channel.js'
 import type { Color } from '../ink/styles.js'
 import { getCliHighlightPromise, type CliHighlight } from '../cc/cliHighlight.js'
+import { SYNTAX_CLASS_TO_TOKEN, chalkFromToken } from '../cc/syntaxTheme.js'
+// Backward-compatible re-export: repro scripts import chalkFromToken from
+// this module's old home.
+export { chalkFromToken } from '../cc/syntaxTheme.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
@@ -61,62 +65,8 @@ const expandTabs = (text: string): string => text.replaceAll('\t', '   ')
 
 // --- syntax highlighting ----------------------------------------------------
 
-/** highlight.js token classes → theme syntax tokens. `default` catches
- *  every unmapped class so cli-highlight's own yellow never leaks through
- *  (issue #250, P2-6). */
-const SYNTAX_CLASS_TO_TOKEN: Record<string, string> = {
-  keyword: 'syntaxKeyword',
-  built_in: 'syntaxKeyword',
-  literal: 'syntaxKeyword',
-  string: 'syntaxString',
-  subst: 'syntaxString',
-  quote: 'syntaxString',
-  comment: 'syntaxComment',
-  number: 'syntaxNumber',
-  title: 'syntaxFunction',
-  'title.function_': 'syntaxFunction',
-  function: 'syntaxFunction',
-  'title.class_': 'syntaxType',
-  type: 'syntaxType',
-  class: 'syntaxType',
-  tag: 'syntaxType',
-  name: 'syntaxType',
-  attr: 'syntaxVariable',
-  attribute: 'syntaxVariable',
-  variable: 'syntaxVariable',
-  'template-variable': 'syntaxVariable',
-  params: 'syntaxVariable',
-  operator: 'syntaxOperator',
-  punctuation: 'syntaxPunctuation',
-  meta: 'syntaxPunctuation',
-  symbol: 'syntaxConstant',
-  regexp: 'syntaxConstant',
-  default: 'syntaxVariable',
-}
-
-/** chalk style for one raw theme value. Accepts every form the theme
- *  loader documents: #rgb, #rrggbb, #rrggbbaa (alpha stripped), rgb() with
- *  or without spaces, ansi256(n), ansi:name (issue #250, P2-5). */
-export function chalkFromToken(token: string): (text: string) => string {
-  let match = /^#([0-9a-fA-F]{3})$/.exec(token)
-  if (match !== null) {
-    const [r, g, b] = match[1]!.split('').map(c => parseInt(c + c, 16))
-    return chalk.rgb(r!, g!, b!)
-  }
-  match = /^#([0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?$/.exec(token)
-  if (match !== null) return chalk.hex(`#${match[1]}`)
-  match = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(token)
-  if (match !== null) return chalk.rgb(Number(match[1]), Number(match[2]), Number(match[3]))
-  match = /^ansi256\((\d+)\)$/.exec(token)
-  if (match !== null) return chalk.ansi256(Number(match[1]))
-  match = /^ansi:(\w+)$/.exec(token)
-  if (match !== null) {
-    const name = match[1] === 'blackBright' ? 'gray' : match[1]
-    const style = (chalk as unknown as Record<string, ((text: string) => string) | undefined>)[name]
-    if (style !== undefined) return style
-  }
-  return (text: string) => text
-}
+// The hljs-class → theme-token map and chalkFromToken live in
+// ../cc/syntaxTheme.ts (shared with the markdown code-block renderer).
 
 /** ANSI 16-color SGR codes → rgb() strings (the dark-ansi palette path). */
 const ANSI16: Record<number, string> = {

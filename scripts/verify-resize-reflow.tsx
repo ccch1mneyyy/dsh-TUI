@@ -205,7 +205,13 @@ function makeHarness(cols: number, rows: number) {
     const buffer = term.buffer.active
     const lines = Array.from({ length: term.rows }, (_, y) =>
       (buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
-    const divider = lines.findLastIndex(line => /^─{8,}$/.test(line.trim()))
+    // Anchor: the LAST border row in the frame. The prompt box's own border
+    // used to render as a plain ─ row (round style with borderLeft/Right off);
+    // EffortInputBorder draws it as ╭─╮/╰─╯ with corners. Either shape is the
+    // bottom border of the frame, and everything from it down is the chrome —
+    // the logo header with its RANDOM startup tip must stay above the cut,
+    // or two independent mounts can never match.
+    const divider = lines.findLastIndex(line => /^(?:─{8,}|[╭╰]─{8,}[╮╯])$/.test(line.trim()))
     return lines.slice(divider === -1 ? 0 : divider)
       .filter(line => line !== '')
       .join('\n')

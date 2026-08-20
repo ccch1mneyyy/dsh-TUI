@@ -102,8 +102,8 @@ export function StreamingMarkdown({
 
   return (
     <Box flexDirection="column" gap={1}>
-      {stablePrefix && <Markdown dimColor>{stablePrefix}</Markdown>}
-      {hasDistinctSuffix && <Markdown dimColor cacheTokens={false}>{unstableSuffix}</Markdown>}
+      {stablePrefix && <Markdown dimColor={dimColor}>{stablePrefix}</Markdown>}
+      {hasDistinctSuffix && <Markdown dimColor={dimColor} cacheTokens={false}>{unstableSuffix}</Markdown>}
     </Box>
   )
 }

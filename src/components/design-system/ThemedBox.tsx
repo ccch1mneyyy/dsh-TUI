@@ -60,7 +60,10 @@ function resolveColor(
   ) {
     return color as Color
   }
-  return theme[color as keyof Theme] as Color
+  // Theme keys may be '' ("no color" in that theme) - collapse to undefined
+  // so empty tokens render as no background/foreground instead of feeding
+  // an empty color string to Ink.
+  return (theme[color as keyof Theme] as Color) || undefined
 }
 
 /**

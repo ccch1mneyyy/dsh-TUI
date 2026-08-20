@@ -20,6 +20,8 @@ export type Theme = {
   autoAccept: string
   bashBorder: string
   claude: string
+  toolNameMutate: string
+  toolNameExec: string
   claudeShimmer: string
   claudeBlue_FOR_SYSTEM_SPINNER: string
   claudeBlueShimmer_FOR_SYSTEM_SPINNER: string
@@ -171,6 +173,8 @@ const darkTheme: Theme = {
   autoAccept: rgb('#B3A0D4'), // Soft violet
   bashBorder: rgb('#D194AE'), // Mist rose
   claude: rgb('#7DA1DE'), // Accent Soft — mist brand blue
+  toolNameMutate: rgb('#E5C07B'), // soft gold — Edit/Write (warm accent)
+  toolNameExec: rgb('#56B6C2'), // mist cyan — Bash/exec tools
   claudeShimmer: rgb('#ABC2EC'), // Border Blue for shimmer effect
   claudeBlue_FOR_SYSTEM_SPINNER: rgb('#7DA1DE'),
   claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#ABC2EC'),
@@ -206,16 +210,16 @@ const darkTheme: Theme = {
   toolDotWrite: rgb('#B3A0D4'), // soft violet — edit/write
   toolDotWeb: rgb('#7DA1DE'), // mist blue — web search/fetch
   toolDotTask: rgb('#D194AE'), // mist rose — subagent/jobs
-  syntaxKeyword: rgb('#8FA8E8'), // mist blue
-  syntaxString: rgb('#9FBF8F'), // soft sage
+  syntaxKeyword: rgb('#82AAFF'), // vivid blue (theme anchor)
+  syntaxString: rgb('#E5C07B'), // gold - echoes the user-message gold accent
   syntaxComment: rgb('#6B7280'), // neutral grey
-  syntaxNumber: rgb('#D9A97E'), // warm tan
-  syntaxFunction: rgb('#82B8C7'), // cyan blue
-  syntaxType: rgb('#B39DDB'), // soft violet
+  syntaxNumber: rgb('#D19A66'), // warm orange
+  syntaxFunction: rgb('#56B6C2'), // vivid cyan
+  syntaxType: rgb('#C678DD'), // vivid violet
   syntaxVariable: rgb('#C9D1D9'), // near-text
   syntaxOperator: rgb('#93A1B0'), // blue grey
   syntaxPunctuation: rgb('#7A8694'), // dim blue grey
-  syntaxConstant: rgb('#D98C9B'), // soft rose
+  syntaxConstant: rgb('#E48A9B'), // soft rose
   red_FOR_SUBAGENTS_ONLY: rgb('#D4685E'),
   blue_FOR_SUBAGENTS_ONLY: rgb('#7496D6'),
   green_FOR_SUBAGENTS_ONLY: rgb('#66B285'),
@@ -228,8 +232,8 @@ const darkTheme: Theme = {
   chromeYellow: rgb('#D8B270'),
   clawd_body: rgb('#D98A63'), // Warm mascot orange
   clawd_background: rgb('#000000'),
-  userMessageBackground: rgb('#292D36'),
-  userMessageBackgroundHover: rgb('#343945'),
+  userMessageBackground: '', // user turn: no fill, gold bold text only (Kimi style)
+  userMessageBackgroundHover: rgb('#3B5BDB'), // hover/expand: blue block with gold text
   messageActionsBackground: rgb('#2E333D'),
   selectionBg: rgb('#3B4A66'), // Mist-blue tint on dark
   bashMessageBackgroundColor: rgb('#2C3038'),
@@ -238,7 +242,7 @@ const darkTheme: Theme = {
   rate_limit_empty: rgb('#3C414B'),
   fastMode: rgb('#E09A58'),
   fastModeShimmer: rgb('#EAB478'),
-  briefLabelYou: rgb('#ABC2EC'),
+  briefLabelYou: rgb('#FFDF80'),
   briefLabelClaude: rgb('#7DA1DE'),
   rainbow_red: rgb('#D98F8A'),
   rainbow_orange: rgb('#D9A97E'),
@@ -266,6 +270,8 @@ const lightTheme: Theme = {
   autoAccept: rgb('#9B86B8'), // Muted violet (from surface-alt pink-mist)
   bashBorder: rgb('#C07A93'), // Muted rose (from surface-alt pink-mist)
   claude: rgb('#3F6CC4'), // Primary Blue — brand
+  toolNameMutate: rgb('#8A6A00'), // deep gold - Edit/Write (warm accent)
+  toolNameExec: rgb('#0F7A8A'), // deep cyan - Bash/exec tools
   claudeShimmer: rgb('#5E88CC'), // Accent Blue for shimmer effect
   claudeBlue_FOR_SYSTEM_SPINNER: rgb('#3F6CC4'),
   claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#5E88CC'),
@@ -301,16 +307,16 @@ const lightTheme: Theme = {
   toolDotWrite: rgb('#7A5CA8'),
   toolDotWeb: rgb('#4A63A8'),
   toolDotTask: rgb('#B04A5A'),
-  syntaxKeyword: rgb('#4A63A8'),
-  syntaxString: rgb('#4E7A4E'),
+  syntaxKeyword: rgb('#2557C7'),
+  syntaxString: rgb('#8A6A00'),
   syntaxComment: rgb('#8A8F98'),
-  syntaxNumber: rgb('#A96B32'),
-  syntaxFunction: rgb('#3F7E8F'),
-  syntaxType: rgb('#7A5CA8'),
+  syntaxNumber: rgb('#B25E1E'),
+  syntaxFunction: rgb('#0F7A8A'),
+  syntaxType: rgb('#8A3FC7'),
   syntaxVariable: rgb('#343945'),
   syntaxOperator: rgb('#5B6672'),
   syntaxPunctuation: rgb('#9AA0A8'),
-  syntaxConstant: rgb('#B04A5A'),
+  syntaxConstant: rgb('#C2186B'),
   red_FOR_SUBAGENTS_ONLY: rgb('#BE5A52'),
   blue_FOR_SUBAGENTS_ONLY: rgb('#3F6CC4'),
   green_FOR_SUBAGENTS_ONLY: rgb('#4E9675'),
@@ -323,8 +329,8 @@ const lightTheme: Theme = {
   chromeYellow: rgb('#C99A3F'),
   clawd_body: rgb('#D98A63'), // Warm mascot orange
   clawd_background: rgb('#F6F3ED'),
-  userMessageBackground: rgb('#EEE5D2'), // Surface
-  userMessageBackgroundHover: rgb('#E4D9E5'), // Surface Alt
+  userMessageBackground: '', // user turn: no fill in light mode, gold text only
+  userMessageBackgroundHover: rgb('#DCE4FB'), // subtle blue tint on hover/expand
   messageActionsBackground: rgb('#E4D9E5'),
   selectionBg: rgb('#D5DEF2'), // Mist-blue tint on warm white
   bashMessageBackgroundColor: rgb('#EAE1D3'),
@@ -333,7 +339,7 @@ const lightTheme: Theme = {
   rate_limit_empty: rgb('#DDD5C7'),
   fastMode: rgb('#D98E4A'),
   fastModeShimmer: rgb('#E2A465'),
-  briefLabelYou: rgb('#5E88CC'),
+  briefLabelYou: rgb('#A67600'),
   briefLabelClaude: rgb('#3F6CC4'),
   rainbow_red: rgb('#D98888'),
   rainbow_orange: rgb('#D9A276'),
@@ -363,6 +369,8 @@ const darkAnsiTheme: Theme = {
   autoAccept: 'ansi:magentaBright',
   bashBorder: 'ansi:magentaBright',
   claude: 'ansi:blueBright',
+  toolNameMutate: 'ansi:yellowBright',
+  toolNameExec: 'ansi:cyanBright',
   claudeShimmer: 'ansi:blueBright',
   claudeBlue_FOR_SYSTEM_SPINNER: 'ansi:blueBright',
   claudeBlueShimmer_FOR_SYSTEM_SPINNER: 'ansi:blueBright',
@@ -420,8 +428,8 @@ const darkAnsiTheme: Theme = {
   chromeYellow: 'ansi:yellowBright',
   clawd_body: 'ansi:redBright',
   clawd_background: 'ansi:black',
-  userMessageBackground: 'ansi:blackBright',
-  userMessageBackgroundHover: 'ansi:white',
+  userMessageBackground: '',
+  userMessageBackgroundHover: 'ansi:blue',
   messageActionsBackground: 'ansi:blackBright',
   selectionBg: 'ansi:blue',
   bashMessageBackgroundColor: 'ansi:black',
@@ -430,7 +438,7 @@ const darkAnsiTheme: Theme = {
   rate_limit_empty: 'ansi:white',
   fastMode: 'ansi:redBright',
   fastModeShimmer: 'ansi:redBright',
-  briefLabelYou: 'ansi:blueBright',
+  briefLabelYou: 'ansi:yellowBright',
   briefLabelClaude: 'ansi:blueBright',
   rainbow_red: 'ansi:red',
   rainbow_orange: 'ansi:redBright',
@@ -480,6 +488,28 @@ export function getTheme(themeName: ThemeName): Theme {
  * (markdown inline code) resolves user themes through getActiveTheme().
  */
 let customThemeResolver: ((name: string) => Theme | undefined) | undefined
+
+/**
+ * Whether the active theme's RESOLVED palette renders on a light background.
+ * Keyed off the resolved palette's IDENTITY for the built-ins (auto resolves
+ * to the shared light/dark instance, so this covers auto-with-light-terminal
+ * that theme-NAME comparisons miss) and off the ink-text luminance for
+ * custom themes (light palettes pair with dark ink). The palette's
+ * `background` field is a badge fill, not the terminal background — never a
+ * lightness signal. Colour-pair variants (effort ignition hues) consume this.
+ */
+export function isLightThemeActive(themeName: ThemeName): boolean {
+  const theme = getTheme(themeName)
+  if (theme === lightTheme) return true
+  if (theme === darkTheme || theme === darkAnsiTheme) return false
+  // 自定义主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
+  // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。
+  const ink = theme.text
+  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(ink)
+  if (rgb === null) return false
+  const [r, g, b] = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
+  return 0.299 * r + 0.587 * g + 0.114 * b < 140
+}
 
 /**
  * Register the custom-theme resolver. Called once by ThemeProvider; the

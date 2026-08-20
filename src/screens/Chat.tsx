@@ -2392,19 +2392,15 @@ function StickyPromptHeader({
   text: string
   onClick: () => void
 }): React.ReactNode {
-  const [hover, setHover] = React.useState(false)
   return (
     <Box
       flexShrink={0}
       width="100%"
       height={1}
       paddingRight={1}
-      backgroundColor={hover ? 'userMessageBackgroundHover' : 'userMessageBackground'}
-      onMouseEnter={() =>{  setHover(true) }}
-      onMouseLeave={() =>{  setHover(false) }}
       onClick={onClick}
     >
-      <Text color="subtle" wrap="truncate-end">
+      <Text color="briefLabelYou" bold wrap="truncate-end">
         {POINTER} {text}
       </Text>
     </Box>
