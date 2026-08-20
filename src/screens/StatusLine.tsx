@@ -2,8 +2,8 @@ import React from 'react'
 import { Box, Text, useTerminalSize, useTheme } from '../ui.js'
 import { formatTokens } from '../cc/format.js'
 import { t } from '../i18n.js'
+import { formatContextUsage, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { Byline } from '../components/design-system/Byline.js'
-import { KeyboardShortcutHint } from '../components/design-system/KeyboardShortcutHint.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
@@ -47,11 +47,21 @@ export function StatusLine({
   const { columns } = useTerminalSize()
   const [themeName] = useTheme()
 
+  const statusBar: StatusBarConfig = normalizeStatusBar(channel.statusBar)
   const usage = channel.lastUsage
+  const contextUsed = usage === undefined
+    ? undefined
+    : usage.input + usage.cacheRead + usage.cacheWrite
   const contextParts: React.ReactNode[] = []
-  // Session-mode marker (Shift+Tab cycle): hidden on the unmarked base
-  // mode (index 0); sage while a plan-declaring mode is in force.
-  if (channel.modeIndex > 0) {
+
+  if (statusBar.thinking && channel.reasoningEffort !== undefined) {
+    contextParts.push(
+      <Text key="effort" color="inactiveShimmer">
+        {channel.reasoningEffort}
+      </Text>,
+    )
+  }
+  if (statusBar.mode && channel.modeIndex > 0) {
     contextParts.push(
       <Text
         key="mode"
@@ -61,32 +71,29 @@ export function StatusLine({
       </Text>,
     )
   }
-  if (channel.reasoningEffort !== undefined) {
-    contextParts.push(
-      <Text key="effort" color="inactiveShimmer">
-        {channel.reasoningEffort}
-      </Text>,
-    )
+  const formattedContext = statusBar.contextUsage
+    ? formatContextUsage(contextUsed, channel.contextWindow, statusBar.compact)
+    : undefined
+  const contextUsagePart = formattedContext === undefined
+    ? undefined
+    : (
+        <Text key="context" color="inactiveShimmer">
+          <Text dimColor>ctx </Text>{formattedContext}
+        </Text>
+      )
+  if (statusBar.cache) {
+    const cacheRate = formatCacheHitRate(usage)
+    if (cacheRate !== undefined) {
+      contextParts.push(
+        <Text key="cache" color="inactiveShimmer">
+          <Text dimColor>{t('status-cache-label')}</Text>{cacheRate}
+        </Text>,
+      )
+    }
   }
-  if (usage !== undefined && usage.cacheRead > 0) {
-    // Cache hit rate of the context fed to the model (read / total), one
-    // decimal — the absolute read count lives in the context bar's system
-    // segment, the rate is the glanceable health signal.
-    const total = usage.input + usage.cacheRead + usage.cacheWrite
-    const rate = total > 0 ? (usage.cacheRead / total) * 100 : 0
-    contextParts.push(
-      <Text key="cache">
-        <Text dimColor>{t('status-cache-label')}</Text>
-        <Text color="inactiveShimmer">{rate.toFixed(1)}%</Text>
-      </Text>,
-    )
-  }
-  // TPS readout sits right after the model so a crowded footer truncates
-  // the trailing fields (tokens/think/cache), never the speedometer. One
-  // number only: the live value (gauge while streaming, sparkline of past
-  // turns once samples exist) — no μ/p95 clutter.
+
   const tpsParts: React.ReactNode[] = []
-  if (channel.tps !== undefined) {
+  if (statusBar.tps && channel.tps !== undefined) {
     if (channel.working && channel.tpsSamples.length === 0) {
       tpsParts.push(
         <Text key="tps">
@@ -113,33 +120,37 @@ export function StatusLine({
     }
   }
 
-  // Left group: every field sits at soft white (inactiveShimmer) instead of
-  // the previous uniform dim grey — readable against dark terminals.
   const leftParts = [
-    <Text key="model" color="inactiveShimmer">
-      {channel.model}
-    </Text>,
+    ...(statusBar.model
+      ? [<Text key="model" color="inactiveShimmer">{channel.model}</Text>]
+      : []),
     ...tpsParts,
     ...contextParts,
-    <Text key="tokens" color="inactiveShimmer">
-      {formatTokens(channel.tokens.input)}→{formatTokens(channel.tokens.output)}
-    </Text>,
+    ...(statusBar.tokens
+      ? [
+          <Text key="tokens" color="inactiveShimmer">
+            {formatTokens(channel.tokens.input)}→{formatTokens(channel.tokens.output)}
+          </Text>,
+        ]
+      : []),
   ]
 
-  // Right group: git branch in muted steel blue, cwd a soft white, the
-  // session title dimmest (it truncates first anyway).
   const rightParts = [
-    ...(channel.gitBranch
+    ...(statusBar.gitBranch && channel.gitBranch
       ? [
           <Text key="git" color="professionalBlue">
             {channel.gitBranch}
           </Text>,
         ]
       : []),
-    <Text key="cwd" color="inactiveShimmer">
-      {basename(channel.displayCwd)}
-    </Text>,
-    ...(channel.sessionTitle
+    ...(statusBar.cwd
+      ? [
+          <Text key="cwd" color="inactiveShimmer">
+            {statusBar.compact ? basename(channel.displayCwd) : channel.displayCwd}
+          </Text>,
+        ]
+      : []),
+    ...(statusBar.sessionTitle && channel.sessionTitle
       ? [
           <Text key="title" dimColor>
             {channel.sessionTitle}
@@ -148,42 +159,50 @@ export function StatusLine({
       : []),
   ]
 
-  // Row 3: the mode hint — and, while idle, the working-activity turn
-  // summary (the live working line itself moves to the spinner slot above
-  // the input while a turn runs, so the two never duplicate).
   const hint = selectionActive
-    ? 'esc to return to input'
+    ? t('statusline-hint-select')
     : channel.working
-      ? 'esc to interrupt'
-      : !helpOpen
-        ? '? for shortcuts'
+      ? t('statusline-hint-working')
+      : statusBar.shortcutHint && !helpOpen
+        ? t('statusline-hint-shortcuts')
         : ''
   const activity = channel.workingActivity
   const showActivity =
+    statusBar.activity &&
     !channel.working &&
     activity !== undefined &&
     activity.line !== '' &&
     activity.phase !== 'idle'
+  const showTrajectory = statusBar.trajectory && wake !== undefined
 
   const barWidth = columns - 4
   let bar: string | null = null
-  // Theme-aware free segment: the light palette's near-white fill (#E8E8E8)
-  // reads as a glaring white band on dark terminals — swap it for a deep
-  // blue-gray there while keeping the light palette as-is (dark-ansi carries
-  // `ansi:` color names, so map by theme name rather than palette tokens).
   const barColors =
     themeName === 'light'
       ? undefined
       : { freeFill: '#2E3440', freeText: '#8D95A6' }
-  if (channel.contextBarEnabled && barWidth >= 14 && channel.contextWindow !== undefined) {
+  if (
+    statusBar.contextBar &&
+    channel.contextBarEnabled &&
+    barWidth >= 14 &&
+    usage !== undefined &&
+    channel.contextWindow !== undefined
+  ) {
     bar = renderContextBar(
       channel.contextSegments,
-      usage !== undefined ? usage.input + usage.cacheRead + usage.cacheWrite : 0,
+      contextUsed ?? 0,
       channel.contextWindow,
       barWidth,
       barColors,
     )
   }
+
+  const compactLeftParts = [...leftParts, ...rightParts]
+  const fullLeftParts = contextUsagePart === undefined
+    ? leftParts
+    : [...leftParts, contextUsagePart]
+  const hasStatusFields = compactLeftParts.length > 0 || contextUsagePart !== undefined
+  const showSupplementalRow = hint !== '' || showActivity || showTrajectory
 
   return (
     // Width is pinned to the terminal rather than inherited: `width="100%"`
@@ -201,51 +220,89 @@ export function StatusLine({
         {/* Row 1: segmented context bar, its own line, first (pi-nano-context
             placement — the bar sits directly under the transcript). */}
         {bar ? <Text>{bar}</Text> : null}
-        {/* Row 2: status fields — left group, tps, right group spread apart.
-            The right group (git/cwd/title) shrinks twice as fast as the left
-            so a long session title truncates before the metrics do. */}
-        <Box flexDirection="row" justifyContent="space-between" gap={2}>
-          <Text wrap="truncate">
-            <Byline>{leftParts}</Byline>
-          </Text>
-          <Box justifyContent="flex-end" flexShrink={2}>
-            <Text wrap="truncate">
-              <Byline>{rightParts}</Byline>
-            </Text>
+        {/* Row 2: optional status fields — every field is independently gated. */}
+        {hasStatusFields ? statusBar.compact ? (
+          <Box flexDirection="row" justifyContent="space-between" gap={2}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text wrap="truncate">
+                <Byline>{compactLeftParts}</Byline>
+              </Text>
+            </Box>
+            {contextUsagePart ? (
+              <Box flexShrink={0}>
+                <Text wrap="truncate">
+                  <Byline>{[contextUsagePart]}</Byline>
+                </Text>
+              </Box>
+            ) : null}
           </Box>
-        </Box>
-        {/* Row 3: idle turn summary (ActivityLine) + mode hint on the right. */}
-        <Box
+        ) : (
+          <Box flexDirection="row" justifyContent="space-between" gap={2}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text wrap="truncate">
+                <Byline>{fullLeftParts}</Byline>
+              </Text>
+            </Box>
+            <Box justifyContent="flex-end" flexShrink={2}>
+              <Text wrap="truncate">
+                <Byline>{rightParts}</Byline>
+              </Text>
+            </Box>
+          </Box>
+        ) : null}
+        {/* Row 3: one stable hint/activity area plus an optional wake. */}
+        {showSupplementalRow ? <Box
           height={1}
           overflow="hidden"
           flexDirection="row"
           justifyContent="space-between"
           gap={2}
         >
-          {showActivity && activity !== undefined ? (
-            <ActivityLine
-              activity={activity}
-              activityFrames={channel.activityFrames}
-              warnPct={contextPressurePct(usage, channel.contextWindow)}
-              warnDanger={
-                (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95
-              }
-            />
-          ) : hint ? (
-            <Text color="inactiveShimmer">{hint}</Text>
-          ) : null}
-          {showActivity && hint ? (
-            <Text color="inactiveShimmer" wrap="truncate">
-              {hint}
-            </Text>
-          ) : null}
-          {wake !== undefined ? (
+          <Box
+            flexDirection="row"
+            flexGrow={1}
+            justifyContent={showActivity && hint ? 'space-between' : 'flex-start'}
+            gap={2}
+          >
+            {showActivity && activity !== undefined ? (
+              <ActivityLine
+                activity={activity}
+                activityFrames={channel.activityFrames}
+                warnPct={contextPressurePct(usage, channel.contextWindow)}
+                warnDanger={
+                  (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95
+                }
+              />
+            ) : hint ? (
+              <Text color="inactiveShimmer">{hint}</Text>
+            ) : null}
+            {showActivity && hint ? (
+              <Text color="inactiveShimmer" wrap="truncate">
+                {hint}
+              </Text>
+            ) : null}
+          </Box>
+          {showTrajectory && wake !== undefined ? (
             <MiniWake band={wake.band} hint={wake.hint} tick={wake.tick} />
           ) : null}
-        </Box>
+        </Box> : null}
       </Box>
     </Box>
   )
+}
+
+type UsageSnapshot = {
+  input: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+/** Return the prompt-cache hit rate, or nothing when usage is unavailable. */
+export function formatCacheHitRate(usage: UsageSnapshot | undefined): string | undefined {
+  if (usage === undefined) return undefined
+  const total = usage.input + usage.cacheRead + usage.cacheWrite
+  if (!Number.isFinite(total) || total <= 0) return undefined
+  return `${((usage.cacheRead / total) * 100).toFixed(1)}%`
 }
 
 function basename(path: string): string {

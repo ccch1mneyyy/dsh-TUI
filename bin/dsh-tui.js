@@ -30,6 +30,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gt, valid } from 'semver'
 import { shellQuote } from '../lib/types/utils/shellQuote.js'
 import { detectLegacyEnv, RENAMED_ENV } from '../lib/types/utils/paths.js'
 
@@ -63,15 +64,50 @@ const MSG = {
     en: `[dsh-tui] Plugin install failed. Retry manually later:\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${ownVersion}`,
     zh: `[dsh-tui] 插件安装失败。可稍后手工重试：\n  dsh plugin --profile ${PROFILE} add -w ${PACKAGE}@${ownVersion}`,
   },
-  versionMismatch: {
+  // no-op 假成功（自举后复查发现判定文件依旧缺失）：pnpm 把包文件残缺的
+  // profile 视为 already up to date，重装什么都不做却报告成功；继续启动
+  // 只会以 cannot resolve profile bundle 崩溃，而崩溃提示的 `plugin
+  // install` 同样 no-op——用户会陷入「每步都成功、每次都崩」的循环。
+  bootstrapUnreadable: {
+    en: dir =>
+      `[dsh-tui] install reported success but the plugin package is still unreadable under:\n` +
+      `  ${dir}\n` +
+      `  pnpm treats this half-installed profile as already up to date, so every retry\n` +
+      `  reports success while boot keeps failing. Recovery:\n` +
+      `  rm -rf ${dir} && dsh-tui`,
+    zh: dir =>
+      `[dsh-tui] 安装报告成功，但插件包仍不可读：\n` +
+      `  ${dir}\n` +
+      `  pnpm 把半残的 profile 视为已装好，重试永远「成功」而启动照旧崩溃。\n` +
+      `  恢复方法：\n` +
+      `  rm -rf ${dir} 后重新运行 dsh-tui`,
+  },
+  // Non-fatal skew comes in two directions and each needs its own repair:
+  // a profile NEWER than the launcher (typical after /update) must point at
+  // the global install, while a profile older only in patch must point back
+  // at the profile. The old generic message told forward-skew users to run
+  // /update again — an "Already up to date" loop.
+  profileOutdated: {
     en: (installed, own) =>
       `[dsh-tui] note: the profile is running v${installed} but this launcher is v${own}.\n` +
-      `  To update the profile: run /update inside the TUI, or:\n` +
-      `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@latest`,
+      `  Align the profile to this launcher:\n` +
+      `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${own}`,
     zh: (installed, own) =>
-      `[dsh-tui] 提示：profile 内运行的是 v${installed}，而启动器是 v${own}。\n` +
-      `  更新 profile：在 TUI 内执行 /update，或运行：\n` +
-      `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@latest`,
+      `[dsh-tui] 提示：profile 内运行的是 v${installed}，启动器是 v${own}。\n` +
+      `  请把 profile 对齐到启动器版本：\n` +
+      `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${own}`,
+  },
+  launcherOutdated: {
+    en: (installed, own) =>
+      `[dsh-tui] note: the profile is already v${installed}, but the global launcher is still v${own}.\n` +
+      `  Align the global dsh-tui launcher to the profile:\n` +
+      `  npm install -g ${PACKAGE}@${installed}\n` +
+      `  (if you installed it globally with pnpm: pnpm add -g ${PACKAGE}@${installed})`,
+    zh: (installed, own) =>
+      `[dsh-tui] 提示：profile 已是 v${installed}，但全局启动器仍是 v${own}。\n` +
+      `  请把全局 dsh-tui 启动器对齐到 profile 版本：\n` +
+      `  npm install -g ${PACKAGE}@${installed}\n` +
+      `  （如果你使用 pnpm 全局安装：pnpm add -g ${PACKAGE}@${installed}）`,
   },
   // Reverse skew (issue #183): the dsh CLI reads the bundle patch from the
   // FIRST copy found from its own install anchor — this globally installed
@@ -140,11 +176,12 @@ const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh')
 const profileDir = join(dshHome, 'profiles', PROFILE)
 // 以已装包的 package.json 可读为准（而非目录存在）：安装中途失败留下的
 // 残骸目录会触发重新安装，而不是以坏 profile 直接启动。
+// 包可读判定文件：installedVersion 读取与自举后的复查共用（残缺 profile
+// 的 no-op 假成功靠它识别——见 bootstrapUnreadable）。
+const installedPkgPath = join(profileDir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui', 'package.json')
 let installedVersion
 try {
-  installedVersion = JSON.parse(
-    readFileSync(join(profileDir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui', 'package.json'), 'utf8'),
-  ).version
+  installedVersion = JSON.parse(readFileSync(installedPkgPath, 'utf8')).version
 } catch {
   installedVersion = undefined
 }
@@ -157,20 +194,40 @@ if (installedVersion === undefined) {
   console.log(msg('bootstrapStart'))
   // pnpm ≥11 在带 pnpm-workspace.yaml 的 profile 目录里可能拒绝向
   // workspace root 写依赖（ERR_PNPM_ADDING_TO_ROOT，issue #239）：识别该
-  // 错误时带 -w 重试一次。stderr 走 pipe 捕获供识别，stdout 保持
-  // inherit 让用户实时看到安装进度；手工重试提示同步带 -w。
-  const runAdd = extraArgs => spawnSync(
+  // 错误时带 -w 重试一次。签名在 stdout——pnpm 的错误报告写 stdout（经
+  // dsh 原样转发），stderr 上只有 dsh 自己的失败说明，识别 stderr 永远
+  // 匹配不到（PR #241 的回归）。因此首次 add 的 stdout/stderr 都走 pipe
+  // 捕获，结束后回放（失败回 stderr 保诊断，成功回 stdout 保进度，代价
+  // 是不再实时）；-w 重试大概率成功，恢复 inherit 让进度实时可见。手工
+  // 重试提示同步带 -w。
+  const runAdd = (extraArgs, capture) => spawnSync(
     ...cmd('dsh', ['plugin', '--profile', PROFILE, 'add', ...extraArgs, `${PACKAGE}@${ownVersion}`]),
-    { stdio: ['inherit', 'inherit', 'pipe'], ...shellOpt },
+    { stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit', ...shellOpt },
   )
-  let add = runAdd([])
-  if (add.status !== 0 && String(add.stderr).includes('ERR_PNPM_ADDING_TO_ROOT')) {
-    console.log(msg('bootstrapRetryW'))
-    add = runAdd(['-w'])
+  let add = runAdd([], true)
+  if (add.status !== 0) {
+    const captured = `${add.stdout ?? ''}${add.stderr ?? ''}`
+    process.stderr.write(captured)
+    if (captured.includes('ERR_PNPM_ADDING_TO_ROOT')) {
+      console.log(msg('bootstrapRetryW'))
+      add = runAdd(['-w'], false)
+    }
+  } else {
+    process.stdout.write(`${add.stdout ?? ''}${add.stderr ?? ''}`)
   }
   if (add.status !== 0) {
     console.error(msg('installFailed'))
     process.exit(add.status ?? 1)
+  }
+  // 自举后复查：pnpm 对包文件残缺的 profile 视为 already up to date，
+  // add 报告成功却什么都没装（no-op 假成功）。此时继续启动只会以 cannot
+  // resolve profile bundle 崩溃，提示的 `plugin install` 又同样 no-op——
+  // fail loud 给出唯一可靠的恢复路径（删 profile 目录重建）。
+  try {
+    readFileSync(installedPkgPath, 'utf8')
+  } catch {
+    console.error(MSG.bootstrapUnreadable[lang](profileDir))
+    process.exit(1)
   }
 } else if (installedVersion !== ownVersion) {
   // Reverse skew is fatal (see MSG.profileOlderThanLauncher): compare
@@ -182,7 +239,19 @@ if (installedVersion === undefined) {
     console.error(MSG.profileOlderThanLauncher[lang](installedVersion, ownVersion))
     process.exit(1)
   }
-  console.error(MSG.versionMismatch[lang](installedVersion, ownVersion))
+
+  // Non-fatal skew: repair in the direction the versions actually moved.
+  // A profile NEWER than the launcher (e.g. right after /update) means the
+  // GLOBAL launcher is stale — never point those users back at /update.
+  // Exact versions only: @latest could skip past the alignment point if a
+  // newer release or a mirror dist-tag is in play.
+  const installedSemver = valid(installedVersion)
+  const ownSemver = valid(ownVersion)
+  if (installedSemver !== null && ownSemver !== null && gt(installedSemver, ownSemver)) {
+    console.error(MSG.launcherOutdated[lang](installedVersion, ownVersion))
+  } else {
+    console.error(MSG.profileOutdated[lang](installedVersion, ownVersion))
+  }
 }
 
 // --- 3. --resume 拦截 ---------------------------------------------------------
@@ -240,6 +309,12 @@ for (const oldName of detectLegacyEnv()) {
 }
 
 // --- 4. 启动 ------------------------------------------------------------------
+// Contract for the profile runtime: lets /update diagnose whether the
+// global dsh-tui launcher is older than the profile it just installed.
+// Not a one-shot marker — it must survive restarts so the runtime always
+// knows the launcher generation it boots under.
+process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion
+
 const child = spawn(...cmd('dsh', ['--profile', PROFILE, ...args]), {
   stdio: 'inherit',
   env: process.env,

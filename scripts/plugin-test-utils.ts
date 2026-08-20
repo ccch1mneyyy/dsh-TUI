@@ -1,6 +1,7 @@
 /** Small helpers shared by the plugin runtime verification batteries. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { getHostAdmission } from '../src/dsh-adapter/plugin-host.js'
 
 export const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -48,7 +49,9 @@ export async function mountAdmitted(
     apply: (candidate: Context) => {
       const host = candidate.get('tuiPluginHost')
       if (host === undefined) throw new Error('tuiPluginHost is not mounted')
-      host.admit(candidate, manifestSource, { source, ...admissionOptions })
+      const admission = getHostAdmission(host)
+      if (admission === undefined) throw new Error('host admission capability is not available')
+      admission.admit(candidate, manifestSource, { source, ...admissionOptions })
       context = candidate
     },
   }) as unknown as { dispose(): unknown }

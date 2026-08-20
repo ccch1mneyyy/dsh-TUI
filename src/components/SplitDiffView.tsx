@@ -6,8 +6,13 @@ import { extname } from 'node:path'
 import type { ToolFileDiff } from '../dsh-adapter/channel.js'
 import type { Color } from '../ink/styles.js'
 import { getCliHighlightPromise, type CliHighlight } from '../cc/cliHighlight.js'
+import { SYNTAX_CLASS_TO_TOKEN, chalkFromToken } from '../cc/syntaxTheme.js'
+// Backward-compatible re-export: repro scripts import chalkFromToken from
+// this module's old home.
+export { chalkFromToken } from '../cc/syntaxTheme.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
+import type { ToolBackground } from '../tuiDisplayPrefs.js'
 
 /**
  * Side-by-side (two-pane) diff view for Edit/Write tool cards.
@@ -60,62 +65,8 @@ const expandTabs = (text: string): string => text.replaceAll('\t', '   ')
 
 // --- syntax highlighting ----------------------------------------------------
 
-/** highlight.js token classes → theme syntax tokens. `default` catches
- *  every unmapped class so cli-highlight's own yellow never leaks through
- *  (issue #250, P2-6). */
-const SYNTAX_CLASS_TO_TOKEN: Record<string, string> = {
-  keyword: 'syntaxKeyword',
-  built_in: 'syntaxKeyword',
-  literal: 'syntaxKeyword',
-  string: 'syntaxString',
-  subst: 'syntaxString',
-  quote: 'syntaxString',
-  comment: 'syntaxComment',
-  number: 'syntaxNumber',
-  title: 'syntaxFunction',
-  'title.function_': 'syntaxFunction',
-  function: 'syntaxFunction',
-  'title.class_': 'syntaxType',
-  type: 'syntaxType',
-  class: 'syntaxType',
-  tag: 'syntaxType',
-  name: 'syntaxType',
-  attr: 'syntaxVariable',
-  attribute: 'syntaxVariable',
-  variable: 'syntaxVariable',
-  'template-variable': 'syntaxVariable',
-  params: 'syntaxVariable',
-  operator: 'syntaxOperator',
-  punctuation: 'syntaxPunctuation',
-  meta: 'syntaxPunctuation',
-  symbol: 'syntaxConstant',
-  regexp: 'syntaxConstant',
-  default: 'syntaxVariable',
-}
-
-/** chalk style for one raw theme value. Accepts every form the theme
- *  loader documents: #rgb, #rrggbb, #rrggbbaa (alpha stripped), rgb() with
- *  or without spaces, ansi256(n), ansi:name (issue #250, P2-5). */
-export function chalkFromToken(token: string): (text: string) => string {
-  let match = /^#([0-9a-fA-F]{3})$/.exec(token)
-  if (match !== null) {
-    const [r, g, b] = match[1]!.split('').map(c => parseInt(c + c, 16))
-    return chalk.rgb(r!, g!, b!)
-  }
-  match = /^#([0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?$/.exec(token)
-  if (match !== null) return chalk.hex(`#${match[1]}`)
-  match = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(token)
-  if (match !== null) return chalk.rgb(Number(match[1]), Number(match[2]), Number(match[3]))
-  match = /^ansi256\((\d+)\)$/.exec(token)
-  if (match !== null) return chalk.ansi256(Number(match[1]))
-  match = /^ansi:(\w+)$/.exec(token)
-  if (match !== null) {
-    const name = match[1] === 'blackBright' ? 'gray' : match[1]
-    const style = (chalk as unknown as Record<string, ((text: string) => string) | undefined>)[name]
-    if (style !== undefined) return style
-  }
-  return (text: string) => text
-}
+// The hljs-class → theme-token map and chalkFromToken live in
+// ../cc/syntaxTheme.ts (shared with the markdown code-block renderer).
 
 /** ANSI 16-color SGR codes → rgb() strings (the dark-ansi palette path). */
 const ANSI16: Record<number, string> = {
@@ -374,17 +325,26 @@ function PaneLine({
   kind,
   width,
   tone,
+  toolBackground,
   padLeft = false,
 }: {
   readonly side: { readonly segments: readonly Segment[] } | undefined
   readonly kind: DiffRow['kind']
   readonly width: number
   readonly tone: 'old' | 'new'
+  readonly toolBackground: ToolBackground
   readonly padLeft?: boolean
 }): React.ReactNode {
+  const ordinaryBackground = toolBackground === 'subtle'
+    ? 'toolCardBackgroundDim'
+    : toolBackground === 'strong'
+      ? 'toolCardBackground'
+      : undefined
+  // Additions/removals keep their semantic tint; unchanged and empty panes
+  // inherit the configured ordinary tool-card surface.
   const backgroundColor =
     kind === 'context'
-      ? 'toolCardBackground'
+      ? ordinaryBackground
       : tone === 'old'
         ? 'diffRemovedDimmed'
         : 'diffAddedDimmed'
@@ -422,6 +382,7 @@ export function SplitDiffView({
   width,
   maxRows,
   verbose,
+  toolBackground = 'none',
 }: {
   readonly diffs: readonly ToolFileDiff[]
   /** Content width available to the whole two-pane block (divider included). */
@@ -429,6 +390,7 @@ export function SplitDiffView({
   /** Row budget when not verbose; overflow folds into one hint row. */
   readonly maxRows: number
   readonly verbose: boolean
+  readonly toolBackground?: ToolBackground
 }): React.ReactNode {
   const [hl, setHl] = React.useState<CliHighlight | null>(null)
   React.useEffect(() => {
@@ -491,7 +453,7 @@ export function SplitDiffView({
   })
 
   return (
-    <Box flexDirection="column" width={paneWidth * 2 + 1} backgroundColor="toolCardBackgroundDim">
+    <Box flexDirection="column" width={paneWidth * 2 + 1}>
       {visible.map((row, index) => {
         if ('separator' in row) {
           return (
@@ -513,11 +475,11 @@ export function SplitDiffView({
           : { segments: newRuns !== undefined ? mergeRuns(newRuns, row.newWords) : row.newWords }
         return (
           <Box key={index} flexDirection="row">
-            <PaneLine side={oldSide} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} />
-            <Box width={1} flexShrink={0} backgroundColor="toolCardBackgroundDim">
+            <PaneLine side={oldSide} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} toolBackground={toolBackground} />
+            <Box width={1} flexShrink={0}>
               <Text dimColor>│</Text>
             </Box>
-            <PaneLine side={newSide} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} padLeft />
+            <PaneLine side={newSide} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} toolBackground={toolBackground} padLeft />
           </Box>
         )
       })}

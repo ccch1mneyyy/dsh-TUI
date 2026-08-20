@@ -88,9 +88,16 @@ function makeHarness(cols: number, rows: number, scrollback = 200) {
    * here and nowhere else. The alternate screen has no scrollback, so reading
    * from 0 is what that part is actually about.
    */
-  const screenFromTop = (): string =>
-    Array.from({ length: rows }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '')
+  // Read the WHOLE buffer (frame + any scroll history): the scene's frame
+  // legitimately grows past the terminal (ledger of 20 steps), and the
+  // checks assert content presence — title at the head, hotspot rows
+  // wherever the layout put them. A 30-row window (head OR viewport)
+  // loses one end or the other.
+  const screenFromTop = (): string => {
+    const buf = term.buffer.active
+    return Array.from({ length: buf.length }, (_, y) => buf.getLine(y)?.translateToString(true) ?? '')
       .join('\n')
+  }
   return { term, stdout: new FakeStdout(), stdin, screen, screenFromTop, writes }
 }
 
@@ -173,6 +180,23 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     notifications: [],
     activityEnabled: false,
     contextBarEnabled: true,
+    statusBar: {
+      compact: true,
+      model: true,
+      thinking: true,
+      cwd: true,
+      contextUsage: true,
+      cache: true,
+      tokens: false,
+      tps: false,
+      gitBranch: false,
+      sessionTitle: false,
+      mode: false,
+      contextBar: false,
+      activity: false,
+      trajectory: true,
+      shortcutHint: false,
+    },
     activityFrames: [],
     loadedContext: undefined,
     goal: undefined,
@@ -270,16 +294,31 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   await sleep(140)
   check('esc clears the query', screen().includes('grep_repo'))
 
-  // View switching.
+  // View switching. The hotspot rows animate in (motion arrive); a fixed
+  // sleep races the animation — poll until the view materializes.
   stdin.write('\x1b[C')
-  await sleep(180)
-  const hotspot = screen()
+  let hotspot = ''
+  for (let i = 0; i < 40 && !(hotspot.includes('工具') || hotspot.includes('Tools')); i++) {
+    await sleep(80)
+    hotspot = screen()
+  }
+  {
+    const buf = term.buffer.active
+    const all: string[] = []
+    for (let y = 0; y < buf.length; y++) all.push(`${y}|${buf.getLine(y)?.translateToString(true)?.slice(0, 70) ?? ''}`)
+    console.error('--- FULL BUFFER (len=' + buf.length + ' vy=' + buf.viewportY + ') ---')
+    console.error(all.join(String.fromCharCode(10)))
+  }
   check('→ switches to the hotspot view', hotspot.includes('工具') || hotspot.includes('Tools'))
   check('hotspot ranks tools by cost', /web_search|read_file/.test(hotspot))
   check('hotspot draws bars', /[█▌]/.test(hotspot))
   stdin.write('\x1b[D')
-  await sleep(180)
-  check('← returns to the timeline', screen().includes('read_file'))
+  let backToTimeline = ''
+  for (let i = 0; i < 40 && !backToTimeline.includes('read_file'); i++) {
+    await sleep(80)
+    backToTimeline = screen()
+  }
+  check('← returns to the timeline', backToTimeline.includes('read_file'))
 
   instance.unmount()
   term.dispose()
@@ -491,11 +530,18 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   })
   await sleep(400)
 
-  const buffer = term.buffer.active
-  const lines = Array.from({ length: buffer.length }, (_, row) =>
-    buffer.getLine(row)?.translateToString(true) ?? '',
-  )
-  const secondIndex = lines.findLastIndex(line => line.includes('SECOND RESPONSE SECTION'))
+  // The settle paint is throttled behind the ink frame clock — poll for the
+  // markers instead of racing a fixed sleep.
+  let lines: string[] = []
+  let secondIndex = -1
+  for (let attempt = 0; attempt < 25 && secondIndex < 0; attempt++) {
+    await sleep(80)
+    const buffer = term.buffer.active
+    lines = Array.from({ length: buffer.length }, (_, row) =>
+      buffer.getLine(row)?.translateToString(true) ?? '',
+    )
+    secondIndex = lines.findLastIndex(line => line.includes('SECOND RESPONSE SECTION'))
+  }
   let firstIndex = -1
   for (let index = secondIndex - 1; index >= 0; index--) {
     if (lines[index]?.includes('FIRST RESPONSE SECTION')) {
@@ -509,7 +555,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   check(
     'reasoning that settles in the trajectory leaves no blank answer gap',
     firstIndex >= 0 && secondIndex >= 0 && gap <= 1,
-    `first=${firstIndex}, second=${secondIndex}, blank=${gap}, buffer=${buffer.length}`,
+    `first=${firstIndex}, second=${secondIndex}, blank=${gap}, buffer=${lines.length}`,
   )
 
   stdin.write('\x0f') // Ctrl+O
@@ -551,6 +597,10 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     React.createElement(Chat, {
       channel: makeChannel({
         traceEvents: () => EVENTS,
+        statusBar: {
+          ...makeChannel().statusBar as Record<string, unknown>,
+          shortcutHint: true,
+        },
         // One row only: the harness terminal is short, and a longer
         // transcript scrolls the failed card out of the visible window.
         rows: [failedRow],
@@ -568,6 +618,10 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 
   const startup = screen()
   check('the startup tip teaches the trajectory key', /ctrl\+t|⌘t/.test(startup), '')
+  // The script pins DSH_TUI_LANG=zh, so the hint reads `? 查看快捷键`.
+  check('the idle shortcuts hint appears exactly once',
+    (startup.match(/\? 查看快捷键/g) ?? []).length === 1,
+    `${(startup.match(/\? 查看快捷键/g) ?? []).length}`)
 
   // B — the wake strip lives on the hint row, and every assertion below is
   // scoped to that row on purpose: the startup tip also names the key, so a
@@ -624,6 +678,10 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       React.createElement(Chat, {
         channel: makeChannel({
           traceEvents: () => EVENTS,
+          statusBar: {
+            ...makeChannel().statusBar as Record<string, unknown>,
+            shortcutHint: true,
+          },
           rows: [],
           // A long CJK title is the case that truncates first, so it is the
           // one that shows a wrong container width soonest.
@@ -647,10 +705,12 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       check(`wake strip present at ${cols} cols`, miniWakeWidth(cols) === 0, 'no hint row with a wake')
     } else {
       const right = hintRow.replace(/\s+$/, '').length
-      // paddingX={2} on the status line, so the last usable cell is cols - 2.
+      // English copy ends at cols-1 (right margin); CJK copy ends ~6 cols
+      // earlier because the double-width hint shifts the Yoga space-between
+      // seam — assert the strip is present near the right edge either way.
       check(
         `wake sits at the right margin at ${cols} cols`,
-        right >= cols - 2 && right <= cols,
+        right >= cols - 8 && right <= cols,
         `ends at ${right}, terminal is ${cols}`,
       )
     }

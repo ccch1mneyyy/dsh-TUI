@@ -54,6 +54,15 @@ check('Ink installs the stderr guard while the TUI is mounted', patchedStderrWri
 const sigcontListenersBefore = process.listenerCount('SIGCONT')
 const resizeListenersBefore = stdout.listenerCount('resize')
 const stdinListenersBefore = stdin.listenerCount('readable')
+const activeEio = Object.assign(new Error('read EIO'), {code: 'EIO'})
+let activeEioEscaped = false
+try {
+  stdin.emit('error', activeEio)
+} catch (error) {
+  activeEioEscaped = error === activeEio
+}
+check('Ink does not absorb stdin EIO while the TUI is active', activeEioEscaped)
+
 const runtime = instances.get(stdout)
 runtime?.detachForShutdown()
 
@@ -63,6 +72,28 @@ check('shutdown detach removes the SIGCONT listener', process.listenerCount('SIG
 check('shutdown detach removes the stdout resize listener', stdout.listenerCount('resize') < resizeListenersBefore)
 check('Ink owns a stdin reader before shutdown detach', stdinListenersBefore > 0)
 check('shutdown detach removes the stdin reader', stdin.listenerCount('readable') < stdinListenersBefore)
+
+const lateEio = Object.assign(new Error('read EIO'), {
+  code: 'EIO',
+  errno: -5,
+  syscall: 'read',
+})
+let lateEioEscaped = false
+try {
+  stdin.emit('error', lateEio)
+} catch (error) {
+  lateEioEscaped = error === lateEio
+}
+check('shutdown detach absorbs a late stdin EIO', !lateEioEscaped)
+
+const unexpectedStdinError = Object.assign(new Error('read EPERM'), {code: 'EPERM'})
+let unexpectedErrorEscaped = false
+try {
+  stdin.emit('error', unexpectedStdinError)
+} catch (error) {
+  unexpectedErrorEscaped = error === unexpectedStdinError
+}
+check('shutdown detach does not absorb unexpected stdin errors', unexpectedErrorEscaped)
 
 stdin.write('x')
 await new Promise(resolve => setImmediate(resolve))

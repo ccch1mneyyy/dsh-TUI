@@ -13,6 +13,12 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
   <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
   <img alt="官方收录" src="https://img.shields.io/badge/DeepSeek%20Harness%20官方公众号-收录-brightgreen">
+  <a href="https://github.com/ccch1mneyyy/dsh-TUI/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/ccch1mneyyy/dsh-TUI?style=flat-square&color=4b6fff"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
+</p>
+
+<p align="center">
+  <a href="https://trendshift.io/repositories/146168" title="GitHub Trending 日榜 #7 · TypeScript 口径"><img alt="Trendshift" src="https://trendshift.io/api/badge/trendshift/repositories/146168/daily?language=TypeScript"></a>
 </p>
 
 # dsh-TUI
@@ -87,8 +93,14 @@ sh install.sh
 已上架 VS Code Marketplace**）见
 [在 VS Code 中运行 dsh-TUI](docs/vscode.md)。
 
-TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提示，输入 `/update`
-即可自动更新并重启恢复当前会话。
+TUI 启动后会在后台检查 npm 是否有新版本；发现更新时可输入 `/update`。
+`/update` 更新当前 `dsh-tui` profile 中的 runtime 并重启会话，它不会静默修改
+npm/pnpm 的全局安装。若通过全局 `dsh-tui` 命令启动且 Launcher 版本落后，
+0.8.3 起会给出精确的全局对齐命令，例如：
+
+```sh
+npm install -g @deepseek-harness-tui/dsh-tui@<profile-version>
+```
 
 旧版 `dsh-cc-tui` / `cc-tui` profile 的迁移命令与兼容数据说明见
 [安装与快速开始](docs/getting-started.md#从旧包迁移)。
@@ -100,17 +112,26 @@ TUI 启动后会在后台检查 npm 是否有新版本；发现更新时会提�
 
 | 键 | 功能 |
 |---|---|
-| `Enter` | 发送（`Shift+Enter` 换行，无法上报修饰键时可用 `Ctrl+J`）；命令菜单打开时执行选中项 |
+| `Enter` | 空闲=发送（`Shift+Enter` 换行，无法上报修饰键时可用 `Ctrl+J`，mac Terminal.app 可用 `Option+Enter` 兜底，issue #110）；**模型工作时=steer**（注入下一步边界，不中断）；命令菜单打开时执行选中项 |
+| `Ctrl+Enter`（⌘Enter） | **打断当前回合并立即发送**（interrupt） |
+| `Alt+Up` | 把最后一条未处理消息取回输入框编辑（不中断回合） |
+| `Tab` | 补全 `/` 命令或 `@` 文件（目录可继续深入）；**模型工作时=follow-up**（排入当前回合之后） |
 | `Ctrl+C` | 中断当前回合；空闲时连按两次退出 |
 | `Esc` | 关闭命令/文件菜单；空闲双击清空输入；**空输入双击 = 时间回溯** |
 | `Ctrl+O` | 展开/收起详情（思考全文、工具参数与输出） |
 | `Ctrl+R` | 历史消息搜索 |
 | `/` | 会话内全文搜索（`n`/`N` 跳转） |
-| `Tab` / `Enter` | 命令 / `@` 文件补全（目录可继续深入） |
 | `Ctrl+V` | 粘贴文本或文件管理器中的文件；图片显示为 `[Image #N]` 并作为持久附件发送 |
 | `Ctrl+X` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
-| `?` | 快捷键菜单 |
+| `?` | 快捷键菜单（仅输入框为空时响应） |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
+| `Ctrl+P` | 切换启动时 loaded-context 面板（面板在屏时有效） |
+| `Home` / `End`、`Ctrl+A` / `Ctrl+E` | 逻辑行首 / 行尾；`Ctrl+E` 双义：输入框=行尾，转录中=展开/折叠隐藏的旧消息 |
+| `Ctrl+←` / `Ctrl+→`（⌘←/→） | 按词跳转 |
+| `Ctrl+U` / `Ctrl+K` | 删除光标前（至行首）/ 光标后（至行尾） |
+| `Ctrl+W` | 删除前一个单词 |
+
+**模型工作中的三态投递**：`Enter`=steer（注入下一步边界，不中断）· `Tab`=follow-up（排入当前回合之后）· `Ctrl+Enter`=interrupt（打断并立即发送）。
 
 **macOS 修饰键**：上表中 Windows/Linux 的 `Ctrl+<键>` 在 macOS 上同时可用 `⌘<键>`
 （如 `⌘V` 粘贴、`⌘O` 展开详情、`⌘Enter` 立即发送）；仅 `Ctrl+C` / `Ctrl+D`
@@ -124,8 +145,13 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 |---|---|
 | 拖拽选择 | 应用内文本选区，**松开即复制**（OSC 52 + `wl-copy`/`xclip`/`xsel` 原生兜底；tmux 内走 `load-buffer -w`），复制后自动取消选区并弹出「已复制 N 个字符」提示 |
 | 双击 / 三击 | 选词 / 选行，同样即选即复制 |
-| 滚轮 | 滚动消息列表 |
+| 滚轮 | 滚动消息列表（±3 行/格） |
 | `Esc` | 拖拽进行中取消选区（不复制） |
+| 单击消息行 | 展开/收起该行 |
+| 单击「加载更早消息」/「ctrl+e 显示前 N 条」 | 加载更早消息 / 展开全部 |
+| 单击 StickyHeader / 「↓ N new messages」 | 跳回固定消息处 / 滚动到底部 |
+| 单击超链接 | 打开浏览器 |
+| 键盘扩展选区 | 有选区时 `Shift+←/→/↑/↓/Home/End` 扩展/收缩（跨行环绕） |
 
 **问卷（模型发起 `ask_user_question` 时）**
 
@@ -135,19 +161,21 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 | `Space` | 多选题勾选/取消 |
 | `Tab` | 切到自定义回答（不选选项直接打字） |
 | `Enter` | 提交当前选择 |
-| `Esc` | 中断提问（模型收到 ASK_ABORTED，可继续对话） |
+| `Esc` / `Ctrl+C` | 取消整批提问（模型收到 ASK_CANCELLED，可继续对话） |
 
 **本地命令（CC 指令全集复刻，均走 DSH 官方链路）**
 
 | 分组 | 命令 |
 |---|---|
-| 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） |
-| 状态 | `/context` 已加载上下文明细 · `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md |
-| 模型 | `/model` 选择器 · `/thinking` 思考显示 · `/tokens` token 明细 · `/theme` 主题选择器 · `/lang` 中英界面切换（`/settings` 中亦可选择） |
+| 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） · `/rewind` 回退选择器（同空输入双击 Esc 的时间回溯） · `/btw <问题>` 侧问（不打断主回合、不写历史） |
+| 状态 | `/context` 已加载上下文明细 · `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md · `/settings` 设置面板（命名空间读取/编辑） |
+| 模型 | `/model` 选择器（**切换 = fork 会话续聊，历史保留**） · `/effort` 推理强度（滑杆 / `status` / `<id>`） · `/preset` Agent 预设（**已开始会话不可切换**，blank-only） · `/thinking` 思考显示 · `/tokens` token 明细 · `/activity` 工作状态行动画（`frames <名>` / `status`） · `/theme` 主题选择器 · `/lang` 中英界面切换（`/settings` 中亦可选择） |
 | 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` |
 | 技能 | `/audit` 代码审计 · `/bug` bug 报告 · `/review` 代码评审 · `/practice` 编程练习 · `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查 |
-| 其它 | `/agents` 子代理列表 · `/update` 自动更新并重启 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` |
-| 注册表 | `/plan` `/goal`（DSH 命令注册表插件，随插件自动并入 `/` 菜单） |
+| 其它 | `/agents` 子代理列表 · `/skills` 技能目录 · `/plugins check <路径>` 插件诊断 · `/update` 自动更新并重启 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit`（别名 `/quit` `/q`） |
+| 注册表 | `/plan` `/goal` `/feedback` `/permission`（DSH 命令注册表插件，随插件自动并入 `/` 菜单） |
+
+> 未知命令会作为普通消息发给模型（如 `/permission` 未挂载的组合里）。
 
 ## 插件生态
 
@@ -253,6 +281,9 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
   未挂载该插件（无 `/permission` 命令）。
 - `/vim` `/connect` `/hooks` 为 CC 同名占位：对应能力在 DSH 侧无等价
   机制，命令会给出明确说明而非静默。
+- `/thinking` 思考显示开关**不持久化**，重启或新会话回到默认。
+- minimal preset 下 `/compact` 不可用（minimal 不组合 compaction）。
+- `/update` 仅 `dsh --profile` 启动方式可用，回合运行中会拒绝。
 
 完整已知限制与安全边界见[架构与限制](docs/architecture.md)。
 

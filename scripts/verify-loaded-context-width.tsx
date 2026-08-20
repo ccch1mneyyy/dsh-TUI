@@ -51,7 +51,7 @@ const context = {
 
 const app = await render(
   <ThemeProvider theme="dark">
-    <LoadedContextPanel context={context} />
+    <LoadedContextPanel context={context} open={false} onToggle={() => {}} />
   </ThemeProvider>,
   {
     stdout: new FakeStdout() as NodeJS.WriteStream,
@@ -78,8 +78,8 @@ if (contentLines.length !== 1) {
 if (!contentLines[0]?.includes('Context loaded')) {
   throw new Error(`Collapsed context summary was not rendered: ${contentLines[0] ?? ''}`)
 }
-if (contentLines[0]?.includes('Ctrl+T')) {
-  throw new Error(`Context summary still claims the trajectory shortcut: ${contentLines[0] ?? ''}`)
+if (!contentLines[0]?.includes('Ctrl+P')) {
+  throw new Error(`Collapsed context summary lost the expand hint: ${contentLines[0] ?? ''}`)
 }
 
 process.stdout.write('loaded context narrow-width regression passed\n')

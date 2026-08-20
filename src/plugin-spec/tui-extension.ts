@@ -6,6 +6,7 @@ import { register as registerCommand } from '@dsh-std/command'
 import { register as registerMessages } from '@dsh-std/messages'
 import { register as registerPresentation } from '@dsh-std/presentation'
 import { register as registerStorage } from '@dsh-std/storage'
+import { tuiChannelDefinition } from '#dsh-ecosystem-spec/tui-channel'
 import type { ContractCoordinate } from './types.js'
 
 export const TUI_EXTENSION_API_VERSION = 'tui.dsh/v1alpha1'
@@ -84,5 +85,6 @@ export function createAdmissionCatalog(): AdmissionCatalog {
   registerMessages(protocols)
   registerPresentation(protocols)
   protocols.register(decisionEventsDefinition)
+  protocols.register(tuiChannelDefinition)
   return { protocols, manifests }
 }

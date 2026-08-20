@@ -51,8 +51,10 @@ function clipSuffixTail(suffix: string, cut: { current: number }): string {
 
 export function StreamingMarkdown({
   children,
+  dimColor = false,
 }: {
   children: string
+  dimColor?: boolean
 }): React.ReactNode {
   // The stable prefix is kept as ONE string identity across renders: a
   // fresh substring per render would break Markdown's React.memo and
@@ -87,12 +89,21 @@ export function StreamingMarkdown({
   }
 
   const stablePrefix = prefixRef.current
-  const unstableSuffix = clipSuffixTail(stripped.substring(stablePrefix.length), cutRef)
+  const suffixSource = stripped.substring(stablePrefix.length)
+  const unstableSuffix = clipSuffixTail(suffixSource, cutRef)
+
+  // A lexer boundary must be strictly outside the stable prefix. If marked
+  // reports a raw span that ends at the current cursor (possible around an
+  // unfinished fence/table while deltas arrive), rendering both branches can
+  // paint the same tail twice. Keep the suffix authoritative and never render
+  // an overlapping empty/duplicate boundary.
+  const hasDistinctSuffix = unstableSuffix !== '' &&
+    (stablePrefix === '' || !unstableSuffix.startsWith(stablePrefix))
 
   return (
     <Box flexDirection="column" gap={1}>
-      {stablePrefix && <Markdown>{stablePrefix}</Markdown>}
-      {unstableSuffix && <Markdown cacheTokens={false}>{unstableSuffix}</Markdown>}
+      {stablePrefix && <Markdown dimColor={dimColor}>{stablePrefix}</Markdown>}
+      {hasDistinctSuffix && <Markdown dimColor={dimColor} cacheTokens={false}>{unstableSuffix}</Markdown>}
     </Box>
   )
 }

@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.8.1",
+  "version": "0.8.5",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "MIT",
   "repository": {
@@ -15,6 +15,9 @@
     "access": "public"
   },
   "type": "module",
+  "imports": {
+    "#dsh-ecosystem-spec/tui-channel": "./dsh-ecosystem-spec/protocols/tui-channel.js"
+  },
   "bin": {
     "dsh-tui": "./bin/dsh-tui.js"
   },
@@ -69,8 +72,9 @@
     "lib",
     "cordis.patch.yml",
     "cordis.yml",
-    "ecosystem-spec/registry",
-    "ecosystem-spec/schemas",
+    "dsh-ecosystem-spec/registry",
+    "dsh-ecosystem-spec/protocols",
+    "dsh-ecosystem-spec/schemas",
     "presets",
     "skills"
   ],
@@ -89,7 +93,7 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
     "verify:manifest-deps": "node --import tsx/esm scripts/verify-manifest-deps.ts",
@@ -101,12 +105,18 @@
     "verify:packaged-presets": "node scripts/verify-packaged-presets.mjs",
     "verify:minimal-preset-tools": "node scripts/verify-minimal-preset-tools.mjs",
     "verify:liangshen-bootstrap": "node scripts/verify-liangshen-bootstrap.mjs",
+    "verify:liangshen-bash": "node scripts/verify-liangshen-bash.mjs",
     "verify:package": "npm pack --dry-run --json --ignore-scripts | node scripts/verify-package.mjs",
     "verify:prompt-debug": "npm run build && node scripts/verify-prompt-debug.mjs",
     "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts",
     "verify:plugin-ledger": "node --import tsx/esm scripts/verify-plugin-ledger.ts",
     "verify:plugin-commands": "node --import tsx/esm scripts/verify-plugin-commands.ts",
-    "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts"
+    "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts",
+    "verify:plugin-lifecycle": "node --import tsx/esm scripts/verify-plugin-lifecycle.ts",
+    "verify:tips": "node --import tsx/esm scripts/verify-tips.tsx",
+    "verify:thinking-preview": "node --import tsx/esm scripts/verify-thinking-preview.tsx",
+    "sync:profile": "node scripts/sync-profile.mjs",
+    "sync:profile:check": "node scripts/sync-profile.mjs --check"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -151,7 +161,7 @@
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^3.0.0 || ^4.0.0",
     "diff": "^8.0.4",
-    "dsh-working-activity": "^0.2.6",
+    "dsh-working-activity": "^0.3.2",
     "emoji-regex": "^10.0.0",
     "figures": "^6.1.0",
     "get-east-asian-width": "^1.0.0",

@@ -12,16 +12,22 @@ import { reorderBidi } from './bidi.js'
 import { type Rectangle, unionRect } from './layout/geometry.js'
 import {
   blitRegion,
+  cellRunSpan,
   CellWidth,
+  createCellRun,
   extractHyperlinkFromStyles,
   filterOutHyperlinkStyles,
   markNoSelectRegion,
   OSC8_PREFIX,
+  recordCellRunEntry,
+  recordSpacerRunEntry,
+  replayCellRun,
   resetScreen,
   type Screen,
   type StylePool,
   setCellAt,
   shiftRows,
+  type CellRun,
 } from './screen.js'
 import { stringWidth } from './stringWidth.js'
 import { widestLine } from './widest-line.js'
@@ -66,6 +72,12 @@ const MAX_CACHEABLE_LINE = 500
 const CHAR_CACHE_MAX_ENTRIES = 16384
 const CHAR_CACHE_MAX_CHARS = 100_000
 
+/** Packed-run line cap: runs are three integers per cell (no per-char
+ *  objects like charCache entries), so long ANSI-art lines (the whale
+ *  logo, ~700 chars) are worth caching — they would otherwise
+ *  re-tokenize and re-cluster every frame. */
+const PACKED_MAX_LINE = 4000
+
 /** Copy a string into a fresh flat string with no parent references. */
 function detachString(s: string): string {
   // Buffer round-trip guarantees a newly allocated flat string; cheaper
@@ -79,31 +91,59 @@ function detachString(s: string): string {
  * no caller can accidentally grow it unboundedly.
  */
 export class CharCache {
+  /**
+   * LRU of line → clustered characters. A full clear on overflow
+   * (the original behavior) thrashes during long-session streaming: the
+   * mounted window's static lines alone approach the char budget, so the
+   * streaming row's per-frame new keys tip it over every frame or two,
+   * nuking the cache and forcing ~1800 line re-tokenizations per frame
+   * (measured ~100ms/frame at a 175-row session). Evicting oldest-first
+   * keeps the hot mounted lines resident while streaming churn falls out
+   * the back. Recency is refreshed on hit (delete + re-insert) so lines
+   * read every frame are never evicted by one-shot churn.
+   */
   private map = new Map<string, ClusteredChar[]>()
   private chars = 0
 
   /**
-   * Return the cached clustered characters for a line, if present.
+   * Return the cached clustered characters for a line, if present, and
+   * refresh the entry's recency.
    * @param line - the line to look up.
    * @returns the cached characters, or undefined on a miss.
    */
   get(line: string): ClusteredChar[] | undefined {
-    return this.map.get(line)
+    const hit = this.map.get(line)
+    if (hit !== undefined) {
+      this.map.delete(line)
+      this.map.set(line, hit)
+    }
+    return hit
   }
 
   /**
-   * Cache clustered characters for a line, enforcing the cache bounds.
+   * Cache clustered characters for a line, enforcing the cache bounds by
+   * evicting least-recently-used entries (never a full clear).
    * @param line - the line key.
    * @param characters - the clustered characters to cache.
    */
   set(line: string, characters: ClusteredChar[]): void {
     if (line.length > MAX_CACHEABLE_LINE) return
-    if (
+    if (this.map.has(line)) {
+      this.map.delete(line)
+      this.chars -= line.length
+    }
+    // Evict oldest entries until the new one fits. A single line longer
+    // than the whole budget cannot fit even empty — skip caching it.
+    if (line.length > CHAR_CACHE_MAX_CHARS) return
+    while (
       this.map.size >= CHAR_CACHE_MAX_ENTRIES ||
       this.chars + line.length > CHAR_CACHE_MAX_CHARS
     ) {
-      this.map.clear()
-      this.chars = 0
+      const oldest = this.map.keys().next()
+      if (oldest.done === true) break
+      const oldestKey = oldest.value
+      this.chars -= oldestKey.length
+      this.map.delete(oldestKey)
     }
     this.map.set(detachString(line), characters)
     this.chars += line.length
@@ -424,6 +464,44 @@ export default class Output {
   private charCache = new CharCache()
 
   /**
+   * LRU of line → recorded packed cell run, mirroring charCache's bounds.
+   * The main-screen architecture repaints every settled line each frame;
+   * the recorded run replays as raw two-word stores (no interning, no
+   * packing, no guard branches) — the long-session streaming fix. Runs are
+   * validated against the screen they were interned on and die with it.
+   */
+  private packedLines = new Map<string, CellRun>()
+  private packedChars = 0
+
+  /** Stable owner handle passed to writeLineToScreen (no per-call closure). */
+  private readonly packedOwner = {
+    lines: this.packedLines,
+    commit: (line: string, run: CellRun): void => {
+      this.setPackedLine(line, run)
+    },
+  }
+
+  /** Insert into the packed-lines LRU, evicting oldest entries on budget. */
+  private setPackedLine(line: string, run: CellRun): void {
+    if (line.length > PACKED_MAX_LINE) return
+    if (this.packedLines.has(line)) {
+      this.packedLines.delete(line)
+      this.packedChars -= line.length
+    }
+    while (
+      this.packedLines.size >= CHAR_CACHE_MAX_ENTRIES ||
+      this.packedChars + line.length > CHAR_CACHE_MAX_CHARS
+    ) {
+      const oldest = this.packedLines.keys().next()
+      if (oldest.done === true) break
+      this.packedChars -= oldest.value.length
+      this.packedLines.delete(oldest.value)
+    }
+    this.packedLines.set(detachString(line), run)
+    this.packedChars += line.length
+  }
+
+  /**
    * Streaming-tail slot, shared by every writeLineToScreen call of this
    * Output (only one line grows per frame during streaming). Survives reset()
    * like charCache - it is keyed by strict line extension, so stale entries
@@ -719,6 +797,11 @@ export default class Output {
                 const from = x < clip.x1! ? clip.x1! - x : 0
                 const width = stringWidth(line)
                 const to = x + width > clip.x2! ? clip.x2! - x : width
+                // Fast path: the line sits entirely inside the clip — no
+                // slice needed. sliceAnsi re-tokenizes the line (the
+                // dominant per-frame cost of long sessions otherwise:
+                // every settled line, every frame).
+                if (from === 0 && to === width) return line
                 let sliced = sliceAnsi(line, from, to)
                 // Wide chars (CJK, emoji) occupy 2 cells. When `to` lands
                 // on the first cell of a wide char, sliceAnsi includes the
@@ -777,6 +860,7 @@ export default class Output {
               this.stylePool,
               this.charCache,
               this.streamingSlot,
+              this.packedOwner,
             )
             writeCells += contentEnd - x
             // See Screen.softWrap docstring for the encoding. contentEnd
@@ -926,12 +1010,54 @@ function writeLineToScreen(
   stylePool: StylePool,
   charCache: CharCache,
   streamingSlot: { current: StreamingLineSlot | null },
+  packed?: {
+    lines: Map<string, CellRun>
+    commit: (line: string, run: CellRun) => void
+  },
 ): number {
+  // Fast path: replay the recorded packed run for this exact line — two
+  // typed-array stores per cell, no interning/packing/guard work. The run
+  // dies with its screen; a width transition needs the slow path's guards
+  // and replayCellRun reports that.
+  if (packed !== undefined) {
+    const run = packed.lines.get(line)
+    if (
+      run !== undefined &&
+      run.charPool === screen.charPool &&
+      x >= 0 &&
+      x + cellRunSpan(run) <= screenWidth
+    ) {
+      if (replayCellRun(screen, x, y, run)) {
+        // LRU refresh (chars budget unchanged: same key length).
+        packed.lines.delete(line)
+        packed.lines.set(line, run)
+        return x + cellRunSpan(run)
+      }
+      // fall through to the slow path for this line this frame
+    }
+  }
+
   let characters = charCache.get(line)
   if (!characters) {
     characters = buildClusteredChars(line, stylePool, streamingSlot)
     charCache.set(line, characters)
   }
+
+  // Recording for the packed fast path: only plain single/wide char cells
+  // are recordable — control chars (tab expansion is x-relative), edge
+  // SpacerHead substitution, and y/x off-screen abort it. The packed-run
+  // limit is far above the charCache's MAX_CACHEABLE_LINE: a run costs
+  // three small integers per cell (no per-char objects), so even the
+  // ~700-char ANSI-art whale lines belong — without this they
+  // re-tokenize and re-cluster EVERY frame.
+  const recordable =
+    packed !== undefined &&
+    line.length <= PACKED_MAX_LINE &&
+    x >= 0 &&
+    y >= 0 &&
+    y < screen.height
+  let run = recordable ? createCellRun(screen) : undefined
+  let runAlive = run !== undefined
 
   let offsetX = x
 
@@ -943,6 +1069,8 @@ function writeLineToScreen(
     // mismatches. stringWidth treats these as width 0, but terminals may
     // move the cursor differently.
     if (codePoint !== undefined && codePoint <= 0x1f) {
+      // Not recordable: tab expansion is x-relative, ESC handling varies.
+      runAlive = false
       // Tab (0x09): expand to spaces to reach next tab stop
       if (codePoint === 0x09) {
         const tabWidth = 8
@@ -1051,9 +1179,10 @@ function writeLineToScreen(
     const isWideCharacter = charWidth >= 2
 
     // Wide char at last column can't fit — terminal would wrap it to
-    // the next line, desyncing our cursor model. Place a SpacerHead
-    // to mark the blank column, matching terminal behavior.
+    // the next line, desyncing our cursor model. Place a SpacerHead to
+    // mark the blank column, matching terminal behavior.
     if (isWideCharacter && offsetX + 2 > screenWidth) {
+      runAlive = false
       setCellAt(screen, offsetX, y, {
         char: ' ',
         styleId: stylePool.none,
@@ -1067,13 +1196,39 @@ function writeLineToScreen(
     // styleId + hyperlink were precomputed during clustering (once per
     // style run, cached via charCache). Hot loop is now just property
     // reads — no intern, no extract, no filter per frame.
+    const cellWidth = isWideCharacter ? CellWidth.Wide : CellWidth.Narrow
     setCellAt(screen, offsetX, y, {
       char: character.value,
       styleId: character.styleId,
-      width: isWideCharacter ? CellWidth.Wide : CellWidth.Narrow,
+      width: cellWidth,
       hyperlink: character.hyperlink,
     })
+    if (runAlive && run !== undefined) {
+      recordCellRunEntry(run, screen, offsetX, {
+        char: character.value,
+        styleId: character.styleId,
+        width: cellWidth,
+        hyperlink: character.hyperlink,
+      })
+      // setCellAt also writes a SpacerTail after a wide char (when it
+      // fits); record that deterministic write too, or abort at the edge.
+      if (isWideCharacter) {
+        if (offsetX + 1 < screenWidth) {
+          recordSpacerRunEntry(run, offsetX + 1)
+        } else {
+          runAlive = false
+        }
+      }
+    }
     offsetX += isWideCharacter ? 2 : 1
+  }
+
+  // Commit the recording for the packed fast path. Complete NON-EMPTY
+  // runs only: an empty line ('' from split('\n'), zero-width-only lines)
+  // records zero entries and would commit a degenerate run whose replay
+  // writes NaN damage (gaps[0] undefined) and poisons the whole frame diff.
+  if (runAlive && run !== undefined && packed !== undefined && run.gaps.length > 0) {
+    packed.commit(line, run)
   }
 
   return offsetX

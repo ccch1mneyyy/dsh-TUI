@@ -142,6 +142,8 @@ const dict = {
   'skill-release-notes-prompt': { zh: '请使用 release-notes 技能为当前项目生成发布说明。', en: 'Use the release-notes skill to generate release notes for the current project.' },
   'skill-vuln-check-prompt': { zh: '请使用 vuln-check 技能对当前项目做一次安全漏洞检查。', en: 'Use the vuln-check skill to run a security vulnerability check on the current project.' },
   'context-loaded': { zh: '已加载上下文', en: 'Context loaded' },
+  'context-panel-expand': { zh: '展开', en: 'Expand' },
+  'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
   'copied-chars': { zh: '已复制 {{n}} 个字符', en: 'Copied {{n}} characters' },
   'activity-usage-name': { zh: '/activity frames <名>', en: '/activity frames <name>' },
   'activity-current-preset': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
@@ -247,6 +249,8 @@ const dict = {
   'btw-hint-done': { zh: '↑/↓ 滚动 · Space/Enter/Esc 关闭 · c 复制', en: '↑/↓ scroll · Space/Enter/Esc dismiss · c copy' },
   'btw-llm-unavailable': { zh: '侧问不可用（llm 服务未挂载）', en: 'Side question unavailable (llm service not mounted)' },
   'exit-press-again': { zh: '再次按 Ctrl+C 退出', en: 'Press Ctrl+C again to exit' },
+  'esc-again-rewind': { zh: '再次按 Esc 时间回溯', en: 'Press Esc again to rewind' },
+  'esc-again-clear': { zh: '再次按 Esc 清空', en: 'Press Esc again to clear' },
   'new-session-started': { zh: '已新建会话', en: 'New session started' },
   'command-not-found': { zh: '/{{name}}：没有这个命令', en: '/{{name}}: no such command' },
   'thinking-toggled': { zh: '思考模式：{{state}}', en: 'Thinking {{state}}' },
@@ -261,6 +265,16 @@ const dict = {
 
   // ── plugin.ts — /update flow ───────────────────────────────────────
   'update-aborted-no-profile': { zh: 'dsh-tui 更新中止：未解析到 dsh profile。', en: 'dsh-tui update aborted: no dsh profile resolved.' },
+  // 0.8.3 launcher alignment bridge: /update only replaces the profile
+  // copy; the global `dsh-tui` launcher must be aligned separately.
+  'update-launcher-align-unknown': {
+    zh: 'Profile 已更新到 v{{version}}。如果你平时使用全局 dsh-tui 命令启动，请同步更新全局启动器：\n  npm install -g @deepseek-harness-tui/dsh-tui@{{version}}',
+    en: 'The profile is now v{{version}}. If you normally launch with the global dsh-tui command, align the global launcher too:\n  npm install -g @deepseek-harness-tui/dsh-tui@{{version}}',
+  },
+  'update-launcher-outdated': {
+    zh: 'Profile 已更新到 v{{profile}}，但全局启动器仍是 v{{launcher}}。请同步更新：\n  npm install -g @deepseek-harness-tui/dsh-tui@{{profile}}',
+    en: 'The profile is now v{{profile}}, but the global launcher is still v{{launcher}}. Align it with:\n  npm install -g @deepseek-harness-tui/dsh-tui@{{profile}}',
+  },
 
   // ── components/ActivityLine.tsx ──────────────────────────────────────
   'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
@@ -291,10 +305,8 @@ const dict = {
 
   // ── components/LogoV2.tsx ───────────────────────────────────────────
   'logo-tagline': { zh: '探索未至之境！', en: 'Explore the uncharted!' },
-  'logo-tip-model': { zh: '切换模型', en: 'switch model' },
-  'logo-tip-help': { zh: '查看命令', en: 'view commands' },
-  'logo-tip-tab': { zh: '自动补全', en: 'autocomplete' },
   'logo-tip-prefix': { zh: '提示：', en: 'Tip: ' },
+  'logo-tip-more': { zh: '更多技巧', en: 'more tips' },
 
   // ── components/PromptInput.tsx ──────────────────────────────────────
   'input-sent-after-turn': { zh: '已发送，当前回合结束后处理', en: 'Sent, processed after the current turn' },
@@ -347,6 +359,8 @@ const dict = {
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
   'help-open-editor': { zh: 'ctrl+x 打开编辑器', en: 'ctrl+x to open editor' },
   'help-commands-title': { zh: '命令：', en: 'commands:' },
+  'tips-title': { zh: '使用技巧（快捷键 · 命令 · 工作流 · 个性化 · 避坑）', en: 'Usage tips (shortcuts · commands · workflow · display · gotchas)' },
+  'tips-hint': { zh: '↑/↓ 滚动 · Esc 关闭', en: '↑/↓ scroll · Esc to close' },
 
   // ── components/InterruptedByUser.tsx ────────────────────────────────
   'interrupted-by-user': { zh: '已打断 ', en: 'Interrupted ' },
@@ -372,6 +386,7 @@ const dict = {
   'settings-title': { zh: '插件设置', en: 'Plugin settings' },
   'settings-unavailable': { zh: '设置服务未挂载——只读', en: 'settings service absent — read-only' },
   'settings-empty': { zh: '没有可配置的插件设置（尚无插件注册设置区块）', en: 'No configurable plugin settings (no plugin has registered a section)' },
+  'settings-group-empty': { zh: '此分组没有可配置字段', en: 'No configurable fields in this group' },
   'settings-section-unavailable': { zh: '命名空间未注册', en: 'namespace not served' },
   'settings-readonly-heading': { zh: '其他设置命名空间（只读）', en: 'Other settings namespaces (read-only)' },
   'settings-readonly-hint': { zh: '以上命名空间尚无 TUI 设置区块，可手工编辑 {{path}}', en: 'No TUI section for these namespaces yet — edit {{path}} by hand' },
@@ -388,7 +403,8 @@ const dict = {
   'settings-saved': { zh: '已保存 {{ns}}', en: 'Saved {{ns}}' },
   'settings-save-failed': { zh: '保存 {{ns}} 失败——请重试', en: 'Saving {{ns}} failed — please retry' },
   'settings-discarded': { zh: '已放弃所有未保存的修改', en: 'Discarded all unsaved edits' },
-  'settings-hint-list': { zh: '**Enter** 编辑/切换 · s 保存 · d 放弃 · Esc 放弃/退出', en: '**Enter** edit/toggle · s save · d discard · Esc discard/exit' },
+  'settings-hint-list': { zh: '**Enter** 进入/编辑/切换 · s 保存 · d 放弃 · Esc 放弃/退出', en: '**Enter** open/edit/toggle · s save · d discard · Esc discard/exit' },
+  'settings-hint-group': { zh: '**Enter** 编辑/切换 · s 保存 · d 放弃 · Esc 返回', en: '**Enter** edit/toggle · s save · d discard · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
 
   // ── 会话浏览器：行、计数、筛选、预览 ───────────────────────────────
@@ -430,6 +446,9 @@ const dict = {
   'hint-select-exit': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** to select · Esc to exit' },
   'hint-fill-exit': { zh: '**Enter** 填入命令 · Esc 退出', en: '**Enter** to insert · Esc to exit' },
   'hint-rewind-back': { zh: '**Enter** 回退 · Esc 返回', en: '**Enter** to rewind · Esc to back' },
+  'statusline-hint-select': { zh: 'esc 返回输入', en: 'esc to return to input' },
+  'statusline-hint-working': { zh: 'esc 中断', en: 'esc to interrupt' },
+  'statusline-hint-shortcuts': { zh: '? 查看快捷键', en: '? for shortcuts' },
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
@@ -501,7 +520,7 @@ const dict = {
   'plugins-check-usage': { zh: '用法：/plugins check <dsh-plugin.json 路径>', en: 'Usage: /plugins check <path-to-dsh-plugin.json>' },
   'plugins-check-not-found': { zh: '文件不存在：{{path}}', en: 'File not found: {{path}}' },
   'plugins-check-invalid-json': { zh: '不是可解析的 JSON：{{err}}', en: 'Not parseable JSON: {{err}}' },
-  'plugins-check-spec-unavailable': { zh: 'vendored 规范数据不可用（ecosystem-spec/），无法校验。', en: 'Vendored spec data unavailable (ecosystem-spec/); cannot validate.' },
+  'plugins-check-spec-unavailable': { zh: 'vendored 规范数据不可用（dsh-ecosystem-spec/），无法校验。', en: 'Vendored spec data unavailable (dsh-ecosystem-spec/); cannot validate.' },
   'plugins-check-schema-failed': { zh: 'schema 校验失败：{{err}}', en: 'Schema validation failed: {{err}}' },
   'plugins-check-invalid': { zh: '语义校验失败：{{err}}', en: 'Semantic validation failed: {{err}}' },
   'plugins-check-state': { zh: '协商结果：{{state}}', en: 'Negotiation decision: {{state}}' },

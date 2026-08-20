@@ -12,7 +12,7 @@ dsh-TUI 是终端程序：它把 ANSI 写进 PTY、从 PTY 读按键，因此任
    实现，扩展已上架 VS Code Marketplace。
 2. **内置集成终端直接运行** —— 零安装，秒级可用，适合不想装扩展的场景。
 
-> 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件，当前 **0.7.1**，建议
+> 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件，当前 **0.8.3**，建议
 > 0.7.0+）；`dsh-tui-vscode` 指 companion 扩展（当前 **0.5.1**）。两者版本
 > 独立、各自发布。扩展的完整说明见其仓库
 > [baobaolaodie/dsh-tui-vscode](https://github.com/baobaolaodie/dsh-tui-vscode)
@@ -91,6 +91,7 @@ npm run package && code --install-extension dsh-tui-vscode-0.5.1.vsix --force
 | `dsh-tui-vscode.kill` | Terminate session / 终止会话 | 向最近终端发送 Ctrl+C |
 | `dsh-tui-vscode.refreshSessions` | Refresh sessions / 刷新会话列表 | 手动刷新侧边栏 |
 | `dsh-tui-vscode.resumeSession` | Resume session / 恢复会话 | 恢复指定会话（侧边栏点击） |
+| `dsh-tui-vscode.insertAtMention` | Insert @-mention / 插入 @文件引用 | 编辑器聚焦时按 `Ctrl+Alt+K`（macOS `Cmd+Alt+K`）或编辑器右键：把当前文件/选中代码以 `@绝对路径 L起-止` 插入 dsh-tui 输入框（绝对路径与 dsh-tui 会话 cwd 无关；未选中引用整个文件；无运行会话回退为复制到剪贴板） |
 
 ### 架构与机制
 
@@ -200,6 +201,9 @@ commit-msg）由仓库 `.githooks/` 分发。
    ```sh
    dsh-tui --resume
    ```
+
+   > `-c` / `--continue` 与 `--resume` 等价；`dsh-tui --resume <id>`（或
+   > `--resume=<id>`，0.7.0 起）恢复指定会话。
 
 dsh-TUI 对 xterm.js（VS Code / Cursor / code-server）有专门的兼容路径：
 truecolor 配色、OSC 8 链接（由 VS Code 直接渲染为可点击）、OSC 52 剪贴板

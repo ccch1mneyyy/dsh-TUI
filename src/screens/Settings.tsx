@@ -6,7 +6,7 @@ import { isMod, isPlainReturn } from '../utils/modifiers.js'
 import { truncateWidth } from '../sessions/format.js'
 import { getLang, t } from '../i18n.js'
 import { SettingsForm } from '../dsh-adapter/settingsEditor.js'
-import type { TuiSettingsField, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
+import type { TuiSettingsField, TuiSettingsGroup, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
 import type { LocalizedDescriptions } from '../commands.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 
@@ -19,11 +19,15 @@ interface EditingState {
   draft: string
 }
 
-/** One flat, focusable row: a field inside a registered section. */
-interface FocusEntry {
+interface ActiveGroup {
   ns: string
-  field: TuiSettingsField
+  id: string
 }
+
+/** One focusable row on either the root page or a group subpage. */
+type FocusEntry =
+  | { kind: 'field'; ns: string; field: TuiSettingsField }
+  | { kind: 'group'; ns: string; group: TuiSettingsGroup }
 
 /** One rendered block with its height, for focus-follow windowing. */
 interface RenderEntry {
@@ -81,6 +85,7 @@ export function Settings({
   const [sections, setSections] = React.useState(() => channel.settingsSections())
   const [mode, setMode] = React.useState<SettingsMode>('list')
   const [editing, setEditing] = React.useState<EditingState | null>(null)
+  const [activeGroup, setActiveGroup] = React.useState<ActiveGroup | null>(null)
   const [focusIndex, setFocusIndex] = React.useState(0)
   const [notice, setNotice] = React.useState<{ text: string; tone: 'error' | 'success' } | undefined>(undefined)
   /** Configured status of every secret field's credential ref. */
@@ -140,10 +145,27 @@ export function Settings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host, sections, secretProbe])
 
-  /** Focusable rows in display order: every field of every section. */
-  const focusable: FocusEntry[] = sections.flatMap(section =>
-    section.fields.map(field => ({ ns: section.ns, field })),
-  )
+  const activeSection = activeGroup === null ? undefined : sections.find(section => section.ns === activeGroup.ns)
+  const activeGroupSpec = activeSection?.groups?.find(group => group.id === activeGroup?.id)
+  React.useEffect(() => {
+    if (activeGroup !== null && activeGroupSpec === undefined) {
+      setActiveGroup(null)
+      setFocusIndex(0)
+      setWindowStart(0)
+    }
+  }, [activeGroup, activeGroupSpec])
+
+  /** Focusable rows in display order for the current page. */
+  const focusable: FocusEntry[] = activeSection !== undefined && activeGroupSpec !== undefined
+    ? activeSection.fields
+      .filter(field => field.group === activeGroupSpec.id)
+      .map(field => ({ kind: 'field', ns: activeSection.ns, field }))
+    : sections.flatMap(section => [
+      ...section.fields
+        .filter(field => field.group === undefined)
+        .map(field => ({ kind: 'field' as const, ns: section.ns, field })),
+      ...(section.groups ?? []).map(group => ({ kind: 'group' as const, ns: section.ns, group })),
+    ])
   const effFocus = Math.min(focusIndex, Math.max(0, focusable.length - 1))
   const focused = focusable.length === 0 ? undefined : focusable[effFocus]
   const focusedForm = focused === undefined ? undefined : forms.get(focused.ns)
@@ -208,6 +230,12 @@ export function Settings({
     } else if (key.downArrow) {
       setFocusIndex(Math.min(Math.max(0, focusable.length - 1), effFocus + 1))
     } else if (isPlainReturn(key) && focused !== undefined) {
+      if (focused.kind === 'group') {
+        setActiveGroup({ ns: focused.ns, id: focused.group.id })
+        setFocusIndex(0)
+        setWindowStart(0)
+        return
+      }
       // A save in flight owns the section's drafts; starting an edit mid-write
       // is exactly the lost-draft race the staged model exists to prevent.
       if (focusedForm === undefined || !focusedForm.available || focusedForm.saving) return
@@ -225,11 +253,17 @@ export function Settings({
       setNotice(undefined)
       bump()
     } else if (key.escape) {
-      // Esc backs out one layer at a time: staged drafts first — ANY dirty
-      // section, not just the focused one, so leaving never silently drops
-      // an edit made two sections ago — the screen second. A save in flight
-      // cannot be undone from here; let it settle instead of discarding
-      // around it.
+      if (activeGroupSpec !== undefined) {
+        // Group navigation never settles drafts; the root page owns discard/exit.
+        setActiveGroup(null)
+        setFocusIndex(0)
+        setWindowStart(0)
+        return
+      }
+      // At the root, Esc backs out one layer at a time: staged drafts first —
+      // ANY dirty section, not just the focused one — then the screen itself.
+      // A save in flight cannot be undone from here; let it settle instead of
+      // discarding around it.
       const dirty = [...forms.values()].filter(form => form.shell().dirty)
       if (dirty.length > 0) {
         if (dirty.some(form => form.saving)) return
@@ -246,7 +280,7 @@ export function Settings({
     const ns = section.ns
     const form = forms.get(ns)
     const state = form?.field(field) ?? { text: '', overridden: false, invalid: false }
-    const isFocused = focused !== undefined && focused.ns === ns && focused.field === field
+    const isFocused = focused?.kind === 'field' && focused.ns === ns && focused.field === field
     const isEditing = isFocused && mode === 'edit' && editing !== null
     const label = pick(field.label, field.descriptions)
     const hint = field.hint !== undefined ? pick(field.hint, field.hintDescriptions) : undefined
@@ -288,83 +322,112 @@ export function Settings({
   }
 
   // ── Layout: a flat entry list with accounted line heights, windowed so the
-  // focused field is always on screen no matter how long the list gets. ────
+  // focused row is always on screen no matter how long the current page gets. ─
   const entries: RenderEntry[] = []
   let focusCursor = 0
-  sections.forEach((section, sectionIndex) => {
-    const form = forms.get(section.ns)
-    const view = form?.namespace
-    const shell = form?.shell()
+  const addField = (section: TuiSettingsSection, field: TuiSettingsField): void => {
+    const isFocused = focused?.kind === 'field' && focused.ns === section.ns && focused.field === field
+    const index = focusCursor
+    focusCursor += 1
     entries.push({
-      key: `section:${section.ns}`,
-      lines: sectionIndex === 0 ? 1 : 2,
-      node: (
-        <Box flexDirection="column">
-          {sectionIndex > 0 && <Text> </Text>}
-          <Box>
-            <Text bold color="permission">{pick(section.title, section.descriptions)}</Text>
-            <Text dimColor> ({section.ns})</Text>
-            {view?.applies === 'restart' && <Text color="warning"> [{t('settings-badge-restart')}]</Text>}
-            {view === undefined && <Text color="warning"> [{t('settings-section-unavailable')}]</Text>}
-            {shell?.dirty === true && <Text color="suggestion"> [{t('settings-badge-dirty')}]</Text>}
-            {shell?.saving === true && <Text dimColor> [{t('settings-badge-saving')}]</Text>}
-            {shell?.failed === true && <Text color="error"> [{t('settings-badge-failed')}]</Text>}
-          </Box>
-        </Box>
-      ),
+      key: `field:${section.ns}:${field.path.join('.')}`,
+      lines: field.hint !== undefined && isFocused ? 2 : 1,
+      focus: index,
+      node: renderField(section, field),
     })
-    for (const field of section.fields) {
-      const isFocused = focused !== undefined && focused.ns === section.ns && focused.field === field
-      const hasHint = field.hint !== undefined && isFocused
-      const index = focusCursor
-      focusCursor += 1
-      entries.push({
-        key: `field:${section.ns}:${field.path.join('.')}`,
-        lines: hasHint ? 2 : 1,
-        focus: index,
-        node: renderField(section, field),
-      })
-    }
-  })
+  }
 
-  const registeredNs = new Set(sections.map(section => section.ns))
-  const readonlyNamespaces = namespaces.filter(entry => !registeredNs.has(entry.ns))
-  if (readonlyNamespaces.length > 0) {
-    entries.push({
-      key: 'readonly:heading',
-      lines: 2,
-      node: (
-        <Box flexDirection="column">
-          <Text> </Text>
-          <Text bold dimColor>{t('settings-readonly-heading')}</Text>
-        </Box>
-      ),
-    })
-    for (const entry of readonlyNamespaces) {
+  if (activeSection !== undefined && activeGroupSpec !== undefined) {
+    const groupFields = activeSection.fields.filter(field => field.group === activeGroupSpec.id)
+    for (const field of groupFields) addField(activeSection, field)
+    if (groupFields.length === 0) {
+      entries.push({ key: 'group:empty', lines: 1, node: <Text dimColor>{t('settings-group-empty')}</Text> })
+    }
+  } else {
+    sections.forEach((section, sectionIndex) => {
+      const form = forms.get(section.ns)
+      const view = form?.namespace
+      const shell = form?.shell()
       entries.push({
-        key: `readonly:${entry.ns}`,
-        lines: 1,
+        key: `section:${section.ns}`,
+        lines: sectionIndex === 0 ? 1 : 2,
         node: (
-          <Box>
-            <Text>{'  '}{entry.ns}</Text>
-            {entry.applies === 'restart' && <Text color="warning"> [{t('settings-badge-restart')}]</Text>}
-            <Text dimColor>{'  '}{valuePreview(entry.value, 60)}</Text>
+          <Box flexDirection="column">
+            {sectionIndex > 0 && <Text> </Text>}
+            <Box>
+              <Text bold color="permission">{pick(section.title, section.descriptions)}</Text>
+              <Text dimColor> ({section.ns})</Text>
+              {view?.applies === 'restart' && <Text color="warning"> [{t('settings-badge-restart')}]</Text>}
+              {view === undefined && <Text color="warning"> [{t('settings-section-unavailable')}]</Text>}
+              {shell?.dirty === true && <Text color="suggestion"> [{t('settings-badge-dirty')}]</Text>}
+              {shell?.saving === true && <Text dimColor> [{t('settings-badge-saving')}]</Text>}
+              {shell?.failed === true && <Text color="error"> [{t('settings-badge-failed')}]</Text>}
+            </Box>
           </Box>
         ),
       })
+      for (const field of section.fields) {
+        if (field.group === undefined) addField(section, field)
+      }
+      for (const group of section.groups ?? []) {
+        const isFocused = focused?.kind === 'group' && focused.ns === section.ns && focused.group === group
+        const index = focusCursor
+        focusCursor += 1
+        entries.push({
+          key: `group:${section.ns}:${group.id}`,
+          lines: 1,
+          focus: index,
+          node: (
+            <Box>
+              <Text color={isFocused ? 'suggestion' : undefined}>{isFocused ? '❯ ' : '  '}</Text>
+              <Text bold={isFocused}>{pick(group.title, group.descriptions)}</Text>
+              <Box flexGrow={1} />
+              <Text color={isFocused ? 'suggestion' : undefined}>›</Text>
+            </Box>
+          ),
+        })
+      }
+    })
+
+    const registeredNs = new Set(sections.map(section => section.ns))
+    const readonlyNamespaces = namespaces.filter(entry => !registeredNs.has(entry.ns))
+    if (readonlyNamespaces.length > 0) {
+      entries.push({
+        key: 'readonly:heading',
+        lines: 2,
+        node: (
+          <Box flexDirection="column">
+            <Text> </Text>
+            <Text bold dimColor>{t('settings-readonly-heading')}</Text>
+          </Box>
+        ),
+      })
+      for (const entry of readonlyNamespaces) {
+        entries.push({
+          key: `readonly:${entry.ns}`,
+          lines: 1,
+          node: (
+            <Box>
+              <Text>{'  '}{entry.ns}</Text>
+              {entry.applies === 'restart' && <Text color="warning"> [{t('settings-badge-restart')}]</Text>}
+              <Text dimColor>{'  '}{valuePreview(entry.value, 60)}</Text>
+            </Box>
+          ),
+        })
+      }
+      entries.push({
+        key: 'readonly:hint',
+        lines: 1,
+        node: <Text dimColor>{'  '}{t('settings-readonly-hint', { path: '~/.dsh/settings.yaml' })}</Text>,
+      })
     }
-    entries.push({
-      key: 'readonly:hint',
-      lines: 1,
-      node: <Text dimColor>{'  '}{t('settings-readonly-hint', { path: '~/.dsh/settings.yaml' })}</Text>,
-    })
-  }
-  if (sections.length === 0 && readonlyNamespaces.length === 0) {
-    entries.push({
-      key: 'empty',
-      lines: 1,
-      node: <Text dimColor>{t('settings-empty')}</Text>,
-    })
+    if (sections.length === 0 && readonlyNamespaces.length === 0) {
+      entries.push({
+        key: 'empty',
+        lines: 1,
+        node: <Text dimColor>{t('settings-empty')}</Text>,
+      })
+    }
   }
 
   // Focus-follow window: keep the focused entry fully inside the viewport.
@@ -395,10 +458,15 @@ export function Settings({
     return start >= windowStart && start + entry.lines <= windowStart + viewport
   })
 
+  const title = activeSection !== undefined && activeGroupSpec !== undefined
+    ? `${t('settings-title')} › ${pick(activeSection.title, activeSection.descriptions)} › ${pick(activeGroupSpec.title, activeGroupSpec.descriptions)}`
+    : t('settings-title')
+  const navigationHint = activeGroupSpec === undefined ? t('settings-hint-list') : t('settings-hint-group')
+
   return (
     <Box flexDirection="column" width={columns} height={rows}>
       <Box>
-        <Text bold>{t('settings-title')}</Text>
+        <Text bold>{title}</Text>
         <Box flexGrow={1} />
         {host === undefined && <Text color="warning">{t('settings-unavailable')}</Text>}
       </Box>
@@ -412,7 +480,7 @@ export function Settings({
       )}
       <Divider />
       <Text dimColor italic>
-        <HintLine text={mode === 'edit' ? t('settings-hint-edit') : t('settings-hint-list')} />
+        <HintLine text={mode === 'edit' ? t('settings-hint-edit') : navigationHint} />
       </Text>
     </Box>
   )

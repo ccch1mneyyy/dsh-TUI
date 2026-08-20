@@ -46,16 +46,17 @@ import {
   permissionScopeCovers,
 } from '../plugin-spec/permission-scope.js'
 import { TUI_DECISION_EVENT_NAMES } from '../plugin-spec/tui-extension.js'
+import { bindCallerEffect, compositionRoot } from './host-access.js'
 
 /** The intercept permission each decision event requires (D-7 naming:
  *  `domain.resource.intercept`). Observe-class events (tui/rewind-done,
  *  tui/session-switched) are deliberately absent. */
-export const DECISION_EVENT_PERMISSIONS: Readonly<Record<string, string>> = {
+export const DECISION_EVENT_PERMISSIONS: Readonly<Record<string, string>> = Object.freeze({
   'tui/input': 'session.input.intercept',
   'tui/rewind-prompt': 'session.rewind.intercept',
   'tui/session-switch': 'session.switch.intercept',
   'tui/compact': 'session.compact.intercept',
-}
+})
 
 // ── Compatibility aliases (pre-GrantStore names) ────────────────────────────
 // The grant-file format and these entry points predate the unified store;
@@ -126,9 +127,7 @@ export interface DecisionRegistry {
 const registries = new WeakMap<object, DecisionRegistry>()
 
 function rootKey(ctx: Context): object {
-  const root: unknown = (ctx as { root?: unknown }).root
-  if (typeof root === 'object' && root !== null) return root
-  return ctx as unknown as object
+  return compositionRoot(ctx) as unknown as object
 }
 
 function registryFor(ctx: Context, grants?: GrantStore): DecisionRegistry {
@@ -306,8 +305,10 @@ export function registerDecisionHandler(
     }
     return true
   }
-  // Both deactivation and grant-file revocation are release boundaries.
-  try { pluginCtx.effect(() => release) } catch { /* degraded test context */ }
+  // Both deactivation and grant-file revocation are release boundaries. Bind
+  // through the host-captured Fiber effect so an explicit Context shadow
+  // cannot replace the cleanup function.
+  bindCallerEffect(pluginCtx, release)
   if (permission !== undefined) {
     const stop = registry.grants.onChange?.(() => {
       const principal = { componentId: identity.componentId, activationId: identity.activationId }
@@ -315,7 +316,7 @@ export function registerDecisionHandler(
     })
     stopGrantWatch = stop
     if (stop !== undefined) {
-      try { pluginCtx.effect(() => stop) } catch { /* degraded test context */ }
+      bindCallerEffect(pluginCtx, stop)
     }
   }
   return release
@@ -353,7 +354,7 @@ export function installDecisionGuard(ctx: Context, grants: GrantStore): void {
   // `root` or `on` entirely — the gate is best-effort there, matching the
   // channel's soft-degradation posture: no dedup bookkeeping without a root
   // object, no hook without an `on`.
-  const root: unknown = (ctx as { root?: unknown }).root ?? ctx
+  const root: unknown = compositionRoot(ctx)
   // Keep the live grant source even when another row installed the Cordis
   // hook first.  The file-backed GrantStore evaluates each operation again.
   registryFor(ctx, grants)

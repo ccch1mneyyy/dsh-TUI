@@ -29,6 +29,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { VerifiedComponentIdentity } from './component-identity.js'
+import { compositionRoot } from './host-access.js'
 
 export interface CommandOwner {
   componentId: string
@@ -39,8 +40,7 @@ export interface CommandOwner {
 const ownerMaps = new WeakMap<object, WeakMap<Function, CommandOwner>>()
 
 function rootKeyOf(ctx: Context): object | undefined {
-  const root: unknown = (ctx as { root?: unknown }).root ?? ctx
-  return typeof root === 'object' && root !== null ? root : undefined
+  return compositionRoot(ctx) as unknown as object
 }
 
 /** The registrant's display name for diagnostics only: the passed context's

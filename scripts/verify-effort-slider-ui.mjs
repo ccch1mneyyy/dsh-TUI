@@ -97,6 +97,9 @@ function makeChannel() {
     workingActivity: undefined,
     activityEnabled: false,
     contextBarEnabled: true,
+    // Status footer fields: the assertions below watch the mode label, so
+    // enable it explicitly (the compact defaults hide it).
+    statusBar: { mode: true },
     agentPreset: 'standard',
     goal: undefined,
     todos: [],

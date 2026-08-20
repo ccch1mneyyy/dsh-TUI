@@ -35,7 +35,7 @@ import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt
 import { applySearchHighlight } from './searchHighlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
-import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, SGR_RESET } from './termio/csi.js';
+import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
@@ -189,8 +189,19 @@ export default class Ink {
     x: number;
     y: number;
   } | null = null;
+  private handleStdinError(error: NodeJS.ErrnoException): void {
+    if (this.isUnmounted && error.code === 'EIO') {
+      return;
+    }
+    throw error;
+  }
   constructor(private readonly options: Options) {
     autoBind(this);
+    if (options.stdin.isTTY) {
+      // Keep this listener through teardown: a pending libuv TTY read can
+      // report EIO only after raw mode and React have already been released.
+      options.stdin.on('error', this.handleStdinError);
+    }
     if (this.options.patchConsole) {
       this.restoreConsole = this.patchConsole();
       this.restoreStderr = this.patchStderr();
@@ -467,6 +478,23 @@ export default class Ink {
     // Kitty stack balanced (a well-behaved editor restores our entry, so
     // without the pop we'd accumulate depth on each editor round-trip).
     this.options.stdout.write('\x1b[?1004h' + (supportsWin32InputMode() ? ENABLE_WIN32_INPUT_MODE : supportsExtendedKeys() ? DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS : ''));
+  }
+  /**
+   * One-shot viewport re-anchor for the NEXT main-screen frame: repaint the
+   * visible viewport in place instead of diffing. Exposed for callers that
+   * know a layout flip just rewrote the whole frame (Ctrl+O transcript
+   * toggle): the ordinary scroll-based diff pushes rows into terminal
+   * scrollback on every expand and nothing removes them on collapse — rapid
+   * toggles drift the virtual↔scrollback mapping until writes misland.
+   * In-place repaint adds nothing to scrollback. No-op in alt-screen
+   * (already CSI H-anchored every frame). ONLY sets the flag: the caller's
+   * own state change (setExpanded) drives the render that consumes it —
+   * forcing an extra render here would paint the OLD layout once more and
+   * burn the flag before the real frame lands.
+   */
+  reanchorViewport() {
+    if (this.altScreenActive) return;
+    this.log.requestViewportReanchor();
   }
   onRender() {
     if (this.isUnmounted || this.isPaused) {
@@ -894,6 +922,30 @@ export default class Ink {
       // repaint() resets frontFrame to 0×0. Without this flag the next
       // frame's blit optimization copies from that empty screen and the
       // diff sees no content. onRender resets the flag at frame end.
+      this.prevFrameContaminated = true;
+    }
+    this.onRender();
+  }
+
+  /**
+   * Establish a genuinely fresh terminal page: clear both the visible screen
+   * and native scrollback, reset frame correspondence, then redraw the current
+   * React tree. This is intentionally stronger than Ctrl+L/forceRedraw(),
+   * which preserves history; use it only at a destructive UI boundary such as
+   * `/new`, where showing the previous conversation above the new session is
+   * misleading.
+   */
+  clearScrollbackAndRedraw(): void {
+    if (!this.options.stdout.isTTY || this.isUnmounted || this.isPaused) return;
+    // Keep 3J outside synchronized output. Windows Terminal can relocate the
+    // viewport when erase-buffer commands execute inside BSU/ESU.
+    this.options.stdout.write(
+      SGR_RESET + ERASE_SCROLLBACK + ERASE_SCREEN + CURSOR_HOME,
+    );
+    if (this.altScreenActive) {
+      this.resetFramesForAltScreen();
+    } else {
+      this.repaint();
       this.prevFrameContaminated = true;
     }
     this.onRender();

@@ -22,6 +22,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
+import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 
 /** Minimal shape of the ink Key flags the matcher reads (kept structurally
  *  compatible with `Key` from the ui kit without importing React-facing
@@ -44,6 +45,14 @@ export interface TuiShortcutKey {
   end?: boolean
   pageUp?: boolean
   pageDown?: boolean
+}
+
+/** Controls that only the Chat input path may use. They are kept out of the
+ * Cordis service object, so one plugin cannot synthesize an input event to
+ * invoke another plugin's shortcut handler. */
+export interface TuiShortcutHost {
+  dispatch(input: string, key: TuiShortcutKey): boolean
+  setErrorHandler(handler: (combo: string, error: unknown) => void): () => void
 }
 
 export interface TuiShortcutOptions {
@@ -221,13 +230,28 @@ declare module '@deepseek-ai/cordis' {
 
 /** `ctx.tuiShortcuts` — plugin keyboard shortcut registry. */
 export class TuiShortcutRuntime extends Service {
-  private readonly shortcuts = new Map<string, RegisteredShortcut>()
-  /** Handler invocation errors are surfaced through this hook — the chat
-   *  screen wires it to its notification toast. */
-  onError: ((combo: string, error: unknown) => void) | undefined
-
   constructor(ctx: Context) {
     super(ctx, 'tuiShortcuts')
+    compositionRoot(ctx)
+    const runtime = this
+    const state: ShortcutState = {
+      shortcuts: new Map(),
+      owners: new Map(),
+      onError: undefined,
+      host: undefined,
+      logger: ctx.logger,
+    }
+    const host: TuiShortcutHost = Object.freeze({
+      dispatch: (input, key) => dispatchShortcut(runtime, input, key),
+      setErrorHandler: (handler) => {
+        state.onError = handler
+        return () => {
+          if (state.onError === handler) state.onError = undefined
+        }
+      },
+    })
+    state.host = host
+    hostShortcuts.set(runtime, state)
   }
 
   /**
@@ -244,10 +268,29 @@ export class TuiShortcutRuntime extends Service {
    * effect ledger's pluginId — omitting it records `undeclared` (C-060).
    */
   register(combo: string, options: TuiShortcutOptions, identity?: Context): () => void {
-    const parsed = parseShortcutCombo(combo)
+    let caller: Context
+    try {
+      caller = requirePluginCaller(this.ctx, 'tuiShortcuts.register', this)
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiShortcuts.register requires a live non-root plugin activation')
+      return () => {}
+    }
+    const state = shortcutStateFor(this)
+    const owner = activationFiber(caller)
+    if (owner === undefined) {
+      this.ctx.logger.warn('dsh-tui: tuiShortcuts.register requires a live activation')
+      return () => {}
+    }
+    let parsed: ParsedCombo | undefined
+    try {
+      parsed = parseShortcutCombo(combo)
+    } catch {
+      this.ctx.logger.warn('dsh-tui: tuiShortcuts.register rejected an uncoercible combo')
+      return () => {}
+    }
     if (parsed === undefined) {
       this.ctx.logger.warn(
-        `dsh-tui: tuiShortcuts.register rejected ${JSON.stringify(combo)} — need ctrl/alt plus one key (e.g. "ctrl+shift+p")`,
+        'dsh-tui: tuiShortcuts.register rejected an invalid combo — need ctrl/alt plus one key (e.g. "ctrl+shift+p")',
       )
       return () => {}
     }
@@ -258,11 +301,11 @@ export class TuiShortcutRuntime extends Service {
     // still checked for combos reserved WITH shift (ctrl+shift+return).
     const shiftlessKey = comboKey({ ...parsed, shift: false })
     if (RESERVED_CANONICAL.has(key) || RESERVED_CANONICAL.has(shiftlessKey)) {
-      this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${combo}" — reserved by a built-in binding`)
+      this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${parsed.raw}" — reserved by a built-in binding`)
       return () => {}
     }
-    if (this.shortcuts.has(key)) {
-      this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${combo}" — already registered`)
+    if (state.shortcuts.has(key)) {
+      this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${parsed.raw}" — already registered`)
       this.ctx.get('tuiEffectLedger')?.record(
         {
           operation: 'bind',
@@ -274,49 +317,90 @@ export class TuiShortcutRuntime extends Service {
       )
       return () => {}
     }
-    const description = cleanScalarText(options?.description, 120)
-    if (typeof options?.handler !== 'function' || description === '') {
-      this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${combo}" — needs a description and a handler`)
+    let description: string
+    let handler: (() => void | Promise<void>) | undefined
+    try {
+      description = cleanScalarText(options?.description, 120)
+      handler = options?.handler
+    } catch {
+      this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${parsed.raw}" — malformed options`)
       return () => {}
     }
-    const entry: RegisteredShortcut = { combo: parsed, description, handler: options.handler }
-    this.shortcuts.set(key, entry)
+    if (typeof handler !== 'function' || description === '') {
+      this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${parsed.raw}" — needs a description and a handler`)
+      return () => {}
+    }
+    const entry: RegisteredShortcut = { combo: parsed, description, handler }
+    state.shortcuts.set(key, entry)
+    state.owners.set(key, owner)
     this.ctx.get('tuiEffectLedger')?.record(
       { operation: 'bind', resource: { kind: 'shortcut', id: key }, result: 'applied' },
       identity,
     )
-    return (): void => {
-      if (this.shortcuts.get(key) !== entry) return
-      this.shortcuts.delete(key)
+    const dispose = (): void => {
+      if (state.shortcuts.get(key) !== entry) return
+      state.shortcuts.delete(key)
+      state.owners.delete(key)
       this.ctx.get('tuiEffectLedger')?.record(
         { operation: 'release', resource: { kind: 'shortcut', id: key }, result: 'applied' },
         identity,
       )
     }
+    bindCallerEffect(caller, dispose)
+    return dispose
   }
 
   /** Registered combos with descriptions (diagnostics / future /help). */
   list(): readonly { combo: string; description: string }[] {
-    return [...this.shortcuts.values()].map(entry => ({ combo: entry.combo.raw, description: entry.description }))
+    const caller = requirePluginCaller(this.ctx, 'tuiShortcuts.list', this)
+    const owner = activationFiber(caller)
+    if (owner === undefined) return []
+    const state = shortcutStateFor(this)
+    return [...state.shortcuts.entries()]
+      .filter(([key]) => state.owners.get(key) === owner)
+      .map(([, entry]) => ({ combo: entry.combo.raw, description: entry.description }))
   }
+}
 
-  /**
-   * Match a keypress; on a hit, run the handler and return true (the UI
-   * consumes the key). Handler rejections are caught and reported through
-   * {@link onError} — never propagated into the input path.
-   */
-  dispatch(input: string, key: TuiShortcutKey): boolean {
-    for (const entry of this.shortcuts.values()) {
-      if (!matchShortcut(entry.combo, input, key)) continue
-      Promise.resolve()
-        .then(() => entry.handler())
-        .catch((error: unknown) => {
-          this.onError?.(entry.combo.raw, error)
-          this.ctx.logger.warn(`dsh-tui: shortcut "${entry.combo.raw}" handler failed: %o`, error)
-        })
-      return true
-    }
-    return false
+/** Host-only dispatch accessor; this module is not exposed through package
+ * exports, while the Cordis capability remains register/list only. */
+interface ShortcutState {
+  readonly shortcuts: Map<string, RegisteredShortcut>
+  readonly owners: Map<string, object>
+  onError: ((combo: string, error: unknown) => void) | undefined
+  host: TuiShortcutHost | undefined
+  readonly logger: Context['logger']
+}
+
+const hostShortcuts = new WeakMap<TuiShortcutRuntime, ShortcutState>()
+
+function shortcutStateFor(runtime: TuiShortcutRuntime): ShortcutState {
+  const state = hostShortcuts.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiShortcuts host state is unavailable')
+  return state
+}
+
+function dispatchShortcut(runtime: TuiShortcutRuntime, input: string, key: TuiShortcutKey): boolean {
+  const state = shortcutStateFor(runtime)
+  for (const entry of state.shortcuts.values()) {
+    if (!matchShortcut(entry.combo, input, key)) continue
+    Promise.resolve()
+      .then(() => entry.handler())
+      .catch((error: unknown) => {
+        state.onError?.(entry.combo.raw, error)
+        state.logger.warn(`dsh-tui: shortcut "${entry.combo.raw}" handler failed: %o`, error)
+      })
+    return true
+  }
+  return false
+}
+
+export function getHostShortcuts(runtime: TuiShortcutRuntime | undefined): TuiShortcutHost | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    return hostShortcuts.get(concreteService(runtime))?.host
+  } catch {
+    return undefined
   }
 }
 

@@ -8,40 +8,30 @@ type Props = {
   addMargin: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  /** Row expanded on its own (persistent hover-grey background, CC). */
-  isExpanded?: boolean
   onClick?(): void
 }
 
 /**
- * User prompt bubble: `❯ text` on the theme's userMessageBackground grey
- * (mirroring Claude Code's `messages/UserPromptMessage.tsx` +
- * `HighlightedThinkingText.tsx`, with the ultrathink rainbow removed).
+ * User prompt bubble: `❯ text` in bold briefLabelYou gold with no background
+ * fill (Kimi Code style: the user turn gets a distinct bold tint so it reads
+ * apart from assistant text; only selection mode paints a highlight).
  */
 export function UserPromptMessage({
   text,
   addMargin,
   isSelected = false,
-  isExpanded = false,
   onClick,
 }: Props): React.ReactNode {
   return (
     <Box
       flexDirection="column"
       marginTop={addMargin ? 1 : 0}
-      backgroundColor={
-        isSelected
-          ? 'messageActionsBackground'
-          : isExpanded
-            ? 'userMessageBackgroundHover'
-            : 'userMessageBackground'
-      }
+      backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       paddingRight={1}
       onClick={onClick}
     >
-      <Text>
-        <Text color="subtle">{POINTER} </Text>
-        <Text color="text">{text}</Text>
+      <Text color="briefLabelYou" bold>
+        {POINTER} {text}
       </Text>
     </Box>
   )

@@ -90,8 +90,21 @@ const host = {
       return Promise.reject(conflict)
     }
     for (const op of ops) {
-      if (op.op === 'set') doc.value[op.path[0] as string] = op.value
-      else delete doc.value[op.path[0] as string]
+      let parent = doc.value
+      for (const segment of op.path.slice(0, -1)) {
+        const child = parent[segment]
+        if (typeof child === 'object' && child !== null && !Array.isArray(child)) {
+          parent = child as Record<string, unknown>
+        } else {
+          const created: Record<string, unknown> = {}
+          parent[segment] = created
+          parent = created
+        }
+      }
+      const leaf = op.path.at(-1)
+      if (leaf === undefined) continue
+      if (op.op === 'set') parent[leaf] = op.value
+      else delete parent[leaf]
     }
     doc.revision += 1
     return Promise.resolve()
@@ -250,7 +263,90 @@ assert(screenText().includes('Explore the uncharted'), 'second Esc returns to th
 
 await instance.unmount()
 
-// 7. Focus-follow scrolling (P2-3): a terminal shorter than the entry list
+// 7. Group navigation: the root hides grouped fields, Enter opens the group,
+// and Esc returns without settling its staged drafts. Re-entering must show the
+// draft, and saving must preserve a nested settings path.
+const { Settings } = await import('../src/screens/Settings.js')
+const GROUP_ROWS = 20
+const groupTerm = new XTerm({ cols: COLS, rows: GROUP_ROWS, scrollback: 50, allowProposedApi: true })
+class GroupStdout extends Writable {
+  columns = COLS
+  rows = GROUP_ROWS
+  isTTY = true
+  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { groupTerm.write(String(chunk), cb) }
+}
+function groupScreenText(): string {
+  const buf = groupTerm.buffer.active
+  const lines: string[] = []
+  for (let y = 0; y < GROUP_ROWS; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
+  return lines.join('\n')
+}
+docs['group-plugin'] = {
+  revision: 5,
+  value: { name: 'basic', advanced: { endpoint: 'old' } },
+  user: {},
+}
+const groupSection = {
+  ns: 'group-plugin',
+  title: 'Grouped settings',
+  groups: [{ id: 'advanced', title: 'Advanced' }],
+  fields: [
+    { path: ['name'], label: 'Name', kind: 'text' as const },
+    { path: ['advanced', 'endpoint'], label: 'Endpoint', kind: 'text' as const, group: 'advanced' },
+  ],
+}
+const groupChannel: any = { ...channel, settingsSections: () => [groupSection] }
+const groupStdin = new FakeStdin()
+let groupClosed = false
+const groupInstance = await render(
+  <Settings channel={groupChannel} onClose={() => { groupClosed = true }} />,
+  { stdout: new GroupStdout(), stdin: groupStdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+)
+await sleep(600)
+assert(groupScreenText().includes('Name') && groupScreenText().includes('Advanced'), 'group root renders ungrouped fields and group entry', groupScreenText())
+assert(!groupScreenText().includes('Endpoint'), 'group root hides grouped fields', groupScreenText())
+groupStdin.write('\x1b[B') // ↓ from Name to Advanced
+await sleep(200)
+groupStdin.write('\r')
+await sleep(400)
+// The headless renderer leaves the first row stale across in-place screen
+// transitions, so assert navigation through group-only content and its hint.
+assert(groupScreenText().includes('Endpoint') && groupScreenText().includes('Esc back'), 'Enter opens the group page', groupScreenText())
+assert(!groupScreenText().includes('Name'), 'group page shows only its fields', groupScreenText())
+groupStdin.write('\r')
+await sleep(150)
+for (let i = 0; i < 3; i++) {
+  groupStdin.write('\x7f')
+  await sleep(50)
+}
+groupStdin.write('new')
+await sleep(150)
+groupStdin.write('\r')
+await sleep(300)
+assert(groupScreenText().includes('new'), 'group field draft is staged', groupScreenText())
+groupStdin.write('\x1b')
+await sleep(300)
+assert(groupScreenText().includes('unsaved') && !groupScreenText().includes('Endpoint'), 'Esc returns to root without dropping the staged edit', groupScreenText())
+groupStdin.write('\x1b[B')
+await sleep(200)
+groupStdin.write('\r')
+await sleep(300)
+assert(groupScreenText().includes('new'), 're-entering the group restores the staged draft', groupScreenText())
+groupStdin.write('s')
+await sleep(400)
+const groupMutation = mutations[2]
+const groupOps = groupMutation?.ops as { op: string; path: readonly string[]; value?: unknown }[]
+assert(groupMutation?.ns === 'group-plugin' && groupMutation.expected === 5, 'group save is revision-fenced')
+assert(groupOps?.[0]?.op === 'set' && groupOps[0].path.join('.') === 'advanced.endpoint' && groupOps[0].value === 'new', 'group save keeps the nested field path')
+assert((docs['group-plugin']?.value.advanced as Record<string, unknown> | undefined)?.endpoint === 'new', 'nested group value reaches the host document')
+groupStdin.write('\x1b')
+await sleep(200)
+groupStdin.write('\x1b')
+await sleep(300)
+assert(groupClosed, 'clean group screen exits from the root page')
+await groupInstance.unmount()
+
+// 8. Focus-follow scrolling (P2-3): a terminal shorter than the entry list
 // must keep the focused field on screen. Render the Settings screen DIRECTLY
 // (not through Chat — Chat's static splash shrinks Ink's live region and
 // clips the frame, which is container behavior, not this screen's). Sixteen
@@ -284,7 +380,6 @@ const longSection = {
 }
 const smallChannel: any = { ...channel, settingsSections: () => [longSection] }
 const smallStdin = new FakeStdin()
-const { Settings } = await import('../src/screens/Settings.js')
 let smallClosed = false
 const smallInstance = await render(
   <Settings channel={smallChannel} onClose={() => { smallClosed = true }} />,
@@ -303,6 +398,50 @@ smallStdin.write('\x1b')
 await sleep(400)
 assert(smallClosed, 'Esc on a clean screen closes it')
 await smallInstance.unmount()
+
+// 9. The same focus-follow guarantee applies inside a group subpage.
+const groupedSmallTerm = new XTerm({ cols: SMALL_COLS, rows: SMALL_ROWS, scrollback: 50, allowProposedApi: true })
+class GroupedSmallStdout extends Writable {
+  columns = SMALL_COLS
+  rows = SMALL_ROWS
+  isTTY = true
+  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { groupedSmallTerm.write(String(chunk), cb) }
+}
+function groupedSmallScreenText(): string {
+  const buf = groupedSmallTerm.buffer.active
+  const lines: string[] = []
+  for (let y = 0; y < SMALL_ROWS; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
+  return lines.join('\n')
+}
+docs['long-group-plugin'] = {
+  revision: 1,
+  value: Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`f${i}`, i])),
+  user: {},
+}
+const longGroupSection = {
+  ns: 'long-group-plugin',
+  title: 'Long grouped settings',
+  groups: [{ id: 'advanced', title: 'Advanced fields' }],
+  fields: Array.from({ length: 16 }, (_, i) => ({ path: [`f${i}`], label: `Grouped field ${i}`, kind: 'number' as const, group: 'advanced' })),
+}
+const groupedSmallChannel: any = { ...channel, settingsSections: () => [longGroupSection] }
+const groupedSmallStdin = new FakeStdin()
+const groupedSmallInstance = await render(
+  <Settings channel={groupedSmallChannel} onClose={() => {}} />,
+  { stdout: new GroupedSmallStdout(), stdin: groupedSmallStdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+)
+await sleep(500)
+assert(groupedSmallScreenText().includes('Advanced fields') && !groupedSmallScreenText().includes('Grouped field 0'), 'short group root hides grouped fields', groupedSmallScreenText())
+groupedSmallStdin.write('\r')
+await sleep(300)
+assert(groupedSmallScreenText().includes('Grouped field 0') && !groupedSmallScreenText().includes('Grouped field 15'), 'short group page starts at its first field', groupedSmallScreenText())
+for (let i = 0; i < 15; i++) {
+  groupedSmallStdin.write('\x1b[B')
+  await sleep(120)
+}
+assert(groupedSmallScreenText().includes('Grouped field 15'), 'short group page follows focus to its last field', groupedSmallScreenText())
+assert(!groupedSmallScreenText().includes('Grouped field 0'), 'short group page windows scrolled-out fields', groupedSmallScreenText())
+await groupedSmallInstance.unmount()
 
 console.log('repro-settings: all assertions passed')
 process.exit(0)

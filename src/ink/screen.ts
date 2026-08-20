@@ -930,6 +930,165 @@ export function setCellAt(
   }
 }
 
+// --- Packed cell runs (fast line repaint) ---------------------------------
+//
+// A settled transcript line is written into the screen buffer every frame
+// unchanged (the main-screen architecture repaints the full content each
+// frame). Re-running the per-cell pipeline — intern char, intern hyperlink,
+// pack words, wide-guard checks, damage update — for every cell of every
+// settled line costs ~100ms/frame on long sessions (measured; the
+// "long chat gets laggy" report). A CellRun records the line's packed cell
+// words ONCE (against one screen's pools) and replays them as raw
+// typed-array writes. Replay bails to the caller's slow path whenever a
+// width transition would need setCellAt's state-dependent guard fixups —
+// same-width overwrites are always a plain two-word store.
+
+/** A recorded run of packed cell writes for one screen line. */
+export interface CellRun {
+  /** Char pool the words were interned against. Screens ping-pong
+   *  (front/back double buffering) but SHARE their pools for a whole
+   *  session, so pool identity — not screen identity — is the validation
+   *  token; runs survive the screen swap and die only with the pools
+   *  (renderer recreation/resize). */
+  charPool: CharPool
+  /** The shared stylePool.none — the spacer cells' style word. */
+  emptyStyleId: number
+  /** Column gap from the previous written cell; the first entry's gap is
+   *  0 (its absolute column is the run's base). */
+  gaps: number[]
+  charIdxs: number[]
+  word1s: number[]
+  /** Absolute column of the first written cell (record time). */
+  baseX: number
+  /** Absolute column of the last written cell (record time). */
+  lastX: number
+}
+
+/** Begin recording a run for the given screen. */
+export function createCellRun(screen: Screen): CellRun {
+  return {
+    charPool: screen.charPool,
+    emptyStyleId: screen.emptyStyleId,
+    gaps: [],
+    charIdxs: [],
+    word1s: [],
+    baseX: -1,
+    lastX: -1,
+  }
+}
+
+/** Record the cell the slow path is about to write at column x. */
+export function recordCellRunEntry(
+  run: CellRun,
+  screen: Screen,
+  x: number,
+  cell: Cell,
+): void {
+  if (run.baseX < 0) run.baseX = x
+  run.gaps.push(run.lastX < 0 ? 0 : x - run.lastX)
+  run.charIdxs.push(internCharString(screen, cell.char))
+  run.word1s.push(
+    packWord1(cell.styleId, internHyperlink(screen, cell.hyperlink), cell.width),
+  )
+  run.lastX = x
+}
+
+/** Record the deterministic SpacerTail that setCellAt writes after a wide
+ *  char at column x (only when x < screen.width - 1). */
+export function recordSpacerRunEntry(run: CellRun, x: number): void {
+  run.gaps.push(x - run.lastX)
+  run.charIdxs.push(SPACER_CHAR_INDEX)
+  run.word1s.push(packWord1(run.emptyStyleId, 0, CellWidth.SpacerTail))
+  run.lastX = x
+}
+
+/**
+ * Replay a recorded run at (x, y): plain two-word stores, with the damage
+ * rect extended over the written span. Mirrors setCellAt's guard-fire
+ * conditions exactly — a replay is only valid when none of the three
+ * state-dependent fixups (wide-overwrite spacer cleanup, spacer-tail
+ * orphan cleanup, wide's next-cell orphan cleanup) would trigger; any
+ * other width transition is a plain overwrite. Returns false so the
+ * caller falls back to the slow path when a guard WOULD fire.
+ */
+export function replayCellRun(
+  screen: Screen,
+  x: number,
+  y: number,
+  run: CellRun,
+): boolean {
+  if (x < 0 || y < 0 || y >= screen.height || x >= screen.width) return false
+  // Defensive: an empty run has no cells and no span — its damage math
+  // would be NaN. Callers never cache empty runs, but a future one might.
+  if (run.gaps.length === 0) return false
+  const cells = screen.cells
+  const width = screen.width
+  let ox = x
+  const gaps = run.gaps
+  for (let i = 0; i < gaps.length; i++) {
+    ox += gaps[i]!
+    if (ox >= width) return false
+    const ci = ((y * width) + ox) << 1
+    const w1 = run.word1s[i]!
+    const newW = w1 & WIDTH_MASK
+    const prevW = cells[ci + 1]! & WIDTH_MASK
+    if (newW === CellWidth.Narrow) {
+      // G1 (prev Wide → narrow overwrite cleans the spacer at x+1) and
+      // G2 (prev SpacerTail → clears the orphan wide at x-1) would fire.
+      if (prevW !== CellWidth.Narrow) return false
+    } else if (newW === CellWidth.Wide) {
+      // G2: a SpacerTail under a Wide write clears the orphan at x-1.
+      if (prevW === CellWidth.SpacerTail) return false
+      // G3: the spacer this write puts at x+1 would stomp a Wide cell
+      // and needs its orphan cleanup.
+      if (ox + 1 < width && (cells[ci + 3]! & WIDTH_MASK) === CellWidth.Wide) {
+        return false
+      }
+    } else {
+      // SpacerTail: G1 fires when it overwrites a Wide cell; G2's
+      // SpacerHead variant (prev SpacerTail under a non-SpacerTail write)
+      // can't occur in a recorded run — SpacerHead is never recorded — but
+      // keep the guard honest for that day soft-wrap starts recording it.
+      if (
+        prevW === CellWidth.Wide ||
+        (newW !== CellWidth.SpacerTail && prevW === CellWidth.SpacerTail)
+      ) {
+        return false
+      }
+    }
+    cells[ci] = run.charIdxs[i]!
+    cells[ci + 1] = w1
+  }
+  // Damage: the full written span, matching what per-cell updates in
+  // setCellAt would have accumulated.
+  const firstX = x + gaps[0]!
+  const endX = ox + 1
+  const damage = screen.damage
+  if (damage !== undefined) {
+    const right = damage.x + damage.width
+    if (firstX < damage.x) {
+      damage.width += damage.x - firstX
+      damage.x = firstX
+    } else if (endX > right) {
+      damage.width += endX - right
+    }
+    if (y < damage.y) {
+      damage.height += damage.y - y
+      damage.y = y
+    } else if (y >= damage.y + damage.height) {
+      damage.height = y - damage.y + 1
+    }
+  } else {
+    screen.damage = { x: firstX, y, width: endX - firstX, height: 1 }
+  }
+  return true
+}
+
+/** Column just past the last written cell — the run's content end. */
+export function cellRunSpan(run: CellRun): number {
+  return run.lastX - run.baseX + 1
+}
+
 /**
  * Replace the styleId of a cell in-place without disturbing char, width,
  * or hyperlink. Preserves empty cells as-is (char stays ' '). Tracks damage

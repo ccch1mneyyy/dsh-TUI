@@ -50,7 +50,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-user-approval@0.1.0-rc.6 || 0.1.0-rc.7'
   - '@deepseek-ai/dsh-user-questions@0.1.0-rc.6 || 0.1.0-rc.7'
   - '@deepseek-ai/schemastery@3.18.1'
-  - dsh-working-activity@0.2.6
+  - dsh-working-activity@0.2.6 || 0.3.0 || 0.3.2
   - '@deepseek-ai/dsh-session-persistence-jsonl@0.1.0-rc.6'
   - '@deepseek-ai/dsh-storage-domain@0.1.0-rc.7'
   - '@deepseek-ai/dsh-storage-json@0.1.0-rc.7'

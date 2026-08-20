@@ -42,6 +42,7 @@ import { DATA_DIR } from '../utils/paths.js'
 import { loadSpecData } from '../plugin-spec/registry.js'
 import { check } from '../plugin-spec/schema-check.js'
 import { componentIdentityOf } from './component-identity.js'
+import { compositionRoot, concreteService } from './host-access.js'
 
 /** Default ledger file (JSONL, one record per line). */
 export const EFFECT_LEDGER_FILE = join(DATA_DIR, 'effect-ledger.jsonl')
@@ -91,30 +92,32 @@ function cleanField(value: unknown, max: number, fallback: string): string {
 
 /** `ctx.tuiEffectLedger` — append-only effect journal (C-060). */
 export class TuiEffectLedgerRuntime extends Service {
-  private readonly file: string
-  private readonly optionsGenerationId: string | undefined
-  private generationId: string | undefined
-  private readonly ledgerSchema: Record<string, unknown> | undefined
-  private readonly activations = new WeakMap<object, string>()
-  private nextActivation = 1
-  private sequence: number
-  private schemaWarned = false
-
   constructor(
     ctx: Context,
     options: { file?: string; generationId?: string; ledgerSchema?: Record<string, unknown> } = {},
   ) {
     super(ctx, 'tuiEffectLedger')
-    this.file = options.file ?? EFFECT_LEDGER_FILE
+    const file = options.file ?? EFFECT_LEDGER_FILE
     // The generation is resolved LAZILY (per first record): cordis does not
     // make sibling services visible to constructors of plugins mounted later
     // by the same apply(), so a constructor-time probe would always miss the
     // plugin-host service and fall back to 'unknown-generation'.
-    this.optionsGenerationId = options.generationId
+    const state: LedgerState = {
+      hostContext: compositionRoot(ctx),
+      file,
+      optionsGenerationId: options.generationId,
+      generationId: undefined,
+      activations: new WeakMap(),
+      nextActivation: 1,
+      sequence: 0,
+      schemaWarned: false,
+      ledgerSchema: undefined,
+    }
     // `'ledgerSchema' in options` lets a caller force-undefined (fail-closed
     // test seam), same contract as the message observer's envelopeSchema.
-    this.ledgerSchema = 'ledgerSchema' in options ? options.ledgerSchema : loadSpecData()?.schemas.ledger
-    this.sequence = this.resumeSequence()
+    state.ledgerSchema = 'ledgerSchema' in options ? options.ledgerSchema : loadSpecData()?.schemas.ledger
+    state.sequence = resumeSequence(file)
+    ledgerStates.set(this, state)
   }
 
   /**
@@ -123,11 +126,13 @@ export class TuiEffectLedgerRuntime extends Service {
    * parameter); omitting it records `undeclared`, never a guess.
    */
   record(entry: LedgerEntry, identity?: Context): void {
+    let state: LedgerState | undefined
     try {
-      if (this.ledgerSchema === undefined) {
-        if (!this.schemaWarned) {
-          this.schemaWarned = true
-          this.ctx.logger.warn('dsh-tui: effect ledger schema unavailable — suppressing all ledger writes (fail-closed)')
+      state = ledgerStateFor(this)
+      if (state.ledgerSchema === undefined) {
+        if (!state.schemaWarned) {
+          state.schemaWarned = true
+          state.hostContext.logger.warn('dsh-tui: effect ledger schema unavailable — suppressing all ledger writes (fail-closed)')
         }
         return
       }
@@ -136,7 +141,7 @@ export class TuiEffectLedgerRuntime extends Service {
       const pluginId = this.pluginIdOf(identity, fiber, verified?.componentId)
       const record = {
         ledgerVersion: '0.15',
-        sequence: this.sequence,
+        sequence: state.sequence,
         timestamp: new Date().toISOString(),
         pluginId,
         activationInstance: verified?.activationId ?? this.activationOf(fiber, pluginId),
@@ -166,18 +171,18 @@ export class TuiEffectLedgerRuntime extends Service {
       // schema is DROPPED, not written (the schema's additionalProperties:
       // false is the structural secret ban).
       try {
-        check(record, this.ledgerSchema, this.ledgerSchema)
+        check(record, state.ledgerSchema, state.ledgerSchema)
       } catch (error) {
-        this.ctx.logger.warn(
+        state.hostContext.logger.warn(
           `dsh-tui: effect ledger record dropped (schema: ${error instanceof Error ? error.message : String(error)})`,
         )
         return
       }
-      mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 })
-      appendFileSync(this.file, `${JSON.stringify(record)}\n`, { mode: 0o600 })
-      this.sequence += 1
+      mkdirSync(dirname(state.file), { recursive: true, mode: 0o700 })
+      appendFileSync(state.file, `${JSON.stringify(record)}\n`, { mode: 0o600 })
+      state.sequence += 1
     } catch (error) {
-      this.ctx.logger.warn(`dsh-tui: effect ledger write failed: %o`, error)
+      ;(state?.hostContext ?? this.ctx).logger.warn('dsh-tui: effect ledger write failed')
     }
   }
 
@@ -185,32 +190,15 @@ export class TuiEffectLedgerRuntime extends Service {
    *  service's id — resolved on first record and cached (the host row mounts
    *  before any caller can record). */
   private generation(): string {
-    if (this.optionsGenerationId !== undefined) return this.optionsGenerationId
-    this.generationId ??= this.ctx.get('tuiPluginHost')?.generationId ?? 'unknown-generation'
-    return this.generationId
+    const state = ledgerStateFor(this)
+    if (state.optionsGenerationId !== undefined) return state.optionsGenerationId
+    state.generationId ??= state.hostContext.get('tuiPluginHost')?.generationId ?? 'unknown-generation'
+    return state.generationId
   }
 
   /** Continue numbering after the existing file's max sequence (restart-safe). */
   private resumeSequence(): number {
-    let text: string
-    try {
-      text = readFileSync(this.file, 'utf8')
-    } catch {
-      return 0 // missing file = fresh ledger, not corruption
-    }
-    let max = -1
-    for (const line of text.split('\n')) {
-      if (line.trim() === '') continue
-      try {
-        const parsed: unknown = JSON.parse(line)
-        const sequence = (parsed as { sequence?: unknown }).sequence
-        if (typeof sequence === 'number' && Number.isInteger(sequence) && sequence > max) max = sequence
-      } catch {
-        // Corrupt line: skip it (never rewritten — the bytes stay for manual
-        // recovery, same posture as plugin-storage).
-      }
-    }
-    return max + 1
+    return resumeSequence(ledgerStateFor(this).file)
   }
 
   private fiberOf(identity: Context | undefined): object | undefined {
@@ -244,13 +232,57 @@ export class TuiEffectLedgerRuntime extends Service {
     // process; 'undeclared' has no fiber at all) — the constant instance id
     // is exact; per-fiber ids only matter for plugin fibers.
     if (fiber === undefined || pluginId === 'host' || pluginId === 'undeclared') return pluginId
-    let activation = this.activations.get(fiber)
+    const state = ledgerStateFor(this)
+    let activation = state.activations.get(fiber)
     if (activation === undefined) {
-      activation = `activation-${this.nextActivation++}`
-      this.activations.set(fiber, activation)
+      activation = `activation-${state.nextActivation++}`
+      state.activations.set(fiber, activation)
     }
     return activation
   }
+}
+
+interface LedgerState {
+  readonly hostContext: Context
+  readonly file: string
+  readonly optionsGenerationId: string | undefined
+  generationId: string | undefined
+  ledgerSchema: Record<string, unknown> | undefined
+  readonly activations: WeakMap<object, string>
+  nextActivation: number
+  sequence: number
+  schemaWarned: boolean
+}
+
+const ledgerStates = new WeakMap<TuiEffectLedgerRuntime, LedgerState>()
+
+function ledgerStateFor(runtime: TuiEffectLedgerRuntime): LedgerState {
+  const state = ledgerStates.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiEffectLedger host state is unavailable')
+  return state
+}
+
+/** Continue numbering after the existing file's max sequence (restart-safe). */
+function resumeSequence(file: string): number {
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch {
+    return 0 // missing file = fresh ledger, not corruption
+  }
+  let max = -1
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    try {
+      const parsed: unknown = JSON.parse(line)
+      const sequence = (parsed as { sequence?: unknown }).sequence
+      if (typeof sequence === 'number' && Number.isInteger(sequence) && sequence > max) max = sequence
+    } catch {
+      // Corrupt line: skip it (never rewritten — the bytes stay for manual
+      // recovery, same posture as plugin-storage).
+    }
+  }
+  return max + 1
 }
 
 export default TuiEffectLedgerRuntime

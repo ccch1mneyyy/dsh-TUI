@@ -143,12 +143,14 @@ refreshLoadedContext（src/channel.ts:2165-2218）：
 触发点：createChannel 末尾（src/channel.ts:2244）+ rewindTo(1342) / resumeTo(1447) /
 newSession(1567) / switchModel(1672) 四个 agent 交换路径。
 
-### 启动摘要与 `/context`
+### 启动面板与 `/context`
 
-- 启动摘要仅在 `channel.rows.length === 0 && channel.loadedContext !==
-  undefined` 时显示；首条转录行接管后消失，并提示用 `/context` 查看明细。
+- 启动面板仅在 `channel.rows.length === 0 && channel.loadedContext !==
+  undefined` 时显示；默认折叠为一行摘要，Ctrl+P 展开/收起分组明细，
+  首条转录行接管后整个面板消失。
 - `/context` 每次执行都通过 `channel.pushLocal` 向当前转录输出一次本地报告；它不切换
-  常驻状态，也不进入模型上下文或会话事件。Ctrl+T 始终只打开会话轨迹。
+  常驻状态，也不进入模型上下文或会话事件。Ctrl+T 始终只打开会话轨迹，Ctrl+P 只在
+  启动面板在屏时生效。
 - 单条文本上限 800 字符（src/utils/loaded-context.ts:5，CONTEXT_ENTRY_MAX_CHARS）；
   truncateContextText 只保留头部并追加截断标记，注释明确 "model-visible
   text is the source of truth"，本地报告只约束自身渲染，模型实际收到的内容不受影响；

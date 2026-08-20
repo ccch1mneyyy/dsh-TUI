@@ -48,15 +48,20 @@ import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
 import { t } from '../i18n.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import { normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
+import type { TrackerConfig } from 'dsh-working-activity/status'
+import { featureOn } from 'dsh-working-activity/config'
+import { readActivityConfig } from '../activityPrefs.js'
 import { attachSessionToWorkspace } from './workspace.js'
-import { createLocalWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
-import type { TuiCommandTreeRuntime } from './command-trees.js'
-import type { TuiSettingsSection, TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
+import { getHostCommandTrees } from './command-trees.js'
+import { getHostSettingsSections, type TuiSettingsSection, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
-import type { TuiSceneDescriptor, TuiSceneRuntime } from './scenes.js'
-import type { TuiRendererRuntime } from './renderers.js'
+import { getHostSceneRuntime, type TuiSceneDescriptor, type TuiSceneRuntime } from './scenes.js'
+import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
+import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
 import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
@@ -447,6 +452,9 @@ export interface Channel {
   readonly contextWindow: number | undefined
   /** Reasoning effort of the latest request header, when the adapter sets one. */
   readonly reasoningEffort: string | undefined
+  /** The live route's reasoning-effort level ids, low → high (the last entry
+   *  is the top tier). Consumed by top-tier-triggered UI (effort ignition). */
+  readonly effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits come from
    *  this, not the running totals — each request's input IS the context). */
   readonly lastUsage:
@@ -462,6 +470,13 @@ export interface Channel {
   readonly activityFrames: string | undefined
   /** Edit/Write diff presentation preference (`auto`/`split`/`unified`). */
   readonly diffLayout: 'auto' | 'split' | 'unified'
+  /** Thinking-block display (`preview` = 2-3 line live stream + fold per
+   *  step; `full` = expanded until turn end). */
+  readonly thinkingFold: 'preview' | 'full'
+  /** Live tool-card background treatment. */
+  readonly toolBackground: ToolBackground
+  /** Live status-footer visibility and compactness preferences. */
+  readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -777,6 +792,8 @@ export interface ChannelState {
   contextWindow: number | undefined
   /** Reasoning effort of the latest request header, when the adapter sets one. */
   reasoningEffort: string | undefined
+  /** The live route's reasoning-effort level ids, low → high. */
+  effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits). */
   lastUsage:
     | { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -791,8 +808,20 @@ export interface ChannelState {
   activityFrames: string | undefined
   /** Diff presentation preference (see the public Channel type). */
   diffLayout: 'auto' | 'split' | 'unified'
+  /** Thinking-block display (see the public Channel type). */
+  thinkingFold: 'preview' | 'full'
+  /** Tool-card background treatment (see the public Channel type). */
+  toolBackground: ToolBackground
+  /** Status-footer preferences (see the public Channel type). */
+  statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
+  /** Apply a thinking-display change (see the public Channel type). */
+  setThinkingFold(mode: 'preview' | 'full'): void
+  /** Apply a tool-card background change. */
+  setToolBackground(background: ToolBackground): void
+  /** Apply status-footer preference changes. */
+  setStatusBar(config: Partial<StatusBarConfig>): void
   /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -1118,48 +1147,44 @@ function restoreToolResult(row: ChatRow, event: SessionEvent<'tool/result'>): vo
 
 
 /**
- * Coalesce runs of same-type assistant/chunk deltas into single synthetic
- * events for REPLAY only. A streamed turn logs one event per token (~100k
- * events in long sessions); replaying them one at a time costs per-chunk
- * string growth on every row (quadratic in the turn's length). Merging is
- * outcome-identical: ensureStreaming/ensureReasoning only read chunk.type
- * and the concatenated text, and the row's seq comes from the run's FIRST
- * chunk (the fork boundary rewindTo derives from it). Parts join once —
- * no quadratic concat. Live events never go through this.
+ * Prepare durable events for REPLAY (resume / rewind / model-switch fork):
+ * drop settled `assistant/chunk` stream deltas — the sealed
+ * `assistant/message` events carry the full text and reasoning blocks, so
+ * per-token chunks add nothing to the replayed transcript while costing a
+ * per-chunk renderEvent pass (a real 4.5MB session logs ~19k chunks against
+ * ~30 messages). The trailing chunk run AFTER the last message belongs to an
+ * unfinished step (crash-orphaned turn) and is kept, so a resumed session
+ * still shows its partial content. Storage-level packed rows
+ * (`text-chunks`/`reasoning-chunks`/`tool-call-chunks`) are dropped the
+ * same way — defensive: the jsonl reader expands them, but a future
+ * direct-pass path must not resurrect them. Replay-side tps sampling is
+ * lost with the chunks (a live metric; lastUsage comes from the message's
+ * own usage). Live events never go through this.
  */
-function coalesceReplayEvents(events: readonly SessionEvent[]): SessionEvent[] {
-  type ChunkEvent = Extract<SessionEvent, { type: 'assistant/chunk' }>
-  const out: SessionEvent[] = []
-  let run: { event: ChunkEvent; type: string; parts: string[] } | null = null
-  const flush = (): void => {
-    if (run === null) return
-    const chunk = run.event.data.chunk
-    out.push({
-      ...run.event,
-      data: { ...run.event.data, chunk: { ...chunk, text: run.parts.join('') } },
-    } as ChunkEvent)
-    run = null
-  }
+function prepareReplayEvents(events: readonly SessionEvent[]): SessionEvent[] {
+  let lastMessageSeq = -1
   for (const event of events) {
-    if (
-      event.type === 'assistant/chunk' &&
-      (event.data.chunk.type === 'text-delta' || event.data.chunk.type === 'reasoning-delta')
-    ) {
-      if (run !== null && run.type === event.data.chunk.type) {
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
-        run.parts.push(event.data.chunk.text ?? '')
-        continue
-      }
-      flush()
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
-      run = { event, type: event.data.chunk.type, parts: [event.data.chunk.text ?? ''] }
-      continue
-    }
-    flush()
-    out.push(event)
+    if (event.type === 'assistant/message') lastMessageSeq = event.seq
   }
-  flush()
-  return out
+  return events.filter(event => {
+    if (event.type === 'assistant/message') return true
+    if (event.type === 'assistant/chunk') {
+      // Keep only the in-flight tail (no message sealed after it).
+      return lastMessageSeq < 0 || event.seq > lastMessageSeq
+    }
+    // Storage-level packed rows: not in the SessionEvent union (they exist
+    // only in the durable JSON), so compare through a widened view — the
+    // defensive drop is exactly for data the static type doesn't know.
+    const packedType = (event as { type: string }).type
+    if (
+      packedType === 'text-chunks' ||
+      packedType === 'reasoning-chunks' ||
+      packedType === 'tool-call-chunks'
+    ) {
+      return false
+    }
+    return true
+  })
 }
 
 /** Buffer below the context window at which CC warns (autoCompact.ts). */
@@ -1219,6 +1244,13 @@ export function createChannel(
     /** Edit/Write diff presentation; default `auto` (side-by-side ≥110
      *  columns, unified below). */
     diffLayout?: 'auto' | 'split' | 'unified'
+    /** Thinking-block display; default `preview` (2-3 line live preview,
+     *  fold per step) — `full` keeps thinking expanded until turn end. */
+    thinkingFold?: 'preview' | 'full'
+    /** Tool-card background treatment; default `none`. */
+    toolBackground?: ToolBackground
+    /** Status-footer field visibility and compactness. */
+    statusBar?: Partial<StatusBarConfig>
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
@@ -1265,13 +1297,15 @@ export function createChannel(
   // messages.observe broker (optional service, C-042): mounted by the
   // dsh-tui-plugin-host row; absent the row, publish is a no-op and nothing
   // else changes (soft degradation, #183).
-  const messageObserver = ctx.get('tuiMessageObserver')
+  const messageObserver = getHostMessageObserver(
+    ctx.get('tuiMessageObserver') as TuiMessageObserverRuntime | undefined,
+  )
   // Workspace registry runtime (optional service, issue #183): mounted by
   // the bundle patch's dsh-tui-workspaces row; absent the row (stale patch
   // or a bare embedder), degrade to the local-only runtime. plugin.ts owns
   // the degraded-boot warning for profile launches.
-  const workspaceService = ctx.get('tuiWorkspaces') ?? createLocalWorkspaceRuntime()
-  const commandTrees = ctx.get('tuiCommandTrees') as TuiCommandTreeRuntime | undefined
+  const workspaceService = getHostWorkspaceRuntime(ctx.get('tuiWorkspaces')) ?? createLocalWorkspaceRuntime()
+  const commandTrees = getHostCommandTrees(ctx.get('tuiCommandTrees'))
   // The `/settings` screen reads its host on EVERY render, so the host must
   // be a stable object: a fresh literal per call would re-fire the screen's
   // host-keyed effects endlessly (render → new host → effect → state →
@@ -1282,11 +1316,14 @@ export function createChannel(
   // Plugin scene runtime (optional service, same degradation rule as
   // tuiWorkspaces/tuiCommandTrees): mounted by the bundle patch's
   // dsh-tui-scenes row; absent the row, `pluginScene` simply stays undefined.
-  const sceneRuntime = ctx.get('tuiScenes') as TuiSceneRuntime | undefined
+  const sceneRuntime = getHostSceneRuntime(ctx.get('tuiScenes') as TuiSceneRuntime | undefined)
+  const settingsSectionsRuntime = getHostSettingsSections(
+    ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
+  )
   // Custom-entry text renderers (optional service, dsh-tui-extensions row):
   // absent the row, unknown plugin event types stay invisible in the
   // transcript, exactly as before the seam existed.
-  const rendererRuntime = ctx.get('tuiRenderers') as TuiRendererRuntime | undefined
+  const rendererRuntime = getHostRenderers(ctx.get('tuiRenderers') as TuiRendererRuntime | undefined)
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
   const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
@@ -1565,6 +1602,7 @@ export function createChannel(
     if (preferredEffort === undefined || llmRuntime === undefined) return
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
+      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
       if (!info.reasoning?.efforts.some(effort => effort.id === preferredEffort)) return
       selection.current = {
         provider: state.provider,
@@ -1575,6 +1613,30 @@ export function createChannel(
       // Route metadata resolution is best-effort; a failure just leaves the
       // provider default in effect.
     }
+  }
+
+  /** Best-effort refresh of the live route's effort-level table for
+   *  top-tier-triggered UI (effort ignition): fire-and-forget on route
+   *  changes (bind/model switch/resume); the /effort paths refresh it
+   *  authoritatively via resolveEfforts. */
+  let effortLevelsGeneration = 0
+  const refreshEffortLevels = (): void => {
+    if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return
+    // 代际保护：快速连续切路由时并发的 resolveModelInfo 可能乱序返回，
+    // 只有最新一代的解析才允许落表；落表后 emit 让 useSyncExternalStore
+    // 消费者立刻可见（否则要等下一次无关 emit）。
+    const generation = ++effortLevelsGeneration
+    void llmRuntime
+      .resolveModelInfo(state.provider, state.model)
+      .then(info => {
+        if (generation !== effortLevelsGeneration) return
+        state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+        state.emit()
+      })
+      .catch(() => {
+        // Route metadata resolution is best-effort; a failure keeps the
+        // previous table until the next /effort interaction clears it.
+      })
   }
 
   /** Resolve the live route's effort levels + adapter default through the
@@ -1591,6 +1653,7 @@ export function createChannel(
     if (llmRuntime === undefined) return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
+      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
       return {
         efforts: info.reasoning?.efforts ?? [],
         defaultEffort: info.reasoning?.defaultEffort,
@@ -1842,6 +1905,7 @@ export function createChannel(
   }
 
   const state: ChannelState = {
+    effortLevels: undefined,
     version: 0,
     rows: [],
     status: 'starting',
@@ -1871,6 +1935,9 @@ export function createChannel(
     workingActivity: undefined,
     activityFrames: options.activityFrames,
     diffLayout: options.diffLayout ?? 'auto',
+    thinkingFold: options.thinkingFold ?? 'preview',
+    toolBackground: normalizeToolBackground(options.toolBackground),
+    statusBar: normalizeStatusBar(options.statusBar),
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,
@@ -2032,14 +2099,12 @@ export function createChannel(
       if (queued.length === 0) return 0
       // No keepInbox: the parked copies are dropped (their discard events
       // retire the preview), then each text is re-queued as a fresh
-      // followup. The harness parks kept inbox work until an unrelated wake
-      // (official cancel.spec: "keepInbox parks queued work after an active
-      // turn aborts"), and a wake issued while the driver is still aborting
-      // is ignored — so the re-queue happens on `whenIdle`, whose own wake
-      // starts the new turn.
+      // followup. dsh-agent's cancel-convergence wake latch accepts this
+      // wake immediately after cancel and starts it once the aborted turn
+      // retires; waiting for whenIdle is unsafe because it also follows
+      // replacement work and may never settle.
       agent.cancel({ kind: 'user' })
       const token = ++interruptSeq
-      const whenIdle = (agent as { whenIdle?(): Promise<void> }).whenIdle
       const deliver = (): void => {
         // A second interrupt while the abort is still settling must not
         // double-deliver: only the latest request's re-queue runs.
@@ -2052,13 +2117,10 @@ export function createChannel(
           dispatchUserText(text, 'followup')
         }
       }
-      if (typeof whenIdle === 'function') {
-        void whenIdle.call(agent).then(deliver)
-      } else {
-        // Defensive: a wake while the driver still runs is ignored, so wait
-        // for the abort to settle before re-queueing.
-        setTimeout(deliver, 200)
-      }
+      // Let cancel finish its synchronous inbox bookkeeping before waking.
+      // A microtask also coalesces two same-tick interrupts: only the latest
+      // token survives, so the user's text is never sent twice.
+      queueMicrotask(deliver)
       return queued.length
     },
     /**
@@ -2191,6 +2253,10 @@ export function createChannel(
       // counters land back at the rewind point, matching the fork).
       streaming = undefined
       reasoning = undefined
+      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
+      // keep it out of the next turn's settle logs and revive cache.
+      sealedReasoning.length = 0
+      lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
@@ -2224,7 +2290,13 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of coalesceReplayEvents(seed)) renderEvent(event)
+      replayEvents(seed)
+      settleStreaming()
+      // A seed ending mid-turn replays a turn/start that set working=true;
+      // the boot path resets this after replay — mirror it here so an idle
+      // rewound agent doesn't sit with a live spinner (a still-running
+      // agent re-asserts on its next event).
+      state.working = handle.agent.status === 'running'
       // Rebind subscriptions to the new agent, then free the old one.
       const oldHandle = currentHandle
       const sourceSessionId = String(agent.session.id)
@@ -2349,6 +2421,10 @@ export function createChannel(
       // rewindTo, plus the context window which the replay re-derives).
       streaming = undefined
       reasoning = undefined
+      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
+      // keep it out of the next turn's settle logs and revive cache.
+      sealedReasoning.length = 0
+      lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
@@ -2394,6 +2470,11 @@ export function createChannel(
       state.lastUsage = undefined
       state.workingActivity = undefined
       state.contextWindow = undefined
+      // Route changed: a stale tier table would let top-tier UI fire on the
+      // wrong level (or never fire on the real one); clear and re-resolve.
+      state.effortLevels = undefined
+      state.reasoningEffort = undefined
+      refreshEffortLevels()
       state.contextSegments = {
         system: 0,
         prompt: 0,
@@ -2401,8 +2482,12 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of coalesceReplayEvents(handle.agent.session.events)) renderEvent(event)
+      replayEvents(handle.agent.session.events)
       settleStreaming()
+      // A log ending mid-turn replays a turn/start that set working=true;
+      // mirror the boot path's post-replay reset (a still-running agent
+      // re-asserts on its next event).
+      state.working = handle.agent.status === 'running'
       // Rebind subscriptions to the resumed agent, then free the old one.
       const oldHandle = currentHandle
       const previousSessionId = String(agent.session.id)
@@ -2508,7 +2593,17 @@ export function createChannel(
       }
       streaming = undefined
       reasoning = undefined
+      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
+      // keep it out of the next turn's settle logs and revive cache. Event
+      // sequence numbers restart in the fresh session, so its dedupe ledgers
+      // must not retain the old session's sequence ids.
+      sealedReasoning.length = 0
+      lastReasoningRow = undefined
       toolCards.clear()
+      handledAssistantMessages.clear()
+      handledAssistantChunks.clear()
+      assistantRowsByStep.clear()
+      lastTextDelta.clear()
       nextRowId = 0
       state.rows.length = 0
       // Goal/todo/title are session-scoped; the replay re-derives them for
@@ -2536,7 +2631,13 @@ export function createChannel(
       state.tpsSamples = []
       state.lastUsage = undefined
       state.workingActivity = undefined
+      state.loadedContext = undefined
       state.contextWindow = undefined
+      // Route changed: a stale tier table would let top-tier UI fire on the
+      // wrong level (or never fire on the real one); clear and re-resolve.
+      state.effortLevels = undefined
+      state.reasoningEffort = undefined
+      refreshEffortLevels()
       state.contextSegments = {
         system: 0,
         prompt: 0,
@@ -2685,6 +2786,10 @@ export function createChannel(
       }
       streaming = undefined
       reasoning = undefined
+      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
+      // keep it out of the next turn's settle logs and revive cache.
+      sealedReasoning.length = 0
+      lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
@@ -2714,6 +2819,11 @@ export function createChannel(
       state.lastUsage = undefined
       state.workingActivity = undefined
       state.contextWindow = undefined
+      // Route changed: a stale tier table would let top-tier UI fire on the
+      // wrong level (or never fire on the real one); clear and re-resolve.
+      state.effortLevels = undefined
+      state.reasoningEffort = undefined
+      refreshEffortLevels()
       state.contextSegments = {
         system: 0,
         prompt: 0,
@@ -2721,12 +2831,16 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      for (const event of coalesceReplayEvents(seed)) renderEvent(event)
+      replayEvents(seed)
       settleStreaming()
+      // Same mid-turn-seed spinner reset as resume above.
+      state.working = handle.agent.status === 'running'
       const oldHandle = currentHandle
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      // Model-switch quip rides the fresh tracker (pi parity).
+      activityTracker.onModelSwitch(model)
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -2793,6 +2907,26 @@ export function createChannel(
     setDiffLayout(layout) {
       if (layout === state.diffLayout) return
       state.diffLayout = layout
+      state.emit()
+    },
+    setThinkingFold(mode) {
+      if (mode === state.thinkingFold) return
+      state.thinkingFold = mode
+      state.emit()
+    },
+    setToolBackground(background) {
+      const normalized = normalizeToolBackground(background)
+      if (normalized === state.toolBackground) return
+      state.toolBackground = normalized
+      state.emit()
+    },
+    setStatusBar(config) {
+      const next = normalizeStatusBar({ ...state.statusBar, ...config })
+      const changed = Object.keys(next).some(key =>
+        next[key as keyof StatusBarConfig] !== state.statusBar[key as keyof StatusBarConfig],
+      )
+      if (!changed) return
+      state.statusBar = next
       state.emit()
     },
     setActivityFrames(name) {
@@ -3001,12 +3135,10 @@ export function createChannel(
       return settingsHostCache
     },
     settingsSections(): readonly TuiSettingsSection[] {
-      const sections = ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined
-      return sections?.list() ?? []
+      return settingsSectionsRuntime?.list() ?? []
     },
     subscribeSettingsSections(listener: () => void): () => void {
-      const sections = ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined
-      return sections?.subscribe(listener) ?? (() => {})
+      return settingsSectionsRuntime?.subscribe(listener) ?? (() => {})
     },
     providerSetup(): ProviderSetupHost | undefined {
       // The `/provider` wizard's runtime surface, over the dsh-base seams:
@@ -3274,6 +3406,8 @@ export function createChannel(
           .compactNow(agent, signal)
           .then((result) => {
             state.notify(result ? t('compact-done') : t('compact-nothing'))
+            // Compaction quip rides the next thinking rotation (pi parity).
+            if (result) activityTracker.onCompact('done')
           })
           .catch((error: unknown) => {
             state.notify(
@@ -3986,6 +4120,38 @@ ${output}
     | undefined
   /** Tool cards by callId, so tool/result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
+  /**
+   * Session events are delivered live and can also be replayed around a
+   * reconnect. A repeated sealed message must not create a second assistant
+   * row for the same durable sequence number.
+   */
+  const handledAssistantMessages = new Set<number>()
+  const handledAssistantChunks = new Set<number>()
+  const assistantRowsByStep = new Map<string, ChatRow>()
+  const lastTextDelta = new Map<ChatRow, string>()
+  const stepKey = (turn: number, step: number): string => `${turn}:${step}`
+
+  /** Append a stream delta idempotently. Providers normally send a pure
+   * delta, but reconnect/proxy paths can resend a cumulative prefix or a
+   * delta whose beginning overlaps the previous tail. Merge the overlap
+   * instead of blindly concatenating it into the visible transcript. */
+  const appendTextDelta = (row: ChatRow, delta: string): void => {
+    if (delta === '') return
+    if (lastTextDelta.get(row) === delta) return
+    lastTextDelta.set(row, delta)
+    if (delta.startsWith(row.text)) {
+      row.text = delta
+      return
+    }
+    const maxOverlap = Math.min(row.text.length, delta.length, 4096)
+    for (let size = maxOverlap; size > 0; size--) {
+      if (row.text.endsWith(delta.slice(0, size))) {
+        row.text += delta.slice(size)
+        return
+      }
+    }
+    row.text += delta
+  }
 
   /** The host-plane tools registry (dsh-tools). Resolved once; absent in
    *  bare embedders — every presenter call soft-fails to undefined and the
@@ -4039,23 +4205,79 @@ ${output}
     (content ?? []).find(block => block.type === 'text')?.text.trim() ?? ''
 
   const ensureStreaming = (seq?: number): ChatRow => {
-    if (streaming === undefined) {
-      streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
-      nextRowId += 1
-      state.rows.push(streaming)
+    if (streaming !== undefined) return streaming
+    // A reconnect can replay the first delta after the sealed message was
+    // already observed. Reuse that durable row instead of opening a second
+    // assistant bubble for the same event sequence.
+    const existing = seq === undefined
+      ? undefined
+      : [...state.rows].reverse().find(row => row.kind === 'assistant' && row.seq === seq)
+    if (existing !== undefined) {
+      existing.streaming = true
+      streaming = existing
+      return existing
     }
+    streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
+    nextRowId += 1
+    state.rows.push(streaming)
     return streaming
   }
 
-  const ensureReasoning = (seq?: number): ChatRow => {
+  /** Latest reasoning row keyed by its (turn, step) — lets a resumed
+   *  mid-step stream REVIVE the row the replay sealed (crash-orphan tail:
+   *  replay folds the partial row, live continuation chunks would
+   *  otherwise open a SECOND row for the same step, splitting one
+   *  thinking block in two). */
+  let lastReasoningRow: { row: ChatRow; turn: number; step: number } | undefined
+
+  const ensureReasoning = (seq?: number, turn?: number, step?: number): ChatRow => {
     if (reasoning === undefined) {
+      // Same-step revive: the sealed row is this step's thinking — continue
+      // it (durationMs carried over via reasoningStart back-dating).
+      if (
+        lastReasoningRow !== undefined &&
+        turn !== undefined &&
+        lastReasoningRow.turn === turn &&
+        lastReasoningRow.step === step
+      ) {
+        reasoning = lastReasoningRow.row
+        reasoning.streaming = true
+        const sealedIdx = sealedReasoning.indexOf(reasoning)
+        if (sealedIdx !== -1) sealedReasoning.splice(sealedIdx, 1)
+        reasoningStart = Date.now() - (reasoning.durationMs ?? 0)
+        logForDebugging('thinking: revived sealed reasoning row for same step')
+        return reasoning
+      }
       reasoningStart = Date.now()
       reasoning = { id: nextRowId, kind: 'reasoning', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
       nextRowId += 1
       state.rows.push(reasoning)
       logForDebugging('thinking: reasoning row open (expanded)')
     }
+    if (turn !== undefined && step !== undefined) {
+      lastReasoningRow = { row: reasoning, turn, step }
+    }
     return reasoning
+  }
+
+  /** Fold the live reasoning preview the moment the model moves PAST
+   *  thinking — the answer's first text token or a tool call — not at
+   *  `assistant/message` (end of step). A long reply pushes the thinking
+   *  block into terminal scrollback long before the message seals, and
+   *  scrollback rows cannot be repainted (the cursor cannot reach them),
+   *  so a late fold leaves a stale unfolded preview frozen above the
+   *  window — the user scrolls up and the thinking looks "not folded".
+   *  Folding while the block still sits in the live window keeps the
+   *  shrink inside the diff engine's reachable region. Preview mode only
+   *  (`full` holds every block open until turn settle by design). */
+  const foldLiveReasoning = (where: string): void => {
+    if (reasoning === undefined || state.thinkingFold !== 'preview') return
+    const duration = Math.max(0, Date.now() - reasoningStart)
+    reasoning.durationMs = duration
+    reasoning.streaming = false
+    sealedReasoning.push(reasoning)
+    reasoning = undefined
+    logForDebugging(`thinking: folded at ${where} (${duration}ms)`)
   }
 
   const settleStreaming = (): void => {
@@ -4131,6 +4353,30 @@ ${output}
         ...change.goal,
         roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
       }
+    }
+  }
+
+  /** True while the durable transcript is being replayed (boot /resume /
+   *  rewind / model-switch fork). The assistant/message reasoning-rebuild
+   *  branch below must run ONLY on this path: in a live stream the chunks
+   *  already created the reasoning row, and foldLiveReasoning clears the
+   *  `reasoning` handle before assistant/message arrives — so
+   *  `reasoning === undefined` alone cannot tell replay from live, and
+   *  using it would rebuild a second thinking block per step. */
+  let replaying = false
+  const replayEvents = (events: readonly SessionEvent[]): void => {
+    // Event sequence numbers restart with a replacement session; reset the
+    // idempotency ledger before replay so an old session cannot suppress a
+    // legitimate message in the new transcript.
+    handledAssistantMessages.clear()
+    handledAssistantChunks.clear()
+    assistantRowsByStep.clear()
+    lastTextDelta.clear()
+    replaying = true
+    try {
+      for (const event of prepareReplayEvents(events)) renderEvent(event)
+    } finally {
+      replaying = false
     }
   }
 
@@ -4214,14 +4460,29 @@ ${output}
         break
       }
       case 'assistant/chunk': {
+        if (handledAssistantChunks.has(event.seq)) break
+        handledAssistantChunks.add(event.seq)
         const chunk = event.data.chunk
         if (chunk.type === 'text-delta') {
           if (chunk.text) {
-            ensureStreaming(event.seq).text += chunk.text
-            state.responseChars += chunk.text.length
+            // Fold the thinking preview while it is still in the live
+            // window (see foldLiveReasoning) — before this text grows the
+            // transcript and pushes the block into scrollback.
+            foldLiveReasoning('first text token')
+            const key = stepKey(event.data.turn, event.data.step)
+            const row = assistantRowsByStep.get(key) ?? ensureStreaming(event.seq)
+            assistantRowsByStep.set(key, row)
+            streaming = row
+            row.streaming = true
+            const before = row.text.length
+            appendTextDelta(row, chunk.text)
+            state.responseChars += Math.max(0, row.text.length - before)
           }
         } else if (chunk.type === 'reasoning-delta') {
-          if (chunk.text) ensureReasoning(event.seq).text += chunk.text
+          if (chunk.text) {
+            const row = ensureReasoning(event.seq, event.data.turn, event.data.step)
+            appendTextDelta(row, chunk.text)
+          }
         }
         const step = tpsStep
         if (
@@ -4243,23 +4504,69 @@ ${output}
         break
       }
       case 'assistant/message': {
+        if (handledAssistantMessages.has(event.seq)) break
+        handledAssistantMessages.add(event.seq)
         const text = textOf(event.data.message.content)
+        // Replay without chunk deltas (prepareReplayEvents drops settled
+        // ones): rebuild the reasoning row from the sealed message's
+        // reasoning blocks. Replay-only — gated on the `replaying` flag,
+        // not on `reasoning === undefined`: a live stream's chunks already
+        // created the row, and foldLiveReasoning has cleared the `reasoning`
+        // handle by the time this event lands, so the undefined check alone
+        // would rebuild a duplicate thinking block per step. Pushed BEFORE
+        // the assistant row so the transcript order matches the live
+        // stream; settled (folded) immediately, durationMs unknown without
+        // a live clock.
+        if (replaying && reasoning === undefined) {
+          const reasoningText = event.data.message.content
+            .map(block => (block.type === 'reasoning' ? block.text : ''))
+            .join('')
+          if (reasoningText !== '') {
+            state.rows.push({
+              id: nextRowId,
+              kind: 'reasoning',
+              text: reasoningText,
+              seq: event.seq,
+            })
+            nextRowId += 1
+          }
+        }
         // Reasoning/tool-only steps emit no text: creating an assistant row
         // anyway leaves an empty `●` bullet in the transcript. A pre-existing
         // streaming row always has text (ensureStreaming is only reached on
         // non-empty text deltas), so only create one when text arrives.
-        const row = streaming ?? (text ? ensureStreaming(event.seq) : undefined)
+        // Key the step→row ledger only when the event carries a durable
+        // turn/step; a message without them must never collide onto a
+        // previous step's row (a bare `undefined:undefined` key would make
+        // every turn/step-less message reuse the FIRST one's assistant row).
+        const msgTurn = event.data.turn
+        const msgStep = event.data.step
+        const msgKey = msgTurn !== undefined && msgStep !== undefined
+          ? stepKey(msgTurn, msgStep)
+          : undefined
+        const row = (msgKey !== undefined ? assistantRowsByStep.get(msgKey) : undefined) ?? streaming ??
+          (text
+            ? ([...state.rows].reverse().find(candidate =>
+                candidate.kind === 'assistant' && candidate.seq === event.seq,
+              ) ?? ensureStreaming(event.seq))
+            : undefined)
         if (row !== undefined) {
+          if (msgKey !== undefined) assistantRowsByStep.set(msgKey, row)
           row.time = event.time
           if (text) row.text = text
           row.streaming = false
         }
         streaming = undefined
         if (reasoning !== undefined) {
-          // Seal, don't fold: the per-step duration settles here, but the
-          // row keeps streaming=true (expanded) until turn/end — WebUI
-          // keepOpen parity. The next step's reasoning opens a fresh row.
+          // Backstop fold: reasoning whose step ended with no text token
+          // and no tool call (foldLiveReasoning handles those earlier —
+          // while the block is still in the repaintable live window;
+          // here a long reply may already have pushed it into scrollback,
+          // where the shrink cannot be repainted). `full` mode
+          // (/settings opt-in) keeps the block expanded until turn settle
+          // — settleStreaming folds the sealed rows then.
           reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
+          if (state.thinkingFold === 'preview') reasoning.streaming = false
           sealedReasoning.push(reasoning)
           logForDebugging(`thinking: step sealed (${reasoning.durationMs}ms), expanded until turn/end`)
         }
@@ -4330,6 +4637,10 @@ ${output}
         // by the TUI once the batch is answered; tool/result for a call with
         // no card is a no-op below.
         if (event.data.name === 'ask_user_question') break
+        // Reasoning that led to a tool call is done thinking — fold the
+        // preview now, before the tool card grows the transcript past it
+        // (see foldLiveReasoning).
+        foldLiveReasoning('tool call')
         const card: ChatRow = {
           id: nextRowId,
           kind: 'tool',
@@ -4534,7 +4845,7 @@ ${output}
   }
 
   // Replay the durable transcript first, then follow live events.
-  for (const event of coalesceReplayEvents(agent.session.events)) renderEvent(event)
+  replayEvents(agent.session.events)
   settleStreaming()
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.
@@ -4545,11 +4856,39 @@ ${output}
   // Live subscription list and activity timer, rebound to every replacement
   // agent so no status from the previous session can leak across a swap.
   let agentSubscriptions: Array<() => void> = []
-  let activityTracker = new ActivityTracker({
-    phrases: true,
-    detailLimit: 40,
-    showIdle: false,
-  })
+  /** Tracker knobs + custom actions from the persisted pi-style config
+   *  (`~/.dsh-tui/working-activity.json`); a missing file means lively
+   *  defaults (all eggs on). */
+  const activityPrefsSnapshot = (): {
+    config: TrackerConfig
+    customActions?: Readonly<Record<string, readonly string[]>>
+  } => {
+    const cfg = readActivityConfig()
+    if (cfg === undefined) {
+      return { config: { phrases: true, detailLimit: 40, showIdle: false } }
+    }
+    return {
+      config: {
+        phrases: featureOn(cfg, 'phrases'),
+        detailLimit: 40,
+        showIdle: false,
+        features: {
+          rareEggs: featureOn(cfg, 'rareEggs'),
+          weekend: featureOn(cfg, 'weekend'),
+          holidays: featureOn(cfg, 'holidays'),
+          nightPhrases: featureOn(cfg, 'nightPhrases'),
+        },
+        customPhrases: cfg.customPhrases,
+        showTokPerSec: cfg.showTokPerSec,
+        workRemindAt: cfg.workRemindAt,
+      },
+      customActions: cfg.customActions,
+    }
+  }
+  let activityTracker = (() => {
+    const prefs = activityPrefsSnapshot()
+    return new ActivityTracker(prefs.config, Date.now, prefs.customActions)
+  })()
   let activityTickTimer: NodeJS.Timeout | undefined
 
   const stopActivityTick = (): void => {
@@ -4572,11 +4911,8 @@ ${output}
   const bindAgent = (): void => {
     for (const dispose of agentSubscriptions) dispose()
     stopActivityTick()
-    activityTracker = new ActivityTracker({
-      phrases: true,
-      detailLimit: 40,
-      showIdle: false,
-    })
+    const prefs = activityPrefsSnapshot()
+    activityTracker = new ActivityTracker(prefs.config, Date.now, prefs.customActions)
     activityTracker.onAgentStatus(agent.status)
     renderWorkingActivity()
     activityTickTimer = setInterval(() => {
@@ -4666,6 +5002,14 @@ ${output}
         // publish never throws into this arm.
         messageObserver?.publish(session, event)
         activityTracker.onSessionEvent(event)
+        // Interrupt quip: an aborted/interrupted turn ends the round; the
+        // comeback copy shows on the next thinking rotation (pi parity).
+        if ((event as { type: string }).type === 'turn/end') {
+          const reason = (event.data as { reason?: { kind?: string } }).reason
+          if (reason?.kind === 'aborted' || reason?.kind === 'interrupted') {
+            activityTracker.onInterrupted()
+          }
+        }
         renderWorkingActivity()
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
         // moment they land (whether appended by cycleMode or by hand).
@@ -4735,6 +5079,8 @@ ${output}
           // only show a branch for sessions this install actually used — which
           // is exactly what the column claims.
           noteBranch(agent.session.id, branch)
+          // Feed the working line so git tools can show ` · git <branch>`.
+          activityTracker.onGitBranch(branch)
           state.emit()
         }
       })

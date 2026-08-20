@@ -1,10 +1,11 @@
 /**
- * Persisted reasoning-effort preference (`~/.dsh-tui/effort.json`). Shift+Tab
- * cycles the live route's adapter-owned levels (dsh-llm `LlmModelReasoningInfo`);
- * the choice lands here so the next boot starts on it. The file is
- * best-effort: a missing/corrupt file or a level the current adapter does not
- * offer just falls back to the provider default — the first request/header
- * event always re-asserts the truth on the status line.
+ * Persisted reasoning-effort preference (`~/.dsh-tui/effort.json`). Set via
+ * `/effort` (slider or `/effort <id>`; `/effort status` reports the current
+ * level) — note Shift+Tab cycles session modes (default/plan/full), not
+ * effort levels. The choice lands here so the next boot starts on it. The
+ * file is best-effort: a missing/corrupt file or a level the current adapter
+ * does not offer just falls back to the provider default — the first
+ * request/header event always re-asserts the truth on the status line.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'

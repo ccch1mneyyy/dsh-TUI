@@ -1,6 +1,6 @@
 /** Live, scoped plugin grant evaluation. */
 
-import { readFileSync, unwatchFile, watchFile } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { PermissionRegistry } from '../plugin-spec/types.js'
 import { normalizePermissionScope, permissionScopeCovers } from '../plugin-spec/permission-scope.js'
@@ -61,16 +61,28 @@ function parseTable(text: string): GrantTable {
   } catch {
     return { grants, denies, corrupt: true }
   }
-  const readSection = (key: 'grants' | 'denies', target: Map<string, readonly GrantRule[]>): void => {
-    const section = (parsed as Record<string, unknown> | null)?.[key]
-    if (section === null || typeof section !== 'object' || Array.isArray(section)) return
-    for (const [componentId, values] of Object.entries(section as Record<string, unknown>)) {
-      if (!Array.isArray(values)) continue
-      target.set(componentId, values.map(parseRule).filter((rule): rule is GrantRule => rule !== undefined))
-    }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { grants, denies, corrupt: true }
   }
-  readSection('grants', grants)
-  readSection('denies', denies)
+  const root = parsed as Record<string, unknown>
+  if (Object.keys(root).some(key => key !== 'grants' && key !== 'denies')) {
+    return { grants, denies, corrupt: true }
+  }
+  const readSection = (key: 'grants' | 'denies', target: Map<string, readonly GrantRule[]>): boolean => {
+    const section = root[key]
+    if (section === undefined) return true
+    if (section === null || typeof section !== 'object' || Array.isArray(section)) return false
+    for (const [componentId, values] of Object.entries(section as Record<string, unknown>)) {
+      if (componentId === '' || !Array.isArray(values)) return false
+      const rules = values.map(parseRule)
+      if (rules.some(rule => rule === undefined)) return false
+      target.set(componentId, rules as GrantRule[])
+    }
+    return true
+  }
+  if (!readSection('grants', grants) || !readSection('denies', denies)) {
+    return { grants: new Map(), denies: new Map(), corrupt: true }
+  }
   return { grants, denies, corrupt: false }
 }
 
@@ -129,7 +141,11 @@ function storeFrom(
   onChange: GrantStore['onChange'],
 ): GrantStore {
   const known = new Map((registry?.permissions ?? []).map(entry => [entry.name, entry.default] as const))
-  return {
+  // The store is a capability, not a mutable configuration object.  Keep the
+  // live table in the closure and freeze the facade so a traceable Cordis
+  // proxy (or an accidentally retained reference) cannot replace `allows`
+  // and turn an authorization check into an unconditional allow.
+  return Object.freeze({
     get corrupt() {
       return table().corrupt
     },
@@ -149,7 +165,7 @@ function storeFrom(
     defaultOf: permission => known.get(permission) ?? 'deny',
     knownPermissions: () => [...known.keys()],
     onChange,
-  }
+  })
 }
 
 /** Parse a fixed snapshot, primarily for deterministic tests. */
@@ -169,14 +185,17 @@ export function readGrantStore(dir: string = DATA_DIR, registry?: PermissionRegi
   const file = join(dir, EXTENSION_GRANTS_FILE)
   const readCurrent = (): { table: GrantTable; signature: string } => {
     let text: string
+    let missing = false
     try {
       text = readFileSync(file, 'utf8')
     } catch (error) {
-      const missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
+      missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
       text = missing ? '' : '{unreadable'
     }
     return {
-      table: text === ''
+      // An existing zero-byte file is corruption, not the same state as an
+      // absent grants file. Only ENOENT receives the registry defaults.
+      table: missing
         ? { grants: new Map(), denies: new Map(), corrupt: false }
         : parseTable(text),
       signature: text,
@@ -184,6 +203,7 @@ export function readGrantStore(dir: string = DATA_DIR, registry?: PermissionRegi
   }
   const listeners = new Set<() => void>()
   let watching = false
+  let watchTimer: ReturnType<typeof setInterval> | undefined
   let signature = readCurrent().signature
   const changed = (): void => {
     const next = readCurrent().signature
@@ -202,13 +222,19 @@ export function readGrantStore(dir: string = DATA_DIR, registry?: PermissionRegi
     listeners.add(listener)
     if (!watching) {
       watching = true
-      watchFile(file, { interval: 100, persistent: false }, changed)
+      // A small unref'ed poll is deterministic across filesystems and
+      // timestamp granularities. The synchronous read on every operation
+      // remains the authorization source of truth; this loop only releases
+      // grant-owned subscriptions promptly after a revocation.
+      watchTimer = setInterval(changed, 50)
+      watchTimer.unref?.()
     }
     return () => {
       listeners.delete(listener)
       if (watching && listeners.size === 0) {
         watching = false
-        unwatchFile(file, changed)
+        if (watchTimer !== undefined) clearInterval(watchTimer)
+        watchTimer = undefined
       }
     }
   }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Channel-level regression for the in-process working-activity projection. */
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -180,6 +180,22 @@ assert.equal(await channel.newSession(), true)
 assert.equal(channel.agentId, 'agent-2')
 assert.equal(channel.workingActivity?.phase, 'idle')
 assert.equal(channel.workingActivity?.line, '')
+
+// The pi-style config file drives the tracker: `mode: minimal` renders plain
+// functional labels instead of the playful pool (issue parity with pi).
+mkdirSync(join(testHome, '.dsh-tui'), { recursive: true })
+writeFileSync(join(testHome, '.dsh-tui', 'working-activity.json'), JSON.stringify({ frames: 'claude', mode: 'minimal' }))
+const minimalChannel = createChannel(ctx, agent, {
+  model: 'test-model', provider: 'test-provider', cwd: testHome, activity: true,
+})
+sessionEvent()(agent.session, {
+  type: 'turn/start', seq: 0, time: Date.now(), data: { turn: 'minimal-turn' },
+})
+sessionEvent()(agent.session, {
+  type: 'assistant/chunk', seq: 1, time: Date.now(),
+  data: { turn: 'minimal-turn', step: 'step-1', chunk: { type: 'text-delta', text: 'hi' } },
+})
+assert.match(minimalChannel.workingActivity.line, /思考中|Thinking/)
 
 for (const dispose of effects.reverse()) dispose()
 rmSync(testHome, { recursive: true, force: true })

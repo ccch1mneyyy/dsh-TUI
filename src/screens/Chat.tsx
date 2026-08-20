@@ -11,7 +11,7 @@ import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type 
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore } from '../dsh-adapter/status.js'
-import type { TuiShortcutRuntime } from '../dsh-adapter/shortcuts.js'
+import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
 import { ApprovalStore } from '../dsh-adapter/approvals.js'
@@ -51,6 +51,7 @@ import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
 import { BtwPanel } from '../components/BtwPanel.js'
+import { TipsPanel } from '../components/TipsPanel.js'
 import { setClipboard } from '../ink/termio/osc.js'
 import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
@@ -178,8 +179,8 @@ export function Chat({
   extensionDialogs?: TuiDialogStore
   /** Plugin status-line contributions (tuiStatus service's store). */
   extensionStatus?: TuiStatusStore
-  /** Plugin keyboard shortcut registry (tuiShortcuts service). */
-  extensionShortcuts?: TuiShortcutRuntime
+  /** Host-only keyboard shortcut dispatch path. */
+  extensionShortcuts?: TuiShortcutHost
   onExit: () => void
   /** Update the installed package and restart the current TUI process. */
   onUpdate?: () => void
@@ -242,12 +243,9 @@ export function Chat({
   // outlives its channel.
   React.useEffect(() => {
     if (extensionShortcuts === undefined) return
-    extensionShortcuts.onError = combo => {
+    return extensionShortcuts.setErrorHandler(combo => {
       channel.notify(t('ext-shortcut-failed', { combo }), { color: 'error', timeoutMs: 4000 })
-    }
-    return () => {
-      extensionShortcuts.onError = undefined
-    }
+    })
   }, [extensionShortcuts, channel])
   // When a questionnaire batch completes, fold a Q&A summary into the
   // transcript (the tool card itself is hidden from the message list).
@@ -350,6 +348,8 @@ export function Chat({
     btwAbortRef.current = null
     setBtw(null)
   }
+  /** /tips usage-tips overlay: pure UI state, no session side effects. */
+  const [tipsOpen, setTipsOpen] = React.useState(false)
   React.useEffect(() => () => btwAbortRef.current?.abort(), [])
   /**
    * The trajectory scene (issue #80 evolution). Unlike every other overlay
@@ -381,6 +381,20 @@ export function Chat({
   }, [])
   /** The startup summary gives way to transcript rows after the first local command or message. */
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
+  /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
+  const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
+  /**
+   * The context panel changes the height of the main-screen transcript by a
+   * large amount. In inline mode that invalidates the renderer's previous
+   * scrollback/layout correspondence; asking it to repaint from the physical
+   * viewport prevents the collapsed frame from reusing stale blank cells.
+   */
+  const toggleLoadedContext = React.useCallback(() => {
+    setLoadedContextOpen(previous => !previous)
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    ink?.invalidatePrevFrame()
+    ink?.reanchorViewport()
+  }, [])
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -771,7 +785,25 @@ export function Chat({
         // non-destructive — no CC-style "press /new again" confirmation.
         setHelpOpen(false)
         void channel.newSession().then((ok) => {
-          if (ok) channel.notify(t('new-session-started'))
+          if (!ok) return
+          // A new session is a fresh terminal page, not merely an emptied
+          // transcript. Reset view-local state, return the ScrollBox to the
+          // top, then clear native scrollback and repaint the whale homepage.
+          setExpanded(false)
+          setExpandedRows(new Set())
+          setSelectedId(null)
+          setSelectionActive(false)
+          setShowAllMessages(false)
+          setLoadedContextOpen(false)
+          handle?.scrollTo(0)
+          channel.notify(t('new-session-started'))
+          const ink = instances.get(process.stdout) ?? instances.values().next().value
+          // Wait one task so React commits the empty transcript/homepage tree;
+          // clearing before that would immediately repaint the old session.
+          setTimeout(() => {
+            handle?.scrollTo(0)
+            ink?.clearScrollbackAndRedraw()
+          }, 0)
         })
         return true
       }
@@ -1138,6 +1170,10 @@ export function Chat({
         })
         return true
       }
+      case 'tips':
+        setHelpOpen(false)
+        setTipsOpen(true)
+        return true
       case 'connect':
         setHelpOpen(false)
         channel.pushLocal('/connect', [t('connect-none')])
@@ -1846,8 +1882,15 @@ export function Chat({
       return
     }
     if (isMod(key) && input === 't') {
-      // Ctrl+T has one stable meaning; loaded-context details live at /context.
+      // Ctrl+T opens the trajectory scene at any point in the session.
       openScene()
+      return
+    }
+    if (isMod(key) && input === 'p' && loadedContextVisible) {
+      // Ctrl+P toggles the startup loaded-context panel while it is on
+      // screen (transcript still empty); once rows take over and the
+      // panel disappears the key has nothing left to do.
+      toggleLoadedContext()
       return
     }
     if (isMod(key) && input === 'r' && !helpOpen) {
@@ -1888,6 +1931,16 @@ export function Chat({
     } else if (isMod(key) && input === 'o') {
       // Leaving transcript mode (Ctrl+O) — search was already handled above.
       setExpanded(previous => !previous)
+      // The toggle rewrites every thinking row's layout at once. The
+      // ordinary scroll-based diff pushes rows into terminal scrollback on
+      // each expand and nothing removes them on collapse — rapid toggling
+      // drifts the virtual↔scrollback mapping until writes misland
+      // (garbled transcript, duplicated rows). Re-anchor the next frame:
+      // in-place viewport repaint, nothing added to scrollback. Lookup
+      // falls back to the only live instance for embedders whose stdout
+      // isn't process.stdout (test harnesses).
+      const ink = instances.get(process.stdout) ?? instances.values().next().value
+      ink?.reanchorViewport()
     } else if (input === '/' && !key.ctrl && !key.meta && !key.super) {
       // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
       // search is active on the transcript screen where `/` isn't a command).
@@ -2001,7 +2054,7 @@ export function Chat({
   const promptSelectionActive =
     selectionActive || modelPickerOpen || skillsPickerOpen || workspacePickerOpen || workspaceFlow !== null || activityPickerOpen ||
     effortSliderOpen || presetPickerOpen || themePickerOpen || thinkingOpen || historyOpen || rewindOpen || searchOpen ||
-    btw !== null
+    btw !== null || tipsOpen
 
   // The trajectory scene replaces the conversation for as long as it is open.
   // Rendering it INSTEAD of (not above) the transcript is what makes it a
@@ -2026,7 +2079,7 @@ export function Chat({
     modelPickerOpen || skillsPickerOpen ||
     activityPickerOpen || (effortSliderOpen && effortOptions.length > 1) ||
     (presetPickerOpen && presetOptions.length > 0) || themePickerOpen || historyOpen ||
-    rewindOpen || searchOpen
+    rewindOpen || searchOpen || tipsOpen
 
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
@@ -2047,12 +2100,17 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
         />
-        {/* The startup loaded-context summary: before the first message the
-            transcript is empty, so the one-line inventory of what this
-            conversation will load (system prompt, workspace instructions,
-            skills, tools) sits at the top; the first rows take over. */}
+        {/* The startup loaded-context panel: before the first message the
+            transcript is empty, so the inventory of what this conversation
+            will load (system prompt, workspace instructions, skills, tools)
+            sits at the top, collapsed to a summary line and expandable with
+            Ctrl+P; the first rows take over. */}
         {loadedContextVisible && (
-          <LoadedContextPanel context={channel.loadedContext} />
+          <LoadedContextPanel
+            context={channel.loadedContext}
+            open={loadedContextOpen}
+            onToggle={toggleLoadedContext}
+          />
         )}
         <MessageList
           rows={channel.rows}
@@ -2064,6 +2122,8 @@ export function Chat({
           onToggleRow={toggleRowExpanded}
           model={channel.model}
           diffLayout={channel.diffLayout}
+          thinkingFold={channel.thinkingFold}
+          toolBackground={channel.toolBackground}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
           onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}
@@ -2145,6 +2205,10 @@ export function Chat({
             onDecide={value => dialogs.decide(dialogSnapshot.key, value)}
             onCancel={() => dialogs.cancel(dialogSnapshot.key)}
           />
+        ) : tipsOpen ? (
+          <Box flexDirection="column" marginTop={1}>
+            <TipsPanel onClose={() => setTipsOpen(false)} />
+          </Box>
         ) : btw !== null ? (
           <Box flexDirection="column" marginTop={1}>
             <BtwPanel
@@ -2328,19 +2392,15 @@ function StickyPromptHeader({
   text: string
   onClick: () => void
 }): React.ReactNode {
-  const [hover, setHover] = React.useState(false)
   return (
     <Box
       flexShrink={0}
       width="100%"
       height={1}
       paddingRight={1}
-      backgroundColor={hover ? 'userMessageBackgroundHover' : 'userMessageBackground'}
-      onMouseEnter={() =>{  setHover(true) }}
-      onMouseLeave={() =>{  setHover(false) }}
       onClick={onClick}
     >
-      <Text color="subtle" wrap="truncate-end">
+      <Text color="briefLabelYou" bold wrap="truncate-end">
         {POINTER} {text}
       </Text>
     </Box>

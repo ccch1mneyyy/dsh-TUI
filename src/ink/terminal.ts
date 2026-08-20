@@ -10,7 +10,6 @@ import {
   cursorMove,
   cursorTo,
   ERASE_SCREEN,
-  ERASE_SCROLLBACK,
   eraseLines,
   SGR_RESET,
 } from './termio/csi.js'
@@ -383,11 +382,19 @@ export function writeDiffToTerminal(
         // scrollback snapshots (the duplicated whale-logo class of bugs);
         // the old soft clear (CSI n S) PUSHED the live viewport into the
         // scrollback instead, depositing a fresh full-UI copy per reset.
+        // Screen-only hard clear: 2J + home, NO 3J. Erasing the scrollback
+        // here destroyed the user's entire visible history on every settle
+        // shrink (the "context lost / cannot scroll" reports) — the inline
+        // transcript IS the scrollback; wiping it to avoid duplicate
+        // snapshots is never an acceptable trade. 2J clears the screen for
+        // the repaint while everything above the viewport survives.
+        // Executed OUTSIDE the DEC 2026 sync block (split begin/end): WT
+        // yanks the viewport to top when 2J runs inside a synchronized
+        // update (claude-code#35580).
         buffer +=
           (useSync ? ESU : '') +
           SGR_RESET +
           ERASE_SCREEN +
-          ERASE_SCROLLBACK +
           CURSOR_HOME +
           (useSync ? BSU : '')
         break

@@ -156,14 +156,34 @@ const instance = await render(
 const ticker = setInterval(() => { channel.responseChars += 7; bump() }, 100)
 await sleep(800)
 
-// ---- 现场回合：user → reasoning → tool → 长流式回复 -------------------------
+// ---- 现场回合：user → Read → reasoning ticker → settle → tool → 长流式回复 ----
 const add = (row: any) => { channel.rows.push({ id: id++, ...row }); bump() }
 add({ kind: 'user', text: '看看这个项目，给个概览' })
 await sleep(120)
 
+// Real report shape: a completed Read row sits immediately above the live
+// thinking ticker. When the ticker settles from four rows to one, an incorrect
+// scrollback seam repaint duplicates this marker above the folded Thinking row.
+add({
+  kind: 'tool', text: '',
+  tool: {
+    callId: 'read-before-thinking', name: 'Read',
+    argsText: '{"file_path": "READ_ONCE_7F31"}',
+    argsFull: '{}', status: 'ok', resultText: 'READ_RESULT_ONCE_7F31',
+    startedAt: Date.now() - 80, durationMs: 80,
+  },
+})
+await sleep(150)
+
 const think1 = { id: id++, kind: 'reasoning', text: '', streaming: true, durationMs: undefined as number | undefined }
 channel.rows.push(think1); bump()
-for (const chunk of ['先看目录结构', '，读 README', '，然后汇总。']) {
+for (const chunk of [
+  '先看目录结构',
+  '\n读取 README',
+  '\n检查 package.json',
+  '\n对照现有回归',
+  '\n然后汇总。',
+]) {
   think1.text += chunk; bump(); await sleep(140)
 }
 think1.streaming = false; think1.durationMs = 1000; bump()
@@ -266,7 +286,14 @@ const countExact = (needle: string) => lines.filter(l => l.trim() === needle).le
 // 每个标记在完整 UI 里恰好一份：logo/用户消息按包含匹配，节标题按整行
 // 匹配（正文 bullet 行 `- 五、… 的第 N 条…` 含标题字符串，属于同一份拷贝
 // 的合法内容，不能按包含计数）。
-for (const t of ['探索未至', '历史问题 0：', '历史问题 1：', '看看这个项目，给个概览']) {
+for (const t of [
+  '探索未至',
+  '历史问题 0：',
+  '历史问题 1：',
+  '看看这个项目，给个概览',
+  'READ_ONCE_7F31',
+  'READ_RESULT_ONCE_7F31',
+]) {
   const n = count(t)
   check(`「${t}」恰好一份`, n === 1, `实际 ${n} 次`)
 }

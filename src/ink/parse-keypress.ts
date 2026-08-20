@@ -47,6 +47,8 @@ const MODIFY_OTHER_KEYS_RE = /^\x1b\[27;(\d+);(\d+)~/
 // win32 instead of kitty/modifyOtherKeys.
 // eslint-disable-next-line no-control-regex
 const WIN32_INPUT_RE = /^\x1b\[([\d;]*)_$/
+const WIN32_INPUT_TAIL_RE = /\[\d*;\d*;\d*;[01](?:;\d*){0,2}_/g
+const WIN32_INPUT_TAILS_RE = /^(?:\[\d*;\d*;\d*;[01](?:;\d*){0,2}_)+$/
 
 // dwControlKeyState modifier bits (others — NUMLOCK_ON 0x20, CAPSLOCK_ON
 // 0x80, ENHANCED_KEY 0x100 — are state indicators, not pressed modifiers)
@@ -736,6 +738,18 @@ export function parseMultipleKeypresses(
     } else if (token.type === 'text') {
       if (inPaste) {
         pasteBuffer += token.value
+      } else if (WIN32_INPUT_TAILS_RE.test(token.value)) {
+        // A delayed win32-input-mode continuation can arrive after App's
+        // escape timer has already flushed its ESC prefix. Recover complete
+        // record tails so their protocol bytes do not leak into the prompt.
+        for (const tail of token.value.match(WIN32_INPUT_TAIL_RE) ?? []) {
+          const win32 = parseWin32KeyEvent('\x1b' + tail, win32Ctx)
+          if (win32 !== undefined && win32 !== null) {
+            for (let i = 0; i < win32.repeat; i++) {
+              keys.push(...feedWin32Paste(win32Paste, win32.key))
+            }
+          }
+        }
       } else if (
         /^\[<\d+;\d+;\d+[Mm]$/.test(token.value) ||
         /^\[M[\x60-\x7f][\x20-\uffff]{2}$/.test(token.value)

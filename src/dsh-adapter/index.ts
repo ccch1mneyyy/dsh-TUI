@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
+import { DEFAULT_STATUS_BAR, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 
 export const name = 'dsh-tui'
 // `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
@@ -77,6 +78,14 @@ export interface Config {
    *  terminals (≥110 cols) and unified below; `split`/`unified` force one
    *  layout. Editable live from the `/settings` screen. */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Thinking-block display: `preview` (default) streams a 2-3 line live
+   *  preview and folds each step when it settles; `full` keeps thinking
+   *  expanded until the whole turn ends. Editable live from `/settings`. */
+  thinkingFold?: 'preview' | 'full'
+  /** Tool-card background strength; defaults to no added background. */
+  toolBackground?: ToolBackground
+  /** Status-footer field visibility and compact presentation preferences. */
+  statusBar?: Partial<StatusBarConfig>
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
@@ -102,6 +111,25 @@ export const Config: Schema<Config> = Schema.object({
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+  thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+  toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+  statusBar: Schema.object({
+    compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
+    model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
+    thinking: Schema.boolean().default(DEFAULT_STATUS_BAR.thinking),
+    cwd: Schema.boolean().default(DEFAULT_STATUS_BAR.cwd),
+    contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
+    cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
+    tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
+    tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
+    gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
+    sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
+    mode: Schema.boolean().default(DEFAULT_STATUS_BAR.mode),
+    contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
+    activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
+    trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
+    shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
+  }).default({ ...DEFAULT_STATUS_BAR }),
   modes: Schema.array(
     Schema.object({
       id: Schema.string(),

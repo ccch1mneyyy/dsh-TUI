@@ -263,6 +263,24 @@ check(
   (compiledSource.match(/isBootDeadlockTarget/g) ?? []).length >= 2,
 )
 
+// ---- launcher bridge (0.8.3): the compiled runtime must keep the
+// post-/update launcher-alignment hints — static contract against the built
+// output so future refactors cannot silently drop the bridge.
+const compiledPluginPath = join(repoRoot, 'lib', 'types', 'dsh-adapter', 'plugin.js')
+const compiledPluginSource = readFileSync(compiledPluginPath, 'utf8')
+check(
+  'launcher bridge: runtime reads the launcher version marker',
+  compiledPluginSource.includes('DSH_TUI_LAUNCHER_VERSION'),
+)
+check(
+  'launcher bridge: old-launcher update path keeps a generic alignment hint',
+  compiledPluginSource.includes('update-launcher-align-unknown'),
+)
+check(
+  'launcher bridge: known older launcher gets a directional hint',
+  compiledPluginSource.includes('update-launcher-outdated'),
+)
+
 // ---- isTransientUpdateFailure: the Windows tmp-rename race (issue #225)
 check(
   'transient: pnpm tmp-rename ENOENT qualifies',
