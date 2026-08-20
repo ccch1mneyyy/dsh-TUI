@@ -111,6 +111,10 @@ jobs:
       # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
       - run: node --import tsx/esm scripts/verify-keys.tsx
 
+      # 输入框高度回归（feat/prompt-max-10）：终端钳制预算下高度单调、
+      # 封顶恒定、小终端钳制生效。
+      - run: node --import tsx/esm scripts/verify-prompt-height.tsx
+
       # 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
       # 回复只进 querier，不回显成终端残影。
       - run: node --import tsx/esm scripts/verify-terminal-queries.tsx

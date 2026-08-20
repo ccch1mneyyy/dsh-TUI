@@ -58,8 +58,13 @@ function wordBoundaryRight(text: string, cursor: number): number {
  */
 
 /** Max input rows before the visible viewport starts scrolling (CC's
- *  maxVisibleLines behavior — the box keeps a stable height). */
-const MAX_VISIBLE_LINES = 5
+ *  maxVisibleLines behavior — the box keeps a stable height). Terminal-height
+ *  clamp keeps ≥6 transcript rows on small terminals: content rows + 2 border
+ *  + 1 marginTop + 1 status + 6 transcript floor ≤ terminalRows. */
+const MAX_INPUT_ROWS = 10
+/** Visible-row budget for the input viewport at a given terminal height. */
+const maxVisibleLines = (terminalRows: number): number =>
+  Math.max(3, Math.min(MAX_INPUT_ROWS, terminalRows - 10))
 
 /**
  * Imperative handle for the Chat-level Ctrl+C rule: Chat's useInput listener
@@ -111,7 +116,7 @@ export interface PromptInputProps {
  * Multi-line: Shift+Enter inserts a newline; ↑/↓ move between lines while
  * the input spans multiple lines (history/command selection otherwise); the
  * visible window scrolls to keep the caret row on screen past
- * MAX_VISIBLE_LINES. Enter submits, backspace/delete edit, ←/→ move the
+ * maxVisibleLines budget. Enter submits, backspace/delete edit, ←/→ move the
  * cursor, Tab completes the selected command, Ctrl+G opens the draft in the
  * external editor ($VISUAL/$EDITOR), Escape clears (or closes the help
  * menu), `?` toggles the help menu. Windows ConPTY pipelines deliver
@@ -195,10 +200,13 @@ export function PromptInput({
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
   const helpScrollRef = React.useRef<ScrollBoxHandle | null>(null)
-  // OverlayAbove reserves six terminal rows for the composer/status chrome;
-  // the help block also keeps one row below it. Its own final row is a
-  // persistent navigation hint, leaving the remainder to ScrollBox.
-  const helpViewportHeight = Math.max(3, Math.max(terminalRows - 6, 4) - 1)
+  // OverlayAbove reserves the composer/status chrome below the help float;
+  // the help block also keeps one row of its own. The composer budget scales
+  // with the terminal (maxVisibleLines content rows + 2 border rows), so a
+  // full-height input cannot push the help float past the frame top — the
+  // overlay's own top clamp still guards the residual rounding.
+  const composerMaxRows = maxVisibleLines(terminalRows) + 2
+  const helpViewportHeight = Math.max(3, terminalRows - composerMaxRows - 4)
 
   const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
   const overlayOpen =
@@ -934,16 +942,17 @@ export function PromptInput({
   const inputWidth = Math.max(10, columns - 3)
   const visualLines = wrapToWidth(value, inputWidth)
   const caretVisualLine = wrapToWidth(value.slice(0, cursor), inputWidth).length - 1
+  const visibleBudget = maxVisibleLines(terminalRows)
   const windowStart = Math.max(
     0,
     Math.min(
-      caretVisualLine - MAX_VISIBLE_LINES + 1,
-      visualLines.length - MAX_VISIBLE_LINES,
+      caretVisualLine - visibleBudget + 1,
+      visualLines.length - visibleBudget,
     ),
   )
   const visibleLines = visualLines.slice(
     windowStart,
-    windowStart + MAX_VISIBLE_LINES,
+    windowStart + visibleBudget,
   )
 
   // Caret position in the caret's visual row, in two units:
@@ -1016,7 +1025,7 @@ export function PromptInput({
           帧高不随面板开关涨落——否则帧顶行会被滚进 scrollback 并在关闭
           重绘时二次写入（/model 切换多一份启动画的根因，见 OverlayAbove）。 */}
       {floatersOpen && (
-      <OverlayAbove maxHeight={Math.max(terminalRows - 6, 4)}>
+      <OverlayAbove maxHeight={Math.max(terminalRows - composerMaxRows - 3, 4)}>
         {helpOpen && (
           <Box marginBottom={1}>
             <HelpMenu
