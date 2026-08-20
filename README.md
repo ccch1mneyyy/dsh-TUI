@@ -177,7 +177,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 |---|---|
 | 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） · `/rewind` 回退选择器（同空输入双击 Esc 的时间回溯） · `/btw <问题>` 侧问（不打断主回合、不写历史） |
 | 状态 | `/context` 已加载上下文明细 · `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md · `/settings` 设置面板（命名空间读取/编辑） |
-| 模型 | `/model` 选择器（**切换 = fork 会话续聊，历史保留**） · `/effort` 推理强度（滑杆 / `status` / `<id>`） · `/preset` Agent 预设（**已开始会话不可切换**，blank-only） · `/thinking` 思考显示 · `/tokens` token 明细 · `/activity` 工作状态行动画（`frames <名>` / `status`） · `/theme` 主题选择器 · `/lang` 中英界面切换（`/settings` 中亦可选择） |
+| 模型 | `/model` 选择器（**切换 = fork 会话续聊，历史保留**） · `/effort` 推理强度（滑杆 / `status` / `<id>`） · `/preset` Agent 预设（**已开始会话不可切换**，blank-only） · `/thinking` 思考显示 · `/tokens` token 明细 · `/activity` 工作状态行动画（`frames <名>` / `status`） · `/theme` 主题选择器 · `/color` 输入边框颜色 · `/lang` 中英界面切换（`/settings` 中亦可选择） |
 | 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` |
 | 技能 | `/audit` 代码审计 · `/bug` bug 报告 · `/review` 代码评审 · `/practice` 编程练习 · `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查 |
 | 其它 | `/agents` 子代理列表 · `/skills` 技能目录 · `/plugins check <路径>` 插件诊断 · `/update` 自动更新并重启 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit`（别名 `/quit` `/q`） |
