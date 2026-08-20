@@ -68,6 +68,14 @@ jobs:
       # （ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED），npm 原生跟随
       # workspace 符号链接打包（dry-run 实证 7 包全入、无 vendor 杂物）。
       # prepare（compile）在 CI 的 pnpm@11 下可正常运行。
+      # 本地已先发布过同一版本（tag 补推）时跳过，避免 E403 红 run。
+      - name: Skip when already published
+        run: |
+          if npm view "@deepseek-harness-tui/dsh-tui@${GITHUB_REF_NAME}" version >/dev/null 2>&1; then
+            echo "version ${GITHUB_REF_NAME} already published — skipping"
+            exit 0
+          fi
+          echo "version ${GITHUB_REF_NAME} not published yet — continuing"
       - run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

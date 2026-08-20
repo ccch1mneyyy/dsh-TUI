@@ -26,6 +26,16 @@ export interface TuiSettingsFieldOption {
   descriptions?: LocalizedDescriptions
 }
 
+/** Optional navigation group inside one settings section. */
+export interface TuiSettingsGroup {
+  /** Stable identifier, unique inside the section. */
+  id: string
+  /** Group title (English; also the fallback). */
+  title: string
+  /** Provider-owned translations for the title. */
+  descriptions?: LocalizedDescriptions
+}
+
 /** The write one field's draft stages when the section is saved. */
 export type TuiSettingsFieldWrite =
   | { kind: 'set'; value: unknown }
@@ -45,6 +55,8 @@ export interface TuiSettingsField {
   hint?: string
   /** Provider-owned translations for the hint. */
   hintDescriptions?: LocalizedDescriptions
+  /** Optional group id; grouped fields render on that group's subpage. */
+  group?: string
   kind: TuiSettingsFieldKind
   /** Choices for `kind: 'select'` (ignored otherwise). */
   options?: readonly TuiSettingsFieldOption[]
@@ -85,6 +97,8 @@ export interface TuiSettingsSection {
   title: string
   /** Provider-owned translations for the title. */
   descriptions?: LocalizedDescriptions
+  /** Optional navigation groups, in display order. */
+  groups?: readonly TuiSettingsGroup[]
   /** Editable fields, in display order. */
   fields: readonly TuiSettingsField[]
 }
@@ -190,12 +204,29 @@ function registerSection(runtime: TuiSettingsSectionsRuntime, section: TuiSettin
   const ns = section.ns.trim()
   if (!/^[a-z][a-z0-9_-]*$/u.test(ns)) throw new TypeError(`invalid TUI settings-section namespace: ${section.ns}`)
   if (state.sections.has(ns)) throw new Error(`TUI settings section "${ns}" is already registered`)
-  const normalized = Object.freeze({
-    ...section,
-    ns,
-    descriptions: section.descriptions === undefined ? undefined : Object.freeze({ ...section.descriptions }),
-    fields: Object.freeze(section.fields.map(field => Object.freeze({
+
+  const groupIds = new Set<string>()
+  const groups = section.groups === undefined
+    ? undefined
+    : Object.freeze(section.groups.map(group => {
+      const id = group.id.trim()
+      if (!/^[a-z][a-z0-9_-]*$/u.test(id)) throw new TypeError(`invalid TUI settings group id: ${group.id}`)
+      if (groupIds.has(id)) throw new Error(`TUI settings group "${id}" is already declared in section "${ns}"`)
+      groupIds.add(id)
+      return Object.freeze({
+        ...group,
+        id,
+        descriptions: group.descriptions === undefined ? undefined : Object.freeze({ ...group.descriptions }),
+      })
+    }))
+  const fields = Object.freeze(section.fields.map(field => {
+    const group = field.group?.trim()
+    if (group !== undefined && !groupIds.has(group)) {
+      throw new TypeError(`TUI settings field "${field.path.join('.')}" references unknown group "${field.group}" in section "${ns}"`)
+    }
+    return Object.freeze({
       ...field,
+      group,
       path: Object.freeze([...field.path]),
       descriptions: field.descriptions === undefined ? undefined : Object.freeze({ ...field.descriptions }),
       hintDescriptions: field.hintDescriptions === undefined ? undefined : Object.freeze({ ...field.hintDescriptions }),
@@ -203,7 +234,14 @@ function registerSection(runtime: TuiSettingsSectionsRuntime, section: TuiSettin
         ? undefined
         : Object.freeze(field.options.map(option => Object.freeze({ ...option, descriptions: option.descriptions === undefined ? undefined : Object.freeze({ ...option.descriptions }) }))),
       secret: field.secret === undefined ? undefined : Object.freeze({ ...field.secret }),
-    }))),
+    })
+  }))
+  const normalized = Object.freeze({
+    ...section,
+    ns,
+    descriptions: section.descriptions === undefined ? undefined : Object.freeze({ ...section.descriptions }),
+    groups,
+    fields,
   })
   state.sections.set(ns, normalized)
   if (owner !== undefined) state.owners.set(ns, owner)

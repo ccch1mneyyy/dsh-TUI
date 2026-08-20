@@ -11,6 +11,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isPresetName } from './components/activityFrames.js'
+import { parseWorkingActivityConfig, type WorkingActivityConfig } from 'dsh-working-activity/config'
 import { DATA_DIR } from './utils/paths.js'
 
 const PREFS_DIR = DATA_DIR
@@ -39,6 +40,22 @@ export function parseActivityFrames(text: string): string | undefined {
 export function readActivityFrames(dir: string = PREFS_DIR): string | undefined {
   try {
     return parseActivityFrames(readFileSync(join(dir, 'working-activity.json'), 'utf8'))
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Read the full pi-style working-activity config (frames / mode / features /
+ * customPhrases / customActions / narrate / thresholds) from the same JSON
+ * file the `/activity` command writes, parsed by the wa package. Best-effort:
+ * a missing or corrupt file yields undefined (callers use their defaults).
+ * @param dir - Prefs directory (injectable for tests).
+ * @returns The parsed config, or undefined when unreadable.
+ */
+export function readActivityConfig(dir: string = PREFS_DIR): WorkingActivityConfig | undefined {
+  try {
+    return parseWorkingActivityConfig(readFileSync(join(dir, 'working-activity.json'), 'utf8')).config
   } catch {
     return undefined
   }

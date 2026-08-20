@@ -4,6 +4,7 @@ export { name, TuiSettingsSectionsRuntime } from './dsh-adapter/settings-section
 export type {
   TuiSettingsFieldKind,
   TuiSettingsFieldOption,
+  TuiSettingsGroup,
   TuiSettingsFieldWrite,
   TuiSettingsField,
   TuiSettingsSection,

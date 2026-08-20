@@ -6,6 +6,8 @@ import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../
 import { ToolUseLoader } from '../ToolUseLoader.js'
 import { SplitDiffView } from '../SplitDiffView.js'
 import { formatDuration } from '../../cc/format.js'
+import type { ToolBackground } from '../../tuiDisplayPrefs.js'
+import type { Theme } from '../../theme.js'
 
 type Props = {
   tool: ToolRow
@@ -28,6 +30,8 @@ type Props = {
   footnote?: string
   /** Diff presentation preference; `auto` picks by terminal width. */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Background treatment for the ordinary, unselected tool card surface. */
+  toolBackground?: ToolBackground
 }
 
 /** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
@@ -59,7 +63,7 @@ function displayName(name: string): string {
 // tool output is visually nested under its header instead of flush-left.
 
 /** `hint` is the trajectory pointer: recessive, never competing with output. */
-type BodyTone = 'add' | 'del' | 'dim' | 'plain' | 'error' | 'hint'
+type BodyTone = 'add' | 'del' | 'dim' | 'plain' | 'error' | 'hint' | 'path'
 type BodyLine = { readonly text: string; readonly tone: BodyTone }
 
 /** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
@@ -79,6 +83,18 @@ const del = (text: string): BodyLine => ({ text, tone: 'del' })
 const dim = (text: string): BodyLine => ({ text, tone: 'dim' })
 const plain = (text: string): BodyLine => ({ text, tone: 'plain' })
 
+/** Tool-name color by category (mist-blue accents): read/search tools keep
+ *  the brand blue, file-mutating tools get the warm gold accent, exec /
+ *  terminal tools get mist cyan. */
+const TOOL_NAME_MUTATE = new Set(['edit', 'write', 'multiedit', 'notebookedit'])
+const TOOL_NAME_EXEC = new Set(['bash', 'bashpersistent', 'sh', 'shell', 'terminal'])
+function toolNameColor(raw: string): keyof Theme {
+  const n = raw.toLowerCase()
+  if (TOOL_NAME_MUTATE.has(n)) return 'toolNameMutate'
+  if (TOOL_NAME_EXEC.has(n)) return 'toolNameExec'
+  return 'claude'
+}
+
 /** One side's text → display lines (upstream contentLines rule: empty text
  *  is zero lines; a single trailing newline is a terminator, not a line;
  *  interior blanks survive). */
@@ -97,7 +113,7 @@ function diffLines(diffs: readonly ToolFileDiff[]): BodyLine[] {
   let prevPath: string | undefined
   for (const diff of diffs) {
     if (diffs.length > 1) {
-      if (diff.path !== prevPath) out.push(plain(diff.path))
+      if (diff.path !== prevPath) out.push({ text: diff.path, tone: 'path' })
       else out.push(dim('⋯'))
     }
     prevPath = diff.path
@@ -113,7 +129,7 @@ function diffLines(diffs: readonly ToolFileDiff[]): BodyLine[] {
 function contentLines(content: ReadonlyArray<{ readonly type: string; readonly text?: string }> | undefined): BodyLine[] {
   const text = (content ?? []).map(block => (block.type === 'text' ? block.text ?? '' : '')).join('').trimEnd()
   if (text === '') return []
-  return text.split('\n').map(dim)
+  return text.split('\n').map(plain)
 }
 
 /** Per-card body lines; unknown/absent shapes yield [] so the caller falls
@@ -126,7 +142,7 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
       // The call-side terminal card has no output yet; only presentResult's
       // does. `in` narrows the call/result union without extra types.
       const out = (('output' in view ? view.output : undefined) ?? '').trimEnd()
-      const lines: BodyLine[] = out === '' ? [] : out.split('\n').map(dim)
+      const lines: BodyLine[] = out === '' ? [] : out.split('\n').map(plain)
       if ('exitCode' in view && view.exitCode !== undefined && view.exitCode !== 0) {
         lines.push({ text: `Exit code ${view.exitCode}`, tone: 'error' })
       }
@@ -149,7 +165,7 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
       for (const file of view.files) {
         lines.push(plain(file.path))
         for (const match of file.matches) {
-          lines.push(dim(`${match.lineNumber}: ${match.line}`))
+          lines.push(plain(`${match.lineNumber}: ${match.line}`))
         }
       }
       if (view.truncated) lines.push(dim(`… (${view.total} total)`))
@@ -188,17 +204,18 @@ function clipHeaderArgs(args: string): string {
   return `${args.slice(0, HEADER_ARGS_BUDGET)}…`
 }
 
-function HeaderTitle({ name, title, isTerminal, displayArgs }: {
+function HeaderTitle({ name, title, isTerminal, displayArgs, nameColor }: {
   name: string
   title: string | undefined
   isTerminal: boolean
   displayArgs: string
+  nameColor: keyof Theme
 }): React.ReactNode {
   if (title === undefined) {
     return (
       <>
         <Box flexShrink={0}>
-          <Text bold wrap="truncate-end">{name}</Text>
+          <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
         </Box>
         {displayArgs !== '' && (
           <Box flexWrap="nowrap">
@@ -212,7 +229,7 @@ function HeaderTitle({ name, title, isTerminal, displayArgs }: {
     return (
       <>
         <Box flexShrink={0}>
-          <Text bold wrap="truncate-end">{name}</Text>
+          <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
         </Box>
         <Box flexWrap="nowrap">
           <Text>({title})</Text>
@@ -224,7 +241,7 @@ function HeaderTitle({ name, title, isTerminal, displayArgs }: {
   if (trimmed === '') {
     return (
       <Box flexShrink={0}>
-        <Text bold wrap="truncate-end">{name}</Text>
+        <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
       </Box>
     )
   }
@@ -233,9 +250,9 @@ function HeaderTitle({ name, title, isTerminal, displayArgs }: {
   const tail = space === -1 ? '' : trimmed.slice(space)
   return (
     <Box flexWrap="nowrap">
-      <Text bold wrap="truncate-end">
+      <Text bold color={nameColor} wrap="truncate-end">
         {head}
-        <Text bold={false}>{tail}</Text>
+        <Text bold={false} color="text">{tail}</Text>
       </Text>
     </Box>
   )
@@ -255,6 +272,7 @@ export function AssistantToolUseMessage({
   isExpanded = false,
   footnote,
   diffLayout = 'auto',
+  toolBackground = 'none',
 }: Props): React.ReactNode {
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
@@ -294,7 +312,7 @@ export function AssistantToolUseMessage({
   } else if (!useSplitDiff) {
     if (view !== undefined) body = viewLines(view)
     if (body.length === 0 && result) {
-      body = result.trimEnd().split('\n').map(dim)
+      body = result.trimEnd().split('\n').map(plain)
     }
     if (isRunning && body.length === 0) {
       body = [dim(`Running… (${formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now())))})`)]
@@ -306,6 +324,14 @@ export function AssistantToolUseMessage({
   const lines = capLines(body, cap, verbose)
   const rendered: BodyLine[] =
     footnote === undefined ? lines : [...lines, { text: footnote, tone: 'hint' }]
+  // Nested split-diff context panes must also yield to interaction highlights.
+  // `none` leaves them transparent so the selected/expanded root shows through.
+  const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
+  const ordinaryBackground = ordinaryToolBackground === 'subtle'
+    ? 'toolCardBackgroundDim'
+    : ordinaryToolBackground === 'strong'
+      ? 'toolCardBackground'
+      : undefined
 
   return (
     <Box
@@ -314,13 +340,9 @@ export function AssistantToolUseMessage({
       justifyContent="space-between"
       marginTop={addMargin ? 1 : 0}
       width="100%"
-      backgroundColor={
-        isSelected
-          ? 'messageActionsBackground'
-          : isExpanded
-            ? 'userMessageBackgroundHover'
-            : 'toolCardBackgroundDim'
-      }
+      // Only selection paints a highlight; the configured treatment applies
+      // to an ordinary card. Diff line tints stay - they are content, not chrome.
+      backgroundColor={isSelected ? 'messageActionsBackground' : ordinaryBackground}
     >
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="row" flexWrap="nowrap" minWidth={minWidth}>
@@ -330,7 +352,7 @@ export function AssistantToolUseMessage({
             isError={isError}
             toolName={tool.name}
           />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} displayArgs={displayArgs} />
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} displayArgs={displayArgs} nameColor={toolNameColor(tool.name)} />
           {!isRunning && (
             <Box flexWrap="nowrap">
               <Text dimColor>{elapsedText}</Text>
@@ -347,13 +369,27 @@ export function AssistantToolUseMessage({
               width={columns - 4}
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
+              toolBackground={ordinaryToolBackground}
             />
           </Box>
         ) : (
           rendered.map((line, index) => (
             <Box key={index} flexDirection="row">
               <Box width={3} flexShrink={0}>
-                <Text dimColor>{index === 0 ? GUTTER_FIRST : GUTTER_REST}</Text>
+                <Text
+                  color={
+                    line.tone === 'add'
+                      ? 'diffAddedWord'
+                      : line.tone === 'del'
+                        ? 'diffRemovedWord'
+                        : line.tone === 'path'
+                          ? 'ide'
+                          : undefined
+                  }
+                  dimColor={line.tone !== 'add' && line.tone !== 'del' && line.tone !== 'path'}
+                >
+                  {index === 0 ? GUTTER_FIRST : GUTTER_REST}
+                </Text>
               </Box>
               <Box flexGrow={1}>
                 <Text
@@ -366,7 +402,9 @@ export function AssistantToolUseMessage({
                           ? 'error'
                           : line.tone === 'hint'
                             ? 'subtle'
-                            : undefined
+                            : line.tone === 'path'
+                              ? 'ide'
+                              : undefined
                   }
                   dimColor={line.tone === 'dim'}
                   wrap="wrap"

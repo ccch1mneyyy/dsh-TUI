@@ -15,11 +15,12 @@ import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
+import type { ToolBackground } from '../tuiDisplayPrefs.js'
 
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
  * on a grey bubble with a `❯` pointer, assistant text with a `●` bullet and
- * markdown, thinking folded to `∴ Thinking (ctrl+o to expand)`, tool calls as
+ * markdown, thinking folded to `⚓ Thinking (ctrl+o to expand)`, tool calls as
  * status-dot cards. `expanded` (Ctrl+O) shows full reasoning + full tool
  * args/results; `expandedRows` (message-selection mode, Enter) expands single
  * rows; `selectedId` highlights the selected row.
@@ -50,6 +51,7 @@ export function MessageList({
   model,
   diffLayout = 'auto',
   thinkingFold = 'preview',
+  toolBackground = 'none',
   showAll,
   onToggleAll,
   onLoadOlder,
@@ -72,6 +74,8 @@ export function MessageList({
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Thinking-block display mode from channel (`preview`/`full`). */
   thinkingFold?: 'preview' | 'full'
+  /** Tool-card background treatment from the live channel settings. */
+  toolBackground?: ToolBackground
   showAll: boolean
   onToggleAll: () => void
   /** Restore folded-away older rows from the session log (CC-style "load
@@ -104,6 +108,7 @@ export function MessageList({
     ? rows
     : rows.slice(hiddenCount)
   ).filter(row => thinkingVisible || row.kind !== 'reasoning')
+
   // CC addMargin: every rendered block gets a 1-row top margin except the
   // first. Pre-pass over the FULL list so a windowed row keeps the exact
   // spacing it would have in a fully-mounted list.
@@ -115,12 +120,11 @@ export function MessageList({
       prev = row.kind
     }
   }
-  // CC's expanded rows keep a persistent hover-grey background (VirtualItem:
-  // `expanded ? userMessageBackgroundHover : undefined`).
+  // Selection keeps its highlight; expanded rows render with no fill (the
+  // diff line tints inside cards are the only backgrounds in the transcript).
   const rowBackground = (rowId: number) => {
     const isSelected = selectedId === rowId
     if (isSelected) return 'messageActionsBackground'
-    if (expandedRows.has(rowId)) return 'userMessageBackgroundHover'
     return undefined
   }
 
@@ -423,6 +427,7 @@ export function MessageList({
               model={model}
               diffLayout={diffLayout}
               thinkingFold={thinkingFold}
+              toolBackground={toolBackground}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
               toolName={tool?.name}
@@ -473,7 +478,8 @@ type MemoRowProps = {
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout: 'auto' | 'split' | 'unified'
   thinkingFold: 'preview' | 'full'
-  background: 'messageActionsBackground' | 'userMessageBackgroundHover' | undefined
+  toolBackground: ToolBackground
+  background: 'messageActionsBackground' | undefined
   // ToolRow, flattened: the channel writes status/result fields in place,
   // so passing the object itself would make mutations invisible to memo.
   toolCallId: string | undefined
@@ -514,6 +520,7 @@ function TranscriptRow({
   model,
   diffLayout,
   thinkingFold,
+  toolBackground,
   background,
   toolCallId,
   toolName,
@@ -549,7 +556,6 @@ function TranscriptRow({
             text={text}
             addMargin={addMargin}
             isSelected={isSelected}
-            isExpanded={isExpanded}
             onClick={onClick}
           />
         </Box>
@@ -605,6 +611,7 @@ function TranscriptRow({
           <AssistantThinkingMessage
             thinking={text}
             addMargin={addMargin}
+            streaming={streaming}
             preview={
               streaming &&
               thinkingFold === 'preview' &&
@@ -657,6 +664,7 @@ function TranscriptRow({
             isExpanded={isExpanded}
             footnote={toolFootnote}
             diffLayout={diffLayout}
+            toolBackground={toolBackground}
           />
         </Box>
       )

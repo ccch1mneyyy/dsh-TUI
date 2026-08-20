@@ -3,18 +3,25 @@
  * thinking, tool call and assistant text rows, then asserts the Claude Code
  * separations:
  *   1. Every block is separated by a blank line (CC addMargin on every row).
- *   2. User prompt carries the userMessageBackground grey (`48;2;55,55,55`).
+ *   2. User prompt carries the gold bold label (briefLabelYou, no background
+ *      fill since the Kimi-style restyle).
  *   3. Thinking label + body are dim+italic (grey).
  * Run: node --import tsx scripts/spacing-probe.tsx (Windows side)
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { render }, { Chat }] = await Promise.all([
-  import('node:stream'),
-  import('react'),
-  import('../src/ui.js'),
-  import('../src/screens/Chat.js'),
-])
+const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, figures, width] =
+  await Promise.all([
+    import('node:stream'),
+    import('react'),
+    import('../src/ui.js'),
+    import('../src/screens/Chat.js'),
+    import('../src/dsh-adapter/questions.js'),
+    import('../src/cc/figures.js'),
+    import('../src/ink/stringWidth.js'),
+  ])
+const { THINKING_SPINNER_FRAMES, THINKING_SETTLED_MARKER } = figures
+const { stringWidth } = width
 
 class FakeStdout extends Writable {
   columns = 120
@@ -54,7 +61,7 @@ const channel = {
   rows: [
     { id: 0, kind: 'user', text: 'hello, list the files' },
     { id: 1, kind: 'reasoning', text: 'the user wants a file listing', streaming: false, durationMs: 12000 },
-    { id: 2, kind: 'tool', text: '', tool: { callId: 'c1', name: 'Bash', argsText: '{"command":"ls"}', argsFull: '{"command":"ls"}', status: 'ok', resultText: 'src\nlib', durationMs: 8000 } },
+    { id: 2, kind: 'tool', text: '', tool: { callId: 'c1', name: 'Bash', argsText: '{"command":"ls"}', argsFull: '{"command":"ls"}', status: 'ok', resultText: 'src\nlib', startedAt: Date.now() - 8000, durationMs: 8000 } },
     // Assistant reply starts with the working-activity ⏵ self-narration
     // line (narrate contract) — the transcript must strip it.
     { id: 3, kind: 'assistant', text: '⏵ 修一下状态栏\nhere are the files.', streaming: false },
@@ -88,6 +95,22 @@ const channel = {
   turnStart: 0,
   lastUserText: 'hello, list the files',
   notifications: [],
+  pending: [],
+  mode: { id: 'default', plan: false },
+  provider: 'deepseek',
+  displayCwd: 'C:/code/demo-project',
+  statusBar: { tps: true, activity: true, shortcutHint: true, contextBar: true },
+  thinkingFold: 'full',
+  toolBackground: 'auto',
+  diffLayout: 'auto',
+  activityEnabled: true,
+  goal: undefined,
+  todos: [],
+  loadedContext: undefined,
+  commandList: [],
+  pluginScene: undefined,
+  agentPreset: undefined,
+  commandCompletions: () => [],
   subscribe: () => () => {},
   submit: () => {},
   cancel: () => {},
@@ -99,13 +122,17 @@ const channel = {
 } as never
 
 const stdout = new FakeStdout()
-const instance = await render(<Chat channel={channel} />, {
-  stdout,
-  stdin: new FakeStdin(),
-  stderr: new FakeStderr(),
-  exitOnCtrlC: false,
-  patchConsole: false,
-})
+const questionStore = new QuestionStore()
+const instance = await render(
+  <Chat channel={channel} questionStore={questionStore} onExit={() => {}} />,
+  {
+    stdout,
+    stdin: new FakeStdin(),
+    stderr: new FakeStderr(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+  },
+)
 
 await new Promise(resolve => setTimeout(resolve, 600))
 
@@ -127,7 +154,7 @@ function check(name: string, ok: boolean, detail = '') {
 
 // 1. Every block separated by a blank line: the four marker lines must be
 //    pairwise separated by >= 1 empty line in the rendered transcript.
-const markers = ['hello, list the files', '∴ Thinking', 'Bash', 'here are the files.']
+const markers = ['hello, list the files', '⚓ Thinking', 'Bash', 'here are the files.']
 const markerLines = markers.map(m => contentLines.findIndex(l => l.includes(m)))
 for (let i = 1; i < markerLines.length; i++) {
   const gap = markerLines[i]! - markerLines[i - 1]!
@@ -140,17 +167,29 @@ for (let i = 1; i < markerLines.length; i++) {
   )
 }
 
-// 2. User prompt carries the grey bubble background.
+// 2. User prompt carries the gold bold label (briefLabelYou #FFDF80 in the
+//    dark theme) with no background fill since the Kimi-style restyle.
 check(
-  'user prompt grey background',
-  cursorMoved.includes('\x1b[48;2;55;55;55m'),
-  '48;2;55;55;55 present in user bubble region',
+  'user prompt gold bold label',
+  cursorMoved.includes('\x1b[38;2;255;223;128m'),
+  'briefLabelYou gold SGR present in user prompt region',
 )
 
 // 3. Thinking label is grey + italic (the theme's `inactive` grey is how
 //    dimColor renders in this truecolor palette — no SGR-dim is emitted).
-check('thinking dim', cursorMoved.includes('\x1b[38;2;153;153;153m'), 'inactive-grey SGR present')
+check('thinking dim', cursorMoved.includes('\x1b[38;2;141;149;166m'), 'inactive-grey SGR present')
 check('thinking italic', cursorMoved.includes('\x1b[3m'), 'italic SGR present')
+
+// 3b. All thinking markers must share ONE width: the braille spinner frames
+//     are padded to 2 columns to match the settled ⚓ anchor (U+2693 is
+//     Emoji_Presentation) — a narrower frame shifts the label right by one
+//     column the moment the step settles.
+check(
+  'thinking markers same width',
+  THINKING_SPINNER_FRAMES.every(m => stringWidth(m) === stringWidth(THINKING_SETTLED_MARKER)),
+  `settled ${JSON.stringify(THINKING_SETTLED_MARKER)}=${stringWidth(THINKING_SETTLED_MARKER)}; frames ` +
+    THINKING_SPINNER_FRAMES.map(m => `${JSON.stringify(m)}=${stringWidth(m)}`).join(' '),
+)
 
 // 4. Tool card present.
 check('tool card rendered', contentLines.some(l => l.includes('Bash') && l.includes('ls')), 'Bash("ls") card')
@@ -162,11 +201,11 @@ check(
   'Bash(...) · 8s',
 )
 
-// 6. Thinking duration on the folded label.
+// 6. Thinking duration on the folded label (zh locale: 思考).
 check(
   'thinking duration on folded label',
-  contentLines.some(l => l.includes('∴ Thinking') && l.includes('12s')),
-  '∴ Thinking · 12s (ctrl+o expand)',
+  contentLines.some(l => l.includes('⚓ 思考') && l.includes('12s')),
+  '⚓ 思考 · 12s (ctrl+o expand)',
 )
 
 // 7. Terminal tab title carries the ✦ prefix + DeepSeek whale (win32 path
@@ -202,16 +241,16 @@ check(
 )
 check(
   'header tip line',
-  contentLines.some(l => l.includes('Tip:') && l.includes('/model')),
+  contentLines.some(l => l.includes('提示：') && l.includes('/tips')),
   'tip under the cwd row',
 )
 
 // 8. Status line metrics (pi-bar style): pressure percent/window, think
-//    level, cache hits, tps gauge/sparkline. The header also mentions the
-//    model id, so pin the footer row by its `in→out` token arrow.
-const statusLine = contentLines.find(l => l.includes('deepseek-v4-flash') && l.includes('→')) ?? ''
+//    level, cache hits, tps gauge/sparkline. The footer row also carries
+//    the cwd, so pin it by the model id + cache label (zh locale: 缓存).
+const statusLine = contentLines.find(l => l.includes('deepseek-v4-flash') && l.includes('缓存')) ?? ''
 check('statusline think level', statusLine.includes('max') && !statusLine.includes('think:max'), 'bare effort level (no think: prefix)')
-check('statusline cache', statusLine.includes('cache 20.5%'), 'cache hit rate, one decimal (3400/16600)')
+check('statusline cache', statusLine.includes('缓存 20.5%'), 'cache hit rate, one decimal (3400/16600)')
 check('statusline tps single value', statusLine.includes('tps') && !statusLine.includes('μ') && !statusLine.includes('p95'), `sparkline + one tps number (got: ${statusLine})`)
 check('statusline sparkline blocks', /[▁▂▃▄▅▆▇█]/.test(cursorMoved), 'sparkline glyphs present')
 check('statusline speed color', cursorMoved.includes('\x1b[38;2;202;138;4m') || cursorMoved.includes('\x1b[38;2;78;186;101m'), 'warning/success tps color')
@@ -230,7 +269,7 @@ check(
 )
 check(
   'activity + hint side by side',
-  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts') && l.includes('? for shortcuts')),
+  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts') && l.includes('? 查看快捷键')),
   'hint stays visible beside the activity line',
 )
 check(
@@ -264,5 +303,11 @@ if (pass < results.length) {
 }
 
 await instance.unmount()
-await instance.waitUntilExit()
+// The app's animation timers (title spinner, clock) are torn down by
+// unmount; waitUntilExit can still hang on the empty loop, so race it
+// against a short timeout and force the result exit code.
+await Promise.race([
+  instance.waitUntilExit(),
+  new Promise(resolve => setTimeout(resolve, 300)),
+])
 process.exit(pass === results.length ? 0 : 1)

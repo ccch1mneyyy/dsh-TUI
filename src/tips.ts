@@ -457,8 +457,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'disp-activity',
     group: 'display',
-    zh: '/activity frames comet 换状态行动画（31 种）',
-    en: '/activity frames comet changes the spinner (31 presets)',
+    zh: '/activity frames comet 换状态行动画（35 种）',
+    en: '/activity frames comet changes the spinner (35 presets)',
   },
   {
     id: 'disp-diff-layout',

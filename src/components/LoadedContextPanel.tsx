@@ -57,7 +57,7 @@ export function LoadedContextPanel({
   if (summary === '') return null
   return (
     <Box flexDirection="column" marginTop={1} marginBottom={1}>
-      <Box paddingX={1} backgroundColor={open ? 'userMessageBackground' : undefined}>
+      <Box paddingX={1} backgroundColor={open ? 'userMessageBackgroundHover' : undefined}>
         <Text bold={open} wrap="truncate">
           {open ? '▼' : '▶'} <Text dimColor>（Ctrl+P{open ? t('context-panel-collapse') : t('context-panel-expand')}）</Text> {t('context-loaded')} · {summary}
         </Text>

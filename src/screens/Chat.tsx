@@ -383,6 +383,18 @@ export function Chat({
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
   /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
   const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
+  /**
+   * The context panel changes the height of the main-screen transcript by a
+   * large amount. In inline mode that invalidates the renderer's previous
+   * scrollback/layout correspondence; asking it to repaint from the physical
+   * viewport prevents the collapsed frame from reusing stale blank cells.
+   */
+  const toggleLoadedContext = React.useCallback(() => {
+    setLoadedContextOpen(previous => !previous)
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    ink?.invalidatePrevFrame()
+    ink?.reanchorViewport()
+  }, [])
   /** `/` transcript search (less-style incsearch, ported from CC's REPL). */
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -773,7 +785,25 @@ export function Chat({
         // non-destructive — no CC-style "press /new again" confirmation.
         setHelpOpen(false)
         void channel.newSession().then((ok) => {
-          if (ok) channel.notify(t('new-session-started'))
+          if (!ok) return
+          // A new session is a fresh terminal page, not merely an emptied
+          // transcript. Reset view-local state, return the ScrollBox to the
+          // top, then clear native scrollback and repaint the whale homepage.
+          setExpanded(false)
+          setExpandedRows(new Set())
+          setSelectedId(null)
+          setSelectionActive(false)
+          setShowAllMessages(false)
+          setLoadedContextOpen(false)
+          handle?.scrollTo(0)
+          channel.notify(t('new-session-started'))
+          const ink = instances.get(process.stdout) ?? instances.values().next().value
+          // Wait one task so React commits the empty transcript/homepage tree;
+          // clearing before that would immediately repaint the old session.
+          setTimeout(() => {
+            handle?.scrollTo(0)
+            ink?.clearScrollbackAndRedraw()
+          }, 0)
         })
         return true
       }
@@ -1860,7 +1890,7 @@ export function Chat({
       // Ctrl+P toggles the startup loaded-context panel while it is on
       // screen (transcript still empty); once rows take over and the
       // panel disappears the key has nothing left to do.
-      setLoadedContextOpen(previous => !previous)
+      toggleLoadedContext()
       return
     }
     if (isMod(key) && input === 'r' && !helpOpen) {
@@ -2079,7 +2109,7 @@ export function Chat({
           <LoadedContextPanel
             context={channel.loadedContext}
             open={loadedContextOpen}
-            onToggle={() => { setLoadedContextOpen(previous => !previous) }}
+            onToggle={toggleLoadedContext}
           />
         )}
         <MessageList
@@ -2093,6 +2123,7 @@ export function Chat({
           model={channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
+          toolBackground={channel.toolBackground}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
           onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}
@@ -2361,19 +2392,15 @@ function StickyPromptHeader({
   text: string
   onClick: () => void
 }): React.ReactNode {
-  const [hover, setHover] = React.useState(false)
   return (
     <Box
       flexShrink={0}
       width="100%"
       height={1}
       paddingRight={1}
-      backgroundColor={hover ? 'userMessageBackgroundHover' : 'userMessageBackground'}
-      onMouseEnter={() =>{  setHover(true) }}
-      onMouseLeave={() =>{  setHover(false) }}
       onClick={onClick}
     >
-      <Text color="subtle" wrap="truncate-end">
+      <Text color="briefLabelYou" bold wrap="truncate-end">
         {POINTER} {text}
       </Text>
     </Box>

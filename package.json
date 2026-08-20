@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "MIT",
   "repository": {
@@ -113,7 +113,10 @@
     "verify:plugin-commands": "node --import tsx/esm scripts/verify-plugin-commands.ts",
     "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts",
     "verify:plugin-lifecycle": "node --import tsx/esm scripts/verify-plugin-lifecycle.ts",
-    "verify:tips": "node --import tsx/esm scripts/verify-tips.tsx"
+    "verify:tips": "node --import tsx/esm scripts/verify-tips.tsx",
+    "verify:thinking-preview": "node --import tsx/esm scripts/verify-thinking-preview.tsx",
+    "sync:profile": "node scripts/sync-profile.mjs",
+    "sync:profile:check": "node scripts/sync-profile.mjs --check"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -158,7 +161,7 @@
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^3.0.0 || ^4.0.0",
     "diff": "^8.0.4",
-    "dsh-working-activity": "^0.3.0",
+    "dsh-working-activity": "^0.3.2",
     "emoji-regex": "^10.0.0",
     "figures": "^6.1.0",
     "get-east-asian-width": "^1.0.0",
