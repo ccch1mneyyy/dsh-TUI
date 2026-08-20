@@ -169,6 +169,7 @@ class TestBlockingStore extends ObservableState {
       }
       return { code: 0, stdout: '', stderr: '' }
     },
+    retryDelaysMs: [],
   })
   assert.ok(integration)
 
@@ -213,6 +214,7 @@ class TestBlockingStore extends ObservableState {
       calls.push({ file, args })
       return { code: exitCode, stdout: '', stderr: exitCode ? 'error' : '' }
     },
+    retryDelaysMs: [],
   })
   assert.ok(integration)
 
@@ -236,7 +238,33 @@ class TestBlockingStore extends ObservableState {
 }
 
 // -----------------------------------------------------------------------------
-// 4. [P1] In-flight backlog folding: rapid state changes fold into latest
+// 4. [P1] Bounded backoff retries recover without a new state event
+// -----------------------------------------------------------------------------
+{
+  const channel = new TestChannel()
+  const questions = new TestBlockingStore()
+  const approvals = new TestBlockingStore()
+  const calls: Array<{ file: string; args: readonly string[] }> = []
+  let failuresLeft = 2
+  const integration = attachHerdrIntegration({
+    channel,
+    questions,
+    approvals,
+    env: { HERDR_ENV: '1', HERDR_BIN_PATH: 'herdr', HERDR_PANE_ID: 'w1:p2' },
+    retryDelaysMs: [5, 5, 5],
+    run: async (file, args) => {
+      calls.push({ file, args })
+      return { code: failuresLeft-- > 0 ? 1 : 0, stdout: 'prompt must not be logged', stderr: 'tool detail' }
+    },
+  })
+  assert.ok(integration)
+  await integration.settled()
+  assert.equal(calls.length, 3, 'late service recovery must not need a fresh state event')
+  await integration.dispose()
+}
+
+// -----------------------------------------------------------------------------
+// 5. [P1] In-flight backlog folding: rapid state changes fold into latest
 // -----------------------------------------------------------------------------
 {
   const channel = new TestChannel()
@@ -308,7 +336,28 @@ class TestBlockingStore extends ObservableState {
 }
 
 // -----------------------------------------------------------------------------
-// 5. Gating: disabled integration when env vars are missing/invalid
+// 6. dispose/release is bounded and idempotent when the CLI hangs
+// -----------------------------------------------------------------------------
+{
+  const integration = attachHerdrIntegration({
+    channel: new TestChannel(),
+    questions: new TestBlockingStore(),
+    approvals: new TestBlockingStore(),
+    env: { HERDR_ENV: '1', HERDR_BIN_PATH: 'herdr', HERDR_PANE_ID: 'w1:p2' },
+    reportTimeoutMs: 1000,
+    releaseTimeoutMs: 20,
+    run: async () => new Promise(() => {}),
+  })
+  assert.ok(integration)
+  const started = Date.now()
+  const first = integration.dispose()
+  assert.equal(await Promise.race([first.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 100))]), true)
+  assert.ok(Date.now() - started < 100, 'dispose must not wait for a hung report or release')
+  assert.equal(integration.dispose(), first, 'dispose must be idempotent')
+}
+
+// -----------------------------------------------------------------------------
+// 7. Gating: disabled integration when env vars are missing/invalid
 // -----------------------------------------------------------------------------
 for (const env of [
   {},
@@ -426,6 +475,19 @@ if (command === 'pane' && subcommand === 'report-agent') {
   } else {
     writeFileSync(stubBin, `#!/bin/sh\nexec node "${stubScript}" "$@"\n`, 'utf8')
     chmodSync(stubBin, 0o755)
+  }
+
+  // Windows must launch .cmd/.bat through cmd.exe without letting argv become
+  // shell syntax. This also exercises paths containing spaces in the temp dir.
+  if (isWin) {
+    const injectionMarker = join(tmp, 'argv-injected.txt')
+    const specialPane = `pane & echo injected > ${injectionMarker}`
+    const special = await execFileNoThrow(stubBin, [
+      'pane', 'report-agent', specialPane,
+      '--source', 'custom:dsh-tui', '--agent', 'dsh-tui', '--state', 'idle', '--seq', '1',
+    ], { timeout: 2000 })
+    assert.equal(special.code, 0, special.stderr)
+    assert.equal(existsSync(injectionMarker), false, 'cmd metacharacters in argv must remain data')
   }
 
   // --- CLI Contract Gates: Verify that invalid argument shapes are strictly rejected ---
@@ -550,4 +612,3 @@ if (process.env.DSH_TUI_HERDR_E2E === '1') {
 }
 
 console.log('verify-herdr-integration: lifecycle, rejection isolation, folding, contract gate, and release passed')
-

@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process'
+import { extname } from 'node:path'
+
+const MAX_CAPTURE_BYTES = 64 * 1024
 
 /** The settled outcome of a no-throw command run. */
 export interface ExecFileNoThrowResult {
@@ -7,68 +10,76 @@ export interface ExecFileNoThrowResult {
   stderr: string
 }
 
-/**
- * Options for {@link execFileNoThrow}: stdin payload, timeout, and child
- * working directory.
- */
+/** Options for {@link execFileNoThrow}: stdin payload, timeout, and child
+ * working directory. */
 export interface ExecFileNoThrowOptions {
-  /** Stdin payload (OSC 52 clipboard helpers and tmux load-buffer). */
   input?: string
-  /** Kill the child after this many milliseconds. */
   timeout?: number
-  /**
-   * Accepted for call-site compatibility with the original execa-based
-   * implementation; `false` (the only value the Ink core passes) matches this
-   * shim's behavior of running in the current working directory.
-   */
   useCwd?: boolean
-  /** Working directory for the child; defaults to the parent's cwd. */
   cwd?: string
 }
 
-/**
- * Run a command without throwing: resolves with `{ code, stdout, stderr }`
- * even when the process exits non-zero or cannot spawn.
- * @param file - The executable path to spawn.
- * @param args - Command-line arguments; defaults to none.
- * @param options - Spawn options (input, timeout, cwd).
- * @returns The process outcome: exit code, captured stdout, and captured stderr.
- */
+function appendBounded(chunks: Buffer[], chunk: Buffer, total: { value: number }): void {
+  if (total.value >= MAX_CAPTURE_BYTES) return
+  const remaining = MAX_CAPTURE_BYTES - total.value
+  const part = chunk.subarray(0, remaining)
+  chunks.push(part)
+  total.value += part.length
+}
+
+/** Quote one argument for the Windows command interpreter without flattening
+ * the caller's argv into an unquoted shell command. */
+function quoteWindowsArg(value: string): string {
+  const escaped = value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')
+  return `"${escaped.replace(/%/g, '%%')}"`
+}
+
+function spawnCommand(file: string, args: readonly string[], options?: ExecFileNoThrowOptions) {
+  const isWindowsScript = process.platform === 'win32' && /\.(?:cmd|bat)$/iu.test(extname(file))
+  if (!isWindowsScript) return spawn(file, args, { timeout: options?.timeout, cwd: options?.cwd })
+  const command = `"${[file, ...args].map(quoteWindowsArg).join(' ')}"`
+  return spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', command], {
+    timeout: options?.timeout,
+    cwd: options?.cwd,
+    windowsHide: true,
+    windowsVerbatimArguments: true,
+  })
+}
+
+/** Run a command without throwing; child output is bounded for safety. */
 export function execFileNoThrow(
   file: string,
-  args?: readonly string[],
+  args: readonly string[] = [],
   options?: ExecFileNoThrowOptions,
 ): Promise<ExecFileNoThrowResult> {
   return new Promise(resolve => {
-    const child = spawn(file, args ?? [], { timeout: options?.timeout, cwd: options?.cwd })
-    // Collect raw bytes and decode once at close: per-chunk toString() splits
-    // multi-byte UTF-8 characters straddling a chunk boundary into U+FFFD.
+    let child
+    try {
+      child = spawnCommand(file, args, options)
+    } catch {
+      resolve({ code: 1, stdout: '', stderr: '' })
+      return
+    }
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutChunks.push(chunk)
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrChunks.push(chunk)
-    })
-    // A child may exit before consuming the supplied input. The resulting
-    // EPIPE/EOF belongs to that child outcome and must not crash the caller.
-    child.stdin.on('error', () => {})
-    child.on('error', () => {
-      resolve({
-        code: 1,
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-      })
-    })
-    child.on('close', code => {
+    const stdoutTotal = { value: 0 }
+    const stderrTotal = { value: 0 }
+    let settled = false
+    const finish = (code: number | null): void => {
+      if (settled) return
+      settled = true
       resolve({
         code,
         stdout: Buffer.concat(stdoutChunks).toString('utf8'),
         stderr: Buffer.concat(stderrChunks).toString('utf8'),
       })
-    })
-    if (options?.input !== undefined) child.stdin.write(options.input)
-    child.stdin.end()
+    }
+    child.stdout?.on('data', (chunk: Buffer) => appendBounded(stdoutChunks, chunk, stdoutTotal))
+    child.stderr?.on('data', (chunk: Buffer) => appendBounded(stderrChunks, chunk, stderrTotal))
+    child.stdin?.on('error', () => {})
+    child.on('error', () => finish(1))
+    child.on('close', code => finish(code))
+    if (options?.input !== undefined) child.stdin?.write(options.input)
+    child.stdin?.end()
   })
 }

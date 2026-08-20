@@ -1,5 +1,11 @@
 import { execFileNoThrow, type ExecFileNoThrowResult } from './utils/execFileNoThrow.js'
 
+const REPORT_TIMEOUT_MS = 2000
+const RELEASE_TIMEOUT_MS = 500
+const RETRY_DELAYS_MS = [100, 250, 500, 1000] as const
+
+type AgentState = 'idle' | 'working' | 'blocked'
+
 interface HerdrChannel {
   readonly working: boolean
   subscribe(listener: () => void): () => void
@@ -23,12 +29,28 @@ export interface HerdrIntegrationOptions {
   readonly approvals: BlockingStore
   readonly env?: NodeJS.ProcessEnv
   readonly run?: RunCommand
+  readonly reportTimeoutMs?: number
+  readonly releaseTimeoutMs?: number
+  readonly retryDelaysMs?: readonly number[]
 }
 
-/**
- * Report this TUI's lifecycle to the owning Herdr pane when Herdr launches it.
- * Outside Herdr the integration is absent and has no runtime cost.
- */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(undefined), timeoutMs)
+    void promise.then(
+      value => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(undefined)
+      },
+    )
+  })
+}
+
+/** Report this TUI's lifecycle to the owning Herdr pane when Herdr launches it. */
 export function attachHerdrIntegration(
   options: HerdrIntegrationOptions,
 ): HerdrIntegration | undefined {
@@ -37,80 +59,85 @@ export function attachHerdrIntegration(
   const paneId = env.HERDR_PANE_ID?.trim()
   if (env.HERDR_ENV !== '1' || !executable || !paneId) return undefined
 
-  const run = options.run ?? ((file, args) => execFileNoThrow(file, args, { timeout: 2000 }))
+  const reportTimeoutMs = options.reportTimeoutMs ?? REPORT_TIMEOUT_MS
+  const releaseTimeoutMs = options.releaseTimeoutMs ?? RELEASE_TIMEOUT_MS
+  const retryDelays = options.retryDelaysMs ?? RETRY_DELAYS_MS
+  const run = options.run ?? ((file, args) => execFileNoThrow(file, args, { timeout: reportTimeoutMs }))
+  const runSafely = (args: readonly string[]): Promise<ExecFileNoThrowResult> => {
+    try {
+      return Promise.resolve(run(executable, args))
+    } catch {
+      return Promise.reject(new Error('Herdr command could not be started'))
+    }
+  }
   let sequence = 0
   let lastConfirmedReport = ''
   let disposed = false
-
   let running = false
-  let notifySettled: (() => void) | undefined
+  let wakeDelay: (() => void) | undefined
   let settledPromise: Promise<void> = Promise.resolve()
 
-  const ensureSettledPromise = (): void => {
-    if (!notifySettled) {
-      settledPromise = new Promise<void>((resolve) => {
-        notifySettled = resolve
-      })
-    }
-  }
-
-  const triggerSettled = (): void => {
-    if (notifySettled) {
-      const fn = notifySettled
-      notifySettled = undefined
-      fn()
-    }
-  }
-
-  const computeState = (): { state: 'idle' | 'working' | 'blocked'; blocked: boolean } => {
+  const computeState = (): { state: AgentState; blocked: boolean } => {
     const blocked = options.questions.getSnapshot() !== null || options.approvals.getSnapshot() !== null
-    const state = blocked ? 'blocked' : options.channel.working ? 'working' : 'idle'
-    return { state, blocked }
+    return { state: blocked ? 'blocked' : options.channel.working ? 'working' : 'idle', blocked }
   }
+
+  const waitForRetry = (delayMs: number): Promise<void> => new Promise(resolve => {
+    const timer = setTimeout(() => {
+      wakeDelay = undefined
+      resolve()
+    }, delayMs)
+    wakeDelay = () => {
+      clearTimeout(timer)
+      wakeDelay = undefined
+      resolve()
+    }
+  })
 
   const processQueue = async (): Promise<void> => {
-    if (running) return
-    running = true
-
+    let failedState = ''
+    let attempts = 0
     try {
       while (!disposed) {
         const { state, blocked } = computeState()
-        if (state === lastConfirmedReport) {
-          break
+        if (state === lastConfirmedReport) break
+        if (state !== failedState) {
+          failedState = state
+          attempts = 0
         }
-
-        const seq = String(++sequence)
-        try {
-          const res = await run(executable, [
-            'pane', 'report-agent', paneId,
-            '--source', 'custom:dsh-tui',
-            '--agent', 'dsh-tui',
-            '--state', state,
-            ...(blocked ? ['--message', 'Waiting for user input'] : []),
-            '--seq', seq,
-          ])
-          if (res?.code === 0) {
-            lastConfirmedReport = state
-          } else {
-            break
-          }
-        } catch {
-          break
+        attempts += 1
+        const result = await withTimeout(runSafely([
+          'pane', 'report-agent', paneId,
+          '--source', 'custom:dsh-tui',
+          '--agent', 'dsh-tui',
+          '--state', state,
+          ...(blocked ? ['--message', 'Waiting for user input'] : []),
+          '--seq', String(++sequence),
+        ]), reportTimeoutMs)
+        if (disposed) break
+        if (result?.code === 0) {
+          lastConfirmedReport = state
+          failedState = ''
+          attempts = 0
+          continue
         }
+        if (attempts > retryDelays.length) break
+        await waitForRetry(retryDelays[attempts - 1] ?? 0)
       }
     } finally {
       running = false
-      triggerSettled()
     }
   }
 
   const report = (): void => {
     if (disposed) return
-    const { state } = computeState()
-    if (state === lastConfirmedReport && !running) return
-
-    ensureSettledPromise()
-    void processQueue()
+    if (running) {
+      wakeDelay?.()
+      return
+    }
+    if (computeState().state === lastConfirmedReport) return
+    running = true
+    settledPromise = processQueue()
   }
 
   const unsubscribes = [
@@ -121,31 +148,20 @@ export function attachHerdrIntegration(
   report()
 
   let disposePromise: Promise<void> | undefined
-
   return {
-    settled: () => (running ? settledPromise : Promise.resolve()),
+    settled: () => settledPromise,
     dispose: () => {
       if (disposePromise !== undefined) return disposePromise
       disposed = true
+      wakeDelay?.()
       for (const unsubscribe of unsubscribes) unsubscribe()
-
-      disposePromise = (async () => {
-        while (running) {
-          await settledPromise
-        }
-        const seq = String(++sequence)
-        try {
-          await run(executable, [
-            'pane', 'release-agent', paneId,
-            '--source', 'custom:dsh-tui',
-            '--agent', 'dsh-tui',
-            '--seq', seq,
-          ])
-        } catch {
-          // Rejection isolated
-        }
-      })()
-
+      const release = runSafely([
+        'pane', 'release-agent', paneId,
+        '--source', 'custom:dsh-tui',
+        '--agent', 'dsh-tui',
+        '--seq', String(++sequence),
+      ])
+      disposePromise = withTimeout(release, releaseTimeoutMs).then(() => undefined)
       return disposePromise
     },
   }
