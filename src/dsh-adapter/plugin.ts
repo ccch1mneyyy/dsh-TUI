@@ -394,6 +394,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
           shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
         }).default({ ...DEFAULT_STATUS_BAR }),
+        // Header pixel whale art; on unless settings.yaml says otherwise.
+        whale: Schema.boolean().default(true),
         // No default on purpose: an unset `lang` keeps the field showing
         // the effective language (see the section's format below) and lets
         // cordis.yml / lang.json keep their precedence.
@@ -403,12 +405,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     type SettingsValue = {
       diffLayout?: 'auto' | 'split' | 'unified'
       lang?: 'zh' | 'en'
+      whale?: boolean
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       statusBar?: Partial<StatusBarConfig>
     }
     const applyLayout = (value: SettingsValue): void => {
       channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+    }
+    const applyWhale = (value: { whale?: boolean }): void => {
+      channel.setWhale(value.whale ?? true)
     }
     // The /settings language field writes `lang` through the settings
     // service (user layer): apply it live and mirror it to lang.json so
@@ -430,6 +436,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
+      applyWhale(next)
       applyLang(next)
       applyDisplay(next)
     }
@@ -640,6 +647,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hint: 'Control only the idle `? for shortcuts` reminder; pressing ? and the Esc shortcut hints are unaffected.',
           hintDescriptions: { zh: '仅控制空闲时的 `? for shortcuts` 提示；按 ? 打开快捷键以及 Esc 快捷提示均不受影响。' },
           group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
+          path: ['whale'],
+          label: 'Whale art',
+          descriptions: { zh: '鲸鱼娘' },
+          hint: 'Show the pixel whale in the header splash.',
+          hintDescriptions: { zh: '开屏头部显示像素鲸鱼娘。' },
           kind: 'boolean',
         },
       ],

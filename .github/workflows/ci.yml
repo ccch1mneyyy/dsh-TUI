@@ -244,6 +244,8 @@ jobs:
 
       - run: node --import tsx/esm scripts/verify-channel-goal-todo.mjs
 
+      - run: node --import tsx/esm scripts/verify-whale-toggle.mjs
+
       # 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
       # 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
       # ● 前缀、内容为空的行。

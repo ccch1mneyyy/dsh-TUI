@@ -739,14 +739,16 @@ export function LogoHeader({
   model,
   effort,
   cwd,
+  whale = true,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
+  whale?: boolean
 }): React.ReactNode {
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} />
     </Box>
   )
 }

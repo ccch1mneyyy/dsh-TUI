@@ -478,6 +478,8 @@ export interface Channel {
   readonly toolBackground: ToolBackground
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
+  /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
+  readonly whale: boolean
   /** Whether the in-process working-activity line is shown (config.activity). */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
@@ -823,6 +825,10 @@ export interface ChannelState {
   setToolBackground(background: ToolBackground): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
+  /** Whale header art switch (see the public Channel type). */
+  whale: boolean
+  /** Apply a whale-visibility change (see the public Channel type). */
+  setWhale(visible: boolean): void
   /** Working-activity display switch (see the public Channel type). */
   activityEnabled: boolean
   /** Context bar row switch (see the public Channel type). */
@@ -1252,6 +1258,8 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
+    /** Show the header's pixel whale art; default on. */
+    whale?: boolean
     /** Show the segmented context bar row in the status footer; default on
      *  (cordis.yml `contextBar: false` hides it, issue #29). */
     contextBar?: boolean
@@ -2032,6 +2040,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     statusBar: normalizeStatusBar(options.statusBar),
+    whale: options.whale !== false,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
     agentPreset: options.agentPreset,
@@ -3026,6 +3035,11 @@ export function createChannel(
       )
       if (!changed) return
       state.statusBar = next
+      state.emit()
+    },
+    setWhale(visible) {
+      if (visible === state.whale) return
+      state.whale = visible
       state.emit()
     },
     setActivityFrames(name) {

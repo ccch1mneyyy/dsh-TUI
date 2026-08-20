@@ -2081,6 +2081,7 @@ export function Chat({
           model={channel.model}
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
+          whale={channel.whale}
         />
         {/* The startup loaded-context panel: before the first message the
             transcript is empty, so the inventory of what this conversation

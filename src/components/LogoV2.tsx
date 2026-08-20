@@ -75,6 +75,7 @@ export function LogoV2({
   cwd,
   skipIntro = false,
   tip,
+  whale = true,
 }: {
   model: string
   effort?: string | undefined
@@ -83,6 +84,8 @@ export function LogoV2({
   skipIntro?: boolean
   /** Test seam: pin the startup tip line (probes need a deterministic tip). */
   tip?: Tip
+  /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
+  whale?: boolean
 }): React.ReactNode {
   const [step, setStep] = React.useState(skipIntro ? OPENING_SEQUENCE.length : 0)
   const settled = step >= OPENING_SEQUENCE.length
@@ -111,7 +114,7 @@ export function LogoV2({
   const wordmarkShimmerRGB = parseRGB(theme.claudeShimmer) ?? ICE
   const taglineRGB = parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE
 
-  const showWhale = columns >= WHALE_MIN_COLUMNS
+  const showWhale = whale && columns >= WHALE_MIN_COLUMNS
   const frameIndex = settled ? STANDARD_FRAME_INDEX : OPENING_SEQUENCE[step].frame
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.
