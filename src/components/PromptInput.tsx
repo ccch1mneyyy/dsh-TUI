@@ -500,7 +500,7 @@ export function PromptInput({
     // is the intentional exception: paste closes Help and inserts visibly.
     // Swallow here before editor/submit/interrupt branches can mutate hidden
     // composer or working-turn state; plain typing still dismisses Help below.
-    if (helpOpen && (key.ctrl || key.meta || key.super || key.return || input.includes('\n') || input.includes('\r'))) {
+    if (helpOpen && !key.escape && (key.ctrl || key.meta || key.super || key.return || input.includes('\n') || input.includes('\r'))) {
       event.stopImmediatePropagation()
       return
     }
@@ -689,7 +689,11 @@ export function PromptInput({
         return
       }
       if (key.end) {
-        helpScrollRef.current?.scrollToBottom()
+        // Use a deliberately oversized absolute target rather than the
+        // sticky-bottom path: compact Help may still be measuring nested
+        // sections in this commit, while ScrollBox's render clamp resolves
+        // the target to the exact current maximum without a follow-up frame.
+        helpScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
         event.stopImmediatePropagation()
         return
       }

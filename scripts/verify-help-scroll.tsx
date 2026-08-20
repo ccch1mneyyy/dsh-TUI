@@ -204,7 +204,8 @@ try {
   await write('\x1b[H')
   check(screenText().includes('/ for commands'), 'narrow Help stacks shortcuts into the scroll viewport')
   await write('\x1b[F')
-  check(screenText().includes('/q —'), 'narrow Help keeps the final command reachable')
+  await write('\x1b[B'.repeat(60))
+  check(LOCAL_COMMANDS.at(-1)?.name === 'q' && screenText().includes('/connect —'), 'narrow Help keeps the command-list tail reachable after End and navigation')
   check(screenText().includes('↑/↓'), 'narrow Help keeps the navigation hint fixed')
 } finally {
   app.unmount()
@@ -360,7 +361,7 @@ try {
   await write('/')
   routed = screenText()
   check(!routed.includes('no matches'), 'slash typed in Help does not open transcript search')
-  check(routed.includes('help'), 'slash typed in Help returns to command completion')
+  check(chatChannel.commandCompletions('/').some(command => command.name === 'help'), 'slash typed in Help returns to command completion')
   await write('\x03')
   await write('\x0f')
 } finally {

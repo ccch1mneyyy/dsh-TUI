@@ -83,16 +83,24 @@ export function HelpMenu({
       </Box>
     </Box>
   )
+  const commandRows = chrome.map(command => (
+    <Box key={command.name} flexShrink={0}>
+      <Text dimColor wrap="truncate-end">
+        /{command.name} — {localizedDescription(command)}
+      </Text>
+    </Box>
+  ))
+  const compactCommandRows = chrome.map(command => (
+    <Box key={command.name} flexShrink={0}>
+      <Text dimColor wrap="truncate-end">
+        /{command.name} — {localizedDescription(command)}
+      </Text>
+    </Box>
+  ))
   const commandList = (
     <Box flexDirection="column" flexShrink={0}>
       <Text dimColor>{t('help-commands-title')}</Text>
-      {chrome.map(command => (
-        <Box key={command.name}>
-          <Text dimColor wrap="truncate-end">
-            /{command.name} — {localizedDescription(command)}
-          </Text>
-        </Box>
-      ))}
+      {commandRows}
     </Box>
   )
   const content = (
@@ -115,15 +123,14 @@ export function HelpMenu({
   return (
     <Box height={viewportHeight} flexDirection="column">
       {compact ? (
-        <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1} flexShrink={1}>
+        <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1} flexShrink={1} paddingX={2}>
           {/* Below 72 columns the two fixed shortcut columns would consume
               almost the whole screen. Stack every section into one reachable
               viewport instead of squeezing the command list to zero width. */}
-          <Box paddingX={2} flexDirection="column">
-            {primaryShortcuts}
-            {secondaryShortcuts}
-            {commandList}
-          </Box>
+          {primaryShortcuts}
+          {secondaryShortcuts}
+          <Text dimColor>{t('help-commands-title')}</Text>
+          {compactCommandRows}
         </ScrollBox>
       ) : (
         <Box paddingX={2} flexDirection="row" gap={4} flexGrow={1}>
