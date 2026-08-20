@@ -149,12 +149,12 @@ export const Config: Schema<Config> = Schema.object({
  * @returns a promise settling when the TUI teardown completes.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
-  const { upstreamDrift, UPSTREAM_VALIDATED_VERSION } = await import('./contract.js')
+  const { upstreamDrift, UPSTREAM_VALIDATED_LABEL } = await import('./contract.js')
   for (const entry of upstreamDrift()) {
     console.warn(
       `[dsh-tui] upstream drift: ${entry.package} installed=${entry.installed ?? 'missing'} ` +
-      `validated=${UPSTREAM_VALIDATED_VERSION} — the TUI was validated against ` +
-      `${UPSTREAM_VALIDATED_VERSION}; upgrade the profile when upstream is bumped.`,
+      `validated=${entry.validated} — the TUI is validated against ${UPSTREAM_VALIDATED_LABEL}; ` +
+      `upgrade or downgrade the profile when the upstream line changes.`,
     )
   }
   const { apply: ccTuiApply } = await import('./plugin.js')

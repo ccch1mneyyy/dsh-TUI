@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
+import type { CommandExecution, CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import {
@@ -67,6 +67,7 @@ import { installDecisionGuard } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
 import { readGrantStore } from './grants.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
+import { installedLineOf } from './contract.js'
 import { pluginsInfoLines } from './plugins-info.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
@@ -1725,6 +1726,24 @@ export function createChannel(
     return true
   }
 
+  /** One composer image accompanying a registry-command line: structural
+   *  mirror of rc.8's `EncodedImageAttachment` (`@deepseek-ai/dsh-attachment/
+   *  types`). Kept local so older installs never resolve rc.8-only types. */
+  interface RegistryCommandImage {
+    mediaType: string
+    data: string
+    name?: string
+  }
+  /** Legacy command-service execute (rc.7 and older): (agent, line, signal). */
+  type CommandExecuteLegacy = (agent: Agent, line: string, signal: AbortSignal) => Promise<CommandExecution | undefined>
+  /** rc.8 command-service execute: composer images precede the signal. */
+  type CommandExecuteWithImages = (
+    agent: Agent,
+    line: string,
+    images: readonly RegistryCommandImage[],
+    signal: AbortSignal,
+  ) => Promise<CommandExecution | undefined>
+
   /** Run one DSH registry command (`/plan`, …) on the live agent; the text
    *  of its result, '' when the result is textless, undefined when the
    *  command is not registered, and the error message when it throws. */
@@ -1786,17 +1805,58 @@ export function createChannel(
       return t('command-invoke-denied-owner', { name, owner: owner.componentId })
     }
     try {
-      const execution = await commandService.execute(
-        agent,
-        `/${name}${rawInput}`,
-        new AbortController().signal,
-      )
+      const signal = new AbortController().signal
+      const images = await registryCommandImages(definition, `/${name}${rawInput}`)
+      // rc.8 moved the signal to the 4th parameter and added composer
+      // images; older lines (rc.7/rc.6) take (agent, line, signal).
+      const execution = images === undefined
+        ? await (commandService.execute as unknown as CommandExecuteLegacy)(agent, `/${name}${rawInput}`, signal)
+        : await (commandService.execute as unknown as CommandExecuteWithImages)(agent, `/${name}${rawInput}`, images, signal)
       // `undefined` = not registered; a handler error surfaces as its
       // message so the user sees why the command failed.
       return execution?.result.text ?? ''
     } catch (error) {
       return error instanceof Error ? error.message : String(error)
     }
+  }
+
+  /** Encode the staged `@`-mention images the user pasted for THIS command
+   *  line into rc.8's `EncodedImageAttachment` payloads; undefined = the
+   *  installed dsh-commands line predates composer images (rc.7/rc.6), so
+   *  the caller uses the legacy 3-arg invoke. Matches the submit pipeline's
+   *  token rule (expandMentions): a staged image attaches only when the
+   *  line references its token. A command that does not declare
+   *  `input.images` gets NO images — rc.8 admission settles such a batch
+   *  as an error, and upstream sends images only to image-capable commands.
+   *  A failing read drops just that image; the command still runs. */
+  const registryCommandImages = async (
+    definition: unknown,
+    line: string,
+  ): Promise<RegistryCommandImage[] | undefined> => {
+    if ((installedLineOf('@deepseek-ai/dsh-commands') ?? 0) < 8) return undefined
+    const declaresImages = (definition as { input?: { images?: boolean } } | undefined)?.input?.images === true
+    if (!declaresImages || stagedImages.size === 0) return []
+    const store = mentionAttachments(ctx) as
+      | { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> }
+      | undefined
+    if (typeof store?.readImage !== 'function') return []
+    const images: RegistryCommandImage[] = []
+    for (const [token, attachment] of stagedImages) {
+      if (!line.includes(token)) continue
+      try {
+        const stored = await store.readImage(attachment)
+        if (stored?.data instanceof Uint8Array && stored.data.byteLength > 0) {
+          images.push({
+            mediaType: attachment.mediaType,
+            data: Buffer.from(stored.data).toString('base64'),
+            name: attachment.name,
+          })
+        }
+      } catch {
+        // One unreadable staged image is dropped; the command still runs.
+      }
+    }
+    return images
   }
 
   // Session-mode folds: last-wins projections over the session log. The

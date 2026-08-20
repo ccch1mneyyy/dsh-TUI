@@ -1,9 +1,11 @@
 /**
  * Upstream compatibility contract.
  *
- * The TUI is validated against one upstream release line (0.1.0-rc.7).
- * Every official package this adapter touches is blessed here; anything
- * else must go through upstream channels or the adapter, never the UI.
+ * The TUI is validated against a set of upstream release lines — the
+ * current primary (0.1.0-rc.8) plus older lines kept in backward
+ * compatibility (0.1.0-rc.7, 0.1.0-rc.6). Every official package this
+ * adapter touches is blessed here; anything else must go through upstream
+ * channels or the adapter, never the UI.
  *
  * `upstreamDrift()` powers both the boot-time warning (dev visibility) and
  * the CI gate (scripts/verify-upstream-contract.ts) so a mismatched
@@ -12,7 +14,18 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-export const UPSTREAM_VALIDATED_VERSION = '0.1.0-rc.7'
+/** Primary validated upstream line (newest). */
+export const UPSTREAM_VALIDATED_VERSION = '0.1.0-rc.8'
+
+/** Every upstream rc line the adapter has been validated against.
+ *
+ * rc.8 = primary; rc.7 = previous line (full CI coverage); rc.6 = legacy
+ * line (install- and type-level compatibility, feature surface may lack
+ * rc.7/rc.8 additions — new features must degrade gracefully there).
+ * The peer range in package.json is deliberately wider than this list: an
+ * install on an older line is allowed but reports drift at boot.
+ */
+export const UPSTREAM_VALIDATED_RC_LINES = [6, 7, 8] as const
 
 /**
  * Framework packages version on their own lines; the contract validates
@@ -58,6 +71,9 @@ export interface UpstreamDriftEntry {
   validated: string
 }
 
+/** Human-readable summary of the validated lines, e.g. `0.1.0-rc.8 (rc.6/rc.7/rc.8)`. */
+export const UPSTREAM_VALIDATED_LABEL = `${UPSTREAM_VALIDATED_VERSION} (${UPSTREAM_VALIDATED_RC_LINES.map((n) => `rc.${n}`).join('/')})`
+
 function resolvePackageJson(packageName: string): string | undefined {
   try {
     const path = import.meta.resolve(`${packageName}/package.json`)
@@ -67,7 +83,11 @@ function resolvePackageJson(packageName: string): string | undefined {
   }
 }
 
+let cachedVersions: Record<string, string | undefined> | undefined
 export function installedUpstreamVersions(): Record<string, string | undefined> {
+  // Package manifests do not change mid-process; memoize so per-call gates
+  // (e.g. the command-images line check) stay cheap.
+  if (cachedVersions !== undefined) return cachedVersions
   const result: Record<string, string | undefined> = {}
   for (const packageName of UPSTREAM_BLESSED_PACKAGES) {
     let version: string | undefined
@@ -82,7 +102,16 @@ export function installedUpstreamVersions(): Record<string, string | undefined> 
     }
     result[packageName] = version
   }
+  cachedVersions = result
   return result
+}
+
+/** The installed upstream rc line of one blessed package (undefined when
+ *  missing or not on the 0.1.0-rc line). Feature gates compare this against
+ *  the line a behavior was introduced on, so the adapter degrades on older
+ *  installs instead of calling APIs they do not have. */
+export function installedLineOf(packageName: string): number | undefined {
+  return rcNumber(installedUpstreamVersions()[packageName])
 }
 
 function rcNumber(version: string | undefined): number | undefined {
@@ -91,8 +120,9 @@ function rcNumber(version: string | undefined): number | undefined {
 }
 
 /**
- * Report every blessed package whose installed version is NOT the validated
- * release line. Empty array = the running install matches the contract.
+ * Report every blessed package whose installed version is NOT one of the
+ * validated release lines. Empty array = the running install matches the
+ * contract.
  */
 export function upstreamDrift(): UpstreamDriftEntry[] {
   const drift: UpstreamDriftEntry[] = []
@@ -105,13 +135,14 @@ export function upstreamDrift(): UpstreamDriftEntry[] {
       const installedMajor = Number((installed ?? '').split('.')[0])
       matches = installedMajor === frameworkMajor
     } else {
-      matches = rcNumber(installed) === rcNumber(UPSTREAM_VALIDATED_VERSION)
+      const installedLine = rcNumber(installed)
+      matches = installedLine !== undefined && (UPSTREAM_VALIDATED_RC_LINES as readonly number[]).includes(installedLine)
     }
     if (!matches) {
       drift.push({
         package: packageName,
         installed,
-        validated: frameworkMajor !== undefined ? `major ${frameworkMajor}` : UPSTREAM_VALIDATED_VERSION,
+        validated: frameworkMajor !== undefined ? `major ${frameworkMajor}` : UPSTREAM_VALIDATED_LABEL,
       })
     }
   }

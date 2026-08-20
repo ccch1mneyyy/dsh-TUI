@@ -267,7 +267,11 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   const checkpoint = definitionLookup
   check1('owner-scoped invoke checkpoint present in channel.ts', checkpoint !== -1)
   check1('owner lookup uses the effective definition', ownerLookup > definitionLookup)
-  const executeAfter = channel.indexOf('commandService.execute(', checkpoint)
+  // The invocation is version-gated (rc.8 composer images vs the legacy
+  // 3-arg call), so match the `commandService.execute` identifier rather
+  // than one particular call shape — the ordering guarantee under test is
+  // that the owner checkpoint precedes the invocation.
+  const executeAfter = channel.indexOf('commandService.execute', checkpoint)
   check1('owner checkpoint runs BEFORE commandService.execute', executeAfter > checkpoint)
   check1("owner deny path returns t('command-invoke-denied-owner')", channel.includes("return t('command-invoke-denied-owner'"))
   check1('owner invoke deny records a scoped permission id', channel.includes('resource: { kind: \'permission\', id: `${owner.componentId}:commands.invoke:${owner.commandId}` }'))
@@ -283,7 +287,7 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   const ownerCheckpoint = checkpoint
   check1('per-owner checkpoint present', ownerCheckpoint !== -1)
   check1('per-owner checkpoint runs BEFORE commandService.execute',
-    channel.indexOf('commandService.execute(', ownerCheckpoint) > ownerCheckpoint)
+    channel.indexOf('commandService.execute', ownerCheckpoint) > ownerCheckpoint)
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',
     pluginHost.includes('registerCommand(pluginCtx: Context'))
