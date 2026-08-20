@@ -1,20 +1,38 @@
 /**
- * Channel-level verification of the header whale-art toggle (settings
- * `dsh-tui.whale`, default on): real Channel via createChannel + fake
- * ctx/agent, plain node against the compiled lib.
+ * Component and channel regression for settings `dsh-tui.whale`.
+ * Imports source through tsx, so it never relies on a pre-existing lib/ tree.
  *
- * - whale defaults to on, `whale: false` opts out
- * - setWhale flips the flag and notifies subscribers exactly once;
- *   setting the same value is a no-op (no re-emit)
- *
- * Run with plain node against the compiled lib: `node scripts/verify-whale-toggle.mjs`
+ * Run: node --import tsx/esm scripts/verify-whale-toggle.mjs
  */
-import { createChannel } from '../lib/types/dsh-adapter/channel.js'
+process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'en'
 
-let failed = 0
-function check(name, ok, extra = '') {
-  console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
-  if (!ok) failed += 1
+const [
+  { strict: assert },
+  { PassThrough, Writable },
+  React,
+  { render, ThemeProvider },
+  { LogoHeader },
+  { createChannel },
+] = await Promise.all([
+  import('node:assert'),
+  import('node:stream'),
+  import('react'),
+  import('../src/ui.js'),
+  import('../src/components/MessageList.js'),
+  import('../src/dsh-adapter/channel.js'),
+])
+
+let checks = 0
+function check(name, test) {
+  try {
+    test()
+    checks += 1
+    console.log(`PASS: ${name}`)
+  } catch (error) {
+    console.error(`FAIL: ${name}`)
+    throw error
+  }
 }
 
 function makeChannel(options = {}) {
@@ -46,20 +64,96 @@ function makeChannel(options = {}) {
   })
 }
 
-// ---- default on / explicit opt-out
-check('whale defaults to on', makeChannel().whale === true)
-check('whale: false opts out', makeChannel({ whale: false }).whale === false)
+class FakeStdin extends PassThrough {
+  isTTY = true
+  setRawMode() { return this }
+  ref() { return this }
+  unref() { return this }
+}
 
-// ---- setWhale flips once, idempotent on repeat
+class FakeOutput extends Writable {
+  constructor(columns) {
+    super()
+    this.columns = columns
+  }
+  rows = 30
+  isTTY = true
+  writes = []
+  _write(chunk, _encoding, callback) {
+    this.writes.push(String(chunk))
+    callback()
+  }
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const stripAnsi = text => text
+  .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+  .replace(/\x1b\]9;[^\x07]*\x07/g, '')
+const WHALE_OUTLINE = '\x1b[38;2;20;38;96m'
+
+async function renderHeader({ columns, whale }) {
+  const stdout = new FakeOutput(columns)
+  const stderr = new FakeOutput(columns)
+  const props = { model: 'whale-model-probe', cwd: '/whale/cwd' }
+  if (whale !== undefined) props.whale = whale
+  const instance = await render(
+    React.createElement(
+      ThemeProvider,
+      { theme: 'dark' },
+      React.createElement(LogoHeader, props),
+    ),
+    {
+      stdout,
+      stderr,
+      stdin: new FakeStdin(),
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  await sleep(180)
+  const raw = stdout.writes.join('')
+  await instance.unmount()
+  return { raw, plain: stripAnsi(raw) }
+}
+
+// Channel defaults and live setter semantics.
+check('channel defaults whale to on', () => assert.equal(makeChannel().whale, true))
+check('channel preserves an explicit whale=false', () => assert.equal(makeChannel({ whale: false }).whale, false))
 const channel = makeChannel()
 let notified = 0
 channel.subscribe(() => { notified += 1 })
 channel.setWhale(false)
-check('setWhale(false) flips the flag', channel.whale === false)
-check('subscriber notified once', notified === 1)
+check('setWhale(false) updates and notifies once', () => {
+  assert.equal(channel.whale, false)
+  assert.equal(notified, 1)
+})
 channel.setWhale(false)
-check('repeat setWhale is a no-op', notified === 1)
+check('repeated setWhale(false) is a no-op', () => assert.equal(notified, 1))
 channel.setWhale(true)
-check('setWhale(true) restores the default view', channel.whale === true && notified === 2)
+check('setWhale(true) restores the default view', () => {
+  assert.equal(channel.whale, true)
+  assert.equal(notified, 2)
+})
 
-process.exit(failed === 0 ? 0 : 1)
+// Real LogoHeader -> LogoV2 rendering: default, explicit opt-out, and narrow fallback.
+const wideDefault = await renderHeader({ columns: 100 })
+check('wide LogoHeader shows whale by default', () => {
+  assert.ok(wideDefault.raw.includes(WHALE_OUTLINE), 'whale palette marker missing')
+  assert.ok(wideDefault.plain.includes('dsh-TUI'), 'text logo missing')
+})
+
+const wideDisabled = await renderHeader({ columns: 100, whale: false })
+check('LogoHeader forwards whale=false while preserving the text logo', () => {
+  assert.ok(!wideDisabled.raw.includes(WHALE_OUTLINE), 'whale palette marker still rendered')
+  assert.ok(wideDisabled.plain.includes('dsh-TUI'), 'text logo missing')
+  assert.ok(wideDisabled.plain.includes('whale-model-probe'), 'header details missing')
+})
+
+const narrowDefault = await renderHeader({ columns: 63 })
+check('narrow terminal hides whale but preserves the text logo', () => {
+  assert.ok(!narrowDefault.raw.includes(WHALE_OUTLINE), 'whale should hide below 64 columns')
+  assert.ok(narrowDefault.plain.includes('dsh-TUI'), 'text logo missing')
+  assert.ok(narrowDefault.plain.includes('whale-model-probe'), 'header details missing')
+})
+
+console.log(`\nAll ${checks} whale-toggle checks passed.`)
