@@ -2,8 +2,8 @@
  * /color command regression — headless Chat-level smoke test.
  *
  * Renders the real Chat screen with a channel-shaped stub, drives /color
- * commands through stdin, and asserts on notifications, pushLocal output,
- * and persistence file state.
+ * commands through stdin, and asserts on notifications and pushLocal output.
+ * No persistence — color resets to default on restart.
  *
  * Run against the compiled lib:
  *   node scripts/verify-color-command.mjs
@@ -12,17 +12,8 @@
  *   node --import tsx/esm scripts/verify-color-command.mjs
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import assert from 'node:assert/strict'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
-
-// ── throwaway HOME so persistence hits a temp dir ─────────────────────────
-const tmpHome = mkdtempSync(join(tmpdir(), 'dshtui-color-test-'))
-process.env.USERPROFILE = tmpHome
-process.env.HOME = tmpHome
 
 const { render } = await import('../lib/types/ui.js')
 const { Chat } = await import('../lib/types/screens/Chat.js')
@@ -163,76 +154,10 @@ async function runCommand(stdin, cmd, waitMs = 300) {
   await sleep(waitMs)
 }
 
-// ── persistence helper: read the color file ───────────────────────────────
-const DATA_DIR = join(tmpHome, '.dsh-tui')
-const COLOR_FILE = join(DATA_DIR, 'prompt-color.json')
-
-function readPersistedColor() {
-  try {
-    return JSON.parse(readFileSync(COLOR_FILE, 'utf8')).color || undefined
-  } catch {
-    return undefined
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
-// Part A: persistence layer (no Chat render needed)
+// Part A: /color command through real Chat (no persistence)
 // ═══════════════════════════════════════════════════════════════════════════
 {
-  mkdirSync(DATA_DIR, { recursive: true })
-
-  // A1: file absent → undefined
-  check('persist: absent file returns undefined', readPersistedColor() === undefined)
-
-  // A2: write and read back
-  writeFileSync(COLOR_FILE, JSON.stringify({ color: 'green' }))
-  check('persist: write + read green', readPersistedColor() === 'green')
-
-  // A3: overwrite
-  writeFileSync(COLOR_FILE, JSON.stringify({ color: 'cyan' }))
-  check('persist: overwrite to cyan', readPersistedColor() === 'cyan')
-
-  // A4: delete (simulates /color default)
-  const { unlinkSync } = await import('node:fs')
-  unlinkSync(COLOR_FILE)
-  check('persist: delete → undefined', readPersistedColor() === undefined)
-
-  // A5: corrupt JSON
-  writeFileSync(COLOR_FILE, '{broken')
-  check('persist: corrupt JSON → undefined', readPersistedColor() === undefined)
-
-  // A6: valid JSON, wrong shape
-  writeFileSync(COLOR_FILE, JSON.stringify({ theme: 'dark' }))
-  check('persist: missing color field → undefined', readPersistedColor() === undefined)
-
-  // A7: valid JSON, invalid color name
-  writeFileSync(COLOR_FILE, JSON.stringify({ color: 'foobar' }))
-  check('persist: invalid color name still readable (filtered at command level)',
-    readPersistedColor() === 'foobar')
-
-  // Clean up
-  unlinkSync(COLOR_FILE)
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Part B: BORDER_COLOR_MAP completeness
-// ═══════════════════════════════════════════════════════════════════════════
-{
-  // Import the compiled PromptInput to verify the map is present and covers
-  // all 8 user-facing color names.
-  const mod = await import('../lib/types/components/PromptInput.js')
-  // BORDER_COLOR_MAP is module-private; we verify indirectly through the
-  // Chat integration in Part C. Here we just confirm the module loads.
-  check('PromptInput module loads without error', typeof mod.PromptInput === 'function')
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Part C: /color command through real Chat
-// ═══════════════════════════════════════════════════════════════════════════
-{
-  // Ensure clean state
-  try { const { unlinkSync } = await import('node:fs'); unlinkSync(COLOR_FILE) } catch {}
-
   const { stdout, stderr, stdin } = makeStreams()
   const channel = makeChannel()
   const instance = await render(
@@ -246,42 +171,51 @@ function readPersistedColor() {
   await sleep(500)
   setLang('en')
 
-  // C1: /color green → switch notification + file persisted
+  // A1: /color green → switch notification
   channel.notifications.length = 0
   await runCommand(stdin, '/color green')
   check('/color green: notification sent',
-    channel.notifications.some(n => n.text.includes('green')),
+    channel.notifications.some(n => n.text.includes('green') && n.options?.color === 'success'),
     JSON.stringify(channel.notifications.map(n => n.text)))
-  check('/color green: persisted to file', readPersistedColor() === 'green')
 
-  // C2: /color (bare) → shows current color
+  // A2: /color (bare) → shows current color
   channel.pushedLocal.length = 0
   await runCommand(stdin, '/color')
   check('/color bare: shows current color',
     channel.pushedLocal.some(p => p.lines.some(l => l.includes('green'))),
     JSON.stringify(channel.pushedLocal))
 
-  // C3: /color red → switch notification + file updated
+  // A3: /color red → switch notification
   channel.notifications.length = 0
   await runCommand(stdin, '/color red')
   check('/color red: notification sent',
-    channel.notifications.some(n => n.text.includes('red')))
-  check('/color red: persisted', readPersistedColor() === 'red')
+    channel.notifications.some(n => n.text.includes('red') && n.options?.color === 'success'))
 
-  // C4: /color default → reset notification + file deleted
+  // A4: /color (bare) → shows updated color
+  channel.pushedLocal.length = 0
+  await runCommand(stdin, '/color')
+  check('/color bare: shows updated color',
+    channel.pushedLocal.some(p => p.lines.some(l => l.includes('red'))))
+
+  // A5: /color default → reset notification
   channel.notifications.length = 0
   await runCommand(stdin, '/color default')
   check('/color default: notification sent',
-    channel.notifications.some(n => n.text.includes('default')))
-  check('/color default: file deleted', !existsSync(COLOR_FILE))
+    channel.notifications.some(n => n.text.includes('default') && n.options?.color === 'success'))
 
-  // C5: /color foobar → unknown color warning
+  // A6: /color (bare) → shows default after reset
+  channel.pushedLocal.length = 0
+  await runCommand(stdin, '/color')
+  check('/color bare: shows default after reset',
+    channel.pushedLocal.some(p => p.lines.some(l => l.includes('default'))))
+
+  // A7: /color foobar → unknown color warning
   channel.notifications.length = 0
   await runCommand(stdin, '/color foobar')
   check('/color foobar: unknown color warning',
     channel.notifications.some(n => n.options?.color === 'warning' && n.text.includes('foobar')))
 
-  // C6: all 8 valid colors accepted
+  // A8: all 8 valid colors accepted
   const COLORS = ['blue', 'green', 'red', 'yellow', 'purple', 'orange', 'pink', 'cyan']
   let allAccepted = true
   for (const color of COLORS) {
@@ -293,11 +227,6 @@ function readPersistedColor() {
     }
   }
   check('all 8 colors accepted', allAccepted)
-
-  // C7: clean up — reset to default
-  channel.notifications.length = 0
-  await runCommand(stdin, '/color default')
-  check('final reset: file deleted', !existsSync(COLOR_FILE))
 
   instance.unmount()
 }

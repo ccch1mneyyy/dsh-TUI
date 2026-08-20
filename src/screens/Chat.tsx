@@ -1,5 +1,3 @@
-import { readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
 import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
@@ -7,7 +5,7 @@ import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { formatTokens } from '../cc/format.js'
-import { homeDir, DATA_DIR } from '../utils/paths.js'
+import { homeDir } from '../utils/paths.js'
 import type { LlmModelInfo } from '../dsh-adapter/types.js'
 import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
@@ -334,9 +332,7 @@ export function Chat({
   const [langPickerOpen, setLangPickerOpen] = React.useState(false)
   const [langIndex, setLangIndex] = React.useState(0)
   const [themeName, setTheme] = useTheme()
-  const [borderColor, setBorderColor] = React.useState<string | undefined>(() => {
-    try { return JSON.parse(readFileSync(join(DATA_DIR, 'prompt-color.json'), 'utf8')).color || undefined } catch { return undefined }
-  })
+  const [borderColor, setBorderColor] = React.useState<string | undefined>()
   const { rows: terminalRows } = useTerminalSize()
   const [showAllMessages, setShowAllMessages] = React.useState(false)
   /** Fold state for the GoalTodoPanel todo section (ctrl/cmd+q or click). */
@@ -846,13 +842,9 @@ export function Chat({
       }
       case 'color': {
         const COLOR_NAMES = ['blue', 'green', 'red', 'yellow', 'purple', 'orange', 'pink', 'cyan', 'default'] as const
-        const COLOR_FILE = join(DATA_DIR, 'prompt-color.json')
         const c = rawInput.trim().split(/\s+/)[0]?.toLowerCase()
         if (c && COLOR_NAMES.includes(c as typeof COLOR_NAMES[number])) {
           setBorderColor(c === 'default' ? undefined : c)
-          mkdirSync(DATA_DIR, { recursive: true })
-          if (c === 'default') { try { unlinkSync(COLOR_FILE) } catch {} }
-          else writeFileSync(COLOR_FILE, JSON.stringify({ color: c }))
           channel.notify(c === 'default' ? 'Border color reset to default' : `Border color switched to: ${c}`, { color: 'success' })
         } else if (c) {
           channel.notify(`Unknown color: ${c}. Available: ${COLOR_NAMES.join(', ')}`, { color: 'warning' })
