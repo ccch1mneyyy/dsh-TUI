@@ -179,6 +179,14 @@ export interface PromptInputProps {
   onRewindRequest?(): void
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
+  /** User-selected border color name (from /color command). */
+  borderColor?: string
+}
+
+/** Map user color names to theme keys. */
+const BORDER_COLOR_MAP: Record<string, string> = {
+  blue: 'promptBorder', green: 'planMode', red: 'error', yellow: 'warning',
+  purple: 'autoAccept', orange: 'fastMode', pink: 'bashBorder', cyan: 'toolDotRead',
 }
 
 /**
@@ -222,6 +230,7 @@ export function PromptInput({
   onFillConsumed,
   onRewindRequest,
   controllerRef,
+  borderColor,
 }: PromptInputProps) {
   const [themeName] = useTheme()
   const [value, setValue] = React.useState('')
@@ -1149,7 +1158,7 @@ export function PromptInput({
   // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。
   const floatersOpen = helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen
   // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
-  const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
+  const promptAccent = channel.mode.plan === true ? 'planMode' : (borderColor && borderColor !== 'default' ? BORDER_COLOR_MAP[borderColor] as keyof import('../theme.js').Theme : 'promptBorder')
 
   return (
     <Box flexDirection="column" marginTop={1}>

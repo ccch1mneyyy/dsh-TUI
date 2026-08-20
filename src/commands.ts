@@ -84,6 +84,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
   { name: 'preset', description: 'Switch the agent preset (including Liangshen mode)' },
   { name: 'theme', description: 'Switch the color theme (auto, built-in or custom)' },
+  { name: 'color', description: 'Set prompt border color' },
   { name: 'lang', description: 'Switch the UI language (en / zh)' },
   { name: 'model', description: 'Show the active model' },
   { name: 'effort', description: 'Adjust the reasoning effort (slider)' },
