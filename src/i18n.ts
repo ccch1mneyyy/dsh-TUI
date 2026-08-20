@@ -651,6 +651,15 @@ const dict = {
   'provider-q-switch': { zh: '立即切换到新 provider？', en: 'Switch to the new provider now?' },
   'provider-opt-switch-now': { zh: '切换到 {{model}}', en: 'Switch to {{model}}' },
   'provider-opt-switch-keep': { zh: '保持当前模型', en: 'Keep the current model' },
+  'provider-codex-device-prompt': { zh: '在浏览器打开 {{url}}，输入代码 {{code}}。授权完成后会自动继续', en: 'Open {{url}} in a browser, enter code {{code}}. This continues automatically after authorization' },
+  'provider-codex-device-detail': { zh: '代码与链接仅本次有效；等待授权期间请勿关闭本终端。也可选「我已授权，继续」或按回车。', en: 'The code and link are single-use; keep this terminal open while waiting. You can also choose “I have authorized — continue” or press Enter.' },
+  'provider-opt-codex-device-continue': { zh: '我已授权，继续', en: 'I have authorized — continue' },
+  'provider-codex-device-denied': { zh: '授权被拒绝', en: 'Authorization denied' },
+  'provider-codex-device-expired': { zh: '设备代码已过期，请重试', en: 'Device code expired — try again' },
+  'provider-codex-device-failed': { zh: '授权失败 · {{err}}', en: 'Authorization failed · {{err}}' },
+  'provider-codex-env-shadowed': { zh: '环境中已有 OPENAI_CODEX_API_KEY，订阅 token 无法自动续期——请移除该环境变量', en: 'OPENAI_CODEX_API_KEY is set in the environment, so the subscription token cannot auto-refresh — unset it' },
+  'provider-write-oauth-store-failed': { zh: '订阅刷新信息写入失败，token 不会自动续期', en: 'Failed to store the subscription refresh info; the token will not auto-refresh' },
+  'provider-line-codex-oauth-refresh': { zh: '订阅 token 自动续期已启用（~/.dsh-tui/codex-oauth.json）', en: 'Subscription token auto-refresh enabled (~/.dsh-tui/codex-oauth.json)' },
 
   // ── commands.ts — slash-command descriptions ─────────────────────────
   // zh-only on purpose: the English text stays in `LOCAL_COMMANDS` (and in

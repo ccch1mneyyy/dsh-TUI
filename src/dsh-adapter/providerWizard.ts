@@ -24,6 +24,11 @@ import {
   type AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
 import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
+import {
+  CodexOAuthError,
+  type CodexDeviceCodeInfo,
+  type CodexOAuthCredential,
+} from './codexOAuth.js'
 
 /** Route id rule shared with the dsh configuration surface (web Models page). */
 export const PROVIDER_ROUTE_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
@@ -84,6 +89,18 @@ export interface ProviderSetupHost {
    * rejects when the adapter's validation deems it unserviceable.
    */
   writeProfile(route: string, profile: Record<string, unknown>): Promise<void>
+  /**
+   * Run the Codex device-authorization flow; the info callback fires once
+   * the user code is issued, so the caller can show the URI/code and wait.
+   */
+  loginCodexOAuth(
+    onCode: (info: CodexDeviceCodeInfo) => void,
+    signal?: AbortSignal,
+  ): Promise<CodexOAuthCredential>
+  /**
+   * Persist the Codex refresh record (~/.dsh-tui/codex-oauth.json, 0600).
+   */
+  writeCodexOAuthStore(route: string, ref: string, credential: CodexOAuthCredential): boolean
 }
 
 export interface ProviderWizardDeps {
@@ -172,7 +189,7 @@ export async function runProviderWizard(
     // ── 2. route ───────────────────────────────────────────────────────
     let route = ''
     if (isCatalog) {
-      const candidates = host.listCatalogProviders()
+      const candidates = catalogChoices(host)
       if (candidates.length > 0) {
         const otherLabel = t('provider-opt-other-route')
         const catalogAnswer = await ask({
@@ -195,16 +212,40 @@ export async function runProviderWizard(
       if (route === '') return 'cancelled'
     }
 
-    // ── 3. API key (own batch so redact covers exactly the secret) ─────
-    const keyAnswer = await ask({
-      questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
-    }, { redact: true })
-    const apiKey = answerText(keyAnswer, 'apikey')
+    // ── 3. authentication ──────────────────────────────────────────────
+    // openai-codex is OAuth-only (ChatGPT Plus/Pro). Device-code web login
+    // is the sole auth path; there is no console API key and no import of
+    // a local pi login. Every other route keeps the single API-key ask.
+    let apiKey = ''
+    let oauthCredential: CodexOAuthCredential | undefined
+    if (route === 'openai-codex') {
+      const result = await runCodexDeviceLogin({
+        login: (onCode, signal) => host.loginCodexOAuth(onCode, signal),
+        ask,
+      })
+      if (result.kind === 'cancelled') return 'cancelled'
+      if (result.kind === 'failed') {
+        notify(result.text, { color: 'error', timeoutMs: 8000 })
+        return 'failed'
+      }
+      oauthCredential = result.credential
+      apiKey = oauthCredential.access
+    }
+    if (apiKey === '') {
+      const keyAnswer = await ask({
+        questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
+      }, { redact: true })
+      apiKey = answerText(keyAnswer, 'apikey')
+    }
 
     // ── 4. endpoint / protocol ─────────────────────────────────────────
+    // Codex OAuth already authenticated; skip the API-key baseURL question
+    // and serve the bundled catalog (omit `api` so llm-pi-ai reuses it).
     let baseURL: string | undefined
     let api: string | undefined
-    if (isCatalog) {
+    if (oauthCredential !== undefined) {
+      // bundled catalog; no discovery, no model narrowing
+    } else if (isCatalog) {
       const choiceAnswer = await ask({
         questions: [optionQuestion('baseurl-choice', t('provider-q-baseurl-choice'), [
           { label: t('provider-opt-baseurl-skip') },
@@ -232,52 +273,53 @@ export async function runProviderWizard(
       api = answerSelected(endpointAnswer, 'protocol')[0]
     }
 
-    // ── 5. model discovery (draft credential, nothing persisted) ───────
-    notify(t('provider-discovery-running'))
-    const discovered = await host.discoverModels({
-      ...(isCatalog ? { provider: route } : {}),
-      ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
-      ...(api !== undefined ? { api } : {}),
-      apiKey,
-    }).catch(() => [])
-
-    // ── 6. model selection ─────────────────────────────────────────────
+    // ── 5–6. model discovery / selection ───────────────────────────────
     let models: string[] = []
     let discoveredById = new Map<string, LlmDiscoveredModel>()
-    if (discovered.length > 0) {
-      discoveredById = new Map(discovered.map(model => [model.id, model] as const))
-      const modelsAnswer = await ask({
-        questions: [optionQuestion('models', t('provider-q-models'),
-          discovered.map(model => ({
-            label: model.id,
-            description: [
-              model.name ?? '',
-              model.contextWindow !== undefined ? `${model.contextWindow}` : '',
-            ].filter(part => part !== '').join(' · ') || undefined,
-          })),
-          { multiSelect: true },
-        )],
-      })
-      models = mergeModelIds(
-        answerSelected(modelsAnswer, 'models'),
-        answerText(modelsAnswer, 'models'),
-      )
-    } else {
-      notify(t('provider-discovery-failed'), { color: 'warning' })
-      for (let attempt = 0; attempt < MAX_RETRY && models.length === 0; attempt += 1) {
-        const fallbackAnswer = await ask({
-          questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
+    if (oauthCredential === undefined) {
+      notify(t('provider-discovery-running'))
+      const discovered = await host.discoverModels({
+        ...(isCatalog ? { provider: route } : {}),
+        ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
+        ...(api !== undefined ? { api } : {}),
+        apiKey,
+      }).catch(() => [])
+
+      if (discovered.length > 0) {
+        discoveredById = new Map(discovered.map(model => [model.id, model] as const))
+        const modelsAnswer = await ask({
+          questions: [optionQuestion('models', t('provider-q-models'),
+            discovered.map(model => ({
+              label: model.id,
+              description: [
+                model.name ?? '',
+                model.contextWindow !== undefined ? `${model.contextWindow}` : '',
+              ].filter(part => part !== '').join(' · ') || undefined,
+            })),
+            { multiSelect: true },
+          )],
         })
-        models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
-        if (models.length === 0) notify(t('provider-models-required'), { color: 'warning' })
+        models = mergeModelIds(
+          answerSelected(modelsAnswer, 'models'),
+          answerText(modelsAnswer, 'models'),
+        )
+      } else {
+        notify(t('provider-discovery-failed'), { color: 'warning' })
+        for (let attempt = 0; attempt < MAX_RETRY && models.length === 0; attempt += 1) {
+          const fallbackAnswer = await ask({
+            questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
+          })
+          models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
+          if (models.length === 0) notify(t('provider-models-required'), { color: 'warning' })
+        }
+        if (models.length === 0) return 'cancelled'
       }
-      if (models.length === 0) return 'cancelled'
-    }
-    if (!isCatalog && models.length === 0) {
-      // A manual route without models fails the adapter validation; the
-      // loops above should prevent this, but guard before writing.
-      notify(t('provider-models-required'), { color: 'error' })
-      return 'cancelled'
+      if (!isCatalog && models.length === 0) {
+        // A manual route without models fails the adapter validation; the
+        // loops above should prevent this, but guard before writing.
+        notify(t('provider-models-required'), { color: 'error' })
+        return 'cancelled'
+      }
     }
 
     // ── 7. confirm ─────────────────────────────────────────────────────
@@ -285,6 +327,7 @@ export async function runProviderWizard(
     const shadowed = host.envShadows(ref)
     const summaryLines = buildSummaryLines({
       route, ref, shadowed, baseURL, api, models, isCatalog,
+      oauthRefresh: oauthCredential !== undefined && !shadowed,
     })
     const detail = host.routeExists(route)
       ? `${summaryLines.join('\n')}\n${t('provider-route-exists-warning')}`
@@ -311,7 +354,10 @@ export async function runProviderWizard(
       await host.writeCredential(ref, apiKey)
       wroteCredential = true
     }
-    const profile = buildProfile({ isCatalog, ref, baseURL, api, models, discoveredById })
+    const profile = buildProfile({
+      isCatalog: isCatalog || oauthCredential !== undefined,
+      ref, baseURL, api, models, discoveredById,
+    })
     try {
       await host.writeProfile(route, profile)
     } catch (error) {
@@ -330,6 +376,17 @@ export async function runProviderWizard(
       const err = error instanceof Error ? error.message : String(error)
       notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
       return 'failed'
+    }
+    // The refresh record lands only after the profile: a failed profile write
+    // rolls the credential back with no dangling record claiming otherwise.
+    // An env-shadowed ref cannot be refreshed from here and is warned instead.
+    if (oauthCredential !== undefined) {
+      if (shadowed) {
+        notify(t('provider-codex-env-shadowed'), { color: 'warning' })
+      } else {
+        const stored = host.writeCodexOAuthStore(route, ref, oauthCredential)
+        if (!stored) notify(t('provider-write-oauth-store-failed'), { color: 'warning' })
+      }
     }
 
     // ── 9. success: transcript summary + optional live switch ──────────
@@ -363,6 +420,125 @@ export async function runProviderWizard(
     notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
   }
+}
+
+/** Copy used by the Codex device-code wait panel. */
+interface CodexDeviceLoginUi {
+  login: (
+    onCode: (info: CodexDeviceCodeInfo) => void,
+    signal?: AbortSignal,
+  ) => Promise<CodexOAuthCredential>
+  ask: ProviderWizardDeps['ask']
+}
+
+/**
+ * Run Codex device authorization: request a code, surface it in a question
+ * panel that parks while the poll runs, and wait for the user to authorize
+ * in their browser. Esc (UserQuestionError) or an aborted login cancels;
+ * the remaining OAuth failures map to user-facing text.
+ */
+async function runCodexDeviceLogin(deps: CodexDeviceLoginUi): Promise<
+  | { kind: 'credential'; credential: CodexOAuthCredential }
+  | { kind: 'cancelled' }
+  | { kind: 'failed'; text: string }
+> {
+  const controller = new AbortController()
+  try {
+    const credential = await withCodexDeviceCodeDisplay(deps, controller.signal)
+    return { kind: 'credential', credential }
+  } catch (error) {
+    controller.abort()
+    if (error instanceof UserQuestionError) return { kind: 'cancelled' }
+    if (error instanceof CodexOAuthError && error.code === 'cancelled') return { kind: 'cancelled' }
+    return {
+      kind: 'failed',
+      text: error instanceof CodexOAuthError && error.code === 'denied'
+        ? t('provider-codex-device-denied')
+        : error instanceof CodexOAuthError && error.code === 'expired'
+          ? t('provider-codex-device-expired')
+          : t('provider-codex-device-failed', {
+            err: error instanceof Error ? error.message : String(error),
+          }),
+    }
+  }
+}
+
+/**
+ * Present the device code and await the browser authorization. The login
+ * promise runs concurrently with the panel; a failure before a code was ever
+ * issued surfaces through the race instead of hanging the display step.
+ */
+async function withCodexDeviceCodeDisplay(
+  deps: CodexDeviceLoginUi,
+  signal: AbortSignal,
+): Promise<CodexOAuthCredential> {
+  let resolveCode!: (info: CodexDeviceCodeInfo) => void
+  const codeReady = new Promise<CodexDeviceCodeInfo>(resolve => {
+    resolveCode = resolve
+  })
+  const login = deps.login(resolveCode, signal)
+  // login resolves only after onCode fires (the device flow issues the
+  // code before it starts polling), so the race winner is always the code
+  // info; an early login rejection is what rejects the race instead.
+  const info = await Promise.race([codeReady, login]) as CodexDeviceCodeInfo
+  // A text-only question rejects empty Enter ("Type your answer before
+  // submitting"), so this step is a Continue option. The grant also
+  // auto-dismisses the panel once polling succeeds — the user should not
+  // have to confirm after the browser already authorized.
+  const panelAbort = new AbortController()
+  const onOuterAbort = (): void => panelAbort.abort()
+  signal.addEventListener('abort', onOuterAbort, { once: true })
+  const panel = deps.ask({
+    questions: [optionQuestion('codex-device-wait', t('provider-codex-device-prompt', {
+      url: info.verificationUri,
+      code: info.userCode,
+    }), [
+      { label: t('provider-opt-codex-device-continue') },
+    ], { detail: t('provider-codex-device-detail'), hideCustomInput: true })],
+    signal: panelAbort.signal,
+  })
+  try {
+    const credential = await new Promise<CodexOAuthCredential>((resolve, reject) => {
+      let settled = false
+      const finish = (apply: () => void): void => {
+        if (settled) return
+        settled = true
+        apply()
+      }
+      login.then(
+        cred => finish(() => resolve(cred)),
+        err => finish(() => reject(err)),
+      )
+      panel.then(
+        () => {
+          login.then(
+            cred => finish(() => resolve(cred)),
+            err => finish(() => reject(err)),
+          )
+        },
+        err => {
+          if (panelAbort.signal.aborted) return
+          finish(() => reject(err))
+        },
+      )
+    })
+    return credential
+  } finally {
+    signal.removeEventListener('abort', onOuterAbort)
+    panelAbort.abort()
+    await panel.catch(() => {})
+  }
+}
+
+/**
+ * Catalog routes the wizard offers. `openai-codex` is withheld by
+ * dsh-llm-pi-ai (OAuth-only), but this TUI can authenticate it, so it is
+ * injected when the adapter does not already list it.
+ */
+function catalogChoices(host: ProviderSetupHost): CatalogProviderCandidate[] {
+  const listed = [...host.listCatalogProviders()]
+  if (listed.some(entry => entry.provider === 'openai-codex')) return listed
+  return [...listed, { provider: 'openai-codex', displayName: 'OpenAI Codex' }]
 }
 
 /** Prompt for a route id until it validates or the retry budget runs out. */
@@ -399,6 +575,7 @@ function buildSummaryLines(input: {
   api: string | undefined
   models: readonly string[]
   isCatalog: boolean
+  oauthRefresh: boolean
 }): string[] {
   const lines = [t('provider-line-route', { route: input.route })]
   lines.push(input.shadowed
@@ -411,6 +588,7 @@ function buildSummaryLines(input: {
   lines.push(input.models.length > 0
     ? t('provider-line-models', { models: input.models.join(', ') })
     : t('provider-line-models-catalog'))
+  if (input.oauthRefresh) lines.push(t('provider-line-codex-oauth-refresh'))
   return lines
 }
 

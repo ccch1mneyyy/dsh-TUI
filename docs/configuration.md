@@ -176,12 +176,27 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
   （`openai-completions` / `openai-responses` / `anthropic-messages`），
   向导会用草稿凭据探测端点公布的模型供勾选（探测失败则手输模型 id）。
 
+**OpenAI Codex（`openai-codex` 路由，ChatGPT Plus/Pro 订阅）**：`dsh-llm-pi-ai`
+把该路由从可配置目录里藏起来（它只提供 OAuth、没有 API key 方法），但
+`/provider` 会单独把它列出来，因为 TUI 能完成登录并续期。认证只走 OpenAI
+的 device-code 授权（`https://auth.openai.com/codex/device`）：在面板中打开
+链接、输入代码。没有 console API key，也不会读取本机 pi 的登录。
+
+订阅 access token 约十天过期，dsh-tui 会把它写成 `OPENAI_CODEX_API_KEY`
+凭据，并把 refresh token 与过期时间记到 `~/.dsh-tui/codex-oauth.json`
+（0600）；后台续期器每 60 秒检查，到期前 5 分钟刷新。**不要**在该路由上写
+`api: openai-codex-responses`——适配器会拒绝这个协议；省略 `api` 才能复用
+捆绑 catalog provider（它会从 JWT 里取出 `chatgpt-account-id`）。若进程
+环境已有 `OPENAI_CODEX_API_KEY`（env shadow），自动续期无法生效，向导会
+给出警告。
+
 写入产物（profile 启动时，dsh-base 提供 settings/credentials 服务）：
 
 | 产物 | 位置 |
 | --- | --- |
 | provider profile | `~/.dsh/settings.yaml` 的 `llm-pi-ai.providers.<路由名>`，写入即注册路由 |
 | API key | `~/.dsh/.credentials.yaml`（0600），引用名为 `<路由名大写>_API_KEY` |
+| Codex 订阅刷新记录 | `~/.dsh-tui/codex-oauth.json`（0600），供后台续期器读取 |
 
 密钥答案在会话记录中只显示 `••••••`；若进程环境已有同名变量，则跳过写入、
 运行时直接从环境解析。配置与 dsh web 端的 Models 设置页互通（同一 settings

@@ -22,6 +22,11 @@
  * 11. providerSetup availability must not call APIs absent from dsh-llm rc.6
  *    (regression: listModelDiscoveryNamespaces() is undefined there and the
  *    guard threw before the wizard could open).
+ * 13. openai-codex is injected into the catalog list even when the host
+ *    withholds it; device login writes OPENAI_CODEX_API_KEY, omits `api`.
+ * 14. openai-codex device login parks on codex-device-wait.
+ * 15. openai-codex device denied: outcome 'failed', nothing written.
+ * 16. openai-codex under an env-shadowed ref: warning, no oauth store.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -31,6 +36,7 @@ import {
   deriveKeyRef,
   runProviderWizard,
 } from '../lib/types/dsh-adapter/providerWizard.js'
+import { CodexOAuthError } from '../lib/types/dsh-adapter/codexOAuth.js'
 import { t } from '../lib/types/i18n.js'
 
 let failed = 0
@@ -63,6 +69,7 @@ function makeDeps(script, options = {}) {
     hideFlags: {},
     /** question id → option descriptions, for catalog row-shape regressions. */
     optionDescriptions: {},
+    codexStores: [],
   }
   const host = {
     listCatalogProviders: () => [
@@ -85,6 +92,28 @@ function makeDeps(script, options = {}) {
     writeProfile: async (route, profile) => {
       if (options.profileThrows) throw new Error('settings-rejected: unserviceable')
       calls.profiles.push([route, profile])
+    },
+    loginCodexOAuth: async onCode => {
+      if (options.codexLoginThrows !== undefined) {
+        onCode(options.codexDeviceCode ?? {
+          verificationUri: 'https://auth.openai.com/codex/device',
+          userCode: 'ABCD-EFGH',
+        })
+        throw options.codexLoginThrows
+      }
+      onCode(options.codexDeviceCode ?? {
+        verificationUri: 'https://auth.openai.com/codex/device',
+        userCode: 'ABCD-EFGH',
+      })
+      return options.codexLoginCredential ?? {
+        access: 'codex-device-access', refresh: 'codex-device-refresh',
+        expires: Date.now() + 3_600_000, accountId: 'acct-device',
+      }
+    },
+    writeCodexOAuthStore: (route, ref, credential) => {
+      if (options.codexStoreThrows) return false
+      calls.codexStores.push({ route, ref, credential })
+      return true
     },
   }
   const deps = {
@@ -407,6 +436,97 @@ const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
       'switch': true,
     }),
     JSON.stringify(custom.calls.hideFlags))
+}
+
+// 13. openai-codex is injected + device login: no api field, bundled catalog.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['openai-codex'] },
+    'codex-device-wait': { selected: [t('provider-opt-codex-device-continue')] },
+    'confirm': CONFIRM_WRITE,
+  }, {
+    codexLoginCredential: {
+      access: 'codex-device-access', refresh: 'codex-device-refresh',
+      expires: Date.now() + 3_600_000, accountId: 'acct-device',
+    },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('13 codex injected into catalog',
+    Object.prototype.hasOwnProperty.call(calls.optionDescriptions.catalog ?? {}, 'openai-codex'),
+    JSON.stringify(calls.optionDescriptions.catalog))
+  check('13 codex device: outcome added', outcome === 'added', outcome)
+  check('13 codex device: apikey ask skipped', !calls.asks.includes('apikey'))
+  check('13 codex device: API-key catalog tail skipped',
+    !calls.asks.includes('baseurl-choice') && !calls.asks.includes('models'))
+  check('13 codex device: token written under OPENAI_CODEX_API_KEY',
+    eq(calls.credentials, [['OPENAI_CODEX_API_KEY', 'codex-device-access']]),
+    JSON.stringify(calls.credentials))
+  check('13 codex device: oauth store written for the route',
+    calls.codexStores.length === 1
+      && calls.codexStores[0].route === 'openai-codex'
+      && calls.codexStores[0].ref === 'OPENAI_CODEX_API_KEY'
+      && calls.codexStores[0].credential.access === 'codex-device-access',
+    JSON.stringify(calls.codexStores))
+  check('13 codex device: profile has no api field',
+    eq(calls.profiles, [['openai-codex', { apiKeyEnv: 'OPENAI_CODEX_API_KEY' }]]),
+    JSON.stringify(calls.profiles))
+  check('13 codex device: summary advertises auto-refresh',
+    calls.pushed.length === 1
+      && calls.pushed[0].lines.some(line => line.includes(t('provider-line-codex-oauth-refresh'))))
+}
+
+// 14. openai-codex device panel parks on codex-device-wait.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['openai-codex'] },
+    'codex-device-wait': { selected: [t('provider-opt-codex-device-continue')] },
+    'confirm': CONFIRM_WRITE,
+  })
+  const outcome = await runProviderWizard(deps)
+  check('14 codex device: outcome added', outcome === 'added', outcome)
+  check('14 codex device: panel showed the code and URI',
+    calls.asks.includes('codex-device-wait')
+      && calls.hideFlags['codex-device-wait'] === true)
+}
+
+// 15. openai-codex device login denied.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['openai-codex'] },
+    'codex-device-wait': { selected: [t('provider-opt-codex-device-continue')] },
+  }, {
+    codexLoginThrows: new CodexOAuthError('denied', 'OpenAI Codex device authorization was denied'),
+  })
+  const outcome = await runProviderWizard(deps)
+  check('15 codex device denied: outcome failed', outcome === 'failed', outcome)
+  check('15 codex device denied: denial notified',
+    calls.notifications.some(n => n.color === 'error'
+      && n.text === t('provider-codex-device-denied')))
+  check('15 codex device denied: nothing written',
+    eq(calls.credentials, []) && eq(calls.profiles, []) && eq(calls.codexStores, []))
+}
+
+// 16. openai-codex under an env-shadowed ref.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['openai-codex'] },
+    'codex-device-wait': { selected: [t('provider-opt-codex-device-continue')] },
+    'confirm': CONFIRM_WRITE,
+  }, {
+    shadow: 'OPENAI_CODEX_API_KEY',
+  })
+  const outcome = await runProviderWizard(deps)
+  check('16 codex shadowed: outcome added', outcome === 'added', outcome)
+  check('16 codex shadowed: credential write skipped', eq(calls.credentials, []))
+  check('16 codex shadowed: no oauth store', eq(calls.codexStores, []))
+  check('16 codex shadowed: env-shadow warning notified',
+    calls.notifications.some(n => n.text === t('provider-codex-env-shadowed')))
+  check('16 codex shadowed: no auto-refresh summary line',
+    calls.pushed[0]?.lines.every(line => line !== t('provider-line-codex-oauth-refresh')))
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)

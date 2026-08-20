@@ -193,6 +193,24 @@ restart:
   The wizard probes the endpoint with the draft credential and offers the
   advertised models for selection (manual id entry as fallback).
 
+**OpenAI Codex (the `openai-codex` route, ChatGPT Plus/Pro subscription)**:
+`dsh-llm-pi-ai` withholds this route from the configurable catalog (it is
+OAuth-only), but `/provider` still offers it because the TUI can log in and
+refresh. Auth is OpenAI's device-code flow only
+(`https://auth.openai.com/codex/device`): open the link and enter the code
+shown in the panel. There is no console API-key option and no import of a
+local pi login.
+
+The subscription access token lasts about ten days. dsh-tui stores it as
+the `OPENAI_CODEX_API_KEY` credential and records the refresh token plus
+expiry in `~/.dsh-tui/codex-oauth.json` (mode 0600); a background refresher
+checks every minute and rotates five minutes before expiry. **Do not** set
+`api: openai-codex-responses` on this route — the adapter rejects that
+protocol. Omit `api` so the bundled catalog provider is reused (it extracts
+`chatgpt-account-id` from the JWT). When `OPENAI_CODEX_API_KEY` is in the
+process environment (env shadow), auto-refresh cannot apply and the wizard
+warns.
+
 What gets written (on a profile start, where dsh-base provides the
 settings/credentials services):
 
@@ -200,6 +218,7 @@ settings/credentials services):
 | --- | --- |
 | Provider profile | `llm-pi-ai.providers.<route>` in `~/.dsh/settings.yaml`; the route registers on write |
 | API key | `~/.dsh/.credentials.yaml` (mode 0600), referenced as `<ROUTE>_API_KEY` |
+| Codex subscription refresh record | `~/.dsh-tui/codex-oauth.json` (mode 0600), read by the background refresher |
 
 Key answers render as `••••••` in the transcript; when the process environment
 already provides the same-named variable, the write is skipped and the value
