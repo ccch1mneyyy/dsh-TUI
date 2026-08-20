@@ -17,6 +17,7 @@ import { registerPackagedSkills } from './packaged-skills.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
+import { startXaiSubscriptionRefresh } from './xaiRefresher.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
@@ -646,6 +647,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     })
     ctx.effect(() => unregister)
   }
+  // xAI SuperGrok/X subscription tokens die hourly; the `/provider`
+  // wizard's oauth store tells this ticker to keep the route's credential
+  // fresh while it stays configured.
+  ctx.effect(() => startXaiSubscriptionRefresh(ctx))
   // DSH approval seam: the permission layer asks ApprovalService.request(),
   // which dispatches an `approval/request` waterfall. With no answerer the
   // chain falls through to the fail-closed 'unavailable', so register this

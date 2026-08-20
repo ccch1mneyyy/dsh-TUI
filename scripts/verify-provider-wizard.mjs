@@ -31,6 +31,7 @@ import {
   deriveKeyRef,
   runProviderWizard,
 } from '../lib/types/dsh-adapter/providerWizard.js'
+import { XaiOAuthError } from '../lib/types/dsh-adapter/xaiOAuth.js'
 import { t } from '../lib/types/i18n.js'
 
 let failed = 0
@@ -63,12 +64,14 @@ function makeDeps(script, options = {}) {
     hideFlags: {},
     /** question id → option descriptions, for catalog row-shape regressions. */
     optionDescriptions: {},
+    oauthStores: [],
   }
   const host = {
     listCatalogProviders: () => [
       { provider: 'deepseek', displayName: 'DeepSeek' },
       { provider: 'openai', displayName: 'OpenAI' },
       { provider: 'same-name', displayName: 'same-name' },
+      { provider: 'xai', displayName: 'xAI' },
     ],
     routeExists: () => false,
     discoverModels: async () => {
@@ -85,6 +88,28 @@ function makeDeps(script, options = {}) {
     writeProfile: async (route, profile) => {
       if (options.profileThrows) throw new Error('settings-rejected: unserviceable')
       calls.profiles.push([route, profile])
+    },
+    loginXaiOAuth: async onCode => {
+      if (options.xaiLoginThrows !== undefined) {
+        onCode(options.xaiDeviceCode ?? {
+          verificationUri: 'https://auth.x.ai/device',
+          userCode: 'ABCD-EFGH',
+        })
+        throw options.xaiLoginThrows
+      }
+      onCode(options.xaiDeviceCode ?? {
+        verificationUri: 'https://auth.x.ai/device',
+        userCode: 'ABCD-EFGH',
+      })
+      return options.xaiLoginCredential ?? {
+        access: 'xai-device-access', refresh: 'xai-device-refresh',
+        expires: Date.now() + 3_600_000,
+      }
+    },
+    writeXaiOAuthStore: (route, ref, credential) => {
+      if (options.xaiStoreThrows) return false
+      calls.oauthStores.push({ route, ref, credential })
+      return true
     },
   }
   const deps = {
@@ -407,6 +432,127 @@ const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
       'switch': true,
     }),
     JSON.stringify(custom.calls.hideFlags))
+}
+
+// 13. xai catalog + device login: live listing persisted, oauth store written.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['xai'] },
+    'xai-method': { selected: [t('provider-opt-xai-device')] },
+    'xai-device-wait': { selected: [t('provider-opt-xai-device-continue')] },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, {
+    discovered: [{ id: 'grok-4', name: 'Grok 4', contextWindow: 128000 }],
+    xaiLoginCredential: {
+      access: 'xai-device-access', refresh: 'xai-device-refresh',
+      expires: Date.now() + 3_600_000,
+    },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('13 xai device: outcome added', outcome === 'added', outcome)
+  check('13 xai device: apikey ask skipped', !calls.asks.includes('apikey'))
+  check('13 xai device: API-key catalog tail skipped',
+    !calls.asks.includes('baseurl-choice') && !calls.asks.includes('models'))
+  check('13 xai device: token written under XAI_API_KEY',
+    eq(calls.credentials, [['XAI_API_KEY', 'xai-device-access']]),
+    JSON.stringify(calls.credentials))
+  check('13 xai device: oauth store written for the route',
+    calls.oauthStores.length === 1
+      && calls.oauthStores[0].route === 'xai'
+      && calls.oauthStores[0].ref === 'XAI_API_KEY'
+      && calls.oauthStores[0].credential.access === 'xai-device-access',
+    JSON.stringify(calls.oauthStores))
+  check('13 xai device: live listing persisted with openai-responses',
+    eq(calls.profiles, [['xai', {
+      apiKeyEnv: 'XAI_API_KEY',
+      api: 'openai-responses',
+      defaultInput: ['text', 'image'],
+      models: [{ id: 'grok-4', name: 'Grok 4', contextWindow: 128000 }],
+    }]]),
+    JSON.stringify(calls.profiles))
+  check('13 xai device: summary advertises auto-refresh',
+    calls.pushed.length === 1
+      && calls.pushed[0].lines.some(line => line.includes(t('provider-line-oauth-refresh'))))
+}
+
+// 14. xai device panel parks on xai-device-wait.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['xai'] },
+    'xai-method': { selected: [t('provider-opt-xai-device')] },
+    'xai-device-wait': { selected: [t('provider-opt-xai-device-continue')] },
+    'confirm': CONFIRM_WRITE,
+  })
+  const outcome = await runProviderWizard(deps)
+  check('14 xai device: outcome added', outcome === 'added', outcome)
+  check('14 xai device: panel showed the code and URI',
+    calls.asks.includes('xai-device-wait')
+      && calls.hideFlags['xai-device-wait'] === true)
+}
+
+// 15. xai device login denied.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['xai'] },
+    'xai-method': { selected: [t('provider-opt-xai-device')] },
+    'xai-device-wait': { selected: [t('provider-opt-xai-device-continue')] },
+  }, {
+    xaiLoginThrows: new XaiOAuthError('denied', 'xAI device authorization was denied'),
+  })
+  const outcome = await runProviderWizard(deps)
+  check('15 xai device denied: outcome failed', outcome === 'failed', outcome)
+  check('15 xai device denied: denial notified',
+    calls.notifications.some(n => n.color === 'error'
+      && n.text === t('provider-xai-device-denied')))
+  check('15 xai device denied: nothing written',
+    eq(calls.credentials, []) && eq(calls.profiles, []) && eq(calls.oauthStores, []))
+}
+
+// 16. xai subscription under an env-shadowed ref.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['xai'] },
+    'xai-method': { selected: [t('provider-opt-xai-device')] },
+    'xai-device-wait': { selected: [t('provider-opt-xai-device-continue')] },
+    'confirm': CONFIRM_WRITE,
+  }, {
+    shadow: 'XAI_API_KEY',
+  })
+  const outcome = await runProviderWizard(deps)
+  check('16 xai shadowed: outcome added', outcome === 'added', outcome)
+  check('16 xai shadowed: credential write skipped', eq(calls.credentials, []))
+  check('16 xai shadowed: no oauth store', eq(calls.oauthStores, []))
+  check('16 xai shadowed: env-shadow warning notified',
+    calls.notifications.some(n => n.text === t('provider-xai-env-shadowed')))
+  check('16 xai shadowed: no auto-refresh summary line',
+    calls.pushed[0]?.lines.every(line => line !== t('provider-line-oauth-refresh')))
+}
+
+// 17. xai catalog + plain API key: ordinary key write, no oauth store.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['xai'] },
+    'xai-method': { selected: [t('provider-opt-xai-apikey')] },
+    'apikey': { custom: 'xai-console-key' },
+    'baseurl-choice': SKIP_BASEURL,
+    'models': { selected: ['grok-3'] },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, {
+    discovered: [{ id: 'grok-3' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('17 xai apikey: outcome added', outcome === 'added', outcome)
+  check('17 xai apikey: key written, no oauth store',
+    eq(calls.credentials, [['XAI_API_KEY', 'xai-console-key']])
+      && eq(calls.oauthStores, []),
+    JSON.stringify({ credentials: calls.credentials, oauthStores: calls.oauthStores }))
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)

@@ -39,6 +39,7 @@ import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ProviderSetupHost } from './providerWizard.js'
+import * as xaiOAuth from './xaiOAuth.js'
 import { readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName } from '../components/activityFrames.js'
@@ -3294,6 +3295,12 @@ export function createChannel(
             if (code !== 'SETTINGS_CONFLICT') throw error
             await settings.mutate('llm-pi-ai', ops, revision())
           }
+        },
+        loginXaiOAuth(onCode, signal) {
+          return xaiOAuth.loginXaiDevice(onCode, signal)
+        },
+        writeXaiOAuthStore(route, ref, credential) {
+          return xaiOAuth.writeXaiOAuthStore({ route, ref, credential })
         },
       }
     },

@@ -24,6 +24,14 @@ import {
   type AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
 import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
+import {
+  XaiOAuthError,
+  XAI_DEFAULT_BASE_URL,
+  XAI_SUBSCRIPTION_API,
+  type XaiCatalogModel,
+  type XaiDeviceCodeInfo,
+  type XaiOAuthCredential,
+} from './xaiOAuth.js'
 
 /** Route id rule shared with the dsh configuration surface (web Models page). */
 export const PROVIDER_ROUTE_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
@@ -84,6 +92,18 @@ export interface ProviderSetupHost {
    * rejects when the adapter's validation deems it unserviceable.
    */
   writeProfile(route: string, profile: Record<string, unknown>): Promise<void>
+  /**
+   * Run the xAI device-authorization flow; the info callback fires once the
+   * code is issued, so the caller can show the URI/code and wait.
+   */
+  loginXaiOAuth(
+    onCode: (info: XaiDeviceCodeInfo) => void,
+    signal?: AbortSignal,
+  ): Promise<XaiOAuthCredential>
+  /**
+   * Persist the xAI refresh record (~/.dsh-tui/xai-oauth.json, 0600).
+   */
+  writeXaiOAuthStore(route: string, ref: string, credential: XaiOAuthCredential): boolean
 }
 
 export interface ProviderWizardDeps {
@@ -195,16 +215,61 @@ export async function runProviderWizard(
       if (route === '') return 'cancelled'
     }
 
-    // ── 3. API key (own batch so redact covers exactly the secret) ─────
-    const keyAnswer = await ask({
-      questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
-    }, { redact: true })
-    const apiKey = answerText(keyAnswer, 'apikey')
+    // ── 3. authentication ──────────────────────────────────────────────
+    // xAI can authenticate with SuperGrok/X Premium device-code OAuth or a
+    // console API key. There is no import of a local pi login.
+    let apiKey = ''
+    let oauthCredential: XaiOAuthCredential | undefined
+    if (route === 'xai') {
+      const methodAnswer = await ask({
+        questions: [optionQuestion('xai-method', t('provider-q-xai-method'), [
+          { label: t('provider-opt-xai-device'), description: t('provider-opt-xai-device-desc') },
+          { label: t('provider-opt-xai-apikey'), description: t('provider-opt-xai-apikey-desc') },
+        ], { hideCustomInput: true })],
+      })
+      const method = answerSelected(methodAnswer, 'xai-method')[0]
+      if (method === t('provider-opt-xai-device')) {
+        const result = await runXaiDeviceLogin({
+          login: (onCode, signal) => host.loginXaiOAuth(onCode, signal),
+          ask,
+        })
+        if (result.kind === 'cancelled') return 'cancelled'
+        if (result.kind === 'failed') {
+          notify(result.text, { color: 'error', timeoutMs: 8000 })
+          return 'failed'
+        }
+        oauthCredential = result.credential
+        apiKey = oauthCredential.access
+      }
+    }
+    if (apiKey === '') {
+      const keyAnswer = await ask({
+        questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
+      }, { redact: true })
+      apiKey = answerText(keyAnswer, 'apikey')
+    }
 
-    // ── 4. endpoint / protocol ─────────────────────────────────────────
+    // ── 4–6. endpoint / discovery / model pick ─────────────────────────
     let baseURL: string | undefined
     let api: string | undefined
-    if (isCatalog) {
+    let models: string[] = []
+    let discoveredById = new Map<string, LlmDiscoveredModel>()
+    let oauthModels: readonly XaiCatalogModel[] | undefined
+    if (oauthCredential !== undefined) {
+      const live = await host.discoverModels({
+        baseURL: XAI_DEFAULT_BASE_URL,
+        api: 'openai-completions',
+        apiKey,
+      }).catch(() => [])
+      oauthModels = live.map(model => ({
+        id: model.id,
+        ...(model.name === undefined ? {} : { name: model.name }),
+        ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+        ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+      }))
+      models = live.map(model => model.id)
+      if (models.length > 0) api = XAI_SUBSCRIPTION_API
+    } else if (isCatalog) {
       const choiceAnswer = await ask({
         questions: [optionQuestion('baseurl-choice', t('provider-q-baseurl-choice'), [
           { label: t('provider-opt-baseurl-skip') },
@@ -232,52 +297,48 @@ export async function runProviderWizard(
       api = answerSelected(endpointAnswer, 'protocol')[0]
     }
 
-    // ── 5. model discovery (draft credential, nothing persisted) ───────
-    notify(t('provider-discovery-running'))
-    const discovered = await host.discoverModels({
-      ...(isCatalog ? { provider: route } : {}),
-      ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
-      ...(api !== undefined ? { api } : {}),
-      apiKey,
-    }).catch(() => [])
+    if (oauthCredential === undefined) {
+      notify(t('provider-discovery-running'))
+      const discovered = await host.discoverModels({
+        ...(isCatalog ? { provider: route } : {}),
+        ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
+        ...(api !== undefined ? { api } : {}),
+        apiKey,
+      }).catch(() => [])
 
-    // ── 6. model selection ─────────────────────────────────────────────
-    let models: string[] = []
-    let discoveredById = new Map<string, LlmDiscoveredModel>()
-    if (discovered.length > 0) {
-      discoveredById = new Map(discovered.map(model => [model.id, model] as const))
-      const modelsAnswer = await ask({
-        questions: [optionQuestion('models', t('provider-q-models'),
-          discovered.map(model => ({
-            label: model.id,
-            description: [
-              model.name ?? '',
-              model.contextWindow !== undefined ? `${model.contextWindow}` : '',
-            ].filter(part => part !== '').join(' · ') || undefined,
-          })),
-          { multiSelect: true },
-        )],
-      })
-      models = mergeModelIds(
-        answerSelected(modelsAnswer, 'models'),
-        answerText(modelsAnswer, 'models'),
-      )
-    } else {
-      notify(t('provider-discovery-failed'), { color: 'warning' })
-      for (let attempt = 0; attempt < MAX_RETRY && models.length === 0; attempt += 1) {
-        const fallbackAnswer = await ask({
-          questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
+      if (discovered.length > 0) {
+        discoveredById = new Map(discovered.map(model => [model.id, model] as const))
+        const modelsAnswer = await ask({
+          questions: [optionQuestion('models', t('provider-q-models'),
+            discovered.map(model => ({
+              label: model.id,
+              description: [
+                model.name ?? '',
+                model.contextWindow !== undefined ? `${model.contextWindow}` : '',
+              ].filter(part => part !== '').join(' · ') || undefined,
+            })),
+            { multiSelect: true },
+          )],
         })
-        models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
-        if (models.length === 0) notify(t('provider-models-required'), { color: 'warning' })
+        models = mergeModelIds(
+          answerSelected(modelsAnswer, 'models'),
+          answerText(modelsAnswer, 'models'),
+        )
+      } else {
+        notify(t('provider-discovery-failed'), { color: 'warning' })
+        for (let attempt = 0; attempt < MAX_RETRY && models.length === 0; attempt += 1) {
+          const fallbackAnswer = await ask({
+            questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
+          })
+          models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
+          if (models.length === 0) notify(t('provider-models-required'), { color: 'warning' })
+        }
+        if (models.length === 0) return 'cancelled'
       }
-      if (models.length === 0) return 'cancelled'
-    }
-    if (!isCatalog && models.length === 0) {
-      // A manual route without models fails the adapter validation; the
-      // loops above should prevent this, but guard before writing.
-      notify(t('provider-models-required'), { color: 'error' })
-      return 'cancelled'
+      if (!isCatalog && models.length === 0) {
+        notify(t('provider-models-required'), { color: 'error' })
+        return 'cancelled'
+      }
     }
 
     // ── 7. confirm ─────────────────────────────────────────────────────
@@ -285,6 +346,7 @@ export async function runProviderWizard(
     const shadowed = host.envShadows(ref)
     const summaryLines = buildSummaryLines({
       route, ref, shadowed, baseURL, api, models, isCatalog,
+      oauthRefresh: oauthCredential !== undefined && !shadowed,
     })
     const detail = host.routeExists(route)
       ? `${summaryLines.join('\n')}\n${t('provider-route-exists-warning')}`
@@ -304,14 +366,14 @@ export async function runProviderWizard(
     let wroteCredential = false
     let previousCredential: string | undefined
     if (!shadowed) {
-      // Capture any pre-existing value BEFORE overwriting: when the profile
-      // write below fails, rollback must restore it — an unconditional unset
-      // would destroy the old key of the route being overwritten.
       previousCredential = await host.readCredential(ref)
       await host.writeCredential(ref, apiKey)
       wroteCredential = true
     }
-    const profile = buildProfile({ isCatalog, ref, baseURL, api, models, discoveredById })
+    const profile = buildProfile({
+      isCatalog: isCatalog || oauthCredential !== undefined,
+      ref, baseURL, api, models, discoveredById, oauthModels,
+    })
     try {
       await host.writeProfile(route, profile)
     } catch (error) {
@@ -330,6 +392,14 @@ export async function runProviderWizard(
       const err = error instanceof Error ? error.message : String(error)
       notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
       return 'failed'
+    }
+    if (oauthCredential !== undefined) {
+      if (shadowed) {
+        notify(t('provider-xai-env-shadowed'), { color: 'warning' })
+      } else {
+        const stored = host.writeXaiOAuthStore(route, ref, oauthCredential)
+        if (!stored) notify(t('provider-write-oauth-store-failed'), { color: 'warning' })
+      }
     }
 
     // ── 9. success: transcript summary + optional live switch ──────────
@@ -362,6 +432,106 @@ export async function runProviderWizard(
     const err = error instanceof Error ? error.message : String(error)
     notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
+  }
+}
+
+/** Copy used by the xAI device-code wait panel. */
+interface XaiDeviceLoginUi {
+  login: (
+    onCode: (info: XaiDeviceCodeInfo) => void,
+    signal?: AbortSignal,
+  ) => Promise<XaiOAuthCredential>
+  ask: ProviderWizardDeps['ask']
+}
+
+/**
+ * Run xAI device authorization: request a code, surface it in a question
+ * panel that parks while the poll runs, and wait for the user to authorize
+ * in their browser.
+ */
+async function runXaiDeviceLogin(deps: XaiDeviceLoginUi): Promise<
+  | { kind: 'credential'; credential: XaiOAuthCredential }
+  | { kind: 'cancelled' }
+  | { kind: 'failed'; text: string }
+> {
+  const controller = new AbortController()
+  try {
+    const credential = await withXaiDeviceCodeDisplay(deps, controller.signal)
+    return { kind: 'credential', credential }
+  } catch (error) {
+    controller.abort()
+    if (error instanceof UserQuestionError) return { kind: 'cancelled' }
+    if (error instanceof XaiOAuthError && error.code === 'cancelled') return { kind: 'cancelled' }
+    return {
+      kind: 'failed',
+      text: error instanceof XaiOAuthError && error.code === 'denied'
+        ? t('provider-xai-device-denied')
+        : error instanceof XaiOAuthError && error.code === 'expired'
+          ? t('provider-xai-device-expired')
+          : t('provider-xai-device-failed', {
+            err: error instanceof Error ? error.message : String(error),
+          }),
+    }
+  }
+}
+
+/**
+ * Present the device code and await the browser authorization. The login
+ * promise runs concurrently with the panel; a failure before a code was ever
+ * issued surfaces through the race instead of hanging the display step.
+ */
+async function withXaiDeviceCodeDisplay(
+  deps: XaiDeviceLoginUi,
+  signal: AbortSignal,
+): Promise<XaiOAuthCredential> {
+  let resolveCode!: (info: XaiDeviceCodeInfo) => void
+  const codeReady = new Promise<XaiDeviceCodeInfo>(resolve => {
+    resolveCode = resolve
+  })
+  const login = deps.login(resolveCode, signal)
+  const info = await Promise.race([codeReady, login]) as XaiDeviceCodeInfo
+  const panelAbort = new AbortController()
+  const onOuterAbort = (): void => panelAbort.abort()
+  signal.addEventListener('abort', onOuterAbort, { once: true })
+  const panel = deps.ask({
+    questions: [optionQuestion('xai-device-wait', t('provider-xai-device-prompt', {
+      url: info.verificationUri,
+      code: info.userCode,
+    }), [
+      { label: t('provider-opt-xai-device-continue') },
+    ], { detail: t('provider-xai-device-detail'), hideCustomInput: true })],
+    signal: panelAbort.signal,
+  })
+  try {
+    const credential = await new Promise<XaiOAuthCredential>((resolve, reject) => {
+      let settled = false
+      const finish = (apply: () => void): void => {
+        if (settled) return
+        settled = true
+        apply()
+      }
+      login.then(
+        cred => finish(() => resolve(cred)),
+        err => finish(() => reject(err)),
+      )
+      panel.then(
+        () => {
+          login.then(
+            cred => finish(() => resolve(cred)),
+            err => finish(() => reject(err)),
+          )
+        },
+        err => {
+          if (panelAbort.signal.aborted) return
+          finish(() => reject(err))
+        },
+      )
+    })
+    return credential
+  } finally {
+    signal.removeEventListener('abort', onOuterAbort)
+    panelAbort.abort()
+    await panel.catch(() => {})
   }
 }
 
@@ -399,6 +569,7 @@ function buildSummaryLines(input: {
   api: string | undefined
   models: readonly string[]
   isCatalog: boolean
+  oauthRefresh: boolean
 }): string[] {
   const lines = [t('provider-line-route', { route: input.route })]
   lines.push(input.shadowed
@@ -411,6 +582,7 @@ function buildSummaryLines(input: {
   lines.push(input.models.length > 0
     ? t('provider-line-models', { models: input.models.join(', ') })
     : t('provider-line-models-catalog'))
+  if (input.oauthRefresh) lines.push(t('provider-line-oauth-refresh'))
   return lines
 }
 
@@ -421,12 +593,24 @@ function buildProfile(input: {
   api: string | undefined
   models: readonly string[]
   discoveredById: ReadonlyMap<string, LlmDiscoveredModel>
+  oauthModels?: readonly XaiCatalogModel[]
 }): Record<string, unknown> {
   const profile: Record<string, unknown> = { apiKeyEnv: input.ref }
   if (input.baseURL !== undefined && input.baseURL !== '') profile['baseURL'] = input.baseURL
   if (input.isCatalog) {
-    // `models` replaces the catalog when present; omit it to keep the whole
-    // catalog served.
+    if (input.oauthModels !== undefined && input.oauthModels.length > 0) {
+      if (input.api !== undefined) profile['api'] = input.api
+      profile['defaultInput'] = ['text', 'image']
+      profile['models'] = input.oauthModels.map(model => ({
+        id: model.id,
+        ...(model.name === undefined ? {} : { name: model.name }),
+        ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+        ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+        ...(model.input === undefined ? {} : { input: [...model.input] }),
+        ...(model.reasoningEfforts === undefined ? {} : { reasoningEfforts: { ...model.reasoningEfforts } }),
+      }))
+      return profile
+    }
     if (input.models.length > 0) {
       profile['models'] = input.models.map(id => ({ id }))
     }

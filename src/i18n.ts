@@ -651,6 +651,20 @@ const dict = {
   'provider-q-switch': { zh: '立即切换到新 provider？', en: 'Switch to the new provider now?' },
   'provider-opt-switch-now': { zh: '切换到 {{model}}', en: 'Switch to {{model}}' },
   'provider-opt-switch-keep': { zh: '保持当前模型', en: 'Keep the current model' },
+  'provider-q-xai-method': { zh: '如何用 xAI 认证？', en: 'How do you want to authenticate with xAI?' },
+  'provider-opt-xai-device': { zh: '用 SuperGrok / X Premium 账号登录', en: 'Sign in with SuperGrok or X Premium' },
+  'provider-opt-xai-device-desc': { zh: '浏览器授权（device code），token 到期自动续期', en: 'Browser authorization (device code); the token auto-refreshes' },
+  'provider-opt-xai-apikey': { zh: '输入 API key', en: 'Enter an API key' },
+  'provider-opt-xai-apikey-desc': { zh: '在 console.x.ai 为订阅生成的常规 API key', en: 'A regular API key minted for the subscription at console.x.ai' },
+  'provider-xai-device-prompt': { zh: '在浏览器打开 {{url}}，输入代码 {{code}}。授权完成后会自动继续', en: 'Open {{url}} in a browser, enter code {{code}}. This continues automatically after authorization' },
+  'provider-xai-device-detail': { zh: '代码与链接仅本次有效；等待授权期间请勿关闭本终端。也可选「我已授权，继续」或按回车。', en: 'The code and link are single-use; keep this terminal open while waiting. You can also choose “I have authorized — continue” or press Enter.' },
+  'provider-opt-xai-device-continue': { zh: '我已授权，继续', en: 'I have authorized — continue' },
+  'provider-xai-device-denied': { zh: '授权被拒绝', en: 'Authorization denied' },
+  'provider-xai-device-expired': { zh: '设备代码已过期，请重试', en: 'Device code expired — try again' },
+  'provider-xai-device-failed': { zh: '授权失败 · {{err}}', en: 'Authorization failed · {{err}}' },
+  'provider-xai-env-shadowed': { zh: '环境中已有 XAI_API_KEY，订阅 token 无法自动续期——请移除该环境变量或改用 API key', en: 'XAI_API_KEY is set in the environment, so the subscription token cannot auto-refresh — unset it or use an API key instead' },
+  'provider-write-oauth-store-failed': { zh: '订阅刷新信息写入失败，token 不会自动续期', en: 'Failed to store the subscription refresh info; the token will not auto-refresh' },
+  'provider-line-oauth-refresh': { zh: '订阅 token 自动续期已启用（~/.dsh-tui/xai-oauth.json）', en: 'Subscription token auto-refresh enabled (~/.dsh-tui/xai-oauth.json)' },
 
   // ── commands.ts — slash-command descriptions ─────────────────────────
   // zh-only on purpose: the English text stays in `LOCAL_COMMANDS` (and in

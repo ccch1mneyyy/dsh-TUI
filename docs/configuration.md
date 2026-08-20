@@ -176,12 +176,23 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
   （`openai-completions` / `openai-responses` / `anthropic-messages`），
   向导会用草稿凭据探测端点公布的模型供勾选（探测失败则手输模型 id）。
 
+**xAI SuperGrok（`xai` 路由）**：`/provider` 可用 SuperGrok / X Premium 的
+device-code OAuth，或 console API key。Device 登录走 RFC 8628
+（`https://auth.x.ai`）：在面板中打开链接、输入代码。不会读取本机 pi 的登录。
+
+订阅 access token 约一小时过期，dsh-tui 会把它写成 `XAI_API_KEY` 凭据，并把
+refresh token 与过期时间记到 `~/.dsh-tui/xai-oauth.json`（0600）；后台续期器
+每 60 秒检查，到期前 5 分钟刷新。device 登录后向导会探测 `https://api.x.ai/v1`，
+若列出模型则写入 `api: openai-responses` 以便额外 id 可用。若进程环境已有
+`XAI_API_KEY`（env shadow），自动续期无法生效，向导会给出警告。
+
 写入产物（profile 启动时，dsh-base 提供 settings/credentials 服务）：
 
 | 产物 | 位置 |
 | --- | --- |
 | provider profile | `~/.dsh/settings.yaml` 的 `llm-pi-ai.providers.<路由名>`，写入即注册路由 |
 | API key | `~/.dsh/.credentials.yaml`（0600），引用名为 `<路由名大写>_API_KEY` |
+| xAI 订阅刷新记录 | `~/.dsh-tui/xai-oauth.json`（0600），供后台续期器读取 |
 
 密钥答案在会话记录中只显示 `••••••`；若进程环境已有同名变量，则跳过写入、
 运行时直接从环境解析。配置与 dsh web 端的 Models 设置页互通（同一 settings

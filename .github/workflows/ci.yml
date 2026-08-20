@@ -350,8 +350,12 @@ jobs:
 
       # /provider 向导回归：catalog/custom 两分支的 profile 形状、凭据回滚
       # （覆盖时恢复旧 key 而非误删）、env shadow 跳过、rc.6 兼容守卫、
-      # hideCustomInput 逐题标记。
+      # hideCustomInput 逐题标记、xAI SuperGrok 订阅 device-code 登录。
       - run: node scripts/verify-provider-wizard.mjs
+
+      # xAI Grok/X 订阅 OAuth 回归：store 存取与 0600、token 刷新、
+      # RFC 8628 device 流程、后台续期器启用条件。
+      - run: node scripts/verify-xai-oauth.mjs
 
       # /login 凭据状态回归（issue #213）：只通过 credentials.describe()
       # 展示 configured/source/writable，managed key 不得误报或泄露值。

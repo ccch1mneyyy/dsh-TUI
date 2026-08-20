@@ -193,6 +193,20 @@ restart:
   The wizard probes the endpoint with the draft credential and offers the
   advertised models for selection (manual id entry as fallback).
 
+**xAI SuperGrok (the `xai` route)**: `/provider` can authenticate with
+device-code OAuth (SuperGrok / X Premium) or a console API key. Device
+login is RFC 8628 against `https://auth.x.ai`: open the link and enter the
+code shown in the panel. There is no import of a local pi login.
+
+The subscription access token dies about hourly. dsh-tui stores it as the
+`XAI_API_KEY` credential and records the refresh token plus expiry in
+`~/.dsh-tui/xai-oauth.json` (mode 0600); a background refresher checks every
+minute and rotates five minutes before expiry. After device login the wizard
+probes `https://api.x.ai/v1` and, when the listing is non-empty, writes
+`api: openai-responses` so extra ids stay serviceable. When `XAI_API_KEY` is
+in the process environment (env shadow), auto-refresh cannot apply and the
+wizard warns.
+
 What gets written (on a profile start, where dsh-base provides the
 settings/credentials services):
 
@@ -200,6 +214,7 @@ settings/credentials services):
 | --- | --- |
 | Provider profile | `llm-pi-ai.providers.<route>` in `~/.dsh/settings.yaml`; the route registers on write |
 | API key | `~/.dsh/.credentials.yaml` (mode 0600), referenced as `<ROUTE>_API_KEY` |
+| xAI subscription refresh record | `~/.dsh-tui/xai-oauth.json` (mode 0600), read by the background refresher |
 
 Key answers render as `••••••` in the transcript; when the process environment
 already provides the same-named variable, the write is skipped and the value
