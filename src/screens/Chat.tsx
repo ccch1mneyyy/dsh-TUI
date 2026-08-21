@@ -314,6 +314,7 @@ export function Chat({
   const [themePickerOpen, setThemePickerOpen] = React.useState(false)
   const [themeIndex, setThemeIndex] = React.useState(0)
   const [themeName, setTheme] = useTheme()
+  const [borderColor, setBorderColor] = React.useState<string | undefined>()
   const { rows: terminalRows } = useTerminalSize()
   const [showAllMessages, setShowAllMessages] = React.useState(false)
   const [thinkingVisible, setThinkingVisible] = React.useState(true)
@@ -788,6 +789,19 @@ export function Chat({
         setHelpOpen(false)
         setThemeIndex(Math.max(0, getThemeOptions().findIndex(option => option.value === themeName)))
         setThemePickerOpen(true)
+        return true
+      }
+      case 'color': {
+        const COLOR_NAMES = ['blue', 'green', 'red', 'yellow', 'purple', 'orange', 'pink', 'cyan', 'default'] as const
+        const c = rawInput.trim().split(/\s+/)[0]?.toLowerCase()
+        if (c && COLOR_NAMES.includes(c as typeof COLOR_NAMES[number])) {
+          setBorderColor(c === 'default' ? undefined : c)
+          channel.notify(c === 'default' ? 'Border color reset to default' : `Border color switched to: ${c}`, { color: 'success' })
+        } else if (c) {
+          channel.notify(`Unknown color: ${c}. Available: ${COLOR_NAMES.join(', ')}`, { color: 'warning' })
+        } else {
+          channel.pushLocal('/color', [`Current border color: ${borderColor ?? 'default'}`, `Usage: /color <name>\nAvailable: ${COLOR_NAMES.join(', ')}`])
+        }
         return true
       }
       case 'new': {
@@ -2312,6 +2326,7 @@ export function Chat({
             onFillConsumed={() =>{  setHistoryFill(null) }}
             onRewindRequest={openRewind}
             controllerRef={promptControllerRef}
+            borderColor={borderColor}
           />
         )}
         <StatusLine

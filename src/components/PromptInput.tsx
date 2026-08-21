@@ -96,6 +96,14 @@ export interface PromptInputProps {
   onRewindRequest?(): void
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
+  /** User-selected border color name (from /color command). */
+  borderColor?: string
+}
+
+/** Map user color names to theme keys. */
+const BORDER_COLOR_MAP: Record<string, string> = {
+  blue: 'promptBorder', green: 'planMode', red: 'error', yellow: 'warning',
+  purple: 'autoAccept', orange: 'fastMode', pink: 'bashBorder', cyan: 'toolDotRead',
 }
 
 /**
@@ -138,6 +146,7 @@ export function PromptInput({
   onFillConsumed,
   onRewindRequest,
   controllerRef,
+  borderColor,
 }: PromptInputProps) {
   const [themeName] = useTheme()
   const [value, setValue] = React.useState('')
@@ -1116,7 +1125,7 @@ export function PromptInput({
         levels={channel.effortLevels}
         columns={columns}
         onLight={isLightThemeActive(themeName)}
-        idleColor={channel.mode.plan === true ? 'planMode' : 'promptBorder'}
+        idleColor={channel.mode.plan === true ? 'planMode' : (borderColor && borderColor !== 'default' ? BORDER_COLOR_MAP[borderColor] as keyof import('../theme.js').Theme : 'promptBorder')}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph
