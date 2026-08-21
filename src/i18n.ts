@@ -315,6 +315,7 @@ const dict = {
 
   // ── components/PromptInput.tsx ──────────────────────────────────────
   'input-sent-after-turn': { zh: '已发送，当前回合结束后处理', en: 'Sent, processed after the current turn' },
+  'input-injected': { zh: '已从编辑器发送', en: 'Sent from editor' },
   'input-interrupted-next': { zh: '已插话 · 下一步立即处理', en: 'Interrupted · processed next' },
   'input-queued-after-turn': { zh: '已排队 · 回合结束后处理', en: 'Queued · processed after the turn' },
   'input-cannot-retract': { zh: '无法撤回：消息可能已被处理，或当前版本不支持', en: 'Cannot retract: the message may already be processed, or this version doesn\'t support it' },

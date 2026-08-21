@@ -309,3 +309,23 @@ transcript。
 
 `/vim`、`/connect`、`/hooks` 当前是兼容占位命令；当 DSH 组合没有
 对应能力时会给出明确说明，而不是静默执行。
+
+## 外部注入通道（编辑器集成）
+
+运行中的会话会开一个**本会话独占的本地注入通道**，供编辑器插件（如
+`dsh.nvim`）把上下文推进输入框。它是
+OpenCode `POST /tui/publish` 的对应物，但走本地 socket 而非 HTTP 端口：无端口
+分配、无鉴权面，端点随会话退出自动清理。
+
+- **传输**：Unix domain socket `~/.dsh-tui/inject/<sessionId>.sock`
+  （Windows 为命名管道 `\\.\pipe\dsh-tui-inject-<sessionId>`）。
+- **发现**：`~/.dsh-tui/inject/servers.json` 列出每个存活会话
+  （`pid`、`sessionId`、`cwd`、`socketPath`），客户端据此按 `cwd` 匹配项目并
+  选择目标会话；会话退出时该记录被移除。
+- **协议**：换行分隔的 JSON，每行一条：
+  `{"type":"prompt.append","text":"@src/foo.ts "}` 把文本追加到输入框；
+  `{"type":"command.execute","command":"prompt.submit"}` 提交当前输入。追加文本以
+  空格结尾（OpenCode 惯例）时保持不提交，便于继续编辑。
+- **接线**：追加复用输入框的 `PromptController.append`，提交走
+  `channel.submit`（工作态下自动进 inbox，回合结束后处理）。实现见
+  `src/dsh-adapter/inject-channel.ts`，回归门禁 `scripts/verify-inject-channel.mjs`。

@@ -70,6 +70,13 @@ const MAX_VISIBLE_LINES = 5
 export interface PromptController {
   hasText(): boolean
   clear(): void
+  /**
+   * Append `text` at the end of the input (external injection channel; see
+   * dsh-adapter/inject-channel.ts). Unlike `fillText`, which replaces the
+   * whole value, this accumulates — matching OpenCode's `tui.prompt.append`
+   * so repeated editor sends build one prompt. Returns the resulting value.
+   */
+  append(text: string): string
 }
 
 export interface PromptInputProps {
@@ -156,6 +163,14 @@ export function PromptInput({
         cursorRef.current = 0
         setValue('')
         setCursor(0)
+      },
+      append: (text: string) => {
+        const next = valueRef.current + text
+        valueRef.current = next
+        cursorRef.current = next.length
+        setValue(next)
+        setCursor(next.length)
+        return next
       },
     }
     return () => {
