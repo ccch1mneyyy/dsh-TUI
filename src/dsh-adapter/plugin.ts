@@ -40,7 +40,7 @@ import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './sett
 import { withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
-import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
+import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, SGR_RESET } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
 
@@ -1091,7 +1091,7 @@ async function finishExit(
     if (runtime === undefined && instance !== undefined) {
       ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
     }
-    const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
+    const cursor = cursorMoveToFrameEnd(runtime)
 
     try {
       runtime?.detachForShutdown?.()
@@ -1104,8 +1104,9 @@ async function finishExit(
       ctx.logger.debug('dsh-tui: Ink shutdown detach failed; continuing with generic terminal cleanup')
     }
     const cleanup = [
-      fullscreen ? EXIT_ALT_SCREEN : '',
+      SGR_RESET,
       cursor,
+      fullscreen ? EXIT_ALT_SCREEN : '',
       DISABLE_MOUSE_TRACKING,
       DISABLE_MODIFY_OTHER_KEYS,
       DISABLE_KITTY_KEYBOARD,
