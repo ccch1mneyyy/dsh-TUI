@@ -98,6 +98,10 @@ jobs:
       # 关闭重绘二次写入，每切一次 /model 多一份启动画。
       - run: node --import tsx/esm scripts/repro-model-switch-scrollback.tsx
 
+      # absolute 浮层缩小时的底层恢复回归：旧浮层区域不能只清空，必须
+      # 重新合成被其覆盖的正常流内容；同时不得增长 inline scrollback。
+      - run: pnpm verify:overlay-shrink-restore
+
       # 长列表 picker 焦点窗口化回归：限高浮层下全量渲染会把焦点行裁出屏外
       # （30 行终端 30 个模型，焦点在索引 0 不可见），且 yoga 挤压会产生
       # 零高丢行——焦点必须始终随窗口在屏。

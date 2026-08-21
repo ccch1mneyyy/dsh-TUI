@@ -7,7 +7,7 @@ import { FocusManager } from './focus.js'
 import Output from './output.js'
 import reconciler from './reconciler.js'
 import renderNodeToOutput, {
-  resetLayoutShifted,
+  createRenderContext,
 } from './render-node-to-output.js'
 import {
   CellWidth,
@@ -113,8 +113,10 @@ export function renderToScreen(
   } else {
     output.reset(width, height, screen)
   }
-  resetLayoutShifted()
-  renderNodeToOutput(root, output, { prevScreen: undefined })
+  renderNodeToOutput(root, output, {
+    prevScreen: undefined,
+    context: createRenderContext(),
+  })
   // renderNodeToOutput queues writes into Output; .get() flushes the
   // queue into the Screen's cell arrays. Without this the screen is
   // blank (constructor-zero).

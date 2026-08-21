@@ -31,19 +31,55 @@ function isXtermJsHost(): boolean {
 // (spinner tick, clock tick, text append into a fixed-height box) don't
 // shift layout → narrow damage bounds → O(changed cells) diff instead of
 // O(rows×cols).
-let layoutShifted = false
-
-/** Reset the per-frame layout-shift flag. */
-export function resetLayoutShifted(): void {
-  layoutShifted = false
+export type RenderContext = {
+  layoutShifted: boolean
+  absoluteLayoutShifted: boolean
+  /** True only while repainting after an absolute-layout transition. */
+  recomposePass: boolean
+  scrollHint: ScrollHint | null
+  scrollDrainNode: DOMElement | null
+  followScroll: FollowScroll | null
+  /** First-pass visual scroll positions reused by the paint-only pass. */
+  scrollPaintTops: WeakMap<DOMElement, number>
+  absoluteRectsPrev: Rectangle[]
+  absoluteRectsCur: Rectangle[]
+  absoluteNodesPrev: WeakSet<DOMElement>
+  absoluteNodesCur: WeakSet<DOMElement>
 }
 
-/**
- * Whether any node's layout position or size shifted this frame, or a child was removed.
- * @returns true when the full-damage path is needed this frame.
- */
-export function didLayoutShift(): boolean {
-  return layoutShifted
+/** State retained across frames by one renderer instance. */
+export type RendererState = {
+  absoluteRects: Rectangle[]
+  absoluteNodes: WeakSet<DOMElement>
+}
+
+export function createRendererState(): RendererState {
+  return { absoluteRects: [], absoluteNodes: new WeakSet() }
+}
+
+/** Create scratch state owned by one renderer invocation. */
+export function createRenderContext(
+  state: RendererState = createRendererState(),
+): RenderContext {
+  const absoluteRectsPrev = state.absoluteRects
+  const absoluteRectsCur: Rectangle[] = []
+  const absoluteNodesPrev = state.absoluteNodes
+  const absoluteNodesCur = new WeakSet<DOMElement>()
+  state.absoluteRects = absoluteRectsCur
+  state.absoluteNodes = absoluteNodesCur
+  return {
+    layoutShifted: false,
+    absoluteLayoutShifted: false,
+    recomposePass: false,
+    scrollHint: null,
+    scrollDrainNode: null,
+    followScroll: null,
+    scrollPaintTops: new WeakMap(),
+    absoluteRectsPrev,
+    absoluteRectsCur,
+    absoluteNodesPrev,
+    absoluteNodesCur,
+  }
 }
 
 // DECSTBM scroll optimization hint. When a ScrollBox's scrollTop changes
@@ -59,49 +95,18 @@ export function didLayoutShift(): boolean {
  * moved up (scrollTop increased, CSI n S).
  */
 export type ScrollHint = { top: number; bottom: number; delta: number }
-let scrollHint: ScrollHint | null = null
-
-// Rects of position:absolute nodes from the PREVIOUS frame, used by
-// ScrollBox's blit+shift third-pass repair (see usage site). Recorded at
-// three paths — full-render nodeCache.set, node-level blit early-return,
-// blitEscapingAbsoluteDescendants — so clean-overlay consecutive scrolls
-// still have the rect.
-let absoluteRectsPrev: Rectangle[] = []
-let absoluteRectsCur: Rectangle[] = []
-
-/** Reset the scroll hint for the next frame and rotate the absolute-rect buffers. */
-export function resetScrollHint(): void {
-  scrollHint = null
-  absoluteRectsPrev = absoluteRectsCur
-  absoluteRectsCur = []
-}
 
 /**
- * The scroll hint captured this frame, or null.
- * @returns the scroll hint, or null when none was captured.
+ * Discard first-pass bookkeeping before an absolute-layout recomposition.
+ * Do not rotate absoluteRectsPrev again: it still describes the preceding
+ * terminal frame. Follow-scroll and drain state are intentionally retained;
+ * the first pass may already have consumed a pending scroll delta.
  */
-export function getScrollHint(): ScrollHint | null {
-  return scrollHint
-}
-
-// The ScrollBox DOM node (if any) with pendingScrollDelta left after this
-// frame's drain. renderer.ts calls markDirty(it) post-render so the NEXT
-// frame's root blit check fails and we descend to continue draining.
-// Without this, after the scrollbox's dirty flag is cleared (line ~721),
-// the next frame blits root and never reaches the scrollbox — drain stalls.
-let scrollDrainNode: DOMElement | null = null
-
-/** Clear the pending scroll drain node for the next frame. */
-export function resetScrollDrainNode(): void {
-  scrollDrainNode = null
-}
-
-/**
- * The ScrollBox node still draining pending scroll delta, or null.
- * @returns the draining ScrollBox node, or null.
- */
-export function getScrollDrainNode(): DOMElement | null {
-  return scrollDrainNode
+export function resetAbsoluteRecomposePass(context: RenderContext): void {
+  context.absoluteLayoutShifted = false
+  context.recomposePass = true
+  context.scrollHint = null
+  context.absoluteRectsCur.length = 0
 }
 
 // At-bottom follow scroll event this frame. When streaming content
@@ -122,18 +127,6 @@ export type FollowScroll = {
   viewportTop: number
   viewportBottom: number
 }
-let followScroll: FollowScroll | null = null
-
-/**
- * Read and clear the follow-scroll event recorded this frame.
- * @returns the follow-scroll delta and viewport bounds, or null.
- */
-export function consumeFollowScroll(): FollowScroll | null {
-  const f = followScroll
-  followScroll = null
-  return f
-}
-
 // ── Native terminal drain (iTerm2/Ghostty/etc. — proportional events) ──
 // Minimum rows applied per frame. Above this, drain is proportional (~3/4
 // of remaining) so big bursts catch up in log₄ frames while the tail
@@ -444,6 +437,7 @@ function renderNodeToOutput(
     // opaque descendants' narrower rects are safe to blit.
     skipSelfBlit?: boolean
     inheritedBackgroundColor?: Color
+    context: RenderContext
   },
 ): void {
   const {
@@ -452,6 +446,7 @@ function renderNodeToOutput(
     prevScreen,
     skipSelfBlit = false,
     inheritedBackgroundColor,
+    context,
   } = options
   const { yogaNode } = node
 
@@ -473,7 +468,13 @@ function renderNodeToOutput(
           // the blit check at line ~432 passes and copies EMPTY cells from
           // prevScreen (cleared here) → content vanishes.
           dropSubtreeCache(node)
-          layoutShifted = true
+          context.layoutShifted = true
+          if (
+            node.style.position === 'absolute' ||
+            context.absoluteNodesPrev.has(node)
+          ) {
+            context.absoluteLayoutShifted = true
+          }
         }
       }
       return
@@ -516,7 +517,8 @@ function renderNodeToOutput(
       const fh = Math.floor(height)
       output.blit(prevScreen, fx, fy, fw, fh)
       if (node.style.position === 'absolute') {
-        absoluteRectsCur.push(cached)
+        context.absoluteRectsCur.push(cached)
+        context.absoluteNodesCur.add(node)
       }
       // Absolute descendants can paint outside this node's layout bounds
       // (e.g. a slash menu with position='absolute' bottom='100%' floats
@@ -524,7 +526,16 @@ function renderNodeToOutput(
       // cells, the blit above only restored this node's own rect — the
       // absolute descendants' cells are lost. Re-blit them from prevScreen
       // so the overlays survive.
-      blitEscapingAbsoluteDescendants(node, output, prevScreen, fx, fy, fw, fh)
+      blitEscapingAbsoluteDescendants(
+        node,
+        output,
+        prevScreen,
+        fx,
+        fy,
+        fw,
+        fh,
+        context,
+      )
       return
     }
 
@@ -537,8 +548,32 @@ function renderNodeToOutput(
         cached.y !== y ||
         cached.width !== width ||
         cached.height !== height)
-    if (positionChanged) {
-      layoutShifted = true
+    // A transparent absolute node can change its painted cells without
+    // changing its Yoga rect (for example the fixed one-row notification
+    // above PromptInput changing from a long message to a short one). Its
+    // clear excludes the whole old rect from underlay blits below, so the
+    // newly transparent tail must be recomposited even though layout stayed
+    // geometrically identical. Opaque/background-filled absolute nodes paint
+    // every cell in their rect and do not need this extra pass.
+    const transparentAbsoluteChanged =
+      cached !== undefined &&
+      node.dirty &&
+      (node.style.position === 'absolute' ||
+        context.absoluteNodesPrev.has(node)) &&
+      !node.style.opaque &&
+      node.style.backgroundColor === undefined
+    if (positionChanged || transparentAbsoluteChanged) {
+      context.layoutShifted = true
+      // The current style alone is insufficient: an absolute node may have
+      // just become in-flow. Its previous pixels still covered unrelated
+      // subtrees, so that transition needs the same paint-only recomposition
+      // as an absolute node that merely moved or resized.
+      if (
+        node.style.position === 'absolute' ||
+        context.absoluteNodesPrev.has(node)
+      ) {
+        context.absoluteLayoutShifted = true
+      }
     }
     if (cached && (node.dirty || positionChanged)) {
       output.clear(
@@ -557,7 +592,7 @@ function renderNodeToOutput(
     const clears = pendingClears.get(node)
     const hasRemovedChild = clears !== undefined
     if (hasRemovedChild) {
-      layoutShifted = true
+      context.layoutShifted = true
       for (const rect of clears) {
         output.clear({
           x: Math.floor(rect.x),
@@ -762,12 +797,16 @@ function renderNodeToOutput(
         // follow check compares against last frame's max.
         const prevScrollHeight = node.scrollHeight ?? scrollHeight
         const prevInnerHeight = node.scrollViewportHeight ?? innerHeight
-        node.scrollHeight = scrollHeight
-        node.scrollViewportHeight = innerHeight
+        if (!context.recomposePass) {
+          node.scrollHeight = scrollHeight
+          node.scrollViewportHeight = innerHeight
+        }
         // Absolute screen-buffer row where the scrollable area (inside
         // padding) begins. Exposed via ScrollBoxHandle.getViewportTop() so
         // drag-to-scroll can detect when the drag leaves the scroll viewport.
-        node.scrollViewportTop = (y1 ?? y) + padTop
+        if (!context.recomposePass) {
+          node.scrollViewportTop = (y1 ?? y) + padTop
+        }
 
         const maxScroll = Math.max(0, scrollHeight - innerHeight)
         // scrollAnchor: scroll so the anchored element's top is at the
@@ -781,7 +820,7 @@ function renderNodeToOutput(
         // → firstVisible wrong. Also: SCROLL_MIN_PER_FRAME=4 with snap-at-1
         // ping-ponged forever at delta=2. Smooth needs drain-end notify
         // plumbing; shipping instant first. stickyScroll overrides.
-        if (node.scrollAnchor) {
+        if (!context.recomposePass && node.scrollAnchor) {
           const anchorTop = node.scrollAnchor.el.yogaNode?.getComputedTop()
           if (anchorTop != null) {
             node.scrollTop = anchorTop + node.scrollAnchor.offset
@@ -820,7 +859,7 @@ function renderNodeToOutput(
         // frame AFTER an artifact shrink compares against the shrunken
         // maxScroll and yanks a mid-scroll view to the bottom (opentui #709:
         // content-size changes must not reset the manual-scroll state).
-        if (!shrunk) node.scrollPrevMax = maxScroll
+        if (!context.recomposePass && !shrunk) node.scrollPrevMax = maxScroll
         // Positional at-bottom also fires on NO-GROWTH frames when the
         // scroll position already sits at maxScroll: a wheel-down that
         // lands exactly on the bottom re-pins the follow (and restores
@@ -831,7 +870,12 @@ function renderNodeToOutput(
           sticky ||
           (scrollTopBeforeFollow >= prevMaxScroll &&
             (grew || scrollTopBeforeFollow >= maxScroll))
-        if (atBottom && (node.pendingScrollDelta ?? 0) >= 0 && !shrunk) {
+        if (
+          !context.recomposePass &&
+          atBottom &&
+          (node.pendingScrollDelta ?? 0) >= 0 &&
+          !shrunk
+        ) {
           node.scrollTop = maxScroll
           node.pendingScrollDelta = undefined
           // Sync flag so useVirtualScroll's isSticky() agrees with positional
@@ -853,9 +897,9 @@ function renderNodeToOutput(
           }
         }
         const followDelta = (node.scrollTop ?? 0) - scrollTopBeforeFollow
-        if (followDelta > 0) {
+        if (!context.recomposePass && followDelta > 0) {
           const vpTop = node.scrollViewportTop ?? 0
-          followScroll = {
+          context.followScroll = {
             delta: followDelta,
             viewportTop: vpTop,
             viewportBottom: vpTop + innerHeight - 1,
@@ -875,7 +919,7 @@ function renderNodeToOutput(
         // Single-sided clamps are valid: sticky virtualization sets only the
         // min (scroll-up protection during the sticky->manual transition)
         // and leaves the max open for bottom-follow.
-        if (pending !== undefined && pending !== 0) {
+        if (!context.recomposePass && pending !== undefined && pending !== 0) {
           // Drain continues even past the clamp — the render-clamp below
           // holds the VISUAL at the mounted edge regardless. Hard-stopping
           // here caused stop-start jutter: drain hits edge → pause → React
@@ -895,7 +939,7 @@ function renderNodeToOutput(
           cur += isXtermJsHost()
             ? drainAdaptive(node, pending, eff)
             : drainProportional(node, pending, eff)
-        } else if (pending === 0) {
+        } else if (!context.recomposePass && pending === 0) {
           // Opposite scrollBy calls cancelled to zero — clear so we don't
           // schedule an infinite loop of no-op drain frames.
           node.pendingScrollDelta = undefined
@@ -916,11 +960,18 @@ function renderNodeToOutput(
           cMin ?? -Infinity,
           Math.min(scrollTop, cMax ?? Infinity),
         )
-        node.scrollTop = scrollTop
+        if (!context.recomposePass) node.scrollTop = scrollTop
         // Clamp hitting top/bottom consumes any remainder. Set drainPending
         // only after clamp so a wasted no-op frame isn't scheduled.
-        if (scrollTop !== cur) node.pendingScrollDelta = undefined
-        if (node.pendingScrollDelta !== undefined) scrollDrainNode = node
+        if (!context.recomposePass && scrollTop !== cur) {
+          node.pendingScrollDelta = undefined
+        }
+        if (
+          !context.recomposePass &&
+          node.pendingScrollDelta !== undefined
+        ) {
+          context.scrollDrainNode = node
+        }
         // A manual scroll that lands exactly on the bottom re-pins sticky
         // IMMEDIATELY on this frame — the follow-block restore above only
         // fires when a later frame happens, but an idle stream (turn done,
@@ -929,6 +980,7 @@ function renderNodeToOutput(
         // that was explicitly broken by scrollTo/scrollBy (=== false);
         // shrink-artifact frames and still-draining scrolls are excluded.
         if (
+          !context.recomposePass &&
           !shrunk &&
           node.stickyScroll === false &&
           node.pendingScrollDelta === undefined &&
@@ -937,7 +989,12 @@ function renderNodeToOutput(
           node.stickyScroll = true
           node.onStickyRestore?.()
         }
-        scrollTop = clamped
+        if (context.recomposePass) {
+          scrollTop = context.scrollPaintTops.get(node) ?? clamped
+        } else {
+          scrollTop = clamped
+          context.scrollPaintTops.set(node, scrollTop)
+        }
 
         if (content && contentYoga) {
           // Compute content wrapper's absolute render position with scroll
@@ -967,9 +1024,9 @@ function renderNodeToOutput(
               Math.abs(delta) < innerHeight
             ) {
               hint = { top: regionTop, bottom: regionBottom, delta }
-              scrollHint = hint
+              context.scrollHint = hint
             } else {
-              layoutShifted = true
+              context.layoutShifted = true
             }
           }
           // Fast path: scroll (hint captured) with usable prevScreen.
@@ -1011,7 +1068,7 @@ function renderNodeToOutput(
           // is false the full path renders a next.screen that doesn't match
           // the DECSTBM shift — emitting DECSTBM leaves stale rows (seen as
           // content bleeding through during scroll-up + streaming). Clear it.
-          if (!safeForFastPath) scrollHint = null
+          if (!safeForFastPath) context.scrollHint = null
           if (hint && prevScreen && safeForFastPath) {
             const { top, bottom, delta } = hint
             const w = Math.floor(width)
@@ -1049,6 +1106,7 @@ function renderNodeToOutput(
               edgeTop - contentY,
               edgeBottom + 1 - contentY,
               boxBackgroundColor,
+              context,
               true,
             )
             output.unclip()
@@ -1152,6 +1210,7 @@ function renderNodeToOutput(
                     offsetY: contentY,
                     prevScreen: undefined,
                     inheritedBackgroundColor: boxBackgroundColor,
+                    context,
                   })
                   output.unclip()
                 }
@@ -1165,8 +1224,8 @@ function renderNodeToOutput(
             // pixels sit at (rect.y - delta) — neither edge render nor the
             // overlay's own re-render covers them. Wipe and re-render
             // ScrollBox content so the diff writes correct cells.
-            const spaces = absoluteRectsPrev.length ? ' '.repeat(w) : ''
-            for (const r of absoluteRectsPrev) {
+            const spaces = context.absoluteRectsPrev.length ? ' '.repeat(w) : ''
+            for (const r of context.absoluteRectsPrev) {
               if (r.y >= bottom + 1 || r.y + r.height <= top) continue
               const shiftedTop = Math.max(top, Math.floor(r.y) - delta)
               const shiftedBottom = Math.min(
@@ -1197,6 +1256,7 @@ function renderNodeToOutput(
                 shiftedTop - contentY,
                 shiftedBottom - contentY,
                 boxBackgroundColor,
+                context,
                 true,
               )
               output.unclip()
@@ -1240,6 +1300,7 @@ function renderNodeToOutput(
               scrollTop,
               scrollTop + innerHeight,
               boxBackgroundColor,
+              context,
             )
           }
           nodeCache.set(content, {
@@ -1291,6 +1352,7 @@ function renderNodeToOutput(
           // on re-render → /permissions body blanked on Down arrow, #25436).
           ownBackgroundColor || node.style.opaque ? undefined : prevScreen,
           boxBackgroundColor,
+          context,
         )
       }
 
@@ -1311,6 +1373,7 @@ function renderNodeToOutput(
         hasRemovedChild,
         prevScreen,
         inheritedBackgroundColor,
+        context,
       )
     }
 
@@ -1318,7 +1381,8 @@ function renderNodeToOutput(
     const rect = { x, y, width, height, top: yogaTop }
     nodeCache.set(node, rect)
     if (node.style.position === 'absolute') {
-      absoluteRectsCur.push(rect)
+      context.absoluteRectsCur.push(rect)
+      context.absoluteNodesCur.add(node)
     }
     node.dirty = false
   }
@@ -1360,6 +1424,7 @@ function renderChildren(
   hasRemovedChild: boolean,
   prevScreen: Screen | undefined,
   inheritedBackgroundColor: Color | undefined,
+  context: RenderContext,
 ): void {
   let seenDirtyChild = false
   let seenDirtyClipped = false
@@ -1380,6 +1445,7 @@ function renderChildren(
         !childElem.style.opaque &&
         childElem.style.backgroundColor === undefined,
       inheritedBackgroundColor,
+      context,
     })
     if (wasDirty && !seenDirtyChild) {
       if (!clipsBothAxes(childElem) || isAbsolute) {
@@ -1440,6 +1506,7 @@ function blitEscapingAbsoluteDescendants(
   py: number,
   pw: number,
   ph: number,
+  context: RenderContext,
 ): void {
   const pr = px + pw
   const pb = py + ph
@@ -1449,7 +1516,8 @@ function blitEscapingAbsoluteDescendants(
     if (elem.style.position === 'absolute') {
       const cached = nodeCache.get(elem)
       if (cached) {
-        absoluteRectsCur.push(cached)
+        context.absoluteRectsCur.push(cached)
+        context.absoluteNodesCur.add(elem)
         const cx = Math.floor(cached.x)
         const cy = Math.floor(cached.y)
         const cw = Math.floor(cached.width)
@@ -1462,7 +1530,16 @@ function blitEscapingAbsoluteDescendants(
       }
     }
     // Recurse — absolute descendants can be nested arbitrarily deep
-    blitEscapingAbsoluteDescendants(elem, output, prevScreen, px, py, pw, ph)
+    blitEscapingAbsoluteDescendants(
+      elem,
+      output,
+      prevScreen,
+      px,
+      py,
+      pw,
+      ph,
+      context,
+    )
   }
 }
 
@@ -1482,6 +1559,7 @@ function renderScrolledChildren(
   scrollTopY: number,
   scrollBottomY: number,
   inheritedBackgroundColor: Color | undefined,
+  context: RenderContext,
   // When true (DECSTBM fast path), culled children keep their cache —
   // the blit+shift put stable rows in next.screen so stale cache is
   // never read. Avoids walking O(total_children * subtree_depth) per frame.
@@ -1538,6 +1616,7 @@ function renderScrolledChildren(
       offsetY,
       prevScreen: hasRemovedChild || seenDirtyChild ? undefined : prevScreen,
       inheritedBackgroundColor,
+      context,
     })
     if (wasDirty) {
       seenDirtyChild = true

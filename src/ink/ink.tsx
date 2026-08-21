@@ -28,7 +28,7 @@ import { optimize } from './optimizer.js';
 import Output from './output.js';
 import type { ParsedKey } from './parse-keypress.js';
 import reconciler, { dispatcher, getLastCommitMs, getLastYogaMs, isDebugRepaintsEnabled, recordYogaMs, resetProfileCounters } from './reconciler.js';
-import renderNodeToOutput, { consumeFollowScroll, didLayoutShift } from './render-node-to-output.js';
+import renderNodeToOutput, { createRenderContext } from './render-node-to-output.js';
 import { applyPositionedHighlight, type MatchPosition, scanPositions } from './render-to-screen.js';
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
@@ -563,7 +563,7 @@ export default class Ink {
     // (screen-local) so only anchor shifts — selection grows toward the
     // mouse as the anchor walks up. After release, both ends are text-
     // anchored and move as a block.
-    const follow = consumeFollowScroll();
+    const follow = frame.followScroll;
     if (follow && this.selection.anchor &&
     // Only translate if the selection is ON scrollbox content. Selections
     // in the footer/prompt/StickyPromptHeader are on static text — the
@@ -625,7 +625,7 @@ export default class Ink {
     // (spinner appears → bottom grows → scrollbox shrinks), the
     // cached-clear + clip-and-cull + setCellAt damage union can miss
     // transition cells at the boundary. But that only happens when layout
-    // actually SHIFTS — didLayoutShift() tracks exactly this (any node's
+    // actually SHIFTS — frame.layoutShifted tracks exactly this (any node's
     // cached yoga position/size differs from current, or a child was
     // removed). Steady-state frames (spinner rotate, clock tick, text
     // stream into fixed-height box) don't shift layout, so normal damage
@@ -660,7 +660,7 @@ export default class Ink {
     // cells at sibling boundaries that per-node damage tracking misses.
     // Selection/highlight overlays write via setCellStyleId which doesn't
     // track damage. prevFrameContaminated covers the cleanup frame.
-    if (didLayoutShift() || selActive || hlActive || this.prevFrameContaminated) {
+    if (frame.layoutShifted || selActive || hlActive || this.prevFrameContaminated) {
       frame.screen.damage = {
         x: 0,
         y: 0,
@@ -1219,6 +1219,7 @@ export default class Ink {
     const rows = this.terminalRows;
     const cols = this.terminalColumns;
     const blank = (): Frame => ({
+      layoutShifted: false,
       screen: createScreen(cols, rows, this.stylePool, this.charPool, this.hyperlinkPool),
       viewport: {
         width: cols,
@@ -1321,7 +1322,8 @@ export default class Ink {
     renderNodeToOutput(el, output, {
       offsetX: -elLeft,
       offsetY: -elTop,
-      prevScreen: undefined
+      prevScreen: undefined,
+      context: createRenderContext()
     });
     const rendered = output.get();
     // renderNodeToOutput wrote our offset positions to nodeCache —

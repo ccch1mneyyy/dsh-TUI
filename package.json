@@ -112,6 +112,7 @@
     "verify:bun-package": "node scripts/verify-bun-package.mjs",
     "verify:prompt-debug": "npm run build && node scripts/verify-prompt-debug.mjs",
     "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts",
+    "verify:overlay-shrink-restore": "node --import tsx/esm scripts/verify-overlay-shrink-restore.tsx",
     "verify:plugin-ledger": "node --import tsx/esm scripts/verify-plugin-ledger.ts",
     "verify:plugin-commands": "node --import tsx/esm scripts/verify-plugin-commands.ts",
     "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts",

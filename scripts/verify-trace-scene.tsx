@@ -630,8 +630,11 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   // B — the wake strip lives on the hint row, and every assertion below is
   // scoped to that row on purpose: the startup tip also names the key, so a
   // whole-screen search could not tell the two channels apart.
+  // Match the status-line copy exactly enough to exclude rotating transcript
+  // tips such as `按 ? 随时查看快捷键菜单`.  A loose `快捷键` search made this
+  // test occasionally inspect the tip row instead of the footer.
   const hintRowOf = (text: string): string =>
-    text.split('\n').find(line => line.includes('shortcuts') || line.includes('快捷键')) ?? ''
+    text.split('\n').find(line => line.includes('? for shortcuts') || line.includes('? 查看快捷键')) ?? ''
   const statusArea = hintRowOf(startup)
   check('the status line carries a live wake strip', /[▁▂▃▄▅▆▇█]/.test(statusArea),
     statusArea.trim().slice(-42))

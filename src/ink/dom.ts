@@ -50,6 +50,10 @@ export type DOMElement = {
   onComputeLayout?: () => void
   onRender?: () => void
   onImmediateRender?: () => void
+  // Set only on ink-root when an absolute descendant was removed. The
+  // owning renderer consumes it on its next frame; keeping the signal on
+  // the root prevents one Ink instance from consuming another's removal.
+  absoluteNodeRemoved?: boolean
   // Used to skip empty renders during React 19's effect double-invoke in test mode
   hasRenderedContent?: boolean
 

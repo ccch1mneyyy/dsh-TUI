@@ -22,17 +22,6 @@ export const nodeCache = new WeakMap<DOMElement, CachedLayout>()
 export const pendingClears = new WeakMap<DOMElement, Rectangle[]>()
 
 /**
- * Set when a pendingClear is added for an absolute-positioned node.
- * Signals renderer to disable blit for the next frame: the removed node
- * may have painted over non-siblings (e.g. an overlay over a ScrollBox
- * earlier in tree order), so their blits from prevScreen would restore
- * the overlay's pixels. Normal-flow removals are already handled by
- * hasRemovedChild at the parent level; only absolute positioning paints
- * cross-subtree. Reset at the start of each render.
- */
-let absoluteNodeRemoved = false
-
-/**
  * Register a removed child's rect for clearing on the next render, and
  * flag the next frame when the removed node was absolutely positioned.
  * @param parent - the parent whose removed child rect to record.
@@ -51,16 +40,19 @@ export function addPendingClear(
     pendingClears.set(parent, [rect])
   }
   if (isAbsolute) {
-    absoluteNodeRemoved = true
+    let root = parent
+    while (root.parentNode) root = root.parentNode
+    root.absoluteNodeRemoved = true
   }
 }
 
 /**
  * Read and clear the absolute-removal flag set by addPendingClear.
+ * @param root - the root owned by the renderer consuming the signal.
  * @returns whether an absolutely positioned node was removed since the last render.
  */
-export function consumeAbsoluteRemovedFlag(): boolean {
-  const had = absoluteNodeRemoved
-  absoluteNodeRemoved = false
+export function consumeAbsoluteRemovedFlag(root: DOMElement): boolean {
+  const had = root.absoluteNodeRemoved === true
+  root.absoluteNodeRemoved = false
   return had
 }

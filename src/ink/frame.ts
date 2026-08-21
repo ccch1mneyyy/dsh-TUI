@@ -1,6 +1,6 @@
 import type { Cursor } from './cursor.js'
 import type { Size } from './layout/geometry.js'
-import type { ScrollHint } from './render-node-to-output.js'
+import type { FollowScroll, ScrollHint } from './render-node-to-output.js'
 import {
   type CharPool,
   createScreen,
@@ -17,10 +17,14 @@ export type Frame = {
   readonly screen: Screen
   readonly viewport: Size
   readonly cursor: Cursor
+  /** Whether this renderer invocation observed a layout position/size shift. */
+  readonly layoutShifted: boolean
   /** DECSTBM scroll optimization hint (alt-screen only, null otherwise). */
   readonly scrollHint?: ScrollHint | null
   /** A ScrollBox has remaining pendingScrollDelta — schedule another frame. */
   readonly scrollDrainPending?: boolean
+  /** At-bottom follow delta produced by this renderer invocation. */
+  readonly followScroll?: FollowScroll | null
 }
 
 /**
@@ -41,6 +45,7 @@ export function emptyFrame(
   hyperlinkPool: HyperlinkPool,
 ): Frame {
   return {
+    layoutShifted: false,
     screen: createScreen(0, 0, stylePool, charPool, hyperlinkPool),
     viewport: { width: columns, height: rows },
     cursor: { x: 0, y: 0, visible: true },
