@@ -20,6 +20,7 @@ export type RenderOptions = {
   terminalWidth: number
   terminalRows: number
   altScreen: boolean
+  ambiguousAsWide: boolean
   // True when the previous frame's screen buffer was mutated post-render
   // (selection overlay), reset to blank (alt-screen enter/resize/SIGCONT),
   // or reset to 0×0 (forceRedraw). Blitting from such a prevScreen would
@@ -45,7 +46,14 @@ export default function createRenderer(
   // persists — most lines don't change between renders.
   let output: Output | undefined
   return options => {
-    const { frontFrame, backFrame, isTTY, terminalWidth, terminalRows } =
+    const {
+      frontFrame,
+      backFrame,
+      isTTY,
+      terminalWidth,
+      terminalRows,
+      ambiguousAsWide,
+    } =
       options
     const prevScreen = frontFrame.screen
     const backScreen = backFrame.screen
@@ -115,9 +123,15 @@ export default function createRenderer(
       backScreen ??
       createScreen(width, height, stylePool, charPool, hyperlinkPool)
     if (output) {
-      output.reset(width, height, screen)
+      output.reset(width, height, screen, ambiguousAsWide)
     } else {
-      output = new Output({ width, height, stylePool, screen })
+      output = new Output({
+        width,
+        height,
+        stylePool,
+        screen,
+        ambiguousAsWide,
+      })
     }
 
     resetLayoutShifted()

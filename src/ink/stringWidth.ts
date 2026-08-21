@@ -2,8 +2,16 @@ import emojiRegex from 'emoji-regex'
 import { eastAsianWidth } from 'get-east-asian-width'
 import stripAnsi from 'strip-ansi'
 import { getGraphemeSegmenter } from '../utils/intl.js'
+import { isClassicConhost } from './terminal.js'
 
 const EMOJI_REGEX = emojiRegex()
+
+function isAmbiguousWidth(codePoint: number): boolean {
+  return (
+    eastAsianWidth(codePoint, { ambiguousAsWide: false }) !==
+    eastAsianWidth(codePoint, { ambiguousAsWide: true })
+  )
+}
 
 /**
  * Fallback JavaScript implementation of stringWidth when Bun.stringWidth is not available.
@@ -13,11 +21,11 @@ const EMOJI_REGEX = emojiRegex()
  * This is a more accurate alternative to the string-width package that correctly handles
  * characters like ⚠ (U+26A0) which string-width incorrectly reports as width 2.
  *
- * The implementation uses eastAsianWidth directly with ambiguousAsWide: false,
- * which correctly treats ambiguous-width characters as narrow (width 1) as
- * recommended by the Unicode standard for Western contexts.
+ * The implementation uses eastAsianWidth directly. Most terminals treat
+ * ambiguous characters as narrow; classic conhost reserves two cells so its
+ * font-dependent renderer can never advance farther than the layout model.
  */
-function stringWidthJavaScript(str: string): number {
+function stringWidthJavaScript(str: string, ambiguousAsWide: boolean): number {
   if (typeof str !== 'string' || str.length === 0) {
     return 0
   }
@@ -58,7 +66,7 @@ function stringWidthJavaScript(str: string): number {
     for (const char of str) {
       const codePoint = char.codePointAt(0)!
       if (!isZeroWidth(codePoint)) {
-        width += eastAsianWidth(codePoint, { ambiguousAsWide: false })
+        width += eastAsianWidth(codePoint, { ambiguousAsWide })
       }
     }
     return width
@@ -67,6 +75,16 @@ function stringWidthJavaScript(str: string): number {
   let width = 0
 
   for (const { segment: grapheme } of getGraphemeSegmenter().segment(str)) {
+    const firstCodePoint = grapheme.codePointAt(0)!
+    if (
+      ambiguousAsWide &&
+      !grapheme.includes('\ufe0e') &&
+      isAmbiguousWidth(firstCodePoint)
+    ) {
+      width += 2
+      continue
+    }
+
     // Check for emoji first (most emoji sequences are width 2)
     EMOJI_REGEX.lastIndex = 0
     if (EMOJI_REGEX.test(grapheme)) {
@@ -80,7 +98,7 @@ function stringWidthJavaScript(str: string): number {
     for (const char of grapheme) {
       const codePoint = char.codePointAt(0)!
       if (!isZeroWidth(codePoint)) {
-        width += eastAsianWidth(codePoint, { ambiguousAsWide: false })
+        width += eastAsianWidth(codePoint, { ambiguousAsWide })
         break
       }
     }
@@ -277,6 +295,27 @@ const bunStringWidth =
 
 const BUN_STRING_WIDTH_OPTS = { ambiguousIsNarrow: true } as const
 
+export type StringWidthOptions = {
+  ambiguousAsWide?: boolean
+}
+
+/**
+ * Whether a grapheme needs the classic-conhost two-cell safety path.
+ * Conhost asks its active font whether ambiguous glyphs are wide, so the
+ * renderer must tolerate either physical width after reserving two cells.
+ */
+export function needsConhostWidthCompensation(
+  grapheme: string,
+  options: StringWidthOptions = {},
+): boolean {
+  const ambiguousAsWide = options.ambiguousAsWide ?? isClassicConhost()
+  if (!ambiguousAsWide) return false
+  return (
+    stringWidthFor(grapheme, { ambiguousAsWide }) === 2 &&
+    stringWidthFor(grapheme, { ambiguousAsWide: false }) === 1
+  )
+}
+
 /**
  * Get the display width of a string as it would appear in a terminal.
  *
@@ -286,6 +325,18 @@ const BUN_STRING_WIDTH_OPTS = { ambiguousIsNarrow: true } as const
  * @param str - the string to measure.
  * @returns the number of terminal cells the string occupies.
  */
-export const stringWidth: (str: string) => number = bunStringWidth
-  ? str => bunStringWidth(str, BUN_STRING_WIDTH_OPTS)
-  : stringWidthJavaScript
+export function stringWidthFor(
+  str: string,
+  options: StringWidthOptions = {},
+): number {
+  if (options.ambiguousAsWide === true) {
+    return stringWidthJavaScript(str, true)
+  }
+  return bunStringWidth
+    ? bunStringWidth(str, BUN_STRING_WIDTH_OPTS)
+    : stringWidthJavaScript(str, false)
+}
+
+export const stringWidth: (str: string) => number = isClassicConhost()
+  ? str => stringWidthFor(str, { ambiguousAsWide: true })
+  : str => stringWidthFor(str)

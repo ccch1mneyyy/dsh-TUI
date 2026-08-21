@@ -29,7 +29,7 @@ import {
   shiftRows,
   type CellRun,
 } from './screen.js'
-import { stringWidth } from './stringWidth.js'
+import { stringWidthFor } from './stringWidth.js'
 import { widestLine } from './widest-line.js'
 
 /**
@@ -169,6 +169,7 @@ type Options = {
   width: number
   height: number
   stylePool: StylePool
+  ambiguousAsWide?: boolean
   /**
    * Screen to render into. Will be reset before use.
    * For double-buffering, pass a reusable screen. Otherwise create a new one.
@@ -414,6 +415,7 @@ function buildClusteredChars(
   line: string,
   stylePool: StylePool,
   slot: { current: StreamingLineSlot | null },
+  ambiguousAsWide: boolean,
 ): ClusteredChar[] {
   const prev = slot.current
   if (
@@ -431,7 +433,11 @@ function buildClusteredChars(
     const replay = styledCharsFromTokens(
       tokenize(ansiCodesToString(prev.trailingStyles) + suffix),
     )
-    const clustered = styledCharsWithGraphemeClustering(replay, stylePool)
+    const clustered = styledCharsWithGraphemeClustering(
+      replay,
+      stylePool,
+      ambiguousAsWide,
+    )
     const result = prev.clustered.concat(
       reorderBidi(clustered),
     )
@@ -440,7 +446,7 @@ function buildClusteredChars(
   }
   const chars = styledCharsFromTokens(tokenize(line))
   const clustered = reorderBidi(
-    styledCharsWithGraphemeClustering(chars, stylePool),
+    styledCharsWithGraphemeClustering(chars, stylePool, ambiguousAsWide),
   )
   updateStreamingSlot(slot, line, clustered, chars)
   return clustered
@@ -462,6 +468,7 @@ export default class Output {
   private readonly operations: Operation[] = []
 
   private charCache = new CharCache()
+  private ambiguousAsWide: boolean
 
   /**
    * LRU of line → recorded packed cell run, mirroring charCache's bounds.
@@ -516,6 +523,7 @@ export default class Output {
     this.height = height
     this.stylePool = stylePool
     this.screen = screen
+    this.ambiguousAsWide = options.ambiguousAsWide === true
 
     resetScreen(screen, width, height)
   }
@@ -530,10 +538,22 @@ export default class Output {
    * @param height - the new screen height in rows.
    * @param screen - the screen buffer to render into.
    */
-  reset(width: number, height: number, screen: Screen): void {
+  reset(
+    width: number,
+    height: number,
+    screen: Screen,
+    ambiguousAsWide = this.ambiguousAsWide,
+  ): void {
     this.width = width
     this.height = height
     this.screen = screen
+    if (this.ambiguousAsWide !== ambiguousAsWide) {
+      this.charCache = new CharCache()
+      this.packedLines.clear()
+      this.packedChars = 0
+      this.streamingSlot.current = null
+      this.ambiguousAsWide = ambiguousAsWide
+    }
     this.operations.length = 0
     resetScreen(screen, width, height)
     // Bounds are enforced at insertion time (CharCache.set); nothing to
@@ -795,7 +815,9 @@ export default class Output {
             if (clipHorizontally) {
               lines = lines.map(line => {
                 const from = x < clip.x1! ? clip.x1! - x : 0
-                const width = stringWidth(line)
+                const width = stringWidthFor(line, {
+                  ambiguousAsWide: this.ambiguousAsWide,
+                })
                 const to = x + width > clip.x2! ? clip.x2! - x : width
                 // Fast path: the line sits entirely inside the clip — no
                 // slice needed. sliceAnsi re-tokenizes the line (the
@@ -809,7 +831,11 @@ export default class Output {
                 // writing a SpacerTail into the adjacent sibling. Re-slice
                 // one cell earlier; wide chars are exactly 2 cells, so a
                 // single retry always fits.
-                if (stringWidth(sliced) > to - from) {
+                if (
+                  stringWidthFor(sliced, {
+                    ambiguousAsWide: this.ambiguousAsWide,
+                  }) > to - from
+                ) {
                   sliced = sliceAnsi(line, from, to - 1)
                 }
                 return sliced
@@ -830,7 +856,11 @@ export default class Output {
               // screen.softWrap[lineY] correctly records the join point
               // even though that line's cells were never written.
               if (softWrap && from > 0 && softWrap[from] === true) {
-                prevContentEnd = x + stringWidth(lines[from - 1]!)
+                prevContentEnd =
+                  x +
+                  stringWidthFor(lines[from - 1]!, {
+                    ambiguousAsWide: this.ambiguousAsWide,
+                  })
               }
 
               lines = lines.slice(from, to)
@@ -860,6 +890,7 @@ export default class Output {
               this.stylePool,
               this.charCache,
               this.streamingSlot,
+              this.ambiguousAsWide,
               this.packedOwner,
             )
             writeCells += contentEnd - x
@@ -924,6 +955,7 @@ function stylesEqual(a: AnsiCode[], b: AnsiCode[]): boolean {
 function styledCharsWithGraphemeClustering(
   chars: StyledChar[],
   stylePool: StylePool,
+  ambiguousAsWide: boolean,
 ): ClusteredChar[] {
   const charCount = chars.length
   if (charCount === 0) return []
@@ -938,7 +970,13 @@ function styledCharsWithGraphemeClustering(
 
     // Different styles means we need to flush and start new buffer
     if (bufferChars.length > 0 && !stylesEqual(styles, bufferStyles)) {
-      flushBuffer(bufferChars.join(''), bufferStyles, stylePool, result)
+      flushBuffer(
+        bufferChars.join(''),
+        bufferStyles,
+        stylePool,
+        result,
+        ambiguousAsWide,
+      )
       bufferChars.length = 0
     }
 
@@ -948,7 +986,13 @@ function styledCharsWithGraphemeClustering(
 
   // Final flush
   if (bufferChars.length > 0) {
-    flushBuffer(bufferChars.join(''), bufferStyles, stylePool, result)
+    flushBuffer(
+      bufferChars.join(''),
+      bufferStyles,
+      stylePool,
+      result,
+      ambiguousAsWide,
+    )
   }
 
   return result
@@ -959,6 +1003,7 @@ function flushBuffer(
   styles: AnsiCode[],
   stylePool: StylePool,
   out: ClusteredChar[],
+  ambiguousAsWide: boolean,
 ): void {
   // Compute styleId + hyperlink ONCE for the whole style run.
   // Every grapheme in this buffer shares the same styles.
@@ -983,7 +1028,7 @@ function flushBuffer(
   for (const { segment: grapheme } of getGraphemeSegmenter().segment(buffer)) {
     out.push({
       value: grapheme,
-      width: stringWidth(grapheme),
+      width: stringWidthFor(grapheme, { ambiguousAsWide }),
       styleId,
       hyperlink,
     })
@@ -1010,6 +1055,7 @@ function writeLineToScreen(
   stylePool: StylePool,
   charCache: CharCache,
   streamingSlot: { current: StreamingLineSlot | null },
+  ambiguousAsWide: boolean,
   packed?: {
     lines: Map<string, CellRun>
     commit: (line: string, run: CellRun) => void
@@ -1039,7 +1085,12 @@ function writeLineToScreen(
 
   let characters = charCache.get(line)
   if (!characters) {
-    characters = buildClusteredChars(line, stylePool, streamingSlot)
+    characters = buildClusteredChars(
+      line,
+      stylePool,
+      streamingSlot,
+      ambiguousAsWide,
+    )
     charCache.set(line, characters)
   }
 

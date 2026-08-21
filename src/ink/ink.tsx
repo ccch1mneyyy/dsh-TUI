@@ -34,7 +34,7 @@ import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './searchHighlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
-import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
+import { isClassicConhost, isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
@@ -193,6 +193,7 @@ export default class Ink {
     x: number;
     y: number;
   } | null = null;
+  private readonly ambiguousAsWide: boolean;
   private handleStdinError(error: NodeJS.ErrnoException): void {
     if (this.isUnmounted && error.code === 'EIO') {
       return;
@@ -206,6 +207,11 @@ export default class Ink {
       // report EIO only after raw mode and React have already been released.
       options.stdin.on('error', this.handleStdinError);
     }
+    this.ambiguousAsWide = isClassicConhost(
+      process.platform,
+      process.env,
+      options.stdout.isTTY,
+    );
     if (this.options.patchConsole) {
       this.restoreConsole = this.patchConsole();
       this.restoreStderr = this.patchStderr();
@@ -224,7 +230,8 @@ export default class Ink {
     this.backFrame = emptyFrame(this.terminalRows, this.terminalColumns, this.stylePool, this.charPool, this.hyperlinkPool);
     this.log = new LogUpdate({
       isTTY: options.stdout.isTTY as boolean | undefined || false,
-      stylePool: this.stylePool
+      stylePool: this.stylePool,
+      ambiguousAsWide: this.ambiguousAsWide
     });
 
     // scheduleRender is called from the reconciler's resetAfterCommit, which
@@ -548,6 +555,7 @@ export default class Ink {
       terminalWidth,
       terminalRows,
       altScreen: this.altScreenActive,
+      ambiguousAsWide: this.ambiguousAsWide,
       prevFrameContaminated: this.prevFrameContaminated
     });
     const rendererMs = performance.now() - renderStart;
@@ -1316,6 +1324,7 @@ export default class Ink {
       width,
       height,
       stylePool: this.stylePool,
+      ambiguousAsWide: this.ambiguousAsWide,
       screen
     });
     renderNodeToOutput(el, output, {

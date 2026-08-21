@@ -109,9 +109,15 @@ export function renderToScreen(
     hyperlinkPool!,
   )
   if (!output) {
-    output = new Output({ width, height, stylePool: stylePool!, screen })
+    output = new Output({
+      width,
+      height,
+      stylePool: stylePool!,
+      screen,
+      ambiguousAsWide: false,
+    })
   } else {
-    output.reset(width, height, screen)
+    output.reset(width, height, screen, false)
   }
   resetLayoutShifted()
   renderNodeToOutput(root, output, { prevScreen: undefined })

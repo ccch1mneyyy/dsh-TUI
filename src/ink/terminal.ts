@@ -260,6 +260,37 @@ export function supportsWin32InputMode(
 }
 
 /**
+ * True for the classic Windows console host, whose active font decides the
+ * width of East Asian Ambiguous glyphs. Modern terminals expose their own
+ * marker; MSYS/mintty exposes TERM/MSYSTEM instead.
+ *
+ * The TTY guard keeps headless renderers and build scripts on the portable
+ * width policy even when they run on Windows.
+ */
+export function isClassicConhost(
+  platform: NodeJS.Platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env,
+  isTTY = process.stdout.isTTY === true,
+): boolean {
+  if (platform !== 'win32' || !isTTY) return false
+  if (
+    environment.WT_SESSION ||
+    environment.TERM_PROGRAM ||
+    environment.TERMINAL_EMULATOR ||
+    environment.ConEmuANSI ||
+    environment.ConEmuPID ||
+    environment.ConEmuTask ||
+    environment.ANSICON ||
+    environment.MSYSTEM
+  ) {
+    return false
+  }
+
+  const term = environment.TERM?.toLowerCase()
+  return !term || term === 'dumb'
+}
+
+/**
  * True if the terminal scrolls the viewport when it receives cursor-up
  * sequences that reach above the visible area. On Windows, conhost's
  * SetConsoleCursorPosition follows the cursor into scrollback

@@ -290,6 +290,10 @@ jobs:
       # CJK 不劈字、窄终端布局不破。
       - run: node --import tsx/esm scripts/verify-cjk-truncate.tsx
 
+      # 经典 conhost 宽度回归（issue #344）：歧义宽度字符按保守双格布局，
+      # 窄字体通过绝对列补偿，且 Windows Terminal 继续按单格处理。
+      - run: node --import tsx/esm scripts/verify-conhost-width.tsx
+
       # 启动上下文摘要窄终端回归（issue #167）：摘要与 Ctrl+T 提示必须
       # 作为一条可截断文本布局，不能换行后互相穿插。
       - run: node --import tsx/esm scripts/verify-loaded-context-width.tsx

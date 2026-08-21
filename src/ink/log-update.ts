@@ -32,6 +32,7 @@ import {
 } from './termio/csi.js'
 import { isJetBrainsIdeTerminal } from './terminal.js'
 import { LINK_END, link as oscLink } from './termio/osc.js'
+import { needsConhostWidthCompensation } from './stringWidth.js'
 
 type State = {
   previousOutput: string
@@ -49,6 +50,7 @@ type State = {
 type Options = {
   isTTY: boolean
   stylePool: StylePool
+  ambiguousAsWide?: boolean
 }
 
 const CARRIAGE_RETURN = { type: 'carriageReturn' } as const
@@ -539,7 +541,14 @@ export class LogUpdate {
           targetHyperlink,
         )
         const styleStr = stylePool.transition(currentStyleId, added.styleId)
-        if (writeCellWithStyleStr(screen, added, styleStr)) {
+        if (
+          writeCellWithStyleStr(
+            screen,
+            added,
+            styleStr,
+            this.options.ambiguousAsWide === true,
+          )
+        ) {
           currentStyleId = added.styleId
         }
       } else if (removed) {
@@ -582,6 +591,7 @@ export class LogUpdate {
         prev.screen.height,
         next.screen.height,
         stylePool,
+        this.options.ambiguousAsWide === true,
       )
     }
 
@@ -751,7 +761,7 @@ function fullResetSequence_CAUSES_FLICKER(
   const contentRows = Math.min(height, Math.max(1, frame.viewport.height - 1))
   const startY = height - contentRows
   const screen = new VirtualScreen({ x: 0, y: startY }, frame.viewport.width)
-  renderFrameSlice(screen, frame, startY, height, stylePool, false)
+  renderFrameSlice(screen, frame, startY, height, stylePool, false, false)
   return [{ type: 'clearTerminal', reason, debug }, ...screen.diff]
 }
 
@@ -814,7 +824,7 @@ function shrinkAnchoredRepaint(
     const startY = height - contentRows
     const anchor = CURSOR_HOME + eraseToEndOfScreen()
     const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
-    renderFrameSlice(screen, next, startY, height, stylePool, false)
+    renderFrameSlice(screen, next, startY, height, stylePool, false, false)
     return { patches: [{ type: 'stdout', content: anchor }, ...screen.diff], anchoredPad: 0 }
   }
 
@@ -824,7 +834,7 @@ function shrinkAnchoredRepaint(
   const anchor =
     CURSOR_HOME + eraseToEndOfScreen() + (blankBand > 0 ? cursorDown(blankBand) : '')
   const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
-  renderFrameSlice(screen, next, startY, height, stylePool, false)
+  renderFrameSlice(screen, next, startY, height, stylePool, false, false)
   return {
     patches: [{ type: 'stdout', content: anchor }, ...screen.diff],
     // Cap at height-1: a seam that matches every row of a very short frame
@@ -923,7 +933,7 @@ function viewportRepaintPatches(
     CURSOR_HOME +
     eraseToEndOfScreen()
   const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
-  renderFrameSlice(screen, next, startY, height, stylePool, false)
+  renderFrameSlice(screen, next, startY, height, stylePool, false, false)
   return [{ type: 'stdout', content: anchor }, ...screen.diff]
 }
 
@@ -937,6 +947,7 @@ function renderFrameSlice(
   startY: number,
   endY: number,
   stylePool: StylePool,
+  ambiguousAsWide: boolean,
   /**
    * When false (repaint / full-reset paths), advance rows with
    * CR + cursor-down instead of bare LFs. The repaint paints exactly a
@@ -1015,7 +1026,14 @@ function renderFrameSlice(
 
       // Style transition — cached string, zero allocations after warmup
       const styleStr = stylePool.transition(currentStyleId, cell.styleId)
-      if (writeCellWithStyleStr(screen, cell, styleStr)) {
+      if (
+        writeCellWithStyleStr(
+          screen,
+          cell,
+          styleStr,
+          ambiguousAsWide,
+        )
+      ) {
         currentStyleId = cell.styleId
         lastRenderedStyleId = cell.styleId
       }
@@ -1073,6 +1091,7 @@ function writeCellWithStyleStr(
   screen: VirtualScreen,
   cell: Cell,
   styleStr: string,
+  ambiguousAsWide: boolean,
 ): boolean {
   const cellWidth = cell.width === CellWidth.Wide ? 2 : 1
   const px = screen.cursor.x
@@ -1093,7 +1112,8 @@ function writeCellWithStyleStr(
     diff.push({ type: 'styleStr', str: styleStr })
   }
 
-  const needsCompensation = cellWidth === 2 && needsWidthCompensation(cell.char)
+  const needsCompensation =
+    cellWidth === 2 && needsWidthCompensation(cell.char, ambiguousAsWide)
 
   // On terminals with old wcwidth tables, a compensated emoji only advances
   // the cursor 1 column, so the CHA below skips column x+1 without painting
@@ -1163,8 +1183,12 @@ function moveCursorTo(screen: VirtualScreen, targetX: number, targetY: number) {
  * 2. Text-by-default emoji + VS16 (U+FE0F): the base codepoint is width 1
  *    in wcwidth, but VS16 triggers emoji presentation making it width 2.
  *    Examples: ⚔️ (U+2694), ☠️ (U+2620), ❤️ (U+2764).
+ * 3. East Asian Ambiguous glyphs in classic conhost, where the active font
+ *    decides whether the physical glyph occupies one or two cells.
  */
-function needsWidthCompensation(char: string): boolean {
+function needsWidthCompensation(char: string, ambiguousAsWide: boolean): boolean {
+  if (needsConhostWidthCompensation(char, { ambiguousAsWide })) return true
+
   const cp = char.codePointAt(0)
   if (cp === undefined) return false
   // U+1FA70-U+1FAFF: Symbols and Pictographs Extended-A (Unicode 12.0-15.0)
