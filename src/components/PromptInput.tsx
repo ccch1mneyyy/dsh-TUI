@@ -448,10 +448,13 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+V / Cmd+V: raw mode hands the key to the app, so the clipboard is
-    // read here — text, file paths when the file manager copied files, or an
-    // exported temp-file path when the clipboard holds a raw image.
-    if (isMod(key) && input === 'v') {
+    // Clipboard paste, shared by Ctrl+V and Alt+V. Raw mode hands the key
+    // to the app, so the clipboard is read here — text, file paths when the
+    // file manager copied files, or an exported temp-file path when the
+    // clipboard holds a raw image. `imageMode` picks what an image offer
+    // becomes: 'path' inserts the exported PNG as an @-reference (Ctrl+V);
+    // 'attach' stages the image bytes and inserts the image token (Alt+V).
+    const pasteClipboard = (imageMode: 'path' | 'attach') => {
       if (clipboardBusyRef.current) return
       // Match insertAtCaret's overlay/selection dismissal up front: the
       // async continuation below only sets value/cursor, so a paste landing
@@ -470,7 +473,7 @@ export function PromptInput({
             channel.notify(t('input-clipboard-unavailable'), { color: 'warning' })
             return
           }
-          if (content.kind === 'image') {
+          if (content.kind === 'image' && imageMode === 'attach') {
             const mediaType = clipboardImageMediaType(content.path)
             if (mediaType !== undefined) {
               try {
@@ -498,10 +501,25 @@ export function PromptInput({
           channel.notify(t('input-clipboard-read-failed'), { color: 'warning' })
         })
         .finally(() => {
-          // A rejected read must never wedge Ctrl+V for the rest of the
-          // session.
+          // A rejected read must never wedge clipboard paste for the rest
+          // of the session.
           clipboardBusyRef.current = false
         })
+    }
+
+    // Ctrl+V / Cmd+V: paste as before, but an image offer lands as its
+    // exported @-path rather than a staged attachment.
+    if (isMod(key) && input === 'v') {
+      pasteClipboard('path')
+      return
+    }
+
+    // Alt+V: paste a clipboard image as a staged attachment (image token),
+    // like other agent TUIs. A dedicated binding because desktop terminals
+    // commonly swallow Ctrl+V for their own text-only paste, leaving image
+    // pastes unreachable — Alt+V passes through everywhere.
+    if (key.meta && input === 'v') {
+      pasteClipboard('attach')
       return
     }
 

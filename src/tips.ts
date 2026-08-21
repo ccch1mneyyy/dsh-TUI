@@ -145,8 +145,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-paste',
     group: 'keys',
-    zh: 'Ctrl+V 粘贴文本、文件路径或图片附件',
-    en: 'Ctrl+V pastes text, file paths, or image attachments',
+    zh: 'Ctrl+V 粘贴文本/文件路径，Alt+V 粘贴剪贴板图片为附件',
+    en: 'Ctrl+V pastes text/file paths, Alt+V pastes a clipboard image as an attachment',
   },
   {
     id: 'keys-slash-search',

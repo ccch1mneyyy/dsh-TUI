@@ -127,6 +127,7 @@ const RESERVED_COMBOS = new Set([
   'ctrl+shift+return', // shift+Enter newline (CSI 13;6u) — same editor binding
   'alt+return', // newline fallback on terminals without shift reporting
   'alt+up', // pull the last pending message back for editing
+  'alt+v', // paste clipboard image attachment
   'escape', // pickers / interrupt / rewind double-tap
   'tab', // command completion
   'shift+tab', // session-mode cycle
