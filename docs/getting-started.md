@@ -179,6 +179,26 @@ $DSH_HOME/profiles/dsh-tui/cordis.patch.yml
 仓库根目录的 `cordis.yml` 是裸组合示例；正常的 npm/profile 安装以
 `cordis.patch.yml` 为准，不需要把根配置复制到 profile。
 
+### 图片粘贴与准入限额
+
+`Ctrl+V` 直接粘贴剪贴板图片（输入框出现 `[Image #N (W×H)]` 占位符）；
+把图片文件拖进终端窗口同样会被识别。Linux 需要以下剪贴板工具之一
+（按会话自动探测）：
+
+```sh
+sudo apt install xclip xsel wl-clipboard   # X11: xclip/xsel；Wayland: wl-clipboard
+```
+
+超大图片会在提交前自动等比缩放进准入限额（需要可选依赖 `sharp`；
+未安装时超限图片会被拒绝）。默认单边上限 2000px 会挡下 2K/4K 屏的
+全屏截图，可在 profile 用户层 `cordis.patch.yml` 调大：
+
+```yaml
+- id: attachment-local
+  config:
+    maxImageDimension: 4096
+```
+
 ## 从源码开发
 
 ```sh

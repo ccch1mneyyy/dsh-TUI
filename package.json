@@ -248,6 +248,9 @@
     "typescript": "^6.0.3",
     "yaml": "^2.9.0"
   },
+  "optionalDependencies": {
+    "sharp": "^0.34.0"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

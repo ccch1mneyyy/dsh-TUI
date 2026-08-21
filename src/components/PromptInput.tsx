@@ -401,16 +401,7 @@ export function PromptInput({
   }
 
   /** Line index of the cursor; -1 when the cursor is at the very end. */
-  const cursorLine = (text: string, cursorOffset: number) => {
-    const before = text.slice(0, cursorOffset)
-    return before.split('\n').length - 1
-  }
   /** Column of the cursor within its line. */
-  const cursorColumn = (text: string, cursorOffset: number) => {
-    const before = text.slice(0, cursorOffset)
-    const line = before.split('\n').pop() ?? ''
-    return line.length
-  }
 
   useInput((input, key, event) => {
     if (selectionActive) return
@@ -434,11 +425,38 @@ export function PromptInput({
       setFileSelected(0)
     }
 
-    // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click): insert
-    // verbatim at the caret. Paste content may contain newlines — that is
-    // NOT Enter — so this branch runs before the whole-line submit rule.
+    // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click / 拖拽):
+    // insert verbatim at the caret. Paste content may contain newlines —
+    // that is NOT Enter — so this branch runs before the whole-line submit
+    // rule. 拖拽进终端的图片以单一绝对路径形态到达（kitty 等把文件落成
+    // 路径文本粘贴）——识别为图片时走 stageImage 转成 token，与 Ctrl+V
+    // 剪贴板图片同一条准入管道；其余情况（普通文件/多行文本）保持原样。
     if (event?.isPasted && input.length > 0) {
-      insertAtCaret(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+      const pasted = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      // 与 Ctrl+V 分支同款前置：帮助浮层开着时插入会落在面板背后。
+      if (helpOpen) onToggleHelp()
+      const asPath = decodeFileUri(pasted.trim())
+      if (asPath !== undefined && !asPath.includes('\n') && !asPath.includes(' ')) {
+        const mediaType = clipboardImageMediaType(asPath)
+        if (mediaType !== undefined && !clipboardBusyRef.current) {
+          clipboardBusyRef.current = true
+          void readFile(asPath)
+            .then(data => channel.stageImage({ data: new Uint8Array(data), mediaType, name: basename(asPath) }))
+            .then(token => {
+              insertClipboardAtCaret(`${token} `)
+              channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+            })
+            .catch(() => {
+              // 读失败或被准入拒绝：按普通文本插入路径，保留拖拽的原语义。
+              insertClipboardAtCaret(pasted)
+            })
+            .finally(() => {
+              clipboardBusyRef.current = false
+            })
+          return
+        }
+      }
+      insertAtCaret(pasted)
       return
     }
 
@@ -718,14 +736,15 @@ export function PromptInput({
         )
         return
       }
-      const line = cursorLine(value, cursor)
-      if (line > 0) {
-        // Move to the previous line, clamping to its length.
-        const upToLineStart = value.lastIndexOf('\n', cursor - 1)
-        const prevLineStart =
-          upToLineStart === -1 ? 0 : value.lastIndexOf('\n', upToLineStart - 1) + 1
-        const prevLine = value.slice(prevLineStart, upToLineStart)
-        setInput(value, prevLineStart + Math.min(cursorColumn(value, cursor), prevLine.length))
+      // 视觉行导航：折行后的屏幕行间移动光标（列按字符数 clamp 到目标行
+      // 长度）；仅在首视觉行才继续走到历史遍历——单段超长文本在逻辑上
+      // 只有 1 行，按逻辑行判定会让 ↑ 直接换历史条目，表现为整框内容
+      // 突变与高度跳变。
+      const upGeo = visualNavGeometry(value, cursor, Math.max(10, columns - 3))
+      if (upGeo.row > 0) {
+        const targetRow = upGeo.row - 1
+        const target = upGeo.rows[targetRow] ?? ''
+        setInput(value, snapToCodePointBoundary(value, upGeo.rowStarts[targetRow]! + Math.min(upGeo.colChars, target.length)))
         return
       }
       if (overlayOpen) {
@@ -752,16 +771,12 @@ export function PromptInput({
         )
         return
       }
-      const line = cursorLine(value, cursor)
-      const lines = value.split('\n')
-      if (line < lines.length - 1) {
-        const nextLineStart = value.indexOf('\n', cursor) + 1
-        const nextLineEnd = value.indexOf('\n', nextLineStart)
-        const nextLine = value.slice(
-          nextLineStart,
-          nextLineEnd === -1 ? value.length : nextLineEnd,
-        )
-        setInput(value, nextLineStart + Math.min(cursorColumn(value, cursor), nextLine.length))
+      // 视觉行导航（与 ↑ 对称）：仅在末视觉行才继续走到历史遍历。
+      const downGeo = visualNavGeometry(value, cursor, Math.max(10, columns - 3))
+      if (downGeo.row < downGeo.rows.length - 1) {
+        const targetRow = downGeo.row + 1
+        const target = downGeo.rows[targetRow] ?? ''
+        setInput(value, snapToCodePointBoundary(value, downGeo.rowStarts[targetRow]! + Math.min(downGeo.colChars, target.length)))
         return
       }
       if (overlayOpen) {
@@ -1145,6 +1160,56 @@ export function PromptInput({
       </EffortInputBorder>
     </Box>
   )
+}
+
+/** ↑/↓ 视觉行导航的几何：光标所在视觉行号、行内字符列，以及每个
+ * 视觉行在 value 中的起始下标（由 wrapToWidth 的切行反推：行内容在
+ * value 中连续按序，行尾若为逻辑行边界则跳过一个 \n）。单段超长文本
+ * 折成多个视觉行时 ↑/↓ 用它逐视觉行移动光标，而不是掉进历史遍历。 */
+/**
+ * ↑/↓ 落点的码点吸附：目标偏移落在代理对中间（前高后低）时回退一位，
+ * 避免后续 Backspace 删掉高代理一半、把孤立低代理发进模型请求与
+ * 会话日志（SearchBox caret 已有同款语义，见 verify-ime-cursor 场景 7）。
+ */
+function snapToCodePointBoundary(value: string, offset: number): number {
+  if (offset > 0 && offset < value.length) {
+    const prev = value.charCodeAt(offset - 1)
+    const at = value.charCodeAt(offset)
+    if (prev >= 0xd800 && prev <= 0xdbff && at >= 0xdc00 && at <= 0xdfff) return offset - 1
+  }
+  return offset
+}
+
+function visualNavGeometry(value: string, cursor: number, width: number): {
+  row: number
+  colChars: number
+  rowStarts: number[]
+  rows: string[]
+} {
+  const rows = wrapToWidth(value, width)
+  const prefix = wrapToWidth(value.slice(0, cursor), width)
+  const colChars = prefix[prefix.length - 1]!.length
+  const rowStarts: number[] = []
+  let consumed = 0
+  for (const r of rows) {
+    rowStarts.push(consumed)
+    consumed += r.length
+    if (value[consumed] === '\n') consumed += 1
+  }
+  return { row: prefix.length - 1, colChars, rowStarts, rows }
+}
+
+/** 粘贴内容的单一文件路径形态：file:// URI 解包、裸绝对路径原样；
+ * 除此之外（多行、含空格、相对文本）返回 undefined。 */
+function decodeFileUri(text: string): string | undefined {
+  if (text.startsWith('file://')) {
+    try {
+      return decodeURIComponent(new URL(text).pathname)
+    } catch {
+      return undefined
+    }
+  }
+  return text.startsWith('/') ? text : undefined
 }
 
 /**
