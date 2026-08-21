@@ -903,7 +903,18 @@ function renderNodeToOutput(
         // Keep the pre-frame position on a shrink frame (measurement
         // artifact) instead of clamping to the shrunken maxScroll — the
         // clamp would persist the yank even after content grows back.
-        let scrollTop = shrunk ? cur : Math.max(0, Math.min(cur, maxScroll))
+        // Exception: a STICKY view must stay pinned to the bottom. A width
+        // change clears MessageList's row-height cache, collapsing the
+        // estimated scrollHeight; freezing the pre-shrink scrollTop then
+        // parks it PAST the whole shrunken content — every child culls and
+        // the frame paints only the bottom chrome. With the resize erase
+        // (needsEraseBeforePaint) that lands as a pure blank screen with
+        // just the input box, and an idle app produces no follow-up frame
+        // to heal it (user-reported full-screen loss on pane-width jitter —
+        // issue #421; repro-resize-blank). Clamping a sticky view to the shrunken
+        // maxScroll is exactly its contract — show the bottom.
+        let scrollTop =
+          shrunk && !sticky ? cur : Math.max(0, Math.min(cur, maxScroll))
         // Virtual-scroll clamp: if scrollTop raced past the currently-mounted
         // range (burst PageUp before React re-renders), render at the EDGE of
         // the mounted children instead of blank spacer. Do NOT write back to
@@ -912,9 +923,17 @@ function renderNodeToOutput(
         // the right range. Not scheduling scrollDrainNode here keeps the
         // clamp passive — React's commit → resetAfterCommit → onRender will
         // paint again with fresh bounds.
+        // Cap both bounds at maxScroll: the clamp bounds come from
+        // MessageList's height ESTIMATES while maxScroll comes from the
+        // frame's actual Yoga height. A width change resets the estimates
+        // (row-height cache clear), and a stale bound can point PAST the
+        // shrunken content bottom — the painted viewport then sits entirely
+        // below the content and every child culls to blank (the sticky
+        // full-screen loss — issue #421; repro-resize-blank). Nothing renderable exists
+        // below maxScroll regardless of what the estimates claim.
         const clamped = Math.max(
-          cMin ?? -Infinity,
-          Math.min(scrollTop, cMax ?? Infinity),
+          Math.min(cMin ?? -Infinity, maxScroll),
+          Math.min(scrollTop, Math.min(cMax ?? Infinity, maxScroll)),
         )
         node.scrollTop = scrollTop
         // Clamp hitting top/bottom consumes any remainder. Set drainPending
