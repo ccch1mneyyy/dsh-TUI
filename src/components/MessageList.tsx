@@ -770,18 +770,20 @@ export function LogoHeader({
   effort,
   cwd,
   whale = true,
+  maid = false,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
   whale?: boolean
+  maid?: boolean
 }): React.ReactNode {
   // Minimal mode drops the whole splash (whale art AND wordmark) — only the
   // transcript and a bare status bar remain.
   if (isMinimalMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} maid={maid} />
     </Box>
   )
 }

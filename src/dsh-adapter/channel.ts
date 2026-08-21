@@ -527,6 +527,9 @@ export interface Channel {
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
+  /** Maid persona easter egg: the header whale swaps for the whale girl
+   *  while the session's `maid` command fold reports active. */
+  readonly maidActive: boolean
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
   readonly minimal: boolean
@@ -883,6 +886,8 @@ export interface ChannelState {
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
   whale: boolean
+  /** Maid persona fold (see the public Channel type). */
+  maidActive: boolean
   /** Apply a whale-visibility change (see the public Channel type). */
   setWhale(visible: boolean): void
   minimal: boolean
@@ -2048,6 +2053,22 @@ export function createChannel(
     }
     return active
   }
+  /** Maid persona easter egg: `command/run` for the `maid` command folds
+   *  with toggle semantics (`off` deactivates, any other form flips), so a
+   *  resumed session restores its mascot — the same last-wins shape as the
+   *  mode folds above, plus the flip. */
+  const foldMaidActive = (events: readonly SessionEvent[]): boolean => {
+    let active = false
+    for (const event of events) {
+      if ((event as { type: string }).type === 'command/run') {
+        const data = event.data as unknown as { name?: string; args?: string }
+        if (data?.name === 'maid') {
+          active = typeof data.args === 'string' && data.args.trim() === 'off' ? false : !active
+        }
+      }
+    }
+    return active
+  }
   const foldSandboxMode = (events: readonly SessionEvent[]): string | undefined => {
     let mode: string | undefined
     for (const event of events) {
@@ -2088,6 +2109,14 @@ export function createChannel(
   const refreshMode = (): void => {
     state.modeIndex = deriveModeIndex(agent.session.events)
     state.mode = sessionModes[state.modeIndex]!
+  }
+
+  /** Re-derive the maid mascot fold; true when it flipped (caller emits). */
+  const refreshMaid = (): boolean => {
+    const active = foldMaidActive(agent.session.events)
+    if (active === state.maidActive) return false
+    state.maidActive = active
+    return true
   }
 
   /** Apply one configured mode: each declared atom switches independently
@@ -2180,6 +2209,7 @@ export function createChannel(
     toolBackground: normalizeToolBackground(options.toolBackground),
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
+    maidActive: false,
     minimal: options.minimal === true,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
@@ -5253,6 +5283,7 @@ ${output}
     }
     void applyPreferredEffort()
     refreshMode()
+    refreshMaid()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),
       ctx.on('agent/status', ({ agent: subject, status }) => {
@@ -5324,6 +5355,12 @@ ${output}
         const eventType = (event as { type: string }).type
         if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
           refreshMode()
+        }
+        // Only maid runs can flip the fold; skipping other commands keeps the
+        // full-log scan off every /tips-scale invocation.
+        if (eventType === 'command/run'
+          && (event.data as unknown as { name?: string })?.name === 'maid') {
+          refreshMaid()
         }
         renderEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned

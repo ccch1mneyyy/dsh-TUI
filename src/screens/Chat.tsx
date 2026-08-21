@@ -2165,6 +2165,7 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           whale={channel.whale}
+          maid={channel.maidActive}
         />
         {/* The startup loaded-context panel: before the first message the
             transcript is empty, so the inventory of what this conversation

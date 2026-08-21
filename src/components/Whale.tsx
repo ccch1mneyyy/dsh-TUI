@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
 import { WHALE_FRAMES, type WhaleFrame } from './whaleFrames.js'
+import { MAID_PALETTE, WHALE_MAID_FRAMES } from './whaleMaidFrames.js'
 
 /**
  * The DeepSeek pixel whale from the hand-drawn Excel art (whale_frames.zip):
@@ -26,11 +27,12 @@ const bg = (rgb: Rgb): string => `\x1b[48;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
 const RESET = '\x1b[0m'
 
 /**
- * Render a frame to 13 ANSI rows (one per sprite row pair). Consecutive
- * cells sharing one style are run-length encoded; trailing transparent
- * cells are dropped so the rows measure exactly the whale's bounding box.
+ * Render one frame to ANSI rows (one per sprite row pair) under its own
+ * palette. Consecutive cells sharing one style are run-length encoded;
+ * trailing transparent cells are dropped so the rows measure exactly the
+ * sprite's bounding box.
  */
-export function renderWhaleRows(frame: WhaleFrame): string[] {
+export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb | undefined>): string[] {
   const sprite = frame.rows
   const rows: string[] = []
   for (let r = 0; r < sprite.length; r += 2) {
@@ -39,8 +41,8 @@ export function renderWhaleRows(frame: WhaleFrame): string[] {
     let out = ''
     let current = ''
     for (let x = 0; x < upper.length; x++) {
-      const up = PALETTE[upper[x]]
-      const lo = PALETTE[lower[x]]
+      const up = palette[upper[x]]
+      const lo = palette[lower[x]]
       let seq: string
       let ch: string
       if (up !== undefined && lo !== undefined) {
@@ -72,8 +74,11 @@ export function renderWhaleRows(frame: WhaleFrame): string[] {
   return rows
 }
 
-/** Pre-rendered ANSI rows for every frame, computed once at module load. */
-const RENDERED: readonly string[][] = WHALE_FRAMES.map(renderWhaleRows)
+/** Pre-rendered ANSI rows for every whale frame, computed once at module load. */
+const RENDERED: readonly string[][] = WHALE_FRAMES.map(frame => renderSpriteRows(frame, PALETTE))
+
+/** Pre-rendered ANSI rows for the maid pose (one static frame today). */
+const MAID_RENDERED: readonly string[][] = WHALE_MAID_FRAMES.map(frame => renderSpriteRows(frame, MAID_PALETTE))
 
 /** Index of the `standard` frame — the settled header's static pose. */
 export const STANDARD_FRAME_INDEX = 0
@@ -93,6 +98,24 @@ export function WhaleArt({
   width?: number
 }): React.ReactNode {
   const rows = RENDERED[frameIndex] ?? RENDERED[STANDARD_FRAME_INDEX]
+  return (
+    <Box flexDirection="column" flexShrink={0} width={width}>
+      {rows.map((row, index) => (
+        <Text key={index} wrap="truncate-end">
+          {row}
+        </Text>
+      ))}
+    </Box>
+  )
+}
+
+/**
+ * The whale-girl pose for the maid persona easter egg: 13 rows x 40
+ * columns in the maid palette, rendered like {@link WhaleArt}. One static
+ * frame — no opening animation — pinned at the header's 13-row height.
+ */
+export function WhaleMaidArt({ width }: { width?: number }): React.ReactNode {
+  const rows = MAID_RENDERED[0] ?? []
   return (
     <Box flexDirection="column" flexShrink={0} width={width}>
       {rows.map((row, index) => (
