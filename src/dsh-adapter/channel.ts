@@ -3694,7 +3694,16 @@ export function createChannel(
               { color: 'error', timeoutMs: 8000 },
             )
           })
-      })()
+      })().catch((error: unknown) => {
+        // Sync throws from compactNow (e.g. runMaintenance rejecting a
+        // non-idle agent right after /resume) reject this IIFE itself;
+        // uncaught, that is an unhandled rejection and Node exits the
+        // whole TUI. Surface it as the same failure notification.
+        state.notify(
+          t('compact-failed', { err: error instanceof Error ? error.message : String(error) }),
+          { color: 'error', timeoutMs: 8000 },
+        )
+      })
     },
     runExternalCommand(name, rawInput) {
       return executeRegistryCommand(name, rawInput)
