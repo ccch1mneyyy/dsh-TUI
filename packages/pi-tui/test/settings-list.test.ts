@@ -55,4 +55,22 @@ describe("SettingsList", () => {
 
 		assert.deepStrictEqual(changes, [{ id: "tui-mode", value: "fullscreen" }]);
 	});
+
+	it("renders localized string overrides for hint and empty states", () => {
+		const list = new SettingsList(items.map((item) => ({ ...item })), 10, testTheme, () => {}, () => {}, {
+			enableSearch: true,
+			strings: { hint: "  HINT-OVERRIDE", noMatches: "  NOTHING-MATCHES", noSettings: "  NOTHING-AT-ALL" },
+		});
+
+		for (const character of "zzz-no-match") list.handleInput(character);
+		const filtered = list.render(80).join("\n");
+		assert.ok(filtered.includes("NOTHING-MATCHES"));
+		assert.ok(filtered.includes("HINT-OVERRIDE"));
+		assert.ok(!filtered.includes("Esc to cancel"));
+
+		const empty = new SettingsList([], 10, testTheme, () => {}, () => {}, {
+			strings: { noSettings: "  NOTHING-AT-ALL" },
+		});
+		assert.ok(empty.render(80).join("\n").includes("NOTHING-AT-ALL"));
+	});
 });

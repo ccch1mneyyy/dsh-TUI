@@ -27,8 +27,23 @@ export interface SettingsListTheme {
 	hint: (text: string) => string;
 }
 
+/**
+ * Localized overrides for the component's built-in English strings. Each
+ * value renders verbatim through the theme's hint painter — include any
+ * leading padding you want shown.
+ */
+export interface SettingsListStrings {
+	/** Bottom key-hint line. */
+	hint?: string;
+	/** Shown when the list has no items at all. */
+	noSettings?: string;
+	/** Shown when the search filter matches no item. */
+	noMatches?: string;
+}
+
 export interface SettingsListOptions {
 	enableSearch?: boolean;
+	strings?: SettingsListStrings;
 }
 
 export class SettingsList implements Component {
@@ -41,6 +56,7 @@ export class SettingsList implements Component {
 	private onCancel: () => void;
 	private searchInput?: Input;
 	private searchEnabled: boolean;
+	private strings: SettingsListStrings;
 
 	// Submenu state
 	private submenuComponent: Component | null = null;
@@ -61,6 +77,7 @@ export class SettingsList implements Component {
 		this.onChange = onChange;
 		this.onCancel = onCancel;
 		this.searchEnabled = options.enableSearch ?? false;
+		this.strings = options.strings ?? {};
 		if (this.searchEnabled) {
 			this.searchInput = new Input();
 		}
@@ -96,7 +113,7 @@ export class SettingsList implements Component {
 		}
 
 		if (this.items.length === 0) {
-			lines.push(this.theme.hint("  No settings available"));
+			lines.push(this.theme.hint(this.strings.noSettings ?? "  No settings available"));
 			if (this.searchEnabled) {
 				this.addHintLine(lines, width);
 			}
@@ -105,7 +122,7 @@ export class SettingsList implements Component {
 
 		const displayItems = this.searchEnabled ? this.filteredItems : this.items;
 		if (displayItems.length === 0) {
-			lines.push(truncateToWidth(this.theme.hint("  No matching settings"), width));
+			lines.push(truncateToWidth(this.theme.hint(this.strings.noMatches ?? "  No matching settings"), width));
 			this.addHintLine(lines, width);
 			return lines;
 		}
@@ -238,9 +255,10 @@ export class SettingsList implements Component {
 		lines.push(
 			truncateToWidth(
 				this.theme.hint(
-					this.searchEnabled
-						? "  Type to search · Enter/Space to change · Esc to cancel"
-						: "  Enter/Space to change · Esc to cancel",
+					this.strings.hint ??
+						(this.searchEnabled
+							? "  Type to search · Enter/Space to change · Esc to cancel"
+							: "  Enter/Space to change · Esc to cancel"),
 				),
 				width,
 			),
