@@ -167,7 +167,7 @@ export function Chat({
   extensionShortcuts,
   onExit,
   onUpdate,
-  fullscreen = false,
+  fullscreen: fullscreenProp = false,
   trajectorySeen: trajectorySeenProp,
 }: {
   channel: Channel
@@ -192,11 +192,10 @@ export function Chat({
   /** Update the installed package and restart the current TUI process. */
   onUpdate?: () => void
   /**
-   * True when the host already wrapped this tree in `<AlternateScreen>`
-   * (`fullscreen: true`). Both full-screen surfaces need this — the trajectory
-   * scene and the session browser: entering the alt
-   * screen a second time is harmless, but the inner unmount's DEC 1049 exit
-   * would drop the whole app back to the main screen.
+   * Fallback when the channel has no live `fullscreen` field (headless
+   * embeds / tests). Production Chat reads `channel.fullscreen` so overlay
+   * screens skip a nested `<AlternateScreen>` while the host DisplayFrame
+   * already owns DEC 1049.
    */
   fullscreen?: boolean
   /**
@@ -837,6 +836,64 @@ export function Chat({
         setHelpOpen(false)
         setThemeIndex(Math.max(0, getThemeOptions().findIndex(option => option.value === themeName)))
         setThemePickerOpen(true)
+        return true
+      }
+      case 'tui': {
+        // Claude Code `/tui fullscreen` / `/tui default`: hot-swap the
+        // alternate screen and persist to settings.yaml `dsh-tui.fullscreen`.
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        const current = channel.fullscreen ?? fullscreenProp
+        const modeLabel = (value: boolean) => value ? t('tui-mode-fullscreen') : t('tui-mode-inline')
+        const persistFullscreen = async (value: boolean): Promise<boolean> => {
+          const settingsHost = channel.settingsHost()
+          const tuiView = settingsHost?.listNamespaces().find(entry => entry.ns === 'dsh-tui')
+          if (settingsHost === undefined || tuiView === undefined) return false
+          try {
+            await settingsHost.write(
+              'dsh-tui',
+              [{ op: 'set', path: ['fullscreen'], value }],
+              tuiView.revision,
+            )
+            return true
+          } catch {
+            return false
+          }
+        }
+        if (parts[0] === 'status' || parts.length === 0) {
+          setHelpOpen(false)
+          channel.pushLocal('/tui', [
+            t('tui-current', { mode: modeLabel(current) }),
+            t('tui-switch-hint'),
+            t('tui-persist-hint'),
+          ])
+          return true
+        }
+        const token = parts[0]!.toLowerCase()
+        if (parts.length > 1 || (token !== 'fullscreen' && token !== 'default' && token !== 'inline')) {
+          setHelpOpen(false)
+          channel.notify(
+            token === 'fullscreen' || token === 'default' || token === 'inline'
+              ? t('tui-usage')
+              : t('tui-unknown', { mode: parts[0]! }),
+            { color: token === 'fullscreen' || token === 'default' || token === 'inline' ? 'warning' : 'error' },
+          )
+          return true
+        }
+        const next = token === 'fullscreen'
+        setHelpOpen(false)
+        if (current !== next) {
+          channel.setFullscreen(next)
+          const ink = instances.get(process.stdout) ?? instances.values().next().value
+          ink?.clearTextSelection()
+          channel.notify(t('tui-switched', { mode: modeLabel(next) }), { color: 'success' })
+        } else {
+          channel.notify(t('tui-already', { mode: modeLabel(next) }), { color: 'success' })
+        }
+        void persistFullscreen(next).then(ok => {
+          if (!ok) {
+            channel.notify(t('tui-switched-pref-failed', { mode: modeLabel(next) }), { color: 'warning' })
+          }
+        })
         return true
       }
       case 'new': {
@@ -2265,6 +2322,14 @@ export function Chat({
   // crash reports to the transcript and closes the scene instead of taking
   // the whole TUI down through ink's app-level boundary.
   const pluginScene = channel.pluginScene
+  const fullscreen = channel.fullscreen ?? fullscreenProp
+  // Overlay screens (browser / settings / trajectory / subagent) enter the
+  // alternate screen themselves in inline mode. In fullscreen the host
+  // DisplayFrame already owns DEC 1049, so they must not nest — nesting
+  // would emit a second DEC 1049, and its unmount would drop the whole app
+  // back to the main screen.
+  const wrapDisplay = (node: React.ReactNode): React.ReactNode =>
+    fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   if (pluginScene !== undefined) {
     const node = (
       <PluginSceneBoundary
@@ -2282,7 +2347,7 @@ export function Chat({
         })}
       </PluginSceneBoundary>
     )
-    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+    return wrapDisplay(node)
   }
 
   // The browser is a screen, not an overlay: it REPLACES the conversation
@@ -2299,8 +2364,8 @@ export function Chat({
       />
     )
     // Inline hosts enter the alternate screen for the duration; full-screen
-    // hosts are already in it and must not nest a second one.
-    return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+    // hosts wrap once at the DisplayFrame root and must not nest a second one.
+    return wrapDisplay(browser)
   }
 
   // The settings screen follows the browser's rule exactly: it REPLACES the
@@ -2308,7 +2373,7 @@ export function Chat({
   // is no transcript underneath to be repainted or bled through.
   if (settingsOpen) {
     const screen = <Settings channel={channel} onClose={() => setSettingsOpen(false)} />
-    return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
+    return wrapDisplay(screen)
   }
 
   // Subagent detail scene: displays detailed view of a specific subagent.
@@ -2331,7 +2396,7 @@ export function Chat({
         }}
       />
     )
-    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+    return wrapDisplay(scene)
   }
 
   // Subagent dashboard: displays all active and completed subagents.
@@ -2347,7 +2412,7 @@ export function Chat({
         onClose={() => setSubagentDashboardOpen(false)}
       />
     )
-    return fullscreen ? dashboard : <AlternateScreen>{dashboard}</AlternateScreen>
+    return wrapDisplay(dashboard)
   }
 
   /** Prompt input is inert while a modal dialog owns the keyboard. */
@@ -2362,12 +2427,12 @@ export function Chat({
   // screen rather than an overlay: it owns the full viewport, and the
   // conversation's own frame is never resized while it is up. Chat stays
   // mounted, so every hook above has already run and no state is lost.
-  // `<AlternateScreen>` is skipped when the app is already fullscreen —
+  // `<AlternateScreen>` is skipped when DisplayFrame is already active —
   // nesting it would emit a second DEC 1049, and its unmount would drop the
   // whole app back to the main screen.
   if (sceneOpen) {
     const scene = <TrajectoryScene channel={channel} build={trajectory} onClose={closeScene} />
-    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+    return wrapDisplay(scene)
   }
 
   // 浮层整体挂载条件：必须与内部各面板的可见条件精确同值。关闭时把
@@ -2558,6 +2623,7 @@ export function Chat({
         )}
         <StatusLine
           channel={channel}
+          fullscreen={fullscreen}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
           wake={

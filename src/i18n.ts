@@ -400,9 +400,6 @@ const dict = {
   'sugg-activity-frames-desc': { zh: '列出或切换动画帧预设', en: 'List or switch frame presets' },
   'sugg-activity-frame-desc': { zh: '动画帧预设', en: 'Animation frame preset' },
 
-  // ── dsh-adapter/plugin.ts（/settings 全屏设置）───────────────────────
-  'settings-fullscreen-restart': { zh: '全屏设置已保存，重启 dsh-tui 后生效', en: 'Fullscreen preference saved — restart dsh-tui to apply' },
-
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
   'help-this-help': { zh: '? 查看本帮助', en: '? for this help' },
@@ -782,6 +779,9 @@ const dict = {
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },
   'cmd-desc-thinking': { zh: '显示或隐藏思考过程' },
+  'cmd-desc-tui': { zh: '切换全屏与常规显示模式' },
+  'cmd-desc-tui-fullscreen': { zh: '进入全屏（alternate screen）', en: 'Enter fullscreen (alternate screen)' },
+  'cmd-desc-tui-default': { zh: '回到常规 inline 模式', en: 'Return to inline (default) mode' },
   'cmd-desc-tokens': { zh: '查看会话 token 用量' },
   // Account / policy
   'cmd-desc-provider': { zh: '添加模型提供方（内置目录或自定义 API 端点）' },
@@ -817,6 +817,18 @@ const dict = {
   'cmd-desc-plan': { zh: '切换计划模式（/plan off 退出）' },
   'cmd-desc-goal': { zh: '设置或查看会话目标' },
   'cmd-desc-feedback': { zh: '提交使用反馈' },
+
+  // ── /tui command ────────────────────────────────────────────────────
+  'tui-current': { zh: '当前显示  {{mode}}', en: 'Current display  {{mode}}' },
+  'tui-mode-fullscreen': { zh: '全屏', en: 'fullscreen' },
+  'tui-mode-inline': { zh: '常规', en: 'inline' },
+  'tui-switch-hint': { zh: '切换      /tui fullscreen | /tui default', en: 'Switch      /tui fullscreen | /tui default' },
+  'tui-persist-hint': { zh: '持久化    ~/.dsh/settings.yaml 的 dsh-tui.fullscreen（重启后仍生效）', en: 'Persisted    ~/.dsh/settings.yaml dsh-tui.fullscreen (survives restart)' },
+  'tui-already': { zh: '已是{{mode}}模式', en: 'Already in {{mode}} mode' },
+  'tui-switched': { zh: '已切换到{{mode}}模式', en: 'Switched to {{mode}} mode' },
+  'tui-switched-pref-failed': { zh: '已切换到{{mode}}模式，但默认偏好写入失败（重启后不保留）', en: 'Switched to {{mode}} mode, but writing the default preference failed (won\'t persist after restart)' },
+  'tui-unknown': { zh: '未知模式「{{mode}}」· /tui 查看用法', en: 'Unknown mode "{{mode}}" · /tui to view usage' },
+  'tui-usage': { zh: '用法：/tui | /tui fullscreen | /tui default', en: 'Usage: /tui | /tui fullscreen | /tui default' },
 
   // ── /lang command ───────────────────────────────────────────────────
   'lang-current': { zh: '当前语言  {{lang}}', en: 'Current language  {{lang}}' },

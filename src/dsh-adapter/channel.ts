@@ -527,6 +527,10 @@ export interface Channel {
   readonly toolBackground: ToolBackground
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
+  /** Live fullscreen (alternate-screen) display mode. */
+  readonly fullscreen: boolean
+  /** Switch fullscreen on or off without remounting the session. */
+  setFullscreen(value: boolean): void
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
@@ -876,6 +880,10 @@ export interface ChannelState {
   toolBackground: ToolBackground
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
+  /** Fullscreen display mode (see the public Channel type). */
+  fullscreen: boolean
+  /** Apply a fullscreen change (see the public Channel type). */
+  setFullscreen(value: boolean): void
   /** Apply a diff-layout change (see the public Channel type). */
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   /** Apply a thinking-display change (see the public Channel type). */
@@ -1390,6 +1398,8 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
+    /** Fullscreen (alternate-screen) display; default off. */
+    fullscreen?: boolean
     /** Show the header's pixel whale art; default on. */
     whale?: boolean
     /** Minimal mode; default off (settings `dsh-tui.minimal`). */
@@ -1456,7 +1466,7 @@ export function createChannel(
   // Task tool descriptions, queued in call order; each subagent/start consumes
   // the oldest one so the card shows the user-visible task label.
   const pendingTaskDescriptions: string[] = []
-  
+
   /**
    * Sync subagentStore state into ChatRows (insert/update in state.rows).
    * Called whenever subagent state changes (spawned/completed/failed/output).
@@ -2338,6 +2348,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     statusBar: normalizeStatusBar(options.statusBar),
+    fullscreen: options.fullscreen === true,
     whale: options.whale !== false,
     minimal: options.minimal === true,
     activityEnabled: options.activity !== false,
@@ -2359,6 +2370,12 @@ export function createChannel(
         if ('effort'.startsWith(head)) warmEffortLevels()
       }
       return completeCommands(input, state.commandList, (path) => {
+        if (path.length === 1 && path[0] === 'tui') {
+          return [
+            { name: 'fullscreen', description: 'Enter fullscreen (alternate screen)', descriptionKey: 'cmd-desc-tui-fullscreen' },
+            { name: 'default', description: 'Return to inline (default) mode', descriptionKey: 'cmd-desc-tui-default', aliases: ['inline'] },
+          ]
+        }
         if (path.length === 1 && path[0] === 'model') {
           // provider/id specs, current model tagged; see modelNodeCache.
           warmModelNodes()
@@ -3447,6 +3464,11 @@ export function createChannel(
       )
       if (!changed) return
       state.statusBar = next
+      state.emit()
+    },
+    setFullscreen(value) {
+      if (value === state.fullscreen) return
+      state.fullscreen = value
       state.emit()
     },
     setWhale(visible) {

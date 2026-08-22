@@ -82,6 +82,8 @@ diagnostics to an active TUI's stdout; use stderr `DSH_TUI_DEBUG` or
   emulator owns scrollback and native text selection.
 - **Fullscreen**: `AlternateScreen` switches to the alternate screen, where the
   TUI owns scrolling, mouse selection, OSC 52 copy, and screen restoration.
+  `/tui` hot-swaps the mode and writes `~/.dsh/settings.yaml`
+  `dsh-tui.fullscreen`.
 
 Both modes share the Channel and React views but use different terminal protocol
 paths. Changes involving input, scrolling, mouse, cursor, resize, or cleanup

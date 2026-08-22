@@ -15,6 +15,7 @@ export { default as Spacer } from './ink/components/Spacer.js'
 export { default as Newline, type Props as NewlineProps } from './ink/components/Newline.js'
 export { NoSelect } from './ink/components/NoSelect.js'
 export { AlternateScreen } from './ink/components/AlternateScreen.js'
+export { DisplayFrame } from './ink/components/DisplayFrame.js'
 export {
   default as ScrollBox,
   type ScrollBoxProps,

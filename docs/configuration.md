@@ -53,7 +53,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `activity` | `true` | 是否显示实时工作状态行 |
 | `activityFrames` | 持久化选择或 `claude` | 工作状态动画预设；也可通过 `/activity` 修改 |
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行 |
-| `fullscreen` | `false` | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
+| `fullscreen` | `false` | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式。会话内 `/tui fullscreen` / `/tui default`（及 `/settings`）写入 `~/.dsh/settings.yaml` 的 `dsh-tui.fullscreen`，用户层覆盖本组合默认 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
 

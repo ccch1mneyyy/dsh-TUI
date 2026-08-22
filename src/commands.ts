@@ -88,6 +88,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'model', description: 'Show the active model' },
   { name: 'effort', description: 'Adjust the reasoning effort (slider)' },
   { name: 'thinking', description: 'Toggle extended thinking display' },
+  { name: 'tui', description: 'Switch between fullscreen and inline display' },
   { name: 'tokens', description: 'Show session token usage' },
   // Account / policy
   { name: 'provider', description: 'Add an LLM provider (catalog or custom API endpoint)' },

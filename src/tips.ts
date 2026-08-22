@@ -515,6 +515,12 @@ export const TIPS: readonly Tip[] = [
     en: 'In /settings, toolBackground tunes tool-card emphasis',
   },
   {
+    id: 'disp-tui',
+    group: 'display',
+    zh: '/tui fullscreen 与 /tui default 切换全屏和常规模式',
+    en: '/tui fullscreen and /tui default switch display modes',
+  },
+  {
     id: 'disp-mouse',
     group: 'display',
     zh: '全屏模式鼠标拖选即复制；Esc 取消选区',

@@ -64,7 +64,9 @@ export interface Config {
    *  `ctx used/window` readout) in the status footer; off hides that row
    *  while the status/mode lines stay (issue #29). */
   contextBar?: boolean
-  /** Run in the terminal's alternate screen (Claude Code fullscreen layout). */
+  /** Run in the terminal's alternate screen (Claude Code fullscreen layout).
+   *  Editable live via `/tui` and `/settings`; the settings.yaml user layer
+   *  wins over this composition default. */
   fullscreen?: boolean
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
    *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */

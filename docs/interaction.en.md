@@ -242,7 +242,12 @@ flows remain available.
 `fullscreen: false` is the default inline mode, where the terminal emulator
 owns native scrollback and selection.
 
-`fullscreen: true` uses the alternate screen and enables in-app mouse handling:
+`fullscreen: true` uses the alternate screen and enables in-app mouse handling.
+During a session, `/tui fullscreen` and `/tui default` (`inline` is an alias)
+hot-swap the mode; the choice is written to `~/.dsh/settings.yaml`
+`dsh-tui.fullscreen` and wins over the composition default. Bare `/tui` prints
+the current mode and usage. The status line shows `fullscreen` / `inline`
+(zh: `全屏` / `常规`) at the left of the model/context row.
 
 | Action | Behavior |
 | --- | --- |

@@ -206,7 +206,7 @@ scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识�
 
 `fullscreen: false` 是默认 inline 模式，终端模拟器拥有原生 scrollback 和选区。
 
-`fullscreen: true` 使用 alternate screen，并启用应用内鼠标处理：
+`fullscreen: true` 使用 alternate screen，并启用应用内鼠标处理。会话中用 `/tui fullscreen` 与 `/tui default`（`inline` 为别名）热切换；选择写入 `~/.dsh/settings.yaml` 的 `dsh-tui.fullscreen`，覆盖组合层默认。空 `/tui` 打印当前模式与用法。底栏模型行最左侧显示 `全屏` / `常规`（en：`fullscreen` / `inline`）。
 
 | 操作 | 行为 |
 | --- | --- |
