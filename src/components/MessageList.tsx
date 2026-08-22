@@ -735,6 +735,14 @@ function TranscriptRow({
         </Box>
       )
     case 'assistant':
+      // Skip empty assistant rows: when the model calls a tool directly
+      // without producing any text, the assistant/message event creates a
+      // row with empty text. This would render as a lone `●` bullet above
+      // the tool card. Skip it to avoid the duplicate dot.
+      // Note: Use trim() to catch whitespace-only text as well.
+      if (!streaming && text.trim() === '') {
+        return null
+      }
       return streaming ? (
         <Box
           alignItems="flex-start"

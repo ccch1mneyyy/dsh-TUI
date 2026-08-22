@@ -34,17 +34,22 @@ interface PendingApproval {
   readonly snapshot: Omit<ApprovalSnapshot, 'key'>
   resolve: (outcome: ApprovalOutcome) => void
   onAbort: () => void
+  /** Idempotent cleanup — removes the abort listener. */
+  cleanup: () => void
 }
 
 const COMMAND_CLIP = 500
+const WRITE_PREVIEW_LINES = 8
+const EDIT_PREVIEW_LINES = 4
 
 /**
  * Recover the gated command from the session log: the approval request
  * links to an already-presented tool call via `callId`, so the arguments
  * are not duplicated on the request. Mirrors the web client's `commandOf`.
  * @param req - The pending approval request.
- * @returns The `command` argument when present, else the raw arguments
- *   string (clipped), else undefined when the call cannot be found.
+ * @returns The `command` argument when present, a human-readable preview
+ *   for file-operation tools (path first, then content/diff), else the raw
+ *   arguments string (clipped), else undefined when the call cannot be found.
  */
 function commandOf(req: ApprovalRequest): string | undefined {
   if (req.callId === undefined) return undefined
@@ -56,9 +61,37 @@ function commandOf(req: ApprovalRequest): string | undefined {
     const raw = event.data.arguments
     try {
       const parsed: unknown = JSON.parse(raw)
-      if (parsed !== null && typeof parsed === 'object' && 'command' in parsed) {
-        const command = parsed.command
-        if (typeof command === 'string') return command
+      if (parsed !== null && typeof parsed === 'object') {
+        // bash tool: has a `command` field — return it directly.
+        if ('command' in parsed && typeof parsed.command === 'string') {
+          return parsed.command
+        }
+        // write tool: file_path + content → path line, then content preview.
+        const obj = parsed as Record<string, unknown>
+        if (typeof obj.file_path === 'string' && typeof obj.content === 'string') {
+          const lines = obj.content.split('\n')
+          const preview = lines.slice(0, WRITE_PREVIEW_LINES).map(l => `  + ${l}`).join('\n')
+          const remaining = lines.length - WRITE_PREVIEW_LINES
+          const suffix = remaining > 0 ? `\n  ... +${remaining} more lines` : ''
+          return `${obj.file_path}\n\n${preview}${suffix}\n`
+        }
+        // edit tool: file_path + old_string + new_string → path line, then diff preview.
+        if (typeof obj.file_path === 'string' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string') {
+          const parts: string[] = []
+          if (obj.old_string !== '') {
+            const oldLines = obj.old_string.split('\n')
+            const oldPreview = oldLines.slice(0, EDIT_PREVIEW_LINES).map(l => `  - ${l}`).join('\n')
+            const oldRemaining = oldLines.length - EDIT_PREVIEW_LINES
+            parts.push(oldPreview + (oldRemaining > 0 ? `\n  ... +${oldRemaining} more lines` : ''))
+          }
+          if (obj.new_string !== '') {
+            const newLines = obj.new_string.split('\n')
+            const newPreview = newLines.slice(0, EDIT_PREVIEW_LINES).map(l => `  + ${l}`).join('\n')
+            const newRemaining = newLines.length - EDIT_PREVIEW_LINES
+            parts.push(newPreview + (newRemaining > 0 ? `\n  ... +${newRemaining} more lines` : ''))
+          }
+          return `${obj.file_path}\n\n${parts.join('\n')}\n`
+        }
       }
     } catch {
       // Not JSON — fall through to the raw string.
@@ -136,6 +169,7 @@ export class ApprovalStore {
         },
         resolve,
         onAbort: () => {
+          pending.cleanup()
           if (this.active === pending) {
             this.active = undefined
             this.rebuildSnapshot()
@@ -147,6 +181,7 @@ export class ApprovalStore {
           if (at >= 0) this.queue.splice(at, 1)
           pending.resolve('cancelled')
         },
+        cleanup: () => req.signal?.removeEventListener('abort', pending.onAbort),
       }
       req.signal?.addEventListener('abort', pending.onAbort, { once: true })
       this.queue.push(pending)
@@ -170,6 +205,7 @@ export class ApprovalStore {
   decide(outcome: 'allowed-once' | 'rejected'): void {
     const pending = this.active
     if (pending === undefined) return
+    pending.cleanup()
     this.active = undefined
     this.rebuildSnapshot()
     pending.resolve(outcome)
@@ -184,10 +220,14 @@ export class ApprovalStore {
    */
   settleAll(outcome: ApprovalOutcome): void {
     const active = this.active
+    active?.cleanup()
     this.active = undefined
     this.rebuildSnapshot()
     active?.resolve(outcome)
-    for (const pending of this.queue.splice(0)) pending.resolve(outcome)
+    for (const pending of this.queue.splice(0)) {
+      pending.cleanup()
+      pending.resolve(outcome)
+    }
     this.emit()
   }
 }
