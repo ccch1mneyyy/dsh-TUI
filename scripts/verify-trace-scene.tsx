@@ -456,17 +456,21 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     Object.assign(channel, changes)
     channel.version = Number(channel.version) + 1
     for (const listener of listeners) listener()
+    rerenderChat?.()
   }
+  const chatNode = (): React.ReactElement => React.createElement(Chat, {
+    channel: channel as never,
+    questionStore: new QuestionStore() as never,
+    onExit: () => {},
+    fullscreen: false,
+    trajectorySeen: true,
+  })
+  let rerenderChat: (() => void) | undefined
   const instance = await render(
-    React.createElement(Chat, {
-      channel: channel as never,
-      questionStore: new QuestionStore() as never,
-      onExit: () => {},
-      fullscreen: false,
-      trajectorySeen: true,
-    }),
+    chatNode(),
     { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
   )
+  rerenderChat = () => instance.rerender(chatNode())
   for (const value of instances.values()) instances.set(process.stdout, value)
   await sleep(500)
   writes.length = 0
@@ -522,7 +526,10 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   })
   await sleep(250)
   stdin.write('q')
-  await sleep(400)
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (screen().includes('FIRST RESPONSE SECTION')) break
+    await sleep(80)
+  }
   publish({
     rows: [
       { id: 1, kind: 'user', text: 'investigate the rendering issue' },
@@ -539,6 +546,8 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   let secondIndex = -1
   let gap = Number.POSITIVE_INFINITY
   for (let attempt = 0; attempt < 50; attempt++) {
+    rerenderChat?.()
+    await sleep(80)
     const buffer = term.buffer.active
     lines = Array.from({ length: buffer.length }, (_, row) =>
       buffer.getLine(row)?.translateToString(true) ?? '',
@@ -555,12 +564,14 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       ? Number.POSITIVE_INFINITY
       : lines.slice(firstIndex + 1, secondIndex).filter(line => line.trim() === '').length
     if (firstIndex >= 0 && secondIndex >= 0 && gap <= 1) break
-    await sleep(80)
   }
+  const missingReasoningTail = firstIndex < 0 || secondIndex < 0
+    ? `, tail=${lines.slice(-8).map(line => line.trim()).join(' | ')}`
+    : ''
   check(
     'reasoning that settles in the trajectory leaves no blank answer gap',
     firstIndex >= 0 && secondIndex >= 0 && gap <= 1,
-    `first=${firstIndex}, second=${secondIndex}, blank=${gap}, buffer=${lines.length}`,
+    `first=${firstIndex}, second=${secondIndex}, blank=${gap}, buffer=${lines.length}${missingReasoningTail}`,
   )
 
   stdin.write('\x0f') // Ctrl+O

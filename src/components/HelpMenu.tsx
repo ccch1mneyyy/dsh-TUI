@@ -4,6 +4,7 @@ import type { LocalCommand } from '../commands.js'
 import { localizedDescription } from '../commands.js'
 import { t } from '../i18n.js'
 import { modLabel } from '../utils/modifiers.js'
+import { keybindingLabel, resolveKeybindings, type KeybindingConfig } from '../keybindings.js'
 
 /**
  * The `?` help menu, mirroring Claude Code's `PromptInputHelpMenu.tsx`
@@ -17,11 +18,13 @@ import { modLabel } from '../utils/modifiers.js'
  */
 export function HelpMenu({
   commands,
+  keybindings,
   viewportHeight,
   viewportWidth,
   scrollRef,
 }: {
   commands: readonly LocalCommand[]
+  keybindings?: KeybindingConfig
   /** Fixed viewport supplied by the prompt overlay; unset for standalone renders. */
   viewportHeight?: number
   /** Terminal width used to collapse the three-column layout when necessary. */
@@ -30,6 +33,7 @@ export function HelpMenu({
   scrollRef?: React.Ref<ScrollBoxHandle>
 }): React.ReactNode {
   const chrome = commands.filter(command => !command.skill)
+  const effective = resolveKeybindings(keybindings).bindings
   const primaryShortcuts = (
     <Box flexDirection="column" width={26} flexShrink={0}>
       <Box>
@@ -39,16 +43,16 @@ export function HelpMenu({
         <Text dimColor>{t('help-this-help')}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-verbose-output', { mod: modLabel })}</Text>
+        <Text dimColor>{t('help-verbose-output', { key: keybindingLabel(effective.toggleDetails) })}</Text>
       </Box>
       <Box>
         <Text dimColor>{t('help-open-trajectory', { mod: modLabel })}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-search-history', { mod: modLabel })}</Text>
+        <Text dimColor>{t('help-search-history', { key: keybindingLabel(effective.historySearch) })}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-interrupt')}</Text>
+        <Text dimColor>{t('help-interrupt', { key: keybindingLabel(effective.interrupt) })}</Text>
       </Box>
       <Box>
         <Text dimColor>{t('help-exit')}</Text>

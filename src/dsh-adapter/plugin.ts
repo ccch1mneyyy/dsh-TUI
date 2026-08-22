@@ -43,6 +43,7 @@ import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
+import { DEFAULT_KEYBINDINGS, keybindingLabel, resolveKeybindings } from '../keybindings.js'
 
 /**
  * Claude Code style interactive TUI front door for DeepSeek Harness agents.
@@ -89,6 +90,22 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // render so every module resolves strings in the same language.
   const envLang = process.env.DSH_TUI_LANG
   setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
+  const keybindingResolution = resolveKeybindings(config.keybindings)
+  const keybindingWarnings = keybindingResolution.warnings.map(warning =>
+    warning.reason === 'conflict'
+      ? t('keybinding-conflict', {
+          action: warning.action,
+          value: warning.value,
+          other: warning.conflictWith ?? '',
+          fallback: keybindingLabel(DEFAULT_KEYBINDINGS[warning.action]),
+        })
+      : t('keybinding-invalid', {
+          action: warning.action,
+          value: warning.value,
+          fallback: keybindingLabel(DEFAULT_KEYBINDINGS[warning.action]),
+        }),
+  )
+  for (const warning of keybindingWarnings) ctx.logger.warn(`dsh-tui: ${warning}`)
 
   // Rename notices must land before the first render — stderr writes break
   // the fullscreen UI once it is up. The bin launcher prints the same
@@ -367,6 +384,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
+  for (const warning of keybindingWarnings) {
+    channel.notify(warning, { color: 'warning', timeoutMs: 10000 })
+  }
   // Fullscreen layout decision: the settings user layer (edited through the
   // /settings screen) overrides cordis.yml when set. The settings injection
   // below resolves it synchronously when the host settings service is up —
@@ -877,6 +897,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // browser — enter the alt screen themselves in inline mode; in fullscreen
     // the tree is already wrapped below, so they must not nest.
     fullscreen: bootedFullscreen,
+    keybindings: keybindingResolution.bindings,
     onExit: () => handleExit(),
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the

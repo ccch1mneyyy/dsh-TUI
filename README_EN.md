@@ -142,6 +142,10 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 
 **Three delivery modes while the model is working**: `Enter` = steer (inject a next-step boundary, no interruption) · `Tab` = follow-up (queued after the current turn) · `Ctrl+Enter` = interrupt (break in and send immediately).
 
+The high-frequency actions behind `Ctrl+R`, `Ctrl+O`, and `Ctrl+C` can be
+remapped through the [`keybindings` configuration](docs/configuration.en.md#custom-keybindings).
+Defaults remain unchanged when the field is absent.
+
 **macOS modifier keys**: the `Ctrl+<key>` bindings above also work with `⌘<key>`
 on macOS (e.g. `⌘V` paste, `⌘O` expand details, `⌘Enter` send immediately);
 only `Ctrl+C` / `Ctrl+D` (interrupt/exit) stay on Ctrl, to avoid clashing

@@ -37,6 +37,10 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
     activityFrames: claude
     contextBar: true
     fullscreen: false
+    keybindings:
+      historySearch: ctrl+y
+      toggleDetails: alt+o
+      interrupt: ctrl+g
     preset: !!js process.env.DSH_TUI_PRESET ?? undefined
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
@@ -54,8 +58,25 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `activityFrames` | 持久化选择或 `claude` | 工作状态动画预设；也可通过 `/activity` 修改 |
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行 |
 | `fullscreen` | `false` | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
+| `keybindings` | 见下文默认值 | 重映射历史搜索、详情切换和中断三个高频全局动作 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
+
+## 自定义快捷键
+
+Phase 1 开放三个全局动作：
+
+| 动作 | 默认值 | 语义 |
+| --- | --- | --- |
+| `historySearch` | `mod+r` | 打开输入历史搜索；`mod` 在 Windows/Linux 为 Ctrl，在 macOS 为 Ctrl 或 Cmd |
+| `toggleDetails` | `mod+o` | 展开/收起 transcript 详情 |
+| `interrupt` | `ctrl+c` | 工作时中断；空闲时清输入或双按退出 |
+
+每个 chord 使用一个字母或数字键，并至少包含 `ctrl`、`alt`、`mod` 之一；可额外加
+`shift`，修饰键顺序和大小写不敏感。例如 `ctrl+y`、`alt+shift+o`、`mod+g`。
+`mod` 已代表平台主修饰键，不可再与 `ctrl` 组合。不接受无修饰键或只有 `shift` 的配置，
+以免吞掉普通输入。非法值或动作间冲突会在
+启动时警告，并把相关动作回退到默认值。`Ctrl+D` 不可重映射，始终作为退出后备键。
 
 ## 工作状态行
 

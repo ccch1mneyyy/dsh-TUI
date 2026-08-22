@@ -39,6 +39,10 @@ A complete common override looks like this:
     activityFrames: claude
     contextBar: true
     fullscreen: false
+    keybindings:
+      historySearch: ctrl+y
+      toggleDetails: alt+o
+      interrupt: ctrl+g
     preset: !!js process.env.DSH_TUI_PRESET ?? undefined
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
@@ -56,8 +60,27 @@ A complete common override looks like this:
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
 | `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
+| `keybindings` | defaults below | Remap the history-search, detail-toggle, and interrupt global actions |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
+
+## Custom keybindings
+
+Phase 1 exposes three global actions:
+
+| Action | Default | Meaning |
+| --- | --- | --- |
+| `historySearch` | `mod+r` | Open input-history search; `mod` means Ctrl on Windows/Linux and Ctrl or Cmd on macOS |
+| `toggleDetails` | `mod+o` | Expand/collapse transcript details |
+| `interrupt` | `ctrl+c` | Interrupt while working; clear input or double-press to exit while idle |
+
+A chord uses one letter or digit and at least one of `ctrl`, `alt`, or `mod`;
+`shift` may be added. Modifier order and case are ignored. Examples:
+`ctrl+y`, `alt+shift+o`, and `mod+g`. Unmodified and shift-only bindings are
+rejected so ordinary typing cannot be captured. `mod` already represents the
+platform primary modifier and cannot be combined with `ctrl`. Invalid or conflicting values
+produce a startup warning and the affected action falls back to its default.
+`Ctrl+D` is not remappable and always remains the exit fallback.
 
 ## Live activity row
 

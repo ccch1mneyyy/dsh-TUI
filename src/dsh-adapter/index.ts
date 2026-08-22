@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
+import type { KeybindingConfig } from '../keybindings.js'
 import { DEFAULT_STATUS_BAR, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 
 export const name = 'dsh-tui'
@@ -78,6 +79,8 @@ export interface Config {
    *  terminals (≥110 cols) and unified below; `split`/`unified` force one
    *  layout. Editable live from the `/settings` screen. */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Optional high-frequency global shortcut overrides (issue #113). */
+  keybindings?: KeybindingConfig
   /** Thinking-block display: `preview` (default) streams a 2-3 line live
    *  preview and folds each step when it settles; `full` keeps thinking
    *  expanded until the whole turn ends. Editable live from `/settings`. */
@@ -111,6 +114,11 @@ export const Config: Schema<Config> = Schema.object({
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+  keybindings: Schema.object({
+    historySearch: Schema.string().required(false),
+    toggleDetails: Schema.string().required(false),
+    interrupt: Schema.string().required(false),
+  }).required(false),
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   statusBar: Schema.object({

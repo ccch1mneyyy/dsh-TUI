@@ -141,6 +141,9 @@ npm install -g @deepseek-harness-tui/dsh-tui@<profile-version>
 
 **模型工作中的三态投递**：`Enter`=steer（注入下一步边界，不中断）· `Tab`=follow-up（排入当前回合之后）· `Ctrl+Enter`=interrupt（打断并立即发送）。
 
+`Ctrl+R`、`Ctrl+O`、`Ctrl+C` 对应的高频动作可通过
+[`keybindings` 配置](docs/configuration.md#自定义快捷键)重新绑定；未配置时保持上表默认值。
+
 **macOS 修饰键**：上表中 Windows/Linux 的 `Ctrl+<键>` 在 macOS 上同时可用 `⌘<键>`
 （如 `⌘V` 粘贴、`⌘O` 展开详情、`⌘Enter` 立即发送）；仅 `Ctrl+C` / `Ctrl+D`
 （中断/退出）保持 Ctrl 不变，避免与 macOS 系统级 `⌘C` 复制等肌肉记忆冲突。

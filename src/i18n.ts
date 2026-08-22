@@ -406,10 +406,10 @@ const dict = {
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
   'help-this-help': { zh: '? 查看本帮助', en: '? for this help' },
-  'help-verbose-output': { zh: '{{mod}}o 详细输出', en: '{{mod}}o for verbose output' },
+  'help-verbose-output': { zh: '{{key}} 详细输出', en: '{{key}} for verbose output' },
   'help-open-trajectory': { zh: '{{mod}}t 打开会话轨迹', en: '{{mod}}t to open trajectory' },
-  'help-search-history': { zh: '{{mod}}r 搜索历史', en: '{{mod}}r to search history' },
-  'help-interrupt': { zh: 'ctrl+c 打断', en: 'ctrl+c to interrupt' },
+  'help-search-history': { zh: '{{key}} 搜索历史', en: '{{key}} to search history' },
+  'help-interrupt': { zh: '{{key}} 打断', en: '{{key}} to interrupt' },
   'help-exit': { zh: 'ctrl+d 退出', en: 'ctrl+d to exit' },
   'help-redraw': { zh: '{{mod}}l 重绘', en: '{{mod}}l to redraw' },
   'help-clear-input': { zh: 'esc 清空输入', en: 'esc to clear input' },
@@ -422,6 +422,8 @@ const dict = {
   'help-fold-todos': { zh: '{{mod}}q 折叠待办', en: '{{mod}}q to fold todos' },
   'goal-todo-fold-hint': { zh: '{{mod}}q 折叠', en: '{{mod}}q to fold' },
   'help-commands-title': { zh: '命令：', en: 'commands:' },
+  'keybinding-invalid': { zh: '快捷键 {{action}} 的配置“{{value}}”无效，已回退为 {{fallback}}', en: 'Invalid {{action}} shortcut "{{value}}"; using {{fallback}}' },
+  'keybinding-conflict': { zh: '快捷键 {{action}} 的配置“{{value}}”与 {{other}} 冲突，已回退为 {{fallback}}', en: '{{action}} shortcut "{{value}}" conflicts with {{other}}; using {{fallback}}' },
   'help-scroll-hint': {
     zh: '↑/↓ 滚动 · PgUp/PgDn 翻页 · Home/End 首尾 · Esc 关闭',
     en: '↑/↓ scroll · PgUp/PgDn page · Home/End jump · Esc close',
@@ -867,7 +869,7 @@ const dict = {
   },
   'traj-empty': { zh: '暂无轨迹事件', en: 'No trajectory events yet' },
   'traj-hint-failure': { zh: '{{key}} 看完整轨迹', en: '{{key}} for the full trajectory' },
-  
+
   // ── subagent UI ──────────────────────────────────────────────────────
   'subagent.unnamed': { zh: '未命名子代理', en: 'Unnamed subagent' },
   'subagent.no-model': { zh: '未知模型', en: 'Unknown model' },

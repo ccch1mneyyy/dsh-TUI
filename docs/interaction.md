@@ -27,6 +27,10 @@
 | Help 内 `↑/↓`、`PgUp/PgDn`、`Home/End` | 逐行滚动、翻页或跳到命令列表首尾；`Esc` 关闭 |
 | `Shift+Up` | 进入消息选择模式；方向键移动，`Enter` 展开单条，`Esc` 退出 |
 
+`Ctrl+R`（历史搜索）、`Ctrl+O`（详情切换）和 `Ctrl+C`（中断/清空/双按退出）
+可通过 [`keybindings`](configuration.md#自定义快捷键)重新绑定。`Ctrl+D` 始终保留为
+空闲双按退出的后备键。
+
 `/` 有两种语义：普通输入模式中打开 slash command 补全；`Ctrl+O` 的
 transcript 模式中打开会话全文搜索。全文搜索使用 `n`/`N` 在结果间前后跳转。
 
