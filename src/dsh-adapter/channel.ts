@@ -4083,7 +4083,7 @@ export function createChannel(
       }
       // Session store candidates mirror the compat layer (sessionsRoots):
       // the active root depends on the composition (bare cordis.yml →
-      // legacy ~/.dsh-tui, profile → $DSH_HOME/sessions), so list every
+      // legacy ~/.dsh-cc, profile → $DSH_HOME/sessions), so list every
       // candidate with its own state instead of hardcoding one.
       for (const dir of sessionsRoots()) {
         lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
