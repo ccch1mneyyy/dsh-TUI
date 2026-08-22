@@ -1729,6 +1729,19 @@ export function createChannel(
   // replacement work queued by interruptAndDeliver and leave the UI gated on
   // a working flag that has not observed turn/end yet.
   let cancelInFlight = false
+  /** Session-replacing operations (newSession/resumeTo/rewindTo/switchModel/
+   *  switchWorkspace) run one at a time, in arrival order: each carries
+   *  multi-step awaits, so two in flight would interleave their transcript
+   *  resets and agent rebinds and leave the channel on whichever swap
+   *  finished LAST. Turn-path work (submit/steer/streaming/cancel) never
+   *  enters this queue — a parked replacement must not gate typing. A
+   *  rejected run settles its own caller and never blocks the queue. */
+  let sessionMutation: Promise<unknown> = Promise.resolve()
+  const enqueueSessionMutation = <T>(run: () => Promise<T>): Promise<T> => {
+    const next = sessionMutation.then(run, run)
+    sessionMutation = next.catch(() => {})
+    return next
+  }
   /** The llm runtime seam (dsh-llm LlmRuntime): route metadata resolution. */
   const llmRuntime = ctx.get('llm') as
     | {
@@ -1757,8 +1770,17 @@ export function createChannel(
    *  silent no-op otherwise (the next request/header corrects the display). */
   const applyPreferredEffort = async (): Promise<void> => {
     if (preferredEffort === undefined || llmRuntime === undefined) return
+    // Non-replacing write: the route metadata resolves asynchronously, and a
+    // session swap committed meanwhile makes this result the OLD session's —
+    // the new session's own bindAgent re-applies the preference, so a late
+    // write here would pin the old route's effort onto the new agent.
+    const epoch = state.sessionEpoch
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
+      if (epoch !== state.sessionEpoch) {
+        logForDebugging('effort: preferred-effort apply dropped — session changed while resolving route metadata')
+        return
+      }
       state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
       if (!info.reasoning?.efforts.some(effort => effort.id === preferredEffort)) return
       selection.current = {
@@ -1860,6 +1882,9 @@ export function createChannel(
   /** Set one effort level by id (`/effort <id>` and the slider's live
    *  apply); false + a notify when the id is not offered by the route. */
   const setEffort = async (id: string): Promise<boolean> => {
+    // Non-replacing write: a session swap committed while the route's levels
+    // resolve must not pin the choice onto the NEW session's routing.
+    const epoch = state.sessionEpoch
     const resolved = await resolveEfforts()
     if (resolved === 'unavailable') {
       state.notify(t('effort-unavailable'), { color: 'error' })
@@ -1876,6 +1901,10 @@ export function createChannel(
         t('effort-invalid', { id, ids: resolved.efforts.map(effort => effort.id).join(', ') }),
         { color: 'warning' },
       )
+      return false
+    }
+    if (epoch !== state.sessionEpoch) {
+      logForDebugging('effort: setEffort dropped — session changed while resolving levels')
       return false
     }
     applyEffort(found)
@@ -2962,7 +2991,10 @@ export function createChannel(
       const previousDisplay = state.displayCwd
       state.cwd = target.cwd
       state.displayCwd = target.description ?? target.uri
-      const switched = await state.newSession()
+      // Direct handle on the UNWRAPPED newSession: switchWorkspace itself
+      // already holds a session-mutation slot, so going through the queued
+      // public entry here would wait on itself and never settle.
+      const switched = await newSessionDirect()
       if (!switched) {
         state.cwd = previousCwd
         state.displayCwd = previousDisplay
@@ -3265,6 +3297,10 @@ export function createChannel(
         state.notify(t('preset-agent-running'), { color: 'warning' })
         return false
       }
+      // Non-replacing write: a session swap committed while the roster
+      // resolves/recomposes must not append the composition event to the NEW
+      // session's log nor restamp state.agentPreset.
+      const epoch = state.sessionEpoch
       let target: AgentPresetInfo
       try {
         target = await presets.resolve(presetId)
@@ -3301,6 +3337,10 @@ export function createChannel(
       }
       try {
         const preset = await presets.recompose(agent.ctx, target.id)
+        if (epoch !== state.sessionEpoch) {
+          logForDebugging('preset: switch dropped — session changed while recomposing')
+          return false
+        }
         // The switch is a logged session fact (model-visible ⟺ logged):
         // resumes/forks of this session resolve the NEW composition. The
         // type is runtime-registered in dsh-session's known-event set but
@@ -5470,6 +5510,22 @@ ${output}
       })
   }
   refreshGitBranch()
+
+  // Serialize the session-replacing public entries through the mutation
+  // queue; the method bodies above stay exactly as written. The captured
+  // *Direct handles keep the pre-queue implementations: switchWorkspace
+  // delegates to newSession mid-body (see its call site), and re-entering
+  // the queue it already occupies would deadlock it.
+  const newSessionDirect = state.newSession
+  const resumeToDirect = state.resumeTo
+  const rewindToDirect = state.rewindTo
+  const switchModelDirect = state.switchModel
+  const switchWorkspaceDirect = state.switchWorkspace
+  state.newSession = () => enqueueSessionMutation(newSessionDirect)
+  state.resumeTo = sessionId => enqueueSessionMutation(() => resumeToDirect(sessionId))
+  state.rewindTo = (row, mode) => enqueueSessionMutation(() => rewindToDirect(row, mode))
+  state.switchModel = (provider, model) => enqueueSessionMutation(() => switchModelDirect(provider, model))
+  state.switchWorkspace = target => enqueueSessionMutation(() => switchWorkspaceDirect(target))
 
   return state
 }
