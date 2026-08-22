@@ -80,6 +80,7 @@ type Props = {
 	readonly stderr: NodeJS.WriteStream;
 	readonly exitOnCtrlC: boolean;
 	readonly onExit: (error?: Error) => void;
+	readonly reanchorViewport: () => void;
 	readonly terminalColumns: number;
 	readonly terminalRows: number;
 	// Text selection state. App mutates this directly from mouse events
@@ -218,6 +219,7 @@ export default class App extends PureComponent<Props, State> {
 				<AppContext.Provider
 					value={{
 						exit: this.handleExit,
+						reanchorViewport: this.props.reanchorViewport,
 					}}
 				>
 					<StdinContext.Provider

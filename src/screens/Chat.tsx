@@ -1,6 +1,6 @@
 import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
-import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useApp, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
@@ -209,6 +209,7 @@ export function Chat({
    */
   trajectorySeen?: boolean
 }) {
+  const { reanchorViewport } = useApp()
   const writeRaw = React.useContext(TerminalWriteContext)
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   React.useSyncExternalStore(channel.subscribe, () => channel.version)
@@ -270,6 +271,17 @@ export function Chat({
   const [expanded, setExpanded] = React.useState(false)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [handle, setHandle] = React.useState<ScrollBoxHandle | null>(null)
+  const previousAgentIdRef = React.useRef(channel.agentId)
+  React.useLayoutEffect(() => {
+    if (previousAgentIdRef.current === channel.agentId) return
+    previousAgentIdRef.current = channel.agentId
+    // A session switch is a real frame-identity reset. In inline mode the
+    // shrink renderer normally preserves an equal header seam in scrollback;
+    // that is correct for transient folds, but would leave the NEW session's
+    // identical whale header off-screen until another render. Re-anchor the
+    // switch frame so the new header is painted into the live viewport.
+    reanchorViewport()
+  }, [channel.agentId, reanchorViewport])
   const [selectionActive, setSelectionActive] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
   const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
