@@ -108,8 +108,9 @@ SQLite 声称标为「文档冲突/待确认」**。文档描述的是 43f271f�
 
 `src/history.ts` 管理的是**输入命令历史**（与会话历史无关）：
 `~/.dsh-cc/history.jsonl`，每行一个 {text, ts} JSON（:6-14）；appendHistory
-追加、去重相邻重复项（CC 行为：重复提交只推进时间戳）、slice(-200) 截断
-（HISTORY_LIMIT=200，:45-68）；loadHistory 返回倒序（最新在前，:70-85）供
+在跨进程锁下写入临时文件并原子替换，避免多进程整文件覆盖；loadHistory 读取时折叠
+相邻重复项、归一化非法 ts，并只保留最近 200 条（HISTORY_LIMIT=200）；返回倒序
+（最新在前）供
 Ctrl+R 搜索框（见 [input-commands.md](input-commands.md#ctrlr-历史搜索)）；
 historyEntryId 用 sha1(text) 前 12 位做 React key。写入点全部在 PromptInput
 五条发送路径（submit/steer/queue/interrupt/slash，:238/263/281/327/351）。

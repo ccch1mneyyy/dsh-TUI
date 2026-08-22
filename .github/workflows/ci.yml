@@ -228,6 +228,10 @@ jobs:
       # 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
       # ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
       - run: node scripts/verify-prompt-history-draft.mjs
+      # 持久化历史搜索回归（issue #271）：重复文本过滤后不留旧行；并发进程
+      # 写入不互相覆盖且物理文件有界，非法时间戳被归一化。
+      - run: node --import tsx/esm scripts/verify-history-filter.tsx
+      - run: node scripts/verify-history-persistence.mjs
       # 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
       # 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
       - run: node scripts/verify-file-completion.mjs

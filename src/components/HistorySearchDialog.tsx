@@ -60,7 +60,10 @@ export function HistorySearchDialog({
             const absoluteIndex = start + index
             return (
               <ListItem
-                key={historyEntryId(entry)}
+                // Text is not unique in persisted history. Include the
+                // current result position so duplicate commands never share
+                // a React key and leave stale rows after filtering.
+                key={`${historyEntryId(entry)}:${absoluteIndex}`}
                 isFocused={absoluteIndex === focusIndex}
                 // The SearchBox owns the native-cursor declaration while this
                 // dialog is open — result rows must not park the cursor on

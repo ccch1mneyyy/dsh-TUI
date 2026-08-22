@@ -28,9 +28,11 @@ PromptInput 为单一 value 字符串 + 整数 cursor 双状态（无选区 API�
 会话内历史（:15,141-142,539-580）：↑/↓ 在非多行、非 overlay 时走
 history.current 环形数组（提交时 push trimmed 文本，上限 HISTORY_LIMIT=50，↑
 回退 ↓ 前进，越界回空串）；**该数组初始化即为空，从不从磁盘历史文件加载**。
-持久化历史（`src/history.ts`）：history.jsonl 每行一个 JSON（text+ts），容量
-HISTORY_LIMIT=200，appendHistory 对紧邻重复只更新时间戳、坏行跳过；historyEntryId
-用 sha1(text) 前 12 位做 React key；只有 Ctrl+R 能检索磁盘历史（见下）。
+持久化历史（`src/history.ts`）：history.jsonl 每行一个 JSON（text+ts），appendHistory
+在跨进程锁下写入临时文件并原子替换，物理文件始终只保留最近 HISTORY_LIMIT=200 条；
+读取时折叠紧邻重复、跳过坏行、归一化非法 ts。historyEntryId 用 sha1(text) 前 12 位
+做 React key 前缀，结果位置保证重复文本的 key 唯一；只有 Ctrl+R 能检索磁盘历史
+（见下）。
 
 ## 键盘链路
 
@@ -233,7 +235,9 @@ Enter 填充、Esc/Ctrl+C/Ctrl+D 取消、其余键编辑 query；HistorySearchD
 自身无 useInput（:11-17 注释 "Keyboard handling lives in the caller (Chat)"）。
 setHistoryFill(entry.text) → PromptInput fillText effect 替换输入并置光标到
 末尾（src/components/PromptInput.tsx:146-153，lastFill ref 去重）。对话框打开时 PromptInput
-因 promptSelectionActive（含 historyOpen 等所有模态）忽略全部键。
+因 promptSelectionActive（含 historyOpen 等所有模态）忽略全部键。中文输入法仍在预编辑时，
+SearchBox 中由终端绘制的字符尚未进入 historyQuery，结果会暂时保持上一个已提交查询；完成
+候选提交后才会重新过滤。
 
 ## 冲突
 
