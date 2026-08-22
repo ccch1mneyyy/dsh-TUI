@@ -2600,7 +2600,7 @@ export function createChannel(
       // queued/steered messages are delivered as the next turn (web parity).
       // Cancellation converges asynchronously; ignore a repeated Esc/Ctrl+C
       // until the aborted turn has produced its terminal event.
-      if (cancelInFlight) return
+      if (cancelInFlight || agent.status !== 'running') return
       cancelInFlight = true
       agent.cancel({ kind: 'user' }, { keepInbox: true })
     },

@@ -154,8 +154,8 @@ check('re-queued as followup', interruptChannel.pending.every(p => p.placement =
 resolveIdle?.()
 
 // A second interrupt while the first abort is still settling must not
-// double-deliver: only the latest request's re-queue runs (both share the
-// same abort's whenIdle).
+// cancel the same driver again or double-deliver. The latest request replaces
+// the earlier pending delivery while the existing abort is reused.
 let resolveIdle2
 const idlePromise2 = new Promise(resolve => { resolveIdle2 = resolve })
 const interruptAgent2 = {
@@ -181,7 +181,7 @@ interruptChannel2.interruptAndDeliver(['x'])
 interruptChannel2.interruptAndDeliver(['y'])
 resolveIdle2()
 await sleep(10)
-check('double interrupt does not double-deliver', interruptFollowups.filter(m => m.content?.[0]?.text === 'x').length === 0 && interruptFollowups.filter(m => m.content?.[0]?.text === 'y').length === 1, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
+check('double interrupt does not double-cancel or double-deliver', interruptFollowups.filter(m => m.content?.[0]?.text === 'x').length === 0 && interruptFollowups.filter(m => m.content?.[0]?.text === 'y').length === 1, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
 
 // dsh-agent's cancel-convergence wake latch accepts a followup submitted
 // immediately after cancel. Waiting for whenIdle is unsafe: the promise can
