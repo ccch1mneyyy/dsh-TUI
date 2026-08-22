@@ -129,7 +129,15 @@ export function apply(ctx, config) {
       if (promotion.status(agent).promoted !== true) return decision
       const session = agent.session
       if (session === undefined || hinted.has(session.id)) return decision
+
+      // Claim this process before inspecting durable state or probing the
+      // filesystem, so concurrent re-entry cannot pass through an await. The
+      // event scan makes resume safe, but is not an atomic cross-process claim:
+      // simultaneous writers can both observe no hint before either persists it.
       hinted.add(session.id)
+      if (session.events.some(
+        event => event.type === 'user/message' && event.data?.source?.kind === 'instruction-hint',
+      )) return decision
 
       const fs = ctx.get('fs')
       if (fs === undefined) return decision
