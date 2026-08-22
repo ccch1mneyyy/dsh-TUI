@@ -501,16 +501,7 @@ export function PromptInput({
   }
 
   /** Line index of the cursor; -1 when the cursor is at the very end. */
-  const cursorLine = (text: string, cursorOffset: number) => {
-    const before = text.slice(0, cursorOffset)
-    return before.split('\n').length - 1
-  }
   /** Column of the cursor within its line. */
-  const cursorColumn = (text: string, cursorOffset: number) => {
-    const before = text.slice(0, cursorOffset)
-    const line = before.split('\n').pop() ?? ''
-    return line.length
-  }
 
   useInput((input, key, event) => {
     if (selectionActive) return
@@ -821,14 +812,15 @@ export function PromptInput({
         )
         return
       }
-      const line = cursorLine(value, cursor)
-      if (line > 0) {
-        // Move to the previous line, clamping to its length.
-        const upToLineStart = value.lastIndexOf('\n', cursor - 1)
-        const prevLineStart =
-          upToLineStart === -1 ? 0 : value.lastIndexOf('\n', upToLineStart - 1) + 1
-        const prevLine = value.slice(prevLineStart, upToLineStart)
-        setInput(value, prevLineStart + Math.min(cursorColumn(value, cursor), prevLine.length))
+      // 视觉行导航：折行后的屏幕行间移动光标（列按字符数 clamp 到目标行
+      // 长度）；仅在首视觉行才继续走到历史遍历——单段超长文本在逻辑上
+      // 只有 1 行，按逻辑行判定会让 ↑ 直接换历史条目，表现为整框内容
+      // 突变与高度跳变。
+      const upGeo = visualNavGeometry(value, cursor, Math.max(10, columns - 3))
+      if (upGeo.row > 0) {
+        const targetRow = upGeo.row - 1
+        const target = upGeo.rows[targetRow] ?? ''
+        setInput(value, upGeo.rowStarts[targetRow]! + Math.min(upGeo.colChars, target.length))
         return
       }
       if (overlayOpen) {
@@ -855,16 +847,12 @@ export function PromptInput({
         )
         return
       }
-      const line = cursorLine(value, cursor)
-      const lines = value.split('\n')
-      if (line < lines.length - 1) {
-        const nextLineStart = value.indexOf('\n', cursor) + 1
-        const nextLineEnd = value.indexOf('\n', nextLineStart)
-        const nextLine = value.slice(
-          nextLineStart,
-          nextLineEnd === -1 ? value.length : nextLineEnd,
-        )
-        setInput(value, nextLineStart + Math.min(cursorColumn(value, cursor), nextLine.length))
+      // 视觉行导航（与 ↑ 对称）：仅在末视觉行才继续走到历史遍历。
+      const downGeo = visualNavGeometry(value, cursor, Math.max(10, columns - 3))
+      if (downGeo.row < downGeo.rows.length - 1) {
+        const targetRow = downGeo.row + 1
+        const target = downGeo.rows[targetRow] ?? ''
+        setInput(value, downGeo.rowStarts[targetRow]! + Math.min(downGeo.colChars, target.length))
         return
       }
       if (overlayOpen) {
@@ -1286,6 +1274,29 @@ export function PromptInput({
       </EffortInputBorder>
     </Box>
   )
+}
+
+/** ↑/↓ 视觉行导航的几何：光标所在视觉行号、行内字符列，以及每个
+ * 视觉行在 value 中的起始下标（由 wrapToWidth 的切行反推：行内容在
+ * value 中连续按序，行尾若为逻辑行边界则跳过一个 \n）。单段超长文本
+ * 折成多个视觉行时 ↑/↓ 用它逐视觉行移动光标，而不是掉进历史遍历。 */
+function visualNavGeometry(value: string, cursor: number, width: number): {
+  row: number
+  colChars: number
+  rowStarts: number[]
+  rows: string[]
+} {
+  const rows = wrapToWidth(value, width)
+  const prefix = wrapToWidth(value.slice(0, cursor), width)
+  const colChars = prefix[prefix.length - 1]!.length
+  const rowStarts: number[] = []
+  let consumed = 0
+  for (const r of rows) {
+    rowStarts.push(consumed)
+    consumed += r.length
+    if (value[consumed] === '\n') consumed += 1
+  }
+  return { row: prefix.length - 1, colChars, rowStarts, rows }
 }
 
 /**

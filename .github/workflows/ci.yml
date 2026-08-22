@@ -129,6 +129,10 @@ jobs:
       # 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
       - run: node --import tsx/esm scripts/verify-keys.tsx
 
+      # 输入框视觉行导航回归：↑/↓ 按视觉行（折行后屏幕行）移动光标，
+      # 仅首/末视觉行进入历史遍历——单段超长文本不再被历史替换。
+      - run: node --import tsx/esm scripts/verify-prompt-visual-nav.tsx
+
       # 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
       # 回复只进 querier，不回显成终端残影。
       - run: node --import tsx/esm scripts/verify-terminal-queries.tsx
