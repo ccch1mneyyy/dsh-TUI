@@ -42,19 +42,34 @@ function parseSkillMarkdown(raw: string, fallbackName: string): { name: string; 
 }
 
 /**
+ * Resolve the package asset in both src/tsx and compiled npm layouts.
+ *
+ * @param moduleUrl - module URL for packaged-skills
+ * @returns the packaged skills directory
+ */
+export function packagedSkillRoot(moduleUrl: string = import.meta.url): string {
+  const directory = dirname(fileURLToPath(moduleUrl))
+  const candidates = [join(directory, '../../skills'), join(directory, '../../../skills')]
+  const found = candidates.find(candidate => existsSync(candidate))
+  if (found === undefined) {
+    throw new Error(`dsh-tui: packaged skill root is missing (checked ${candidates.join(', ')})`)
+  }
+  return found
+}
+
+/**
  * Register every `skills/<name>/SKILL.md` shipped in this package. No-op when
- * the composition mounts no skill registry (bare standalone boots); duplicate
- * or invalid entries are skipped so a skill can never take down the TUI boot.
+ * the composition mounts no skill registry (bare standalone boots). If a
+ * registry is present but the packaged skill root is missing, boot fails loudly;
+ * duplicate or invalid entries are skipped so one bad skill cannot take down
+ * the TUI boot.
  *
  * @param ctx - the plugin's cordis context
  */
 export function registerPackagedSkills(ctx: Context): void {
   const registry = ctx.get('skills') as SkillRegistryLike | undefined
   if (!registry) return
-  // import.meta.url is lib/types/packaged-skills.js — two levels up is the
-  // package root, which is where `files` ships the skills/ directory.
-  const skillsRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills')
-  if (!existsSync(skillsRoot)) return
+  const skillsRoot = packagedSkillRoot()
   for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
     const file = join(skillsRoot, entry.name, 'SKILL.md')
