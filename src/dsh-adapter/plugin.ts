@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import React from 'react'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
@@ -30,19 +29,20 @@ import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '
 import { DEFAULT_STATUS_BAR, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
-import { Chat } from '../screens/Chat.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { getHostSceneRuntime, type TuiSceneRuntime } from './scenes.js'
 import { withHostRootCapability } from './host-access.js'
-import { render, ThemeProvider, AlternateScreen } from '../ui.js'
-import instances from '../ink/instances.js'
-import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
-import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
+import { bootstrapTui } from '../tui/bootstrap.js'
+import { createTuiCommands, type TuiFences } from '../tui/commands.js'
+import { TuiController } from '../tui/controller.js'
+import { ChatScreen } from '../tui/screens/chat-screen.js'
+import type { FinalStopReason, TuiLifecycle } from '../tui/lifecycle.js'
+import { editInExternalEditor, type EditorOutcome } from '../utils/externalEditor.js'
 
 /**
  * Claude Code style interactive TUI front door for DeepSeek Harness agents.
@@ -260,7 +260,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     )
   }
   const workspaceService = mountedWorkspaceService ?? createLocalWorkspaceRuntime()
-  // Same skew guard for the plugin-scene registry (dsh-tui-scenes row): the
+  // Same skew guard for the plugin-scene registry (tuiScenes, mounted by the
+  // dsh-tui-extensions row): the
   // channel degrades to never opening scenes when the service is absent, so
   // say why on profile launches — a plugin's open() otherwise fails with only
   // its own warn to go on.
@@ -714,43 +715,97 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   for (const [text, options] of stderrBacklog.splice(0)) {
     notifyStderr(text, options)
   }
-  // Single exit funnel: `/exit` and double Ctrl+C land here, and so does
-  // the unmount triggered by a cordis context teardown — but the two must
-  // not share a fate (issue #12). The DSH launcher's boot-time recompose
-  // disposes every entry once; treating that teardown as a user exit killed
-  // the process before the recomposed tree could re-mount the TUI (the
-  // "flash back to bash with no error" symptom). Teardown only unmounts the
-  // UI; user exit runs the full leave sequence: unmount() restores the
-  // terminal (cursor, raw mode, mouse tracking) and the explicit newlines
-  // keep the shell prompt from overlapping the TUI's last line.
-  let instance: Awaited<ReturnType<typeof render>> | undefined
+  // The TUI front door owns one bootstrap, one terminal and one lifecycle.
+  // Context teardown is intentionally separate from a user exit: the host may
+  // recompose this plugin and mount a new root in the same process.
   let exited = false
+  let teardown = false
   let updateRequested = false
   let updateTargetVersion: string | undefined
   // The profile this process was booted with (`dsh --profile <name>`); dsh
   // exposes it nowhere else, and /update must update the installation the
   // user is actually running, not a hard-coded one.
   const profile = resolveDshProfileName()
-  // Single exit funnel: `/exit` and double Ctrl+C land here, and so does
-  // the unmount triggered by a cordis context teardown — but the two must
-  // not share a fate (issue #12). Teardown only unmounts the UI; user exit
-  // runs the full leave sequence below (resume marker, terminal restore,
-  // update handoff or resume hint).
+  let chat: ChatScreen | undefined
+
+  const bootstrap = bootstrapTui({
+    fullscreen: config.fullscreen === true,
+    getTranscript: () => {
+      if (chat === undefined) return []
+      // The channel folds rows beyond its MAX_ROWS window down to preview
+      // text; the session log is the source of truth, so restore the folded
+      // full text before the exit replay renders the complete transcript
+      // into native scrollback (plan §1.2).
+      try {
+        channel.loadOlder()
+      } catch (error) {
+        // Folded rows keep their preview text; a restore failure must never
+        // skip the exit replay itself.
+        ctx.logger.debug(
+          `dsh-tui: transcript restore for exit replay failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+      return chat.getTranscriptComponentsForExit()
+    },
+  })
+  const { ui, lifecycle, takeover } = bootstrap
+  const fences: TuiFences = {
+    sessionEpoch: () => channel.sessionEpoch,
+    generation: () => lifecycle.generation,
+  }
+  const dialogStore = getHostDialogStore(
+    ctx.get('tuiDialogs') as TuiDialogRuntime | undefined,
+  )
+  const statusStore = getHostStatusStore(
+    ctx.get('tuiStatus') as TuiStatusRuntime | undefined,
+  )
+  // The scene bridge is host-only: ChatScreen receives the structural create /
+  // close controls, never the Cordis runtime or plugin context.
+  const sceneHost = getHostSceneRuntime(
+    ctx.get('tuiScenes') as TuiSceneRuntime | undefined,
+  )
+  // Keep resolving the host shortcut capability here for the migrated root;
+  // ChatScreen does not consume it yet, but this keeps shortcut registration
+  // independent of the removed component tree.
+  const shortcutHost = getHostShortcuts(
+    ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined,
+  )
+  void shortcutHost
+  const controller = new TuiController({
+    channel,
+    questions: questionStore,
+    approvals: approvalStore,
+    dialogs: dialogStore,
+    status: statusStore,
+    fences,
+  })
+  const commands = createTuiCommands({
+    channel,
+    fences,
+    stores: {
+      questions: questionStore,
+      approvals: approvalStore,
+      dialogs: dialogStore,
+    },
+  })
+
   const funnel = createExitFunnel({
     onUserExit: error => {
-      // Mirror the funnel's internal exited flag for the /update and
-      // background-check guards that still read the outer one.
+      // A signal/exception handler may have already established the process
+      // exit path; do not schedule a second completion callback.
+      if (exited) return
       exited = true
       if (error !== undefined) {
         const message = error instanceof Error ? error.message : String(error)
         ctx.logger.error(`dsh-tui: exit after error: ${message}`)
         void finishExit(
           ctx,
-          instance,
-          config.fullscreen === true,
+          lifecycle,
+          'exception',
           undefined,
           `dsh-tui crashed: ${message}`,
           () => disposeRootAndExit(ctx, 1),
+          waitForExternalEditor,
         )
         return
       }
@@ -762,11 +817,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }
         void finishExit(
           ctx,
-          instance,
-          config.fullscreen === true,
+          lifecycle,
+          'update',
           'Updating @deepseek-harness-tui/dsh-tui and restarting…',
           undefined,
           () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
+          waitForExternalEditor,
         )
         return
       }
@@ -791,41 +847,81 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         : undefined
       void finishExit(
         ctx,
-        instance,
-        config.fullscreen === true,
+        lifecycle,
+        'shutdown',
         hint,
         undefined,
         () => disposeRootAndExit(ctx, 0),
+        waitForExternalEditor,
       )
     },
   })
   const handleExit = funnel.handleExit
 
-  const chat = React.createElement(Chat, {
-    channel,
-    questionStore,
-    approvalStore,
-    // The dsh-tui-extensions row's services (managed dialogs, status line,
-    // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
-    // Chat falls back to inert stores and no shortcut registry.
-    extensionDialogs: getHostDialogStore(ctx.get('tuiDialogs') as TuiDialogRuntime | undefined),
-    extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
-    extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
-    // Full-screen surfaces inside Chat — the trajectory scene and the session
-    // browser — enter the alt screen themselves in inline mode; in fullscreen
-    // the tree is already wrapped below, so they must not nest.
+  let externalEditorBusy = false
+  // The in-flight editor round-trip, held so finishExit can wait for the
+  // editor child before the process handoff — a signal/update must not exit
+  // the parent while the editor still owns the tty.
+  let externalEditorFlight: Promise<void> | undefined
+  const waitForExternalEditor = (): Promise<void> => externalEditorFlight ?? Promise.resolve()
+  const openExternalEditor = (draft: string, apply: (text: string) => void): void => {
+    if (externalEditorBusy) return
+    externalEditorBusy = true
+    let quiesceAttempted = false
+    const flight = (async () => {
+      try {
+        quiesceAttempted = true
+        await lifecycle.quiesce('external-editor')
+        const outcome: EditorOutcome = await editInExternalEditor(draft)
+        if (lifecycle.finalStopEstablished) return
+        if (outcome.kind === 'edited') {
+          apply(outcome.text)
+        } else if (outcome.kind === 'unavailable') {
+          commands.info.notify('No editor configured.', { color: 'warning' })
+        } else if (outcome.kind === 'failed') {
+          commands.info.notify(`External editor failed: ${outcome.message}`, { color: 'warning' })
+        }
+      } catch (error) {
+        if (!lifecycle.finalStopEstablished) {
+          const message = error instanceof Error ? error.message : String(error)
+          commands.info.notify(`External editor failed: ${message}`, { color: 'warning' })
+        }
+      } finally {
+        if (quiesceAttempted) {
+          try {
+            await lifecycle.resume()
+          } catch (error) {
+            ctx.logger.debug(
+              `dsh-tui: external editor resume failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
+          }
+        }
+        externalEditorBusy = false
+        externalEditorFlight = undefined
+      }
+    })()
+    externalEditorFlight = flight
+    void flight
+  }
+
+  chat = new ChatScreen({
+    ui,
+    commands,
+    controller,
+    sceneHost,
     fullscreen: config.fullscreen === true,
     onExit: () => handleExit(),
+    onOpenExternalEditor: openExternalEditor,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
     // unavailable notice instead.
     onUpdate: profile === undefined ? undefined : () => {
-      if (exited || updateRequested) return
+      if (exited || teardown || updateRequested) return
       // Confirm the target version before tearing the TUI down: on an
       // already-latest install, an unconditional update+restart would churn
       // the process and then trip the "version did not advance" warning.
       void resolveTuiUpdateTarget().then((target) => {
-        if (exited || updateRequested) return
+        if (exited || teardown || updateRequested) return
         if (target.kind === 'latest') {
           channel.notify(t('update-already-latest', { current: target.current }), { color: 'warning' })
           return
@@ -856,48 +952,81 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       })
     },
   })
-  // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
-  // tracking), which turns on in-app text selection (copy-on-select via
-  // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
-  // mode leaves the mouse to the terminal emulator's native selection.
-  const tree = React.createElement(
-    ThemeProvider,
-    null,
-    config.fullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
-  )
-  instance = await render(tree, { exitOnCtrlC: false })
+
+  const stopForProcessEvent = (
+    reason: 'signal' | 'exception',
+    code: number,
+    stderrNotice?: string,
+  ): void => {
+    if (exited) return
+    exited = true
+    void finishExit(
+      ctx,
+      lifecycle,
+      reason,
+      undefined,
+      stderrNotice,
+      () => disposeRootAndExit(ctx, code),
+      waitForExternalEditor,
+    )
+  }
+  const onSigint = (): void => stopForProcessEvent('signal', 130)
+  const onSigterm = (): void => stopForProcessEvent('signal', 143)
+  const onUncaughtException = (error: Error): void => {
+    const message = error instanceof Error ? error.message : String(error)
+    ctx.logger.error(`dsh-tui: uncaught exception: ${message}`)
+    stopForProcessEvent('exception', 1, `dsh-tui crashed: ${message}`)
+  }
+  const onUnhandledRejection = (reason: unknown): void => {
+    const message = reason instanceof Error ? reason.message : String(reason)
+    ctx.logger.error(`dsh-tui: unhandled rejection: ${message}`)
+    stopForProcessEvent('exception', 1, `dsh-tui crashed: ${message}`)
+  }
+  process.on('SIGINT', onSigint)
+  process.on('SIGTERM', onSigterm)
+  process.on('uncaughtException', onUncaughtException)
+  process.on('unhandledRejection', onUnhandledRejection)
+  const removeProcessHandlers = (): void => {
+    process.off('SIGINT', onSigint)
+    process.off('SIGTERM', onSigterm)
+    process.off('uncaughtException', onUncaughtException)
+    process.off('unhandledRejection', onUnhandledRejection)
+  }
+
+  takeover.setRoot(chat)
+  ui.setFocus(chat)
+  ui.start()
 
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
   // command remains available regardless of network access.
   void checkForTuiUpdate().then((update) => {
-    if (update === undefined || exited || updateRequested) return
+    if (update === undefined || exited || teardown || updateRequested) return
     channel.notify(
       t('update-available', { current: update.current, latest: update.latest }),
       { color: 'warning', timeoutMs: 12000 },
     )
   })
 
-  // If the surrounding tree goes down (reload, teardown), unmount the UI —
-  // but flag it as teardown first so the settling waitUntilExit does not
-  // run the user-exit sequence: no resume marker, no disposeRootAndExit,
-  // the process stays alive and the recomposed tree re-mounts the TUI.
-  // Hand back what the channel contributed to host registries on the way out:
-  // the command registry scopes a registration to ITS own context, so the
-  // skill commands (issue #86) would survive this exact recompose and the
-  // re-mounted channel would find the names taken, freezing its menu.
+  // If the surrounding tree goes down (reload or teardown), release the
+  // channel contributions, dispose component subscriptions, and stop this
+  // root without leaving the process. The host may mount a replacement root.
   ctx.effect(() => () => {
+    teardown = true
     funnel.markTeardown()
+    removeProcessHandlers()
     channel.releaseContributions()
-    instance?.unmount()
+    chat?.dispose()
+    controller.dispose()
+    return lifecycle
+      .finalStop('shutdown')
+      .then(() => lifecycle.awaitStop())
+      .catch(error => {
+        ctx.logger.debug(
+          `dsh-tui: teardown stop failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      })
   })
-
-  // The TUI is the front door: when the user unmounts it (Ctrl+C), dispose
-  // the app tree and exit the process. The rejection handler covers
-  // error-driven unmounts — without it a rejected exitPromise became an
-  // unhandled rejection instead of a clean exit. A teardown-driven settle
-  // is swallowed by the funnel (issue #12).
-  void instance.waitUntilExit().then(handleExit, handleExit)
 }
 
 /**
@@ -1010,16 +1139,13 @@ async function resolveAgent(
 /**
  * Distinguish a user-driven exit from a cordis context teardown (issue #12).
  *
- * Both paths settle the Ink instance's exit promise, but only a user exit
- * (`/exit`, double Ctrl+C, render crash) may leave the process. A teardown —
- * the DSH launcher's boot-time recompose disposes every entry once — must
- * only unmount the UI: the recomposed tree re-runs `apply` and mounts a
- * fresh instance, so exiting here would kill the process mid-recompose
- * (the "flash back to bash with no error" symptom).
+ * A teardown — the DSH launcher's boot-time recompose disposes every entry
+ * once — must stop only this root and leave the process alive so the
+ * recomposed tree can mount a fresh one. User exits continue through the
+ * lifecycle shutdown and process handoff path.
  *
- * `markTeardown` must run before the unmount that settles the exit promise
- * (the settle reaches `handleExit` through a microtask, so a same-tick flag
- * is always observed). Exported for scripts/verify-teardown-exit.tsx.
+ * `markTeardown` is called before root disposal, so a teardown cannot be
+ * mistaken for a user exit. Exported for scripts/verify-teardown-exit.tsx.
  */
 export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }): {
   handleExit: (error?: unknown) => void
@@ -1065,118 +1191,74 @@ export function isExitResumable(deps: {
   )
 }
 
-type InkShutdownState = {
-  detachForShutdown?: () => void
-  /**
-   * Full stdin detach for the /update child handoff (issues #284/#307):
-   * removes the readable/data listeners and pauses the pump so the
-   * lingering parent stops racing the restarted TUI for keypresses.
-   */
-  detachStdinForHandoff?: () => void
-  frontFrame?: { cursor?: { x: number; y: number } }
-  displayCursor?: { x: number; y: number } | null
-}
-
-/** Finish terminal I/O before handing control to a process-level exit action. */
-async function finishExit(
+/**
+ * Stop the single TUI before handing control to a child or process exit.
+ * Exported for test/tui/finish-exit.test.ts.
+ */
+export async function finishExit(
   ctx: Context,
-  instance: Awaited<ReturnType<typeof render>> | undefined,
-  fullscreen: boolean,
+  lifecycle: TuiLifecycle,
+  reason: FinalStopReason,
   notice: string | undefined,
   stderrNotice: string | undefined,
   done: () => void,
+  waitForEditor?: () => Promise<void>,
 ): Promise<void> {
+  // An external editor child still owns the tty (quiesced stdio inherit):
+  // let it finish BEFORE the terminal teardown so a signal/update cannot
+  // exit the parent from under the editor.
   try {
-    const runtime = readInkShutdownState(instances.get(process.stdout))
-    if (runtime === undefined && instance !== undefined) {
-      ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
-    }
-    const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
+    await waitForEditor?.()
+  } catch (error) {
+    ctx.logger.debug(
+      `dsh-tui: external editor wait failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
 
+  let result: Awaited<ReturnType<TuiLifecycle['finalStop']>> | undefined
+  try {
+    const stopPromise = lifecycle.finalStop(reason)
     try {
-      runtime?.detachForShutdown?.()
-      // The /update continuation spawns children that inherit this stdin;
-      // strip the readable pump so the parent cannot swallow their input
-      // (issues #284/#307). Harmless on plain exits — the process exits
-      // right after this cleanup anyway.
-      runtime?.detachStdinForHandoff?.()
-    } catch {
-      ctx.logger.debug('dsh-tui: Ink shutdown detach failed; continuing with generic terminal cleanup')
+      result = await stopPromise
+    } catch (error) {
+      ctx.logger.debug(
+        `dsh-tui: finalStop failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
-    const cleanup = [
-      fullscreen ? EXIT_ALT_SCREEN : '',
-      cursor,
-      DISABLE_MOUSE_TRACKING,
-      DISABLE_MODIFY_OTHER_KEYS,
-      DISABLE_KITTY_KEYBOARD,
-      DISABLE_WIN32_INPUT_MODE,
-      DFE,
-      DBP,
-      SHOW_CURSOR,
-      CLEAR_ITERM2_PROGRESS,
-      supportsTabStatus() ? wrapForMultiplexer(CLEAR_TAB_STATUS) : '',
-    ].join('')
-    const suffix = notice === undefined ? '' : `${notice}\n`
-    await writeStream(process.stdout, `${cleanup}\r\n${suffix}`)
-    if (stderrNotice !== undefined) {
-      await writeStream(process.stderr, `\n${stderrNotice}\n`)
+    // finalStop is established before awaitStop is called; this explicit
+    // second wait keeps the child/exit handoff behind the lifecycle boundary.
+    try {
+      await lifecycle.awaitStop()
+    } catch (error) {
+      ctx.logger.debug(
+        `dsh-tui: awaitStop failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
     }
-  } catch {
-    ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
+  } catch (error) {
+    ctx.logger.debug(
+      `dsh-tui: shutdown setup failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+
+  if (result?.stdoutDrainError !== undefined) {
+    ctx.logger.debug(`dsh-tui: stdout drain failed: ${result.stdoutDrainError}`)
+    // A failed final flush means a dead/blocked tty: run no child and write
+    // no notice into it — emergency restore + exit instead (plan §1.2).
+    // Never returns.
+    lifecycle.emergencyRestoreAndExit()
+  }
+
+  // The stopped-window boundary owns notices on stderr; plugin code never
+  // writes terminal cleanup sequences or notices directly to stdout.
+  try {
+    if (notice !== undefined) process.stderr.write(`\n${notice}\n`)
+    if (stderrNotice !== undefined) process.stderr.write(`\n${stderrNotice}\n`)
+  } catch (error) {
+    ctx.logger.debug(
+      `dsh-tui: shutdown notice failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
   }
   done()
-}
-
-function readInkShutdownState(value: unknown): InkShutdownState | undefined {
-  if (value === null || typeof value !== 'object') return undefined
-  const candidate = value as Record<string, unknown>
-  if (candidate.detachForShutdown !== undefined && typeof candidate.detachForShutdown !== 'function') return undefined
-  if (candidate.detachStdinForHandoff !== undefined && typeof candidate.detachStdinForHandoff !== 'function') return undefined
-  if (candidate.frontFrame !== undefined && !isFrameState(candidate.frontFrame)) return undefined
-  if (candidate.displayCursor !== undefined && candidate.displayCursor !== null && !isCursorState(candidate.displayCursor)) return undefined
-  return value as InkShutdownState
-}
-
-function isFrameState(value: unknown): value is { cursor?: { x: number; y: number } } {
-  if (value === null || typeof value !== 'object') return false
-  const cursor = (value as Record<string, unknown>).cursor
-  return cursor === undefined || isCursorState(cursor)
-}
-
-function isCursorState(value: unknown): value is { x: number; y: number } {
-  if (value === null || typeof value !== 'object') return false
-  const cursor = value as Record<string, unknown>
-  return typeof cursor.x === 'number' && typeof cursor.y === 'number'
-}
-
-function cursorMoveToFrameEnd(runtime: InkShutdownState | undefined): string {
-  const frame = runtime?.frontFrame?.cursor
-  if (frame === undefined) return ''
-  const parked = runtime?.displayCursor ?? frame
-  return cursorMove(frame.x - parked.x, frame.y - parked.y)
-}
-
-function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
-  if (data.length === 0) return Promise.resolve()
-  return new Promise(resolve => {
-    let settled = false
-    const finish = (): void => {
-      if (settled) return
-      settled = true
-      resolve()
-    }
-    const timer = setTimeout(finish, 1000)
-    timer.unref()
-    try {
-      stream.write(data, () => {
-        clearTimeout(timer)
-        finish()
-      })
-    } catch {
-      clearTimeout(timer)
-      finish()
-    }
-  })
 }
 
 function runUpdate(

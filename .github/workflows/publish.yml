@@ -40,8 +40,11 @@ jobs:
           bun-version: 1.3.14
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @deepseek-harness-tui/pi-tui test
 
       - run: pnpm compile
+      - run: pnpm test:tui
+      - run: pnpm verify:tui-boundary
 
       - name: Verify clean compile output
         run: |
@@ -52,6 +55,7 @@ jobs:
 
       - run: pnpm verify:package
       - run: pnpm verify:bun-package
+      - run: pnpm smoke
 
       # 标签与 package.json version 不一致直接失败，防止发错版本。
       - name: Check tag matches package version
@@ -60,13 +64,8 @@ jobs:
           pkg="$(node -p "require('./package.json').version")"
           [ "$tag" = "$pkg" ] || { echo "tag $tag != package.json $pkg"; exit 1; }
 
-      - run: node --import tsx/esm scripts/repro-askpanel.tsx
-
-      - run: node --import tsx/esm scripts/repro-toolcards.tsx
-
-      # /provider 向导与面板 hideCustomInput 回归（发版门禁同 CI）。
+      # Pure provider configuration remains a release gate.
       - run: node scripts/verify-provider-wizard.mjs
-      - run: node --import tsx/esm scripts/verify-askpanel-hide-custom-input.tsx
 
       # 用 npm 而非 pnpm 发布：@dsh-std/* 是 bundledDependencies（workspace
       # 包，#308），pnpm 在 isolated linker 下拒绝。发布包装器只在 npm

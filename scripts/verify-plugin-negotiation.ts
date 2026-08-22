@@ -10,7 +10,7 @@
  *   E. /plugins check：vendored fixtures 跑五态（compatible /
  *      waiting_authorization / unknown + grants 翻转 compatible）、schema 与
  *      语义失败路径、not-found、坏 JSON、输出零控制字符（不可信输入消毒）；
- *   F. 接线断言：LOCAL_COMMANDS、Chat.tsx 派发、channel 接口与实现、
+ *   F. 接线断言：LOCAL_COMMANDS、imperative TUI command/channel/plugin seam、
  *      doctorInfo 新行引用的 i18n 键、cmd-desc-plugins、banner 双语。
  *
  * HOME/USERPROFILE 在导入 src 前隔离。
@@ -317,9 +317,13 @@ const overview = () => pluginsInfoLines('', { grants, host })
 {
   const commands = readFileSync(join(root, 'src/commands.ts'), 'utf8')
   check1("LOCAL_COMMANDS carries 'plugins'", /\{ name: 'plugins', description: /.test(commands))
-  const chat = readFileSync(join(root, 'src/screens/Chat.tsx'), 'utf8')
-  check1("Chat.tsx dispatches case 'plugins' to channel.pluginsInfo(rawInput)",
-    chat.includes("case 'plugins':") && chat.includes('channel.pluginsInfo(rawInput)'))
+  const tuiCommands = readFileSync(join(root, 'src/tui/commands.ts'), 'utf8')
+  check1('imperative TUI exposes the plugin-info command seam',
+    tuiCommands.includes('pluginsInfo(rawInput: string): string[]') &&
+    tuiCommands.includes('return channel.pluginsInfo(rawInput)'))
+  const chatScreen = readFileSync(join(root, 'src/tui/screens/chat-screen.ts'), 'utf8')
+  check1('imperative ChatScreen routes slash commands through TUI commands',
+    chatScreen.includes('runExternalCommand(name, rawInput)'))
   const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
   check1('channel interface declares pluginsInfo(args)', channel.includes('pluginsInfo(args: string): string[]'))
   check1('channel implementation soft-probes tuiPluginHost for pluginsInfo',

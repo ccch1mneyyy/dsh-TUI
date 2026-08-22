@@ -1,9 +1,10 @@
 /**
  * Cross-platform modifier-key helpers. Windows/Linux muscle memory uses
- * Ctrl+<key>; on macOS the same action maps to Cmd+<key>. Terminals deliver
- * Cmd as the `super` flag (kitty CSI-u / xterm modifyOtherKeys — see
- * src/ink/parse-keypress.ts); Ctrl keeps working everywhere, so `isMod`
- * accepts either on the mac and stays Ctrl-only elsewhere.
+ * Ctrl+<key>; on macOS the same action maps to Cmd+<key>. The pi-tui input
+ * contract represents Cmd as `super` for Kitty CSI-u / xterm
+ * modifyOtherKeys sequences (exposed through `src/tui/public.ts`); Ctrl keeps
+ * working everywhere, so `isMod` accepts either on macOS and stays Ctrl-only
+ * elsewhere.
  */
 
 export const isMac = process.platform === 'darwin'

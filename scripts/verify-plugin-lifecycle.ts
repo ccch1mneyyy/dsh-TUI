@@ -10,10 +10,16 @@ import { TuiDialogRuntime, getHostDialogStore } from '../src/dsh-adapter/dialogs
 import { TuiStatusRuntime, getHostStatusStore } from '../src/dsh-adapter/status.js'
 import TuiShortcutRuntime, { getHostShortcuts } from '../src/dsh-adapter/shortcuts.js'
 import { TuiRendererRuntime, getHostRenderers } from '../src/dsh-adapter/renderers.js'
-import TuiSceneRuntime, { getHostSceneRuntime } from '../src/dsh-adapter/scenes.js'
+import TuiSceneRuntime, { getHostSceneRuntime, TUI_SCENE_VERSION } from '../src/dsh-adapter/scenes.js'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections } from '../src/dsh-adapter/settings-sections.js'
 import TuiWorkspaceRuntime, { getHostWorkspaceRuntime } from '../src/dsh-adapter/workspaces.js'
 import TuiCommandTreeRuntime, { getHostCommandTrees } from '../src/dsh-adapter/command-trees.js'
+
+const sceneDescriptor = (id: string) => ({
+  version: TUI_SCENE_VERSION,
+  id,
+  create: () => ({ render: () => [], invalidate() {} }),
+})
 
 let failures = 0
 let checks = 0
@@ -44,6 +50,72 @@ const commandTrees = getHostCommandTrees(root.get('tuiCommandTrees'))
 if (dialogs === undefined || status === undefined || shortcuts === undefined || renderers === undefined || scenes === undefined || sections === undefined || workspaces === undefined || commandTrees === undefined) {
   throw new Error('lifecycle battery could not resolve host accessors')
 }
+
+// The host factory receives only the bounded scene context and a typed command
+// sink. This fake context keeps the lifecycle battery independent of a TUI or
+// terminal while still checking the create failure boundary.
+const sceneContext = (notifications: string[]) => ({
+  viewModel: undefined as never,
+  commands: {
+    info: {
+      notify(text: string) {
+        notifications.push(text)
+        return () => {}
+      },
+    },
+  } as never,
+  root: Object.freeze({ kind: 'root' as const, id: 'chat', mode: 'inline' as const }),
+  overlay: Object.freeze({ kind: 'overlay' as const, id: 'none', visible: false }),
+  signal: new AbortController().signal,
+})
+
+const factoryNotifications: string[] = []
+let legacySceneError = ''
+let unversionedSceneError = ''
+const factoryFiber = root.inject(['tuiScenes'], (pluginCtx) => {
+  try {
+    pluginCtx.tuiScenes.register({ id: 'legacy-scene', component: () => null } as never)
+  } catch (error) {
+    legacySceneError = error instanceof Error ? error.message : String(error)
+  }
+  try {
+    pluginCtx.tuiScenes.register({ id: 'unversioned-scene', create: () => ({ render: () => [], invalidate() {} }) } as never)
+  } catch (error) {
+    unversionedSceneError = error instanceof Error ? error.message : String(error)
+  }
+  pluginCtx.tuiScenes.register({
+    ...sceneDescriptor('factory-fails'),
+    create: () => {
+      throw new Error('factory exploded')
+    },
+  })
+  pluginCtx.tuiScenes.open('factory-fails')
+})
+await factoryFiber
+const failedScene = scenes.create(sceneContext(factoryNotifications))
+check('legacy React scene descriptor fails closed with migration error', legacySceneError.includes('legacy React scene descriptor'))
+check('scene without version fails closed with explicit version error', unversionedSceneError.includes('missing version'))
+check('factory failure returns no component, closes active, and notifies',
+  failedScene === undefined
+  && scenes.active === undefined
+  && factoryNotifications.some(text => text.includes('factory-fails') && text.includes('factory exploded')))
+await factoryFiber.dispose()
+
+const malformedNotifications: string[] = []
+const malformedFiber = root.inject(['tuiScenes'], (pluginCtx) => {
+  pluginCtx.tuiScenes.register({
+    ...sceneDescriptor('factory-malformed'),
+    create: () => null as never,
+  })
+  pluginCtx.tuiScenes.open('factory-malformed')
+})
+await malformedFiber
+const malformedScene = scenes.create(sceneContext(malformedNotifications))
+check('malformed factory return also closes active and notifies',
+  malformedScene === undefined
+  && scenes.active === undefined
+  && malformedNotifications.some(text => text.includes('factory-malformed') && text.includes('pi-tui Component')))
+await malformedFiber.dispose()
 
 // A plugin can read ctx.root, but cannot use it to attach an effect to the
 // host fiber. Mutating entries reject or return their documented inert result.
@@ -89,7 +161,7 @@ const rootProbe = root.inject(
       rootRegistryRejected = true
     }
     try {
-      rootCtx.get('tuiScenes')?.register({ id: 'root-leak', component: () => null })
+      rootCtx.get('tuiScenes')?.register(sceneDescriptor('root-leak'))
     } catch {
       rootSceneRejected = true
     }
@@ -153,7 +225,7 @@ const foreignFiber = foreignRoot.plugin({
     trace('tuiRenderers')?.register('foreign/leak', () => ({ lines: ['must not persist'] }))
     foreignDialog = trace('tuiDialogs')?.confirm({ title: 'must not queue' })
     try {
-      trace('tuiScenes')?.register({ id: 'foreign-leak', component: () => null })
+      trace('tuiScenes')?.register(sceneDescriptor('foreign-leak'))
     } catch {
       foreignSceneRejected = true
     }
@@ -203,7 +275,7 @@ const pluginFiber = root.inject(
     pluginCtx.tuiStatus.set('lifecycle', 'active')
     pluginCtx.tuiShortcuts.register('alt+x', { description: 'lifecycle', handler: () => {} })
     pluginCtx.tuiRenderers.register('lifecycle/note', () => ({ lines: ['active'] }))
-    pluginCtx.tuiScenes.register({ id: 'lifecycle', component: () => null })
+    pluginCtx.tuiScenes.register(sceneDescriptor('lifecycle'))
     pluginCtx.tuiScenes.open('lifecycle')
     pluginCtx.tuiSettingsSections.register({ ns: 'lifecycle', title: 'Lifecycle', fields: [] })
     pluginCtx.tuiWorkspaces.register({
@@ -317,7 +389,7 @@ const forgedFiber = root.inject(
     forged.get('tuiRenderers')?.register('forged/leak', () => ({ lines: ['must not persist'] }))
     forgedDialog = forged.get('tuiDialogs')?.confirm({ title: 'must not queue' })
     try {
-      forged.get('tuiScenes')?.register({ id: 'forged-leak', component: () => null })
+      forged.get('tuiScenes')?.register(sceneDescriptor('forged-leak'))
     } catch {
       forgedSceneRejected = true
     }

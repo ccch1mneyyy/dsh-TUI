@@ -90,11 +90,13 @@ try {
     [
       "await import('@deepseek-harness-tui/dsh-tui')",
       "await import('@deepseek-harness-tui/dsh-tui/extensions')",
+      "const scenes = await import('@deepseek-harness-tui/dsh-tui/scenes'); if (scenes.TUI_SCENE_VERSION !== 'dsh-tui/pi-tui-scene@1') throw new Error('scene export is missing the pi-tui scene version')",
+      "const fork = await import('./node_modules/@deepseek-harness-tui/dsh-tui/node_modules/@deepseek-harness-tui/pi-tui'); if (typeof fork.TuiMainScreen !== 'function' || typeof fork.TuiAltScreen !== 'function') throw new Error('bundled fork root export is missing screen constructors')",
       "await import('./node_modules/@deepseek-harness-tui/dsh-tui/node_modules/@dsh-std/manifest')",
     ].join(';'),
   ], temporaryRoot)
 
-  console.log('bun package install OK (root, extensions, and bundled @dsh-std runtime imported)')
+  console.log('bun package install OK (root, extensions, scenes, fork root, and bundled @dsh-std runtime imported)')
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true })
 }

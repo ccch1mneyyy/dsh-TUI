@@ -17,6 +17,8 @@ if (report === undefined || !Array.isArray(report.files)) {
 
 const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 const packed = new Set(report.files.map(file => file.path.replaceAll('\\', '/')))
+const forkPackage = '@deepseek-harness-tui/pi-tui'
+const forkPackedPrefix = `node_modules/${forkPackage}/`
 const targets = new Set()
 
 const addTarget = value => {
@@ -41,6 +43,26 @@ const missing = [...targets].filter(target => !packed.has(target))
 if (missing.length > 0) {
   throw new Error(`package exports missing from tarball: ${missing.join(', ')}`)
 }
+if (!manifest.bundledDependencies?.includes(forkPackage)) {
+  throw new Error(`package manifest does not bundle ${forkPackage}`)
+}
+for (const forkFile of [
+  'package.json',
+  'README.md',
+  'LICENSE',
+  'native/win32/prebuilds/win32-arm64/win32-console-mode.node',
+  'native/win32/prebuilds/win32-x64/win32-console-mode.node',
+  'native/win32/src/win32-console-mode.c',
+  'native/win32/build.mjs',
+  'native/win32/README.md',
+  'native/darwin/prebuilds/darwin-arm64/darwin-modifiers.node',
+  'native/darwin/prebuilds/darwin-x64/darwin-modifiers.node',
+  'native/darwin/src/darwin-modifiers.c',
+  'native/darwin/build.sh',
+  'native/darwin/README.md',
+].map(path => `${forkPackedPrefix}${path}`)) {
+  if (!packed.has(forkFile)) throw new Error(`bundled fork file missing from tarball: ${forkFile}`)
+}
 for (const presetFile of [
   'presets/liangshen/agent.cordis.yml',
   'presets/liangshen/preset.yml',
@@ -57,6 +79,10 @@ if (packed.has('lib/invariant.js')) {
 }
 
 await import(new URL(`../${manifest.main}`, import.meta.url))
+const fork = await import(forkPackage)
+if (typeof fork.TuiMainScreen !== 'function' || typeof fork.TuiAltScreen !== 'function') {
+  throw new Error(`bundled fork root import does not expose ${forkPackage} screen constructors`)
+}
 const invariant = await import(new URL('../lib/types/dsh-adapter/invariant.js', import.meta.url))
 if (invariant.name !== 'dsh-tui-invariant' || typeof invariant.apply !== 'function') {
   throw new Error('compiled invariant entry does not expose the expected contract')

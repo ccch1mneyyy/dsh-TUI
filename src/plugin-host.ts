@@ -5,6 +5,16 @@
 // still load the adapter declarations so Context augmentation is available.
 export { name, apply } from './dsh-adapter/plugin-host.js'
 export type { TuiPluginHost } from './dsh-adapter/plugin-host.js'
+// Scene factories use the same safe public type hub as the other plugin
+// capabilities; the Cordis-backed scene runtime remains adapter-internal.
+export { TUI_SCENE_VERSION } from './dsh-adapter/scenes.js'
+export type {
+  TuiSceneContext,
+  TuiSceneDescriptor,
+  TuiSceneOverlayDescriptor,
+  TuiSceneRootDescriptor,
+  TuiSceneVersion,
+} from './dsh-adapter/scenes.js'
 export type { GrantPrincipal, GrantStore } from './dsh-adapter/grants.js'
 export type { HostContract, HostDescriptor, ContractCoordinate, ContractRef, NegotiationDecision, PermissionEntry, PermissionRegistry } from './plugin-spec/types.js'
 export type { TuiPluginStorage, PluginStorageErrorCode, TuiPluginStorageRuntime } from './dsh-adapter/plugin-storage.js'

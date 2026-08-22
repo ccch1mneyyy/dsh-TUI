@@ -34,16 +34,15 @@
 - id: dsh-tui-settings-sections
   name: '@deepseek-harness-tui/dsh-tui/settings-sections'
 
-- id: dsh-tui-scenes
-  name: '@deepseek-harness-tui/dsh-tui/scenes'
-
 # Plugin-interop anchor (v0.15): unified grant store, runtime generation
 # id, Host Descriptor; later contract surfaces mount off this row's apply.
 - id: dsh-tui-plugin-host
   name: '@deepseek-harness-tui/dsh-tui/plugin-host'
 
 # Plugin-facing UI seams: managed dialogs, status-line contributions,
-# keyboard shortcuts, custom session-entry renderers (decision events are
+# keyboard shortcuts, custom session-entry renderers, and the plugin scene
+# registry (tuiScenes is mounted by THIS row — a standalone scenes row cannot
+# survive CLI-side patch/code version skew, issue #183; decision events are
 # fired by the channel and need no row).
 - id: dsh-tui-extensions
   name: '@deepseek-harness-tui/dsh-tui/extensions'

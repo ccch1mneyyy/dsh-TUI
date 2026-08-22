@@ -6,13 +6,22 @@ import { spawnSync } from 'node:child_process'
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const manifestPath = join(projectRoot, 'package.json')
 const bundledPackages = [
-  'command',
-  'connection',
-  'core',
-  'manifest',
-  'messages',
-  'presentation',
-  'storage',
+  {
+    name: '@deepseek-harness-tui/pi-tui',
+    manifestPath: join(projectRoot, 'packages', 'pi-tui', 'package.json'),
+  },
+  ...[
+    'command',
+    'connection',
+    'core',
+    'manifest',
+    'messages',
+    'presentation',
+    'storage',
+  ].map(packageName => ({
+    name: `@dsh-std/${packageName}`,
+    manifestPath: join(projectRoot, 'vendor', 'dsh-std', 'packages', packageName, 'package.json'),
+  })),
 ]
 
 const [command, ...args] = process.argv.slice(2)
@@ -21,11 +30,8 @@ if (command === undefined) throw new Error('usage: node with-publish-manifest.mj
 const originalManifest = await readFile(manifestPath)
 const manifest = JSON.parse(originalManifest)
 manifest.optionalDependencies ??= {}
-for (const packageName of bundledPackages) {
-  const name = `@dsh-std/${packageName}`
-  const packageManifest = JSON.parse(await readFile(
-    join(projectRoot, 'vendor', 'dsh-std', 'packages', packageName, 'package.json'),
-  ))
+for (const { name, manifestPath: packageManifestPath } of bundledPackages) {
+  const packageManifest = JSON.parse(await readFile(packageManifestPath))
   delete manifest.dependencies?.[name]
   manifest.optionalDependencies[name] = packageManifest.version
 }

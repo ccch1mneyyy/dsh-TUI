@@ -7,7 +7,6 @@
     "dsh-tui-workspaces",
     "dsh-tui-command-trees",
     "dsh-tui-settings-sections",
-    "dsh-tui-scenes",
     "dsh-tui-plugin-host",
     "dsh-tui-extensions",
     "dsh-tui-agent-presets",

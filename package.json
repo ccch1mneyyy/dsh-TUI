@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
   "version": "0.8.7",
-  "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
+  "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on pi-tui.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -56,10 +56,6 @@
       "types": "./lib/types/plugin-host.d.ts",
       "import": "./lib/types/plugin-host.js"
     },
-    "./jsx-runtime": {
-      "types": "./lib/types/jsx-runtime.d.ts",
-      "import": "./lib/types/jsx-runtime.js"
-    },
     "./invariant": {
       "types": "./lib/types/dsh-adapter/invariant.d.ts",
       "default": "./lib/types/dsh-adapter/invariant.js"
@@ -84,7 +80,8 @@
   "scripts": {
     "clean": "node scripts/clean-lib.mjs",
     "build:dsh-std": "pnpm --dir vendor/dsh-std install --frozen-lockfile --ignore-scripts && pnpm --dir vendor/dsh-std --filter @dsh-std/core --filter @dsh-std/manifest --filter @dsh-std/connection --filter @dsh-std/presentation --filter @dsh-std/command --filter @dsh-std/storage --filter @dsh-std/messages -r build",
-    "compile": "npm run build:dsh-std && npm run clean && tsc -p tsconfig.json",
+    "build:pi-tui": "pnpm --filter @deepseek-harness-tui/pi-tui build",
+    "compile": "npm run build:dsh-std && npm run build:pi-tui && npm run clean && tsc -p tsconfig.json",
     "prepare": "node scripts/prepare-guard.mjs && npm run compile",
     "build": "npm run compile && npm run verify:build",
     "dev": "node scripts/dev-test.mjs",
@@ -93,8 +90,10 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
+    "test:tui": "node --import tsx/esm --test test/tui/*.test.ts",
     "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
+    "verify:tui-boundary": "node scripts/verify-tui-boundary.mjs",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
     "verify:herdr": "node --import tsx/esm scripts/verify-herdr-integration.ts",
     "verify:manifest-deps": "node --import tsx/esm scripts/verify-manifest-deps.ts",
@@ -116,8 +115,6 @@
     "verify:plugin-commands": "node --import tsx/esm scripts/verify-plugin-commands.ts",
     "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts",
     "verify:plugin-lifecycle": "node --import tsx/esm scripts/verify-plugin-lifecycle.ts",
-    "verify:tips": "node --import tsx/esm scripts/verify-tips.tsx",
-    "verify:thinking-preview": "node --import tsx/esm scripts/verify-thinking-preview.tsx",
     "sync:profile": "node scripts/sync-profile.mjs",
     "sync:profile:check": "node scripts/sync-profile.mjs --check"
   },
@@ -150,6 +147,7 @@
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "dependencies": {
+    "@deepseek-harness-tui/pi-tui": "workspace:*",
     "@dsh-std/command": "workspace:*",
     "@dsh-std/connection": "workspace:*",
     "@dsh-std/core": "workspace:*",
@@ -157,34 +155,24 @@
     "@dsh-std/messages": "workspace:*",
     "@dsh-std/presentation": "workspace:*",
     "@dsh-std/storage": "workspace:*",
-    "@alcalzone/ansi-tokenize": "^0.3.0",
-    "auto-bind": "^4.0.0 || ^5.0.0",
-    "bidi-js": "^1.0.0",
     "chalk": "^5.0.0",
-    "cli-boxes": "^3.0.0 || ^4.0.0",
     "cli-highlight": "^2.1.11",
-    "code-excerpt": "^3.0.0 || ^4.0.0",
     "diff": "^8.0.4",
     "dsh-working-activity": "^0.3.3",
-    "emoji-regex": "^10.0.0",
     "figures": "^6.1.0",
-    "get-east-asian-width": "^1.0.0",
+    "get-east-asian-width": "1.6.0",
     "highlight.js": "^11.11.1",
     "indent-string": "^5.0.0",
     "lodash-es": "^4.17.0",
-    "marked": "^18.0.7",
-    "react": "^19.2.0",
-    "react-reconciler": "^0.33.0",
+    "marked": "18.0.5",
     "semver": "^7.0.0",
     "signal-exit": "^4.0.0",
     "stack-utils": "^2.0.0",
-    "strip-ansi": "^7.0.0",
-    "supports-hyperlinks": "^3.0.0",
     "type-fest": "^4.0.0",
-    "usehooks-ts": "^3.1.0",
     "wrap-ansi": "^8.0.0 || ^9.0.0"
   },
   "bundledDependencies": [
+    "@deepseek-harness-tui/pi-tui",
     "@dsh-std/command",
     "@dsh-std/connection",
     "@dsh-std/core",
@@ -200,6 +188,7 @@
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-instructions": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-app-boot": "0.1.0-rc.8",
     "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-brand": "^0.1.0-rc.6",
@@ -240,10 +229,7 @@
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/lodash-es": "^4.17.0",
     "@types/node": "^22.0.0",
-    "@types/react": "^19.0.0",
-    "@types/react-reconciler": "^0.33.0",
     "@types/semver": "^7.0.0",
-    "@xterm/headless": "^6.0.0",
     "tsx": "^4.0.0",
     "typescript": "^6.0.3",
     "yaml": "^2.9.0"

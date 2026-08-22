@@ -8,7 +8,7 @@
  * @module @deepseek-harness-tui/dsh-tui/sessions/format
  */
 import { t } from '../i18n.js'
-import { stringWidth } from '../ink/stringWidth.js'
+import { visibleWidth } from '../tui/public.js'
 import type { SessionKind, TitleSource } from '../dsh-adapter/sessions/index.js'
 import type { Theme } from '../theme.js'
 
@@ -16,9 +16,9 @@ import type { Theme } from '../theme.js'
  * Truncate to a terminal DISPLAY width, CJK-aware (a wide character costs two
  * columns).
  *
- * Used wherever the cut has to be exact: Ink's own `wrap="truncate"` appends
- * its ellipsis as soon as content is as wide as its box rather than wider,
- * which silently eats the last character of a row laid out at its natural
+ * Used wherever the cut has to be exact: a generic renderer's truncate mode
+ * may append its ellipsis as soon as content is as wide as its box rather than
+ * wider, silently eating the last character of a row laid out at its natural
  * width — and a row that then reflows pushes every row below it down.
  *
  * @param text - Plain text, no ANSI.
@@ -27,11 +27,11 @@ import type { Theme } from '../theme.js'
  */
 export function truncateWidth(text: string, maxWidth: number): string {
   if (maxWidth <= 0) return ''
-  if (stringWidth(text) <= maxWidth) return text
+  if (visibleWidth(text) <= maxWidth) return text
   let width = 0
   let out = ''
   for (const char of text) {
-    const charWidth = stringWidth(char)
+    const charWidth = visibleWidth(char)
     if (width + charWidth > maxWidth - 1) break
     width += charWidth
     out += char
@@ -73,11 +73,11 @@ export function spreadRow(left: string, right: string, columns: number): SpreadR
   // run together into an unreadable single word — which means the left segment
   // yields too when the row is narrower than it is.
   const fittedLeft = truncateWidth(left, Math.max(0, columns - 1))
-  const leftWidth = stringWidth(fittedLeft)
+  const leftWidth = visibleWidth(fittedLeft)
   const fittedRight = truncateWidth(right, Math.max(0, columns - leftWidth - 1))
   return {
     left: fittedLeft,
-    gap: Math.max(1, columns - leftWidth - stringWidth(fittedRight)),
+    gap: Math.max(1, columns - leftWidth - visibleWidth(fittedRight)),
     right: fittedRight,
   }
 }
@@ -96,13 +96,13 @@ export function spreadRow(left: string, right: string, columns: number): SpreadR
  */
 export function tailWidth(text: string, maxWidth: number): string {
   if (maxWidth <= 0) return ''
-  if (stringWidth(text) <= maxWidth) return text
+  if (visibleWidth(text) <= maxWidth) return text
   const characters = [...text]
   let width = 0
   let out = ''
   for (let at = characters.length - 1; at >= 0; at--) {
     const character = characters[at]!
-    const characterWidth = stringWidth(character)
+    const characterWidth = visibleWidth(character)
     if (width + characterWidth > maxWidth - 1) break
     width += characterWidth
     out = character + out
@@ -182,7 +182,7 @@ export function wrapWidth(text: string, width: number): string[] {
     let line = ''
     let used = 0
     for (const char of paragraph) {
-      const charWidth = stringWidth(char)
+      const charWidth = visibleWidth(char)
       if (used + charWidth > width) {
         // Prefer a word boundary, but only when it does not throw away most
         // of the line — a single long token must still make progress.
@@ -190,7 +190,7 @@ export function wrapWidth(text: string, width: number): string[] {
         if (breakAt > width / 2) {
           lines.push(line.slice(0, breakAt))
           line = line.slice(breakAt + 1)
-          used = stringWidth(line)
+          used = visibleWidth(line)
         } else {
           lines.push(line)
           line = ''

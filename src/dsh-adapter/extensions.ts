@@ -10,6 +10,10 @@
  * - `ctx.tuiStatus`    — keyed status-line contributions
  * - `ctx.tuiShortcuts` — keyboard shortcut registry
  * - `ctx.tuiRenderers` — custom session-entry text renderers
+ * - `ctx.tuiScenes`    — plugin scene registry, folded into this row: the CLI
+ *   can read the profile patch from a different package copy than the plugin
+ *   module it loads (issue #183), so the scene service must not depend on a
+ *   standalone `dsh-tui-scenes` row surviving that skew.
  *
  * The decision-point events (`tui/input`, `tui/rewind-prompt`, …) need no
  * separate service — they are fired by the channel and answered through the
@@ -22,9 +26,10 @@
  * this row covers profiles launching without the channel, and the channel
  * covers the skew path where THIS row is missing.
  *
- * Every consumer (`channel.ts`, `Chat.tsx`) reads these with `ctx.get`
- * softly: without this row the TUI degrades to no dialogs/status/shortcuts/
- * renderers, and plugin.ts logs the skew warning once for profile launches.
+ * Every consumer (`channel.ts`, the pi-tui Chat screen) reads these with
+ * `ctx.get` softly: without this row the TUI degrades to no dialogs/status/
+ * shortcuts/renderers/scenes, and plugin.ts logs the skew warning once for
+ * profile launches.
  */
 
 import { Context } from '@deepseek-ai/cordis'
@@ -32,6 +37,7 @@ import TuiDialogRuntime from './dialogs.js'
 import TuiStatusRuntime from './status.js'
 import TuiShortcutRuntime from './shortcuts.js'
 import TuiRendererRuntime from './renderers.js'
+import TuiSceneRuntime from './scenes.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { readGrantStore } from './grants.js'
 
@@ -43,4 +49,5 @@ export function apply(ctx: Context): void {
   ctx.plugin(TuiStatusRuntime)
   ctx.plugin(TuiShortcutRuntime)
   ctx.plugin(TuiRendererRuntime)
+  ctx.plugin(TuiSceneRuntime)
 }

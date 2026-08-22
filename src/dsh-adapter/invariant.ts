@@ -1,9 +1,9 @@
 /**
  * Package-owned invariant companion for `@deepseek-harness-tui/dsh-tui`.
  *
- * The vendored Ink core under `src/ink` is third-party code written against
- * looser compiler flags; the relaxed `tsconfig` options exist only for that
- * subtree and must not spread to new code.
+ * The vendored pi-tui fork is built separately under `packages/pi-tui`; this
+ * companion covers only the dsh-tui adapter/front-door package and does not
+ * claim renderer internals as part of its invariant surface.
  * @module @deepseek-harness-tui/dsh-tui/invariant
  */
 

@@ -1,4 +1,5 @@
 packages:
+  - 'packages/pi-tui'
   - 'vendor/dsh-std/packages/core'
   - 'vendor/dsh-std/packages/manifest'
   - 'vendor/dsh-std/packages/connection'

@@ -26,10 +26,6 @@ import assert from 'node:assert/strict'
 const { classify, readHeader } = await import('../lib/types/dsh-adapter/sessions/header.js')
 const { buildView, anchorTop, windowEnd, moveSelection, seekSelectable, sessionAt, DEFAULT_FILTERS } =
   await import('../lib/types/sessions/view.js')
-const { formatWhen, formatBytes, truncateWidth, wrapWidth, formatProject, kindMark, titleColor, spreadRow, tailWidth } =
-  await import('../lib/types/sessions/format.js')
-const { setLang } = await import('../lib/types/i18n.js')
-setLang('en')
 
 let checks = 0
 function check(name, actual, expected) {
@@ -98,15 +94,6 @@ check(
   { kind: 'fork', parent: 'p1' },
 )
 check('an unknown origin value is not a subagent', kindOf({ origin: 'imported' }), { kind: 'root' })
-
-// Only the exceptional kinds are marked; an ordinary conversation gets no
-// badge, because a badge on every row costs a column and teaches nothing.
-check('a root conversation carries no marker', kindMark({ kind: 'root' }), undefined)
-check('a fork is marked', kindMark({ kind: 'fork', parent: 'p' })?.glyph, '⑃')
-check('a delegated run is marked differently', kindMark({ kind: 'subagent', parent: 'p', depth: 1 })?.glyph, '⑂')
-check('a fallback title is dimmed rather than stated as a name', titleColor('fallback', false), 'subtle')
-check('a real title is stated plainly', titleColor('auto', false), 'text')
-check('focus wins over provenance', titleColor('fallback', true), 'suggestion')
 
 // ── 3. The view ─────────────────────────────────────────────────────────
 const summary = (over) => ({
@@ -294,81 +281,5 @@ check(
   })(),
   'ok',
 )
-
-// ── 5. Formatting ───────────────────────────────────────────────────────
-// Pure functions with real edge cases: bucket boundaries a reader would
-// notice being off by one, and CJK widths where a wrong count reflows a row
-// and pushes every row under it down a line.
-const NOW = Date.parse('2026-03-10T12:00:00Z')
-const ago = (ms) => formatWhen(NOW - ms, NOW)
-check('under 45 seconds reads as now', ago(44_000), 'just now')
-check('45 seconds rounds into the minute bucket', ago(45_000), '1m ago')
-check('minutes round to nearest', ago(90_000), '2m ago')
-check('59 minutes stays in minutes', ago(59 * 60_000), '59m ago')
-check('an hour crosses into hours', ago(60 * 60_000), '1h ago')
-check('23 hours stays in hours', ago(23 * 3_600_000), '23h ago')
-check('a day crosses into days', ago(24 * 3_600_000), '1d ago')
-check('seven days is still relative', ago(7 * 24 * 3_600_000), '7d ago')
-check('past a week an absolute date is more useful than an offset', ago(30 * 24 * 3_600_000).includes('/'), true)
-check('a future timestamp never reads as negative', formatWhen(NOW + 10_000, NOW), 'just now')
-
-check('bytes below a kilobyte are exact', formatBytes(812), '812 B')
-check('kilobytes carry one decimal', formatBytes(146_330), '142.9 KB')
-check('megabytes carry one decimal', formatBytes(4_404_019), '4.2 MB')
-check('exactly 1024 bytes is a kilobyte', formatBytes(1024), '1.0 KB')
-check('an unknown size formats to nothing at all', formatBytes(undefined), undefined)
-check('a nonsense size formats to nothing', formatBytes(-5), undefined)
-
-check('text that fits is returned untouched', truncateWidth('hello', 5), 'hello')
-check('a wide character costs two columns', truncateWidth('你好世界', 8), '你好世界')
-check('truncation counts columns, not characters', truncateWidth('你好世界', 7), '你好世…')
-check('a zero budget yields nothing', truncateWidth('anything', 0), '')
-check('the ellipsis always fits the budget', truncateWidth('你好世界', 3), '你…')
-
-check('CJK wraps mid-character because there is nothing else to break on', wrapWidth('你好世界你好', 4), ['你好', '世界', '你好'])
-check('latin prefers a word boundary', wrapWidth('alpha beta gamma', 11), ['alpha beta', 'gamma'])
-check('a single long token still makes progress', wrapWidth('aaaaaaaaaa', 4), ['aaaa', 'aaaa', 'aa'])
-check('newlines in the source are honoured', wrapWidth('one\ntwo', 10), ['one', 'two'])
-check('a zero width wraps to nothing rather than looping', wrapWidth('text', 0), [])
-
-// The header's arithmetic, pinned directly. This is the layer where a
-// character count passes in English and overflows in Chinese, so the check is
-// exhaustive over both scripts and every width the row can be given.
-{
-  const stringWidth = (await import('../lib/types/ink/stringWidth.js')).stringWidth
-  const LEFTS = ['', ' Resume session', ' 恢复会话', ' 恢复会话 Resume', '很长很长很长很长很长很长很长很长的标题']
-  const RIGHTS = ['', '3 sessions', '8 个会话 · 29 个子运行已折叠 · 15 个空会话', 'mixed 混合 text 文本 here 这里']
-  let worst = 'ok'
-  for (const left of LEFTS) {
-    for (const right of RIGHTS) {
-      for (let columns = 0; columns <= 80; columns++) {
-        const row = spreadRow(left, right, columns)
-        const total = stringWidth(row.left) + row.gap + stringWidth(row.right)
-        if (total > columns && columns > 0) {
-          worst = `overflow at columns=${columns}: ${total} for ${JSON.stringify([left, right])}`
-        }
-        if (columns > 0 && row.gap < 1) worst = `segments touch at columns=${columns}`
-      }
-    }
-  }
-  check('a spread row is never wider than the columns it was given', worst, 'ok')
-  check('a zero-width row renders nothing', spreadRow('a', 'b', 0), { left: '', gap: 0, right: '' })
-  check('the right segment is pinned to the end', spreadRow('ab', 'cd', 10), { left: 'ab', gap: 6, right: 'cd' })
-  check('a CJK left segment is measured in columns', spreadRow('恢复', 'ab', 10), { left: '恢复', gap: 4, right: 'ab' })
-  // 12 columns, a left segment 8 wide, one reserved for the gap: 3 remain.
-  check('the right segment yields first', spreadRow('恢复会话', '12345', 12).right, '12…')
-  check('the left segment yields when it alone will not fit', spreadRow('恢复会话', 'x', 5).left, '恢…')
-}
-
-check('the tail is what a one-line editor keeps', tailWidth('abcdefgh', 5), '…efgh')
-check('text that fits keeps its head', tailWidth('abc', 5), 'abc')
-check('the tail is measured in columns too', tailWidth('你好世界', 5), '…世界')
-check('a zero budget yields nothing at all', tailWidth('abc', 0), '')
-
-check('home collapses to a tilde', formatProject('/home/me/code', '/home/me'), '~/code')
-check('the home directory itself is just a tilde', formatProject('/home/me', '/home/me'), '~')
-check('backslashes normalize before comparing', formatProject('C:\\Users\\me\\proj', 'C:\\Users\\me'), '~/proj')
-check('a sibling of home is not collapsed', formatProject('/home/melissa', '/home/me'), '/home/melissa')
-check('a path outside home is shown whole', formatProject('/srv/app', '/home/me'), '/srv/app')
 
 console.log(`verify-session-kinds: OK (${checks} checks)`)

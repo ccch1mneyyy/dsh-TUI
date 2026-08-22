@@ -4,7 +4,6 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "lib": ["ES2024"],
-    "jsx": "react-jsx",
     "declaration": true,
     "declarationMap": true,
     "skipLibCheck": true,
@@ -13,8 +12,8 @@
     "types": ["node"],
     "rootDir": "src",
     "outDir": "lib/types",
-    // The ported Ink core is third-party code written against looser flags;
-    // keep the vendored renderer compiling without a rewrite.
+    // Keep the adapter surface permissive while the vendored fork is built
+    // separately under packages/pi-tui/.
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noImplicitAny": false,

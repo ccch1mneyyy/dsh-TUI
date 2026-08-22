@@ -377,8 +377,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'flow-at',
     group: 'workflow',
-    zh: '任意位置 @ 补全文件，@ink 也能命中 src/ink',
-    en: '@ completes files anywhere; @ink matches src/ink',
+    zh: '任意位置 @ 补全文件，@public 也能命中 src/tui/public.ts',
+    en: '@ completes files anywhere; @public matches src/tui/public.ts',
   },
   {
     id: 'flow-question-type',

@@ -8,3 +8,12 @@ package-lock.json
 .tmp/
 AGENTS.md
 .dsh-prompt-debug.json
+# pi-tui adoption (WP-00): recorder output, offline UI baseline build
+# artifacts and temporary tarballs are never committed or packed.
+artifacts/tui-adoption/**
+tools/legacy-ui-baseline/**/*.log
+tools/legacy-ui-baseline/**/*.tgz
+packages/pi-tui/dist/
+# The fork's AGENTS.md records the upstream base + rebase rules (plan §3.2);
+# it must be tracked despite the repo-wide AGENTS.md ignore above.
+!packages/pi-tui/AGENTS.md

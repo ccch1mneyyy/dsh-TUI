@@ -517,8 +517,8 @@ export function getTheme(themeName: ThemeName): Theme {
 
 /**
  * Resolver that maps a user theme name to a fully built palette (see
- * customTheme.ts). Wired by ThemeProvider at startup so non-React rendering
- * (markdown inline code) resolves user themes through getActiveTheme().
+ * customTheme.ts). Wired by the TUI theme bootstrap at startup so imperative
+ * rendering resolves user themes through getActiveTheme().
  */
 let customThemeResolver: ((name: string) => Theme | undefined) | undefined
 
@@ -557,9 +557,9 @@ export function registerCustomThemeResolver(
 }
 
 /**
- * The theme chosen at startup, mirrored module-level so non-React rendering
- * (markdown inline code in cc/markdown.ts) can resolve palette colors
- * without a context. ThemeProvider sets this once detection settles.
+ * The theme chosen at startup, mirrored module-level so imperative rendering
+ * can resolve palette colors without a component context. The TUI theme
+ * bootstrap sets this once detection settles.
  */
 let activeThemeName: ThemeName = 'dark'
 

@@ -206,12 +206,6 @@
     - id: dsh-tui-settings-sections
       name: '@deepseek-harness-tui/dsh-tui/settings-sections'
 
-    # Optional plugins register full-screen scenes (trajectory-style whole-
-    # terminal views) here and open them from their own command handlers;
-    # rendering and input ownership remain owned by the TUI's Chat screen.
-    - id: dsh-tui-scenes
-      name: '@deepseek-harness-tui/dsh-tui/scenes'
-
     # Plugin-interop anchor (Community Consensus v0.15): the unified grant
     # store, runtime generation id, and Host Descriptor live here; later
     # contract surfaces (plugin storage, message observation, effect
@@ -223,7 +217,9 @@
 
     # Plugin-facing UI seams (the pi-style extension surface): managed
     # dialogs (select/confirm/input), keyed status-line contributions,
-    # keyboard shortcuts, and custom session-entry text renderers. The
+    # keyboard shortcuts, custom session-entry text renderers, and the
+    # tuiScenes plugin scene registry (folded into this row — a standalone
+    # scenes row cannot survive CLI-side patch/code version skew, #183). The
     # decision events (tui/input, tui/rewind-prompt, tui/session-switch,
     # tui/compact, …) are fired by the channel on the cordis bus directly
     # and need no row.

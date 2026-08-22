@@ -43,12 +43,17 @@ const {
 const { parseGrantStore } = await import('../src/dsh-adapter/grants.js')
 const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
-const { TuiSceneRuntime } = await import('../src/dsh-adapter/scenes.js')
+const { TUI_SCENE_VERSION, TuiSceneRuntime } = await import('../src/dsh-adapter/scenes.js')
 const { TuiRendererRuntime } = await import('../src/dsh-adapter/renderers.js')
 const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('./plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const sceneDescriptor = (id: string) => ({
+  version: TUI_SCENE_VERSION,
+  id,
+  create: () => ({ render: () => [], invalidate() {} }),
+})
 const cleanup: string[] = [fakeHome]
 
 let checks = 0
@@ -327,7 +332,7 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     check1('tuiShortcuts.register without identity returns a disposer', typeof disposeShortcut === 'function')
     disposeShortcut()
 
-    const disposeScene = pluginCtx.tuiScenes.register({ id: 'demo-scene', component: () => null })
+    const disposeScene = pluginCtx.tuiScenes.register(sceneDescriptor('demo-scene'))
     check1('tuiScenes.register without identity returns a disposer', typeof disposeScene === 'function')
     disposeScene()
 

@@ -1,19 +1,9 @@
 /**
  * External editor round-trip for the prompt input (issue #123): Ctrl+G dumps
- * the current draft into a temp file, hands the terminal to `$VISUAL` /
- * `$EDITOR` (nvim, vim, nano, `code --wait`, …), and returns the saved text
- * for the input to adopt.
- *
- * Terminal handover reuses the Ink core's editor handoff pair —
- * `enterAlternateScreen()` pauses rendering, suspends raw-mode stdin, and
- * drops the extended key reporting that non-CSI-u editors (nano) choke on;
- * `exitAlternateScreen()` re-enters the alt screen (vim's rmcup pops back to
- * the main screen on quit), repaints, and resumes stdin. See ink.tsx. The
- * saved file is read back BEFORE stdin is resumed: resuming earlier would
- * let keystrokes typed right at editor exit race the prompt's `setValue`
- * and get overwritten. The restore is attempted whenever the handover was
- * attempted (a partially-failed enter still gets an exit pass), and a
- * failing restore never overrides the outcome.
+ * the current draft into a temp file, runs `$VISUAL` / `$EDITOR` (nvim, vim,
+ * nano, `code --wait`, …) with inherited stdio, and returns the saved text
+ * for the input to adopt. Terminal quiesce/resume belongs to the lifecycle
+ * owner, not this file.
  *
  * Editor resolution order mirrors readline's edit-and-execute-command:
  * `$VISUAL` → `$EDITOR`. There is deliberately NO fallback editor: an
@@ -39,7 +29,6 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join, win32 } from 'node:path'
-import instances from '../ink/instances.js'
 import { cmdEscapeArgument, cmdEscapeCommand } from './shellQuote.js'
 
 /**
@@ -219,14 +208,8 @@ function errorMessage(error: unknown): string {
 
 /**
  * Edit `draft` in the user's editor and report what happened. Never throws:
- * every filesystem, spawn, or terminal-restore failure maps to a `failed`
- * outcome (or is swallowed in the finally) so the UI notifies instead of
- * dying on an unhandled rejection.
- *
- * The Ink instance is looked up lazily (same pattern as Chat's Ctrl+L
- * redraw) so the util stays usable in tests and non-TTY contexts: without a
- * live instance the handover escapes are skipped and the editor simply
- * inherits stdio.
+ * every filesystem or spawn failure maps to a `failed` outcome so the caller
+ * can notify instead of dying on an unhandled rejection.
  *
  * Newline handling: the saved file is compared against the draft with BOTH
  * sides CRLF-normalized, so an editor that only converts line endings (or
@@ -240,12 +223,6 @@ export async function editInExternalEditor(draft: string): Promise<EditorOutcome
   const argv = resolveEditorCommand()
   if (argv === undefined) return { kind: 'unavailable' }
 
-  const ink =
-    instances.get(process.stdout) ??
-    // Test harnesses render onto a fake stdout — fall back to the process's
-    // single live instance so the handover path stays exercisable there.
-    (instances.size === 1 ? [...instances.values()][0] : undefined)
-  let handed = false
   let dir: string | undefined
   try {
     dir = await mkdtemp(join(tmpdir(), 'dsh-tui-prompt-'))
@@ -253,13 +230,9 @@ export async function editInExternalEditor(draft: string): Promise<EditorOutcome
     const file = join(dir, 'input.md')
     await writeFile(file, draft, 'utf8')
 
-    // Mark the handover as attempted BEFORE entering: if enter fails after
-    // suspending stdin, the finally must still run the restore pass.
-    handed = ink !== undefined
-    ink?.enterAlternateScreen()
     const code = await runEditor(argv, file)
-    // Read back BEFORE the finally resumes stdin — keystrokes typed the
-    // moment the editor exits must not race the prompt adopting the result.
+    // Read back before the caller resumes stdin: keystrokes typed at editor
+    // exit must not race the prompt adopting the result.
     const saved = await readFile(file, 'utf8').catch(() => null)
 
     if (code === -1) return { kind: 'failed', message: argv[0]! }
@@ -275,19 +248,8 @@ export async function editInExternalEditor(draft: string): Promise<EditorOutcome
   } catch (error) {
     return { kind: 'failed', message: errorMessage(error) }
   } finally {
-    // Cleanup runs before the restore: when the finally ends, stdin must
-    // come back to a fully settled state. Both steps are best-effort — a
-    // failure here never overrides the outcome produced above.
     if (dir !== undefined) {
       await rm(dir, { recursive: true, force: true }).catch(() => {})
-    }
-    if (handed) {
-      try {
-        ink?.exitAlternateScreen()
-      } catch {
-        // A stuck alt screen is visible to the user; a rejection on top of
-        // a valid outcome is strictly worse — swallow and keep the outcome.
-      }
     }
   }
 }

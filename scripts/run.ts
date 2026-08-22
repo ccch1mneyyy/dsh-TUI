@@ -18,12 +18,9 @@ if (!process.env.DSH_HOME?.endsWith('.dsh-cc')) {
   process.env.DSH_HOME = resolve(homedir(), '.dsh-cc')
 }
 
-// Force React's production build BEFORE boot() pulls in the plugin tree.
-// react-reconciler's CJS entry picks development vs production on first
-// require; the development build records one performance.measure() per
-// component render into Node's perf_hooks buffer, which is UNBOUNDED —
-// streaming frames accumulated 1,004,767 PerformanceMeasure objects and
-// OOM'd a real session at 4GB in under 20 minutes (heapsnapshot evidence).
+// Pin production mode BEFORE boot() pulls in the plugin tree. The pi-tui
+// renderer is independent of NODE_ENV; this remains a launcher compatibility
+// guard so transitive plugins see the same mode as packaged production startup.
 process.env.NODE_ENV ??= 'production'
 
 // app-boot is loaded through pnpm symlink → lib/index.js. Rebuild after

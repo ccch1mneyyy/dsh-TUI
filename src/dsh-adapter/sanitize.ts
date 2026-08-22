@@ -15,16 +15,16 @@
  * (string/number/boolean) coerce through String() first.
  */
 
-import { stringWidth } from '../ink/stringWidth.js'
+import { visibleWidth } from '../tui/public.js'
 
 /** Sanitize an already-string value for the render path. */
 export function cleanRenderText(value: string, maxCells: number): string {
   // eslint-disable-next-line no-control-regex -- deliberate: sanitize untrusted render-path text
   const flat = value.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
-  if (stringWidth(flat) <= maxCells) return flat
+  if (visibleWidth(flat) <= maxCells) return flat
   let out = ''
   for (const ch of flat) {
-    if (stringWidth(out + ch) > maxCells - 1) break
+    if (visibleWidth(out + ch) > maxCells - 1) break
     out += ch
   }
   return `${out}…`
@@ -47,10 +47,10 @@ export function cleanScalarText(value: unknown, maxCells: number): string {
  * collapsing their spaces would corrupt text they can still edit.
  */
 export function capCells(value: string, maxCells: number): string {
-  if (stringWidth(value) <= maxCells) return value
+  if (visibleWidth(value) <= maxCells) return value
   let out = ''
   for (const ch of value) {
-    if (stringWidth(out + ch) > maxCells) break
+    if (visibleWidth(out + ch) > maxCells) break
     out += ch
   }
   return out

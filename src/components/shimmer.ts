@@ -1,5 +1,5 @@
 import chalk from 'chalk'
-import { stringWidth } from '../ink/stringWidth.js'
+import { visibleWidth } from '../tui/public.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import { interpolateColor } from '../components/Spinner/spinnerUtils.js'
 
@@ -40,13 +40,13 @@ export const FLASH: Rgb = { r: 198, g: 216, b: 248 }
  * @returns The ANSI bold-colored word with the moving highlight.
  */
 export function sweep(word: string, time: number, base: Rgb, highlight: Rgb, stepMs = 60): string {
-  const width = stringWidth(word)
+  const width = visibleWidth(word)
   const cycle = width + 20
   const glimmerStart = (Math.floor(time / stepMs) % cycle) - 10
   let out = ''
   let col = 0
   for (const { segment } of getGraphemeSegmenter().segment(word)) {
-    const segWidth = stringWidth(segment)
+    const segWidth = visibleWidth(segment)
     const highlighted = col >= glimmerStart && col + segWidth <= glimmerStart + 10
     const opacity = highlighted ? (Math.sin(time / (stepMs * 2)) + 1) / 2 : 0
     const rgb = highlighted ? interpolateColor(base, highlight, opacity) : base

@@ -17,12 +17,10 @@
  *   多个尾部）无操作保存不得算编辑
  * - 异常安全（never-throws 契约）：EDITOR='""' 同步 spawn 失败 → failed
  *   且不泄漏临时目录；TMPDIR 不可写 → failed；EDITOR=/bin/rm 删稿 →
- *   unchanged；假 Ink 实例下 enter 抛错 → failed 且 exit 仍被调用、
- *   exit 抛错 → outcome 正常返回不被覆盖
+ *   unchanged；所有失败都映射为可诊断结果，不泄漏临时目录
  *
- * CI 无 TTY：假 Ink 实例直接注册进 instances map 覆盖移交路径；真编辑器
- * 一律是 node 跑的脚本文件，EDITOR 串里的路径加双引号（Windows 默认
- * Node 安装路径含空格，拆分时不能断）。
+ * CI 无 TTY：真编辑器一律是 node 跑的脚本文件，EDITOR 串里的路径加双引号
+ * （Windows 默认 Node 安装路径含空格，拆分时不能断）。
  *
  * Run with plain node against the compiled lib: `node scripts/verify-external-editor.mjs`
  */
@@ -37,7 +35,6 @@ import {
   splitEditorCommand,
 } from '../lib/types/utils/externalEditor.js'
 import { cmdEscapeArgument, cmdEscapeCommand } from '../lib/types/utils/shellQuote.js'
-import instances from '../lib/types/ink/instances.js'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -294,56 +291,6 @@ if (process.platform !== 'win32') {
   )
   process.env.TMPDIR = savedEnv.TMPDIR ?? tmpdir()
   if (savedEnv.TMPDIR === undefined) delete process.env.TMPDIR
-}
-
-// ── 终端移交契约（假 Ink 实例）─────────────────────────────────────────
-// enter 抛错：outcome=failed、exit 仍被尝试（部分失败的 enter 可能已挂起
-// stdin）、临时目录清理。exit 抛错：outcome 不被覆盖、Promise 不拒绝。
-{
-  const calls = []
-  instances.set(process.stdout, {
-    enterAlternateScreen() { calls.push('enter'); throw new Error('enter exploded') },
-    exitAlternateScreen() { calls.push('exit') },
-  })
-  const dirsBefore = promptDirCount()
-  let outcome
-  try {
-    useEditor(`${base} noop`)
-    outcome = await editInExternalEditor('draft')
-  } catch (error) {
-    outcome = { kind: 'rejected', message: String(error) }
-  } finally {
-    instances.delete(process.stdout)
-  }
-  check(
-    '终端: enter 抛错 → failed 且 exit 仍被调用',
-    outcome.kind === 'failed' && eq(calls, ['enter', 'exit']),
-    JSON.stringify({ outcome, calls }),
-  )
-  check('终端: enter 抛错后无临时目录泄漏', promptDirCount() === dirsBefore)
-}
-{
-  const calls = []
-  instances.set(process.stdout, {
-    enterAlternateScreen() { calls.push('enter') },
-    exitAlternateScreen() { calls.push('exit'); throw new Error('restore failed') },
-  })
-  const dirsBefore = promptDirCount()
-  let outcome
-  try {
-    useEditor(`${base} noop`)
-    outcome = await editInExternalEditor('draft')
-  } catch (error) {
-    outcome = { kind: 'rejected', message: String(error) }
-  } finally {
-    instances.delete(process.stdout)
-  }
-  check(
-    '终端: exit 抛错 → outcome 不被覆盖、不拒绝',
-    outcome.kind === 'unchanged' && eq(calls, ['enter', 'exit']),
-    JSON.stringify({ outcome, calls }),
-  )
-  check('终端: exit 抛错后无临时目录泄漏', promptDirCount() === dirsBefore)
 }
 
 restoreEnv()

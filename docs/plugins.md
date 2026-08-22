@@ -238,7 +238,7 @@ identity 时，activation-scoped grant 按 fail-closed 诊断。manifest 是
 | 五 · system prompt 段 | cordis 服务 | 注入稳定提示词段 |
 | 六 · 设置区块 | `ctx.tuiSettingsSections` | `/settings` 声明式编辑区块 |
 | 七 · profile 组合 | cordis.patch.yml | 安装/配置行 |
-| 八 · 全屏场景 | `ctx.tuiScenes` | 整屏 React 页面（`/trace` 形态） |
+| 八 · 全屏场景 | `ctx.tuiScenes` | 整屏 imperative pi-tui Component（`/trace` 形态） |
 | 九 · 决策事件 | cordis serial/parallel 事件 | 拦截/改写输入、rewind、会话切换、压缩 |
 | 十 · 托管对话框 | `ctx.tuiDialogs` | select / confirm / input 弹窗 |
 | 十一 · 状态行 | `ctx.tuiStatus` | 提示框上方的键控状态行 |
@@ -459,29 +459,47 @@ ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
   `@deepseek-harness-tui/dsh-tui/working-activity` 子路径再导出后挂载。你的插件
   如果也要被别的 bundle 组合，提供同样的显式子路径导出。
 
-## 接缝八：插件全屏场景（tuiScenes）
+## 接缝八：插件全屏场景（tuiScenes，imperative pi-tui）
 
-插件可以把一个**整屏 React 场景**注册给 TUI，再从自己的 slash 命令里打开它——
-就是 `/trace`（轨迹时间线）和 `/settings` 那种"接管整个终端、退出后原样归还"
-的页面形态。命令执行权仍在 dsh-commands（`command/run`/`command/done` 日志对
-照记），TUI 只提供渲染面与键盘所有权；场景的打开/关闭不碰会话流，不落任何
-session 事件。
+插件可以把一个**整屏 imperative 场景**注册给 TUI，再从自己的 slash 命令里打开
+它——就是 `/trace` 和 `/settings` 那种“接管整个终端、退出后原样归还”的页面形态。
+命令执行权仍在 dsh-commands（`command/run`/`command/done` 日志对照记），TUI 只
+提供唯一的渲染根与键盘所有权；场景的打开/关闭不碰会话流，不落任何 session 事件。
+
+这是 `0.9.0` 的破坏性 scene 迁移。唯一接受的 descriptor 版本是
+`'dsh-tui/pi-tui-scene@1'`，descriptor 只有 `version`、`id`、可选 `title` 和
+`create(context)`。scene 不再是 React 组件，也不接收 React、旧 `ui` kit 或 Channel。
 
 ### 三步接入
 
-**1. 注册场景**（`id` 全局唯一，kebab-case；重复或非法 id 注册即抛错）：
+**1. 注册场景**（`id` 全局唯一，kebab-case；重复、非法或版本错误会明确抛错）：
 
 ```ts
-import type { TuiSceneProps } from '@deepseek-harness-tui/dsh-tui/scenes'
+import type { Component, TuiSceneDescriptor, TuiSceneContext } from '@deepseek-harness-tui/dsh-tui/scenes'
+
+const descriptor: TuiSceneDescriptor = {
+  version: 'dsh-tui/pi-tui-scene@1',
+  id: 'my-dashboard',
+  title: 'My dashboard', // 可选，调试/日志用；标题栏由场景自绘
+  create(context) {
+    return new MyDashboard(context)
+  },
+}
 
 ctx.inject(['tuiScenes'], (sceneCtx) => {
-  const dispose = sceneCtx.tuiScenes.register({
-    id: 'my-dashboard',
-    title: 'My dashboard',        // 可选，调试/日志用；标题栏由场景自绘
-    component: MyDashboard,
-  })
-  ctx.effect(() => () => dispose())   // dispose 当前打开的场景会自动关屏
+  const dispose = sceneCtx.tuiScenes.register(descriptor)
+  ctx.effect(() => () => dispose()) // dispose 当前打开的场景会自动关屏
 })
+
+class MyDashboard implements Component {
+  constructor(private readonly context: TuiSceneContext) {}
+  render(width: number): string[] {
+    if (width <= 0) return []
+    const { viewModel, root } = this.context
+    return [`${root.id}: ${viewModel.transcript.rows.length} rows`]
+  }
+  invalidate(): void {}
+}
 ```
 
 **2. 注册打开它的命令**（执行与日志仍归 dsh-commands；handler 返回静默
@@ -503,81 +521,48 @@ ctx.inject(['commands'], (commandCtx) => {
 })
 ```
 
-**3. 写场景组件**——props 注入宿主的 `React` 与 `ui` kit，**这是硬契约**
-（原因见下节）：
+**3. 使用 scene context**。factory 只收到当前打开实例的只读能力：
 
-```tsx
-// tsconfig: "jsx": "react-jsx",
-//           "jsxImportSource": "@deepseek-harness-tui/dsh-tui"
-import type { TuiSceneProps } from '@deepseek-harness-tui/dsh-tui/scenes'
+- `viewModel` 是按屏幕有界的 readonly `ChatViewModel` snapshot；它不是 Channel
+  的可变副本，数组和对象按 projection 规则共享引用。
+- `commands` 是 `src/tui/commands.ts` 的 typed sink。使用 `commands.input`、
+  `commands.session`、`commands.info` 等分组，不直接访问 Channel、Cordis、Agent
+  或业务 service。
+- `root` 与 `overlay` 是宿主发出的只读描述符，不是可恢复/可创建的终端句柄。
+- `signal` 在当前 scene 生命周期结束时可用于取消插件自己的异步工作。
 
-export function MyDashboard({ React, ui, channel, close }: TuiSceneProps) {
-  // hook 必须用注入的 React；JSX 经 jsxImportSource 走宿主 jsx-runtime
-  const { Box, Text, useInput, useTerminalSize } = ui
-  const { columns, rows } = useTerminalSize()
-  // channel 是响应式的：照 Chat 的用法订阅 version，数据随会话实时刷新
-  React.useSyncExternalStore(channel.subscribe, () => channel.version)
-  // 场景打开期间独占键盘——Esc/q 关闭这类约定由场景自己实现
-  useInput((input, key) => {
-    if (key.escape || input === 'q') close()
-  })
-  return (
-    <Box flexDirection="column" width="100%" paddingX={1}>
-      <Text bold>My dashboard</Text>
-      <Text>{channel.rows.length} rows · {columns}×{rows}</Text>
-    </Box>
-  )
-}
-```
-
-不用 JSX 也可以：`React.createElement(ui.Box, …)` 完全合法（`React` 就是宿主
-实例，`createElement`/`Fragment` 都安全）。
-
-### React 契约（必读，违反即首渲染崩溃）
-
-TUI 的 reconciler 是 **React 19**，场景组件运行在宿主的 React 实例上：
-
-- **hook 必须用 props 注入的 `React`**。插件从自己 node_modules 里 import 一个
-  React 副本调 hook，dispatcher 对不上，第一次渲染就是 invalid hook call。
-- **元素必须过宿主 runtime**。React 19 的 JSX 工厂产出
-  `Symbol.for('react.transitional.element')` 元素；插件自带的旧版 React（18 及
-  更早）编译出的 JSX 是 `Symbol.for('react.element')`，宿主 reconciler 直接拒绝。
-  所以 JSX 作者必须把 tsconfig 的 `jsxImportSource` 指向
-  `@deepseek-harness-tui/dsh-tui`（它的 `./jsx-runtime` 子路径原样 re-export 宿主
-  的 `react/jsx-runtime`），或者干脆只用注入 `React` 的 `createElement`。
-  插件自带的 React 副本**仅当同为 19.x 时**产出的元素才合法，且 hook 依然禁用。
+`Component` 只实现 `render(width): string[]` 和 `invalidate()`，可以另外实现
+`handleInput(data)`。组件由宿主在唯一的 pi-tui 根上挂载；scene 自己不得创建
+TUI、Terminal、stdin listener、render loop 或 stdout writer。
 
 ### 运行时语义
 
-- **屏幕栈**：插件场景位于 Chat early-return 链的最顶端——在 `/settings`、
-  `/resume` 浏览器、轨迹场景之上。场景打开期间这些屏幕保持挂载但让出屏幕与
-  键盘；`close()` 后落回之前所在的屏幕。
-- **inline / fullscreen 通吃**：inline 模式下 TUI 自动为场景包
-  `<AlternateScreen>`（DEC 1049 进出、帧 churn 不进 scrollback）；fullscreen
-  模式直接复用宿主已有的 alt screen，场景组件**不要**自己再包一层。
-- **命令异步打开也安全**：handler 是 async 的，命令结束后才 `open()` 也没问题——
-  打开动作经 channel 的 version bump 驱动重渲染，不依赖命令的返回时机。
-- **服务缺失时静默降级**：`ctx.get('tuiScenes')` 探测；旧版 patch 未挂
-  `dsh-tui-scenes` 行时 `open()` 打 warn 并返回 `false`，TUI 侧永不打开，
-  绝不拖垮启动（#183 原则）。
-- **生命周期**：场景注册与打开状态不随 `/new`、`/resume`、rewind 的 agent
-  切换重置；`channel` 始终指向当前 live agent。场景组件卸载（关屏）时 hook
-  状态随之销毁，重开是全新挂载。
+- **控制面不变**：`ctx.tuiScenes.register/open/close` 以及 owner、效果台账和
+  `subscribe` 的隔离规则保持不变；每个 activation 只能操作自己的 scene。
+- **fail closed**：旧 `{ id, component }` descriptor、缺失 `version` 或未知版本均
+  拒绝并给出迁移提示，绝不隐式推断版本、fallback 到 React 或双轨运行。
+- **factory 边界**：宿主调用 `create(context)`。factory 抛错或返回的对象不是
+  pi-tui `Component` 时，scene 立即关闭，发送错误通知，active 清空；失败的实例
+  不会污染新的 active scene。
+- **屏幕栈**：插件 scene 位于宿主根 screen 的最上层；关闭后恢复之前的 screen。
+  inline 与 fullscreen 都复用已有的 TUI/Terminal，scene 不包第二层
+  `AlternateScreen`。
+- **命令异步打开也安全**：handler 在稍后调用 `open()` 仍由宿主订阅与 projection
+  驱动切屏，不依赖命令返回时机。
+- **服务缺失时降级**：`ctx.get('tuiScenes')` 探测；旧 patch 未挂
+  `dsh-tui-scenes` 行时 `open()` 告警并返回 `false`，绝不拖垮启动（#183 原则）。
+- **生命周期**：注册与打开状态不随 `/new`、`/resume`、rewind 的 agent 切换重置；
+  scene 关闭后其 Component 实例不再复用，重开会重新调用 factory。
 
 ### 场景的红线
 
-- 场景打开期间**独占整个终端**：布局用 `flexGrow`/`useTerminalSize()` 自适应，
-  别假设固定行列数；也别往 stdout 写任何东西（调试走 `DSH_TUI_DEBUG` 的
-  stderr）。
-- 场景是会话的**观察者**：数据从 `channel` 读（rows、tokens、working、
-  traceEvents……），写操作（submit/steer/cancel）也能用，但打开/关闭本身
-  不产生任何 session 事件——别在场景里 append 事件，要发就走接缝一的
-  log-only 铁律。
-- 每一帧的重渲染成本由场景自己兜着：高频动画用 `ui.useAnimationFrame`，
-  别在渲染路径里做同步 I/O。
-- **渲染期异常有边界兜底**：场景组件 render/生命周期里抛错会被
-  `PluginSceneBoundary` 接住——转录里报一条错误、场景自动关闭，不会拖垮整个
-  TUI。但 boundary 管不到 effect 与异步回调里的异常，那些仍是场景自己的责任。
+- 场景打开期间**独占整个终端**，但只使用宿主传入的 `Component` 能力；不要往
+  stdout 写任何东西（调试走 `DSH_TUI_DEBUG` 的 stderr）。
+- 场景是会话的**观察者**：从 bounded `viewModel` 读数据，写操作走 typed
+  `commands`；打开/关闭本身不产生 session 事件，要发 log-only 事件走接缝一。
+- 每一帧的重渲染成本由场景自己兜着；不要在 `render` 路径做同步 I/O。
+- factory、render 和 input 的异常必须留在 scene 边界内；宿主会关闭/通知失败，
+  不会让异常穿透到唯一的 TUI/Terminal。
 
 ## 接缝九：决策事件（tui/input · rewind · session-switch · compact）
 

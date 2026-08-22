@@ -19,6 +19,9 @@ type SideQuestionLlm = {
 }
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+
+export type { LlmModelInfo as AdapterLlmModelInfo } from '@deepseek-ai/dsh-llm'
+export type { SessionEvent as AdapterSessionEvent } from '@deepseek-ai/dsh-session'
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
@@ -465,6 +468,10 @@ export interface LoadedContext {
 export interface Channel {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
+  /** Monotonic epoch — bumped on every session/agent replacement
+   *  (newSession/resumeTo/switchModel/rewindTo), so async results captured
+   *  under a previous session can be fenced off on completion (plan §1.3). */
+  readonly sessionEpoch: number
   readonly rows: readonly ChatRow[]
   readonly status: AgentStatus | 'starting' | 'disposed'
   readonly sessionTitle: string
@@ -580,10 +587,9 @@ export interface Channel {
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
   /**
    * Plugin-registered full-screen scene currently replacing the conversation
-   * (the `dsh-tui-scenes` runtime), if any. The chat screen renders its
-   * component INSTEAD of the transcript — the same whole-terminal treatment
-   * the trajectory scene gets — and hands it the keyboard; `undefined`
-   * renders the conversation normally.
+   * (the tuiScenes runtime, mounted by the dsh-tui-extensions row), if any. The host uses this versioned
+   * descriptor to create one imperative pi-tui Component; `undefined` renders
+   * the conversation normally.
    */
   readonly pluginScene: TuiSceneDescriptor | undefined
   /**
@@ -827,6 +833,8 @@ export interface EffortOption {
 
 export interface ChannelState {
   version: number
+  /** Session/agent replacement epoch (see the public Channel type). */
+  sessionEpoch: number
   rows: ChatRow[]
   status: AgentStatus | 'starting' | 'disposed'
   sessionTitle: string
@@ -1452,8 +1460,8 @@ export function createChannel(
   let settingsHostCache: SettingsHost | undefined
   let settingsHostResolved = false
   // Plugin scene runtime (optional service, same degradation rule as
-  // tuiWorkspaces/tuiCommandTrees): mounted by the bundle patch's
-  // dsh-tui-scenes row; absent the row, `pluginScene` simply stays undefined.
+  // tuiWorkspaces/tuiCommandTrees): mounted by the dsh-tui-extensions row;
+  // absent the row, `pluginScene` simply stays undefined.
   const sceneRuntime = getHostSceneRuntime(ctx.get('tuiScenes') as TuiSceneRuntime | undefined)
   const settingsSectionsRuntime = getHostSettingsSections(
     ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
@@ -1516,9 +1524,14 @@ export function createChannel(
   let sendChain: Promise<void> = Promise.resolve()
   let stagedImageSequence = 0
   const stagedImages = new Map<string, ChannelImageBlock['attachment']>()
+  // Bumped every time the map is cleared (session swap). An image save that
+  // outlives the swap must not mint a placeholder into the NEW session's
+  // composer state — the token was typed against the old one (plan §1.3).
+  let stagedImagesEpoch = 0
   const clearStagedImages = (): void => {
     stagedImages.clear()
     stagedImageSequence = 0
+    stagedImagesEpoch += 1
   }
   /**
    * Expand the text's `@` mentions and deliver ONE user message: the typed
@@ -2138,6 +2151,7 @@ export function createChannel(
   const state: ChannelState = {
     effortLevels: undefined,
     version: 0,
+    sessionEpoch: 0,
     rows: [],
     status: 'starting',
     sessionTitle: '',
@@ -2261,7 +2275,16 @@ export function createChannel(
       if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
         throw new Error(`image exceeds this profile's per-image size limit`)
       }
+      const stagedEpoch = stagedImagesEpoch
       const attachment = await attachments.saveImage(input)
+      // The save outlived a session swap: the map was cleared and the
+      // sequence reset for the new session, so staging now would pollute it
+      // with a placeholder its composer never typed. Fail closed — the
+      // command sink's fence drops this late completion (the swap also moved
+      // sessionEpoch).
+      if (stagedImagesEpoch !== stagedEpoch) {
+        throw new Error('staged image invalidated by a session switch')
+      }
       stagedImageSequence += 1
       const token = `[Image #${stagedImageSequence}]`
       stagedImages.set(token, attachment)
@@ -2544,6 +2567,9 @@ export function createChannel(
       // Rebind subscriptions to the new agent, then free the old one.
       const oldHandle = currentHandle
       const sourceSessionId = String(agent.session.id)
+      // Session/agent swap: bump the epoch so late async results captured
+      // under the old session are fenced off on completion (plan §1.3).
+      state.sessionEpoch += 1
       agent = handle.agent
       currentHandle = handle
       bindAgent()
@@ -2735,6 +2761,9 @@ export function createChannel(
       // Rebind subscriptions to the resumed agent, then free the old one.
       const oldHandle = currentHandle
       const previousSessionId = String(agent.session.id)
+      // Session/agent swap: bump the epoch so late async results captured
+      // under the old session are fenced off on completion (plan §1.3).
+      state.sessionEpoch += 1
       agent = handle.agent
       currentHandle = handle
       bindAgent()
@@ -2891,6 +2920,9 @@ export function createChannel(
       }
       const oldHandle = currentHandle
       const previousSessionId = String(agent.session.id)
+      // Session/agent swap: bump the epoch so late async results captured
+      // under the old session are fenced off on completion (plan §1.3).
+      state.sessionEpoch += 1
       agent = handle.agent
       currentHandle = handle
       bindAgent()
@@ -3080,6 +3112,9 @@ export function createChannel(
       // Same mid-turn-seed spinner reset as resume above.
       state.working = handle.agent.status === 'running'
       const oldHandle = currentHandle
+      // Session/agent swap: bump the epoch so late async results captured
+      // under the old session are fenced off on completion (plan §1.3).
+      state.sessionEpoch += 1
       agent = handle.agent
       currentHandle = handle
       bindAgent()

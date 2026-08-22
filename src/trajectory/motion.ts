@@ -31,13 +31,33 @@
  *
  * ## Cost
  *
- * No timer is created here. The scene subscribes once to the Ink core's
- * shared animation clock, which already pauses when the terminal loses focus
- * or the view scrolls offscreen — so an idle session animates nothing.
+ * No timer is created here. The imperative trajectory scene owns the shared
+ * animation clock and repaints only while it is active, so an idle session
+ * animates nothing.
  */
 
 import { interpolateColor, parseRGB, type RGBColor } from '../components/Spinner/spinnerUtils.js'
-import type { Color } from '../ink/styles.js'
+type RawColor =
+  | `rgb(${number},${number},${number})`
+  | `#${string}`
+  | `ansi256(${number})`
+  | `ansi:${
+    | 'black'
+    | 'red'
+    | 'green'
+    | 'yellow'
+    | 'blue'
+    | 'magenta'
+    | 'cyan'
+    | 'white'
+    | 'blackBright'
+    | 'redBright'
+    | 'greenBright'
+    | 'yellowBright'
+    | 'blueBright'
+    | 'magentaBright'
+    | 'cyanBright'
+    | 'whiteBright'}`
 
 /** Scene clock period. One tick drives every verb below. */
 export const MOTION_TICK_MS = 100
@@ -54,7 +74,7 @@ export const MOTION_SPANS = {
 const BREATH_TICKS = 6
 
 /** Format an RGB triple the way the theme and `<Text color>` expect. */
-export function rgbString(color: RGBColor): Color {
+export function rgbString(color: RGBColor): RawColor {
   return `rgb(${color.r},${color.g},${color.b})`
 }
 
@@ -67,12 +87,12 @@ export function rgbString(color: RGBColor): Color {
  * @returns A colour string `<Text color>` accepts, or `base` when either
  *   input could not be parsed (a custom theme may carry an ANSI name).
  */
-export function mix(base: string, highlight: string, t: number): Color {
+export function mix(base: string, highlight: string, t: number): RawColor {
   const from = parseRGB(base)
   const to = parseRGB(highlight)
   // An unparseable input (a custom theme may carry an ANSI name, which has no
   // channels to interpolate) falls back to the base rather than to grey.
-  if (from === null || to === null) return base as Color
+  if (from === null || to === null) return base as RawColor
   return rgbString(interpolateColor(from, to, Math.min(1, Math.max(0, t))))
 }
 
@@ -147,6 +167,6 @@ export function alert(tick: number, startTick: number): number {
  * @param base - Settled colour.
  * @param highlight - Peak-of-breath colour.
  */
-export function aliveColor(tick: number, base: string, highlight: string): Color {
+export function aliveColor(tick: number, base: string, highlight: string): RawColor {
   return mix(base, highlight, alive(tick))
 }

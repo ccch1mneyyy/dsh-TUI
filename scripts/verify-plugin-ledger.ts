@@ -327,6 +327,17 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   }
   check1('tuiShortcuts.register takes the optional identity param',
     identityParam('src/dsh-adapter/shortcuts.ts', 'options: TuiShortcutOptions'))
+  const sceneSource = readFileSync(join(root, 'src/dsh-adapter/scenes.ts'), 'utf8')
+  check1('scene descriptor is versioned and imperative',
+    sceneSource.includes("TUI_SCENE_VERSION = 'dsh-tui/pi-tui-scene@1'")
+    && sceneSource.includes('create(context: TuiSceneContext): Component'))
+  check1('scene imports the pi-tui Component, bounded view model and command sink types',
+    sceneSource.includes("import type { Component } from '../tui/public.js'")
+    && sceneSource.includes("import type { TuiCommands } from '../tui/commands.js'")
+    && sceneSource.includes("import type { ChatViewModel } from '../tui/view-model.js'"))
+  check1('legacy component and missing-version descriptors fail closed',
+    sceneSource.includes('legacy React scene descriptor')
+    && sceneSource.includes('is missing version'))
   check1('tuiScenes.register takes the optional identity param',
     identityParam('src/dsh-adapter/scenes.ts', 'descriptor: TuiSceneDescriptor'))
   check1('tuiStatus.set takes the optional identity param',
