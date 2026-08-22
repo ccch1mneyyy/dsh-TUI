@@ -46,6 +46,13 @@ const PROMOTE_EVENTS = {
 const PROJECT_CANDIDATES = ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md']
 const USER_GLOBAL_CANDIDATE = 'AGENTS.md'
 
+function alreadyHinted(session) {
+  return session.events.some(event =>
+    event.type === 'user/message'
+    && event.data?.source?.kind === 'instruction-hint',
+  )
+}
+
 function parsePromoteOn(value) {
   if (value === undefined || value === 'either') return PROMOTE_EVENTS.either
   if (value === 'tool-call' || value === 'assistant-message') return PROMOTE_EVENTS[value]
@@ -130,6 +137,7 @@ export function apply(ctx, config) {
       const session = agent.session
       if (session === undefined || hinted.has(session.id)) return decision
       hinted.add(session.id)
+      if (alreadyHinted(session)) return decision
 
       const fs = ctx.get('fs')
       if (fs === undefined) return decision
