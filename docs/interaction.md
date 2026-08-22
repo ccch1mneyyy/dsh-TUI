@@ -233,7 +233,9 @@ scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识�
 | `Space` | 多选题勾选或取消 |
 | `Tab` | 切换到自定义文本回答 |
 | `Enter` | 提交当前题 |
-| `Esc` | 取消整批提问，模型收到 `ASK_CANCELLED`（harness 侧中止仍报 `ASK_ABORTED`） |
+| `Esc`（第 2 题起） | 返回上一题并保留当前草稿 |
+| `Esc`（第 1 题） | 取消整批提问，模型收到 `ASK_CANCELLED` |
+| `Ctrl+C` | 从任意题取消整批提问，模型收到 `ASK_CANCELLED`（harness 侧中止仍报 `ASK_ABORTED`） |
 
 **最后一行是自由输入行**：直接在选项行打字 = 附加该选项标签 + 自定义文本一起
 提交（不必先 `Tab`），`Tab` 直达输入行。

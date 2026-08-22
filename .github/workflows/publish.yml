@@ -62,6 +62,9 @@ jobs:
 
       - run: node --import tsx/esm scripts/repro-askpanel.tsx
 
+      # 问卷回退回归：答案按题覆盖、草稿恢复、Esc 分层语义与最终摘要。
+      - run: node --import tsx/esm scripts/verify-question-backtrack.tsx
+
       - run: node --import tsx/esm scripts/repro-toolcards.tsx
 
       # /provider 向导与面板 hideCustomInput 回归（发版门禁同 CI）。

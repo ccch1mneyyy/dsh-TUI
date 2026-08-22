@@ -172,7 +172,8 @@ so keep using `Ctrl`.
 | `Space` | Toggle multi-select options |
 | `Tab` | Switch to a custom answer (type directly without picking an option) |
 | `Enter` | Submit the current selection |
-| `Esc` / `Ctrl+C` | Cancel the whole question batch (the model receives ASK_CANCELLED and can continue the conversation) |
+| `Esc` (from question 2 onward) | Return to the previous question and keep the current draft |
+| `Esc` (from question 1) / `Ctrl+C` | Cancel the whole question batch (the model receives ASK_CANCELLED and can continue the conversation) |
 
 **Local commands** (a full replica of the CC command set, all routed through the official DSH pipeline)
 

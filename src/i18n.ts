@@ -651,6 +651,8 @@ const dict = {
   'question-hint-enter': { zh: 'Enter 提交', en: 'Enter submit' },
   'question-hint-back': { zh: '↑ 返回选项', en: '↑ back to options' },
   'question-hint-esc': { zh: 'Esc 中断', en: 'Esc cancel' },
+  'question-hint-previous': { zh: 'Esc 上一题', en: 'Esc previous question' },
+  'question-hint-cancel': { zh: 'Ctrl+C 取消整批', en: 'Ctrl+C cancel batch' },
   'question-hint-selected': { zh: '已选 {{n}}', en: 'Selected {{n}}' },
   'question-hint-select': { zh: '↑/↓ 选择', en: '↑/↓ select' },
   'question-hint-multi': { zh: 'Space 多选', en: 'Space multi-select' },

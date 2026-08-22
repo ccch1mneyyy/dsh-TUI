@@ -271,7 +271,9 @@ keyboard:
 | `Space` | Toggle a multi-select option |
 | `Tab` | Switch to a custom text answer |
 | `Enter` | Submit the current question |
-| `Esc` | Cancel the whole batch of questions; the model receives `ASK_CANCELLED` (a harness-side abort still reports `ASK_ABORTED`) |
+| `Esc` (from question 2 onward) | Return to the previous question and keep the current draft |
+| `Esc` (from question 1) | Cancel the whole batch; the model receives `ASK_CANCELLED` |
+| `Ctrl+C` | Cancel the whole batch from any question; the model receives `ASK_CANCELLED` (a harness-side abort still reports `ASK_ABORTED`) |
 
 The last row is a free-form input line: typing directly on an option row
 submits that option's label **plus** your custom text together (no need to
