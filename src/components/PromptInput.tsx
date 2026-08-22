@@ -1496,6 +1496,22 @@ export function PromptInput({
   // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
   const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
 
+  // 浮层最佳路径（/ 命令卡、@ 文件卡、帮助/队列）经渲染器 absolute-overlay
+  // 机制覆盖转录尾部与状态行。若覆盖期间上方兄弟重绘（spinner 滴答、流式
+  // 文本），覆盖单元格会混入 prevScreen 的旧转录内容——"重叠变花"的根因
+  // （渲染器注释描述的同族问题）。Chat.tsx 对其浮层/高度切换都做视口重锚
+  // （Ctrl+O、loaded-context）；此处为斜杠/文件浮层的开关补上同样的恢复：
+  // 打开时保证卡片整块重绘、关闭时保证被覆盖行回到干净的转录内容，而非与
+  // scrollback 失同步后残留花屏。
+  const prevFloatersOpenRef = React.useRef(floatersOpen)
+  React.useLayoutEffect(() => {
+    if (floatersOpen === prevFloatersOpenRef.current) return
+    prevFloatersOpenRef.current = floatersOpen
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    ink?.invalidatePrevFrame()
+    ink?.reanchorViewport()
+  }, [floatersOpen])
+
   return (
     <Box flexDirection="column" marginTop={1}>
       {/* 瞬态面板浮层（帮助/队列/补全）：零布局高度、向上覆盖转录尾部，
