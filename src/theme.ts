@@ -517,8 +517,9 @@ export function getTheme(themeName: ThemeName): Theme {
 
 /**
  * Resolver that maps a user theme name to a fully built palette (see
- * customTheme.ts). Wired by the TUI theme bootstrap at startup so imperative
- * rendering resolves user themes through getActiveTheme().
+ * customTheme.ts). Wired by the TUI theme bootstrap (the display command
+ * group in src/tui/commands.ts) so imperative rendering resolves user themes
+ * through getActiveTheme().
  */
 let customThemeResolver: ((name: string) => Theme | undefined) | undefined
 
@@ -545,8 +546,8 @@ export function isLightThemeActive(themeName: ThemeName): boolean {
 }
 
 /**
- * Register the custom-theme resolver. Called once by ThemeProvider; the
- * resolver must return `undefined` for names it does not know so getTheme
+ * Register the custom-theme resolver. Called once by the TUI theme bootstrap;
+ * the resolver must return `undefined` for names it does not know so getTheme
  * falls back to `dark`.
  * @param resolver - Resolves a user theme name to a built palette.
  */
@@ -559,17 +560,26 @@ export function registerCustomThemeResolver(
 /**
  * The theme chosen at startup, mirrored module-level so imperative rendering
  * can resolve palette colors without a component context. The TUI theme
- * bootstrap sets this once detection settles.
+ * bootstrap sets this once detection settles, and the `/theme` command moves
+ * it on every runtime switch.
  */
 let activeThemeName: ThemeName = 'dark'
 
 /**
- * Set the module-level active theme; ThemeProvider calls this once
- * background detection settles and on every runtime theme switch.
+ * Set the module-level active theme; called once background detection settles
+ * and on every runtime `/theme` switch.
  * @param name - The theme to activate.
  */
 export function setActiveThemeName(name: ThemeName): void {
   activeThemeName = name
+}
+
+/**
+ * The module-level active theme name (`/theme` status/picker current row).
+ * @returns The active theme name.
+ */
+export function getActiveThemeName(): ThemeName {
+  return activeThemeName
 }
 
 /**

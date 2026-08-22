@@ -152,8 +152,8 @@ export interface SessionsProjection {
   readonly currentAgentId: Channel['agentId']
 }
 
-/** Settings slice: the plugin-declared sections (the screen's own form model
- *  stays in `src/dsh-adapter/settingsEditor.ts`). */
+/** Settings slice: the plugin-declared sections (the panel's own field/write
+ *  helpers stay in `src/dsh-adapter/settingsEditor.ts`). */
 export interface SettingsSectionsProjection {
   readonly meta: ProjectionMeta
   readonly sections: readonly TuiSettingsSection[]

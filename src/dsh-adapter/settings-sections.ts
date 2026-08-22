@@ -1,13 +1,13 @@
 /**
  * Plugin settings-section extension seam for terminal front doors.
  *
- * The TUI owns the settings screen: rendering, staged editing, and the
- * revision-fenced `settings.mutate` writes. Optional plugins declare WHAT is
- * editable — a section over their settings namespace — without coupling the
- * TUI to them, mirroring the web front door's `settings.plugin.item` slot
- * (plugins ship cards; the host ships the chrome). Storage, validation and
- * layering stay with the dsh settings service; this registry is display
- * metadata only.
+ * The TUI owns the settings panel: rendering and the revision-fenced
+ * `settings.mutate` writes (applied immediately on change). Optional plugins
+ * declare WHAT is editable — a section over their settings namespace —
+ * without coupling the TUI to them, mirroring the web front door's
+ * `settings.plugin.item` slot (plugins ship cards; the host ships the
+ * chrome). Storage, validation and layering stay with the dsh settings
+ * service; this registry is display metadata only.
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -170,7 +170,7 @@ export class TuiSettingsSectionsRuntime extends Service {
   }
 
   /**
-   * Subscribe to register/unregister events so an open settings screen can
+   * Subscribe to register/unregister events so an open settings panel can
    * re-read the section list (a plugin (un)loading mid-session changes it).
    */
   subscribe(listener: () => void): () => void {

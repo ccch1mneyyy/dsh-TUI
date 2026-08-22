@@ -30,8 +30,8 @@
  *
  * Methods are grouped by the component surface that uses them (input stream,
  * session lifecycle, model/preset/effort, async queries, settings, workspace,
- * informational, scenes, overlays) — not a flat union — so a component can be
- * handed only the group it needs.
+ * informational, scenes, overlays, display prefs) — not a flat union — so a
+ * component can be handed only the group it needs.
  *
  * The `overlays` group (WP-03) answers the pending approval/question/plugin
  * dialog. It delegates to the UI stores (`QuestionStore`, `ApprovalStore`,
@@ -55,6 +55,10 @@ import type {
 import type { ApprovalStore } from '../dsh-adapter/approvals.js'
 import type { TuiDialogAnswer, TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import type { QuestionSelection, QuestionStore } from '../dsh-adapter/questions.js'
+import type {
+  AskUserQuestionAnswer,
+  AskUserQuestionRequest,
+} from '@deepseek-ai/dsh-user-questions'
 import type { CommandCompletion } from '../commands.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import type { ProviderSetupHost } from '../dsh-adapter/providerWizard.js'
@@ -68,6 +72,27 @@ import type {
 } from '../dsh-adapter/workspaces.js'
 import type { AdapterLlmModelInfo as LlmModelInfo, AdapterSessionEvent as SessionEvent } from '../dsh-adapter/channel.js'
 import { logForDebugging } from '../utils/debug.js'
+import { setLang as applyI18nLang, t, writeLangPref, type Lang } from '../i18n.js'
+import {
+  AUTO_THEME_NAME,
+  getActiveThemeName,
+  getTheme,
+  registerCustomThemeResolver,
+  setActiveThemeName,
+  THEME_NAMES,
+  type Theme,
+} from '../theme.js'
+import {
+  buildTheme,
+  isThemeAvailable,
+  listCustomThemes,
+  resolveCustomTheme,
+} from '../customTheme.js'
+import { writeThemePref } from '../themePrefs.js'
+
+/** Theme keys previewed as picker swatches, chosen for visual contrast (the
+ *  old ThemePicker's SWATCH_KEYS). */
+const SWATCH_KEYS = ['claude', 'text', 'success'] as const
 
 /**
  * Fence sources shared by the command sink and the controller. One instance
@@ -114,6 +139,9 @@ export interface TuiModelCommands {
   listModels(): Promise<readonly LlmModelInfo[] | undefined>
   switchPreset(id: string): Promise<boolean>
   listPresets(): Promise<readonly PresetOption[] | undefined>
+  /** The preset the CURRENT session runs under (channel `agentPreset`), for
+   *  the `/preset` status report and the picker's active row. */
+  currentPreset(): string | undefined
   setEffort(id: string): Promise<boolean>
   listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined } | undefined>
   setActivityFrames(name: string): boolean
@@ -135,7 +163,7 @@ export interface TuiQueryCommands {
   subagentInterrupt(id: string): boolean
 }
 
-/** `/settings` screen capabilities (the form model lives in
+/** `/settings` panel capabilities (the field/write helpers live in
  *  `settingsEditor.ts`; this is the channel seam it writes through). */
 export interface TuiSettingsCommands {
   settingsHost(): SettingsHost | undefined
@@ -189,6 +217,47 @@ export interface TuiOverlayCommands {
   decideApproval(outcome: 'allowed-once' | 'rejected'): void
   decideDialog(key: string, value: TuiDialogAnswer): void
   cancelDialog(key: string): void
+  /** Local wizards (e.g. `/provider`) drive the same question panel the
+   *  model-facing ask_user_question tool uses. Rejects when the UI stores are
+   *  absent (headless hosts) — the wizard catches and reports 'failed'. */
+  askQuestion(
+    request: AskUserQuestionRequest,
+    options?: { redact?: boolean },
+  ): Promise<AskUserQuestionAnswer>
+}
+
+/** One `/theme` picker row (auto + built-in palettes + user themes). */
+export interface ThemeOption {
+  readonly name: string
+  readonly displayName?: string
+  readonly description?: string
+  /** Preview colors (Theme color values) rendered as swatches by the picker. */
+  readonly colors?: readonly string[]
+}
+
+/**
+ * Display preferences (theme + UI language). Unlike every other group these
+ * do NOT delegate to the channel: theme/language are UI-local module state
+ * (src/theme.ts, src/i18n.ts) persisted under ~/.dsh-tui — the old
+ * ThemeProvider owned the same writes. `setLang` additionally mirrors into
+ * the settings service's `dsh-tui` namespace when one is mounted, so
+ * `/settings` and the next boot agree (best effort; lang.json stays the
+ * fallback). All methods are synchronous and unfenced: they mutate no
+ * session state.
+ */
+export interface TuiDisplayCommands {
+  /** The selectable theme catalog: `auto` first, then the built-in palettes,
+   *  then user themes from ~/.dsh-tui/themes (sorted by name). */
+  listThemes(): readonly ThemeOption[]
+  /** The active theme name (module-level mirror in src/theme.ts). */
+  currentTheme(): string
+  /** Validate, persist (~/.dsh-tui/theme.json) and hot-swap a theme; false
+   *  when the name is unknown or the preference cannot be written. */
+  setTheme(name: string): boolean
+  /** Persist (~/.dsh-tui/lang.json) and hot-swap the UI language, mirroring
+   *  into the settings namespace when served; false when the preference file
+   *  cannot be written. */
+  setLang(lang: Lang): boolean
 }
 
 /** The sink a migrated component receives, grouped by consumer surface. */
@@ -202,6 +271,7 @@ export interface TuiCommands {
   readonly info: TuiInfoCommands
   readonly scene: TuiSceneCommands
   readonly overlays: TuiOverlayCommands
+  readonly display: TuiDisplayCommands
 }
 
 export interface TuiCommandsDeps {
@@ -219,6 +289,11 @@ export interface TuiCommandsDeps {
 /** Create the command sink over one channel + one fence source. */
 export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
   const { channel, fences, stores } = deps
+
+  // User themes resolve through the module-level resolver in src/theme.ts;
+  // the old ThemeProvider registered it at mount, the sink owns it now (one
+  // sink per TUI boot, and the registration is idempotent).
+  registerCustomThemeResolver(resolveCustomTheme)
 
   /**
    * Run an async channel read fenced by sessionEpoch/generation. A result or
@@ -355,6 +430,9 @@ export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
       listPresets() {
         return fenced('listPresets', () => channel.listPresets())
       },
+      currentPreset() {
+        return channel.agentPreset
+      },
       setEffort(id) {
         // Same no-self-bump shape as switchPreset.
         return fencedWrite('setEffort', () => false, false, () => channel.setEffort(id))
@@ -484,6 +562,66 @@ export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
       },
       cancelDialog(key) {
         stores?.dialogs?.cancel(key)
+      },
+      askQuestion(request, options) {
+        if (stores === undefined) {
+          return Promise.reject(new Error('dsh-tui: question store is not wired into this host'))
+        }
+        return stores.questions.ask(request, options)
+      },
+    },
+    display: {
+      listThemes() {
+        const option = (name: string, displayName: string, theme: Theme, description: string): ThemeOption => ({
+          name,
+          displayName,
+          description,
+          colors: SWATCH_KEYS.map(key => theme[key]),
+        })
+        const builtins = THEME_NAMES.map(name =>
+          option(name, name, getTheme(name), t('theme-builtin-base', { name })))
+        const custom = listCustomThemes()
+          .filter(spec => spec.name !== AUTO_THEME_NAME)
+          .map(spec =>
+            option(spec.name, spec.displayName, buildTheme(spec), t('theme-user-base', { base: spec.base, name: spec.name })))
+        return [
+          option(AUTO_THEME_NAME, AUTO_THEME_NAME, getTheme(AUTO_THEME_NAME), t('theme-auto-base')),
+          ...builtins,
+          ...custom,
+        ]
+      },
+      currentTheme() {
+        return getActiveThemeName()
+      },
+      setTheme(name) {
+        // Persist first (a choice that cannot be saved never silently
+        // disappears), then hot swap the module-level palette. Switching to
+        // `auto` keeps the boot-detected base: the imperative root owns no
+        // OSC 11 querier, so the old ThemeProvider's live re-detection has
+        // no equivalent here.
+        if (!isThemeAvailable(name)) {
+          logForDebugging(`theme "${name}" not found`)
+          return false
+        }
+        if (!writeThemePref(name)) {
+          logForDebugging('failed to write ~/.dsh-tui/theme.json')
+          return false
+        }
+        setActiveThemeName(name)
+        return true
+      },
+      setLang(lang) {
+        const ok = writeLangPref(lang)
+        applyI18nLang(lang)
+        // Mirror into the settings service's dsh-tui namespace when served,
+        // so /settings and the next boot see the same last-write-wins choice
+        // (best effort; lang.json stays the fallback).
+        const host = channel.settingsHost()
+        const view = host?.listNamespaces().find(entry => entry.ns === 'dsh-tui')
+        if (host !== undefined && view !== undefined) {
+          void host.write('dsh-tui', [{ op: 'set', path: ['lang'], value: lang }], view.revision).catch(() => {})
+        }
+        return ok
       },
     },
   }

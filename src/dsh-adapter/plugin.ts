@@ -368,7 +368,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
-  // Register the dsh-tui settings namespace so the /settings screen can
+  // Register the dsh-tui settings namespace so the /settings panel can
   // edit it (the section below was '命名空间未注册' without this): the
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and
   // watch() lands commits on the live channel — no recompose needed.
@@ -455,7 +455,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       apply(next)
     })
   })
-  // The /settings screen's own section: the dsh-tui namespace comes from
+  // The /settings panel's own section: the dsh-tui namespace comes from
   // the settings registration above, and the declared selects write `lang`
   // and `diffLayout` back through the settings service's revision-fenced
   // mutate (the watch applies both live).

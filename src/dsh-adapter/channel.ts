@@ -2017,9 +2017,12 @@ export function createChannel(
           timeoutMs: 4000,
         })
       }
-      // `undefined` = not registered; a handler error surfaces as its
-      // message so the user sees why the command failed.
-      return execution?.result.text ?? ''
+      // `undefined` = not registered (the caller's documented fallback
+      // signal — never flatten it to ''); a textless success reads as '' and
+      // a handler error surfaces as its message so the user sees why the
+      // command failed.
+      if (execution === undefined) return undefined
+      return execution.result.text ?? ''
     } catch (error) {
       return error instanceof Error ? error.message : String(error)
     }
@@ -3409,7 +3412,7 @@ export function createChannel(
     settingsHost(): SettingsHost | undefined {
       if (settingsHostResolved) return settingsHostCache
       settingsHostResolved = true
-      // The `/settings` screen's runtime surface, over the same dsh-base
+      // The `/settings` panel's runtime surface, over the same dsh-base
       // seams the `/provider` wizard uses: settings (namespace descriptors +
       // revision-fenced mutate) and credentials (secret writes). Structurally
       // typed like the other optional seams in this file.

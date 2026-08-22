@@ -323,7 +323,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
     tuiCommands.includes('return channel.pluginsInfo(rawInput)'))
   const chatScreen = readFileSync(join(root, 'src/tui/screens/chat-screen.ts'), 'utf8')
   check1('imperative ChatScreen routes slash commands through TUI commands',
-    chatScreen.includes('runExternalCommand(name, rawInput)'))
+    chatScreen.includes('commands.input.runExternalCommand('))
   const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
   check1('channel interface declares pluginsInfo(args)', channel.includes('pluginsInfo(args: string): string[]'))
   check1('channel implementation soft-probes tuiPluginHost for pluginsInfo',
