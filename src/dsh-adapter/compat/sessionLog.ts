@@ -3,8 +3,9 @@
  *
  * Title lookup tolerates event types unknown to the current harness. Offline
  * rename and delete support the `/resume` picker when no live Agent owns the
- * selected persisted session. The resume seam registers vouched-for legacy
- * event types into every reachable KNOWN_SESSION_EVENT_TYPES copy so the
+ * selected persisted session. The resume seam registers vouched-for event
+ * types — legacy third-party residue and the channel's own durable UI
+ * toggles — into every reachable KNOWN_SESSION_EVENT_TYPES copy so the
  * strict read path stops rejecting whole sessions over them (issue #153).
  *
  * Registration background: plugins like dsh-working-activity (< the publish
@@ -29,12 +30,18 @@
  * on disk and degrades to exactly the pre-patch behavior when no copy
  * resolves.
  *
- * Whitelist discipline: ONLY `activity/status` — the type the plugin
- * provably wrote as ephemeral UI frames. Anything else unknown stays
- * unknown: upstream's fail-closed ("likely written by a newer harness") is
- * a feature — silently skipping a REQUIRED future event would reconstruct
- * a wrong session. Retires the day upstream's shared catalog adopts the
- * type or ships a real registration API (the add() calls become no-ops).
+ * Whitelist discipline: ONLY vetted log-only UI frames join the list.
+ * `activity/status` is the type dsh-working-activity provably wrote as
+ * ephemeral UI frames. `plan-prompt/mode` is dsh-tui's own durable
+ * `/planPrompt` switch ({ active: boolean }): the channel folds it for the
+ * status line and the packaged liangshen persona gates prompt injection on
+ * it, but session reconstruction (surface/message folds and
+ * adoptSessionEvent's default branch) never reads it — accepting it cannot
+ * rebuild a wrong session. Anything else unknown stays unknown: upstream's
+ * fail-closed ("likely written by a newer harness") is a feature — silently
+ * skipping a REQUIRED future event would reconstruct a wrong session.
+ * Entries retire the day upstream's shared catalog adopts the type or ships
+ * a real registration API (the add() calls become no-ops).
  *
  * @module @deepseek-harness-tui/dsh-tui/compat/sessionLog
  */
@@ -52,12 +59,14 @@ import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { homeDir } from '../../utils/paths.js'
 
 /**
- * Legacy third-party session-event types the TUI vouches for as ephemeral
- * UI frames — safe for the strict read path to accept and skip. Exported
- * for the regression verifier; grow it only with proof the type was always
- * inert (never load-bearing for session reconstruction).
+ * Event types the TUI vouches for as log-only UI frames — safe for the
+ * strict read path to accept and skip. `activity/status` covers the legacy
+ * third-party residue (issue #153); `plan-prompt/mode` covers the channel's
+ * own `/planPrompt` switch appended by the current build. Exported for the
+ * regression verifier; grow it only with proof the type was always inert
+ * (never load-bearing for session reconstruction).
  */
-export const LEGACY_SESSION_EVENT_TYPES: readonly string[] = ['activity/status']
+export const LEGACY_SESSION_EVENT_TYPES: readonly string[] = ['activity/status', 'plan-prompt/mode']
 
 /** Zstd frame magic number, little-endian (0xFD2FB528). */
 const ZSTD_MAGIC = 0xfd2fb528

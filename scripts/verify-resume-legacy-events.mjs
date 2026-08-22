@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 /**
- * Regression: resume-seam legacy event-type registration
- * (src/dsh-adapter/compat/sessionLog.ts, issue #153).
+ * Regression: resume-seam event-type registration
+ * (src/dsh-adapter/compat/sessionLog.ts, issue #153 + the /planPrompt
+ * persistence bug).
  *
  * Part 1 boots the REAL upstream storage stack (SessionStore + the jsonl
- * persistence backend) against a temp root with hand-crafted pre-#143 logs
- * (activity/status present, no ignorable marker — the shape that made
- * resume reject whole sessions), and asserts through the backend's own
- * strict read path:
- *   1. before registration, load() rejects with SessionFormatUnsupportedError
- *      ("not marked ignorable") — the exact failure from issue #153;
- *   2. ensureLegacySessionEventTypes() flips the SAME load() to success via
+ * persistence backend) against a temp root. Tainted logs carry either the
+ * pre-#143 `activity/status` residue or the channel's own
+ * `plan-prompt/mode` UI toggle (no ignorable marker — the shape that makes
+ * resume reject whole sessions), plus one log written through a LIVE
+ * SessionStore "toggle" (the exact write path `channel.setPlanPrompt` uses),
+ * and asserts through the backend's own strict read path:
+ *   1. before registration, every tainted load() rejects with
+ *      SessionFormatUnsupportedError ("not marked ignorable") — including
+ *      the toggle-then-resume shape a fresh runtime sees;
+ *   2. ensureLegacySessionEventTypes() flips the SAME loads to success via
  *      the validator's own dsh-session copy (anchor coverage is e2e-proven,
- *      not assumed);
- *   3. the log file stays byte-identical and keeps its 0600 mode —
+ *      not assumed), and the toggled event's payload survives intact;
+ *   3. every log file stays byte-identical and keeps its 0600 mode —
  *      registration never rewrites the shared store (no lost concurrent
  *      frames, no permission/checksum drift, no torn-tail parsing);
  *   4. whitelist discipline: a non-whitelisted unknown type (standing in
@@ -27,13 +31,14 @@
  * physical dsh-session copy — three distinct module instances. A child
  * process launched from the CLI tree runs the compiled
  * ensureLegacySessionEventTypes and must register ALL THREE copies
- * (profile, CLI-direct, validator-nested), proving the anchor walk covers
- * trees the lockfile's single-copy layout cannot exercise here.
+ * (profile, CLI-direct, validator-nested) with BOTH whitelisted types,
+ * proving the anchor walk covers trees the lockfile's single-copy layout
+ * cannot exercise here.
  * Exits non-zero on any assertion failure (CI gate).
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,10 +53,10 @@ const {
   LEGACY_SESSION_EVENT_TYPES,
 } = await import('../lib/types/dsh-adapter/compat/sessionLog.js')
 
-/** Hand-craft one pre-#143 shaped log: header frame + one event frame. */
-function writeTaintedLog(id, eventType) {
+/** Hand-craft one tainted log: header frame + one event frame. */
+function writeTaintedLog(id, eventType, data = {}) {
   const header = { type: 'session', version: SESSION_FORMAT_VERSION, id, createdAt: 1, cwd: '/tmp/verify', delegationDepth: 0 }
-  const event = { type: eventType, seq: 0, time: 2, data: {} }
+  const event = { type: eventType, seq: 0, time: 2, data }
   const dir = join(root, '--tmp-verify--', id)
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'session.jsonl.zstd')
@@ -66,44 +71,86 @@ function writeTaintedLog(id, eventType) {
   return file
 }
 
+/** Await a Jsonl plugin mount across the fork shapes cordis emits. */
+async function mountJsonl(target, storeRoot) {
+  const fork = target.plugin(Jsonl, { root: storeRoot })
+  if (fork && typeof fork.await === 'function') await fork.await()
+  else await fork
+}
+
+const legacyId = '00000000-1111-2222-3333-444444444444'
+const planPromptId = '11111111-2222-3333-4444-555555555555'
+const futureId = '55555555-6666-7777-8888-999999999999'
+const legacyFile = writeTaintedLog(legacyId, 'activity/status')
+const planPromptFile = writeTaintedLog(planPromptId, 'plan-prompt/mode', { active: true })
+writeTaintedLog(futureId, 'acme/required-policy') // non-whitelisted unknown
+
+// Live "toggle then resume" write through a REAL SessionStore session:
+// the JS-equivalent of channel.setPlanPrompt's cast-append. The backend
+// must land it under the cwd-derived project dir, exactly where a later
+// resume reads it.
+const liveId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+{
+  const writer = new Context()
+  await writer.plugin(SessionStore)
+  await mountJsonl(writer, root)
+  const session = writer.sessions.create(liveId, { meta: { cwd: '/tmp/verify' } })
+  session.append('plan-prompt/mode', { active: true })
+  assert.equal(await writer.sessions.flush(session), true, 'live toggle flush participates durably')
+}
+const liveFile = join(root, '--tmp-verify--', liveId, 'session.jsonl.zstd')
+assert.ok(existsSync(liveFile), 'live toggle landed in the backend artifact layout')
+
+// Fresh runtime on the same root = the resume process.
 const ctx = new Context()
 await ctx.plugin(SessionStore)
-const fork = ctx.plugin(Jsonl, { root })
-if (fork && typeof fork.await === 'function') await fork.await()
-else await fork
+await mountJsonl(ctx, root)
 const persistence = ctx.get('sessionPersistence')
 assert.ok(persistence, 'sessionPersistence service mounted')
 
-const legacyId = '00000000-1111-2222-3333-444444444444'
-const futureId = '55555555-6666-7777-8888-999999999999'
-const legacyFile = writeTaintedLog(legacyId, 'activity/status')
-writeTaintedLog(futureId, 'acme/required-policy') // non-whitelisted unknown
+const tainted = [
+  { id: legacyId, file: legacyFile },
+  { id: planPromptId, file: planPromptFile },
+  { id: liveId, file: liveFile },
+]
 
-// 1. The exact issue #153 failure, through the real validator.
-await assert.rejects(
-  () => persistence.load(legacyId),
-  (error) => {
-    assert.equal(error.name, 'SessionFormatUnsupportedError')
-    assert.match(error.message, /not marked ignorable/)
-    return true
-  },
-  'tainted log must reject before registration',
-)
+// 1. Every tainted log — hand-crafted legacy, hand-crafted channel toggle,
+//    AND the live-written toggle — rejects through the real validator.
+for (const { id } of tainted) {
+  await assert.rejects(
+    () => persistence.load(id),
+    (error) => {
+      assert.equal(error.name, 'SessionFormatUnsupportedError', `${id} rejection name`)
+      assert.match(error.message, /not marked ignorable/, `${id} rejection message`)
+      if (id !== legacyId) assert.match(error.message, /plan-prompt\/mode/, `${id} names the channel event type`)
+      return true
+    },
+    `${id} must reject before registration`,
+  )
+}
 
-const bytesBefore = readFileSync(legacyFile)
-const modeBefore = statSync(legacyFile).mode & 0o777
+const bytesBefore = new Map(tainted.map(({ id, file }) => [id, readFileSync(file)]))
+const modeBefore = new Map(tainted.map(({ id, file }) => [id, statSync(file).mode & 0o777]))
 
-// 2. Registration flips the same load to success.
+// 2. Registration flips the same loads to success.
 ensureLegacySessionEventTypes()
-const loaded = await persistence.load(legacyId)
-assert.equal(loaded.events.length, 1, 'legacy session loads after registration')
-assert.equal(loaded.events[0].type, 'activity/status')
+const loadedLegacy = await persistence.load(legacyId)
+assert.equal(loadedLegacy.events.length, 1, 'legacy session loads after registration')
+assert.equal(loadedLegacy.events[0].type, 'activity/status')
+for (const id of [planPromptId, liveId]) {
+  const loaded = await persistence.load(id)
+  assert.equal(loaded.events.length, 1, `${id} loads after registration`)
+  assert.equal(loaded.events[0].type, 'plan-prompt/mode', `${id} keeps the channel event type`)
+  assert.equal(loaded.events[0].data.active, true, `${id} keeps the toggled payload`)
+}
 
 // 3. The shared store was never rewritten.
-assert.equal(Buffer.compare(readFileSync(legacyFile), bytesBefore), 0, 'log bytes untouched')
-assert.equal(statSync(legacyFile).mode & 0o777, modeBefore, 'log mode untouched')
-if (process.platform !== 'win32') {
-  assert.equal(modeBefore, 0o600, 'fixture really exercised the 0600 contract')
+for (const { id, file } of tainted) {
+  assert.equal(Buffer.compare(readFileSync(file), bytesBefore.get(id)), 0, `${id} log bytes untouched`)
+  assert.equal(statSync(file).mode & 0o777, modeBefore.get(id), `${id} log mode untouched`)
+  if (process.platform !== 'win32') {
+    assert.equal(modeBefore.get(id), 0o600, `${id} fixture really exercised the 0600 contract`)
+  }
 }
 
 // 4. Fail-closed preserved: the non-whitelisted unknown still rejects.
@@ -119,7 +166,8 @@ for (const type of LEGACY_SESSION_EVENT_TYPES) {
 }
 assert.ok(!KNOWN_SESSION_EVENT_TYPES.has('acme/required-policy'), 'unknown stays unknown')
 ensureLegacySessionEventTypes() // second call: no-op, never throws
-assert.equal((await persistence.load(legacyId)).events.length, 1, 'still loads after re-ensure')
+assert.equal((await persistence.load(legacyId)).events.length, 1, 'legacy still loads after re-ensure')
+assert.equal((await persistence.load(planPromptId)).events.length, 1, 'plan-prompt still loads after re-ensure')
 
 // --- part 2: split CLI/profile trees ---------------------------------------
 // Three PHYSICAL dsh-session copies (stub packages — anchor coverage is
@@ -191,6 +239,9 @@ async function main() {
     profileRegistered: copies[0].KNOWN_SESSION_EVENT_TYPES.has('activity/status'),
     cliRegistered: copies[1].KNOWN_SESSION_EVENT_TYPES.has('activity/status'),
     validatorRegistered: copies[2].KNOWN_SESSION_EVENT_TYPES.has('activity/status'),
+    profilePlanPromptRegistered: copies[0].KNOWN_SESSION_EVENT_TYPES.has('plan-prompt/mode'),
+    cliPlanPromptRegistered: copies[1].KNOWN_SESSION_EVENT_TYPES.has('plan-prompt/mode'),
+    validatorPlanPromptRegistered: copies[2].KNOWN_SESSION_EVENT_TYPES.has('plan-prompt/mode'),
   }))
 }
 main().catch((error) => { console.error(error); process.exit(1) })
@@ -203,15 +254,17 @@ const launched = spawnSync(process.execPath, [launcherPath], {
 assert.equal(launched.status, 0, `split fixture child failed:\n${launched.stderr}`)
 const coverage = JSON.parse(launched.stdout.trim().split('\n').at(-1))
 assert.equal(coverage.distinctCopies, true, 'fixture must hold three distinct dsh-session instances')
-assert.deepEqual(
-  {
-    profileRegistered: coverage.profileRegistered,
-    cliRegistered: coverage.cliRegistered,
-    validatorRegistered: coverage.validatorRegistered,
-  },
-  { profileRegistered: true, cliRegistered: true, validatorRegistered: true },
-  'registration must reach the profile tree, the CLI tree, AND the validator-own copy',
-)
+for (const [prefix, planPromptKey] of [
+  ['profile', 'profilePlanPromptRegistered'],
+  ['cli', 'cliPlanPromptRegistered'],
+  ['validator', 'validatorPlanPromptRegistered'],
+]) {
+  assert.deepEqual(
+    { registered: coverage[`${prefix}Registered`], planPromptRegistered: coverage[planPromptKey] },
+    { registered: true, planPromptRegistered: true },
+    `registration must reach the ${prefix} copy with BOTH whitelisted types`,
+  )
+}
 
 rmSync(fixture, { recursive: true, force: true })
 rmSync(root, { recursive: true, force: true })

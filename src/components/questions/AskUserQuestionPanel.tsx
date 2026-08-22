@@ -52,6 +52,13 @@ export type AskUserQuestionPanelProps = {
   readonly onAnswer: (selection: QuestionSelection) => void
   /** Esc / Ctrl+C — aborts the whole ask (ASK_ABORTED back to the model). */
   readonly onCancel: () => void
+  /** Plan-review Exit planning row; defaults to onCancel for non-Chat
+   *  callers that render a plan-review question without the store hook. */
+  readonly onExitPlanning?: () => void
+  /** Enable the plan-review Exit planning row (Liangshen preset with
+   *  `/planPrompt` on). When false (the default), the panel shows the
+   *  asker's own decline option verbatim with keep-planning semantics. */
+  readonly exitPlanning?: boolean
 }
 
 export function AskUserQuestionPanel({
@@ -61,12 +68,22 @@ export function AskUserQuestionPanel({
   answered,
   onAnswer,
   onCancel,
+  onExitPlanning,
+  exitPlanning,
 }: AskUserQuestionPanelProps): React.ReactNode {
   // Plan-mode's exit_plan_mode ask carries a presentation intent: render
   // the CC-style decision card instead of the generic questionnaire. The
   // branch precedes every hook so hook order stays stable per remount key.
   if (question.intent?.kind === 'plan-review') {
-    return <PlanReviewPanel question={question} onAnswer={onAnswer} onCancel={onCancel} />
+    return (
+      <PlanReviewPanel
+        question={question}
+        onAnswer={onAnswer}
+        onCancel={onCancel}
+        onExitPlanning={onExitPlanning ?? onCancel}
+        exitPlanning={exitPlanning}
+      />
+    )
   }
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true

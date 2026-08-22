@@ -697,9 +697,13 @@ const dict = {
 
   // ── components/questions/PlanReviewPanel.tsx ────────────────────────
   'plan-review-fallback-header': { zh: '计划评审', en: 'Plan review' },
+  'plan-review-exit-label': { zh: 'Exit planning', en: 'Exit planning' },
+  'plan-review-exit-description': { zh: '退出 plan mode 并关闭 /planPrompt 注入（不批准当前计划）', en: 'Leave plan mode and turn off the /planPrompt injection without approving this plan.' },
   'plan-review-feedback-placeholder': { zh: '输入反馈，告诉模型要改什么…', en: 'Tell the model what to change…' },
   'plan-review-approve-needs-empty': { zh: '请先清空反馈再批准（或在输入行回车提交反馈）', en: 'Clear the feedback to approve (or press Enter on the input row to send it)' },
+  'plan-review-exit-needs-empty': { zh: '请先清空反馈再退出规划（或在输入行回车提交反馈）', en: 'Clear the feedback to exit planning (or press Enter on the input row to send it)' },
   'plan-review-hint': { zh: '↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · Enter 提交 · Esc 打断评审', en: '↑/↓ select · 1/2 quick-pick · type feedback · Enter submit · Esc dismiss' },
+  'plan-review-exit-hint': { zh: '↑/↓ 选择 · 1 批准 / 2 退出规划 · 打字输入反馈 · Enter 提交 · Esc 打断评审', en: '↑/↓ select · 1 approve / 2 exit planning · type feedback · Enter submit · Esc dismiss' },
 
   // ── providerWizard.ts ────────────────────────────────────────────────
   'provider-unavailable': { zh: '/provider 需要经 dsh profile 启动（settings / credentials / llm-pi-ai 服务未挂载）', en: '/provider requires starting through a dsh profile (settings / credentials / llm-pi-ai services not mounted)' },
@@ -815,8 +819,21 @@ const dict = {
   // Registry-injected (external) commands — zh only; en falls back to the
   // registry's own description, and unlisted externals always fall back.
   'cmd-desc-plan': { zh: '切换计划模式（/plan off 退出）' },
+  'cmd-desc-planPrompt': { zh: '进入 plan mode 并注入梁神模式 plan 提示词（/planPrompt off 关闭并退出）' },
   'cmd-desc-goal': { zh: '设置或查看会话目标' },
   'cmd-desc-feedback': { zh: '提交使用反馈' },
+
+  // ── /planPrompt command ─────────────────────────────────────────────
+  'plan-prompt-on': { zh: '已开启梁神模式 plan prompt，并进入 plan mode · /planPrompt off 关闭', en: 'Liangshen plan prompt on and plan mode entered · /planPrompt off to disable' },
+  'plan-prompt-off': { zh: '已关闭梁神模式 plan prompt，并退出 plan mode · /planPrompt 重新开启', en: 'Liangshen plan prompt off and plan mode exited · /planPrompt to re-enable' },
+  'plan-prompt-already-on': { zh: '梁神模式 plan prompt 注入已处于开启状态', en: 'Liangshen plan prompt injection is already on' },
+  'plan-prompt-already-off': { zh: '梁神模式 plan prompt 注入已处于关闭状态', en: 'Liangshen plan prompt injection is already off' },
+  'plan-prompt-status-on': { zh: '状态：已开启（plan mode 激活时注入 plan prompt）', en: 'Status: on (the plan prompt is injected while plan mode is active)' },
+  'plan-prompt-status-off': { zh: '状态：已关闭（保持 Minimal 系统提示）', en: 'Status: off (the Minimal system prompt is unchanged)' },
+  'plan-prompt-usage': { zh: '用法：/planPrompt 开启 · /planPrompt off 关闭 · /planPrompt status 查看', en: 'Usage: /planPrompt to enable · /planPrompt off to disable · /planPrompt status' },
+  'plan-prompt-unavailable': { zh: '/planPrompt 仅在梁神模式（/preset liangshen）可用', en: '/planPrompt is only available in Liangshen mode (/preset liangshen)' },
+  'plan-status-on': { zh: '计划模式：已开启', en: 'Plan mode: on' },
+  'plan-status-off': { zh: '计划模式：已关闭', en: 'Plan mode: off' },
 
   // ── /lang command ───────────────────────────────────────────────────
   'lang-current': { zh: '当前语言  {{lang}}', en: 'Current language  {{lang}}' },

@@ -76,6 +76,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'status', description: 'Show session status' },
   { name: 'cost', description: 'Show session token usage' },
   { name: 'config', description: 'Show the dsh-tui configuration source' },
+  { name: 'planPrompt', description: 'Enter plan mode and inject the plan prompt in Liangshen mode (off exits)' },
   { name: 'settings', description: 'View and edit plugin settings' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
@@ -161,7 +162,10 @@ export function localizedDescription(command: LocalCommand & { descriptionKey?: 
 /**
  * Parse a slash-command line into its name and the verbatim input following
  * the name (separator whitespace included) — the same split the DSH command
- * registry uses, so `/plan off` dispatches `plan` with ` off`.
+ * registry uses, so `/plan off` dispatches `plan` with ` off`. Unlike the
+ * registry, local commands may use camelCase (e.g. `/planPrompt`); the
+ * case-insensitive match preserves the typed name so dispatch can compare it
+ * against the local catalog.
  *
  * @param line - Complete candidate command line.
  * @returns The parsed name and raw input, or `undefined` when the line is
@@ -170,7 +174,7 @@ export function localizedDescription(command: LocalCommand & { descriptionKey?: 
 export function parseCommandName(
   line: string,
 ): { name: string; rawInput: string } | undefined {
-  const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/.exec(line)
+  const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/iu.exec(line)
   if (match === null) return undefined
   return { name: match[1], rawInput: line.slice(match[0].length) }
 }

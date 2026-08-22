@@ -99,6 +99,9 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
   与 Scoop 约定目录，最后兜底 PATH 上的裸 `bash`，且始终拒绝把 System32 的 WSL 启动器
   当作 Git Bash。可用环境变量 `DSH_TUI_LIANGSHEN_BASH_PATH` 显式指定 `bash.exe` 绝对
   路径（设置后即为唯一候选，找不到即告警并跳过注册，首轮直接放开完整工具目录）。
+- 梁神模式的系统提示默认保持 Minimal 原样；`/planPrompt` 会进入 plan mode 并把
+  plan-mode 配置中的 plan 提示词注入当前会话系统提示，`/planPrompt off` 关闭注入并
+  退出 plan mode。`/plan` 本身的用法不变。
 
 自定义 preset 放在 `$DSH_HOME/.agent-presets/<name>/`，目录中应包含
 `agent.cordis.yml`。默认 `DSH_HOME` 下的路径即 `~/.dsh/.agent-presets/`。

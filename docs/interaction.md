@@ -244,14 +244,18 @@ transcript。
 ## 计划评审（plan review）
 
 计划模式下模型调用 `exit_plan_mode` 时，计划全文以 markdown 渲染在评审面板中
-（`intent: plan-review` 的专用决策布局）：
+（`intent: plan-review` 的专用决策布局）。仅梁神模式且 `/planPrompt` 开启时，
+第一个非批准选项会显示为 `Exit planning`；其他 preset（以及梁神未开启
+`/planPrompt`）显示提问方原始标签，按"继续规划"处理：
 
 | 按键 | 行为 |
 | --- | --- |
 | `Up/Down` | 在选项与底部反馈输入行之间移动 |
 | `1`/`2` | 直接提交对应选项（反馈缓冲为空时；非空则数字视为反馈字符） |
 | 打字 | 进入反馈输入行 |
-| `Enter`（选项行） | 提交该选项；批准行有反馈时会报错——批准必须不带反馈，否则协议视为"继续规划" |
+| `Enter`（`Approve` 行） | 批准计划并退出 plan mode；有反馈时会报错——批准必须不带反馈，否则协议视为"继续规划" |
+| `Enter`（其他选项行） | 提交该选项（通常是"继续规划"，可附反馈文本） |
+| `Enter`（`Exit planning` 行） | 仅梁神模式且 `/planPrompt` 开启时显示：不批准当前计划，直接退出 plan mode 并关闭 `/planPrompt`；模型收到停止并等待下一条消息的提示 |
 | `Enter`（输入行） | 提交"继续规划"并附上反馈文本 |
 | `Esc` | 打断评审去说话（`ASK_CANCELLED`），模型停留在计划模式 |
 

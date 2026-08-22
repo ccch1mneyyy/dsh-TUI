@@ -704,6 +704,45 @@ export function Chat({
         setActivityPickerOpen(true)
         return true
       }
+      case 'planPrompt': {
+        // Liangshen-only plan prompt switch. The command lives in the local
+        // catalog only when channel.agentPreset === 'liangshen'; the channel
+        // appends `plan-prompt/mode` AND keeps `plan/mode` consistent, so
+        // the injected "You are in plan mode" prompt and `exit_plan_mode`
+        // agree. Plain `/plan` behavior is unchanged.
+        setHelpOpen(false)
+        const parts = rawInput.trim().toLowerCase().split(/\s+/).filter(Boolean)
+        if (parts.length === 0 || parts[0] === 'on') {
+          const before = channel.planPromptEnabled()
+          const enabled = channel.setPlanPrompt(true)
+          if (enabled === undefined) {
+            channel.notify(t('plan-prompt-unavailable'), { color: 'warning' })
+          } else {
+            channel.notify(before ? t('plan-prompt-already-on') : t('plan-prompt-on'), { color: 'success' })
+          }
+          return true
+        }
+        if (parts[0] === 'off') {
+          const before = channel.planPromptEnabled()
+          const enabled = channel.setPlanPrompt(false)
+          if (enabled === undefined) {
+            channel.notify(t('plan-prompt-unavailable'), { color: 'warning' })
+          } else {
+            channel.notify(before ? t('plan-prompt-off') : t('plan-prompt-already-off'), { color: 'success' })
+          }
+          return true
+        }
+        if (parts[0] === 'status') {
+          channel.pushLocal('/planPrompt', [
+            channel.planPromptEnabled() ? t('plan-prompt-status-on') : t('plan-prompt-status-off'),
+            channel.planModeEnabled() ? t('plan-status-on') : t('plan-status-off'),
+            t('plan-prompt-usage'),
+          ])
+          return true
+        }
+        channel.notify(t('plan-prompt-usage'), { color: 'warning' })
+        return true
+      }
       case 'preset': {
         // issue #8: bare `/preset` opens the roster picker (standard/code/
         // minimal/cordis plus any user-authored presets); `/preset <id>`
@@ -2542,6 +2581,8 @@ export function Chat({
             answered={questionSnapshot.answered}
             onAnswer={selection => questionStore.answerCurrent(selection)}
             onCancel={() => questionStore.cancelCurrent()}
+            onExitPlanning={() => questionStore.exitPlanReview()}
+            exitPlanning={channel.agentPreset === 'liangshen' && channel.planPromptEnabled()}
           />
         ) : (
           <PromptInput

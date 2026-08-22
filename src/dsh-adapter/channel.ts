@@ -82,6 +82,23 @@ import type {
   TuiRewindPromptDecision,
 } from './extension-events.js'
 
+/**
+ * Seam 1 (session persistence), type layer: dsh-session's `SessionEventType`
+ * is `keyof SessionEventMap` and the map explicitly supports plugin-merged
+ * extensions, so the channel's own durable `/planPrompt` switch gets a real
+ * typed member instead of the `as unknown` casts at the append sites. Keep
+ * the literal in sync with `LIANGSHEN_PLAN_PROMPT_EVENT` below and with
+ * `PLAN_PROMPT_EVENT` in `presets/liangshen/plan-aware-persona.mjs`
+ * (`scripts/verify-liangshen-plan-persona.mjs` locks the preset half).
+ * Compile-time only — the runtime registration lives in
+ * `compat/sessionLog.ts` (`ensureLegacySessionEventTypes`).
+ */
+declare module '@deepseek-ai/dsh-session' {
+  interface SessionEventMap {
+    'plan-prompt/mode': { active: boolean }
+  }
+}
+
 /** `tui/input` return normalization: transform/handled/cancel or no opinion.
  *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
  *  continues so a later veto listener still runs. */
@@ -677,11 +694,31 @@ export interface Channel {
   readonly mode: SessionModeSpec
   /** Index of `mode` in the configured cycle; 0 is the unmarked base mode. */
   readonly modeIndex: number
-  /** Shift+Tab: advance to the next configured session mode. */
+  /** Shift+Tab: advance to the next configured session mode. Concurrent
+   *  invocations are serialized, so rapid presses advance once per press. */
   cycleMode(): Promise<void>
+  /**
+   * Whether real plan mode is in force, including a switch queued for the
+   * next step boundary (dsh-plan-mode's pending intent) — the same truth the
+   * model-facing plan section uses.
+   */
+  planModeEnabled(): boolean
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined
+  /**
+   * Whether the `/planPrompt` switch is on. Toggling it through
+   * {@link setPlanPrompt} also activates/deactivates real plan mode, and the
+   * packaged persona only injects the plan section while plan mode is
+   * actually active. It has no effect outside the Liangshen preset.
+   */
+  planPromptEnabled(): boolean
+  /**
+   * Enable or disable the `/planPrompt` switch for the current session.
+   * Returns the resulting switch state, or `undefined` when the session is
+   * not running the Liangshen preset.
+   */
+  setPlanPrompt(active: boolean): boolean | undefined
   /** The roster's presets for the `/preset` picker (empty without a roster). */
   listPresets(): Promise<readonly PresetOption[]>
   /** Switch the agent preset (`/preset`): a blank session swaps composition
@@ -971,8 +1008,14 @@ export interface ChannelState {
   modeIndex: number
   /** Shift+Tab session-mode advance (see the public Channel type). */
   cycleMode(): Promise<void>
+  /** Real plan-mode state (see the public Channel type). */
+  planModeEnabled(): boolean
   /** The preset the current session runs under (see the public Channel type). */
   agentPreset: string | undefined
+  /** `/planPrompt` injection switch (see the public Channel type). */
+  planPromptEnabled(): boolean
+  /** Set the `/planPrompt` injection switch (see the public Channel type). */
+  setPlanPrompt(active: boolean): boolean | undefined
   /** The roster's presets for the `/preset` picker (see the public Channel type). */
   listPresets(): Promise<readonly PresetOption[]>
   /** Switch the agent preset (see the public Channel type). */
@@ -1545,6 +1588,14 @@ export function createChannel(
       `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
     )
   }
+  /**
+   * Serializes Shift+Tab cycles. `applyMode` awaits the `/plan` registry
+   * command, so without a tail each overlapping call re-derives the same
+   * pre-switch index and two quick presses land on the SAME mode instead of
+   * advancing twice. The tail swallows failures for queueing purposes; the
+   * caller receives the original rejection.
+   */
+  let modeCycleTail: Promise<void> = Promise.resolve()
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
@@ -2131,10 +2182,13 @@ export function createChannel(
     return { images, dropped }
   }
 
-  // Session-mode folds: last-wins projections over the session log. The
-  // event types are registered by dsh-plan-mode / dsh-sandbox-policy /
-  // dsh-user-approval and are NOT in this package's typed SessionEvent
-  // union, so they are matched by name through casts — the same pattern as
+  // Session-mode folds: last-wins projections over the session log.
+  // `approval/policy` IS in this package's typed SessionEvent union (the
+  // adapter's type imports from @deepseek-ai/dsh-user-approval bring the
+  // upstream module augmentation), so that fold narrows on `event.type`
+  // without casts. `plan/mode` and `sandbox/mode` belong to plugins this
+  // channel does not import (dsh-plan-mode / dsh-sandbox-policy), so their
+  // folds keep the name-match casts — the same pattern as
   // `agent-preset/selected` in renderEvent and the goal projection above.
   const foldPlanActive = (events: readonly SessionEvent[]): boolean => {
     let active = false
@@ -2145,6 +2199,58 @@ export function createChannel(
     }
     return active
   }
+  /**
+   * Effective plan-mode truth: dsh-plan-mode's pending intent (a switch
+   * queued for the next step boundary) wins over the logged fold, exactly
+   * like the controller's own model-facing section and the plan-aware
+   * persona gate. Falls back to the raw log fold when the controller is
+   * not resolvable (bare embeds, rosterless leafs).
+   */
+  const planModeState = (): { active: boolean; pending?: boolean } => {
+    try {
+      const planMode = serviceForAgent<{
+        get?(agent: Agent): { active: boolean; pending?: boolean }
+      }>(ctx, agent, 'planMode')
+      const value = planMode?.get?.(agent)
+      if (value !== undefined && typeof value.active === 'boolean') {
+        return {
+          active: value.active,
+          pending: typeof value.pending === 'boolean' ? value.pending : undefined,
+        }
+      }
+    } catch {
+      // Roster/service resolution is best-effort; the log fold is authoritative alone.
+    }
+    return { active: foldPlanActive(agent.session.events) }
+  }
+  const planModeEnabled = (): boolean => {
+    const plan = planModeState()
+    return plan.pending ?? plan.active
+  }
+  /**
+   * `/planPrompt` switch (Liangshen-only). The event is appended by this
+   * channel and folded by `presets/liangshen/plan-aware-persona.mjs` — the
+   * string is duplicated because the packaged preset must stay importable
+   * outside this package's `node_modules`.
+   */
+  const LIANGSHEN_PLAN_PROMPT_EVENT = 'plan-prompt/mode'
+  const foldPlanPromptEnabled = (events: readonly SessionEvent[]): boolean => {
+    let active = false
+    for (const event of events) {
+      if ((event as { type: string }).type === LIANGSHEN_PLAN_PROMPT_EVENT) {
+        active = (event.data as unknown as { active?: boolean }).active === true
+      }
+    }
+    return active
+  }
+  /**
+   * Sessions whose stale `/planPrompt` clear is queued. The clear must NOT
+   * append from inside the `session/event` observer that noticed the plan
+   * exit: dsh-session forbids reentrant appends while an event is being
+   * published, so the observer's append would throw and be swallowed by the
+   * session's contained listener dispatch, leaving the switch stale-on.
+   */
+  const pendingPlanPromptClears = new Set<object>()
   const foldSandboxMode = (events: readonly SessionEvent[]): string | undefined => {
     let mode: string | undefined
     for (const event of events) {
@@ -2158,8 +2264,8 @@ export function createChannel(
   const foldApprovalPolicy = (events: readonly SessionEvent[]): string | undefined => {
     let policy: string | undefined
     for (const event of events) {
-      if ((event as { type: string }).type === 'approval/policy') {
-        const value = (event.data as unknown as { policy?: string }).policy
+      if (event.type === 'approval/policy') {
+        const value = event.data.policy
         if (typeof value === 'string') policy = value
       }
     }
@@ -2203,6 +2309,12 @@ export function createChannel(
     // The durable sandbox override is one session event (dsh-sandbox-policy's
     // own write path); the session/event arm picks it up immediately.
     if (spec.sandbox !== undefined && foldSandboxMode(agent.session.events) !== spec.sandbox) {
+      // sandbox/mode stays a widened append: the event type belongs to
+      // dsh-sandbox-policy, which this channel deliberately does not import
+      // (not a peer/blessed dependency), so the key is absent from this
+      // program's typed SessionEventMap. The runtime write is byte-identical
+      // to upstream's own setSandboxMode — session.append('sandbox/mode',
+      // { mode }); plugin-load registration covers the strict resume read.
       ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
         'sandbox/mode',
         { mode: spec.sandbox },
@@ -2216,11 +2328,18 @@ export function createChannel(
         | undefined
       if (approval) {
         approval.setPolicy(agent, spec.approval)
+        // dsh-user-approval.setPolicy is a deliberate no-op when the target
+        // already equals the configured default, so no `approval/policy`
+        // event lands. Mode derivation reads the log only, so without the
+        // explicit event a mode whose approval atom equals that default
+        // (the built-in plan mode's `ask`) can never match and Shift+Tab
+        // gets stuck re-applying the same mode. Log the explicit override
+        // only if the service still left the fold short of the target policy.
+        if (foldApprovalPolicy(agent.session.events) !== spec.approval) {
+          agent.session.append('approval/policy', { policy: spec.approval })
+        }
       } else {
-        ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-          'approval/policy',
-          { policy: spec.approval },
-        )
+        agent.session.append('approval/policy', { policy: spec.approval })
       }
     }
     refreshMode()
@@ -2230,10 +2349,17 @@ export function createChannel(
 
   /** Shift+Tab: advance to the next configured session mode. Cycling starts
    *  from the mode DERIVED from the session log (never a stored index), so
-   *  manual `/plan` use can never desync the cycle. */
-  const cycleMode = async (): Promise<void> => {
-    const index = deriveModeIndex(agent.session.events)
-    await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
+   *  manual `/plan` use can never desync the cycle. Calls are serialized on
+   *  {@link modeCycleTail}; the index is re-derived only when the previous
+   *  switch has fully settled, so rapid consecutive presses advance once per
+   *  press instead of racing on the same pre-switch snapshot. */
+  const cycleMode = (): Promise<void> => {
+    const run = modeCycleTail.then(async () => {
+      const index = deriveModeIndex(agent.session.events)
+      await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
+    })
+    modeCycleTail = run.catch(() => {})
+    return run
   }
 
   // Session-lifetime candidate pool for non-path queries. The load promise is
@@ -2303,6 +2429,50 @@ export function createChannel(
       state.emit()
     }).catch(() => {})
   }
+  /** `/planPrompt` / `/planPrompt off`: durable, Liangshen-only plan-prompt
+   *  switch. Turning it ON also activates real plan mode, because the
+   *  injected text tells the model it is in plan mode and `exit_plan_mode`
+   *  is gated on `plan/mode`. Turning it OFF leaves plan mode when this
+   *  switch was the one keeping it on; a session that entered plan mode with
+   *  plain `/plan` is left untouched by `/planPrompt off` (the original
+   *  `/plan` command keeps its own behavior). */
+  const setPlanPrompt = (active: boolean): boolean | undefined => {
+    if (state.agentPreset !== 'liangshen') return undefined
+    const promptActive = foldPlanPromptEnabled(agent.session.events)
+    const planActive = foldPlanActive(agent.session.events)
+    // The plan/mode fallback below still needs this widened append because
+    // rc.8's SessionEventMap does not declare that type yet (upstream lag).
+    const session = agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }
+    if (promptActive !== active) agent.session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active })
+    // Prefer the real dsh-plan-mode controller for the plan-state half: it
+    // owns the pending-intent queue, so a `/plan off` queued during an open
+    // turn must be replaced/cancelled by this switch instead of silently
+    // winning at the next step boundary after `/planPrompt` was re-entered.
+    let planMode: { set(agent: Agent, active: boolean): unknown } | undefined
+    try {
+      planMode = serviceForAgent<{ set(agent: Agent, active: boolean): unknown }>(ctx, agent, 'planMode')
+    } catch {
+      planMode = undefined
+    }
+    if (active) {
+      if (planMode?.set !== undefined) {
+        planMode.set(agent, true)
+      } else if (!planActive) {
+        session.append('plan/mode', { active: true })
+      }
+    } else if (promptActive) {
+      // Never let an OFF command tear down a plan mode the user entered
+      // through plain `/plan`: only touch plan state when this switch was
+      // the one keeping the injection on.
+      if (planMode?.set !== undefined) {
+        planMode.set(agent, false)
+      } else if (planActive) {
+        session.append('plan/mode', { active: false })
+      }
+    }
+    return active
+  }
+  const planPromptEnabled = (): boolean => foldPlanPromptEnabled(agent.session.events)
 
   const state: ChannelState = {
     effortLevels: undefined,
@@ -2888,12 +3058,12 @@ export function createChannel(
       // untouched.
       if (await sessionSwitchVetoed('resume', sessionId)) return { ok: false, reason: 'cancelled' }
       let handle: AgentHandle
-      // Compat boundary: register vouched-for legacy event types (e.g.
-      // activity/status from pre-#143 logs) in every reachable dsh-session
-      // copy before ANY strict read path (preset lookup below, then the
-      // harness seed validation) loads the target — the plugin's #119
-      // registration never ran in processes where it is unmounted (issue
-      // #153). In-process only: the shared log is never rewritten.
+      // Compat boundary: the plugin-load registration normally already
+      // covered this process; re-ensure before ANY strict read path (preset
+      // lookup below, then the harness seed validation) as defense in depth
+      // — the plugin's #119 registration never ran in processes where it is
+      // unmounted (issue #153). Idempotent, in-process only: the shared log
+      // is never rewritten.
       ensureLegacySessionEventTypes()
       // The target session's own preset (from its persisted log) — never the
       // current preference: a resume re-enters the composition its history
@@ -3381,6 +3551,9 @@ export function createChannel(
     listEfforts,
     setEffort,
     cycleMode,
+    planModeEnabled,
+    planPromptEnabled,
+    setPlanPrompt,
     clear() {
       state.rows.length = 0
       nextRowId = 0
@@ -3558,6 +3731,10 @@ export function createChannel(
         )
         return false
       }
+      // Local commands can be preset-gated (`/planPrompt` is Liangshen-only);
+      // recomposition already fires `commands/change` for registry rows, but
+      // the local half must be re-merged from the NEW preset id directly.
+      refreshCommandList()
       state.emit()
       if (!writePresetPref(target.id)) {
         state.notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
@@ -4284,7 +4461,12 @@ export function createChannel(
   const refreshCommandList = (): void => {
     const target = agent
     const token = ++commandListSeq
-    const merged: LocalCommand[] = [...LOCAL_COMMANDS]
+    // `/planPrompt` only has a receiver (the packaged persona plugin) when
+    // the session runs the Liangshen preset; keep it out of every other
+    // preset's suggestion menu.
+    const merged: LocalCommand[] = state.agentPreset === 'liangshen'
+      ? [...LOCAL_COMMANDS]
+      : LOCAL_COMMANDS.filter(command => command.name !== 'planPrompt')
     if (commandService) {
       for (const descriptor of commandService.list(target)) {
         // Hidden TUI commands (e.g. /deepseek) stay out of the public
@@ -5393,6 +5575,17 @@ ${output}
         // Whole-list snapshot — latest write wins; log-only UI state.
         state.todos = event.data.todos
         break
+      case LIANGSHEN_PLAN_PROMPT_EVENT:
+        // Transcript projection for the durable /planPrompt switch: every
+        // append site only logs a real state change, so one notice row per
+        // toggle is correct on the live stream AND on replay.
+        state.rows.push({
+          id: nextRowId,
+          kind: 'notice',
+          text: event.data.active ? t('plan-prompt-on') : t('plan-prompt-off'),
+        })
+        nextRowId += 1
+        break
       default:
         // Logged preset switch (blank sessions only, issue #8): a transcript
         // marker so a replayed log shows which composition produced the
@@ -5629,6 +5822,31 @@ ${output}
         if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
           refreshMode()
         }
+        // Plan mode owns the truth the injected prompt describes. When plan
+        // mode turns off (exit_plan_mode approval, /plan off, Shift+Tab), the
+        // `/planPrompt` switch must not stay stale-on: clear its durable
+        // event so status and a later bare `/planPrompt` agree with reality.
+        if (
+          eventType === 'plan/mode' &&
+          (event.data as unknown as { active?: boolean }).active !== true &&
+          foldPlanPromptEnabled(session.events) &&
+          !pendingPlanPromptClears.has(session)
+        ) {
+          pendingPlanPromptClears.add(session)
+          queueMicrotask(() => {
+            pendingPlanPromptClears.delete(session)
+            // Re-check after the publishing append has unwound: a queued
+            // `/planPrompt` back-on in the same tick must not be cleared.
+            if (foldPlanActive(session.events) || !foldPlanPromptEnabled(session.events)) return
+            try {
+              session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active: false })
+            } catch (error) {
+              ctx.logger.warn(
+                `dsh-tui: failed to clear the /planPrompt switch: ${error instanceof Error ? error.message : String(error)}`,
+              )
+            }
+          })
+        }
         renderEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
         // path; every other event keeps synchronous notification.
@@ -5690,6 +5908,16 @@ ${output}
         }
       })(),
     ]
+    // A resumed/rewound log from an older build can carry a stale-on
+    // `/planPrompt` event after plan mode already exited. Normalize it once
+    // per agent bind so status and the persona gate never disagree.
+    if (
+      state.agentPreset === 'liangshen' &&
+      !foldPlanActive(agent.session.events) &&
+      foldPlanPromptEnabled(agent.session.events)
+    ) {
+      agent.session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active: false })
+    }
   }
   // Subagents inherit provider/model from AgentOptions, but resumed TUI
   // agents can legitimately carry their route only in persisted request

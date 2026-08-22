@@ -58,6 +58,7 @@ function makeEnv({ withCommands = true, withApproval = true } = {}) {
       ? {
           commands: {
             list: () => [],
+            find: () => undefined,
             execute: async (agent, line, _signal) => {
               commands.push(line)
               if (line.startsWith('/plan')) {
@@ -196,6 +197,35 @@ const baseOptions = {
     'each switch notified',
     channel.notifications.filter(n => n.text.includes('→')).length === 3,
     JSON.stringify(channel.notifications.map(n => n.text)),
+  )
+}
+
+// ---- concurrent Shift+Tab presses serialize instead of racing -------------
+{
+  const { ctx, agent, commands, appended, approvalPolicies } = makeEnv()
+  const channel = createChannel(ctx, agent, baseOptions)
+
+  await Promise.all([channel.cycleMode(), channel.cycleMode()])
+
+  check(
+    'two concurrent cycles dispatch /plan then /plan off',
+    commands.length === 2 && commands[0] === '/plan' && commands[1] === '/plan off',
+    JSON.stringify(commands),
+  )
+  check(
+    'two concurrent cycles append read-only then danger-full-access',
+    appended.filter(e => e.type === 'sandbox/mode').map(e => e.data.mode).join(',') === 'read-only,danger-full-access',
+    JSON.stringify(appended.filter(e => e.type === 'sandbox/mode')),
+  )
+  check(
+    'two concurrent cycles set approval ask then never',
+    approvalPolicies.length === 2 && approvalPolicies[0] === 'ask' && approvalPolicies[1] === 'never',
+    JSON.stringify(approvalPolicies),
+  )
+  check(
+    'two concurrent cycles land on full (not plan)',
+    channel.mode.id === 'full' && channel.modeIndex === 2,
+    `${channel.mode.id}/${channel.modeIndex}`,
   )
 }
 
