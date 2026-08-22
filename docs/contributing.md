@@ -151,10 +151,11 @@ pnpm verify:build                          # 构建门禁，不重复编译
 pnpm verify:package                        # npm tarball 与入口 smoke test
 node --import tsx/esm scripts/repro-askpanel.tsx
 node --import tsx/esm scripts/verify-askpanel-layout.tsx
+pnpm verify:question-scrollback
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-改动共享渲染、`Chat`、提示/问卷布局、工具卡、主题原语或 Ink core 时，三个
+改动共享渲染、`Chat`、提示/问卷布局、工具卡、主题原语或 Ink core 时，四个
 CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 
 | 改动区域 | 聚焦验证 |

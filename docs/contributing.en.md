@@ -198,10 +198,11 @@ pnpm verify:build                          # build gates without recompiling
 pnpm verify:package                        # npm tarball and entry smoke test
 node --import tsx/esm scripts/repro-askpanel.tsx
 node --import tsx/esm scripts/verify-askpanel-layout.tsx
+pnpm verify:question-scrollback
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-Run all three CI regressions for changes to shared rendering, `Chat`, prompt or
+Run all four CI regressions for changes to shared rendering, `Chat`, prompt or
 question layout, tool cards, theme primitives, or the Ink core. For a narrow
 change, also run the closest focused script:
 

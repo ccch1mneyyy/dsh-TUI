@@ -22,6 +22,7 @@ import type { QuestionSelection } from '../../dsh-adapter/questions.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { listWindow } from '../listWindow.js'
+import wrapText from '../../ink/wrap-text.js'
 
 const CHECKED = '◉'
 const UNCHECKED = '○'
@@ -49,6 +50,10 @@ export type AskUserQuestionPanelProps = {
   readonly total: number
   /** Questions answered before the current one. */
   readonly answered: number
+  /** Rows physically available above the questionnaire anchor. Chat passes
+   *  its measured inline viewport; standalone/fullscreen callers may omit it
+   *  and fall back to the terminal height. */
+  readonly availableRows?: number
   readonly onAnswer: (selection: QuestionSelection) => void
   /** Esc / Ctrl+C — aborts the whole ask (ASK_ABORTED back to the model). */
   readonly onCancel: () => void
@@ -59,6 +64,7 @@ export function AskUserQuestionPanel({
   position,
   total,
   answered,
+  availableRows,
   onAnswer,
   onCancel,
 }: AskUserQuestionPanelProps): React.ReactNode {
@@ -66,12 +72,19 @@ export function AskUserQuestionPanel({
   // the CC-style decision card instead of the generic questionnaire. The
   // branch precedes every hook so hook order stays stable per remount key.
   if (question.intent?.kind === 'plan-review') {
-    return <PlanReviewPanel question={question} onAnswer={onAnswer} onCancel={onCancel} />
+    return (
+      <PlanReviewPanel
+        question={question}
+        availableRows={availableRows}
+        onAnswer={onAnswer}
+        onCancel={onCancel}
+      />
+    )
   }
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true
   const hideCustomInput = question.hideCustomInput === true && options.length > 0
-  const { rows: terminalRows } = useTerminalSize()
+  const { rows: terminalRows, columns: terminalColumns } = useTerminalSize()
   /** Rows: the real options plus the inline input row at the tail. */
   const rowCount = options.length + (hideCustomInput ? 0 : 1)
   const [focusIndex, setFocusIndex] = React.useState(0)
@@ -84,20 +97,69 @@ export function AskUserQuestionPanel({
   const [error, setError] = React.useState<string | null>(null)
 
   const inputFocused = !hideCustomInput && focusIndex === options.length
-  // Chat chrome + panel scaffolding consume twelve rows before the option
-  // list: status line, outer/divider/question/list/hint spacing and content.
-  // Optional header/detail/input/error rows are charged explicitly. Long
-  // lists then use fixed one/two-line rows so listWindow's budget is exact;
-  // short questionnaires retain their existing wrapped presentation.
-  const detailRows = question.detail === undefined ? 0 : question.detail.split('\n').length + 1
-  const reservedRows = 12
-    + (question.header === undefined ? 0 : 1)
+  const hintParts = inputFocused
+    ? [
+        t('question-hint-type'),
+        t('question-hint-enter'),
+        ...(options.length > 0 ? [t('question-hint-back')] : []),
+        t('question-hint-esc'),
+        ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
+      ]
+    : [
+        t('question-hint-select'),
+        ...(multiSelect ? [t('question-hint-multi')] : []),
+        ...(hideCustomInput ? [] : [t('question-hint-attach')]),
+        t('question-hint-enter'),
+        t('question-hint-esc'),
+        ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
+      ]
+  // Account for every wrapped panel row before assigning the remainder to the
+  // option window. Windowed labels/descriptions are intentionally fixed at one
+  // line each so listWindow's budget stays exact.
+  const contentWidth = Math.max(1, terminalColumns - 4)
+  const wrappedRows = (text: string, width = contentWidth): number =>
+    wrapText(text, width, 'wrap').split('\n').length
+  const questionRows = wrappedRows(question.question)
+  const headerRows = question.header === undefined ? 0 : wrappedRows(`◈ ${question.header}`)
+  const detailRows = question.detail === undefined
+    ? 0
+    : 1 + question.detail.split('\n').reduce((rows, line) => rows + wrappedRows(line), 0)
+  const hintRows = wrappedRows(hintParts.join(' · '))
+  const errorRows = error === null ? 0 : 1 + wrappedRows(error)
+  // Non-option rows visible in the panel: outer top margin, divider,
+  // question-block margin, options-block margin and hint margin (five), plus
+  // the wrapped content itself. Keeping this accounting structural avoids the
+  // old magic `12` reserve that hid providers even when a tall viewport had
+  // enough physical rows for the complete catalog.
+  const fixedRows = 5
+    + questionRows
+    + headerRows
     + detailRows
-    + (hideCustomInput ? 0 : 1)
-    + (error === null ? 0 : 2)
-  const optionBudget = Math.max(terminalRows - reservedRows, 2)
-  const optionHeights = options.map(option => option.description === undefined ? 1 : 2)
-  const windowedOptions = optionHeights.reduce((sum, height) => sum + height, 0) > optionBudget
+    + hintRows
+    + errorRows
+  // The physical terminal can be taller than the visible inline frame. Chat
+  // therefore passes the rows measured above the status anchor; direct panel
+  // tests and fullscreen callers use terminalRows. Window only when the
+  // content's *wrapped* height exceeds that real budget—never an arbitrary
+  // catalog cap, otherwise a tall terminal hides providers despite having
+  // room for them.
+  const panelRows = Math.max(1, Math.floor(availableRows ?? terminalRows))
+  const roomBeforeInput = Math.max(1, panelRows - fixedRows)
+  const showCustomInputRow = !hideCustomInput && (inputFocused || roomBeforeInput >= 2)
+  const reservedRows = fixedRows + (showCustomInputRow ? 1 : 0)
+  const optionBudget = Math.max(1, panelRows - reservedRows)
+  const optionContentWidth = Math.max(1, terminalColumns - 7)
+  const naturalOptionHeights = options.map(option =>
+    wrappedRows(option.label, optionContentWidth)
+      + (option.description === undefined ? 0 : wrappedRows(option.description, optionContentWidth)))
+  const naturalOptionRows = naturalOptionHeights.reduce((sum, height) => sum + height, 0)
+  const windowedOptions = naturalOptionRows > optionBudget
+  // At the smallest heights one description would consume the entire list
+  // budget and clip the focused label. Prefer the actionable label there.
+  const showWindowedDescriptions = optionBudget >= 2
+  const optionHeights = windowedOptions
+    ? options.map(option => option.description !== undefined && showWindowedDescriptions ? 2 : 1)
+    : naturalOptionHeights
   const optionFocus = Math.min(focusIndex, Math.max(options.length - 1, 0))
   const optionWindow = windowedOptions
     ? listWindow(optionHeights, optionFocus, optionBudget)
@@ -358,7 +420,7 @@ export function AskUserQuestionPanel({
               >
                 {label}
               </Text>
-              {description !== undefined && (
+              {description !== undefined && (!windowedOptions || showWindowedDescriptions) && (
                 <Text dimColor wrap={windowedOptions ? 'truncate' : 'wrap'}>
                   {description}
                 </Text>
@@ -367,26 +429,33 @@ export function AskUserQuestionPanel({
           </Box>
         )
       })}
-      {hideCustomInput ? null : renderInputRow()}
+      {showCustomInputRow ? renderInputRow() : null}
     </Box>
   )
 
-  const hintParts = inputFocused
-    ? [
-        t('question-hint-type'),
-        t('question-hint-enter'),
-        ...(options.length > 0 ? [t('question-hint-back')] : []),
-        t('question-hint-esc'),
-        ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
-      ]
-    : [
-        t('question-hint-select'),
-        ...(multiSelect ? [t('question-hint-multi')] : []),
-        ...(hideCustomInput ? [] : [t('question-hint-attach')]),
-        t('question-hint-enter'),
-        t('question-hint-esc'),
-        ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
-      ]
+  // With only one to three rows above the status chrome, the full decorated
+  // panel cannot fit. Keep the focused action and submit/cancel controls on
+  // screen instead of allowing margins, detail text, or descriptions to clip
+  // the only answer the user can act on.
+  if (panelRows <= 3) {
+    const focusedOption = options[optionFocus]
+    const focusedSelected = focusedOption !== undefined
+      && (multiSelect ? checked.has(optionFocus) : focusIndex === optionFocus)
+    const compactLabel = inputFocused
+      ? `${t('question-custom-tab')}: ${customText}`
+      : `${focusedSelected ? (multiSelect ? CHECKED : '●') : UNCHECKED} ${focusedOption?.label ?? question.question}`
+    return (
+      <Box flexDirection="column" paddingLeft={2} paddingRight={2} width="100%">
+        {panelRows >= 3 && <Text bold wrap="truncate">{question.question}</Text>}
+        <Text color="claude" bold wrap="truncate">›{compactLabel}</Text>
+        {panelRows >= 2 && (
+          <Text dimColor wrap="truncate">
+            {t('question-hint-enter')} · {t('question-hint-esc')}
+          </Text>
+        )}
+      </Box>
+    )
+  }
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">

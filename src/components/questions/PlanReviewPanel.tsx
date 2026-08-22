@@ -17,13 +17,14 @@
 
 import React from 'react'
 import { t } from '../../i18n.js'
-import { Box, Text, useInput } from '../../ui.js'
+import { Box, ScrollBox, Text, useInput, type ScrollBoxHandle } from '../../ui.js'
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../cc/figures.js'
 import type { QuestionSelection } from '../../dsh-adapter/questions.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
+import { listWindow } from '../listWindow.js'
 
 const PENCIL = '✎'
 
@@ -36,6 +37,9 @@ export type PlanReviewPanelProps = {
     readonly options?: ReadonlyArray<{ readonly label: string; readonly description?: string }>
     readonly intent?: { readonly kind: 'plan-review'; readonly approve: string }
   }
+  /** Physical rows available to the question overlay. When omitted, retain
+   *  the historical intrinsic-height standalone layout. */
+  readonly availableRows?: number
   readonly onAnswer: (selection: QuestionSelection) => void
   /** Esc / Ctrl+C — dismissed to speak instead (ASK_CANCELLED). */
   readonly onCancel: () => void
@@ -43,6 +47,7 @@ export type PlanReviewPanelProps = {
 
 export function PlanReviewPanel({
   question,
+  availableRows,
   onAnswer,
   onCancel,
 }: PlanReviewPanelProps): React.ReactNode {
@@ -55,6 +60,7 @@ export function PlanReviewPanel({
   const [feedback, setFeedback] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
   const [error, setError] = React.useState<string | null>(null)
+  const detailScrollRef = React.useRef<ScrollBoxHandle | null>(null)
 
   const inputFocused = focusIndex === options.length
 
@@ -118,6 +124,14 @@ export function PlanReviewPanel({
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel()
+      return
+    }
+
+    // Keep decision navigation on the arrow keys; PageUp/PageDown browse a
+    // long plan body without moving or submitting the current decision.
+    if (key.pageUp || key.pageDown) {
+      const page = Math.max(1, detailScrollRef.current?.getViewportHeight() ?? 1)
+      detailScrollRef.current?.scrollBy(key.pageUp ? -page : page)
       return
     }
 
@@ -198,6 +212,87 @@ export function PlanReviewPanel({
   }, { isActive: true })
 
   const cursorChar = cursor < feedback.length ? feedback[cursor] : ' '
+
+  // Inside Chat the panel is an absolute overlay and therefore has a hard
+  // physical row budget. Pin decisions, feedback and controls below a
+  // scrollable plan viewport; window unusually large decision lists around
+  // the current focus. Standalone renders keep the original rich layout.
+  if (availableRows !== undefined) {
+    const panelRows = Math.max(1, Math.floor(availableRows))
+    const errorRows = error === null ? 0 : 1
+    // One scroll viewport + feedback + hint (+ optional error). Header,
+    // question and Markdown all live in the viewport so none is discarded;
+    // PageUp/PageDown reaches every wrapped row.
+    const fixedRows = 3 + errorRows
+    const optionBudget = Math.max(1, panelRows - fixedRows)
+    const optionFocus = Math.min(focusIndex, Math.max(options.length - 1, 0))
+    const optionWindow = listWindow(options.map(() => 1), optionFocus, optionBudget)
+    const visibleOptions = options.slice(optionWindow.start, optionWindow.end)
+    const detailViewportRows = Math.max(1, panelRows - fixedRows - visibleOptions.length + 1)
+
+    return (
+      <Box flexDirection="column" paddingLeft={2} paddingRight={2} width="100%">
+        <ScrollBox
+          ref={detailScrollRef}
+          height={detailViewportRows}
+          flexDirection="column"
+          flexShrink={0}
+        >
+          {question.header !== undefined && (
+            <Text color="suggestion" bold wrap="wrap">◈ {question.header}</Text>
+          )}
+          <Text bold wrap="wrap">{question.question}</Text>
+          {question.detail !== undefined && (
+            <Markdown>{question.detail}</Markdown>
+          )}
+        </ScrollBox>
+        {visibleOptions.map((option, index) => {
+          const absoluteIndex = optionWindow.start + index
+          const focused = absoluteIndex === focusIndex
+          const isApprove = option.label === approveLabel
+          const marker = absoluteIndex === optionWindow.start && optionWindow.start > 0
+            ? '↑'
+            : absoluteIndex === optionWindow.end - 1 && optionWindow.end < options.length
+              ? '↓'
+              : focused ? POINTER : ' '
+          return (
+            <Box key={`${absoluteIndex}:${option.label}`} flexDirection="row">
+              <Box width={1} flexShrink={0}>
+                <Text color={focused ? 'claude' : undefined} bold={focused}>{marker}</Text>
+              </Box>
+              <Text
+                bold={focused}
+                color={focused || isApprove ? 'claude' : undefined}
+                wrap="truncate"
+              >
+                {absoluteIndex + 1}. {option.label}
+                {option.description !== undefined && <Text dimColor> — {option.description}</Text>}
+              </Text>
+            </Box>
+          )
+        })}
+        <Box flexDirection="row" height={1} overflow="hidden">
+          <Text color={inputFocused ? 'claude' : undefined} bold={inputFocused}>
+            {inputFocused ? POINTER : ' '}
+          </Text>
+          <Text color={inputFocused ? 'claude' : 'suggestion'}>{PENCIL} </Text>
+          {feedback === '' && !inputFocused ? (
+            <Text ref={caretRef} dimColor wrap="truncate">{t('plan-review-feedback-placeholder')}</Text>
+          ) : (
+            <>
+              <Text wrap="truncate">{feedback.slice(0, cursor)}</Text>
+              {inputFocused
+                ? <Text ref={caretRef} inverse>{cursorChar}</Text>
+                : <Text ref={caretRef} color="suggestion">▏</Text>}
+              <Text wrap="truncate">{feedback.slice(inputFocused ? cursor + 1 : cursor)}</Text>
+            </>
+          )}
+        </Box>
+        {error !== null && <Text color="error" wrap="truncate">{error}</Text>}
+        <Text dimColor wrap="truncate">{t('plan-review-hint')}</Text>
+      </Box>
+    )
+  }
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">

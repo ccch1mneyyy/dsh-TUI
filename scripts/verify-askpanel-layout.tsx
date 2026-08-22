@@ -11,6 +11,7 @@
 export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
 
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'zh'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
   import('node:stream'),

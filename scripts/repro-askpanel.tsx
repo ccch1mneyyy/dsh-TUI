@@ -7,6 +7,7 @@
  * output is captured raw and ANSI-stripped (no xterm dependency).
  */
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'zh'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskUserQuestionPanel }] = await Promise.all([
   import('node:stream'),
