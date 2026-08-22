@@ -37,6 +37,7 @@ import { ModelPicker } from '../components/ModelPicker.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
+import { SubagentScene } from './SubagentScene.js'
 import { Settings } from './Settings.js'
 import { WorkspacePicker } from '../components/WorkspacePicker.js'
 import { WorkspaceMenuPicker } from '../components/WorkspaceMenuPicker.js'
@@ -285,6 +286,8 @@ export function Chat({
   /** `/resume` opens the session browser, a screen rather than a panel. It
    *  owns its own selection, filters and keyboard — Chat only opens it. */
   const [browserOpen, setBrowserOpen] = React.useState(false)
+  /** `/agents` owns selection and child transcript navigation as a screen. */
+  const [subagentsOpen, setSubagentsOpen] = React.useState(false)
   /** `/settings` opens the plugin settings screen (issue #165) — like the
    *  browser, a screen rather than a panel: it owns its own focus, staged
    *  drafts and keyboard; Chat only opens it. */
@@ -1170,9 +1173,7 @@ export function Chat({
       }
       case 'agents':
         setHelpOpen(false)
-        void channel.listSubagents().then((lines) => {
-          channel.pushLocal('/agents', lines)
-        })
+        setSubagentsOpen(true)
         return true
       case 'login': {
         setHelpOpen(false)
@@ -1631,6 +1632,8 @@ export function Chat({
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
     if (browserOpen) return
+    // The subagent catalog and its child transcript own every key while open.
+    if (subagentsOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
     // the field draft editor belong to it alone.
     if (settingsOpen) return
@@ -2301,6 +2304,13 @@ export function Chat({
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
     return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+  }
+
+  // `/agents` follows the session browser's screen ownership and alternate-
+  // screen rules, while keeping Chat mounted for a lossless return.
+  if (subagentsOpen) {
+    const scene = <SubagentScene channel={channel} onClose={() => setSubagentsOpen(false)} />
+    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
   }
 
   // The settings screen follows the browser's rule exactly: it REPLACES the

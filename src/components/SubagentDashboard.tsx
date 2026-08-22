@@ -17,10 +17,10 @@ export interface SubagentDashboardProps {
  * SubagentDashboard — overlay panel showing all active/recent subagents.
  * Keyboard: up/down to navigate, Enter to view detail, Esc to close.
  */
-export function SubagentDashboard({ 
-  subagents, 
-  onClose, 
-  onSelect 
+export function SubagentDashboard({
+  subagents,
+  onClose,
+  onSelect
 }: SubagentDashboardProps): React.ReactNode {
   const [focusIndex, setFocusIndex] = React.useState(0)
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
@@ -32,28 +32,28 @@ export function SubagentDashboard({
       onClose()
       return
     }
-    
+
     if (key.upArrow) {
       event.stopImmediatePropagation()
       setFocusIndex(i => Math.max(0, i - 1))
       scrollRef.current?.scrollBy(-3)
       return
     }
-    
+
     if (key.downArrow) {
       event.stopImmediatePropagation()
       setFocusIndex(i => Math.min(subagents.length - 1, i + 1))
       scrollRef.current?.scrollBy(3)
       return
     }
-    
+
     if (isPlainReturnInput(input, key) && onSelect) {
       event.stopImmediatePropagation()
       const selected = subagents[focusIndex]
       if (selected) onSelect(selected.agentId)
       return
     }
-    
+
     // Consume all input while dashboard is open
     event.stopImmediatePropagation()
   })
@@ -64,12 +64,12 @@ export function SubagentDashboard({
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1}>
-      <Divider 
-        color="claude" 
-        title={t('subagent-dashboard-title')} 
-        padding={4} 
+      <Divider
+        color="claude"
+        title={t('subagent-dashboard-title')}
+        padding={4}
       />
-      
+
       <Box flexDirection="row" gap={3} marginTop={1} marginBottom={1}>
         <Text>
           <Text color="claude">{running}</Text>
@@ -114,8 +114,8 @@ export function SubagentDashboard({
       <Divider color="subtle" title="" padding={4} />
       <Box marginTop={0}>
         <Text dimColor>
-          {onSelect 
-            ? t('subagent-dashboard-hint-detail') 
+          {onSelect
+            ? t('subagent-dashboard-hint-detail')
             : t('subagent-dashboard-hint-basic')}
         </Text>
       </Box>

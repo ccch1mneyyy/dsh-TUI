@@ -359,6 +359,10 @@ jobs:
       # scrollback 零增量、动效帧只含 SGR。
       - run: node --import tsx/esm scripts/verify-trace-scene.tsx
 
+      # 子代理会话视图回归（issue #223）：真实 Chat + xterm 驱动
+      # /agents 列表、结构化状态、Enter 进入只读 transcript、两级 Esc
+      # 返回，并覆盖完整/运行中/空/诊断/服务缺失场景。
+      - run: node --import tsx/esm scripts/verify-subagent-session-view.tsx
       # 最高档思考强度点焰回归：数学层（波形/缓动/包络/逐列色契约）+
       # 场景（headless xterm）：三幕（双框同步扫光/档名居中聚拢/渐隐
       # 归零）断言帧间文本恒定、零行级 repaint、行数恒定、负路径全暗。
