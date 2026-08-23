@@ -41,6 +41,7 @@ import { ApprovalPanelView } from '../components/overlays/approval-panel.js'
 import { ExtensionDialogView } from '../components/overlays/extension-dialog.js'
 import { QuestionPanelView } from '../components/overlays/question-panel.js'
 import { SessionBrowserScreen } from './session-browser.js'
+import { SessionTreeScreen } from './session-tree.js'
 import { SettingsPanel } from '../components/settings-panel.js'
 import { TrajectoryScene } from './trajectory-scene.js'
 import {
@@ -220,6 +221,7 @@ type PluginSceneComponent = Component & {
 
 type TransientKind =
   | 'session-browser'
+  | 'session-tree'
   | 'trajectory'
   | 'subagent-dashboard'
   | 'subagent-detail'
@@ -364,7 +366,7 @@ export class ChatScreen implements Component {
     }
     this.promptEditor.onClearOrExit = () => this.promptEditor.setText('')
     this.promptEditor.onRewindRequest = () => {
-      this.commands.info.notify('Rewind picker is not wired into this root yet.', { color: 'warning' })
+      this.openSessionTree('rewind')
     }
     this.promptEditor.focused = true
 
@@ -630,6 +632,58 @@ export class ChatScreen implements Component {
   }
 
   /**
+   * Double-Esc / `/tree`: replace the conversation with the session family
+   * tree (pi's Session Tree). The family loads asynchronously through the
+   * fenced sink — the panel opens in its loading seat, and a tree that
+   * settles null/undefined closes itself (the channel already toasted the
+   * reason, or a session swap made the build stale). The panel opens in
+   * rewind intent; ctrl+f toggles the fork intent inside it.
+   */
+  openSessionTree(mode: 'rewind' | 'fork'): void {
+    const screen = new SessionTreeScreen({
+      commands: this.commands,
+      mode,
+      currentSessionId: this.vm?.agentId ?? '',
+      onClose: () => this.closeTransientScreen(),
+      onRestoreText: (text) => this.promptEditor.setText(text),
+    })
+    screen.onChange = () => {
+      if (this.transientScreen === screen) this.ui.requestRender()
+    }
+    this.replaceTransient(screen, 'session-tree')
+    screen.load()
+  }
+
+  /**
+   * `/rewind`: immediately rewind the LAST user turn (kimi-code's `/undo 1`)
+   * — no picker. The channel forks to just before that turn, swaps in the
+   * fork, and returns the prompt text, which goes back into the editor for
+   * re-editing. Refusals (running-turn settle timeout, first message) are
+   * toasted by the channel; an empty transcript gets its own note here.
+   */
+  private rewindLastTurn(): void {
+    const rows = this.vm?.transcript.rows ?? []
+    let target
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i]!
+      if (row.kind === 'user' && row.seq !== undefined) {
+        target = row
+        break
+      }
+    }
+    if (target === undefined) {
+      this.commands.info.notify(t('rewind-none'), { color: 'warning' })
+      return
+    }
+    void this.commands.session.rewindTo(target).then((text) => {
+      if (text === null) return
+      if (text !== '') this.promptEditor.setText(text)
+      this.commands.info.notify(t('rewind-done'))
+      this.ui.requestRender()
+    })
+  }
+
+  /**
    * `/settings`: mount the settings panel in the prompt editor's slot
    * (pi-style editor replacement — the transcript and status chrome stay
    * visible; Esc closes the panel and restores the editor). Reopening while
@@ -877,7 +931,13 @@ export class ChatScreen implements Component {
         void this.commands.session.newSession()
         return
       case 'rewind':
-        this.commands.info.notify('Rewind picker is not wired into this root yet.', { color: 'warning' })
+        this.rewindLastTurn()
+        return
+      case 'tree':
+        this.openSessionTree('rewind')
+        return
+      case 'fork':
+        void this.commands.session.forkSession()
         return
       case 'update':
         if (this.onUpdate === undefined) {

@@ -53,6 +53,7 @@ import type {
   StagedImageInput,
 } from '../dsh-adapter/channel.js'
 import type { ApprovalStore } from '../dsh-adapter/approvals.js'
+import type { SessionTreeData } from '../dsh-adapter/sessionTree.js'
 import type { TuiDialogAnswer, TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import type { QuestionSelection, QuestionStore } from '../dsh-adapter/questions.js'
 import type {
@@ -133,6 +134,13 @@ export interface TuiSessionCommands {
   clear(): void
   promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
   rewindTo(row: ChatRow, mode?: string | null): Promise<string | null>
+  /** Session-tree fork: `rewind` drops the picked user turn (its prompt comes
+   *  back as the returned text), `fork` keeps the picked entry. Null = refused
+   *  or failed (the channel already notified the reason). */
+  rewindToNode(sessionId: string, seq: number, mode?: 'rewind' | 'fork'): Promise<string | null>
+  /** `/fork`: fork the current session at its tip into a persisted copy and
+   *  STAY in the source session (no swap — the fence expects no self-bump). */
+  forkSession(): Promise<boolean>
   /** The configured session-mode cycle for the `/permission` picker. */
   listModes(): readonly SessionModeSpec[]
   /** Apply one configured session mode by id; false when the id is unknown. */
@@ -161,6 +169,9 @@ export interface TuiModelCommands {
 export interface TuiQueryCommands {
   listSessions(): Promise<readonly SessionSummary[] | undefined>
   previewSession(id: string): Promise<readonly PreviewEntry[] | undefined>
+  /** The session family tree for the double-Esc panel: null = unavailable
+   *  (the channel notified the reason), undefined = stale-dropped. */
+  getSessionTree(): Promise<SessionTreeData | null | undefined>
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   listFiles(): Promise<readonly string[] | undefined>
   /** Sync slash completions (pure over the command registry) — no fence. */
@@ -422,6 +433,17 @@ export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
         // nothing.
         return fencedWrite('rewindTo', (childId) => childId !== null, null, () => channel.rewindTo(row, mode))
       },
+      rewindToNode(sessionId, seq, mode) {
+        // Same fork shape as rewindTo: a committed node rewind/fork bumps the
+        // epoch exactly once; null commits nothing.
+        return fencedWrite('rewindToNode', (text) => text !== null, null, () => channel.rewindToNode(sessionId, seq, mode))
+      },
+      forkSession() {
+        // The tip fork never swaps the live session (same no-self-bump shape
+        // as setEffort): a moved epoch means an interleaved replacement —
+        // drop the stale completion.
+        return fencedWrite('forkSession', () => false, false, () => channel.forkSession())
+      },
       listModes() {
         return channel.listModes()
       },
@@ -469,6 +491,9 @@ export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
       },
       previewSession(id) {
         return fenced('previewSession', () => channel.previewSession(id))
+      },
+      getSessionTree() {
+        return fenced('getSessionTree', () => channel.buildSessionTree())
       },
       listSkills() {
         return fenced('listSkills', () => channel.listSkills())

@@ -142,6 +142,8 @@ interface CallLog {
   exit: number;
   exportSession: number;
   external: Array<{ name: string; rawInput: string }>;
+  forkSession: number;
+  getSessionTree: number;
   initWorkspace: number;
   listEfforts: number;
   listModels: number;
@@ -155,6 +157,7 @@ interface CallLog {
   pushLocal: Array<{ title: string; lines: readonly string[] }>;
   reload: number;
   renameSession: string[];
+  rewindTo: string[];
   runWorkspaceCommand: Array<{ name: string; input: string }>;
   setActivityFrames: string[];
   setEffort: string[];
@@ -183,6 +186,8 @@ interface HarnessOptions {
   providerSetup?: object | undefined;
   /** false omits the onReload hook to cover the host-unavailable warning. */
   reloadHook?: boolean;
+  /** Transcript rows for the immediate /rewind path (last user turn). */
+  rows?: Array<Record<string, unknown>>;
   setModeResult?: boolean;
   workspaceCommands?: Array<{ name: string; aliases?: string[]; description?: string }>;
   workspaceResult?: unknown;
@@ -205,6 +210,8 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     exit: 0,
     exportSession: 0,
     external: [],
+    forkSession: 0,
+    getSessionTree: 0,
     initWorkspace: 0,
     listEfforts: 0,
     listModels: 0,
@@ -218,6 +225,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     pushLocal: [],
     reload: 0,
     renameSession: [],
+    rewindTo: [],
     runWorkspaceCommand: [],
     setActivityFrames: [],
     setEffort: [],
@@ -267,7 +275,16 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       },
       renameSessionTo: async () => true,
       resumeTo: async () => ({ ok: false, reason: 'cancelled' }),
-      rewindTo: async () => null,
+      rewindTo: async (row: { text: string }) => {
+        calls.rewindTo.push(row.text);
+        // Mirror the channel: the dropped turn's prompt comes back.
+        return row.text;
+      },
+      rewindToNode: async () => null,
+      forkSession: async () => {
+        calls.forkSession += 1;
+        return true;
+      },
       listModes: () => [
         { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
         { id: 'plan', plan: true, sandbox: 'read-only', approval: 'ask' },
@@ -313,6 +330,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       commandCompletions: () => [],
       listFiles: async () => [],
       listSessions: async () => [],
+      getSessionTree: async () => {
+        calls.getSessionTree += 1;
+        return null;
+      },
       listSkills: async () => {
         calls.listSkills += 1;
         return options.listSkills;
@@ -426,6 +447,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const notifications: Array<ChatViewModel['prompt']['notifications'][number]> = [];
   const activeMode = { id: options.modeId ?? 'default', plan: false } as never;
   const vm = makeViewModel({
+    transcript: { meta, rows: (options.rows ?? []) as never },
     header: { ...makeViewModel().header, loadedContext: options.loadedContext as never },
     prompt: {
       ...makeViewModel().prompt,
@@ -769,10 +791,44 @@ test('slash dispatch: /clear, /compact, /new hit the session sink', async () => 
   fresh.chat.dispose();
 });
 
-test('slash dispatch: /rewind warns that it is not wired', async () => {
+test('slash dispatch: /tree opens the session tree', async () => {
   const harness = makeHarness();
+  await dispatch(harness.chat, '/tree');
+  assert.equal(harness.calls.getSessionTree, 1, '/tree loads the session family tree');
+  harness.chat.dispose();
+});
+
+test('slash dispatch: /rewind immediately rewinds the last user turn (kimi /undo 1)', async () => {
+  const harness = makeHarness({
+    rows: [
+      { id: 0, kind: 'user', text: 'first prompt', seq: 1 },
+      { id: 1, kind: 'assistant', text: 'first reply', seq: 2 },
+      { id: 2, kind: 'user', text: 'second prompt', seq: 6 },
+    ],
+  });
   await dispatch(harness.chat, '/rewind');
-  assert.ok(harness.calls.notify.some(entry => entry.color === 'warning' && entry.text.includes('Rewind')));
+  assert.deepEqual(harness.calls.rewindTo, ['second prompt'], 'the LAST user row with a seq is the target');
+  assert.equal(harness.calls.getSessionTree, 0, '/rewind no longer opens the tree');
+  // The dropped turn's prompt is refilled into the editor for re-editing.
+  const editor = (harness.chat as unknown as { promptEditor: { getText(): string } }).promptEditor;
+  assert.equal(editor.getText(), 'second prompt');
+  assert.ok(harness.calls.notify.some(entry => entry.text === t('rewind-done')));
+  harness.chat.dispose();
+});
+
+test('slash dispatch: /rewind with nothing to rewind toasts instead of calling the channel', async () => {
+  const harness = makeHarness({ rows: [{ id: 0, kind: 'assistant', text: 'only a reply', seq: 2 }] });
+  await dispatch(harness.chat, '/rewind');
+  assert.deepEqual(harness.calls.rewindTo, []);
+  assert.ok(harness.calls.notify.some(entry => entry.text === t('rewind-none')));
+  harness.chat.dispose();
+});
+
+test('slash dispatch: /fork forks the current session in place (no tree, no swap)', async () => {
+  const harness = makeHarness();
+  await dispatch(harness.chat, '/fork');
+  assert.equal(harness.calls.forkSession, 1);
+  assert.equal(harness.calls.getSessionTree, 0, '/fork no longer opens the tree');
   harness.chat.dispose();
 });
 
@@ -1207,7 +1263,7 @@ test('slash dispatch: dispatch table exactly covers LOCAL_COMMANDS + hidden entr
     'status', 'cost', 'tokens', 'config', 'doctor', 'plugins', 'export',
     'init', 'login', 'logout', 'permission', 'add-dir', 'hooks', 'mcp',
     'vim', 'terminal-setup', 'rename', 'connect', 'clear', 'new', 'compact',
-    'rewind', 'update', 'reload', 'exit', 'quit', 'q', 'review', 'pr_comments',
+    'rewind', 'tree', 'fork', 'update', 'reload', 'exit', 'quit', 'q', 'review', 'pr_comments',
     'audit', 'practice', 'bug', 'release-notes', 'vuln-check', 'deepseek',
   ];
   const expected = [
