@@ -845,9 +845,9 @@ export function Chat({
         const c = rawInput.trim().split(/\s+/)[0]?.toLowerCase()
         if (c && COLOR_NAMES.includes(c as typeof COLOR_NAMES[number])) {
           setBorderColor(c === 'default' ? undefined : c)
-          channel.notify(c === 'default' ? 'Border color reset to default' : `Border color switched to: ${c}`, { color: 'success' })
+          channel.notify(c === 'default' ? t('color-reset') : t('color-switched', { name: c }), { color: 'success' })
         } else if (c) {
-          channel.notify(`Unknown color: ${c}. Available: ${COLOR_NAMES.join(', ')}`, { color: 'warning' })
+          channel.notify(t('color-unknown', { name: c }), { color: 'warning' })
         } else {
           channel.pushLocal('/color', [`Current border color: ${borderColor ?? 'default'}`, `Usage: /color <name>\nAvailable: ${COLOR_NAMES.join(', ')}`])
         }

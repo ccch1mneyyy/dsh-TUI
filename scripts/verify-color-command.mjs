@@ -5,19 +5,16 @@
  * commands through stdin, and asserts on notifications and pushLocal output.
  * No persistence — color resets to default on restart.
  *
- * Run against the compiled lib:
- *   node scripts/verify-color-command.mjs
- *
- * Or against the TypeScript source:
+ * Run with tsx (imports TypeScript source directly):
  *   node --import tsx/esm scripts/verify-color-command.mjs
  */
 
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 
-const { render } = await import('../lib/types/ui.js')
-const { Chat } = await import('../lib/types/screens/Chat.js')
-const { setLang } = await import('../lib/types/i18n.js')
+const { render } = await import('../src/ui.js')
+const { Chat } = await import('../src/screens/Chat.js')
+const { setLang } = await import('../src/i18n.js')
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -140,7 +137,6 @@ function makeChannel() {
     resumeTo: async () => ({ ok: false, reason: 'unavailable' }),
     newSession: async () => false,
     compact() {},
-    notifications,
     pushedLocal,
   }
   return channel
