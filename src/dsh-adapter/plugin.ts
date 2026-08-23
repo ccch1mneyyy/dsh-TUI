@@ -479,9 +479,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
-        // Terminal-card header folding: keep the current full-title rendering
-        // unless the user opts in.
-        foldTerminalCommand: Schema.boolean().default(false),
+        // No default on purpose (same rule as `fullscreen` below): a schema
+        // default here would come back from scope.get()/watch() and shadow
+        // an explicit cordis.yml `foldTerminalCommand: true` while the
+        // settings user layer is unset — applyDisplay's
+        // `?? config.foldTerminalCommand ?? false` already supplies the
+        // default and keeps cordis.yml decisive.
+        foldTerminalCommand: Schema.boolean(),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -687,6 +691,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hint: 'Terminal cards (Bash/PowerShell): collapse a multi-line command header to its first line + count; Ctrl+O or a click expands it.',
           hintDescriptions: { zh: '终端卡（Bash/PowerShell）：多行命令头部折叠为首行 + 计数；Ctrl+O 或点击卡片展开。' },
           kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: show the effective resolution (cordis.yml
+            // → off) instead of a blank — same rule as `fullscreen`'s field.
+            return String(typeof value === 'boolean' ? value : config.foldTerminalCommand === true)
+          },
         },
         {
           path: ['statusBar', 'compact'],

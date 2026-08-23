@@ -301,7 +301,7 @@ await show('glob', {
 check('Glob paths 逐行列出', rowOf('src/a.ts') >= 0 && rowOf('src/b.ts') >= 0)
 
 // 13. 终端命令折叠（dsh-tui.foldTerminalCommand）：多行脚本标题收起为
-//     首行 + `… +N lines` 提示；提示走 i18n（zh/en 都含 ctrl+o）。
+//     首行 + `… +N lines` 提示；提示与正文折叠提示（capLines）同格式。
 const pwshTool = {
   name: 'powershell',
   callView: { card: 'terminal', title: '$items = Get-ChildItem -Recurse\n$items | Where-Object { $_.Length -gt 1kb }\n$items | Sort-Object Length\n$items | Select-Object -First 10 Name' },
@@ -315,6 +315,15 @@ await show('fold-on', pwshTool, false, true)
   check('折叠时显示 +N 行提示', s.includes('… +3 lines') && s.includes('ctrl+o'))
   check('折叠时后续脚本行不出现', rowOf('Sort-Object') === -1 && rowOf('Select-Object') === -1)
 }
+
+// 13b. 尾随换行是终止符不是行（sideLines 同规则）：'cd /tmp\nls\n' 计 +1 不 +2。
+await show('fold-trailing', {
+  name: 'bash',
+  callView: { card: 'terminal', title: 'cd /tmp\nls\n' },
+  resultView: { card: 'terminal', output: '', exitCode: 0 },
+  resultFull: '',
+}, false, true)
+check('尾随换行不计入折叠行数', screen().includes('… +1 lines') && screen().includes('Bash(cd /tmp)'))
 
 // 14. Ctrl+O（verbose）在折叠开启时仍展开完整脚本。
 await show('fold-open', pwshTool, true, true)
