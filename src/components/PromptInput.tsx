@@ -1158,7 +1158,9 @@ export function PromptInput({
   // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。
   const floatersOpen = helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen
   // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
-  const promptAccent = channel.mode.plan === true ? 'planMode' : (borderColor && borderColor !== 'default' ? BORDER_COLOR_MAP[borderColor] as keyof import('../theme.js').Theme : 'promptBorder')
+  const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
+  const borderColorMapped = borderColor && borderColor !== 'default' ? BORDER_COLOR_MAP[borderColor] as keyof import('../theme.js').Theme : undefined
+  const idleColor = borderColorMapped ?? promptAccent
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -1261,7 +1263,7 @@ export function PromptInput({
         levels={channel.effortLevels}
         columns={columns}
         onLight={isLightThemeActive(themeName)}
-        idleColor={promptAccent}
+        idleColor={idleColor}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph
