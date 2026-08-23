@@ -56,9 +56,13 @@ inserted verbatim, including newlines, and is never mistaken for an Enter key.
 ## @ file references
 
 Typing `@` at **any position** of the message opens file completion: keep typing
-path fragments to filter, `Tab`/`Enter` to pick, and directories can be entered
-further (matching covers path prefixes **or basenames** — `@ink` matches
-`src/ink/Box.js`; `Esc` closes only the current `@` token's menu). Text files
+to filter, `Tab`/`Enter` to pick, and directories can be entered
+further (plain fragments match **fuzzily** — `@ment` matches
+`src/utils/mentions.ts`, with prefix/boundary and short-path boosts; path-shaped
+queries — `@src/`, `@./`, `@../`, `@~/`, `@D:\`, or anything containing a
+separator — read **only that directory** for local completion. `Esc` closes only
+the current `@` token's menu; async refreshes keep your selected candidate).
+Text files
 and directory listings are attached as text; PNG, JPEG, WebP,
 and GIF files are sent as durable Harness image blocks. Reads use the active
 workspace filesystem, including provider-owned workspaces.

@@ -16,7 +16,9 @@ export interface MentionToken {
   path: string
 }
 
-/** True when `ch` delimits a token (whitespace). */
+/** True when `ch` delimits a token (whitespace). Path separators and the
+ *  quote char are ordinary token characters on every platform — Windows
+ *  backslash paths must survive both caret tracking and submission. */
 const isBoundary = (ch: string | undefined): boolean =>
   ch === undefined || /\s/.test(ch)
 

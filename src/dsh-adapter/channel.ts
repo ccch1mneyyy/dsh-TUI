@@ -50,18 +50,21 @@ import {
   type SessionTreeData,
 } from './sessionTree.js'
 import { writeActivityFrames } from '../activityPrefs.js'
+import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ProviderSetupHost } from './providerWizard.js'
 import { readPresetPref, writePresetPref } from '../presetPrefs.js'
-import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
-import { isPresetName } from '../components/activityFrames.js'
+import { composePreset, resolvePersistedPreset, resolvePersistedRoute, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
+import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
-import { t } from '../i18n.js'
+import { getLang, LANGS, t } from '../i18n.js'
+import { AUTO_THEME_NAME, THEME_NAMES } from '../theme.js'
+import { listCustomThemes } from '../customTheme.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import { normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
@@ -555,10 +558,11 @@ export interface Channel {
   readonly contextBarEnabled: boolean
   /**
    * Current same-session goal projection, when a goal exists. Derived live
-   * from the durable `goal/change` context events (round-zero goal-sourced
-   * user messages) in the session log — every goal mutation appends one, so
-   * this snapshot tracks create/edit/pause/resume/complete/block/clear in
-   * real time and replays correctly on resume/rewind.
+   * from the durable goal events in the session log — top-level
+   * `goal/change` snapshots (every goal mutation appends one) plus the
+   * goal-sourced continuation rounds that advance the counter — so this
+   * snapshot tracks create/edit/pause/resume/complete/block/clear in real
+   * time and replays correctly on resume/rewind.
    */
   readonly goal: ChannelGoal | undefined
   /**
@@ -782,7 +786,9 @@ export interface Channel {
   settingsSections(): readonly TuiSettingsSection[]
   /** Subscribe to settings-section register/unregister events. */
   subscribeSettingsSections(listener: () => void): () => void
-  /** Top-level entries of the session cwd for `@` file completion. */
+  /** Structured `@` file completion, using the session's remote fs service. */
+  listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }): Promise<readonly FileCandidate[]>
+  /** Backward-compatible top-level/recursive listing. */
   listFiles(): Promise<readonly string[]>
   /** Every session the persistence backend stores, classified and unfiltered
    *  — the browser (`/resume`) decides which of them a given view shows. */
@@ -1056,6 +1062,7 @@ export interface ChannelState {
   settingsSections(): readonly TuiSettingsSection[]
   /** Subscribe to settings-section register/unregister events. */
   subscribeSettingsSections(listener: () => void): () => void
+  listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }): Promise<readonly FileCandidate[]>
   listFiles(): Promise<readonly string[]>
   listSessions(): Promise<readonly SessionSummary[]>
   /** Trailing exchanges of a persisted session (see the public Channel type). */
@@ -1419,8 +1426,7 @@ export function createChannel(
       try {
         runtime.interrupt(target, { kind: 'ancestor', agent })
         subagentStore.onCancelled(agentId, 'interrupted')
-        state.subagents = subagentStore.snapshot()
-        syncSubagentRows()
+        syncSubagentsNow()
         state.emit()
         return true
       } catch {
@@ -1454,9 +1460,12 @@ export function createChannel(
   /**
    * Sync subagentStore state into ChatRows (insert/update in state.rows).
    * Called whenever subagent state changes (spawned/completed/failed/output).
+   * Accepts a caller-taken snapshot to avoid the double copy on the hot path
+   * (session/event fires per subagent token: snapshot here + snapshot in the
+   * caller = two full state copies before emitStream's 16ms throttle).
    */
-  const syncSubagentRows = (): void => {
-    const snapshot = subagentStore.snapshot()
+  const syncSubagentRows = (preSnapshot?: readonly SubagentState[]): void => {
+    const snapshot = preSnapshot ?? subagentStore.snapshot()
     for (const sub of snapshot) {
       let row = subagentRowsByAgentId.get(sub.agentId)
       if (!row) {
@@ -1539,6 +1548,31 @@ export function createChannel(
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
+  /** True while subagent assistant/chunk deltas have deferred their
+   *  snapshot+projection to the frame-aligned flush (emitStream's timer).
+   *  Chunks arrive at token rate (100-300 events/s) and the projection is a
+   *  full deep state copy (SubagentActivityStore.snapshot) plus a SubagentRow
+   *  rebuild per tracked agent — running that per token sits BEFORE
+   *  emitStream's 16ms coalescing and defeats it. Non-chunk events
+   *  (tool/call, subagent/end, interrupt) project immediately and clear
+   *  this flag, so lifecycle transitions stay synchronous. */
+  let subagentStreamDirty = false
+  /** Deferred projection for the frame-aligned flush: runs INSIDE the
+   *  emitStream timer, before listeners wake, so React always reads fully
+   *  projected rows. No-op unless a chunk marked the projection dirty. */
+  const flushSubagentStream = (): void => {
+    if (!subagentStreamDirty) return
+    subagentStreamDirty = false
+    state.subagents = subagentStore.snapshot()
+    syncSubagentRows(state.subagents)
+  }
+  /** Immediate projection; supersedes any pending deferred flush (the fresh
+   *  snapshot already contains everything the deferred pass would project). */
+  const syncSubagentsNow = (): void => {
+    subagentStreamDirty = false
+    state.subagents = subagentStore.snapshot()
+    syncSubagentRows(state.subagents)
+  }
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
   const foldCursor: { rows: unknown; index: number } = { rows: null, index: 0 }
@@ -2433,6 +2467,9 @@ export function createChannel(
       streamNotifyScheduled = true
       const timer = setTimeout(() => {
         streamNotifyScheduled = false
+        // Deferred subagent projection rides this same frame: flush BEFORE
+        // the listeners wake so React reads fully projected rows.
+        flushSubagentStream()
         foldRows(state.rows, MAX_ROWS, foldCursor)
         for (const listener of listeners) listener()
       }, 16)
@@ -3461,10 +3498,20 @@ export function createChannel(
         provider: options.configuredProvider,
         model: options.configuredModel,
       })
+      // The recorded route feeds back into agentOptions too — not just the
+      // status line below: a provider-only cordis.yml pin (issue #67) leaves
+      // agentOptions.model undefined on resume, which breaks the `{{model}}`
+      // persona variable for the resumed agent's own assembly AND for every
+      // subagent it spawns (dsh-subagent's resolveChildAgentOptions inherits
+      // `parent.options.model`).
+      const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
       try {
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
-          agentOptions: { provider: resumeRoute?.provider, model: resumeRoute?.model },
+          agentOptions: {
+            provider: resumeRoute?.provider ?? recordedRoute?.provider,
+            model: resumeRoute?.model ?? recordedRoute?.model,
+          },
           ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
         })
       } catch (error) {
@@ -4373,20 +4420,30 @@ export function createChannel(
         signal: options?.signal,
       })
     },
-    listFiles() {
-      const fs = ctx.get('fs') as
-        | {
-          resolve(path: string): Promise<{ displayPath: string }>
-          listDir(target: { displayPath: string }): Promise<
-            Array<{
-              name: string
-              type: 'file' | 'directory' | 'other'
-              target: { displayPath: string }
-            }>
-          >
-        }
-        | undefined
-      return listFilesDeep(fs, state.cwd)
+    async listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }) {
+      const fs = ctx.get('fs') as MentionFs | undefined
+      if (!fs || options?.signal?.aborted) return []
+      if (isPathLikeQuery(query)) {
+        return listPathCandidates(fs, state.cwd, query, options?.signal, options?.topK ?? 50)
+      }
+      if (fileCandidateCache.cwd !== state.cwd) {
+        fileCandidateCache.cwd = state.cwd
+        fileCandidateCache.load = undefined
+      }
+      fileCandidateCache.load ??= listFilesDeepCandidates(fs, state.cwd).then(candidates => {
+        if (candidates.length > 0) return candidates
+        // An empty scan is not worth caching forever — retry on next query.
+        fileCandidateCache.load = undefined
+        return candidates
+      })
+      const candidates = await fileCandidateCache.load
+      if (options?.signal?.aborted) return []
+      return rankFileCandidates(candidates, query, options?.topK ?? 50)
+    },
+    async listFiles() {
+      const fs = ctx.get('fs') as MentionFs | undefined
+      const candidates = await listFilesDeepCandidates(fs, state.cwd)
+      return candidates.map(candidate => candidate.path)
     },
     async listSessions() {
       // Every stored session, classified and unfiltered. Which of them a
@@ -5415,28 +5472,49 @@ ${output}
   }
 
   /**
+   * One durable goal mutation as the goal service records it (the `data` of
+   * a top-level `goal/change` session event, and of the snapshot a round-zero
+   * goal-sourced `user/message` may inline). Declared structurally: the
+   * pinned peer's `SessionEvent` union predates the event type, so the fold
+   * admits the payload by shape, not by union membership.
+   */
+  type GoalChangePayload = {
+    kind: 'goal/change'
+    version: number
+    operation:
+      | 'create'
+      | 'edit'
+      | 'pause'
+      | 'resume'
+      | 'complete'
+      | 'block'
+      | 'clear'
+    goal?: Omit<ChannelGoal, 'roundsStarted'>
+    roundsStarted?: number
+  }
+
+  /** Fold one goal mutation into the channel's goal projection. */
+  const applyGoalChange = (change: GoalChangePayload): void => {
+    if (change.operation === 'clear') {
+      state.goal = undefined
+    } else if (change.goal !== undefined) {
+      state.goal = {
+        ...change.goal,
+        roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
+      }
+    }
+  }
+
+  /**
    * Fold one goal-sourced message into the channel's goal projection.
-   * Round-zero goal messages carry the full durable snapshot (or a clear
+   * Round-zero goal messages may carry the full durable snapshot (or a clear
    * tombstone) in their source; positive-round messages are admitted
    * continuation prompts that only advance the rounds counter.
    */
   const applyGoalEvent = (event: SessionEvent<'user/message'>): void => {
     const source = event.data.source as unknown as {
       round: number
-      change?: {
-        kind: 'goal/change'
-        version: 1
-        operation:
-          | 'create'
-          | 'edit'
-          | 'pause'
-          | 'resume'
-          | 'complete'
-          | 'block'
-          | 'clear'
-        goal?: ChannelGoal
-        roundsStarted?: number
-      }
+      change?: GoalChangePayload
     }
     if (source.round > 0) {
       // Admitted continuation round — the snapshot itself is unchanged.
@@ -5451,14 +5529,7 @@ ${output}
     const change = source.change
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may not match the static type
     if (change === undefined || change.kind !== 'goal/change') return
-    if (change.operation === 'clear') {
-      state.goal = undefined
-    } else if (change.goal !== undefined) {
-      state.goal = {
-        ...change.goal,
-        roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
-      }
-    }
+    applyGoalChange(change)
   }
 
   /** True while the durable transcript is being replayed (boot /resume /
@@ -5486,6 +5557,15 @@ ${output}
   }
 
   const renderEvent = (event: SessionEvent): void => {
+    // Top-level `goal/change` events are how the goal service actually
+    // records durable goal mutations (create/edit/pause/resume/complete/
+    // block/clear) — confirmed in production logs. The pinned peer's
+    // SessionEvent union predates the type, so admit it structurally: the
+    // goal chip and panel stay dark without this fold.
+    if ((event as { type: string }).type === 'goal/change') {
+      applyGoalChange((event as { data: GoalChangePayload }).data)
+      return
+    }
     switch (event.type) {
       case 'user/message': {
         // Compaction checkpoint: `source = { kind: 'plugin', plugin:
@@ -5531,10 +5611,13 @@ ${output}
           contextWarned = false
           break
         }
-        // Same-session goal domain: round-zero goal-sourced messages carry
-        // the durable goal snapshot (or clear tombstone) in their source.
-        // They are not transcript bubbles — they drive the goal panel's
-        // live projection (replayed on resume/rewind like every other event).
+        // Same-session goal domain: goal-sourced messages are the round
+        // driver's continuation prompts (positive rounds advance the
+        // counter); some hosts also inline the durable snapshot in a
+        // round-zero source. They are not transcript bubbles — they drive
+        // the goal panel's live projection (replayed on resume/rewind like
+        // every other event; the snapshot itself arrives as the top-level
+        // `goal/change` event admitted above).
         if ((event.data.source as { kind: string }).kind === 'goal') {
           applyGoalEvent(event)
           break
@@ -6121,10 +6204,17 @@ ${output}
         const subagentId = subagentStore.getSubagentIdBySession(session)
         if (subagentId) {
           subagentStore.onSessionEvent(subagentId, event)
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
-          if (event.type === 'assistant/chunk') state.emitStream()
-          else state.emit()
+          if (event.type === 'assistant/chunk') {
+            // Token-rate path (100-300 events/s): the store append stays
+            // synchronous (cheap); the expensive snapshot + row projection
+            // defers to the frame-aligned flush inside emitStream's 16ms
+            // timer, so it coalesces exactly like the main-agent stream.
+            subagentStreamDirty = true
+            state.emitStream()
+          } else {
+            syncSubagentsNow()
+            state.emit()
+          }
           return
         }
         // Otherwise handle main agent session
@@ -6183,8 +6273,7 @@ ${output}
           } catch {
             // Session discovery is best-effort and must not break the parent turn.
           }
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
+          syncSubagentsNow()
           state.emit()
         })
         const disposeEnd = ctx.on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
@@ -6202,8 +6291,7 @@ ${output}
           if (info.stopReason === 'completed') subagentStore.onCompleted(info.id, output, info.stopReason)
           else if (info.stopReason === 'cancelled' || info.stopReason === 'aborted') subagentStore.onCancelled(info.id, info.stopReason, output)
           else subagentStore.onFailed(info.id, info.stopReason || 'Unknown error')
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
+          syncSubagentsNow()
           state.emit()
         })
         return () => {
@@ -6392,82 +6480,89 @@ function usageOutputTokens(usage: unknown): number | undefined {
     : undefined
 }
 
-/**
- * `@` file listing through the leaf's fs service (dsh-fs-local): skips
- * VCS/dependency/build dirs and rotates across directory listings so one
- * large subtree cannot consume the global MAX_FILES budget. That budget also
- * bounds directory reads without imposing an arbitrary source-tree depth.
- * Relative directories retain the trailing `/` that FileSuggestions expects.
- * Unreadable subtrees are skipped, not fatal.
- */
-async function listFilesDeep(
-  fs: {
-    resolve(path: string): Promise<{ displayPath: string }>
-    listDir(target: { displayPath: string }): Promise<
-      Array<{
-        name: string
-        type: 'file' | 'directory' | 'other'
-        target: { displayPath: string }
-      }>
-    >
-  } | undefined,
-  root: string,
-): Promise<string[]> {
+type FileSuggestionFs = {
+  resolve(path: string): Promise<{ displayPath: string }>
+  listDir(target: { displayPath: string }): Promise<Array<{ name: string; type: 'file' | 'directory' | 'other'; target?: { displayPath: string } }>>
+}
+
+async function listPathCandidates(fs: FileSuggestionFs, cwd: string, query: string, signal: AbortSignal | undefined, topK: number): Promise<FileCandidate[]> {
+  const normalized = query.replaceAll('\\', '/')
+  const slash = normalized.lastIndexOf('/')
+  // `.` / `..` without a trailing separator are whole-directory queries too.
+  const bareDir = slash < 0 && (normalized === '.' || normalized === '..' || normalized === '~')
+  const directoryPart = slash < 0 ? (bareDir ? `${normalized}/` : '') : normalized.slice(0, slash + 1)
+  const nameQuery = slash < 0 || bareDir ? '' : normalized.slice(slash + 1)
+  // `~/` expands against the host home (matches the cwd resolution rules);
+  // drive-letter and POSIX-absolute prefixes pass through untouched.
+  const expanded = directoryPart === '~/'
+    ? `${homeDir()}/`
+    : directoryPart.startsWith('/') || /^[A-Za-z]:\//.test(directoryPart)
+      ? directoryPart
+      : join(cwd, directoryPart || '.')
+  try {
+    if (signal?.aborted) return []
+    const target = await fs.resolve(expanded)
+    const entries = (await fs.listDir(target)).slice().sort((a, b) => a.name.localeCompare(b.name))
+    return rankFileCandidates(entries.filter(entry => entry.type === 'file' || entry.type === 'directory').map(entry => {
+      const path = `${directoryPart}${entry.name}${entry.type === 'directory' ? '/' : ''}`
+      return { id: path, path, displayPath: path, name: entry.name, kind: entry.type as 'file' | 'directory', score: 0 }
+    }), nameQuery, topK)
+  } catch {
+    return []
+  }
+}
+
+async function listFilesDeepCandidates(fs: FileSuggestionFs | undefined, root: string, signal?: AbortSignal): Promise<FileCandidate[]> {
   if (!fs) return []
-  const out: string[] = []
+  const out: FileCandidate[] = []
   const SKIP = new Set(['node_modules', '.git', '.hg', '.svn', '.DS_Store', 'dist'])
   const BUILD_DIR = /^(?:build(?:[-_].*)?|cmake-build(?:[-_].*)?)$/i
-  const MAX_FILES = 100
-
-  type Entry = {
-    name: string
-    type: 'file' | 'directory' | 'other'
-    target: { displayPath: string }
-  }
-  type Directory = {
-    dir: string
-    prefix: string
-    entries?: Entry[]
-    index: number
-  }
-  const directories: Directory[] = [{ dir: root, prefix: '', index: 0 }]
-
-  while (directories.length > 0 && out.length < MAX_FILES) {
-    const current = directories.shift()
-    if (!current) continue
+  type Entry = { name: string; type: 'file' | 'directory' | 'other'; target?: { displayPath: string } }
+  type Node = { dir: string; prefix: string; entries?: Entry[]; index: number }
+  const queue: Node[] = [{ dir: root, prefix: '', index: 0 }]
+  const visited = new Set<string>()
+  const maxFiles = 100
+  const maxDirectories = 100
+  let fileCount = 0
+  let dirCount = 0
+  // Round-robin: each directory yields ONE non-skipped entry per visit before
+  // it re-queues, so a large early sibling (e.g. `generated/` with 120 files)
+  // cannot starve `src/` out of the per-kind budgets. This is the regression
+  // contract pinned by scripts/verify-file-completion.mjs.
+  while (queue.length && fileCount < maxFiles && dirCount < maxDirectories) {
+    if (signal?.aborted) return []
+    const current = queue.shift()!
     if (!current.entries) {
       try {
         const target = await fs.resolve(current.dir)
-        current.entries = await fs.listDir(target)
-      } catch {
-        continue // unreadable subtree — skip
-      }
+        if (visited.has(target.displayPath)) continue
+        visited.add(target.displayPath)
+        current.entries = (await fs.listDir(target)).slice().sort((a, b) => a.name.localeCompare(b.name))
+      } catch { continue }
     }
-
     let entry: Entry | undefined
     while (current.index < current.entries.length) {
-      const candidate = current.entries[current.index++]
+      const candidate = current.entries[current.index++]!
       if (SKIP.has(candidate.name) || BUILD_DIR.test(candidate.name)) continue
       entry = candidate
       break
     }
     if (!entry) continue
-    if (current.index < current.entries.length) directories.push(current)
+    if (current.index < current.entries.length) queue.push(current)
 
-    const rel = current.prefix ? `${current.prefix}/${entry.name}` : entry.name
+    const path = current.prefix ? `${current.prefix}/${entry.name}` : entry.name
     if (entry.type === 'directory') {
-      out.push(`${rel}/`)
-      directories.push({
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: symlink targets optional
-        dir: entry.target?.displayPath ?? join(current.dir, entry.name),
-        prefix: rel,
-        index: 0,
-      })
+      if (dirCount >= maxDirectories) continue
+      out.push({ id: `${path}/`, path: `${path}/`, displayPath: `${path}/`, name: entry.name, kind: 'directory', score: 0 })
+      dirCount += 1
+      queue.push({ dir: entry.target?.displayPath ?? join(current.dir, entry.name), prefix: path, index: 0 })
     } else if (entry.type === 'file') {
-      out.push(rel)
+      if (fileCount >= maxFiles) continue
+      out.push({ id: path, path, displayPath: path, name: entry.name, kind: 'file', score: 0 })
+      fileCount += 1
     }
   }
-  return out
+  return out.sort((a, b) => a.path.localeCompare(b.path))
 }
 
 /** One attached file's contribution is capped so an absent-minded `@` of a

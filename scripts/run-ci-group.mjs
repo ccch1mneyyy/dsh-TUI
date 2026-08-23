@@ -134,6 +134,10 @@ const GROUPS = {
 // 子代理模型路由回归（issue #191）：child scope 没有 AgentOptions 路由时，
 // 首次请求继承 TUI 当前完整路由；显式 child 路由保持优先。
     ["verify-subagent-model-route", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-model-route.tsx']],
+// 子代理流投影批处理：chunk 风暴的 snapshot+行投影必须按 16ms 帧
+// 对齐合并（token 率 100-300/s 下的全量深拷贝热路径），且生命周期
+// 事件（tool/call、subagent/end）保持同步立即可见。
+    ["verify-subagent-stream-batching", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-stream-batching.tsx']],
 // 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
 // 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
     ["verify-child-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-child-stderr.tsx']],
@@ -154,6 +158,14 @@ const GROUPS = {
     ["verify-provider-wizard", ['node', 'scripts/verify-provider-wizard.mjs']],
 // resume 模型路由回填回归：session 记录的 request/header 路由必须能被
 // resolvePersistedRoute 读回并喂给 agents.resume——provider-only 的
+// cordis.yml pin（issue #67）否则会让 options.model 缺位，连累子代理
+// 继承（{{model}} persona 变量装配失败）。纯 node 直跑编译产物 lib/
+//（CI build job 的 artifact 已含 lib/）。
+    ["verify-resume-route", ['node', 'scripts/verify-resume-route.mjs']],
+// @ 文件建议纯函数断言（eacc7a9 前端半边的后端/工具侧）：isPathLikeQuery
+// 双模式判定、模糊子序列打分、preserveSelection 选中保持、mentions
+// 共享边界规则（Windows 分隔符是 token 字符）。
+    ["verify-file-suggestions", ['node', '--import', 'tsx/esm', 'scripts/verify-file-suggestions.ts']],
   ],
 }
 

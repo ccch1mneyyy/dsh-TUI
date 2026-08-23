@@ -241,4 +241,119 @@ if (sessionHandler === undefined) {
   check('non-goal injected message ignored', channel.goal === undefined && channel.todos?.length === 2)
 }
 
+// ---- REAL-SHAPE scenario: the goal service writes durable snapshots as
+// top-level `goal/change` session events (not inlined in user/message
+// sources) and injects round prompts as goal-sourced messages WITHOUT a
+// change object. This is the shape found in production session logs — the
+// original inlined-source fold left the footer goal chip dark forever.
+{
+  const seed = [
+    {
+      type: 'goal/change',
+      seq: 1,
+      time: now - 5000,
+      data: {
+        kind: 'goal/change',
+        version: 1,
+        operation: 'create',
+        goal: {
+          id: 'goal-x1',
+          revision: 1,
+          objective: 'Demonstrate the goal chip',
+          phase: 'active',
+          maxGoalRounds: 1,
+        },
+        roundsStarted: 0,
+        createdAt: now - 5000,
+        updatedAt: now - 5000,
+      },
+    },
+    {
+      type: 'user/message',
+      seq: 2,
+      time: now - 4000,
+      data: {
+        source: { kind: 'goal', goalId: 'goal-x1', revision: 1, round: 1 },
+        content: [],
+      },
+    },
+    {
+      type: 'goal/change',
+      seq: 3,
+      time: now - 3000,
+      data: {
+        kind: 'goal/change',
+        version: 1,
+        operation: 'complete',
+        goal: {
+          id: 'goal-x1',
+          revision: 2,
+          objective: 'Demonstrate the goal chip',
+          phase: 'complete',
+          maxGoalRounds: 1,
+        },
+        roundsStarted: 1,
+        createdAt: now - 5000,
+        updatedAt: now - 3000,
+      },
+    },
+  ]
+  const goalAgent = {
+    id: 'a2',
+    status: 'idle',
+    session: { id: 's2', seq: 3, events: seed },
+    ctx: { on: () => () => {} },
+  }
+  const goalChannel = createChannel(ctx, goalAgent, {
+    model: 'deepseek-chat',
+    cwd: '/tmp',
+    provider: 'deepseek',
+    activity: false,
+  })
+  check('real-shape replay folds the goal', goalChannel.goal?.id === 'goal-x1', JSON.stringify(goalChannel.goal))
+  check('real-shape replay reaches complete phase', goalChannel.goal?.phase === 'complete')
+  check('real-shape round prompt advanced roundsStarted', goalChannel.goal?.roundsStarted === 1)
+
+  // Live top-level event: pause, then clear.
+  const handler = handlers.get('session/event')
+  if (handler === undefined) {
+    check('session/event handler captured (real-shape)', false)
+  } else {
+    handler(goalAgent.session, {
+      type: 'goal/change',
+      seq: 4,
+      time: now,
+      data: {
+        kind: 'goal/change',
+        version: 1,
+        operation: 'pause',
+        goal: {
+          id: 'goal-x1',
+          revision: 3,
+          objective: 'Demonstrate the goal chip',
+          phase: 'paused',
+          maxGoalRounds: 1,
+        },
+        roundsStarted: 1,
+        createdAt: now - 5000,
+        updatedAt: now,
+      },
+    })
+    check('live real-shape pause folds', goalChannel.goal?.phase === 'paused' && goalChannel.goal?.revision === 3)
+    handler(goalAgent.session, {
+      type: 'goal/change',
+      seq: 5,
+      time: now + 1,
+      data: {
+        kind: 'goal/change',
+        version: 1,
+        operation: 'clear',
+        cleared: { id: 'goal-x1', revision: 4 },
+        clearedAt: now + 1,
+      },
+    })
+    check('live real-shape clear folds', goalChannel.goal === undefined)
+  }
+}
+
 process.exit(failed)
