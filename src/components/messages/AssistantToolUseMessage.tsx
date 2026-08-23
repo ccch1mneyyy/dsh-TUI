@@ -10,6 +10,7 @@ import { SyntaxText } from '../SyntaxText.js'
 import { formatDuration } from '../../cc/format.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 
 type Props = {
   tool: ToolRow
@@ -21,6 +22,12 @@ type Props = {
   isSelected?: boolean
   /** Row expanded on its own (persistent hover-grey background, CC). */
   isExpanded?: boolean
+  /**
+   * Mouse click (fullscreen): toggles the row's expansion — same action as
+   * clicking other transcript rows. Also makes the `(ctrl+o to expand)`
+   * hint actionable with the mouse.
+   */
+  onClick?(event: ClickEvent): void
   /**
    * Trajectory pointer, rendered as one more `⎿` line under a failed call.
    *
@@ -89,7 +96,13 @@ function languageFromPath(path: string | undefined): string | undefined {
 
 /** `hint` is the trajectory pointer: recessive, never competing with output. */
 type BodyTone = 'add' | 'del' | 'dim' | 'plain' | 'error' | 'hint' | 'path'
-type BodyLine = { readonly text: string; readonly tone: BodyTone }
+type BodyLine = {
+  readonly text: string
+  readonly tone: BodyTone
+  /** The row's collapse hint: dim at rest, steps to text while hovered so the
+   *  toggle reads before the click (the compaction row's pattern). */
+  readonly revealOnHover?: boolean
+}
 
 /** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
 const TEXT_BODY_MAX_LINES = 3
@@ -209,7 +222,7 @@ function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] 
   if (lines.length - max === 1) return lines
   return [
     ...lines.slice(0, max),
-    dim(`… +${lines.length - max} lines (ctrl+o to expand)`),
+    { ...dim(`… +${lines.length - max} lines (ctrl+o to expand)`), revealOnHover: true },
   ]
 }
 
@@ -299,6 +312,7 @@ export function AssistantToolUseMessage({
   verbose,
   isSelected = false,
   isExpanded = false,
+  onClick,
   footnote,
   diffLayout = 'auto',
   toolBackground = 'none',
@@ -367,6 +381,16 @@ export function AssistantToolUseMessage({
     : ordinaryToolBackground === 'strong'
       ? 'toolCardBackground'
       : undefined
+  // Hover affordance for the click-to-toggle row: the theme's tool-card blue
+  // face marks the call's content area while the pointer dwells (the
+  // toolBackground treatment steps up one level to the strong card face), the
+  // collapsed `(ctrl+o to expand)` hint steps from dim to text, the elapsed
+  // clock stops dimming, and a ▾/▴ discloses the row is a toggle.
+  // No layout change: the indicator is a fixed column on the header line, the
+  // body never moves.
+  const [hovered, setHovered] = React.useState(false)
+  const interactive = onClick !== undefined
+  const hoverTint = interactive && hovered && !isSelected
 
   return (
     <Box
@@ -375,9 +399,12 @@ export function AssistantToolUseMessage({
       justifyContent="space-between"
       marginTop={addMargin ? 1 : 0}
       width="100%"
+      onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies
       // to an ordinary card. Diff line tints stay - they are content, not chrome.
-      backgroundColor={isSelected ? 'messageActionsBackground' : ordinaryBackground}
+      backgroundColor={isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground}
+      onMouseEnter={interactive ? () => setHovered(true) : undefined}
+      onMouseLeave={interactive ? () => setHovered(false) : undefined}
     >
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="row" flexWrap="nowrap" minWidth={minWidth}>
@@ -390,7 +417,12 @@ export function AssistantToolUseMessage({
           <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} />
           {!isRunning && (
             <Box flexWrap="nowrap">
-              <Text dimColor>{elapsedText}</Text>
+              <Text dimColor={!hovered}>{elapsedText}</Text>
+            </Box>
+          )}
+          {hovered && (
+            <Box flexShrink={0}>
+              <Text dimColor>{isExpanded ? '▴' : '▾'}</Text>
             </Box>
           )}
         </Box>
@@ -441,7 +473,7 @@ export function AssistantToolUseMessage({
                               ? 'ide'
                               : undefined
                   }
-                  dimColor={line.tone === 'dim'}
+                  dimColor={line.tone === 'dim' && !(line.revealOnHover === true && hovered)}
                   wrap="wrap"
                 >
                   {line.tone === 'plain' && syntaxLanguage !== undefined ? (

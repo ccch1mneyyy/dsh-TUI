@@ -246,14 +246,24 @@ owns native scrollback and selection.
 
 | Action | Behavior |
 | --- | --- |
-| Wheel | Scroll the transcript |
+| Wheel | Routed by position: moves the selected row in the completion/command menu under the pointer; scrolls the topmost scroll container (transcript / help / subagent panel); elsewhere scrolls the message list; never scrolls the transcript behind an open overlay; moves the cursor in the trajectory scene (±3 rows per notch on the timeline, ±1 in hotspot, scrolls the detail while expanded); walks the focused row in /settings |
 | Drag | Select text, copy on release, then clear the selection |
 | Double/triple click | Select and copy a word/line |
 | `Esc` | Cancel an active drag (or an existing selection) without copying |
-| Single-click a message row | Expand / collapse that row |
+| Single-click a message row | Plain text rows (user/assistant) do nothing — the transcript is a reading surface, selection is the mouse's job there |
+| Single-click a tool card / thinking / compact summary | Expand / collapse (header brightens on hover; trailing blank cells do not trigger) |
+| Single-click a subagent card | Open that subagent's detail scene (status glyph brightens on hover) |
+| Single-click the input box | Place the text caret at the click (multi-line, wrapped rows and CJK all width-aligned) |
 | Single-click “load earlier messages” / “ctrl+e show previous N” | Load earlier messages / expand all |
 | Single-click the sticky header / “↓ N new messages” | Jump back to the pinned message / scroll to bottom |
 | Single-click a hyperlink | Open it in the browser |
+| Single-click a picker / menu row | Select and apply immediately (model / skills / activity frames / preset / permissions / plan / language / theme / effort / command & file completion / history / session rows / thinking mode / workspace targets, submenu & flow choices) — the keyboard Enter path; rows are inert while a picker is busy or mid-input |
+| Single-click a rewind candidate / confirm row | List page: click selects only (stepping into the confirm state stays an explicit keyboard Enter); confirm page: clicking the message / mode row executes the rewind directly — the confirm pane is itself the confirmation layer |
+| Single-click an approval / questionnaire / plan-review / plugin dialog row | Submit that decision directly (unblock a waiting agent with the mouse) |
+| Single-click in the trajectory scene | Timeline/hotspot rows jump the cursor (a hotspot row jumps back to the timeline at that group — same as Enter; hover shows a dim ▸ pointer); tabs switch views; the sort/projection label cycles; the query line and the tab gap open the `/` search; a wave-band column (ruler included) jumps to its nearest event |
+| Single-click a /settings field / group row | Focus it and run that row's Enter action (boolean/select cycles, text enters edit, groups open); hover moves the focus (lazygit-style); the edit mode ignores the mouse entirely |
+| Single-click a session-browser confirm row | Confirm the delete/clean (same as Enter); cancelling stays on keyboard Esc |
+| Single-click a help-menu command row | Fill `/name ` into the prompt and close the help (the Tab completion's mouse equivalent) |
 | Keyboard selection extension | With a selection, `Shift+←/→/↑/↓/Home/End` extends / shrinks it (wraps across lines) |
 
 Copy prefers OSC 52. Local fallbacks include `wl-copy`, `xclip`, and `xsel`;

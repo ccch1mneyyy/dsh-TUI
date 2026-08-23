@@ -14,9 +14,13 @@ import { HintLine } from './design-system/HintLine.js'
 export function PlanPicker({
   focusIndex,
   currentOn,
+  onPick,
 }: {
   focusIndex: number
   currentOn: boolean
+  /** Mouse pick (fullscreen): clicked row's absolute index (Chat applies
+   *  the same code path as the keyboard Enter). */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   return (
     <Pane color="permission">
@@ -33,6 +37,7 @@ export function PlanPicker({
           ]}
           focusIndex={focusIndex}
           selectedValue={currentOn ? 'on' : 'off'}
+          onPick={onPick ? index => onPick(index) : undefined}
         />
         <Text dimColor italic>
           <HintLine text={t('hint-confirm-exit')} />

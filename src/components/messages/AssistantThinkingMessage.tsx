@@ -12,6 +12,7 @@ import {
 import { BRAND, ICE } from '../shimmer.js'
 import { interpolateColor } from '../Spinner/spinnerUtils.js'
 import { isMinimalMode } from '../../minimalMode.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 
 /** Preview body rows — a FIXED row count (kimicode-style constant-height
  *  ticker). Ink's truncate slices the whole string across newlines as one
@@ -39,7 +40,7 @@ type Props = {
   durationMs?: number
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  onClick?(): void
+  onClick?(event: ClickEvent): void
 }
 
 /**
@@ -86,14 +87,21 @@ export function AssistantThinkingMessage({
   const pulse = (Math.sin(frame * 0.9) + 1) / 2
   const pulseColor = interpolateColor(BRAND, ICE, pulse)
   const frameText = THINKING_SPINNER_FRAMES[frame % THINKING_SPINNER_FRAMES.length]!
+  // Hover 轻指示：可点击折叠时折叠头从 dim 提亮为正常色（不刷整行背景，
+  // 转录视觉保持安静）。
+  const [hovered, setHovered] = React.useState(false)
+  const hoverProps = onClick !== undefined
+    ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
+    : {}
   const header =
     streaming ? (
       <Box flexDirection="row">
         <Text>{minimal ? frameText : chalk.rgb(pulseColor.r, pulseColor.g, pulseColor.b).bold(frameText)}</Text>
-        <Text dimColor italic>{` ${label}`}</Text>
+        {/* 流式行同样可点击折叠（hover 提亮标签给出指示，与落定态一致） */}
+        <Text dimColor={!hovered} color={hovered ? 'text' : undefined} italic>{` ${label}`}</Text>
       </Box>
     ) : (
-      <Text dimColor italic>{`${minimal ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
+      <Text italic dimColor={!hovered} color={hovered ? 'text' : undefined}>{`${minimal ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
     )
 
   if (preview) {
@@ -119,6 +127,7 @@ export function AssistantThinkingMessage({
         marginTop={addMargin ? 1 : 0}
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
+        {...hoverProps}
       >
         {header}
         <Box
@@ -156,6 +165,7 @@ export function AssistantThinkingMessage({
         marginTop={addMargin ? 1 : 0}
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
+        {...hoverProps}
       >
         {header}
       </Box>
@@ -170,6 +180,7 @@ export function AssistantThinkingMessage({
       width="100%"
       backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       onClick={onClick}
+      {...hoverProps}
     >
       {header}
       <Box paddingLeft={2}>

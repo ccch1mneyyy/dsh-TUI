@@ -138,6 +138,8 @@ export function GoalTodoPanel({
     startRef.current = { id: goal.id, at: Date.now() }
   }
   const [now, setNow] = React.useState(() => Date.now())
+  // Hover tint for the clickable todo fold header (mouse affordance).
+  const [headerHovered, setHeaderHovered] = React.useState(false)
   React.useEffect(() => {
     // Tick only while the goal is open; a complete goal freezes the last
     // elapsed reading instead of counting past the finish line.
@@ -195,7 +197,13 @@ export function GoalTodoPanel({
         <Box flexDirection="column">
           {/* Fold header: done/total summary, clickable, doubles as the
               collapsed line (with the live-task preview). */}
-          <Box flexDirection="row" onClick={onToggle}>
+          <Box
+            flexDirection="row"
+            onClick={onToggle}
+            onMouseEnter={() => setHeaderHovered(true)}
+            onMouseLeave={() => setHeaderHovered(false)}
+            backgroundColor={headerHovered ? 'userMessageBackgroundHover' : undefined}
+          >
             <Text dimColor>{collapsed ? '▸' : '▾'} </Text>
             <Text dimColor>✓ {doneCount}/{allTodos.length}</Text>
             {collapsed && preview !== undefined && (

@@ -3,6 +3,7 @@ import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize }
 import type { SubagentState } from '../dsh-adapter/subagents.js'
 import { t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
+import { ExitButton } from './SubagentDashboard.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { toolNameColor } from './messages/AssistantToolUseMessage.js'
 import { getCliHighlightPromise } from '../cc/cliHighlight.js'
@@ -188,9 +189,14 @@ export function SubagentDetailScene({
     const active = page === name
     return (
       <React.Fragment key={name}>
-        <Text color={active ? 'claude' : undefined} bold={active} inverse={active}>
-          {` ${label} `}
-        </Text>
+        <Box
+          onClick={() => setPage(name)}
+          backgroundColor={!active ? 'userMessageBackgroundHover' : undefined}
+        >
+          <Text color={active ? 'claude' : undefined} bold={active} inverse={active}>
+            {` ${label} `}
+          </Text>
+        </Box>
         <Text dimColor>{name === PAGES[PAGES.length - 1] ? '' : '│'}</Text>
       </React.Fragment>
     )
@@ -204,6 +210,9 @@ export function SubagentDetailScene({
         <Text bold>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
         <Text dimColor>·</Text>
         <Text color={info.color}>{info.label}</Text>
+        <Box flexGrow={1} />
+        {/* 可点击退出（Esc/Enter 的鼠标等价），hover 提亮 */}
+        <ExitButton onClick={onBack} />
       </Box>
       <Text>
         <Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
@@ -301,12 +310,19 @@ export function SubagentDetailScene({
 
       <Divider color="subtle" title="" padding={4} />
       {/* Footer hint */}
-      <Box marginTop={0}>
+      <Box marginTop={0} flexDirection="row">
         <Text dimColor>
           {`←/→ ${t('subagent-hint-page')} · ↑/↓ ${t('subagent-hint-scroll')}`}
-          {isRunning && onInterrupt ? ' · X interrupt' : ''}
-          {` · Esc ${t('subagent-hint-back')}`}
         </Text>
+        {isRunning && onInterrupt && (
+          <>
+            <Text dimColor>{' · '}</Text>
+            <Box onClick={() => onInterrupt(subagent.agentId)}>
+              <Text dimColor bold color="warning">X interrupt</Text>
+            </Box>
+          </>
+        )}
+        <Text dimColor>{` · Esc ${t('subagent-hint-back')}`}</Text>
       </Box>
     </Box>
   )

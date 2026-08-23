@@ -21,11 +21,15 @@ export function HistorySearchDialog({
   cursorOffset,
   matches,
   focusIndex,
+  onPick,
 }: {
   query: string
   cursorOffset: number
   matches: readonly HistoryEntry[]
   focusIndex: number
+  /** 鼠标点击行（fullscreen）：上报绝对索引——Chat 用与 Enter 相同的
+   *  填入/提交路径处理。 */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   const isTerminalFocused = useTerminalFocus()
   const { rows: terminalRows } = useTerminalSize()
@@ -69,6 +73,7 @@ export function HistorySearchDialog({
                 description={formatRelativeAge(entry.ts)}
                 showScrollUp={absoluteIndex === start && start > 0}
                 showScrollDown={absoluteIndex === end - 1 && end < matches.length}
+                onClick={onPick ? () => onPick(absoluteIndex) : undefined}
               >
                 {entry.text}
               </ListItem>

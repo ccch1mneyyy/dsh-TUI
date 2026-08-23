@@ -43,6 +43,8 @@ const instance = await render(<MessageList
   expandedRows={new Set()}
   selectedId={null}
   onToggleRow={() => {}}
+  streamFoldedRows={new Set()}
+  onToggleStreamFold={() => {}}
   model="deepseek-chat"
   showAll
   onToggleAll={() => {}}

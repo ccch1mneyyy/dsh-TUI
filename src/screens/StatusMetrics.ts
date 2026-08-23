@@ -9,8 +9,10 @@
  */
 
 /** Context bar segments — DeepSeek blue family (dark-theme friendly: deep
- *  navy → brand blue, neutral grey free segment; labels adapt to width). */
-const USED_SEGMENTS = [
+ *  navy → brand blue, neutral grey free segment; labels adapt to width).
+ *  Exported for the hoverable JSX bar (ContextBarView), which re-derives
+ *  the same column split this module's ANSI path renders. */
+export const USED_SEGMENTS = [
   { key: 'system', color: '#22305F', labels: ['system', 'sys', 's'] }, // deep navy
   { key: 'prompt', color: '#2B3D78', labels: ['prompt', 'pr', 'p'] }, // navy
   { key: 'assistant', color: '#344A92', labels: ['assistant', 'ast', 'a'] }, // indigo
@@ -56,7 +58,9 @@ export function formatTokens(count: number): string {
 
 // --- Context bar (pi-nano-context) ---
 
-function centeredText(text: string, width: number): string {
+/** Center `text` in `width` cells (plain spaces, no ANSI). Exported for
+ *  ContextBarView's JSX used-segment labels. */
+export function centeredText(text: string, width: number): string {
   const textWidth = plainWidth(text)
   if (textWidth > width) return ' '.repeat(width)
   const left = Math.floor((width - textWidth) / 2)
@@ -64,7 +68,9 @@ function centeredText(text: string, width: number): string {
   return `${' '.repeat(left)}${text}${' '.repeat(right)}`
 }
 
-function chooseLabel(labels: readonly string[], width: number): string {
+/** Pick the longest label that fits `width` cells. Exported for
+ *  ContextBarView's JSX segments (same fallback ladder as the ANSI path). */
+export function chooseLabel(labels: readonly string[], width: number): string {
   for (const label of labels) {
     if (plainWidth(label) <= width) return label
   }
@@ -97,11 +103,15 @@ function chooseRightAlignedText(
   return ''
 }
 
-function renderFreeSegment(
+/**
+ * Compose the free segment's plain text: the `free` label centered, the
+ * usage readout right-aligned into whatever width remains. Shared by the
+ * ANSI string path (renderContextBar) and the hoverable JSX bar
+ * (ContextBarView) so both render pixel-identical content.
+ */
+export function composeFreeSegmentText(
   options: readonly string[],
   width: number,
-  fill: string,
-  text: string,
 ): string {
   if (width <= 0) return ''
   const content = Array.from({ length: width }, () => ' ')
@@ -120,7 +130,17 @@ function renderFreeSegment(
       content[labelStart + offset] = char
     }
   }
-  return background(fill, foreground(text, content.join('')))
+  return content.join('')
+}
+
+function renderFreeSegment(
+  options: readonly string[],
+  width: number,
+  fill: string,
+  text: string,
+): string {
+  if (width <= 0) return ''
+  return background(fill, foreground(text, composeFreeSegmentText(options, width)))
 }
 
 /** Largest-remainder column allocation (pi-nano-context). */
@@ -142,8 +162,9 @@ function allocateProportionally(values: readonly number[], columns: number): num
   return allocatedColumns
 }
 
-/** Give every visible used segment at least one column before sharing the rest. */
-function allocateBarColumns(values: readonly number[], width: number): number[] {
+/** Give every visible used segment at least one column before sharing the
+ *  rest. Exported for ContextBarView (hoverable JSX twin of the bar). */
+export function allocateBarColumns(values: readonly number[], width: number): number[] {
   const visibleUsedSegments = USED_SEGMENTS
     .map((_, index) => index)
     .filter(index => (values[index] ?? 0) > 0)
@@ -197,6 +218,50 @@ export function renderContextBar(
     colors?.freeFill ?? FREE_SEGMENT_FILL,
     colors?.freeText ?? FREE_SEGMENT_TEXT,
   )}`
+}
+
+// --- Mini context bar (footer ctx-field hover) ---
+
+/** Context-pressure thresholds, shared with contextPressurePct's amber/red
+ *  footer convention (amber ≥ 80%, red ≥ 95%). */
+const PRESSURE_WARN = 80
+const PRESSURE_DANGER = 95
+
+/** Pressure-colored text: green below 80%, amber ≥ 80, red ≥ 95.
+ * @param pct - Context occupancy percent (0–100+).
+ * @param text - Text to color.
+ * @returns The ANSI 24-bit color-wrapped text.
+ */
+export function pressureColor(pct: number, text: string): string {
+  const key = pct >= PRESSURE_DANGER ? 'error' : pct >= PRESSURE_WARN ? 'warning' : 'success'
+  return `\x1b[38;2;${colorHex(key)}m${text}\x1b[39m`
+}
+
+/** Compact 1/8-cell context gauge for the footer's ctx field on hover:
+ *  `▕██████▋···▏`, fill proportional to context occupancy, colored by the
+ *  amber/red pressure thresholds. Same block ramp as the TPS gauge.
+ * @param usedTokens - Total context tokens in use.
+ * @param contextWindow - Context window size in tokens.
+ * @param width - Gauge width in terminal columns (fill cells, brackets excluded).
+ * @returns The ANSI gauge string, or '' for a non-positive window.
+ */
+export function renderMiniContextBar(
+  usedTokens: number,
+  contextWindow: number,
+  width = 10,
+): string {
+  if (contextWindow <= 0 || width <= 0) return ''
+  const pct = Math.min(100, Math.max(0, (usedTokens / contextWindow) * 100))
+  const frac = pct / 100
+  const eighths = Math.round(frac * width * 8)
+  const full = Math.floor(eighths / 8)
+  const rem = eighths % 8
+  let fill = '█'.repeat(Math.min(full, width))
+  if (full < width && rem > 0) {
+    fill += HBLOCKS[rem]
+  }
+  const track = TRACK.repeat(Math.max(0, width - fill.length))
+  return `▕${pressureColor(pct, fill)}${`\x1b[2m${track}\x1b[22m`}▏`
 }
 
 // --- TPS gauge + sparkline (pi-tps-meter) ---

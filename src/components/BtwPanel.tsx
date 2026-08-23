@@ -80,9 +80,12 @@ export function BtwPanel({
           </ScrollBox>
         </Box>
       </Box>
-      <Text dimColor>
-        {settled ? t('btw-hint-done') : streaming ? t('btw-hint-loading') : t('btw-hint-done')}
-      </Text>
+      {/* 提示行可点击复制（与 c 键同路径，审计 C-19） */}
+      <Box onClick={settled ? onCopy : undefined}>
+        <Text dimColor>
+          {settled ? t('btw-hint-done') : streaming ? t('btw-hint-loading') : t('btw-hint-done')}
+        </Text>
+      </Box>
     </Box>
   )
 }

@@ -54,6 +54,8 @@ const props = {
   expandedRows: new Set<number>(),
   selectedId: null,
   onToggleRow: () => {},
+  streamFoldedRows: new Set<number>(),
+  onToggleStreamFold: () => {},
   model: 'deepseek-chat',
   showAll: true,
   onToggleAll: () => {},

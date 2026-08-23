@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.8.8",
+  "version": "0.9.0",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "MIT",
   "repository": {
@@ -93,7 +93,7 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:liangshen-plan-persona && npm run verify:plan-prompt-command && npm run verify:plan-review-exit",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:liangshen-plan-persona && npm run verify:plan-prompt-command && npm run verify:plan-review-exit && npm run verify:pointer-events && npm run verify:chat-overlay",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
     "verify:herdr": "node --import tsx/esm scripts/verify-herdr-integration.ts",
@@ -122,6 +122,8 @@
     "verify:tips": "node --import tsx/esm scripts/verify-tips.tsx",
     "verify:thinking-preview": "node --import tsx/esm scripts/verify-thinking-preview.tsx",
     "verify:wheel-selection": "node --import tsx/esm scripts/verify-wheel-selection.ts",
+    "verify:pointer-events": "node --import tsx/esm scripts/verify-pointer-events.ts",
+    "verify:chat-overlay": "node --import tsx/esm scripts/verify-chat-overlay.ts",
     "sync:profile": "node scripts/sync-profile.mjs",
     "sync:profile:check": "node scripts/sync-profile.mjs --check"
   },
