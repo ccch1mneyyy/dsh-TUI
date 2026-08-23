@@ -49,6 +49,7 @@ import {
   sessionAt,
   windowEnd,
   type BrowserFilters,
+  type BrowserRow,
   type BrowserView,
 } from '../../sessions/view.js'
 import {
@@ -219,6 +220,12 @@ export class SessionBrowserScreen implements Component {
    *  `resolveFocus` on every view rebuild and by `step` on every move, so
    *  several key events from one stdin chunk all read the current position. */
   private focus = 0
+  /**
+   * Anchors of the fork families the user has opened with →. Held as identity
+   * (anchor session id) for the same reason the cursor is: rows reorder under
+   * every mutation, the expansion must survive them — reloads included.
+   */
+  private expandedFamilies: ReadonlySet<string> = new Set<string>()
   /** Scroll anchor: derived from the focus each render and read back to keep
    *  a stationary cursor from re-shuffling the screen. */
   private windowTop = 0
@@ -340,6 +347,30 @@ export class SessionBrowserScreen implements Component {
       // single steps so it lands on a selectable row like every other move.
       const halfWindow = Math.max(1, Math.floor(this.layoutMetrics().listHeight / 2))
       this.step(matchesKey(data, Key.pageDown) ? 1 : -1, halfWindow)
+    } else if (matchesKey(data, Key.right) || matchesKey(data, Key.left)) {
+      // Fork-family folding. → opens the folded family under the cursor; ←
+      // closes it — from anywhere inside it, so a member row's ← lands the
+      // cursor on the family's row rather than on a row that just folded away.
+      const row = view.rows[this.focus]
+      const family = row?.kind === 'session' ? row.family : undefined
+      if (family !== undefined) {
+        if (matchesKey(data, Key.right) && family.role === 'rep' && !family.expanded && family.size > 1) {
+          this.expandedFamilies = new Set(this.expandedFamilies).add(family.anchor)
+          this.viewDirty = true
+        } else if (matchesKey(data, Key.left) && (family.role === 'member' || family.expanded)) {
+          const next = new Set(this.expandedFamilies)
+          next.delete(family.anchor)
+          this.expandedFamilies = next
+          this.viewDirty = true
+          if (family.role === 'member') {
+            this.focusId = family.rep
+            // Rows above the family are untouched by the fold, so the rep's
+            // index in the current rows is its index after it too.
+            const repIndex = view.rows.findIndex((r) => r.kind === 'session' && r.session.id === family.rep)
+            if (repIndex >= 0) this.focus = repIndex
+          }
+        }
+      }
     } else if (matchesKey(data, Key.enter)) {
       if (focused !== undefined) this.runResume(focused)
     } else if (matchesKey(data, Key.escape)) {
@@ -669,7 +700,7 @@ export class SessionBrowserScreen implements Component {
         branch: this.gitBranch,
         currentId: this.currentAgentId,
         sameProject: this.sameProject,
-      })
+      }, this.expandedFamilies)
       this.viewDirty = false
       this.resolveFocus(this.viewCache)
     }
@@ -776,7 +807,7 @@ export class SessionBrowserScreen implements Component {
           `${paint(theme, truncateWidth(` ${formatProject(row.project, this.home)}`, Math.max(0, listWidth - 6)), 'planMode')}${paint(theme, `  ${row.count}`, undefined, { dim: true })}`,
         )
       } else {
-        listLines.push(...this.renderSessionRow(theme, row.session, row.depth, windowTop + index === focus, listWidth, now))
+        listLines.push(...this.renderSessionRow(theme, row.session, row.depth, windowTop + index === focus, listWidth, now, row.family))
       }
     })
     const clipped = listLines.slice(0, Math.max(0, listHeight))
@@ -805,11 +836,18 @@ export class SessionBrowserScreen implements Component {
     focusedRow: boolean,
     width: number,
     now: number,
+    family?: Extract<BrowserRow, { kind: 'session' }>['family'],
   ): string[] {
     const indent = depth * 2
     // Two cells for the focus marker, plus the indent for a nested run.
     const body = Math.max(8, width - 2 - indent)
     const mark = kindMark(session.kind)
+    // A folded family's badge sits after the title and must never squeeze it
+    // past usefulness, so its width comes out of the title's budget up front.
+    const badge = family?.role === 'rep' && family.size > 1
+      ? `${family.expanded ? '▾' : '▸'}${family.size}`
+      : undefined
+    const badgeCells = badge === undefined ? 0 : badge.length + 1
 
     const facts: string[] = [formatWhen(session.updatedAt, now)]
     if (session.branch !== undefined) facts.push(session.branch)
@@ -822,12 +860,13 @@ export class SessionBrowserScreen implements Component {
     const glyph = mark === undefined ? '' : paint(theme, `${mark.glyph} `, mark.color)
     const title = paint(
       theme,
-      truncateWidth(session.label ?? session.title.text, body - (mark === undefined ? 0 : 2)),
+      truncateWidth(session.label ?? session.title.text, body - (mark === undefined ? 0 : 2) - badgeCells),
       titleColor(session.title.source, focusedRow),
       { bold: focusedRow },
     )
+    const badgeText = badge === undefined ? '' : paint(theme, ` ${badge}`, undefined, { dim: true })
     const meta = paint(theme, `${' '.repeat(indent + 2)}${truncateWidth(facts.join(' · '), body)}`, undefined, { dim: true })
-    return [marker + glyph + title, meta]
+    return [marker + glyph + title + badgeText, meta]
   }
 
   /**
