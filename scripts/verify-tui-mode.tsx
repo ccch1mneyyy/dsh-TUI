@@ -3,6 +3,7 @@
  *   1. `/tui f` completes to `/tui fullscreen `
  *   2. `/tui` writes settings.yaml `dsh-tui.fullscreen` (not a sidecar json)
  *   3. StatusLine leftmost field is inline/fullscreen (zh 常规/全屏)
+ *   4. /settings registers each dsh-tui path once (merge leftover guard)
  *
  * Run: node --import tsx/esm scripts/verify-tui-mode.tsx
  */
@@ -109,6 +110,23 @@ function ChatHarness({
       <Chat channel={channel as never} questionStore={questionStore} approvalStore={approvalStore} />
     </DisplayFrame>
   )
+}
+
+console.log('settings field paths unique:')
+{
+  const { readFileSync } = await import('node:fs')
+  const { dirname, join } = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/dsh-adapter/plugin.ts'), 'utf8')
+  const paths = [...source.matchAll(/path:\s*\[([^\]]+)\]/g)].map(match => match[1].replace(/\s+/g, ''))
+  const seen = new Set<string>()
+  const dupes: string[] = []
+  for (const path of paths) {
+    if (seen.has(path)) dupes.push(path)
+    else seen.add(path)
+  }
+  check(dupes.length === 0, `dsh-tui settings paths unique (dupes: ${dupes.join(', ') || 'none'})`)
+  check(paths.filter(path => path === "'fullscreen'").length === 1, 'exactly one fullscreen settings field')
 }
 
 const tuiChildren = (path: readonly string[]) => path.length === 1 && path[0] === 'tui'

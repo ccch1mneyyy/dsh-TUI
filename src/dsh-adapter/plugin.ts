@@ -554,17 +554,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           ],
         },
         {
-          path: ['fullscreen'],
-          label: 'Fullscreen',
-          descriptions: { zh: '全屏显示' },
-          hint: 'Use the alternate screen with in-app scrolling and mouse selection. `/tui` writes the same field.',
-          hintDescriptions: { zh: '使用备用屏，应用内滚动和鼠标选区。`/tui` 写入同一字段。' },
-          kind: 'boolean',
-          format(value: unknown): string {
-            return value === true || value === false ? String(value) : String(config.fullscreen === true)
-          },
-        },
-        {
           path: ['statusBar', 'compact'],
           label: 'Compact status bar',
           descriptions: { zh: '紧凑状态栏' },
