@@ -15,9 +15,9 @@
  * - Esc: closes the completion menu first; while working → `onCancel`;
  *   with text → clear; on an empty input the double-tap (3s window, timer
  *   owned here) → `onRewindRequest`.
- * - Ctrl+C: while working → `onCancel`; with text → clear + `onClearOrExit`;
- *   on an empty input → `onExitRequest` (single event per press — the
- *   double-press exit timing lives in the chat screen).
+ * - Ctrl+C: with text → clear + `onClearOrExit`; empty while working →
+ *   `onCancel`; empty while idle → `onExitRequest` (single event per press —
+ *   the double-press exit timing lives in the chat screen).
  * - Ctrl+G → `onOpenExternalEditor(expandedText)`; Ctrl+V reads the
  *   clipboard here (image → `commands.query.stageImage` → token insert,
  *   files/text → formatted insert), because the terminal hands raw-mode
@@ -323,14 +323,16 @@ export class PromptEditor extends Editor {
     }
 
     // Ctrl+C must run before super: the Editor swallows it as `tui.input.copy`.
+    // Priority: text → clear; empty + working → cancel; empty + idle → exit
+    // request (the chat screen arms the double-press window).
     if (matchesKey(normalized, Key.ctrl('c'))) {
-      if (this.vm.working) {
-        this.onCancel?.()
-        return
-      }
       if (this.getText() !== '') {
         this.clearAfterSend()
         this.onClearOrExit?.()
+        return
+      }
+      if (this.vm.working) {
+        this.onCancel?.()
         return
       }
       this.onExitRequest?.()

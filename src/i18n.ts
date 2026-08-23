@@ -278,6 +278,11 @@ const dict = {
     en: 'The profile is now v{{profile}}, but the global launcher is still v{{launcher}}. Align it with:\n  npm install -g @deepseek-harness-tui/dsh-tui@{{profile}}',
   },
 
+  // ── plugin.ts — /reload flow ───────────────────────────────────────
+  'reload-while-working': { zh: '回合运行中或有待发送消息，请等待完成后再重载。', en: 'Wait for the current response to finish before reloading.' },
+  'reload-starting': { zh: '正在重载 dsh-tui，当前会话将在重载后恢复……', en: 'Reloading dsh-tui. The session will resume when finished…' },
+  'reload-done': { zh: '已重载 dsh-tui，当前会话已恢复。', en: 'Reloaded dsh-tui; the session has been resumed.' },
+
   // ── components/ActivityLine.tsx ──────────────────────────────────────
   'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
 
@@ -484,6 +489,10 @@ const dict = {
   'model-loading-subtitle': { zh: '正在查询 provider…', en: 'Querying the provider…' },
   'model-switching': { zh: '正在切换模型到 {{name}}…', en: 'Switching model to {{name}}…' },
   'model-switched': { zh: '模型已切换为 {{name}}', en: 'Model switched to {{name}}' },
+  // /model 选择器（Kimi 式 provider 分组 tab + Thinking 分段页脚）
+  'picker-tab-all': { zh: '全部', en: 'All' },
+  'hint-model-picker': { zh: '**↑/↓** 选择 · **Tab** 切换分组 · **←/→** 推理强度 · **Enter** 确认 · Esc 退出', en: '**↑/↓** select · **Tab** switch group · **←/→** effort · **Enter** confirm · Esc exit' },
+  'hint-model-picker-tabs': { zh: '**↑/↓** 选择 · **Tab** 切换分组 · **Enter** 确认 · Esc 退出', en: '**↑/↓** select · **Tab** switch group · **Enter** confirm · Esc exit' },
 
   // ── components/RewindPicker.tsx ─────────────────────────────────────
   'rewind-title': { zh: '回退', en: 'Rewind' },
@@ -736,6 +745,7 @@ const dict = {
   'cmd-desc-skills': { zh: '列出所有可用技能' },
   'cmd-desc-plugins': { zh: '显示插件契约、授权与台账诊断' },
   'cmd-desc-update': { zh: '更新 dsh-tui 并重启' },
+  'cmd-desc-reload': { zh: '热重载 TUI（保留当前会话）' },
   // Built-in skills
   'cmd-desc-audit': { zh: '对当前项目做全面代码审计' },
   'cmd-desc-bug': { zh: '记录一份 bug 报告' },

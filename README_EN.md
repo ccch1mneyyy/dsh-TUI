@@ -183,7 +183,7 @@ so keep using `Ctrl`.
 | Model | `/model` picker (**switching = fork continuation, history preserved**) · `/effort` reasoning effort (segmented picker / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` add a model provider · `/login` credential status · `/logout` logout notes · `/permission` permission-mode picker (same modes as Shift+Tab) · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/audit` code audit · `/bug` bug report · `/review` code review · `/practice` coding practice · `/pr_comments` PR comments · `/release-notes` release notes · `/vuln-check` vulnerability check |
-| Other | `/agents` subagent list · `/skills` skills directory · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
+| Other | `/agents` subagent list · `/skills` skills directory · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/reload` in-process hot reload (session preserved) · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
 | Registry | `/plan` `/goal` `/feedback` `/permission` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
 
 > Unknown commands are sent to the model as ordinary messages (e.g. in a composition where `/permission` is not mounted).
@@ -302,6 +302,8 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   compaction).
 - `/update` works only when started via `dsh --profile` and is refused while a turn is
   running.
+- `/reload` hot-reloads the TUI in process and resumes the session; it is refused while
+  a turn is running or input is queued.
 
 See [Architecture and limitations](docs/architecture.en.md) for the complete list of
 known limitations and the security boundary.

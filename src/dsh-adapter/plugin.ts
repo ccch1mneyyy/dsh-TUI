@@ -44,6 +44,16 @@ import { ChatScreen } from '../tui/screens/chat-screen.js'
 import type { FinalStopReason, TuiLifecycle } from '../tui/lifecycle.js'
 import { editInExternalEditor, type EditorOutcome } from '../utils/externalEditor.js'
 
+// /reload handoff (pi-style in-process hot reload): `ctx.fiber.restart()`
+// re-runs apply in the SAME process without re-importing this module, so the
+// session to resume rides a module-level slot — set just before the restart,
+// consumed at the top of the next apply.
+let reloadResumeSessionId: string | undefined
+// The positional-args initial prompt is submitted only on the FIRST apply:
+// a /reload re-runs apply and would otherwise send the launch prompt to the
+// model again.
+let initialPromptSubmitted = false
+
 /**
  * Claude Code style interactive TUI front door for DeepSeek Harness agents.
  *
@@ -301,9 +311,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   const sessionCwd = initialWorkspace?.cwd ?? resolveSessionCwd(config.cwd)
   const meta = { cwd: sessionCwd }
+  // A /reload restart re-runs this apply in the same process: resume the
+  // session the previous root was showing (its agent was disposed with the
+  // old fiber) instead of opening a fresh one.
+  const resumeAfterReload = reloadResumeSessionId
+  reloadResumeSessionId = undefined
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,
-    config.sessionId,
+    resumeAfterReload ?? config.sessionId,
     configuredRoute,
     startupRoute,
     meta,
@@ -705,10 +720,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // `dsh-tui "run the tests"` forwards positionals through the dsh CLI,
   // which mounts them as ctx.cmdlineArgs. Submit once the channel exists —
   // delivery goes through the normal pending/inbox chain, so no special
-  // timing is needed; flag-shaped leftovers are not prompt text.
+  // timing is needed; flag-shaped leftovers are not prompt text. The module
+  // level once-guard keeps a /reload re-apply from resubmitting the launch
+  // prompt to the resumed session.
   const cmdlineArgs = (ctx as { cmdlineArgs?: { args?: readonly string[] } }).cmdlineArgs?.args
   const initialPrompt = cmdlineArgs?.filter(arg => !arg.startsWith('-')).join(' ').trim()
-  if (initialPrompt) channel.submit(initialPrompt)
+  if (initialPrompt && !initialPromptSubmitted) {
+    initialPromptSubmitted = true
+    channel.submit(initialPrompt)
+  }
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
   notifyStderr = (text, options) => channel.notify(text, options)
@@ -720,6 +740,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // recompose this plugin and mount a new root in the same process.
   let exited = false
   let teardown = false
+  // Set by /reload: the upcoming teardown is a fiber restart, so finalStop
+  // must skip the exit transcript replay and the process handoff.
+  let reloading = false
   let updateRequested = false
   let updateTargetVersion: string | undefined
   // The profile this process was booted with (`dsh --profile <name>`); dsh
@@ -951,6 +974,23 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         handleExit()
       })
     },
+    // pi-style in-process hot reload: restart this plugin's fiber (dispose +
+    // re-apply, same process) and resume the live session from its log
+    // afterwards. Refused while a turn runs or input is queued — the
+    // abort/steer plumbing owns those transitions, not a fiber restart.
+    onReload: () => {
+      if (exited || teardown) return
+      if (channel.working || channel.pending.length > 0) {
+        channel.notify(t('reload-while-working'), { color: 'warning' })
+        return
+      }
+      reloading = true
+      reloadResumeSessionId = channel.agentId
+      channel.notify(t('reload-starting'))
+      void ctx.fiber.restart().catch((error: unknown) => {
+        ctx.logger.error(`dsh-tui: reload failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    },
   })
 
   const stopForProcessEvent = (
@@ -997,6 +1037,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ui.setFocus(chat)
   ui.start()
 
+  // The reload handoff completed: the resumed session is back on screen.
+  if (resumeAfterReload !== undefined) {
+    channel.notify(t('reload-done'))
+  }
+
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
   // command remains available regardless of network access.
@@ -1011,6 +1056,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // If the surrounding tree goes down (reload or teardown), release the
   // channel contributions, dispose component subscriptions, and stop this
   // root without leaving the process. The host may mount a replacement root.
+  // A /reload restart marks `reloading` so finalStop skips the fullscreen
+  // exit transcript replay — the resumed session repaints itself.
   ctx.effect(() => () => {
     teardown = true
     funnel.markTeardown()
@@ -1019,7 +1066,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     chat?.dispose()
     controller.dispose()
     return lifecycle
-      .finalStop('shutdown')
+      .finalStop(reloading ? 'reload' : 'shutdown')
       .then(() => lifecycle.awaitStop())
       .catch(error => {
         ctx.logger.debug(

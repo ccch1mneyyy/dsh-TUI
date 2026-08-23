@@ -6,10 +6,12 @@
  * (stdin/stdout owner). dsh injects no stream/writer of its own — the
  * concrete terminal is created here and handed out only through the public
  * `Terminal` interface. Scene/overlay/editor helpers must NEVER create a
- * second terminal or a second root TUI; the sole exception is the
- * fullscreen final exit, where `TuiLifecycle.stopFullscreenWithTranscript`
- * runs a temporary `TuiMainScreen` on the SAME terminal as a strictly
- * sequential takeover after the original TUI has stopped (plan §1.1).
+ * second terminal or a second root TUI; the sole exceptions are strictly
+ * sequential takeovers after the original TUI has stopped: the fullscreen
+ * final exit, where `TuiLifecycle.stopFullscreenWithTranscript` runs a
+ * temporary `TuiMainScreen` on the SAME terminal (plan §1.1), and `/reload`,
+ * where the plugin fiber restarts and the re-run apply bootstraps a fresh
+ * terminal + root only after the previous lifecycle's finalStop completed.
  *
  * This factory deliberately does NOT call `ui.start()`: the caller
  * (WP-04 plugin.ts) mounts the root component first and decides when

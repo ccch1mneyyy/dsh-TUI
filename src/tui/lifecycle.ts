@@ -41,7 +41,7 @@ import { TuiMainScreen } from './public.js'
 
 export type QuiesceReason = 'external-editor'
 
-export type FinalStopReason = 'update' | 'shutdown' | 'signal' | 'exception'
+export type FinalStopReason = 'update' | 'shutdown' | 'signal' | 'exception' | 'reload'
 
 export type LifecycleState = 'running' | 'quiesced' | 'final-stopping' | 'stopped'
 
@@ -242,7 +242,15 @@ export class TuiLifecycle {
       // Best effort — the terminal may already be dead (SIGHUP/EIO).
     }
     if (this.ui.mode === 'fullscreen') {
-      this.stopFullscreenWithTranscript(this.ui, wasQuiesced)
+      // A reload remounts a fresh root on a new bootstrap right after this
+      // stop: leave the alt screen without replaying the transcript into
+      // native scrollback — that replay is exit semantics, and the resumed
+      // session repaints itself on the next start.
+      if (reason === 'reload') {
+        if (!wasQuiesced) this.ui.stop({ preserveScreen: true })
+      } else {
+        this.stopFullscreenWithTranscript(this.ui, wasQuiesced)
+      }
     } else if (!wasQuiesced) {
       this.ui.stop()
     }

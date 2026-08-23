@@ -180,7 +180,7 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 | 模型 | `/model` 选择器（**切换 = fork 会话续聊，历史保留**） · `/effort` 推理强度（分段选择器 / `status` / `<id>`） · `/preset` Agent 预设（**已开始会话不可切换**，blank-only） · `/thinking` 思考显示 · `/tokens` token 明细 · `/activity` 工作状态行动画（`frames <名>` / `status`） · `/theme` 主题选择器 · `/lang` 中英界面切换（`/settings` 中亦可选择） |
 | 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permission` 权限模式选择器（同 Shift+Tab 循环） · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` |
 | 技能 | `/audit` 代码审计 · `/bug` bug 报告 · `/review` 代码评审 · `/practice` 编程练习 · `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查 |
-| 其它 | `/agents` 子代理列表 · `/skills` 技能目录 · `/plugins check <路径>` 插件诊断 · `/update` 自动更新并重启 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit`（别名 `/quit` `/q`） |
+| 其它 | `/agents` 子代理列表 · `/skills` 技能目录 · `/plugins check <路径>` 插件诊断 · `/update` 自动更新并重启 · `/reload` 进程内热重载（保留会话） · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit`（别名 `/quit` `/q`） |
 | 注册表 | `/plan` `/goal` `/feedback` `/permission`（DSH 命令注册表插件，随插件自动并入 `/` 菜单） |
 
 > 未知命令会作为普通消息发给模型（如 `/permission` 未挂载的组合里）。
@@ -292,6 +292,7 @@ compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与�
 - `/thinking` 思考显示开关**不持久化**，重启或新会话回到默认。
 - minimal preset 下 `/compact` 不可用（minimal 不组合 compaction）。
 - `/update` 仅 `dsh --profile` 启动方式可用，回合运行中会拒绝。
+- `/reload` 在进程内热重载 TUI 并恢复原会话；回合运行中或有待发送消息时会拒绝。
 
 完整已知限制与安全边界见[架构与限制](docs/architecture.md)。
 

@@ -28,6 +28,7 @@ import type {
 } from '../view-model.js'
 import { TranscriptView } from '../components/transcript.js'
 import { PromptEditor } from '../components/prompt-editor.js'
+import { NotificationsView } from '../components/notifications.js'
 import { HeaderView } from '../components/header.js'
 import { WorkingIndicator } from '../components/working-indicator.js'
 import { StatusLineView } from '../components/status-line.js'
@@ -105,6 +106,7 @@ export interface ChatScreenOptions {
   readonly controller: TuiController
   readonly onExit: () => void
   readonly onUpdate?: () => void
+  readonly onReload?: () => void
   readonly onOpenExternalEditor?: (draft: string, apply: (text: string) => void) => void
   /** Optional host bridge; absent hosts keep the no-plugin-scene behavior. */
   readonly sceneHost?: ChatSceneHost
@@ -217,9 +219,10 @@ type TransientKind =
   | 'subagent-dashboard'
   | 'subagent-detail'
   | 'plugin-scene'
-  /** One of the picker-family panels from ../components/pickers.ts (incl. the
-   *  /btw side-question panel and the workspace-flow choice list): modal,
-   *  keyboard-owning, closed via closeTransientScreen(). */
+  /** A picker-family panel mounted as a FULL transient replacement (only the
+   *  /tips panel and the /btw side-question panel still do this): modal,
+   *  keyboard-owning, closed via closeTransientScreen(). Selection pickers
+   *  mount in the editor slot instead — see pickerPanel. */
   | 'picker'
 
 /**
@@ -236,6 +239,7 @@ export class ChatScreen implements Component {
   private readonly controller: TuiController
   private readonly onExit: () => void
   private readonly onUpdate: (() => void) | undefined
+  private readonly onReload: (() => void) | undefined
   private readonly onOpenExternalEditor:
     | ((draft: string, apply: (text: string) => void) => void)
     | undefined
@@ -251,6 +255,7 @@ export class ChatScreen implements Component {
   private readonly working: WorkingIndicator
   private readonly status: StatusLineView
   private readonly statusEntries: StatusEntriesView
+  private readonly notifications: NotificationsView
   private readonly approval: ApprovalPanelView
   private readonly dialog: ExtensionDialogView
   private readonly question: QuestionPanelView
@@ -266,6 +271,11 @@ export class ChatScreen implements Component {
   private settingsPanel: SettingsPanel | undefined
   /** Stable VStack child that delegates to the open settings panel. */
   private readonly settingsSlot: Component
+  /** The picker-family panel holding the editor slot (same pi-style editor
+   *  replacement as the settings panel; mutually exclusive with it). */
+  private pickerPanel: Component | undefined
+  /** Stable VStack child that delegates to the open slot picker. */
+  private readonly pickerSlot: Component
   private pluginSceneId: string | undefined
   private pluginSceneAbortController: AbortController | undefined
   private subagentDetailId: string | undefined
@@ -273,6 +283,10 @@ export class ChatScreen implements Component {
   private logoNonce = 0
   /** In-flight `/btw` side question; aborted when the panel closes. */
   private btwAbort: AbortController | undefined
+  /** Ctrl+C-on-empty double-press exit: first press arms the window and shows
+   *  the hint, a second press within 3s exits. */
+  private exitPending = false
+  private exitTimer: ReturnType<typeof setTimeout> | null = null
   private disposed = false
   private readonly unsubscribeController: () => void
 
@@ -282,6 +296,7 @@ export class ChatScreen implements Component {
     this.controller = options.controller
     this.onExit = options.onExit
     this.onUpdate = options.onUpdate
+    this.onReload = options.onReload
     this.onOpenExternalEditor = options.onOpenExternalEditor
     this.home = options.home ?? ''
     this.sameProject = options.sameProject ?? ((a, b) => a === b)
@@ -302,6 +317,7 @@ export class ChatScreen implements Component {
     this.working = new WorkingIndicator(this.ui, EMPTY_SPINNER)
     this.status = new StatusLineView(this.ui, EMPTY_STATUS)
     this.statusEntries = new StatusEntriesView()
+    this.notifications = new NotificationsView()
     this.approval = new ApprovalPanelView(this.commands, this.ui)
     this.dialog = new ExtensionDialogView(this.commands, this.ui)
     this.question = new QuestionPanelView(this.commands, this.ui)
@@ -315,7 +331,23 @@ export class ChatScreen implements Component {
     }
     this.promptEditor.onCancel = () => this.commands.input.cancel()
     this.promptEditor.onPullBack = () => this.pullBackPending()
-    this.promptEditor.onExitRequest = () => this.onExit()
+    this.promptEditor.onExitRequest = () => {
+      if (this.exitPending) {
+        if (this.exitTimer !== null) {
+          clearTimeout(this.exitTimer)
+          this.exitTimer = null
+        }
+        this.exitPending = false
+        this.onExit()
+        return
+      }
+      this.exitPending = true
+      this.commands.info.notify(t('exit-press-again'), { color: 'warning', timeoutMs: 3000 })
+      this.exitTimer = setTimeout(() => {
+        this.exitTimer = null
+        this.exitPending = false
+      }, 3000)
+    }
     this.promptEditor.onOpenExternalEditor = (draft) => {
       if (this.onOpenExternalEditor === undefined) {
         this.commands.info.notify('External editor is not wired into this root yet.', { color: 'warning' })
@@ -333,11 +365,16 @@ export class ChatScreen implements Component {
       render: (width) => this.settingsPanel?.render(width) ?? [],
       invalidate: () => this.settingsPanel?.invalidate(),
     }
+    this.pickerSlot = {
+      render: (width) => this.pickerPanel?.render(width) ?? [],
+      invalidate: () => this.pickerPanel?.invalidate(),
+    }
 
     // VStack owns the vertical component composition. Visibility predicates are
     // layout predicates only; every component still receives its own bounded
-    // projection through update(). The settings panel swaps into the prompt
-    // editor's slot while open (pi-style editor replacement).
+    // projection through update(). The settings panel and the selection
+    // pickers swap into the prompt editor's slot while open (pi-style editor
+    // replacement); the notification toast stack sits under the slot.
     this.root = new VStack([
       { component: this.header, visible: () => this.shouldShowHeader() },
       this.transcript,
@@ -346,8 +383,10 @@ export class ChatScreen implements Component {
       { component: this.dialog, visible: () => this.activeOverlayKind() === 'dialog' },
       { component: this.question, visible: () => this.activeOverlayKind() === 'question' },
       { component: this.statusEntries, visible: () => this.hasStatusEntries() },
-      { component: this.promptEditor, visible: () => this.settingsPanel === undefined },
+      { component: this.promptEditor, visible: () => this.settingsPanel === undefined && this.pickerPanel === undefined },
       { component: this.settingsSlot, visible: () => this.settingsPanel !== undefined },
+      { component: this.pickerSlot, visible: () => this.pickerPanel !== undefined },
+      { component: this.notifications, visible: () => this.hasNotifications() },
       this.status,
     ])
 
@@ -369,6 +408,7 @@ export class ChatScreen implements Component {
     this.working.update(vm.spinner)
     this.status.update(vm.statusLine)
     this.statusEntries.update(vm.overlays.statusEntries ?? [])
+    this.notifications.update(vm.prompt.notifications)
     this.promptEditor.update(vm.prompt)
     this.approval.update(vm.overlays.approval)
     this.dialog.update(vm.overlays.dialog)
@@ -400,6 +440,13 @@ export class ChatScreen implements Component {
     // The settings panel owns the keyboard while it holds the editor slot.
     if (this.settingsPanel !== undefined) {
       this.settingsPanel.handleInput(data)
+      this.ui.requestRender()
+      return
+    }
+
+    // So does a slot-mounted picker (the two never hold the slot together).
+    if (this.pickerPanel?.handleInput !== undefined) {
+      this.pickerPanel.handleInput(data)
       this.ui.requestRender()
       return
     }
@@ -445,7 +492,8 @@ export class ChatScreen implements Component {
       return fitLines(this.transientScreen.render(safeWidth), safeWidth)
     }
 
-    this.promptEditor.focused = this.activeOverlayKind() === undefined && this.settingsPanel === undefined
+    this.promptEditor.focused =
+      this.activeOverlayKind() === undefined && this.settingsPanel === undefined && this.pickerPanel === undefined
     return fitLines(this.root.render(safeWidth), safeWidth)
   }
 
@@ -453,6 +501,7 @@ export class ChatScreen implements Component {
     this.root.invalidate()
     this.transientScreen?.invalidate()
     this.settingsPanel?.invalidate()
+    this.pickerPanel?.invalidate()
   }
 
   /** Components replayed by fullscreen finalStop on the same terminal. */
@@ -476,8 +525,15 @@ export class ChatScreen implements Component {
     this.unsubscribeController()
     this.btwAbort?.abort()
     this.btwAbort = undefined
+    if (this.exitTimer !== null) {
+      clearTimeout(this.exitTimer)
+      this.exitTimer = null
+    }
+    this.exitPending = false
     this.settingsPanel?.dispose()
     this.settingsPanel = undefined
+    this.disposeComponent(this.pickerPanel)
+    this.pickerPanel = undefined
     if (this.transientKind === 'plugin-scene') {
       this.closePluginScene(false)
     } else {
@@ -525,7 +581,7 @@ export class ChatScreen implements Component {
    * open is a no-op; writes land immediately through the settings host.
    */
   openSettings(): void {
-    if (this.disposed || this.settingsPanel !== undefined) return
+    if (this.disposed || this.settingsPanel !== undefined || this.pickerPanel !== undefined) return
     this.settingsPanel = new SettingsPanel({
       commands: this.commands,
       onClose: () => this.closeSettings(),
@@ -775,6 +831,13 @@ export class ChatScreen implements Component {
           this.onUpdate()
         }
         return
+      case 'reload':
+        if (this.onReload === undefined) {
+          this.commands.info.notify('Reload is not available in this host.', { color: 'warning' })
+        } else {
+          this.onReload()
+        }
+        return
       case 'exit':
       case 'quit':
       case 'q':
@@ -814,7 +877,9 @@ export class ChatScreen implements Component {
         this.openBtwPanel(rawInput)
         return
       case 'tips':
-        this.mountPicker(createTipsPanel({ onClose: () => this.closeTransientScreen() }))
+        // Static reference panel: stays a full transient screen, not the
+        // editor-slot replacement the selection pickers use.
+        this.replaceTransient(createTipsPanel({ onClose: () => this.closeTransientScreen() }), 'picker')
         return
       case 'help':
         this.pushHelp()
@@ -1020,41 +1085,79 @@ export class ChatScreen implements Component {
   }
 
   /**
-   * Mount a picker-family panel as the transient screen. Picker payloads load
-   * asynchronously, so the mount happens after the await — when the user
-   * already opened another transient in between, the stale picker stays
-   * closed instead of clobbering the newer screen.
+   * Mount a picker-family panel in the prompt editor's slot (pi-style editor
+   * replacement — the transcript and status chrome stay visible, Esc closes
+   * the picker and restores the editor). Picker payloads load asynchronously,
+   * so the mount happens after the await — when the user already opened
+   * another panel in between, the stale picker stays closed instead of
+   * clobbering the newer one.
    */
   private mountPicker(picker: Component): void {
-    if (this.disposed || this.transientScreen !== undefined) return
-    this.replaceTransient(picker, 'picker')
+    if (
+      this.disposed
+      || this.transientScreen !== undefined
+      || this.settingsPanel !== undefined
+      || this.pickerPanel !== undefined
+    ) {
+      return
+    }
+    this.pickerPanel = picker
+    this.promptEditor.focused = false
+    this.ui.requestRender()
   }
 
-  /** `/model` — the forked listModels payload arrives async, then the picker
-   *  mounts; Enter switches the live route (the conversation forks onto a new
-   *  agent; the sink fences a stale completion). */
+  /** Close the slot-mounted picker and hand the keyboard back to the editor. */
+  private closePicker(): void {
+    if (this.pickerPanel === undefined) return
+    this.disposeComponent(this.pickerPanel)
+    this.pickerPanel = undefined
+    this.promptEditor.focused = true
+    this.ui.requestRender()
+  }
+
+  /** `/model` — the forked listModels/listEfforts payloads arrive async, then
+   *  the picker mounts in the editor slot; Enter switches the live route (the
+   *  conversation forks onto a new agent; the sink fences a stale completion)
+   *  and, when the Thinking draft differs from the live effort, applies it
+   *  after the switch succeeds. */
   private openModelPicker(): void {
-    void this.commands.model.listModels().then((models) => {
-      if (models === undefined || this.disposed) return
-      this.mountPicker(createModelPicker({
-        models: models.map(model => ({
-          provider: model.provider,
-          id: model.id,
-          name: model.name,
-          description: model.description,
-        })),
-        current: { provider: this.vm?.provider ?? '', model: this.vm?.statusLine.model ?? '' },
-        onSelect: (provider, id) => {
-          this.closeTransientScreen()
-          const label = models.find(model => model.provider === provider && model.id === id)?.name ?? id
-          this.commands.info.notify(t('model-switching', { name: label }))
-          void this.commands.model.switchModel(provider, id).then((ok) => {
-            if (ok) this.commands.info.notify(t('model-switched', { name: label }))
-          })
-        },
-        onClose: () => this.closeTransientScreen(),
-      }))
-    })
+    void Promise.all([this.commands.model.listModels(), this.commands.model.listEfforts()]).then(
+      ([models, effortsResult]) => {
+        if (models === undefined || this.disposed) return
+        const efforts = effortsResult?.efforts
+        const currentEffort = this.vm?.statusLine.reasoningEffort ?? effortsResult?.defaultEffort
+        this.mountPicker(createModelPicker({
+          models: models.map(model => ({
+            provider: model.provider,
+            id: model.id,
+            name: model.name,
+            description: model.description,
+          })),
+          current: { provider: this.vm?.provider ?? '', model: this.vm?.statusLine.model ?? '' },
+          ...(efforts !== undefined && efforts.length > 1
+            ? {
+                efforts: efforts.map(effort => ({
+                  id: effort.id,
+                  name: effort.name,
+                  description: effort.description,
+                })),
+                currentEffort,
+              }
+            : {}),
+          onSelect: (provider, id, effort) => {
+            this.closePicker()
+            const label = models.find(model => model.provider === provider && model.id === id)?.name ?? id
+            this.commands.info.notify(t('model-switching', { name: label }))
+            void this.commands.model.switchModel(provider, id).then((ok) => {
+              if (!ok) return
+              this.commands.info.notify(t('model-switched', { name: label }))
+              if (effort !== undefined && effort !== currentEffort) void this.commands.model.setEffort(effort)
+            })
+          },
+          onClose: () => this.closePicker(),
+        }))
+      },
+    )
   }
 
   /**
@@ -1089,10 +1192,10 @@ export class ChatScreen implements Component {
         })),
         current: this.vm?.statusLine.reasoningEffort ?? defaultEffort,
         onSelect: (id) => {
-          this.closeTransientScreen()
+          this.closePicker()
           void this.commands.model.setEffort(id)
         },
-        onClose: () => this.closeTransientScreen(),
+        onClose: () => this.closePicker(),
       }))
     })
   }
@@ -1120,10 +1223,10 @@ export class ChatScreen implements Component {
       })),
       activeId: this.vm?.statusLine.mode.id,
       onSelect: (modeId) => {
-        this.closeTransientScreen()
+        this.closePicker()
         void this.commands.session.setMode(modeId)
       },
-      onClose: () => this.closeTransientScreen(),
+      onClose: () => this.closePicker(),
     }))
   }
 
@@ -1165,10 +1268,10 @@ export class ChatScreen implements Component {
         })),
         activeId: this.commands.model.currentPreset(),
         onSelect: (id) => {
-          this.closeTransientScreen()
+          this.closePicker()
           void this.commands.model.switchPreset(id)
         },
-        onClose: () => this.closeTransientScreen(),
+        onClose: () => this.closePicker(),
       }))
     })
   }
@@ -1203,10 +1306,10 @@ export class ChatScreen implements Component {
       themes: this.commands.display.listThemes(),
       activeId: this.commands.display.currentTheme(),
       onSelect: (name) => {
-        this.closeTransientScreen()
+        this.closePicker()
         this.applyTheme(name, 'theme-switch-failed')
       },
-      onClose: () => this.closeTransientScreen(),
+      onClose: () => this.closePicker(),
     }))
   }
 
@@ -1288,10 +1391,10 @@ export class ChatScreen implements Component {
       presets: PRESET_NAMES.map(name => ({ name, description: preview(name) })),
       activeName: current ?? 'random',
       onSelect: (name) => {
-        this.closeTransientScreen()
+        this.closePicker()
         this.commands.model.setActivityFrames(name)
       },
-      onClose: () => this.closeTransientScreen(),
+      onClose: () => this.closePicker(),
     }))
   }
 
@@ -1303,7 +1406,7 @@ export class ChatScreen implements Component {
         this.transcript.setThinkingVisible(visible)
         this.commands.info.notify(t('thinking-toggled', { state: visible ? t('thinking-on') : t('thinking-off') }))
       },
-      onClose: () => this.closeTransientScreen(),
+      onClose: () => this.closePicker(),
     }))
   }
 
@@ -1327,10 +1430,10 @@ export class ChatScreen implements Component {
           userInvocable: skill.userInvocable,
         })),
         onSelect: (name) => {
-          this.closeTransientScreen()
+          this.closePicker()
           this.promptEditor.setText(`/${name} `)
         },
-        onClose: () => this.closeTransientScreen(),
+        onClose: () => this.closePicker(),
       }))
     })
   }
@@ -1412,11 +1515,11 @@ export class ChatScreen implements Component {
         workspaces: targets,
         cwd: this.vm?.cwd ?? '',
         onSelect: (picked) => {
-          this.closeTransientScreen()
+          this.closePicker()
           const target = targets.find(candidate => candidate.uri === picked.uri)
           if (target !== undefined) void this.commands.workspace.switchWorkspace(target)
         },
-        onClose: () => this.closeTransientScreen(),
+        onClose: () => this.closePicker(),
       }))
     }).catch((error: unknown) => {
       if (this.disposed) return
@@ -1430,13 +1533,13 @@ export class ChatScreen implements Component {
   /**
    * One step of a provider workspace flow: a `target` settles the flow with
    * a session switch; `choices` replace the open step's picker with the next
-   * one (while the flow owns the keyboard no other transient can open, so an
+   * one (while the flow owns the editor slot no other panel can open, so an
    * open picker here is always the previous step of this flow). Choice-level
    * inline inputs (Tab) from the old WorkspaceFlowPicker have no pi-tui
    * equivalent yet — Enter runs the choice's `choose` directly.
    */
   private handleWorkspaceResult(result: TuiWorkspaceCommandResult): void {
-    if (this.transientKind === 'picker') this.closeTransientScreen()
+    if (this.pickerPanel !== undefined) this.closePicker()
     if (result.kind === 'target') {
       void this.commands.workspace.switchWorkspace(result.target)
       return
@@ -1464,7 +1567,7 @@ export class ChatScreen implements Component {
           )
         })
       },
-      onClose: () => this.closeTransientScreen(),
+      onClose: () => this.closePicker(),
     }))
   }
 
@@ -1645,6 +1748,10 @@ export class ChatScreen implements Component {
 
   private hasStatusEntries(): boolean {
     return (this.vm?.overlays.statusEntries.length ?? 0) > 0
+  }
+
+  private hasNotifications(): boolean {
+    return (this.vm?.prompt.notifications.length ?? 0) > 0
   }
 
   private updateTransient(): void {

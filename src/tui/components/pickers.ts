@@ -55,6 +55,17 @@ function themed(color: string): (text: string) => string {
   return typeof named === 'function' ? (named as (text: string) => string) : (text) => text
 }
 
+/** Same resolution for BACKGROUND fills (the active tab chip). */
+function themedBackground(color: string): (text: string) => string {
+  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(color)
+  if (rgb) return chalk.bgRgb(Number(rgb[1]), Number(rgb[2]), Number(rgb[3]))
+  if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(color)) return chalk.bgHex(color)
+  const ansi = /^ansi:(\w+)$/.exec(color)
+  const name = ansi ? `bg${ansi[1]!.charAt(0).toUpperCase()}${ansi[1]!.slice(1)}` : ''
+  const named = name === '' ? undefined : (chalk as unknown as Record<string, unknown>)[name]
+  return typeof named === 'function' ? (named as (text: string) => string) : (text) => text
+}
+
 const dim = (text: string): string => chalk.dim(text)
 
 /** Localized hint line: `**primary**` segments render bold, the rest dim italic (old HintLine). */
@@ -101,7 +112,8 @@ export interface PickerViewOptions<T> {
   items: readonly T[]
   /** Map a payload to a list row. `value` is opaque (selection round-trips by index). */
   toItem: (item: T) => { label: string; description?: string }
-  /** Marks the active row with a themed ✓ (old ListItem isSelected). */
+  /** Marks the live row: it renders in the theme success color (whole row,
+   *  no ✓ suffix) and the picker opens with the focus on it. */
   isActive?: (item: T) => boolean
   /** Show a search input row; typing refilters the list (case-insensitive substring). */
   searchable?: boolean
@@ -137,6 +149,7 @@ export class PickerView<T> implements Component {
     this.maxVisible = Math.max(options.maxVisible ?? DEFAULT_MAX_VISIBLE, 1)
     this.visibleItems = options.items
     this.list = this.buildList(this.visibleItems)
+    this.focusActive()
     if (options.searchable) {
       this.input = new Input()
     }
@@ -145,11 +158,22 @@ export class PickerView<T> implements Component {
   private toSelectItem(item: T, index: number): SelectItem {
     const { label, description } = this.options.toItem(item)
     const active = this.options.isActive?.(item) === true
-    const marked = active ? `${label} ${themed(getActiveTheme().remember)('✓')}` : label
+    // The live row is pre-colored in the theme success green (Kimi-style:
+    // whole row, no ✓ suffix). SelectList only wraps the FOCUSED row in
+    // selectedText, so a pre-colored unfocused row renders as-is; when the
+    // two coincide the accent arrow still leads the green label.
+    if (!active) {
+      return {
+        value: String(index),
+        label,
+        ...(description === undefined ? {} : { description }),
+      }
+    }
+    const live = themed(getActiveTheme().success)
     return {
       value: String(index),
-      label: marked,
-      ...(description === undefined ? {} : { description }),
+      label: live(label),
+      ...(description === undefined ? {} : { description: live(description) }),
     }
   }
 
@@ -162,9 +186,16 @@ export class PickerView<T> implements Component {
     return list
   }
 
+  /** Focus the first live row (the current choice), clamped by SelectList. */
+  private focusActive(): void {
+    const index = this.visibleItems.findIndex((item) => this.options.isActive?.(item) === true)
+    if (index > 0) this.list.setSelectedIndex(index)
+  }
+
   /** Case-insensitive substring filter over the row label. (Facade gap: the
    *  fork's fuzzyFilter is not re-exported through src/tui/public.ts yet —
-   *  swap this one function when it is.) */
+   *  swap this one function when it is.) The rebuilt list re-focuses the
+   *  live row when it survives the filter (clamped to the top otherwise). */
   private refilter(): void {
     const query = this.query.trim().toLowerCase()
     this.visibleItems =
@@ -172,6 +203,7 @@ export class PickerView<T> implements Component {
         ? this.options.items
         : this.options.items.filter((item) => this.options.toItem(item).label.toLowerCase().includes(query))
     this.list = this.buildList(this.visibleItems)
+    this.focusActive()
   }
 
   invalidate(): void {
@@ -299,27 +331,23 @@ export interface HistorySearchEntry {
 // List pickers
 // ---------------------------------------------------------------------------
 
-/** `/model` — models payload comes from `commands.model.listModels()` at the call site. */
+/** `/model` — the models payload comes from `commands.model.listModels()` at
+ *  the call site, the Thinking-footer levels from `listEfforts()`; Enter
+ *  commits the focused model together with its draft effort segment. */
 export function createModelPicker(options: {
   models: readonly ModelPickerModel[]
   current: { provider: string; model: string }
+  /** Reasoning-effort levels for the Thinking footer; hidden when ≤1. */
+  efforts?: readonly EffortSliderLevel[]
+  /** The live effort; seeds every model's draft segment. */
+  currentEffort?: string | undefined
   searchable?: boolean
-  onSelect: (provider: string, id: string) => void
+  /** `effort` is the focused model's draft segment — undefined when the
+   *  Thinking footer is hidden. */
+  onSelect: (provider: string, id: string, effort?: string) => void
   onClose: () => void
 }): Component {
-  return new PickerView<ModelPickerModel>({
-    title: t('picker-title-model'),
-    items: options.models,
-    toItem: (model) => ({
-      label: `${model.provider} / ${model.name ?? model.id}`,
-      ...(model.description === undefined ? {} : { description: model.description }),
-    }),
-    isActive: (model) => model.provider === options.current.provider && model.id === options.current.model,
-    searchable: options.searchable ?? true,
-    footerHint: t('hint-confirm-exit'),
-    onSelect: (model) => options.onSelect(model.provider, model.id),
-    onClose: options.onClose,
-  })
+  return new ModelPickerView(options)
 }
 
 /** Agent-preset picker (issue #8); broken presets stay listed with their reason. */
@@ -539,7 +567,8 @@ export function createThinkingToggle(options: {
 }
 
 /** `/permission` — session permission-mode picker over the configured
- *  Shift+Tab modes (Kimi-style choice list; the current mode carries ✓). */
+ *  Shift+Tab modes (Kimi-style choice list; the current mode row renders in
+ *  the theme success color and opens focused). */
 export function createPermissionPicker(options: {
   modes: readonly PermissionModeOption[]
   activeId: string | undefined
@@ -569,8 +598,8 @@ export function createPermissionPicker(options: {
  * wrapped in `[ ]` (the Kimi-style segmented control). ←/→ step the focus —
  * clamped at the ends — without applying; plain Enter commits the focused
  * level through `onSelect` (which also closes), Esc/Ctrl+C cancels. The
- * currently applied level carries `✓`; the focused level's description
- * renders below the row.
+ * currently applied level renders in the theme success color (no ✓ marker)
+ * and opens focused; the focused level's description renders below the row.
  */
 export function createEffortSlider(options: {
   levels: readonly EffortSliderLevel[]
@@ -610,7 +639,9 @@ class EffortSliderView implements Component {
     const { levels, current } = this.options
     const row = levels
       .map((level, index) => {
-        const name = level.id === current ? `${level.name}${themed(theme.remember)('✓')}` : level.name
+        // The live level renders in the success green (no ✓ marker); the
+        // focused level wraps in accent-bold brackets. Both can coincide.
+        const name = level.id === current ? themed(theme.success)(level.name) : level.name
         return index === this.focusIndex ? chalk.bold(themed(theme.remember)(`[ ${name} ]`)) : `  ${name}  `
       })
       .join('  ')
@@ -645,6 +676,260 @@ class EffortSliderView implements Component {
       this.focusIndex = Math.min(levels.length - 1, this.focusIndex + 1)
     }
     // The picker owns the keyboard while open: swallow everything else.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ModelPicker (provider tabs + per-model Thinking footer)
+// ---------------------------------------------------------------------------
+
+const MODEL_PICKER_MAX_VISIBLE = 8
+
+interface ModelPickerOptions {
+  models: readonly ModelPickerModel[]
+  current: { provider: string; model: string }
+  efforts?: readonly EffortSliderLevel[]
+  currentEffort?: string | undefined
+  searchable?: boolean
+  onSelect: (provider: string, id: string, effort?: string) => void
+  onClose: () => void
+}
+
+/**
+ * `/model` picker (Kimi-style): an `All` tab plus one tab per provider in
+ * insertion order, Tab/Shift+Tab cycling; the list keeps SelectList's wrapped
+ * ↑/↓ navigation and opens focused on the live model (the live row renders
+ * whole in the theme success color, no ✓). When the route advertises more
+ * than one reasoning-effort level a `Thinking` segmented row sits under the
+ * list: ←/→ steps the FOCUSED model's draft segment — clamped at the ends,
+ * never applied live; every model keeps its own draft (seeded from the live
+ * effort) across focus moves — and Enter commits model + draft together.
+ * Esc clears a non-empty search first and only closes when it is already
+ * empty; Ctrl+C always closes. The picker owns the keyboard while open.
+ */
+class ModelPickerView implements Component {
+  private readonly options: ModelPickerOptions
+  private readonly providers: readonly string[]
+  /** 0 is the `All` tab; i > 0 is providers[i - 1]. */
+  private tabIndex = 0
+  private readonly input: Input | undefined
+  private query = ''
+  private visibleModels: readonly ModelPickerModel[]
+  private list: SelectList
+  /** Per-model draft effort segments (`provider/id` → level id). */
+  private readonly drafts = new Map<string, string>()
+  private readonly levels: readonly EffortSliderLevel[]
+
+  constructor(options: ModelPickerOptions) {
+    this.options = options
+    const providers: string[] = []
+    for (const model of options.models) {
+      if (!providers.includes(model.provider)) providers.push(model.provider)
+    }
+    this.providers = providers
+    this.levels = options.efforts !== undefined && options.efforts.length > 1 ? options.efforts : []
+    this.visibleModels = this.tabModels()
+    this.list = this.buildList()
+    this.refocus()
+    if (options.searchable ?? true) {
+      this.input = new Input()
+    }
+  }
+
+  private isLive(model: ModelPickerModel): boolean {
+    return model.provider === this.options.current.provider && model.id === this.options.current.model
+  }
+
+  private tabModels(): readonly ModelPickerModel[] {
+    if (this.tabIndex === 0) return this.options.models
+    const provider = this.providers[this.tabIndex - 1]
+    return this.options.models.filter((model) => model.provider === provider)
+  }
+
+  /** Plain row text the substring filter runs on (name + provider on All). */
+  private rowText(model: ModelPickerModel): string {
+    const name = model.name ?? model.id
+    return this.tabIndex === 0 ? `${name} ${model.provider}` : name
+  }
+
+  private toSelectItem(model: ModelPickerModel, index: number): SelectItem {
+    const name = model.name ?? model.id
+    const plain = this.tabIndex === 0 ? `${name} ${dim(model.provider)}` : name
+    // The live row is pre-colored in the theme success green (see PickerView);
+    // SelectList's focus styling still leads it with the accent arrow.
+    const live = this.isLive(model) ? themed(getActiveTheme().success) : undefined
+    return {
+      value: String(index),
+      label: live === undefined ? plain : live(plain),
+      ...(model.description === undefined
+        ? {}
+        : { description: live === undefined ? model.description : live(model.description) }),
+    }
+  }
+
+  private buildList(): SelectList {
+    const list = new SelectList(
+      this.visibleModels.map((model, index) => this.toSelectItem(model, index)),
+      MODEL_PICKER_MAX_VISIBLE,
+      selectTheme(),
+    )
+    list.onSelect = (selected) => {
+      const model = this.visibleModels[Number(selected.value)]
+      if (model === undefined) return
+      if (this.levels.length > 0) this.options.onSelect(model.provider, model.id, this.draftFor(model))
+      else this.options.onSelect(model.provider, model.id)
+    }
+    return list
+  }
+
+  /** Rebuild the list for the active tab + query, keeping the live row focused. */
+  private rebuild(): void {
+    const query = this.query.trim().toLowerCase()
+    const tabModels = this.tabModels()
+    this.visibleModels =
+      query === '' ? tabModels : tabModels.filter((model) => this.rowText(model).toLowerCase().includes(query))
+    this.list = this.buildList()
+    this.refocus()
+  }
+
+  /** Focus the live model row when it is on this tab/filter (clamped top). */
+  private refocus(): void {
+    const index = this.visibleModels.findIndex((model) => this.isLive(model))
+    if (index > 0) this.list.setSelectedIndex(index)
+  }
+
+  private switchTab(direction: -1 | 1): void {
+    const count = this.providers.length + 1
+    this.tabIndex = (this.tabIndex + direction + count) % count
+    this.rebuild()
+  }
+
+  private focusedModel(): ModelPickerModel | undefined {
+    const selected = this.list.getSelectedItem()
+    return selected === null ? undefined : this.visibleModels[Number(selected.value)]
+  }
+
+  /** The model's draft segment, seeded from the live effort on first touch
+   *  (the first level is the last-resort fallback so a segment always shows). */
+  private draftFor(model: ModelPickerModel): string {
+    const key = `${model.provider}/${model.id}`
+    let draft = this.drafts.get(key)
+    if (draft === undefined) {
+      draft = this.options.currentEffort ?? this.levels[0]?.id ?? ''
+      this.drafts.set(key, draft)
+    }
+    return draft
+  }
+
+  /** ←/→ step the focused model's draft segment, clamped at the ends. */
+  private moveDraft(direction: -1 | 1): void {
+    const model = this.focusedModel()
+    if (model === undefined || this.levels.length === 0) return
+    const index = this.levels.findIndex((level) => level.id === this.draftFor(model))
+    const next = Math.max(0, Math.min(this.levels.length - 1, (index >= 0 ? index : 0) + direction))
+    this.drafts.set(`${model.provider}/${model.id}`, this.levels[next]!.id)
+  }
+
+  /** The tab strip: active tab is a bold accent-fill chip, the rest dim. */
+  private tabRow(): string {
+    const theme = getActiveTheme()
+    const chip = themedBackground(theme.suggestion)
+    const ink = themed(theme.inverseText)
+    return [t('picker-tab-all'), ...this.providers]
+      .map((label, index) => (index === this.tabIndex ? chalk.bold(chip(ink(` ${label} `))) : dim(` ${label} `)))
+      .join(' ')
+  }
+
+  /** The Thinking segmented row for the focused model's draft, or undefined
+   *  when the route has ≤1 effort level. */
+  private effortRow(): string | undefined {
+    if (this.levels.length === 0) return undefined
+    const theme = getActiveTheme()
+    const model = this.focusedModel()
+    const draft = model === undefined ? (this.options.currentEffort ?? this.levels[0]!.id) : this.draftFor(model)
+    const segments = this.levels
+      .map((level) =>
+        level.id === draft ? chalk.bold(themed(theme.remember)(`[ ${level.name} ]`)) : `  ${level.name}  `,
+      )
+      .join('')
+    return `${dim(t('thinking-label'))}  ${segments}`
+  }
+
+  invalidate(): void {
+    this.list.invalidate()
+    this.input?.invalidate()
+  }
+
+  render(width: number): string[] {
+    const contentWidth = Math.max(width - visibleWidth(INDENT), 1)
+    const lines: string[] = ['', divider(width)]
+    lines.push(...indentLines([chalk.bold(themed(getActiveTheme().remember)(t('picker-title-model')))], width))
+    lines.push('')
+    if (this.input !== undefined) {
+      lines.push(...indentLines(this.input.render(contentWidth), width))
+    }
+    lines.push(...indentLines([truncateToWidth(this.tabRow(), contentWidth, '')], width))
+    if (this.visibleModels.length === 0) {
+      lines.push(...indentLines([dim('—')], width))
+    } else {
+      lines.push(...indentLines(this.list.render(contentWidth), width))
+    }
+    const effort = this.effortRow()
+    if (effort !== undefined) {
+      lines.push(...indentLines([effort], width))
+    }
+    lines.push(
+      ...indentLines([hintLine(this.levels.length > 0 ? t('hint-model-picker') : t('hint-model-picker-tabs'))], width),
+    )
+    return lines
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, Key.escape)) {
+      // Two-stage Esc: a non-empty search clears first; only an already-empty
+      // search closes the picker.
+      if (this.query !== '') {
+        this.query = ''
+        this.input?.setValue('')
+        this.rebuild()
+        return
+      }
+      this.options.onClose()
+      return
+    }
+    if (matchesKey(data, Key.ctrl('c'))) {
+      this.options.onClose()
+      return
+    }
+    if (matchesKey(data, Key.tab)) {
+      this.switchTab(1)
+      return
+    }
+    if (matchesKey(data, Key.shift('tab'))) {
+      this.switchTab(-1)
+      return
+    }
+    if (matchesKey(data, Key.up) || matchesKey(data, Key.down) || matchesKey(data, Key.enter)) {
+      this.list.handleInput(data)
+      return
+    }
+    if (matchesKey(data, Key.left)) {
+      this.moveDraft(-1)
+      return
+    }
+    if (matchesKey(data, Key.right)) {
+      this.moveDraft(1)
+      return
+    }
+    if (this.input !== undefined) {
+      this.input.handleInput(data)
+      const value = this.input.getValue()
+      if (value !== this.query) {
+        this.query = value
+        this.rebuild()
+      }
+    }
+    // Every other key is swallowed while the picker is open.
   }
 }
 

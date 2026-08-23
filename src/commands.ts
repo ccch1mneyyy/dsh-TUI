@@ -100,6 +100,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'skills', description: 'List available skills' },
   { name: 'plugins', description: 'Show plugin contract, grant, and ledger diagnostics' },
   { name: 'update', description: 'Update dsh-tui and restart' },
+  { name: 'reload', description: 'Reload the TUI in place (session preserved)' },
   // Built-in skills (CC's skill commands, driven through DSH skills)
   { name: 'audit', description: 'Run a comprehensive code audit on this project' },
   { name: 'bug', description: 'Capture a bug report' },

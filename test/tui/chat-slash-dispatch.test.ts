@@ -153,6 +153,7 @@ interface CallLog {
   notify: Array<{ text: string; color?: string }>;
   pluginsInfo: string[];
   pushLocal: Array<{ title: string; lines: readonly string[] }>;
+  reload: number;
   renameSession: string[];
   runWorkspaceCommand: Array<{ name: string; input: string }>;
   setActivityFrames: string[];
@@ -177,7 +178,11 @@ interface HarnessOptions {
   listSkills?: Array<{ name: string; description?: string; source: string; userInvocable: boolean }> | undefined;
   listWorkspaces?: Array<{ uri: string; label: string; description?: string; badge?: string; cwd?: string }> | undefined;
   loadedContext?: unknown;
+  /** The live session mode id (drives the /permission picker's active row). */
+  modeId?: string;
   providerSetup?: object | undefined;
+  /** false omits the onReload hook to cover the host-unavailable warning. */
+  reloadHook?: boolean;
   setModeResult?: boolean;
   workspaceCommands?: Array<{ name: string; aliases?: string[]; description?: string }>;
   workspaceResult?: unknown;
@@ -211,6 +216,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     notify: [],
     pluginsInfo: [],
     pushLocal: [],
+    reload: 0,
     renameSession: [],
     runWorkspaceCommand: [],
     setActivityFrames: [],
@@ -359,8 +365,17 @@ function makeHarness(options: HarnessOptions = {}): Harness {
         calls.mcpStatus += 1;
         return ['mcp-line'];
       },
-      notify: (text: string, notifyOptions?: { color?: string }) => {
+      // Mirror the channel: the notification lands in the projected array and
+      // the chat root re-renders off the updated projection.
+      notify: (text: string, notifyOptions?: { color?: string; timeoutMs?: number }) => {
         calls.notify.push({ text, color: notifyOptions?.color });
+        notifications.push({
+          id: notifications.length,
+          text,
+          ...(notifyOptions?.color === undefined ? {} : { color: notifyOptions.color as never }),
+          timeoutMs: notifyOptions?.timeoutMs ?? 4000,
+        });
+        chat.update(controller.getChat());
         return () => {};
       },
       pluginsInfo: (rawInput: string) => {
@@ -408,23 +423,41 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       },
     },
   };
+  const notifications: Array<ChatViewModel['prompt']['notifications'][number]> = [];
+  const activeMode = { id: options.modeId ?? 'default', plan: false } as never;
   const vm = makeViewModel({
     header: { ...makeViewModel().header, loadedContext: options.loadedContext as never },
-    prompt: { ...makeViewModel().prompt, commandList: options.commandList ?? [] },
+    prompt: {
+      ...makeViewModel().prompt,
+      commandList: options.commandList ?? [],
+      mode: activeMode,
+      notifications,
+    },
+    statusLine: { ...makeViewModel().statusLine, mode: activeMode },
   });
+  const controller = new FakeController(vm);
   const ui = {
     requestRender: () => {},
     terminal: { columns: 80, rows: 24 },
   } as unknown as TUI;
-  const chat = new ChatScreen({
+  // Assigned right below; the notify fake only runs after construction.
+  let chat!: ChatScreen;
+  chat = new ChatScreen({
     commands,
-    controller: new FakeController(vm) as unknown as TuiController,
+    controller: controller as unknown as TuiController,
     onExit: () => {
       calls.exit += 1;
     },
     onUpdate: () => {
       calls.update += 1;
     },
+    ...(options.reloadHook === false
+      ? {}
+      : {
+          onReload: () => {
+            calls.reload += 1;
+          },
+        }),
     ui,
   });
   const rendered = () => chat.render(80).join('\n');
@@ -467,6 +500,54 @@ test('slash dispatch: /model select switches the live route', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(harness.calls.switchModel, [{ provider: 'p', model: 'm' }]);
   assert.ok(harness.calls.notify.some(entry => entry.text.includes('Model M')));
+  harness.chat.dispose();
+});
+
+test('slash dispatch: /model renders provider tabs and the Thinking footer', async () => {
+  const harness = makeHarness({
+    listEfforts: { defaultEffort: 'low', efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] },
+    listModels: [
+      { provider: 'deepseek', id: 'deepseek-chat', name: 'DeepSeek Chat' },
+      { provider: 'openai', id: 'gpt-5', name: 'GPT-5' },
+    ],
+  });
+  await dispatch(harness.chat, '/model');
+  const rendered = harness.rendered();
+  assert.equal(harness.calls.listModels, 1);
+  assert.equal(harness.calls.listEfforts, 1);
+  // Tab strip (All + one tab per provider) and the Thinking segmented footer.
+  assert.ok(rendered.includes(t('picker-tab-all')));
+  assert.ok(rendered.includes('deepseek') && rendered.includes('openai'));
+  assert.ok(rendered.includes(t('thinking-label')));
+  assert.ok(rendered.includes('[ Low ]'));
+  // Editor-slot mount: the status chrome stays visible alongside the picker.
+  assert.ok(rendered.includes('test-model'));
+  // ←/→ moves the focused model's draft segment without applying it; Enter
+  // commits the model and the draft effort together.
+  harness.chat.handleInput('\x1b[C');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.calls.setEffort, []);
+  assert.ok(harness.rendered().includes('[ High ]'));
+  harness.chat.handleInput('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.calls.switchModel, [{ provider: 'deepseek', model: 'deepseek-chat' }]);
+  assert.deepEqual(harness.calls.setEffort, ['high']);
+  harness.chat.dispose();
+});
+
+test('slash dispatch: /model without effort levels hides the Thinking footer', async () => {
+  const harness = makeHarness({
+    listEfforts: { defaultEffort: undefined, efforts: [{ id: 'low', name: 'Low' }] },
+    listModels: [{ provider: 'p', id: 'm', name: 'Model M' }],
+  });
+  await dispatch(harness.chat, '/model');
+  const rendered = harness.rendered();
+  assert.ok(rendered.includes(t('picker-tab-all')));
+  assert.ok(!rendered.includes(t('thinking-label')));
+  harness.chat.handleInput('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.calls.switchModel, [{ provider: 'p', model: 'm' }]);
+  assert.deepEqual(harness.calls.setEffort, []);
   harness.chat.dispose();
 });
 
@@ -530,11 +611,21 @@ test('slash dispatch: /theme mounts the picker / direct apply / status', async (
   const harness = makeHarness();
   await dispatch(harness.chat, '/theme');
   assert.ok(harness.rendered().includes(t('picker-title-theme')));
+  // The active theme (dark) opens focused; Enter re-applies it.
   harness.chat.handleInput('\r');
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(harness.calls.setTheme, ['auto']);
+  assert.deepEqual(harness.calls.setTheme, ['dark']);
   assert.ok(harness.calls.notify.some(entry => entry.color === 'success'));
   harness.chat.dispose();
+
+  const moved = makeHarness();
+  await dispatch(moved.chat, '/theme');
+  // ↑ moves the focus off the active row (dark → auto); Enter applies that.
+  moved.chat.handleInput('\x1b[A');
+  moved.chat.handleInput('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(moved.calls.setTheme, ['auto']);
+  moved.chat.dispose();
 
   const direct = makeHarness();
   await dispatch(direct.chat, '/theme dark');
@@ -692,6 +783,21 @@ test('slash dispatch: /update invokes the host update hook', async () => {
   harness.chat.dispose();
 });
 
+test('slash dispatch: /reload invokes the host reload hook', async () => {
+  const harness = makeHarness();
+  await dispatch(harness.chat, '/reload');
+  assert.equal(harness.calls.reload, 1);
+  harness.chat.dispose();
+});
+
+test('slash dispatch: /reload warns when the host has no reload hook', async () => {
+  const harness = makeHarness({ reloadHook: false });
+  await dispatch(harness.chat, '/reload');
+  assert.equal(harness.calls.reload, 0);
+  assert.ok(harness.calls.notify.some(entry => entry.color === 'warning' && entry.text.includes('Reload')));
+  harness.chat.dispose();
+});
+
 test('slash dispatch: /exit, /quit and /q request exit', async () => {
   for (const input of ['/exit', '/quit', '/q']) {
     const harness = makeHarness();
@@ -699,6 +805,20 @@ test('slash dispatch: /exit, /quit and /q request exit', async () => {
     assert.equal(harness.calls.exit, 1, input);
     harness.chat.dispose();
   }
+});
+
+test('ctrl+c on an empty editor shows the press-again exit hint', async () => {
+  const harness = makeHarness();
+  // First press arms the double-press window: the hint must be VISIBLE in the
+  // notification row between the editor and the status line.
+  harness.chat.handleInput('\x03');
+  assert.ok(harness.calls.notify.some(entry => entry.text === t('exit-press-again')));
+  assert.ok(harness.rendered().includes(t('exit-press-again')));
+  assert.equal(harness.calls.exit, 0);
+  // The second press inside the window exits.
+  harness.chat.handleInput('\x03');
+  assert.equal(harness.calls.exit, 1);
+  harness.chat.dispose();
 });
 
 test('slash dispatch: /tips mounts the tips panel', async () => {
@@ -825,6 +945,22 @@ test('slash dispatch: /permission mounts the mode picker and applies on Enter', 
   assert.ok(harness.rendered().includes(t('picker-title-permission')));
   // The current mode (default) opens focused; ↓ moves to plan, Enter applies.
   harness.chat.handleInput('\x1b[B');
+  harness.chat.handleInput('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.calls.setMode, ['plan']);
+  harness.chat.dispose();
+});
+
+test('slash dispatch: /permission opens focused on the current mode row', async () => {
+  const harness = makeHarness({ modeId: 'plan' });
+  await dispatch(harness.chat, '/permission');
+  const rendered = harness.rendered();
+  // The active mode row opens focused (the → prefix), not the first row.
+  assert.ok(rendered.includes(`→ ${t('mode-plan')}`));
+  assert.ok(!rendered.includes(`→ ${t('mode-default')}`));
+  // Editor-slot mount: the status chrome stays visible alongside the picker.
+  assert.ok(rendered.includes('test-model'));
+  // Enter applies the focused (already active) mode.
   harness.chat.handleInput('\r');
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(harness.calls.setMode, ['plan']);
@@ -1071,7 +1207,7 @@ test('slash dispatch: dispatch table exactly covers LOCAL_COMMANDS + hidden entr
     'status', 'cost', 'tokens', 'config', 'doctor', 'plugins', 'export',
     'init', 'login', 'logout', 'permission', 'add-dir', 'hooks', 'mcp',
     'vim', 'terminal-setup', 'rename', 'connect', 'clear', 'new', 'compact',
-    'rewind', 'update', 'exit', 'quit', 'q', 'review', 'pr_comments',
+    'rewind', 'update', 'reload', 'exit', 'quit', 'q', 'review', 'pr_comments',
     'audit', 'practice', 'bug', 'release-notes', 'vuln-check', 'deepseek',
   ];
   const expected = [
