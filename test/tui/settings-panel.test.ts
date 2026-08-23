@@ -378,3 +378,33 @@ test('settings panel: empty composition renders the empty state and unavailable 
   assert.ok(out.includes(t('settings-empty')));
   empty.panel.dispose();
 });
+
+test('settings panel: the fullscreen boolean field lists and shows the effective value when unset', async () => {
+  const section: TuiSettingsSection = {
+    ns: 'dsh-tui',
+    title: 'dsh-tui',
+    fields: [
+      {
+        path: ['fullscreen'],
+        label: 'Fullscreen mode',
+        kind: 'boolean',
+        // Same pattern as the plugin's field: unset shows the boot value.
+        format: (value: unknown) => (value === undefined || value === null ? 'false' : String(value)),
+      },
+    ],
+  };
+  // The namespace carries no `fullscreen` key: the row must show the
+  // effective (cordis) value's off label rather than a blank "unset".
+  const harness = makePanel({ sections: [section], namespaces: [makeNamespace()] });
+  await flush();
+  const out = harness.rendered();
+  assert.ok(out.includes('Fullscreen mode'));
+  assert.ok(out.includes(t('settings-value-off')));
+  // Cycling the row writes the toggled boolean immediately.
+  harness.panel.handleInput(ENTER);
+  await flush();
+  assert.deepEqual(harness.writes, [
+    { ns: 'dsh-tui', ops: [{ op: 'set', path: ['fullscreen'], value: true }], revision: 7 },
+  ]);
+  harness.panel.dispose();
+});

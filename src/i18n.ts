@@ -282,6 +282,7 @@ const dict = {
   'reload-while-working': { zh: '回合运行中或有待发送消息，请等待完成后再重载。', en: 'Wait for the current response to finish before reloading.' },
   'reload-starting': { zh: '正在重载 dsh-tui，当前会话将在重载后恢复……', en: 'Reloading dsh-tui. The session will resume when finished…' },
   'reload-done': { zh: '已重载 dsh-tui，当前会话已恢复。', en: 'Reloaded dsh-tui; the session has been resumed.' },
+  'fullscreen-reload-deferred': { zh: '回合运行中，全屏设置已保存，将在下次启动或重载时生效。', en: 'Turn in progress; the fullscreen change is saved and takes effect on the next launch or reload.' },
 
   // ── components/ActivityLine.tsx ──────────────────────────────────────
   'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },

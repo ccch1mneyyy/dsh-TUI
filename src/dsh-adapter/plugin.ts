@@ -15,6 +15,7 @@ import { ApprovalStore } from './approvals.js'
 import { registerPackagedSkills } from './packaged-skills.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
+import { readFullscreenPref, writeFullscreenPref } from '../fullscreenPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
@@ -53,6 +54,21 @@ let reloadResumeSessionId: string | undefined
 // a /reload re-runs apply and would otherwise send the launch prompt to the
 // model again.
 let initialPromptSubmitted = false
+
+// cordis `fiber.restart()` is a silent no-op while the fiber is still in
+// its initial load: `_setEpoch` is blocked by the in-flight inertia and the
+// restart resolves without re-running apply (observed with cordis 4.0.1).
+// Settle the fiber first, then restart. The fiber's initial load resolves
+// once this apply's setup completes, so the wait is brief; a disposed fiber
+// makes `restart()` throw, which the catch reports.
+function restartFiberWhenSettled(ctx: Context): void {
+  void (async () => {
+    await ctx.fiber.await()
+    await ctx.fiber.restart()
+  })().catch((error: unknown) => {
+    ctx.logger.error(`dsh-tui: reload failed: ${error instanceof Error ? error.message : String(error)}`)
+  })
+}
 
 /**
  * Claude Code style interactive TUI front door for DeepSeek Harness agents.
@@ -420,11 +436,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // the effective language (see the section's format below) and lets
         // cordis.yml / lang.json keep their precedence.
         lang: Schema.union(['zh', 'en']),
+        // No default either: unset keeps cordis.yml's `fullscreen` effective
+        // (and the panel shows it); a set value wins and switches the layout
+        // through a fiber restart (the watch below).
+        fullscreen: Schema.boolean(),
       }),
     )
     type SettingsValue = {
       diffLayout?: 'auto' | 'split' | 'unified'
       lang?: 'zh' | 'en'
+      fullscreen?: boolean
       whale?: boolean
       minimal?: boolean
       thinkingFold?: 'preview' | 'full'
@@ -458,17 +479,44 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
+    // Fullscreen is fixed per bootstrap (inline vs alt-screen), so a change
+    // rides the /reload fiber restart. cordis inject callbacks always run
+    // asynchronously — after the bootstrap below — so the boot cannot
+    // consume this settings value: a set toggle mirrors to fullscreen.json
+    // and the next boot reads it synchronously (this also self-heals a
+    // settings.yaml fullscreen that predates the mirror — the initial apply
+    // writes it and restarts into the requested layout). Compare the
+    // resolved value against the one this boot started with: flipping the
+    // toggle back to its origin must not restart. The later-declared flags
+    // (`reloading` & friends) are safe to touch here — this callback never
+    // runs before the synchronous body below completes.
+    const applyFullscreen = (value: boolean | undefined): void => {
+      if (typeof value === 'boolean') writeFullscreenPref(value)
+      const resolved = value ?? readFullscreenPref() ?? config.fullscreen === true
+      if (resolved === bootedFullscreen) return
+      if (exited || teardown) return
+      if (channel.working || channel.pending.length > 0) {
+        // A restart would kill the running turn; the choice is already
+        // persisted (settings.yaml + fullscreen.json) and takes effect on
+        // the next launch/reload.
+        channel.notify(t('fullscreen-reload-deferred'), { color: 'warning' })
+        return
+      }
+      reloading = true
+      reloadResumeSessionId = channel.agentId
+      channel.notify(t('reload-starting'))
+      restartFiberWhenSettled(ctx)
+    }
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
       applyWhale(next)
       applyMinimal(next)
       applyLang(next)
       applyDisplay(next)
+      applyFullscreen(next.fullscreen)
     }
     apply(scope.get())
-    scope.watch(next => {
-      apply(next)
-    })
+    scope.watch(next => apply(next))
   })
   // The /settings panel's own section: the dsh-tui namespace comes from
   // the settings registration above, and the declared selects write `lang`
@@ -499,6 +547,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             // (env / cordis.yml / lang.json resolution) instead of a
             // blank "unset" that hides the current choice.
             return value === undefined || value === null ? getLang() : String(value)
+          },
+        },
+        {
+          path: ['fullscreen'],
+          label: 'Fullscreen mode',
+          descriptions: { zh: '全屏模式' },
+          hint: 'Run on the terminal alternate screen (fullscreen layout); toggling reloads the TUI in place and keeps the current session — during a running turn it takes effect on the next launch or reload.',
+          hintDescriptions: { zh: '在终端备用屏运行（全屏布局）；切换会原地重载 TUI 并保留当前会话，回合运行中则下次启动或重载时生效。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: show the cordis.yml value this boot
+            // resolved with instead of a blank "unset" (same as lang).
+            return value === undefined || value === null ? String(config.fullscreen === true) : String(value)
           },
         },
         {
@@ -751,8 +812,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const profile = resolveDshProfileName()
   let chat: ChatScreen | undefined
 
+  // The alt-screen mode is fixed for this boot. The settings inject callback
+  // above always runs after this bootstrap (cordis resumes it on a later
+  // microtask), so settings.yaml cannot feed the boot directly — the
+  // /settings toggle mirrors its choice to fullscreen.json, read here
+  // synchronously; cordis.yml is the fallback. The watch compares against
+  // this value to decide whether a fiber restart is needed.
+  const bootedFullscreen = readFullscreenPref() ?? config.fullscreen === true
   const bootstrap = bootstrapTui({
-    fullscreen: config.fullscreen === true,
+    fullscreen: bootedFullscreen,
     getTranscript: () => {
       if (chat === undefined) return []
       // The channel folds rows beyond its MAX_ROWS window down to preview
@@ -932,7 +1000,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     commands,
     controller,
     sceneHost,
-    fullscreen: config.fullscreen === true,
+    fullscreen: bootedFullscreen,
     onExit: () => handleExit(),
     onOpenExternalEditor: openExternalEditor,
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -987,9 +1055,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       reloading = true
       reloadResumeSessionId = channel.agentId
       channel.notify(t('reload-starting'))
-      void ctx.fiber.restart().catch((error: unknown) => {
-        ctx.logger.error(`dsh-tui: reload failed: ${error instanceof Error ? error.message : String(error)}`)
-      })
+      restartFiberWhenSettled(ctx)
     },
   })
 

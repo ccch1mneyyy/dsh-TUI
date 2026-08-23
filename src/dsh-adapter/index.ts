@@ -150,11 +150,16 @@ export const Config: Schema<Config> = Schema.object({
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const { upstreamDrift, installedUpstreamLines, UPSTREAM_VALIDATED_LABEL } = await import('./contract.js')
-  for (const entry of upstreamDrift()) {
+  // One aggregated line for the whole drift set — per-package lines only
+  // repeat the same installed/validated pair and bury the actionable part.
+  const drift = upstreamDrift()
+  if (drift.length > 0) {
+    const installed = [...new Set(drift.map(entry => entry.installed ?? 'missing'))]
     console.warn(
-      `[dsh-tui] upstream drift: ${entry.package} installed=${entry.installed ?? 'missing'} ` +
-      `validated=${entry.validated} — the TUI is validated against ${UPSTREAM_VALIDATED_LABEL}; ` +
-      `upgrade or downgrade the profile when the upstream line changes.`,
+      `[dsh-tui] upstream drift: ${drift.length} packages ` +
+      `installed=${installed.length === 1 ? installed[0] : `mixed (${installed.join(', ')})`}; ` +
+      `validated=${UPSTREAM_VALIDATED_LABEL} — upgrade or downgrade the profile ` +
+      `when the upstream line changes.`,
     )
   }
   const installedLines = installedUpstreamLines()
