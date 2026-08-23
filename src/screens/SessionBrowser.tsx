@@ -134,6 +134,8 @@ export function SessionBrowser({
   const topRef = React.useRef(0)
   const [mode, setMode] = React.useState<BrowserMode>('list')
   const [renameText, setRenameText] = React.useState('')
+  /** Hover state for the confirm rows (only one is ever mounted). */
+  const [confirmHovered, setConfirmHovered] = React.useState(false)
   // The browser owns the whole screen, so it has to carry its own messages.
   // `channel.notify` renders into the conversation — which is exactly what is
   // NOT on screen right now — so a failed delete, a refused resume, or an
@@ -208,6 +210,36 @@ export function SessionBrowser({
   }, [view.rows, focusId])
 
   const focused = sessionAt(view.rows, focus)
+
+  /**
+   * Resume a session (Enter and row-click share this path). The screen closes
+   * only once the resume actually happened. Closing first and letting a
+   * refusal fall through to a notification would send that explanation to the
+   * conversation the user is not looking at, and leave them staring at an
+   * unchanged transcript wondering what Enter did. `resumeTo` reports its own
+   * reasons; this only has to stay put.
+   */
+  const resumeSession = (target: NonNullable<typeof focused>): void => {
+    runAction(async () => {
+      try {
+        const result = await channel.resumeTo(target.id)
+        if (result.ok) {
+          channel.notify(t('resume-resumed'))
+          onClose()
+        } else {
+          if (result.reason === 'cancelled') return
+          const text = result.reason === 'working'
+            ? t('resume-while-working')
+            : result.reason === 'unavailable'
+              ? t('resume-unavailable')
+              : t('session-resume-failed', { err: result.error })
+          setNotice({ text, tone: 'error' })
+        }
+      } catch (error) {
+        setNotice({ text: t('session-resume-failed', { err: message(error) }), tone: 'error' })
+      }
+    })
+  }
 
   // Where the cursor is RIGHT NOW, including moves made earlier in this same
   // tick. A held arrow key (or a paste) delivers several key events from one
@@ -389,37 +421,18 @@ export function SessionBrowser({
       step(-1)
     } else if (key.downArrow) {
       step(1)
+    } else if (key.wheelUp) {
+      // 滚轮在列表上：与 ↑ 同路径——焦点跟随窗口下移焦点即滚动
+      step(-1)
+    } else if (key.wheelDown) {
+      step(1)
     } else if (key.pageUp || key.pageDown) {
       // A page is "as many rows as the window holds", taken as repeated single
       // steps so it lands on a selectable row like every other move.
       step(key.pageDown ? 1 : -1, Math.max(1, Math.floor(listHeight / 2)))
     } else if (isPlainReturn(key)) {
       if (focused === undefined) return
-      const target = focused
-      // The screen closes only once the resume actually happened. Closing
-      // first and letting a refusal fall through to a notification would send
-      // that explanation to the conversation the user is not looking at, and
-      // leave them staring at an unchanged transcript wondering what Enter
-      // did. `resumeTo` reports its own reasons; this only has to stay put.
-      runAction(async () => {
-        try {
-          const result = await channel.resumeTo(target.id)
-          if (result.ok) {
-            channel.notify(t('resume-resumed'))
-            onClose()
-          } else {
-            if (result.reason === 'cancelled') return
-            const text = result.reason === 'working'
-              ? t('resume-while-working')
-              : result.reason === 'unavailable'
-                ? t('resume-unavailable')
-                : t('session-resume-failed', { err: result.error })
-            setNotice({ text, tone: 'error' })
-          }
-        } catch (error) {
-          setNotice({ text: t('session-resume-failed', { err: message(error) }), tone: 'error' })
-        }
-      })
+      resumeSession(focused)
     } else if (key.escape) {
       // Esc backs out one layer at a time: a live query first, the screen
       // second. Closing on the first Esc would discard a search the user is
@@ -540,6 +553,11 @@ export function SessionBrowser({
                 depth={row.depth}
                 focused={windowTop + index === focus}
                 now={now}
+                // 点击行 = 聚焦 + 恢复该会话（与 Enter 同路径）
+                onClick={() => {
+                  setFocusId(row.session.id)
+                  resumeSession(row.session)
+                }}
               />
             ),
           )}
@@ -566,14 +584,34 @@ export function SessionBrowser({
         </Box>
       )}
       {mode === 'confirm-delete' && focused !== undefined && (
-        <Box flexShrink={0}>
+        <Box
+          flexShrink={0}
+          onClick={() => {
+            // 点击确认行 = 确认删除（与 Enter 同路径）；确认屏本身就是
+            // 显式确认层，取消保留键盘 Esc，防误点
+            setMode('list')
+            runDelete(focused)
+          }}
+          onMouseEnter={(): void => setConfirmHovered(true)}
+          onMouseLeave={(): void => setConfirmHovered(false)}
+          backgroundColor={confirmHovered ? 'userMessageBackgroundHover' : undefined}
+        >
           <Text color="error">
             {` ${truncateWidth(t('resume-delete-confirm', { name: focused.title.text }), inputBudget)}`}
           </Text>
         </Box>
       )}
       {mode === 'confirm-clean' && (
-        <Box flexShrink={0}>
+        <Box
+          flexShrink={0}
+          onClick={() => {
+            setMode('list')
+            runClean()
+          }}
+          onMouseEnter={(): void => setConfirmHovered(true)}
+          onMouseLeave={(): void => setConfirmHovered(false)}
+          backgroundColor={confirmHovered ? 'userMessageBackgroundHover' : undefined}
+        >
           <Text color="warning">
             {` ${truncateWidth(t('session-clean-confirm', { n: view.emptyCount }), inputBudget)}`}
           </Text>

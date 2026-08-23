@@ -25,7 +25,7 @@ jobs:
   star-history:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
       - name: 切换到图表专用分支（基于最新 main，同步远端）

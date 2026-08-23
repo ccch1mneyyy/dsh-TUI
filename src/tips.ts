@@ -157,8 +157,14 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-mouse-click',
     group: 'keys',
-    zh: '单击消息行展开/收起；点链接直接打开浏览器',
-    en: 'Click a message row to expand it; click links to open the browser',
+    zh: '工具卡/thinking/摘要点击展开，子代理卡点击看详情；输入框点击定位光标',
+    en: 'Click tool/thinking/summary rows to fold; subagent cards open detail; click input to move caret',
+  },
+  {
+    id: 'keys-mouse-scenes',
+    group: 'keys',
+    zh: '轨迹与 /settings 支持鼠标：行点击跳转/编辑，滚轮移动光标或焦点',
+    en: 'Trajectory and /settings take the mouse: row clicks jump/edit, the wheel moves cursor or focus',
   },
 
   // ── 命令 ──────────────────────────────────────────────────
@@ -603,8 +609,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-mouse-mode',
     group: 'pitfalls',
-    zh: '鼠标操作仅在全屏模式（fullscreen）下生效',
-    en: 'Mouse support only works in fullscreen mode',
+    zh: '主界面鼠标需开 fullscreen；轨迹/resume 整屏页两种模式都带鼠标',
+    en: 'Main-chat mouse needs fullscreen; full-page screens (trajectory, /resume) have it in both modes',
   },
   {
     id: 'pit-env-rename',

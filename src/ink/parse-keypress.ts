@@ -726,7 +726,13 @@ export function parseMultipleKeypresses(
           if (response) {
             keys.push({ kind: 'response', sequence: token.value, response })
           } else {
-            const mouse = parseMouseEvent(token.value)
+            // SGR first (1006); X10 (legacy 1000/1002 without SGR) as the
+            // compatibility fallback for clicks/drags. Wheel falls through
+            // to parseKeypress, which turns it into a wheel key WITH the
+            // pointer coordinates for position-based routing.
+            const mouse =
+              parseMouseEvent(token.value) ??
+              parseX10MouseEvent(token.value)
             if (mouse) {
               keys.push(mouse)
             } else {
@@ -940,6 +946,8 @@ export const nonAlphanumericKeys = [
   'backspace',
   'wheelup',
   'wheeldown',
+  'wheelleft',
+  'wheelright',
   'mouse',
 ]
 
@@ -1080,6 +1088,14 @@ export type ParsedKey = {
   raw: string | undefined
   code?: string
   isPasted: boolean
+  /**
+   * Pointer column (0-indexed) for wheel keys — SGR/X10 wheel sequences
+   * carry the position the wheel event occurred at. Undefined for
+   * non-wheel keys.
+   */
+  mouseCol?: number
+  /** Pointer row (0-indexed) for wheel keys. See mouseCol. */
+  mouseRow?: number
 }
 
 /** A terminal response sequence (DECRPM, DA1, OSC reply, etc.) parsed
@@ -1131,6 +1147,37 @@ function parseMouseEvent(s: string): ParsedMouse | null {
     action: match[4] === 'M' ? 'press' : 'release',
     col: parseInt(match[2]!, 10),
     row: parseInt(match[3]!, 10),
+    sequence: s,
+  }
+}
+
+/**
+ * Parse an X10 mouse sequence (CSI M + Cb/Cx/Cy raw bytes, each +32) into
+ * a ParsedMouse, or null for anything else. Serves terminals that honor
+ * DECSET 1000/1002 but ignore 1006 (SGR): clicks and button-drags become
+ * real ParsedMouse events so text selection works there too.
+ *
+ * Protocol limits (documented, accepted): X10 has no release events — a
+ * started selection finishes via App's lost-release recovery (next press /
+ * focus-out / no-button motion), and click dispatch (release-based) stays
+ * SGR-only. No-button motion (hover) is unrepresentable without the drag
+ * bit, so hover stays SGR-only. Wheel returns null (parseKeypress's wheel
+ * branch turns it into a key with coordinates).
+ */
+function parseX10MouseEvent(s: string): ParsedMouse | null {
+  if (s.length !== 6 || !s.startsWith('\x1b[M')) return null
+  const button = s.charCodeAt(3) - 32
+  // Wheel (bit 6) → key path; no-button without drag bit → unsupported
+  // hover encoding, swallow upstream.
+  if ((button & 0x40) !== 0) return null
+  if ((button & 0x03) === 3 && (button & 0x20) === 0) return null
+  return {
+    kind: 'mouse',
+    button,
+    action: 'press',
+    // X10 coords are 1-indexed like SGR (charCode - 32).
+    col: s.charCodeAt(4) - 32,
+    row: s.charCodeAt(5) - 32,
     sequence: s,
   }
 }
@@ -1205,23 +1252,46 @@ function parseKeypress(s: string = ''): ParsedKey {
   // + direction while ignoring modifier bits (Shift=0x04, Meta=0x08,
   // Ctrl=0x10) — modified wheel events (e.g. Ctrl+scroll, button=80)
   // should still be recognized as wheelup/wheeldown.
+  //
+  // The SGR sequence carries the pointer position (CSI < btn;col;row M) —
+  // preserved on the ParsedKey (mouseCol/mouseRow, 0-indexed) so wheel
+  // routing can hit-test the ScrollBox under the pointer instead of
+  // scrolling a hardcoded target. Buttons 66/67 are horizontal wheel
+  // (wheelleft/wheelright); kept as keys with coords for future consumers.
   if ((match = SGR_MOUSE_RE.exec(s))) {
     const button = parseInt(match[1]!, 10)
-    if ((button & 0x43) === 0x40) return createNavKey(s, 'wheelup', false)
-    if ((button & 0x43) === 0x41) return createNavKey(s, 'wheeldown', false)
+    const col = parseInt(match[2]!, 10) - 1
+    const row = parseInt(match[3]!, 10) - 1
+    const dir = button & 0x43
+    if (dir === 0x40) return createWheelKey(s, 'wheelup', col, row, button)
+    if (dir === 0x41) return createWheelKey(s, 'wheeldown', col, row, button)
+    if (dir === 0x42) return createWheelKey(s, 'wheelleft', col, row, button)
+    if (dir === 0x43) return createWheelKey(s, 'wheelright', col, row, button)
     // Shouldn't reach here (parseMouseEvent catches non-wheel) but be safe
     return createNavKey(s, 'mouse', false)
   }
 
   // X10 mouse: CSI M + 3 raw bytes (Cb+32, Cx+32, Cy+32). Terminals that
   // ignore DECSET 1006 (SGR) but honor 1000/1002 emit this legacy encoding.
-  // Button bits match SGR: 0x40 = wheel, low bit = direction. Non-wheel
-  // X10 events (clicks/drags) are swallowed here — we only enable mouse
-  // tracking in alt-screen and only need wheel for ScrollBox.
+  // Button bits match SGR: 0x40 = wheel, low bit = direction, 0x20 = drag.
+  // Wheel events become wheel keys (with coordinates, like SGR); clicks and
+  // drags become ParsedMouse so X10-only terminals get selection support.
+  // X10 cannot report button release — click dispatch (release-based) stays
+  // SGR-only; a started selection finishes via the lost-release recovery
+  // paths (next press / focus-out / no-button motion).
   if (s.length === 6 && s.startsWith('\x1b[M')) {
     const button = s.charCodeAt(3) - 32
-    if ((button & 0x43) === 0x40) return createNavKey(s, 'wheelup', false)
-    if ((button & 0x43) === 0x41) return createNavKey(s, 'wheeldown', false)
+    const col = s.charCodeAt(4) - 32 - 1
+    const row = s.charCodeAt(5) - 32 - 1
+    const dir = button & 0x43
+    if (dir === 0x40) return createWheelKey(s, 'wheelup', col, row, button)
+    if (dir === 0x41) return createWheelKey(s, 'wheeldown', col, row, button)
+    if (dir === 0x42) return createWheelKey(s, 'wheelleft', col, row, button)
+    if (dir === 0x43) return createWheelKey(s, 'wheelright', col, row, button)
+    // Non-wheel X10 clicks/drags are intercepted by parseX10MouseEvent in
+    // parseMultipleKeypresses before this function runs; reaching here means
+    // a flush path bypassed it (no-button motion without the drag bit — X10
+    // hover, unsupported). Swallow as before.
     return createNavKey(s, 'mouse', false)
   }
 
@@ -1332,5 +1402,34 @@ function createNavKey(s: string, name: string, ctrl: boolean): ParsedKey {
     sequence: s,
     raw: s,
     isPasted: false,
+  }
+}
+
+/**
+ * Build a wheel ParsedKey preserving the pointer position and modifier
+ * bits from the protocol's button byte (Shift=0x04, Meta/Alt=0x08,
+ * Ctrl=0x10 — same bit layout decodeModifier documents).
+ */
+function createWheelKey(
+  s: string,
+  name: string,
+  col: number,
+  row: number,
+  button: number,
+): ParsedKey {
+  return {
+    kind: 'key',
+    name,
+    ctrl: (button & 0x10) !== 0,
+    meta: (button & 0x08) !== 0,
+    shift: (button & 0x04) !== 0,
+    option: false,
+    super: false,
+    fn: false,
+    sequence: s,
+    raw: s,
+    isPasted: false,
+    mouseCol: col,
+    mouseRow: row,
   }
 }

@@ -86,9 +86,13 @@ export function getThemeOptions(): SelectOption[] {
 export function ThemePicker({
   focusIndex,
   currentTheme,
+  onPick,
 }: {
   focusIndex: number
   currentTheme: string | undefined
+  /** Mouse pick (fullscreen): clicked row's absolute index (Chat applies
+   *  the same code path as the keyboard Enter). */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   const options = React.useMemo(() => getThemeOptions(), [])
   return (
@@ -104,6 +108,7 @@ export function ThemePicker({
           focusIndex={focusIndex}
           selectedValue={currentTheme}
           visibleOptionCount={6}
+          onPick={onPick ? index => onPick(index) : undefined}
         />
         <Text dimColor italic>
           <HintLine text={t('hint-confirm-exit')} />

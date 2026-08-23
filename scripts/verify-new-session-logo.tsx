@@ -186,7 +186,7 @@ const targetRoot = await createRoot({
 const decoyReanchors = trackReanchors(decoyStdout)
 const targetReanchors = trackReanchors(targetStdout)
 decoyRoot.render(<></>)
-targetRoot.render(<Chat channel={channel} questionStore={new QuestionStore()} />)
+targetRoot.render(<Chat channel={channel} questionStore={new QuestionStore()} onExit={() => {}} />)
 await sleep(3500)
 
 const beforeNew = viewportLines()

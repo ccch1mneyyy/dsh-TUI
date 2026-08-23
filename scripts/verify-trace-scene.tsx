@@ -533,12 +533,20 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   await sleep(400)
 
   // The settle paint is throttled behind the ink frame clock — poll for the
-  // markers instead of racing a fixed sleep.
+  // markers instead of racing a fixed sleep. The ceiling is generous (~15s)
+  // on purpose: this check asserts the FINAL LAYOUT (no blank band between
+  // the two sections), not paint latency, and the old 4s window straddled
+  // the settle-paint latency distribution — it failed with first=-1/
+  // second=-1 (markers not yet on screen) in ~1/3 of local runs while the
+  // very next assertion passed 400ms later. Green paths break out early;
+  // only a real layout regression (or a paint that never lands) pays the
+  // full ceiling.
+  const settlePollStart = Date.now()
   let lines: string[] = []
   let firstIndex = -1
   let secondIndex = -1
   let gap = Number.POSITIVE_INFINITY
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < 187; attempt++) {
     const buffer = term.buffer.active
     lines = Array.from({ length: buffer.length }, (_, row) =>
       buffer.getLine(row)?.translateToString(true) ?? '',
@@ -557,10 +565,14 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     if (firstIndex >= 0 && secondIndex >= 0 && gap <= 1) break
     await sleep(80)
   }
+  const settleWaitedMs = Date.now() - settlePollStart
   check(
     'reasoning that settles in the trajectory leaves no blank answer gap',
     firstIndex >= 0 && secondIndex >= 0 && gap <= 1,
-    `first=${firstIndex}, second=${secondIndex}, blank=${gap}, buffer=${lines.length}`,
+    `first=${firstIndex}, second=${secondIndex}, blank=${gap}, buffer=${lines.length}, waited=${settleWaitedMs}ms` +
+      (firstIndex < 0 || secondIndex < 0
+        ? ' (markers never painted within the 15s window — hung or lost frame, not a layout gap)'
+        : ''),
   )
 
   stdin.write('\x0f') // Ctrl+O

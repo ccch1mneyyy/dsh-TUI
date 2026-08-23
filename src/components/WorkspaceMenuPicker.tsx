@@ -14,9 +14,13 @@ import { HintLine } from './design-system/HintLine.js'
 export function WorkspaceMenuPicker({
   options,
   focusIndex,
+  onPick,
 }: {
   options: readonly { id: string; label: string; description: string }[]
   focusIndex: number
+  /** Mouse pick (fullscreen): reports the clicked row's index — Chat
+   *  applies it with the same code path as the keyboard Enter. */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   return (
     <Pane color="permission">
@@ -34,6 +38,7 @@ export function WorkspaceMenuPicker({
           }))}
           focusIndex={focusIndex}
           selectedValue={undefined}
+          onPick={onPick === undefined ? undefined : (index) => onPick(index)}
         />
         <Text dimColor italic>
           <HintLine text={t('hint-confirm-exit')} />

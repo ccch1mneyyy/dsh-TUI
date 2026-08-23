@@ -10,6 +10,7 @@ import { SyntaxText } from '../SyntaxText.js'
 import { formatDuration } from '../../cc/format.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 
 type Props = {
   tool: ToolRow
@@ -21,6 +22,12 @@ type Props = {
   isSelected?: boolean
   /** Row expanded on its own (persistent hover-grey background, CC). */
   isExpanded?: boolean
+  /**
+   * Mouse click (fullscreen): toggles the row's expansion — same action as
+   * clicking other transcript rows. Also makes the `(ctrl+o to expand)`
+   * hint actionable with the mouse.
+   */
+  onClick?(event: ClickEvent): void
   /**
    * Trajectory pointer, rendered as one more `⎿` line under a failed call.
    *
@@ -299,6 +306,7 @@ export function AssistantToolUseMessage({
   verbose,
   isSelected = false,
   isExpanded = false,
+  onClick,
   footnote,
   diffLayout = 'auto',
   toolBackground = 'none',
@@ -375,8 +383,11 @@ export function AssistantToolUseMessage({
       justifyContent="space-between"
       marginTop={addMargin ? 1 : 0}
       width="100%"
+      onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies
       // to an ordinary card. Diff line tints stay - they are content, not chrome.
+      // No hover tint: the card stays visually quiet until clicked (user
+      // feedback — row-hover color changes read as noise in the transcript).
       backgroundColor={isSelected ? 'messageActionsBackground' : ordinaryBackground}
     >
       <Box flexDirection="column" flexGrow={1}>

@@ -3,6 +3,7 @@ import { Box, Text, useTerminalSize } from '../../ui.js'
 import { POINTER } from '../../cc/figures.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { wrapWidth } from '../../sessions/format.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 
 type Props = {
   text: string
@@ -10,7 +11,7 @@ type Props = {
   addMargin: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  onClick?(): void
+  onClick?(event: ClickEvent): void
 }
 
 /**

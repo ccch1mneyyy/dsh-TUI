@@ -13,10 +13,14 @@ export function WorkspacePicker({
   targets,
   focusIndex,
   currentCwd,
+  onPick,
 }: {
   targets: readonly TuiWorkspaceTarget[]
   focusIndex: number
   currentCwd: string
+  /** Mouse pick (fullscreen): reports the clicked row's absolute index —
+   *  Chat applies it with the same code path as the keyboard Enter. */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   const start = Math.max(0, Math.min(focusIndex - Math.floor(WINDOW / 2), targets.length - WINDOW))
   const visible = targets.slice(start, start + WINDOW)
@@ -34,6 +38,7 @@ export function WorkspacePicker({
             description={target.description ?? target.uri}
             showScrollUp={index === 0 && start > 0}
             showScrollDown={index === visible.length - 1 && start + visible.length < targets.length}
+            onClick={onPick === undefined ? undefined : () => onPick(start + index)}
           >
             {target.badge} · {target.label}
           </ListItem>

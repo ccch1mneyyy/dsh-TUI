@@ -124,6 +124,8 @@ function SelectDialog({
               description={option.description}
               showScrollUp={absoluteIndex === start && start > 0}
               showScrollDown={absoluteIndex === end - 1 && end < dialog.options.length}
+              // Click = decide this option (same as Enter on it).
+              onClick={() => onDecide(option.id)}
             >
               {option.label}
             </ListItem>
@@ -190,7 +192,12 @@ function ConfirmDialog({
           {dialog.message !== undefined && <Text dimColor>{dialog.message}</Text>}
         </Box>
         {labels.map((label, index) => (
-          <ListItem key={label} isFocused={index === focusIndex}>
+          <ListItem
+            key={label}
+            isFocused={index === focusIndex}
+            // Click = decide this row (same as Enter on it).
+            onClick={() => onDecide(index === 0)}
+          >
             {label}
           </ListItem>
         ))}

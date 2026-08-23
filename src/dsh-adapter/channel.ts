@@ -51,7 +51,7 @@ import { getLang, LANGS, t } from '../i18n.js'
 import { AUTO_THEME_NAME, THEME_NAMES } from '../theme.js'
 import { listCustomThemes } from '../customTheme.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
-import { normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
@@ -525,6 +525,10 @@ export interface Channel {
   readonly thinkingFold: 'preview' | 'full'
   /** Live tool-card background treatment. */
   readonly toolBackground: ToolBackground
+  /** What the fullscreen transcript's right gutter shows (settings
+   *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
+   *  nothing). */
+  readonly scrollGutter: ScrollGutterMode
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
@@ -874,6 +878,8 @@ export interface ChannelState {
   thinkingFold: 'preview' | 'full'
   /** Tool-card background treatment (see the public Channel type). */
   toolBackground: ToolBackground
+  /** Transcript gutter mode (see the public Channel type). */
+  scrollGutter: ScrollGutterMode
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
@@ -882,6 +888,8 @@ export interface ChannelState {
   setThinkingFold(mode: 'preview' | 'full'): void
   /** Apply a tool-card background change. */
   setToolBackground(background: ToolBackground): void
+  /** Apply a transcript gutter mode change. */
+  setScrollGutter(mode: ScrollGutterMode): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -1388,6 +1396,8 @@ export function createChannel(
     thinkingFold?: 'preview' | 'full'
     /** Tool-card background treatment; default `none`. */
     toolBackground?: ToolBackground
+    /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
+    scrollGutter?: ScrollGutterMode
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -2337,6 +2347,7 @@ export function createChannel(
     diffLayout: options.diffLayout ?? 'auto',
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
+    scrollGutter: normalizeScrollGutter(options.scrollGutter),
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,
@@ -3438,6 +3449,12 @@ export function createChannel(
       const normalized = normalizeToolBackground(background)
       if (normalized === state.toolBackground) return
       state.toolBackground = normalized
+      state.emit()
+    },
+    setScrollGutter(mode) {
+      const normalized = normalizeScrollGutter(mode)
+      if (normalized === state.scrollGutter) return
+      state.scrollGutter = normalized
       state.emit()
     },
     setStatusBar(config) {

@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text, useTheme } from '../../ui.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 import { burstDurationMs, burstErrors, previewText } from '../../dsh-adapter/trajectory/index.js'
 import {
   costGlyph,
@@ -69,6 +70,7 @@ export function Ledger({
   tick,
   arrivalTick,
   arrivalFrom,
+  onRowClick,
 }: {
   /** The (possibly filtered) ledger. */
   rows: readonly TrajNode[]
@@ -85,9 +87,17 @@ export function Ledger({
   arrivalTick: number
   /** Rows at or after this index are the ones that just arrived. */
   arrivalFrom: number
+  /**
+   * Mouse pick (fullscreen): reports the clicked row's absolute index — the
+   * scene jumps the cursor to it (same semantics as the keyboard jumps).
+   * Hover on a non-focused row shows a dim `▸` pointer — light indication,
+   * no background wash (the ledger is content, not a menu).
+   */
+  onRowClick?: (index: number, event: ClickEvent) => void
 }): React.ReactNode {
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
+  const [hoverIndex, setHoverIndex] = React.useState(-1)
   const layout = ledgerLayout(width)
   const visible = rows.slice(start, start + height)
   const arriving = arrive(tick, arrivalTick)
@@ -112,6 +122,23 @@ export function Ledger({
         const running = node.status === 'running'
         const isNew = index >= arrivalFrom && arriving > 0
         const duration = node.burst === undefined ? node.durationMs : burstDurationMs(node.burst)
+        // 鼠标：行点击跳光标；悬停在非焦点行亮出 dim ▸（轻指示，不刷背景）
+        const hovered = onRowClick !== undefined && hoverIndex === index
+        const pointer = focused || hovered ? '▸' : ' '
+        const rowEvents =
+          onRowClick === undefined
+            ? undefined
+            : {
+                onClick: (event: ClickEvent): void => {
+                  onRowClick(index, event)
+                },
+                onMouseEnter: (): void => {
+                  setHoverIndex(index)
+                },
+                onMouseLeave: (): void => {
+                  setHoverIndex(previous => (previous === index ? -1 : previous))
+                },
+              }
 
         // ── structural rows are RULES, not rows ────────────────────────────
         //
@@ -132,9 +159,9 @@ export function Ledger({
           // session's actual chapter break, gets a rule.
           if (!isTurn) {
             return (
-              <Box key={`${node.seq}:step`} flexDirection="row" width="100%" height={1} flexShrink={0} gap={1}>
+              <Box key={`${node.seq}:step`} flexDirection="row" width="100%" height={1} flexShrink={0} gap={1} {...rowEvents}>
                 <Box flexShrink={0}>
-                  <Text color="subtle">{`${focused ? '▸' : ' '}╵`}</Text>
+                  <Text color="subtle">{`${pointer}╵`}</Text>
                 </Box>
                 <Box flexGrow={1} flexShrink={1} overflow="hidden">
                   <Text color={focused ? 'suggestion' : 'subtle'} wrap="truncate">{node.label}</Text>
@@ -158,12 +185,12 @@ export function Ledger({
           const idle =
             previous === undefined ? 0 : node.time - (previous.time + (previous.durationMs ?? 0))
           const idleText = idle >= IDLE_FLOOR_MS ? `  ⋯ ${formatDuration(idle)}` : ''
-          const head = `${focused ? '▸' : ' '}━━ ${node.label}${idleText} `
+          const head = `${pointer}━━ ${node.label}${idleText} `
           const fill = Math.max(2, width - stringWidth(head) - stringWidth(right) - 2)
           return (
-            <Box key={`${node.seq}:turn`} width="100%" height={1} flexShrink={0}>
+            <Box key={`${node.seq}:turn`} width="100%" height={1} flexShrink={0} {...rowEvents}>
               <Text color={tone} bold>
-                {`${focused ? '▸' : ' '}━━ ${node.label}`}
+                {`${pointer}━━ ${node.label}`}
                 <Text color="subtle">{idleText}</Text>
                 <Text color="inactive">{` ${'━'.repeat(fill)} `}</Text>
                 <Text color={failed ? 'error' : heatColor(duration)}>{right}</Text>
@@ -187,10 +214,10 @@ export function Ledger({
             : ''
 
         return (
-          <Box key={`${node.seq}:${node.kind}`} flexDirection="row" width="100%" height={1} flexShrink={0} gap={1}>
+          <Box key={`${node.seq}:${node.kind}`} flexDirection="row" width="100%" height={1} flexShrink={0} gap={1} {...rowEvents}>
             <Box flexShrink={0}>
               <Text color={spineColor}>
-                {focused ? '▸' : ' '}
+                {pointer}
                 {spineGlyph(rows, index)}
               </Text>
             </Box>

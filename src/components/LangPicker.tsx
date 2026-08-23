@@ -12,9 +12,13 @@ import { HintLine } from './design-system/HintLine.js'
 export function LangPicker({
   focusIndex,
   currentLang,
+  onPick,
 }: {
   focusIndex: number
   currentLang: Lang
+  /** Mouse pick (fullscreen): clicked row's absolute index (Chat applies
+   *  the same code path as the keyboard Enter). */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   return (
     <Pane color="permission">
@@ -32,6 +36,7 @@ export function LangPicker({
           }))}
           focusIndex={focusIndex}
           selectedValue={currentLang}
+          onPick={onPick ? index => onPick(index) : undefined}
         />
         <Text dimColor italic>
           <HintLine text={t('hint-confirm-exit')} />

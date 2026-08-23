@@ -1,6 +1,7 @@
-import React, { type ReactNode } from 'react'
+import React, { type ReactNode, useState } from 'react'
 import { Box, Text } from '../../ui.js'
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 import { POINTER, DOWN_ARROW, UP_ARROW, TICK } from '../../cc/figures.js'
 
 export type ListItemProps = {
@@ -28,6 +29,12 @@ export type ListItemProps = {
    * @default true
    */
   declareCursor?: boolean
+  /**
+   * Mouse click handler (fullscreen mode). When provided the row becomes
+   * clickable and gains a subtle hover background so the affordance is
+   * visible; when absent the row renders exactly as before.
+   */
+  onClick?: (event: ClickEvent) => void
 }
 
 /**
@@ -47,6 +54,7 @@ export function ListItem({
   styled = true,
   disabled = false,
   declareCursor,
+  onClick,
 }: ListItemProps): React.ReactNode {
   // Park the native terminal cursor on the pointer indicator so screen
   // readers / magnifiers track the focused item (CC behavior). (0,0) is the
@@ -56,6 +64,11 @@ export function ListItem({
     column: 0,
     active: isFocused && !disabled && declareCursor !== false,
   })
+  // Hover highlight only when the row is actually clickable — the extra
+  // background is the mouse affordance (there is no cursor-shape feedback
+  // in a terminal).
+  const [hovered, setHovered] = useState(false)
+  const clickable = Boolean(onClick) && !disabled
 
   function renderIndicator(): ReactNode {
     if (disabled) {
@@ -92,7 +105,14 @@ export function ListItem({
   const flatChildren = flattenDeep(children)
 
   return (
-    <Box ref={cursorRef} flexDirection="column">
+    <Box
+      ref={cursorRef}
+      flexDirection="column"
+      onClick={clickable ? onClick : undefined}
+      onMouseEnter={clickable ? () => setHovered(true) : undefined}
+      onMouseLeave={clickable ? () => setHovered(false) : undefined}
+      backgroundColor={clickable && hovered ? 'userMessageBackgroundHover' : undefined}
+    >
       {/* 行高恒 1、不压缩、溢出隐藏：压边换行会把每个列表项膨胀成 2 个
           屏幕行，与 listWindow 按每项申报的高度失配——浮层顶行被裁、真
           终端上换行泄入 scrollback 使行寻址错位、翻页错位累加（#396）。

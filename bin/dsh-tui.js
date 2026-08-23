@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-tui — 双态启动器（delegating launcher，0.8.8）。
+ * dsh-tui — 双态启动器（delegating launcher，0.9.0）。
  *
  * 同一个文件按“自己住在哪”决定扮演的角色：
  *

@@ -20,10 +20,14 @@ export function ModelPicker({
   models,
   focusIndex,
   currentModel,
+  onPick,
 }: {
   models: readonly LlmModelInfo[]
   focusIndex: number
   currentModel: string
+  /** Mouse pick (fullscreen): reports the clicked row's absolute index —
+   *  Chat applies it with the same code path as the keyboard Enter. */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   const { rows: terminalRows } = useTerminalSize()
   // 焦点窗口化按行预算：ListItem 带 description 时占 2 行（正文+描述，均
@@ -52,6 +56,7 @@ export function ModelPicker({
               description={model.description}
               showScrollUp={absoluteIndex === start && start > 0}
               showScrollDown={absoluteIndex === end - 1 && end < models.length}
+              onClick={onPick ? () => onPick(absoluteIndex) : undefined}
             >
               {model.provider} / {model.name}
             </ListItem>

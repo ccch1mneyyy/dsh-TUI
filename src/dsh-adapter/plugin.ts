@@ -27,9 +27,10 @@ import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_STATUS_BAR, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
+import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
@@ -53,6 +54,20 @@ import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMult
  * `dsh-jsonrpc`: the surrounding `cordis.yml` supplies the agent spine, the
  * LLM adapter, and the tool plugins.
  */
+/**
+ * Fullscreen decision latched across host recomposes. The launcher disposes
+ * and re-mounts the plugin tree (teardown → apply() runs again) — a fresh
+ * apply() re-resolves `bootedFullscreen` from cordis config, and the
+ * settings user layer (settings.yaml) can arrive after the 300ms
+ * `settingsReady` bound when the recompose is also re-mounting the settings
+ * service. The tree would then mount INLINE and `fullscreenFrozen` would
+ * swallow the late application — the app lands on the main screen
+ * ("exited fullscreen", dead mouse, unpinned input) until restart. A
+ * session that already mounted fullscreen must never regress on a
+ * recompose: latch the decision.
+ */
+let lastBootedFullscreen: boolean | undefined
+
 export async function apply(ctx: Context, config: Config): Promise<void> {
   if (!process.stdout.isTTY) {
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
@@ -364,6 +379,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     diffLayout: config.diffLayout,
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
+    scrollGutter: config.scrollGutter,
     statusBar: config.statusBar,
     handle,
   })
@@ -376,6 +392,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // (swapping layouts requires re-mounting the whole tree).
   let bootedFullscreen = config.fullscreen === true
   let fullscreenFrozen = false
+  // The settings service may come up AFTER this plugin's apply: the cordis
+  // inject callback defers until the service registers, so the first
+  // `apply(scope.get())` below can land after the mount (field report: the
+  // /settings fullscreen toggle never took effect — the frozen latch below
+  // swallowed the late callback and bootedFullscreen stayed false). The
+  // mount must therefore WAIT for the first settings application (bounded —
+  // a bare embedder without a settings service must not deadlock).
+  let resolveSettingsReady: (() => void) | undefined
+  const settingsReady = new Promise<void>(resolve => {
+    resolveSettingsReady = () => resolve()
+    setTimeout(resolve, 300)
+  })
   // Register the dsh-tui settings namespace so the /settings screen can
   // edit it (the section below was '命名空间未注册' without this): the
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and
@@ -387,6 +415,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+        scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -428,6 +457,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       fullscreen?: boolean
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
+      scrollGutter?: ScrollGutterMode
       statusBar?: Partial<StatusBarConfig>
     }
     const applyLayout = (value: SettingsValue): void => {
@@ -464,6 +494,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const applyDisplay = (value: SettingsValue): void => {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
+      channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     const apply = (next: SettingsValue): void => {
@@ -481,10 +512,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         channel.notify(t('settings-fullscreen-restart'), { color: 'warning' })
       }
     })
+    resolveSettingsReady?.()
   })
-  // The tree mounts with the resolved value from here on; a settings doc
-  // landing later must not flip the running session's exit/layout truth.
-  fullscreenFrozen = true
   // The /settings screen's own section: the dsh-tui namespace comes from
   // the settings registration above, and the declared selects write `lang`
   // and `diffLayout` back through the settings service's revision-fenced
@@ -520,8 +549,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           path: ['fullscreen'],
           label: 'Fullscreen mode',
           descriptions: { zh: '全屏模式' },
-          hint: 'Alt-screen fullscreen layout with in-app mouse selection and wheel scroll; off keeps the terminal-native scrollback and selection. Saved for the next launch.',
-          hintDescriptions: { zh: '开启：alt-screen 全屏布局，应用内鼠标选择与滚轮滚动；关闭：保留终端原生滚动与选择。保存后下次启动生效。' },
+          // 故意不用 "alt-screen" 这类终端术语：读者要的是行为差异。鼠标
+          // 两种模式都可用（整屏页面自带鼠标跟踪），别让描述暗示关掉就
+          // 没有鼠标——最常见的误解。长度对齐既有最长 hint（单行假设）。
+          hint: 'On: app takes the whole screen (vim/less style), in-app mouse. Off: native scrollback; full-page screens keep the mouse. Restart to apply.',
+          hintDescriptions: { zh: '开启：接管整个终端（同 vim/less），应用内鼠标；关闭：终端原生滚动选择；整屏页两种模式都有鼠标。重启生效。' },
           kind: 'boolean',
           format(value: unknown): string {
             // Unset in settings.yaml: show what THIS session booted with
@@ -565,6 +597,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'none', label: 'None', descriptions: { zh: '无' } },
             { value: 'subtle', label: 'Subtle', descriptions: { zh: '轻微' } },
             { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
+          ],
+        },
+        {
+          path: ['scrollGutter'],
+          label: 'Transcript gutter',
+          descriptions: { zh: '转录边栏' },
+          hint: 'Right gutter of the fullscreen transcript: per-turn timeline ticks, a proportional scrollbar, or nothing.',
+          hintDescriptions: { zh: '全屏转录区右侧边栏：按轮次的时间线节点、比例滚动条，或留空。' },
+          kind: 'select',
+          options: [
+            { value: 'timeline', label: 'Turn timeline', descriptions: { zh: '轮次时间线' } },
+            { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
+            { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
           ],
         },
         {
@@ -863,6 +908,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
   const handleExit = funnel.handleExit
 
+  // Chat's `fullscreen` prop must match the root wrap below, or the
+  // full-screen surfaces inside Chat (session browser, settings, trajectory,
+  // subagent pages) would nest a SECOND <AlternateScreen> — whose unmount
+  // writes DEC 1049 exit and drops the whole app back to the main screen
+  // (the stable /resume→Esc "exited fullscreen" repro). The prop is captured
+  // when the element is created, so wait for the settings first-application
+  // BEFORE creating Chat: the element must see the same bootedFullscreen the
+  // root tree resolves after settingsReady below.
+  await settingsReady
   const chat = React.createElement(Chat, {
     channel,
     questionStore,
@@ -918,6 +972,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       })
     },
   })
+  // Freeze the fullscreen decision only NOW, right before the tree mounts:
+  // Chat above was created after the same settingsReady await, so the root
+  // wrap and the `fullscreen` prop share one value; a mid-session /settings
+  // edit from here on is persisted for the next boot (the watch notifies),
+  // never applied live (swapping layouts requires re-mounting the tree).
+  // Host recompose hardening: never regress a fullscreen session to inline
+  // on a re-mount whose settings application arrived late (see the module
+  // latch note). A fresh process still resolves from config + settings
+  // normally — the latch is undefined there.
+  if (bootedFullscreen === false && lastBootedFullscreen === true) {
+    bootedFullscreen = true
+  }
+  fullscreenFrozen = true
   // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
   // tracking), which turns on in-app text selection (copy-on-select via
   // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
@@ -928,6 +995,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     bootedFullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
   )
   instance = await render(tree, { exitOnCtrlC: false })
+  const isRecompose = lastBootedFullscreen !== undefined
+  lastBootedFullscreen = bootedFullscreen
+  logMouseDebug('apply mount', { bootedFullscreen, isRecompose })
 
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
@@ -949,6 +1019,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // skill commands (issue #86) would survive this exact recompose and the
   // re-mounted channel would find the names taken, freezing its menu.
   ctx.effect(() => () => {
+    logMouseDebug('apply teardown')
     funnel.markTeardown()
     channel.releaseContributions()
     instance?.unmount()
