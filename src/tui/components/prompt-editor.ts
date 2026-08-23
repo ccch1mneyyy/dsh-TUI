@@ -28,8 +28,9 @@
  * History is the Editor's in-memory list (`addToHistory` on every accepted
  * dispatch) plus the persisted JSONL log (`appendHistory`). Slash (`/`) and
  * file-mention (`@`) completion come from `PromptAutocompleteProvider`,
- * backed by `commands.query.commandCompletions` / `commands.query.listFiles`
- * with prefix-or-basename compatibility matching.
+ * backed by `commands.query.commandCompletions` (sync) and
+ * `commands.query.listFileCandidates` (two modes: path-shaped queries list
+ * that directory only, plain fragments rank the fuzzy session index).
  *
  * The component never touches the Channel/cordis/Agent/stdio: state arrives
  * via `update(PromptProjection)`, side effects leave through `TuiCommands`
@@ -53,6 +54,7 @@ import {
 } from '../public.js'
 import type { TuiCommands } from '../commands.js'
 import type { PromptProjection } from '../view-model.js'
+import { localizedDescription } from '../../commands.js'
 import { appendHistory } from '../../history.js'
 import { t } from '../../i18n.js'
 import {
@@ -140,10 +142,14 @@ export function createPromptEditorTheme(): EditorTheme {
 /**
  * Slash-command and `@` file-mention completion over the command sink.
  * Slash completions are synchronous (`commandCompletions` is pure over the
- * command registry); file listings are async and already fenced by the sink
- * (`undefined` = stale drop → no suggestions).
+ * command registry); file candidates are async, per-keystroke and fenced by
+ * the sink (`undefined` = stale drop → no suggestions) on top of the Editor's
+ * own request-id guard + AbortSignal. The two-mode ranking (path-shaped
+ * query → that directory only; plain fragment → fuzzy session index) lives
+ * in the channel — this provider only maps candidates onto pi-tui's item
+ * shape, marking directories by the pi-tui trailing-`/` label convention.
  */
-class PromptAutocompleteProvider implements AutocompleteProvider {
+export class PromptAutocompleteProvider implements AutocompleteProvider {
   readonly triggerCharacters = ['@']
 
   constructor(private readonly commands: TuiCommands) {}
@@ -163,36 +169,41 @@ class PromptAutocompleteProvider implements AutocompleteProvider {
       if (completions.length === 0) return null
       return {
         prefix: before,
-        items: completions.map((completion): AutocompleteItem => ({
-          value: completion.commandLine,
-          label: completion.commandLine,
-          ...(completion.description === '' ? {} : { description: completion.description }),
-        })),
+        items: completions.map((completion): AutocompleteItem => {
+          // Localize at render time (a /lang switch repaints the next menu)
+          // and fold the [current]/[default]/aliases tag into the description
+          // column — the pi-tui item shape has no tag slot of its own.
+          const description = localizedDescription(completion)
+          const tag = completion.tag === undefined ? '' : `[${completion.tag}] `
+          return {
+            value: completion.commandLine,
+            label: completion.commandLine,
+            ...(description === '' && tag === '' ? {} : { description: `${tag}${description}` }),
+          }
+        }),
       }
     }
 
     // `@` file mention at the caret: the trigger is the token being edited,
-    // so `@` works mid-message, not only as the first character.
+    // so `@` works mid-message, not only as the first character. The query is
+    // the token fragment as typed — the channel decides path-shaped
+    // (directory listing) vs plain (fuzzy index).
     const mention = mentionAtCaret(line, cursorCol)
     if (mention === undefined) return null
-    const files = await this.commands.query.listFiles()
-    if (files === undefined || options.signal.aborted) return null
-    const query = mention.query.toLowerCase()
-    // Match the relative-path prefix OR the basename: `@src/tui` and
-    // `@public` both find `src/tui/public.ts`.
-    const matches = files.filter((file) => {
-      const lower = file.toLowerCase()
-      if (lower.startsWith(query)) return true
-      if (query.includes('/')) return false
-      const base = lower.split('/').pop() ?? ''
-      return base.startsWith(query)
+    const candidates = await this.commands.query.listFileCandidates(mention.query, {
+      signal: options.signal,
+      topK: FILE_COMPLETION_LIMIT,
     })
-    if (matches.length === 0) return null
+    if (candidates === undefined || options.signal.aborted || candidates.length === 0) return null
     return {
       prefix: line.slice(mention.start, cursorCol),
-      items: matches.slice(0, FILE_COMPLETION_LIMIT).map((file): AutocompleteItem => ({
-        value: file,
-        label: file,
+      items: candidates.map((candidate): AutocompleteItem => ({
+        value: candidate.path,
+        // pi-tui's directory convention: a trailing `/` on the LABEL marks a
+        // directory — applyCompletion reads it back for the drill-in insert
+        // (no more endsWith('/') guess on the value).
+        label: candidate.kind === 'directory' ? `${candidate.name}/` : candidate.name,
+        description: candidate.displayPath,
       })),
     }
   }
@@ -217,14 +228,15 @@ class PromptAutocompleteProvider implements AutocompleteProvider {
     }
 
     // `@` mention: replace ONLY the token at the caret, quoting paths with
-    // whitespace; a directory inserts `@dir/` without a trailing space so
-    // completion continues into it.
+    // whitespace; a directory (the label's trailing `/`, by convention)
+    // inserts `@dir/` without a trailing space so completion continues into it.
     const mention = mentionAtCaret(line, cursorCol)
     if (mention === undefined) {
       return { lines, cursorLine, cursorCol }
     }
+    const isDirectory = item.label.endsWith('/')
     const body = /\s/.test(item.value) ? `@"${item.value}"` : `@${item.value}`
-    const insert = item.value.endsWith('/') ? body : `${body} `
+    const insert = isDirectory ? body : `${body} `
     nextLines[cursorLine] = line.slice(0, mention.start) + insert + line.slice(mention.end)
     return { lines: nextLines, cursorLine, cursorCol: mention.start + insert.length }
   }

@@ -180,6 +180,7 @@ const EMPTY_STATUS: StatusLineProjection = {
   gitBranch: undefined,
   displayCwd: '',
   sessionTitle: '',
+  agentId: '',
   working: false,
   workingActivity: undefined,
   activityFrames: undefined,

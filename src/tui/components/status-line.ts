@@ -7,7 +7,8 @@
  * 1. the segmented context bar on its own line (`contextBar`),
  * 2. the fields row — left group: model · tps gauge/sparkline · effort ·
  *    mode · cache · tokens (+ contextUsage); right group: git · cwd ·
- *    session title — space-between, truncating to the row width,
+ *    session title · short session id — space-between, truncating to the row
+ *    width,
  * 3. the idle working-activity summary (`activity`, only when no turn runs).
  *
  * The old footer's hint texts (`esc to interrupt`, `? for shortcuts`) moved:
@@ -238,6 +239,10 @@ export class StatusLineView implements Component {
       ...(statusBar.gitBranch && vm.gitBranch ? [themePainter(theme.professionalBlue)(vm.gitBranch)] : []),
       ...(statusBar.cwd ? [inactive(statusBar.compact ? basename(vm.displayCwd) : vm.displayCwd)] : []),
       ...(statusBar.sessionTitle && vm.sessionTitle ? [dim(vm.sessionTitle)] : []),
+      // Short id last: a provenance tag trails the content it identifies, and
+      // the 8-char form is what the session log filename starts with, so a
+      // truncated rendering still names the right log for --resume.
+      ...(statusBar.sessionId && vm.agentId ? [dim(`#${vm.agentId.slice(0, 8)}`)] : []),
     ]
 
     const formattedContext = statusBar.contextUsage

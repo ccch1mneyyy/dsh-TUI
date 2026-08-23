@@ -37,6 +37,7 @@ function makeViewModel(active: { id: string } | undefined): ChatViewModel {
       gitBranch: 'main',
       displayCwd: '/repo',
       sessionTitle: '',
+      agentId: 'test-agent-id',
       working: false,
       workingActivity: undefined,
       activityFrames: undefined,

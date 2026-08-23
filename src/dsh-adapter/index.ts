@@ -124,6 +124,7 @@ export const Config: Schema<Config> = Schema.object({
     tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
     gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
     sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
+    sessionId: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionId),
     mode: Schema.boolean().default(DEFAULT_STATUS_BAR.mode),
     contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
     activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),

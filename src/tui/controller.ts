@@ -379,6 +379,7 @@ export class TuiController {
         cached.gitBranch === channel.gitBranch &&
         cached.displayCwd === channel.displayCwd &&
         cached.sessionTitle === channel.sessionTitle &&
+        cached.agentId === channel.agentId &&
         cached.working === channel.working &&
         cached.workingActivity === channel.workingActivity &&
         cached.activityFrames === channel.activityFrames &&
@@ -400,6 +401,7 @@ export class TuiController {
         gitBranch: channel.gitBranch,
         displayCwd: channel.displayCwd,
         sessionTitle: channel.sessionTitle,
+        agentId: channel.agentId,
         working: channel.working,
         workingActivity: channel.workingActivity,
         activityFrames: channel.activityFrames,

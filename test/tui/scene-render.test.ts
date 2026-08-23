@@ -30,6 +30,7 @@ function makeViewModel(active: { id: string; title?: string } | undefined): Chat
       gitBranch: 'main',
       displayCwd: '/repo',
       sessionTitle: '',
+      agentId: 'test-agent-id',
       working: false,
       workingActivity: undefined,
       activityFrames: undefined,

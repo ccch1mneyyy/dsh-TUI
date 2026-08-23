@@ -33,6 +33,7 @@ function makeViewModel(overrides: Partial<ChatViewModel> = {}): ChatViewModel {
       gitBranch: 'main',
       displayCwd: '/repo',
       sessionTitle: '',
+      agentId: 'test-agent-id',
       working: false,
       workingActivity: undefined,
       activityFrames: undefined,
@@ -329,6 +330,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     query: {
       commandCompletions: () => [],
       listFiles: async () => [],
+      listFileCandidates: async () => [],
       listSessions: async () => [],
       getSessionTree: async () => {
         calls.getSessionTree += 1;

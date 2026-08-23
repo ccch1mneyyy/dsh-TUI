@@ -56,6 +56,7 @@ import type { ApprovalStore } from '../dsh-adapter/approvals.js'
 import type { SessionTreeData } from '../dsh-adapter/sessionTree.js'
 import type { TuiDialogAnswer, TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import type { QuestionSelection, QuestionStore } from '../dsh-adapter/questions.js'
+import type { FileCandidate } from '../utils/fileSuggestions.js'
 import type {
   AskUserQuestionAnswer,
   AskUserQuestionRequest,
@@ -174,6 +175,13 @@ export interface TuiQueryCommands {
   getSessionTree(): Promise<SessionTreeData | null | undefined>
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   listFiles(): Promise<readonly string[] | undefined>
+  /** Structured `@` file suggestions (two modes: path-shaped queries list
+   *  that directory only, plain fragments rank the fuzzy session index).
+   *  The editor's per-keystroke AbortSignal rides in `options`. */
+  listFileCandidates(
+    query: string,
+    options?: { signal?: AbortSignal; topK?: number },
+  ): Promise<readonly FileCandidate[] | undefined>
   /** Sync slash completions (pure over the command registry) — no fence. */
   commandCompletions(value: string): readonly CommandCompletion[]
   /** Persist a pasted image; the placeholder token is stale-sensitive
@@ -500,6 +508,9 @@ export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
       },
       listFiles() {
         return fenced('listFiles', () => channel.listFiles())
+      },
+      listFileCandidates(query, options) {
+        return fenced('listFileCandidates', () => channel.listFileCandidates(query, options))
       },
       commandCompletions(value) {
         return channel.commandCompletions(value)

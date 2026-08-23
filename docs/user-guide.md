@@ -388,9 +388,9 @@ dsh-tui
 
 **Row 2 — 状态字段行**（每个字段独立开关，见 `/settings`）
 - 左组：模型 → TPS → thinking 推理等级 → mode 会话模式 → ctx 上下文占用 → cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）
-- 右组：git 分支 → 工作目录（紧凑模式仅 basename）→ 会话标题
+- 右组：git 分支 → 工作目录（紧凑模式仅 basename）→ 会话标题 → 短会话 ID（`#` + 前 8 位，与日志文件名对应，方便 `--resume` 定位）
 - `statusBar.compact` 时左右合并为单行。
-- 默认开：compact / model / thinking / cwd / contextUsage / cache；默认关：tokens / tps / gitBranch / sessionTitle / mode / contextBar / activity / trajectory。
+- 默认开：compact / model / thinking / cwd / contextUsage / cache；默认关：tokens / tps / gitBranch / sessionTitle / sessionId / mode / contextBar / activity / trajectory。
 
 **Row 3 — 提示 / 工作活动 + 迷你轨迹条**
 - 空闲显示 `? for shortcuts`，回合运行中显示 `esc to interrupt`，消息选择中显示 `esc to return to input`。
@@ -416,7 +416,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 19 �
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
-| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/tps/gitBranch/sessionTitle/mode/contextBar/activity/trajectory） |
+| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
 未声明 TUI 区块的命名空间不在面板中显示，需手工编辑 `~/.dsh/settings.yaml`。
 provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / modes

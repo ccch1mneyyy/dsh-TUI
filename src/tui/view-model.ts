@@ -68,6 +68,7 @@ export interface StatusLineProjection {
   readonly gitBranch: Channel['gitBranch']
   readonly displayCwd: Channel['displayCwd']
   readonly sessionTitle: Channel['sessionTitle']
+  readonly agentId: Channel['agentId']
   readonly working: Channel['working']
   readonly workingActivity: Channel['workingActivity']
   readonly activityFrames: Channel['activityFrames']

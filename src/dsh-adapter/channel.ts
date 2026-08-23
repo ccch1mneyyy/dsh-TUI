@@ -2364,6 +2364,74 @@ export function createChannel(
     return sourceSessionId
   }
 
+  // Session-lifetime candidate pool for non-path queries. The load promise is
+  // shared so concurrent first keystrokes cannot kick off duplicate scans, and
+  // it is keyed by cwd so a /workspace switch or resumed session never reuses
+  // another directory's listing.
+  const fileCandidateCache = { cwd: '', load: undefined as Promise<readonly FileCandidate[]> | undefined }
+
+  // `/model <provider/id>` completion: the model catalog is async (one llm
+  // listModels per provider), so the first keystrokes that could be heading
+  // for /model warm a session-lifetime cache — the shared promise dedupes
+  // concurrent triggers, children() synchronously serves whatever has landed,
+  // and the arrival state.emit() reopens the menu mid-typing. switchModel's
+  // success path drops the cache so the [current] tag re-resolves against
+  // the new route.
+  const modelNodeCache = {
+    nodes: undefined as readonly CommandCompletionNode[] | undefined,
+    load: undefined as Promise<void> | undefined,
+  }
+  const warmModelNodes = (): void => {
+    if (modelNodeCache.load !== undefined) return
+    modelNodeCache.load = state.listModels().then((list) => {
+      modelNodeCache.nodes = list.map((model) => ({
+        name: `${model.provider}/${model.id}`,
+        description: model.name,
+        ...(state.provider === model.provider && state.model === model.id
+          ? { tag: 'current' }
+          : {}),
+      }))
+      state.emit()
+    }).catch(() => {
+      // listModels already swallows per-provider failures; this only fires
+      // when the llm service shape itself is missing — settle on an empty
+      // menu rather than retrying on every keystroke.
+      modelNodeCache.nodes = []
+    })
+  }
+
+  // `/preset <id>` completion: same warm-cache pattern as models. The
+  // current/default tags resolve at children() time (sync state reads), so
+  // no cache invalidation is needed on switch.
+  const presetOptionCache = {
+    list: undefined as readonly PresetOption[] | undefined,
+    load: undefined as Promise<void> | undefined,
+  }
+  const warmPresetOptions = (): void => {
+    if (presetOptionCache.load !== undefined) return
+    presetOptionCache.load = state.listPresets().then((list) => {
+      presetOptionCache.list = list
+      state.emit()
+    }).catch(() => {
+      presetOptionCache.list = []
+    })
+  }
+
+  // `/effort <id>` completion: state.effortLevels is the sync vocabulary
+  // (populated on route changes); when still unknown, one best-effort
+  // resolveEfforts warms it. `tried` caps the retry — resolveEfforts
+  // notifies on hard errors, so keystroke-time retries would spam.
+  const effortWarm = { tried: false }
+  const warmEffortLevels = (): void => {
+    if (state.effortLevels !== undefined || effortWarm.tried) return
+    effortWarm.tried = true
+    void resolveEfforts().then((resolved) => {
+      if (resolved === 'unavailable' || resolved === 'error') return
+      effortWarm.tried = false
+      state.emit()
+    }).catch(() => {})
+  }
+
   const state: ChannelState = {
     effortLevels: undefined,
     version: 0,
@@ -2410,7 +2478,91 @@ export function createChannel(
     pending: [],
     commandList: LOCAL_COMMANDS,
     commandCompletions(input: string) {
+      // Warm the async vocabularies as soon as the input could be heading
+      // for their commands (`/m`, `/pre`, …) — by the time a trailing space
+      // asks children() for nodes, the fetch has usually landed.
+      const head = input.slice(1).split(/[\t ]/)[0]?.toLowerCase() ?? ''
+      if (head !== '') {
+        if ('model'.startsWith(head)) warmModelNodes()
+        if ('preset'.startsWith(head)) warmPresetOptions()
+        if ('effort'.startsWith(head)) warmEffortLevels()
+      }
       return completeCommands(input, state.commandList, (path) => {
+        if (path.length === 1 && path[0] === 'model') {
+          // provider/id specs, current model tagged; see modelNodeCache.
+          warmModelNodes()
+          return modelNodeCache.nodes ?? []
+        }
+        if (path.length === 1 && path[0] === 'lang') {
+          return [
+            { name: 'status', description: 'Show the current UI language', descriptionKey: 'sugg-status-desc' },
+            ...LANGS.map((lang) => ({
+              name: lang,
+              description: `Switch the UI language to ${lang}`,
+              descriptionKey: lang === 'zh' ? 'sugg-lang-zh-desc' : 'sugg-lang-en-desc',
+              ...(getLang() === lang ? { tag: 'current' } : {}),
+            })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'theme') {
+          return [
+            { name: 'status', description: 'Show the current theme', descriptionKey: 'sugg-status-desc' },
+            { name: AUTO_THEME_NAME, description: 'Follow the terminal background', descriptionKey: 'sugg-theme-auto-desc' },
+            ...THEME_NAMES.map((name) => ({
+              name,
+              description: `Built-in theme ${name}`,
+              descriptionKey: 'sugg-theme-builtin-desc',
+            })),
+            ...listCustomThemes()
+              .filter((spec) => spec.name !== AUTO_THEME_NAME)
+              .map((spec) => ({
+                name: spec.name,
+                description: `User theme (${spec.base} base)`,
+                descriptionKey: 'sugg-theme-user-desc',
+              })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'effort') {
+          warmEffortLevels()
+          return [
+            { name: 'status', description: 'Show the current reasoning effort', descriptionKey: 'sugg-status-desc' },
+            ...(state.effortLevels ?? []).map((id) => ({
+              name: id,
+              description: 'Reasoning effort level',
+              descriptionKey: 'sugg-effort-level-desc',
+              ...(state.reasoningEffort === id ? { tag: 'current' } : {}),
+            })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'preset') {
+          warmPresetOptions()
+          return [
+            { name: 'status', description: 'Show the current agent preset', descriptionKey: 'sugg-status-desc' },
+            ...(presetOptionCache.list ?? []).map((preset) => ({
+              name: preset.id,
+              description: preset.description ?? preset.name ?? preset.id,
+              ...(preset.id === state.agentPreset
+                ? { tag: 'current' }
+                : preset.isDefault
+                  ? { tag: 'default' }
+                  : {}),
+            })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'activity') {
+          return [
+            { name: 'status', description: 'Show the current activity preset', descriptionKey: 'sugg-status-desc' },
+            { name: 'frames', description: 'List or switch frame presets', descriptionKey: 'sugg-activity-frames-desc' },
+          ]
+        }
+        if (path.length === 2 && path[0] === 'activity' && path[1] === 'frames') {
+          return PRESET_NAMES.map((name) => ({
+            name,
+            description: 'Animation frame preset',
+            descriptionKey: 'sugg-activity-frame-desc',
+            ...(state.activityFrames === name ? { tag: 'current' } : {}),
+          }))
+        }
         if (path.length === 1 && path[0] === 'workspace') {
           const builtins: CommandCompletionNode[] = [
             { name: 'resume', description: 'Switch to another workspace', descriptionKey: 'cmd-desc-workspace-resume' },
@@ -3936,6 +4088,11 @@ export function createChannel(
       state.agentPreset = modelComposed.agentPreset
       state.model = model
       state.provider = provider
+      // /model completion cache: the [current] tag was resolved at fetch
+      // time — drop the cache so the next `/model ` refetches for the new
+      // route.
+      modelNodeCache.nodes = undefined
+      modelNodeCache.load = undefined
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
