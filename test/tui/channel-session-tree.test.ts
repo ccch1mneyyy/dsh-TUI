@@ -446,7 +446,10 @@ test('forkSession forks at the tip, stays in the source session, and toasts the 
   assert.equal(calls.length, 1, 'exactly one fork created')
   const call = calls[0]!
   assert.notEqual(call.sessionId, 's-live')
-  assert.equal(call.meta.parentSession, 's-live', 'the fork hangs under the source session')
+  // A /fork copy is an independent conversation: no lineage recorded, so the
+  // /resume browser lists it as its own row instead of folding it into the
+  // source's rewind family.
+  assert.equal(call.meta.parentSession, undefined, 'the fork is a new root session, not a branch')
   assert.equal(call.seed.length, 12, 'no boundary: the seed is the whole log')
   assert.equal(call.meta.seedLength, 12)
   assert.equal(channel.agentId, 'agent-initial', 'the live session is NEVER swapped')

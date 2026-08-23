@@ -111,6 +111,7 @@ const dict = {
   'fork-while-working': { zh: '回合运行中，无法分叉会话', en: 'Cannot fork while a turn is running' },
   'fork-failed': { zh: '分叉失败 · {{err}}', en: 'Fork failed · {{err}}' },
   'fork-create-failed': { zh: '分叉失败——无法创建分叉会话', en: 'Fork failed — could not create the forked session' },
+  'fork-attach-failed': { zh: '已分叉，但工作区挂载失败 · {{err}}', en: 'Session forked, but workspace attachment failed · {{err}}' },
   'fork-done': { zh: '已分叉（{{id}}）——仍在原会话中\n新进程进入分叉：{{command}}', en: 'Forked ({{id}}) — still in the original session\nEnter the fork in a new process: {{command}}' },
   'resume-while-working': { zh: '回合运行中，无法恢复会话', en: 'Cannot resume while a turn is running' },
   'resume-unavailable': { zh: '恢复不可用——agents 服务未加载', en: 'Resume unavailable — agents service not loaded' },

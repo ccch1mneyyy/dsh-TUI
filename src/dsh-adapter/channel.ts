@@ -3356,7 +3356,11 @@ export function createChannel(
           seed,
           meta: {
             cwd: state.cwd,
-            parentSession: source.id,
+            // NO parentSession: a /fork copy is an independent conversation
+            // (kimi-code semantics — a copy of the message list under a new
+            // root session, like /new plus the history), not a rewind branch.
+            // Recording lineage would fold it into the source's family in
+            // /resume and the user would never find it.
             seedLength: seed.length,
             ...(forkComposed.agentPreset === undefined
               ? {}
@@ -3372,18 +3376,26 @@ export function createChannel(
       // STAY in the source session: adopting the fork would dispose the live
       // agent (killing its in-flight turn and background tasks) — the fork is
       // an independent copy the user enters via /resume or the printed resume
-      // command. Release the fork's runtime immediately; the persisted log is
-      // what matters.
-      void handle.dispose().catch((error: unknown) => {
-        ctx.logger.warn('dsh-tui: forked session dispose failed: %o', error)
-      })
+      // command. The teardown order matters:
+      // 1. attach while the fork's agent is still LIVE — the workspace's
+      //    header read resolves live sessions from the registry, so attaching
+      //    after dispose races the persistence index and can fail with
+      //    "cannot validate session".
+      // 2. await the dispose so the seed log finishes flushing…
+      // 3. …then append the Fork: title — appending mid-flush races the
+      //    writer and the frame is silently dropped.
       try {
         await attachSessionToWorkspace(ctx, state.cwd, childId)
       } catch (error) {
         state.notify(
-          t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+          t('fork-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
           { color: 'warning', timeoutMs: 8000 },
         )
+      }
+      try {
+        await handle.dispose()
+      } catch (error: unknown) {
+        ctx.logger.warn('dsh-tui: forked session dispose failed: %o', error)
       }
       // kimi's naming convention: the fork wears `Fork: <source title>` (the
       // prefix stays English in both locales). Best effort — a backend whose
