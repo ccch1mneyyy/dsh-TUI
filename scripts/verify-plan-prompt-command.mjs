@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
-import { parseCommandName } from '../lib/types/commands.js'
+import { isLocalCommandName, normalizeLocalCommandName, parseCommandName } from '../lib/types/commands.js'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -27,6 +27,21 @@ check(
 const off = parseCommandName('/planPrompt off')
 check('parseCommandName preserves /planPrompt off raw input', off?.name === 'planPrompt' && off?.rawInput === ' off')
 check('parseCommandName leaves /plan untouched', parseCommandName('/plan')?.name === 'plan')
+const mixed = parseCommandName('/PlAnPrOmPt off')
+check(
+  'parseCommandName preserves mixed-case /PlAnPrOmPt for catalog folding',
+  mixed?.name === 'PlAnPrOmPt' && mixed?.rawInput === ' off',
+)
+check(
+  'normalizeLocalCommandName folds every casing back to planPrompt',
+  ['/planPrompt', '/PlanPrompt', '/PLANPROMPT', '/pLaNpRoMpT ']
+    .every(variant => normalizeLocalCommandName(variant) === 'planPrompt'),
+)
+check(
+  'isLocalCommandName matches the catalog case-insensitively',
+  ['planPrompt', 'PLANPROMPT', '/PlanPrompt '].every(variant => isLocalCommandName(variant)),
+)
+check('isLocalCommandName still rejects unknown names', !isLocalCommandName('/planpromt'))
 
 // ---- channel --------------------------------------------------------------
 function makeAgent(handlers, id) {
@@ -381,4 +396,4 @@ function makeEnv(agentPreset, services = {}) {
 }
 
 if (failed > 0) process.exit(failed)
-console.log('planPrompt command channel verified (camelCase parse, prompt+plan consistency, pending-intent re-enter, /plan untouched)')
+console.log('planPrompt command channel verified (case-insensitive camelCase parse/fold, prompt+plan consistency, pending-intent re-enter, /plan untouched)')

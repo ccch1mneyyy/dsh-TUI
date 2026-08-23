@@ -22,7 +22,7 @@ import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-pro
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
-import { completeCommands, HIDDEN_COMMAND_NAMES, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
+import { completeCommands, isHiddenCommandName, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../sessionHistory.js'
 import { appendSessionTitle, deleteSessionLog, ensureLegacySessionEventTypes, sessionsRoots } from './compat/index.js'
 import {
@@ -4470,8 +4470,9 @@ export function createChannel(
     if (commandService) {
       for (const descriptor of commandService.list(target)) {
         // Hidden TUI commands (e.g. /deepseek) stay out of the public
-        // command catalog even if a plugin/skill happens to share the name.
-        if (HIDDEN_COMMAND_NAMES.has(descriptor.name)) continue
+        // command catalog even if a plugin/skill shares the name with a
+        // different casing.
+        if (isHiddenCommandName(descriptor.name)) continue
         if (merged.some(command => command.name === descriptor.name)) continue
         const descriptions = commandTrees?.descriptions(descriptor.name)
         merged.push({

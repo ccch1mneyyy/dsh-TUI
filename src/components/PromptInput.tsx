@@ -15,7 +15,7 @@ import { getGraphemeSegmenter } from '../utils/intl.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
-import { isHiddenCommandName, parseCommandName } from '../commands.js'
+import { isHiddenCommandName, isLocalCommandName, normalizeLocalCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
@@ -475,8 +475,7 @@ export function PromptInput({
     if (!text.startsWith('/')) return false
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
-    const known = channel.commandList.some(command => command.name === parsed.name)
-      || isHiddenCommandName(parsed.name)
+    const known = isLocalCommandName(parsed.name, channel.commandList)
     if (!known) return false
     const handled = onRunCommand(parsed.name, parsed.rawInput)
     if (handled) {
@@ -682,10 +681,10 @@ export function PromptInput({
         // streaming. Every other input keeps the steer behavior so /new
         // /model etc. stay idle-only.
         const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
-        if (parsed !== undefined && (
-          (parsed.name === 'btw' && channel.commandList.some(c => c.name === 'btw'))
-          || isHiddenCommandName(parsed.name)
-        )) {
+        const name = parsed === undefined
+          ? undefined
+          : normalizeLocalCommandName(parsed.name, channel.commandList)
+        if (name === 'btw' || (name !== undefined && isHiddenCommandName(name))) {
           tryRunCommand(value)
           return
         }

@@ -1,4 +1,5 @@
 import React from 'react'
+import { normalizeLocalCommandName } from '../commands.js'
 import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
@@ -627,6 +628,9 @@ export function Chat({
 
   /**
    * Dispatch a slash command; false lets the input flow to the model.
+   * The parsed name is first folded back to the merged catalog's spelling
+   * (`/PLANPROMPT` → `planPrompt`), so the switch and registry lookups stay
+   * case-sensitive while the user-facing match stays case-insensitive.
    * Built-in names run the local switch; anything registered by a DSH
    * plugin (plan/goal/…) dispatches through the command registry, whose
    * result text lands as a notification. `rawInput` carries the text after
@@ -663,7 +667,12 @@ export function Chat({
   }
 
   const runCommand = (name: string, rawInput = ''): boolean => {
-    switch (name) {
+    // Normalize once, before the switch: parseCommandName preserves the
+    // typed casing, so `/PLANPROMPT` and `/planprompt` must dispatch to the
+    // same catalog case as `/planPrompt`.
+    const commandName = normalizeLocalCommandName(name, channel.commandList)
+    if (commandName === undefined) return false
+    switch (commandName) {
       case 'activity': {
         // Ported from the pi working-activity extension: bare `/activity`
         // opens the interactive indicator picker; `/activity frames <name>`
@@ -1375,7 +1384,7 @@ export function Chat({
       case 'deepseek': {
         // Hidden easter egg: replay the logo header's whale spout + text
         // shimmer. The command is intentionally not in the suggestion/help
-        // catalogs; PromptInput recognizes it through HIDDEN_COMMAND_NAMES.
+        // catalogs; PromptInput recognizes it through the hidden-command fold.
         setHelpOpen(false)
         setLogoNonce(n => n + 1)
         // Bring the logo back into view if the transcript has scrolled.
@@ -1402,7 +1411,7 @@ export function Chat({
         // CC's skill commands: drive the DSH skill system by sending the
         // activation prompt to the model (it loads the skill via its skill
         // catalog/load tools when the SKILL.md ships in ~/.dsh/skills).
-        const key = SKILL_PROMPTS[name]
+        const key = SKILL_PROMPTS[commandName]
         if (key) channel.submit(t(key))
         return true
       }
@@ -1412,15 +1421,15 @@ export function Chat({
         // plan-mode projection folds those records, so /plan state stays
         // consistent). Unknown names fall through to the model.
         const external = channel.commandList.find(
-          command => command.external && command.name === name,
+          command => command.external && command.name === commandName,
         )
         if (external) {
           setHelpOpen(false)
-          void channel.runExternalCommand(name, rawInput).then((text) => {
+          void channel.runExternalCommand(commandName, rawInput).then((text) => {
             if (text !== undefined && text !== '') {
               channel.notify(text)
             } else if (text === undefined) {
-              channel.notify(t('command-not-found', { name }), { color: 'error' })
+              channel.notify(t('command-not-found', { name: commandName }), { color: 'error' })
             }
           })
           return true
