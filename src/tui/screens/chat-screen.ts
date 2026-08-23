@@ -1,9 +1,14 @@
 import {
   Key,
+  LAYOUT_NODE,
   matchesKey,
+  ScrollView,
   truncateToWidth,
   VStack,
   type Component,
+  type LayoutComponent,
+  type LayoutNode,
+  type StackChild,
   type TUI,
 } from '../public.js'
 import type { TuiCommands } from '../commands.js'
@@ -260,6 +265,7 @@ export class ChatScreen implements Component {
   private readonly dialog: ExtensionDialogView
   private readonly question: QuestionPanelView
   private readonly root: VStack
+  private readonly fullscreen: boolean
 
   private vm: ChatViewModel | undefined
   private subagents: SubagentsProjection = EMPTY_SUBAGENTS
@@ -301,6 +307,7 @@ export class ChatScreen implements Component {
     this.home = options.home ?? ''
     this.sameProject = options.sameProject ?? ((a, b) => a === b)
     this.sceneHost = options.sceneHost
+    this.fullscreen = options.fullscreen === true
     this.sceneRootDescriptor = Object.freeze({
       kind: 'root' as const,
       id: 'chat',
@@ -375,9 +382,8 @@ export class ChatScreen implements Component {
     // projection through update(). The settings panel and the selection
     // pickers swap into the prompt editor's slot while open (pi-style editor
     // replacement); the notification toast stack sits under the slot.
-    this.root = new VStack([
-      { component: this.header, visible: () => this.shouldShowHeader() },
-      this.transcript,
+    const headerEntry: StackChild = { component: this.header, visible: () => this.shouldShowHeader() }
+    const dockEntries: StackChild[] = [
       { component: this.working, visible: () => this.vm?.spinner.working === true },
       { component: this.approval, visible: () => this.activeOverlayKind() === 'approval' },
       { component: this.dialog, visible: () => this.activeOverlayKind() === 'dialog' },
@@ -388,7 +394,29 @@ export class ChatScreen implements Component {
       { component: this.pickerSlot, visible: () => this.pickerPanel !== undefined },
       { component: this.notifications, visible: () => this.hasNotifications() },
       this.status,
-    ])
+    ]
+    if (this.fullscreen) {
+      // Fullscreen (alt-screen) layout, mirroring pi's interactive-mode
+      // fullscreenLayoutRoot: the conversation — banner included, so it
+      // scrolls away with the history (see shouldShowHeader) — lives in the
+      // primary ScrollView that TuiAltScreen routes wheel/PageUp/PageDown to;
+      // the working/overlay/editor/notification/status chrome docks below at
+      // its natural height and is never clipped by the viewport.
+      const conversation = new VStack([headerEntry, this.transcript])
+      const scrollView = new ScrollView(conversation, {
+        follow: 'end',
+        primary: true,
+        overscroll: 'chain',
+        scrollbar: 'auto',
+      })
+      const dock = new VStack(dockEntries)
+      this.root = new VStack([
+        { component: scrollView, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+        { component: dock, basis: 'auto', grow: 0, shrink: 1, minSize: 1 },
+      ])
+    } else {
+      this.root = new VStack([headerEntry, this.transcript, ...dockEntries])
+    }
 
     this.unsubscribeController = this.controller.subscribe('chat', () => {
       if (!this.disposed) this.update(this.controller.getChat())
@@ -416,6 +444,7 @@ export class ChatScreen implements Component {
     this.subagents = this.controller.getSubagents?.() ?? EMPTY_SUBAGENTS
     this.updatePluginScene()
     this.updateTransient()
+    this.syncPromptFocus()
     this.ui.requestRender()
   }
 
@@ -492,9 +521,35 @@ export class ChatScreen implements Component {
       return fitLines(this.transientScreen.render(safeWidth), safeWidth)
     }
 
+    this.syncPromptFocus()
+    return fitLines(this.root.render(safeWidth), safeWidth)
+  }
+
+  /**
+   * The editor emits the hardware cursor marker only while focused; it yields
+   * focus to an active overlay, the settings panel, or a slot picker (a
+   * transient screen returns from render() before this runs, hence the same
+   * guard here). Called from both update() and render(): fullscreen layout
+   * frames bypass render() entirely — the alt-screen engine draws the layout
+   * entries directly — so update() is the only place the flag tracks overlay
+   * state in fullscreen.
+   */
+  private syncPromptFocus(): void {
+    if (this.transientScreen !== undefined) return
     this.promptEditor.focused =
       this.activeOverlayKind() === undefined && this.settingsPanel === undefined && this.pickerPanel === undefined
-    return fitLines(this.root.render(safeWidth), safeWidth)
+  }
+
+  /**
+   * Expose the root's layout node to pi-tui's alt-screen engine: in
+   * fullscreen this hands renderLayoutFrame the ScrollView+dock tree (scroll
+   * routing, bottom-docked chrome). A mounted transient screen keeps the leaf
+   * behavior — the engine renders this component's render() output directly.
+   * Inline mode never consults layout nodes.
+   */
+  [LAYOUT_NODE](): LayoutNode | undefined {
+    if (this.transientScreen !== undefined) return undefined
+    return (this.root as unknown as LayoutComponent)[LAYOUT_NODE]()
   }
 
   invalidate(): void {
