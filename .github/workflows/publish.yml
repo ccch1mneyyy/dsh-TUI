@@ -18,18 +18,18 @@ jobs:
       # Gate scripts assert zh UI copy (same convention as CI).
       DSH_TUI_LANG: zh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # vendor/dsh-std 是 @dsh-std/* workspace 依赖的来源（#308）：
           # 不拉子模块时 prepare→compile 在空目录上构建出悬空链接，
           # tsc 全线 TS2307。
           submodules: recursive
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm

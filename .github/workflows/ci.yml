@@ -18,18 +18,18 @@ jobs:
       # DSH_TUI_LANG=en themselves before their dynamic imports.
       DSH_TUI_LANG: zh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Verify generated output is not checked in
         run: test -z "$(git ls-files -- lib)"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -38,15 +38,15 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @deepseek-harness-tui/pi-tui test
+      # install 只装依赖：prepare 钩子里的 compile 由下面的显式步骤替代，
+      # 全 workflow 只编译这一次，产物经 artifact 供下游测试组复用。
+      # （--ignore-scripts 对依赖无影响：pnpm-workspace.yaml 的 allowBuilds
+      # 本就禁了 esbuild/koffi 的构建脚本。）
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
       # lib/ is not checked in. Compile it once from a clean output directory;
       # the following gates reuse this exact runtime instead of rebuilding it.
       - run: pnpm compile
-
-      - run: pnpm test:tui
-      - run: pnpm verify:tui-boundary
 
       - name: Verify clean compile output
         run: |
@@ -59,144 +59,236 @@ jobs:
       # and smoke-import the two runtime entry points.
       - run: pnpm verify:package
       - run: pnpm verify:bun-package
-      - run: pnpm smoke
 
-      # New renderer lifecycle, root/input, and race coverage is in test:tui.
-      # /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
-      # registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
-      - run: node scripts/verify-update.mjs
+      # 编译产物交给下游测试组（needs: build 的 job 下载复用，不再各自
+      # prepare-compile）。@dsh-std 运行时依赖只有 workspace 内部链接，
+      # 根 node_modules 的符号链接即完成解析，无需携带 vendor 的构建
+      # 工具链；.tsx 脚本走的 src/ 由各组自己的 checkout 提供。
+      # packages/pi-tui/dist/ 是本分支特有：compile 含 build:pi-tui，
+      # src/tui 与 test/tui 经 workspace 链接解析到 dist/index.js。
+      - name: Upload compiled output
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-build-${{ github.run_id }}
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            lib/
+            packages/pi-tui/dist/
+            vendor/dsh-std/packages/core/lib/
+            vendor/dsh-std/packages/manifest/lib/
+            vendor/dsh-std/packages/connection/lib/
+            vendor/dsh-std/packages/presentation/lib/
+            vendor/dsh-std/packages/command/lib/
+            vendor/dsh-std/packages/storage/lib/
+            vendor/dsh-std/packages/messages/lib/
 
-      # 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
-      # 版本不一致提示、双语消息、shellQuote 转义规则。
-      - run: node scripts/verify-launcher.mjs
+  # pi-tui 渲染器包测试 · TUI 集成测试 · 渲染器边界与入口 smoke——
+  # 与其余组并行；失败互不遮蔽。（main 此组承载的 Ink 渲染探针已随旧
+  # 渲染器退役，pi-tui 架构下由 test:tui 等四项接替。）
+  # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
+  render-scroll:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      DSH_TUI_LANG: zh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
-      # 剪贴板回归：text/uri-list 严格 URL 解析（远程 authority 拒绝、
-      # query/fragment 剥离、畸形转义保留）、image/text MIME 挑选、插入格式化；
-      # stub PATH 假 wl-paste/xclip 集成——CJK 跨 chunk、gnome verb 行、
-      # 图片导出权限（目录 0700/文件 0600）、空 vs unavailable、
-      # 死 Wayland 会话回退 xclip。
-      - run: node scripts/verify-clipboard.mjs
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
 
-      # 图片附件回归：剪贴板位图占位符与图片文件 @ 引用进附件库（#152）。
-      - run: node --import tsx/esm scripts/verify-clipboard-image.ts
-      # 换名迁移回归（issue #120）：~/.dsh-cc → ~/.dsh-tui 首启复制迁移、
-      # resume.txt 双写契约、旧 env 名检测（DSH_CC_RESUME_SESSION 双读不算废弃）。
-      - run: node scripts/verify-legacy-rename.mjs
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
 
-      # 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
-      # approval 行；裸组合与 profile patch 的 policy 表达式逐场景同值
-      #（ask / never / win32 never），两个入口语义不漂移。
-      - run: node scripts/verify-cordis-approval.mjs
+      # 依赖装好即可；编译产物复用 build job 的 artifact，本组不再 compile。
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # 工作状态由基础事件在进程内派生：阶段、500ms tick、Agent 切换重置。
-      - run: node scripts/verify-working-activity.mjs
+      - name: Restore compiled output
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-build-${{ github.run_id }}
+      # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
+      # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
+      # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
+      - run: node scripts/run-ci-group.mjs render-scroll
 
-      # TUI 创建及恢复的会话必须持久关联到 Workspace。
-      - run: node scripts/verify-workspace-attachment.mjs
+  # 退出漏斗 · 启动器 · 剪贴板 · 换名迁移——与其余组并行；失败互不遮蔽。
+  # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
+  input-terminal:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      DSH_TUI_LANG: zh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
-      # tuiWorkspaces 服务可选化回归（issue #183）：代码层 inject 不含
-      # tuiWorkspaces、消费处带本地兜底、patch 保留服务行与行级顺序保证。
-      - run: node scripts/verify-workspaces-degrade.mjs
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
 
-      # Exit funnel and resume-marker decisions are pure lifecycle gates.
-      - run: node --import tsx/esm scripts/verify-exit-resume-marker.tsx
-      - run: node --import tsx/esm scripts/verify-teardown-exit.tsx
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
 
-      # Extension behavior is covered by focused plugin lifecycle and command
-      # gates below.
-      # 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
-      # 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
-      - run: node scripts/verify-session-titles.mjs
+      # 依赖装好即可；编译产物复用 build job 的 artifact，本组不再 compile。
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # resume 遗留事件注册回归（issue #153）：真实存储栈 e2e——注册前
-      # load() 抛 SessionFormatUnsupportedError（原样复现 issue）、注册后
-      # 放行；日志字节与 0600 权限绝不被改写；非白名单未知类型保持拒读
-      #（上游 fail-closed 新格式保护不破）。
-      - run: node scripts/verify-resume-legacy-events.mjs
+      - name: Restore compiled output
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-build-${{ github.run_id }}
+      # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
+      # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
+      # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
+      - run: node scripts/run-ci-group.mjs input-terminal
 
-      # 会话 cwd 回归（issue #96）：启动目录向上解析 git 仓库根（普通克隆
-      # 与 .git 文件 worktree 均覆盖、dotfiles ~/.git 守卫），/resume 过滤
-      # 双向兼容升级前记录的子目录会话，$HOME/盘符根容器目录只精确匹配
-      #（issue #153），Windows 分隔符与大小写语义。
-      - run: node scripts/verify-session-cwd.mjs
+  # 会话 · 工作区 · resume——与其余组并行；失败互不遮蔽。
+  # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
+  session-workspace:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      DSH_TUI_LANG: zh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
-      # Prompt-input rendering probes moved with the retired renderer and are
-      # intentionally omitted; keep the pure filesystem and session gates.
-      # 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
-      # 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
-      - run: node scripts/verify-file-completion.mjs
-      # /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
-      # 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
-      - run: node scripts/verify-resume-manage.mjs
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
 
-      # /resume 任意深度重命名回归：会话索引取消了标题解析窗口，最旧的一条
-      # 也必须解析出自己的标题、改名后立即显示新名。stub 只提供 list（不给
-      # listSnapshots/locate），因此同时覆盖降级路径。
-      - run: node scripts/verify-resume-rename-mru.mjs
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
 
-      # 会话种类与视图真值表：origin 判子 agent、parentSession 单独出现是
-      # /rewind 分叉（不能一起过滤掉）、空会话只计数不列出、搜索/分组/
-      # 折叠、以及按行高解析的变高窗口（穷举 focus×budget×prev 不溢出）。
-      - run: node scripts/verify-session-kinds.mjs
+      # 依赖装好即可；编译产物复用 build job 的 artifact，本组不再 compile。
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # 会话索引引擎：结构化走帧、定界读与全量解码等价、损坏帧不吃掉整个
-      # 日志、标题来源判定、revision 命中/失效（钉住 revision 改写日志作
-      # 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）。
-      - run: node scripts/verify-session-index.mjs
+      - name: Restore compiled output
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-build-${{ github.run_id }}
+      # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
+      # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
+      # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
+      - run: node scripts/run-ci-group.mjs session-workspace
 
-      # Session-browser rendering probes are retired with the old renderer;
-      # storage/index/session business gates above remain active.
-      # channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
-      # goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
-      # installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
-      # 防再腐烂。
-      - run: node --import tsx/esm scripts/verify-submit.mjs
-      - run: node scripts/verify-compact.mjs
-      - run: node --import tsx/esm scripts/verify-channel-goal-todo.mjs
+  # channel · 界面应用回归——与其余组并行；失败互不遮蔽。
+  # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
+  channel-ui:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      DSH_TUI_LANG: zh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
 
-      # 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
-      # 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
-      # ● 前缀、内容为空的行。
-      - run: node scripts/verify-empty-assistant-row.mjs
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
 
-      # 技能斜杠命令补全回归（issue #86）：user-invocable 技能合并进 /
-      # 菜单与 Tab 补全（skill 标记、与 locals/注册表撞名让位），
-      # skills/change 实时增删，读取失败保留 last-good。
-      - run: node scripts/verify-skill-commands.mjs
+      # 依赖装好即可；编译产物复用 build job 的 artifact，本组不再 compile。
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # 轨迹投影回归（issue #80 演进）：增量折叠与全量折叠在每个切分点终态
-      # 等价（机械 oracle）、六类括号配对、增广事件守卫的全变异模糊测试、
-      # 未知事件前向兼容、连发折叠边界、无 chunk 的步不伪造 TTFT。
-      - run: node scripts/verify-trace-projection.mjs
+      - name: Restore compiled output
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-build-${{ github.run_id }}
+      # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
+      # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
+      # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
+      - run: node scripts/run-ci-group.mjs channel-ui
 
-      # effort 配置链路回归（issue #51）：cordis 配置的 effort 必须进入实际
-      # 请求配置，而不是只做状态栏启动显示（≤0.3.5 的 display-only 行为）。
-      - run: node --import tsx/esm scripts/repro-effort.tsx
+  # 平台冒烟（non-blocking 观察档）：Windows（ConPTY/路径/行尾）与
+  # macOS（PTY/clang 工具链）上只有真实平台才能暴露的安装与编译差异。
+  # 最小链路：install → compile → 入口导入。结果只做观察（不接
+  # ci-gate、不阻塞合并），探明各平台差异后再逐步扩测并提升为
+  # required。fail-fast: false 让两个平台都跑完。
+  platform-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      DSH_TUI_LANG: zh
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
-      # 子代理模型路由回归（issue #191）：child scope 没有 AgentOptions 路由时，
-      # 首次请求继承 TUI 当前完整路由；显式 child 路由保持优先。
-      - run: node --import tsx/esm scripts/verify-subagent-model-route.tsx
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
 
-      # 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
-      # 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
-      - run: node --import tsx/esm scripts/verify-child-stderr.tsx
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
 
-      # 模型路由原子解析回归（issue #67）：完整 config > pref > default 整对
-      # 生效，provider-only pin 不得与另一半拼接出错配路由。
-      - run: node scripts/verify-model-route.mjs
+      # 与 build job 相同的显式编译语义；Windows 上 pnpm 脚本经 npm 转发，
+      # bash shell 保证 test/管道语法跨平台一致。
+      - run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # 外部编辑器回归（issue #123）：Ctrl+G 的 $VISUAL/$EDITOR 解析
-      # （引号拆分、优先级、未配置时 unavailable——无 vi 兜底）与临时文件
-      # 往返（edited/unchanged/非零退出/启动失败）。假编辑器进程，无需 TTY。
-      - run: node scripts/verify-external-editor.mjs
+      - run: pnpm compile
 
-      # 主题解析回归：内置主题完整性、parseCustomTheme 拒绝畸形/不安全项、
-      # displayName 内嵌换行入口压平（#160 窗口化列表单行契约的第一道防
-      # 线）。注意必须走 tsx——脚本直接 import src/customTheme.ts。
-      - run: node --import tsx/esm scripts/verify-themes.mjs
+      - run: |
+          test -f lib/types/index.js
+          test -f lib/types/dsh-adapter/invariant.js
 
-      # /provider 向导回归：catalog/custom 两分支的 profile 形状、凭据回滚
-      # （覆盖时恢复旧 key 而非误删）、env shadow 跳过、rc.6 兼容守卫、
-      # hideCustomInput 逐题标记。
-      - run: node scripts/verify-provider-wizard.mjs
+      - name: Smoke-import compiled entry
+        run: node -e "import('./lib/types/index.js').then(() => console.log('entry import ok')).catch(e => { console.error(e); process.exit(1) })"
+
+  # CI 门禁：唯一的 required check 候选。汇总所有分组结果——任何一组失败
+  # 或被取消，gate 显式失败并逐组报告状态。if: always() 保证上游失败时
+  # gate 仍然运行（被跳过的 check 不会阻塞合并，失败才会）；后续 CI 内部
+  # 再拆组、改名、加 matrix，branch protection 只需盯住这一个稳定名字。
+  ci-gate:
+    needs: [build, render-scroll, input-terminal, session-workspace, channel-ui]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every group to have succeeded
+        env:
+          BUILD: ${{ needs.build.result }}
+          RENDER_SCROLL: ${{ needs.render-scroll.result }}
+          INPUT_TERMINAL: ${{ needs.input-terminal.result }}
+          SESSION_WORKSPACE: ${{ needs.session-workspace.result }}
+          CHANNEL_UI: ${{ needs.channel-ui.result }}
+        run: |
+          status=0
+          for pair in "build:${BUILD}" \
+                      "render-scroll:${RENDER_SCROLL}" \
+                      "input-terminal:${INPUT_TERMINAL}" \
+                      "session-workspace:${SESSION_WORKSPACE}" \
+                      "channel-ui:${CHANNEL_UI}"; do
+            name="${pair%%:*}"
+            result="${pair#*:}"
+            echo "${name}: ${result}"
+            if [ "${result}" != "success" ]; then
+              echo "::error title=CI gate::${name} 结束状态为 ${result}（要求 success）"
+              status=1
+            fi
+          done
+          exit "${status}"

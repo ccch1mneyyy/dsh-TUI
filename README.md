@@ -39,10 +39,10 @@
   <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-TUI" width="560">
 </p>
 
-同时也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录收录：
+同时也被 [dshfind](https://dshfind.com/zh/plugins/ccch1mneyyy/dsh-TUI) 插件目录收录：
 
 <p align="center">
-  <a href="https://dshfind.com/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=zh" alt="dsh-TUI on dshfind"></a>
+  <a href="https://dshfind.com/zh/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=zh" alt="dsh-TUI on dshfind"></a>
 </p>
 
 ## 核心能力
@@ -101,13 +101,18 @@ Herdr 的 `agent start --kind dsh-tui`、session 身份与服务重启后自动�
 已上架 VS Code Marketplace**）见
 [在 VS Code 中运行 dsh-TUI](docs/vscode.md)。
 
-TUI 启动后会在后台检查 npm 是否有新版本；发现更新时可输入 `/update`。
-`/update` 更新当前 `dsh-tui` profile 中的 runtime 并重启会话，它不会静默修改
-npm/pnpm 的全局安装。若通过全局 `dsh-tui` 命令启动且 Launcher 版本落后，
-0.8.3 起会给出精确的全局对齐命令，例如：
+TUI 启动后会在后台检查当前 registry 是否有新版本；发现更新时直接输入 `/update`
+即可一键升级。`/update` 会更新当前 `dsh-tui` profile 中实际运行的 runtime、校验
+安装结果，然后自动重启并恢复当前会话。
+
+通过全局 `dsh-tui` 命令启动时，新版会自动将全局入口迁移/对齐为 delegating
+launcher（委托式启动器）：全局命令只负责转交给 profile 内副本，后续启动逻辑始终
+跟随 profile 版本。
+
+正常情况下不再需要额外执行：
 
 ```sh
-npm install -g @deepseek-harness-tui/dsh-tui@<profile-version>
+npm install -g @deepseek-harness-tui/dsh-tui
 ```
 
 旧版 `dsh-cc-tui` / `cc-tui` profile 的迁移命令与兼容数据说明见
