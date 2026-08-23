@@ -42,6 +42,18 @@ const GROUPS = {
     ["repro-settings", ['node', '--import', 'tsx/esm', 'scripts/repro-settings.tsx']],
     ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
+// inline 重锚残影：帧高涨过视口再缩回后，空闲自愈的 viewport 重锚曾按
+// 当前帧高定位视口顶部，把已进 scrollback 的行重画回视口并被再推一份。
+    ["repro-reanchor-ghost", ['node', '--import', 'tsx/esm', 'scripts/repro-reanchor-ghost.tsx']],
+// fullscreen/inline 热切换错位：在 inline 里流式对话到超过一屏，进全屏、
+// 滚一下、再切回。滚动打断 sticky，退出帧因此要重写整个可见区域——这是
+// 唯一会让帧高水位重启的行映射漂移一次性显形的路径（纯 inline 下它只
+// 改尾部行，被停驻光标掩盖）。
+    ["repro-tui-toggle-scroll", ['node', '--import', 'tsx/esm', 'scripts/repro-tui-toggle-scroll.tsx']],
+// inline 输入框残影 + 转录完整性：多轮 grow/fold/settle 后，整个 buffer
+// 里 composer 边框只允许出现在视口内，且每个流式要点恰一份——上翻阅读
+// 期间继续流式（终端原生 scrollback 不可变）是残影最容易沉积的时刻。
+    ["repro-composer-ghost", ['node', '--import', 'tsx/esm', 'scripts/repro-composer-ghost.tsx']],
 // 全屏 resize 空白回归：宽度变化清空行高缓存 → scrollHeight 估算塌缩，
 // shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
 // 成"只剩输入框"（Orca pane 宽度抖动的现场取证复现）。

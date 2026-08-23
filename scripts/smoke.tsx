@@ -387,6 +387,20 @@ const aliasCompletion = commandModule.completeCommands('/workspace con', command
 if (aliasCompletion[0]?.replacement !== '/workspace connect ') {
   throw new Error('command completion smoke: plugin alias completion failed')
 }
+const tuiChildren = (path: readonly string[]) => path.length === 1 && path[0] === 'tui'
+  ? [
+      { name: 'fullscreen', description: 'Enter fullscreen' },
+      { name: 'default', description: 'Return to inline', aliases: ['inline'] },
+    ]
+  : []
+const tuiChildCompletion = commandModule.completeCommands('/tui f', commandModule.LOCAL_COMMANDS, tuiChildren)
+if (tuiChildCompletion[0]?.replacement !== '/tui fullscreen ') {
+  throw new Error('command completion smoke: /tui fullscreen completion failed')
+}
+const tuiAliasCompletion = commandModule.completeCommands('/tui in', commandModule.LOCAL_COMMANDS, tuiChildren)
+if (tuiAliasCompletion[0]?.replacement !== '/tui inline ') {
+  throw new Error('command completion smoke: /tui inline alias completion failed')
+}
 if (!modifierModule.isPlainReturnInput('\r', {}) || modifierModule.isPlainReturnInput('\r', { shift: true })) {
   throw new Error('modal input smoke: raw CR recognition failed')
 }

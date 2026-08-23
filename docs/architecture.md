@@ -70,7 +70,8 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 
 - **Inline（默认）**：内容留在主屏，终端模拟器管理 scrollback 和原生文本选区。
 - **Fullscreen**：`AlternateScreen` 切换到备用屏，TUI 自己管理滚动、鼠标选区、OSC 52
-  复制和退出时的屏幕恢复。
+  复制和退出时的屏幕恢复。`/tui` 热切换，选择写入 `~/.dsh/settings.yaml` 的
+  `dsh-tui.fullscreen`。
 
 两种模式共享 Channel 与 React 视图，但终端协议路径不同。涉及输入、滚动、鼠标、
 光标、resize 或清理的改动必须分别验证，尤其要覆盖窄终端和 Windows ConPTY。

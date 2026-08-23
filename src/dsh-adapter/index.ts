@@ -67,8 +67,9 @@ export interface Config {
   /** Run in the terminal's alternate screen (Claude Code fullscreen layout).
    *  Defaults to true — the fullscreen surface is the more complete one
    *  (mouse, timeline rail, scrollbar gutter, selection copy), so fresh
-   *  installs start there; cordis.yml `fullscreen: false` or a /settings
-   *  toggle opts back into the inline main-screen layout. */
+   *  installs start there. Editable live via `/tui` and `/settings`; the
+   *  settings.yaml user layer wins over this composition default, so
+   *  `fullscreen: false` opts back into the inline main-screen layout. */
   fullscreen?: boolean
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
    *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */

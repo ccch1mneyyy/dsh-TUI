@@ -55,7 +55,7 @@ A complete common override looks like this:
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
-| `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
+| `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode. `/tui fullscreen` / `/tui default` (and `/settings`) write `~/.dsh/settings.yaml` `dsh-tui.fullscreen`, and that user layer wins over this composition default |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 

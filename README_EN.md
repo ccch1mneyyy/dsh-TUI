@@ -174,7 +174,7 @@ terminal support for the extended keyboard protocol (iTerm2 / kitty / WezTerm /
 ghostty / tmux); macOS's built-in Terminal.app consumes `⌘` shortcuts itself,
 so keep using `Ctrl`.
 
-**Mouse** (fullscreen is the factory default since 0.8.8; set `fullscreen: false` to restore the inline main screen)
+**Mouse** (fullscreen is the factory default since 0.8.8; set `fullscreen: false` or run `/tui default` to restore the inline main screen)
 
 | Action | Function |
 |---|---|
@@ -205,7 +205,7 @@ so keep using `Ctrl`.
 |---|---|
 | Session | `/new` new session · `/resume` session browser (search, preview, cross-project, sub-agent runs folded) · `/rename` rename session · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
-| Model | `/model` picker (**switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/lang` zh/en UI switch (also selectable in `/settings`) |
+| Model | `/model` picker (**switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/lang` zh/en UI switch (also selectable in `/settings`) · `/tui` fullscreen/inline hot-switch (`fullscreen` / `default`) |
 | Accounts/Policy | `/provider` add a model provider · `/login` credential status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/audit` code audit · `/bug` bug report · `/review` code review · `/practice` coding practice · `/pr_comments` PR comments · `/release-notes` release notes · `/vuln-check` vulnerability check |
 | Other | `/agents` subagent list · `/skills` skills directory · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
