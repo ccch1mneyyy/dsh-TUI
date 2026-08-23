@@ -39,8 +39,9 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Highlights
 
-- **Terminal-native interaction**: streaming Markdown, structured tool cards,
-  command and file completion, `@` file references (complete anywhere; text
+- **Terminal-native interaction**: streaming Markdown, structured tool cards
+  (terminal-card multi-line command headers fold to the first line plus a
+  count via `/settings`; Ctrl+O or a card click expands), command and file completion, `@` file references (complete anywhere; text
   files attach content, directories attach listings, and PNG/JPEG/WebP/GIF are
   sent as durable image blocks), history
   search, message selection, inline or alternate-screen rendering, and `/lang`

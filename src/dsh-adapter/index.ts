@@ -92,6 +92,11 @@ export interface Config {
    *  `dsh-tui.scrollGutter`): `timeline` turn rail (default), `scrollbar`
    *  proportional thumb, or `hidden`. */
   scrollGutter?: ScrollGutterMode
+  /** Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
+   *  `true` collapses a multi-line command title to its first line plus a
+   *  `+N lines` hint; Ctrl+O / clicking the card expands it. Default off —
+   *  the full title keeps rendering. */
+  foldTerminalCommand?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
@@ -122,6 +127,7 @@ export const Config: Schema<Config> = Schema.object({
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
+  foldTerminalCommand: Schema.boolean().default(false),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
