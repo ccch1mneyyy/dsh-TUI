@@ -2,8 +2,8 @@ import { useContext } from 'react'
 import AppContext, { type Props } from '../components/AppContext.js'
 
 /**
- * React hook exposing the manual app-exit function from `AppContext`.
- * @returns the `AppContext` value, whose `exit` function unmounts the app.
+ * React hook exposing controls for the Ink root that owns this component.
+ * @returns The current root's exit and viewport re-anchor functions.
  */
 const useApp = (): Props => useContext(AppContext)
 export default useApp
