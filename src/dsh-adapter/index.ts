@@ -165,8 +165,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const installedLines = installedUpstreamLines()
   if (installedLines.length > 1) {
     console.warn(
-      `[dsh-tui] mixed upstream lines detected (${installedLines.map(n => `rc.${n}`).join(', ')}) — ` +
-      `blessed packages are on different rc lines; the TUI is validated against ${UPSTREAM_VALIDATED_LABEL} ` +
+      `[dsh-tui] mixed upstream lines detected (${installedLines.join(', ')}) — ` +
+      `blessed packages sit on different upstream versions; the TUI is validated against ${UPSTREAM_VALIDATED_LABEL} ` +
       `and a coherent install is strongly recommended.`,
     )
   }

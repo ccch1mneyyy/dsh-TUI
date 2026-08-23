@@ -293,9 +293,9 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   check1('per-owner checkpoint present', ownerCheckpoint !== -1)
   check1('per-owner checkpoint runs BEFORE commandService.execute',
     channel.indexOf('commandService.execute', ownerCheckpoint) > ownerCheckpoint)
-  check1('rc.8 composer-images invocation is version-gated (gate + 4-param shape present)',
+  check1('composer-images invocation is version-gated (0.1.0-rc.8 threshold + 4-param shape present)',
     channel.includes('commandServiceSupportsImages(')
-    && channel.includes("installedLineOf('@deepseek-ai/dsh-commands')")
+    && channel.includes("installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')")
     && channel.includes('CommandExecuteWithImages'))
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',

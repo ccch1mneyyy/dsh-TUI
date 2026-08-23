@@ -12,10 +12,11 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
 
 ## 上游契约
 
-- 校验版本线:主 `0.1.0-rc.8`,兼容 `0.1.0-rc.7` / `0.1.0-rc.6`
-  (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_RC_LINES`)
-- peer 范围:`^0.1.0-rc.6`(允许 rc.6 起的安装;契约外版本启动时打 drift 警告)
-- 白名单包:blessed list(harness 包按 rc 号校验,框架包 cordis/schemastery 按 major 校验)
+- 校验版本线:主 `0.1.1-rc.2`,兼容 `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
+  (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_VERSIONS`;特性门控用
+  `installedMeetsVersion(pkg, 'x.y.z-rc.n')` 跨家族比较,老安装上优雅降级)
+- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1`(允许 rc.6 起及 0.1.1 线的安装;契约外版本启动时打 drift 警告)
+- 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
 ## Patch Surface

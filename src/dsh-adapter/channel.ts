@@ -85,7 +85,7 @@ import { installDecisionGuard } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
 import { readGrantStore } from './grants.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
-import { installedLineOf } from './contract.js'
+import { installedMeetsVersion } from './contract.js'
 import { pluginsInfoLines } from './plugins-info.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
@@ -1988,12 +1988,13 @@ export function createChannel(
     signal: AbortSignal,
   ) => Promise<CommandExecution | undefined>
 
-  /** Whether the installed command service takes composer images: rc line
-   *  gate with a structural fallback, so a failed manifest probe (bundlers,
-   *  exotic loaders) still lands on the 4-param rc.8 shape at runtime. */
+  /** Whether the installed command service takes composer images: version
+   *  gate (composer images arrived on 0.1.0-rc.8 and every later family —
+   *  0.1.1 included — keeps the 4-param shape) with a structural fallback,
+   *  so a failed manifest probe (bundlers, exotic loaders) still lands on
+   *  the 4-param rc.8 shape at runtime. */
   const commandServiceSupportsImages = (service: CommandRuntime): boolean => {
-    const line = installedLineOf('@deepseek-ai/dsh-commands')
-    if (line !== undefined) return line >= 8
+    if (installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')) return true
     return typeof (service.execute as { length?: number } | undefined)?.length === 'number'
       && (service.execute as { length: number }).length >= 4
   }
