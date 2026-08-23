@@ -41,7 +41,7 @@ import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ProviderSetupHost } from './providerWizard.js'
 import { readPresetPref, writePresetPref } from '../presetPrefs.js'
-import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
+import { composePreset, resolvePersistedPreset, resolvePersistedRoute, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
@@ -51,7 +51,7 @@ import { getLang, LANGS, t } from '../i18n.js'
 import { AUTO_THEME_NAME, THEME_NAMES } from '../theme.js'
 import { listCustomThemes } from '../customTheme.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
-import { normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
@@ -525,6 +525,10 @@ export interface Channel {
   readonly thinkingFold: 'preview' | 'full'
   /** Live tool-card background treatment. */
   readonly toolBackground: ToolBackground
+  /** What the fullscreen transcript's right gutter shows (settings
+   *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
+   *  nothing). */
+  readonly scrollGutter: ScrollGutterMode
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Live fullscreen (alternate-screen) display mode. */
@@ -878,6 +882,8 @@ export interface ChannelState {
   thinkingFold: 'preview' | 'full'
   /** Tool-card background treatment (see the public Channel type). */
   toolBackground: ToolBackground
+  /** Transcript gutter mode (see the public Channel type). */
+  scrollGutter: ScrollGutterMode
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Fullscreen display mode (see the public Channel type). */
@@ -890,6 +896,8 @@ export interface ChannelState {
   setThinkingFold(mode: 'preview' | 'full'): void
   /** Apply a tool-card background change. */
   setToolBackground(background: ToolBackground): void
+  /** Apply a transcript gutter mode change. */
+  setScrollGutter(mode: ScrollGutterMode): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -1396,6 +1404,8 @@ export function createChannel(
     thinkingFold?: 'preview' | 'full'
     /** Tool-card background treatment; default `none`. */
     toolBackground?: ToolBackground
+    /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
+    scrollGutter?: ScrollGutterMode
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Fullscreen (alternate-screen) display; default off. */
@@ -2347,6 +2357,7 @@ export function createChannel(
     diffLayout: options.diffLayout ?? 'auto',
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
+    scrollGutter: normalizeScrollGutter(options.scrollGutter),
     statusBar: normalizeStatusBar(options.statusBar),
     fullscreen: options.fullscreen === true,
     whale: options.whale !== false,
@@ -2927,10 +2938,20 @@ export function createChannel(
         provider: options.configuredProvider,
         model: options.configuredModel,
       })
+      // The recorded route feeds back into agentOptions too — not just the
+      // status line below: a provider-only cordis.yml pin (issue #67) leaves
+      // agentOptions.model undefined on resume, which breaks the `{{model}}`
+      // persona variable for the resumed agent's own assembly AND for every
+      // subagent it spawns (dsh-subagent's resolveChildAgentOptions inherits
+      // `parent.options.model`).
+      const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
       try {
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
-          agentOptions: { provider: resumeRoute?.provider, model: resumeRoute?.model },
+          agentOptions: {
+            provider: resumeRoute?.provider ?? recordedRoute?.provider,
+            model: resumeRoute?.model ?? recordedRoute?.model,
+          },
           ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
         })
       } catch (error) {
@@ -3455,6 +3476,12 @@ export function createChannel(
       const normalized = normalizeToolBackground(background)
       if (normalized === state.toolBackground) return
       state.toolBackground = normalized
+      state.emit()
+    },
+    setScrollGutter(mode) {
+      const normalized = normalizeScrollGutter(mode)
+      if (normalized === state.scrollGutter) return
+      state.scrollGutter = normalized
       state.emit()
     },
     setStatusBar(config) {

@@ -197,6 +197,9 @@ const listProps = (expanded) => ({
   )
   await sleep(200)
   const frame = toPlain(stdout.frames.at(-1) ?? '')
+  // 空帧守卫：渲染崩溃时两条 hides 断言会空洞通过（本文件曾因 MessageList
+  // 新增必需 prop 而空帧,只有 shows 报警）。先证明画面存在。
+  check('compact scenario renders at all', frame.includes('Conversation compacted'), '')
   check('folded summary shows the fold line', frame.includes('摘要已折叠'), '')
   check('folded summary hides the full text', !frame.includes(LONG_SUMMARY), '')
   instance.unmount()

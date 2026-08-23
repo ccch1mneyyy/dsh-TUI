@@ -40,9 +40,13 @@ function sourceLabel(source: string): string {
 export function SkillsPicker({
   skills,
   focusIndex,
+  onPick,
 }: {
   skills: readonly SkillInfo[]
   focusIndex: number
+  /** Mouse pick (fullscreen): clicked row's absolute index (Chat applies
+   *  the same code path as the keyboard Enter). */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   const { rows: terminalRows } = useTerminalSize()
   // 每项恒占 2 行（正文 + 来源/简述描述行，均 truncate 成单行）。
@@ -72,6 +76,7 @@ export function SkillsPicker({
                 description={`${sourceLabel(skill.source)}${skill.description === '' ? '' : ` · ${skill.description}`}`}
                 showScrollUp={absoluteIndex === start && start > 0}
                 showScrollDown={absoluteIndex === end - 1 && end < skills.length}
+                onClick={onPick ? () => onPick(absoluteIndex) : undefined}
               >
                 {skill.userInvocable ? `/${skill.name}` : skill.name}
               </ListItem>

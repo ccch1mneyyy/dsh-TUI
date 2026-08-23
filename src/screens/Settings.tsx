@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import type { WheelEvent } from '../ink/events/wheel-event.js'
 import { Divider } from '../components/design-system/Divider.js'
 import { HintLine } from '../components/design-system/HintLine.js'
 import { isMod, isPlainReturn } from '../utils/modifiers.js'
@@ -202,6 +203,40 @@ export function Settings({
     bump()
   }
 
+  /**
+   * Activate one focusable entry — the keyboard Enter path, shared with the
+   * mouse click. Groups open their subpage; boolean/select fields cycle their
+   * value; text/secret fields enter the edit mode.
+   */
+  const activateEntry = (entry: FocusEntry): void => {
+    if (entry.kind === 'group') {
+      setActiveGroup({ ns: entry.ns, id: entry.group.id })
+      setFocusIndex(0)
+      setWindowStart(0)
+      return
+    }
+    // A save in flight owns the section's drafts; starting an edit mid-write
+    // is exactly the lost-draft race the staged model exists to prevent.
+    const form = forms.get(entry.ns)
+    if (form === undefined || !form.available || form.saving) return
+    if (entry.field.kind === 'boolean' || entry.field.kind === 'select') {
+      cycleField(entry.ns, entry.field)
+    } else {
+      setEditing({ ns: entry.ns, field: entry.field, draft: form.field(entry.field).text })
+      setMode('edit')
+    }
+  }
+
+  /** Mouse wheel moves the focus (the window is focus-follow, so moving the
+   *  focus IS scrolling); the edit mode keeps the keyboard as sole owner. */
+  const handleWheel = (event: WheelEvent): void => {
+    if (mode === 'edit') return
+    const direction = event.deltaY >= 0 ? 1 : -1
+    setFocusIndex(previous =>
+      Math.min(Math.max(0, focusable.length - 1), Math.max(0, previous + direction)),
+    )
+  }
+
   useInput((input, key) => {
     if (mode === 'edit' && editing !== null) {
       if (isPlainReturn(key)) {
@@ -230,21 +265,7 @@ export function Settings({
     } else if (key.downArrow) {
       setFocusIndex(Math.min(Math.max(0, focusable.length - 1), effFocus + 1))
     } else if (isPlainReturn(key) && focused !== undefined) {
-      if (focused.kind === 'group') {
-        setActiveGroup({ ns: focused.ns, id: focused.group.id })
-        setFocusIndex(0)
-        setWindowStart(0)
-        return
-      }
-      // A save in flight owns the section's drafts; starting an edit mid-write
-      // is exactly the lost-draft race the staged model exists to prevent.
-      if (focusedForm === undefined || !focusedForm.available || focusedForm.saving) return
-      if (focused.field.kind === 'boolean' || focused.field.kind === 'select') {
-        cycleField(focused.ns, focused.field)
-      } else {
-        setEditing({ ns: focused.ns, field: focused.field, draft: focusedForm.field(focused.field).text })
-        setMode('edit')
-      }
+      activateEntry(focused)
     } else if (input === 's' && focused !== undefined) {
       commitSave(focused.ns)
     } else if (input === 'd' && focused !== undefined) {
@@ -276,7 +297,7 @@ export function Settings({
     }
   })
 
-  const renderField = (section: TuiSettingsSection, field: TuiSettingsField): React.ReactNode => {
+  const renderField = (section: TuiSettingsSection, field: TuiSettingsField, focus: number): React.ReactNode => {
     const ns = section.ns
     const form = forms.get(ns)
     const state = form?.field(field) ?? { text: '', overridden: false, invalid: false }
@@ -284,6 +305,21 @@ export function Settings({
     const isEditing = isFocused && mode === 'edit' && editing !== null
     const label = pick(field.label, field.descriptions)
     const hint = field.hint !== undefined ? pick(field.hint, field.hintDescriptions) : undefined
+    // 鼠标：编辑态整屏不响应（草稿由键盘独占，防误触抢焦点）；列表态
+    // 悬停即移动焦点（lazygit 语义——焦点就是选中），点击 = 焦点 + 该行
+    // 的 Enter 动作（boolean/select 循环值，文本/secret 进编辑态）。
+    const rowEvents =
+      mode === 'edit'
+        ? undefined
+        : {
+            onClick: (): void => {
+              setFocusIndex(focus)
+              activateEntry({ kind: 'field', ns: section.ns, field })
+            },
+            onMouseEnter: (): void => {
+              setFocusIndex(focus)
+            },
+          }
 
     let value: string
     if (field.secret !== undefined) {
@@ -304,7 +340,7 @@ export function Settings({
     }
 
     return (
-      <Box>
+      <Box {...rowEvents}>
         <Text color={isFocused ? 'suggestion' : undefined}>{isFocused ? '❯ ' : '  '}</Text>
         <Text bold={isFocused}>{label}</Text>
         <Box flexGrow={1} />
@@ -333,7 +369,7 @@ export function Settings({
       key: `field:${section.ns}:${field.path.join('.')}`,
       lines: field.hint !== undefined && isFocused ? 2 : 1,
       focus: index,
-      node: renderField(section, field),
+      node: renderField(section, field, index),
     })
   }
 
@@ -373,12 +409,24 @@ export function Settings({
         const isFocused = focused?.kind === 'group' && focused.ns === section.ns && focused.group === group
         const index = focusCursor
         focusCursor += 1
+        const groupRowEvents =
+          mode === 'edit'
+            ? undefined
+            : {
+                onClick: (): void => {
+                  setFocusIndex(index)
+                  activateEntry({ kind: 'group', ns: section.ns, group })
+                },
+                onMouseEnter: (): void => {
+                  setFocusIndex(index)
+                },
+              }
         entries.push({
           key: `group:${section.ns}:${group.id}`,
           lines: 1,
           focus: index,
           node: (
-            <Box>
+            <Box {...groupRowEvents}>
               <Text color={isFocused ? 'suggestion' : undefined}>{isFocused ? '❯ ' : '  '}</Text>
               <Text bold={isFocused}>{pick(group.title, group.descriptions)}</Text>
               <Box flexGrow={1} />
@@ -471,9 +519,18 @@ export function Settings({
         {host === undefined && <Text color="warning">{t('settings-unavailable')}</Text>}
       </Box>
       <Divider />
-      {visible.map(entry => (
-        <React.Fragment key={entry.key}>{entry.node}</React.Fragment>
-      ))}
+      {/* Literal ink-box host for the wheel — every Box flavor is a compiled
+          component whose prop list drops onWheel (SuggestionCard precedent).
+          Rolling the wheel walks the focus, and the focus-follow window
+          scrolls with it — the focus IS the viewport here. */}
+      <ink-box
+        style={{ flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}
+        onWheel={handleWheel}
+      >
+        {visible.map(entry => (
+          <React.Fragment key={entry.key}>{entry.node}</React.Fragment>
+        ))}
+      </ink-box>
       <Box flexGrow={1} />
       {notice !== undefined && (
         <Text color={notice.tone === 'error' ? 'error' : 'success'}>{notice.text}</Text>

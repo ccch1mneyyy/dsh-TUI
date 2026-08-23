@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { DEFAULT_STATUS_BAR, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_STATUS_BAR, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 
 export const name = 'dsh-tui'
 // `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
@@ -65,8 +65,11 @@ export interface Config {
    *  while the status/mode lines stay (issue #29). */
   contextBar?: boolean
   /** Run in the terminal's alternate screen (Claude Code fullscreen layout).
-   *  Editable live via `/tui` and `/settings`; the settings.yaml user layer
-   *  wins over this composition default. */
+   *  Defaults to true — the fullscreen surface is the more complete one
+   *  (mouse, timeline rail, scrollbar gutter, selection copy), so fresh
+   *  installs start there. Editable live via `/tui` and `/settings`; the
+   *  settings.yaml user layer wins over this composition default, so
+   *  `fullscreen: false` opts back into the inline main-screen layout. */
   fullscreen?: boolean
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
    *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */
@@ -86,6 +89,10 @@ export interface Config {
   thinkingFold?: 'preview' | 'full'
   /** Tool-card background strength; defaults to no added background. */
   toolBackground?: ToolBackground
+  /** What the fullscreen transcript's right gutter shows (settings
+   *  `dsh-tui.scrollGutter`): `timeline` turn rail (default), `scrollbar`
+   *  proportional thumb, or `hidden`. */
+  scrollGutter?: ScrollGutterMode
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
@@ -109,12 +116,13 @@ export const Config: Schema<Config> = Schema.object({
   activity: Schema.boolean().default(true),
   activityFrames: Schema.string().required(false),
   contextBar: Schema.boolean().default(true),
-  fullscreen: Schema.boolean().default(false),
+  fullscreen: Schema.boolean().default(true),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+  scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),

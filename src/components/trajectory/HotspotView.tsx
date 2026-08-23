@@ -67,6 +67,7 @@ export function HotspotView({
   cursor,
   tick,
   switchTick,
+  onRowClick,
 }: {
   agg: TrajAggregate
   sort: HotspotSort
@@ -75,9 +76,16 @@ export function HotspotView({
   cursor: number
   tick: number
   switchTick: number
+  /**
+   * Mouse pick (fullscreen): reports the clicked row's cursor index — the
+   * scene jumps back to the timeline positioned on the group's first member
+   * (same path as the keyboard Enter). Hover shows a dim `▸` pointer.
+   */
+  onRowClick?: (cursorIndex: number) => void
 }): React.ReactNode {
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
+  const [hoverIndex, setHoverIndex] = React.useState(-1)
 
   const labelWidth = Math.min(18, Math.max(10, Math.floor(width * 0.16)))
   const barWidth = Math.max(6, Math.min(30, width - labelWidth - 34))
@@ -116,6 +124,8 @@ export function HotspotView({
         }
         const { row, max, colorKey } = entry
         const focused = entry.cursorIndex === cursor
+        // 鼠标：行点击跳回 timeline 定位；悬停轻指示（dim ▸，不刷背景）
+        const hovered = onRowClick !== undefined && hoverIndex === entry.cursorIndex
         // Stagger the settle by row so a section reads top-down on switch.
         const dim = reproject(tick - offset, switchTick)
         const base = row.error === true ? theme.error : theme[colorKey]
@@ -124,9 +134,23 @@ export function HotspotView({
           (row.tokens > 0 ? ` · ${formatTokens(row.tokens)}` : '') +
           (row.count > 0 && row.totalMs > 0 ? ` · ⌀${formatDuration(row.totalMs / row.count)}` : '')
         return (
-          <Box key={`r${entry.cursorIndex}`} flexDirection="row" width="100%" height={1} flexShrink={0} gap={1}>
+          <Box
+            key={`r${entry.cursorIndex}`}
+            flexDirection="row"
+            width="100%"
+            height={1}
+            flexShrink={0}
+            gap={1}
+            onClick={onRowClick === undefined ? undefined : () => onRowClick(entry.cursorIndex)}
+            onMouseEnter={onRowClick === undefined ? undefined : () => setHoverIndex(entry.cursorIndex)}
+            onMouseLeave={
+              onRowClick === undefined
+                ? undefined
+                : () => setHoverIndex(previous => (previous === entry.cursorIndex ? -1 : previous))
+            }
+          >
             <Box flexShrink={0} width={2}>
-              <Text color="suggestion">{focused ? '▸' : ' '}</Text>
+              <Text color={focused ? 'suggestion' : 'inactive'}>{focused || hovered ? '▸' : ' '}</Text>
             </Box>
             <Box flexShrink={0} width={labelWidth}>
               <Text color={focused ? 'suggestion' : row.error === true ? 'error' : undefined}>

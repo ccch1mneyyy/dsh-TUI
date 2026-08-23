@@ -513,6 +513,9 @@ const dict = {
   'statusline-hint-select': { zh: 'esc 返回输入', en: 'esc to return to input' },
   'statusline-hint-working': { zh: 'esc 中断', en: 'esc to interrupt' },
   'statusline-hint-shortcuts': { zh: '? 查看快捷键', en: '? for shortcuts' },
+  // ── 底栏字段 hover 明细（补充行读出；技术标签 ctx/free/read 等保持不译）──
+  'status-detail-of-window': { zh: '的窗口', en: 'of window' },
+  'status-detail-session-id': { zh: '会话日志目录与此 id 同名', en: 'the session log directory is named after this id' },
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
@@ -622,8 +625,9 @@ const dict = {
   'rename-current': { zh: '当前名称  {{title}}', en: 'Current title  {{title}}' },
   'rename-done': { zh: '已重命名为「{{title}}」', en: 'Renamed to "{{title}}"' },
   'compact-summary-folded': { zh: '摘要已折叠', en: 'Summary folded' },
-  'new-message': { zh: '{{n}} 条新消息', en: '1 new message' },
-  'new-messages': { zh: '{{n}} 条新消息', en: '{{n}} new messages' },
+  'new-message': { zh: '↓ {{n}} 条新消息', en: '↓ 1 new message' },
+  'new-messages': { zh: '↓ {{n}} 条新消息', en: '↓ {{n}} new messages' },
+  'back-to-bottom': { zh: '↓ 回到底部（Enter/End）', en: '↓ back to bottom (Enter/End)' },
 
   // ── components/ThemePicker.tsx ──────────────────────────────────────
   'theme-builtin-base': { zh: '内置 · {{name}} 基底', en: 'Built-in · {{name}} base' },

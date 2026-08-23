@@ -76,12 +76,20 @@ function lexWithCache(content: string, allowCache: boolean): Token[] {
   const tokens = marked.lexer(content)
   if (content.length > TOKEN_CACHE_MAX_SOURCE_LENGTH) return tokens
 
-  if (
+  // Evict oldest entries (Map preserves insertion order) until both the
+  // count and char budgets fit. The previous full clear() nuked the whole
+  // cache every time a long session crossed 200 blocks — every subsequent
+  // row remount then re-ran the lexer (scroll-through-a-long-session
+  // stutter); evicting only what the newcomer displaces keeps the working
+  // set warm.
+  while (
     tokenCache.size >= TOKEN_CACHE_CAPACITY ||
     tokenCacheChars + content.length > TOKEN_CACHE_CHAR_BUDGET
   ) {
-    tokenCache.clear()
-    tokenCacheChars = 0
+    const oldest = tokenCache.keys().next().value
+    if (oldest === undefined) break
+    tokenCache.delete(oldest)
+    tokenCacheChars -= oldest.length
   }
   tokenCache.set(content, tokens)
   tokenCacheChars += content.length
