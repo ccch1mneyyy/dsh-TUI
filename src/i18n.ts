@@ -226,9 +226,6 @@ const dict = {
   'login-base-url': { zh: 'Base URL: {{url}}', en: 'Base URL: {{url}}' },
   'login-official-endpoint': { zh: '官方端点', en: 'official endpoint' },
   'login-logout-hint': { zh: '使用 /provider 管理 DSH 凭据；若来源为 env，请删除对应环境变量并重启 dsh-tui', en: 'Manage DSH credentials with /provider; for env sources, remove the corresponding environment variable and restart dsh-tui' },
-  'permissions-policy-hint': { zh: 'DSH 权限策略由 fs-policy / bash-sandbox 配置决定（当前 leaf：workspace 内读写、写入需已读文件）。', en: 'DSH permission policy is set by fs-policy / bash-sandbox config (current leaf: read/write in workspace, writes need a prior read).' },
-  'permissions-approval-hint': { zh: '审批通道已挂载：命令申请权限提升（sandbox_permissions）时弹出审批条，Yes 放行一次、No / Esc 拒绝。', en: 'The approval channel is mounted: sandbox escalations (sandbox_permissions) raise an approval bar — Yes allows once, No / Esc rejects.' },
-  'permissions-preset-hint': { zh: '/permission 可查看与切换权限预设（read-only / workspace-write / danger-full-access）。', en: '/permission shows and switches permission presets (read-only / workspace-write / danger-full-access).' },
   'permissions-root-hint': { zh: '当前文件系统策略以工作目录为根：{{cwd}}', en: 'Current filesystem policy is rooted at the working directory: {{cwd}}' },
   'permissions-path-hint': { zh: '模型工具相对路径均解析自该目录；跨目录访问由 fs-policy 拦截。', en: 'Relative paths of model tools resolve from this directory; cross-directory access is blocked by fs-policy.' },
   'hooks-not-mounted': { zh: 'DSH hooks（dsh-hooks-claude / dsh-hooks-codex）未在本 leaf 挂载。', en: 'DSH hooks (dsh-hooks-claude / dsh-hooks-codex) are not mounted in this leaf.' },
@@ -307,6 +304,15 @@ const dict = {
   'mode-plan': { zh: '计划模式', en: 'plan mode' },
   'mode-full': { zh: '完全访问', en: 'full access' },
   'mode-plan-unavailable': { zh: '当前 preset 未注册 /plan 命令，无法切换计划模式', en: 'The active preset does not register /plan; cannot toggle plan mode' },
+  // /permission picker — mode rows (sessionModes.ts modeDescription atoms)
+  'picker-title-permission': { zh: '权限模式', en: 'Permission mode' },
+  'permission-unknown-mode': { zh: '未知权限模式「{{id}}」', en: 'Unknown permission mode "{{id}}"' },
+  'mode-desc-plan-on': { zh: '计划模式', en: 'plan mode' },
+  'mode-desc-sandbox-read-only': { zh: '只读', en: 'read-only' },
+  'mode-desc-sandbox-workspace-write': { zh: '工作区内写入', en: 'workspace write' },
+  'mode-desc-sandbox-danger-full-access': { zh: '完全访问', en: 'full access' },
+  'mode-desc-approval-ask': { zh: '逐条审批', en: 'approve each action' },
+  'mode-desc-approval-never': { zh: '自动批准', en: 'auto-approve' },
 
   // ── components/LogoV2.tsx ───────────────────────────────────────────
   'logo-tagline': { zh: '探索未至之境！', en: 'Explore the uncharted!' },
@@ -396,8 +402,6 @@ const dict = {
   'settings-unavailable': { zh: '设置服务未挂载——只读', en: 'settings service absent — read-only' },
   'settings-empty': { zh: '没有可配置的设置项（尚无插件注册设置区块）', en: 'No configurable settings (no plugin has registered a section)' },
   'settings-group-empty': { zh: '此分组没有可配置字段', en: 'No configurable fields in this group' },
-  'settings-section-unavailable': { zh: '命名空间未注册', en: 'namespace not served' },
-  'settings-readonly-hint': { zh: '此命名空间尚无 TUI 设置区块，可手工编辑 {{path}}', en: 'No TUI section for this namespace yet — edit {{path}} by hand' },
   'settings-badge-restart': { zh: '重启生效', en: 'applies on restart' },
   'settings-field-empty': { zh: '（未设置）', en: '(unset)' },
   'settings-field-invalid': { zh: '无效输入', en: 'invalid' },
@@ -412,7 +416,6 @@ const dict = {
   'settings-hint-back': { zh: '↑↓ 选择 · Enter/Space 切换/进入 · Esc 返回', en: '↑↓ navigate · Enter/Space change/open · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'settings-secret-hint': { zh: '输入新值覆盖，留空保持不变 · **Enter** 保存 · Esc 取消', en: 'Type to replace; blank keeps the current value · **Enter** to save · Esc to cancel' },
-  'settings-hint-readonly': { zh: 'Enter/Esc 返回', en: 'Enter/Esc to go back' },
 
   // ── 会话浏览器：行、计数、筛选、预览 ───────────────────────────────
   'session-loading': { zh: '正在读取会话…', en: 'Reading sessions…' },
@@ -457,7 +460,7 @@ const dict = {
   'statusline-hint-working': { zh: 'esc 中断', en: 'esc to interrupt' },
   'statusline-hint-shortcuts': { zh: '? 查看快捷键', en: '? for shortcuts' },
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
-  'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
+  'hint-effort-picker': { zh: '**←/→** 切换 · **Enter** 确认 · Esc 取消', en: '**←/→** switch · **Enter** select · Esc cancel' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
   'hint-expand-ctrl-o': { zh: '（ctrl+o 展开）', en: '(ctrl+o to expand)' },
 
@@ -719,13 +722,14 @@ const dict = {
   'cmd-desc-theme': { zh: '切换配色主题（auto 跟随系统，或内置/自定义）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },
+  'cmd-desc-effort': { zh: '选择推理强度等级' },
   'cmd-desc-thinking': { zh: '显示或隐藏思考过程' },
   'cmd-desc-tokens': { zh: '查看会话 token 用量' },
   // Account / policy
   'cmd-desc-provider': { zh: '添加模型提供方（内置目录或自定义 API 端点）' },
   'cmd-desc-login': { zh: '查看 API 凭证状态' },
   'cmd-desc-logout': { zh: '清除 API 凭证' },
-  'cmd-desc-permissions': { zh: '查看权限策略状态' },
+  'cmd-desc-permission': { zh: '选择会话权限模式' },
   'cmd-desc-add-dir': { zh: '查看文件系统策略范围' },
   'cmd-desc-hooks': { zh: '查看 hooks 状态' },
   'cmd-desc-mcp': { zh: '查看 MCP 状态' },

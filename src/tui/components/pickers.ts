@@ -282,6 +282,14 @@ export interface EffortSliderLevel {
   description?: string
 }
 
+/** One `/permission` picker row (structural; the chat screen maps the
+ *  configured session modes onto it). */
+export interface PermissionModeOption {
+  id: string
+  label: string
+  description?: string
+}
+
 export interface HistorySearchEntry {
   text: string
   ts: number
@@ -530,20 +538,44 @@ export function createThinkingToggle(options: {
   })
 }
 
+/** `/permission` — session permission-mode picker over the configured
+ *  Shift+Tab modes (Kimi-style choice list; the current mode carries ✓). */
+export function createPermissionPicker(options: {
+  modes: readonly PermissionModeOption[]
+  activeId: string | undefined
+  onSelect: (id: string) => void
+  onClose: () => void
+}): Component {
+  return new PickerView<PermissionModeOption>({
+    title: t('picker-title-permission'),
+    items: options.modes,
+    toItem: (mode) => ({
+      label: mode.label,
+      ...(mode.description === undefined ? {} : { description: mode.description }),
+    }),
+    isActive: (mode) => mode.id === options.activeId,
+    footerHint: t('hint-confirm-exit'),
+    onSelect: (mode) => options.onSelect(mode.id),
+    onClose: options.onClose,
+  })
+}
+
 // ---------------------------------------------------------------------------
-// EffortSlider (rheostat row, not a list)
+// EffortSlider (segmented row, not a list)
 // ---------------------------------------------------------------------------
 
 /**
- * Reasoning-effort slider (`/effort`): a row of levels, ←/→ moving focus —
- * every move applies immediately through `onChange` (the slider IS the
- * control); plain Enter or Esc just closes. The current level carries `✓`;
- * the focused level's description renders below the row.
+ * Reasoning-effort picker (`/effort`): one row of segments, the focused one
+ * wrapped in `[ ]` (the Kimi-style segmented control). ←/→ step the focus —
+ * clamped at the ends — without applying; plain Enter commits the focused
+ * level through `onSelect` (which also closes), Esc/Ctrl+C cancels. The
+ * currently applied level carries `✓`; the focused level's description
+ * renders below the row.
  */
 export function createEffortSlider(options: {
   levels: readonly EffortSliderLevel[]
   current: string | undefined
-  onChange: (id: string) => void
+  onSelect: (id: string) => void
   onClose: () => void
 }): Component {
   return new EffortSliderView(options)
@@ -553,7 +585,7 @@ class EffortSliderView implements Component {
   private readonly options: {
     levels: readonly EffortSliderLevel[]
     current: string | undefined
-    onChange: (id: string) => void
+    onSelect: (id: string) => void
     onClose: () => void
   }
   private focusIndex: number
@@ -561,7 +593,7 @@ class EffortSliderView implements Component {
   constructor(options: {
     levels: readonly EffortSliderLevel[]
     current: string | undefined
-    onChange: (id: string) => void
+    onSelect: (id: string) => void
     onClose: () => void
   }) {
     this.options = options
@@ -578,10 +610,10 @@ class EffortSliderView implements Component {
     const { levels, current } = this.options
     const row = levels
       .map((level, index) => {
-        const name = index === this.focusIndex ? chalk.inverse(chalk.bold(level.name)) : level.name
-        return level.id === current ? `${name}${themed(theme.remember)('✓')}` : name
+        const name = level.id === current ? `${level.name}${themed(theme.remember)('✓')}` : level.name
+        return index === this.focusIndex ? chalk.bold(themed(theme.remember)(`[ ${name} ]`)) : `  ${name}  `
       })
-      .join(dim(' ── '))
+      .join('  ')
     const focused = levels[this.focusIndex]
     const lines: string[] = ['', divider(width)]
     lines.push(...indentLines([chalk.bold(themed(theme.remember)(t('picker-title-effort')))], width))
@@ -590,27 +622,29 @@ class EffortSliderView implements Component {
     if (focused?.description !== undefined) {
       lines.push(...indentLines([dim(focused.description)], width))
     }
-    lines.push(...indentLines([hintLine(t('hint-adjust-done'))], width))
+    lines.push(...indentLines([hintLine(t('hint-effort-picker'))], width))
     return lines
   }
 
   handleInput(data: string): void {
-    const { levels, onChange, onClose } = this.options
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c')) || matchesKey(data, Key.enter)) {
+    const { levels, onSelect, onClose } = this.options
+    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) {
       onClose()
       return
     }
-    if (levels.length === 0) return
+    if (matchesKey(data, Key.enter)) {
+      const focused = levels[this.focusIndex]
+      if (focused !== undefined) onSelect(focused.id)
+      return
+    }
     if (matchesKey(data, Key.left)) {
-      this.focusIndex = this.focusIndex === 0 ? levels.length - 1 : this.focusIndex - 1
-      onChange(levels[this.focusIndex]!.id)
+      this.focusIndex = Math.max(0, this.focusIndex - 1)
       return
     }
     if (matchesKey(data, Key.right)) {
-      this.focusIndex = this.focusIndex === levels.length - 1 ? 0 : this.focusIndex + 1
-      onChange(levels[this.focusIndex]!.id)
+      this.focusIndex = Math.min(levels.length - 1, this.focusIndex + 1)
     }
-    // The slider owns the keyboard while open: swallow everything else.
+    // The picker owns the keyboard while open: swallow everything else.
   }
 }
 

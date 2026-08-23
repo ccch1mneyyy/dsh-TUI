@@ -162,8 +162,8 @@ dsh-tui
 **/btw 侧问面板**
 `↑/↓` 滚动 · `Space`/`Enter`/`Esc` 关闭 · `c` 复制答案 · 等待中 `Esc` 取消
 
-**/effort 滑杆**
-`←/→` 实时调整（Esc 不还原）· `Enter`/`Esc` 完成
+**/effort 分段选择器**
+`←/→` 移动焦点 · `Enter` 应用并关闭 · `Esc` 取消
 
 **@ 文件补全**
 `@` 在消息任意位置触发 · `↑/↓` 移动 · `Tab`/`Enter` 接受 · 目录可继续深入 ·
@@ -214,7 +214,7 @@ dsh-tui
 | 命令 | 参数 | 作用 |
 |---|---|---|
 | `/model` | 无 | 模型选择器；**切换 = fork 会话续聊**（历史保留、仅换路由），选择持久化到 `~/.dsh-tui/model.json` |
-| `/effort` | `status` / `<id>` | 推理强度：无参滑杆（←/→ 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json` |
+| `/effort` | `status` / `<id>` | 推理强度：无参分段选择器（←/→ 移动、Enter 确认）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json` |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | token 用量 + 上下文百分比 |
 | `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器；`frames` 列全部预设；`frames <名>` 直接设置。帧名 30 个（`random` 随机 + `claude/star2/sand/triangle/box/box2/corners/point/layer/flip/aesthetic/hamburger/moon/moon8/comet/breathe/dots/arrow/spark/bar/braille/arc/circle/grow/noise/bounce/rainbow/dqpb/toggle`，默认 `moon8`）。持久化 `~/.dsh-tui/working-activity.json` |
@@ -229,7 +229,7 @@ dsh-tui
 | `/provider` | 无 | 交互式添加模型提供方向导（持久化 profile + key） |
 | `/login` | 无 | 凭证状态（来源、存储可写性、base URL） |
 | `/logout` | 无 | 登出说明（env 来源需删环境变量并重启） |
-| `/permissions` | 无 | 权限策略与审批通道说明 |
+| `/permission` | `<id>` | 会话权限模式选择器（对应 Shift+Tab 循环：默认 / 计划 / 完全访问）；`<id>` 直接切换 |
 | `/add-dir` | 无 | 文件策略范围说明（以工作目录为根） |
 | `/hooks` | 无 | 占位：DSH hooks 未在组合中挂载时给出说明 |
 | `/mcp` | 无 | MCP 连接状态（工具按 `mcp__服务器__工具` 分组）；未配置时给出 `cordis.patch.yml` 插入示例 |
@@ -266,7 +266,6 @@ dsh-tui
 | `/plan` | `[off\|message]` 计划模式；`/plan off` 退出 |
 | `/goal` | 设置/查看会话目标 |
 | `/feedback` | 提交使用反馈 |
-| `/permission` | 查看/切换权限预设（read-only / workspace-write / danger-full-access；非所有组合都有） |
 
 > 这些命令的行为由 DSH 命令注册表实现，本仓库只做菜单并入、补全与分发；
 > 未知命令会作为普通消息发给模型。
@@ -336,7 +335,7 @@ dsh-tui
 - `/model`：选择器，**切换 = fork 会话续聊**（历史保留、只换 provider/model 路由，preset 不变）；旧会话留在 `/resume`；选择持久化 `~/.dsh-tui/model.json`。运行时切换被拒绝。
 - `/preset`：`standard`（默认全功能）/ `code`（PTC）/ `minimal`（仅 bash+编辑器，无 compaction）/ `cordis`（创造模式）/ `liangshen`（梁神模式：首轮最小双工具，首次工具调用后开放全目录）。
   **已产生对话的会话不可切换**（blank-only：选择只保存为下次 `/new` 的默认）。
-- 会话模式 `Shift+Tab` 循环三档：default（workspace-write + 审批）→ plan（read-only）→ full（danger-full-access）。
+- 会话模式 `Shift+Tab` 循环三档：default（workspace-write + 审批）→ plan（read-only）→ full（danger-full-access）；`/permission` 打开同款三档的选择器（`/permission <id>` 直接切）。
 
 ### 4.7 问卷与审批
 
@@ -354,7 +353,7 @@ dsh-tui
 - 打包技能（`/audit` 代码审计 · `/bug` bug 报告 · `/review` 评审 · `/practice` 练习 ·
   `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查）：
   命令发送激活提示，模型加载 `SKILL.md` 执行；`/skills` 浏览技能目录。
-- `/plan` `/goal` `/feedback` `/permission`：来自 DSH 命令注册表，随组合并入 `/` 菜单。
+- `/plan` `/goal` `/feedback`：来自 DSH 命令注册表，随组合并入 `/` 菜单。
 - **Goals/Todos 面板自动出现**：模型写入 goal/todo 时在输入框上方实时渲染（🎯 目标 + phase 徽章 +
   树形 todo 最多 8 行），无需任何操作；agent 空闲时自动隐藏已完成项。
 
@@ -366,7 +365,7 @@ dsh-tui
 - `/doctor` 自检：Node/平台、API key、模型路由、cwd、上下文窗口、会话存储、插件宿主。
 - `/provider` 交互向导添加模型提供方（密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`）。
 - `/init` 创建 AGENTS.md；`/agents` 子代理列表；`/login` `/logout` 凭证管理；
-  `/permissions` `/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
+  `/permission` 权限模式选择器；`/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
 
 ---
 
@@ -418,7 +417,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 19 �
 | toolBackground | 工具卡背景强调：none / subtle / strong |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/tps/gitBranch/sessionTitle/mode/contextBar/activity/trajectory） |
 
-未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 `~/.dsh/settings.yaml`。
+未声明 TUI 区块的命名空间不在面板中显示，需手工编辑 `~/.dsh/settings.yaml`。
 provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / modes
 **不在 /settings 内**，要改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`。
 
@@ -436,7 +435,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 | 项 | 命令 | 说明 |
 |---|---|---|
 | 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用 |
-| 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前 |
+| 推理强度 | `/effort` | 分段选择器（←/→ 移动、Enter 确认）或 `/effort <id>`；`/effort status` 看当前 |
 | Agent 预设 | `/preset` | `standard` / `code` / `minimal` / `cordis` + **梁神模式 `liangshen`**；**已开始会话不可切换**（blank-only） |
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
@@ -489,7 +488,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 16. `/theme` 换主题，`auto` 跟随终端背景；想要专属配色就写
     `~/.dsh-tui/themes/<名>.json`（`{base, colors}`），选中即热切换。
 17. `/preset liangshen` 梁神模式：首轮最小工具集、首次工具调用后开放全目录（**新会话才生效**）。
-18. `/effort` 滑杆 `←/→` 实时调推理强度；`/activity frames comet` 换状态行动画
+18. `/effort` 分段选择器 `←/→` 移动、`Enter` 确认推理强度；`/activity frames comet` 换状态行动画
     （帧名 30 个，`random` 随机）。
 19. `/model` 切换会 fork 续聊（历史保留），持久化后重启与 `/new` 沿用——放心换模型。
 20. 会话太多？`/resume` 里 `Ctrl+S` 折叠子 agent 运行、`Ctrl+X` 清理空壳会话。

@@ -117,9 +117,9 @@ dual-written to both paths because older launchers only read the old one.
 
 `dsh-TUI` does not provide a separate sandbox; it implements the tool-level
 approval UI (a CC-style panel answering the `approval/request` waterfall),
-while `/permission` preset switching comes from the dsh-base
-`permission-presets` row. Effective capability comes from the DSH services
-mounted by `cordis.patch.yml`:
+and the session permission modes (the Shift+Tab cycle) can also be switched
+through the local `/permission` picker. Effective capability comes from the
+DSH services mounted by `cordis.patch.yml`:
 
 - On non-Windows platforms, `DSH_PERMISSION_MODE` defaults to `workspace-write`;
   the filesystem policy requires observed files and the approval policy is
@@ -153,9 +153,8 @@ visual TUI alone does not describe the effective policy.
 - Exit restores the terminal and ends the process without waiting for the
   Agent's asynchronous flush; the persistence plugin is the fallback.
 - The tool-level approval panel is implemented (approval service + TUI
-  answerer); `/permission` preset switching is provided by the dsh-base
-  `permission-presets` plugin and works in profile compositions — the bare
-  `cordis.yml` mounts only the approval service, not `permission-presets`.
+  answerer); `/permission` is a local command switching the same session
+  permission modes as the Shift+Tab cycle (plan / sandbox / approval atoms).
 - `/vim`, `/connect`, and `/hooks` are compatibility placeholders,
   not evidence that those DSH capabilities are mounted.
 - There is no automated full-flow suite that requires real model credentials;
@@ -166,7 +165,7 @@ visual TUI alone does not describe the effective policy.
 
 | Goal | Method |
 | --- | --- |
-| Environment and profile | Run `/doctor`, `/config`, and `/permissions` inside the TUI |
+| Environment and profile | Run `/doctor` and `/config` inside the TUI |
 | stderr diagnostics | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
 | Raw ANSI frames | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | Theme regression | `node --import tsx/esm scripts/verify-themes.mjs` |

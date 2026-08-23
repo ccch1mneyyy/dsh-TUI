@@ -320,7 +320,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Sessions | `/new`, `/resume`, `/rename`, `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`), `/rewind` (time travel, same as double-`Esc` on an empty input) |
 | Status | `/context`, `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents`, `/settings` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/lang` |
-| Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/skills`, `/plugins` (`check <path>` validates a plugin manifest) |
+| Account and policy | `/provider`, `/login`, `/logout`, `/permission`, `/add-dir`, `/hooks`, `/mcp`, `/skills`, `/plugins` (`check <path>` validates a plugin manifest) |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
 | Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` (aliases `/quit`, `/q`) |
 | Registry | `/plan`, `/goal`, and any other command registered by the DSH composition |

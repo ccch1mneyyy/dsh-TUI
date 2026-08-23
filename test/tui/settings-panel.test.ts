@@ -353,21 +353,20 @@ test('settings panel: secret fields mask the draft and write through the credent
   harness.panel.dispose();
 });
 
-test('settings panel: undeclared namespaces stay read-only with a JSON preview', async () => {
+test('settings panel: undeclared namespaces are not listed', async () => {
   const harness = makePanel({ sections: [SECTION], namespaces: [makeNamespace(), READONLY_NAMESPACE] });
   const out = harness.rendered();
-  assert.ok(out.includes('llm-deepseek'));
-
-  for (let index = 0; index < 6; index += 1) harness.panel.handleInput(DOWN);
-  // The selected row shows its description, carrying the restart badge.
-  assert.ok(harness.rendered().includes(t('settings-badge-restart')));
-  harness.panel.handleInput(ENTER); // open the read-only preview
-  const preview = harness.rendered();
-  assert.ok(preview.includes('"baseUrl": "https://api.example.test"'));
-  assert.ok(preview.includes('~/.dsh/settings.yaml'));
-  harness.panel.handleInput(ESC);
-  assert.equal(harness.closed(), 0); // back to the top list
+  assert.ok(!out.includes('llm-deepseek'));
+  // Every listed row stays editable (writes land through the same panel).
   assert.equal(harness.writes.length, 0);
+  harness.panel.dispose();
+});
+
+test('settings panel: sections whose namespace is not served are hidden', async () => {
+  const harness = makePanel({ sections: [SECTION], namespaces: [] });
+  const out = harness.rendered();
+  assert.ok(!out.includes('Language'));
+  assert.ok(out.includes(t('settings-empty')));
   harness.panel.dispose();
 });
 

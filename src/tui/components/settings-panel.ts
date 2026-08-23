@@ -11,9 +11,10 @@
  * in the dsh-tui plugin, not this panel.
  *
  * Plugin-declared sections map onto the flat list: ungrouped fields are top
- * rows, declared groups (the 13 status-bar toggles) become a nested
- * `SettingsList` submenu, and namespaces no plugin declared a section for
- * stay read-only with a JSON preview submenu pointing at settings.yaml. When
+ * rows and declared groups (the 15 status-bar toggles) become a nested
+ * `SettingsList` submenu. Only editable rows are listed — namespaces no
+ * plugin declared a section for, and sections whose namespace the
+ * composition does not serve, are hidden rather than shown read-only. When
  * several sections are registered the label carries the section title as a
  * prefix so search still reaches it.
  *
@@ -57,19 +58,15 @@ import type { TuiCommands } from '../commands.js'
  *  and hint chrome the panel stays around 16 lines tall. */
 const MAX_VISIBLE = 8
 
-/** Pretty-printed JSON lines a read-only namespace submenu shows at most. */
-const READONLY_PREVIEW_LINES = 8
-
 interface FieldBinding {
   readonly ns: string
   readonly field: TuiSettingsField
   /**
    * `cycle` rows write in onChange (boolean/select); `editor` rows write
    * inside their input submenu, so their onChange (fired when the submenu
-   * closes with a new display value) must not write again; `readonly` rows
-   * never write.
+   * closes with a new display value) must not write again.
    */
-  readonly mode: 'cycle' | 'editor' | 'readonly'
+  readonly mode: 'cycle' | 'editor'
   /** Cycle rows: displayed label → draft text for the field's parse. */
   readonly textByDisplay?: ReadonlyMap<string, string>
 }
@@ -183,6 +180,11 @@ export class SettingsPanel implements Component {
     const items: SettingItem[] = []
     for (const section of sections) {
       const view = namespaces.find(entry => entry.ns === section.ns)
+      // Only editable rows are listed: a section whose namespace the
+      // composition doesn't serve (or a missing settings host) would render
+      // inert rows, so the whole section is hidden instead; namespaces no
+      // plugin declared a section for are not shown at all.
+      if (view === undefined || this.host === undefined) continue
       const prefix = sections.length > 1 ? `${pick(section.title, section.descriptions)} · ` : ''
       for (const field of section.fields) {
         if (field.group === undefined) items.push(this.fieldItem(section.ns, field, view, prefix))
@@ -190,12 +192,6 @@ export class SettingsPanel implements Component {
       for (const group of section.groups ?? []) {
         items.push(this.groupItem(section, group, view, prefix))
       }
-    }
-
-    // Namespaces no plugin declared a section for stay read-only.
-    const declared = new Set(sections.map(section => section.ns))
-    for (const view of namespaces) {
-      if (!declared.has(view.ns)) items.push(this.readonlyItem(view))
     }
 
     const list = new SettingsList(
@@ -222,22 +218,15 @@ export class SettingsPanel implements Component {
   private fieldItem(
     ns: string,
     field: TuiSettingsField,
-    view: SettingsNamespaceView | undefined,
+    view: SettingsNamespaceView,
     labelPrefix: string,
   ): SettingItem {
     const id = `field:${ns}:${field.path.join('.')}`
     const label = labelPrefix + pick(field.label, field.descriptions)
     const hint = field.hint !== undefined ? pick(field.hint, field.hintDescriptions) : undefined
     const badges: string[] = []
-    if (view === undefined) badges.push(`[${t('settings-section-unavailable')}]`)
-    else if (view.applies === 'restart') badges.push(`[${t('settings-badge-restart')}]`)
+    if (view.applies === 'restart') badges.push(`[${t('settings-badge-restart')}]`)
     const description = [...badges, ...(hint !== undefined ? [hint] : [])].join(' ') || undefined
-
-    // A section whose namespace the composition doesn't serve renders inert.
-    if (view === undefined || this.host === undefined) {
-      this.bindings.set(id, { ns, field, mode: 'readonly' })
-      return { id, label, description, currentValue: '' }
-    }
 
     if (field.secret === undefined && (field.kind === 'boolean' || field.kind === 'select')) {
       const rawText = formatSettingValue(field, getPath(view.value, field.path))
@@ -270,7 +259,7 @@ export class SettingsPanel implements Component {
   private groupItem(
     section: TuiSettingsSection,
     group: TuiSettingsGroup,
-    view: SettingsNamespaceView | undefined,
+    view: SettingsNamespaceView,
     labelPrefix: string,
   ): SettingItem {
     return {
@@ -290,7 +279,7 @@ export class SettingsPanel implements Component {
   private buildGroupList(
     section: TuiSettingsSection,
     group: TuiSettingsGroup,
-    view: SettingsNamespaceView | undefined,
+    view: SettingsNamespaceView,
     done: () => void,
   ): Component {
     const items = section.fields
@@ -307,20 +296,6 @@ export class SettingsPanel implements Component {
     for (const item of items) this.itemOwners.set(item.id, list)
     this.probeSecrets(list, items)
     return list
-  }
-
-  /** Read-only row for a namespace with no declared section: JSON preview. */
-  private readonlyItem(view: SettingsNamespaceView): SettingItem {
-    return {
-      id: `readonly:${view.ns}`,
-      label: view.ns,
-      description: [
-        ...(view.applies === 'restart' ? [`[${t('settings-badge-restart')}]`] : []),
-        t('settings-readonly-hint', { path: '~/.dsh/settings.yaml' }),
-      ].join(' '),
-      currentValue: '',
-      submenu: (_current, done) => new SettingsReadonlyView(view, () => done()),
-    }
   }
 
   // ── Immediate writes ───────────────────────────────────────────────────────
@@ -528,45 +503,5 @@ class SettingsInputEditor implements Component {
     // A save in flight owns the draft; ignore keys until it settles.
     if (this.pending) return
     this.input.handleInput(data)
-  }
-}
-
-/**
- * Read-only namespace submenu: the resolved value as capped pretty JSON plus
- * the hand-edit hint. Enter/Esc backs out; every other key is swallowed.
- */
-class SettingsReadonlyView implements Component {
-  private readonly view: SettingsNamespaceView
-  private readonly done: () => void
-
-  constructor(view: SettingsNamespaceView, done: () => void) {
-    this.view = view
-    this.done = done
-  }
-
-  invalidate(): void {
-    // Static between opens; nothing cached per width.
-  }
-
-  render(width: number): string[] {
-    const safeWidth = Math.max(1, Math.floor(width))
-    const lines: string[] = [truncateToWidth(`  ${chalk.bold(this.view.ns)}`, safeWidth, ''), '']
-    let preview: string[]
-    try {
-      preview = JSON.stringify(this.view.value, null, 2).split('\n')
-    } catch {
-      preview = [String(this.view.value)]
-    }
-    const capped = preview.slice(0, READONLY_PREVIEW_LINES)
-    if (preview.length > capped.length) capped.push('…')
-    for (const line of capped) lines.push(truncateToWidth(chalk.dim(`  ${line}`), safeWidth, ''))
-    lines.push('')
-    lines.push(truncateToWidth(chalk.dim(`  ${t('settings-readonly-hint', { path: '~/.dsh/settings.yaml' })}`), safeWidth, ''))
-    lines.push(truncateToWidth(chalk.dim.italic(`  ${t('settings-hint-readonly')}`), safeWidth, ''))
-    return lines
-  }
-
-  handleInput(data: string): void {
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) this.done()
   }
 }

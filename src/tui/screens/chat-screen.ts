@@ -47,6 +47,7 @@ import {
   createBtwPanel,
   createEffortSlider,
   createModelPicker,
+  createPermissionPicker,
   createPresetPicker,
   createSkillsPicker,
   createThemePicker,
@@ -57,6 +58,7 @@ import {
 } from '../components/pickers.js'
 import { getLang, isLang, t, type I18nKey } from '../../i18n.js'
 import { LOCAL_COMMANDS, localizedDescription } from '../../commands.js'
+import { modeDescription, modeDisplayName } from '../../sessionModes.js'
 import { FRAME_PRESETS, PRESET_NAMES } from '../../components/activityFrames.js'
 import { formatTokens } from '../../cc/format.js'
 import { modLabel } from '../../utils/modifiers.js'
@@ -417,6 +419,15 @@ export class ChatScreen implements Component {
     }
     if (matchesKey(data, Key.ctrl('a'))) {
       this.openSubagentDashboard(this.subagents)
+      return
+    }
+
+    // Shift+Tab cycles the session permission mode. The open completion menu
+    // keeps the key (the same isShowingAutocomplete guard the editor's Tab
+    // routing uses); transient screens, the settings panel and overlays own
+    // the keyboard above and never reach this check.
+    if (matchesKey(data, Key.shift('tab')) && !this.promptEditor.isShowingAutocomplete()) {
+      this.commands.session.cycleMode()
       return
     }
 
@@ -916,18 +927,8 @@ export class ChatScreen implements Component {
       case 'logout':
         this.commands.info.notify(t('login-logout-hint'))
         return
-      case 'permissions':
-        this.commands.info.pushLocal('/permissions', [
-          t('permissions-policy-hint'),
-          t('permissions-approval-hint'),
-          // /permission comes from the dsh-base permission-presets row via the
-          // commands registry; only advertise it when this composition
-          // actually mounted it (the bare cordis.yml leaf has no
-          // permission-presets, so the command does not exist there).
-          ...(this.vm?.prompt.commandList.some(entry => entry.name === 'permission') === true
-            ? [t('permissions-preset-hint')]
-            : []),
-        ])
+      case 'permission':
+        this.runPermissionCommand(rawInput)
         return
       case 'add-dir':
         this.commands.info.pushLocal('/add-dir', [
@@ -1057,10 +1058,10 @@ export class ChatScreen implements Component {
   }
 
   /**
-   * `/effort` — bare opens the rheostat slider over the live route's adapter
-   * levels (←/→ applies each step immediately); `/effort <id>` sets directly
-   * (validated by the channel); `/effort status` prints the current level.
-   * The choice persists to ~/.dsh-tui/effort.json.
+   * `/effort` — bare opens the segmented picker over the live route's
+   * adapter levels (←/→ moves the focus, Enter commits); `/effort <id>`
+   * sets directly (validated by the channel); `/effort status` prints the
+   * current level. The choice persists to ~/.dsh-tui/effort.json.
    */
   private runEffortCommand(rawInput: string): void {
     const parts = rawInput.trim().split(/\s+/).filter(Boolean)
@@ -1087,12 +1088,43 @@ export class ChatScreen implements Component {
           description: effort.description,
         })),
         current: this.vm?.statusLine.reasoningEffort ?? defaultEffort,
-        onChange: (id) => {
+        onSelect: (id) => {
+          this.closeTransientScreen()
           void this.commands.model.setEffort(id)
         },
         onClose: () => this.closeTransientScreen(),
       }))
     })
+  }
+
+  /**
+   * `/permission` — bare opens the session permission-mode picker (a choice
+   * list over the configured Shift+Tab modes, current one marked ✓);
+   * `/permission <id>` applies the mode directly. The channel narrates the
+   * switch (mode-switched notify) like the Shift+Tab cycle does.
+   */
+  private runPermissionCommand(rawInput: string): void {
+    const id = rawInput.trim().split(/\s+/).filter(Boolean)[0]
+    if (id !== undefined) {
+      void this.commands.session.setMode(id).then((ok) => {
+        if (this.disposed || ok) return
+        this.commands.info.notify(t('permission-unknown-mode', { id }), { color: 'warning' })
+      })
+      return
+    }
+    this.mountPicker(createPermissionPicker({
+      modes: this.commands.session.listModes().map(spec => ({
+        id: spec.id,
+        label: modeDisplayName(spec),
+        description: modeDescription(spec),
+      })),
+      activeId: this.vm?.statusLine.mode.id,
+      onSelect: (modeId) => {
+        this.closeTransientScreen()
+        void this.commands.session.setMode(modeId)
+      },
+      onClose: () => this.closeTransientScreen(),
+    }))
   }
 
   /**

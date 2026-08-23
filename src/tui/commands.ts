@@ -60,6 +60,7 @@ import type {
   AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
 import type { CommandCompletion } from '../commands.js'
+import type { SessionModeSpec } from '../sessionModes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import type { ProviderSetupHost } from '../dsh-adapter/providerWizard.js'
 import type { PreviewEntry, SessionSummary } from '../dsh-adapter/sessions/types.js'
@@ -120,7 +121,8 @@ export interface TuiInputCommands {
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
 }
 
-/** Session lifecycle: /new, /resume, rewind, compact/clear, titles. */
+/** Session lifecycle: /new, /resume, rewind, compact/clear, titles, and the
+ *  session permission mode (`/permission`, same machinery as Shift+Tab). */
 export interface TuiSessionCommands {
   newSession(): Promise<boolean>
   resumeTo(id: string): Promise<ResumeResult>
@@ -131,6 +133,13 @@ export interface TuiSessionCommands {
   clear(): void
   promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
   rewindTo(row: ChatRow, mode?: string | null): Promise<string | null>
+  /** The configured session-mode cycle for the `/permission` picker. */
+  listModes(): readonly SessionModeSpec[]
+  /** Apply one configured session mode by id; false when the id is unknown. */
+  setMode(id: string): Promise<boolean>
+  /** Cycle to the next configured session mode (the Shift+Tab binding);
+   *  fire-and-forget like compact/clear. */
+  cycleMode(): void
 }
 
 /** Model / preset / effort / activity-indicator switching and pickers. */
@@ -412,6 +421,16 @@ export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
         // expectation as newSession/resumeTo; null (refused/failed) commits
         // nothing.
         return fencedWrite('rewindTo', (childId) => childId !== null, null, () => channel.rewindTo(row, mode))
+      },
+      listModes() {
+        return channel.listModes()
+      },
+      setMode(id) {
+        // No agent swap (same no-self-bump shape as setEffort).
+        return fencedWrite('setMode', () => false, false, () => channel.setMode(id))
+      },
+      cycleMode() {
+        void channel.cycleMode()
       },
     },
     model: {

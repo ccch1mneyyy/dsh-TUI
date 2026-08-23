@@ -681,6 +681,12 @@ export interface Channel {
   readonly modeIndex: number
   /** Shift+Tab: advance to the next configured session mode. */
   cycleMode(): Promise<void>
+  /** The configured session-mode cycle (cordis.yml `modes` or the built-in
+   *  default/plan/full), for the `/permission` picker. */
+  listModes(): readonly SessionModeSpec[]
+  /** Apply one configured session mode by id (`/permission <id>` or the
+   *  picker); false when the id is not in the cycle. */
+  setMode(id: string): Promise<boolean>
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined
@@ -973,6 +979,10 @@ export interface ChannelState {
   modeIndex: number
   /** Shift+Tab session-mode advance (see the public Channel type). */
   cycleMode(): Promise<void>
+  /** The configured session-mode cycle (see the public Channel type). */
+  listModes(): readonly SessionModeSpec[]
+  /** Apply one configured session mode by id (see the public Channel type). */
+  setMode(id: string): Promise<boolean>
   /** The preset the current session runs under (see the public Channel type). */
   agentPreset: string | undefined
   /** The roster's presets for the `/preset` picker (see the public Channel type). */
@@ -2180,6 +2190,15 @@ export function createChannel(
     await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
   }
 
+  /** `/permission <id>` / the picker: apply one configured mode by id;
+   *  false when the id is not in the cycle. */
+  const setMode = async (id: string): Promise<boolean> => {
+    const spec = sessionModes.find(entry => entry.id === id)
+    if (spec === undefined) return false
+    await applyMode(spec)
+    return true
+  }
+
   const state: ChannelState = {
     effortLevels: undefined,
     version: 0,
@@ -3175,6 +3194,8 @@ export function createChannel(
     listEfforts,
     setEffort,
     cycleMode,
+    listModes: () => sessionModes,
+    setMode,
     clear() {
       state.rows.length = 0
       nextRowId = 0

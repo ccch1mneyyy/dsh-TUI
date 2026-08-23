@@ -102,8 +102,8 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 `dsh-TUI` 本身不提供独立沙箱；实际能力由 `cordis.patch.yml` 挂载的 DSH 服务
 决定。审批走 `ctx.approval` seam：策略为 `ask` 时 TUI 以 CC 式审批面板作为
 answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定——协议没有
-"总是允许"与反馈通道；`/permission` 预设切换来自 dsh-base 的
-`permission-presets` 服务行：
+"总是允许"与反馈通道；会话权限模式（Shift+Tab 循环的三档）也可经本地
+`/permission` 选择器切换：
 
 - 非 Windows 默认 `DSH_PERMISSION_MODE` 为 `workspace-write`，文件策略要求先观察
   文件，审批策略通常为 `ask`。
@@ -127,9 +127,8 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
   不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。剪贴板图片
   导出为临时文件插入路径（0700 私有目录、0600 文件），不内嵌图片块。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
-- 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的沙箱
-  预设切换由 dsh-base 的 `permission-presets` 插件提供，profile 组合下可用；
-  裸组合 `cordis.yml` 只挂了 approval 服务，未挂 `permission-presets`。
+- 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 为本地命令，
+  切换与 Shift+Tab 循环相同的会话权限模式（plan / sandbox / approval 原子组合）。
 - `/vim`、`/connect`、`/hooks` 是兼容占位命令，不代表对应 DSH 能力已挂载。
 - 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务，
   真实模型集成仍需要在目标终端手动验证。
@@ -138,7 +137,7 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 
 | 目的 | 方式 |
 | --- | --- |
-| 环境与 profile | TUI 内运行 `/doctor`、`/config`、`/permissions` |
+| 环境与 profile | TUI 内运行 `/doctor`、`/config` |
 | stderr 调试 | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
 | 原始 ANSI 帧 | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | 主题回归 | `node --import tsx/esm scripts/verify-themes.mjs` |

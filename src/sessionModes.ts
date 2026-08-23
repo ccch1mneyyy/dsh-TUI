@@ -57,3 +57,18 @@ export function modeDisplayName(spec: SessionModeSpec): string {
   if (spec.id === 'full') return t('mode-full')
   return spec.id
 }
+
+/** One-line description composed from the declared atoms, for the
+ *  `/permission` picker (`plan mode · read-only · approve each action`);
+ *  empty when the spec declares nothing usable (those are dropped from the
+ *  cycle, so this only guards custom configs). */
+export function modeDescription(spec: SessionModeSpec): string {
+  const parts: string[] = []
+  if (spec.plan === true) parts.push(t('mode-desc-plan-on'))
+  if (spec.sandbox === 'read-only') parts.push(t('mode-desc-sandbox-read-only'))
+  else if (spec.sandbox === 'workspace-write') parts.push(t('mode-desc-sandbox-workspace-write'))
+  else if (spec.sandbox === 'danger-full-access') parts.push(t('mode-desc-sandbox-danger-full-access'))
+  if (spec.approval === 'ask') parts.push(t('mode-desc-approval-ask'))
+  else if (spec.approval === 'never') parts.push(t('mode-desc-approval-never'))
+  return parts.join(' · ')
+}

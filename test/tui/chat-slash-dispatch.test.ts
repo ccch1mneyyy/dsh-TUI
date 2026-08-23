@@ -136,6 +136,7 @@ interface CallLog {
   askQuestion: number;
   clear: number;
   compact: number;
+  cycleMode: number;
   describeCredential: string[];
   doctorInfo: number;
   exit: number;
@@ -157,6 +158,7 @@ interface CallLog {
   setActivityFrames: string[];
   setEffort: string[];
   setLang: string[];
+  setMode: string[];
   setTheme: string[];
   sideQuestion: string[];
   submit: string[];
@@ -176,6 +178,7 @@ interface HarnessOptions {
   listWorkspaces?: Array<{ uri: string; label: string; description?: string; badge?: string; cwd?: string }> | undefined;
   loadedContext?: unknown;
   providerSetup?: object | undefined;
+  setModeResult?: boolean;
   workspaceCommands?: Array<{ name: string; aliases?: string[]; description?: string }>;
   workspaceResult?: unknown;
 }
@@ -191,6 +194,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     askQuestion: 0,
     clear: 0,
     compact: 0,
+    cycleMode: 0,
     describeCredential: [],
     doctorInfo: 0,
     exit: 0,
@@ -212,6 +216,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     setActivityFrames: [],
     setEffort: [],
     setLang: [],
+    setMode: [],
     setTheme: [],
     sideQuestion: [],
     submit: [],
@@ -242,6 +247,9 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       compact: () => {
         calls.compact += 1;
       },
+      cycleMode: () => {
+        calls.cycleMode += 1;
+      },
       deleteSession: async () => true,
       newSession: async () => {
         calls.newSession += 1;
@@ -254,6 +262,15 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       renameSessionTo: async () => true,
       resumeTo: async () => ({ ok: false, reason: 'cancelled' }),
       rewindTo: async () => null,
+      listModes: () => [
+        { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
+        { id: 'plan', plan: true, sandbox: 'read-only', approval: 'ask' },
+        { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' },
+      ],
+      setMode: async (id: string) => {
+        calls.setMode.push(id);
+        return options.setModeResult ?? true;
+      },
     },
     model: {
       currentPreset: () => 'default',
@@ -461,12 +478,19 @@ test('slash dispatch: /model stays silent when the payload is dropped', async ()
   harness.chat.dispose();
 });
 
-test('slash dispatch: /effort mounts the slider', async () => {
+test('slash dispatch: /effort mounts the segmented picker', async () => {
   const harness = makeHarness({
     listEfforts: { defaultEffort: 'low', efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] },
   });
   await dispatch(harness.chat, '/effort');
   assert.ok(harness.rendered().includes(t('picker-title-effort')));
+  // ←/→ move the focus without applying; Enter commits the focused level.
+  harness.chat.handleInput('\x1b[C');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.calls.setEffort, []);
+  harness.chat.handleInput('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.calls.setEffort, ['high']);
   harness.chat.dispose();
 });
 
@@ -795,12 +819,52 @@ test('slash dispatch: /logout notifies the hint', async () => {
   harness.chat.dispose();
 });
 
-test('slash dispatch: /permissions, /add-dir, /hooks, /mcp push their reports', async () => {
-  const permissions = makeHarness();
-  await dispatch(permissions.chat, '/permissions');
-  assert.equal(permissions.calls.pushLocal[0]?.title, '/permissions');
-  permissions.chat.dispose();
+test('slash dispatch: /permission mounts the mode picker and applies on Enter', async () => {
+  const harness = makeHarness();
+  await dispatch(harness.chat, '/permission');
+  assert.ok(harness.rendered().includes(t('picker-title-permission')));
+  // The current mode (default) opens focused; ↓ moves to plan, Enter applies.
+  harness.chat.handleInput('\x1b[B');
+  harness.chat.handleInput('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.calls.setMode, ['plan']);
+  harness.chat.dispose();
+});
 
+test('slash dispatch: /permission <id> applies directly, unknown id warns', async () => {
+  const harness = makeHarness();
+  await dispatch(harness.chat, '/permission full');
+  assert.deepEqual(harness.calls.setMode, ['full']);
+  harness.chat.dispose();
+
+  const unknown = makeHarness({ setModeResult: false });
+  await dispatch(unknown.chat, '/permission nope');
+  assert.deepEqual(unknown.calls.setMode, ['nope']);
+  assert.ok(unknown.calls.notify.some(entry => entry.color === 'warning'));
+  unknown.chat.dispose();
+});
+
+test('shift+tab cycles the session permission mode', async () => {
+  const harness = makeHarness();
+  // Legacy backtab; the editor may hold text — the cycle fires regardless.
+  harness.chat.handleInput('\x1b[Z');
+  assert.equal(harness.calls.cycleMode, 1);
+  harness.chat.handleInput('\x1b[Z');
+  assert.equal(harness.calls.cycleMode, 2);
+  harness.chat.dispose();
+});
+
+test('shift+tab does not cycle while a transient picker is open', async () => {
+  const harness = makeHarness();
+  await dispatch(harness.chat, '/permission');
+  assert.ok(harness.rendered().includes(t('picker-title-permission')));
+  // The picker owns the keyboard: backtab reaches it, never the chat root.
+  harness.chat.handleInput('\x1b[Z');
+  assert.equal(harness.calls.cycleMode, 0);
+  harness.chat.dispose();
+});
+
+test('slash dispatch: /add-dir, /hooks, /mcp push their reports', async () => {
   const addDir = makeHarness();
   await dispatch(addDir.chat, '/add-dir');
   assert.equal(addDir.calls.pushLocal[0]?.title, '/add-dir');
@@ -1005,7 +1069,7 @@ test('slash dispatch: dispatch table exactly covers LOCAL_COMMANDS + hidden entr
     'resume', 'settings', 'trace', 'trajectory', 'agents', 'subagents',
     'skills', 'workspace', 'provider', 'btw', 'tips', 'help', 'context',
     'status', 'cost', 'tokens', 'config', 'doctor', 'plugins', 'export',
-    'init', 'login', 'logout', 'permissions', 'add-dir', 'hooks', 'mcp',
+    'init', 'login', 'logout', 'permission', 'add-dir', 'hooks', 'mcp',
     'vim', 'terminal-setup', 'rename', 'connect', 'clear', 'new', 'compact',
     'rewind', 'update', 'exit', 'quit', 'q', 'review', 'pr_comments',
     'audit', 'practice', 'bug', 'release-notes', 'vuln-check', 'deepseek',
