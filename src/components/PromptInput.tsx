@@ -4,9 +4,10 @@ import { basename } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
-import { EffortInputBorder } from './EffortInputBorder.js'
+import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
 import { isLightThemeActive } from '../theme.js'
+import { sessionColorHex } from '../cc/sessionColors.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import { noteAuxNumber } from '../ink/geometry-trace.js'
@@ -1499,7 +1500,21 @@ export function PromptInput({
   const floatersOpen =
     helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen || peekOpen
   // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
-  const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
+  // `/color` 会话强调色优先于主题 promptBorder（plan 模式仍整体走 sage 绿）。
+  // `?? ''` 防御最小 mock channel（只声明用到的字段的回归脚本）。
+  const sessionAccent = sessionColorHex(channel.sessionColor ?? '')
+  const promptAccent = channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'promptBorder')
+  // 顶边框左侧的会话名标签（CC 风格 chip）：色随强调色；超宽截断，宽度
+  // 随终端列数伸缩但不超过 28 显示单元。
+  const sessionTitle = channel.sessionTitle ?? ''
+  const topLeftLabel: InputBorderLabel | undefined =
+    sessionTitle !== ''
+      ? {
+          text: truncateToWidth(sessionTitle, Math.max(8, Math.min(28, columns - 8))),
+          color: channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'claude'),
+          ink: 'inverseText',
+        }
+      : undefined
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -1654,6 +1669,7 @@ export function PromptInput({
         columns={columns}
         onLight={isLightThemeActive(themeName)}
         idleColor={promptAccent}
+        topLeftLabel={topLeftLabel}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph

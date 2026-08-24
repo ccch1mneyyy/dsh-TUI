@@ -23,28 +23,55 @@ import React, { useContext, useEffect, useReducer, useRef, useState } from 'reac
 import { Box, Text } from '../ui.js'
 import { ClockContext } from '../ink/components/ClockContext.js'
 import type { Color } from '../ink/styles.js'
+import { stringWidth } from '../ink/stringWidth.js'
 import type { Theme } from '../theme.js'
 import { IGNITION_TIMELINE, ignitionLineColors } from '../trajectory/effortIgnition.js'
 
 type Overlay = { label: string; startedAtMs: number }
 
-/** 边框行（顶/底共用同一色段序列——同步变色）。 */
+/** A static chip on the top border row (the session label, CC-style). */
+export interface InputBorderLabel {
+  /** Visible text (already width-truncated by the caller). */
+  text: string
+  /** Chip background (theme token or raw color). */
+  color: keyof Theme | Color
+  /** Chip foreground (theme token or raw color). */
+  ink: keyof Theme | Color
+}
+
+/** 边框行（顶/底共用同一色段序列——同步变色）。顶行可在左圆角后插入
+ *  一个静态标签 chip（会话名），占用的列数从色段序列里扣掉，行宽不变。 */
 function BorderRow({
   left,
   right,
   runs,
   idleColor,
+  label,
 }: {
   left: string
   right: string
   runs: ReadonlyArray<{ glyph: string; color: keyof Theme | Color }>
   idleColor: keyof Theme | Color
+  label?: InputBorderLabel
 }): React.ReactNode {
+  const labelWidth = label === undefined ? 0 : stringWidth(` ${label.text} `)
+  // 裁剪色段序列到剩余列数（label 行与底行的列数一致，总宽不变）。
+  let budget = Math.max(0, runs.reduce((sum, run) => sum + run.glyph.length, 0) - labelWidth)
+  const clipped: Array<{ glyph: string; color: keyof Theme | Color }> = []
+  for (const run of runs) {
+    if (budget <= 0) break
+    const take = Math.min(run.glyph.length, budget)
+    if (take > 0) clipped.push({ glyph: run.glyph.slice(0, take), color: run.color })
+    budget -= take
+  }
   return (
     <Box width="100%" height={1} flexShrink={0} overflow="hidden">
       <Text wrap="truncate-end">
         <Text color={idleColor}>{left}</Text>
-        {runs.map((run, i) => (
+        {label !== undefined && (
+          <Text backgroundColor={label.color} color={label.ink}>{` ${label.text} `}</Text>
+        )}
+        {clipped.map((run, i) => (
           <Text key={i} color={run.color}>
             {run.glyph}
           </Text>
@@ -61,6 +88,7 @@ export function EffortInputBorder({
   columns,
   onLight,
   idleColor,
+  topLeftLabel,
   children,
 }: {
   /** 当前思考强度档 id；`undefined` 表示路线未声明。 */
@@ -71,6 +99,8 @@ export function EffortInputBorder({
   onLight: boolean
   /** 静止边框色（主题 token 名，如 'promptBorder' / 'planMode'）。 */
   idleColor: keyof Theme | Color
+  /** 顶边框左侧的静态标签 chip（会话名标签）；undefined = 不显示。 */
+  topLeftLabel?: InputBorderLabel
   children: React.ReactNode
 }): React.ReactNode {
   const clock = useContext(ClockContext)
@@ -125,7 +155,7 @@ export function EffortInputBorder({
       width="100%"
       flexShrink={0}
     >
-      <BorderRow left="╭" right="╮" runs={runs} idleColor={idleColor} />
+      <BorderRow left="╭" right="╮" runs={runs} idleColor={idleColor} label={topLeftLabel} />
       <Box flexShrink={0}>{children}</Box>
       <BorderRow left="╰" right="╯" runs={runs} idleColor={idleColor} />
     </Box>

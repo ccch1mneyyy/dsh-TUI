@@ -13,6 +13,8 @@ import {
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
+import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
+import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 /** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
 type SideQuestionLlm = {
   stream(options: object): AsyncIterable<StreamChunk>
@@ -471,6 +473,10 @@ export interface Channel {
   readonly rows: readonly ChatRow[]
   readonly status: AgentStatus | 'starting' | 'disposed'
   readonly sessionTitle: string
+  /** Per-session accent color name (`/color`), '' when unset — persisted via
+   *  a `session/color` log event so it survives resume/rewind. Renders as
+   *  the prompt-input border + session label chip accent (cc/sessionColors). */
+  readonly sessionColor: string
   readonly agentId: string
   /** Resolved model id (from the plugin config). */
   readonly model: string
@@ -762,6 +768,14 @@ export interface Channel {
   /** Rename the current session (CC's /rename): appends a `session/title`
    *  event, which the status line and the /resume picker both read. */
   renameSession(title: string): void
+  /** Set the current session's accent color (`/color <name>`): appends a
+   *  `session/color` event; '' clears it back to the theme default. */
+  setSessionColor(color: string): void
+  /** Generate a recap of the session's recent activity (`/recap`): one
+   *  tool-less LLM call over the tail exchanges, returning a one-line
+   *  summary plus an optional proposed title. The answer is pure UI state
+   *  and never enters the session log. */
+  recapRecent(options?: { signal?: AbortSignal; onText?: (delta: string) => void }): Promise<RecapOutcome>
   /** Delete a persisted session (`/resume` picker ctrl+d): removes its log
    *  directory, its last-used entry, and the resume marker when it points
    *  here. False for the live session or a missing/unwritable log. */
@@ -852,6 +866,7 @@ export interface ChannelState {
   rows: ChatRow[]
   status: AgentStatus | 'starting' | 'disposed'
   sessionTitle: string
+  sessionColor: string
   agentId: string
   model: string
   provider: string
@@ -935,6 +950,12 @@ export interface ChannelState {
     question: string,
     options?: { signal?: AbortSignal; onText?: (delta: string) => void },
   ): Promise<{ answer: string | null; error?: string }>
+  /** 会话 recap（见 public Channel.recapRecent）。 */
+  recapRecent(
+    options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+  ): Promise<RecapOutcome>
+  /** 会话强调色（见 public Channel.setSessionColor）。 */
+  setSessionColor(color: string): void
   /** Effective slash commands (see the public Channel type). */
   commandList: readonly LocalCommand[]
   /** Context-aware slash completions (see the public Channel type). */
@@ -2344,6 +2365,7 @@ export function createChannel(
     rows: [],
     status: 'starting',
     sessionTitle: '',
+    sessionColor: '',
     agentId: agent.id,
     model: options.model,
     provider: options.provider,
@@ -2431,6 +2453,18 @@ export function createChannel(
                 description: `User theme (${spec.base} base)`,
                 descriptionKey: 'sugg-theme-user-desc',
               })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'color') {
+          return [
+            { name: 'status', description: 'Show the current session color', descriptionKey: 'sugg-status-desc' },
+            { name: 'reset', description: 'Clear the session color', descriptionKey: 'sugg-color-reset-desc' },
+            ...SESSION_COLOR_NAMES.map((name) => ({
+              name,
+              description: 'Session accent color',
+              descriptionKey: 'sugg-color-name-desc',
+              ...(state.sessionColor === name ? { tag: 'current' } : {}),
+            })),
           ]
         }
         if (path.length === 1 && path[0] === 'effort') {
@@ -2825,6 +2859,7 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
+      state.sessionColor = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -3003,6 +3038,7 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
+      state.sessionColor = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -3181,6 +3217,7 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
+      state.sessionColor = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -3368,6 +3405,7 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
+      state.sessionColor = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -3912,6 +3950,57 @@ export function createChannel(
       agent.session.append('session/title', { title })
       state.sessionTitle = title
       state.emit()
+    },
+    setSessionColor(color) {
+      // `session/color` is a dsh-tui plugin event — not in dsh-session's
+      // typed union, so appended through the same cast applyMode uses for
+      // its sandbox/approval overrides. It replays on resume/rewind like
+      // session/title, keeping each session's accent color its own.
+      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
+        .append('session/color', { color })
+      state.sessionColor = color
+      state.emit()
+    },
+    async recapRecent(options) {
+      // `/recap` (pi-recap semantics): one tool-less LLM call over the
+      // session's TAIL exchanges — unlike /btw it does not replay the full
+      // derived history (the excerpt IS the payload), so it stays cheap.
+      // The answer is pure UI state: never appended to the session log.
+      const llm = ctx.get('llm') as SideQuestionLlm | undefined
+      if (!llm) return { summary: null, error: t('recap-llm-unavailable') }
+      const header = agent.session.requestHeader()
+      const config = header?.config
+      const activity = collectRecentActivity(agent.session.events, RECAP_RECENT_CHARS)
+      if (activity === '') return { summary: null, error: t('recap-no-activity') }
+      const messages: Message[] = [
+        createUserMessage({
+          content: [{ type: 'text', text: wrapRecapPrompt(activity) }],
+          source: { kind: 'plugin', plugin: 'dsh-tui/recap' },
+        }),
+      ]
+      const request: Record<string, unknown> = {
+        provider: config?.provider ?? state.provider,
+        model: config?.model ?? state.model,
+        messages,
+        ...(header?.system !== undefined && { system: header.system }),
+        ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
+        ...(config?.temperature !== undefined && { temperature: config.temperature }),
+        ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),
+        ...(config?.stop !== undefined && { stop: [...config.stop] }),
+        sessionId: agent.session.id,
+        ...(options?.signal && { signal: options.signal }),
+      }
+      const outcome = await runSideQuestion({
+        stream: llm.stream.bind(llm),
+        options: request,
+        onText: options?.onText,
+        signal: options?.signal,
+      })
+      if (outcome.answer === null) return { summary: null, error: outcome.error }
+      const parsed = parseRecapResponse(outcome.answer)
+      return parsed.title === undefined
+        ? { summary: parsed.summary }
+        : { summary: parsed.summary, title: parsed.title }
     },
     async deleteSession(sessionId) {
       // The live session's log is still being appended by this process —
@@ -5471,6 +5560,13 @@ ${output}
             text: t('agent-preset-switched', { preset: data.agentPreset ?? 'unknown' }),
           })
           nextRowId += 1
+          break
+        }
+        // `/color` accent (dsh-tui plugin event, replayed on resume/rewind
+        // like session/title): last write wins, '' clears to the default.
+        if ((event as { type: string }).type === 'session/color') {
+          const data = event.data as unknown as { color?: unknown }
+          state.sessionColor = typeof data.color === 'string' ? data.color : ''
           break
         }
         // Custom plugin events (tuiRenderers seam): a registered renderer

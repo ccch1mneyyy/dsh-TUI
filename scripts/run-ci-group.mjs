@@ -361,6 +361,10 @@ const GROUPS = {
 // dsh-file: URL 编解码、相对路径按 cwd 解析、file:// 转换、Windows
 // start 组装——fileTarget.ts / openExternal.ts 的纯函数部分。
     ["verify-clickable-targets", ['node', '--import', 'tsx/esm', 'scripts/verify-clickable-targets.ts']],
+// 会话标识回归（issue #372）：/color 会话强调色（setSessionColor 调用 +
+// 边框 cell 级颜色重绘 + reset 恢复）、会话名标签渲染在输入框顶边框、
+// /recap 面板（摘要 + 建议标题 + a 键一键应用标题走 renameSession）。
+    ["verify-session-color-recap", ['node', '--import', 'tsx/esm', 'scripts/verify-session-color-recap.tsx']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得

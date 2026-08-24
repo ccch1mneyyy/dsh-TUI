@@ -67,6 +67,8 @@ import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
 import { BtwPanel } from '../components/BtwPanel.js'
+import { RecapPanel } from '../components/RecapPanel.js'
+import { isValidSessionColor, SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 import { TipsPanel } from '../components/TipsPanel.js'
 import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { SubagentDetailScene } from '../components/SubagentDetailScene.js'
@@ -375,6 +377,23 @@ export function Chat({
     btwAbortRef.current = null
     setBtw(null)
   }
+  /** /recap overlay (pi-recap semantics): pure UI state like /btw — the
+   *  summary never enters the transcript or session log; applying the
+   *  proposed title goes through the normal /rename path. */
+  const [recap, setRecap] = React.useState<{
+    raw: string
+    summary: string
+    title?: string
+    error?: string
+    done: boolean
+    titleApplied: boolean
+  } | null>(null)
+  const recapAbortRef = React.useRef<AbortController | null>(null)
+  const closeRecap = () => {
+    recapAbortRef.current?.abort()
+    recapAbortRef.current = null
+    setRecap(null)
+  }
   /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
   /** Detail view for a specific subagent (opened from dashboard). */
@@ -385,6 +404,7 @@ export function Chat({
    */
   const [logoNonce, setLogoNonce] = React.useState(0)
   React.useEffect(() => () => btwAbortRef.current?.abort(), [])
+  React.useEffect(() => () => recapAbortRef.current?.abort(), [])
   /**
    * The trajectory scene (issue #80 evolution). Unlike every other overlay
    * here it is not a panel but a whole screen: while open, Chat renders the
@@ -981,11 +1001,43 @@ export function Chat({
         })
         return true
       }
+      case 'color': {
+        // `/color`（CC accent，按会话持久化）：`/color <name>` 直接设置，
+        // `/color status` 显示当前，`/color reset` 清除回主题默认；无参
+        // 列出用法。颜色经 `session/color` 事件按会话保存——resume/rewind
+        // 后仍是这个会话自己的颜色（见 channel.ts）。
+        setHelpOpen(false)
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        if (parts.length === 0 || parts[0] === 'status') {
+          channel.pushLocal('/color', [
+            channel.sessionColor === ''
+              ? t('color-current-none')
+              : t('color-current', { name: channel.sessionColor }),
+            t('color-usage', { list: SESSION_COLOR_NAMES.join('/') }),
+          ])
+          return true
+        }
+        if (parts[0] === 'reset') {
+          channel.setSessionColor('')
+          channel.notify(t('color-reset'))
+          return true
+        }
+        const colorName = parts[0]!.toLowerCase()
+        if (!isValidSessionColor(colorName)) {
+          channel.notify(
+            t('color-unknown', { name: colorName, list: SESSION_COLOR_NAMES.join(' · ') }),
+            { color: 'error' },
+          )
+          return true
+        }
+        channel.setSessionColor(colorName)
+        channel.notify(t('color-set', { name: colorName }), { color: 'success' })
+        return true
+      }
       case 'new': {
         // One-shot `/new` (issue #25): the old session stays persisted and
         // is recoverable via /resume, so discarding the live view is
-        // non-destructive — no CC-style "press /new again" confirmation.
-        setHelpOpen(false)
+        // non-destructive — no CC-style "press /new again" confirmation.        setHelpOpen(false)
         void channel.newSession().then((ok) => {
           if (!ok) return
           // A new session is a fresh terminal page, not merely an emptied
@@ -1560,6 +1612,32 @@ export function Chat({
           t('terminal-paste-hint', { mod: modLabel }),
         ])
         return true
+      case 'recap': {
+        // `/recap`（pi-recap 语义）：对会话最近活动做一次无工具单轮
+        // 调用，生成一行摘要 + 建议标题。摘要是纯 UI 状态（不进 transcript
+        // 也不进 session log）；建议标题经「应用」按钮走 /rename 路径。
+        setHelpOpen(false)
+        recapAbortRef.current?.abort()
+        const controller = new AbortController()
+        recapAbortRef.current = controller
+        setRecap({ raw: '', summary: '', error: undefined, done: false, titleApplied: false })
+        void channel.recapRecent({
+          signal: controller.signal,
+          onText: delta => setRecap(prev => (prev ? { ...prev, raw: prev.raw + delta } : prev)),
+        }).then(result => {
+          if (controller.signal.aborted) return
+          setRecap(prev => (prev
+            ? {
+                ...prev,
+                summary: result.summary ?? prev.raw,
+                title: result.title,
+                error: result.error,
+                done: true,
+              }
+            : prev))
+        })
+        return true
+      }
       case 'btw': {
         // CC /btw：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
         // 会话历史。空参数只提示用法。
@@ -2855,6 +2933,27 @@ export function Chat({
         ) : overlay.kind === 'tips' ? (
           <Box flexDirection="column" marginTop={1}>
             <TipsPanel onClose={() => dispatchOverlay({ type: 'close-if', kind: 'tips' })} />
+          </Box>
+        ) : recap !== null ? (
+          <Box flexDirection="column" marginTop={1}>
+            <RecapPanel
+              summary={recap.summary}
+              title={recap.title}
+              error={recap.error}
+              streaming={!recap.done}
+              titleApplied={recap.titleApplied}
+              onClose={closeRecap}
+              onCopy={() => {
+                void setClipboard(recap.summary ?? '').then(raw => { if (raw) writeRaw?.(raw) })
+                channel.notify(t('copied-chars', { n: (recap.summary ?? '').length }), { timeoutMs: 1500 })
+              }}
+              onApplyTitle={() => {
+                if (recap.title === undefined || recap.titleApplied) return
+                channel.renameSession(recap.title)
+                setRecap(prev => (prev ? { ...prev, titleApplied: true } : prev))
+                channel.notify(t('recap-title-applied-notify', { title: recap.title }), { color: 'success' })
+              }}
+            />
           </Box>
         ) : btw !== null ? (
           <Box flexDirection="column" marginTop={1}>
