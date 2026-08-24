@@ -55,6 +55,7 @@ import { WorkspaceMenuPicker } from '../components/WorkspaceMenuPicker.js'
 import { WorkspaceFlowPicker } from '../components/WorkspaceFlowPicker.js'
 import type { TuiWorkspaceCommandResult, TuiWorkspaceTarget } from '../workspaces.js'
 import { ActivityPicker } from '../components/ActivityPicker.js'
+import { ColorPicker } from '../components/ColorPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { PermissionsPicker, PERMISSION_PRESET_IDS } from '../components/PermissionsPicker.js'
@@ -1002,13 +1003,23 @@ export function Chat({
         return true
       }
       case 'color': {
-        // `/color`（CC accent，按会话持久化）：`/color <name>` 直接设置，
-        // `/color status` 显示当前，`/color reset` 清除回主题默认；无参
-        // 列出用法。颜色经 `session/color` 事件按会话保存——resume/rewind
-        // 后仍是这个会话自己的颜色（见 channel.ts）。
+        // `/color`（CC accent，按会话持久化）：无参打开调色板选择器，
+        // `/color <name>` 直接设置，`/color status` 显示当前，`/color
+        // reset` 清除回主题默认。颜色经 `session/color` 事件按会话保存
+        // ——resume/rewind 后仍是这个会话自己的颜色（见 channel.ts）。
         setHelpOpen(false)
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
-        if (parts.length === 0 || parts[0] === 'status') {
+        if (parts.length === 0) {
+          dispatchOverlay({
+            type: 'open',
+            overlay: {
+              kind: 'color',
+              index: Math.max(0, SESSION_COLOR_NAMES.indexOf(channel.sessionColor)),
+            },
+          })
+          return true
+        }
+        if (parts[0] === 'status') {
           channel.pushLocal('/color', [
             channel.sessionColor === ''
               ? t('color-current-none')
@@ -2264,6 +2275,21 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'color') {
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: SESSION_COLOR_NAMES.length })
+      } else if (plainReturn) {
+        const name = SESSION_COLOR_NAMES[overlay.index]
+        dispatchOverlay({ type: 'close' })
+        if (name) {
+          channel.setSessionColor(name)
+          channel.notify(t('color-set', { name }), { color: 'success' })
+        }
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
     if (overlay.kind === 'effort') {
       if (key.leftArrow || key.rightArrow) {
         const delta = key.leftArrow ? -1 : 1
@@ -3126,6 +3152,22 @@ export function Chat({
                   dispatchOverlay({ type: 'close' })
                   const name = PRESET_NAMES[index]
                   if (name) channel.setActivityFrames(name)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'color' && (
+            <Box flexDirection="column" marginTop={1}>
+              <ColorPicker
+                focusIndex={overlay.index}
+                currentColor={channel.sessionColor}
+                onPick={(index) => {
+                  dispatchOverlay({ type: 'close' })
+                  const name = SESSION_COLOR_NAMES[index]
+                  if (name) {
+                    channel.setSessionColor(name)
+                    channel.notify(t('color-set', { name }), { color: 'success' })
+                  }
                 }}
               />
             </Box>

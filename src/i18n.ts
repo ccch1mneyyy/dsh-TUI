@@ -578,6 +578,7 @@ const dict = {
   'skills-source-custom': { zh: '自定义', en: 'custom' },
   'picker-title-theme': { zh: '颜色主题', en: 'Color theme' },
   'picker-title-activity': { zh: '指示器预设', en: 'Indicator preset' },
+  'picker-title-color': { zh: '会话强调色', en: 'Session accent color' },
   'picker-title-effort': { zh: '推理强度', en: 'Reasoning effort' },
   'model-loading': { zh: '正在加载模型', en: 'Loading models' },
   'model-loading-subtitle': { zh: '正在查询 provider…', en: 'Querying the provider…' },

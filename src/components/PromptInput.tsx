@@ -1504,11 +1504,12 @@ export function PromptInput({
   // `?? ''` 防御最小 mock channel（只声明用到的字段的回归脚本）。
   const sessionAccent = sessionColorHex(channel.sessionColor ?? '')
   const promptAccent = channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'promptBorder')
-  // 顶边框左侧的会话名标签（CC 风格 chip）：色随强调色；超宽截断，宽度
-  // 随终端列数伸缩但不超过 28 显示单元。
+  // 顶边框右侧的会话名标签（CC 风格 chip）：色随强调色；超宽截断，宽度
+  // 随终端列数伸缩但不超过 28 显示单元。默认关闭——`/settings` 的
+  // 「会话名标签」开关（dsh-tui.promptSessionLabel）开启后显示。
   const sessionTitle = channel.sessionTitle ?? ''
-  const topLeftLabel: InputBorderLabel | undefined =
-    sessionTitle !== ''
+  const topRightLabel: InputBorderLabel | undefined =
+    channel.promptSessionLabel === true && sessionTitle !== ''
       ? {
           text: truncateToWidth(sessionTitle, Math.max(8, Math.min(28, columns - 8))),
           color: channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'claude'),
@@ -1669,7 +1670,7 @@ export function PromptInput({
         columns={columns}
         onLight={isLightThemeActive(themeName)}
         idleColor={promptAccent}
-        topLeftLabel={topLeftLabel}
+        topRightLabel={topRightLabel}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph

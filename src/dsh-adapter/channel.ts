@@ -547,6 +547,9 @@ export interface Channel {
    *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
    *  nothing). */
   readonly scrollGutter: ScrollGutterMode
+  /** Whether the session-name chip shows on the prompt top border's right
+   *  side (settings `dsh-tui.promptSessionLabel`; off by default). */
+  readonly promptSessionLabel: boolean
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
@@ -913,6 +916,8 @@ export interface ChannelState {
   toolBackground: ToolBackground
   /** Transcript gutter mode (see the public Channel type). */
   scrollGutter: ScrollGutterMode
+  /** Session-name chip on the prompt border (see the public Channel type). */
+  promptSessionLabel: boolean
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
@@ -923,6 +928,8 @@ export interface ChannelState {
   setToolBackground(background: ToolBackground): void
   /** Apply a transcript gutter mode change. */
   setScrollGutter(mode: ScrollGutterMode): void
+  /** Apply a prompt session-name chip change. */
+  setPromptSessionLabel(enabled: boolean): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -1437,6 +1444,9 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
     scrollGutter?: ScrollGutterMode
+    /** Session-name chip on the prompt top border; default off (settings
+     *  `dsh-tui.promptSessionLabel`). */
+    promptSessionLabel?: boolean
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -2399,6 +2409,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
+    promptSessionLabel: options.promptSessionLabel === true,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,
@@ -3532,6 +3543,11 @@ export function createChannel(
       const normalized = normalizeScrollGutter(mode)
       if (normalized === state.scrollGutter) return
       state.scrollGutter = normalized
+      state.emit()
+    },
+    setPromptSessionLabel(enabled) {
+      if (enabled === state.promptSessionLabel) return
+      state.promptSessionLabel = enabled
       state.emit()
     },
     setStatusBar(config) {

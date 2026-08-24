@@ -5,9 +5,11 @@
  * Drives the real Chat command path in xterm (same harness as
  * verify-thinking-display): `/color <name>` must call channel.setSessionColor
  * and repaint the prompt border in that color (cell-level fg assertion),
- * the session title must render as a chip on the top border, `/color reset`
- * must clear it, and `/recap` must surface the model summary + proposed
- * title with a one-key apply through renameSession.
+ * the session title must render as a chip on the top border's RIGHT side
+ * (settings `promptSessionLabel`, off by default — the chip must vanish
+ * when the toggle is off), `/color reset` must clear it, and `/recap` must
+ * surface the model summary + proposed title with a one-key apply through
+ * renameSession.
  *
  * Every command step settles on the SCREEN showing the command's visible
  * effect (notification / local row / panel) — not on the synchronous mock
@@ -117,6 +119,7 @@ function makeChannel() {
     status: 'idle',
     sessionTitle: '我的会话',
     sessionColor: '',
+    promptSessionLabel: true,
     agentId: 'session-identity-repro',
     model: 'deepseek-v4-flash',
     provider: 'deepseek',
@@ -238,12 +241,25 @@ const instance = await render(
 )
 await settle(() => screenText().includes('我的会话'))
 
-// ── 1. session 名标签显示在输入框顶边框上 ──────────────────────────────
+// ── 1. session 名标签显示在输入框顶边框右上角（开关开启时）────────────
 let row = borderRow()
 check('输入框顶边框存在', row !== undefined)
-check('顶边框左侧渲染会话名标签', row !== undefined && row.text.includes('╭ 我的会话 '), row?.text ?? '')
+check('顶边框右侧渲染会话名标签（与右圆角留白）', row !== undefined && row.text.includes(' 我的会话 ──╮'), row?.text ?? '')
 const defaultFg = borderFgColor()
 check('未设置颜色时边框为主题 promptBorder 灰蓝', defaultFg === 0x55606f, `0x${defaultFg?.toString(16) ?? '?'}`)
+
+// ── 1b. 开关关闭时标签隐藏（默认关，settings `promptSessionLabel`）────
+channel.promptSessionLabel = false
+channel.emit()
+await settle(() => {
+  const r = borderRow()
+  return r !== undefined && !r.text.includes('我的会话')
+})
+check('关闭开关后会话名标签隐藏', borderRow() !== undefined && !borderRow()!.text.includes('我的会话'))
+channel.promptSessionLabel = true
+channel.emit()
+await settle(() => borderRow()?.text.includes(' 我的会话 ──╮') === true)
+check('重新开启后标签恢复（右上角）', borderRow()?.text.includes(' 我的会话 ──╮') === true)
 
 // ── 2. /color <name> 设置会话强调色并重绘边框 ──────────────────────────
 stdin.write('/color red')
@@ -284,12 +300,37 @@ await settle(() => borderFgColor() === 0x55606f)
 const resetFg = borderFgColor()
 check('边框恢复主题色', resetFg === 0x55606f, `0x${resetFg?.toString(16) ?? '?'}`)
 
-// ── 5. /recap 面板：摘要 + 建议标题 + 一键应用 ─────────────────────────
+// ── 5. 无参 /color 打开调色板选择器，方向键 + Enter 应用 ──────────────
+stdin.write('/color')
+await settle(() => screenText().includes('/color'))
+stdin.write('\r')
+// 注意：不能拿「会话强调色」当 picker 已开的信号——命令补全下拉的
+// cmd-desc-color 描述（「设置当前会话强调色…」）也含这串字，settle 会
+// 秒匹配到 dropdown 导致后续按键错位。色点行「● red」只出现在 picker 里。
+await settle(() => screenText().includes('● red'), { timeoutMs: 10000 })
+let screen = screenText()
+check('无参 /color 打开调色板选择器', screen.includes('● red') && screen.includes('● blue'))
+check('选择器聚焦当前色（reset 后无当前色 → 首行 red）', /❯[^\n]*● red/u.test(screen), screen.split('\n').find(l => l.includes('●')) ?? '')
+stdin.write('\x1b[B') // ↓：red → orange
+await settle(() => /❯[^\n]*● orange/u.test(screenText()), { timeoutMs: 10000 })
+check('方向键移动焦点到 orange', /❯[^\n]*● orange/u.test(screenText()))
+// Chat 对模态 Enter 有 80ms 去重（lastModalEnterAtRef，防 \r\n 双事件）：
+// 本 harness 处理快时，打开 picker 的 Enter 与应用 Enter 落在同一窗口内，
+// 第二个 \r 会被吞掉（Esc 不受影响，实测 picker 活着但不应用）。留出
+// 处理时间间隙，与 verify-thinking-display 的 120ms sleep 同一理由。
+await sleep(200)
+stdin.write('\r')
+await settle(() => screenText().includes('会话颜色已设为 orange'), { timeoutMs: 10000 })
+check('选择器 Enter 应用 orange', channel.setColorCalls.at(-1) === 'orange', JSON.stringify(channel.setColorCalls))
+check('选择器应用后关闭', !screenText().includes('● red') && !screenText().includes('● orange'))
+check('选择器设置后边框重绘为橙色 #F76B15', borderFgColor() === 0xf76b15, `0x${borderFgColor()?.toString(16) ?? '?'}`)
+
+// ── 6. /recap 面板：摘要 + 建议标题 + 一键应用 ─────────────────────────
 stdin.write('/recap')
 await settle(() => screenText().includes('/recap'))
 stdin.write('\r')
 await settle(() => screenText().includes('最近在修会话颜色与 recap'))
-let screen = screenText()
+screen = screenText()
 check('recap 摘要渲染', screen.includes('最近在修会话颜色与 recap'))
 check('建议标题渲染', screen.includes('建议标题') && screen.includes('会话标识 PR'))
 check('应用按钮渲染', screen.includes('应用'))

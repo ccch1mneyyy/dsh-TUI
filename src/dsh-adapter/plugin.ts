@@ -451,6 +451,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
     scrollGutter: config.scrollGutter,
+    promptSessionLabel: config.promptSessionLabel,
     statusBar: config.statusBar,
     handle,
   })
@@ -488,6 +489,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
+        promptSessionLabel: Schema.boolean().default(false),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -536,6 +538,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       scrollGutter?: ScrollGutterMode
+      promptSessionLabel?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -574,6 +577,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
+      channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
@@ -821,6 +825,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
             { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
           ],
+        },
+        {
+          path: ['promptSessionLabel'],
+          label: 'Session name chip',
+          descriptions: { zh: '会话名标签' },
+          hint: 'Show the session name on the prompt top border, right corner. Off by default.',
+          hintDescriptions: { zh: '在输入框顶边框右上角显示会话名。默认关闭。' },
+          kind: 'boolean',
         },
         ...shortcutFields,
         {
