@@ -140,9 +140,9 @@ const MSG = {
   },
   delegateFailed: {
     en: path =>
-      `[dsh-tui] cannot launch the profile copy:\n  ${path}\nReinstall the global launcher:\n  npm install -g ${PACKAGE}@latest`,
+      `[dsh-tui] cannot launch the profile copy:\n  ${path}\nReinstall the global launcher:\n  npm install -g --legacy-peer-deps ${PACKAGE}@latest\n(--legacy-peer-deps avoids an npm 12 peer-resolution crash; the launcher is a thin shim, so skipping global peer resolution is safe.)`,
     zh: path =>
-      `[dsh-tui] 无法启动 profile 内副本：\n  ${path}\n请重装全局启动器：\n  npm install -g ${PACKAGE}@latest`,
+      `[dsh-tui] 无法启动 profile 内副本：\n  ${path}\n请重装全局启动器：\n  npm install -g --legacy-peer-deps ${PACKAGE}@latest\n（--legacy-peer-deps 可绕过 npm 12 的 peer 解析崩溃；启动器是瘦壳，跳过全局 peer 解析是安全的。）`,
   },
   profileExited: {
     en: code => `[dsh-tui] dsh profile exited with code ${code}. Run it directly for diagnostics:\n  dsh --profile ${PROFILE}`,
@@ -297,7 +297,8 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
     if (installedNewer) {
       console.error(
         `[dsh-tui] note: the profile is already v${installedVersion}; this launcher copy is v${ownVersion}.\n` +
-          `  npm install -g ${PACKAGE}@${installedVersion}`,
+          `  npm install -g --legacy-peer-deps ${PACKAGE}@${installedVersion}\n` +
+          `(--legacy-peer-deps avoids an npm 12 peer-resolution crash, see issue #459)`,
       )
     } else {
       // profile 更旧但同 minor（patch 级错位）：允许启动，指引用 add 把

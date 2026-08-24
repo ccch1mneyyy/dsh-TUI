@@ -10,6 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
 import { DEFAULT_STATUS_BAR, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 
 export const name = 'dsh-tui'
 // `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
@@ -94,6 +95,12 @@ export interface Config {
   scrollGutter?: ScrollGutterMode
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
+  /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
+   *  id (see src/utils/keymap.ts). Combos are `ctrl+`/`alt+`/`shift+` plus a
+   *  key; several combos may be comma-separated. Unset actions keep their
+   *  defaults; the `/settings` screen edits the same keys live (its user
+   *  layer wins over this file). */
+  shortcuts?: Partial<Record<ShortcutActionId, string>>
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
@@ -141,6 +148,11 @@ export const Config: Schema<Config> = Schema.object({
     trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
     shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
   }).default({ ...DEFAULT_STATUS_BAR }),
+  // One optional combo string per customizable action (no defaults: unset
+  // keeps the built-in binding; see Config.shortcuts).
+  shortcuts: Schema.object(
+    Object.fromEntries(SHORTCUT_ACTIONS.map(action => [action.id, Schema.string().required(false)])),
+  ).required(false),
   modes: Schema.array(
     Schema.object({
       id: Schema.string(),

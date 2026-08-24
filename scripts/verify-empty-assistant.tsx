@@ -61,7 +61,13 @@ const rows: any[] = [
   { id: 0, kind: 'user', text: '帮我跑一下测试' },
   // 空文本 settled assistant（PR #383 的 bug 形状：模型直接调工具）
   { id: 1, kind: 'assistant', text: '', streaming: false },
+  // 叙述-only settled assistant（narrate 契约：⏵ 行 + 直接调工具）。
+  // 原文非空但渲染层 stripNarration 剥成空——旧过滤器测原文漏放行，
+  // 渲染成工具卡上方的孤立 ●（用户实测报告的形状）。
+  { id: 6, kind: 'assistant', text: '⏵ 正在跑测试', streaming: false },
   { id: 2, kind: 'tool', text: '', tool: { callId: 't1', name: 'Bash', argsText: '{"command": "npm test"}', argsFull: '{}', status: 'ok', startedAt: 0, durationMs: 42, resultText: 'all 12 tests passed' } },
+  // ⏵ 行 + 正文：叙述被剥但正文必须完整保留（不能误过滤）
+  { id: 7, kind: 'assistant', text: '⏵ 正在分析结果\n\n工具结果看起来全部通过 REALBODY2-END', streaming: false },
   { id: 3, kind: 'assistant', text: '测试全部通过，共 12 项。REALBODY-END', streaming: false },
   // 空文本但 streaming：必须保留（live dot）
   { id: 4, kind: 'assistant', text: '', streaming: true },
@@ -104,10 +110,14 @@ await sleep(700)
     '')
   check('工具卡正常渲染', screen.includes('Bash'), '')
   check('真实正文正常渲染', screen.includes('REALBODY-END'), '')
+  check('叙述-only settled 行被过滤（⏵ 行不渲染、上方无孤立 ●）', !screen.includes('⏵') && !dotAboveTool, '')
+  check('⏵ 行 + 正文混合行保留正文', screen.includes('REALBODY2-END'), '')
 }
 
-// 落定翻转：streaming true → false 原地写（rows 身份/长度不变）
-rows[4]!.streaming = false
+// 落定翻转：streaming true → false 原地写（rows 身份/长度不变）。
+// 按 id 定位流式行——数组顺序在该脚本演化过，索引翻转曾错翻到别的行。
+const streamRow = rows.find(r => r.id === 4)!
+streamRow.streaming = false
 channel.emit()
 await sleep(500)
 {

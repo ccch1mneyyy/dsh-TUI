@@ -112,6 +112,11 @@ const GROUPS = {
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
+// /update 恢复链路端到端回归（#479/#483）：假 dsh 按剧本重放 pnpm 失败
+// （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程
+// 走编译产物——验证陈旧安装清理后重跑成功、瞬时重试升级、真实失败不
+// 触发任何恢复且不破坏 profile，重启尾部向替代进程传递 env 契约。
+    ["verify-update-recovery", ['node', 'scripts/verify-update-recovery.mjs']],
 // /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
 // 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
 // 规则（provider-only pin 不挡偏好）、两命令的注册与解析。
@@ -188,6 +193,10 @@ const GROUPS = {
 // stdin 批量按键回归：同一读取内的文本、方向键、文本必须依次基于
 // 前一事件的输入状态执行，不能因 React 批处理读取旧闭包而丢字符。
     ["verify-batched-prompt-input", ['node', 'scripts/verify-batched-prompt-input.mjs']],
+// 快捷键 keymap 回归：共享组合语法、动作注册表与 /settings 改键
+// （Alt+V 粘贴别名、覆盖热更新、保留位集合、草稿冲突校验），以及
+// 真 Chat 里 Alt+V / 改键后的外部编辑器路径。
+    ["verify-keymap", ['node', 'scripts/verify-keymap.mjs']],
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],
@@ -261,6 +270,11 @@ const GROUPS = {
 // 模型路由原子解析回归（issue #67）：完整 config > pref > default 整对
 // 生效，provider-only pin 不得与另一半拼接出错配路由。
     ["verify-model-route", ['node', 'scripts/verify-model-route.mjs']],
+// 全屏出厂默认迁移回归（0.9.x schema + cordis.patch.yml false→true 翻转）：
+// 翻转前钉在 settings 用户层的显式 false 首启被 unset 一次（marker 仅在
+// 写入成功后落盘，失败下次自愈重试），此后再写的 false 是用户主动选择
+// 永不触碰；首启 apply 收到的值必须整键缺省而非 false。
+    ["verify-fullscreen-migration", ['node', 'scripts/verify-fullscreen-migration.mjs']],
 // CJK 显示宽度截断回归（issue #41）：4 处描述按终端显示宽度处理，
 // CJK 不劈字、窄终端布局不破。
     ["verify-cjk-truncate", ['node', '--import', 'tsx/esm', 'scripts/verify-cjk-truncate.tsx']],

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -333,6 +333,90 @@ export function isTransientUpdateFailure(stderr: string): boolean {
 }
 
 /**
+ * The pnpm Linux flavor of the tmp-rename race (issue #479): the very same
+ * `importPackage` staging path, but overlayfs surfaces the second swap of an
+ * already-replaced package dir as EEXIST — deterministically, on every run,
+ * never transiently. A plain retry of the identical command ALWAYS fails the
+ * same way (the leftover `_tmp_<pid>_<threadId>` staging dir keeps colliding),
+ * so this signature must route to the recovery path
+ * (removeStalePackageInstall + rerun), not to the plain retry.
+ */
+export function isEexistTmpRenameFailure(stderr: string): boolean {
+  return /EEXIST/i.test(stderr) && /_tmp_\d+/i.test(stderr)
+}
+
+/**
+ * The dsh profile layout places plugin packages under
+ * `$DSH_HOME ?? ~/.dsh` — the same root dsh itself resolves
+ * (`dshHomePath is $DSH_HOME ?? ~/.dsh`, and packaged presets resolve
+ * identically). /update's recovery path needs this location to clear a
+ * half-updated install pnpm can no longer swap in place (issue #479).
+ */
+export function profilePackageDir(profile: string): string {
+  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  return join(dshHome, 'profiles', profile, 'node_modules', PACKAGE_NAME)
+}
+
+/** What removeStalePackageInstall actually cleared from disk. */
+export interface StaleInstallRemoval {
+  /**
+   * `removed` — the package dir (or its junction/symlink link) is gone;
+   * `absent` — it was not there to begin with (custom profile roots just
+   * miss); `failed` — an error other than ENOENT blocked the removal.
+   */
+  packageDir: 'removed' | 'absent' | 'failed'
+  /** Leftover pnpm staging dirs (`dsh-tui_tmp_<pid>_<threadId>`) removed. */
+  tmpDirs: string[]
+}
+
+/**
+ * Recovery for the pnpm tmp-rename races (issues #225/#479): remove the
+ * profile's installed copy of this package plus the sibling `_tmp_`
+ * staging dirs a crashed swap leaves behind, so the next installer run
+ * takes the fresh-install path instead of renaming over the collision.
+ * Field-verified workaround (issue #479): `rm -rf <pkg dir>` + rerun
+ * succeeds where ten plain retries fail.
+ *
+ * A junction/symlink at the package dir is UNLINKED only — the link is
+ * removed, the target tree (a dev checkout it may point at) is never
+ * traversed or deleted. Best effort throughout: this runs inside a
+ * failure-recovery branch, so an unusable result simply falls through to
+ * the rerun and the manual repair hint.
+ */
+export function removeStalePackageInstall(profile: string): StaleInstallRemoval {
+  const pkgDir = profilePackageDir(profile)
+  const scopeDir = dirname(pkgDir)
+  const removal: StaleInstallRemoval = { packageDir: 'absent', tmpDirs: [] }
+  try {
+    const stats = lstatSync(pkgDir)
+    // lstat reports junctions AND symlinks as isSymbolicLink — remove the
+    // link itself, never what it points at.
+    if (stats.isSymbolicLink() || stats.isDirectory()) {
+      rmSync(pkgDir, { recursive: true, force: true })
+      removal.packageDir = 'removed'
+    }
+  } catch (error) {
+    removal.packageDir = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'failed'
+  }
+  try {
+    for (const name of readdirSync(scopeDir)) {
+      if (!/^dsh-tui_tmp_\d+_\d+$/.test(name)) continue
+      const staging = join(scopeDir, name)
+      try {
+        rmSync(staging, { recursive: true, force: true })
+        removal.tmpDirs.push(name)
+      } catch {
+        // Staging leftovers are best effort; the package dir removal is
+        // the load-bearing half of the recovery.
+      }
+    }
+  } catch {
+    // Unreadable scope dir — nothing more to clear.
+  }
+  return removal
+}
+
+/**
  * Best-effort migrate the GLOBAL launcher to the delegating shim (0.8.7):
  * after a successful profile update, copy this package's `bin/dsh-tui.js`
  * and `package.json` over the global install so the launcher can never lag
@@ -436,6 +520,23 @@ export async function updateTuiAndRestart(
     updateStderr = ''
     updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
   }
+  // Deterministic Linux tmp-rename race (issue #479): EEXIST never clears on
+  // a plain retry (the staging-dir collision reproduces every run), and a
+  // transient retry that failed again means the same leftover state. Both
+  // recover by removing the stale install + staging dirs, then rerunning —
+  // the field-verified workaround that takes pnpm down its fresh-install
+  // path instead of renaming over the collision.
+  if (updateCode !== 0 && (isEexistTmpRenameFailure(updateStderr) || isTransientUpdateFailure(updateStderr))) {
+    const flavor = isEexistTmpRenameFailure(updateStderr) ? 'EEXIST, issue #479' : 'retry failed, issue #225'
+    const removal = removeStalePackageInstall(profile)
+    const stagingNote = removal.tmpDirs.length > 0 ? ` + ${removal.tmpDirs.length} staging dir(s)` : ''
+    process.stderr.write(
+      `dsh-tui: pnpm tmp-rename race (${flavor}) — cleared the stale install ` +
+        `(package dir: ${removal.packageDir}${stagingNote}) and rerunning the update…\n`,
+    )
+    updateStderr = ''
+    updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
+  }
   if (updateCode !== 0) return { updateCode, restartCode: updateCode }
 
   // A --latest fallback (preflight failed) on a stale mirror can still land
@@ -484,15 +585,16 @@ export async function updateTuiAndRestart(
     process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
   }
 
-  const restartCode = await runProcess(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
-    env: {
-      ...process.env,
-      // Dual-write the resume contract (issue #120): the cordis layer of a
-      // still-old TUI build reads only DSH_CC_RESUME_SESSION.
-      DSH_TUI_RESUME_SESSION: sessionId,
-      DSH_CC_RESUME_SESSION: sessionId,
-      [UPDATED_FROM_ENV]: updatedFrom,
-    },
+  // Restart through the same hardened handoff as /restart (issues
+  // #284/#307/#483): wait for the replacement's natural exit (the outer
+  // interpreter must not reclaim the console under it), re-assert the
+  // stdin detach from a watchdog so a revived pump cannot swallow the
+  // child's keypresses, and capture a fast-death stderr report. The old
+  // plain inherit spawn raced the interpreter for input on Windows
+  // Terminal (issue #483: "cannot type anything after /update").
+  const restartCode = await restartTui(sessionId, {
+    env: { [UPDATED_FROM_ENV]: updatedFrom },
+    kind: 'update',
   })
   return { updateCode, restartCode }
 }
@@ -503,24 +605,26 @@ export async function updateTuiAndRestart(
  * same node process with the original argv and the dual-written resume
  * contract, so a fresh process re-boots the same profile and attaches the
  * same session. No installation is touched, so it works on any launch
- * (profile, source checkout, `--config` overlay).
+ * (profile, source checkout, `--config` overlay). `/update` reuses this
+ * handoff for its own restart tail (`kind: 'update'`): the keyboard-race
+ * hardening below is exactly the failure its users reported (issue #483:
+ * update restarts into a TUI that takes no input).
  *
  * The TUI must already be unmounted before this is called (same terminal
  * handoff contract as `updateTuiAndRestart`): the caller runs this from the
  * exit funnel's done callback, after finishExit detached the terminal and
  * the readable stdin pump.
  *
- * This waits for the replacement's natural exit, exactly like the proven
- * `/update` restart: the outer command interpreter that ran `dsh-tui`
- * reclaims the console the moment the launch chain (cmd → wrapper → this
- * process) unwinds, and an orphaned replacement still attached to the
- * console then fights the interpreter's own prompt and line reader for
- * every keypress (field evidence 2026-08-24: healthy child mounted the
- * UI, the old process exited on a 4s survival timer, the interpreter
- * printed its prompt over the TUI and the DA response bytes landed on
- * the prompt line). Waiting is safe because finishExit already paused
- * and unref'd this process's stdin — the child is the console's only
- * key reader (issues #284/#307).
+ * This waits for the replacement's natural exit: the outer command
+ * interpreter that ran `dsh-tui` reclaims the console the moment the
+ * launch chain (cmd → wrapper → this process) unwinds, and an orphaned
+ * replacement still attached to the console then fights the interpreter's
+ * own prompt and line reader for every keypress (field evidence
+ * 2026-08-24: healthy child mounted the UI, the old process exited on a
+ * 4s survival timer, the interpreter printed its prompt over the TUI and
+ * the DA response bytes landed on the prompt line). Waiting is safe
+ * because finishExit already paused and unref'd this process's stdin —
+ * the child is the console's only key reader (issues #284/#307).
  *
  * The 4s survival window remains a DIAGNOSIS marker only: a replacement
  * that dies within it never painted the TUI, and its captured stderr is
@@ -528,12 +632,28 @@ export async function updateTuiAndRestart(
  * late exit is quiet — by then the user owned a working TUI session.
  *
  * @param sessionId - Session to resume in the replacement process.
+ * @param options - `kind: 'update'` drops the /restart boot-diagnosis
+ *   marker and tags restart.log events for the update flow; `env` adds
+ *   marker variables for the replacement (e.g. DSH_TUI_UPDATED_FROM).
  * @returns 0 when the replacement ran and exited cleanly, 127 when it
  *   failed to start, otherwise the child's own exit code.
  */
-export async function restartTui(sessionId: string): Promise<number> {
+export interface TuiRestartOptions {
+  /** Extra env markers for the replacement process (/update's stamp). */
+  env?: Record<string, string>
+  /**
+   * 'update' reuses this handoff after an install: no
+   * DSH_TUI_RESTART_CHILD marker (that flag is /restart-only boot
+   * diagnostics) and restart.log events carry the update-restart tag.
+   */
+  kind?: 'restart' | 'update'
+}
+
+export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
+  const kind = options.kind ?? 'restart'
+  const tag = kind === 'update' ? 'update-restart' : 'restart'
   const argv = [...process.execArgv, ...process.argv.slice(1)]
-  logRestartEvent('restart: spawning replacement', {
+  logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,
     argv,
     cwd: process.cwd(),
@@ -553,8 +673,9 @@ export async function restartTui(sessionId: string): Promise<number> {
         DSH_TUI_RESUME_SESSION: sessionId,
         DSH_CC_RESUME_SESSION: sessionId,
         // Marks the replacement so its own boot logs to restart.log without
-        // noisy logging on every ordinary launch.
-        [RESTART_CHILD_ENV]: '1',
+        // noisy logging on every ordinary launch (/restart only).
+        ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
+        ...options.env,
       },
       // stdin/stdout stay inherited so the replacement owns the console the
       // moment it boots; stderr is captured so a boot failure is reportable
@@ -562,7 +683,7 @@ export async function restartTui(sessionId: string): Promise<number> {
       // the child dies, and a raw inherit write can vanish).
       stdio: ['inherit', 'inherit', 'pipe'],
     })
-    logRestartEvent('restart: replacement spawned', { childPid: child.pid })
+    logRestartEvent(`${tag}: replacement spawned`, { childPid: child.pid })
     // Handoff watchdog (field evidence 2026-08-24: restarted TUI mounts but
     // takes no input). Two jobs, both diagnosis-grade:
     // 1. SAMPLE this process's stdin state every second — if anything
@@ -613,26 +734,26 @@ export async function restartTui(sessionId: string): Promise<number> {
       // terminal report below, and unbounded output must not grow the file.
       if (loggedStderrBytes < 4096) {
         loggedStderrBytes += chunk.length
-        logRestartEvent('restart: replacement stderr', { text: chunk.toString('utf8').slice(0, 2048) })
+        logRestartEvent(`${tag}: replacement stderr`, { text: chunk.toString('utf8').slice(0, 2048) })
       }
     })
     // Diagnosis marker only — never resolves: after the window the child owns
     // the terminal, and this process must keep the launch chain open until
     // the replacement exits (see the header comment).
     const timer = setTimeout(() => {
-      logRestartEvent('restart: survival window passed, following the replacement until it exits')
+      logRestartEvent(`${tag}: survival window passed, following the replacement until it exits`)
     }, 4000)
     timer.unref()
     child.once('error', error => {
       clearTimeout(timer)
-      logRestartEvent('restart: spawn error', { message: error.message })
+      logRestartEvent(`${tag}: spawn error`, { message: error.message })
       writeHandoffNotice(`dsh-tui: failed to spawn the restart: ${error.message}\n`)
       resolve(127)
     })
     child.once('close', (code, signal) => {
       clearTimeout(timer)
       const elapsedMs = Date.now() - startedAt
-      logRestartEvent('restart: replacement exited', {
+      logRestartEvent(`${tag}: replacement exited`, {
         code: code ?? null,
         signal: signal ?? null,
         elapsedMs,
@@ -645,7 +766,7 @@ export async function restartTui(sessionId: string): Promise<number> {
         writeHandoffNotice(
           `dsh-tui: restart child exited during the handoff (code ${code ?? 'null'}` +
             `${signal === undefined || signal === null ? '' : `, signal ${signal}`}) — the TUI did not come up.` +
-            `${suffix}\nYour session is preserved; resume with the launcher or retry /restart.\n`,
+            `${suffix}\nYour session is preserved; resume with the launcher or retry the command.\n`,
         )
       } else if (code !== 0 && code !== null) {
         // Late nonzero exit: the session ended abnormally, say so briefly.

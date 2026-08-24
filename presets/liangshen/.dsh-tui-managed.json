@@ -1,5 +1,5 @@
 {
   "owner": "@deepseek-harness-tui/dsh-tui",
   "preset": "liangshen",
-  "revision": "liangshen-plan-prompt-toggle-v2"
+  "revision": "liangshen-plan-prompt-toggle-durable-hint-v6"
 }

@@ -11,7 +11,8 @@ import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
-import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
+import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
 import { formatTokens } from '../cc/format.js'
 import { homeDir } from '../utils/paths.js'
 import type { LlmModelInfo } from '../dsh-adapter/types.js'
@@ -2339,8 +2340,9 @@ export function Chat({
         if (historyMatches.length > 0) {
           dispatchOverlay({ type: 'move', delta: -1, count: historyMatches.length })
         }
-      } else if (key.downArrow || (isMod(key) && input === 'r')) {
-        // CC's historySearch:next — ↓ and repeat ctrl+r walk to the next match.
+      } else if (key.downArrow || actionMatches('history', input, key)) {
+        // CC's historySearch:next — ↓ and the history key (default Ctrl+R)
+        // walk to the next match.
         if (historyMatches.length > 0) {
           dispatchOverlay({ type: 'move', delta: 1, count: historyMatches.length })
         }
@@ -2446,24 +2448,25 @@ export function Chat({
       }
       return
     }
-    if (isMod(key) && input === 't') {
-      // Ctrl+T opens the trajectory scene at any point in the session.
+    if (actionMatches('trajectory', input, key)) {
+      // The trajectory scene key (default Ctrl+T) opens it at any point in
+      // the session.
       openScene()
       return
     }
-    if (isMod(key) && input === 'a') {
-      // Ctrl+A opens the subagent dashboard.
+    if (actionMatches('dashboard', input, key)) {
+      // The subagent dashboard key (default Ctrl+A) opens the dashboard.
       setSubagentDashboardOpen(true)
       return
     }
-    if (isMod(key) && input === 'p' && loadedContextVisible) {
-      // Ctrl+P toggles the startup loaded-context panel while it is on
-      // screen (transcript still empty); once rows take over and the
-      // panel disappears the key has nothing left to do.
+    if (actionMatches('contextPanel', input, key) && loadedContextVisible) {
+      // The loaded-context panel key (default Ctrl+P) toggles the startup
+      // panel while it is on screen (transcript still empty); once rows take
+      // over and the panel disappears the key has nothing left to do.
       toggleLoadedContext()
       return
     }
-    if (isMod(key) && input === 'r' && !helpOpen) {
+    if (actionMatches('history', input, key) && !helpOpen) {
       setHistoryEntries(loadHistory())
       dispatchOverlay({
         type: 'open',
@@ -2498,11 +2501,12 @@ export function Chat({
         channel.cancel()
       }
       event.stopImmediatePropagation()
-    } else if (isMod(key) && input === 'o' && !helpOpen) {
-      // Leaving transcript mode (Ctrl+O) — search was already handled above.
-      // Help is modal: toggling this state behind the overlay is invisible,
-      // then the next `/` unexpectedly opens transcript search instead of
-      // slash-command completion after Help closes.
+    } else if (actionMatches('transcript', input, key) && !helpOpen) {
+      // Leaving transcript mode (default Ctrl+O) — search was already
+      // handled above. Help is modal: toggling this state behind the
+      // overlay is invisible, then the next `/` unexpectedly opens
+      // transcript search instead of slash-command completion after Help
+      // closes.
       setExpanded(previous => !previous)
       // The toggle rewrites every thinking row's layout at once. The
       // ordinary scroll-based diff pushes rows into terminal scrollback on
@@ -2541,15 +2545,16 @@ export function Chat({
       } else {
         requestExit()
       }
-    } else if (isMod(key) && input === 'l') {
-      // CC's app:redraw — clear the physical terminal and repaint.
+    } else if (actionMatches('redraw', input, key)) {
+      // CC's app:redraw (default Ctrl+L) — clear the physical terminal and
+      // repaint.
       instances.get(process.stdout)?.forceRedraw()
-    } else if (isMod(key) && input === 'e') {
+    } else if (actionMatches('showAll', input, key)) {
       setShowAllMessages(previous => !previous)
-    } else if (isMod(key) && input === 'q') {
-      // Fold/unfold the GoalTodoPanel todo section — works mid-turn too:
-      // the collapsed line keeps the done/total count and the live task
-      // preview, so long todo lists stop crowding the prompt.
+    } else if (actionMatches('todoFold', input, key)) {
+      // Fold/unfold the GoalTodoPanel todo section (default Ctrl+Q) — works
+      // mid-turn too: the collapsed line keeps the done/total count and the
+      // live task preview, so long todo lists stop crowding the prompt.
       setTodoCollapsed(previous => !previous)
     } else if (plainReturn && !isSticky) {
       // Enter while scrolled up returns to the bottom (CC's pill: the

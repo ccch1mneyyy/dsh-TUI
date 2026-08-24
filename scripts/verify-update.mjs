@@ -14,11 +14,17 @@
  * - DSH_TUI_UPDATED_FROM is stamped from the pre-update version: the stamp
  *   read happens before the first installer child runs and the restart env
  *   reuses that captured value (issue #307's new-vs-new false alarm)
+ * - isEexistTmpRenameFailure() classifies the deterministic Linux rename
+ *   collision (issue #479) — recovery territory, never a plain retry — and
+ *   removeStalePackageInstall() clears the stale package dir plus leftover
+ *   `_tmp_` staging dirs without traversing a junction/symlink
+ * - the /update restart tail reuses the hardened restartTui handoff
+ *   (issues #284/#307/#483) with kind: 'update'
  *
  * Run: node scripts/verify-update.mjs
  */
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -37,6 +43,9 @@ const {
   shellQuote,
   tuiUpdatePluginArgs,
   isTransientUpdateFailure,
+  isEexistTmpRenameFailure,
+  profilePackageDir,
+  removeStalePackageInstall,
 } = await import('../lib/types/update.js')
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
 const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQuote.js', import.meta.url))
@@ -231,9 +240,11 @@ check('deadlock: invalid input is never a deadlock target', !isBootDeadlockTarge
 
 const compiledSource = readFileSync(compiledModulePath, 'utf8')
 // P1: the node restart must NOT go through a shell — assert the compiled
-// restart spawn call has no shell option while the dsh call does.
-const dshSpawn = compiledSource.indexOf("runProcess(dsh")
-const nodeSpawn = compiledSource.indexOf('runProcess(process.execPath')
+// restart spawn call has no shell option while the dsh call does. The
+// restart spawn now lives inside restartTui() (shared by /restart and the
+// /update restart tail); the dsh calls live in updateTuiAndRestart().
+const dshSpawn = compiledSource.indexOf('runProcess(dsh')
+const nodeSpawn = compiledSource.indexOf('spawn(process.execPath')
 const dshSegment = compiledSource.slice(dshSpawn, nodeSpawn)
 const nodeSegment = compiledSource.slice(nodeSpawn)
 check(
@@ -253,9 +264,10 @@ check(
   'stamp: pre-update version is captured before the installer runs',
   stampRead !== -1 && stampRead < dshSpawn,
 )
+const stampEnvUse = compiledSource.indexOf('[UPDATED_FROM_ENV]: updatedFrom')
 check(
   'stamp: restart env reuses the captured value, not a fresh read',
-  /\[UPDATED_FROM_ENV\]:\s*updatedFrom/.test(nodeSegment),
+  stampEnvUse !== -1 && stampEnvUse > dshSpawn,
 )
 // The --latest fallback (preflight failed) can also land on the deadlock
 // range on a stale mirror: the post-install guard must refuse a restart
@@ -306,6 +318,130 @@ check(
 check(
   'transient: empty output does not qualify',
   !isTransientUpdateFailure(''),
+)
+
+// ---- isEexistTmpRenameFailure: the deterministic Linux flavor (issue #479)
+const eexistSample =
+  "ERR_PNPM_EEXIST  EEXIST: file already exists, rename " +
+  "'/root/.dsh/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/node_modules' " +
+  "-> '/root/.dsh/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui_tmp_2424672_1/node_modules'"
+check(
+  'eexist: pnpm tmp-rename EEXIST qualifies (#479 verbatim stderr)',
+  isEexistTmpRenameFailure(eexistSample),
+)
+check(
+  'eexist: EEXIST without the tmp token does not qualify',
+  !isEexistTmpRenameFailure('EEXIST: file already exists, mkdir /root/.cache/pnpm'),
+)
+check(
+  'eexist: transient ENOENT is not the EEXIST flavor',
+  !isEexistTmpRenameFailure("[ERR_PNPM_ENOENT] [importPackage] ENOENT: scandir 'D:\\p\\dsh-tui_tmp_40044_1\\node_modules'"),
+)
+check(
+  'transient: EEXIST is NOT plain-retry transient (needs stale-install recovery, #479)',
+  !isTransientUpdateFailure(eexistSample),
+)
+
+// ---- profilePackageDir: where the recovery path clears a stale install
+const DSH_HOME_BACKUP = process.env.DSH_HOME
+const staleSandbox = mkdtempSync(join(tmpdir(), 'verify-update-stale-'))
+try {
+  const sandboxRoot = join(staleSandbox, 'dsh-root')
+  process.env.DSH_HOME = sandboxRoot
+  check(
+    'profilePackageDir: DSH_HOME root wins',
+    profilePackageDir('dsh-tui') === join(sandboxRoot, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui'),
+    `got ${profilePackageDir('dsh-tui')}`,
+  )
+  delete process.env.DSH_HOME
+  check(
+    'profilePackageDir: defaults to ~/.dsh',
+    profilePackageDir('custom') === join(homedir(), '.dsh', 'profiles', 'custom', 'node_modules', '@deepseek-harness-tui', 'dsh-tui'),
+    `got ${profilePackageDir('custom')}`,
+  )
+  process.env.DSH_HOME = sandboxRoot
+
+  // ---- removeStalePackageInstall: clears the package dir + tmp staging dirs
+  const scope = join(sandboxRoot, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui')
+  const pkgDir = join(scope, 'dsh-tui')
+  mkdirSync(join(pkgDir, 'lib'), { recursive: true })
+  writeFileSync(join(pkgDir, 'lib', 'marker.txt'), 'stale install')
+  mkdirSync(join(scope, 'dsh-tui_tmp_2424672_1'))
+  writeFileSync(join(scope, 'dsh-tui_tmp_2424672_1', 'leftover'), 'x')
+  // Look-alike dirs must survive: other packages and foreign tmp names.
+  mkdirSync(join(scope, 'unrelated-pkg'))
+  mkdirSync(join(scope, 'other_tmp_999_1'))
+  const removal = removeStalePackageInstall('dsh-tui')
+  check(
+    'stale: package dir removed',
+    !existsSync(pkgDir),
+  )
+  check(
+    'stale: leftover tmp staging dir removed',
+    !existsSync(join(scope, 'dsh-tui_tmp_2424672_1')),
+  )
+  check(
+    'stale: removal reports both halves',
+    removal.packageDir === 'removed' && removal.tmpDirs.length === 1 && removal.tmpDirs[0] === 'dsh-tui_tmp_2424672_1',
+    `got ${JSON.stringify(removal)}`,
+  )
+  check(
+    'stale: sibling packages and foreign tmp names survive',
+    existsSync(join(scope, 'unrelated-pkg')) && existsSync(join(scope, 'other_tmp_999_1')),
+  )
+
+  // A junction/symlink at the package dir: the LINK goes, the target tree
+  // it points at (a dev checkout) must never be traversed or deleted.
+  const precious = join(staleSandbox, 'precious-checkout')
+  mkdirSync(join(precious, 'src'), { recursive: true })
+  writeFileSync(join(precious, 'src', 'keep.txt'), 'do not delete')
+  symlinkSync(precious, pkgDir, process.platform === 'win32' ? 'junction' : 'dir')
+  const linkRemoval = removeStalePackageInstall('dsh-tui')
+  check(
+    'stale: link at the package dir is unlinked',
+    !existsSync(pkgDir),
+  )
+  check(
+    'stale: link target is never traversed',
+    existsSync(join(precious, 'src', 'keep.txt')),
+  )
+  check(
+    'stale: link removal still reports removed',
+    linkRemoval.packageDir === 'removed',
+  )
+
+  const absent = removeStalePackageInstall('never-existed')
+  check(
+    'stale: absent package dir reports absent (custom roots just miss)',
+    absent.packageDir === 'absent' && absent.tmpDirs.length === 0,
+  )
+} finally {
+  if (DSH_HOME_BACKUP === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = DSH_HOME_BACKUP
+  rmSync(staleSandbox, { recursive: true, force: true })
+}
+
+// ---- recovery wiring (issue #479): the EEXIST signature and the stale
+// install removal must be reachable from updateTuiAndRestart, and the
+// /update restart tail must ride the hardened restartTui handoff (#483).
+const updateFnStart = compiledSource.indexOf('export async function updateTuiAndRestart')
+const restartFnStart = compiledSource.indexOf('export async function restartTui')
+const updateSegment = compiledSource.slice(updateFnStart, restartFnStart)
+check(
+  'recovery: EEXIST failure routes to the stale-install removal (#479)',
+  updateSegment.includes('isEexistTmpRenameFailure(updateStderr)') && updateSegment.includes('removeStalePackageInstall(profile)'),
+)
+check(
+  'recovery: transient retry failure also escalates to removal (#225 leftovers)',
+  updateSegment.includes('isTransientUpdateFailure(updateStderr)'),
+)
+check(
+  'update restart: reuses the hardened restartTui handoff with kind update (#483)',
+  updateSegment.includes("kind: 'update'") && updateSegment.includes('restartTui(sessionId, {'),
+)
+check(
+  'restartTui: update kind skips the /restart boot-diagnosis marker',
+  /kind === 'restart' \? \{ \[RESTART_CHILD_ENV\]: '1' \} : \{\}/.test(compiledSource),
 )
 
 if (failed > 0) {

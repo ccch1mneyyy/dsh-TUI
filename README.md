@@ -141,7 +141,7 @@ npm install -g @deepseek-harness-tui/dsh-tui
 | `Ctrl+O` | 展开/收起详情（思考全文、工具参数与输出） |
 | `Ctrl+R` | 历史消息搜索 |
 | `/` | 会话内全文搜索（`n`/`N` 跳转） |
-| `Ctrl+V` | 粘贴文本或文件管理器中的文件；图片显示为 `[Image #N]` 并作为持久附件发送 |
+| `Ctrl+V` / `Alt+V` | 粘贴文本或文件管理器中的文件；图片显示为 `[Image #N]` 并作为持久附件发送。终端拦截 `Ctrl+V` 时用 `Alt+V` |
 | `Ctrl+G` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
 | `?` | 快捷键菜单（仅输入框为空时响应） |
 | `Shift+↑` | 消息选择模式（Enter 展开单条） |
@@ -153,13 +153,15 @@ npm install -g @deepseek-harness-tui/dsh-tui
 
 **模型工作中的三态投递**：`Enter`=steer（注入下一步边界，不中断）· `Tab`=follow-up（排入当前回合之后）· `Ctrl+Enter`=interrupt（打断并立即发送）。
 
+**自定义快捷键**：上表带 `Ctrl+<键>` 的动作型快捷键（粘贴、历史搜索、外部编辑器、转录展开、轨迹、子代理面板、上下文面板、显示全部、重绘、待办折叠）都可在 `/settings` → `dsh-tui` → `Shortcuts` 分组中改键：填写 `alt+v`、`ctrl+shift+v` 这类组合，多个组合用逗号分隔，留空恢复默认；保存即生效，无需重启。与固定编辑键（`Ctrl+A/E/U/K/W`、`Ctrl+←/→`）或其它动作冲突的组合会被拒绝。cordis.yml 也可通过 `shortcuts.<action>` 静态指定（settings 用户层优先）。
+
 **macOS 修饰键**：上表中 Windows/Linux 的 `Ctrl+<键>` 在 macOS 上同时可用 `⌘<键>`
 （如 `⌘V` 粘贴、`⌘O` 展开详情、`⌘Enter` 立即发送）；仅 `Ctrl+C` / `Ctrl+D`
 （中断/退出）保持 Ctrl 不变，避免与 macOS 系统级 `⌘C` 复制等肌肉记忆冲突。
 `⌘` 需终端支持扩展键盘协议（iTerm2 / kitty / WezTerm / ghostty / tmux）；
 macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctrl`。
 
-**鼠标（全屏模式默认开启；`fullscreen: false` 可退回 inline 主屏模式）**
+**鼠标（全屏模式默认开启；`fullscreen: false` 可退回 inline 主屏模式；从旧版更新会一次性清除更新前保存的 inline 选择，之后仍可再改回）**
 
 | 操作 | 功能 |
 |---|---|

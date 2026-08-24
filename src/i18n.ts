@@ -278,7 +278,7 @@ const dict = {
   'streaming-folded': { zh: '…（前 {{count}} 字符流式期间已折叠，落定后完整显示）', en: '…(first {{count}} chars folded while streaming; full text renders once the turn settles)' },
   'vim-not-implemented': { zh: 'vim 模式暂未实现', en: 'vim mode not implemented yet' },
   'terminal-setup-hint': { zh: '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。', en: 'Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).' },
-  'terminal-paste-hint': { zh: '{{mod}}V 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用。', en: '{{mod}}V pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works.' },
+  'terminal-paste-hint': { zh: '{{mod}}V 或 Alt+V 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用；快捷键可在 /settings 修改。', en: '{{mod}}V or Alt+V pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works; remappable via /settings.' },
   'connect-none': { zh: 'DSH 暂无远程连接机制（CC 的 /connect 对应能力未适配）。', en: 'DSH has no remote connection mechanism (CC\'s /connect equivalent is not adapted).' },
   'theme-switch-failed': { zh: '主题「{{name}}」切换失败（无法写入 ~/.dsh-tui/theme.json）', en: 'Theme "{{name}}" switch failed (cannot write ~/.dsh-tui/theme.json)' },
   'interrupt-delivered': { zh: '已打断当前回合，{{n}} 条消息立即处理', en: 'Interrupted current turn, {{n}} messages processed immediately' },
@@ -307,12 +307,12 @@ const dict = {
   // 0.8.3 launcher alignment bridge: /update only replaces the profile
   // copy; the global `dsh-tui` launcher must be aligned separately.
   'update-launcher-align-unknown': {
-    zh: 'Profile 已更新到 v{{version}}。如果你平时使用全局 dsh-tui 命令启动，请同步更新全局启动器：\n  npm install -g @deepseek-harness-tui/dsh-tui@{{version}}',
-    en: 'The profile is now v{{version}}. If you normally launch with the global dsh-tui command, align the global launcher too:\n  npm install -g @deepseek-harness-tui/dsh-tui@{{version}}',
+    zh: 'Profile 已更新到 v{{version}}。如果你平时使用全局 dsh-tui 命令启动，请同步更新全局启动器：\n  npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@{{version}}\n（--legacy-peer-deps 可绕过 npm 12 的 peer 解析崩溃，全局启动器是瘦壳，跳过全局 peer 解析是安全的）',
+    en: 'The profile is now v{{version}}. If you normally launch with the global dsh-tui command, align the global launcher too:\n  npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@{{version}}\n(--legacy-peer-deps works around an npm 12 peer-resolution crash; the global launcher is a thin shim, so skipping global peer resolution is safe.)',
   },
   'update-launcher-outdated': {
-    zh: 'Profile 已更新到 v{{profile}}，但全局启动器仍是 v{{launcher}}。请同步更新：\n  npm install -g @deepseek-harness-tui/dsh-tui@{{profile}}',
-    en: 'The profile is now v{{profile}}, but the global launcher is still v{{launcher}}. Align it with:\n  npm install -g @deepseek-harness-tui/dsh-tui@{{profile}}',
+    zh: 'Profile 已更新到 v{{profile}}，但全局启动器仍是 v{{launcher}}。请同步更新：\n  npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@{{profile}}\n（--legacy-peer-deps 可绕过 npm 12 的 peer 解析崩溃，见 #459）',
+    en: 'The profile is now v{{profile}}, but the global launcher is still v{{launcher}}. Align it with:\n  npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@{{profile}}\n(--legacy-peer-deps works around an npm 12 peer-resolution crash, see #459.)',
   },
 
   // ── components/ActivityLine.tsx ──────────────────────────────────────
@@ -421,6 +421,7 @@ const dict = {
 
   // ── dsh-adapter/plugin.ts（/settings 全屏设置）───────────────────────
   'settings-fullscreen-restart': { zh: '全屏设置已保存，重启 dsh-tui 后生效', en: 'Fullscreen preference saved — restart dsh-tui to apply' },
+  'settings-fullscreen-migrated': { zh: '全屏已是出厂默认（已清除更新前的 inline 选择）；偏好 inline 可在 /settings 改回', en: 'Fullscreen is now the factory default (pre-update inline choice cleared); prefer inline? Switch back in /settings' },
 
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },

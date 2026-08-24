@@ -315,16 +315,24 @@ export function MessageList({
     // that is STILL STREAMING keeps its place even with empty text — the
     // live dot is the "model is answering" affordance and content may yet
     // arrive.
+    // The emptiness test must match what RENDERING shows: the `⏵`
+    // self-narration line (dsh-working-activity narrate contract) is
+    // stripped at render (stripNarration below), so a narration-only step —
+    // thinking, `⏵ …` line, straight to a tool call — has non-empty raw
+    // text but RENDERS as that same lone `●`. Test the stripped text, or
+    // the raw-text check lets the dot through forever.
+    const rendersEmptyAssistant = (row: ChatRow): boolean =>
+      row.kind === 'assistant' && row.streaming !== true && stripNarration(row.text ?? '').trim() === ''
     let hasEmptyAssistant = false
     for (const row of sliced) {
-      if (row.kind === 'assistant' && row.streaming !== true && (row.text ?? '').trim() === '') {
+      if (rendersEmptyAssistant(row)) {
         hasEmptyAssistant = true
         break
       }
     }
     const out = hasEmptyAssistant
       ? sliced.filter(row =>
-          !(row.kind === 'assistant' && row.streaming !== true && (row.text ?? '').trim() === '') &&
+          !rendersEmptyAssistant(row) &&
           (thinkingVisible || row.kind !== 'reasoning'),
         )
       : thinkingVisible

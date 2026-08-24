@@ -154,7 +154,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
 | `Ctrl+R` | History search |
 | `/` | In-session full-text search (`n`/`N` to jump) |
-| `Ctrl+V` | Paste text or files from the file manager; images show as `[Image #N]` and are sent as durable attachments |
+| `Ctrl+V` / `Alt+V` | Paste text or files from the file manager; images show as `[Image #N]` and are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |
 | `Ctrl+G` | Edit the current input with `$VISUAL`/`$EDITOR` (e.g. nvim); content is filled back in on save and exit |
 | `?` | Keybinding menu (responds only when the input is empty) |
 | `Shift+↑` | Message selection mode (`Enter` expands a single message) |
@@ -166,6 +166,8 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 
 **Three delivery modes while the model is working**: `Enter` = steer (inject a next-step boundary, no interruption) · `Tab` = follow-up (queued after the current turn) · `Ctrl+Enter` = interrupt (break in and send immediately).
 
+**Custom keybindings**: the action shortcuts above (paste, history search, external editor, transcript expand, trajectory, subagent dashboard, loaded-context panel, show-all, redraw, todo fold) are remappable in `/settings` → `dsh-tui` → `Shortcuts`: enter combos like `alt+v` or `ctrl+shift+v`, comma-separate several, leave blank to restore the default; saves apply live with no restart. Combos that clash with the fixed editing keys (`Ctrl+A/E/U/K/W`, `Ctrl+←/→`) or with another action are rejected. Deployments can also pin them statically via `shortcuts.<action>` in cordis.yml (the settings user layer wins).
+
 **macOS modifier keys**: the `Ctrl+<key>` bindings above also work with `⌘<key>`
 on macOS (e.g. `⌘V` paste, `⌘O` expand details, `⌘Enter` send immediately);
 only `Ctrl+C` / `Ctrl+D` (interrupt/exit) stay on Ctrl, to avoid clashing
@@ -174,7 +176,7 @@ terminal support for the extended keyboard protocol (iTerm2 / kitty / WezTerm /
 ghostty / tmux); macOS's built-in Terminal.app consumes `⌘` shortcuts itself,
 so keep using `Ctrl`.
 
-**Mouse** (fullscreen is the factory default since 0.8.8; set `fullscreen: false` to restore the inline main screen)
+**Mouse** (fullscreen is the factory default since 0.8.8; set `fullscreen: false` to restore the inline main screen; updating from an older version clears a previously saved inline choice once — you can still pick inline again afterwards)
 
 | Action | Function |
 |---|---|
