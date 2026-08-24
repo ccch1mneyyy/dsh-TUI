@@ -126,6 +126,8 @@ const dict = {
   'model-switch-fork-failed': { zh: '无法切换模型 · {{err}}', en: 'Cannot switch models · {{err}}' },
   'model-switch-failed': { zh: '模型切换失败 · {{err}}', en: 'Model switch failed · {{err}}' },
   'model-switch-attach-failed': { zh: '模型已切换，但工作区挂载失败 · {{err}}', en: 'Model switched, but workspace attachment failed · {{err}}' },
+  'model-usage': { zh: '用法：/model <provider/model>（如 deepseek/deepseek-v4-flash）', en: 'Usage: /model <provider/model> (e.g. deepseek/deepseek-v4-flash)' },
+  'model-unknown': { zh: '未知模型「{{spec}}」· /model 查看全部', en: 'Unknown model "{{spec}}" · /model to view all' },
   'compact-unavailable': { zh: '压缩不可用——当前 leaf 没有压缩服务', en: 'Compaction unavailable · no compaction service in this leaf' },
   'compact-while-working': { zh: '回合运行中，无法压缩会话', en: 'Cannot compact while a turn is running' },
   'compact-working': { zh: '正在压缩会话…', en: 'Compacting conversation…' },
@@ -298,6 +300,9 @@ const dict = {
   // ── components/ActivityLine.tsx ──────────────────────────────────────
   'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
 
+  // ── components/GoalTodoPanel.tsx（目标侧：tui/components/goal-todo.ts）──
+  'goal-todo-fold-hint': { zh: '{{mod}}q 折叠', en: '{{mod}}q to fold' },
+
   // ── components/ActivityPicker.tsx ─────────────────────────────────────
   'activity-random-each-preset': { zh: '每次随机一个预设', en: 'random preset each time' },
 
@@ -369,6 +374,17 @@ const dict = {
   'frame-tail-1': { zh: '摆尾巴1', en: 'tail1' },
   'frame-tail-2': { zh: '摆尾巴2', en: 'tail2' },
   'frame-tail-3': { zh: '摆尾巴3', en: 'tail3' },
+
+  // 二级补全子项描述（/lang /theme /effort /preset /activity 的 children）
+  'sugg-status-desc': { zh: '显示当前选择', en: 'Show the current choice' },
+  'sugg-lang-zh-desc': { zh: '切换界面语言到中文', en: 'Switch the UI language to Chinese' },
+  'sugg-lang-en-desc': { zh: '切换界面语言到英文', en: 'Switch the UI language to English' },
+  'sugg-theme-auto-desc': { zh: '跟随终端背景自动切换', en: 'Follow the terminal background' },
+  'sugg-theme-builtin-desc': { zh: '内置主题', en: 'Built-in theme' },
+  'sugg-theme-user-desc': { zh: '用户主题（{{base}} 基底）', en: 'User theme ({{base}} base)' },
+  'sugg-effort-level-desc': { zh: '思考强度档位', en: 'Reasoning effort level' },
+  'sugg-activity-frames-desc': { zh: '列出或切换动画帧预设', en: 'List or switch frame presets' },
+  'sugg-activity-frame-desc': { zh: '动画帧预设', en: 'Animation frame preset' },
 
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
@@ -587,8 +603,9 @@ const dict = {
   'rename-current': { zh: '当前名称  {{title}}', en: 'Current title  {{title}}' },
   'rename-done': { zh: '已重命名为「{{title}}」', en: 'Renamed to "{{title}}"' },
   'compact-summary-folded': { zh: '摘要已折叠', en: 'Summary folded' },
-  'new-message': { zh: '{{n}} 条新消息', en: '1 new message' },
-  'new-messages': { zh: '{{n}} 条新消息', en: '{{n}} new messages' },
+  'new-message': { zh: '↓ {{n}} 条新消息', en: '↓ 1 new message' },
+  'new-messages': { zh: '↓ {{n}} 条新消息', en: '↓ {{n}} new messages' },
+  'back-to-bottom': { zh: '↓ 回到底部（Enter/End）', en: '↓ back to bottom (Enter/End)' },
 
   // ── components/ThemePicker.tsx ──────────────────────────────────────
   'theme-builtin-base': { zh: '内置 · {{name}} 基底', en: 'Built-in · {{name}} base' },
@@ -776,16 +793,6 @@ const dict = {
   'cmd-desc-workspace-resume': { zh: '切换到另一个工作区', en: 'Switch to another workspace' },
   'cmd-desc-workspace-rename': { zh: '重命名当前工作区', en: 'Rename the current workspace' },
   'cmd-desc-workspace-open': { zh: '打开路径或工作区 URI', en: 'Open a path or workspace URI' },
-  // 二级补全子项描述（/lang /theme /effort /preset /activity 的 children）
-  'sugg-status-desc': { zh: '显示当前选择', en: 'Show the current choice' },
-  'sugg-lang-zh-desc': { zh: '切换界面语言到中文', en: 'Switch the UI language to Chinese' },
-  'sugg-lang-en-desc': { zh: '切换界面语言到英文', en: 'Switch the UI language to English' },
-  'sugg-theme-auto-desc': { zh: '跟随终端背景自动切换', en: 'Follow the terminal background' },
-  'sugg-theme-builtin-desc': { zh: '内置主题', en: 'Built-in theme' },
-  'sugg-theme-user-desc': { zh: '用户主题（{{base}} 基底）', en: 'User theme ({{base}} base)' },
-  'sugg-effort-level-desc': { zh: '思考强度档位', en: 'Reasoning effort level' },
-  'sugg-activity-frames-desc': { zh: '列出或切换动画帧预设', en: 'List or switch frame presets' },
-  'sugg-activity-frame-desc': { zh: '动画帧预设', en: 'Animation frame preset' },
   // Help / exit
   'cmd-desc-help': { zh: '查看快捷键与命令' },
   'cmd-desc-exit': { zh: '退出 dsh-tui' },

@@ -30,6 +30,7 @@ import {
   matchesKey,
   visibleWidth,
   type Component,
+  type PointerEvent,
 } from '../public.js'
 import type { TuiCommands } from '../commands.js'
 import {
@@ -233,6 +234,13 @@ export class SessionTreeScreen implements Component {
   private generation = 0
   /** Host-fed viewport height in rows; 0 = unset, render at natural height. */
   private viewportHeight = 0
+  /** Entry-row geometry of the last tree render, for pointer hit-testing:
+   *  the first entry row's line offset, the visible entry count, and the
+   *  window's start index into the visible node list. 0 rows while the
+   *  loading seat or the confirm seat owns the render. */
+  private pointerRowStart = 0
+  private pointerRowCount = 0
+  private pointerWindowStart = 0
 
   constructor(deps: SessionTreeScreenDeps) {
     this.commands = deps.commands
@@ -364,6 +372,43 @@ export class SessionTreeScreen implements Component {
     }
   }
 
+  /**
+   * Pointer parity (research §4.3): a primary-button click on an entry row
+   * moves the cursor to it and asks for the rewind/fork — the keyboard Enter
+   * on that row — so the confirm seat still stands between the click and the
+   * high-risk action (only Enter on the seat executes; clicks there act on
+   * nothing). A wheel event moves the cursor by one row, clamped at the ends
+   * (the arrow keys wrap; a fast wheel must not). Clicks on the chrome
+   * (title, position line, hints, blank rows) are consumed without acting;
+   * press/release/move stay unconsumed so drag-selection copy keeps working.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if (event.type === 'click') {
+      if (event.button !== 0) return true
+      if (this.loading || this.rewinding || this.confirm !== null) return true
+      const row = event.localY - this.pointerRowStart
+      if (row < 0 || row >= this.pointerRowCount) return true
+      const nodes = this.visibleNodes()
+      const index = this.pointerWindowStart + row
+      if (index >= nodes.length) return true
+      this.notice = undefined
+      this.cursor = index
+      this.askRewind(nodes[index])
+      return true
+    }
+    if (event.type === 'wheel') {
+      if (event.deltaY === 0) return true
+      if (this.loading || this.rewinding || this.confirm !== null) return true
+      const nodes = this.visibleNodes()
+      const last = nodes.length - 1
+      if (last < 0) return true
+      const cursor = this.clampedCursor(nodes)
+      this.cursor = Math.max(0, Math.min(last, cursor + (event.deltaY > 0 ? 1 : -1)))
+      return true
+    }
+    return undefined
+  }
+
   /** Enter on a row: ask to rewind (or fork) at its entry. */
   private askRewind(flatNode: FlatNode | undefined): void {
     const entry = flatNode?.node.entry
@@ -493,13 +538,17 @@ export class SessionTreeScreen implements Component {
     const budget = Math.max(0, width - 1)
 
     if (this.loading || this.rewinding) {
+      this.pointerRowCount = 0
       return this.pad([
         paint(theme, truncateWidth(` ${t('tree-title')}`, budget), 'remember', { bold: true }),
         paint(theme, ` ${this.rewinding ? t('tree-rewinding') : t('tree-loading')}`, undefined, { dim: true }),
       ])
     }
 
-    if (this.confirm !== null) return this.renderConfirm(theme, width)
+    if (this.confirm !== null) {
+      this.pointerRowCount = 0
+      return this.renderConfirm(theme, width)
+    }
 
     const nodes = this.visibleNodes()
     const cursor = this.clampedCursor(nodes)
@@ -528,7 +577,13 @@ export class SessionTreeScreen implements Component {
 
     if (visible.length === 0) {
       lines.push(paint(theme, ` ${t('tree-empty')}`, undefined, { dim: true, italic: true }))
+      this.pointerRowStart = 0
+      this.pointerRowCount = 0
+      this.pointerWindowStart = 0
     } else {
+      this.pointerRowStart = lines.length
+      this.pointerRowCount = visible.length
+      this.pointerWindowStart = start
       visible.forEach((flatNode, offset) => {
         lines.push(this.renderRow(theme, flatNode, multipleRoots, start + offset === cursor, width))
       })

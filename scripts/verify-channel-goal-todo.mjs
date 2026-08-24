@@ -353,6 +353,11 @@ if (sessionHandler === undefined) {
       },
     })
     check('live real-shape clear folds', goalChannel.goal === undefined)
+
+    // Malformed top-level payloads are ignored silently (no throw, no cast).
+    handler(goalAgent.session, { type: 'goal/change', seq: 6, time: now + 2 })
+    handler(goalAgent.session, { type: 'goal/change', seq: 7, time: now + 3, data: { kind: 'goal/other' } })
+    check('malformed real-shape events ignored', goalChannel.goal === undefined)
   }
 }
 

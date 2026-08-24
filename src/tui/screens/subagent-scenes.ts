@@ -6,16 +6,20 @@
  *   failed) over a scrollable list of SubagentCardView rows. ↑/↓ moves the
  *   focus row and the scroll window follows it; an unmodified Enter opens
  *   the detail through `onSelect(agentId)`; Esc / Ctrl+C closes via
- *   `onClose()`. Data arrives exclusively through `update(vm)` — the command
- *   sink is part of the uniform scene constructor contract but the dashboard
- *   issues no commands today.
+ *   `onClose()`. Pointer (research §4.3): the counts row's right-end ✕ is
+ *   the Esc-equivalent close click and the wheel steps the focus row; card
+ *   rows stay keyboard-Enter only (source main parity — the transcript's
+ *   subagent card is the click-to-detail path).
  * - {@link SubagentDetailScreen}: paged full-screen view of one subagent
  *   (summary | output | tools). ←/→ turns pages (scroll resets), ↑/↓
  *   scrolls the body, X interrupts a running subagent through
  *   `commands.query.subagentInterrupt`, Esc / Ctrl+C / an unmodified Enter
- *   returns via `onBack()`. The output page tail-follows the newest
- *   streamed line while the subagent runs; page turns and settlement stop
- *   the follow so manual ↑ scrolling wins.
+ *   returns via `onBack()`. Pointer: tab cells switch pages with the turn
+ *   semantics, the hint row's `X interrupt` segment runs the x key's command
+ *   path, the identity row's ✕ takes the onBack seat, and the wheel scrolls
+ *   the body. The output page tail-follows the newest streamed line while
+ *   the subagent runs; page turns and settlement stop the follow so manual
+ *   ↑ scrolling wins.
  *
  * Both are imperative pi-tui Components fed by `update(...)` projections
  * (plan §1.3) — no React/Ink/Yoga, no Channel/Cordis/Agent, no stdio.
@@ -28,6 +32,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
   type Component,
+  type PointerEvent,
 } from '../public.js'
 import type { TuiCommands } from '../commands.js'
 import type { SubagentsProjection } from '../view-model.js'
@@ -50,6 +55,21 @@ const SCROLL_STEP = 3
 /** Horizontal inset the old scenes applied (`paddingX={2}` on both sides). */
 const SIDE_PADDING = 2
 const DEFAULT_VIEWPORT_ROWS = 24
+/** Width of the clickable ` ✕` close/back affordance (source main's
+ *  ExitButton) pinned to a chrome row's right end. */
+const CLOSE_WIDTH = 2
+/** Dashboard screen row of the counts line (after pad/divider/pad). */
+const DASHBOARD_COUNTS_ROW = 3
+/** Detail screen row of the identity line (after the top pad). */
+const DETAIL_IDENTITY_ROW = 1
+
+/** A chrome row with a ` ✕` cell pinned to the right end of the content
+ *  width — the mouse equivalent of the scene's Esc seat (source main). */
+function withCloseCell(text: string, contentWidth: number): string {
+  const left = truncateToWidth(text, Math.max(0, contentWidth - CLOSE_WIDTH), '…')
+  const gap = ' '.repeat(Math.max(0, contentWidth - CLOSE_WIDTH - visibleWidth(left)))
+  return `${left}${gap}${chalk.dim(' ✕')}`
+}
 
 /** Divider in the Claude Code visual language: `────── title ──────`, the
  *  dashes and title in one palette slot (dim when no slot is given). */
@@ -86,6 +106,8 @@ export class SubagentDashboardScreen implements Component {
   private scrollOffset = 0
   private viewportRows = DEFAULT_VIEWPORT_ROWS
   private readonly cards = new Map<string, SubagentCardView>()
+  /** Content width of the last render; locates the counts row's ✕ cell. */
+  private pointerContentWidth = 0
 
   constructor(
     private readonly commands: TuiCommands,
@@ -146,6 +168,9 @@ export class SubagentDashboardScreen implements Component {
     ]
     if (failed > 0) counts.push(`${themeKeyFg('error', String(failed))}${chalk.dim(` ${t('subagent-count-failed')}`)}`)
 
+    // Pointer geometry rides along with the paint (research §4.3).
+    this.pointerContentWidth = contentWidth
+
     const body = this.items.length === 0
       ? this.renderEmpty(listRows, contentWidth)
       : this.renderList(listRows, contentWidth)
@@ -157,13 +182,42 @@ export class SubagentDashboardScreen implements Component {
       '',
       pad(dividerLine(contentWidth, t('subagent-dashboard-title'), 'claude')),
       '',
-      pad(counts.join('   ')),
+      pad(withCloseCell(counts.join('   '), contentWidth)),
       '',
       ...body.map(pad),
       pad(dividerLine(contentWidth, '', 'subtle')),
       pad(chalk.dim(hint)),
       '',
     ].slice(0, this.viewportRows)
+  }
+
+  /**
+   * Pointer parity (research §4.3): the counts row's right-end ✕ closes the
+   * dashboard (the Esc seat); a wheel steps the focus row like ↑/↓. Card
+   * rows deliberately stay keyboard-Enter only, as on source main — the
+   * transcript's own subagent card is the click-to-detail path. All clicks
+   * and wheels inside the scene are consumed (full-screen transient modal);
+   * press/release/move stay unconsumed so drag-selection copy keeps working.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if (event.type === 'click') {
+      if (
+        event.button === 0 &&
+        event.localY === DASHBOARD_COUNTS_ROW &&
+        event.localX - SIDE_PADDING >= this.pointerContentWidth - CLOSE_WIDTH
+      ) {
+        this.handlers.onClose()
+      }
+      return true
+    }
+    if (event.type === 'wheel') {
+      if (event.deltaY !== 0 && this.items.length > 0) {
+        const direction = event.deltaY > 0 ? 1 : -1
+        this.focusIndex = Math.max(0, Math.min(this.items.length - 1, this.focusIndex + direction))
+      }
+      return true
+    }
+    return undefined
   }
 
   /** Empty state: dim, horizontally centered block under a top margin. */
@@ -226,6 +280,13 @@ export class SubagentDetailScreen implements Component {
   private scrollOffset = 0
   private followOutput = false
   private viewportRows = DEFAULT_VIEWPORT_ROWS
+  // ── pointer geometry (recorded per render; research §4.3) ──────────────
+  /** Content width of the last render; locates the identity row's ✕ cell. */
+  private pointerContentWidth = 0
+  /** Tab bar: screen row plus each tab's content-column range. */
+  private pointerTabs: { row: number; ranges: { start: number; end: number; page: DetailPage }[] } | undefined
+  /** The hint row's `X interrupt` segment (present only while running). */
+  private pointerInterrupt: { row: number; start: number; end: number } | undefined
 
   constructor(
     private readonly commands: TuiCommands,
@@ -295,7 +356,10 @@ export class SubagentDetailScreen implements Component {
     // Header: identity line, stats line, timing line, optional error.
     const head: string[] = [
       '',
-      pad(`${themeKeyFg(info.color, chalk.bold(info.glyph))} ${chalk.bold(`${t('subagent-card-prefix')}${subagent.description}`)}${chalk.dim(' · ')}${themeKeyFg(info.color, info.label)}`),
+      pad(withCloseCell(
+        `${themeKeyFg(info.color, chalk.bold(info.glyph))} ${chalk.bold(`${t('subagent-card-prefix')}${subagent.description}`)}${chalk.dim(' · ')}${themeKeyFg(info.color, info.label)}`,
+        contentWidth,
+      )),
       pad(`${subagent.model ?? subagent.provider ?? 'default'}${chalk.dim(` · ${formatDetailDuration(elapsed)} · ${totalTokens || '—'} tok · ${subagent.toolCalls.length} tools`)}`),
       pad(chalk.dim(
         `${t('subagent-started')} ${formatTimestamp(subagent.startedAt)}` +
@@ -309,19 +373,29 @@ export class SubagentDetailScreen implements Component {
       }
     }
 
-    // Tab bar with page indicator.
+    // Tab bar with page indicator. Each tab cell is clickable (the ←/→ page
+    // turn's mouse equivalent); ranges land in pointerTabs in CONTENT
+    // columns, one `│` separator cell wide between cells.
+    const tabRanges: { start: number; end: number; page: DetailPage }[] = []
+    let tabColumn = 0
     const tabs = PAGES.map((name, index) => {
       const label = name === 'summary' ? t('subagent-tab-summary') : name === 'output' ? t('subagent-output-label') : t('subagent-tools')
       const active = index === pageIndex
+      const cellWidth = visibleWidth(label) + 2
+      tabRanges.push({ start: tabColumn, end: tabColumn + cellWidth, page: name })
+      tabColumn += cellWidth + (index === PAGES.length - 1 ? 0 : 1)
       const cell = active ? themeKeyFg('claude', chalk.bold.inverse(` ${label} `)) : ` ${label} `
       return index === PAGES.length - 1 ? cell : `${cell}${chalk.dim('│')}`
     }).join('')
+    const tabsRow = head.length + 1
     head.push('', pad(`${tabs}${chalk.dim(`  ${pageIndex + 1}/${PAGES.length}`)}`), pad(rowSeparator(contentWidth - 2)))
 
+    const hintPrefix = `←/→ ${t('subagent-hint-page')} · ↑/↓ ${t('subagent-hint-scroll')}`
+    // The `X interrupt` hint segment is clickable while running (the x key's
+    // command path); its cell range is recorded for the pointer handler.
+    const interruptSegment = running ? ' · X interrupt' : ''
     const foot = [pad(dividerLine(contentWidth, '', 'subtle')), pad(chalk.dim(
-      `←/→ ${t('subagent-hint-page')} · ↑/↓ ${t('subagent-hint-scroll')}` +
-      (running ? ' · X interrupt' : '') +
-      ` · Esc ${t('subagent-hint-back')}`,
+      hintPrefix + interruptSegment + ` · Esc ${t('subagent-hint-back')}`,
     )), '']
 
     const bodyRows = Math.max(1, this.viewportRows - head.length - foot.length)
@@ -332,6 +406,14 @@ export class SubagentDetailScreen implements Component {
     if (this.page === 'output' && running && this.followOutput) this.scrollOffset = maxOffset
     this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxOffset))
     const windowed = body.slice(this.scrollOffset, this.scrollOffset + bodyRows)
+
+    // Pointer geometry rides along with the paint (research §4.3).
+    this.pointerContentWidth = contentWidth
+    this.pointerTabs = { row: tabsRow, ranges: tabRanges }
+    const interruptStart = visibleWidth(hintPrefix) + 2
+    this.pointerInterrupt = running
+      ? { row: head.length + windowed.length + 1, start: interruptStart, end: interruptStart + 'X interrupt'.length }
+      : undefined
 
     return [...head, ...windowed.map(pad), ...foot].slice(0, this.viewportRows)
   }
@@ -419,9 +501,62 @@ export class SubagentDetailScreen implements Component {
 
   private turnPage(delta: number): void {
     const next = (PAGES.indexOf(this.page) + delta + PAGES.length) % PAGES.length
-    this.page = PAGES[next]!
+    this.goToPage(PAGES[next]!)
+  }
+
+  /** Absolute page switch — the tab click shares the ←/→ turn semantics
+   *  (scroll resets; re-entering a running output page resumes tail-follow). */
+  private goToPage(page: DetailPage): void {
+    this.page = page
     this.scrollOffset = 0
-    // Re-entering the output page of a running subagent resumes tail-follow.
-    this.followOutput = this.page === 'output'
+    this.followOutput = page === 'output'
+  }
+
+  /**
+   * Pointer parity (research §4.3): the identity row's right-end ✕ takes the
+   * Esc/Enter seat (onBack); a tab cell switches pages with the ←/→ turn
+   * semantics; the hint row's `X interrupt` segment runs the x key's exact
+   * command path (commands.query.subagentInterrupt — no separate business
+   * action); the wheel scrolls the body like ↑/↓. Every click/wheel is
+   * consumed (full-screen transient modal); press/release/move stay
+   * unconsumed so drag-selection copy keeps working.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if (event.type === 'click') {
+      if (event.button === 0) this.handleClick(event.localX - SIDE_PADDING, event.localY)
+      return true
+    }
+    if (event.type === 'wheel') {
+      if (event.deltaY !== 0) {
+        this.scrollOffset = Math.max(0, this.scrollOffset + (event.deltaY > 0 ? SCROLL_STEP : -SCROLL_STEP))
+      }
+      return true
+    }
+    return undefined
+  }
+
+  /** Click dispatch in content columns (after the side padding) / rows. */
+  private handleClick(column: number, row: number): void {
+    if (row === DETAIL_IDENTITY_ROW) {
+      if (column >= this.pointerContentWidth - CLOSE_WIDTH) this.handlers.onBack()
+      return
+    }
+    const tabs = this.pointerTabs
+    if (tabs !== undefined && row === tabs.row) {
+      const hit = tabs.ranges.find((range) => column >= range.start && column < range.end)
+      if (hit !== undefined && hit.page !== this.page) this.goToPage(hit.page)
+      return
+    }
+    const interrupt = this.pointerInterrupt
+    if (
+      interrupt !== undefined &&
+      row === interrupt.row &&
+      column >= interrupt.start &&
+      column < interrupt.end &&
+      this.subagent !== undefined &&
+      isSubagentRunning(this.subagent)
+    ) {
+      this.commands.query.subagentInterrupt(this.subagent.agentId)
+    }
   }
 }

@@ -66,7 +66,7 @@ import { getLang, LANGS, t } from '../i18n.js'
 import { AUTO_THEME_NAME, THEME_NAMES } from '../theme.js'
 import { listCustomThemes } from '../customTheme.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
-import { normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
@@ -546,6 +546,9 @@ export interface Channel {
   readonly toolBackground: ToolBackground
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
+  /** Live scroll-gutter preference (settings `dsh-tui.scrollGutter`): the
+   *  timeline rail, the proportional scrollbar, or no gutter. */
+  readonly scrollGutter: ScrollGutterMode
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
@@ -932,6 +935,8 @@ export interface ChannelState {
   toolBackground: ToolBackground
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
+  /** Scroll-gutter preference (see the public Channel type). */
+  scrollGutter: ScrollGutterMode
   /** Apply a diff-layout change (see the public Channel type). */
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   /** Apply a thinking-display change (see the public Channel type). */
@@ -940,6 +945,8 @@ export interface ChannelState {
   setToolBackground(background: ToolBackground): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
+  /** Apply a scroll-gutter preference change. */
+  setScrollGutter(mode: ScrollGutterMode): void
   /** Whale header art switch (see the public Channel type). */
   whale: boolean
   /** Apply a whale-visibility change (see the public Channel type). */
@@ -1390,6 +1397,9 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
+    /** Scroll-gutter mode (`timeline`/`scrollbar`/`hidden`); default
+     *  `timeline`. */
+    scrollGutter?: ScrollGutterMode
     /** Show the header's pixel whale art; default on. */
     whale?: boolean
     /** Minimal mode; default off (settings `dsh-tui.minimal`). */
@@ -2467,6 +2477,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     statusBar: normalizeStatusBar(options.statusBar),
+    scrollGutter: normalizeScrollGutter(options.scrollGutter),
     whale: options.whale !== false,
     minimal: options.minimal === true,
     activityEnabled: options.activity !== false,
@@ -4213,6 +4224,12 @@ export function createChannel(
       state.statusBar = next
       state.emit()
     },
+    setScrollGutter(mode) {
+      const normalized = normalizeScrollGutter(mode)
+      if (normalized === state.scrollGutter) return
+      state.scrollGutter = normalized
+      state.emit()
+    },
     setWhale(visible) {
       if (visible === state.whale) return
       state.whale = visible
@@ -4578,7 +4595,7 @@ export function createChannel(
       })
     },
     async listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }) {
-      const fs = ctx.get('fs') as MentionFs | undefined
+      const fs = mentionFs(ctx)
       if (!fs || options?.signal?.aborted) return []
       if (isPathLikeQuery(query)) {
         return listPathCandidates(fs, state.cwd, query, options?.signal, options?.topK ?? 50)
@@ -4598,8 +4615,7 @@ export function createChannel(
       return rankFileCandidates(candidates, query, options?.topK ?? 50)
     },
     async listFiles() {
-      const fs = ctx.get('fs') as MentionFs | undefined
-      const candidates = await listFilesDeepCandidates(fs, state.cwd)
+      const candidates = await listFilesDeepCandidates(mentionFs(ctx), state.cwd)
       return candidates.map(candidate => candidate.path)
     },
     async listSessions() {
@@ -5720,7 +5736,10 @@ ${output}
     // SessionEvent union predates the type, so admit it structurally: the
     // goal chip and panel stay dark without this fold.
     if ((event as { type: string }).type === 'goal/change') {
-      applyGoalChange((event as { data: GoalChangePayload }).data)
+      const change = (event as { data?: unknown }).data as GoalChangePayload | undefined
+      // Malformed payloads (durable replay data may not match the static
+      // type) are ignored silently — never blindly cast into the projection.
+      if (change?.kind === 'goal/change') applyGoalChange(change)
       return
     }
     switch (event.type) {
@@ -6637,22 +6656,35 @@ function usageOutputTokens(usage: unknown): number | undefined {
     : undefined
 }
 
+/** The fs-service surface `@` candidate scans consume (dsh-fs-local); the
+ *  `target` on listDir entries is optional because not every fs provider
+ *  resolves symlink targets eagerly. */
 type FileSuggestionFs = {
   resolve(path: string): Promise<{ displayPath: string }>
   listDir(target: { displayPath: string }): Promise<Array<{ name: string; type: 'file' | 'directory' | 'other'; target?: { displayPath: string } }>>
 }
 
+/**
+ * Path-shaped `@` queries (`src/`, `./`, `~/`, `/abs`, `D:\`, any separator)
+ * list ONLY the directory the query points at — the session-cached pool never
+ * sees them. `~/` expands against the host home; drive-letter and
+ * POSIX-absolute prefixes pass through untouched. The trailing name fragment
+ * is fuzzy-ranked over that one listing. Unreadable/absent directories
+ * degrade to no candidates, never a failed keystroke.
+ */
 async function listPathCandidates(fs: FileSuggestionFs, cwd: string, query: string, signal: AbortSignal | undefined, topK: number): Promise<FileCandidate[]> {
   const normalized = query.replaceAll('\\', '/')
   const slash = normalized.lastIndexOf('/')
-  // `.` / `..` without a trailing separator are whole-directory queries too.
+  // `.` / `..` / `~` without a trailing separator are whole-directory queries too.
   const bareDir = slash < 0 && (normalized === '.' || normalized === '..' || normalized === '~')
   const directoryPart = slash < 0 ? (bareDir ? `${normalized}/` : '') : normalized.slice(0, slash + 1)
   const nameQuery = slash < 0 || bareDir ? '' : normalized.slice(slash + 1)
   // `~/` expands against the host home (matches the cwd resolution rules);
-  // drive-letter and POSIX-absolute prefixes pass through untouched.
-  const expanded = directoryPart === '~/'
-    ? `${homeDir()}/`
+  // the startsWith form also covers continuing completion into a home
+  // subdirectory (`~/notes/` — eacc7a97 expanded only the bare prefix).
+  // Drive-letter and POSIX-absolute prefixes pass through untouched.
+  const expanded = directoryPart.startsWith('~/')
+    ? join(homeDir(), directoryPart.slice(2))
     : directoryPart.startsWith('/') || /^[A-Za-z]:\//.test(directoryPart)
       ? directoryPart
       : join(cwd, directoryPart || '.')
@@ -6669,6 +6701,17 @@ async function listPathCandidates(fs: FileSuggestionFs, cwd: string, query: stri
   }
 }
 
+/**
+ * Recursive `@` candidate scan through the leaf's fs service (dsh-fs-local):
+ * skips VCS/dependency/build dirs and rotates across directory listings
+ * (each directory yields ONE non-skipped entry per visit before it
+ * re-queues), so a large early sibling (e.g. `generated/` with 120 files)
+ * cannot starve `src/` out of the per-kind budgets — the regression contract
+ * pinned by scripts/verify-file-completion.mjs. Files and directories have
+ * separate 100-entry budgets; a visited-set on resolved directory paths
+ * guards symlink cycles. Relative directories retain the trailing `/`.
+ * Unreadable subtrees are skipped, not fatal.
+ */
 async function listFilesDeepCandidates(fs: FileSuggestionFs | undefined, root: string, signal?: AbortSignal): Promise<FileCandidate[]> {
   if (!fs) return []
   const out: FileCandidate[] = []

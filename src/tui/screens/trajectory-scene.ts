@@ -24,6 +24,12 @@
  * - Keyboard input arrives as raw `data` matched with `matchesKey(data,
  *   Key.x)`; the query line accepts printable text the way pi-tui's own
  *   `Input` does (Kitty CSI-u decode, then a control-character reject).
+ * - Pointer input (research §4.3) resolves against geometry recorded during
+ *   `render` — the scene is a full-screen transient leaf, so `localY` is the
+ *   output row index and `localX − 1` the content column. Clicks reuse the
+ *   keyboard verbs (tab ←/→, axis m/t, query `/`, hotspot Enter, ✕ = q/Esc);
+ *   the wheel moves the selection. press/release/move stay unconsumed so
+ *   drag-selection copy keeps working.
  * - The header's session title is no longer read off the Channel (components
  *   may not hold one); the shell passes it as `title` at construction.
  *
@@ -37,6 +43,7 @@ import {
   matchesKey,
   visibleWidth,
   type Component,
+  type PointerEvent,
 } from '../public.js'
 import type { TuiCommands } from '../commands.js'
 import type { TrajectoryProjection } from '../view-model.js'
@@ -65,8 +72,9 @@ import { formatDuration, formatTokens, truncateWidth } from '../../trajectory/fo
 import { renderWaveBand } from '../components/trajectory/wave-band.js'
 import { renderLedger } from '../components/trajectory/ledger.js'
 import { renderInspector } from '../components/trajectory/inspector.js'
-import { hotspotRows, renderHotspotView } from '../components/trajectory/hotspot-view.js'
+import { hotspotPointerRows, hotspotRows, renderHotspotView } from '../components/trajectory/hotspot-view.js'
 import { fg } from '../components/trajectory/paint.js'
+import type { HotspotRow } from '../../dsh-adapter/types.js'
 
 /** Inspector height in the default (unexpanded) layout. */
 const INSPECTOR_ROWS = 6
@@ -83,6 +91,38 @@ const CHROME_ROWS = 2 + 2 + 1 + 1 + 1
 
 /** Viewport height assumed until the shell first calls `setViewportHeight`. */
 const DEFAULT_VIEWPORT_ROWS = 24
+
+/**
+ * Fixed scene rows above the content region (research §4.3 pointer mapping):
+ * header (with the ✕ close cell), tabs, the two wave-band rows, one blank.
+ * The band renders exactly two lines (wave + ruler), so the content region —
+ * ledger or hotspot — always starts at row 5 of the scene's output.
+ */
+const HEADER_ROW = 0
+const TABS_ROW = 1
+const BAND_ROWS = 2
+const CONTENT_START_ROW = 2 + BAND_ROWS + 1
+
+/** Width of the header's clickable ` ✕` close affordance (source main). */
+const CLOSE_WIDTH = 2
+
+/** Content-column ranges of the tabs line's clickable segments, recorded by
+ *  {@link TrajectoryScene.tabsLine} on every render. All are 0-based columns
+ *  within the unpadded line (the scene prefixes one space at paint time). */
+interface TabsPointerGeometry {
+  /** [0, timelineEnd) switches to the timeline view. */
+  timelineEnd: number
+  /** [timelineEnd, hotspotEnd) switches to the hotspot view. */
+  hotspotEnd: number
+  /** [hotspotEnd, queryEnd) reopens the query editor (absent when no query
+   *  segment is shown — then this equals hotspotEnd). */
+  queryEnd: number
+  /** End of the clipped left side: [queryEnd, axisStart) is the gap, which
+   *  also opens the query editor (the gap IS where the query line sits). */
+  leftEnd: number
+  /** [axisStart, bandWidth) cycles the projection/sort label. */
+  axisStart: number
+}
 
 export type TrajectoryView = 'timeline' | 'hotspot'
 
@@ -161,6 +201,21 @@ export class TrajectoryScene implements Component {
     | { band: WaveBand; indexes: readonly number[]; empty: boolean; columns: Set<number> | undefined }
     | undefined
   private detailCache: { node: TrajNode; detail: InspectDetail } | undefined
+
+  // ── pointer geometry (recorded per render; see handlePointer) ───────────
+  /** bandWidth of the last render; the ✕ close cell sits at its right end. */
+  private pointerBandWidth = 0
+  /** Tabs line segment ranges of the last render. */
+  private pointerTabs: TabsPointerGeometry | undefined
+  /** The band rendered last frame (bucket lookup for column clicks). */
+  private pointerBand: WaveBand | undefined
+  /** Filtered index behind the first visible ledger row of the last render. */
+  private pointerLedgerStart = 0
+  /** Ledger line count of the last render. */
+  private pointerLedgerRows = 0
+  /** Clickable hotspot row per visible content offset (undefined = title or
+   *  padding), aligned with the last hotspot render; undefined in timeline. */
+  private pointerHotspot: (HotspotRow | undefined)[] | undefined
 
   constructor(options: TrajectorySceneOptions) {
     this.commands = options.commands
@@ -386,19 +441,12 @@ export class TrajectoryScene implements Component {
         return
       }
       if (matchesKey(data, 't')) {
-        this.sort = HOTSPOT_SORTS[(HOTSPOT_SORTS.indexOf(this.sort) + 1) % HOTSPOT_SORTS.length]!
-        this.switchTick = this.tick
+        this.cycleAxis()
         return
       }
       if (matchesKey(data, Key.enter)) {
         // Jump back to the timeline, positioned on the group's first member.
-        const row = hotspotRows(this.ensureAggregate())[this.hotCursor]
-        this.switchView('timeline')
-        if (row !== undefined) {
-          const target = indexes.indexOf(row.firstIndex)
-          this.cursor = target >= 0 ? target : 0
-          this.follow = false
-        }
+        this.jumpFromHotspot(hotspotRows(this.ensureAggregate())[this.hotCursor], indexes)
         return
       }
       return
@@ -432,8 +480,7 @@ export class TrajectoryScene implements Component {
       return this.seek(filtered, (index) => filtered[index]?.kind === 'turn', true)
     }
     if (matchesKey(data, 'm')) {
-      this.projection = WAVE_PROJECTIONS[(WAVE_PROJECTIONS.indexOf(this.projection) + 1) % WAVE_PROJECTIONS.length]!
-      this.switchTick = this.tick
+      this.cycleAxis()
       return
     }
     if (matchesKey(data, Key.enter)) {
@@ -494,6 +541,135 @@ export class TrajectoryScene implements Component {
     this.inspectScroll = 0
   }
 
+  /** Axis label cycle — the `m` (timeline) / `t` (hotspot) key path, shared
+   *  with the tabs-line axis click. */
+  private cycleAxis(): void {
+    if (this.view === 'hotspot') {
+      this.sort = HOTSPOT_SORTS[(HOTSPOT_SORTS.indexOf(this.sort) + 1) % HOTSPOT_SORTS.length]!
+    } else {
+      this.projection = WAVE_PROJECTIONS[(WAVE_PROJECTIONS.indexOf(this.projection) + 1) % WAVE_PROJECTIONS.length]!
+    }
+    this.switchTick = this.tick
+  }
+
+  /** Jump the timeline cursor to a filtered index (keyboard jump semantics:
+   *  reset the inspector scroll, re-pin the tail follow at the last row). */
+  private jumpTo(index: number, filteredLength: number): void {
+    this.inspectScroll = 0
+    this.cursor = index
+    this.follow = index >= filteredLength - 1
+  }
+
+  /** Jump back to the timeline, positioned on a hotspot group's first
+   *  member — the hotspot-view Enter path, shared with the row click. */
+  private jumpFromHotspot(row: HotspotRow | undefined, indexes: readonly number[]): void {
+    this.switchView('timeline')
+    if (row !== undefined) {
+      const target = indexes.indexOf(row.firstIndex)
+      this.cursor = target >= 0 ? target : 0
+      this.follow = false
+    }
+  }
+
+  // ── pointer (research §4.3) ──────────────────────────────────────────────
+
+  /**
+   * Pointer parity with the source scene: clicks resolve against the
+   * geometry recorded by the last {@link render} — header ✕ closes (q/Esc
+   * equivalent), tab segments switch views (←/→), the query segment and the
+   * gap open the search editor (`/`), the right axis label cycles the
+   * projection/sort (m/t), a wave-band column seeks the nearest event
+   * (bucket.firstIndex, ruler row included), a ledger row moves the cursor
+   * to it, and a hotspot row takes the Enter path back to the timeline.
+   * The wheel moves the selection rather than a viewport: ±1 hotspot row,
+   * ±3 ledger rows, or the inspector page step while expanded.
+   *
+   * Every click/wheel inside the scene is consumed (it is a full-screen
+   * transient replacement — nothing behind it may see the event);
+   * press/release/move stay unconsumed so terminal drag-selection copy
+   * keeps working, and a drag release never dispatches a click.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if (event.type === 'click') {
+      if (event.button === 0) this.handleClick(event.localX - 1, event.localY)
+      return true
+    }
+    if (event.type === 'wheel') {
+      if (event.deltaY !== 0) this.handleWheel(event.deltaY)
+      return true
+    }
+    return undefined
+  }
+
+  /** Click dispatch in CONTENT columns (the scene pads every line by one
+   *  cell, so the caller passes localX − 1) and output row indexes. */
+  private handleClick(column: number, row: number): void {
+    const nodes = this.build.nodes
+    const query = parseQuery(this.queryText)
+    const { rows: filtered, indexes } = this.ensureFilter(nodes, query)
+
+    if (row === HEADER_ROW) {
+      if (column >= this.pointerBandWidth - CLOSE_WIDTH) this.onClose()
+      return
+    }
+    if (row === TABS_ROW) {
+      const tabs = this.pointerTabs
+      if (tabs === undefined) return
+      if (column < tabs.timelineEnd) return this.switchView('timeline')
+      if (column < tabs.hotspotEnd) return this.switchView('hotspot')
+      if (column >= tabs.axisStart) return this.cycleAxis()
+      // Query segment and gap share one action: (re)open the search editor.
+      this.queryOpen = true
+      return
+    }
+    if (row >= TABS_ROW + 1 && row < CONTENT_START_ROW - 1) {
+      // Wave band (wave + ruler rows): seek the column's nearest event.
+      // Empty columns inherit their predecessor's firstIndex for exactly
+      // this; rows the query filtered out never jump (indexOf misses).
+      const band = this.pointerBand
+      if (band === undefined || band.buckets.length === 0) return
+      const bucket = Math.max(0, Math.min(band.buckets.length - 1, column))
+      const nodeIndex = band.buckets[bucket]?.firstIndex ?? -1
+      if (nodeIndex < 0) return
+      const target = indexes.indexOf(nodeIndex)
+      if (target >= 0) this.jumpTo(target, filtered.length)
+      return
+    }
+    const contentRow = row - CONTENT_START_ROW
+    if (contentRow < 0) return
+    if (this.view === 'timeline') {
+      // Ledger rows jump the cursor; the divider and the inspector below
+      // have no click action (consumed by the caller regardless).
+      if (contentRow < this.pointerLedgerRows) {
+        const index = this.pointerLedgerStart + contentRow
+        if (index < filtered.length) this.jumpTo(index, filtered.length)
+      }
+      return
+    }
+    const hotspotRow = this.pointerHotspot?.[contentRow]
+    if (hotspotRow !== undefined) this.jumpFromHotspot(hotspotRow, indexes)
+  }
+
+  /** Wheel over the content area moves the selection (source semantics). */
+  private handleWheel(deltaY: number): void {
+    const direction = deltaY > 0 ? 1 : -1
+    if (this.view === 'hotspot') {
+      const total = hotspotRows(this.ensureAggregate()).length
+      this.hotCursor = Math.max(0, Math.min(total - 1, this.hotCursor + direction))
+      return
+    }
+    if (this.expanded) {
+      // The expanded inspector owns the wheel: same page step as j/k.
+      this.inspectScroll = Math.max(
+        0,
+        this.inspectScroll + direction * Math.max(1, this.inspectorRows() - 2),
+      )
+      return
+    }
+    const filtered = this.ensureFilter(this.build.nodes, parseQuery(this.queryText)).rows
+    this.move(direction * 3, filtered.length)
+  }
+
   private clampedCursor(length: number): number {
     return length === 0 ? 0 : Math.min(this.cursor, length - 1)
   }
@@ -531,8 +707,17 @@ export class TrajectoryScene implements Component {
     const focused = filtered[clampedCursor]
     const detail = this.ensureDetail(focused)
 
+    // Pointer geometry rides along with the paint so handlePointer resolves
+    // against exactly what is on screen (research §4.3).
+    this.pointerBandWidth = bandWidth
+    this.pointerBand = band
+    this.pointerLedgerStart = windowStart
+    this.pointerLedgerRows = ledgerRows
+
     const lines: string[] = [
-      this.headerLine(agg, bandWidth),
+      // The ✕ close affordance pins to the band's right end (source main):
+      // the spread line gives up its last two cells for it.
+      this.headerLine(agg, bandWidth - CLOSE_WIDTH) + fg('subtle', ' ✕'),
       this.tabsLine(agg, query, filtered.length, nodes.length, bandWidth),
       ...renderWaveBand({
         band,
@@ -549,6 +734,7 @@ export class TrajectoryScene implements Component {
     ]
 
     if (this.view === 'timeline') {
+      this.pointerHotspot = undefined
       lines.push(
         ...renderLedger({
           rows: filtered,
@@ -571,12 +757,14 @@ export class TrajectoryScene implements Component {
         }),
       )
     } else {
+      const hotspotHeight = ledgerRows + inspectorRows + 1
+      this.pointerHotspot = hotspotPointerRows(agg, this.sort, hotspotHeight, this.hotCursor)
       lines.push(
         ...renderHotspotView({
           agg,
           sort: this.sort,
           width: width - 4,
-          height: ledgerRows + inspectorRows + 1,
+          height: hotspotHeight,
           cursor: this.hotCursor,
           tick: this.tick,
           switchTick: this.switchTick,
@@ -633,9 +821,10 @@ export class TrajectoryScene implements Component {
   ): string {
     const axisLabel =
       this.view === 'hotspot' ? t(`traj-sort-${this.sort}`) : t(`traj-proj-${this.projection}`)
-    const tabsLeft =
-      `${this.view === 'timeline' ? '●' : '○'} ${t('traj-tab-timeline')}  ` +
-      `${this.view === 'hotspot' ? '●' : '○'} ${t('traj-tab-hotspot')}`
+    const tabTimeline =
+      `${this.view === 'timeline' ? '●' : '○'} ${t('traj-tab-timeline')}  `
+    const tabHotspot = `${this.view === 'hotspot' ? '●' : '○'} ${t('traj-tab-hotspot')}`
+    const tabsLeft = tabTimeline + tabHotspot
     const querySegment =
       this.queryOpen || !query.empty
         ? `   / ${this.queryText}${this.queryOpen ? '▌' : ''}  ${t('traj-matches', { n: filteredLength, total: totalLength })}`
@@ -643,6 +832,26 @@ export class TrajectoryScene implements Component {
     const line = this.spread(tabsLeft + querySegment, axisLabel, width)
     const tabs = line.left.length >= tabsLeft.length ? line.left.slice(0, tabsLeft.length) : line.left
     const queryPart = line.left.length >= tabsLeft.length ? line.left.slice(tabsLeft.length) : ''
+
+    // Clickable segment ranges in CELL columns (pointer coordinates are
+    // cells; the string-position split above only steers the coloring).
+    // The spread clips the left side at its room budget, so every segment
+    // end clamps to the actually-painted left width.
+    const leftWidth = visibleWidth(line.left)
+    const timelineEnd = Math.min(visibleWidth(tabTimeline), leftWidth)
+    const hotspotEnd = Math.min(timelineEnd + visibleWidth(tabHotspot), leftWidth)
+    const queryEnd =
+      querySegment === ''
+        ? hotspotEnd
+        : Math.min(hotspotEnd + visibleWidth(querySegment), leftWidth)
+    this.pointerTabs = {
+      timelineEnd,
+      hotspotEnd,
+      queryEnd,
+      leftEnd: leftWidth,
+      axisStart: width - visibleWidth(line.right),
+    }
+
     return (
       fg(this.view === 'timeline' ? 'permission' : 'subtle', tabs, { bold: this.view === 'timeline' }) +
       fg('suggestion', queryPart) +

@@ -28,9 +28,9 @@
  * History is the Editor's in-memory list (`addToHistory` on every accepted
  * dispatch) plus the persisted JSONL log (`appendHistory`). Slash (`/`) and
  * file-mention (`@`) completion come from `PromptAutocompleteProvider`,
- * backed by `commands.query.commandCompletions` (sync) and
- * `commands.query.listFileCandidates` (two modes: path-shaped queries list
- * that directory only, plain fragments rank the fuzzy session index).
+ * backed by `commands.query.commandCompletions` (sync) and the structured
+ * `commands.query.listFileCandidates` sink (path-shaped queries list that
+ * directory only, plain fragments rank the fuzzy session index).
  *
  * The component never touches the Channel/cordis/Agent/stdio: state arrives
  * via `update(PromptProjection)`, side effects leave through `TuiCommands`
@@ -63,6 +63,7 @@ import {
   type ClipboardContent,
 } from '../../utils/clipboard.js'
 import { mentionAtCaret } from '../../utils/mentions.js'
+import type { FileCandidateKind } from '../../utils/fileSuggestions.js'
 import { getActiveTheme } from '../../theme.js'
 import { parseRGB } from '../../components/Spinner/spinnerUtils.js'
 
@@ -75,6 +76,11 @@ const ENTER_DEDUPE_MS = 80
 const ESC_DOUBLE_TAP_MS = 3000
 /** Cap on the `@` file-mention suggestion list (the menu shows 5 anyway). */
 const FILE_COMPLETION_LIMIT = 50
+
+/** File-mention completion item: the candidate's `kind` rides along so the
+ *  accept path distinguishes file/directory by data, not by a trailing-`/`
+ *  guess. The id contract stays `value === candidate.path`. */
+type FileSuggestionItem = AutocompleteItem & { kind?: FileCandidateKind }
 
 // Kitty CSI-u sequence: ESC [ keycode ; modifier[:eventType] u. Only the
 // simple two-field form is matched — enough to rewrite `ctrl+<LETTER>` with
@@ -142,12 +148,17 @@ export function createPromptEditorTheme(): EditorTheme {
 /**
  * Slash-command and `@` file-mention completion over the command sink.
  * Slash completions are synchronous (`commandCompletions` is pure over the
- * command registry); file candidates are async, per-keystroke and fenced by
- * the sink (`undefined` = stale drop → no suggestions) on top of the Editor's
- * own request-id guard + AbortSignal. The two-mode ranking (path-shaped
- * query → that directory only; plain fragment → fuzzy session index) lives
- * in the channel — this provider only maps candidates onto pi-tui's item
- * shape, marking directories by the pi-tui trailing-`/` label convention.
+ * command registry); file suggestions go through the typed
+ * `listFileCandidates` query — structured candidates with a stable id and a
+ * file/directory kind, ranked channel-side. Stale results never land: the
+ * sink's sessionEpoch/generation fence drops them as `undefined`, the
+ * channel honors the per-request `signal`, and the Editor additionally
+ * guards by request id + text/cursor snapshot before applying anything.
+ * Selection across async refreshes is the Editor's own best-match rule over
+ * a deterministically ranked list; the compatibility item shape keeps the
+ * basename/displayPath labels while carrying the candidate kind for accept.
+ *
+ * Exported for the node:test surface (test/tui/file-candidates.test.ts).
  */
 export class PromptAutocompleteProvider implements AutocompleteProvider {
   readonly triggerCharacters = ['@']
@@ -174,11 +185,12 @@ export class PromptAutocompleteProvider implements AutocompleteProvider {
           // and fold the [current]/[default]/aliases tag into the description
           // column — the pi-tui item shape has no tag slot of its own.
           const description = localizedDescription(completion)
-          const tag = completion.tag === undefined ? '' : `[${completion.tag}] `
+          const tag = completion.tag === undefined ? '' : `[${completion.tag}]`
+          const text = tag === '' ? description : description === '' ? tag : `${description} ${tag}`
           return {
             value: completion.commandLine,
             label: completion.commandLine,
-            ...(description === '' && tag === '' ? {} : { description: `${tag}${description}` }),
+            ...(text === '' ? {} : { description: text }),
           }
         }),
       }
@@ -186,8 +198,8 @@ export class PromptAutocompleteProvider implements AutocompleteProvider {
 
     // `@` file mention at the caret: the trigger is the token being edited,
     // so `@` works mid-message, not only as the first character. The query is
-    // the token fragment as typed — the channel decides path-shaped
-    // (directory listing) vs plain (fuzzy index).
+    // the token fragment as typed; the channel ranks path-shaped queries
+    // against that directory and plain fragments against the session pool.
     const mention = mentionAtCaret(line, cursorCol)
     if (mention === undefined) return null
     const candidates = await this.commands.query.listFileCandidates(mention.query, {
@@ -197,14 +209,23 @@ export class PromptAutocompleteProvider implements AutocompleteProvider {
     if (candidates === undefined || options.signal.aborted || candidates.length === 0) return null
     return {
       prefix: line.slice(mention.start, cursorCol),
-      items: candidates.map((candidate): AutocompleteItem => ({
-        value: candidate.path,
-        // pi-tui's directory convention: a trailing `/` on the LABEL marks a
-        // directory — applyCompletion reads it back for the drill-in insert
-        // (no more endsWith('/') guess on the value).
-        label: candidate.kind === 'directory' ? `${candidate.name}/` : candidate.name,
-        description: candidate.displayPath,
-      })),
+      items: candidates.map((candidate): FileSuggestionItem => {
+        // Keep the established pi display contract (basename + displayPath)
+        // while carrying the structured kind for the accept path. The metadata
+        // is non-enumerable so older integrations comparing the item shape keep
+        // working; `applyCompletion` still reads it when present.
+        const item = {
+          value: candidate.path,
+          label: candidate.kind === 'directory' ? `${candidate.name}/` : candidate.name,
+          description: candidate.displayPath,
+        } as FileSuggestionItem
+        Object.defineProperty(item, 'kind', {
+          value: candidate.kind,
+          enumerable: false,
+          configurable: true,
+        })
+        return item
+      }),
     }
   }
 
@@ -228,13 +249,16 @@ export class PromptAutocompleteProvider implements AutocompleteProvider {
     }
 
     // `@` mention: replace ONLY the token at the caret, quoting paths with
-    // whitespace; a directory (the label's trailing `/`, by convention)
-    // inserts `@dir/` without a trailing space so completion continues into it.
+    // whitespace; a directory (by candidate kind, falling back to the
+    // compatible trailing-`/` label or value contract) inserts `@dir/`
+    // without a trailing space so completion continues into it.
     const mention = mentionAtCaret(line, cursorCol)
     if (mention === undefined) {
       return { lines, cursorLine, cursorCol }
     }
-    const isDirectory = item.label.endsWith('/')
+    const isDirectory = (item as FileSuggestionItem).kind === 'directory'
+      || item.label?.endsWith('/') === true
+      || item.value.endsWith('/')
     const body = /\s/.test(item.value) ? `@"${item.value}"` : `@${item.value}`
     const insert = isDirectory ? body : `${body} `
     nextLines[cursorLine] = line.slice(0, mention.start) + insert + line.slice(mention.end)
@@ -309,6 +333,15 @@ export class PromptEditor extends Editor {
       this.escTimer = null
     }
     this.escPending = false
+  }
+
+  /**
+   * Paste the system clipboard into the prompt outside the keyboard path —
+   * the TuiAltScreen `onRightClickPaste` hook (Windows) lands here. Same
+   * async read + busy-guard as Ctrl+V (`pasteFromClipboard`).
+   */
+  requestClipboardPaste(): void {
+    this.pasteFromClipboard()
   }
 
   override handleInput(data: string): void {

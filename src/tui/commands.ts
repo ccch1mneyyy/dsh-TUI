@@ -174,14 +174,14 @@ export interface TuiQueryCommands {
    *  (the channel notified the reason), undefined = stale-dropped. */
   getSessionTree(): Promise<SessionTreeData | null | undefined>
   listSkills(): Promise<readonly SkillInfo[] | undefined>
-  listFiles(): Promise<readonly string[] | undefined>
-  /** Structured `@` file suggestions (two modes: path-shaped queries list
-   *  that directory only, plain fragments rank the fuzzy session index).
-   *  The editor's per-keystroke AbortSignal rides in `options`. */
+  /** Structured `@` file completion: path-shaped queries list only that
+   *  directory, plain fragments rank the session-cached candidate pool.
+   *  `signal` is the caller's per-keystroke abort; `undefined` = stale drop. */
   listFileCandidates(
     query: string,
     options?: { signal?: AbortSignal; topK?: number },
   ): Promise<readonly FileCandidate[] | undefined>
+  listFiles(): Promise<readonly string[] | undefined>
   /** Sync slash completions (pure over the command registry) — no fence. */
   commandCompletions(value: string): readonly CommandCompletion[]
   /** Persist a pasted image; the placeholder token is stale-sensitive
@@ -234,6 +234,16 @@ export interface TuiInfoCommands {
 export interface TuiSceneCommands {
   openPluginScene(id: string): boolean
   closePluginScene(): void
+}
+
+/** Transcript window commands (M2.4): restore log-folded older rows. */
+export interface TuiTranscriptCommands {
+  /** Restore the folded-away older rows from the session log (channel
+   *  `loadOlder`). The channel mutation itself is synchronous (restore +
+   *  emit); the fence only guards the REPORTED count — a completion that
+   *  settles after a session swap / lifecycle resume reads as `undefined`.
+   *  Resolves to the number of restored rows (0 = nothing was folded). */
+  loadOlder(): Promise<number | undefined>
 }
 
 /** Overlay panels (approval / questionnaire / plugin dialog): answer the
@@ -300,6 +310,9 @@ export interface TuiCommands {
   readonly scene: TuiSceneCommands
   readonly overlays: TuiOverlayCommands
   readonly display: TuiDisplayCommands
+  /** Optional so pre-M2.4 partial test fakes keep type-checking; the real
+   *  sink always provides it, and consumers must tolerate its absence. */
+  readonly transcript?: TuiTranscriptCommands
 }
 
 export interface TuiCommandsDeps {
@@ -506,11 +519,11 @@ export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
       listSkills() {
         return fenced('listSkills', () => channel.listSkills())
       },
-      listFiles() {
-        return fenced('listFiles', () => channel.listFiles())
-      },
       listFileCandidates(query, options) {
         return fenced('listFileCandidates', () => channel.listFileCandidates(query, options))
+      },
+      listFiles() {
+        return fenced('listFiles', () => channel.listFiles())
       },
       commandCompletions(value) {
         return channel.commandCompletions(value)
@@ -600,6 +613,14 @@ export function createTuiCommands(deps: TuiCommandsDeps): TuiCommands {
       },
       closePluginScene() {
         channel.closePluginScene()
+      },
+    },
+    transcript: {
+      loadOlder() {
+        // channel.loadOlder() is synchronous (restore + emit); wrapping it in
+        // the read fence keeps the sink's stale-drop contract for the
+        // reported count without changing when the mutation lands.
+        return fenced('loadOlder', () => Promise.resolve(channel.loadOlder()))
       },
     },
     overlays: {

@@ -19,6 +19,7 @@
  */
 import type { Component, Terminal, TUI, TuiAltScreenOptions } from './public.js'
 import { ProcessTerminal, TuiAltScreen, TuiMainScreen } from './public.js'
+import { isMouseClicksDisabled } from '../utils/fullscreen.js'
 import { TuiLifecycle } from './lifecycle.js'
 import { ScreenTakeover } from './screen-takeover.js'
 
@@ -49,6 +50,44 @@ export interface TuiBootstrap {
   readonly lifecycle: TuiLifecycle
   /** Sole root/overlay swap helper for this root TUI (plan §1.2). */
   readonly takeover: ScreenTakeover
+}
+
+export interface AltScreenHooks {
+  /**
+   * Windows right-click paste (pi-tui fires this on win32 only): paste the
+   * system clipboard into the prompt. The host decides whether the prompt
+   * currently owns input; the callback fires for every right-click press.
+   */
+  readonly onRightClickPaste?: () => void
+}
+
+/**
+ * The TuiAltScreen options for this boot (research §4.4 host wiring).
+ *
+ * - `mouse`: `DSH_TUI_DISABLE_MOUSE` maps to the granular `{ buttons: false }`
+ *   — click/selection/right-click paste off, wheel scroll kept — mirroring
+ *   source main, where `isMouseClicksDisabled()` gates only the mouse-button
+ *   handler and wheel reaches the keybinding path. A plain `mouse: false`
+ *   would kill wheel too (tracking never enabled), which is NOT equivalent.
+ *   The flag is read once per boot; a `/reload` fiber restart re-reads it.
+ * - `openUrl`: deliberately unwired — source main's `onHyperlinkClick` is
+ *   never assigned either (dead option), so link-click is a no-op on both
+ *   sides. Recorded gap: no browser-open wiring exists in dsh yet.
+ * - `copySelection`: deliberately unwired — pi-tui's built-in raw OSC 52
+ *   write is the copy path. `src/utils/clipboard.ts` is READ-only (Ctrl+V
+ *   paste); source main additionally shells out to tmux `load-buffer -w` and
+ *   native tools (pbcopy/wl-copy/xclip/xsel/clip.exe) when local. Recorded
+ *   gap: under tmux without `set-clipboard on` + allow-passthrough, or
+ *   terminals ignoring OSC 52, copy-on-select silently no-ops while the
+ *   "Copied!" flash still shows.
+ */
+export function buildAltScreenOptions(hooks: AltScreenHooks = {}): TuiAltScreenOptions {
+  return {
+    mouse: isMouseClicksDisabled() ? { buttons: false } : true,
+    ...(hooks.onRightClickPaste === undefined
+      ? {}
+      : { onRightClickPaste: hooks.onRightClickPaste }),
+  }
 }
 
 /**

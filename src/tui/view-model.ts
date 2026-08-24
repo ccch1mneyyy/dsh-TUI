@@ -133,6 +133,21 @@ export interface SubagentsProjection {
 }
 
 /**
+ * GoalTodoPanel slice: the durable goal projection plus the latest
+ * whole-list todo snapshot and the working flag the fold rules read. Pulled
+ * through `TuiController.getGoalTodo()` (the same standalone-getter pattern
+ * as {@link SubagentsProjection}) instead of riding {@link ChatViewModel}, so
+ * the composed chat contract stays stable for hosts that never mount the
+ * panel.
+ */
+export interface GoalTodoProjection {
+  readonly meta: ProjectionMeta
+  readonly goal: Channel['goal']
+  readonly todos: Channel['todos']
+  readonly working: Channel['working']
+}
+
+/**
  * Plugin-scene slice. The imperative descriptor stays host-side, so the
  * projection carries only identity fields — enough for the chat screen to
  * reconcile the active scene without exposing the descriptor to components.
@@ -168,7 +183,8 @@ export interface TrajectoryProjection {
 }
 
 /** The chat main screen's composed view: its slices by reference plus the
- *  handful of scalars the screen itself reads (`/status`, pickers). */
+ *  handful of scalars the screen itself reads (`/status`, pickers, the
+ *  fullscreen scroll-gutter preference). */
 export interface ChatViewModel {
   readonly meta: ProjectionMeta
   readonly transcript: TranscriptProjection
@@ -182,6 +198,7 @@ export interface ChatViewModel {
   readonly cwd: Channel['cwd']
   readonly gitBranch: Channel['gitBranch']
   readonly provider: Channel['provider']
+  readonly scrollGutter: Channel['scrollGutter']
 }
 
 /** Subscription granularity of the TuiController: one listener set per

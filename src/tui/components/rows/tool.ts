@@ -260,7 +260,9 @@ export class ToolCardRow extends CachedRow {
   protected build(width: number, marginTop: boolean): string[] {
     const tool = this.row.tool
     if (tool === undefined) return []
-    const verbose = this.ctx.expanded
+    // Verbose = global Ctrl+O OR this card's own click toggle (source parity:
+    // `verbose = isExpanded || expanded`).
+    const verbose = this.ctx.expanded || this.ctx.expandedRows.has(this.row.id)
     const isRunning = tool.status === 'running'
     const isError = tool.status === 'error'
     const result = tool.resultFull ?? tool.resultText

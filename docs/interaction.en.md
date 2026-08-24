@@ -258,7 +258,7 @@ owns native scrollback and selection.
 
 Copy prefers OSC 52. Local fallbacks include `wl-copy`, `xclip`, and `xsel`;
 tmux uses `load-buffer -w`. Set `DSH_TUI_DISABLE_MOUSE=1` to temporarily disable
-fullscreen mouse handling.
+fullscreen mouse clicks and selection (wheel scroll keeps working).
 
 ## `ask_user_question` questionnaires
 

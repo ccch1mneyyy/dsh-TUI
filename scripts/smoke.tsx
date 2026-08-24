@@ -141,6 +141,7 @@ class SmokeChannel {
     tps: false,
     gitBranch: false,
     sessionTitle: false,
+    sessionId: false,
     mode: false,
     contextBar: false,
     activity: false,
@@ -160,6 +161,8 @@ class SmokeChannel {
   contextSegments = { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }
   subagents = []
   subagentControl = { interrupt: (_id: string) => false }
+  goal = undefined
+  todos = []
   readonly submissions: string[] = []
   private readonly listeners = new Set<() => void>()
   private readonly settingsListeners = new Set<() => void>()

@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
 	AltScreenSearchComponent,
 	type AltScreenSearchMatch,
@@ -9,13 +11,17 @@ import { ScrollView } from "./components/scroll-view.ts";
 import { getKeybindings } from "./keybindings.ts";
 import { isKeyRelease } from "./keys.ts";
 import {
+	getHitChainAt,
 	getScrollbarGeometry,
 	getScrollViewBox,
 	getScrollViewsAt,
+	type LayoutBox,
 	type LayoutFrame,
+	type LayoutRect,
 	renderLayoutFrame,
 	type ScrollbarGeometry,
 } from "./layout.ts";
+import type { PointerEvent, PointerEventType } from "./pointer.ts";
 import type { Terminal } from "./terminal.ts";
 import {
 	deleteAllKittyImages,
@@ -98,11 +104,42 @@ interface ClickTarget {
 	wordEnd: number;
 }
 
+/** Mouse event decoded from an SGR (`ESC[<b;x;yM/m`) or X10 (`ESC[M` + 3 bytes) sequence. */
 interface SgrMouseEvent {
 	button: number;
 	x: number;
 	y: number;
 	release: boolean;
+}
+
+/**
+ * Protocol-decoded pointer input ready for dispatch: button/modifiers extracted
+ * from the raw protocol bits, wheel deltas folded in.
+ */
+interface PointerDispatchSource {
+	x: number;
+	y: number;
+	/** 0 = left, 1 = middle, 2 = right; -1 for move/wheel/enter/leave and X10 releases. */
+	button: number;
+	shift: boolean;
+	alt: boolean;
+	ctrl: boolean;
+	deltaX: number;
+	deltaY: number;
+}
+
+/**
+ * Pointer capture established by a consumed press: the components that received
+ * the press, deepest-first. Rects are re-resolved per event (against
+ * `overlayHitRegions` first, then the committed layout frame) so capture
+ * survives re-renders and scrolling.
+ */
+interface PointerCaptureState {
+	components: Component[];
+}
+
+function rectContainsPoint(rect: LayoutRect, x: number, y: number): boolean {
+	return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
 }
 
 interface WheelEvent {
@@ -140,11 +177,33 @@ interface SearchHighlightRange {
 	current: boolean;
 }
 
+/**
+ * Granular mouse capture control. `wheel` keeps wheel-scroll routing
+ * (component dispatch first, then ScrollView routing); `buttons` covers every
+ * button-driven interaction: pointer press/release/click/hover dispatch,
+ * application-owned text selection, scrollbar hover/drag and right-click
+ * paste. `buttons: false` with `wheel` on gives scroll-only mouse support —
+ * clicks fall to no handler rather than starting a selection. Mouse tracking
+ * stays enabled while either flag is on, so the terminal's native selection
+ * remains intercepted (same trade-off as a full `mouse: true`).
+ */
+export interface TuiMouseOptions {
+	/** Route wheel events (default true). */
+	wheel?: boolean;
+	/** Dispatch button-driven pointer events and text selection (default true). */
+	buttons?: boolean;
+}
+
 export interface TuiAltScreenOptions {
 	/** Number of logical lines moved for each mouse-wheel event. */
 	wheelScrollLines?: number;
-	/** Capture mouse events for viewport scrolling and application-owned text selection. */
-	mouse?: boolean;
+	/**
+	 * Capture mouse events for viewport scrolling and application-owned text
+	 * selection. `false` never enables terminal mouse tracking (the terminal's
+	 * native behavior is untouched); an object enables tracking but gates the
+	 * two interaction families independently (see {@link TuiMouseOptions}).
+	 */
+	mouse?: boolean | TuiMouseOptions;
 	/** Style a non-current transcript search match. */
 	searchMatchStyle?: (text: string) => string;
 	/** Style the current transcript search match. */
@@ -188,11 +247,18 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private selectionPressActive = false;
 	private scrollbarDrag?: ScrollbarDrag;
 	private scrollbarHover?: ScrollView;
+	private pointerCapture?: PointerCaptureState;
+	private pointerPressCell?: { x: number; y: number };
+	private pointerHoverChain: Component[] = [];
+	private lastHoverCell?: { x: number; y: number };
+	private lastPointerCell?: { x: number; y: number };
 	private activeSearch?: ActiveSearch;
 	private pressedUrl?: string;
 	private selectionDragged = false;
 	private readonly wheelScrollLines: number;
 	private readonly mouseEnabled: boolean;
+	private readonly mouseWheel: boolean;
+	private readonly mouseButtons: boolean;
 	private readonly searchMatchStyle: (text: string) => string;
 	private readonly searchCurrentMatchStyle: (text: string) => string;
 	private readonly openUrl?: (url: string) => void;
@@ -215,7 +281,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.implicitScrollView = new ScrollView(this.implicitDocument, { follow: "end", primary: true });
 		this.flashes = new AltScreenFlashContainer(() => this.requestRender());
 		this.wheelScrollLines = Math.max(1, Math.floor(options.wheelScrollLines ?? 1));
-		this.mouseEnabled = options.mouse ?? true;
+		const mouse = options.mouse ?? true;
+		this.mouseWheel = typeof mouse === "object" ? (mouse.wheel ?? true) : mouse;
+		this.mouseButtons = typeof mouse === "object" ? (mouse.buttons ?? true) : mouse;
+		// Terminal mouse tracking stays on while either family is enabled; with
+		// tracking off entirely the terminal never sends mouse sequences.
+		this.mouseEnabled = this.mouseWheel || this.mouseButtons;
 		this.searchMatchStyle = options.searchMatchStyle ?? ((text) => `\x1b[4m${text}\x1b[24m`);
 		this.searchCurrentMatchStyle = options.searchCurrentMatchStyle ?? ((text) => `\x1b[1;7m${text}\x1b[22;27m`);
 		this.openUrl = options.openUrl;
@@ -256,6 +327,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.selectionPressActive = false;
 		this.stopScrollbarHover();
 		this.stopScrollbarDrag();
+		this.clearPointerInteraction(false);
 		this.flashes.dispose();
 		this.altScreenActive = true;
 		const capabilities = getCapabilities();
@@ -297,6 +369,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.selectionPressActive = false;
 		this.stopScrollbarHover();
 		this.stopScrollbarDrag();
+		this.clearPointerInteraction(true);
 		this.flashes.dispose();
 		if (!this.altScreenActive) return;
 		this.terminal.write(
@@ -544,6 +617,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			this.stopSelectionAutoScroll();
 			this.stopScrollbarHover();
 			this.stopScrollbarDrag();
+			this.clearPointerInteraction(true);
 			this.pressedUrl = undefined;
 			this.selectionDragged = false;
 			if (hadActiveSelection) {
@@ -560,16 +634,51 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 		const wheelEvent = this.parseWheelEvent(data);
 		if (wheelEvent) {
+			// Pointer dispatch layering: components/overlays get the wheel event first;
+			// only an unconsumed event falls through to the legacy ScrollView routing.
+			if (
+				this.mouseWheel &&
+				this.dispatchPointerEvent("wheel", {
+					x: wheelEvent.x,
+					y: wheelEvent.y,
+					button: -1,
+					shift: false,
+					alt: false,
+					ctrl: false,
+					deltaX: 0,
+					deltaY: wheelEvent.direction,
+				})
+			) {
+				this.updateScrollbarHover(wheelEvent.x, wheelEvent.y);
+				this.requestRender();
+				return { consume: true };
+			}
 			if (this.shouldDeferViewportInputToOverlay()) return undefined;
-			this.routeWheel(wheelEvent);
+			// The legacy route stays live whenever tracking is off entirely
+			// (mouse:false — a stray sequence behaves as before the granular
+			// split); an explicit wheel:false with tracking on drops the scroll.
+			if (this.mouseWheel || !this.mouseEnabled) this.routeWheel(wheelEvent);
 			return { consume: true };
 		}
-		const mouseEvent = this.parseSgrMouseEvent(data);
+		const mouseEvent = this.parseMouseEvent(data);
 		if (mouseEvent) {
-			if (this.handleRightClickPaste(mouseEvent)) return { consume: true };
-			const handled = this.handleScrollbarMouseEvent(mouseEvent);
-			if (!this.scrollbarDrag) this.updateScrollbarHover(mouseEvent.x, mouseEvent.y);
-			if (!handled) this.handleSelectionMouseEvent(mouseEvent);
+			if (!this.mouseEnabled) {
+				// With mouse disabled the terminal never sends these sequences; if one
+				// still arrives, keep the pre-pointer-dispatch behavior byte-identical.
+				if (this.handleRightClickPaste(mouseEvent)) return { consume: true };
+				const handled = this.handleScrollbarMouseEvent(mouseEvent);
+				if (!this.scrollbarDrag) this.updateScrollbarHover(mouseEvent.x, mouseEvent.y);
+				if (!handled) this.handleSelectionMouseEvent(mouseEvent);
+				return { consume: true };
+			}
+			if (this.mouseButtons) {
+				if (this.handleRightClickPaste(mouseEvent)) return { consume: true };
+				const handled = this.handleScrollbarMouseEvent(mouseEvent);
+				if (!this.scrollbarDrag) this.updateScrollbarHover(mouseEvent.x, mouseEvent.y);
+				if (!handled) this.handlePointerMouseEvent(mouseEvent);
+			}
+			// Buttons gated off with tracking on (wheel-only mode): swallow the
+			// event — no dispatch, no selection, no scrollbar interaction.
 			return { consume: true };
 		}
 		if (this.isMouseSequence(data)) return { consume: true };
@@ -683,15 +792,30 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.requestRender();
 	}
 
-	private parseSgrMouseEvent(data: string): SgrMouseEvent | undefined {
+	private parseMouseEvent(data: string): SgrMouseEvent | undefined {
 		const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
-		if (!match) return undefined;
-		return {
-			button: Number.parseInt(match[1], 10),
-			x: Number.parseInt(match[2], 10) - 1,
-			y: Number.parseInt(match[3], 10) - 1,
-			release: match[4] === "m",
-		};
+		if (match) {
+			return {
+				button: Number.parseInt(match[1], 10),
+				x: Number.parseInt(match[2], 10) - 1,
+				y: Number.parseInt(match[3], 10) - 1,
+				release: match[4] === "m",
+			};
+		}
+		// X10: ESC[M followed by button+32 and 1-based coords+33. Wheel events
+		// (bit 6) are handled by parseWheelEvent before this parser runs.
+		if (data.length === 6 && data.startsWith("\x1b[M")) {
+			const button = data.charCodeAt(3) - 32;
+			if ((button & 64) !== 0) return undefined;
+			return {
+				button,
+				x: data.charCodeAt(4) - 33,
+				y: data.charCodeAt(5) - 33,
+				// X10 has no release final byte: button 3 without the motion bit is a release.
+				release: (button & 32) === 0 && (button & 3) === 3,
+			};
+		}
+		return undefined;
 	}
 
 	private handleRightClickPaste(event: SgrMouseEvent): boolean {
@@ -764,15 +888,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (event.release || (event.button & 32) !== 0 || (event.button & 3) !== 0) return false;
 		const target = this.getScrollbarTargetAt(event.x, event.y);
 		if (!target) return false;
-		this.stopSelectionAutoScroll();
-		this.selectionPressActive = false;
-		this.selectionAnchor = undefined;
-		this.selectionFocus = undefined;
-		this.selectionGranularity = "character";
-		this.selectionInitialRange = undefined;
-		this.lastClick = undefined;
-		this.pressedUrl = undefined;
-		this.selectionDragged = false;
+		this.resetSelectionInteraction();
 		this.setScrollbarHover(target.scrollView);
 		this.scrollbarDrag = {
 			scrollView: target.scrollView,
@@ -783,6 +899,340 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	private stopScrollbarDrag(): void {
 		this.scrollbarDrag = undefined;
+	}
+
+	private resetSelectionInteraction(): void {
+		this.stopSelectionAutoScroll();
+		this.selectionPressActive = false;
+		this.selectionAnchor = undefined;
+		this.selectionFocus = undefined;
+		this.selectionGranularity = "character";
+		this.selectionInitialRange = undefined;
+		this.lastClick = undefined;
+		this.pressedUrl = undefined;
+		this.selectionDragged = false;
+	}
+
+	// --- Generic pointer dispatch (see pointer.ts for the dispatch contract) ---
+
+	private makePointerSource(event: SgrMouseEvent): PointerDispatchSource {
+		const motion = (event.button & 32) !== 0;
+		return {
+			x: event.x,
+			y: event.y,
+			// Motion and X10 releases (button 3) carry no button identity.
+			button: motion || (event.release && (event.button & 3) === 3) ? -1 : event.button & 3,
+			shift: (event.button & 4) !== 0,
+			alt: (event.button & 8) !== 0,
+			ctrl: (event.button & 16) !== 0,
+			deltaX: 0,
+			deltaY: 0,
+		};
+	}
+
+	private neutralPointerSource(): PointerDispatchSource {
+		const cell = this.lastPointerCell ?? this.lastHoverCell ?? { x: -1, y: -1 };
+		return { x: cell.x, y: cell.y, button: -1, shift: false, alt: false, ctrl: false, deltaX: 0, deltaY: 0 };
+	}
+
+	private handlePointerMouseEvent(event: SgrMouseEvent): void {
+		this.lastPointerCell = { x: event.x, y: event.y };
+		const source = this.makePointerSource(event);
+		if (event.release) {
+			this.handlePointerRelease(event, source);
+			return;
+		}
+		if ((event.button & 32) !== 0) {
+			this.handlePointerMotion(event, source);
+			return;
+		}
+		if ((event.button & 3) === 3) {
+			// A non-motion button-3 press carries no usable button identity; the
+			// selection path ignores it exactly as before pointer dispatch existed.
+			this.handleSelectionMouseEvent(event);
+			return;
+		}
+		this.pointerPressCell = { x: event.x, y: event.y };
+		const dispatched: Component[] = [];
+		if (this.dispatchPointerEvent("press", source, dispatched)) {
+			// A consumed press captures the pointer and suppresses the selection candidate.
+			this.pointerCapture = { components: dispatched };
+			this.resetSelectionInteraction();
+			this.requestRender();
+			return;
+		}
+		this.handleSelectionMouseEvent(event);
+	}
+
+	private handlePointerRelease(event: SgrMouseEvent, source: PointerDispatchSource): void {
+		const pressCell = this.pointerPressCell;
+		this.pointerPressCell = undefined;
+		const capture = this.pointerCapture;
+		this.pointerCapture = undefined;
+		if (capture) {
+			// Pairing guarantee: every component that received the captured press also
+			// receives the release (bubbling does not stop at a consumer), delivered
+			// even when the release lands outside the target's rect.
+			for (const component of capture.components) {
+				const rect = this.resolvePointerRect(component);
+				if (rect) this.dispatchToPointerComponent(component, "release", source, rect, false);
+			}
+		} else {
+			this.dispatchPointerEvent("release", source);
+		}
+		// A release on the press cell without an intervening drag is a click.
+		// Selection drags never produce one (their release completes the copy path).
+		const sameCell = pressCell !== undefined && pressCell.x === event.x && pressCell.y === event.y;
+		if (sameCell && !this.selectionDragged) {
+			const clickConsumed = capture
+				? this.dispatchToCapturedChain(capture, "click", source)
+				: this.dispatchPointerEvent("click", source);
+			if (clickConsumed) {
+				// A consumed click suppresses the fallback copy/OSC 8 activation path.
+				this.resetSelectionInteraction();
+				this.requestRender();
+				return;
+			}
+		}
+		// A captured press never created a selection candidate; nothing to complete.
+		if (capture) return;
+		this.handleSelectionMouseEvent(event);
+	}
+
+	private handlePointerMotion(event: SgrMouseEvent, source: PointerDispatchSource): void {
+		if (this.pointerCapture) {
+			this.dispatchToCapturedChain(this.pointerCapture, "move", source);
+			return;
+		}
+		if ((event.button & 3) !== 3) {
+			// Button-motion drag without a consumed press belongs to text selection.
+			this.handleSelectionMouseEvent(event);
+			return;
+		}
+		// Pure hover move. Only DECSET 1003 (all-motion) terminals emit these;
+		// multiplexers negotiate button-motion tracking instead, so hover simply
+		// never happens there — no mux-specific code is required.
+		this.lastHoverCell = { x: event.x, y: event.y };
+		const chain = this.resolveHoverChain(event.x, event.y);
+		this.diffHoverChain(chain, source);
+		if (chain.length === 0) return;
+		const frame = this.currentLayout;
+		const cellIsBlank = frame ? this.isCellBlank(frame, event.x, event.y) : true;
+		for (const component of chain) {
+			const rect = this.resolvePointerRect(component);
+			if (!rect) continue;
+			if (this.dispatchToPointerComponent(component, "move", source, rect, cellIsBlank)) break;
+		}
+	}
+
+	/**
+	 * Dispatch a pointer event: overlay hit regions first (topmost-first), then
+	 * the base layout tree (deepest-first bubbling over the clip-aware hit chain).
+	 * Returns true when a handler consumed the event; the components that received
+	 * it are collected into `dispatched` (for capture pairing).
+	 */
+	private dispatchPointerEvent(type: PointerEventType, source: PointerDispatchSource, dispatched?: Component[]): boolean {
+		const regions = this.overlayHitRegions;
+		if (regions.length > 0) {
+			const hit = regions.find((region) => rectContainsPoint(region.rect, source.x, source.y));
+			const topmostCapturing = regions.find((region) => region.capturing);
+			if (hit) {
+				dispatched?.push(hit.component);
+				if (this.dispatchToPointerComponent(hit.component, type, source, hit.rect, false)) return true;
+				// A hit capturing region never passes through to the base tree.
+				if (hit.capturing) return false;
+				if (topmostCapturing) {
+					// A visible modal owns pointer input: an unconsumed hit on a
+					// non-capturing overlay is delivered to the modal itself (locals may
+					// lie outside its rect), never to the base tree.
+					dispatched?.push(topmostCapturing.component);
+					return this.dispatchToPointerComponent(topmostCapturing.component, type, source, topmostCapturing.rect, false);
+				}
+				// Unconsumed non-capturing overlay: the event passes through to the base tree.
+			} else if (topmostCapturing) {
+				// Click-outside delivery: with a visible capturing overlay, events that
+				// hit no region go to the topmost capturing component itself, with
+				// out-of-bounds local coordinates (click-outside-to-close support).
+				dispatched?.push(topmostCapturing.component);
+				return this.dispatchToPointerComponent(topmostCapturing.component, type, source, topmostCapturing.rect, false);
+			}
+		}
+		const frame = this.currentLayout;
+		if (!frame) return false;
+		const cellIsBlank = this.isCellBlank(frame, source.x, source.y);
+		for (const box of getHitChainAt(frame, source.x, source.y)) {
+			if (!box.component.handlePointer) continue;
+			dispatched?.push(box.component);
+			if (this.dispatchToPointerComponent(box.component, type, source, box.rect, cellIsBlank)) return true;
+		}
+		return false;
+	}
+
+	/** Bubble an event through a captured chain, deepest-first, stopping at a consumer. */
+	private dispatchToCapturedChain(capture: PointerCaptureState, type: PointerEventType, source: PointerDispatchSource): boolean {
+		for (const component of capture.components) {
+			const rect = this.resolvePointerRect(component);
+			if (!rect) continue;
+			if (this.dispatchToPointerComponent(component, type, source, rect, false)) return true;
+		}
+		return false;
+	}
+
+	private dispatchToPointerComponent(
+		component: Component,
+		type: PointerEventType,
+		source: PointerDispatchSource,
+		rect: LayoutRect,
+		cellIsBlank: boolean,
+	): boolean {
+		const handler = component.handlePointer;
+		if (!handler) return false;
+		// Each dispatch level receives a fresh event object with locals recomputed
+		// against that level's rect; handlers must not retain or mutate it.
+		const event: PointerEvent = {
+			type,
+			x: source.x,
+			y: source.y,
+			localX: source.x - rect.x,
+			localY: source.y - rect.y,
+			button: source.button,
+			shift: source.shift,
+			alt: source.alt,
+			ctrl: source.ctrl,
+			deltaX: source.deltaX,
+			deltaY: source.deltaY,
+			cellIsBlank,
+		};
+		try {
+			return handler.call(component, event) === true;
+		} catch (error) {
+			// Handler exceptions are isolated: the event counts as consumed so a
+			// faulty component cannot break the input loop or leak into fallbacks.
+			this.logPointerHandlerError(component, error);
+			return true;
+		}
+	}
+
+	private logPointerHandlerError(component: Component, error: unknown): void {
+		if (process.env.PI_DEBUG_POINTER !== "1") return;
+		try {
+			const logPath = path.join(this.logDirectory, "pi-debug.log");
+			const message = `[${new Date().toISOString()}] pointer handler error in ${component.constructor.name}: ${String(error)}\n`;
+			fs.mkdirSync(path.dirname(logPath), { recursive: true });
+			fs.appendFileSync(logPath, message);
+		} catch {
+			// Debug logging is best-effort.
+		}
+	}
+
+	/** Resolve a dispatch target's current rect: visible overlay region first, then the committed layout frame. */
+	private resolvePointerRect(component: Component): LayoutRect | undefined {
+		const region = this.overlayHitRegions.find((candidate) => candidate.component === component);
+		if (region) return region.rect;
+		return this.findLayoutBox(component)?.rect;
+	}
+
+	private findLayoutBox(component: Component): LayoutBox | undefined {
+		const frame = this.currentLayout;
+		if (!frame) return undefined;
+		const visit = (box: LayoutBox): LayoutBox | undefined => {
+			if (box.component === component) return box;
+			for (const child of box.children) {
+				const match = visit(child);
+				if (match) return match;
+			}
+			return undefined;
+		};
+		return visit(frame.root);
+	}
+
+	/**
+	 * Blankness of a base-tree hit cell, computed from the committed layout frame
+	 * (not the composited screen, so non-capturing overlay pixels never leak in).
+	 * Overlay hits always report false.
+	 */
+	private isCellBlank(frame: LayoutFrame, x: number, y: number): boolean {
+		if (y < 0 || y >= frame.lines.length) return true;
+		return stripTerminalSequences(sliceByColumn(frame.lines[y] ?? "", x, 1, true)).trim().length === 0;
+	}
+
+	private isOverlayComponent(component: Component): boolean {
+		return this.overlayHitRegions.some((region) => region.component === component);
+	}
+
+	/** Hover chain for a cell, deepest-first: overlay hit first, then the filtered base hit chain. */
+	private resolveHoverChain(x: number, y: number): Component[] {
+		const hit = this.overlayHitRegions.find((region) => rectContainsPoint(region.rect, x, y));
+		if (hit) return hit.component.handlePointer ? [hit.component] : [];
+		// A visible capturing overlay suppresses base-tree hover outside its region.
+		if (this.overlayHitRegions.some((region) => region.capturing)) return [];
+		const frame = this.currentLayout;
+		if (!frame) return [];
+		return getHitChainAt(frame, x, y)
+			.filter((box) => box.component.handlePointer !== undefined)
+			.map((box) => box.component);
+	}
+
+	/** Diff the hover chain: leave fires deepest-first, enter shallowest-first. */
+	private diffHoverChain(next: Component[], source: PointerDispatchSource): void {
+		const previous = this.pointerHoverChain;
+		for (const component of previous) {
+			if (next.includes(component)) continue;
+			const rect = this.resolvePointerRect(component) ?? { x: source.x, y: source.y, width: 0, height: 0 };
+			this.dispatchToPointerComponent(component, "leave", source, rect, false);
+		}
+		for (let index = next.length - 1; index >= 0; index--) {
+			const component = next[index]!;
+			if (previous.includes(component)) continue;
+			const rect = this.resolvePointerRect(component);
+			if (rect) this.dispatchToPointerComponent(component, "enter", source, rect, false);
+		}
+		this.pointerHoverChain = next;
+	}
+
+	/**
+	 * Reconcile pointer state with a freshly committed frame: clear capture whose
+	 * targets vanished (synthesizing leave), and re-hit the last hover cell so
+	 * content that moved under a stationary pointer (scroll, resize, overlay
+	 * show/hide) produces the correct enter/leave transitions.
+	 */
+	private syncPointerStateAfterCommit(): void {
+		if (this.pointerCapture) {
+			const vanished = this.pointerCapture.components.filter(
+				(component) => this.resolvePointerRect(component) === undefined,
+			);
+			if (vanished.length > 0) {
+				const source = this.neutralPointerSource();
+				const rect = { x: source.x, y: source.y, width: 0, height: 0 };
+				for (const component of vanished) {
+					this.dispatchToPointerComponent(component, "leave", source, rect, false);
+				}
+				this.pointerCapture = undefined;
+			}
+		}
+		if (this.lastHoverCell) {
+			this.diffHoverChain(this.resolveHoverChain(this.lastHoverCell.x, this.lastHoverCell.y), this.neutralPointerSource());
+		}
+	}
+
+	/**
+	 * Clear capture/hover state on focus loss, stop, and (silently) start. When
+	 * `synthesizeRelease` is set, a captured press is paired with a synthetic
+	 * release first, so components never wait for a release that will not come.
+	 */
+	private clearPointerInteraction(synthesizeRelease: boolean): void {
+		const capture = this.pointerCapture;
+		this.pointerCapture = undefined;
+		this.pointerPressCell = undefined;
+		if (capture && synthesizeRelease) {
+			const source = this.neutralPointerSource();
+			for (const component of capture.components) {
+				const rect = this.resolvePointerRect(component);
+				if (rect) this.dispatchToPointerComponent(component, "release", source, rect, false);
+			}
+		}
+		if (this.pointerHoverChain.length > 0) this.diffHoverChain([], this.neutralPointerSource());
+		this.lastHoverCell = undefined;
 	}
 
 	private getScrollSelectionPoint(scrollView: ScrollView, x: number, y: number): SelectionPoint | undefined {
@@ -1310,5 +1760,6 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.previousScreenWidth = width;
 		this.previousScreenHeight = height;
 		this.currentLayout = nextLayout;
+		this.syncPointerStateAfterCommit();
 	}
 }

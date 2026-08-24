@@ -86,6 +86,7 @@ function makeViewModel(overrides: Partial<ChatViewModel> = {}): ChatViewModel {
     cwd: '/repo',
     gitBranch: 'main',
     provider: 'test-provider',
+    scrollGutter: 'timeline',
     ...overrides,
   } as ChatViewModel;
 }

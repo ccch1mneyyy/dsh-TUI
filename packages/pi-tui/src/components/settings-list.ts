@@ -1,5 +1,6 @@
 import { fuzzyFilter } from "../fuzzy.ts";
 import { getKeybindings } from "../keybindings.ts";
+import type { PointerEvent } from "../pointer.ts";
 import type { Component } from "../tui.ts";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 import { Input } from "./input.ts";
@@ -62,6 +63,11 @@ export class SettingsList implements Component {
 	private submenuComponent: Component | null = null;
 	private submenuItemIndex: number | null = null;
 
+	/** Row geometry of the last main-list render, for pointer hit-testing. */
+	private pointerListOffset = 0;
+	private pointerWindowStart = 0;
+	private pointerVisibleRows = 0;
+
 	constructor(
 		items: SettingItem[],
 		maxVisible: number,
@@ -111,8 +117,10 @@ export class SettingsList implements Component {
 			lines.push(...this.searchInput.render(width));
 			lines.push("");
 		}
+		this.pointerListOffset = lines.length;
 
 		if (this.items.length === 0) {
+			this.pointerVisibleRows = 0;
 			lines.push(this.theme.hint(this.strings.noSettings ?? "  No settings available"));
 			if (this.searchEnabled) {
 				this.addHintLine(lines, width);
@@ -122,6 +130,7 @@ export class SettingsList implements Component {
 
 		const displayItems = this.searchEnabled ? this.filteredItems : this.items;
 		if (displayItems.length === 0) {
+			this.pointerVisibleRows = 0;
 			lines.push(truncateToWidth(this.theme.hint(this.strings.noMatches ?? "  No matching settings"), width));
 			this.addHintLine(lines, width);
 			return lines;
@@ -133,6 +142,8 @@ export class SettingsList implements Component {
 			Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), displayItems.length - this.maxVisible),
 		);
 		const endIndex = Math.min(startIndex + this.maxVisible, displayItems.length);
+		this.pointerWindowStart = startIndex;
+		this.pointerVisibleRows = endIndex - startIndex;
 
 		// Calculate max label width for alignment
 		const maxLabelWidth = Math.min(30, Math.max(...this.items.map((item) => visibleWidth(item.label))));
@@ -210,6 +221,38 @@ export class SettingsList implements Component {
 			this.searchInput.handleInput(data);
 			this.applyFilter(this.searchInput.getValue());
 		}
+	}
+
+	/**
+	 * Pointer support (generic input capability): a primary-button click on a
+	 * visible item row focuses it and activates it — the keyboard equivalent of
+	 * moving to the row and pressing Enter (cycle rows step their value, rows
+	 * with a `submenu` open it). A wheel event steps the selection by one row,
+	 * CLAMPED at the ends rather than wrapping like the arrow keys. The search
+	 * row, scroll indicator, description and hint consume without acting; an
+	 * open submenu owns the pointer exactly like it owns the keyboard.
+	 */
+	handlePointer(event: PointerEvent): boolean | void {
+		if (this.submenuComponent) {
+			this.submenuComponent.handlePointer?.(event);
+			return true;
+		}
+		if (event.type === "wheel") {
+			const displayItems = this.searchEnabled ? this.filteredItems : this.items;
+			if (displayItems.length === 0 || event.deltaY === 0) return true;
+			const step = event.deltaY > 0 ? 1 : -1;
+			this.selectedIndex = Math.max(0, Math.min(displayItems.length - 1, this.selectedIndex + step));
+			return true;
+		}
+		if (event.type === "click") {
+			const row = event.localY - this.pointerListOffset;
+			if (event.button === 0 && row >= 0 && row < this.pointerVisibleRows) {
+				this.selectedIndex = this.pointerWindowStart + row;
+				this.activateItem();
+			}
+			return true;
+		}
+		return undefined;
 	}
 
 	private activateItem(): void {

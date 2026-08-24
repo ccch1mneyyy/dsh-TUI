@@ -408,3 +408,25 @@ export function getScrollViewsAt(frame: LayoutFrame, x: number, y: number): Scro
 	result.sort((a, b) => b.depth - a.depth);
 	return result.map((entry) => entry.scrollView);
 }
+
+/**
+ * Return the hit-test chain for a point, deepest box first (`[leaf, ..., root]`).
+ * Boxes are pruned by clip containment (clip is always a subset of rect, so clip
+ * containment is visibility-aware). Children are visited in reverse paint order
+ * (later siblings paint on top); only the first matching branch is descended into.
+ */
+export function getHitChainAt(frame: LayoutFrame, x: number, y: number): LayoutBox[] {
+	const chain: LayoutBox[] = [];
+	const visit = (box: LayoutBox): void => {
+		chain.push(box);
+		for (let index = box.children.length - 1; index >= 0; index--) {
+			const child = box.children[index]!;
+			if (containsPoint(child.clip, x, y)) {
+				visit(child);
+				return;
+			}
+		}
+	};
+	if (containsPoint(frame.root.clip, x, y)) visit(frame.root);
+	return chain.reverse();
+}

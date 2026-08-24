@@ -83,6 +83,7 @@ function makeViewModel(active: { id: string; title?: string } | undefined): Chat
     cwd: '/repo',
     gitBranch: 'main',
     provider: 'test-provider',
+    scrollGutter: 'timeline',
   }
 }
 

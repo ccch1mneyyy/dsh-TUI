@@ -2,6 +2,7 @@ import type { AutocompleteProvider, AutocompleteSuggestions } from "../autocompl
 import { getKeybindings } from "../keybindings.ts";
 import { decodePrintableKey, matchesKey } from "../keys.ts";
 import { KillRing } from "../kill-ring.ts";
+import type { PointerEvent } from "../pointer.ts";
 import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.ts";
 import { UndoStack } from "../undo-stack.ts";
 import {
@@ -284,6 +285,14 @@ export class Editor implements Component, Focusable {
 	// Store last render width for cursor navigation
 	private lastWidth: number = 80;
 
+	// Last-render geometry for click-to-caret (set by render(); the pointer
+	// event coordinates are in the last committed frame's space, so they must
+	// be interpreted against the same render's layout).
+	/** Clamped horizontal padding actually used by the last render. */
+	private lastPaddingX: number = 0;
+	/** Number of text rows rendered between the top and bottom borders. */
+	private lastRenderedTextRows: number = 0;
+
 	// Vertical scrolling support
 	private scrollOffset: number = 0;
 
@@ -304,6 +313,8 @@ export class Editor implements Component, Focusable {
 	private autocompleteRequestTask: Promise<void> = Promise.resolve();
 	private autocompleteStartToken: number = 0;
 	private autocompleteRequestId: number = 0;
+	/** Row within the last render output where the autocomplete menu starts; -1 when no menu rendered. */
+	private lastAutocompleteStartRow = -1;
 
 	// Paste tracking for large pastes
 	private pastes: Map<number, string> = new Map();
@@ -490,6 +501,7 @@ export class Editor implements Component, Focusable {
 
 		// Store for cursor navigation (must match wrapping width)
 		this.lastWidth = layoutWidth;
+		this.lastPaddingX = paddingX;
 
 		const horizontal = this.borderColor("─");
 
@@ -517,6 +529,7 @@ export class Editor implements Component, Focusable {
 
 		// Get visible lines slice
 		const visibleLines = layoutLines.slice(this.scrollOffset, this.scrollOffset + maxVisibleLines);
+		this.lastRenderedTextRows = visibleLines.length;
 
 		const result: string[] = [];
 		const leftPadding = " ".repeat(paddingX);
@@ -588,7 +601,9 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Add autocomplete list if active
+		this.lastAutocompleteStartRow = -1;
 		if (this.autocompleteState && this.autocompleteList) {
+			this.lastAutocompleteStartRow = result.length;
 			const autocompleteResult = this.autocompleteList.render(contentWidth);
 			for (const line of autocompleteResult) {
 				const lineWidth = visibleWidth(line);
@@ -598,6 +613,123 @@ export class Editor implements Component, Focusable {
 		}
 
 		return result;
+	}
+
+	/**
+	 * Pointer support: autocomplete menu routing plus click-to-caret.
+	 *
+	 * Menu routing: events landing on the menu rows appended below the bottom
+	 * border are forwarded to the suggestion list (a click confirms the row
+	 * through the keyboard Enter path — see createAutocompleteList; a wheel
+	 * steps the selection), and the open menu owns its whole region so a drag
+	 * over it never starts a text selection the click would race.
+	 *
+	 * Click-to-caret: a primary-button click on the text rows moves the cursor
+	 * to the grapheme boundary nearest the clicked cell (positionCursorAtCell).
+	 * It is deliberately click-only and never consumes:
+	 * - press/release stay unconsumed so the terminal-level drag selection keeps
+	 *   working over the prompt (a consumed press would capture the pointer and
+	 *   suppress the selection candidate);
+	 * - a drag never produces a click (dispatch contract), so releasing a
+	 *   selection never moves the cursor;
+	 * - leaving the click unconsumed keeps the fallback release path alive: a
+	 *   no-op for a collapsed single click, but it preserves double/triple-click
+	 *   word/line selection (a consumed click would reset that state). Editor
+	 *   content holds no OSC 8 links, so the link-activation fallback cannot
+	 *   fire inside this rect.
+	 * A click on the text rows while the menu is open behaves like the
+	 * equivalent arrow-key move: the picker refreshes against the new cursor
+	 * position (closing itself when the position yields no suggestions).
+	 */
+	handlePointer(event: PointerEvent): boolean | void {
+		if (this.autocompleteState && this.autocompleteList) {
+			if (this.lastAutocompleteStartRow >= 0 && event.localY >= this.lastAutocompleteStartRow) {
+				if (event.type === "click" || event.type === "wheel") {
+					this.autocompleteList.handlePointer({ ...event, localY: event.localY - this.lastAutocompleteStartRow });
+				}
+				return true;
+			}
+		}
+		if (event.type !== "click" || event.button !== 0) return undefined;
+		this.positionCursorAtCell(event.localX, event.localY);
+		return undefined;
+	}
+
+	/**
+	 * Map a click on a text row back to a logical cursor position.
+	 *
+	 * Row mapping uses the last render's geometry: row 0 is the top border,
+	 * rows 1..lastRenderedTextRows are the visible text slice (shifted by
+	 * scrollOffset), the next row is the bottom border. Border rows and rows
+	 * outside the rendered slice are ignored.
+	 *
+	 * Column mapping walks the same grapheme segmentation the renderer wraps
+	 * with (paste-marker aware), so a CJK wide char, emoji ZWJ cluster or
+	 * combining sequence is never split: the caret lands before a grapheme
+	 * whose midpoint is past the clicked column, after it otherwise. Clicks in
+	 * the left padding act as column 0 (caret to the wrapped row's start);
+	 * clicks past the row's text (right padding / blank cells) snap to the
+	 * row's end. The result is snapped to atomic-segment boundaries, so the
+	 * cursor never lands in the middle of a multi-grapheme unit (same
+	 * invariant as moveToVisualLine).
+	 */
+	private positionCursorAtCell(localX: number, localY: number): void {
+		const textRow = localY - 1;
+		if (textRow < 0 || textRow >= this.lastRenderedTextRows) return;
+
+		const visualLines = this.buildVisualLineMap(this.lastWidth);
+		const visualLine = visualLines[this.scrollOffset + textRow];
+		if (!visualLine) return;
+
+		const line = this.state.lines[visualLine.logicalLine] || "";
+		const rangeStart = visualLine.startCol;
+		const rangeEnd = visualLine.startCol + visualLine.length;
+		const targetCol = Math.max(0, localX - this.lastPaddingX);
+
+		let offset = rangeEnd;
+		let widthSoFar = 0;
+		for (const seg of this.segment(line, "grapheme")) {
+			const segStart = seg.index;
+			const segEnd = seg.index + seg.segment.length;
+			if (segEnd <= rangeStart) continue;
+			if (segStart >= rangeEnd) break;
+			// A segment can be clipped by the visual-line range only when word
+			// wrap had to split an atomic unit (e.g. a paste marker wider than
+			// the terminal) — measure just the visible part then.
+			const visStart = Math.max(segStart, rangeStart);
+			const visEnd = Math.min(segEnd, rangeEnd);
+			const width = visibleWidth(line.slice(visStart, visEnd));
+			if (widthSoFar + width / 2 > targetCol) {
+				offset = visStart;
+				break;
+			}
+			if (widthSoFar + width > targetCol) {
+				offset = visEnd;
+				break;
+			}
+			widthSoFar += width;
+		}
+
+		// Snap out of atomic segments: a range-clipped offset can still sit
+		// inside a multi-grapheme unit; move it to the unit's start.
+		for (const seg of this.segment(line, "grapheme")) {
+			if (seg.index >= offset) break;
+			if (offset < seg.index + seg.segment.length) {
+				offset = seg.index;
+				break;
+			}
+		}
+
+		if (visualLine.logicalLine === this.state.cursorLine && offset === this.state.cursorCol) return;
+		this.lastAction = null;
+		this.state.cursorLine = visualLine.logicalLine;
+		this.setCursorCol(offset);
+		// Keep an open autocomplete picker in sync with the clicked position,
+		// exactly like an arrow-key move does (see moveCursor).
+		if (this.autocompleteState) {
+			this.updateAutocomplete();
+		}
+		this.tui.requestRender();
 	}
 
 	handleInput(data: string): void {
@@ -2146,7 +2278,13 @@ export class Editor implements Component, Focusable {
 		items: Array<{ value: string; label: string; description?: string }>,
 	): SelectList {
 		const layout = prefix.startsWith("/") ? SLASH_COMMAND_SELECT_LIST_LAYOUT : undefined;
-		return new SelectList(items, this.autocompleteMaxVisible, this.theme.selectList, layout);
+		const list = new SelectList(items, this.autocompleteMaxVisible, this.theme.selectList, layout);
+		// A pointer click on a suggestion row confirms it through the keyboard
+		// Enter path (the row is already focused by SelectList's handlePointer),
+		// so subclass Enter routing and the slash-command submit fall-through
+		// apply exactly as if Enter was pressed.
+		list.onSelect = () => this.handleInput("\r");
+		return list;
 	}
 
 	private tryTriggerAutocomplete(explicitTab: boolean = false): void {

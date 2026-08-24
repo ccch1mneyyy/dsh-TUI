@@ -27,7 +27,7 @@ import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_STATUS_BAR, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
@@ -38,7 +38,7 @@ import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspac
 import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { getHostSceneRuntime, type TuiSceneRuntime } from './scenes.js'
 import { withHostRootCapability } from './host-access.js'
-import { bootstrapTui } from '../tui/bootstrap.js'
+import { bootstrapTui, buildAltScreenOptions } from '../tui/bootstrap.js'
 import { createTuiCommands, type TuiFences } from '../tui/commands.js'
 import { TuiController } from '../tui/controller.js'
 import { ChatScreen } from '../tui/screens/chat-screen.js'
@@ -397,6 +397,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
     statusBar: config.statusBar,
+    scrollGutter: config.scrollGutter,
     handle,
   })
   // Register the dsh-tui settings namespace so the /settings panel can
@@ -410,6 +411,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+        scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -451,6 +453,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       minimal?: boolean
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
+      scrollGutter?: ScrollGutterMode
       statusBar?: Partial<StatusBarConfig>
     }
     const applyLayout = (value: SettingsValue): void => {
@@ -479,6 +482,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
+      channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
     }
     // Fullscreen is fixed per bootstrap (inline vs alt-screen), so a change
     // rides the /reload fiber restart. cordis inject callbacks always run
@@ -599,6 +603,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'none', label: 'None', descriptions: { zh: '无' } },
             { value: 'subtle', label: 'Subtle', descriptions: { zh: '轻微' } },
             { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
+          ],
+        },
+        {
+          path: ['scrollGutter'],
+          label: 'Scroll gutter',
+          descriptions: { zh: '滚动导览槽' },
+          hint: 'Fullscreen conversation gutter: the turn timeline rail, a proportional scrollbar, or no gutter. Applies immediately.',
+          hintDescriptions: { zh: '全屏会话的右侧导览槽：按轮次的时间线、比例滚动条，或完全隐藏。立即生效。' },
+          kind: 'select',
+          options: [
+            { value: 'timeline', label: 'Timeline rail', descriptions: { zh: '时间线' } },
+            { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
+            { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
           ],
         },
         {
@@ -831,6 +848,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const bootedFullscreen = readFullscreenPref() ?? config.fullscreen === true
   const bootstrap = bootstrapTui({
     fullscreen: bootedFullscreen,
+    // Mouse/clipboard wiring lives in buildAltScreenOptions (research §4.4).
+    // The right-click paste hook fires long after `chat` is assigned, so the
+    // late-bound closure is safe; ChatScreen decides whether the prompt owns
+    // input at that moment.
+    altScreenOptions: buildAltScreenOptions({
+      onRightClickPaste: () => chat?.pasteIntoPrompt(),
+    }),
     getTranscript: () => {
       if (chat === undefined) return []
       // The channel folds rows beyond its MAX_ROWS window down to preview

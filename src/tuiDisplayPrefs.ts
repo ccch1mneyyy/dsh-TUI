@@ -1,6 +1,24 @@
 /** Background treatment applied to tool-call cards. */
 export type ToolBackground = 'none' | 'subtle' | 'strong'
 
+/**
+ * Scroll-gutter preference (settings `dsh-tui.scrollGutter`): the timeline
+ * rail (default), the proportional scrollbar, or nothing. Canonical home is
+ * this import-free prefs module because the channel consumes it;
+ * `src/tui/timeline-model.ts` re-exports both for its renderer consumers.
+ */
+export type ScrollGutterMode = 'timeline' | 'scrollbar' | 'hidden'
+
+const SCROLL_GUTTERS = new Set<ScrollGutterMode>(['timeline', 'scrollbar', 'hidden'])
+
+/** Normalize an unknown settings value to a gutter mode; anything
+ *  unrecognized falls back to the default timeline rail. */
+export function normalizeScrollGutter(value: unknown): ScrollGutterMode {
+  return typeof value === 'string' && SCROLL_GUTTERS.has(value as ScrollGutterMode)
+    ? (value as ScrollGutterMode)
+    : 'timeline'
+}
+
 /** Individually selectable fields in the status footer. */
 export interface StatusBarConfig {
   /** Prefer the compact, single-line presentation when space permits. */

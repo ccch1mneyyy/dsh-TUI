@@ -9,7 +9,8 @@
  * - `local-output` — the command's output, dimmed under a 2-cell indent;
  *   never takes a top margin (it hangs directly under its `local` echo).
  * - `compact` — the post-compaction summary: folded one-liner with a
- *   60-cell whitespace-flattened preview, full dimmed text under Ctrl+O.
+ *   60-cell whitespace-flattened preview, full dimmed text under Ctrl+O or
+ *   the row's own click toggle (`RowContext.expandedRows`).
  *   The folded line wraps like the old Text when it overflows.
  */
 import chalk from 'chalk'
@@ -70,7 +71,9 @@ export class LocalOutputRow extends CachedRow {
 export class CompactRow extends CachedRow {
   protected build(width: number, marginTop: boolean): string[] {
     const out: string[] = marginTop ? [''] : []
-    if (this.ctx.expanded) {
+    // Global Ctrl+O or the row's own click toggle reveals the full summary
+    // (source parity: `expanded || isExpanded`).
+    if (this.ctx.expanded || this.ctx.expandedRows.has(this.row.id)) {
       for (const line of wrapWidth(this.row.text, Math.max(1, width - 2))) {
         out.push(`  ${chalk.dim(line)}`)
       }

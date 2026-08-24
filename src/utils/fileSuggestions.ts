@@ -1,3 +1,10 @@
+/**
+ * Structured `@` file-suggestion pure utilities (ported from main eacc7a97,
+ * plan §2.5): the FileCandidate shape (stable id, kind, paths), path-like
+ * query detection, fuzzy subsequence scoring/ranking and selection
+ * preservation across async result refreshes. No I/O lives here — the
+ * channel's `listFileCandidates` owns the fs-service scans.
+ */
 export type FileCandidateKind = 'file' | 'directory'
 
 export interface FileCandidate {

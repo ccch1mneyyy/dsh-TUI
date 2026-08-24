@@ -19,13 +19,15 @@
  * `commands.overlays.decideApproval`; the component never touches the store
  * itself. Only a modifier-free Enter commits (`matchesKey(data, Key.enter)`:
  * Option+Enter arrives as ESC CR and Ctrl+Enter as CSI 13;5u — neither
- * matches, see fork keys.ts).
+ * matches, see fork keys.ts). Pointer: a primary-button click on an option
+ * row commits it (the retired React panel's onClick); everything inside the
+ * panel rect is consumed — see {@link handlePointer}.
  */
 import { t } from '../../../i18n.js'
 import { POINTER } from '../../../cc/figures.js'
 import type { ApprovalSnapshot } from '../../../dsh-adapter/approvals.js'
 import type { TuiCommands } from '../../commands.js'
-import { Key, matchesKey, wrapTextWithAnsi, type Component, type TUI } from '../../public.js'
+import { Key, matchesKey, wrapTextWithAnsi, type Component, type PointerEvent, type TUI } from '../../public.js'
 import { bold, dim, dividerLine, themePainter } from './overlay-chrome.js'
 
 const OUTCOMES = ['allowed-once', 'rejected'] as const
@@ -33,11 +35,21 @@ const OUTCOMES = ['allowed-once', 'rejected'] as const
 /** Left padding of the panel body (the old Box paddingLeft={2}). */
 const PAD = '  '
 
+/** A clickable option row span: [start, end) line offsets within the last
+ *  render output, plus the option index it activates. */
+interface RowSpan {
+  readonly start: number
+  readonly end: number
+  readonly index: number
+}
+
 export class ApprovalPanelView implements Component {
   private snapshot: ApprovalSnapshot | null = null
   /** The key of the snapshot the state below belongs to (remount marker). */
   private key: string | null = null
   private focusIndex = 0
+  /** Click hit map recorded by the last render (panel-local line offsets). */
+  private optionRows: RowSpan[] = []
 
   constructor(
     private readonly commands: TuiCommands,
@@ -88,9 +100,30 @@ export class ApprovalPanelView implements Component {
     }
   }
 
+  /**
+   * Click parity with the retired React ApprovalPanel (research §4.3): a
+   * primary-button click on an option row commits that outcome outright —
+   * the keyboard equivalent of moving the focus to the row and pressing
+   * Enter. Every event reaching this handler lies inside the panel rect and
+   * is consumed (blocking modal: no selection start, no scroll-through, no
+   * pass-through); blank cells and non-option rows consume without acting.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if (this.snapshot === null) return undefined
+    if (event.type === 'click' && event.button === 0 && !event.cellIsBlank) {
+      const hit = this.optionRows.find(row => event.localY >= row.start && event.localY < row.end)
+      if (hit !== undefined) {
+        this.focusIndex = hit.index
+        this.commands.overlays.decideApproval(OUTCOMES[hit.index]!)
+      }
+    }
+    return true
+  }
+
   render(width: number): string[] {
     const snapshot = this.snapshot
     if (snapshot === null) return []
+    this.optionRows = []
 
     const claude = themePainter('claude')
     const lines: string[] = ['']
@@ -118,10 +151,12 @@ export class ApprovalPanelView implements Component {
       const pointer = focused ? claude(bold(POINTER)) : ' '
       const label = `${index + 1}. ${labels[index]!}`
       const wrapped = wrapTextWithAnsi(label, Math.max(1, width - 5))
+      const start = lines.length
       for (const [lineIndex, line] of wrapped.entries()) {
         const text = focused ? claude(bold(line)) : line
         lines.push(lineIndex === 0 ? `${PAD}${pointer}${text}` : `${PAD} ${text}`)
       }
+      this.optionRows.push({ start, end: lines.length, index })
     }
 
     lines.push('')

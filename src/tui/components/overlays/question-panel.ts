@@ -33,6 +33,11 @@
  * CURSOR_MARKER at the caret whenever visible (the old useDeclaredCursor
  * IME anchor) — typing on an option row also lands in this buffer, so the
  * anchor must follow even when the row itself is not focused.
+ *
+ * Pointer (research §4.3): a primary-button click reuses the keyboard
+ * action of the clicked row — option rows answer/toggle/focus+submit per
+ * kind, the input row focuses (never submits); everything inside the panel
+ * rect is consumed — see {@link handlePointer}.
  */
 import { t } from '../../../i18n.js'
 import { POINTER } from '../../../cc/figures.js'
@@ -46,6 +51,7 @@ import {
   truncateToWidth,
   wrapTextWithAnsi,
   type Component,
+  type PointerEvent,
   type TUI,
 } from '../../public.js'
 import { bold, dim, dividerLine, inverse, italic, LineEdit, textInput, themePainter } from './overlay-chrome.js'
@@ -59,6 +65,14 @@ const PENCIL = '✎'
 const PAD = '  '
 /** X offset where option labels / the input tail start (pointer + check + gap). */
 const LABEL_PAD = '     '
+
+/** A clickable row span: [start, end) line offsets within the last render
+ *  output. `index` is the ABSOLUTE option index (window-aware). */
+interface RowSpan {
+  readonly start: number
+  readonly end: number
+  readonly index: number
+}
 
 /** The wire item plus the local wizard extension (`hideCustomInput`, set by
  *  /provider-style wizards — see providerWizard.ts; carried through the store
@@ -78,6 +92,10 @@ export class QuestionPanelView implements Component {
    *  together with the custom text when the input row itself is Entered. */
   private attached: string | null = null
   private error: string | null = null
+  /** Click hit maps recorded by the last render (panel-local line offsets):
+   *  option rows (absolute indices) and the trailing input/feedback row. */
+  private optionRows: RowSpan[] = []
+  private inputRow: { readonly start: number; readonly end: number } | null = null
 
   constructor(
     private readonly commands: TuiCommands,
@@ -241,6 +259,61 @@ export class QuestionPanelView implements Component {
     }
   }
 
+  // ── pointer ──────────────────────────────────────────────────────────
+
+  /**
+   * Click parity with the retired React panels (research §4.3), reusing the
+   * keyboard actions rather than copying business logic:
+   *
+   * - Option row, plan-review: focus the row + Enter (`submitPlanOption`).
+   * - Option row, multi-select: toggle the checkmark (Space).
+   * - Option row, single-select: answer immediately — focus + Enter on the
+   *   row (`submitOptions`, so typed custom text rides along).
+   * - Input/feedback row: focus it (Tab) — a click never submits text.
+   *
+   * Every event reaching this handler lies inside the panel rect and is
+   * consumed (blocking modal); blank cells and non-row regions consume
+   * without acting.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    const snapshot = this.snapshot
+    if (snapshot === null) return undefined
+    if (event.type === 'click' && event.button === 0 && !event.cellIsBlank) {
+      this.clickRow(snapshot, event.localY)
+    }
+    return true
+  }
+
+  private clickRow(snapshot: QuestionSnapshot, row: number): void {
+    const question = this.panelQuestion(snapshot)
+    const options = question.options ?? []
+    const hideCustomInput = question.hideCustomInput === true && options.length > 0
+
+    const hit = this.optionRows.find(span => row >= span.start && row < span.end)
+    if (hit !== undefined) {
+      if (snapshot.question.intent?.kind === 'plan-review') {
+        this.focusIndex = hit.index
+        this.submitPlanOption(snapshot, options, hit.index)
+        return
+      }
+      if (question.multiSelect === true) {
+        if (this.checked.has(hit.index)) this.checked.delete(hit.index)
+        else this.checked.add(hit.index)
+        this.ui.requestRender()
+        return
+      }
+      this.focusIndex = hit.index
+      this.submitOptions(snapshot, options, false)
+      return
+    }
+
+    if (!hideCustomInput && this.inputRow !== null && row >= this.inputRow.start && row < this.inputRow.end) {
+      this.focusIndex = options.length
+      this.error = null
+      this.ui.requestRender()
+    }
+  }
+
   // ── submit paths (protocol mapping) ──────────────────────────────────
 
   /** Enter on a real option: the option(s) plus whatever the input row holds. */
@@ -359,6 +432,8 @@ export class QuestionPanelView implements Component {
   render(width: number): string[] {
     const snapshot = this.snapshot
     if (snapshot === null) return []
+    this.optionRows = []
+    this.inputRow = null
     return snapshot.question.intent?.kind === 'plan-review'
       ? this.renderPlanReview(snapshot, width)
       : this.renderQuestion(snapshot, width)
@@ -472,6 +547,7 @@ export class QuestionPanelView implements Component {
             ? '↓'
             : ' '
       if (!windowed && focused) lines.push('') // the old row's marginTop
+      const start = lines.length
       const pointerCell = focused ? claude(bold(pointer)) : pointer
       const checkCell = selected ? (multiSelect ? CHECKED : SINGLE_SELECTED) : UNCHECKED
       const checkStyled = focused ? claude(selected ? bold(checkCell) : checkCell) : selected ? bold(checkCell) : checkCell
@@ -494,6 +570,7 @@ export class QuestionPanelView implements Component {
           lines.push(LABEL_PAD + dim(line))
         }
       }
+      this.optionRows.push({ start, end: lines.length, index })
     }
   }
 
@@ -524,9 +601,11 @@ export class QuestionPanelView implements Component {
 
     const tailWidth = Math.max(1, width - 5)
     const tail = `${label}${attached}${colon}${content}`
+    const start = lines.length
     for (const [lineIndex, line] of wrapTextWithAnsi(tail, tailWidth).entries()) {
       lines.push(lineIndex === 0 ? `${PAD}${pointer}${pencil} ${line}` : `${LABEL_PAD}${line}`)
     }
+    this.inputRow = { start, end: lines.length }
   }
 
   private renderPlanReview(snapshot: QuestionSnapshot, width: number): string[] {
@@ -562,6 +641,7 @@ export class QuestionPanelView implements Component {
       const focused = index === this.focusIndex
       const isApprove = option.label === approveLabel
       if (focused) lines.push('') // the old row's marginTop
+      const start = lines.length
       const pointer = focused ? claude(bold(POINTER)) : ' '
       const label = `${index + 1}. ${option.label}`
       const labelLines = wrapTextWithAnsi(label, labelWidth)
@@ -574,6 +654,7 @@ export class QuestionPanelView implements Component {
           lines.push(`${PAD}  ${dim(line)}`)
         }
       }
+      this.optionRows.push({ start, end: lines.length, index })
     }
 
     if (inputFocused) lines.push('')
@@ -586,9 +667,11 @@ export class QuestionPanelView implements Component {
         + (inputFocused ? inverse(this.edit.at()) : suggestion('▏'))
         + this.edit.after(inputFocused)
     const feedbackWidth = Math.max(1, width - 5)
+    const feedbackStart = lines.length
     for (const [lineIndex, line] of wrapTextWithAnsi(content, feedbackWidth).entries()) {
       lines.push(lineIndex === 0 ? `${PAD}${pointer}${pencil} ${line}` : `${PAD}   ${line}`)
     }
+    this.inputRow = { start: feedbackStart, end: lines.length }
 
     if (this.error !== null) {
       lines.push('')

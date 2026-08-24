@@ -2,12 +2,16 @@ import {
   Key,
   LAYOUT_NODE,
   matchesKey,
+  HStack,
   ScrollView,
   truncateToWidth,
+  visibleWidth,
   VStack,
   type Component,
   type LayoutComponent,
   type LayoutNode,
+  type OverlayHandle,
+  type PointerEvent,
   type StackChild,
   type TUI,
 } from '../public.js'
@@ -21,6 +25,7 @@ import type {
 } from '../../dsh-adapter/scenes.js'
 import type {
   ChatViewModel,
+  GoalTodoProjection,
   HeaderProjection,
   OverlayProjection,
   ProjectionMeta,
@@ -32,10 +37,29 @@ import type {
   TrajectoryProjection,
 } from '../view-model.js'
 import { TranscriptView } from '../components/transcript.js'
+import { ChatTimeline, type TimelineState } from '../timeline.js'
+import {
+  RAIL_MIN_TERMINAL_WIDTH,
+  RAIL_WIDTH,
+  jumpTargetForTurn,
+  railEligible,
+  wrapPreviewLines,
+  type TimelineTurn,
+} from '../timeline-model.js'
+import {
+  ScrollbarGutterView,
+  TimelineRailView,
+  createTurnPreviewCard,
+  type TimelineHoverCard,
+  type TimelineViewInputs,
+} from '../components/timeline-rail.js'
+import { StickyPromptHeaderView } from '../components/sticky-prompt-header.js'
+import { BackToBottomPillView } from '../components/back-to-bottom-pill.js'
 import { PromptEditor } from '../components/prompt-editor.js'
 import { NotificationsView } from '../components/notifications.js'
 import { HeaderView } from '../components/header.js'
 import { WorkingIndicator } from '../components/working-indicator.js'
+import { GoalTodoView } from '../components/goal-todo.js'
 import { StatusLineView } from '../components/status-line.js'
 import { ApprovalPanelView } from '../components/overlays/approval-panel.js'
 import { ExtensionDialogView } from '../components/overlays/extension-dialog.js'
@@ -53,6 +77,7 @@ import {
   createActivityPicker,
   createBtwPanel,
   createEffortSlider,
+  createHistorySearch,
   createModelPicker,
   createPermissionPicker,
   createPresetPicker,
@@ -68,7 +93,8 @@ import { LOCAL_COMMANDS, localizedDescription } from '../../commands.js'
 import { modeDescription, modeDisplayName } from '../../sessionModes.js'
 import { FRAME_PRESETS, PRESET_NAMES } from '../../components/activityFrames.js'
 import { formatTokens } from '../../cc/format.js'
-import { modLabel } from '../../utils/modifiers.js'
+import { isMac, modLabel } from '../../utils/modifiers.js'
+import { loadHistory } from '../../history.js'
 import { formatLoadedContextReport } from '../../utils/loaded-context.js'
 import { runProviderWizard } from '../../dsh-adapter/providerWizard.js'
 import { AUTO_THEME_NAME, getAutoThemeBase } from '../../theme.js'
@@ -199,6 +225,13 @@ const EMPTY_SUBAGENTS: SubagentsProjection = {
   items: [],
 }
 
+const EMPTY_GOAL_TODO: GoalTodoProjection = {
+  meta: EMPTY_META,
+  goal: undefined,
+  todos: [],
+  working: false,
+}
+
 /** A tiny imperative component for plugin status contributions. */
 class StatusEntriesView implements Component {
   private entries: OverlayProjection['statusEntries'] = []
@@ -261,6 +294,7 @@ export class ChatScreen implements Component {
   private readonly promptEditor: PromptEditor
   private readonly header: HeaderView
   private readonly working: WorkingIndicator
+  private readonly goalTodo: GoalTodoView
   private readonly status: StatusLineView
   private readonly statusEntries: StatusEntriesView
   private readonly notifications: NotificationsView
@@ -269,6 +303,54 @@ export class ChatScreen implements Component {
   private readonly question: QuestionPanelView
   private readonly root: VStack
   private readonly fullscreen: boolean
+  /** The fullscreen conversation ScrollView (header + transcript). Created
+   *  only in fullscreen — inline mode has no scroll container. Promoted to a
+   *  field (research §1.2) so M2.4 keyboard paths (Enter back-to-bottom,
+   *  scroll-top loadOlder) and later timeline/pill work can query and steer
+   *  it. */
+  private readonly conversationScroll?: ScrollView
+  /** Timeline data layer (research §3.4.4): derives the rail/header/pill
+   *  snapshot + unseen state from the transcript's row geometry and the
+   *  ScrollView's metrics. Ticked from update(); its published state is
+   *  signature-gated and identity-stable while nothing consumed changed. */
+  private readonly timeline = new ChatTimeline()
+  /** Header-height memo for the timeline's content coordinate system: the
+   *  header renders inside the scroll content, so its height is the
+   *  transcript's offset. Keyed on the header projection identity (the
+   *  controller shares it while whale/model/effort/cwd/loadedContext are
+   *  unchanged) plus width; the opening animation and theme/lang changes
+   *  never alter the line count. */
+  private headerHeightCache:
+    | { width: number; vm: HeaderProjection | undefined; height: number }
+    | undefined
+
+  /** M4b timeline chrome (research §3.3–§3.5): the rail/scrollbar gutter
+   *  views, the sticky prompt header, and the back-to-bottom pill. Created
+   *  unconditionally; MOUNTED only in fullscreen — the inline root keeps the
+   *  §3.4.8 three-no rule (no rail, no sticky header, no pill). */
+  private readonly railView: TimelineRailView
+  private readonly scrollbarGutter: ScrollbarGutterView
+  private readonly stickyHeaderView: StickyPromptHeaderView
+  private readonly pillView: BackToBottomPillView
+  /** Stable HStack child delegating to the active gutter view (rail or
+   *  scrollbar, per `dsh-tui.scrollGutter`). Never unmounted itself — the
+   *  `visible` predicate drops the slot when the mode is `hidden` or the
+   *  current mode's eligibility fails. */
+  private readonly gutterSlot: Component
+  /** Terminal width seen by the last layout-predicate pass. In fullscreen
+   *  the root entries' `visible` predicates receive the full root viewport
+   *  every frame, so this is fresh by the time any chrome view renders. */
+  private terminalWidthSeen = 0
+  /** The transcript width the last timeline tick measured with — a change
+   *  marks a (re)wrap frame and schedules the converging follow-up frame
+   *  (see {@link tickTimeline}). */
+  private lastTickWidth = 0
+  /** Rail hover preview card (research §3.4.3): a non-capturing pi overlay
+   *  popped by the rail's dwell timer. The screen owns the lifecycle —
+   *  torn down on leave/click/state change (rail-side), modal open
+   *  (update/handleInput), and dispose. */
+  private previewOverlay: OverlayHandle | undefined
+  private previewOverlayTurn: number | null = null
 
   private vm: ChatViewModel | undefined
   private subagents: SubagentsProjection = EMPTY_SUBAGENTS
@@ -296,6 +378,18 @@ export class ChatScreen implements Component {
    *  the hint, a second press within 3s exits. */
   private exitPending = false
   private exitTimer: ReturnType<typeof setTimeout> | null = null
+  /** Fold state for the goal/todo panel todo section — the one UI-local state
+   *  the Ctrl/Cmd+Q hotkey and the panel's fold-header toggle share. */
+  private todoCollapsed = false
+  /** Ctrl/Cmd+O verbose expansion (UI-local toggle mirrored into the
+   *  transcript's shared RowContext). */
+  private transcriptExpanded = false
+  /** Scroll-top auto-loadOlder (M2.4): armed once the user has scrolled away
+   *  from the top at least once; consumed by each trigger, so a viewport
+   *  parked at the top never drains the log in a loop. */
+  private loadOlderArmed = false
+  /** One loadOlder in flight at a time; the trigger never doubles up. */
+  private loadOlderInFlight = false
   private disposed = false
   private readonly unsubscribeController: () => void
 
@@ -323,8 +417,67 @@ export class ChatScreen implements Component {
     })
 
     this.transcript = new TranscriptView(this.ui)
+    // Transcript pointer seams (research §4.3):
+    // - the subagent card click opens the detail scene directly (the
+    //   dashboard's Enter path targets the same screen);
+    // - the load-earlier divider click shares the scroll-top trigger's
+    //   fenced command-sink path, viewport anchor included;
+    // - the §1.3 ownership gate is mirrored INTO the transcript: the root
+    //   backstop below only sees events that bubble past every deeper
+    //   component, so a transcript with its own handler must gate itself —
+    //   while a modal/panel owns the keyboard it consumes without acting.
+    this.transcript.onOpenSubagent = (agentId) => this.openSubagentDetail(agentId)
+    this.transcript.onLoadOlder = () => this.triggerLoadOlder()
+    this.transcript.isPointerBlocked = () =>
+      this.transientScreen !== undefined ||
+      this.settingsPanel !== undefined ||
+      this.pickerPanel !== undefined ||
+      this.activeOverlayKind() !== undefined
+
+    // M4b timeline chrome wiring (research §3.3–§3.5): pure pull-model
+    // views — the screen feeds ticked inputs, resolves navigation/reveal,
+    // owns the hover card overlay, and mirrors the §1.3 ownership gate one
+    // level down (the same condition the transcript gates itself with).
+    this.railView = new TimelineRailView(this.ui)
+    this.scrollbarGutter = new ScrollbarGutterView()
+    this.stickyHeaderView = new StickyPromptHeaderView()
+    this.pillView = new BackToBottomPillView(this.ui)
+    const timelineSource = (): TimelineViewInputs | undefined => this.currentTimelineInputs()
+    this.railView.source = timelineSource
+    this.scrollbarGutter.source = timelineSource
+    this.stickyHeaderView.source = timelineSource
+    this.pillView.source = timelineSource
+    this.railView.onJumpToTurn = (turn) => this.jumpToTurn(turn)
+    this.stickyHeaderView.onJumpToTurn = (turn) => this.jumpToTurn(turn)
+    this.railView.onHoverCard = (card) => this.showTurnPreview(card)
+    this.scrollbarGutter.onScrollTo = (top) => {
+      this.conversationScroll?.scrollTo(top)
+      this.ui.requestRender()
+    }
+    this.pillView.onJumpToBottom = () => {
+      this.conversationScroll?.scrollToEnd()
+      this.ui.requestRender()
+    }
+    const chromeBlocked = (): boolean => this.chromePointerBlocked()
+    this.railView.isPointerBlocked = chromeBlocked
+    this.scrollbarGutter.isPointerBlocked = chromeBlocked
+    this.stickyHeaderView.isPointerBlocked = chromeBlocked
+    this.pillView.isPointerBlocked = chromeBlocked
+    this.gutterSlot = {
+      render: (width) => this.activeGutterView().render(width),
+      invalidate: () => {
+        this.railView.invalidate()
+        this.scrollbarGutter.invalidate()
+      },
+      // The slot is the layout child, so pointer events on the gutter rect
+      // arrive here; the active view owns them (same delegation pattern as
+      // the settings/picker slots above).
+      handlePointer: (event: PointerEvent): boolean | void =>
+        this.activeGutterView().handlePointer?.(event),
+    }
     this.header = new HeaderView(this.ui, EMPTY_HEADER)
     this.working = new WorkingIndicator(this.ui, EMPTY_SPINNER)
+    this.goalTodo = new GoalTodoView(this.ui, EMPTY_GOAL_TODO)
     this.status = new StatusLineView(this.ui, EMPTY_STATUS)
     this.statusEntries = new StatusEntriesView()
     this.notifications = new NotificationsView()
@@ -374,10 +527,26 @@ export class ChatScreen implements Component {
     this.settingsSlot = {
       render: (width) => this.settingsPanel?.render(width) ?? [],
       invalidate: () => this.settingsPanel?.invalidate(),
+      // The slot is the layout child, so pointer events on the panel's rect
+      // arrive here; the open panel owns them (modal ownership, §1.3 pointer
+      // mirror). Everything the panel's own handler does not act on is still
+      // consumed — never bubbled to the transcript behind it.
+      handlePointer: (event: PointerEvent): boolean | void => {
+        const panel = this.settingsPanel
+        if (panel === undefined) return undefined
+        if (panel.handlePointer !== undefined) return panel.handlePointer(event)
+        return true
+      },
     }
     this.pickerSlot = {
       render: (width) => this.pickerPanel?.render(width) ?? [],
       invalidate: () => this.pickerPanel?.invalidate(),
+      handlePointer: (event: PointerEvent): boolean | void => {
+        const panel = this.pickerPanel
+        if (panel === undefined) return undefined
+        if (panel.handlePointer !== undefined) return panel.handlePointer(event)
+        return true
+      },
     }
 
     // VStack owns the vertical component composition. Visibility predicates are
@@ -388,6 +557,9 @@ export class ChatScreen implements Component {
     const headerEntry: StackChild = { component: this.header, visible: () => this.shouldShowHeader() }
     const dockEntries: StackChild[] = [
       { component: this.working, visible: () => this.vm?.spinner.working === true },
+      // Goal/todo docks directly under the working row, above overlays and
+      // the editor slot — the position the React Chat gave GoalTodoPanel.
+      { component: this.goalTodo, visible: () => this.goalTodo.visible },
       { component: this.approval, visible: () => this.activeOverlayKind() === 'approval' },
       { component: this.dialog, visible: () => this.activeOverlayKind() === 'dialog' },
       { component: this.question, visible: () => this.activeOverlayKind() === 'question' },
@@ -405,6 +577,13 @@ export class ChatScreen implements Component {
       // primary ScrollView that TuiAltScreen routes wheel/PageUp/PageDown to;
       // the working/overlay/editor/notification/status chrome docks below at
       // its natural height and is never clipped by the viewport.
+      //
+      // M4b additions (research §3.3–§3.5): the sticky prompt header pins
+      // above the conversation while scrolled up; the ScrollView shares an
+      // HStack with the 2-column timeline gutter (rail or scrollbar per
+      // `dsh-tui.scrollGutter`, dropped entirely by the `hidden` mode or a
+      // failed eligibility check); the back-to-bottom pill docks at the
+      // dock's top. The inline root below is untouched (§3.4.8).
       const conversation = new VStack([headerEntry, this.transcript])
       const scrollView = new ScrollView(conversation, {
         follow: 'end',
@@ -412,9 +591,39 @@ export class ChatScreen implements Component {
         overscroll: 'chain',
         scrollbar: 'auto',
       })
-      const dock = new VStack(dockEntries)
-      this.root = new VStack([
+      this.conversationScroll = scrollView
+      const conversationRow = new HStack([
         { component: scrollView, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+        {
+          component: this.gutterSlot,
+          basis: RAIL_WIDTH,
+          grow: 0,
+          shrink: 0,
+          visible: (viewport) => {
+            this.terminalWidthSeen = viewport.width
+            return this.gutterVisible(viewport.width)
+          },
+        },
+      ])
+      const dock = new VStack([
+        {
+          component: this.pillView,
+          visible: (viewport) => {
+            this.terminalWidthSeen = viewport.width
+            return this.pillVisible()
+          },
+        },
+        ...dockEntries,
+      ])
+      this.root = new VStack([
+        {
+          component: this.stickyHeaderView,
+          visible: (viewport) => {
+            this.terminalWidthSeen = viewport.width
+            return this.stickyHeaderVisible()
+          },
+        },
+        { component: conversationRow, basis: 0, grow: 1, shrink: 1, minSize: 1 },
         { component: dock, basis: 'auto', grow: 0, shrink: 1, minSize: 1 },
       ])
     } else {
@@ -445,15 +654,27 @@ export class ChatScreen implements Component {
     this.dialog.update(vm.overlays.dialog)
     this.question.update(vm.overlays.question)
     this.subagents = this.controller.getSubagents?.() ?? EMPTY_SUBAGENTS
+    // Standalone getter like subagents: the panel slice is pulled, not
+    // embedded in ChatViewModel, so older fakes without it still work.
+    this.goalTodo.update(this.controller.getGoalTodo?.() ?? EMPTY_GOAL_TODO)
     this.updatePluginScene()
     this.updateTransient()
     this.syncPromptFocus()
+    this.pollLoadOlder()
+    this.tickTimeline()
+    this.syncScrollGutter()
+    // A modal/panel opening must drop a popped hover card even before the
+    // pointer moves again (the rail's own clear only fires on rail events).
+    if (this.chromePointerBlocked()) this.hideTurnPreview()
     this.ui.requestRender()
   }
 
   /** Route transient screens first, then the active inline modal, then prompt. */
   handleInput(data: string): void {
     if (this.disposed) return
+    // Keyboard-driven modal opens don't come with a controller emit; drop a
+    // popped hover card as soon as ownership moves away from the transcript.
+    if (this.chromePointerBlocked()) this.hideTurnPreview()
 
     // A plugin scene owns the whole root even when it has no input handler;
     // otherwise its Escape/letters would leak into the chat editor.
@@ -501,6 +722,43 @@ export class ChatScreen implements Component {
       return
     }
 
+    // Ctrl/Cmd+Q folds the goal/todo panel's todo section (mod = ctrl, or
+    // super on macOS — the isMod contract). Global like Ctrl+T/Ctrl+A: it
+    // works mid-turn and never reaches the editor; the fold-header toggle
+    // shares the same UI-local state.
+    if (matchesKey(data, Key.ctrl('q')) || (isMac && matchesKey(data, Key.super('q')))) {
+      this.todoCollapsed = !this.todoCollapsed
+      this.goalTodo.setCollapsed(this.todoCollapsed)
+      this.ui.requestRender()
+      return
+    }
+
+    // Ctrl/Cmd+E lifts/re-applies the transcript's MAX_RENDERED_ROWS fold
+    // (the divider advertises the key). Global like Ctrl+T/Ctrl+A.
+    if (matchesKey(data, Key.ctrl('e')) || (isMac && matchesKey(data, Key.super('e')))) {
+      if (this.transcript.isShowingAll) this.transcript.collapse()
+      else this.transcript.showAll()
+      this.ui.requestRender()
+      return
+    }
+
+    // Ctrl/Cmd+O toggles verbose expansion (full reasoning, full tool
+    // args/results). pi's exact layout re-measures on the next frame, so no
+    // source-style reanchorViewport is needed here.
+    if (matchesKey(data, Key.ctrl('o')) || (isMac && matchesKey(data, Key.super('o')))) {
+      this.transcriptExpanded = !this.transcriptExpanded
+      this.transcript.setExpanded(this.transcriptExpanded)
+      this.ui.requestRender()
+      return
+    }
+
+    // Ctrl/Cmd+R mounts the persisted-input history search in the editor
+    // slot (pi-style editor replacement, same as the other slot pickers).
+    if (matchesKey(data, Key.ctrl('r')) || (isMac && matchesKey(data, Key.super('r')))) {
+      this.openHistorySearch()
+      return
+    }
+
     // Shift+Tab cycles the session permission mode. The open completion menu
     // keeps the key (the same isShowingAutocomplete guard the editor's Tab
     // routing uses); transient screens, the settings panel and overlays own
@@ -510,8 +768,80 @@ export class ChatScreen implements Component {
       return
     }
 
+    // Back-to-bottom (research §3.5): a plain Enter while the conversation is
+    // scrolled away from the end returns to the bottom and is CONSUMED — the
+    // send does not happen this time, even with a non-empty prompt. That is
+    // the manual's semantics and a deliberate deviation from source main,
+    // which still sends a non-empty prompt on this Enter. The completion
+    // menu keeps Enter for its own selection. Inline mode has no scroll
+    // container, so the key always falls through to the editor there.
+    if (
+      this.conversationScroll !== undefined
+      && !this.conversationScroll.isFollowingEnd
+      && !this.promptEditor.isShowingAutocomplete()
+      && matchesKey(data, Key.enter)
+    ) {
+      this.conversationScroll.scrollToEnd()
+      this.ui.requestRender()
+      return
+    }
+
     this.promptEditor.handleInput(data)
     this.ui.requestRender()
+  }
+
+  /**
+   * Pointer gate (research §1.3, §4.2 contract 2): whoever owns the keyboard
+   * owns the pointer too.
+   *
+   * A transient screen with a pointer handler (session browser, session tree)
+   * owns the whole root: events reach it through this root backstop, because
+   * a mounted transient collapses the layout to the chat leaf.
+   *
+   * While an approval/dialog/question panel, the settings panel, or a slot
+   * picker owns the keyboard, this root-level backstop reproduces
+   * capturing-modal semantics (those panels are DOCK components, not pi
+   * overlays, so they are not capturing regions). ChatScreen is the layout
+   * root, hence the LAST box in every hit chain — events on a panel's own
+   * rect are consumed deeper by the slot's forwarding handler or the panel's
+   * handlePointer and never reach here; everything that bubbles this far
+   * (transcript, dock chrome) is swallowed: press consumed → no selection
+   * candidate, click consumed → no transcript business action, wheel consumed
+   * → pi skips ScrollView routing. The transcript now has its own
+   * handlePointer (research §4.4 stage 6), so it mirrors this gate one level
+   * down via its `isPointerBlocked` seam — a transcript click under an open
+   * modal is consumed there without acting, exactly as if it had bubbled
+   * here. With no panel open, nothing is consumed and the default
+   * wheel/selection behavior is untouched.
+   *
+   * Trade-off vs source main: drag-selection is suspended while a blocking
+   * panel is open (source's screen-buffer selection stays live there). The
+   * strict modal reading was chosen so transcript click handlers can never
+   * leak under an open modal.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if (this.disposed) return
+    if (this.transientScreen?.handlePointer !== undefined) {
+      return this.transientScreen.handlePointer(event)
+    }
+    if (this.settingsPanel !== undefined || this.pickerPanel !== undefined) return true
+    if (this.activeOverlayKind() !== undefined) return true
+    return undefined
+  }
+
+  /**
+   * Windows right-click paste (the TuiAltScreen `onRightClickPaste` hook):
+   * paste into the prompt only when the editor would own keyboard input —
+   * the same ownership order handleInput enforces (research §1.3). With a
+   * transient screen, settings panel, slot picker or blocking overlay open,
+   * the paste target is not the prompt and the event is ignored.
+   */
+  pasteIntoPrompt(): void {
+    if (this.disposed) return
+    if (this.transientScreen !== undefined) return
+    if (this.settingsPanel !== undefined || this.pickerPanel !== undefined) return
+    if (this.activeOverlayKind() !== undefined) return
+    this.promptEditor.requestClipboardPaste()
   }
 
   /** Render the transient replacement or the main VStack, clipping every row. */
@@ -581,6 +911,8 @@ export class ChatScreen implements Component {
     if (this.disposed) return
     this.disposed = true
     this.unsubscribeController()
+    this.hideTurnPreview()
+    this.railView.dispose()
     this.btwAbort?.abort()
     this.btwAbort = undefined
     if (this.exitTimer !== null) {
@@ -603,6 +935,7 @@ export class ChatScreen implements Component {
     this.promptEditor.dispose()
     this.header.dispose()
     this.working.dispose()
+    this.goalTodo.dispose()
   }
 
   /** Replace the conversation with the session browser, without another TUI. */
@@ -696,6 +1029,7 @@ export class ChatScreen implements Component {
       commands: this.commands,
       onClose: () => this.closeSettings(),
     })
+    this.hideTurnPreview()
     this.promptEditor.focused = false
     this.ui.requestRender()
   }
@@ -960,7 +1294,7 @@ export class ChatScreen implements Component {
         this.onExit()
         return
       case 'model':
-        this.openModelPicker()
+        this.runModelCommand(rawInput)
         return
       case 'effort':
         this.runEffortCommand(rawInput)
@@ -1218,6 +1552,7 @@ export class ChatScreen implements Component {
       return
     }
     this.pickerPanel = picker
+    this.hideTurnPreview()
     this.promptEditor.focused = false
     this.ui.requestRender()
   }
@@ -1229,6 +1564,397 @@ export class ChatScreen implements Component {
     this.pickerPanel = undefined
     this.promptEditor.focused = true
     this.ui.requestRender()
+  }
+
+  /**
+   * Ctrl/Cmd+R: search the persisted input history (newest first) in the
+   * editor slot. The payload is a synchronous local file read, so the picker
+   * mounts immediately — mountPicker's stale guard still applies (it refuses
+   * the mount while a transient screen, the settings panel or another picker
+   * holds the slot; the input routing above already keeps those cases from
+   * reaching this binding). An empty history mounts the picker's empty state
+   * (createHistorySearch's existing behavior). Enter fills the editor with
+   * the picked text and closes; Esc just closes.
+   */
+  private openHistorySearch(): void {
+    const entries = loadHistory()
+    this.mountPicker(createHistorySearch({
+      entries,
+      onSelect: (text) => {
+        this.promptEditor.setText(text)
+        this.closePicker()
+      },
+      onClose: () => this.closePicker(),
+    }))
+  }
+
+  /**
+   * Scroll-top auto-loadOlder (M2.4, product decision): when the fullscreen
+   * conversation is parked at the very top and the session log still holds
+   * folded rows, restore them once through the fenced command sink. Polled
+   * from update() — there is no scroll-state subscription, and at the 16ms
+   * coalesced frame cadence the poll cost is negligible.
+   *
+   * Guards: the trigger is armed only after the user has left the top
+   * (scrollTop > 0) and consumed by each fire, so a viewport parked at the
+   * top never auto-drains the log. The restore itself (in-flight guard,
+   * viewport anchor) lives in {@link triggerLoadOlder}.
+   */
+  private pollLoadOlder(): void {
+    const scroll = this.conversationScroll
+    if (scroll === undefined) return // inline mode: no scroll container
+    if (this.transientScreen !== undefined) return
+    if (scroll.scrollTop > 0) {
+      this.loadOlderArmed = true
+      return
+    }
+    if (!this.loadOlderArmed) return
+    this.triggerLoadOlder()
+  }
+
+  /**
+   * One loadOlder restore through the fenced sink, shared by the scroll-top
+   * trigger and the load-earlier divider click. Guards: one in flight at a
+   * time, and only while the session log still holds folded rows. Viewport
+   * anchor: the restored rows land ABOVE the reading position, so the grown
+   * transcript height delta is compensated with one scrollBy (fullscreen
+   * only — inline has no scroll container to steer).
+   */
+  private triggerLoadOlder(): void {
+    const sink = this.commands.transcript
+    if (sink === undefined || this.loadOlderInFlight) return
+    if (this.vm?.transcript.rows.some(row => row.folded) !== true) return
+    const scroll = this.conversationScroll
+    this.loadOlderArmed = false
+    this.loadOlderInFlight = true
+    const width = this.transcript.renderWidth
+    const heightBefore = this.transcript.renderedHeight
+    void sink.loadOlder().then((restored) => {
+      this.loadOlderInFlight = false
+      if (restored === undefined || restored === 0 || this.disposed) return
+      if (scroll === undefined || width <= 0 || this.conversationScroll !== scroll) return
+      const delta = this.transcript.render(width).length - heightBefore
+      if (delta !== 0) scroll.scrollBy(delta)
+    })
+  }
+
+  /** @internal The fullscreen conversation ScrollView, exposed for tests and
+   *  the upcoming timeline/pill wiring (research §1.2); undefined inline. */
+  get conversationScrollView(): ScrollView | undefined {
+    return this.conversationScroll
+  }
+
+  /** @internal The fullscreen timeline state (research §3.4.4) — the
+   *  rail/header/pill data layer; undefined inline (no scroll container, no
+   *  snapshot, §3.4.8). Identity-stable while the consumed content is
+   *  unchanged. */
+  get timelineState(): TimelineState | undefined {
+    return this.conversationScroll === undefined ? undefined : this.timeline.state
+  }
+
+  /**
+   * Timeline tick (research §3.4.4), polled from update() like
+   * {@link pollLoadOlder} — there is no scroll-state subscription, and the
+   * signature gate inside ChatTimeline keeps an unchanged tick
+   * allocation-free. The transcript is re-rendered at its last width first
+   * when the projection dropped its cache, so the row geometry reflects
+   * THIS tick's rows (a cache hit costs nothing).
+   *
+   * Frame convergence: the tick's inputs can change as a RESULT of the
+   * layout pass itself — the first frame (no transcript render yet) and any
+   * (re)wrap frame (gutter mount/unmount, terminal resize) leave the
+   * entries laid out before the conversation one frame stale. Both cases
+   * schedule exactly one follow-up frame; a stable width schedules nothing,
+   * so neither can loop.
+   */
+  private tickTimeline(): void {
+    const scroll = this.conversationScroll
+    if (scroll === undefined) return // inline mode: no scroll container
+    const width = this.transcript.renderWidth
+    if (width <= 0) {
+      this.ui.requestRender() // first frame: the transcript renders later in this pass
+      return
+    }
+    if (width !== this.lastTickWidth) {
+      this.lastTickWidth = width
+      this.ui.requestRender()
+    }
+    this.transcript.render(width)
+    this.timeline.update({
+      sessionEpoch: this.vm?.transcript.meta.sessionEpoch ?? 0,
+      geometry: this.transcript.rowGeometry,
+      headerHeight: this.measureHeaderHeight(width),
+      scrollTop: scroll.scrollTop,
+      viewportHeight: scroll.viewportHeight,
+      contentHeight: scroll.contentHeight,
+      atBottom: scroll.isFollowingEnd,
+    })
+  }
+
+  /**
+   * The transcript's offset inside the ScrollView content (research §3.4.3):
+   * the fullscreen conversation is VStack(header, transcript) with no gap,
+   * so the header's rendered height is exactly the transcript's content-space
+   * base. 0 while the header is hidden (minimal mode).
+   */
+  private measureHeaderHeight(width: number): number {
+    if (!this.shouldShowHeader()) return 0
+    const vm = this.vm?.header
+    const cache = this.headerHeightCache
+    if (cache !== undefined && cache.width === width && cache.vm === vm) return cache.height
+    const height = this.header.render(width).length
+    this.headerHeightCache = { width, vm, height }
+    return height
+  }
+
+  /**
+   * Per-frame input pull for the M4b timeline chrome views (research §3.4.4
+   * "per-frame view pull"): fullscreen layout frames bypass
+   * ChatScreen.render() entirely — the alt-screen engine draws the layout
+   * entries directly — so the freshness point moves onto the predicates and
+   * view renders, all of which pull through here. tickTimeline is
+   * signature-gated, so the N pulls a frame costs one effective tick.
+   */
+  private currentTimelineInputs(): TimelineViewInputs | undefined {
+    const scroll = this.conversationScroll
+    if (scroll === undefined) return undefined // inline: no scroll container
+    this.tickTimeline()
+    return {
+      state: this.timeline.state,
+      terminalWidth: this.terminalWidthSeen,
+      viewportRows: scroll.viewportHeight,
+      scrollTop: scroll.scrollTop,
+      maxScrollTop: scroll.maxScrollTop,
+    }
+  }
+
+  /** Sticky header layout predicate (research §3.4.6): pinned while scrolled
+   *  up with an identifiable active turn; gone at the bottom so the
+   *  ScrollView never shifts under the reader. */
+  private stickyHeaderVisible(): boolean {
+    const inputs = this.currentTimelineInputs()
+    if (inputs === undefined) return false
+    const { state } = inputs
+    if (state.atBottom || state.snapshot.activeId === null) return false
+    const turn = state.snapshot.turns.find(candidate => candidate.id === state.snapshot.activeId)
+    return turn !== undefined && turn.preview.length > 0
+  }
+
+  /** Pill layout predicate (research §3.5): shown whenever the conversation
+   *  is scrolled away from the end — with or without unseen rows. */
+  private pillVisible(): boolean {
+    const inputs = this.currentTimelineInputs()
+    return inputs !== undefined && !inputs.state.atBottom
+  }
+
+  /**
+   * Gutter layout predicate (research §3.3): the `hidden` mode never mounts
+   * the slot; `timeline`/`scrollbar` each apply their own eligibility. The
+   * slot width is RAIL_WIDTH in both mounted modes, so switching modes never
+   * rewraps the transcript; an eligibility flip (resize, content fitting the
+   * viewport) rewraps once, as in the source.
+   */
+  private gutterVisible(terminalWidth: number): boolean {
+    const mode = this.vm?.scrollGutter ?? 'timeline'
+    if (mode === 'hidden') return false
+    const inputs = this.currentTimelineInputs()
+    if (inputs === undefined) return false
+    const { state } = inputs
+    const viewportRows = this.conversationScroll?.viewportHeight ?? 0
+    if (mode === 'scrollbar') {
+      return viewportRows >= 2 && state.scrollable && terminalWidth >= RAIL_MIN_TERMINAL_WIDTH
+    }
+    return railEligible({
+      turnCount: state.snapshot.turns.length,
+      terminalWidth,
+      viewportRows,
+      scrollable: state.scrollable,
+    })
+  }
+
+  /** The gutter view for the current `dsh-tui.scrollGutter` mode. Only
+   *  called while the slot is mounted, so the `hidden` mode never reaches
+   *  here; `timeline` is the fallback for a missing/legacy vm. */
+  private activeGutterView(): Component {
+    return (this.vm?.scrollGutter ?? 'timeline') === 'scrollbar' ? this.scrollbarGutter : this.railView
+  }
+
+  /**
+   * Gutter preference → ScrollView scrollbar policy: the rail/scrollbar
+   * gutter REPLACES pi's built-in scrollbar while mounted; only the
+   * `hidden` mode keeps the transient auto-scrollbar. `auto` never changes
+   * the content width (only `always` reserves a column), so this stays
+   * width-stable across mode switches. setScrollbar is same-value guarded,
+   * making the per-update call free.
+   */
+  private syncScrollGutter(): void {
+    const scroll = this.conversationScroll
+    if (scroll === undefined) return
+    scroll.setScrollbar((this.vm?.scrollGutter ?? 'timeline') === 'hidden' ? 'auto' : 'hidden')
+  }
+
+  /** The §1.3 ownership gate shared by the timeline chrome views — the same
+   *  condition the transcript's isPointerBlocked seam mirrors. */
+  private chromePointerBlocked(): boolean {
+    return (
+      this.transientScreen !== undefined ||
+      this.settingsPanel !== undefined ||
+      this.pickerPanel !== undefined ||
+      this.activeOverlayKind() !== undefined
+    )
+  }
+
+  /**
+   * Turn navigation shared by the rail ticks/chevrons and the sticky prompt
+   * header (research §3.4.7): measured turns jump by content coordinate;
+   * folded turns go through the reveal path (never scrollTo(−1)).
+   */
+  private jumpToTurn(turn: TimelineTurn): void {
+    const scroll = this.conversationScroll
+    if (scroll === undefined || this.disposed || this.transientScreen !== undefined) return
+    const target = jumpTargetForTurn(turn)
+    if (target.kind === 'scroll') {
+      if (target.top < 0) return
+      scroll.scrollTo(target.top)
+      this.ui.requestRender()
+      return
+    }
+    void this.revealAndSeekTurn(target.id)
+  }
+
+  /**
+   * Reveal-then-seek for folded turns (research §3.4.7): restore the folded
+   * history through the fenced sink when the CHANNEL folded the row away,
+   * lift the render-window cap when the row is merely window-excluded, then
+   * re-measure synchronously and pin the prompt text to the viewport top —
+   * no Ink-style setTimeout race. Any step that cannot resolve the turn
+   * abandons the jump (the tick stays clickable for a later attempt).
+   */
+  private async revealAndSeekTurn(id: number): Promise<void> {
+    const scroll = this.conversationScroll
+    if (scroll === undefined || this.disposed) return
+    const row = this.vm?.transcript.rows.find(candidate => candidate.id === id)
+    if (row?.folded === true) {
+      const sink = this.commands.transcript
+      // One restore at a time globally (shared with the M2.4 scroll-top
+      // trigger); a concurrent trigger — or a host without the sink — just
+      // abandons this jump.
+      if (sink === undefined || this.loadOlderInFlight) return
+      this.loadOlderInFlight = true
+      try {
+        await sink.loadOlder()
+      } catch {
+        // A fenced-sink failure just never reveals — fall through to the
+        // seek, which resolves whatever geometry exists now.
+      } finally {
+        this.loadOlderInFlight = false
+      }
+      if (this.disposed || this.conversationScroll !== scroll) return
+    }
+    const width = this.transcript.renderWidth
+    if (width <= 0) return
+    // Re-measure THIS tick's rows before reading geometry (cache-hit cheap;
+    // required after a restore, which invalidated the render cache).
+    this.transcript.render(width)
+    let geometry = this.transcript.rowGeometry.find(
+      candidate => candidate.rowId === id && candidate.kind === 'user',
+    )
+    if ((geometry === undefined || geometry.folded) && !this.transcript.isShowingAll) {
+      this.transcript.showAll()
+      this.transcript.render(width) // synchronous re-measure at the live width
+      geometry = this.transcript.rowGeometry.find(
+        candidate => candidate.rowId === id && candidate.kind === 'user',
+      )
+    }
+    if (geometry === undefined || geometry.folded || geometry.startRow < 0) return
+    // The restore grew the content ABOVE the reading position; the fresh
+    // geometry already reflects the shift, so an absolute scrollTo lands
+    // exactly (no delta compensation like the M2.4 trigger needs).
+    scroll.scrollTo(this.measureHeaderHeight(width) + geometry.startRow)
+    this.ui.requestRender()
+  }
+
+  /**
+   * Rail hover preview card (research §3.4.3): a non-capturing pi overlay
+   * popped by the rail's dwell timer, positioned beside the hovered tick
+   * and vertically clamped into the conversation region. The rail reports
+   * intent; the screen owns the overlay lifecycle.
+   */
+  private showTurnPreview(card: TimelineHoverCard | null): void {
+    if (card === null) {
+      this.hideTurnPreview()
+      return
+    }
+    if (this.disposed || this.transientScreen !== undefined) return
+    // Minimal fake TUIs in tests have no overlay stack — skip silently.
+    if (typeof this.ui.showOverlay !== 'function') return
+    if (this.previewOverlay !== undefined && this.previewOverlayTurn === card.turn.id) return
+    this.hideTurnPreview()
+    const inputs = this.currentTimelineInputs()
+    if (inputs === undefined) return
+    const { terminalWidth, viewportRows } = inputs
+    if (terminalWidth <= 0 || viewportRows <= 0) return
+    // Width budget (source): half the transcript width, clamped to [16, 32]
+    // content columns; +4 for the border and 1-cell padding per side.
+    const budget = Math.min(32, Math.max(16, Math.floor((terminalWidth - RAIL_WIDTH) / 2)))
+    const lines = wrapPreviewLines(card.turn.preview, budget)
+    const cardW = Math.max(...lines.map(line => visibleWidth(line))) + 4
+    if (cardW + RAIL_WIDTH + 1 >= terminalWidth) return // no room beside the rail
+    const cardH = Math.min(viewportRows, lines.length + 2)
+    const top = Math.max(0, Math.min(card.row - Math.floor(cardH / 2), viewportRows - cardH))
+    // The card's absolute row: the conversation row sits under the sticky
+    // header when that is pinned.
+    const row = (this.stickyHeaderVisible() ? 1 : 0) + top
+    const col = terminalWidth - RAIL_WIDTH - 1 - cardW
+    this.previewOverlay = this.ui.showOverlay(createTurnPreviewCard(lines, cardW), {
+      row,
+      col,
+      width: cardW,
+      nonCapturing: true,
+    })
+    this.previewOverlayTurn = card.turn.id
+  }
+
+  private hideTurnPreview(): void {
+    const overlay = this.previewOverlay
+    this.previewOverlay = undefined
+    this.previewOverlayTurn = null
+    overlay?.hide()
+  }
+
+  /**
+   * `/model <provider/model>` switches directly (same live-fork path as the
+   * picker's Enter, source main 41300b04 semantics): the spec is validated
+   * against the catalog before the fork; bare `/model` opens the picker.
+   * Both hops go through the fenced sink — a stale listModels or a failed
+   * switchModel just never narrates.
+   */
+  private runModelCommand(rawInput: string): void {
+    const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+    if (parts.length === 0) {
+      this.openModelPicker()
+      return
+    }
+    const spec = parts[0]!
+    const slash = spec.indexOf('/')
+    const provider = slash >= 0 ? spec.slice(0, slash) : undefined
+    const id = slash >= 0 ? spec.slice(slash + 1) : spec
+    if (provider === undefined || id.length === 0 || provider.length === 0) {
+      this.commands.info.notify(t('model-usage'), { color: 'warning' })
+      return
+    }
+    void this.commands.model.listModels().then((list) => {
+      if (list === undefined || this.disposed) return
+      const model = list.find(m => m.provider === provider && m.id === id)
+      if (model === undefined) {
+        this.commands.info.notify(t('model-unknown', { spec }), { color: 'error', timeoutMs: 8000 })
+        return
+      }
+      this.commands.info.notify(t('model-switching', { name: model.name }))
+      void this.commands.model.switchModel(provider, id).then((ok) => {
+        if (ok) this.commands.info.notify(t('model-switched', { name: model.name }))
+      })
+    })
   }
 
   /** `/model` — the forked listModels/listEfforts payloads arrive async, then
@@ -1910,6 +2636,7 @@ export class ChatScreen implements Component {
     this.disposeComponent(this.transientScreen)
     this.transientScreen = screen
     this.transientKind = kind
+    this.hideTurnPreview()
     this.updateTransientViewport()
     this.promptEditor.focused = false
     this.ui.requestRender()

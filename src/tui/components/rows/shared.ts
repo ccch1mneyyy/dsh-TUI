@@ -27,6 +27,14 @@ import type { ChatRow } from '../../../dsh-adapter/channel.js'
 export interface RowContext {
   /** Ctrl+O verbose: full reasoning, full tool args/results, uncapped bodies. */
   expanded: boolean
+  /** Per-row expansion, toggled by clicking a foldable card (research §4.3).
+   *  Replaced (never mutated) on each toggle, like the source's React state. */
+  expandedRows: ReadonlySet<number>
+  /** Streaming reasoning rows the user clicked folded (source
+   *  `streamFoldedRows`): streaming defaults to the live view, so the click
+   *  fold needs its own switch — settled rows read `expandedRows` instead and
+   *  the two defaults never flip each other. */
+  streamFoldedRows: ReadonlySet<number>
   /** Channel thinking-block display mode; drives the streaming preview ticker. */
   thinkingFold: 'preview' | 'full'
   /** Working-activity preset name; drives the subagent card's running glyph. */

@@ -33,6 +33,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
   type Component,
+  type PointerEvent,
   type SelectItem,
   type SelectListTheme,
 } from '../public.js'
@@ -143,6 +144,9 @@ export class PickerView<T> implements Component {
   private query = ''
   private visibleItems: readonly T[]
   private list: SelectList
+  /** List region of the last render output (line offsets), for pointer hit-testing. */
+  private listStart = 0
+  private listRows = 0
 
   constructor(options: PickerViewOptions<T>) {
     this.options = options
@@ -224,12 +228,35 @@ export class PickerView<T> implements Component {
       lines.push(...indentLines(this.input.render(contentWidth), width))
     }
     if (this.visibleItems.length === 0) {
+      this.listStart = 0
+      this.listRows = 0
       lines.push(...indentLines([dim(emptyText ?? '—')], width))
     } else {
+      this.listStart = lines.length
       lines.push(...indentLines(this.list.render(contentWidth), width))
+      this.listRows = lines.length - this.listStart
     }
     lines.push(...indentLines([hintLine(footerHint)], width))
     return lines
+  }
+
+  /**
+   * Pointer parity (research §4.3): a primary-button click on a list row
+   * focuses it and confirms — the keyboard equivalent of ↑/↓ + Enter — and a
+   * wheel event over the list steps the selection (SelectList handles both).
+   * The picker owns its whole slot rect while open (same modal reading as the
+   * blocking overlays): clicks on the title/search/footer chrome and blank
+   * areas act on nothing but are consumed, and press/release are swallowed so
+   * no selection or transcript action starts through the open picker.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if ((event.type === 'click' || event.type === 'wheel') && this.listRows > 0) {
+      const row = event.localY - this.listStart
+      if (row >= 0 && row < this.listRows) {
+        this.list.handlePointer({ ...event, localY: row })
+      }
+    }
+    return true
   }
 
   handleInput(data: string): void {
@@ -618,6 +645,9 @@ class EffortSliderView implements Component {
     onClose: () => void
   }
   private focusIndex: number
+  /** Segment row + per-segment cell spans of the last render, for click hit-testing. */
+  private segmentRow = -1
+  private segmentSpans: ReadonlyArray<readonly [number, number]> = []
 
   constructor(options: {
     levels: readonly EffortSliderLevel[]
@@ -637,24 +667,53 @@ class EffortSliderView implements Component {
   render(width: number): string[] {
     const theme = getActiveTheme()
     const { levels, current } = this.options
+    // Track each segment's cell span (including the INDENT prefix) so a click
+    // can be mapped back to the segment it landed on.
+    const spans: Array<readonly [number, number]> = []
+    let cellCursor = visibleWidth(INDENT)
     const row = levels
       .map((level, index) => {
         // The live level renders in the success green (no ✓ marker); the
         // focused level wraps in accent-bold brackets. Both can coincide.
         const name = level.id === current ? themed(theme.success)(level.name) : level.name
-        return index === this.focusIndex ? chalk.bold(themed(theme.remember)(`[ ${name} ]`)) : `  ${name}  `
+        const segment = index === this.focusIndex ? chalk.bold(themed(theme.remember)(`[ ${name} ]`)) : `  ${name}  `
+        const start = cellCursor
+        cellCursor += visibleWidth(segment)
+        spans.push([start, cellCursor])
+        cellCursor += 2 // the join separator
+        return segment
       })
       .join('  ')
     const focused = levels[this.focusIndex]
     const lines: string[] = ['', divider(width)]
     lines.push(...indentLines([chalk.bold(themed(theme.remember)(t('picker-title-effort')))], width))
     lines.push('')
+    this.segmentRow = lines.length
+    this.segmentSpans = spans
     lines.push(...indentLines([row], width))
     if (focused?.description !== undefined) {
       lines.push(...indentLines([dim(focused.description)], width))
     }
     lines.push(...indentLines([hintLine(t('hint-effort-picker'))], width))
     return lines
+  }
+
+  /**
+   * Pointer parity (research §4.3): a primary-button click on a segment
+   * focuses it and commits — the keyboard equivalent of ←/→ + Enter. The
+   * slider owns its whole slot rect while open: clicks on the gaps/chrome act
+   * on nothing but are consumed, and no selection starts through it.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if (event.type === 'click' && event.button === 0 && event.localY === this.segmentRow) {
+      const hit = this.segmentSpans.findIndex(([start, end]) => event.localX >= start && event.localX < end)
+      const level = this.options.levels[hit]
+      if (hit >= 0 && level !== undefined) {
+        this.focusIndex = hit
+        this.options.onSelect(level.id)
+      }
+    }
+    return true
   }
 
   handleInput(data: string): void {
@@ -719,6 +778,9 @@ class ModelPickerView implements Component {
   /** Per-model draft effort segments (`provider/id` → level id). */
   private readonly drafts = new Map<string, string>()
   private readonly levels: readonly EffortSliderLevel[]
+  /** List region of the last render output (line offsets), for pointer hit-testing. */
+  private listStart = 0
+  private listRows = 0
 
   constructor(options: ModelPickerOptions) {
     this.options = options
@@ -870,9 +932,13 @@ class ModelPickerView implements Component {
     }
     lines.push(...indentLines([truncateToWidth(this.tabRow(), contentWidth, '')], width))
     if (this.visibleModels.length === 0) {
+      this.listStart = 0
+      this.listRows = 0
       lines.push(...indentLines([dim('—')], width))
     } else {
+      this.listStart = lines.length
       lines.push(...indentLines(this.list.render(contentWidth), width))
+      this.listRows = lines.length - this.listStart
     }
     const effort = this.effortRow()
     if (effort !== undefined) {
@@ -882,6 +948,23 @@ class ModelPickerView implements Component {
       ...indentLines([hintLine(this.levels.length > 0 ? t('hint-model-picker') : t('hint-model-picker-tabs'))], width),
     )
     return lines
+  }
+
+  /**
+   * Pointer parity (research §4.3), same reading as PickerView: a click on a
+   * model row focuses and commits it (↑/↓ + Enter, including the draft effort
+   * segment), a wheel event steps the selection. The tab strip, search row and
+   * Thinking footer have no pointer action; the picker owns its whole slot
+   * rect while open, so all other events are consumed without acting.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if ((event.type === 'click' || event.type === 'wheel') && this.listRows > 0) {
+      const row = event.localY - this.listStart
+      if (row >= 0 && row < this.listRows) {
+        this.list.handlePointer({ ...event, localY: row })
+      }
+    }
+    return true
   }
 
   handleInput(data: string): void {

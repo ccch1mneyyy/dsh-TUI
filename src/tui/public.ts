@@ -60,7 +60,10 @@ export type {
   MarkdownOptions,
   MarkdownTheme,
   OverlayHandle,
+  OverlayHitRegion,
   OverlayOptions,
+  PointerEvent,
+  PointerEventType,
   ScrollViewOptions,
   SelectItem,
   SelectListTheme,
@@ -77,6 +80,7 @@ export type {
   TuiInputListener,
   TuiInputListenerResult,
   TuiMode,
+  TuiMouseOptions,
   TuiStopOptions,
   ViewportTUI,
 } from '@deepseek-harness-tui/pi-tui'

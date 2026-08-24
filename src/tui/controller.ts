@@ -37,6 +37,7 @@ import { logForDebugging } from '../utils/debug.js'
 import type { TuiFences } from './commands.js'
 import type {
   ChatViewModel,
+  GoalTodoProjection,
   HeaderProjection,
   OverlayProjection,
   PluginSceneProjection,
@@ -85,6 +86,7 @@ export interface ChannelProjectionSource {
   readonly workingActivity: Channel['workingActivity']
   readonly activityFrames: Channel['activityFrames']
   readonly statusBar: Channel['statusBar']
+  readonly scrollGutter: Channel['scrollGutter']
   readonly whale: Channel['whale']
   readonly minimal: Channel['minimal']
   readonly activityEnabled: Channel['activityEnabled']
@@ -97,6 +99,8 @@ export interface ChannelProjectionSource {
   readonly modeIndex: Channel['modeIndex']
   readonly pluginScene: Channel['pluginScene']
   readonly subagents: Channel['subagents']
+  readonly goal: Channel['goal']
+  readonly todos: Channel['todos']
   subscribe(listener: () => void): () => void
   listSessions(): ReturnType<Channel['listSessions']>
   settingsSections(): ReturnType<Channel['settingsSections']>
@@ -162,6 +166,7 @@ export class TuiController {
   private settingsCache: SettingsSectionsProjection | undefined
   private trajectoryCache: TrajectoryProjection | undefined
   private subagentsCache: SubagentsProjection | undefined
+  private goalTodoCache: GoalTodoProjection | undefined
 
   constructor(deps: TuiControllerDeps) {
     this.channel = deps.channel
@@ -227,7 +232,8 @@ export class TuiController {
         cached.agentId === channel.agentId &&
         cached.cwd === channel.cwd &&
         cached.gitBranch === channel.gitBranch &&
-        cached.provider === channel.provider,
+        cached.provider === channel.provider &&
+        cached.scrollGutter === channel.scrollGutter,
       (meta) => ({
         meta,
         transcript,
@@ -241,6 +247,7 @@ export class TuiController {
         cwd: channel.cwd,
         gitBranch: channel.gitBranch,
         provider: channel.provider,
+        scrollGutter: channel.scrollGutter,
       }),
     ))
   }
@@ -295,6 +302,29 @@ export class TuiController {
       this.channel.version,
       (cached) => cached.items === items,
       (meta) => ({ meta, items }),
+    ))
+  }
+
+  /**
+   * Goal/todo slice for the chat dock panel. The channel folds `goal/change`
+   * and `todo/write` into fresh `goal`/`todos` references (never in-place),
+   * so reference equality plus the working flag is the whole content check.
+   */
+  getGoalTodo(): GoalTodoProjection {
+    const channel = this.channel
+    return (this.goalTodoCache = this.project(
+      this.goalTodoCache,
+      channel.version,
+      (cached) =>
+        cached.goal === channel.goal &&
+        cached.todos === channel.todos &&
+        cached.working === channel.working,
+      (meta) => ({
+        meta,
+        goal: channel.goal,
+        todos: channel.todos,
+        working: channel.working,
+      }),
     ))
   }
 

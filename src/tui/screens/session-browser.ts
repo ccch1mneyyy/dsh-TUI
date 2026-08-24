@@ -36,6 +36,7 @@ import {
   matchesKey,
   visibleWidth,
   type Component,
+  type PointerEvent,
 } from '../public.js'
 import type { TuiCommands } from '../commands.js'
 import type { SessionsProjection } from '../view-model.js'
@@ -250,6 +251,17 @@ export class SessionBrowserScreen implements Component {
   private viewportHeight = 0
   private viewCache: BrowserView | undefined
   private viewDirty = true
+  /**
+   * List geometry of the last render, for pointer hit-testing: the region's
+   * line offset within the render output, the list's column width (a split
+   * preview owns the columns beyond it), and one span per visible row —
+   * `rowIndex` is the row's ABSOLUTE index in the current view, so a click
+   * resolves the session by identity, never by a stale position.
+   */
+  private pointerRegionStart = 0
+  private pointerListWidth = 0
+  private pointerSplit = false
+  private pointerRows: ReadonlyArray<{ start: number; end: number; rowIndex: number }> = []
 
   constructor(deps: SessionBrowserScreenDeps) {
     this.commands = deps.commands
@@ -417,6 +429,46 @@ export class SessionBrowserScreen implements Component {
     this.syncPreview()
   }
 
+  /**
+   * Pointer parity (research §4.3): a primary-button click on a session row
+   * focuses it BY SESSION ID and resumes it — the keyboard Enter on that row
+   * (a refusal stays on screen, same as Enter). The high-risk actions keep
+   * their keyboard seats: delete/rename/clean are only reachable through
+   * ctrl+d/ctrl+r/ctrl+x and their confirm/input rows, and while one of those
+   * modes is open every click is consumed without acting. A wheel event steps
+   * the cursor like ↑/↓ (moveSelection clamps at the ends; the window and the
+   * preview follow). Clicks anywhere else — project headers, the preview
+   * pane, the search box, blank rows — are consumed without acting.
+   * press/release/move stay unconsumed so drag-selection copy keeps working
+   * on the list; a drag never produces a click, so it never resumes.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if (event.type === 'click') {
+      if (event.button !== 0) return true
+      if (this.mode !== 'list' || this.actionPending) return true
+      if (this.pointerSplit && event.localX >= this.pointerListWidth) return true
+      const local = event.localY - this.pointerRegionStart
+      const hit = this.pointerRows.find((row) => local >= row.start && local < row.end)
+      if (hit === undefined) return true
+      const view = this.getView()
+      const row = view.rows[hit.rowIndex]
+      if (row?.kind !== 'session') return true
+      this.notice = undefined
+      this.focus = hit.rowIndex
+      this.focusId = row.session.id
+      this.runResume(row.session)
+      return true
+    }
+    if (event.type === 'wheel') {
+      if (event.deltaY === 0) return true
+      if (this.mode !== 'list' || this.actionPending) return true
+      this.step(event.deltaY > 0 ? 1 : -1)
+      this.syncPreview()
+      return true
+    }
+    return undefined
+  }
+
   render(width: number): string[] {
     // One clock per render pass: every relative time on screen must agree.
     const now = Date.now()
@@ -461,6 +513,7 @@ export class SessionBrowserScreen implements Component {
     )
     if (rules.has(1)) lines.push(this.renderDivider(theme, width))
 
+    this.pointerRegionStart = lines.length
     lines.push(...this.renderRegion(theme, view, focus, focusedSession, listWidth, previewWidth, listHeight, splitPreview, soloPreview, now))
 
     if (this.notice !== undefined) {
@@ -787,6 +840,9 @@ export class SessionBrowserScreen implements Component {
     now: number,
   ): string[] {
     if (soloPreview) {
+      this.pointerRows = []
+      this.pointerSplit = false
+      this.pointerListWidth = 0
       return focusedSession === undefined
         ? Array.from({ length: listHeight }, () => '')
         : this.renderPreviewLines(theme, focusedSession, previewWidth, listHeight, now)
@@ -795,6 +851,9 @@ export class SessionBrowserScreen implements Component {
     const windowTop = anchorTop(view.rows, focus, listHeight, this.windowTop)
     this.windowTop = windowTop
     const visibleRows = view.rows.slice(windowTop, windowEnd(view.rows, windowTop, listHeight))
+    this.pointerSplit = splitPreview
+    this.pointerListWidth = listWidth
+    const pointerRows: Array<{ start: number; end: number; rowIndex: number }> = []
     const listLines: string[] = []
     if (!this.loaded) {
       listLines.push(paint(theme, ` ${truncateWidth(t('session-loading'), Math.max(0, listWidth - 2))}`, undefined, { dim: true, italic: true }))
@@ -802,6 +861,7 @@ export class SessionBrowserScreen implements Component {
       listLines.push(paint(theme, ` ${truncateWidth(t('resume-none-in-cwd'), Math.max(0, listWidth - 2))}`, undefined, { dim: true, italic: true }))
     }
     visibleRows.forEach((row, index) => {
+      const rowStart = listLines.length
       if (row.kind === 'project') {
         listLines.push(
           `${paint(theme, truncateWidth(` ${formatProject(row.project, this.home)}`, Math.max(0, listWidth - 6)), 'planMode')}${paint(theme, `  ${row.count}`, undefined, { dim: true })}`,
@@ -809,7 +869,9 @@ export class SessionBrowserScreen implements Component {
       } else {
         listLines.push(...this.renderSessionRow(theme, row.session, row.depth, windowTop + index === focus, listWidth, now, row.family))
       }
+      pointerRows.push({ start: rowStart, end: listLines.length, rowIndex: windowTop + index })
     })
+    this.pointerRows = pointerRows
     const clipped = listLines.slice(0, Math.max(0, listHeight))
     while (clipped.length < listHeight) clipped.push('')
 

@@ -49,6 +49,7 @@ import {
   truncateToWidth,
   visibleWidth,
   type Component,
+  type PointerEvent,
   type SettingItem,
   type SettingsListTheme,
 } from '../public.js'
@@ -57,6 +58,9 @@ import type { TuiCommands } from '../commands.js'
 /** Rows of any one list on screen at once; with the search row, description
  *  and hint chrome the panel stays around 16 lines tall. */
 const MAX_VISIBLE = 8
+
+/** Lines above the list in the panel render: blank, divider, title. */
+const PANEL_CHROME_LINES = 3
 
 interface FieldBinding {
   readonly ns: string
@@ -152,6 +156,22 @@ export class SettingsPanel implements Component {
     // The list owns every key while the panel is open (navigation, cycling,
     // submenus and the search input); nothing leaks into the editor behind it.
     this.list.handleInput(data)
+  }
+
+  /**
+   * Pointer parity (research §4.3): clicks and wheel events on the list below
+   * the 3-line chrome (blank, divider, title) are forwarded to the
+   * SettingsList — a row click activates it exactly like Enter (cycle rows
+   * step their value, editor rows open their input submenu, group rows open
+   * the nested list), and a wheel steps the selection. The panel owns its
+   * whole slot rect while open: everything else is consumed without acting,
+   * and no selection starts through it.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    if ((event.type === 'click' || event.type === 'wheel') && event.localY >= PANEL_CHROME_LINES) {
+      this.list.handlePointer({ ...event, localY: event.localY - PANEL_CHROME_LINES })
+    }
+    return true
   }
 
   render(width: number): string[] {

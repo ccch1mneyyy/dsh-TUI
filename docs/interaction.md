@@ -221,7 +221,7 @@ scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识�
 | 键盘扩展选区 | 有选区时 `Shift+←/→/↑/↓/Home/End` 扩展 / 收缩（跨行环绕） |
 
 复制优先使用 OSC 52；本地终端可回退到 `wl-copy`、`xclip` 或 `xsel`，tmux 使用
-`load-buffer -w`。设置 `DSH_TUI_DISABLE_MOUSE=1` 可临时关闭 fullscreen 鼠标。
+`load-buffer -w`。设置 `DSH_TUI_DISABLE_MOUSE=1` 可临时关闭 fullscreen 的鼠标点击与拖选（滚轮滚动仍可用）。
 
 ## `ask_user_question` 问卷
 

@@ -54,6 +54,54 @@ export function hotspotRows(agg: TrajAggregate): HotspotRow[] {
   return [...agg.tools, ...agg.model, ...agg.turns]
 }
 
+/** The flat title/row list in display order (one list entry per line). */
+function buildEntries(agg: TrajAggregate, sort: HotspotSort): Entry[] {
+  const entries: Entry[] = []
+  let cursorIndex = 0
+  for (const [title, rows, colorKey] of [
+    [t('traj-hot-tools'), agg.tools, 'chromeYellow'],
+    [t('traj-hot-model'), agg.model, 'autoAccept'],
+    [t('traj-hot-turns'), agg.turns, 'professionalBlue'],
+  ] as const) {
+    if (rows.length === 0) continue
+    entries.push({ kind: 'title', text: title })
+    const max = Math.max(...rows.map((row) => valueOf(row, sort)), 1)
+    for (const row of rows) {
+      entries.push({ kind: 'row', row, cursorIndex, max, colorKey })
+      cursorIndex += 1
+    }
+  }
+  return entries
+}
+
+/** First visible entry index: the window centers the cursor's entry. */
+function windowStart(entries: readonly Entry[], height: number, cursor: number): number {
+  const focusEntry = entries.findIndex((entry) => entry.kind === 'row' && entry.cursorIndex === cursor)
+  return Math.max(0, Math.min(focusEntry - Math.floor(height / 2), entries.length - height))
+}
+
+/**
+ * The pointer mapping for one rendered hotspot frame (research §4.3): the
+ * clickable `HotspotRow` per visible line offset, `undefined` for section
+ * titles and the padding tail. Computed with the same entries/window the
+ * renderer uses, so a click always resolves against what is on screen.
+ */
+export function hotspotPointerRows(
+  agg: TrajAggregate,
+  sort: HotspotSort,
+  height: number,
+  cursor: number,
+): (HotspotRow | undefined)[] {
+  const entries = buildEntries(agg, sort)
+  const start = windowStart(entries, height, cursor)
+  const visible = entries.slice(Math.max(0, start), Math.max(0, start) + height)
+  const rows: (HotspotRow | undefined)[] = visible.map((entry) =>
+    entry.kind === 'row' ? entry.row : undefined,
+  )
+  while (rows.length < height) rows.push(undefined)
+  return rows
+}
+
 /** Value a row is ranked by under the active sort. */
 function valueOf(row: HotspotRow, sort: HotspotSort): number {
   return sort === 'count' ? row.count : sort === 'tokens' ? row.tokens : row.totalMs
@@ -76,26 +124,9 @@ export function renderHotspotView({ agg, sort, width, height, cursor, tick, swit
   const labelWidth = Math.min(18, Math.max(10, Math.floor(width * 0.16)))
   const barWidth = Math.max(6, Math.min(30, width - labelWidth - 34))
 
-  // Build the flat list once, tagging each row with its section's scale.
-  const entries: Entry[] = []
-  let cursorIndex = 0
-  for (const [title, rows, colorKey] of [
-    [t('traj-hot-tools'), agg.tools, 'chromeYellow'],
-    [t('traj-hot-model'), agg.model, 'autoAccept'],
-    [t('traj-hot-turns'), agg.turns, 'professionalBlue'],
-  ] as const) {
-    if (rows.length === 0) continue
-    entries.push({ kind: 'title', text: title })
-    const max = Math.max(...rows.map((row) => valueOf(row, sort)), 1)
-    for (const row of rows) {
-      entries.push({ kind: 'row', row, cursorIndex, max, colorKey })
-      cursorIndex += 1
-    }
-  }
-
+  const entries = buildEntries(agg, sort)
   // Window around the cursor's entry so ↑/↓ can reach every section.
-  const focusEntry = entries.findIndex((entry) => entry.kind === 'row' && entry.cursorIndex === cursor)
-  const start = Math.max(0, Math.min(focusEntry - Math.floor(height / 2), entries.length - height))
+  const start = windowStart(entries, height, cursor)
   const visible = entries.slice(Math.max(0, start), Math.max(0, start) + height)
 
   const lines: string[] = []

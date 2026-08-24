@@ -6,6 +6,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isKeyRelease, matchesKey } from "./keys.ts";
+import type { LayoutRect } from "./layout.ts";
+import type { PointerEvent } from "./pointer.ts";
 import type { Terminal } from "./terminal.ts";
 import {
 	isOsc11BackgroundColorResponse,
@@ -32,6 +34,15 @@ export interface Component {
 	 * Optional handler for keyboard input when component has focus
 	 */
 	handleInput?(data: string): void;
+
+	/**
+	 * Optional handler for pointer (mouse) input dispatch.
+	 * Events bubble from the deepest hit component up to the root; returning
+	 * true consumes the event: bubbling stops and fallback behaviors (text
+	 * selection, OSC 8 link activation, ScrollView wheel routing) are
+	 * suppressed. See pointer.ts for the full dispatch contract.
+	 */
+	handlePointer?(event: PointerEvent): boolean | void;
 
 	/**
 	 * If true, component receives key release events (Kitty protocol).
@@ -192,6 +203,20 @@ type OverlayStackEntry = {
 	hidden: boolean;
 	focusOrder: number;
 };
+
+/**
+ * Screen geometry of a visible overlay, recorded while compositing.
+ * Rect is in final visible viewport coordinates (0-based), with height
+ * already clamped by maxHeight slicing.
+ */
+export interface OverlayHitRegion {
+	component: Component;
+	rect: LayoutRect;
+	/** !options?.nonCapturing: capturing overlays block pointer pass-through. */
+	capturing: boolean;
+	/** Larger = more topmost (same convention as compositeOverlays). */
+	focusOrder: number;
+}
 
 type OverlayBlockedFocusResume = { status: "restore-overlay" } | { status: "focus-target"; target: Component | null };
 type EligibleOverlayFocusRestoreState = { status: "eligible"; overlay: OverlayStackEntry };
@@ -354,6 +379,13 @@ export abstract class TuiBase extends Container implements TUI {
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
 	private overlayStack: OverlayStackEntry[] = [];
+	/**
+	 * Hit regions of the overlays composited by the last render, ordered
+	 * topmost-first (descending focusOrder) for pointer dispatch. Recording
+	 * is a pure side product of compositing; TuiAltScreen's pointer dispatch
+	 * consumes it.
+	 */
+	protected overlayHitRegions: OverlayHitRegion[] = [];
 
 	get hasOverlayEntries(): boolean {
 		return this.overlayStack.length > 0;
@@ -1097,6 +1129,7 @@ export abstract class TuiBase extends Container implements TUI {
 
 	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
 	protected compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
+		this.overlayHitRegions.length = 0;
 		if (this.overlayStack.length === 0) return lines;
 		const result = [...lines];
 
@@ -1125,6 +1158,16 @@ export abstract class TuiBase extends Container implements TUI {
 			const { row, col } = this.resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
 
 			rendered.push({ overlayLines, row, col, w: width });
+			// Record the hit region in final viewport coordinates: resolveOverlayLayout
+			// clamps row into the visible area and the doRender slice offset equals
+			// viewportStart, so (col, row) is where the overlay lands on screen.
+			// Unshift keeps regions topmost-first (reverse paint order) for dispatch.
+			this.overlayHitRegions.unshift({
+				component,
+				rect: { x: col, y: row, width, height: overlayLines.length },
+				capturing: !options?.nonCapturing,
+				focusOrder: entry.focusOrder,
+			});
 			minLinesNeeded = Math.max(minLinesNeeded, row + overlayLines.length);
 		}
 

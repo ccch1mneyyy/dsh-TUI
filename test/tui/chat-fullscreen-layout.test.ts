@@ -90,6 +90,7 @@ function makeViewModel(active: { id: string } | undefined): ChatViewModel {
     cwd: '/repo',
     gitBranch: 'main',
     provider: 'test-provider',
+    scrollGutter: 'timeline',
   }
 }
 
@@ -139,16 +140,29 @@ function asStack(node: ReturnType<typeof getLayoutNode>): StackLayoutNode {
   return node
 }
 
-test('fullscreen ChatScreen exposes a ScrollView+dock layout root', () => {
+test('fullscreen ChatScreen exposes a ScrollView+gutter+dock layout root', () => {
   const { chat } = makeChat(true)
   try {
     const node = asStack(chat[LAYOUT_NODE]())
     assert.equal(node.type, 'vstack')
-    assert.equal(node.entries.length, 2)
+    assert.equal(node.entries.length, 3)
 
-    // The conversation scrolls: first entry is the primary follow-end
-    // ScrollView that TuiAltScreen routes wheel/PageUp/PageDown to.
-    const [scrollEntry, dockEntry] = node.entries
+    // M4b: the sticky prompt header pins above the conversation while
+    // scrolled up — a predicate-gated entry, hidden at the bottom.
+    const [stickyEntry, rowEntry, dockEntry] = node.entries
+    assert.equal(typeof stickyEntry?.visible, 'function')
+
+    // The conversation row is an HStack: the primary follow-end ScrollView
+    // that TuiAltScreen routes wheel/PageUp/PageDown to, plus the 2-column
+    // timeline gutter slot (rail or scrollbar per dsh-tui.scrollGutter).
+    assert.equal(rowEntry?.basis, 0)
+    assert.equal(rowEntry?.grow, 1)
+    assert.equal(rowEntry?.shrink, 1)
+    assert.equal(rowEntry?.minSize, 1)
+    const row = asStack(getLayoutNode(rowEntry!.component))
+    assert.equal(row.type, 'hstack')
+    assert.equal(row.entries.length, 2)
+    const [scrollEntry, gutterEntry] = row.entries
     assert.equal(scrollEntry?.basis, 0)
     assert.equal(scrollEntry?.grow, 1)
     assert.equal(scrollEntry?.shrink, 1)
@@ -157,8 +171,13 @@ test('fullscreen ChatScreen exposes a ScrollView+dock layout root', () => {
     assert.ok(scrollView instanceof ScrollView)
     assert.equal(scrollView.primary, true)
     assert.equal(scrollView.overscroll, 'chain')
-    assert.equal(scrollView.scrollbar, 'auto')
+    // The timeline gutter replaces pi's built-in scrollbar while mounted
+    // (the `hidden` mode would keep 'auto'); same-value guarded per update.
+    assert.equal(scrollView.scrollbar, 'hidden')
     assert.equal(scrollView.isFollowingEnd, true)
+    assert.equal(gutterEntry?.basis, 2)
+    assert.equal(gutterEntry?.grow, 0)
+    assert.equal(typeof gutterEntry?.visible, 'function')
 
     // The scroll content is header + transcript, so the banner scrolls away
     // with the conversation history.
@@ -169,15 +188,16 @@ test('fullscreen ChatScreen exposes a ScrollView+dock layout root', () => {
     assert.equal(conversation.entries.length, 2)
 
     // The dock keeps every chrome row below the transcript at its natural
-    // height: working/approval/dialog/question/statusEntries/editor/
-    // settingsSlot/pickerSlot/notifications/status.
+    // height: pill/working/goalTodo/approval/dialog/question/statusEntries/
+    // editor/settingsSlot/pickerSlot/notifications/status.
     assert.equal(dockEntry?.basis, 'auto')
     assert.equal(dockEntry?.grow, 0)
     const dock = asStack(getLayoutNode(dockEntry!.component))
     assert.equal(dock.type, 'vstack')
-    assert.equal(dock.entries.length, 10)
-    // The status line is the last, always-visible dock row; notifications sit
-    // right above it.
+    assert.equal(dock.entries.length, 12)
+    // The back-to-bottom pill docks first (predicate-gated); the status line
+    // is the last, always-visible row; notifications sit right above it.
+    assert.equal(typeof dock.entries[0]?.visible, 'function')
     assert.equal(dock.entries.at(-1)?.visible, undefined)
     assert.equal(typeof dock.entries.at(-2)?.visible, 'function')
 
@@ -193,7 +213,7 @@ test('inline ChatScreen keeps the flat root without a scroll node', () => {
   try {
     const node = asStack(chat[LAYOUT_NODE]())
     assert.equal(node.type, 'vstack')
-    assert.equal(node.entries.length, 12)
+    assert.equal(node.entries.length, 13)
     assert.ok(node.entries.every((entry) => getLayoutNode(entry.component)?.type !== 'scroll'))
   } finally {
     chat.dispose()

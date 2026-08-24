@@ -1,4 +1,5 @@
 import { getKeybindings } from "../keybindings.ts";
+import type { PointerEvent } from "../pointer.ts";
 import type { Component } from "../tui.ts";
 import { truncateToWidth, visibleWidth } from "../utils.ts";
 
@@ -49,6 +50,10 @@ export class SelectList implements Component {
 	public onCancel?: () => void;
 	public onSelectionChange?: (item: SelectItem) => void;
 
+	/** Window geometry of the last render, for pointer row hit-testing. */
+	private pointerWindowStart = 0;
+	private pointerItemRows = 0;
+
 	constructor(items: SelectItem[], maxVisible: number, theme: SelectListTheme, layout: SelectListLayoutOptions = {}) {
 		this.items = items;
 		this.filteredItems = items;
@@ -76,6 +81,8 @@ export class SelectList implements Component {
 
 		// If no items match filter, show message
 		if (this.filteredItems.length === 0) {
+			this.pointerWindowStart = 0;
+			this.pointerItemRows = 0;
 			lines.push(this.theme.noMatch("  No matching commands"));
 			return lines;
 		}
@@ -88,6 +95,8 @@ export class SelectList implements Component {
 			Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.filteredItems.length - this.maxVisible),
 		);
 		const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
+		this.pointerWindowStart = startIndex;
+		this.pointerItemRows = endIndex - startIndex;
 
 		// Render visible items
 		for (let i = startIndex; i < endIndex; i++) {
@@ -134,6 +143,38 @@ export class SelectList implements Component {
 				this.onCancel();
 			}
 		}
+	}
+
+	/**
+	 * Pointer support (generic input capability): a primary-button click on a
+	 * visible item row focuses it and fires `onSelect` — the keyboard
+	 * equivalent of moving to the row and pressing Enter. A wheel event steps
+	 * the selection by one row, CLAMPED at the ends rather than wrapping like
+	 * the arrow keys, so fast scrolling cannot wrap around unnoticed. Anything
+	 * else inside the list rect (the scroll-info line, rows from a stale frame)
+	 * is consumed without acting; press/release/move stay untouched so text
+	 * selection outside the rows keeps working.
+	 */
+	handlePointer(event: PointerEvent): boolean | void {
+		if (event.type === "wheel") {
+			if (event.deltaY === 0 || this.filteredItems.length === 0) return true;
+			const step = event.deltaY > 0 ? 1 : -1;
+			this.selectedIndex = clamp(this.selectedIndex + step, 0, this.filteredItems.length - 1);
+			this.notifySelectionChange();
+			return true;
+		}
+		if (event.type === "click") {
+			if (event.button === 0 && event.localY >= 0 && event.localY < this.pointerItemRows) {
+				this.setSelectedIndex(this.pointerWindowStart + event.localY);
+				this.notifySelectionChange();
+				const item = this.filteredItems[this.selectedIndex];
+				if (item && this.onSelect) {
+					this.onSelect(item);
+				}
+			}
+			return true;
+		}
+		return undefined;
 	}
 
 	private renderItem(

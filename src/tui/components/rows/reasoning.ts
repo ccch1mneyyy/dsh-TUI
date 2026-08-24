@@ -5,9 +5,11 @@
  * - streaming: a braille spinner + `Thinking…` header; the body is either a
  *   constant-height 3-row live ticker of the latest reasoning lines
  *   (`thinkingFold: 'preview'`, the channel default) or the full dimmed
- *   markdown block (`'full'` / Ctrl+O).
+ *   markdown block (`'full'` / Ctrl+O). A click folds the live view to the
+ *   bare header via `RowContext.streamFoldedRows`.
  * - settled: folded one-liner `⚓ Thinking · 12s (ctrl+o to expand)`; the
- *   global Ctrl+O verbose (`RowContext.expanded`) reveals the full text.
+ *   global Ctrl+O verbose (`RowContext.expanded`) or the row's own click
+ *   toggle (`RowContext.expandedRows`) reveals the full text.
  *
  * Simplifications vs the old React path: the streaming glyph pulses in a
  * fixed `claude` tint instead of the sine brand→ice color sweep, and the
@@ -61,7 +63,19 @@ export class ReasoningRow extends CachedRow {
     const out: string[] = marginTop ? [''] : []
     out.push(clip(header, width))
 
-    if (streaming && !this.ctx.expanded && this.ctx.thinkingFold === 'preview') {
+    // Click fold state (research §4.3): a SETTLED row toggles via the shared
+    // per-row set (default folded — click expands); a STREAMING row defaults
+    // to the live view, so its click fold is the separate streamFolded set
+    // and the two defaults never flip each other (source main e972821).
+    const rowExpanded = this.ctx.expandedRows.has(this.row.id)
+    const streamFolded = streaming && this.ctx.streamFoldedRows.has(this.row.id)
+    if (
+      streaming &&
+      !streamFolded &&
+      !rowExpanded &&
+      !this.ctx.expanded &&
+      this.ctx.thinkingFold === 'preview'
+    ) {
       // Live ticker: the model's last reasoning lines, one row each, padded
       // to a constant PREVIEW_ROWS-tall block. The LAST row truncates from
       // the start so the newest tokens (growing at the line's end) stay
@@ -83,7 +97,7 @@ export class ReasoningRow extends CachedRow {
       return out
     }
 
-    if (streaming || this.ctx.expanded) {
+    if ((streaming && !streamFolded) || this.ctx.expanded || rowExpanded) {
       out.push('')
       for (const line of this.renderMarkdown(thinking.trim(), Math.max(1, width - 2))) {
         out.push(`  ${trimPad(line)}`)

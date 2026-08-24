@@ -29,7 +29,9 @@
  * (null hides the view — zero rows) and routes the keyboard to
  * {@link handleInput} while pending. A new snapshot `key` remounts the view
  * state (fresh focus, input reseeded from `initial`), mirroring the old React
- * `key={dialog.key}` remount.
+ * `key={dialog.key}` remount. Pointer: a primary-button click on a
+ * select/confirm row settles it like Enter (the retired React panel's
+ * onClick; the input row has no click action) — see {@link handlePointer}.
  */
 import { t } from '../../../i18n.js'
 import { POINTER } from '../../../cc/figures.js'
@@ -37,11 +39,19 @@ import { listWindow } from '../../../components/listWindow.js'
 import type { TuiDialogSnapshot } from '../../../dsh-adapter/dialogs.js'
 import { capCells, flattenInline } from '../../../dsh-adapter/sanitize.js'
 import type { TuiCommands } from '../../commands.js'
-import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TUI } from '../../public.js'
+import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type PointerEvent, type TUI } from '../../public.js'
 import { bold, dim, dividerLine, hintLine, inverse, LineEdit, textInput, themePainter } from './overlay-chrome.js'
 
 /** Content left padding inside the Pane (the old Box paddingX={2}). */
 const PAD = '  '
+
+/** A clickable row span: [start, end) line offsets within the last render
+ *  output, plus the option index it activates. */
+interface RowSpan {
+  readonly start: number
+  readonly end: number
+  readonly index: number
+}
 
 /**
  * The documented bound of the resolved input text. Mirrors INPUT_CELLS in
@@ -57,6 +67,8 @@ export class ExtensionDialogView implements Component {
   private key: string | null = null
   private focusIndex = 0
   private readonly edit = new LineEdit()
+  /** Click hit map recorded by the last render (view-local line offsets). */
+  private rowSpans: RowSpan[] = []
 
   constructor(
     private readonly commands: TuiCommands,
@@ -167,11 +179,36 @@ export class ExtensionDialogView implements Component {
     this.focusIndex = (this.focusIndex + delta + rowCount) % rowCount
   }
 
+  /**
+   * Click parity with the retired React ExtensionDialog (research §4.3): a
+   * primary-button click on a select row settles that option id, on a
+   * confirm row settles the boolean — the keyboard equivalent of moving the
+   * focus there and pressing Enter. The input row has no click action
+   * (source has none either). Every event reaching this handler lies inside
+   * the view rect and is consumed (blocking modal); blank cells and non-row
+   * regions consume without acting.
+   */
+  handlePointer(event: PointerEvent): boolean | void {
+    const snapshot = this.snapshot
+    if (snapshot === null) return undefined
+    if (event.type === 'click' && event.button === 0 && !event.cellIsBlank) {
+      const hit = this.rowSpans.find(span => event.localY >= span.start && event.localY < span.end)
+      if (hit !== undefined && snapshot.kind === 'select') {
+        const option = snapshot.options[hit.index]
+        if (option !== undefined) this.commands.overlays.decideDialog(snapshot.key, option.id)
+      } else if (hit !== undefined && snapshot.kind === 'confirm') {
+        this.commands.overlays.decideDialog(snapshot.key, hit.index === 0)
+      }
+    }
+    return true
+  }
+
   // ── render ───────────────────────────────────────────────────────────
 
   render(width: number): string[] {
     const snapshot = this.snapshot
     if (snapshot === null) return []
+    this.rowSpans = []
 
     // The Pane chrome: a gap row, a full-width permission rule, then the
     // padded content column.
@@ -229,12 +266,14 @@ export class ExtensionDialogView implements Component {
             ? '↓'
             : ' '
       const pointerCell = pointer === ' ' ? ' ' : focused ? suggestion(pointer) : dim(pointer)
+      const start = lines.length
       const label = truncateToWidth(option.label.replace(/[\r\n]+/g, ' '), labelWidth, '…')
       lines.push(`${PAD}${pointerCell} ${focused ? suggestion(label) : label}`)
       if (option.description !== undefined) {
         const description = truncateToWidth(option.description.replace(/[\r\n]+/g, ' '), labelWidth, '…')
         lines.push(`${PAD}  ${inactive(description)}`)
       }
+      this.rowSpans.push({ start, end: lines.length, index })
     }
   }
 
@@ -252,7 +291,9 @@ export class ExtensionDialogView implements Component {
       const focused = index === this.focusIndex
       const pointerCell = focused ? suggestion(POINTER) : ' '
       const text = truncateToWidth(label.replace(/[\r\n]+/g, ' '), Math.max(1, width - 4), '…')
+      const start = lines.length
       lines.push(`${PAD}${pointerCell} ${focused ? suggestion(text) : text}`)
+      this.rowSpans.push({ start, end: lines.length, index })
     }
   }
 
