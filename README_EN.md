@@ -42,7 +42,9 @@ the interface, and removing it leaves no core modifications behind.
 - **Terminal-native interaction**: streaming Markdown, structured tool cards,
   command and file completion, `@` file references (complete anywhere; text
   files attach content, directories attach listings, and PNG/JPEG/WebP/GIF are
-  sent as durable image blocks), history
+  sent as durable image blocks; `@path#L12-14` line ranges attach only the
+  requested lines, clamping past-EOF ranges or falling back to the whole file
+  with a note), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
   zh/en UI language switching.
 - **Timeline navigation**: a Grok-style turn rail covering **every turn

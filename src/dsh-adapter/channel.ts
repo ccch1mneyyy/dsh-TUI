@@ -6929,6 +6929,25 @@ function mentionImageMediaType(path: string): MentionImageMediaType | undefined 
   return MENTION_IMAGE_MEDIA_TYPES[extname(path).toLowerCase()]
 }
 
+/** One mention target that resolved and stat'ed to something attachable. */
+interface ResolvedMention {
+  target: { displayPath: string }
+  info: { type: 'file' | 'directory' | 'other' }
+}
+
+/** Resolve+stat one candidate path; undefined when it throws OR stats
+ * absent — both are a miss for strip-first mention resolution (issue #359). */
+async function tryResolveMention(fs: MentionFs, absolute: string): Promise<ResolvedMention | undefined> {
+  try {
+    const target = await fs.resolve(absolute)
+    const info = await fs.stat(target)
+    if (info === undefined) return undefined
+    return { target, info }
+  } catch {
+    return undefined
+  }
+}
+
 export interface MentionExpansion {
   /** Model-facing blocks: the typed text first, one block per attachment. */
   blocks: ContentBlock[]
@@ -6962,64 +6981,95 @@ export async function expandMentions(
   let imageBytes = 0
   if (fs !== undefined) {
     for (const mention of mentions) {
+    const display = mention.literal ?? mention.path
     const imageMediaType = mentionImageMediaType(mention.path)
     if (budget <= 0 && imageMediaType === undefined) break
     // Mentions resolve against the session cwd, same as the model-facing fs
-    // tools; absolute paths pass through untouched.
+    // tools; absolute paths pass through untouched. A `#L12-14` line suffix
+    // (issue #359) is stripped before resolution; when the stripped path
+    // misses, the typed literal (suffix intact) gets ONE fallback try so
+    // filenames genuinely containing `#L…` still resolve as whole files.
     const absolute = isAbsolute(mention.path) ? mention.path : join(cwd, mention.path)
-    let target: { displayPath: string }
-    let info: { type: 'file' | 'directory' | 'other' } | undefined
-    try {
-      target = await fs.resolve(absolute)
-      info = await fs.stat(target)
-    } catch {
-      missing.push(mention.path)
+    let resolved = await tryResolveMention(fs, absolute)
+    let literalFallback = false
+    if (resolved === undefined && mention.literal !== undefined) {
+      const literalPath = isAbsolute(mention.literal) ? mention.literal : join(cwd, mention.literal)
+      resolved = await tryResolveMention(fs, literalPath)
+      literalFallback = resolved !== undefined
+    }
+    if (resolved === undefined) {
+      missing.push(display)
       continue
     }
+    const { target, info } = resolved
+    // On a literal-fallback hit the attached file IS the typed name — the
+    // model must see that path, not the suffix-stripped one.
+    const shownPath = literalFallback ? display : mention.path
+    // …and judge image-ness by the typed extension in that case too.
+    const imageType = literalFallback && mention.literal !== undefined
+      ? mentionImageMediaType(mention.literal)
+      : imageMediaType
     if (info?.type === 'file') {
-      if (imageMediaType !== undefined && attachments !== undefined && fs.readBytes !== undefined) {
+      if (imageType !== undefined && attachments !== undefined && fs.readBytes !== undefined) {
         const limits = attachments.imageLimits
-        if (!limits.mediaTypes.includes(imageMediaType) || imageCount >= limits.maxImagesPerMessage) {
-          missing.push(mention.path)
+        if (!limits.mediaTypes.includes(imageType) || imageCount >= limits.maxImagesPerMessage) {
+          missing.push(display)
           continue
         }
         try {
           const data = await fs.readBytes(target, undefined, limits.maxImageBytes)
           if (imageBytes + data.byteLength > limits.maxMessageImageBytes) {
-            missing.push(mention.path)
+            missing.push(display)
             continue
           }
           const attachment = await attachments.saveImage({
             data,
-            mediaType: imageMediaType,
+            mediaType: imageType,
             name: basename(target.displayPath),
           })
           blocks.push({ type: 'image', attachment })
           imageCount += 1
           imageBytes += data.byteLength
-          attached.push(mention.path)
+          attached.push(display)
         } catch {
-          missing.push(mention.path)
+          missing.push(display)
         }
         continue
       }
       try {
         const cap = Math.min(MENTION_MAX_FILE_CHARS, budget)
-        let content = await fs.readText(target)
+        const content = await fs.readText(target)
+        let body = content
         let truncated = false
-        if (content.length > cap) {
-          content = content.slice(0, cap)
+        let header = `<attached-file path="${shownPath}">`
+        if (mention.startLine !== undefined && !literalFallback) {
+          // Line-range slice (issue #359): 1-based inclusive. An endLine
+          // past EOF clamps to the file; a startLine past EOF falls back
+          // to the whole file with an in-band note — never a silent
+          // empty attach. Line ranges never apply to literal-fallback
+          // hits (those files really are named `…#L…`, no suffix typed).
+          const lines = content.split('\n')
+          if (mention.startLine > lines.length) {
+            header = `<attached-file path="${shownPath}" lines="${mention.startLine}-${mention.endLine}" note="requested lines beyond EOF (file has ${lines.length} line${lines.length === 1 ? '' : 's'}); whole file attached">`
+          } else {
+            const endLine = Math.min(mention.endLine ?? mention.startLine, lines.length)
+            header = `<attached-file path="${shownPath}" lines="${mention.startLine}${endLine === mention.startLine ? '' : `-${endLine}`}">`
+            body = lines.slice(mention.startLine - 1, endLine).join('\n')
+          }
+        }
+        if (body.length > cap) {
+          body = body.slice(0, cap)
           truncated = true
         }
-        budget -= content.length
+        budget -= body.length
         blocks.push({
           type: 'text',
-          text: `<attached-file path="${mention.path}">\n${content}${truncated ? '\n[… truncated]' : ''}\n</attached-file>`,
+          text: `${header}\n${body}${truncated ? '\n[… truncated]' : ''}\n</attached-file>`,
         })
-        attached.push(mention.path)
+        attached.push(display)
       } catch {
         // Binary/undecodable or unreadable — report it like a miss.
-        missing.push(mention.path)
+        missing.push(display)
       }
       continue
     }
@@ -7036,16 +7086,16 @@ export async function expandMentions(
         budget -= body.length
         blocks.push({
           type: 'text',
-          text: `<attached-directory path="${mention.path}">\n${body}\n</attached-directory>`,
+          text: `<attached-directory path="${shownPath}">\n${body}\n</attached-directory>`,
         })
-        attached.push(mention.path)
+        attached.push(display)
       } catch {
-        missing.push(mention.path)
+        missing.push(display)
       }
       continue
     }
     // Absent (stat → undefined) or a special file.
-    missing.push(mention.path)
+    missing.push(display)
     }
   }
   if (attachments !== undefined && stagedImages !== undefined) {

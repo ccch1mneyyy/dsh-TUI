@@ -441,13 +441,18 @@ export function PromptInput({
    * Accept the selected file suggestion: replace ONLY the mention token at
    * the caret (prefix/suffix text survives), quoting whitespace paths. A
    * directory inserts `@dir/` without a trailing space so completion
-   * continues into it; a file completes the token with a space.
+   * continues into it; a file completes the token with a space. A typed
+   * `#L12-14` suffix is NOT part of the replacement — completion ends at
+   * `pathEnd` so the line range survives acceptance (issue #359).
    */
   const acceptFile = (candidate: FileCandidate) => {
     if (!mention) return
     const file = candidate.path
     const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
-    const insert = candidate.kind === 'directory' ? body : `${body} `
+    // A typed `#L12-14` suffix rides along AFTER the completed body (before
+    // the trailing space) — quoting a whitespace path must not detach it.
+    const suffix = mention.pathEnd === undefined ? '' : value.slice(mention.pathEnd, mention.end)
+    const insert = candidate.kind === 'directory' ? `${body}${suffix}` : `${body}${suffix} `
     const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
     setInput(next, mention.start + insert.length)
     setFileSelected(0)

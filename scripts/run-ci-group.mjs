@@ -375,6 +375,12 @@ const GROUPS = {
 // 边框 cell 级颜色重绘 + reset 恢复）、会话名标签渲染在输入框顶边框、
 // /recap 面板（摘要 + 建议标题 + a 键一键应用标题走 renameSession）。
     ["verify-session-color-recap", ['node', '--import', 'tsx/esm', 'scripts/verify-session-color-recap.tsx']],
+// @ 引用行区间回归（issue #359）：`#L12-14` 后缀按 1-based 闭区间切片
+// 附加、endLine 越界 clamp 到文件尾、startLine 越界回退整文件并在块内
+// 注明、剥后路径未命中时回退字面路径（真叫 `…#L…` 的文件按整文件附加
+// 且模型看到字面路径）、双 miss 报用户原文、无后缀行为不变、目录忽略
+// 后缀。内存 fs stub，expandMentions 纯扩展逻辑。
+    ["verify-mention-lines", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-lines.ts']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得
