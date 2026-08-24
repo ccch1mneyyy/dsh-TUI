@@ -10,7 +10,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 变更分流：纯文档 / issue 模板改动不需要编译与回归——docs/contributing.md
+  # 已经写了「纯文档、纯 workflow、纯 YAML 改动不需要重建」，这里是它的 CI 落地。
+  # 白名单之外的任何路径都算代码，包括 .github/workflows 本身（改 ci.yml 必须跑
+  # 全套）。push 与任何非 PR 事件一律按代码处理。
+  #
+  # 不能改用 paths-ignore 跳过整个 workflow：ci-gate 是 main 的 required check，
+  # workflow 不运行就永远不上报，文档 PR 会卡在 pending 无法合并。
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/github-script@v9
+        id: filter
+        with:
+          script: |
+            if (context.eventName !== 'pull_request') {
+              core.setOutput('code', 'true')
+              core.notice('非 pull_request 事件，按代码改动处理')
+              return
+            }
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            })
+            const DOCS_ONLY = [
+              /^docs\//,
+              /^README(_EN)?\.md$/,
+              /^\.github\/ISSUE_TEMPLATE\//,
+              /^\.github\/PULL_REQUEST_TEMPLATE(\.md)?$/,
+              /^LICENSE$/,
+            ]
+            const paths = files.map(f => f.filename)
+            // 空改动集按代码处理：宁可多跑一轮，不要漏跑。
+            const code = paths.length === 0
+              || paths.some(p => !DOCS_ONLY.some(re => re.test(p)))
+            core.setOutput('code', String(code))
+            core.notice(`${paths.length} 个文件改动，code=${code}`)
+
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     env:
       # Keep UI language deterministic for the repro/verify scripts: zh is the
@@ -258,6 +304,8 @@ jobs:
   # ci-gate、不阻塞合并），探明各平台差异后再逐步扩测并提升为
   # required。fail-fast: false 让两个平台都跑完。
   platform-smoke:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -300,19 +348,33 @@ jobs:
   # gate 仍然运行（被跳过的 check 不会阻塞合并，失败才会）；后续 CI 内部
   # 再拆组、改名、加 matrix，branch protection 只需盯住这一个稳定名字。
   ci-gate:
-    needs: [build, render-scroll, input-terminal, session-workspace, channel-ui]
+    needs: [changes, build, render-scroll, input-terminal, session-workspace, channel-ui]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require every group to have succeeded
         env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
           BUILD: ${{ needs.build.result }}
           RENDER_SCROLL: ${{ needs.render-scroll.result }}
           INPUT_TERMINAL: ${{ needs.input-terminal.result }}
           SESSION_WORKSPACE: ${{ needs.session-workspace.result }}
           CHANNEL_UI: ${{ needs.channel-ui.result }}
         run: |
+          # 纯文档改动：期望每组都是 skipped。这里不能笼统地放行 skipped——
+          # build 失败时下游同样是 skipped，那种情况必须判失败。因此只对明确的
+          # code=false 放行 skipped；changes 自身失败时 CODE 为空串，一律按代码
+          # 严查（fail-closed），否则一个零测试的代码 PR 会在 gate 误绿下合并。
+          if [ "${CODE}" = "false" ]; then expected=skipped; else expected=success; fi
+          echo "code=${CODE}，要求每组结束状态为 ${expected}"
           status=0
+          # changes 是全链路的分类源头：它自己失败时所有下游都是 skipped，
+          # 必须在这里显式判失败，不能指望上面的期望值兜住。
+          if [ "${CHANGES}" != "success" ]; then
+            echo "::error title=CI gate::changes 结束状态为 ${CHANGES}（要求 success，无法分类改动）"
+            status=1
+          fi
           for pair in "build:${BUILD}" \
                       "render-scroll:${RENDER_SCROLL}" \
                       "input-terminal:${INPUT_TERMINAL}" \
@@ -321,8 +383,8 @@ jobs:
             name="${pair%%:*}"
             result="${pair#*:}"
             echo "${name}: ${result}"
-            if [ "${result}" != "success" ]; then
-              echo "::error title=CI gate::${name} 结束状态为 ${result}（要求 success）"
+            if [ "${result}" != "${expected}" ]; then
+              echo "::error title=CI gate::${name} 结束状态为 ${result}（要求 ${expected}）"
               status=1
             fi
           done

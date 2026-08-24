@@ -72,8 +72,9 @@ const ThemeContext = createContext<ThemeContextValue>({
  * DSH_TUI_THEME skips terminal detection (tests, debugging). Accepts a
  * built-in name (auto|light|dark|dark-ansi) or a user theme name; invalid
  * values are warned and ignored by the caller, falling back to detection.
+ * Exported for /reload, which must respect the env override's precedence.
  */
-function envThemeOverride(): string | undefined {
+export function envThemeOverride(): string | undefined {
   const v = process.env.DSH_TUI_THEME
   return v === undefined || v === '' ? undefined : v
 }

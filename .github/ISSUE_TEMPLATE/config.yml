@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 功能建议 / Feature request
+    url: https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=ideas
+    about: 新功能、行为变更、交互改进请发到 Discussions Ideas。维护者认可后会开 issue 跟踪。
+  - name: 使用问题 / Question
+    url: https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=q-a
+    about: 安装、配置、用法问题请发到 Discussions Q&A。
+  - name: 插件 / 主题 / 收录 / Show and tell
+    url: https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=show-and-tell
+    about: 周边插件、主题包、收录通知请发到 Discussions Show and tell。

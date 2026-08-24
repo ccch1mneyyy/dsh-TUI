@@ -78,6 +78,14 @@ export type ChatOverlay =
   // closing so n/N keep walking the matches (CC semantics).
   | { kind: 'search' }
   | { kind: 'tips' }
+  /**
+   * Click-to-act file menu: opened by clicking a file path in the
+   * transcript (tool cards, markdown code spans / plain text, file://
+   * links). `index` is the focused action row (0 = open, 1 = reveal in
+   * file manager, 2 = copy absolute path). `isDir` tells the panel whether
+   * the target is a directory (first row reads "open folder").
+   */
+  | { kind: 'file-actions'; path: string; index: number; isDir: boolean }
 
 export const NO_OVERLAY: ChatOverlay = { kind: 'none' }
 
@@ -108,7 +116,7 @@ export type ChatOverlayAction =
    *  with the authoritative focus (model list / preset roster), or a mouse
    *  click on a row of a panel that stays open (effort slider, workspace
    *  flow). Ignored unless that panel is still up. */
-  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'workspace-flow' | 'rewind'; index: number }
+  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'workspace-flow' | 'rewind' | 'file-actions'; index: number }
   /** Edit the history-search draft (query text, caret, focused match). */
   | { type: 'history-edit'; query?: string; cursor?: number; focus?: number }
   /** Workspace flow: an action is running (keys except Esc are swallowed). */
@@ -176,6 +184,7 @@ export function chatOverlayReducer(state: ChatOverlay, action: ChatOverlayAction
         || state.kind === 'permission'
         || state.kind === 'plan'
         || state.kind === 'lang'
+        || state.kind === 'file-actions'
       ) {
         return { ...state, index: wrapIndex(state.index, action.delta, action.count) }
       }

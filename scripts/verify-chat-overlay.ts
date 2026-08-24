@@ -186,6 +186,32 @@ check('T8e preset gated on >0 options', [
 check('T8f tips still counts as overlay-open', dialogOverlayVisible({ kind: 'tips' }, gates), true)
 check('T8g search mounts the bar', dialogOverlayVisible({ kind: 'search' }, gates), true)
 
+// --- T9: file-actions (click-to-act file menu) ---------------------------
+const fileActions = (index: number, isDir = false): ChatOverlay =>
+  ({ kind: 'file-actions', path: 'C:\\repo\\src\\a.ts', index, isDir })
+check('T9a open from none', reduce(NO_OVERLAY, { type: 'open', overlay: fileActions(0) }), fileActions(0))
+check(
+  'T9b move wraps within the 3 actions',
+  [
+    reduce(fileActions(2), { type: 'move', delta: 1, count: 3 }),
+    reduce(fileActions(0), { type: 'move', delta: -1, count: 3 }),
+  ],
+  [fileActions(0), fileActions(2)],
+)
+check('T9c empty count is a no-op', reduce(fileActions(1), { type: 'move', delta: 1, count: 0 }), fileActions(1))
+check(
+  'T9d mouse pick sets the absolute row',
+  reduce(fileActions(1), { type: 'set-index', kind: 'file-actions', index: 2 }),
+  fileActions(2),
+)
+check(
+  'T9e stale set-index ignored after the menu closed',
+  reduce({ kind: 'theme', index: 0 }, { type: 'set-index', kind: 'file-actions', index: 2 }),
+  { kind: 'theme', index: 0 },
+)
+check('T9f close', reduce(fileActions(0), { type: 'close' }), { kind: 'none' })
+check('T9g overlay mounts by default (no data gate)', dialogOverlayVisible(fileActions(0), gates), true)
+
 if (failures > 0) {
   console.error(`\n${failures} failure(s)`)
   process.exit(1)

@@ -22,6 +22,7 @@ import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
@@ -305,9 +306,9 @@ export function PromptInput({
   // Double-tap Esc to clear (CC semantics).
   const escPendingRef = React.useRef(false)
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
+  /** True while a clipboard paste read is in flight (ignore repeat keys). */
   const clipboardBusyRef = React.useRef(false)
-  /** True while the external editor owns the terminal (Ctrl+G round-trip). */
+  /** True while the external editor owns the terminal (editor-key round-trip). */
   const editorBusyRef = React.useRef(false)
   /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
   const lastEnterAtRef = React.useRef(0)
@@ -676,10 +677,12 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+V / Cmd+V: raw mode hands the key to the app, so the clipboard is
-    // read here — text, file paths when the file manager copied files, or an
-    // exported temp-file path when the clipboard holds a raw image.
-    if (isMod(key) && input === 'v') {
+    // Clipboard paste (default Ctrl+V / Cmd+V, plus the Alt+V alias for
+    // terminals that intercept Ctrl+V — combos are user-remappable via
+    // /settings): raw mode hands the key to the app, so the clipboard is
+    // read here — text, file paths when the file manager copied files, or
+    // an exported temp-file path when the clipboard holds a raw image.
+    if (actionMatches('paste', input, key)) {
       if (clipboardBusyRef.current) return
       // Match insertAtCaret's overlay/selection dismissal up front: the
       // async continuation below only sets value/cursor, so a paste landing
@@ -736,8 +739,9 @@ export function PromptInput({
       return
     }
 
-    // Help is modal for modified keys and every Enter variant. Ctrl+V above
-    // is the intentional exception: paste closes Help and inserts visibly.
+    // Help is modal for modified keys and every Enter variant. The paste
+    // branch above is the intentional exception: paste closes Help and
+    // inserts visibly.
     // Swallow here before editor/submit/interrupt branches can mutate hidden
     // composer or working-turn state; plain typing still dismisses Help below.
     if (helpOpen && !key.escape && (key.ctrl || key.meta || key.super || key.return || input.includes('\n') || input.includes('\r'))) {
@@ -745,14 +749,15 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+G: edit the current draft in $VISUAL/$EDITOR (issue #123,
-    // readline's edit-and-execute-command). The draft is written to a temp
-    // file, the terminal is handed to the editor (Ink's alt-screen handoff),
-    // and the saved text replaces the input when it differs. The util maps
-    // every failure to an outcome, but the catch/finally here is the hard
-    // guarantee: a rejected promise must never kill the process, and the
-    // busy flag must always clear or Ctrl+G stays locked forever.
-    if (key.ctrl && input === 'g') {
+    // Ctrl+G (remappable via /settings): edit the current draft in
+    // $VISUAL/$EDITOR (issue #123, readline's edit-and-execute-command). The
+    // draft is written to a temp file, the terminal is handed to the editor
+    // (Ink's alt-screen handoff), and the saved text replaces the input when
+    // it differs. The util maps every failure to an outcome, but the
+    // catch/finally here is the hard guarantee: a rejected promise must
+    // never kill the process, and the busy flag must always clear or the
+    // editor key stays locked forever.
+    if (actionMatches('editor', input, key)) {
       editorBusyRef.current = true
       void (async () => {
         try {

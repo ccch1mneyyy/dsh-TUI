@@ -76,6 +76,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'status', description: 'Show session status' },
   { name: 'cost', description: 'Show session token usage' },
   { name: 'config', description: 'Show the dsh-tui configuration source' },
+  { name: 'reload', description: 'Reload preference files from disk and apply live' },
   { name: 'settings', description: 'View and edit plugin settings' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
@@ -113,6 +114,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
   { name: 'tips', description: 'Show usage tips and shortcuts' },
+  { name: 'restart', description: 'Restart dsh-tui and resume this session' },
   { name: 'exit', description: 'Exit dsh-tui' },
   { name: 'quit', description: 'Exit dsh-tui', tag: 'alias of /exit' },
   { name: 'q', description: 'Exit dsh-tui', tag: 'alias of /exit' },

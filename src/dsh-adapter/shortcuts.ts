@@ -9,9 +9,11 @@
  *
  * - Combos must carry ctrl or alt (meta) — bare letters are typing, and
  *   bare Esc/arrows are navigation. Rejected at registration.
- * - A RESERVED list (every combo the TUI itself binds globally or in the
- *   prompt editor) is refused at registration with a warning. The list is
- *   the enforcement of "locals win": collisions can never reach the matcher.
+ * - A RESERVED list (fixed combos the TUI itself binds globally or in the
+ *   prompt editor, PLUS the effective combos of every customizable built-in
+ *   action from src/utils/keymap.ts) is refused at registration with a
+ *   warning. The list is the enforcement of "locals win": collisions can
+ *   never reach the matcher — and it follows user remaps made in /settings.
  * - Overlays (pickers, dialogs, scenes, the session browser) own the
  *   keyboard while open; shortcuts match only in the plain chat state.
  *
@@ -23,29 +25,28 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
 import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import {
+  canonicalCombo,
+  comboMatchesStrict,
+  fixedReservedCombos,
+  parseCombo,
+  reservedActionCombos,
+  type ComboKeyFlags,
+  type ParsedCombo,
+} from '../utils/keymap.js'
 
-/** Minimal shape of the ink Key flags the matcher reads (kept structurally
- *  compatible with `Key` from the ui kit without importing React-facing
- *  modules into the adapter). */
-export interface TuiShortcutKey {
-  ctrl?: boolean
-  meta?: boolean
-  super?: boolean
-  shift?: boolean
-  return?: boolean
-  escape?: boolean
-  tab?: boolean
-  backspace?: boolean
-  delete?: boolean
-  upArrow?: boolean
-  downArrow?: boolean
-  leftArrow?: boolean
-  rightArrow?: boolean
-  home?: boolean
-  end?: boolean
-  pageUp?: boolean
-  pageDown?: boolean
-}
+/**
+ * Minimal shape of the ink Key flags the matcher reads (kept structurally
+ * compatible with `Key` from the ui kit without importing React-facing
+ * modules into the adapter).
+ */
+export type TuiShortcutKey = ComboKeyFlags
+
+// Shared combo grammar + built-in keymap live in src/utils/keymap.ts; the
+// parse/match entry points stay re-exported here for API stability.
+export const parseShortcutCombo = parseCombo
+export const matchShortcut = comboMatchesStrict
+export type { ParsedCombo }
 
 /** Controls that only the Chat input path may use. They are kept out of the
  * Cordis service object, so one plugin cannot synthesize an input event to
@@ -62,165 +63,20 @@ export interface TuiShortcutOptions {
   handler: () => void | Promise<void>
 }
 
-interface ParsedCombo {
-  readonly raw: string
-  readonly ctrl: boolean
-  readonly meta: boolean
-  readonly shift: boolean
-  /** Named key flag on the Key object, or undefined for a character key. */
-  readonly named?: keyof TuiShortcutKey
-  /** Character to match against the ink `input` string (lowercased). */
-  readonly char?: string
-}
-
 interface RegisteredShortcut {
   readonly combo: ParsedCombo
   readonly description: string
   readonly handler: () => void | Promise<void>
 }
 
-const NAMED_KEYS: Record<string, keyof TuiShortcutKey> = {
-  enter: 'return',
-  return: 'return',
-  esc: 'escape',
-  escape: 'escape',
-  tab: 'tab',
-  backspace: 'backspace',
-  delete: 'delete',
-  up: 'upArrow',
-  down: 'downArrow',
-  left: 'leftArrow',
-  right: 'rightArrow',
-  home: 'home',
-  end: 'end',
-  pageup: 'pageUp',
-  pagedown: 'pageDown',
-}
-
 /**
- * Combos the TUI owns, globally or inside the prompt editor (the editor's
- * bindings are checked AFTER plugin shortcuts, so refusing them here is
- * what keeps "locals win" true). Built-in handlers match a MODIFIER SUBSET
- * (`key.ctrl && input === 'g'` — they never exclude an extra Shift), so
- * the reserved check below refuses a plugin combo whose SHIFTLESS form is
- * reserved: ctrl+shift+g would shadow Ctrl+G on terminals that report both
- * as the same keypress (ConPTY does), and would be dead weight on terminals
- * that don't.
+ * The fixed half of the reserved set lives in src/utils/keymap.ts
+ * (FIXED_RESERVED_COMBOS) so the /settings draft validator and this
+ * registry agree on one list; the customizable action combos join here
+ * dynamically via `reservedActionCombos()` so a user remap (say
+ * paste → alt+v) moves the reservation with the binding.
  */
-const RESERVED_COMBOS = new Set([
-  'ctrl+c', // interrupt / clear
-  'ctrl+d', // exit on empty input
-  'ctrl+t', // startup context panel
-  'ctrl+r', // history search
-  'ctrl+g', // external editor
-  'ctrl+o', // transcript mode toggle
-  'ctrl+l', // terminal redraw
-  'ctrl+e', // show all messages / line end
-  'ctrl+v', // paste
-  'ctrl+a', // line start
-  'ctrl+u', // kill line
-  'ctrl+k', // kill to end
-  'ctrl+w', // kill word
-  'ctrl+left', // word jump
-  'ctrl+right', // word jump
-  'ctrl+return', // newline (multi-line input)
-  'ctrl+shift+return', // shift+Enter newline (CSI 13;6u) — same editor binding
-  'alt+return', // newline fallback on terminals without shift reporting
-  'alt+up', // pull the last pending message back for editing
-  'escape', // pickers / interrupt / rewind double-tap
-  'tab', // command completion
-  'shift+tab', // session-mode cycle
-])
-
-/**
- * Parse `ctrl+shift+p` style combos. Returns undefined on anything
- * malformed or disallowed (no modifier, unknown key name); `allowReserved`
- * is exposed for tests only.
- */
-export function parseShortcutCombo(raw: string): ParsedCombo | undefined {
-  const parts = String(raw ?? '')
-    .toLowerCase()
-    .split('+')
-    .map(part => part.trim())
-    .filter(part => part !== '')
-  if (parts.length === 0) return undefined
-  let ctrl = false
-  let meta = false
-  let shift = false
-  let named: keyof TuiShortcutKey | undefined
-  let char: string | undefined
-  for (const part of parts) {
-    if (part === 'ctrl' || part === 'control') {
-      if (ctrl) return undefined
-      ctrl = true
-    } else if (part === 'alt' || part === 'meta' || part === 'option') {
-      if (meta) return undefined
-      meta = true
-    } else if (part === 'shift') {
-      if (shift) return undefined
-      shift = true
-    } else if (part === 'space') {
-      if (char !== undefined || named !== undefined) return undefined
-      char = ' '
-    } else if (part in NAMED_KEYS) {
-      if (char !== undefined || named !== undefined) return undefined
-      named = NAMED_KEYS[part]
-    } else if ([...part].length === 1) {
-      if (char !== undefined || named !== undefined) return undefined
-      char = part
-    } else {
-      return undefined
-    }
-  }
-  if (char === undefined && named === undefined) return undefined
-  // Bare keys are typing/navigation; a modifier is what makes a shortcut.
-  if (!ctrl && !meta) return undefined
-  // Escape combos are refused outright: the input layer sets key.meta = true
-  // for EVERY Escape (ink/events/input-event.ts — `keypress.meta ||
-  // keypress.name === 'escape' || keypress.option`), so an alt+escape combo
-  // would match every bare Esc press and shadow clear-input / the double-Esc
-  // rewind. Esc is fully owned by the TUI; there is no unambiguous way to
-  // bind it.
-  if (named === 'escape') return undefined
-  return { raw: parts.join('+'), ctrl, meta, shift, ...(named === undefined ? {} : { named }), ...(char === undefined ? {} : { char }) }
-}
-
-/** Canonical form for dedupe/reserved checks: modifiers sorted, key last. */
-function comboKey(combo: ParsedCombo): string {
-  const mods = [combo.ctrl ? 'ctrl' : '', combo.meta ? 'alt' : '', combo.shift ? 'shift' : '']
-    .filter(part => part !== '')
-    .sort()
-  return [...mods, combo.named === undefined ? (combo.char ?? '') : String(combo.named)].join('+')
-}
-
-/** Reserved lookup accepts user-spelled combos too (`ctrl+c`). */
-function reservedKey(raw: string): string {
-  const combo = parseShortcutCombo(raw)
-  return combo === undefined ? raw.toLowerCase() : comboKey(combo)
-}
-
-const RESERVED_CANONICAL = new Set([...RESERVED_COMBOS].map(reservedKey))
-
-/** Match a keypress against a parsed combo. `input` is ink's input string
- *  (already the resolved character; ctrl+space arrives as ' '). */
-export function matchShortcut(combo: ParsedCombo, input: string, key: TuiShortcutKey): boolean {
-  if (Boolean(key.ctrl) !== combo.ctrl) return false
-  // ink reports Alt as meta; Esc itself also sets meta, which is why the
-  // modifier check runs against the combo, not a bare flag read.
-  if (Boolean(key.meta) !== combo.meta) return false
-  if (key.super) return false
-  // Shift must match for NAMED keys exactly as for characters — otherwise a
-  // registered ctrl+shift+enter would also match a plain ctrl+enter press,
-  // letting a plugin shadow the editor's built-in Ctrl+Enter delivery.
-  if (Boolean(key.shift) !== combo.shift) return false
-  if (combo.named !== undefined) {
-    return key[combo.named] === true
-  }
-  if (combo.char === undefined) return false
-  // Shift+letter arrives as the uppercase character; compare case-folded
-  // (the shift FLAG equality above already pinned the modifier state).
-  return input.toLowerCase() === combo.char
-}
+const FIXED_RESERVED_CANONICAL = fixedReservedCombos()
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -294,13 +150,20 @@ export class TuiShortcutRuntime extends Service {
       )
       return () => {}
     }
-    const key = comboKey(parsed)
-    // Built-ins match a modifier subset (see RESERVED_COMBOS): a combo whose
-    // SHIFTLESS form is reserved collides with the built-in on terminals that
-    // don't report Shift distinctly, so it is refused too. The exact form is
-    // still checked for combos reserved WITH shift (ctrl+shift+return).
-    const shiftlessKey = comboKey({ ...parsed, shift: false })
-    if (RESERVED_CANONICAL.has(key) || RESERVED_CANONICAL.has(shiftlessKey)) {
+    const key = canonicalCombo(parsed)
+    // Built-ins match a modifier subset (see FIXED_RESERVED_COMBOS): a combo
+    // whose SHIFTLESS form is reserved collides with the built-in on
+    // terminals that don't report Shift distinctly, so it is refused too.
+    // The exact form is still checked for combos reserved WITH shift
+    // (ctrl+shift+return). The customizable action combos join the check
+    // dynamically, so a user remap (paste → alt+v) reserves the new combo
+    // from the moment the settings layer applies it.
+    const shiftlessKey = canonicalCombo({ ...parsed, shift: false })
+    const actionReserved = reservedActionCombos()
+    if (
+      FIXED_RESERVED_CANONICAL.has(key) || FIXED_RESERVED_CANONICAL.has(shiftlessKey) ||
+      actionReserved.has(key) || actionReserved.has(shiftlessKey)
+    ) {
       this.ctx.logger.warn(`dsh-tui: tuiShortcuts.register rejected "${parsed.raw}" — reserved by a built-in binding`)
       return () => {}
     }

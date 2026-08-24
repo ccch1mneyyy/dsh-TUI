@@ -6,7 +6,6 @@ package-lock.json
 *.tsbuildinfo
 *.tgz
 .tmp/
-AGENTS.md
 .dsh-prompt-debug.json
 HANDOVER.md
 .local/

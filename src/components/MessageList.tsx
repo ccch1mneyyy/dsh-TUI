@@ -175,6 +175,7 @@ export function MessageList({
   failureHintRowId,
   failureHint,
   onOpenSubagent,
+  onOpenFile,
 }: {
   rows: readonly ChatRow[]
   expanded: boolean
@@ -253,6 +254,8 @@ export function MessageList({
   failureHint?: string
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
+  /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
+  onOpenFile?: (path: string) => void
 }) {
   const hiddenCount = rows.length - MAX_RENDERED_ROWS
   // The thinking filter runs BEFORE virtualization so window indices line up.
@@ -312,16 +315,24 @@ export function MessageList({
     // that is STILL STREAMING keeps its place even with empty text — the
     // live dot is the "model is answering" affordance and content may yet
     // arrive.
+    // The emptiness test must match what RENDERING shows: the `⏵`
+    // self-narration line (dsh-working-activity narrate contract) is
+    // stripped at render (stripNarration below), so a narration-only step —
+    // thinking, `⏵ …` line, straight to a tool call — has non-empty raw
+    // text but RENDERS as that same lone `●`. Test the stripped text, or
+    // the raw-text check lets the dot through forever.
+    const rendersEmptyAssistant = (row: ChatRow): boolean =>
+      row.kind === 'assistant' && row.streaming !== true && stripNarration(row.text ?? '').trim() === ''
     let hasEmptyAssistant = false
     for (const row of sliced) {
-      if (row.kind === 'assistant' && row.streaming !== true && (row.text ?? '').trim() === '') {
+      if (rendersEmptyAssistant(row)) {
         hasEmptyAssistant = true
         break
       }
     }
     const out = hasEmptyAssistant
       ? sliced.filter(row =>
-          !(row.kind === 'assistant' && row.streaming !== true && (row.text ?? '').trim() === '') &&
+          !rendersEmptyAssistant(row) &&
           (thinkingVisible || row.kind !== 'reasoning'),
         )
       : thinkingVisible
@@ -1015,6 +1026,7 @@ export function MessageList({
               onToggleStreamFold={onToggleStreamFold}
               streamFolded={streamFoldedRows.has(row.id)}
               onOpenSubagent={onOpenSubagent}
+              onOpenFile={onOpenFile}
               setRowRef={setRowRef}
             />
           )
@@ -1080,6 +1092,7 @@ type MemoRowProps = {
   /** 该行是否被用户折叠（仅流式 reasoning 行消费）。 */
   streamFolded: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
+  onOpenFile: ((path: string) => void) | undefined
   setRowRef: (rowId: number, el: DOMElement | null) => void
 }
 
@@ -1136,6 +1149,7 @@ function TranscriptRow({
   onToggleStreamFold,
   streamFolded,
   onOpenSubagent,
+  onOpenFile,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
   const ref = React.useCallback(
@@ -1282,6 +1296,7 @@ function TranscriptRow({
             diffLayout={diffLayout}
             toolBackground={toolBackground}
             onClick={foldOnClick}
+            onOpenFile={onOpenFile}
           />
         </Box>
       )
