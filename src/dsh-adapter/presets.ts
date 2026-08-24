@@ -21,6 +21,7 @@ import type { AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
+import { recordedModelRoute, type ModelRoute } from '../modelRoute.js'
 
 const ASK_USER_TOOL = 'ask_user_question'
 
@@ -141,6 +142,42 @@ export function runningPresetOf(session: {
   events: readonly { type: string; data: unknown }[]
 }): string | undefined {
   return resolveSessionPreset(session as Parameters<typeof resolveSessionPreset>[0])
+}
+
+/**
+ * The route a PERSISTED session actually ran, read from its log: the last
+ * `request/header` snapshot. undefined when the log records none (a session
+ * that never started a turn) or the artifact is unreadable.
+ *
+ * Resume feeds this back into `agents.resume({ agentOptions })` so the
+ * resumed agent's `options.model` is populated again — a cordis.yml that
+ * pins only `provider` (issue #67: a half-pin never merges) leaves
+ * agentOptions.model undefined, which breaks the `{{model}}` persona variable
+ * for the resumed agent's own assembly AND for every subagent it spawns
+ * (dsh-subagent's `resolveChildAgentOptions` inherits `parent.options.model`).
+ *
+ * @param ctx - The plugin context (persistence lookup).
+ * @param sessionId - The persisted session to inspect.
+ * @returns The recorded model route, or undefined when unrecorded/unreadable.
+ */
+export async function resolvePersistedRoute(ctx: Context, sessionId: SessionId): Promise<ModelRoute | undefined> {
+  const persistence = ctx.get('sessionPersistence') as
+    | {
+        load(id: SessionId): Promise<{
+          meta: unknown
+          events: readonly { type: string; data?: unknown }[]
+        }>
+      }
+    | undefined
+  if (persistence === undefined) return undefined
+  try {
+    const { events } = await persistence.load(sessionId)
+    return recordedModelRoute(events)
+  } catch {
+    // A missing/corrupt artifact leaves resume itself to report the failure;
+    // the route lookup must not mask it with a second, misleading error.
+    return undefined
+  }
 }
 
 /**

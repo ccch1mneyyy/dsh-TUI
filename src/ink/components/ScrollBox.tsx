@@ -1,10 +1,12 @@
-import React, { type PropsWithChildren, type Ref, useImperativeHandle, useRef, useState } from 'react';
+import React, { type PropsWithChildren, type Ref, useCallback, useImperativeHandle, useRef, useState } from 'react';
 import type { Except } from 'type-fest';
+import { FRAME_INTERVAL_MS } from '../constants.js';
 import { markScrollActivity } from '../../bootstrap/state.js';
 import type { DOMElement } from '../dom.js';
 import { markDirty, scheduleRenderFrom } from '../dom.js';
 import { noteFrameCause } from '../geometry-trace.js';
 import { markCommitStart } from '../reconciler.js';
+import type { WheelEvent } from '../events/wheel-event.js';
 import type { Styles } from '../styles.js';
 import Box from './Box.js';
 export type ScrollBoxHandle = {
@@ -97,8 +99,44 @@ function ScrollBox({
   const [, forceRender] = useState(0);
   const listenersRef = useRef(new Set<() => void>());
   const renderQueuedRef = useRef(false);
+  // The imperative handle, kept in a ref so the onWheel handler below can
+  // call scrollBy through the full public path (clamp bounds, sticky
+  // clearing, subscriber notify) instead of duplicating its logic.
+  const handleRef = useRef<ScrollBoxHandle | null>(null);
   const notify = () => {
     for (const l of listenersRef.current) l();
+  };
+  // Input-edge intent coalescing (Qwen Code's 16ms wheel merge, Crush's
+  // pre-queue filter): subscribers drive React state (MessageList's mount
+  // window, Chat's sticky flag, the timeline rail), so notifying per wheel
+  // EVENT runs a full React commit per event — a fast flick is 10-30
+  // events, each re-running the offsets/window/timeline loops on a big
+  // session. The scrollTop mutation and the ink render are already
+  // frame-throttled; this aligns the React commits to the same frame
+  // budget. Both edges defer to a microtask: the remaining input events of
+  // the same stdin batch then land BEFORE any commit, and one commit
+  // covers the whole batch (the sync leading edge used to run a full
+  // commit inside the wheel dispatch itself — pure input latency).
+  const notifyQueuedRef = useRef(false);
+  const lastNotifyAtRef = useRef(-Infinity);
+  const notifyCoalesced = () => {
+    const since = performance.now() - lastNotifyAtRef.current;
+    if (!notifyQueuedRef.current && since >= FRAME_INTERVAL_MS) {
+      notifyQueuedRef.current = true;
+      lastNotifyAtRef.current = performance.now();
+      queueMicrotask(() => {
+        notifyQueuedRef.current = false;
+        notify();
+      });
+      return;
+    }
+    if (notifyQueuedRef.current) return;
+    notifyQueuedRef.current = true;
+    setTimeout(() => {
+      notifyQueuedRef.current = false;
+      lastNotifyAtRef.current = performance.now();
+      notify();
+    }, Math.max(0, FRAME_INTERVAL_MS - since));
   };
   function scrollMutated(el: DOMElement): void {
     // Signal background intervals (IDE poll, LSP poll, GCS fetch, orphan
@@ -108,7 +146,7 @@ function ScrollBox({
     noteFrameCause('scroll');
     markDirty(el);
     markCommitStart();
-    notify();
+    notifyCoalesced();
     if (renderQueuedRef.current) return;
     renderQueuedRef.current = true;
     queueMicrotask(() => {
@@ -116,7 +154,8 @@ function ScrollBox({
       scheduleRenderFrom(el);
     });
   }
-  useImperativeHandle(ref, (): ScrollBoxHandle => ({
+  useImperativeHandle(ref, (): ScrollBoxHandle => {
+    const handle: ScrollBoxHandle = {
     scrollTo(y: number) {
       const el = domRef.current;
       if (!el) return;
@@ -154,10 +193,37 @@ function ScrollBox({
     scrollToBottom() {
       const el = domRef.current;
       if (!el) return;
+      el.scrollAnchor = undefined;
+      const viewportH = el.scrollViewportHeight ?? 0;
+      const maxScroll = Math.max(0, (el.scrollHeight ?? 0) - viewportH);
+      const distance = maxScroll - (el.scrollTop ?? 0);
+      if (distance > viewportH && viewportH > 0) {
+        // FAR jump: drain instead of teleport. The viewport would land on
+        // rows that were never mounted — their spacer heights are
+        // DEFAULT_ROW_HEIGHT estimates, so the topPad swallows the view
+        // (blank transcript) AND it is a fixed point: unmounted rows never
+        // measure, nothing retried until the next wheel event. The drain
+        // walks the exact wheel path instead: proportional steps, the
+        // virtualization window follows per commit (it mounts the union of
+        // committed + pending), the visual clamp pins to the mounted edge
+        // while rows measure as they enter — no blank at any distance. The
+        // renderer's at-bottom re-pin restores sticky when it lands
+        // (stickyScroll=false + pending undefined + scrollTop >= maxScroll).
+        el.stickyScroll = false;
+        el.pendingScrollDelta = (el.pendingScrollDelta ?? 0) + distance;
+        scrollMutated(el);
+        return;
+      }
       el.pendingScrollDelta = undefined;
       el.stickyScroll = true;
-      markDirty(el);
-      notify();
+      // DOM-direct pre-write of the target (near jumps only): the notify
+      // below triggers MessageList's window recompute, and its React commit
+      // must read the NEW scrollTop — the old order (notify first, renderer
+      // moves scrollTop later) left the window one commit behind. The
+      // renderer's sticky branch re-pins scrollTop to the exact fresh
+      // maxScroll next frame, so a stale cached height costs one frame.
+      el.scrollTop = maxScroll;
+      scrollMutated(el);
       forceRender(n => n + 1);
     },
     getScrollTop() {
@@ -197,12 +263,23 @@ function ScrollBox({
       el.scrollClampMin = min;
       el.scrollClampMax = max;
     }
-  }),
+  };
+  handleRef.current = handle;
+  return handle;
+  },
   // notify/scrollMutated are inline (no useCallback) but only close over
   // refs + imports — stable. Empty deps avoids rebuilding the handle on
   // every render (which re-registers the ref = churn).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   []);
+
+  // Position-routed wheel events (pointer over this box) scroll THIS box
+  // through the public scrollBy path — clamp bounds, sticky clearing, and
+  // subscriber notify all apply. Horizontal wheel (deltaX) has no renderer
+  // support yet (no scrollLeft in the DOM model) and is ignored.
+  const handleWheel = useCallback((e: WheelEvent) => {
+    if (e.deltaY !== 0) handleRef.current?.scrollBy(e.deltaY);
+  }, []);
 
   // Structure: outer viewport (overflow:scroll, constrained height) >
   // inner content (flexGrow:1, flexShrink:0 — fills at least the viewport
@@ -223,7 +300,7 @@ function ScrollBox({
       // must reach React subscribers too — see dom.ts onStickyRestore.
       el.onStickyRestore = notify;
     }
-  }} style={{
+  }} onWheel={handleWheel} style={{
     flexWrap: 'nowrap',
     flexDirection: style.flexDirection ?? 'row',
     flexGrow: style.flexGrow ?? 0,

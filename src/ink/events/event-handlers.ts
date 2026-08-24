@@ -2,14 +2,23 @@ import type { ClickEvent } from './click-event.js'
 import type { FocusEvent } from './focus-event.js'
 import type { KeyboardEvent } from './keyboard-event.js'
 import type { PasteEvent } from './paste-event.js'
+import type { PointerEvent } from './pointer-event.js'
 import type { ResizeEvent } from './resize-event.js'
+import type { WheelEvent } from './wheel-event.js'
 
 type KeyboardEventHandler = (event: KeyboardEvent) => void
 type FocusEventHandler = (event: FocusEvent) => void
 type PasteEventHandler = (event: PasteEvent) => void
 type ResizeEventHandler = (event: ResizeEvent) => void
 type ClickEventHandler = (event: ClickEvent) => void
-type HoverEventHandler = () => void
+/**
+ * Hover handlers receive the pointer position. Existing `() => void`
+ * handlers remain assignable (a function taking fewer parameters is
+ * assignable to one taking more), so this widening is fully backwards
+ * compatible.
+ */
+type HoverEventHandler = (event: PointerEvent) => void
+type WheelEventHandler = (event: WheelEvent) => void
 
 /**
  * Props for event handlers on Box and other host components.
@@ -35,6 +44,7 @@ export type EventHandlerProps = {
   onClick?: ClickEventHandler
   onMouseEnter?: HoverEventHandler
   onMouseLeave?: HoverEventHandler
+  onWheel?: WheelEventHandler
 }
 
 /**
@@ -51,6 +61,7 @@ export const HANDLER_FOR_EVENT: Record<
   paste: { bubble: 'onPaste', capture: 'onPasteCapture' },
   resize: { bubble: 'onResize' },
   click: { bubble: 'onClick' },
+  wheel: { bubble: 'onWheel' },
 }
 
 /**
@@ -70,4 +81,5 @@ export const EVENT_HANDLER_PROPS = new Set<string>([
   'onClick',
   'onMouseEnter',
   'onMouseLeave',
+  'onWheel',
 ])

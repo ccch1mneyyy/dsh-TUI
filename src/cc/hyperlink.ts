@@ -11,6 +11,12 @@ export const OSC8_END = '\x07'
 
 type HyperlinkOptions = {
   supportsHyperlinks?: boolean
+  /**
+   * Override the default blue styling of the display text — callers that
+   * already painted the content (code spans keep their permission color)
+   * pass the identity here so the OSC 8 wrap does not recolor it.
+   */
+  style?: (text: string) => string
 }
 
 /**
@@ -21,7 +27,7 @@ type HyperlinkOptions = {
  * @param content - Optional content to display as the link text (only when hyperlinks are supported).
  *                  If provided and hyperlinks are supported, this text is shown as a clickable link.
  *                  If hyperlinks are not supported, content is ignored and only the URL is shown.
- * @param options - Optional overrides for testing (supportsHyperlinks)
+ * @param options - Optional overrides for testing (supportsHyperlinks, style)
  * @returns The OSC 8-wrapped blue link text, or the plain URL when the terminal lacks hyperlink support.
  */
 export function createHyperlink(
@@ -37,6 +43,7 @@ export function createHyperlink(
   // Apply basic ANSI blue color - wrap-ansi preserves this across line breaks
   // RGB colors (like theme colors) are NOT preserved by wrap-ansi with OSC 8
   const displayText = content ?? url
-  const coloredText = chalk.blue(displayText)
+  const style = options?.style ?? ((text: string) => chalk.blue(text))
+  const coloredText = style(displayText)
   return `${OSC8_START}${url}${OSC8_END}${coloredText}${OSC8_START}${OSC8_END}`
 }

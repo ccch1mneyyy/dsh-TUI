@@ -145,8 +145,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-paste',
     group: 'keys',
-    zh: 'Ctrl+V 粘贴文本、文件路径或图片附件',
-    en: 'Ctrl+V pastes text, file paths, or image attachments',
+    zh: 'Ctrl+V 或 Alt+V 粘贴文本、文件路径或图片附件；/settings 可改快捷键',
+    en: 'Ctrl+V or Alt+V pastes text, file paths, or image attachments; remappable in /settings',
   },
   {
     id: 'keys-slash-search',
@@ -157,8 +157,14 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-mouse-click',
     group: 'keys',
-    zh: '单击消息行展开/收起；点链接直接打开浏览器',
-    en: 'Click a message row to expand it; click links to open the browser',
+    zh: '工具卡/thinking/摘要点击展开，子代理卡点击看详情；输入框点击定位光标',
+    en: 'Click tool/thinking/summary rows to fold; subagent cards open detail; click input to move caret',
+  },
+  {
+    id: 'keys-mouse-scenes',
+    group: 'keys',
+    zh: '轨迹与 /settings 支持鼠标：行点击跳转/编辑，滚轮移动光标或焦点',
+    en: 'Trajectory and /settings take the mouse: row clicks jump/edit, the wheel moves cursor or focus',
   },
 
   // ── 命令 ──────────────────────────────────────────────────
@@ -521,6 +527,12 @@ export const TIPS: readonly Tip[] = [
     en: 'Drag-select copies instantly in fullscreen; Esc cancels',
   },
   {
+    id: 'disp-hover-footer',
+    group: 'display',
+    zh: '悬停底栏字段：ctx 原地变等宽压力条，明细走常驻底行，布局不动',
+    en: 'Hover footer fields: ctx morphs in place into a same-width bar, details on a stable line',
+  },
+  {
     id: 'disp-wheel-sel',
     group: 'display',
     zh: '有文本选区时，滚轮平移选区而非滚动列表',
@@ -603,8 +615,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-mouse-mode',
     group: 'pitfalls',
-    zh: '鼠标操作仅在全屏模式（fullscreen）下生效',
-    en: 'Mouse support only works in fullscreen mode',
+    zh: '主界面鼠标需开 fullscreen；轨迹/resume 整屏页两种模式都带鼠标',
+    en: 'Main-chat mouse needs fullscreen; full-page screens (trajectory, /resume) have it in both modes',
   },
   {
     id: 'pit-env-rename',

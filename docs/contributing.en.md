@@ -7,14 +7,27 @@ development contract for humans and coding agents working on `@deepseek-harness-
 
 ## How To Contribute
 
-- **Report bugs or request features** by opening an issue with a clear
-  reproduction and the terminal environment you use.
+- **Report bugs** through the bug issue form: version, terminal environment,
+  and a minimal reproduction.
+- **Request features** in [Discussions Ideas](https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=ideas).
+  Issues do not accept feature requests. Accepted proposals get a tracking issue,
+  and its assignee owns the implementation. **Do not start writing code before the
+  proposal is accepted** — OAuth, `/cost`, notifications, a plugin API and a remote
+  runtime were each written in full and then closed.
+  If a maintainer has not responded within 14 days, you may open a PR directly; it
+  gets the `unreviewed-proposal` label and is treated as unreviewed.
 - **Open a pull request** against `main`. Keep changes focused: one logical
   change per PR, with a Chinese or bilingual title and a description that
   covers motivation, what changed, and how it was verified.
 - **Run the verification matrix** below before requesting a review; CI runs
   the same commands.
 - New features should include or extend a focused regression script.
+
+### When the feature proposal flow takes effect
+
+It applies only to pull requests opened on or after 2026-08-24. Pull requests
+already open before that date follow the previous rules and need no Discussion
+or tracking issue.
 
 
 

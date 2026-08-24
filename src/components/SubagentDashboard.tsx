@@ -13,6 +13,20 @@ export interface SubagentDashboardProps {
   onSelect?: (agentId: string) => void
 }
 
+/** 可点击 ✕ 退出按钮：整屏/浮层场景的鼠标退出通道（Esc 等价）。 */
+export function ExitButton({ onClick }: { onClick: () => void }): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  return (
+    <Box
+      onClick={onClick}
+      onMouseEnter={(): void => setHovered(true)}
+      onMouseLeave={(): void => setHovered(false)}
+    >
+      <Text color={hovered ? 'text' : 'subtle'}>{' ✕'}</Text>
+    </Box>
+  )
+}
+
 /**
  * SubagentDashboard — overlay panel showing all active/recent subagents.
  * Keyboard: up/down to navigate, Enter to view detail, Esc to close.
@@ -85,6 +99,9 @@ export function SubagentDashboard({
             <Text dimColor> {t('subagent-count-failed')}</Text>
           </Text>
         )}
+        <Box flexGrow={1} />
+        {/* 可点击退出（Esc 的鼠标等价），hover 提亮 */}
+        <ExitButton onClick={onClose} />
       </Box>
 
       <Box flexDirection="column" maxHeight={Math.max(10, rows - 10)} marginTop={1}>
@@ -101,6 +118,10 @@ export function SubagentDashboard({
                 <SubagentCard
                   subagent={subagent}
                   focused={index === focusIndex}
+                  onClick={onSelect !== undefined
+                    // Click = view detail, same as Enter on the focused card.
+                    ? () => onSelect(subagent.agentId)
+                    : undefined}
                 />
                 {index < subagents.length - 1 && (
                   <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>

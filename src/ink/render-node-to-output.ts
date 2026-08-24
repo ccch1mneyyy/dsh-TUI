@@ -70,11 +70,30 @@ let scrollHint: ScrollHint | null = null
 let absoluteRectsPrev: Rectangle[] = []
 let absoluteRectsCur: Rectangle[] = []
 
+// position:absolute nodes of the CURRENT frame with their paint rects, for
+// pointer hit-testing. hitTest's containment recursion cannot reach an
+// absolute child that paints OUTSIDE its parent's rect (OverlayAbove uses
+// bottom:'100%' to float pickers over the transcript — the click point is
+// inside the overlay but outside every ancestor's rect, so the subtree is
+// skipped and the overlay's handlers are unreachable). Dispatchers consult
+// this list first, in reverse paint order (later = visually on top).
+export type AbsoluteHitEntry = { node: DOMElement; rect: Rectangle }
+let absoluteHitList: AbsoluteHitEntry[] = []
+
+/**
+ * The current frame's absolute-positioned nodes in paint order.
+ * @returns read-only list; reverse-iterate for topmost-first hit-testing.
+ */
+export function getAbsoluteHitList(): readonly AbsoluteHitEntry[] {
+  return absoluteHitList
+}
+
 /** Reset the scroll hint for the next frame and rotate the absolute-rect buffers. */
 export function resetScrollHint(): void {
   scrollHint = null
   absoluteRectsPrev = absoluteRectsCur
   absoluteRectsCur = []
+  absoluteHitList = []
 }
 
 /**
@@ -513,6 +532,18 @@ function renderNodeToOutput(
     // Check if we can skip this subtree (clean node with unchanged layout).
     // Blit cells from previous screen instead of re-rendering.
     const cached = nodeCache.get(node)
+    // The node's EFFECTIVE background = its own + the inherited one. When it
+    // changed since the last frame (hover on/off toggles a row's
+    // backgroundColor, a parent's bg swap changes every child's inherited
+    // value), prevScreen still holds the OLD background — a clean child
+    // blitting it would resurrect the stale color (stuck hover highlights:
+    // the row's fill is skipped once the bg is removed, its clean children
+    // then blit the previous bg'd cells, the frame equals prevScreen, the
+    // diff finds nothing, and the highlight never clears). Compare against
+    // the value recorded at the previous render and refuse the blit when it
+    // moved.
+    const effectiveBg = node.style.backgroundColor ?? inheritedBackgroundColor
+    const bgChanged = cached?.bg !== effectiveBg
     if (
       !node.dirty &&
       !skipSelfBlit &&
@@ -522,6 +553,7 @@ function renderNodeToOutput(
       cached.y === y &&
       cached.width === width &&
       cached.height === height &&
+      !bgChanged &&
       prevScreen
     ) {
       const fx = Math.floor(x)
@@ -531,6 +563,7 @@ function renderNodeToOutput(
       output.blit(prevScreen, fx, fy, fw, fh)
       if (node.style.position === 'absolute') {
         absoluteRectsCur.push(cached)
+        absoluteHitList.push({ node, rect: cached })
       }
       // Absolute descendants can paint outside this node's layout bounds
       // (e.g. a slash menu with position='absolute' bottom='100%' floats
@@ -771,7 +804,27 @@ function renderNodeToOutput(
         // within the viewport (equal to the scroll container's
         // paddingTop), and innerHeight already subtracts padding, so
         // including it double-counts padding and inflates maxScroll.
-        const scrollHeight = contentYoga?.getComputedHeight() ?? 0
+        let scrollHeight = contentYoga?.getComputedHeight() ?? 0
+        // Defensive extent floor: the wrapper's Yoga height can land ONE LINE
+        // short of its children's laid-out extent (the engine's flex-basis
+        // measure cache and the child's final subtree layout can disagree by
+        // a row — measured on resume of a long session: wrapper 286 while the
+        // last row's bottom sat at 287, stable across forced re-layouts). A
+        // short scrollHeight clamps maxScroll below the real bottom, so the
+        // sticky pin parks the viewport a line up and the tail line culls
+        // against the viewport edge — permanently invisible AND unreachable
+        // (no scroll position ever shows it; the user loses the newest
+        // message). The children's real extent is the authoritative floor.
+        // O(direct children) — the windowed list keeps this tiny, and the
+        // painter walks the same nodes right below.
+        if (content !== undefined) {
+          for (const child of content.childNodes) {
+            const childYoga = (child as DOMElement).yogaNode
+            if (childYoga === undefined) continue
+            const bottom = childYoga.getComputedTop() + childYoga.getComputedHeight()
+            if (bottom > scrollHeight) scrollHeight = bottom
+          }
+        }
         // Capture previous scroll bounds BEFORE overwriting — the at-bottom
         // follow check compares against last frame's max.
         const prevScrollHeight = node.scrollHeight ?? scrollHeight
@@ -1363,11 +1416,12 @@ function renderNodeToOutput(
           // backgroundColor and opaque both disable child blit: the fill
           // overwrites the entire interior each render, so any child whose
           // layout position shifted would blit stale cells from prevScreen
-          // on top of the fresh fill. Previously opaque kept blit enabled
-          // on the assumption that plain-space fill + unchanged children =
-          // valid composite, but children CAN reposition (ScrollBox remeasure
-          // on re-render → /permissions body blanked on Down arrow, #25436).
-          ownBackgroundColor || node.style.opaque ? undefined : prevScreen,
+          // on top of the fresh fill. bgChanged (effective background moved,
+          // e.g. a hover highlight removed) must disable child blit for the
+          // same reason: the old fill lives in prevScreen and the children's
+          // blits would resurrect it — the frame then equals prevScreen and
+          // the diff never clears the stale highlight.
+          ownBackgroundColor || node.style.opaque || bgChanged ? undefined : prevScreen,
           boxBackgroundColor,
         )
       }
@@ -1393,10 +1447,11 @@ function renderNodeToOutput(
     }
 
     // Cache layout bounds for dirty tracking
-    const rect = { x, y, width, height, top: yogaTop }
+    const rect = { x, y, width, height, top: yogaTop, bg: effectiveBg }
     nodeCache.set(node, rect)
     if (node.style.position === 'absolute') {
       absoluteRectsCur.push(rect)
+      absoluteHitList.push({ node, rect })
     }
     node.dirty = false
   }
@@ -1528,6 +1583,7 @@ function blitEscapingAbsoluteDescendants(
       const cached = nodeCache.get(elem)
       if (cached) {
         absoluteRectsCur.push(cached)
+        absoluteHitList.push({ node: elem, rect: cached })
         const cx = Math.floor(cached.x)
         const cy = Math.floor(cached.y)
         const cw = Math.floor(cached.width)

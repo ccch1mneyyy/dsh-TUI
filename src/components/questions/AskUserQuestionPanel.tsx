@@ -284,8 +284,43 @@ export function AskUserQuestionPanel({
   const headerTitle = ` ${t('question-header-progress', { position, total, remaining: remaining > 1 ? t('question-remaining-more', { n: remaining }) : '' })} `
 
   const cursorChar = customCursor < customText.length ? customText[customCursor] : ' '
+  /** Mouse: click the input row to focus it (same as Tab). */
+  const focusInputRow = (): void => {
+    if (hideCustomInput) return
+    setFocusIndex(options.length)
+    setError(null)
+  }
+  /**
+   * Mouse: click an option row. Multi-select toggles the checkmark (same as
+   * Space); single-select answers immediately with that option plus any
+   * typed text (same as focusing the row and pressing Enter) — one click =
+   * one answer, matching ApprovalPanel's click semantics.
+   */
+  const clickOption = (index: number): void => {
+    if (multiSelect) {
+      setChecked(previous => {
+        const next = new Set(previous)
+        if (next.has(index)) next.delete(index)
+        else next.add(index)
+        return next
+      })
+      return
+    }
+    const label = options[index]?.label
+    if (label === undefined) return
+    const text = customText.trim()
+    onAnswer({ selected: [label], ...(text !== '' ? { custom: text } : {}) })
+  }
+  const [hoverIndex, setHoverIndex] = React.useState(-1)
   const renderInputRow = (): React.ReactNode => (
-    <Box flexDirection="row" marginTop={inputFocused ? 1 : 0}>
+    <Box
+      flexDirection="row"
+      marginTop={inputFocused ? 1 : 0}
+      onClick={focusInputRow}
+      onMouseEnter={() => setHoverIndex(options.length)}
+      onMouseLeave={() => setHoverIndex(current => (current === options.length ? -1 : current))}
+      backgroundColor={hoverIndex === options.length && !inputFocused ? 'userMessageBackgroundHover' : undefined}
+    >
       <Box width={1} flexShrink={0}>
         <Text color={inputFocused ? 'claude' : undefined} bold={inputFocused}>
           {inputFocused ? POINTER : ' '}
@@ -339,6 +374,10 @@ export function AskUserQuestionPanel({
             key={`${absoluteIndex}:${option.label}`}
             flexDirection="row"
             marginTop={!windowedOptions && focused ? 1 : 0}
+            onClick={() => clickOption(absoluteIndex)}
+            onMouseEnter={() => setHoverIndex(absoluteIndex)}
+            onMouseLeave={() => setHoverIndex(current => (current === absoluteIndex ? -1 : current))}
+            backgroundColor={hoverIndex === absoluteIndex && !focused ? 'userMessageBackgroundHover' : undefined}
           >
             <Box width={1} flexShrink={0}>
               <Text color={focused ? 'claude' : undefined} bold={focused}>

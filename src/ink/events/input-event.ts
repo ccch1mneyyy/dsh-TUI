@@ -14,6 +14,8 @@ export type Key = {
   pageUp: boolean
   wheelUp: boolean
   wheelDown: boolean
+  wheelLeft: boolean
+  wheelRight: boolean
   home: boolean
   end: boolean
   return: boolean
@@ -26,6 +28,13 @@ export type Key = {
   delete: boolean
   meta: boolean
   super: boolean
+  /**
+   * Pointer column (0-indexed) when the key is a wheel event — the SGR/X10
+   * sequence carries the position. Undefined for non-wheel keys.
+   */
+  mouseCol?: number
+  /** Pointer row (0-indexed) when the key is a wheel event. See mouseCol. */
+  mouseRow?: number
 }
 
 function parseKey(keypress: ParsedKey): [Key, string] {
@@ -38,6 +47,8 @@ function parseKey(keypress: ParsedKey): [Key, string] {
     pageUp: keypress.name === 'pageup',
     wheelUp: keypress.name === 'wheelup',
     wheelDown: keypress.name === 'wheeldown',
+    wheelLeft: keypress.name === 'wheelleft',
+    wheelRight: keypress.name === 'wheelright',
     home: keypress.name === 'home',
     end: keypress.name === 'end',
     return: keypress.name === 'return',
@@ -57,6 +68,8 @@ function parseKey(keypress: ParsedKey): [Key, string] {
     // protocol CSI u sequences. Distinct from meta (Alt/Option) so
     // bindings like cmd+c can be expressed separately from opt+c.
     super: keypress.super,
+    mouseCol: keypress.mouseCol,
+    mouseRow: keypress.mouseRow,
   }
 
   let input = keypress.ctrl ? keypress.name : keypress.sequence

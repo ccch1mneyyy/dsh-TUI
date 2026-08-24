@@ -1,4 +1,4 @@
-import { Event } from './event.js'
+import { PointerEvent, type PointerEventInit } from './pointer-event.js'
 
 /**
  * Mouse click event. Fired on left-button release without drag, only when
@@ -6,21 +6,12 @@ import { Event } from './event.js'
  *
  * Bubbles from the deepest hit node up through parentNode. Call
  * stopImmediatePropagation() to prevent ancestors' onClick from firing.
+ *
+ * Extends PointerEvent: `shift`/`alt`/`ctrl` expose the modifiers the
+ * terminal reported on the release, and `localCol`/`localRow` are recomputed
+ * per handler so containers see coordinates relative to themselves.
  */
-export class ClickEvent extends Event {
-  /** 0-indexed screen column of the click */
-  readonly col: number
-  /** 0-indexed screen row of the click */
-  readonly row: number
-  /**
-   * Click column relative to the current handler's Box (col - box.x).
-   * Recomputed by dispatchClick before each handler fires, so an onClick
-   * on a container sees coords relative to that container, not to any
-   * child the click landed on.
-   */
-  localCol = 0
-  /** Click row relative to the current handler's Box (row - box.y). */
-  localRow = 0
+export class ClickEvent extends PointerEvent {
   /**
    * True if the clicked cell has no visible content (unwritten in the
    * screen buffer — both packed words are 0). Handlers can check this to
@@ -29,10 +20,21 @@ export class ClickEvent extends Event {
    */
   readonly cellIsBlank: boolean
 
-  constructor(col: number, row: number, cellIsBlank: boolean) {
-    super()
-    this.col = col
-    this.row = row
+  constructor(
+    col: number,
+    row: number,
+    cellIsBlank: boolean,
+    init?: PointerEventInit,
+  ) {
+    // A click is by definition a left-button release without drag. Normalize
+    // the low button bits to 0 (left) while preserving modifier bits
+    // (0x04 shift / 0x08 alt / 0x10 ctrl) from the release byte.
+    const button = init?.button ?? 0
+    super('click', col, row, {
+      ...init,
+      action: 'release',
+      button: button & ~0x03,
+    })
     this.cellIsBlank = cellIsBlank
   }
 }

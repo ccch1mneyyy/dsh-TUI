@@ -15,12 +15,18 @@ export function WorkspaceFlowPicker({
   focusIndex,
   busy = false,
   input = null,
+  onPick,
 }: {
   title: string
   choices: readonly TuiWorkspaceChoice[]
   focusIndex: number
   busy?: boolean
   input?: { value: string; cursor: number; placeholder?: string } | null
+  /** Mouse pick (fullscreen): reports the clicked row's absolute index —
+   *  Chat applies it with the same code path as the keyboard Enter. Rows
+   *  are inert while busy (keyboard is swallowed too) and while the inline
+   *  text input owns the interaction. */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   const start = Math.max(0, Math.min(focusIndex - Math.floor(WINDOW / 2), choices.length - WINDOW))
   const visible = choices.slice(start, start + WINDOW)
@@ -36,8 +42,14 @@ export function WorkspaceFlowPicker({
             isFocused={start + index === focusIndex}
             isSelected={false}
             description={choice.description}
+            disabled={busy}
             showScrollUp={index === 0 && start > 0}
             showScrollDown={index === visible.length - 1 && start + visible.length < choices.length}
+            onClick={
+              onPick !== undefined && !busy && input === null
+                ? () => onPick(start + index)
+                : undefined
+            }
           >
             {choice.badge ? `${choice.badge} · ` : ''}{choice.label}
           </ListItem>

@@ -13,6 +13,11 @@ export type CachedLayout = {
   width: number
   height: number
   top?: number
+  /** Effective background color (own ?? inherited) at the last render.
+   *  Renderer compares it per frame so a background change refuses the
+   *  prevScreen blit — children would otherwise resurrect the stale color
+   *  (stuck hover highlight). */
+  bg?: string
 }
 
 /** Layout bounds cached per rendered node, used for blitting and clearing. */

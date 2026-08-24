@@ -10,6 +10,7 @@ import { SyntaxText } from '../SyntaxText.js'
 import { formatDuration } from '../../cc/format.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 
 type Props = {
   tool: ToolRow
@@ -21,6 +22,12 @@ type Props = {
   isSelected?: boolean
   /** Row expanded on its own (persistent hover-grey background, CC). */
   isExpanded?: boolean
+  /**
+   * Mouse click (fullscreen): toggles the row's expansion — same action as
+   * clicking other transcript rows. Also makes the `(ctrl+o to expand)`
+   * hint actionable with the mouse.
+   */
+  onClick?(event: ClickEvent): void
   /**
    * Trajectory pointer, rendered as one more `⎿` line under a failed call.
    *
@@ -34,6 +41,13 @@ type Props = {
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Background treatment for the ordinary, unselected tool card surface. */
   toolBackground?: ToolBackground
+  /**
+   * Click-to-act (fullscreen): opens the file-action menu for the tool's
+   * file path. When provided, the path in the card header (and diff path
+   * rows) renders underlined and clickable; the click stops propagation so
+   * the row's own fold-toggle does not fire.
+   */
+  onOpenFile?: (path: string) => void
 }
 
 /** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
@@ -89,7 +103,13 @@ function languageFromPath(path: string | undefined): string | undefined {
 
 /** `hint` is the trajectory pointer: recessive, never competing with output. */
 type BodyTone = 'add' | 'del' | 'dim' | 'plain' | 'error' | 'hint' | 'path'
-type BodyLine = { readonly text: string; readonly tone: BodyTone }
+type BodyLine = {
+  readonly text: string
+  readonly tone: BodyTone
+  /** The row's collapse hint: dim at rest, steps to text while hovered so the
+   *  toggle reads before the click (the compaction row's pattern). */
+  readonly revealOnHover?: boolean
+}
 
 /** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
 const TEXT_BODY_MAX_LINES = 3
@@ -209,7 +229,7 @@ function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] 
   if (lines.length - max === 1) return lines
   return [
     ...lines.slice(0, max),
-    dim(`… +${lines.length - max} lines (ctrl+o to expand)`),
+    { ...dim(`… +${lines.length - max} lines (ctrl+o to expand)`), revealOnHover: true },
   ]
 }
 
@@ -230,13 +250,17 @@ function clipHeaderArgs(args: string): string {
   return `${args.slice(0, HEADER_ARGS_BUDGET)}…`
 }
 
-function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameColor }: {
+function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameColor, filePath, onOpenFile }: {
   name: string
   title: string | undefined
   isTerminal: boolean
   displayArgs: string
   argsLanguage?: 'json'
   nameColor: keyof Theme
+  /** Clickable file target: when set and present in the title, the path
+   *  segment renders underlined and clickable (opens the file menu). */
+  filePath?: string
+  onOpenFile?: (path: string) => void
 }): React.ReactNode {
   if (title === undefined) {
     return (
@@ -274,6 +298,32 @@ function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameC
       </Box>
     )
   }
+  // Clickable path: when the caller resolved a file path that appears in
+  // the title (`Edit /path (1 - 100)`), render that segment underlined and
+  // clickable. The click stops propagation so the row's fold toggle does
+  // not fire. indexOf keeps the split exact even for paths with regex
+  // metacharacters.
+  if (onOpenFile !== undefined && filePath !== undefined && filePath !== '' && trimmed.includes(filePath)) {
+    const at = trimmed.indexOf(filePath)
+    const before = trimmed.slice(0, at)
+    const after = trimmed.slice(at + filePath.length)
+    return (
+      <Box flexWrap="nowrap">
+        <Text bold color={nameColor} wrap="truncate-end">{before}</Text>
+        <Box
+          onClick={(event: ClickEvent) => {
+            event.stopImmediatePropagation()
+            onOpenFile(filePath)
+          }}
+        >
+          <Text underline wrap="truncate-end">{filePath}</Text>
+        </Box>
+        {after !== '' && (
+          <Text bold={false} color="text" wrap="truncate-end">{after}</Text>
+        )}
+      </Box>
+    )
+  }
   const space = trimmed.indexOf(' ')
   const head = space === -1 ? trimmed : trimmed.slice(0, space)
   const tail = space === -1 ? '' : trimmed.slice(space)
@@ -299,9 +349,11 @@ export function AssistantToolUseMessage({
   verbose,
   isSelected = false,
   isExpanded = false,
+  onClick,
   footnote,
   diffLayout = 'auto',
   toolBackground = 'none',
+  onOpenFile,
 }: Props): React.ReactNode {
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
@@ -367,6 +419,16 @@ export function AssistantToolUseMessage({
     : ordinaryToolBackground === 'strong'
       ? 'toolCardBackground'
       : undefined
+  // Hover affordance for the click-to-toggle row: the theme's tool-card blue
+  // face marks the call's content area while the pointer dwells (the
+  // toolBackground treatment steps up one level to the strong card face), the
+  // collapsed `(ctrl+o to expand)` hint steps from dim to text, the elapsed
+  // clock stops dimming, and a ▾/▴ discloses the row is a toggle.
+  // No layout change: the indicator is a fixed column on the header line, the
+  // body never moves.
+  const [hovered, setHovered] = React.useState(false)
+  const interactive = onClick !== undefined
+  const hoverTint = interactive && hovered && !isSelected
 
   return (
     <Box
@@ -375,9 +437,12 @@ export function AssistantToolUseMessage({
       justifyContent="space-between"
       marginTop={addMargin ? 1 : 0}
       width="100%"
+      onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies
       // to an ordinary card. Diff line tints stay - they are content, not chrome.
-      backgroundColor={isSelected ? 'messageActionsBackground' : ordinaryBackground}
+      backgroundColor={isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground}
+      onMouseEnter={interactive ? () => setHovered(true) : undefined}
+      onMouseLeave={interactive ? () => setHovered(false) : undefined}
     >
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="row" flexWrap="nowrap" minWidth={minWidth}>
@@ -387,10 +452,15 @@ export function AssistantToolUseMessage({
             isError={isError}
             toolName={tool.name}
           />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} />
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} />
           {!isRunning && (
             <Box flexWrap="nowrap">
-              <Text dimColor>{elapsedText}</Text>
+              <Text dimColor={!hovered}>{elapsedText}</Text>
+            </Box>
+          )}
+          {hovered && (
+            <Box flexShrink={0}>
+              <Text dimColor>{isExpanded ? '▴' : '▾'}</Text>
             </Box>
           )}
         </Box>
@@ -427,29 +497,42 @@ export function AssistantToolUseMessage({
                 </Text>
               </Box>
               <Box flexGrow={1}>
-                <Text
-                  color={
-                    line.tone === 'add'
-                      ? 'diffAddedWord'
-                      : line.tone === 'del'
-                        ? 'diffRemovedWord'
-                        : line.tone === 'error'
-                          ? 'error'
-                          : line.tone === 'hint'
-                            ? 'subtle'
-                            : line.tone === 'path'
-                              ? 'ide'
-                              : undefined
-                  }
-                  dimColor={line.tone === 'dim'}
-                  wrap="wrap"
-                >
-                  {line.tone === 'plain' && syntaxLanguage !== undefined ? (
-                    <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />
-                  ) : (
-                    line.text === '' ? ' ' : line.text
-                  )}
-                </Text>
+                {line.tone === 'path' && onOpenFile !== undefined ? (
+                  <Box
+                    onClick={(event: ClickEvent) => {
+                      // Stop propagation so the row's fold toggle does not
+                      // fire when clicking the path.
+                      event.stopImmediatePropagation()
+                      onOpenFile(line.text)
+                    }}
+                  >
+                    <Text color="ide" underline>{line.text}</Text>
+                  </Box>
+                ) : (
+                  <Text
+                    color={
+                      line.tone === 'add'
+                        ? 'diffAddedWord'
+                        : line.tone === 'del'
+                          ? 'diffRemovedWord'
+                          : line.tone === 'error'
+                            ? 'error'
+                            : line.tone === 'hint'
+                              ? 'subtle'
+                              : line.tone === 'path'
+                                ? 'ide'
+                                : undefined
+                    }
+                    dimColor={line.tone === 'dim' && !(line.revealOnHover === true && hovered)}
+                    wrap="wrap"
+                  >
+                    {line.tone === 'plain' && syntaxLanguage !== undefined ? (
+                      <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />
+                    ) : (
+                      line.text === '' ? ' ' : line.text
+                    )}
+                  </Text>
+                )}
               </Box>
             </Box>
           ))

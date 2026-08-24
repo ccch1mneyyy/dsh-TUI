@@ -26,10 +26,14 @@ export function PermissionsPicker({
   focusIndex,
   currentMode,
   cwd,
+  onPick,
 }: {
   focusIndex: number
   currentMode: string | undefined
   cwd: string
+  /** Mouse pick (fullscreen): clicked row's absolute index (Chat applies
+   *  the same code path as the keyboard Enter). */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   return (
     <Pane color="permission">
@@ -47,6 +51,7 @@ export function PermissionsPicker({
           ]}
           focusIndex={focusIndex}
           selectedValue={currentMode}
+          onPick={onPick ? index => onPick(index) : undefined}
         />
         <Text dimColor italic>
           <HintLine text={t('hint-confirm-exit')} />
