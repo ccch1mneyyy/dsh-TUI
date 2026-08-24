@@ -17,13 +17,18 @@
  * 运行：node --import tsx/esm scripts/verify-skill-direct-invocation.ts
  */
 import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const {
   LOCAL_COMMANDS,
   isLocalCommandName,
   parseCommandName,
 } = await import('../src/commands.js')
-const { registerPackagedSkills } = await import('../src/dsh-adapter/packaged-skills.js')
+const {
+  registerPackagedSkills,
+  resolveSkillsRoot,
+} = await import('../src/dsh-adapter/packaged-skills.js')
 
 let failures = 0
 function assert(cond: boolean, msg: string) {
@@ -76,14 +81,20 @@ console.log('\n[3] registerPackagedSkills 注册 7 个打包技能')
     JSON.stringify(names) === JSON.stringify([...PACKAGED_SKILL_NAMES].sort()),
     `注册名集合 === 打包技能目录（实际：${names.join(', ') || '∅'}）`,
   )
-  // 构建布局（lib/types/dsh-adapter/*.js）需要再向上一级：源码必须像
-  // packaged-presets.ts 一样给出两层候选路径，单路径在发布包内会落空。
-  const self = readFileSync('src/dsh-adapter/packaged-skills.ts', 'utf8').replace(/\s+/g, '')
-  assert(
-    self.includes("join(moduleDir,'..','..','skills')")
-    && self.includes("join(moduleDir,'..','..','..','skills')"),
-    'skillsRoot 采用双层候选路径（src 与 lib 布局都能命中）',
-  )
+  // 行为级验证：两种产物布局（src/ 与 lib/types/dsh-adapter/）下，
+  // resolveSkillsRoot 都必须解析到同一个包根 skills/，而不是靠检查
+  // 源码字符串来快照实现（换 join 实现细节不该让断言误报）。
+  const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  const srcModuleDir = join(pkgRoot, 'src', 'dsh-adapter')
+  const libModuleDir = join(pkgRoot, 'lib', 'types', 'dsh-adapter')
+  const expectedRoot = join(pkgRoot, 'skills')
+  for (const moduleDir of [srcModuleDir, libModuleDir]) {
+    const skillsRoot = resolveSkillsRoot(moduleDir)
+    assert(
+      skillsRoot === expectedRoot,
+      `resolveSkillsRoot('${moduleDir}') 命中包根 skills/（实际：${skillsRoot ?? '∅'}）`,
+    )
+  }
 }
 
 // --- 4. 旧提示词路径已移除 ---

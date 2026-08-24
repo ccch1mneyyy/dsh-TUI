@@ -263,7 +263,8 @@ dsh-tui
 | `/release-notes` | 发布说明 |
 | `/vuln-check` | 漏洞检查 |
 
-技能命令把激活提示发给模型，模型经 `skills/` 目录加载对应 `SKILL.md` 执行。
+技能命令由 host 注入对应 `SKILL.md` 的技能正文后执行，参数原样随行
+（详见 §4.8）；`/skills` 浏览技能目录。
 
 ### 3.6 占位命令
 

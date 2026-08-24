@@ -369,9 +369,9 @@ Additional forms:
   without restarting.
 - `/plan [off|message]` and `/goal ...` are handled by DSH command plugins and
   recorded as session events.
-- Skill commands submit activation prompts. The actual skill is loaded through
-  the DSH skill registry. Packaged `skills/` register at startup and may be
-  overridden by same-name project or user skills.
+- Skill commands are executed by the host injecting the corresponding
+  `SKILL.md` body, with arguments passed through unchanged. Packaged `skills/`
+  register at startup and may be overridden by same-name project or user skills.
 
 `/vim`, `/connect`, and `/hooks` are currently compatibility
 placeholders. When the DSH composition has no matching capability, each
