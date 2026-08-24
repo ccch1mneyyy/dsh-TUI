@@ -242,6 +242,13 @@ const dict = {
   'login-base-url': { zh: 'Base URL: {{url}}', en: 'Base URL: {{url}}' },
   'login-official-endpoint': { zh: '官方端点', en: 'official endpoint' },
   'login-logout-hint': { zh: '使用 /provider 管理 DSH 凭据；若来源为 env，请删除对应环境变量并重启 dsh-tui', en: 'Manage DSH credentials with /provider; for env sources, remove the corresponding environment variable and restart dsh-tui' },
+  // /login 的 OAuth 账号状态段（dsh-auth 类插件挂载时追加）
+  'login-oauth-heading': { zh: '订阅账号（OAuth）:', en: 'Subscriptions (OAuth):' },
+  'login-oauth-row': { zh: '  {{provider}} — {{state}}', en: '  {{provider}} — {{state}}' },
+  'login-oauth-in': { zh: '已登录 · 令牌到期 {{time}}', en: 'signed in · token expires {{time}}' },
+  'login-oauth-expired': { zh: '已登录但令牌已过期，重新登录可恢复', en: 'signed in but the token expired — sign in again to restore' },
+  'login-oauth-signed-out': { zh: '未登录', en: 'not signed in' },
+  'login-oauth-hint': { zh: '  登录/登出：/provider 订阅账号登录，或 /auth login <provider>', en: '  Sign in/out: /provider subscription sign-in, or /auth login <provider>' },
   'permission-policy-hint': { zh: 'DSH 权限策略由 fs-policy / bash-sandbox 配置决定（当前 leaf：workspace 内读写、写入需已读文件）。', en: 'DSH permission policy is set by fs-policy / bash-sandbox config (current leaf: read/write in workspace, writes need a prior read).' },
   'permission-approval-hint': { zh: '审批通道已挂载：命令申请权限提升（sandbox_permissions）时弹出审批条，Yes 放行一次、No / Esc 拒绝。', en: 'The approval channel is mounted: sandbox escalations (sandbox_permissions) raise an approval bar — Yes allows once, No / Esc rejects.' },
   'permission-root-hint': { zh: '当前文件系统策略以工作目录为根：{{cwd}}', en: 'Current filesystem policy is rooted at the working directory: {{cwd}}' },
@@ -563,6 +570,10 @@ const dict = {
 
   // ── components/ModelPicker.tsx / ThemePicker.tsx / ActivityPicker.tsx / EffortSlider.tsx ──
   'picker-title-model': { zh: '模型', en: 'Model' },
+  'picker-group-recent': { zh: '最近使用', en: 'Recently used' },
+  'picker-group-count': { zh: '{{count}} 个模型', en: '{{count}} models' },
+  'hint-model-groups': { zh: '**Enter** 查看模型 · Esc 退出', en: '**Enter** to view models · Esc to exit' },
+  'hint-model-back': { zh: '**Enter** 切换模型 · Esc/⌫ 返回上级', en: '**Enter** to switch · Esc/⌫ to go back' },
   'picker-title-skills': { zh: '技能', en: 'Skills' },
   'skills-loading': { zh: '正在加载技能', en: 'Loading skills' },
   'skills-loading-subtitle': { zh: '正在查询技能注册表…', en: 'Querying the skill registry…' },
@@ -785,6 +796,25 @@ const dict = {
   'provider-q-switch': { zh: '立即切换到新 provider？', en: 'Switch to the new provider now?' },
   'provider-opt-switch-now': { zh: '切换到 {{model}}', en: 'Switch to {{model}}' },
   'provider-opt-switch-keep': { zh: '保持当前模型', en: 'Keep the current model' },
+  // /provider OAuth 分支（dsh-auth 等插件挂载 ctx.dshAuth 时出现）
+  'provider-opt-oauth': { zh: '订阅账号登录（OAuth）', en: 'Subscription sign-in (OAuth)' },
+  'provider-opt-oauth-desc': { zh: '用 ChatGPT / Claude / Grok 等官方订阅账号登录，无需 API key', en: 'Sign in with an official subscription (ChatGPT / Claude / Grok) — no API key' },
+  'provider-q-oauth': { zh: '登录哪个订阅账号？', en: 'Sign in to which subscription?' },
+  'provider-oauth-state-in': { zh: '已登录 · 令牌到期 {{time}}', en: 'Signed in · token expires {{time}}' },
+  'provider-oauth-state-expired': { zh: '已登录但令牌已过期，重新登录即可恢复', en: 'Signed in but the token expired — sign in again to restore' },
+  'provider-q-oauth-signed': { zh: '{{provider}} 已登录，接下来？', en: '{{provider}} is signed in — what next?' },
+  'provider-opt-oauth-relogin': { zh: '重新登录', en: 'Sign in again' },
+  'provider-opt-oauth-relogin-desc': { zh: '更换账号或刷新已有凭据', en: 'Switch accounts or refresh the stored credential' },
+  'provider-opt-oauth-logout': { zh: '登出', en: 'Sign out' },
+  'provider-opt-oauth-logout-desc': { zh: '删除本地保存的 OAuth 凭据', en: 'Remove the locally stored OAuth credential' },
+  'provider-oauth-none': { zh: '没有可 OAuth 登录的 provider（检查 dsh-auth 插件是否挂载）', en: 'No OAuth-capable providers (check whether the dsh-auth plugin is mounted)' },
+  'provider-oauth-login-ok': { zh: '{{provider}} 登录成功', en: 'Signed in to {{provider}}' },
+  'provider-oauth-login-failed': { zh: 'OAuth 登录失败 · {{{err}}}', en: 'OAuth sign-in failed · {{{err}}}' },
+  'provider-oauth-logout-ok': { zh: '{{provider}} 已登出', en: 'Signed out of {{provider}}' },
+  'provider-line-oauth-provider': { zh: '路由：{{provider}}', en: 'Route: {{provider}}' },
+  'provider-line-oauth-flow': { zh: '登录方式：{{flow}}', en: 'Sign-in: {{flow}}' },
+  'provider-line-oauth-expires': { zh: '令牌到期：{{time}}', en: 'Token expires: {{time}}' },
+  'provider-line-oauth-out': { zh: '已登出，本地 OAuth 凭据已删除', en: 'Signed out — the stored OAuth credential was removed' },
 
   // ── commands.ts — slash-command descriptions ─────────────────────────
   // zh-only on purpose: the English text stays in `LOCAL_COMMANDS` (and in

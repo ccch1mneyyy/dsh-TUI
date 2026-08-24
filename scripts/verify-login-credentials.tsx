@@ -110,6 +110,9 @@ function makeChannel(status: unknown) {
       return status
     },
     listModels: () => Promise.resolve([]),
+    // No dsh-auth-style plugin in this harness: /login renders exactly its
+    // pre-plugin lines (the OAuth account section stays absent).
+    oauthProviderStatuses: async () => undefined,
     commandCompletions(input: string) {
       const prefix = input.replace(/^\//u, '').trim().toLowerCase()
       return this.commandList

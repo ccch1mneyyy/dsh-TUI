@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandExecution, CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
-import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo } from '@deepseek-ai/dsh-llm'
+import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
   isTokenDelta,
@@ -41,7 +41,7 @@ import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../util
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
-import type { ProviderSetupHost } from './providerWizard.js'
+import type { OAuthProviderStatus, OAuthSetupHost, ProviderSetupHost } from './providerWizard.js'
 import { readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
@@ -734,6 +734,8 @@ export interface Channel {
   setActivityFrames(name: string): boolean
   /** Advertised models across every registered provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Provider display identities for the same routes (picker group labels). */
+  listProviders(): Promise<readonly LlmProviderInfo[]>
   /** The live agent's full skill catalog for `/skills` (issue #204) — name,
    *  description, invocation flags and source bucket. Undefined on a failed
    *  or incomplete registry read (the picker shows an error); empty only
@@ -745,6 +747,9 @@ export interface Channel {
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */
   providerSetup(): ProviderSetupHost | undefined
+  /** OAuth sign-in states from a mounted dsh-auth-style plugin; undefined
+   *  without the plugin, so `/login` renders exactly what it did before. */
+  oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined>
   /**
    * Runtime capabilities for the `/settings` screen, over the settings /
    * credentials seams; undefined when the composition lacks the settings
@@ -1038,12 +1043,16 @@ export interface ChannelState {
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Provider display identities (see the public Channel type). */
+  listProviders(): Promise<readonly LlmProviderInfo[]>
   /** The live agent's skill catalog for `/skills` (see the public Channel type). */
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login` (see the public Channel type). */
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
   /** `/provider` wizard capabilities (see the public Channel type). */
   providerSetup(): ProviderSetupHost | undefined
+  /** OAuth sign-in states (see the public Channel type). */
+  oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined>
   /** `/settings` screen capabilities (see the public Channel type). */
   settingsHost(): SettingsHost | undefined
   /** Plugin-declared settings sections (see the public Channel type). */
@@ -3688,6 +3697,14 @@ export function createChannel(
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
     },
+    listProviders() {
+      // Group labels for the two-level /model picker: the registry's own
+      // display names, detached so a registry swap cannot leak through.
+      const llm = ctx.get('llm') as
+        | { listProviders(): readonly { id: string; name: string }[] }
+        | undefined
+      return Promise.resolve(llm === undefined ? [] : llm.listProviders().map(info => ({ ...info })))
+    },
     async listSkills() {
       // snapshot() over list(): only a COMPLETE observation is authoritative
       // (same contract as the skill-command merge above) — a partial catalog
@@ -3832,7 +3849,12 @@ export function createChannel(
       }
       const revision = (): number | undefined =>
         settings.describe().find(descriptor => descriptor.ns === 'llm-pi-ai')?.revision
+      // The OAuth sign-in surface (dsh-auth-style plugin), structural and
+      // optional: mounting the plugin lights up the wizard's OAuth branch,
+      // and without it the wizard is exactly what it was before.
+      const oauthApi = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
       return {
+        ...(oauthApi === undefined ? {} : { oauth: oauthApi }),
         listCatalogProviders() {
           // declared === true marks routes the adapter knows only because a
           // stored profile names them (user-added); the rest are activatable
@@ -3877,6 +3899,12 @@ export function createChannel(
           }
         },
       }
+    },
+    async oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined> {
+      // Same optional seam the wizard's OAuth branch reads: absent plugin →
+      // undefined, and `/login` renders exactly its pre-plugin lines.
+      const api = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
+      return api === undefined ? undefined : api.providers()
     },
     async sideQuestion(
       question: string,

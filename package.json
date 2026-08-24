@@ -32,6 +32,10 @@
       "types": "./lib/types/working-activity.d.ts",
       "import": "./lib/types/working-activity.js"
     },
+    "./oauth": {
+      "types": "./lib/types/oauth.d.ts",
+      "import": "./lib/types/oauth.js"
+    },
     "./workspaces": {
       "types": "./lib/types/workspaces.d.ts",
       "import": "./lib/types/workspaces.js"
@@ -84,7 +88,8 @@
   "scripts": {
     "clean": "node scripts/clean-lib.mjs",
     "build:dsh-std": "pnpm --dir vendor/dsh-std install --frozen-lockfile --ignore-scripts && pnpm --dir vendor/dsh-std --filter @dsh-std/core --filter @dsh-std/manifest --filter @dsh-std/connection --filter @dsh-std/presentation --filter @dsh-std/command --filter @dsh-std/storage --filter @dsh-std/messages -r build",
-    "compile": "npm run build:dsh-std && npm run clean && tsc -p tsconfig.json",
+    "build:dsh-auth": "pnpm --dir dsh-auth install --frozen-lockfile --ignore-scripts && pnpm --dir dsh-auth run build",
+    "compile": "npm run build:dsh-std && npm run build:dsh-auth && npm run clean && tsc -p tsconfig.json",
     "prepare": "node scripts/prepare-guard.mjs && npm run compile",
     "build": "npm run compile && npm run verify:build",
     "dev": "node scripts/dev-test.mjs",
@@ -136,6 +141,7 @@
     "@deepseek-ai/dsh-cordis-host-runner": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6 || ^0.1.1-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-persona": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.6 || ^0.1.1-rc.1",
@@ -170,7 +176,9 @@
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^3.0.0 || ^4.0.0",
     "diff": "^8.0.4",
+    "dsh-auth": "link:./dsh-auth",
     "dsh-working-activity": "^0.3.3",
+    "@earendil-works/pi-ai": "^0.82.1",
     "emoji-regex": "^10.0.0",
     "figures": "^6.1.0",
     "get-east-asian-width": "^1.0.0",
@@ -215,6 +223,7 @@
     "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6 || ^0.1.1-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-persona": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-sandbox": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-sandbox-policy": "^0.1.0-rc.6 || ^0.1.1-rc.1",
