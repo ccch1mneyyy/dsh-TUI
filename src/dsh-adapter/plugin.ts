@@ -25,7 +25,7 @@ import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
+import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
@@ -69,7 +69,65 @@ import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMult
 let lastBootedFullscreen: boolean | undefined
 
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  // /restart handoff diagnosis: the replacement process is marked by env and
+  // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
+  // silent). First line lands before anything in this function can throw.
+  if (process.env.DSH_TUI_RESTART_CHILD === '1') {
+    logRestartEvent('boot: plugin apply', {
+      stdoutTty: process.stdout.isTTY === true,
+      stdinTty: process.stdin.isTTY === true,
+      stderrTty: process.stderr.isTTY === true,
+    })
+    // Field evidence (2026-08-24): the restarted TUI mounts but takes no
+    // input, and the terminal's DA reply surfaced on PS's prompt line in an
+    // earlier attempt — meaning NO process was reading console input. Probe
+    // whether THIS process's stdin pump ever sees bytes: wrap read()
+    // transparently (delegates; purely observational) and sample the pump
+    // state, so the log distinguishes "bytes never arrive" (console-level
+    // theft/mode) from "bytes arrive but the UI ignores them".
+    const probedStdin = process.stdin as NodeJS.ReadStream & { isRaw?: boolean }
+    const originalRead = probedStdin.read.bind(probedStdin)
+    let loggedChunks = 0
+    probedStdin.read = ((...args: Parameters<typeof originalRead>) => {
+      const chunk = originalRead(...args)
+      if (chunk !== null && chunk !== '' && loggedChunks < 12) {
+        loggedChunks += 1
+        const text = String(chunk)
+        logRestartEvent('boot: stdin chunk arrived', {
+          bytes: text.length,
+          preview: text.slice(0, 24).replace(/[^\x20-\x7e]/g, '.'),
+        })
+      }
+      return chunk
+    }) as typeof originalRead
+    const sampleStdinState = (label: string): void => {
+      logRestartEvent(`boot: ${label}`, {
+        isRaw: probedStdin.isRaw === true,
+        readableListeners: probedStdin.listenerCount('readable'),
+        dataListeners: probedStdin.listenerCount('data'),
+        paused: probedStdin.isPaused,
+        buffered: probedStdin.readableLength,
+        chunksSeen: loggedChunks,
+      })
+    }
+    sampleStdinState('stdin state at plugin apply')
+    let pendingSamples = 0
+    const sampleAt = (delayMs: number, label: string): void => {
+      pendingSamples += 1
+      const timer = setTimeout(() => {
+        pendingSamples -= 1
+        sampleStdinState(label)
+      }, delayMs)
+      timer.unref?.()
+    }
+    sampleAt(2000, 'stdin state +2s')
+    sampleAt(5000, 'stdin state +5s')
+    sampleAt(12000, 'stdin state +12s')
+  }
   if (!process.stdout.isTTY) {
+    if (process.env.DSH_TUI_RESTART_CHILD === '1') {
+      logRestartEvent('boot: TTY gate failed - stdout is not a TTY')
+    }
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
   }
 
@@ -395,6 +453,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // only explicit values so the target session's own record wins.
     configuredModel: config.model,
     configuredProvider: config.provider,
+    // Raw cordis.yml `lang` / `activityFrames`: /reload must not override a
+    // static deployment choice with the persisted preference.
+    configuredLang: config.lang,
+    configuredActivityFrames: config.activityFrames,
     effort: config.effort,
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
@@ -883,6 +945,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   let exited = false
   let updateRequested = false
   let updateTargetVersion: string | undefined
+  // `/restart` flag: same exit funnel as `/update` minus the pnpm step —
+  // write the resume target, restore the terminal, respawn the process with
+  // the original argv, and let the fresh boot attach the same session.
+  let restartRequested = false
   // The profile this process was booted with (`dsh --profile <name>`); dsh
   // exposes it nowhere else, and /update must update the installation the
   // user is actually running, not a hard-coded one.
@@ -923,6 +989,31 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           'Updating @deepseek-harness-tui/dsh-tui and restarting…',
           undefined,
           () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
+        )
+        return
+      }
+      // `/restart`: same handoff as the update path, no installation step.
+      // The resume target is written unconditionally — the user asked to
+      // restart THIS session, blank or not (mirrors the update contract).
+      if (restartRequested) {
+        beginRestartAttempt(channel.agentId)
+        logRestartEvent('funnel: /restart branch entered')
+        try {
+          writeResumeTarget(channel.agentId)
+          logRestartEvent('funnel: resume target written')
+        } catch (error) {
+          // Resume persistence is best effort and must never block a restart.
+          logRestartEvent('funnel: resume target write failed', {
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
+        void finishExit(
+          ctx,
+          instance,
+          bootedFullscreen,
+          t('restart-starting'),
+          undefined,
+          () => runRestart(ctx, profile, channel.agentId),
         )
         return
       }
@@ -981,6 +1072,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // the tree is already wrapped below, so they must not nest.
     fullscreen: bootedFullscreen,
     onExit: () => handleExit(),
+    // `/restart`: respawn this process and resume the session, no update.
+    onRestart: () => {
+      if (exited || restartRequested) return
+      restartRequested = true
+      logRestartEvent('command: /restart accepted')
+      channel.notify(t('restart-starting'))
+      handleExit()
+    },
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
     // unavailable notice instead.
@@ -1047,6 +1146,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const isRecompose = lastBootedFullscreen !== undefined
   lastBootedFullscreen = bootedFullscreen
   logMouseDebug('apply mount', { bootedFullscreen, isRecompose })
+  // /restart handoff diagnosis: the replacement got all the way to a mounted
+  // UI, so any later death is post-boot (and its stderr keeps flowing to the
+  // parent only within the survival window — this line is the durable mark).
+  if (process.env.DSH_TUI_RESTART_CHILD === '1') {
+    logRestartEvent('boot: UI mounted', { fullscreen: bootedFullscreen, isRecompose })
+  }
 
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
@@ -1372,6 +1477,42 @@ function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
   })
 }
 
+/**
+ * Restart the TUI in place and resume the same session — the `/restart`
+ * tail of `/reload`: the soft reload cannot re-read boot-time-only state
+ * (cordis.yml root config, frozen fullscreen layout, newly built code), so
+ * /restart respawns the process with the original argv through the same
+ * terminal handoff the /update path uses, minus the installation step.
+ * The resume contract is dual-written (env + resume.txt) before this runs.
+ */
+function runRestart(ctx: Context, profile: string | undefined, sessionId: string): void {
+  logRestartEvent('runRestart: entered, disposing cordis root')
+  disposeRootAndThen(ctx, () => {
+    logRestartEvent('runRestart: root disposed, starting restartTui')
+    void restartTui(sessionId).then(
+      restartCode => {
+        logRestartEvent('runRestart: restartTui resolved', { restartCode })
+        if (restartCode !== 0) {
+          writeHandoffNotice(
+            `\ndsh-tui restart failed to spawn (exit ${restartCode}). Your session is preserved — resume with:\n` +
+              `${resumeCommand(profile, sessionId)}\n\n`,
+          )
+        }
+        process.exit(restartCode)
+      },
+      restartError => {
+        const message = restartError instanceof Error ? restartError.message : String(restartError)
+        logRestartEvent('runRestart: restartTui rejected', { message })
+        writeHandoffNotice(
+          `\ndsh-tui restart failed: ${message}. Your session is preserved — resume with:\n` +
+            `${resumeCommand(profile, sessionId)}\n\n`,
+        )
+        process.exit(1)
+      },
+    )
+  })
+}
+
 function runUpdate(
   ctx: Context,
   profile: string | undefined,
@@ -1435,7 +1576,12 @@ function resumeCommand(profile: string | undefined, sessionId: string): string {
  * reporting failure on a clean exit would mislead wrapper scripts.
  */
 function disposeRootAndThen(ctx: Context, done: () => void, fallbackCode = 1): void {
-  const timer = setTimeout(() => process.exit(fallbackCode), 5000)
+  const timer = setTimeout(() => {
+    // Diagnosis for a stalled disposal: without this line the fallback exit
+    // is indistinguishable from a successful handoff in the field.
+    logRestartEvent('dispose: timeout, taking fallback exit', { fallbackCode })
+    process.exit(fallbackCode)
+  }, 5000)
   timer.unref()
   void withHostRootCapability(() => ctx.root.fiber.dispose()).then(
     () => {

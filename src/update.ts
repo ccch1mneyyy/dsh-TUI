@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process'
-import { readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gte, gt, lt, valid } from 'semver'
 import { shellQuote } from './utils/shellQuote.js'
+import { DATA_DIR } from './utils/paths.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -15,6 +16,72 @@ const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
 const UPDATE_CHECK_TIMEOUT_MS = 4000
 /** env marker set on the /update restart; the new process verifies it at boot. */
 const UPDATED_FROM_ENV = 'DSH_TUI_UPDATED_FROM'
+/**
+ * env marker set on the /restart replacement: its boot logs to restart.log
+ * (ordinary launches stay silent, so the file is restart-only evidence).
+ */
+const RESTART_CHILD_ENV = 'DSH_TUI_RESTART_CHILD'
+
+/**
+ * Field-diagnosis log for the /restart terminal handoff, appended by BOTH
+ * processes: the exiting TUI logs the funnel path, the spawned replacement
+ * logs its boot progress, and every line carries pid + timestamp — so a
+ * handoff that dies at any stage (loader entry, TTY gate, session resume,
+ * even after the parent's survival window) leaves breadcrumbs on disk even
+ * when nothing reaches the already-confused terminal. Diagnosis only: every
+ * write is best effort and must never break the handoff itself.
+ */
+const RESTART_LOG = join(DATA_DIR, 'restart.log')
+/** Cap so a long debugging streak cannot grow the log unbounded. */
+const RESTART_LOG_MAX_BYTES = 256 * 1024
+
+function writeRestartLine(line: string): void {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true })
+    appendFileSync(RESTART_LOG, `${new Date().toISOString()} pid=${process.pid} ${line}\n`)
+  } catch {
+    // Diagnosis only.
+  }
+}
+
+/**
+ * Append a /restart handoff event to ~/.dsh-tui/restart.log.
+ * @param event - Short stable event name.
+ * @param data - Small JSON-safe detail (never credentials or session text).
+ */
+export function logRestartEvent(event: string, data?: Record<string, unknown>): void {
+  writeRestartLine(`${event}${data === undefined ? '' : ` ${JSON.stringify(data)}`}`)
+}
+
+/** Start a fresh, clearly delimited /restart attempt block in the log. */
+export function beginRestartAttempt(sessionId: string): void {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true })
+    let size = 0
+    try {
+      size = statSync(RESTART_LOG).size
+    } catch {
+      size = 0
+    }
+    if (size > RESTART_LOG_MAX_BYTES) writeFileSync(RESTART_LOG, '')
+  } catch {
+    // Diagnosis only.
+  }
+  writeRestartLine(`--- /restart attempt session=${sessionId} ---`)
+}
+
+/**
+ * Write a handoff notice to stderr synchronously: process.exit() right after
+ * an async stream write skips the flush, and a vanished diagnosis is
+ * indistinguishable from a silent failure.
+ */
+export function writeHandoffNotice(text: string): void {
+  try {
+    writeFileSync(2, text)
+  } catch {
+    process.stderr.write(text)
+  }
+}
 
 export interface TuiUpdateInfo {
   current: string
@@ -428,4 +495,163 @@ export async function updateTuiAndRestart(
     },
   })
   return { updateCode, restartCode }
+}
+
+/**
+ * Restart the running TUI in place and resume the active session — the
+ * `/update` restart path minus the pnpm step, for `/restart`. Spawns the
+ * same node process with the original argv and the dual-written resume
+ * contract, so a fresh process re-boots the same profile and attaches the
+ * same session. No installation is touched, so it works on any launch
+ * (profile, source checkout, `--config` overlay).
+ *
+ * The TUI must already be unmounted before this is called (same terminal
+ * handoff contract as `updateTuiAndRestart`): the caller runs this from the
+ * exit funnel's done callback, after finishExit detached the terminal and
+ * the readable stdin pump.
+ *
+ * This waits for the replacement's natural exit, exactly like the proven
+ * `/update` restart: the outer command interpreter that ran `dsh-tui`
+ * reclaims the console the moment the launch chain (cmd → wrapper → this
+ * process) unwinds, and an orphaned replacement still attached to the
+ * console then fights the interpreter's own prompt and line reader for
+ * every keypress (field evidence 2026-08-24: healthy child mounted the
+ * UI, the old process exited on a 4s survival timer, the interpreter
+ * printed its prompt over the TUI and the DA response bytes landed on
+ * the prompt line). Waiting is safe because finishExit already paused
+ * and unref'd this process's stdin — the child is the console's only
+ * key reader (issues #284/#307).
+ *
+ * The 4s survival window remains a DIAGNOSIS marker only: a replacement
+ * that dies within it never painted the TUI, and its captured stderr is
+ * reported synchronously (a raw inherit write can vanish mid-handoff). A
+ * late exit is quiet — by then the user owned a working TUI session.
+ *
+ * @param sessionId - Session to resume in the replacement process.
+ * @returns 0 when the replacement ran and exited cleanly, 127 when it
+ *   failed to start, otherwise the child's own exit code.
+ */
+export async function restartTui(sessionId: string): Promise<number> {
+  const argv = [...process.execArgv, ...process.argv.slice(1)]
+  logRestartEvent('restart: spawning replacement', {
+    node: process.execPath,
+    argv,
+    cwd: process.cwd(),
+    stdinTty: process.stdin.isTTY === true,
+    stdoutTty: process.stdout.isTTY === true,
+    stderrTty: process.stderr.isTTY === true,
+    nodeOptions: process.env.NODE_OPTIONS ?? null,
+    dshHome: process.env.DSH_HOME ?? null,
+  })
+  const startedAt = Date.now()
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, argv, {
+      env: {
+        ...process.env,
+        // Dual-write the resume contract (issue #120): the cordis layer of a
+        // still-old TUI build reads only DSH_CC_RESUME_SESSION.
+        DSH_TUI_RESUME_SESSION: sessionId,
+        DSH_CC_RESUME_SESSION: sessionId,
+        // Marks the replacement so its own boot logs to restart.log without
+        // noisy logging on every ordinary launch.
+        [RESTART_CHILD_ENV]: '1',
+      },
+      // stdin/stdout stay inherited so the replacement owns the console the
+      // moment it boots; stderr is captured so a boot failure is reportable
+      // through THIS process (the terminal may already be mid-handoff when
+      // the child dies, and a raw inherit write can vanish).
+      stdio: ['inherit', 'inherit', 'pipe'],
+    })
+    logRestartEvent('restart: replacement spawned', { childPid: child.pid })
+    // Handoff watchdog (field evidence 2026-08-24: restarted TUI mounts but
+    // takes no input). Two jobs, both diagnosis-grade:
+    // 1. SAMPLE this process's stdin state every second — if anything
+    //    re-attaches a reader after the funnel's detachStdinForHandoff, the
+    //    sample (taken before the re-assert below) shows it in the log.
+    // 2. RE-ASSERT the detach and finally destroy the stream: this process
+    //    must never read the shared console again — every keypress belongs
+    //    to the replacement, and a resumed pump here is exactly the
+    //    "restarted TUI sees dropped or swallowed input" failure (#284/#307).
+    let watchdogTicks = 0
+    const watchdog = setInterval(() => {
+      watchdogTicks += 1
+      const stdin = process.stdin as NodeJS.ReadStream & { isRaw?: boolean }
+      logRestartEvent('parent: stdin watchdog', {
+        tick: watchdogTicks,
+        readableListeners: stdin.listenerCount('readable'),
+        dataListeners: stdin.listenerCount('data'),
+        paused: stdin.isPaused,
+        raw: stdin.isRaw === true,
+        buffered: stdin.readableLength,
+      })
+      try {
+        stdin.removeAllListeners('readable')
+        stdin.removeAllListeners('data')
+        stdin.pause()
+      } catch {
+        // Diagnosis/mitigation only.
+      }
+      if (watchdogTicks === 15) {
+        clearInterval(watchdog)
+        try {
+          // Terminal safeguard: a destroyed stream can never be resumed by
+          // any late re-attachment. The child holds its own inherited
+          // handle, so closing ours does not affect it.
+          process.stdin.destroy()
+          logRestartEvent('parent: stdin destroyed after watchdog')
+        } catch {
+          // Best effort.
+        }
+      }
+    }, 1000)
+    watchdog.unref()
+    let childStderr = ''
+    let loggedStderrBytes = 0
+    child.stderr?.on('data', (chunk: Buffer) => {
+      childStderr += chunk.toString('utf8')
+      // Mirror chunks to the log capped: the full text still reaches the
+      // terminal report below, and unbounded output must not grow the file.
+      if (loggedStderrBytes < 4096) {
+        loggedStderrBytes += chunk.length
+        logRestartEvent('restart: replacement stderr', { text: chunk.toString('utf8').slice(0, 2048) })
+      }
+    })
+    // Diagnosis marker only — never resolves: after the window the child owns
+    // the terminal, and this process must keep the launch chain open until
+    // the replacement exits (see the header comment).
+    const timer = setTimeout(() => {
+      logRestartEvent('restart: survival window passed, following the replacement until it exits')
+    }, 4000)
+    timer.unref()
+    child.once('error', error => {
+      clearTimeout(timer)
+      logRestartEvent('restart: spawn error', { message: error.message })
+      writeHandoffNotice(`dsh-tui: failed to spawn the restart: ${error.message}\n`)
+      resolve(127)
+    })
+    child.once('close', (code, signal) => {
+      clearTimeout(timer)
+      const elapsedMs = Date.now() - startedAt
+      logRestartEvent('restart: replacement exited', {
+        code: code ?? null,
+        signal: signal ?? null,
+        elapsedMs,
+      })
+      if (elapsedMs < 4000) {
+        // Fast death: the TUI never came up. Synchronous stderr write —
+        // process.exit() right after an async stream write skips the flush,
+        // and a vanished diagnosis is indistinguishable from silent failure.
+        const suffix = childStderr.trim() === '' ? '' : `\n${childStderr.trimEnd()}`
+        writeHandoffNotice(
+          `dsh-tui: restart child exited during the handoff (code ${code ?? 'null'}` +
+            `${signal === undefined || signal === null ? '' : `, signal ${signal}`}) — the TUI did not come up.` +
+            `${suffix}\nYour session is preserved; resume with the launcher or retry /restart.\n`,
+        )
+      } else if (code !== 0 && code !== null) {
+        // Late nonzero exit: the session ended abnormally, say so briefly.
+        writeHandoffNotice(`\ndsh-tui: the restarted session exited with code ${code}.\n`)
+      }
+      resolve(code ?? 1)
+    })
+  })
 }

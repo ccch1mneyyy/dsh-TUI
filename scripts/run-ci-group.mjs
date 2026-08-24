@@ -112,6 +112,10 @@ const GROUPS = {
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
+// /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
+// 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
+// 规则（provider-only pin 不挡偏好）、两命令的注册与解析。
+    ["verify-reload", ['node', '--import', 'tsx/esm', 'scripts/verify-reload.ts']],
 // 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
 // 版本不一致提示、双语消息、shellQuote 转义规则。
     ["verify-launcher", ['node', 'scripts/verify-launcher.mjs']],
@@ -124,6 +128,10 @@ const GROUPS = {
 // Ctrl+V UI 端到端回归（stub wl-paste）：帮助面板在读取前关闭、
 // 剪贴板文本落入输入框、busy 闩锁释放后第二次粘贴仍生效。
     ["repro-clipboard", ['node', '--import', 'tsx/esm', 'scripts/repro-clipboard.tsx']],
+// 粘贴折叠回归：大段粘贴折叠成一行预览 chip（统计+首行预览，非黑盒）、
+// 悬停窥视（窗口钉头部）/移开重折叠、点击 chip 固定展开、点击 ▾ 前缀
+// 再折叠、Esc 展开不清空、Enter/输入全文提交——鼠标走真实 SGR 事件。
+    ["repro-paste-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-paste-fold.tsx']],
 // 图片附件回归：剪贴板位图占位符与图片文件 @ 引用进附件库（#152）。
     ["verify-clipboard-image", ['node', '--import', 'tsx/esm', 'scripts/verify-clipboard-image.ts']],
 // 换名迁移回归（issue #120）：~/.dsh-cc → ~/.dsh-tui 首启复制迁移、
@@ -326,6 +334,10 @@ const GROUPS = {
 // 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
 // onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
     ["verify-plugin-scene-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-scene-boundary.tsx']],
+// 终端点击目标回归（点击链接开浏览器 / 文件路径弹菜单）：路径判定、
+// dsh-file: URL 编解码、相对路径按 cwd 解析、file:// 转换、Windows
+// start 组装——fileTarget.ts / openExternal.ts 的纯函数部分。
+    ["verify-clickable-targets", ['node', '--import', 'tsx/esm', 'scripts/verify-clickable-targets.ts']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得

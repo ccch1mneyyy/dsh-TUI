@@ -259,6 +259,22 @@ const dict = {
   'update-check-failed': { zh: '无法确认新版本（网络或 registry 不可达），已尝试直接更新……', en: 'Could not confirm a newer version (network or registry unreachable); attempting the update anyway…' },
   'update-refused-deadlock': { zh: '已取消更新：镜像 registry 目前只能装到 v{{latest}}，而该版本在旧全局启动器的 patch 下会启动死锁（#183/#307）；官方最新为 v{{authoritative}}，待镜像同步后再 /update。', en: 'Update cancelled: the mirror registry can only serve v{{latest}}, which deadlocks boot under older global-launcher patches (#183/#307); official latest is v{{authoritative}} — retry /update after the mirror syncs.' },
   'update-mirror-lag': { zh: '镜像 registry 滞后：本次安装 v{{latest}}；官方最新 v{{authoritative}}，镜像同步后可再 /update。', en: 'Mirror registry lag: installing v{{latest}} now; official latest is v{{authoritative}} — run /update again once the mirror syncs.' },
+  // ── /reload (pi-style soft reload) ────────────────────────────────────
+  'reload-header': { zh: '已重读偏好文件：', en: 'Preferences reloaded:' },
+  'reload-applied': { zh: '{{kind}}  {{from}} → {{to}}（已应用）', en: '{{kind}}  {{from}} → {{to}} (applied)' },
+  'reload-unchanged': { zh: '{{kind}}  无变化', en: '{{kind}}  unchanged' },
+  'reload-skipped-env': { zh: '{{kind}}  跳过：环境变量优先', en: '{{kind}}  skipped: env override wins' },
+  'reload-skipped-config': { zh: '{{kind}}  跳过：显式配置优先', en: '{{kind}}  skipped: explicit config wins' },
+  'reload-skipped-invalid': { zh: '{{kind}}  跳过：文件缺失或无效', en: '{{kind}}  skipped: missing or invalid file' },
+  'reload-footer': { zh: '提示：settings.yaml / cordis.patch.yml 由 watcher 自动热重载；cordis.yml 根配置改动需 /restart', en: 'Note: settings.yaml / cordis.patch.yml hot-reload via watchers; cordis.yml root config changes need /restart' },
+  'reload-kind-theme': { zh: '主题', en: 'theme' },
+  'reload-kind-lang': { zh: '语言', en: 'language' },
+  'reload-kind-preset': { zh: '预设', en: 'preset' },
+  'reload-kind-model': { zh: '模型', en: 'model' },
+  'reload-kind-activity': { zh: '活动指示', en: 'activity' },
+  // ── /restart (process restart with session resume) ────────────────────
+  'restart-starting': { zh: '正在重启 dsh-tui，完成后自动恢复当前会话……', en: 'Restarting dsh-tui. The session resumes when it comes back…' },
+  'restart-unavailable': { zh: '当前运行方式不支持进程内重启（未挂载重启通道）。', en: 'Restart is unavailable in this launch mode (no restart channel mounted).' },
   'streaming-folded': { zh: '…（前 {{count}} 字符流式期间已折叠，落定后完整显示）', en: '…(first {{count}} chars folded while streaming; full text renders once the turn settles)' },
   'vim-not-implemented': { zh: 'vim 模式暂未实现', en: 'vim mode not implemented yet' },
   'terminal-setup-hint': { zh: '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。', en: 'Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).' },
@@ -368,6 +384,9 @@ const dict = {
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },
   'input-pending-actions-hint': { zh: '撤回 · Esc 打断并立即发送', en: 'Retract · Esc interrupts and sends immediately' },
+  'input-fold-stats': { zh: '{{lines}} 行 · {{chars}} 字', en: '{{lines}} lines · {{chars}} chars' },
+  'input-fold-hover': { zh: '悬停查看', en: 'hover to peek' },
+  'input-fold-peek-footer': { zh: '… 共 {{lines}} 行 · 点击展开编辑', en: '… {{lines}} lines total · click to edit' },
 
   // ── components/whaleFrames.ts (frame labels) ────────────────────────
   'frame-blink': { zh: '眨眼', en: 'blink' },
@@ -523,6 +542,13 @@ const dict = {
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
   'hint-expand-ctrl-o': { zh: '（ctrl+o 展开）', en: '(ctrl+o to expand)' },
+
+  // ── components/FileActionsPanel.tsx（点击文件路径弹出的操作菜单）──
+  'file-actions-title': { zh: '文件操作', en: 'File actions' },
+  'file-actions-open': { zh: '打开文件', en: 'Open file' },
+  'file-actions-open-dir': { zh: '打开文件夹', en: 'Open folder' },
+  'file-actions-reveal': { zh: '打开所在文件夹', en: 'Reveal in folder' },
+  'file-actions-copy': { zh: '复制绝对路径', en: 'Copy absolute path' },
 
   // ── components/ModelPicker.tsx / ThemePicker.tsx / ActivityPicker.tsx / EffortSlider.tsx ──
   'picker-title-model': { zh: '模型', en: 'Model' },
@@ -779,6 +805,7 @@ const dict = {
   'cmd-desc-status': { zh: '查看会话状态' },
   'cmd-desc-cost': { zh: '查看会话 token 用量' },
   'cmd-desc-config': { zh: '查看 dsh-tui 配置来源' },
+  'cmd-desc-reload': { zh: '重读偏好文件并立即生效' },
   'cmd-desc-settings': { zh: '查看和编辑插件设置' },
   'cmd-desc-doctor': { zh: '运行环境检查' },
   'cmd-desc-init': { zh: '在工作目录创建 AGENTS.md' },
@@ -819,6 +846,7 @@ const dict = {
   'cmd-desc-workspace-open': { zh: '打开路径或工作区 URI', en: 'Open a path or workspace URI' },
   // Help / exit
   'cmd-desc-help': { zh: '查看快捷键与命令' },
+  'cmd-desc-restart': { zh: '重启 dsh-tui 并恢复当前会话' },
   'cmd-desc-exit': { zh: '退出 dsh-tui' },
   // Registry-injected (external) commands — zh only; en falls back to the
   // registry's own description, and unlisted externals always fall back.

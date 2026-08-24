@@ -1,0 +1,92 @@
+name: Bug report (English)
+description: Report a problem. Feature requests belong in Discussions.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests, usage questions and plugin announcements belong in Discussions.
+
+        Intermittent problems are welcome — just state how often they happen.
+
+  - type: input
+    id: version
+    attributes:
+      label: dsh-tui version
+      description: |
+        The startup banner shows it in the top right corner (`✦ dsh-TUI vX.Y.Z`).
+        Do not use `npm ls -g` — the global launcher version does not move with `/update`
+        and will lag behind what is actually running. Write "unknown" if you cannot find it.
+      placeholder: "0.9.0"
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Terminal and OS
+      description: Terminal app + version, OS + version. Mention tmux / WSL / SSH if you use them. Partial information is fine.
+      placeholder: "Windows Terminal 1.21 + WSL2 Ubuntu 24.04 / iTerm2 3.5 + macOS 15.5"
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: What happens
+      description: The actual behavior. Screenshots or recordings help.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to trigger it
+      description: |
+        What you did, starting from a clean launch. Include terminal size, inline vs fullscreen, and which keys you pressed.
+        If it always happens, list the steps. If it is intermittent, state how often (for example "two or three times out of ten").
+      value: |
+        1.
+        2.
+        3.
+
+        Frequency:
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior (optional)
+      description: Leave empty if the description above already makes it clear.
+    validations:
+      required: false
+
+  - type: textarea
+    id: analysis
+    attributes:
+      label: Analysis (optional)
+      description: |
+        Analysis that points at a specific commit, function or line is genuinely useful.
+        Mark every claim as "verified" or "unverified". Unmarked claims are treated as unverified.
+      placeholder: |
+        Verified: git bisect points at a643ee2; parent 457dbba passes. Re-checked 3 times on each side.
+        Unverified: possibly related to width invalidation when streaming changes row height. No evidence.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: This is a bug, not a feature request.
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        If you already have a fix, open a PR and cross-link it with this issue. Bug fixes do not need prior approval.

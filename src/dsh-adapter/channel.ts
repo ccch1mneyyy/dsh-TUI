@@ -493,6 +493,18 @@ export interface Channel {
   readonly model: string
   /** Provider route of the live agent. */
   readonly provider: string
+  /** Raw cordis.yml `provider` key (undefined when unset) — the boot-time
+   *  pin `/reload` must never override. */
+  readonly configuredProvider: string | undefined
+  /** Raw cordis.yml `model` key (undefined when unset). */
+  readonly configuredModel: string | undefined
+  /** Explicit cordis.yml `preset` (undefined = roster default wins) — `/reload`
+   *  must not override a static deployment choice. */
+  readonly configuredPreset: string | undefined
+  /** Explicit cordis.yml `activityFrames` (undefined = pref/default wins). */
+  readonly configuredActivityFrames: string | undefined
+  /** Explicit cordis.yml `lang` (undefined = settings/lang.json wins). */
+  readonly configuredLang: string | undefined
   /** Running token totals across the session's assistant messages. */
   readonly tokens: TokenUsage
   /** Working directory of the session. */
@@ -909,6 +921,12 @@ export interface ChannelState {
   workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset (see the public Channel type). */
   activityFrames: string | undefined
+  /** Raw cordis.yml pins `/reload` must respect (see the public Channel type). */
+  configuredProvider: string | undefined
+  configuredModel: string | undefined
+  configuredPreset: string | undefined
+  configuredActivityFrames: string | undefined
+  configuredLang: string | undefined
   /** Diff presentation preference (see the public Channel type). */
   diffLayout: 'auto' | 'split' | 'unified'
   /** Thinking-block display (see the public Channel type). */
@@ -1459,6 +1477,12 @@ export function createChannel(
      *  only route a resume overrides the target's own record with. */
     configuredProvider?: string
     configuredModel?: string
+    /** cordis.yml's raw `lang` key, undefined when unset: `/reload` consults
+     *  it so a static deployment choice is never overridden by lang.json. */
+    configuredLang?: string
+    /** cordis.yml's raw `activityFrames` key, undefined when unset: the
+     *  static choice `/reload` must not override. */
+    configuredActivityFrames?: string
     /** The preset the initial agent's session runs under (from resolveAgent). */
     agentPreset?: string
     /** Shift+Tab session-mode cycle from cordis.yml `modes`; undefined →
@@ -2514,6 +2538,11 @@ export function createChannel(
     modeIndex: 0,
     workingActivity: undefined,
     activityFrames: options.activityFrames,
+    configuredProvider: options.configuredProvider,
+    configuredModel: options.configuredModel,
+    configuredPreset: options.configuredPreset,
+    configuredActivityFrames: options.configuredActivityFrames,
+    configuredLang: options.configuredLang,
     diffLayout: options.diffLayout ?? 'auto',
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),

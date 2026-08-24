@@ -175,6 +175,7 @@ export function MessageList({
   failureHintRowId,
   failureHint,
   onOpenSubagent,
+  onOpenFile,
 }: {
   rows: readonly ChatRow[]
   expanded: boolean
@@ -253,6 +254,8 @@ export function MessageList({
   failureHint?: string
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
+  /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
+  onOpenFile?: (path: string) => void
 }) {
   const hiddenCount = rows.length - MAX_RENDERED_ROWS
   // The thinking filter runs BEFORE virtualization so window indices line up.
@@ -1015,6 +1018,7 @@ export function MessageList({
               onToggleStreamFold={onToggleStreamFold}
               streamFolded={streamFoldedRows.has(row.id)}
               onOpenSubagent={onOpenSubagent}
+              onOpenFile={onOpenFile}
               setRowRef={setRowRef}
             />
           )
@@ -1080,6 +1084,7 @@ type MemoRowProps = {
   /** 该行是否被用户折叠（仅流式 reasoning 行消费）。 */
   streamFolded: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
+  onOpenFile: ((path: string) => void) | undefined
   setRowRef: (rowId: number, el: DOMElement | null) => void
 }
 
@@ -1136,6 +1141,7 @@ function TranscriptRow({
   onToggleStreamFold,
   streamFolded,
   onOpenSubagent,
+  onOpenFile,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
   const ref = React.useCallback(
@@ -1282,6 +1288,7 @@ function TranscriptRow({
             diffLayout={diffLayout}
             toolBackground={toolBackground}
             onClick={foldOnClick}
+            onOpenFile={onOpenFile}
           />
         </Box>
       )

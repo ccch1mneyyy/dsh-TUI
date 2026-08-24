@@ -1,6 +1,13 @@
 import React from 'react'
 import { normalizeLocalCommandName } from '../commands.js'
-import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
+import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
+import { readThemePref } from '../themePrefs.js'
+import { readPresetPref } from '../presetPrefs.js'
+import { readModelPref } from '../modelPrefs.js'
+import { readActivityFrames } from '../activityPrefs.js'
+import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
+import { hasPath } from '../dsh-adapter/settingsEditor.js'
+import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
@@ -63,6 +70,10 @@ import { BtwPanel } from '../components/BtwPanel.js'
 import { TipsPanel } from '../components/TipsPanel.js'
 import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { SubagentDetailScene } from '../components/SubagentDetailScene.js'
+import { FileActionsPanel, FILE_ACTION_COUNT } from '../components/FileActionsPanel.js'
+import { openExternal, openFile, revealInFileManager } from '../utils/openExternal.js'
+import { fileUrlToPath, parseFileLinkUrl, resolveTargetPath } from '../utils/fileTarget.js'
+import { statSync } from 'node:fs'
 import { setClipboard } from '../ink/termio/osc.js'
 import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import instances from '../ink/instances.js'
@@ -182,6 +193,7 @@ export function Chat({
   extensionShortcuts,
   onExit,
   onUpdate,
+  onRestart,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
 }: {
@@ -206,6 +218,8 @@ export function Chat({
   onExit: () => void
   /** Update the installed package and restart the current TUI process. */
   onUpdate?: () => void
+  /** Restart the current TUI process and resume this session (no update). */
+  onRestart?: () => void
   /**
    * True when the host already wrapped this tree in `<AlternateScreen>`
    * (`fullscreen: true`). Both full-screen surfaces need this — the trajectory
@@ -415,6 +429,66 @@ export function Chat({
     ink?.invalidatePrevFrame()
     ink?.reanchorViewport()
   }, [])
+
+  /**
+   * Click-to-act targets: the Ink instance's hyperlink-open callback (wired
+   * in the effect below) resolves every clickable target the transcript
+   * renders — http(s) links open the browser, `dsh-file:`/`file://` paths
+   * open the file-action menu. `dsh-file:` payloads are RAW display paths
+   * (possibly relative), so they resolve against the CURRENT channel cwd
+   * at click time (read through a ref so this callback keeps a stable
+   * identity — it is threaded into memoized row components).
+   */
+  const cwdRef = React.useRef(channel.cwd)
+  React.useEffect(() => {
+    cwdRef.current = channel.cwd
+  }, [channel.cwd])
+  const openFileActions = React.useCallback((rawPath: string): void => {
+    const resolved = resolveTargetPath(rawPath, cwdRef.current)
+    // Whether the target is a directory decides the first menu row's label
+    // ("open file" vs "open folder"). Missing paths count as files.
+    let isDir = false
+    try {
+      isDir = statSync(resolved).isDirectory()
+    } catch {
+      isDir = false
+    }
+    dispatchOverlay({ type: 'open', overlay: { kind: 'file-actions', path: resolved, index: 0, isDir } })
+  }, [])
+
+  /** Run one file-action menu row: 0 = open file, 1 = reveal in file
+   *  manager, 2 = copy absolute path. */
+  const runFileAction = React.useCallback((index: number, path: string): void => {
+    if (index === 0) openFile(path)
+    else if (index === 1) revealInFileManager(path)
+    else void setClipboard(path)
+  }, [])
+
+  const handleOpenTarget = React.useCallback((url: string): void => {
+    const rawPath = parseFileLinkUrl(url)
+    if (rawPath !== undefined) {
+      openFileActions(rawPath)
+      return
+    }
+    const filePath = fileUrlToPath(url)
+    if (filePath !== undefined) {
+      openFileActions(filePath)
+      return
+    }
+    openExternal(url)
+  }, [openFileActions])
+
+  // Wire the click-to-open callback into the Ink instance (the field is
+  // otherwise never set — clicking links was a no-op). Re-wired whenever
+  // the handler changes (cwd moves), cleared on unmount.
+  React.useEffect(() => {
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    if (ink) ink.onHyperlinkClick = handleOpenTarget
+    return () => {
+      const current = instances.get(process.stdout) ?? instances.values().next().value
+      if (current) current.onHyperlinkClick = undefined
+    }
+  }, [handleOpenTarget])
   /** `/` transcript search (less-style incsearch, ported from CC's REPL).
    *  Only the bar's open/closed mode lives in `overlay`; the query and match
    *  counters persist past the bar closing so n/N keep walking the matches. */
@@ -693,6 +767,17 @@ export function Chat({
       ok ? t('lang-switched', { lang }) : t('lang-switch-failed', { lang }),
       { color: ok ? 'success' : 'error' },
     )
+  }
+
+  /** Localized label of one /reload surface, for the change report. */
+  const reloadKindLabel = (kind: ReloadKind): string => {
+    switch (kind) {
+      case 'theme': return t('reload-kind-theme')
+      case 'lang': return t('reload-kind-lang')
+      case 'preset': return t('reload-kind-preset')
+      case 'model': return t('reload-kind-model')
+      case 'activity': return t('reload-kind-activity')
+    }
   }
 
   const runCommand = (name: string, rawInput = ''): boolean => {
@@ -1418,6 +1503,98 @@ export function Chat({
         } else {
           channel.notify(t('update-starting'))
           onUpdate()
+        }
+        return true
+      case 'reload': {
+        // pi-style soft reload: re-read the persisted preference files
+        // (~/.dsh-tui/{theme,lang,agent-preset,model,working-activity}.json)
+        // and re-apply live, honoring the boot-time precedence (env >
+        // cordis.yml > settings user layer > pref). The dsh-tui settings
+        // namespace is NOT re-read here — its watch applies edits live and
+        // the platform watcher hot-reloads settings.yaml itself. What no
+        // reload can re-read (cordis.yml root config, frozen fullscreen,
+        // newly built code) is listed in the footer and served by /restart.
+        setHelpOpen(false)
+        const tuiNamespace = channel.settingsHost()
+          ?.listNamespaces()
+          .find(entry => entry.ns === 'dsh-tui')
+        const plan = planReload({
+          envTheme: envThemeOverride(),
+          envLang: isLang(process.env.DSH_TUI_LANG) ? process.env.DSH_TUI_LANG : undefined,
+          themePref: readThemePref(),
+          currentTheme: themeName,
+          langPref: readLangPref(),
+          currentLang: getLang(),
+          langOverriddenBySettings: tuiNamespace !== undefined && hasPath(tuiNamespace.user, ['lang']),
+          configuredLang: channel.configuredLang,
+          configuredPreset: channel.configuredPreset,
+          presetPref: readPresetPref(),
+          currentPreset: channel.agentPreset,
+          configuredModel: {
+            provider: channel.configuredProvider,
+            model: channel.configuredModel,
+          },
+          modelPref: readModelPref(),
+          currentModel: { provider: channel.provider, model: channel.model },
+          configuredActivity: channel.configuredActivityFrames,
+          activityPref: readActivityFrames(),
+          currentActivity: channel.activityFrames,
+        })
+        for (const item of plan.apply) {
+          switch (item.kind) {
+            case 'theme':
+              setTheme(item.to)
+              break
+            case 'lang':
+              applyLang(item.to as Lang)
+              break
+            case 'preset':
+              void channel.switchPreset(item.to)
+              break
+            case 'model':
+              if (item.route !== undefined) {
+                void channel.switchModel(item.route.provider, item.route.model)
+              }
+              break
+            case 'activity':
+              channel.setActivityFrames(item.to)
+              break
+          }
+        }
+        const lines = [t('reload-header')]
+        for (const item of plan.apply) {
+          lines.push(t('reload-applied', {
+            kind: reloadKindLabel(item.kind),
+            from: item.from,
+            to: item.to,
+          }))
+        }
+        for (const kind of plan.unchanged) {
+          lines.push(t('reload-unchanged', { kind: reloadKindLabel(kind) }))
+        }
+        for (const skip of plan.skipped) {
+          const key = skip.reason === 'env-wins'
+            ? 'reload-skipped-env'
+            : skip.reason === 'config-wins' ? 'reload-skipped-config' : 'reload-skipped-invalid'
+          lines.push(t(key, { kind: reloadKindLabel(skip.kind) }))
+        }
+        lines.push(t('reload-footer'))
+        channel.pushLocal('/reload', lines)
+        return true
+      }
+      case 'restart':
+        // pi-style reload tail: /reload cannot re-read boot-time-only state
+        // (cordis.yml root config, frozen fullscreen layout, newly built
+        // code), so /restart respawns the process with the original argv and
+        // resumes this session — the /update handoff minus the pnpm step.
+        setHelpOpen(false)
+        if (onRestart === undefined) {
+          channel.notify(t('restart-unavailable'), { color: 'warning' })
+        } else if (channel.working) {
+          channel.notify(t('update-working'), { color: 'warning' })
+        } else {
+          channel.notify(t('restart-starting'))
+          onRestart()
         }
         return true
       case 'vim':
@@ -2255,6 +2432,20 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'file-actions') {
+      // Click-to-act file menu: ↑/↓ move, Enter runs the focused action,
+      // Esc closes.
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: FILE_ACTION_COUNT })
+      } else if (plainReturn) {
+        const path = overlay.path
+        dispatchOverlay({ type: 'close' })
+        runFileAction(overlay.index, path)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
     if (isMod(key) && input === 't') {
       // Ctrl+T opens the trajectory scene at any point in the session.
       openScene()
@@ -2601,6 +2792,7 @@ export function Chat({
           onUnseenCount={setUnseenCount}
           onTimeline={setTimeline}
           onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
+          onOpenFile={openFileActions}
         />
         </ScrollBox>
         {(() => {
@@ -3021,6 +3213,21 @@ export function Chat({
                   const mode = index === 0 ? null : (overlay.modes?.[index - 1]?.id ?? null)
                   dispatchOverlay({ type: 'close' })
                   void performRewind(row, mode)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'file-actions' && (
+            <Box flexDirection="column" marginTop={1}>
+              <FileActionsPanel
+                path={overlay.path}
+                isDir={overlay.isDir}
+                focusIndex={overlay.index}
+                onPick={(index) => {
+                  // 点击行直接执行该动作（与 Enter 同路径）
+                  const path = overlay.path
+                  dispatchOverlay({ type: 'close' })
+                  runFileAction(index, path)
                 }}
               />
             </Box>

@@ -7,11 +7,22 @@
 
 ## 如何贡献
 
-- **报告 bug 或请求功能**：提交 issue，附上清晰的复现步骤与你使用的终端环境。
+- **报告 bug**：用 bug 表单提交 issue，填写版本、终端环境与最短复现步骤。
+- **提功能建议**：发到 [Discussions Ideas](https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=ideas)。
+  Issues 不接受功能请求。维护者认可后会开一个 issue 跟踪实现，实现由该 issue
+  的 assignee 负责。**拿到认可之前不要开始写代码**——被否的提案里已经有 OAuth、
+  `/cost`、通知、插件 API、remote runtime 几套写完整才被关掉的实现。
+  发出后 14 天没有维护者回应，可以直接提 PR，会被打上 `unreviewed-proposal`
+  标签，按未经审阅处理。
 - **提交 PR**：base 指向 `main`。保持改动聚焦——一个 PR 只做一个逻辑改动，
   标题用中文或中英对照，描述写清动机、改动点与验证方式。
 - **请求 review 前先跑验证矩阵**：CI 运行的就是下面这些命令。
 - 新功能应附带或扩展一个聚焦的回归脚本。
+
+### 功能提案流程的生效时间
+
+该流程只对 2026-08-24 起新建的 PR 生效。在此之前开着的 PR 按旧规则处理，
+不需要补 Discussion 或跟踪 issue。
 
 ## 范围（Scope）
 

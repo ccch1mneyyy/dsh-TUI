@@ -40,14 +40,17 @@ const {
 } = await import('../lib/types/update.js')
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
 const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQuote.js', import.meta.url))
+const compiledPathsPath = fileURLToPath(new URL('../lib/types/utils/paths.js', import.meta.url))
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
-// The compiled update.js imports ./utils/shellQuote.js — mirror both into
-// every scratch layout or the import dies with ERR_MODULE_NOT_FOUND.
+// The compiled update.js imports ./utils/shellQuote.js and ./utils/paths.js
+// (the /restart log lives under DATA_DIR) — mirror all three into every
+// scratch layout or the import dies with ERR_MODULE_NOT_FOUND.
 function copyUpdateModule(dstDir) {
   mkdirSync(join(dstDir, 'utils'), { recursive: true })
   cpSync(compiledModulePath, join(dstDir, 'update.js'))
   cpSync(compiledShellQuotePath, join(dstDir, 'utils', 'shellQuote.js'))
+  cpSync(compiledPathsPath, join(dstDir, 'utils', 'paths.js'))
 }
 
 // ---- installedTuiVersion: compiled layout is this module's own real layout
