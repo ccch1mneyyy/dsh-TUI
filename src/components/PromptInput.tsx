@@ -1500,6 +1500,19 @@ export function PromptInput({
     helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen || peekOpen
   // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
   const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
+  // Prefix routing tint: a leading `!` runs locally (bashBorder — the same
+  // rose the transcript paints `!` lines with), `@` opens file mention
+  // (amber), `/` a slash command (claude). The prefix decides where this text
+  // goes, so it wins over the session mode tints; mid-message `@` mentions
+  // are already signaled by the completion overlay. A danger-full-access
+  // session gets a persistent red warning when no routing prefix is present.
+  const promptBorderColor =
+    value.startsWith('!') ? 'bashBorder'
+      : value.startsWith('@') ? 'warning'
+        : value.startsWith('/') ? 'claude'
+          : channel.mode.sandbox === 'danger-full-access' ? 'error'
+            : channel.mode.plan === true ? 'planMode'
+              : 'promptBorder'
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -1646,14 +1659,14 @@ export function PromptInput({
       )}
       {/* The prompt's own top/bottom border rows, self-drawn so the effort
           overlay can play on them (sweep → tier name → fade; see
-          EffortInputBorder). Idle colour keeps the plan-mode accent the old
-          Box border carried. */}
+          EffortInputBorder). Idle colour keeps the prompt routing and mode
+          accents visible when the effort overlay is not animating. */}
       <EffortInputBorder
         effort={channel.reasoningEffort}
         levels={channel.effortLevels}
         columns={columns}
         onLight={isLightThemeActive(themeName)}
-        idleColor={promptAccent}
+        idleColor={promptBorderColor}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph
