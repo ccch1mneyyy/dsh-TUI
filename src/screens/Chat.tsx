@@ -56,6 +56,7 @@ import { ModelPicker } from '../components/ModelPicker.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
+import { SessionTree } from './SessionTree.js'
 import { Settings } from './Settings.js'
 import { WorkspacePicker } from '../components/WorkspacePicker.js'
 import { WorkspaceMenuPicker } from '../components/WorkspaceMenuPicker.js'
@@ -386,6 +387,10 @@ export function Chat({
   /** `/resume` opens the session browser, a screen rather than a panel. It
    *  owns its own selection, filters and keyboard — Chat only opens it. */
   const [browserOpen, setBrowserOpen] = React.useState(false)
+  /** `/tree` opens the session family tree (pi's Session Tree): every rewind
+   *  fork stitched back onto the message it diverged from, hover previews,
+   *  and per-node rewind/fork/adopt actions. Like the browser, a screen. */
+  const [treeOpen, setTreeOpen] = React.useState(false)
   /** `/settings` opens the plugin settings screen (issue #165) — like the
    *  browser, a screen rather than a panel: it owns its own focus, staged
    *  drafts and keyboard; Chat only opens it. */
@@ -1340,6 +1345,21 @@ export function Chat({
         setHelpOpen(false)
         openRewind()
         return true
+      case 'tree': {
+        // The session family tree (pi's Session Tree): every fork branch
+        // stitched back, hover previews, per-node rewind/fork/adopt.
+        setHelpOpen(false)
+        setTreeOpen(true)
+        return true
+      }
+      case 'fork': {
+        // Tip fork (kimi-code semantics): a persisted copy of the whole
+        // conversation the user enters via /resume — the live session and
+        // its running turn stay untouched.
+        setHelpOpen(false)
+        void channel.forkSession()
+        return true
+      }
       case 'exit':
       case 'quit':
       case 'q':
@@ -2062,6 +2082,9 @@ export function Chat({
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
     if (browserOpen) return
+    // Same for the session tree: plain letters drive its search, clicks and
+    // Enter drive its action menu.
+    if (treeOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
     // the field draft editor belong to it alone.
     if (settingsOpen) return
@@ -2785,6 +2808,24 @@ export function Chat({
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
     return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+  }
+
+  // The session tree follows the browser's rule exactly: it REPLACES the
+  // conversation (an early return after every hook above has run), so there
+  // is no transcript underneath to be repainted or bled through. The dropped
+  // turn's prompt returns through the same fill path a rewind picker uses.
+  if (treeOpen) {
+    const tree = (
+      <SessionTree
+        channel={channel}
+        currentSessionId={channel.agentId}
+        onClose={() => setTreeOpen(false)}
+        onRestoreText={(text) => {
+          setHistoryFill(text)
+        }}
+      />
+    )
+    return fullscreen ? tree : <AlternateScreen>{tree}</AlternateScreen>
   }
 
   // The settings screen follows the browser's rule exactly: it REPLACES the

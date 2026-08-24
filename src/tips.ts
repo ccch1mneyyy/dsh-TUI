@@ -375,6 +375,18 @@ export const TIPS: readonly Tip[] = [
     en: 'Rewind forks a session; your message returns to the input',
   },
   {
+    id: 'flow-tree',
+    group: 'workflow',
+    zh: '/tree 打开会话分叉树：悬停预览、点击回退/分叉/切分支',
+    en: '/tree opens the session tree: hover to preview, click to rewind/fork/adopt',
+  },
+  {
+    id: 'flow-fork-copy',
+    group: 'workflow',
+    zh: '/fork 把当前会话复制成可恢复副本，原会话不受影响',
+    en: '/fork copies the session into a resumable twin; the original is untouched',
+  },
+  {
     id: 'flow-resume',
     group: 'workflow',
     zh: '/resume 里 Ctrl+S 折叠子 agent 运行',
