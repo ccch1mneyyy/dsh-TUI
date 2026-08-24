@@ -176,7 +176,7 @@
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^3.0.0 || ^4.0.0",
     "diff": "^8.0.4",
-    "dsh-auth": "link:./dsh-auth",
+    "@deepseek-harness-tui/dsh-auth": "link:./dsh-auth",
     "dsh-working-activity": "^0.3.3",
     "@earendil-works/pi-ai": "^0.82.1",
     "emoji-regex": "^10.0.0",
@@ -204,7 +204,8 @@
     "@dsh-std/manifest",
     "@dsh-std/messages",
     "@dsh-std/presentation",
-    "@dsh-std/storage"
+    "@dsh-std/storage",
+    "@deepseek-harness-tui/dsh-auth"
   ],
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

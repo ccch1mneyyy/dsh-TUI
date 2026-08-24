@@ -54,6 +54,9 @@ importers:
       '@alcalzone/ansi-tokenize':
         specifier: ^0.3.0
         version: 0.3.0
+      '@deepseek-harness-tui/dsh-auth':
+        specifier: link:./dsh-auth
+        version: link:dsh-auth
       '@dsh-std/command':
         specifier: workspace:*
         version: link:vendor/dsh-std/packages/command
@@ -99,9 +102,6 @@ importers:
       diff:
         specifier: ^8.0.4
         version: 8.0.4
-      dsh-auth:
-        specifier: link:./dsh-auth
-        version: link:dsh-auth
       dsh-working-activity:
         specifier: ^0.3.3
         version: 0.3.3(558cf71416b7c517f78887d08d15e10a)
