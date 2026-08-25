@@ -145,8 +145,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-paste',
     group: 'keys',
-    zh: 'Ctrl+V 粘贴文本、文件路径或图片附件',
-    en: 'Ctrl+V pastes text, file paths, or image attachments',
+    zh: 'Ctrl+V 或 Alt+V 粘贴文本、文件路径或图片附件；/settings 可改快捷键',
+    en: 'Ctrl+V or Alt+V pastes text, file paths, or image attachments; remappable in /settings',
   },
   {
     id: 'keys-slash-search',
@@ -375,6 +375,18 @@ export const TIPS: readonly Tip[] = [
     en: 'Rewind forks a session; your message returns to the input',
   },
   {
+    id: 'flow-tree',
+    group: 'workflow',
+    zh: '/tree 打开会话分叉树：悬停预览、点击回退/分叉/切分支',
+    en: '/tree opens the session tree: hover to preview, click to rewind/fork/adopt',
+  },
+  {
+    id: 'flow-fork-copy',
+    group: 'workflow',
+    zh: '/fork 把当前会话复制成可恢复副本，原会话不受影响',
+    en: '/fork copies the session into a resumable twin; the original is untouched',
+  },
+  {
     id: 'flow-resume',
     group: 'workflow',
     zh: '/resume 里 Ctrl+S 折叠子 agent 运行',
@@ -555,8 +567,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-esc',
     group: 'pitfalls',
-    zh: '审批条 Esc=拒绝；问卷 Esc=取消整批提问',
-    en: 'Esc rejects approvals and cancels question batches',
+    zh: '审批条 Esc=拒绝；问卷第 2 题起 Esc=上一题，Ctrl+C=取消整批',
+    en: 'Esc rejects approvals; question batches use Esc for previous and Ctrl+C to cancel',
   },
   {
     id: 'pit-ctrl-c',

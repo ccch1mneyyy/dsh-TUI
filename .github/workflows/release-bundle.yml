@@ -1,0 +1,51 @@
+name: Build installer bundle
+
+# 发布新 Release 时自动构建"一键安装整合包"并上传为该 Release 的资产：
+#   dsh-tui-setup.zip（下载链接固定为
+#   https://github.com/ccch1mneyyy/dsh-TUI/releases/latest/download/dsh-tui-setup.zip，
+#   官网部署时自动拉取最新版，见 dsh-tui-site 的 deploy workflow）。
+# 也可手动触发：Actions → Build installer bundle → Run workflow → 填 tag。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '上传到哪个 tag（默认：最新 release）'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Generate installer bundle
+        run: node scripts/make-installer-bundle.mjs --out dist-bundle
+
+      - name: Syntax check generated scripts
+        run: |
+          bash -n dist-bundle/dsh-tui-setup/install.sh
+          pwsh -NoProfile -Command "[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 'dist-bundle/dsh-tui-setup/install.ps1')) | Out-Null"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          [ -z "$tag" ] && tag="${{ github.event.inputs.tag }}"
+          if [ -z "$tag" ]; then
+            tag="$(gh release list --limit 1 --json tagName -q '.[0].tagName')"
+          fi
+          [ -n "$tag" ] || { echo "no tag given"; exit 1; }
+          echo "Uploading dist-bundle/dsh-tui-setup.zip -> $tag"
+          gh release upload "$tag" dist-bundle/dsh-tui-setup.zip --clobber

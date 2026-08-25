@@ -7,14 +7,27 @@ development contract for humans and coding agents working on `@deepseek-harness-
 
 ## How To Contribute
 
-- **Report bugs or request features** by opening an issue with a clear
-  reproduction and the terminal environment you use.
+- **Report bugs** through the bug issue form: version, terminal environment,
+  and a minimal reproduction.
+- **Request features** in [Discussions Ideas](https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=ideas).
+  Issues do not accept feature requests. Accepted proposals get a tracking issue,
+  and its assignee owns the implementation. **Do not start writing code before the
+  proposal is accepted** — OAuth, `/cost`, notifications, a plugin API and a remote
+  runtime were each written in full and then closed.
+  If a maintainer has not responded within 14 days, you may open a PR directly; it
+  gets the `unreviewed-proposal` label and is treated as unreviewed.
 - **Open a pull request** against `main`. Keep changes focused: one logical
   change per PR, with a Chinese or bilingual title and a description that
   covers motivation, what changed, and how it was verified.
 - **Run the verification matrix** below before requesting a review; CI runs
   the same commands.
 - New features should include or extend a focused regression script.
+
+### When the feature proposal flow takes effect
+
+It applies only to pull requests opened on or after 2026-08-24. Pull requests
+already open before that date follow the previous rules and need no Discussion
+or tracking issue.
 
 
 
@@ -37,9 +50,9 @@ boundaries and helpers over introducing parallel abstractions.
 
 - `src/index.ts`: public Cordis plugin entry point, configuration schema, and
   lazy handoff to the runtime plugin.
-- `src/plugin.ts`: TTY validation, service registration, agent creation/resume,
+- `src/dsh-adapter/plugin.ts`: TTY validation, service registration, agent creation/resume,
   React tree mounting, and terminal/process teardown.
-- `src/channel.ts`: event-to-view projection and the non-React action surface.
+- `src/dsh-adapter/channel.ts`: event-to-view projection and the non-React action surface.
   It translates DSH session events into transcript rows and implements submit,
   steering, rewind, resume, model/preset switching, local reports, and related
   state transitions.
@@ -62,7 +75,7 @@ boundaries and helpers over introducing parallel abstractions.
 - `src/*Prefs.ts`, `src/customTheme.ts`, and `src/sessionHistory.ts`: persisted
   user preferences and local session metadata under `~/.dsh-tui`.
 - `skills/*/SKILL.md`: skills shipped in the npm package and registered by
-  `src/packaged-skills.ts`.
+  `src/dsh-adapter/packaged-skills.ts`.
 - `cordis.patch.yml`: package bundle overlay used by profile installation.
   Ordering, row IDs, disabled host rows, and insert/override semantics matter.
 - `cordis.yml`: full bare-composition example for direct Cordis/DSH startup.
@@ -82,9 +95,9 @@ The central runtime path is:
 ```text
 Cordis config
   -> src/index.ts
-  -> src/plugin.ts
+  -> src/dsh-adapter/plugin.ts
   -> DSH agent/session services
-  -> src/channel.ts (session events -> Channel snapshot)
+  -> src/dsh-adapter/channel.ts (session events -> Channel snapshot)
   -> src/screens/Chat.tsx
   -> src/components/*
   -> src/ui.ts
@@ -270,7 +283,7 @@ the required credentials.
 
 ### Cordis Lifecycle And Configuration
 
-- Keep `src/index.ts` as the small public plugin contract and `src/plugin.ts`
+- Keep `src/index.ts` as the small public plugin contract and `src/dsh-adapter/plugin.ts`
   as the runtime implementation. Preserve the lazy handoff unless the task
   intentionally changes the plugin-loading contract.
 - Register resources through Cordis and clean them up through `ctx.effect` or
@@ -366,9 +379,9 @@ the required credentials.
 | Plugin config or environment behavior | `src/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml`, `README.md`, `README_EN.md` |
 | Slash commands or shortcuts | `src/commands.ts`, `src/screens/Chat.tsx`, help/input components, both READMEs, relevant skill mapping/tests |
 | Theme contract or persisted theme behavior | `src/theme.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs |
-| Session/channel behavior | `src/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |
+| Session/channel behavior | `src/dsh-adapter/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
-| Packaged skill | `skills/<name>/SKILL.md`, `src/packaged-skills.ts` assumptions, command prompt/mapping if exposed as a slash command |
+| Packaged skill | `skills/<name>/SKILL.md`, `src/dsh-adapter/packaged-skills.ts` assumptions, command prompt/mapping if exposed as a slash command |
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
 
@@ -387,6 +400,14 @@ the required credentials.
   tag whose version exactly matches `package.json`, then builds, runs focused
   regressions, and publishes to npm. Treat version changes and tags as release
   operations, not routine cleanup.
+- Release notes credit contributors. Create GitHub Releases with
+  `gh release create vX.Y.Z --notes-file notes.md --generate-notes`: the
+  hand-written summary comes first, and GitHub appends What's Changed (PR
+  title + author + link), New Contributors, and the Full Changelog;
+  `.github/release.yml` excludes bots from the generated list. In the
+  hand-written summary, entries from external contributors end with
+  `(#PR by @user)`; the maintainer's own entries are unmarked. Write bare
+  `#123` and `@user` — GitHub renders them as links.
 - Before handing off a code change, inspect `git diff --check`, the source diff,
   the generated diff, and `git status`. Report exactly which verification ran
   and any platform or credential-dependent checks that could not run.

@@ -10,7 +10,9 @@
  *      copy in the profile whenever pnpm can resolve it);
  *   2. every `@deepseek-ai/*` peerDependency is also a devDependency (local
  *      type-check), at the exact same range;
- *   3. the `@deepseek-ai/*` peer set equals UPSTREAM_BLESSED_PACKAGES, so an
+ *   3. every `@deepseek-ai/*` peerDependency is optional, so npm consumers do
+ *      not auto-install a second framework tree beside the dsh host;
+ *   4. the `@deepseek-ai/*` peer set equals UPSTREAM_BLESSED_PACKAGES, so an
  *      ungated peer (or a blessed package dropped from the manifest) fails
  *      here instead of drifting silently.
  *
@@ -41,6 +43,9 @@ for (const name of peers) {
   } else if (devRange !== peerRange) {
     failures.push(`${name} range mismatch: peer=${peerRange} vs dev=${devRange}`)
   }
+  if (manifest.peerDependenciesMeta?.[name]?.optional !== true) {
+    failures.push(`${name} is a host-provided peer but is not marked optional (npm would auto-install a second framework tree)`)
+  }
 }
 
 const blessed = [...UPSTREAM_BLESSED_PACKAGES] as string[]
@@ -56,4 +61,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  - ${failure}`)
   process.exit(1)
 }
-console.log(`manifest deps OK (${peers.length} framework peers, all mirrored in dev at matching ranges, blessed list in sync)`)
+console.log(`manifest deps OK (${peers.length} optional framework peers, all mirrored in dev at matching ranges, blessed list in sync)`)

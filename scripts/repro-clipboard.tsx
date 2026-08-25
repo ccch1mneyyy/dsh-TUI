@@ -15,7 +15,7 @@ process.env.FORCE_COLOR = '3'
 // language before any module import resolves the startup lang.
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { mkdtempSync, writeFileSync, rmSync }, { tmpdir }, { join }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { mkdtempSync, writeFileSync, rmSync }, { tmpdir }, { join }, termTest] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -25,6 +25,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('node:fs'),
   import('node:os'),
   import('node:path'),
+  import('./lib/term-test.mjs'),
 ])
 
 if (process.platform !== 'linux') {
@@ -69,14 +70,11 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-function screenHas(s: string): boolean {
-  const buf = term.buffer.active
-  for (let y = 0; y < ROWS; y++) {
-    if ((buf.getLine(y)?.translateToString(true) ?? '').includes(s)) return true
-  }
-  return false
-}
+// 等待/读屏走公共辅助（issue #532）：settled 轮询到谓词为真后返回终值，
+// 等待与断言共用同一条件——固定 sleep 在慢 runner 上会断言到旧屏幕。
+// alt-screen 下 baseY 恒 0，视口读取与旧的 getLine(0..ROWS) 直扫等价。
+const { sleep, settled } = termTest
+const screenHas = (s: string): boolean => termTest.screenHas(term, s)
 
 const listeners = new Set<() => void>()
 const channel: any = {
@@ -116,6 +114,7 @@ const instance = await render(
   </AlternateScreen>,
   { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
+// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
 await sleep(600)
 
 let failed = 0
@@ -127,20 +126,16 @@ const check = (name: string, ok: boolean, extra = '') => {
 try {
   // 1. '?' opens the help overlay; Ctrl+V must close it up front.
   stdinObj.write('?')
-  await sleep(400)
-  check('? opens the help overlay', screenHas('? for this help'))
+  check('? opens the help overlay', await settled(() => screenHas('? for this help')))
   stdinObj.write('\x16')
-  await sleep(300)
-  check('Ctrl+V closes the help overlay before the read resolves', !screenHas('? for this help'))
+  check('Ctrl+V closes the help overlay before the read resolves', await settled(() => !screenHas('? for this help')))
 
   // 2. The stub clipboard text lands in the prompt.
-  await sleep(600)
-  check('clipboard text lands in the prompt', screenHas('UI粘贴内容'))
+  check('clipboard text lands in the prompt', await settled(() => screenHas('UI粘贴内容')))
 
   // 3. Busy latch released: a second Ctrl+V pastes again (doubled text).
   stdinObj.write('\x16')
-  await sleep(800)
-  check('second Ctrl+V pastes again (busy latch released)', screenHas('UI粘贴内容UI粘贴内容'))
+  check('second Ctrl+V pastes again (busy latch released)', await settled(() => screenHas('UI粘贴内容UI粘贴内容')))
 } finally {
   await instance.unmount()
   rmSync(stubDir, { recursive: true, force: true })

@@ -6,13 +6,14 @@
 process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render, ThemeProvider }, { LoadedContextPanel }] =
+const [{ Writable }, React, { Terminal: XTerm }, { render, ThemeProvider }, { LoadedContextPanel }, { settled, viewportLines }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
     import('@xterm/headless'),
     import('../src/ui.js'),
     import('../src/components/LoadedContextPanel.js'),
+    import('./lib/term-test.mjs'),
   ])
 
 const COLS = 60
@@ -60,16 +61,18 @@ const app = await render(
   },
 )
 
-await new Promise(resolve => setTimeout(resolve, 300))
+// 等待与断言共用同一谓词；单行上界与行内容在同一快照上同步派生。
+const summaryRendered = await settled(() =>
+  viewportLines(term, ROWS).some(line => line.includes('Context loaded') && line.includes('Ctrl+P')))
 
-const lines = Array.from(
-  { length: ROWS },
-  (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '',
-)
+const lines = viewportLines(term, ROWS)
 const contentLines = lines.filter(line => line.trim() !== '')
 
 await app.unmount()
 
+if (!summaryRendered) {
+  throw new Error(`Collapsed context summary never rendered title + hint:\n${contentLines.join('\n')}`)
+}
 if (contentLines.length !== 1) {
   throw new Error(
     `Collapsed context summary occupied ${contentLines.length} rows at ${COLS} columns:\n${contentLines.join('\n')}`,

@@ -1,12 +1,27 @@
 import React from 'react'
-import { t, getLang, setLang, isLang, writeLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
+import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
+import { readThemePref } from '../themePrefs.js'
+import { readPresetPref } from '../presetPrefs.js'
+import { readModelPref } from '../modelPrefs.js'
+import { readActivityFrames } from '../activityPrefs.js'
+import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
+import { hasPath } from '../dsh-adapter/settingsEditor.js'
+import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
-import { isMod, isPlainReturnInput, modLabel } from '../utils/modifiers.js'
+import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
 import { formatTokens } from '../cc/format.js'
 import { homeDir } from '../utils/paths.js'
-import type { LlmModelInfo } from '../dsh-adapter/types.js'
+import type { LlmModelInfo, LlmProviderInfo } from '../dsh-adapter/types.js'
+import {
+  deriveModelGroups,
+  modelPickerLanding,
+  recentCatalogModels,
+  RECENTS_GROUP_PROVIDER,
+} from '../modelGroups.js'
+import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
 import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
@@ -33,6 +48,7 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
+import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
@@ -41,12 +57,14 @@ import { ModelPicker } from '../components/ModelPicker.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
+import { SessionTree } from './SessionTree.js'
 import { Settings } from './Settings.js'
 import { WorkspacePicker } from '../components/WorkspacePicker.js'
 import { WorkspaceMenuPicker } from '../components/WorkspaceMenuPicker.js'
 import { WorkspaceFlowPicker } from '../components/WorkspaceFlowPicker.js'
 import type { TuiWorkspaceCommandResult, TuiWorkspaceTarget } from '../workspaces.js'
 import { ActivityPicker } from '../components/ActivityPicker.js'
+import { ColorPicker } from '../components/ColorPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { PermissionsPicker, PERMISSION_PRESET_IDS } from '../components/PermissionsPicker.js'
@@ -59,9 +77,15 @@ import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
 import { BtwPanel } from '../components/BtwPanel.js'
+import { RecapPanel } from '../components/RecapPanel.js'
+import { isValidSessionColor, SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 import { TipsPanel } from '../components/TipsPanel.js'
 import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { SubagentDetailScene } from '../components/SubagentDetailScene.js'
+import { FileActionsPanel, FILE_ACTION_COUNT } from '../components/FileActionsPanel.js'
+import { openExternal, openFile, revealInFileManager } from '../utils/openExternal.js'
+import { fileUrlToPath, parseFileLinkUrl, resolveTargetPath } from '../utils/fileTarget.js'
+import { statSync } from 'node:fs'
 import { setClipboard } from '../ink/termio/osc.js'
 import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import instances from '../ink/instances.js'
@@ -181,6 +205,7 @@ export function Chat({
   extensionShortcuts,
   onExit,
   onUpdate,
+  onRestart,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
 }: {
@@ -205,6 +230,8 @@ export function Chat({
   onExit: () => void
   /** Update the installed package and restart the current TUI process. */
   onUpdate?: () => void
+  /** Restart the current TUI process and resume this session (no update). */
+  onRestart?: () => void
   /**
    * True when the host already wrapped this tree in `<AlternateScreen>`
    * (`fullscreen: true`). Both full-screen surfaces need this — the trajectory
@@ -322,11 +349,54 @@ export function Chat({
    */
   const [overlay, dispatchOverlay] = React.useReducer(chatOverlayReducer, NO_OVERLAY)
   const [models, setModels] = React.useState<readonly LlmModelInfo[]>([])
+  /** Provider display identities for the /model group level; refreshed alongside `models`. */
+  const [providerInfos, setProviderInfos] = React.useState<readonly LlmProviderInfo[]>([])
+  /** /model 最近使用分组：成功切换即记录（去重置顶，上限 10），重启保留。 */
+  const [modelRecents, setModelRecents] = React.useState<readonly ModelRecentsRef[]>(() => readModelRecents())
+  /** Two-level /model: the drilled-in provider route; undefined = group level.
+   *  Reset on open; stale ids resolve back to the group level via `activeModelGroup`. */
+  const [modelGroup, setModelGroup] = React.useState<string | undefined>(undefined)
+  /** True while the picker sits in the single-provider fast path (drilled in
+   *  at open, the group level never shown): Esc closes directly and no back
+   *  hint renders — a pinned recents pseudo-group must not fake a two-level
+   *  walk the user never saw (issue #527 regression: repro-picker-windowing). */
+  const [modelPickerDirect, setModelPickerDirect] = React.useState(false)
+  /** Group rows over the current catalog, first-appearance (registry) order,
+   *  with the pinned recents pseudo-group first when any entry is catalogued. */
+  const modelGroups = React.useMemo(
+    () => deriveModelGroups(models, providerInfos, modelRecents),
+    [models, providerInfos, modelRecents],
+  )
+  /** The drilled-in group, but only while it still exists in the catalog. */
+  const activeModelGroup = modelGroup !== undefined && modelGroups.some(group => group.provider === modelGroup)
+    ? modelGroup
+    : undefined
+  const groupModels = React.useMemo(() => {
+    if (activeModelGroup === undefined) return []
+    if (activeModelGroup === RECENTS_GROUP_PROVIDER) return recentCatalogModels(modelRecents, models)
+    return models.filter(model => model.provider === activeModelGroup)
+  }, [models, modelRecents, activeModelGroup])
+  /** Switch + record: every successful switch feeds the /model recents group
+   *  (picker Enter/click, `/model provider/id`, the wizard's live switch,
+   *  and /reload's applied model all ride this one path). */
+  const switchModelRecorded = (provider: string, id: string, name?: string): Promise<boolean> => {
+    if (name !== undefined) channel.notify(t('model-switching', { name }))
+    return channel.switchModel(provider, id).then((ok) => {
+      if (!ok) return ok
+      if (name !== undefined) channel.notify(t('model-switched', { name }))
+      setModelRecents(recordModelUse({ provider, id }))
+      return ok
+    })
+  }
   /** `/skills` 技能目录（issue #204）：null = 注册表快照在途。 */
   const [skillsList, setSkillsList] = React.useState<readonly SkillInfo[] | null>(null)
   /** `/resume` opens the session browser, a screen rather than a panel. It
    *  owns its own selection, filters and keyboard — Chat only opens it. */
   const [browserOpen, setBrowserOpen] = React.useState(false)
+  /** `/tree` opens the session family tree (pi's Session Tree): every rewind
+   *  fork stitched back onto the message it diverged from, hover previews,
+   *  and per-node rewind/fork/adopt actions. Like the browser, a screen. */
+  const [treeOpen, setTreeOpen] = React.useState(false)
   /** `/settings` opens the plugin settings screen (issue #165) — like the
    *  browser, a screen rather than a panel: it owns its own focus, staged
    *  drafts and keyboard; Chat only opens it. */
@@ -360,6 +430,75 @@ export function Chat({
     btwAbortRef.current = null
     setBtw(null)
   }
+  /** /recap overlay (pi-recap semantics): pure UI state like /btw — the
+   *  summary never enters the transcript or session log; applying the
+   *  proposed title goes through the normal /rename path. `auto` marks the
+   *  recapOnOpen-triggered run (rendered as the dim AutoRecapRow until
+   *  expanded); `expanded` lifts an auto recap into the full RecapPanel;
+   *  `rowsAtTrigger` is the last user-row id when the auto run started —
+   *  a newer user row (the user starts a new message) retires the recap. */
+  const [recap, setRecap] = React.useState<{
+    raw: string
+    summary: string
+    title?: string
+    error?: string
+    done: boolean
+    titleApplied: boolean
+    auto?: boolean
+    expanded?: boolean
+    rowsAtTrigger?: number
+  } | null>(null)
+  const recapAbortRef = React.useRef<AbortController | null>(null)
+  const closeRecap = () => {
+    recapAbortRef.current?.abort()
+    recapAbortRef.current = null
+    setRecap(null)
+  }
+  // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
+  // (mount = open/resume, rewind/fork included), summarize its tail into
+  // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
+  // surfaces them; the summary never enters the transcript or session log.
+  const autoRecapSessionId = channel.agentId
+  React.useEffect(() => {
+    // A session switch retires the previous recap outright — an old
+    // session's 回顾 has no place above a new conversation.
+    setRecap(null)
+    if (!channel.autoRecapOnOpen) return
+    // No conversation yet (/new): nothing to recap, don't even fire.
+    if (!channel.rows.some(row => row.kind === 'user' || row.kind === 'assistant')) return
+    recapAbortRef.current?.abort()
+    const controller = new AbortController()
+    recapAbortRef.current = controller
+    const lastUserId = channel.rows.filter(row => row.kind === 'user').at(-1)?.id ?? -1
+    setRecap({ raw: '', summary: '', error: undefined, done: false, titleApplied: false, auto: true, expanded: false, rowsAtTrigger: lastUserId })
+    void channel.recapRecent({
+      signal: controller.signal,
+      onText: delta => setRecap(prev => (prev ? { ...prev, raw: prev.raw + delta } : prev)),
+    }).then(result => {
+      if (controller.signal.aborted) return
+      setRecap(prev => {
+        if (prev === null || !prev.auto) return prev
+        // Auto mode stays quiet on failure (no activity / llm missing / error).
+        if (result.summary === null) return null
+        return { ...prev, summary: result.summary, title: result.title, error: result.error, done: true }
+      })
+    })
+    return () => controller.abort()
+  }, [autoRecapSessionId])
+  // The user starts a new message → the auto recap has served its purpose
+  // (catching them up) and bows out. A newer user row is the signal; the
+  // assistant's own streamed rows don't count.
+  const lastUserRowId = channel.rows.filter(row => row.kind === 'user').at(-1)?.id ?? -1
+  React.useEffect(() => {
+    if (
+      recap !== null &&
+      recap.auto &&
+      recap.rowsAtTrigger !== undefined &&
+      lastUserRowId > recap.rowsAtTrigger
+    ) {
+      closeRecap()
+    }
+  }, [lastUserRowId, recap])
   /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
   /** Detail view for a specific subagent (opened from dashboard). */
@@ -370,6 +509,7 @@ export function Chat({
    */
   const [logoNonce, setLogoNonce] = React.useState(0)
   React.useEffect(() => () => btwAbortRef.current?.abort(), [])
+  React.useEffect(() => () => recapAbortRef.current?.abort(), [])
   /**
    * The trajectory scene (issue #80 evolution). Unlike every other overlay
    * here it is not a panel but a whole screen: while open, Chat renders the
@@ -414,6 +554,66 @@ export function Chat({
     ink?.invalidatePrevFrame()
     ink?.reanchorViewport()
   }, [])
+
+  /**
+   * Click-to-act targets: the Ink instance's hyperlink-open callback (wired
+   * in the effect below) resolves every clickable target the transcript
+   * renders — http(s) links open the browser, `dsh-file:`/`file://` paths
+   * open the file-action menu. `dsh-file:` payloads are RAW display paths
+   * (possibly relative), so they resolve against the CURRENT channel cwd
+   * at click time (read through a ref so this callback keeps a stable
+   * identity — it is threaded into memoized row components).
+   */
+  const cwdRef = React.useRef(channel.cwd)
+  React.useEffect(() => {
+    cwdRef.current = channel.cwd
+  }, [channel.cwd])
+  const openFileActions = React.useCallback((rawPath: string): void => {
+    const resolved = resolveTargetPath(rawPath, cwdRef.current)
+    // Whether the target is a directory decides the first menu row's label
+    // ("open file" vs "open folder"). Missing paths count as files.
+    let isDir = false
+    try {
+      isDir = statSync(resolved).isDirectory()
+    } catch {
+      isDir = false
+    }
+    dispatchOverlay({ type: 'open', overlay: { kind: 'file-actions', path: resolved, index: 0, isDir } })
+  }, [])
+
+  /** Run one file-action menu row: 0 = open file, 1 = reveal in file
+   *  manager, 2 = copy absolute path. */
+  const runFileAction = React.useCallback((index: number, path: string): void => {
+    if (index === 0) openFile(path)
+    else if (index === 1) revealInFileManager(path)
+    else void setClipboard(path)
+  }, [])
+
+  const handleOpenTarget = React.useCallback((url: string): void => {
+    const rawPath = parseFileLinkUrl(url)
+    if (rawPath !== undefined) {
+      openFileActions(rawPath)
+      return
+    }
+    const filePath = fileUrlToPath(url)
+    if (filePath !== undefined) {
+      openFileActions(filePath)
+      return
+    }
+    openExternal(url)
+  }, [openFileActions])
+
+  // Wire the click-to-open callback into the Ink instance (the field is
+  // otherwise never set — clicking links was a no-op). Re-wired whenever
+  // the handler changes (cwd moves), cleared on unmount.
+  React.useEffect(() => {
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    if (ink) ink.onHyperlinkClick = handleOpenTarget
+    return () => {
+      const current = instances.get(process.stdout) ?? instances.values().next().value
+      if (current) current.onHyperlinkClick = undefined
+    }
+  }, [handleOpenTarget])
   /** `/` transcript search (less-style incsearch, ported from CC's REPL).
    *  Only the bar's open/closed mode lives in `overlay`; the query and match
    *  counters persist past the bar closing so n/N keep walking the matches. */
@@ -691,6 +891,17 @@ export function Chat({
     )
   }
 
+  /** Localized label of one /reload surface, for the change report. */
+  const reloadKindLabel = (kind: ReloadKind): string => {
+    switch (kind) {
+      case 'theme': return t('reload-kind-theme')
+      case 'lang': return t('reload-kind-lang')
+      case 'preset': return t('reload-kind-preset')
+      case 'model': return t('reload-kind-model')
+      case 'activity': return t('reload-kind-activity')
+    }
+  }
+
   const runCommand = (name: string, rawInput = ''): boolean => {
     switch (name) {
       case 'activity': {
@@ -895,11 +1106,53 @@ export function Chat({
         })
         return true
       }
+      case 'color': {
+        // `/color`（CC accent，按会话持久化）：无参打开调色板选择器，
+        // `/color <name>` 直接设置，`/color status` 显示当前，`/color
+        // reset` 清除回主题默认。颜色经 `session/color` 事件按会话保存
+        // ——resume/rewind 后仍是这个会话自己的颜色（见 channel.ts）。
+        setHelpOpen(false)
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        if (parts.length === 0) {
+          dispatchOverlay({
+            type: 'open',
+            overlay: {
+              kind: 'color',
+              index: Math.max(0, SESSION_COLOR_NAMES.indexOf(channel.sessionColor)),
+            },
+          })
+          return true
+        }
+        if (parts[0] === 'status') {
+          channel.pushLocal('/color', [
+            channel.sessionColor === ''
+              ? t('color-current-none')
+              : t('color-current', { name: channel.sessionColor }),
+            t('color-usage', { list: SESSION_COLOR_NAMES.join('/') }),
+          ])
+          return true
+        }
+        if (parts[0] === 'reset') {
+          channel.setSessionColor('')
+          channel.notify(t('color-reset'))
+          return true
+        }
+        const colorName = parts[0]!.toLowerCase()
+        if (!isValidSessionColor(colorName)) {
+          channel.notify(
+            t('color-unknown', { name: colorName, list: SESSION_COLOR_NAMES.join(' · ') }),
+            { color: 'error' },
+          )
+          return true
+        }
+        channel.setSessionColor(colorName)
+        channel.notify(t('color-set', { name: colorName }), { color: 'success' })
+        return true
+      }
       case 'new': {
         // One-shot `/new` (issue #25): the old session stays persisted and
         // is recoverable via /resume, so discarding the live view is
-        // non-destructive — no CC-style "press /new again" confirmation.
-        setHelpOpen(false)
+        // non-destructive — no CC-style "press /new again" confirmation.        setHelpOpen(false)
         void channel.newSession().then((ok) => {
           if (!ok) return
           // A new session is a fresh terminal page, not merely an emptied
@@ -973,10 +1226,7 @@ export function Chat({
               channel.notify(t('model-unknown', { spec }), { color: 'error', timeoutMs: 8000 })
               return
             }
-            channel.notify(t('model-switching', { name: model.name }))
-            void channel.switchModel(provider, id).then((ok) => {
-              if (ok) channel.notify(t('model-switched', { name: model.name }))
-            })
+            void switchModelRecorded(provider, id, model.name)
           })
           return true
         }
@@ -984,22 +1234,34 @@ export function Chat({
         // Opens over the cached catalog (empty cache shows the loading
         // pane); the fresh list lands with the authoritative focus, and the
         // kind-guarded set-index cannot re-focus a picker the user left.
-        dispatchOverlay({
-          type: 'open',
-          overlay: {
-            kind: 'model',
-            index: Math.max(0, models.findIndex(
-              model => model.provider === channel.provider && model.id === channel.model,
-            )),
-          },
-        })
+        // Seed-on-open: the model in use IS a use — recording it here means
+        // the recents group exists before the first post-update switch, and
+        // switching A→B keeps A in the list (the file records what was
+        // used, not only switches made after the file appeared).
+        let recentsNow = modelRecents
+        if (channel.provider !== '' && channel.model !== ''
+          && !recentsNow.some(ref => ref.provider === channel.provider && ref.id === channel.model)) {
+          recentsNow = recordModelUse({ provider: channel.provider, id: channel.model })
+          setModelRecents(recentsNow)
+        }
+        // Two-level landing: recents (when catalogued) focus their pinned
+        // row; else multi-provider catalogs focus the current provider's
+        // group row; a single-provider catalog without a meaningful recents
+        // list drills straight into its model list (pre-grouping UX).
+        {
+          const landing = modelPickerLanding(models, channel.provider, channel.model, recentsNow)
+          setModelGroup(landing.group)
+          setModelPickerDirect(landing.group !== undefined)
+          dispatchOverlay({ type: 'open', overlay: { kind: 'model', index: landing.index } })
+        }
         void channel.listModels().then((list) => {
           setModels(list)
-          const index = list.findIndex(
-            model => model.provider === channel.provider && model.id === channel.model,
-          )
-          dispatchOverlay({ type: 'set-index', kind: 'model', index: index >= 0 ? index : 0 })
+          const landing = modelPickerLanding(list, channel.provider, channel.model, recentsNow)
+          setModelGroup(landing.group)
+          setModelPickerDirect(landing.group !== undefined)
+          dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
         })
+        void channel.listProviders().then(setProviderInfos).catch(() => setProviderInfos([]))
         return true
       }
       case 'skills': {
@@ -1054,7 +1316,7 @@ export function Chat({
           notify: (text, options) => channel.notify(text, options),
           pushLocal: (title, lines) => channel.pushLocal(title, lines),
           working: () => channel.working,
-          switchModel: (provider, model) => channel.switchModel(provider, model),
+          switchModel: (provider, model) => switchModelRecorded(provider, model),
         }).catch(() => {
           // The wizard notifies on every handled failure; this only swallows
           // an unexpected reject so it never surfaces as an unhandled promise.
@@ -1143,6 +1405,21 @@ export function Chat({
         setHelpOpen(false)
         openRewind()
         return true
+      case 'tree': {
+        // The session family tree (pi's Session Tree): every fork branch
+        // stitched back, hover previews, per-node rewind/fork/adopt.
+        setHelpOpen(false)
+        setTreeOpen(true)
+        return true
+      }
+      case 'fork': {
+        // Tip fork (kimi-code semantics): a persisted copy of the whole
+        // conversation the user enters via /resume — the live session and
+        // its running turn stay untouched.
+        setHelpOpen(false)
+        void channel.forkSession()
+        return true
+      }
       case 'exit':
       case 'quit':
       case 'q':
@@ -1245,12 +1522,16 @@ export function Chat({
         setHelpOpen(false)
         void channel.describeCredential('DEEPSEEK_API_KEY')
           .catch(() => undefined)
-          .then(status => {
+          .then(async status => {
             const keyStatus = status === undefined
               ? t('login-credentials-unavailable')
               : status.configured
                 ? t('login-key-configured', { ref: 'DEEPSEEK_API_KEY' })
                 : t('login-key-missing')
+            // OAuth account states ride along only while a dsh-auth-style
+            // plugin is mounted; absent it the lines below are exactly the
+            // pre-plugin set.
+            const oauth = await channel.oauthProviderStatuses().catch(() => undefined)
             channel.pushLocal('/login', [
               t('login-api-key', { status: keyStatus }),
               ...(status === undefined
@@ -1262,6 +1543,20 @@ export function Chat({
                     }),
                   ]),
               t('login-base-url', { url: process.env.DEEPSEEK_BASE_URL ?? t('login-official-endpoint') }),
+              ...(oauth === undefined
+                ? []
+                : [
+                    t('login-oauth-heading'),
+                    ...oauth.map(row => t('login-oauth-row', {
+                      provider: row.provider,
+                      state: row.signedIn
+                        ? t('login-oauth-in', { time: new Date(row.expiresAt ?? 0).toISOString() })
+                        : row.expired
+                          ? t('login-oauth-expired')
+                          : t('login-oauth-signed-out'),
+                    })),
+                    t('login-oauth-hint'),
+                  ]),
             ])
           })
         return true
@@ -1372,6 +1667,98 @@ export function Chat({
           onUpdate()
         }
         return true
+      case 'reload': {
+        // pi-style soft reload: re-read the persisted preference files
+        // (~/.dsh-tui/{theme,lang,agent-preset,model,working-activity}.json)
+        // and re-apply live, honoring the boot-time precedence (env >
+        // cordis.yml > settings user layer > pref). The dsh-tui settings
+        // namespace is NOT re-read here — its watch applies edits live and
+        // the platform watcher hot-reloads settings.yaml itself. What no
+        // reload can re-read (cordis.yml root config, frozen fullscreen,
+        // newly built code) is listed in the footer and served by /restart.
+        setHelpOpen(false)
+        const tuiNamespace = channel.settingsHost()
+          ?.listNamespaces()
+          .find(entry => entry.ns === 'dsh-tui')
+        const plan = planReload({
+          envTheme: envThemeOverride(),
+          envLang: isLang(process.env.DSH_TUI_LANG) ? process.env.DSH_TUI_LANG : undefined,
+          themePref: readThemePref(),
+          currentTheme: themeName,
+          langPref: readLangPref(),
+          currentLang: getLang(),
+          langOverriddenBySettings: tuiNamespace !== undefined && hasPath(tuiNamespace.user, ['lang']),
+          configuredLang: channel.configuredLang,
+          configuredPreset: channel.configuredPreset,
+          presetPref: readPresetPref(),
+          currentPreset: channel.agentPreset,
+          configuredModel: {
+            provider: channel.configuredProvider,
+            model: channel.configuredModel,
+          },
+          modelPref: readModelPref(),
+          currentModel: { provider: channel.provider, model: channel.model },
+          configuredActivity: channel.configuredActivityFrames,
+          activityPref: readActivityFrames(),
+          currentActivity: channel.activityFrames,
+        })
+        for (const item of plan.apply) {
+          switch (item.kind) {
+            case 'theme':
+              setTheme(item.to)
+              break
+            case 'lang':
+              applyLang(item.to as Lang)
+              break
+            case 'preset':
+              void channel.switchPreset(item.to)
+              break
+            case 'model':
+              if (item.route !== undefined) {
+                void switchModelRecorded(item.route.provider, item.route.model)
+              }
+              break
+            case 'activity':
+              channel.setActivityFrames(item.to)
+              break
+          }
+        }
+        const lines = [t('reload-header')]
+        for (const item of plan.apply) {
+          lines.push(t('reload-applied', {
+            kind: reloadKindLabel(item.kind),
+            from: item.from,
+            to: item.to,
+          }))
+        }
+        for (const kind of plan.unchanged) {
+          lines.push(t('reload-unchanged', { kind: reloadKindLabel(kind) }))
+        }
+        for (const skip of plan.skipped) {
+          const key = skip.reason === 'env-wins'
+            ? 'reload-skipped-env'
+            : skip.reason === 'config-wins' ? 'reload-skipped-config' : 'reload-skipped-invalid'
+          lines.push(t(key, { kind: reloadKindLabel(skip.kind) }))
+        }
+        lines.push(t('reload-footer'))
+        channel.pushLocal('/reload', lines)
+        return true
+      }
+      case 'restart':
+        // pi-style reload tail: /reload cannot re-read boot-time-only state
+        // (cordis.yml root config, frozen fullscreen layout, newly built
+        // code), so /restart respawns the process with the original argv and
+        // resumes this session — the /update handoff minus the pnpm step.
+        setHelpOpen(false)
+        if (onRestart === undefined) {
+          channel.notify(t('restart-unavailable'), { color: 'warning' })
+        } else if (channel.working) {
+          channel.notify(t('update-working'), { color: 'warning' })
+        } else {
+          channel.notify(t('restart-starting'))
+          onRestart()
+        }
+        return true
       case 'vim':
         channel.notify(t('vim-not-implemented'))
         return true
@@ -1382,6 +1769,32 @@ export function Chat({
           t('terminal-paste-hint', { mod: modLabel }),
         ])
         return true
+      case 'recap': {
+        // `/recap`（pi-recap 语义）：对会话最近活动做一次无工具单轮
+        // 调用，生成一行摘要 + 建议标题。摘要是纯 UI 状态（不进 transcript
+        // 也不进 session log）；建议标题经「应用」按钮走 /rename 路径。
+        setHelpOpen(false)
+        recapAbortRef.current?.abort()
+        const controller = new AbortController()
+        recapAbortRef.current = controller
+        setRecap({ raw: '', summary: '', error: undefined, done: false, titleApplied: false, auto: false, expanded: true })
+        void channel.recapRecent({
+          signal: controller.signal,
+          onText: delta => setRecap(prev => (prev ? { ...prev, raw: prev.raw + delta } : prev)),
+        }).then(result => {
+          if (controller.signal.aborted) return
+          setRecap(prev => (prev
+            ? {
+                ...prev,
+                summary: result.summary ?? prev.raw,
+                title: result.title,
+                error: result.error,
+                done: true,
+              }
+            : prev))
+        })
+        return true
+      }
       case 'btw': {
         // CC /btw：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
         // 会话历史。空参数只提示用法。
@@ -1729,6 +2142,9 @@ export function Chat({
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
     if (browserOpen) return
+    // Same for the session tree: plain letters drive its search, clicks and
+    // Enter drive its action menu.
+    if (treeOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
     // the field draft editor belong to it alone.
     if (settingsOpen) return
@@ -1957,25 +2373,55 @@ export function Chat({
       return
     }
     if (overlay.kind === 'model') {
+      // Two-level picker: group rows at the top (Enter drills in), one
+      // provider's models below (Enter switches, the same live-fork path as
+      // the flat picker always had). Esc/⌫ climbs one level and only closes
+      // at the top; a single-group catalog never shows the group level, so
+      // Esc there closes directly.
+      const rowCount = activeModelGroup === undefined ? modelGroups.length : groupModels.length
       if (key.upArrow || key.downArrow) {
-        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: models.length })
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: rowCount })
       } else if (plainReturn) {
-        const model = models[overlay.index]
+        if (activeModelGroup === undefined) {
+          const group = modelGroups[overlay.index]
+          if (!group) {
+            dispatchOverlay({ type: 'close' })
+            return
+          }
+          setModelGroup(group.provider)
+          // The recents group opens on its most-recent entry; a provider
+          // group on its current model when it owns one, else its first row.
+          if (group.provider === RECENTS_GROUP_PROVIDER) {
+            dispatchOverlay({ type: 'set-index', kind: 'model', index: 0 })
+            return
+          }
+          const landing = modelPickerLanding(
+            models.filter(model => model.provider === group.provider),
+            channel.provider,
+            channel.model,
+          )
+          dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
+          return
+        }
+        const model = groupModels[overlay.index]
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (model) {
           // Enter switches the live model right away: the conversation is
           // forked at its end and continued with an agent routed to the new
-          // model (history replays unchanged).
+          // model (history replays unchanged) — and feeds the recents group.
           dispatchOverlay({ type: 'close' })
-          channel.notify(t('model-switching', { name: model.name }))
-          void channel.switchModel(model.provider, model.id).then((ok) => {
-            if (ok) channel.notify(t('model-switched', { name: model.name }))
-          })
+          void switchModelRecorded(model.provider, model.id, model.name)
         } else {
           dispatchOverlay({ type: 'close' })
         }
-      } else if (key.escape) {
-        dispatchOverlay({ type: 'close' })
+      } else if (key.escape || key.backspace) {
+        if (activeModelGroup !== undefined && modelGroups.length > 1 && !modelPickerDirect) {
+          setModelGroup(undefined)
+          const groupIndex = Math.max(0, modelGroups.findIndex(group => group.provider === activeModelGroup))
+          dispatchOverlay({ type: 'set-index', kind: 'model', index: groupIndex })
+        } else {
+          dispatchOverlay({ type: 'close' })
+        }
       }
       return
     }
@@ -2003,6 +2449,21 @@ export function Chat({
         const name = PRESET_NAMES[overlay.index]
         dispatchOverlay({ type: 'close' })
         if (name) channel.setActivityFrames(name)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
+    if (overlay.kind === 'color') {
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: SESSION_COLOR_NAMES.length })
+      } else if (plainReturn) {
+        const name = SESSION_COLOR_NAMES[overlay.index]
+        dispatchOverlay({ type: 'close' })
+        if (name) {
+          channel.setSessionColor(name)
+          channel.notify(t('color-set', { name }), { color: 'success' })
+        }
       } else if (key.escape) {
         dispatchOverlay({ type: 'close' })
       }
@@ -2114,8 +2575,9 @@ export function Chat({
         if (historyMatches.length > 0) {
           dispatchOverlay({ type: 'move', delta: -1, count: historyMatches.length })
         }
-      } else if (key.downArrow || (isMod(key) && input === 'r')) {
-        // CC's historySearch:next — ↓ and repeat ctrl+r walk to the next match.
+      } else if (key.downArrow || actionMatches('history', input, key)) {
+        // CC's historySearch:next — ↓ and the history key (default Ctrl+R)
+        // walk to the next match.
         if (historyMatches.length > 0) {
           dispatchOverlay({ type: 'move', delta: 1, count: historyMatches.length })
         }
@@ -2207,24 +2669,39 @@ export function Chat({
       }
       return
     }
-    if (isMod(key) && input === 't') {
-      // Ctrl+T opens the trajectory scene at any point in the session.
+    if (overlay.kind === 'file-actions') {
+      // Click-to-act file menu: ↑/↓ move, Enter runs the focused action,
+      // Esc closes.
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: FILE_ACTION_COUNT })
+      } else if (plainReturn) {
+        const path = overlay.path
+        dispatchOverlay({ type: 'close' })
+        runFileAction(overlay.index, path)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
+    if (actionMatches('trajectory', input, key)) {
+      // The trajectory scene key (default Ctrl+T) opens it at any point in
+      // the session.
       openScene()
       return
     }
-    if (isMod(key) && input === 'a') {
-      // Ctrl+A opens the subagent dashboard.
+    if (actionMatches('dashboard', input, key)) {
+      // The subagent dashboard key (default Ctrl+A) opens the dashboard.
       setSubagentDashboardOpen(true)
       return
     }
-    if (isMod(key) && input === 'p' && loadedContextVisible) {
-      // Ctrl+P toggles the startup loaded-context panel while it is on
-      // screen (transcript still empty); once rows take over and the
-      // panel disappears the key has nothing left to do.
+    if (actionMatches('contextPanel', input, key) && loadedContextVisible) {
+      // The loaded-context panel key (default Ctrl+P) toggles the startup
+      // panel while it is on screen (transcript still empty); once rows take
+      // over and the panel disappears the key has nothing left to do.
       toggleLoadedContext()
       return
     }
-    if (isMod(key) && input === 'r' && !helpOpen) {
+    if (actionMatches('history', input, key) && !helpOpen) {
       setHistoryEntries(loadHistory())
       dispatchOverlay({
         type: 'open',
@@ -2259,11 +2736,12 @@ export function Chat({
         channel.cancel()
       }
       event.stopImmediatePropagation()
-    } else if (isMod(key) && input === 'o' && !helpOpen) {
-      // Leaving transcript mode (Ctrl+O) — search was already handled above.
-      // Help is modal: toggling this state behind the overlay is invisible,
-      // then the next `/` unexpectedly opens transcript search instead of
-      // slash-command completion after Help closes.
+    } else if (actionMatches('transcript', input, key) && !helpOpen) {
+      // Leaving transcript mode (default Ctrl+O) — search was already
+      // handled above. Help is modal: toggling this state behind the
+      // overlay is invisible, then the next `/` unexpectedly opens
+      // transcript search instead of slash-command completion after Help
+      // closes.
       setExpanded(previous => !previous)
       // The toggle rewrites every thinking row's layout at once. The
       // ordinary scroll-based diff pushes rows into terminal scrollback on
@@ -2302,15 +2780,16 @@ export function Chat({
       } else {
         requestExit()
       }
-    } else if (isMod(key) && input === 'l') {
-      // CC's app:redraw — clear the physical terminal and repaint.
+    } else if (actionMatches('redraw', input, key)) {
+      // CC's app:redraw (default Ctrl+L) — clear the physical terminal and
+      // repaint.
       instances.get(process.stdout)?.forceRedraw()
-    } else if (isMod(key) && input === 'e') {
+    } else if (actionMatches('showAll', input, key)) {
       setShowAllMessages(previous => !previous)
-    } else if (isMod(key) && input === 'q') {
-      // Fold/unfold the GoalTodoPanel todo section — works mid-turn too:
-      // the collapsed line keeps the done/total count and the live task
-      // preview, so long todo lists stop crowding the prompt.
+    } else if (actionMatches('todoFold', input, key)) {
+      // Fold/unfold the GoalTodoPanel todo section (default Ctrl+Q) — works
+      // mid-turn too: the collapsed line keeps the done/total count and the
+      // live task preview, so long todo lists stop crowding the prompt.
       setTodoCollapsed(previous => !previous)
     } else if (plainReturn && !isSticky) {
       // Enter while scrolled up returns to the bottom (CC's pill: the
@@ -2338,6 +2817,52 @@ export function Chat({
   // Working-activity line (spinner slot): context-pressure prefix shares the
   // StatusLine thresholds (amber ≥ 80, red ≥ 95).
   const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
+
+  // ── Interrupt lane ─────────────────────────────────────────────────────
+  // The approval and ask_user_question panels park the agent until the user
+  // answers, but they render inside the conversation layout — every screen
+  // early-return below (plugin scene, browser, settings, subagent, trace)
+  // used to win over them, leaving the session stuck with no visible cause.
+  // While one is pending and a screen is up, the panel takes the whole
+  // terminal INSTEAD of the screen. The screen's open flag survives, so the
+  // decision lands back on the screen (remounted fresh — the same lifecycle
+  // as closing and reopening it); keyboard exclusivity holds because the
+  // covered screen is unmounted, exactly like the chat-state prompt slot.
+  // The panel elements are shared with the prompt-slot chain below so the
+  // two mount sites cannot drift.
+  const approvalPanelNode = approvalSnapshot !== null ? (
+    <ApprovalPanel
+      key={approvalSnapshot.key}
+      approval={approvalSnapshot}
+      onDecide={outcome => approvals.decide(outcome)}
+    />
+  ) : null
+  const questionPanelNode = questionSnapshot !== null ? (
+    <AskUserQuestionPanel
+      key={questionSnapshot.key}
+      question={questionSnapshot.question}
+      position={questionSnapshot.position}
+      total={questionSnapshot.total}
+      answered={questionSnapshot.answered}
+      initialDraft={questionSnapshot.draft}
+      onAnswer={selection => questionStore.answerCurrent(selection)}
+      onCancel={() => questionStore.cancelCurrent()}
+      onBack={questionSnapshot.canGoBack
+        ? draft => questionStore.backCurrent(draft)
+        : undefined}
+    />
+  ) : null
+  const interruptPanel = approvalPanelNode ?? questionPanelNode
+  const screenOpen = channel.pluginScene !== undefined || browserOpen || settingsOpen
+    || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
+  if (interruptPanel !== null && screenOpen) {
+    const node = (
+      <Box flexDirection="column" width="100%" paddingX={1}>
+        {interruptPanel}
+      </Box>
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
 
   // A plugin scene (dsh-tui-scenes) takes the whole terminal the same way
   // the trajectory scene does, and sits at the TOP of this return chain:
@@ -2389,6 +2914,24 @@ export function Chat({
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
     return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+  }
+
+  // The session tree follows the browser's rule exactly: it REPLACES the
+  // conversation (an early return after every hook above has run), so there
+  // is no transcript underneath to be repainted or bled through. The dropped
+  // turn's prompt returns through the same fill path a rewind picker uses.
+  if (treeOpen) {
+    const tree = (
+      <SessionTree
+        channel={channel}
+        currentSessionId={channel.agentId}
+        onClose={() => setTreeOpen(false)}
+        onRestoreText={(text) => {
+          setHistoryFill(text)
+        }}
+      />
+    )
+    return fullscreen ? tree : <AlternateScreen>{tree}</AlternateScreen>
   }
 
   // The settings screen follows the browser's rule exactly: it REPLACES the
@@ -2553,6 +3096,7 @@ export function Chat({
           onUnseenCount={setUnseenCount}
           onTimeline={setTimeline}
           onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
+          onOpenFile={openFileActions}
         />
         </ScrollBox>
         {(() => {
@@ -2634,6 +3178,14 @@ export function Chat({
           collapsed={todoCollapsed}
           onToggle={() => setTodoCollapsed(previous => !previous)}
         />
+        {recap !== null && recap.auto && !recap.expanded && (
+          <AutoRecapRow
+            summary={recap.summary}
+            streaming={!recap.done}
+            onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
+            onDismiss={() => closeRecap()}
+          />
+        )}
         {statusEntries.length > 0 && (
           // Plugin status contributions (tuiStatus seam): one joined line,
           // truncated by the Text wrap contract — the host owns the layout,
@@ -2642,12 +3194,8 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
-        {approvalSnapshot !== null ? (
-          <ApprovalPanel
-            key={approvalSnapshot.key}
-            approval={approvalSnapshot}
-            onDecide={outcome => approvals.decide(outcome)}
-          />
+        {approvalPanelNode !== null ? (
+          approvalPanelNode
         ) : dialogSnapshot !== null ? (
           <ExtensionDialog
             key={dialogSnapshot.key}
@@ -2658,6 +3206,35 @@ export function Chat({
         ) : overlay.kind === 'tips' ? (
           <Box flexDirection="column" marginTop={1}>
             <TipsPanel onClose={() => dispatchOverlay({ type: 'close-if', kind: 'tips' })} />
+          </Box>
+        ) : recap !== null && (!recap.auto || recap.expanded) ? (
+          <Box flexDirection="column" marginTop={1}>
+            <RecapPanel
+              summary={recap.summary}
+              title={recap.title}
+              error={recap.error}
+              streaming={!recap.done}
+              titleApplied={recap.titleApplied}
+              onClose={() => {
+                // An expanded auto recap collapses back to its dim row;
+                // a manual /recap closes outright.
+                if (recap.auto) {
+                  setRecap(prev => (prev ? { ...prev, expanded: false } : prev))
+                } else {
+                  closeRecap()
+                }
+              }}
+              onCopy={() => {
+                void setClipboard(recap.summary ?? '').then(raw => { if (raw) writeRaw?.(raw) })
+                channel.notify(t('copied-chars', { n: (recap.summary ?? '').length }), { timeoutMs: 1500 })
+              }}
+              onApplyTitle={() => {
+                if (recap.title === undefined || recap.titleApplied) return
+                channel.renameSession(recap.title)
+                setRecap(prev => (prev ? { ...prev, titleApplied: true } : prev))
+                channel.notify(t('recap-title-applied-notify', { title: recap.title }), { color: 'success' })
+              }}
+            />
           </Box>
         ) : btw !== null ? (
           <Box flexDirection="column" marginTop={1}>
@@ -2673,16 +3250,8 @@ export function Chat({
               }}
             />
           </Box>
-        ) : questionSnapshot !== null ? (
-          <AskUserQuestionPanel
-            key={questionSnapshot.key}
-            question={questionSnapshot.question}
-            position={questionSnapshot.position}
-            total={questionSnapshot.total}
-            answered={questionSnapshot.answered}
-            onAnswer={selection => questionStore.answerCurrent(selection)}
-            onCancel={() => questionStore.cancelCurrent()}
-          />
+        ) : questionPanelNode !== null ? (
+          questionPanelNode
         ) : (
           <PromptInput
             channel={channel}
@@ -2780,20 +3349,44 @@ export function Chat({
             <Box flexDirection="column" marginTop={1}>
               {models.length === 0 ? (
                 <ModelPickerLoading />
+              ) : activeModelGroup === undefined ? (
+                <ModelPicker
+                  groups={modelGroups}
+                  focusIndex={overlay.index}
+                  currentProvider={channel.provider}
+                  onPick={(index) => {
+                    // 点击分组行 = 进入该组（与 Enter 同一条路径）
+                    const group = modelGroups[index]
+                    if (!group) return
+                    setModelGroup(group.provider)
+                    if (group.provider === RECENTS_GROUP_PROVIDER) {
+                      dispatchOverlay({ type: 'set-index', kind: 'model', index: 0 })
+                      return
+                    }
+                    const landing = modelPickerLanding(
+                      models.filter(model => model.provider === group.provider),
+                      channel.provider,
+                      channel.model,
+                    )
+                    dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
+                  }}
+                />
               ) : (
                 <ModelPicker
-                  models={models}
+                  models={groupModels}
+                  groupLabel={activeModelGroup === RECENTS_GROUP_PROVIDER
+                    ? t('picker-group-recent')
+                    : modelGroups.find(group => group.provider === activeModelGroup)?.label}
+                  showBack={modelGroups.length > 1 && !modelPickerDirect}
+                  showProviderPrefix={activeModelGroup === RECENTS_GROUP_PROVIDER}
                   focusIndex={overlay.index}
                   currentModel={`${channel.provider}/${channel.model}`}
                   onPick={(index) => {
                     // 点击行 = 应用该行模型（与 Enter 同一条路径）
-                    const model = models[index]
+                    const model = groupModels[index]
                     if (!model) return
                     dispatchOverlay({ type: 'close' })
-                    channel.notify(t('model-switching', { name: model.name }))
-                    void channel.switchModel(model.provider, model.id).then((ok) => {
-                      if (ok) channel.notify(t('model-switched', { name: model.name }))
-                    })
+                    void switchModelRecorded(model.provider, model.id, model.name)
                   }}
                 />
               )}
@@ -2826,6 +3419,22 @@ export function Chat({
                   dispatchOverlay({ type: 'close' })
                   const name = PRESET_NAMES[index]
                   if (name) channel.setActivityFrames(name)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'color' && (
+            <Box flexDirection="column" marginTop={1}>
+              <ColorPicker
+                focusIndex={overlay.index}
+                currentColor={channel.sessionColor}
+                onPick={(index) => {
+                  dispatchOverlay({ type: 'close' })
+                  const name = SESSION_COLOR_NAMES[index]
+                  if (name) {
+                    channel.setSessionColor(name)
+                    channel.notify(t('color-set', { name }), { color: 'success' })
+                  }
                 }}
               />
             </Box>
@@ -2971,6 +3580,21 @@ export function Chat({
                   const mode = index === 0 ? null : (overlay.modes?.[index - 1]?.id ?? null)
                   dispatchOverlay({ type: 'close' })
                   void performRewind(row, mode)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'file-actions' && (
+            <Box flexDirection="column" marginTop={1}>
+              <FileActionsPanel
+                path={overlay.path}
+                isDir={overlay.isDir}
+                focusIndex={overlay.index}
+                onPick={(index) => {
+                  // 点击行直接执行该动作（与 Enter 同路径）
+                  const path = overlay.path
+                  dispatchOverlay({ type: 'close' })
+                  runFileAction(index, path)
                 }}
               />
             </Box>

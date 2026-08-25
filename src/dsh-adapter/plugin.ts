@@ -16,6 +16,7 @@ import { ApprovalStore } from './approvals.js'
 import { registerPackagedSkills } from './packaged-skills.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
+import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
@@ -25,9 +26,17 @@ import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, resolveDshProfileName, resolveTuiUpdateTarget, updateTuiAndRestart } from '../update.js'
+import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import {
+  draftComboConflicts,
+  effectiveComboString,
+  parseComboDraft,
+  setKeymapOverrides,
+  SHORTCUT_ACTIONS,
+  type ShortcutActionId,
+} from '../utils/keymap.js'
 import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
@@ -37,7 +46,7 @@ import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
-import { getHostSettingsSections, type TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
@@ -69,7 +78,65 @@ import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMult
 let lastBootedFullscreen: boolean | undefined
 
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  // /restart handoff diagnosis: the replacement process is marked by env and
+  // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
+  // silent). First line lands before anything in this function can throw.
+  if (process.env.DSH_TUI_RESTART_CHILD === '1') {
+    logRestartEvent('boot: plugin apply', {
+      stdoutTty: process.stdout.isTTY === true,
+      stdinTty: process.stdin.isTTY === true,
+      stderrTty: process.stderr.isTTY === true,
+    })
+    // Field evidence (2026-08-24): the restarted TUI mounts but takes no
+    // input, and the terminal's DA reply surfaced on PS's prompt line in an
+    // earlier attempt — meaning NO process was reading console input. Probe
+    // whether THIS process's stdin pump ever sees bytes: wrap read()
+    // transparently (delegates; purely observational) and sample the pump
+    // state, so the log distinguishes "bytes never arrive" (console-level
+    // theft/mode) from "bytes arrive but the UI ignores them".
+    const probedStdin = process.stdin as NodeJS.ReadStream & { isRaw?: boolean }
+    const originalRead = probedStdin.read.bind(probedStdin)
+    let loggedChunks = 0
+    probedStdin.read = ((...args: Parameters<typeof originalRead>) => {
+      const chunk = originalRead(...args)
+      if (chunk !== null && chunk !== '' && loggedChunks < 12) {
+        loggedChunks += 1
+        const text = String(chunk)
+        logRestartEvent('boot: stdin chunk arrived', {
+          bytes: text.length,
+          preview: text.slice(0, 24).replace(/[^\x20-\x7e]/g, '.'),
+        })
+      }
+      return chunk
+    }) as typeof originalRead
+    const sampleStdinState = (label: string): void => {
+      logRestartEvent(`boot: ${label}`, {
+        isRaw: probedStdin.isRaw === true,
+        readableListeners: probedStdin.listenerCount('readable'),
+        dataListeners: probedStdin.listenerCount('data'),
+        paused: probedStdin.isPaused,
+        buffered: probedStdin.readableLength,
+        chunksSeen: loggedChunks,
+      })
+    }
+    sampleStdinState('stdin state at plugin apply')
+    let pendingSamples = 0
+    const sampleAt = (delayMs: number, label: string): void => {
+      pendingSamples += 1
+      const timer = setTimeout(() => {
+        pendingSamples -= 1
+        sampleStdinState(label)
+      }, delayMs)
+      timer.unref?.()
+    }
+    sampleAt(2000, 'stdin state +2s')
+    sampleAt(5000, 'stdin state +5s')
+    sampleAt(12000, 'stdin state +12s')
+  }
   if (!process.stdout.isTTY) {
+    if (process.env.DSH_TUI_RESTART_CHILD === '1') {
+      logRestartEvent('boot: TTY gate failed - stdout is not a TTY')
+    }
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
   }
 
@@ -360,6 +427,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // only explicit values so the target session's own record wins.
     configuredModel: config.model,
     configuredProvider: config.provider,
+    // Raw cordis.yml `lang` / `activityFrames`: /reload must not override a
+    // static deployment choice with the persisted preference.
+    configuredLang: config.lang,
+    configuredActivityFrames: config.activityFrames,
     effort: config.effort,
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
@@ -380,6 +451,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
     scrollGutter: config.scrollGutter,
+    promptSessionLabel: config.promptSessionLabel,
     statusBar: config.statusBar,
     handle,
   })
@@ -409,13 +481,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and
   // watch() lands commits on the live channel — no recompose needed.
   ctx.inject(['settings'], (settingsCtx) => {
+    const tuiSettingsNs = settingsNamespace('dsh-tui')
     const scope = settingsCtx.settings.register(
-      settingsNamespace('dsh-tui'),
+      tuiSettingsNs,
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
+        promptSessionLabel: Schema.boolean().default(false),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -447,6 +521,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // Same no-default rule: unset keeps cordis.yml's `fullscreen`
         // decisive; set overrides it from the next boot on.
         fullscreen: Schema.boolean(),
+        // Built-in action-shortcut overrides, one optional combo string per
+        // action (see src/utils/keymap.ts). Unset keeps the default binding
+        // and the section's format() shows the effective combos.
+        shortcuts: Schema.object(
+          Object.fromEntries(SHORTCUT_ACTIONS.map(action => [action.id, Schema.string().required(false)])),
+        ).required(false),
       }),
     )
     type SettingsValue = {
@@ -458,7 +538,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       scrollGutter?: ScrollGutterMode
+      promptSessionLabel?: boolean
       statusBar?: Partial<StatusBarConfig>
+      shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
     const applyLayout = (value: SettingsValue): void => {
       channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
@@ -495,7 +577,26 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
+      channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
+    }
+    // Shortcut overrides resolve per action: settings user layer wins over
+    // cordis.yml's `shortcuts` (same precedence as every other field);
+    // unset everywhere keeps the registry default. Applied live into the
+    // keymap module — the very next keypress matches the new combos.
+    const applyShortcuts = (value: SettingsValue): void => {
+      const userLayer = value.shortcuts ?? {}
+      const configLayer = config.shortcuts ?? {}
+      const merged: Partial<Record<ShortcutActionId, string>> = {}
+      for (const action of SHORTCUT_ACTIONS) {
+        const user = userLayer[action.id]
+        const pinned = configLayer[action.id]
+        const chosen = typeof user === 'string' && user.trim() !== ''
+          ? user
+          : (typeof pinned === 'string' && pinned.trim() !== '' ? pinned : undefined)
+        if (chosen !== undefined) merged[action.id] = chosen
+      }
+      setKeymapOverrides(merged)
     }
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
@@ -503,9 +604,29 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       applyMinimal(next)
       applyLang(next)
       applyDisplay(next)
+      applyShortcuts(next)
       applyFullscreen(next)
     }
-    apply(scope.get())
+    // One-time fullscreen factory-default migration (companion to the
+    // schema + cordis.patch.yml flip false→true): a `fullscreen: false`
+    // pinned in the settings user layer BEFORE the flip keeps overriding
+    // the new default on every boot. The first boot past this code clears
+    // that stale explicit choice; the migrations.json marker makes it
+    // strictly once, so a `false` re-pinned afterwards always stands. The
+    // boot decision cannot wait for the async doc write — the stale value
+    // is shadowed out of the first apply below (destructuring omission,
+    // not an explicit undefined), and the later watch commit (fullscreen
+    // back to undefined) is a no-op for applyFullscreen.
+    const bootSettings = scope.get()
+    const fullscreenMigration = planFullscreenFactoryMigration(bootSettings.fullscreen, readAppliedMigrations())
+    void commitFullscreenFactoryMigration(fullscreenMigration, {
+      unset: () => settingsCtx.settings.mutate(tuiSettingsNs, [{ op: 'unset', path: ['fullscreen'] }]),
+    })
+    if (fullscreenMigration === 'unset') {
+      channel.notify(t('settings-fullscreen-migrated'), { color: 'warning' })
+    }
+    const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
+    apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
     scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
@@ -518,14 +639,114 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the settings registration above, and the declared selects write `lang`
   // and `diffLayout` back through the settings service's revision-fenced
   // mutate (the watch applies both live).
-  const settingsSections = getHostSettingsSections(
-    ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-  )
-  if (settingsSections !== undefined) {
+  //
+  // Shortcut fields: one text field per customizable action. The draft is
+  // one or more ctrl+/alt+ combos (comma-separated); blank restores the
+  // default, and a combo another action or a fixed editor binding already
+  // owns is refused as invalid so remaps can never silently shadow.
+  const shortcutFieldMeta: Record<ShortcutActionId, { label: string; zh: string; hintEn: (defaults: string) => string; hintZh: (defaults: string) => string }> = {
+    paste: {
+      label: 'Paste shortcut',
+      zh: '粘贴快捷键',
+      hintEn: d => `Clipboard paste (text, file paths, images). Default: ${d}. Alt+V works where the terminal eats Ctrl+V.`,
+      hintZh: d => `剪贴板粘贴（文本、文件路径、图片）。默认 ${d}。终端吞掉 Ctrl+V 时可用 Alt+V。`,
+    },
+    history: {
+      label: 'History search shortcut',
+      zh: '历史搜索快捷键',
+      hintEn: d => `Open the prompt-history search. Default: ${d}.`,
+      hintZh: d => `打开输入历史搜索。默认 ${d}。`,
+    },
+    editor: {
+      label: 'External editor shortcut',
+      zh: '外部编辑器快捷键',
+      hintEn: d => `Edit the draft in $VISUAL/$EDITOR. Default: ${d}.`,
+      hintZh: d => `在 $VISUAL/$EDITOR 外部编辑器中编辑草稿。默认 ${d}。`,
+    },
+    transcript: {
+      label: 'Transcript mode shortcut',
+      zh: '转录模式快捷键',
+      hintEn: d => `Toggle expanded transcript mode. Default: ${d}.`,
+      hintZh: d => `切换展开转录模式。默认 ${d}。`,
+    },
+    trajectory: {
+      label: 'Trajectory scene shortcut',
+      zh: '轨迹场景快捷键',
+      hintEn: d => `Open the trajectory scene. Default: ${d}.`,
+      hintZh: d => `打开轨迹场景。默认 ${d}。`,
+    },
+    dashboard: {
+      label: 'Subagent dashboard shortcut',
+      zh: '子代理面板快捷键',
+      hintEn: d => `Open the subagent dashboard. Default: ${d}.`,
+      hintZh: d => `打开子代理面板。默认 ${d}。`,
+    },
+    contextPanel: {
+      label: 'Loaded-context panel shortcut',
+      zh: '加载上下文面板快捷键',
+      hintEn: d => `Toggle the startup loaded-context panel. Default: ${d}.`,
+      hintZh: d => `切换启动时的已加载上下文面板。默认 ${d}。`,
+    },
+    showAll: {
+      label: 'Show-all shortcut',
+      zh: '显示全部消息快捷键',
+      hintEn: d => `Toggle show-all-messages. Default: ${d}.`,
+      hintZh: d => `切换显示全部消息。默认 ${d}。`,
+    },
+    redraw: {
+      label: 'Redraw shortcut',
+      zh: '终端重绘快捷键',
+      hintEn: d => `Clear and repaint the terminal. Default: ${d}.`,
+      hintZh: d => `清空并重绘终端。默认 ${d}。`,
+    },
+    todoFold: {
+      label: 'Todo fold shortcut',
+      zh: '待办折叠快捷键',
+      hintEn: d => `Fold/unfold the goal/todo panel. Default: ${d}.`,
+      hintZh: d => `折叠/展开目标与待办面板。默认 ${d}。`,
+    },
+  }
+  const shortcutFields: TuiSettingsField[] = SHORTCUT_ACTIONS.map(action => {
+    const meta = shortcutFieldMeta[action.id]
+    const defaults = action.defaults.join(', ')
+    return {
+      path: ['shortcuts', action.id],
+      label: meta.label,
+      descriptions: { zh: meta.zh },
+      hint: meta.hintEn(defaults),
+      hintDescriptions: { zh: meta.hintZh(defaults) },
+      group: 'shortcuts',
+      kind: 'text',
+      format(value: unknown): string {
+        return typeof value === 'string' && value.trim() !== '' ? value : effectiveComboString(action.id)
+      },
+      parse(text: string) {
+        const draft = parseComboDraft(text)
+        if (draft === undefined) return undefined
+        if (draft.combos.length === 0) return { kind: 'clear' }
+        if (draftComboConflicts(action.id, draft.combos)) return undefined
+        return { kind: 'set', value: draft.combos.join(', ') }
+      },
+    }
+  })
+  // Prefer the composition's sections service; fall back to the in-package
+  // local host. Real compositions have been observed disposing the whole
+  // dsh-tui-* host-seam insert list right after load (issue #557), which
+  // left this registration silently skipped and /settings read-only.
+  // channel.ts reads through the same fallback, so both sides meet in the
+  // same registry either way.
+  {
+    const settingsSections = getHostSettingsSections(
+      ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
+    ) ?? getLocalSettingsSectionsHost()
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
       title: 'dsh-tui',
-      groups: [{ id: 'status-bar', title: 'Status bar', descriptions: { zh: '底栏设置' } }],
+      groups: [
+        { id: 'status-bar', title: 'Status bar', descriptions: { zh: '底栏设置' } },
+        { id: 'shortcuts', title: 'Shortcuts', descriptions: { zh: '快捷键' } },
+        { id: 'session', title: 'Session', descriptions: { zh: '会话' } },
+      ],
       fields: [
         {
           path: ['lang'],
@@ -612,6 +833,27 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
           ],
         },
+        {
+          path: ['promptSessionLabel'],
+          label: 'Session name chip',
+          descriptions: { zh: '会话名标签' },
+          hint: 'Show the session name on the prompt top border, right corner. Off by default.',
+          hintDescriptions: { zh: '在输入框顶边框右上角显示会话名。默认关闭。' },
+          kind: 'boolean',
+        },
+        {
+          path: ['recapOnOpen'],
+          label: 'Auto recap on open',
+          descriptions: { zh: '打开会话时自动总结' },
+          hint: 'On: opening/resuming a session automatically summarizes its recent activity into a dim line at the bottom of the transcript (hover/click to view or apply the suggested title). Off: use /recap manually.',
+          hintDescriptions: { zh: '开启：打开/恢复会话时自动把最近活动总结成一行灰字显示在会话底部（可悬停/点击查看或应用建议标题）；关闭：手动使用 /recap。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: the default is on.
+            return value === undefined || value === null ? 'true' : String(value)
+          },
+        },
+        ...shortcutFields,
         {
           path: ['statusBar', 'compact'],
           label: 'Compact status bar',
@@ -834,6 +1076,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   let exited = false
   let updateRequested = false
   let updateTargetVersion: string | undefined
+  // `/restart` flag: same exit funnel as `/update` minus the pnpm step —
+  // write the resume target, restore the terminal, respawn the process with
+  // the original argv, and let the fresh boot attach the same session.
+  let restartRequested = false
   // The profile this process was booted with (`dsh --profile <name>`); dsh
   // exposes it nowhere else, and /update must update the installation the
   // user is actually running, not a hard-coded one.
@@ -874,6 +1120,31 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           'Updating @deepseek-harness-tui/dsh-tui and restarting…',
           undefined,
           () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
+        )
+        return
+      }
+      // `/restart`: same handoff as the update path, no installation step.
+      // The resume target is written unconditionally — the user asked to
+      // restart THIS session, blank or not (mirrors the update contract).
+      if (restartRequested) {
+        beginRestartAttempt(channel.agentId)
+        logRestartEvent('funnel: /restart branch entered')
+        try {
+          writeResumeTarget(channel.agentId)
+          logRestartEvent('funnel: resume target written')
+        } catch (error) {
+          // Resume persistence is best effort and must never block a restart.
+          logRestartEvent('funnel: resume target write failed', {
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
+        void finishExit(
+          ctx,
+          instance,
+          bootedFullscreen,
+          t('restart-starting'),
+          undefined,
+          () => runRestart(ctx, profile, channel.agentId),
         )
         return
       }
@@ -932,6 +1203,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // the tree is already wrapped below, so they must not nest.
     fullscreen: bootedFullscreen,
     onExit: () => handleExit(),
+    // `/restart`: respawn this process and resume the session, no update.
+    onRestart: () => {
+      if (exited || restartRequested) return
+      restartRequested = true
+      logRestartEvent('command: /restart accepted')
+      channel.notify(t('restart-starting'))
+      handleExit()
+    },
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
     // unavailable notice instead.
@@ -998,6 +1277,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const isRecompose = lastBootedFullscreen !== undefined
   lastBootedFullscreen = bootedFullscreen
   logMouseDebug('apply mount', { bootedFullscreen, isRecompose })
+  // /restart handoff diagnosis: the replacement got all the way to a mounted
+  // UI, so any later death is post-boot (and its stderr keeps flowing to the
+  // parent only within the survival window — this line is the durable mark).
+  if (process.env.DSH_TUI_RESTART_CHILD === '1') {
+    logRestartEvent('boot: UI mounted', { fullscreen: bootedFullscreen, isRecompose })
+  }
 
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
@@ -1215,6 +1500,8 @@ type InkShutdownState = {
    * lingering parent stops racing the restarted TUI for keypresses.
    */
   detachStdinForHandoff?: () => void
+  /** Drain pending stdin bytes; the exit funnel re-drains after cleanup. */
+  drainStdin?: () => void
   frontFrame?: { cursor?: { x: number; y: number } }
   displayCursor?: { x: number; y: number } | null
 }
@@ -1229,9 +1516,19 @@ async function finishExit(
   done: () => void,
 ): Promise<void> {
   try {
-    const runtime = readInkShutdownState(instances.get(process.stdout))
-    if (runtime === undefined && instance !== undefined) {
+    // Resolve the Ink runtime twice: the instances map is keyed by stdout
+    // identity, so a replaced/overridden stdout misses it; the render()
+    // handle is the caller's own instance and always matches (issue #522 —
+    // a missed lookup skipped detachForShutdown, leaving the stdin pump,
+    // TTY handlers and querier alive so the self-heal probe re-wrote
+    // ENABLE_MOUSE_TRACKING after DISABLE_MOUSE_TRACKING had been sent).
+    const fromMap = readInkShutdownState(instances.get(process.stdout))
+    const fromHandle = instance === undefined ? undefined : readInkShutdownState(instance)
+    const runtime = fromMap ?? fromHandle
+    if (runtime === undefined) {
       ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
+    } else if (fromMap === undefined) {
+      ctx.logger.debug('dsh-tui: Ink runtime resolved from the render handle (instances map missed); detaching')
     }
     const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
 
@@ -1260,6 +1557,16 @@ async function finishExit(
     ].join('')
     const suffix = notice === undefined ? '' : `${notice}\n`
     await writeStream(process.stdout, `${cleanup}\r\n${suffix}`)
+    // Re-drain AFTER the cleanup sequences have landed (#507): terminal
+    // replies and mouse packets already in flight when the exit started
+    // keep arriving while cleanup is being written — the detach-time drain
+    // cannot see them. Unconsumed at process exit they land in the shell's
+    // input queue (DECRPM/DA1/XTVERSION garbage pasted into the prompt).
+    // 150ms settle covers reply RTT on slow links (ssh/ghostty is #522's
+    // environment; 50ms proved too tight there) while staying well inside
+    // the exit window the user already waits through.
+    await new Promise<void>(resolve => setTimeout(resolve, 150))
+    runtime?.drainStdin?.()
     if (stderrNotice !== undefined) {
       await writeStream(process.stderr, `\n${stderrNotice}\n`)
     }
@@ -1274,6 +1581,7 @@ function readInkShutdownState(value: unknown): InkShutdownState | undefined {
   const candidate = value as Record<string, unknown>
   if (candidate.detachForShutdown !== undefined && typeof candidate.detachForShutdown !== 'function') return undefined
   if (candidate.detachStdinForHandoff !== undefined && typeof candidate.detachStdinForHandoff !== 'function') return undefined
+  if (candidate.drainStdin !== undefined && typeof candidate.drainStdin !== 'function') return undefined
   if (candidate.frontFrame !== undefined && !isFrameState(candidate.frontFrame)) return undefined
   if (candidate.displayCursor !== undefined && candidate.displayCursor !== null && !isCursorState(candidate.displayCursor)) return undefined
   return value as InkShutdownState
@@ -1318,6 +1626,42 @@ function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
       clearTimeout(timer)
       finish()
     }
+  })
+}
+
+/**
+ * Restart the TUI in place and resume the same session — the `/restart`
+ * tail of `/reload`: the soft reload cannot re-read boot-time-only state
+ * (cordis.yml root config, frozen fullscreen layout, newly built code), so
+ * /restart respawns the process with the original argv through the same
+ * terminal handoff the /update path uses, minus the installation step.
+ * The resume contract is dual-written (env + resume.txt) before this runs.
+ */
+function runRestart(ctx: Context, profile: string | undefined, sessionId: string): void {
+  logRestartEvent('runRestart: entered, disposing cordis root')
+  disposeRootAndThen(ctx, () => {
+    logRestartEvent('runRestart: root disposed, starting restartTui')
+    void restartTui(sessionId).then(
+      restartCode => {
+        logRestartEvent('runRestart: restartTui resolved', { restartCode })
+        if (restartCode !== 0) {
+          writeHandoffNotice(
+            `\ndsh-tui restart failed to spawn (exit ${restartCode}). Your session is preserved — resume with:\n` +
+              `${resumeCommand(profile, sessionId)}\n\n`,
+          )
+        }
+        process.exit(restartCode)
+      },
+      restartError => {
+        const message = restartError instanceof Error ? restartError.message : String(restartError)
+        logRestartEvent('runRestart: restartTui rejected', { message })
+        writeHandoffNotice(
+          `\ndsh-tui restart failed: ${message}. Your session is preserved — resume with:\n` +
+            `${resumeCommand(profile, sessionId)}\n\n`,
+        )
+        process.exit(1)
+      },
+    )
   })
 }
 
@@ -1384,7 +1728,12 @@ function resumeCommand(profile: string | undefined, sessionId: string): string {
  * reporting failure on a clean exit would mislead wrapper scripts.
  */
 function disposeRootAndThen(ctx: Context, done: () => void, fallbackCode = 1): void {
-  const timer = setTimeout(() => process.exit(fallbackCode), 5000)
+  const timer = setTimeout(() => {
+    // Diagnosis for a stalled disposal: without this line the fallback exit
+    // is indistinguishable from a successful handoff in the field.
+    logRestartEvent('dispose: timeout, taking fallback exit', { fallbackCode })
+    process.exit(fallbackCode)
+  }, 5000)
   timer.unref()
   void withHostRootCapability(() => ctx.root.fiber.dispose()).then(
     () => {

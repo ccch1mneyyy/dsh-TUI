@@ -1,0 +1,92 @@
+name: Bug 报告
+description: 报告一个问题。功能建议请走 Discussions。
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        功能建议、使用问题、插件推广请走 Discussions。
+
+        间歇性问题也可以报，说明出现频率即可。
+
+  - type: input
+    id: version
+    attributes:
+      label: dsh-tui 版本
+      description: |
+        启动横幅右上角显示当前版本（`✦ dsh-TUI vX.Y.Z`）。
+        不要用 `npm ls -g` 的结果——全局启动器的版本不随 `/update` 前进，会落后于实际运行的版本。
+        查不到就填「不知道」。
+      placeholder: "0.9.0"
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 终端与操作系统
+      description: 终端软件 + 版本，操作系统 + 版本。用 tmux / WSL / SSH 的请写明。不确定就写你知道的部分。
+      placeholder: "Windows Terminal 1.21 + WSL2 Ubuntu 24.04 / iTerm2 3.5 + macOS 15.5"
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: 现象
+      description: 实际发生了什么。有截图或录屏请贴上来。
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 怎么触发的
+      description: |
+        从干净启动开始，你做了什么。写明终端尺寸、是否全屏、按了哪些键。
+        必现的话写出步骤；偶发的话写出现频率（例如「十次里有两三次」）。
+      value: |
+        1.
+        2.
+        3.
+
+        出现频率：
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望（可选）
+      description: 应该发生什么。现象已经说清楚的话可以留空。
+    validations:
+      required: false
+
+  - type: textarea
+    id: analysis
+    attributes:
+      label: 分析（可选）
+      description: |
+        定位到具体 commit、函数、代码行的分析对处理很有帮助。
+        每条结论请标注「已验证」或「未验证」。未标注的按未验证处理。
+      placeholder: |
+        已验证：git bisect 定位到 a643ee2，父提交 457dbba 通过，两侧各手动复核 3 次。
+        未验证：怀疑与流式行高变化时的宽度失效有关，没有证据。
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      options:
+        - label: 我搜索过现有 issue，这不是重复。
+          required: true
+        - label: 这是一个 bug，不是功能请求。
+          required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        已经写好修复的话，直接提 PR 并和本 issue 互相链接。修 bug 不需要事先批准。

@@ -18,6 +18,7 @@ const [
   { Chat },
   { QuestionStore },
   { createChannel },
+  { settle, settled, sleep, viewportLines },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -28,6 +29,7 @@ const [
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/dsh-adapter/channel.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 80
@@ -115,19 +117,15 @@ function Fixture(): React.ReactNode {
   )
 }
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const write = async (input: string): Promise<void> => {
   stdin.write(input)
   await sleep(180)
 }
 
 function screenText(): string {
-  const buffer = term.buffer.active
-  const lines: string[] = []
-  for (let row = 0; row < term.rows; row++) {
-    lines.push(buffer.getLine(row)?.translateToString(true) ?? '')
-  }
-  return lines.join('\n')
+  // 视口读取（baseY 起）：inline 模式有 scrollback 时直扫 getLine(0..rows)
+  // 读的是缓冲区开头，会混入已滚出的旧行。
+  return viewportLines(term).join('\n')
 }
 
 let failures = 0
@@ -145,68 +143,71 @@ const app = await render(<Fixture />, {
 })
 
 try {
-  await sleep(400)
-  let text = screenText()
-  check(text.includes('/new —'), 'help opens at the first command')
-  check(!text.includes('/q —'), 'tail commands start outside the viewport')
-  check(text.includes('/ for commands'), 'shortcut reference is visible at the top')
-  check(text.includes('↑/↓'), 'a persistent scroll hint is visible')
-  check(!text.includes('PENDING_SENTINEL'), 'pending preview stays behind the help overlay')
+  // 正向条件各自 settled；负向（尚未滚到的尾部/被遮住的 pending）在正向
+  // 落定后的同帧同步判定——空帧上轮询「不存在」会立即真。
+  check(await settled(() => screenText().includes('/new —')), 'help opens at the first command')
+  check(await settled(() => screenText().includes('/ for commands')), 'shortcut reference is visible at the top')
+  check(await settled(() => screenText().includes('↑/↓')), 'a persistent scroll hint is visible')
+  check(!screenText().includes('/q —'), 'tail commands start outside the viewport')
+  check(!screenText().includes('PENDING_SENTINEL'), 'pending preview stays behind the help overlay')
 
-  await write('\x1b[6~')
-  text = screenText()
-  check(!text.includes('/new —'), 'PageDown advances by a viewport')
-  await write('\x1b[5~')
-  text = screenText()
-  check(text.includes('/new —'), 'PageUp returns by a viewport')
+  stdin.write('\x1b[6~')
+  check(await settled(() => !screenText().includes('/new —')), 'PageDown advances by a viewport')
+  stdin.write('\x1b[5~')
+  check(await settled(() => screenText().includes('/new —')), 'PageUp returns by a viewport')
 
   // More presses than the content requires also exercise end clamping.
-  await write('\x1b[B'.repeat(60))
-  text = screenText()
-  check(text.includes('/q —'), 'Down reaches the final command')
-  check(!text.includes('/new —'), 'the viewport actually moved away from the top')
+  stdin.write('\x1b[B'.repeat(60))
+  check(await settled(() => screenText().includes('/q —')), 'Down reaches the final command')
+  check(await settled(() => !screenText().includes('/new —')), 'the viewport actually moved away from the top')
 
-  await write('\x1b[H')
-  text = screenText()
-  check(text.includes('/new —'), 'Home returns to the first command')
+  stdin.write('\x1b[H')
+  check(await settled(() => screenText().includes('/new —')), 'Home returns to the first command')
 
-  await write('\x1b[F')
-  text = screenText()
-  check(text.includes('/q —'), 'End jumps to the final command')
-  check(text.includes('/ for commands'), 'shortcut reference stays fixed at the tail')
+  stdin.write('\x1b[F')
+  check(await settled(() => screenText().includes('/q —')), 'End jumps to the final command')
+  check(await settled(() => screenText().includes('/ for commands')), 'shortcut reference stays fixed at the tail')
 
   // SGR mouse wheel up. The fixture's Chat-like owner must not move the
   // transcript while Help owns the overlay, while Help itself must move.
+  // Stability probe (transcriptWheelEvents must stay 0): a settle on the
+  // already-true condition would return immediately — keep the fixed window
+  // so a leaked wheel event has time to surface.
   await write('\x1b[<64;10;10M'.repeat(20))
   check(transcriptWheelEvents === 0, 'help suppresses transcript wheel scrolling')
-  check(!screenText().includes('/q —'), 'mouse wheel scrolls the help viewport')
+  check(await settled(() => !screenText().includes('/q —')), 'mouse wheel scrolls the help viewport')
 
-  await write('\x1b')
-  check(!screenText().includes('commands:'), 'Escape closes help')
-  check(screenText().includes('PENDING_SENTINEL'), 'pending preview returns after help closes')
-  await write('?')
-  text = screenText()
-  check(text.includes('/new —'), 'reopening help resets the viewport to the top')
-  check(!text.includes('PENDING_SENTINEL'), 'reopened help remains visually exclusive')
+  stdin.write('\x1b')
+  check(await settled(() => !screenText().includes('commands:')), 'Escape closes help')
+  check(await settled(() => screenText().includes('PENDING_SENTINEL')), 'pending preview returns after help closes')
+  stdin.write('?')
+  check(await settled(() => screenText().includes('/new —')), 'reopening help resets the viewport to the top')
+  check(await settled(() => !screenText().includes('PENDING_SENTINEL')), 'reopened help remains visually exclusive')
 
+  // Stability probe across a resize (the hint must REMAIN visible): the
+  // condition is already true before the repaint, so a settle would return
+  // immediately — keep the fixed window for a wrong reflow to surface.
   stdout.rows = 18
   term.resize(COLS, 18)
   stdout.emit('resize')
   await sleep(300)
   check(screenText().includes('↑/↓'), 'scroll hint remains visible after resize')
-  await write('\x1b[F')
-  check(screenText().includes('/q —'), 'resized help can still reach the tail')
+  stdin.write('\x1b[F')
+  check(await settled(() => screenText().includes('/q —')), 'resized help can still reach the tail')
 
+  // Ordering sleep kept: the narrow reflow has no single anchored condition
+  // to poll before the next keypress.
   stdout.columns = 60
   term.resize(60, 18)
   stdout.emit('resize')
   await sleep(300)
-  await write('\x1b[H')
-  check(screenText().includes('/ for commands'), 'narrow Help stacks shortcuts into the scroll viewport')
-  await write('\x1b[F')
-  await write('\x1b[B'.repeat(60))
-  check(LOCAL_COMMANDS.at(-1)?.name === 'q' && screenText().includes('/connect —'), 'narrow Help keeps the command-list tail reachable after End and navigation')
-  check(screenText().includes('↑/↓'), 'narrow Help keeps the navigation hint fixed')
+  stdin.write('\x1b[H')
+  check(await settled(() => screenText().includes('/ for commands')), 'narrow Help stacks shortcuts into the scroll viewport')
+  stdin.write('\x1b[F')
+  await settle(() => screenText().includes('/q —'))
+  stdin.write('\x1b[B'.repeat(60))
+  check(LOCAL_COMMANDS.at(-1)?.name === 'q' && await settled(() => screenText().includes('/connect —')), 'narrow Help keeps the command-list tail reachable after End and navigation')
+  check(await settled(() => screenText().includes('↑/↓')), 'narrow Help keeps the navigation hint fixed')
 } finally {
   app.unmount()
 }
@@ -282,37 +283,43 @@ const chat = await render(
 )
 
 try {
+  // Startup and per-key typing keep fixed sleeps: the prompt echo has no
+  // single stable anchor to poll while the completion menu reshuffles.
   await sleep(500)
   for (const key of '/help') await write(key)
-  await write('\r')
-  check(screenText().includes('↑/↓'), '/help opens Help through the real Chat command path')
+  stdin.write('\r')
+  check(await settled(() => screenText().includes('↑/↓')), '/help opens Help through the real Chat command path')
 
-  await write('\x1b')
+  stdin.write('\x1b')
+  await settle(() => !screenText().includes('↑/↓'))
+  // Negative probe (transcript search must NOT open on `/`): a settle would
+  // return immediately on the already-true condition — keep a fixed window.
   await write('/')
-  let routed = screenText()
-  check(!routed.includes('no matches'), 'ordinary Esc then slash stays in command completion')
-  check(routed.includes('help'), 'ordinary slash completion is visible after Help closes')
+  check(!screenText().includes('no matches'), 'ordinary Esc then slash stays in command completion')
+  check(await settled(() => screenText().includes('help')), 'ordinary slash completion is visible after Help closes')
   for (const key of 'help') await write(key)
-  await write('\r')
-  check(screenText().includes('↑/↓'), '/help reopens through the real Chat command path')
+  stdin.write('\r')
+  check(await settled(() => screenText().includes('↑/↓')), '/help reopens through the real Chat command path')
 
   // Ctrl+O must be inert behind Help; Esc then returns to the ordinary
-  // prompt, where `/` belongs to slash-command completion.
+  // prompt, where `/` belongs to slash-command completion. (The Ctrl+O
+  // inertness is a must-not-change probe — fixed window kept.)
   await write('\x0f')
-  await write('\x1b')
+  stdin.write('\x1b')
+  await settle(() => !screenText().includes('↑/↓'))
   await write('/')
-  routed = screenText()
-  check(!routed.includes('no matches'), 'slash after Help does not open transcript search')
-  check(routed.includes('help'), 'slash completion remains available after Help closes')
+  check(!screenText().includes('no matches'), 'slash after Help does not open transcript search')
+  check(await settled(() => screenText().includes('help')), 'slash completion remains available after Help closes')
 
   for (const key of 'help') await write(key)
-  await write('\r')
-  routed = screenText()
-  check(routed.includes('↑/↓'), '/help can be submitted again after closing Help')
+  stdin.write('\r')
+  check(await settled(() => screenText().includes('↑/↓')), '/help can be submitted again after closing Help')
 
   // Composer-local, Chat-global, and plugin bindings must not mutate hidden
   // state behind Help. The broad Chat yield guards future shortcuts too,
   // instead of relying on an incomplete list of per-binding conditions.
+  // These are all must-not-change probes: polling the already-true condition
+  // would return immediately, so each keeps its fixed observation window.
   await write('\x14')
   check(screenText().includes('↑/↓'), 'Ctrl+T does not open trajectory behind Help')
   await write('\x10')
@@ -324,13 +331,14 @@ try {
   await write('\x1b[Z')
   check(modeCycles === 0, 'Shift+Tab does not cycle session mode behind Help')
   await write('\x1b[1;2A')
-  await write('x')
-  check(!screenText().includes('↑/↓'), 'typing after Shift+Up dismisses Help instead of being trapped in selection mode')
+  stdin.write('x')
+  check(await settled(() => !screenText().includes('↑/↓')), 'typing after Shift+Up dismisses Help instead of being trapped in selection mode')
   await write('\x03')
 
   // Help owns Esc even during a live turn. The Chat-level cancel branch must
   // yield, so one Esc closes the overlay without aborting the agent.
-  await write('?')
+  stdin.write('?')
+  await settle(() => screenText().includes('↑/↓'))
   const onSessionEvent = handlers.get('session/event') as
     | ((session: unknown, event: unknown) => void)
     | undefined
@@ -340,27 +348,27 @@ try {
     type: 'turn/start',
     data: { turn: 1 },
   })
-  await sleep(180)
-  check(chatChannel.working, 'full Chat fixture enters working state')
-  await write('\x1b')
+  check(await settled(() => chatChannel.working), 'full Chat fixture enters working state')
+  stdin.write('\x1b')
+  check(await settled(() => !screenText().includes('↑/↓')), 'Escape still closes Help while a turn is working')
   check(cancelCalls === 0, 'Escape closes Help without cancelling a working turn')
-  check(!screenText().includes('↑/↓'), 'Escape still closes Help while a turn is working')
   onSessionEvent?.(agent.session, {
     seq: 2,
     time: Date.now(),
     type: 'turn/end',
     data: { turn: 1, reason: { kind: 'completed' } },
   })
-  await sleep(180)
+  await settle(() => !chatChannel.working)
 
   // A deliberately enabled Ctrl+O transcript mode survives Help, but `/`
   // typed while Help is visible belongs to the prompt and dismisses Help;
   // it must not open the transcript search bar behind the overlay.
   await write('\x0f')
-  await write('?')
-  await write('/')
-  routed = screenText()
-  check(!routed.includes('no matches'), 'slash typed in Help does not open transcript search')
+  stdin.write('?')
+  await settle(() => screenText().includes('↑/↓'))
+  stdin.write('/')
+  await settle(() => !screenText().includes('↑/↓'))
+  check(!screenText().includes('no matches'), 'slash typed in Help does not open transcript search')
   check(chatChannel.commandCompletions('/').some(command => command.name === 'help'), 'slash typed in Help returns to command completion')
   await write('\x03')
   await write('\x0f')

@@ -92,22 +92,36 @@ teardown 与更新的衔接（src/plugin.ts:316-323,450-467）：cordis 上下�
 
 ## 已确认缺陷
 
-**DSH_CC_UPDATED_FROM 取值时点错误**（src/update.ts:232）：
+**DSH_CC_UPDATED_FROM 取值时点错误**（原 src/update.ts:232）——**已修复**：
+现代码在 `runProcess(update)` 之前捕获 `updatedFrom`（updateTuiAndRestart
+开头，注释引用 issue #307），重启 env 复用该捕获值；verify-update.mjs
+的 `stamp:` 两项断言锁定该顺序。本文行号仍以审计基线 b2f4087 为准。
 
-- 设计意图（src/plugin.ts:47-48 注释）：标记是 "the version it was leaving
-  behind"（更新前版本），仅当 "the freshly loaded one is not newer" 时告警。
-- 实际代码：`installedTuiVersion()` 在 `await runProcess(dsh, ...update
-  --latest...)` **完成后**才求值——此时磁盘已是新版，标记 = 新版。
-- 后果：成功更新后重启核验 `isVersionNewer(now, updatedFrom)` 必为假，
-  "版本未变化"告警在**每次成功更新后同样触发**；该告警只在镜像滞后/失败
-  场景才符合设计意图。
+## 2026-08-24 修复（issues #479/#483）
 
-静态顺序证据明确；运行后果需实跑确认（dsh plugin update 的内部 pnpm 行为属
-dsh CLI 外部实现，只读审计无法验证），证据等级 strong indication。
+- **#479（Linux 必现 ERR_PNPM_EEXIST）**：pnpm `importPackage` 的确定性
+  暂存目录名（`_tmp_<pid>_<threadId>`）使同一次 update 内第二次 swap
+  撞名，Linux overlayfs 报 EEXIST——必现、非瞬时，普通重试永远失败。
+  修复分两层：`isEexistTmpRenameFailure()` 识别该签名（与 #225 的
+  ENOENT/EPERM/EBUSY 瞬时族分开）；`removeStalePackageInstall()` 清除
+  profile 内陈旧包目录（`$DSH_HOME ?? ~/.dsh`/profiles/<name>/…，
+  junction/symlink 只摘链接不穿越目标树）与同级 `dsh-tui_tmp_<pid>_<tid>`
+  残留暂存目录后重跑——issue 实测验证的恢复路径。#225 瞬时族直接重试
+  失败后同样升级到该恢复。
+- **#483-1（更新重启后键盘失灵）**：/update 重启尾部从裸
+  `runProcess(inherit)` 换为复用泛化后的 `restartTui(sessionId,
+  { kind: 'update' })`——获得 /restart 同款加固：等待替代进程自然退出、
+  stdin watchdog 周期性 re-assert detach、stderr 捕获与快速死亡同步
+  报告、restart.log 诊断（事件前缀 `update-restart:`；kind 'update' 不
+  设 DSH_TUI_RESTART_CHILD 标记）。
+- **#483-2（启动器同步提示命令在 npm 12 崩溃，#459）**：
+  `update-launcher-align-unknown` / `update-launcher-outdated` 的手动
+  命令加 `--legacy-peer-deps`（全局启动器是瘦壳，跳过全局 peer 解析
+  安全）。
 
 ## 回归验证
 
-`scripts/verify-update.mjs`：25 项 check，对编译产物 lib/types/update.js 做
+`scripts/verify-update.mjs`：57 项 check，对编译产物 lib/types/update.js 做
 纯函数断言（真实编译 lib、无网络、无子进程；:27-29），任一失败非零退出
 （:206-210），挂 CI（.github/workflows/ci.yml:43-45）。覆盖：installedTuiVersion 双布局+外来
 manifest 拒绝（4）、registry 解析 env 两种拼写/npmrc/默认（4）、semver 严格

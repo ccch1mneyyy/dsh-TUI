@@ -12,7 +12,7 @@ dsh-TUI 是终端程序：它把 ANSI 写进 PTY、从 PTY 读按键，因此任
    实现，扩展已上架 VS Code Marketplace。
 2. **内置集成终端直接运行** —— 零安装，秒级可用，适合不想装扩展的场景。
 
-> 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件，当前 **0.8.3**，建议
+> 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件，当前 **0.9.0**，建议
 > 0.7.0+）；`dsh-tui-vscode` 指 companion 扩展（当前 **0.5.1**）。两者版本
 > 独立、各自发布。扩展的完整说明见其仓库
 > [baobaolaodie/dsh-tui-vscode](https://github.com/baobaolaodie/dsh-tui-vscode)

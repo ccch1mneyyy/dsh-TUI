@@ -37,6 +37,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
+import { settled, sleep } from './lib/term-test.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -64,8 +65,6 @@ function makeStreams() {
   stdin.unref = () => stdin
   return { stdout, stderr, stdin }
 }
-
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const submitted = []
 const channel = {
@@ -97,8 +96,11 @@ const instance = await render(
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
+// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
 await sleep(600)
 
+// 按键间 pacing：每步移动/插入后的光标位置对外不可观测（stdout 被丢弃），
+// 只有最终 submit 可断言——步间保留固定窗口。
 const feed = async seq => {
   stdin.write(seq)
   await sleep(250)
@@ -113,11 +115,11 @@ await feed('\x1b[D')    // bare Left  → caret 6 (single char; jump bug: 0)
 await feed('Z')
 await feed('\x1b[1;5C') // Ctrl+Right → caret 14 (end of "…world")
 await feed('Q')
-await feed('\r')
+stdin.write('\r')
 
 check(
   'caret moves + inserts compose to the expected submitted text',
-  submitted.length === 1 && submitted[0] === 'hello ZYXworldQ',
+  await settled(() => submitted.length === 1 && submitted[0] === 'hello ZYXworldQ'),
   JSON.stringify(submitted),
 )
 

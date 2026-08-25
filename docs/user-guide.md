@@ -106,7 +106,7 @@ dsh-tui
 | `Ctrl+W` | 删除前一个单词 |
 | `Backspace` / `Delete` | 删前一 / 后一字符 |
 | `↑` / `↓` | 多行时行间移动；单行时浏览输入历史（50 条） |
-| `Ctrl+V`（⌘V） | 粘贴：文本 / 文件路径（图片自动 `@` 引用）/ 剪贴板位图（`[Image #N]` 附件） |
+| `Ctrl+V`（⌘V）/ `Alt+V` | 粘贴：文本 / 文件路径（图片自动 `@` 引用）/ 剪贴板位图（`[Image #N]` 附件）；终端拦截 `Ctrl+V` 时用 `Alt+V` |
 | `Ctrl+G` | 用 `$VISUAL`/`$EDITOR` 外部编辑器编辑输入（`:cq` 保留原稿；未设置变量时提示配置） |
 | 右键 / `Ctrl+Shift+V` | 终端原生粘贴（含换行原样插入） |
 | `Esc`（输入框） | 层级：关帮助 → 关命令菜单 → 关文件菜单（仅当前 `@` token）→ 中断重投 → 有输入清空 → 双击=时间回溯 |
@@ -137,7 +137,7 @@ dsh-tui
 ### 2.7 各场景键位
 
 **问卷（模型 ask_user_question）**
-`↑/↓` 选择 · `Space` 多选勾选 · `Tab` 切自定义回答 · `Enter` 提交 · `Esc`/`Ctrl+C` 取消整批提问
+`↑/↓` 选择 · `Space` 多选勾选 · `Tab` 切自定义回答 · `Enter` 提交 · 第 2 题起 `Esc` 返回上一题 · 第 1 题 `Esc` 或任意题 `Ctrl+C` 取消整批提问
 
 **计划评审（plan review）**
 `↑/↓` 移动 · `1`/`2` 数字快选（反馈为空时）· 打字=反馈 · `Enter` 提交 · `Esc` 打断评审
@@ -199,6 +199,7 @@ dsh-tui
 | `/new` | 无 | 新开会话（无二次确认；旧会话可 `/resume` 恢复） |
 | `/resume` | 无 | 打开会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） |
 | `/rename` | `<新名称>` | 重命名当前会话（无参时显示当前标题与用法） |
+| `/recap` | 无 | 最近活动摘要（一行）+ 建议标题；面板内 `a` 键或点击一键应用标题。设置 `dsh-tui.recapOnOpen`（默认开）开启时，打开/恢复会话自动在底部显示一条分隔线 + `回顾：` 摘要行，悬停可查看操作、点击展开，发送新消息后自动消失 |
 | `/workspace` | `resume` / `rename <名称>` / `open <路径或URI>` | 管理工作区；`open` 支持绝对路径、file URI、插件 scheme |
 | `/clear` | 无 | 清空当前会话视图（重置展开/选择状态） |
 | `/compact` | 无 | 压缩会话历史（无可压缩内容时会提示） |
@@ -233,6 +234,7 @@ dsh-tui
 | `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器；`frames` 列全部预设；`frames <名>` 直接设置。帧名 30 个（`random` 随机 + `claude/star2/sand/triangle/box/box2/corners/point/layer/flip/aesthetic/hamburger/moon/moon8/comet/breathe/dots/arrow/spark/bar/braille/arc/circle/grow/noise/bounce/rainbow/dqpb/toggle`，默认 `moon8`）。持久化 `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | Agent 预设切换：官方 `standard` / `code` / `minimal` / `cordis` + TUI 打包**梁神模式 `liangshen`** + 用户自定义；**已开始的会话不可切换**（blank-only 锁定）。持久化 `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
+| `/color` | 无参 / `<名>` / `status` / `reset` | 会话强调色：**无参打开调色板选择器**（8 色 + 色点预览，`↑/↓` 选择、`Enter` 应用）；`<名>` 直接设置；`status` 当前；`reset` 恢复主题默认。输入框边框 + 会话名标签变色（标签显示在输入框顶边框**右上角**，**默认关闭**，`/settings` 的「会话名标签」可开启；`red/orange/yellow/green/blue/purple/pink/cyan`）。按会话经 `session/color` 事件保存，resume/rewind 后仍在 |
 | `/lang` | `en` / `zh` / `status` | 界面语言热切换。优先级：`DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |
 
 ### 3.4 账号 / 策略 / 扩展
@@ -355,7 +357,7 @@ dsh-tui
 
 **问卷（模型 ask_user_question）**：面板独占键盘；`↑/↓` 选选项、`Space` 多选、
 `Enter` 提交。**最后一行是自由输入行**——在选项行直接打字 = 附加该选项标签 + 自定义文本一起提交；
-`Tab` 直达输入行。`Esc`/`Ctrl+C` 取消整批提问（模型收到 ASK_CANCELLED）。
+`Tab` 直达输入行。第 2 题起按 `Esc` 返回上一题并保留草稿；第 1 题按 `Esc`，或任意题按 `Ctrl+C`，取消整批提问（模型收到 ASK_CANCELLED）。
 计划评审卡片：`1`/`2` 数字快选；**批准必须无反馈文本**（带反馈视为"继续规划"）。
 
 **工具审批**：命令申请权限提升时弹出审批条（工具名 + 完整命令 + 原因）。
@@ -512,7 +514,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 
 **避坑**
 22. `/compact`、`/model` 在回合运行中会被拒绝——先 `Ctrl+C` 或等回合结束。
-23. 审批条 `Esc` = 拒绝（fail closed）；问卷 `Esc` = 取消整批（模型会收到取消信号）。
+23. 审批条 `Esc` = 拒绝（fail closed）；问卷第 2 题起 `Esc` = 返回上一题，第 1 题 `Esc` 或任意题 `Ctrl+C` = 取消整批（模型会收到取消信号）。
 24. `/update` 只更新 profile runtime 不动全局安装；提示版本错位时按提示执行
     `npm install -g @deepseek-harness-tui/dsh-tui@<版本>` 对齐启动器。
 25. macOS 的 ⌘ 键需要 iTerm2/kitty/WezTerm/ghostty/tmux；Terminal.app 用 Ctrl 即可。

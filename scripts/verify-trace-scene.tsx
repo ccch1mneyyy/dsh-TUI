@@ -28,7 +28,7 @@ process.env.FORCE_COLOR = '3'
 // to agree with.
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { TrajectoryScene }, { Chat }, { QuestionStore }, { stringWidth }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { TrajectoryScene }, { Chat }, { QuestionStore }, { stringWidth }, { settle, settled, sleep }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -38,12 +38,11 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Traj
     import('../src/screens/Chat.js'),
     import('../src/dsh-adapter/questions.js'),
     import('../src/ink/stringWidth.js'),
+    import('./lib/term-test.mjs'),
   ])
 const { miniWakeWidth } = await import('../src/components/trajectory/MiniWake.js')
 const traj = await import('../src/dsh-adapter/trajectory/index.js')
 const instances = (await import('../src/ink/instances.js')).default
-
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -236,18 +235,21 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     }),
     { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(160)
+  // The ledger rows animate in (motion arrive): each assertion polls its OWN
+  // condition (settled) — snapshotting at the first painted rows would catch a
+  // frame that is still growing, and stale mid-animation frames would poison
+  // every whole-buffer negative check later in this part. The cursor snapshot
+  // `first` is taken only after every arrival condition has settled.
+  check('scene shows its title and totals', await settled(() => screen().includes('轨迹') && /\d+\s*轮/.test(screen())), screen().split('\n')[0]?.trim())
+  check('scene shows both view tabs', await settled(() => screen().includes('时序') && screen().includes('热点')))
+  check('ledger renders tool rows with names', await settled(() => screen().includes('read_file') && screen().includes('grep_repo')))
+  check('ledger folds the burst run', await settled(() => /web_search\s*×4/.test(screen())), /web_search[^\n]*/.exec(screen())?.[0]?.trim())
+  check('ledger surfaces the retry row', await settled(() => screen().includes('RATE_LIMIT') || screen().includes('RTY')))
+  check('ledger renders durations', await settled(() => /\d+(ms|\.\ds)/.test(screen())))
+  check('cursor pointer is visible', await settled(() => screen().includes('▸')))
+  check('wake band renders block glyphs', await settled(() => /[▁▂▃▄▅▆▇█]/.test(screen())))
+  check('hint line documents the keys', await settled(() => screen().includes('查询') || screen().includes('query')))
   const first = screen()
-
-  check('scene shows its title and totals', first.includes('轨迹') && /\d+\s*轮/.test(first), first.split('\n')[0]?.trim())
-  check('scene shows both view tabs', first.includes('时序') && first.includes('热点'))
-  check('ledger renders tool rows with names', first.includes('read_file') && first.includes('grep_repo'))
-  check('ledger folds the burst run', /web_search\s*×4/.test(first), /web_search[^\n]*/.exec(first)?.[0]?.trim())
-  check('ledger surfaces the retry row', first.includes('RATE_LIMIT') || first.includes('RTY'))
-  check('ledger renders durations', /\d+(ms|\.\ds)/.test(first))
-  check('cursor pointer is visible', first.includes('▸'))
-  check('wake band renders block glyphs', /[▁▂▃▄▅▆▇█]/.test(first))
-  check('hint line documents the keys', first.includes('查询') || first.includes('query'))
 
   // The inspector must occupy the same rows no matter where the cursor is —
   // fixed geometry is what keeps cursor movement from resizing the frame.
@@ -260,15 +262,15 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   const before = hintRow(first)
   const rowAtStart = cursorRow(first)
   stdin.write('\x1b[A')
-  await sleep(240)
+  const movedUp = await settled(() => cursorRow(screen()) === rowAtStart - 1)
   const afterUp = screen()
   stdin.write('\x1b[A')
-  await sleep(240)
+  const movedTwo = await settled(() => cursorRow(screen()) === rowAtStart - 2)
   const afterTwo = screen()
   check('cursor opens pinned to the newest row', rowAtStart >= 0, `row ${rowAtStart}`)
   check(
     '↑ walks the cursor back up the ledger',
-    cursorRow(afterUp) === rowAtStart - 1 && cursorRow(afterTwo) === rowAtStart - 2,
+    movedUp && movedTwo,
     `${rowAtStart} → ${cursorRow(afterUp)} → ${cursorRow(afterTwo)}`,
   )
   check('inspector follows the cursor with no keystroke', afterUp !== first && afterTwo !== afterUp)
@@ -279,6 +281,12 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   )
 
   // Jump to the next failure, then confirm the inspector explains it.
+  // Fixed window kept: the assertion's condition ALREADY holds before the
+  // seek (the retry row prints RATE_LIMIT in the ledger), so a settle on it
+  // returns instantly — and the next `/` write then coalesces into the same
+  // stdin chunk as `]`, reaching useInput as one `']/'` string that matches
+  // neither key. The delay both lets the seek process and keeps the
+  // keystrokes in separate chunks.
   stdin.write(']')
   await sleep(140)
   const atFailure = screen()
@@ -286,24 +294,23 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 
   // Query mode filters the whole session.
   stdin.write('/')
+  // Fixed pacing kept: same stdin-chunk coalescing hazard as `]` above — the
+  // query text must not arrive in the same chunk as the `/` keystroke.
   await sleep(80)
   stdin.write('tool:read_file')
-  await sleep(180)
-  const filtered = screen()
-  check('query narrows the ledger', filtered.includes('read_file') && !filtered.includes('grep_repo'))
-  check('query reports its match count', /\d+\/\d+/.test(filtered), /\d+\/\d+[^\n]*/.exec(filtered)?.[0])
+  check('query narrows the ledger', await settled(() => {
+    const s = screen()
+    return s.includes('read_file') && !s.includes('grep_repo')
+  }))
+  check('query reports its match count', await settled(() => /\d+\/\d+/.test(screen())), /\d+\/\d+[^\n]*/.exec(screen())?.[0])
   stdin.write('\x1b')
-  await sleep(140)
-  check('esc clears the query', screen().includes('grep_repo'))
+  check('esc clears the query', await settled(() => screen().includes('grep_repo')))
 
   // View switching. The hotspot rows animate in (motion arrive); a fixed
-  // sleep races the animation — poll until the view materializes.
+  // sleep races the animation — each check polls its own condition until the
+  // view materializes.
   stdin.write('\x1b[C')
-  let hotspot = ''
-  for (let i = 0; i < 40 && !(hotspot.includes('工具') || hotspot.includes('Tools')); i++) {
-    await sleep(80)
-    hotspot = screen()
-  }
+  const hotspotShown = await settled(() => screen().includes('工具') || screen().includes('Tools'))
   {
     const buf = term.buffer.active
     const all: string[] = []
@@ -311,16 +318,11 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     console.error('--- FULL BUFFER (len=' + buf.length + ' vy=' + buf.viewportY + ') ---')
     console.error(all.join(String.fromCharCode(10)))
   }
-  check('→ switches to the hotspot view', hotspot.includes('工具') || hotspot.includes('Tools'))
-  check('hotspot ranks tools by cost', /web_search|read_file/.test(hotspot))
-  check('hotspot draws bars', /[█▌]/.test(hotspot))
+  check('→ switches to the hotspot view', hotspotShown)
+  check('hotspot ranks tools by cost', await settled(() => /web_search|read_file/.test(screen())))
+  check('hotspot draws bars', await settled(() => /[█▌]/.test(screen())))
   stdin.write('\x1b[D')
-  let backToTimeline = ''
-  for (let i = 0; i < 40 && !backToTimeline.includes('read_file'); i++) {
-    await sleep(80)
-    backToTimeline = screen()
-  }
-  check('← returns to the timeline', backToTimeline.includes('read_file'))
+  check('← returns to the timeline', await settled(() => screen().includes('read_file')))
 
   instance.unmount()
   term.dispose()
@@ -353,16 +355,15 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   // inline geometry — the alt-screen path, which is exactly what the two
   // safety assertions below exist to prove, would go untested.
   for (const value of instances.values()) instances.set(process.stdout, value)
-  await sleep(220)
+  const conversationReady = await settled(() => screen().includes('conversation line'))
   const conversation = screen()
   const scrollbackBefore = rowsOf()
-  check('conversation renders before the scene opens', conversation.includes('conversation line'))
+  check('conversation renders before the scene opens', conversationReady)
 
   // Open and close the scene twenty times: any per-round-trip leak compounds
   // into an obvious number rather than hiding as a rounding error.
   for (let round = 0; round < 20; round++) {
     stdin.write('\x14') // Ctrl+T
-    await sleep(round === 0 ? 160 : 60)
     if (round === 0) {
       // Assert the PROTOCOL, not the pixels. `<AlternateScreen>` notifies the
       // Ink instance via `instances.get(process.stdout)`, and this harness
@@ -371,19 +372,25 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       // can prove is exactly what matters for safety: the alternate buffer was
       // entered, the conversation is off-screen, and (below) the main screen
       // comes back untouched. Scene rendering itself is covered by Part A.
-      const inScene = screen()
-      check('Ctrl+T enters the alternate screen', term.buffer.active.type === 'alternate',
+      check('Ctrl+T enters the alternate screen', await settled(() => term.buffer.active.type === 'alternate'),
         term.buffer.active.type)
-      check('the conversation is no longer on screen', !inScene.includes('conversation line 0'))
-      check('the scene is painted there', /[\u2500-\u259f]/.test(inScene) || inScene.includes('时序'))
+      check('the conversation is no longer on screen', await settled(() => !screen().includes('conversation line 0')))
+      check('the scene is painted there', await settled(() => /[\u2500-\u259f]/.test(screen()) || screen().includes('时序')))
+    } else {
+      // Wait to be IN the scene before closing it (act-only wait → settle).
+      await settle(() => term.buffer.active.type === 'alternate')
     }
     stdin.write('q')
-    await sleep(round === 0 ? 200 : 70)
+    await settle(() => term.buffer.active.type === 'normal')
   }
+  // Fixed window kept: this is also the quiescence window for the scrollback
+  // accounting below — settling on the restored conversation would sample
+  // rowsOf() before the post-restore repaint lands and undercount per-trip.
   await sleep(200)
 
+  const mainRestored = await settled(() => screen().includes('conversation line'))
   const restored = screen()
-  check('main screen returns to the conversation', restored.includes('conversation line'),
+  check('main screen returns to the conversation', mainRestored,
     restored === conversation ? '' : firstDiff(conversation, restored))
 
   // Scrollback accounting. Leaving the alternate screen makes the terminal
@@ -398,26 +405,32 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 
   // Navigating inside the scene is the common case by far, and it must be free.
   stdin.write('\x14')
+  // Fixed window kept: beforeNav is the baseline of a "must not grow" probe —
+  // it has to be sampled after the open+first paint fully lands (settling on
+  // the alt buffer alone would sample mid-paint).
   await sleep(240)
   const beforeNav = rowsOf()
   for (let i = 0; i < 40; i++) {
     stdin.write(i % 2 === 0 ? '\x1b[A' : '\x1b[B')
-    await sleep(12)
+    await sleep(12) // fixed pacing kept: keystrokes must arrive in separate stdin chunks
   }
   stdin.write('\x1b[C')
-  await sleep(120)
+  await sleep(120) // fixed window kept: stability probe — growth needs wall time to show up
   stdin.write('\x1b[D')
-  await sleep(200)
+  await sleep(200) // fixed window kept: same stability probe
   check('navigating inside the scene adds no scrollback at all', rowsOf() === beforeNav,
     `${beforeNav} → ${rowsOf()} over 42 keystrokes`)
   stdin.write('q')
-  await sleep(200)
+  await settle(() => term.buffer.active.type === 'normal')
 
   // Idle animation must patch, never repaint.
   stdin.write('\x14')
+  // Fixed window kept: the write stream must be quiescent (open paint done)
+  // before it is cleared — clearing too early counts the initial paint's tail
+  // as an "idle" repaint and fails the negative probe below.
   await sleep(200)
   writes.length = 0
-  await sleep(1200)
+  await sleep(1200) // fixed observation window kept: negative probe (no repaint escapes while idle)
   const stream = writes.join('')
   const repaints = [
     ['erase line', /\x1b\[[0-2]?K/],
@@ -431,7 +444,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   check('idle animation does emit style updates', /\x1b\[[\d;]*m/.test(stream), `${stream.length} bytes`)
 
   stdin.write('q')
-  await sleep(120)
+  await settle(() => term.buffer.active.type === 'normal')
   instance.unmount()
   instances.delete(process.stdout)
   term.dispose()
@@ -468,14 +481,19 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
   )
   for (const value of instances.values()) instances.set(process.stdout, value)
+  // Fixed window kept: the write stream must be quiescent (first paint done)
+  // before it is cleared — the "no repaint after DEC 1049 restore" negative
+  // probe below needs a clean baseline.
   await sleep(500)
   writes.length = 0
 
   stdin.write('\x14')
-  await sleep(250)
-  check('frame-restore probe enters the alternate screen', term.buffer.active.type === 'alternate')
+  check('frame-restore probe enters the alternate screen', await settled(() => term.buffer.active.type === 'alternate'))
   instances.get(process.stdout)?.resetPools()
   stdin.write('q')
+  // Fixed window kept (negative probe): the assertion below is that NOTHING
+  // repaints the marker after DEC 1049 restores the main screen — a wrong
+  // repaint needs this window to show up in the captured writes.
   await sleep(500)
 
   const roundTrip = writes.join('')
@@ -493,6 +511,11 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   const reasoning = Array.from({ length: 80 }, (_, index) =>
     `reasoning line ${String(index).padStart(2, '0')}`,
   ).join('\n')
+  // The publish sequence below is a scripted streaming timeline: the fixed
+  // sleeps are pacing (thinking → open scene → stream on → close → stream on),
+  // reproducing the real cadence the settle-paint race needs; there is no
+  // per-step pollable completion condition, and the final layout is asserted
+  // by the settled() poll after the sequence.
   publish({
     working: true,
     spinnerMode: 'thinking',
@@ -546,7 +569,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   let firstIndex = -1
   let secondIndex = -1
   let gap = Number.POSITIVE_INFINITY
-  for (let attempt = 0; attempt < 187; attempt++) {
+  const noBlankGap = await settled(() => {
     const buffer = term.buffer.active
     lines = Array.from({ length: buffer.length }, (_, row) =>
       buffer.getLine(row)?.translateToString(true) ?? '',
@@ -562,13 +585,12 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     gap = firstIndex < 0 || secondIndex < 0
       ? Number.POSITIVE_INFINITY
       : lines.slice(firstIndex + 1, secondIndex).filter(line => line.trim() === '').length
-    if (firstIndex >= 0 && secondIndex >= 0 && gap <= 1) break
-    await sleep(80)
-  }
+    return firstIndex >= 0 && secondIndex >= 0 && gap <= 1
+  }, { timeoutMs: 15_000, stepMs: 80 })
   const settleWaitedMs = Date.now() - settlePollStart
   check(
     'reasoning that settles in the trajectory leaves no blank answer gap',
-    firstIndex >= 0 && secondIndex >= 0 && gap <= 1,
+    noBlankGap,
     `first=${firstIndex}, second=${secondIndex}, blank=${gap}, buffer=${lines.length}, waited=${settleWaitedMs}ms` +
       (firstIndex < 0 || secondIndex < 0
         ? ' (markers never painted within the 15s window — hung or lost frame, not a layout gap)'
@@ -576,11 +598,9 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   )
 
   stdin.write('\x0f') // Ctrl+O
-  await sleep(400)
-  check('Ctrl+O expands settled reasoning after the round trip', screen().includes('reasoning line 79'))
+  check('Ctrl+O expands settled reasoning after the round trip', await settled(() => screen().includes('reasoning line 79')))
   stdin.write('\x0f')
-  await sleep(400)
-  check('a second Ctrl+O folds settled reasoning again', !screen().includes('reasoning line 79'))
+  check('a second Ctrl+O folds settled reasoning again', await settled(() => !screen().includes('reasoning line 79')))
 
   instance.unmount()
   instances.delete(process.stdout)
@@ -631,14 +651,12 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
   )
   for (const value of instances.values()) instances.set(process.stdout, value)
-  await sleep(600)
 
-  const startup = screen()
-  check('the startup tip teaches the trajectory key', /ctrl\+t|⌘t/.test(startup), '')
+  check('the startup tip teaches the trajectory key', await settled(() => /ctrl\+t|⌘t/.test(screen())), '')
   // The script pins DSH_TUI_LANG=zh, so the hint reads `? 查看快捷键`.
   check('the idle shortcuts hint appears exactly once',
-    (startup.match(/\? 查看快捷键/g) ?? []).length === 1,
-    `${(startup.match(/\? 查看快捷键/g) ?? []).length}`)
+    await settled(() => (screen().match(/\? 查看快捷键/g) ?? []).length === 1),
+    `${(screen().match(/\? 查看快捷键/g) ?? []).length}`)
 
   // B — the wake strip lives on the hint row, and every assertion below is
   // scoped to that row on purpose: the startup tip also names the key, so a
@@ -650,38 +668,33 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   // contains "/tips", so excluding it pins the finder to the real hint row.
   const hintRowOf = (text: string): string =>
     text.split('\n').find(line => !line.includes('/tips') && (line.includes('shortcuts') || line.includes('快捷键'))) ?? ''
-  const statusArea = hintRowOf(startup)
-  check('the status line carries a live wake strip', /[▁▂▃▄▅▆▇█]/.test(statusArea),
-    statusArea.trim().slice(-42))
-  check('the key hint rides beside the strip while unseen', /ctrl\+t|⌘t/.test(statusArea),
-    statusArea.trim().slice(-42))
+  check('the status line carries a live wake strip', await settled(() => /[▁▂▃▄▅▆▇█]/.test(hintRowOf(screen()))),
+    hintRowOf(screen()).trim().slice(-42))
+  check('the key hint rides beside the strip while unseen', await settled(() => /ctrl\+t|⌘t/.test(hintRowOf(screen()))),
+    hintRowOf(screen()).trim().slice(-42))
 
   // E — exactly one footnote, on the failure.
-  const footnotes = (startup.match(/看完整轨迹|full trajectory/g) ?? []).length
-  check('a failed call carries exactly one trajectory footnote', footnotes === 1, `${footnotes}`)
+  check('a failed call carries exactly one trajectory footnote',
+    await settled(() => (screen().match(/看完整轨迹|full trajectory/g) ?? []).length === 1),
+    `${(screen().match(/看完整轨迹|full trajectory/g) ?? []).length}`)
 
   // Opening the scene marks the failures seen and retires both pointers.
   stdin.write('\x14')
-  await sleep(400)
+  await settle(() => term.buffer.active.type === 'alternate')
   stdin.write('q')
   // Closing the alternate screen restores the main frame first; the hint
-  // retirement and wake repaint may land on a later Ink frame. Poll for the
-  // actual settled condition instead of racing a fixed post-close delay.
-  let after = screen()
-  let afterStatus = hintRowOf(after)
-  for (let attempt = 0; attempt < 25; attempt++) {
-    const hintRetired = !/ctrl\+t|⌘t/.test(afterStatus)
-    const wakePresent = /[▁▂▃▄▅▆▇█]/.test(afterStatus)
-    if (hintRetired && wakePresent && !(after.match(/看完整轨迹|full trajectory/g) ?? []).length) break
-    await sleep(80)
-    after = screen()
-    afterStatus = hintRowOf(after)
-  }
+  // retirement and wake repaint may land on a later Ink frame. Anchor on the
+  // repainted hint row (wake back on screen) before the negative assertions —
+  // a bare negation would come true on the transient blank row mid-close.
+  await settle(() => /[▁▂▃▄▅▆▇█]/.test(hintRowOf(screen())))
   check('the footnote clears once the trajectory has been opened',
-    (after.match(/看完整轨迹|full trajectory/g) ?? []).length === 0, '')
+    await settled(() => (screen().match(/看完整轨迹|full trajectory/g) ?? []).length === 0), '')
   check('the key hint retires once the trajectory has been opened',
-    !/ctrl\+t|⌘t/.test(afterStatus), afterStatus.trim().slice(-42))
-  check('the wake strip stays after the hint retires', /[▁▂▃▄▅▆▇█]/.test(afterStatus), '')
+    await settled(() => {
+      const row = hintRowOf(screen())
+      return /[▁▂▃▄▅▆▇█]/.test(row) && !/ctrl\+t|⌘t/.test(row)
+    }), hintRowOf(screen()).trim().slice(-42))
+  check('the wake strip stays after the hint retires', await settled(() => /[▁▂▃▄▅▆▇█]/.test(hintRowOf(screen()))), '')
 
   instance.unmount()
   instances.delete(process.stdout)
@@ -727,23 +740,24 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
     )
     for (const value of instances.values()) instances.set(process.stdout, value)
-    let hintRow: string | undefined
-    for (let attempt = 0; attempt < 25; attempt++) {
-      const rows = screen().split('\n')
-      // Same `/tips` guard as hintRowOf above: the glyph class includes the
-      // middle dot, and the logo tip line ("… · /tips 更多技巧") always has
-      // one — when the random startup tip happens to contain "快捷键"
-      // (keys-help, 1/90) the finder matched the TIP row and this check
-      // failed as "wake sits … ends at 104" after polling to exhaustion.
-      hintRow = rows.find(line =>
-        /[▁▂▃▄▅▆▇█▶·]/.test(line)
-        && !line.includes('/tips')
-        && (line.includes('shortcuts') || line.includes('快捷键')))
-      const settledAtRight = hintRow !== undefined
-        && stringWidth(hintRow.replace(/\s+$/, '')) === cols - 1
-      if (settledAtRight || miniWakeWidth(cols) === 0) break
-      await sleep(80)
-    }
+    // Same `/tips` guard as hintRowOf above: the glyph class includes the
+    // middle dot, and the logo tip line ("… · /tips 更多技巧") always has
+    // one — when the random startup tip happens to contain "快捷键"
+    // (keys-help, 1/90) the finder matched the TIP row and this check
+    // failed as "wake sits … ends at 104" after polling to exhaustion.
+    const findHintRow = (): string | undefined => screen().split('\n').find(line =>
+      /[▁▂▃▄▅▆▇█▶·]/.test(line)
+      && !line.includes('/tips')
+      && (line.includes('shortcuts') || line.includes('快捷键')))
+    // The settle predicate is exactly the disjunction of the two branch
+    // assertions below, which re-derive from the settled screen — no weaker
+    // wait condition can diverge from what is checked.
+    await settle(() => {
+      const row = findHintRow()
+      return miniWakeWidth(cols) === 0
+        || (row !== undefined && stringWidth(row.replace(/\s+$/, '')) === cols - 1)
+    })
+    const hintRow = findHintRow()
     if (hintRow === undefined) {
       // Below `miniWakeWidth`'s floor the strip is meant to be absent; above
       // it, a missing row is itself the failure.
@@ -766,7 +780,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     instance.unmount()
     instances.delete(process.stdout)
     term.dispose()
-    await sleep(30)
+    await sleep(30) // fixed pacing kept: teardown gap between mounts, no pollable condition
   }
 }
 

@@ -85,4 +85,36 @@ const quoted = mentionAtCaret('see @"my dir/x', 7)
 assert.equal(quoted?.start, 4)
 assert.equal(quoted?.query, 'm')
 
+// --- line-range suffix (issue #359) ----------------------------------------
+const ranged = extractMentions('see @src/a.ts#L12-14 and @b.ts#L7 and @c.ts#L14-12 and @"my dir/d.ts"#L3-5')
+assert.deepEqual(
+  [ranged[0]?.path, ranged[0]?.startLine, ranged[0]?.endLine, ranged[0]?.literal, ranged[0]?.end],
+  ['src/a.ts', 12, 14, 'src/a.ts#L12-14', 20],
+)
+// Single-line form: start === end.
+assert.deepEqual([ranged[1]?.path, ranged[1]?.startLine, ranged[1]?.endLine], ['b.ts', 7, 7])
+// Inverted range is NOT a suffix — kept as a literal path (pre-#359 behavior).
+assert.deepEqual([ranged[2]?.path, ranged[2]?.startLine], ['c.ts#L14-12', undefined])
+// Quoted body + suffix: token extends past the closing quote.
+assert.deepEqual(
+  [ranged[3]?.path, ranged[3]?.startLine, ranged[3]?.endLine, ranged[3]?.literal],
+  ['my dir/d.ts', 3, 5, 'my dir/d.ts#L3-5'],
+)
+// A legal filename containing `#` never trips the suffix (must anchor at END).
+const hashName = extractMentions('open @report#L12.md plus @x#L0 and @y#L3-')[0]
+assert.equal(hashName?.path, 'report#L12.md')
+assert.equal(hashName?.startLine, undefined)
+// `#L0` (0-line) and dangling `#L3-` are malformed → literal, and `@y#L3-`
+// dedupes independently of a plain `@y` mention.
+const malformed = extractMentions('a @x#L0 b @y#L3- c @y')
+assert.deepEqual(malformed.map(token => token.path), ['x#L0', 'y#L3-', 'y'])
+// Caret query strips the suffix: completion matches on the path portion,
+// and pathEnd marks where the typed suffix starts (accept must not eat it).
+const rangeEnd = mentionAtCaret('see @src/a.ts#L12', 17)
+assert.equal(rangeEnd?.query, 'src/a.ts')
+assert.equal(rangeEnd?.pathEnd, 13)
+const rangeMid = mentionAtCaret('see @src/a.ts#L12', 10)
+assert.equal(rangeMid?.query, 'src/a')
+assert.equal(rangeMid?.pathEnd, 13)
+
 console.log('verify-file-suggestions: all assertions passed')

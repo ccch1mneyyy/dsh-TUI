@@ -5,8 +5,8 @@ package-lock.json
 .DS_Store
 *.tsbuildinfo
 *.tgz
+/dist-bundle/
 .tmp/
-AGENTS.md
 .dsh-prompt-debug.json
 HANDOVER.md
 .local/

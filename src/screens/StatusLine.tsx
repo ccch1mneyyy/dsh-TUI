@@ -10,6 +10,8 @@ import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
 import { ContextBarView } from '../components/ContextBarView.js'
+import { formatProject } from '../sessions/format.js'
+import { homeDir } from '../utils/paths.js'
 import {
   USED_SEGMENTS,
   renderMiniContextBar,
@@ -130,6 +132,11 @@ export function StatusLine({
     // footer can never grow decorations regardless of saved preferences.
     ? { ...DEFAULT_STATUS_BAR, compact: true, model: true, cwd: true }
     : normalizeStatusBar(channel.statusBar)
+  // Provider workspaces expose a remote display path alongside a host alias;
+  // only the local target has identical cwd/displayCwd values to fold.
+  const displayCwd = channel.displayCwd === channel.cwd
+    ? formatProject(channel.displayCwd, homeDir())
+    : channel.displayCwd
   const usage = channel.lastUsage
   const contextUsed = usage === undefined
     ? undefined
@@ -291,7 +298,7 @@ export function StatusLine({
           id: 'cwd' as const,
           node: (
             <Text color="inactiveShimmer">
-              {statusBar.compact ? basename(channel.displayCwd) : channel.displayCwd}
+              {statusBar.compact ? basename(displayCwd) : displayCwd}
             </Text>
           ),
         }]
