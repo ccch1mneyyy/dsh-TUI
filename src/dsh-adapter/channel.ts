@@ -5066,7 +5066,7 @@ export function createChannel(
       }
       // Session store candidates mirror the compat layer (sessionsRoots):
       // the active root depends on the composition (bare cordis.yml →
-      // legacy ~/.dsh-tui, profile → $DSH_HOME/sessions), so list every
+      // legacy ~/.dsh-tui/sessions, profile → $DSH_HOME/sessions), so list every
       // candidate with its own state instead of hardcoding one.
       for (const dir of sessionsRoots()) {
         lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
@@ -6308,7 +6308,11 @@ ${output}
           nextRowId += 1
           break
         }
-        const detail = reason.kind === 'error' ? reason.error.message : ''
+        // The notice renders as a single-line Divider title: error.message
+        // can carry newlines/control chars, and an embedded \n splits the
+        // rule across rows. cleanRenderText is the render-path single-line
+        // contract (sessionTree's preview() folds likewise for the tree).
+        const detail = reason.kind === 'error' ? cleanRenderText(reason.error.message, NOTICE_CELLS) : ''
         state.rows.push({ id: nextRowId, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         nextRowId += 1
         state.notify(
