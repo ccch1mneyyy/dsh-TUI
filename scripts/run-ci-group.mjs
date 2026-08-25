@@ -375,6 +375,10 @@ const GROUPS = {
 // 边框 cell 级颜色重绘 + reset 恢复）、会话名标签渲染在输入框顶边框、
 // /recap 面板（摘要 + 建议标题 + a 键一键应用标题走 renameSession）。
     ["verify-session-color-recap", ['node', '--import', 'tsx/esm', 'scripts/verify-session-color-recap.tsx']],
+// 打开会话自动总结回归（recapOnOpen）：挂载自动触发恰一次、灰行渲染、
+// hover 提示与关闭 chip、点击展开完整面板、a 应用标题、Esc 收起、
+// × 关闭、会话切换重新触发、失败静默、设置关闭不再触发。
+    ["verify-auto-recap", ['node', '--import', 'tsx/esm', 'scripts/verify-auto-recap.tsx']],
 // @ 引用行区间回归（issue #359）：`#L12-14` 后缀按 1-based 闭区间切片
 // 附加、endLine 越界 clamp 到文件尾、startLine 越界回退整文件并在块内
 // 注明、剥后路径未命中时回退字面路径（真叫 `…#L…` 的文件按整文件附加
