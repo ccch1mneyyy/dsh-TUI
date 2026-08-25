@@ -21,7 +21,7 @@ const TRACE_PATH = join(tmpdir(), 'dsh-geometry-trace.jsonl')
 rmSync(TRACE_PATH, { force: true })
 process.env.DSH_TUI_GEOMETRY_TRACE = TRACE_PATH
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { default: instances }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { default: instances }, { sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -29,11 +29,11 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/ink/instances.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 108
 const ROWS = 34
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (extra ? '  (' + extra + ')' : ''))
@@ -116,6 +116,8 @@ await render(
 const ink: any = instances.get(stdout)
 if (!ink) { console.log('FAIL 未找到 Ink 实例'); process.exit(1) }
 ink.setAltScreenActive(true, true)
+// 基线必须取自不再重绘的稳态帧：「内容非空」不等于「已定格」，无可轮询的
+// 完成条件——保留固定稳定窗。
 await sleep(1500)
 await lastFlushed
 
@@ -127,6 +129,7 @@ check('落定后画面非空', baseline.trim().length > 200, 'bytes=' + baseline
 const baselineTraceLines = readFileSync(TRACE_PATH, 'utf8').trim().split('\n').length
 let screenDriftFrames = 0
 const seenScreens = new Set<string>()
+// 30ms 间隔本身是被测驱动源（#433 的均匀 30ms 帧源），墙钟语义保留。
 for (let i = 0; i < 100; i++) {
   bump()
   await sleep(30)
@@ -135,6 +138,7 @@ for (let i = 0; i < 100; i++) {
   seenScreens.add(shot)
   if (shot !== baseline) screenDriftFrames++
 }
+// 风暴收尾稳定窗：断言「画面回到基线且不再漂移」是稳定性探针，保留固定窗口。
 await sleep(200)
 await lastFlushed
 

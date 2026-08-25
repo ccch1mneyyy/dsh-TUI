@@ -17,7 +17,7 @@ const [
   { render },
   { Chat },
   { setLang },
-  { settle, viewportLines },
+  { settle, settled, sleep, viewportLines },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -52,8 +52,6 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 function screenText(): string {
   return viewportLines(term, ROWS).join('\n')
@@ -186,57 +184,47 @@ const instance = await render(
     patchConsole: false,
   },
 )
-await settle(() => screenText().includes('SECRET_REASONING_TRACE'))
-
-check('切换前流式思考行可见', screenText().includes('SECRET_REASONING_TRACE'))
+check('切换前流式思考行可见', await settled(() => screenText().includes('SECRET_REASONING_TRACE')))
 
 stdin.write('/thinking')
 await settle(() => screenText().includes('/thinking'))
 stdin.write('\r')
-await settle(() => screenText().includes('思考过程显示'))
 
-let screen = screenText()
-check('对话框明确这是思考过程显示设置', screen.includes('思考过程显示'))
-check('对话框明确不改变模型思考行为', screen.includes('不改变模型的思考行为'))
-check('隐藏项说明模型仍会照常思考', screen.includes('模型仍会照常思考'))
+check('对话框明确这是思考过程显示设置', await settled(() => screenText().includes('思考过程显示')))
+check('对话框明确不改变模型思考行为', await settled(() => screenText().includes('不改变模型的思考行为')))
+check('隐藏项说明模型仍会照常思考', await settled(() => screenText().includes('模型仍会照常思考')))
 
 stdin.write('\x1b[B')
 // 排序 sleep 保留：选中项移动只改高亮色，不改可见文本，屏上无可 settle 的内容。
 await sleep(120)
 stdin.write('\r')
 // 对话框盖住转录区时「思考行不可见」早已成立，settle 屏幕条件会提前返回；
-// 通知只在确认处理后才写入，才是确认已生效的信号（也是下方断言之一）。
-await settle(() => channel.notifications.includes('思考过程：隐藏'))
-
-screen = screenText()
-check('隐藏立即生效，不出现质量警告', !screen.includes('可能降低质量'))
-check('隐藏后思考行不可见', !screen.includes('SECRET_REASONING_TRACE'))
+// 通知只在确认处理后才写入，才是确认已生效的信号——先断言它作为门，
+// 其余断言在门后读已落定状态。
+check('通知准确说明思考过程已隐藏', await settled(() => channel.notifications.includes('思考过程：隐藏')), JSON.stringify(channel.notifications))
+check('隐藏立即生效，不出现质量警告', !screenText().includes('可能降低质量'))
+check('隐藏后思考行不可见', await settled(() => !screenText().includes('SECRET_REASONING_TRACE')))
 check('隐藏后模型 effort 保持不变', channel.reasoningEffort === 'max', channel.reasoningEffort)
 check('隐藏不调用 setEffort', channel.setEffortCalls.length === 0, JSON.stringify(channel.setEffortCalls))
-check('通知准确说明思考过程已隐藏', channel.notifications.includes('思考过程：隐藏'), JSON.stringify(channel.notifications))
 
 setLang('en')
 stdin.write('/thinking')
 await settle(() => screenText().includes('/thinking'))
 stdin.write('\r')
-await settle(() => screenText().includes('Thinking display'))
 
-screen = screenText()
-check('English dialog describes thinking display', screen.includes('Thinking display'))
-check('English dialog says model behavior is unchanged', screen.includes('does not change model behavior'))
-check('English shown option describes conversation visibility', screen.includes("Show DeepSeek's reasoning"))
+check('English dialog describes thinking display', await settled(() => screenText().includes('Thinking display')))
+check('English dialog says model behavior is unchanged', await settled(() => screenText().includes('does not change model behavior')))
+check('English shown option describes conversation visibility', await settled(() => screenText().includes("Show DeepSeek's reasoning")))
 
 stdin.write('\x1b[A')
 // 排序 sleep 保留：选中项移动只改高亮色，不改可见文本，屏上无可 settle 的内容。
 await sleep(120)
 stdin.write('\r')
-await settle(() => screenText().includes('SECRET_REASONING_TRACE'))
 
-screen = screenText()
-check('showing reasoning again takes effect immediately', screen.includes('SECRET_REASONING_TRACE'))
+check('showing reasoning again takes effect immediately', await settled(() => screenText().includes('SECRET_REASONING_TRACE')))
 check('showing reasoning keeps model effort unchanged', channel.reasoningEffort === 'max', channel.reasoningEffort)
 check('showing reasoning does not call setEffort', channel.setEffortCalls.length === 0, JSON.stringify(channel.setEffortCalls))
-check('English notification says reasoning is shown', channel.notifications.includes('Thinking display: shown'), JSON.stringify(channel.notifications))
+check('English notification says reasoning is shown', await settled(() => channel.notifications.includes('Thinking display: shown')), JSON.stringify(channel.notifications))
 
 await instance.unmount()
 setLang('zh')

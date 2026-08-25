@@ -2832,6 +2832,52 @@ export function Chat({
   // StatusLine thresholds (amber ≥ 80, red ≥ 95).
   const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
 
+  // ── Interrupt lane ─────────────────────────────────────────────────────
+  // The approval and ask_user_question panels park the agent until the user
+  // answers, but they render inside the conversation layout — every screen
+  // early-return below (plugin scene, browser, settings, subagent, trace)
+  // used to win over them, leaving the session stuck with no visible cause.
+  // While one is pending and a screen is up, the panel takes the whole
+  // terminal INSTEAD of the screen. The screen's open flag survives, so the
+  // decision lands back on the screen (remounted fresh — the same lifecycle
+  // as closing and reopening it); keyboard exclusivity holds because the
+  // covered screen is unmounted, exactly like the chat-state prompt slot.
+  // The panel elements are shared with the prompt-slot chain below so the
+  // two mount sites cannot drift.
+  const approvalPanelNode = approvalSnapshot !== null ? (
+    <ApprovalPanel
+      key={approvalSnapshot.key}
+      approval={approvalSnapshot}
+      onDecide={outcome => approvals.decide(outcome)}
+    />
+  ) : null
+  const questionPanelNode = questionSnapshot !== null ? (
+    <AskUserQuestionPanel
+      key={questionSnapshot.key}
+      question={questionSnapshot.question}
+      position={questionSnapshot.position}
+      total={questionSnapshot.total}
+      answered={questionSnapshot.answered}
+      initialDraft={questionSnapshot.draft}
+      onAnswer={selection => questionStore.answerCurrent(selection)}
+      onCancel={() => questionStore.cancelCurrent()}
+      onBack={questionSnapshot.canGoBack
+        ? draft => questionStore.backCurrent(draft)
+        : undefined}
+    />
+  ) : null
+  const interruptPanel = approvalPanelNode ?? questionPanelNode
+  const screenOpen = channel.pluginScene !== undefined || browserOpen || settingsOpen
+    || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
+  if (interruptPanel !== null && screenOpen) {
+    const node = (
+      <Box flexDirection="column" width="100%" paddingX={1}>
+        {interruptPanel}
+      </Box>
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
+
   // A plugin scene (dsh-tui-scenes) takes the whole terminal the same way
   // the trajectory scene does, and sits at the TOP of this return chain:
   // an open() landing while the session browser or the trajectory scene is
@@ -3162,12 +3208,8 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
-        {approvalSnapshot !== null ? (
-          <ApprovalPanel
-            key={approvalSnapshot.key}
-            approval={approvalSnapshot}
-            onDecide={outcome => approvals.decide(outcome)}
-          />
+        {approvalPanelNode !== null ? (
+          approvalPanelNode
         ) : dialogSnapshot !== null ? (
           <ExtensionDialog
             key={dialogSnapshot.key}
@@ -3222,20 +3264,8 @@ export function Chat({
               }}
             />
           </Box>
-        ) : questionSnapshot !== null ? (
-          <AskUserQuestionPanel
-            key={questionSnapshot.key}
-            question={questionSnapshot.question}
-            position={questionSnapshot.position}
-            total={questionSnapshot.total}
-            answered={questionSnapshot.answered}
-            initialDraft={questionSnapshot.draft}
-            onAnswer={selection => questionStore.answerCurrent(selection)}
-            onCancel={() => questionStore.cancelCurrent()}
-            onBack={questionSnapshot.canGoBack
-              ? draft => questionStore.backCurrent(draft)
-              : undefined}
-          />
+        ) : questionPanelNode !== null ? (
+          questionPanelNode
         ) : (
           <PromptInput
             channel={channel}

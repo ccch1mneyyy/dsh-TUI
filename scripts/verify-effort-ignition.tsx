@@ -32,6 +32,7 @@ const [
   { EffortTierBadge },
   { ClockProvider },
   math,
+  { sleep },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -41,9 +42,11 @@ const [
   import('../src/components/EffortTierBadge.js'),
   import('../src/ink/components/ClockContext.js'),
   import('../src/trajectory/effortIgnition.js'),
+  import('./lib/term-test.mjs'),
 ])
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+// sleep 全部保留：本文件按固定墙钟时间采样动画时间轴的各幕（时间轴本身
+// 是被测对象），改成轮询会移动采样点、破坏后续幕的相对时序。
 let failures = 0
 function check(name: string, ok: boolean, detail = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${detail === '' ? '' : ` (${detail})`}`)
@@ -152,6 +155,7 @@ function SweepDriver(): React.ReactNode {
 {
   const harness = await makeHarness(6, React.createElement(SweepDriver))
   try {
+    // elapsed 前 150ms：t=300 切档之前采样静止态（时窗探针）。
     await sleep(150)
     const restText = harness.rowText(0)
     check('rest: plain theme border, no letters, one colour',
@@ -205,6 +209,8 @@ function SweepDriver(): React.ReactNode {
 async function runDarkScenario(name: string, node: React.ReactNode) {
   const harness = await makeHarness(6, node)
   try {
+    // 稳定性探针（不得播放任何动画）：覆盖整条时间轴的固定窗口——轮询
+    // 对「什么都没发生」立即返回，等于没测。
     await sleep(300)
     harness.writes.length = 0
     await sleep(1800)

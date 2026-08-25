@@ -7,6 +7,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React, { useEffect } from 'react'
 import { render, Text, useStdin } from '../src/ui.js'
 import { oscColor } from '../src/ink/terminal-querier.js'
+import { settled, sleep } from './lib/term-test.mjs'
 
 class FakeStdout extends Writable {
   columns = 80
@@ -71,15 +72,6 @@ function QueryProbe(): React.ReactNode {
   return <Text>terminal query probe</Text>
 }
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let i = 0; i < 100; i++) {
-    if (predicate()) return
-    await sleep(10)
-  }
-  assert.fail('timed out waiting for terminal-query state')
-}
-
 const stdin = new FakeStdin()
 const stdout = new FakeStdout()
 const instance = await render(<QueryProbe />, {
@@ -90,7 +82,10 @@ const instance = await render(<QueryProbe />, {
   patchConsole: false,
 })
 
-await waitFor(() => stdout.output.includes('\x1b]11;?') && stdout.output.includes('\x1b[>0q'))
+assert.ok(
+  await settled(() => stdout.output.includes('\x1b]11;?') && stdout.output.includes('\x1b[>0q')),
+  'timed out waiting for the OSC 11 / XTVERSION queries to be written',
+)
 // Stability probe (must NOT change): raw mode is already true here and must
 // stay true while the replies are late — a settle on the already-true
 // condition would return immediately, so keep a fixed delay window.
@@ -98,11 +93,11 @@ await sleep(450)
 assert.equal(stdin.isRaw, true, 'late terminal replies must remain protected by raw mode')
 
 stdin.write('\x1b]11;rgb:0c0c/0c0c/0c0c\x1b\\\x1b[?61;4c')
-await waitFor(() => oscSettled)
+assert.ok(await settled(() => oscSettled), 'timed out waiting for the OSC 11 reply to settle')
 assert.equal(stdin.isRaw, true, 'the concurrent XTVERSION batch must retain raw mode')
 
 stdin.write('\x1bP>|xterm.js(5.5.0)\x1b\\\x1b[?61;4c')
-await waitFor(() => !stdin.isRaw)
+assert.ok(await settled(() => !stdin.isRaw), 'timed out waiting for raw mode to be released')
 assert.deepEqual(visibleInput, [], 'terminal responses must not reach input listeners')
 
 instance.unmount()

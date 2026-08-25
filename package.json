@@ -19,7 +19,8 @@
     "#dsh-ecosystem-spec/tui-channel": "./dsh-ecosystem-spec/protocols/tui-channel.js"
   },
   "bin": {
-    "dsh-tui": "./bin/dsh-tui.js"
+    "dsh-tui": "./bin/dsh-tui.js",
+    "dst": "./bin/dsh-tui.js"
   },
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
@@ -98,7 +99,7 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:liangshen-instruction-hint && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:liangshen-instruction-hint && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
@@ -128,6 +129,7 @@
     "verify:wheel-selection": "node --import tsx/esm scripts/verify-wheel-selection.ts",
     "verify:pointer-events": "node --import tsx/esm scripts/verify-pointer-events.ts",
     "verify:chat-overlay": "node --import tsx/esm scripts/verify-chat-overlay.ts",
+    "verify:approval-visibility": "node --import tsx/esm scripts/verify-approval-visibility.tsx",
     "sync:profile": "node scripts/sync-profile.mjs",
     "sync:profile:check": "node scripts/sync-profile.mjs --check"
   },
@@ -159,6 +161,35 @@
     "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-workspace": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-agent-instructions": { "optional": true },
+    "@deepseek-ai/dsh-agent-presets": { "optional": true },
+    "@deepseek-ai/dsh-atomic-write": { "optional": true },
+    "@deepseek-ai/dsh-commands": { "optional": true },
+    "@deepseek-ai/dsh-cordis-host-runner": { "optional": true },
+    "@deepseek-ai/dsh-invariants": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-llm-pi-ai": { "optional": true },
+    "@deepseek-ai/dsh-persona": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-settings": { "optional": true },
+    "@deepseek-ai/dsh-skill": { "optional": true },
+    "@deepseek-ai/dsh-storage": { "optional": true },
+    "@deepseek-ai/dsh-storage-domain": { "optional": true },
+    "@deepseek-ai/dsh-storage-json": { "optional": true },
+    "@deepseek-ai/dsh-system-prompt": { "optional": true },
+    "@deepseek-ai/dsh-terminal": { "optional": true },
+    "@deepseek-ai/dsh-terminal-bash": { "optional": true },
+    "@deepseek-ai/dsh-tool-ask-user": { "optional": true },
+    "@deepseek-ai/dsh-tool-bash-persistent": { "optional": true },
+    "@deepseek-ai/dsh-tool-cordis": { "optional": true },
+    "@deepseek-ai/dsh-user-approval": { "optional": true },
+    "@deepseek-ai/dsh-user-questions": { "optional": true },
+    "@deepseek-ai/dsh-workspace": { "optional": true },
+    "@deepseek-ai/schemastery": { "optional": true }
   },
   "dependencies": {
     "@dsh-std/command": "workspace:*",

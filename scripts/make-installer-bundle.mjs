@@ -169,7 +169,7 @@ if (-not $hasKey) {
 Write-Host ''
 Write-Host '============================================' -ForegroundColor Green
 Write-Host '  安装完成！启动方式：' -ForegroundColor Green
-Write-Host '    1. 重新打开终端，运行：dsh-tui' -ForegroundColor Green
+Write-Host '    1. 重新打开终端，运行：dsh-tui 或 dst' -ForegroundColor Green
 Write-Host '    2. 或双击本目录下的：启动 dsh-tui.bat' -ForegroundColor Green
 Write-Host '  首次启动会自动初始化 profile，稍等片刻即可进入界面。' -ForegroundColor Green
 Write-Host '  更新：dsh-tui update ｜ 文档：https://dshtui.com' -ForegroundColor Green
@@ -260,7 +260,7 @@ dsh-tui --version || true
 ensure_key
 echo ''
 echo '============================================'
-echo '  安装完成！启动方式：dsh-tui'
+echo '  安装完成！启动方式：dsh-tui 或 dst'
 echo '  首次启动会自动初始化 profile，稍等片刻即可进入界面。'
 echo '  更新：dsh-tui update ｜ 文档：https://dshtui.com'
 echo '============================================'
@@ -297,8 +297,8 @@ const README_TXT = `dsh-TUI 一键安装整合包（dsh-tui-setup）
   5. 检查 DEEPSEEK_API_KEY，未配置时引导你粘贴并持久化保存。
 
 启动
-  Windows：双击"启动 dsh-tui.bat"；或打开终端运行：dsh-tui
-  macOS / Linux：运行：dsh-tui
+  Windows：双击"启动 dsh-tui.bat"；或打开终端运行：dsh-tui 或 dst
+  macOS / Linux：运行：dsh-tui 或 dst
   首次启动会自动初始化 profile（dsh --profile dsh-tui 等价），稍等片刻进入界面。
 
 API Key 从哪来？
@@ -317,7 +317,7 @@ English summary:
   Windows: double-click install.bat. macOS/Linux: sh install.sh.
   It installs Node (if missing), pnpm, @deepseek-ai/dsh + @deepseek-harness-tui/dsh-tui,
   verifies the dsh-tui command, and guides DEEPSEEK_API_KEY setup.
-  Launch with: dsh-tui
+  Launch with: dsh-tui (or dst)
 `
 
 // ─── 组装 ───────────────────────────────────────────────────────────────────

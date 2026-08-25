@@ -16,7 +16,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle, settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -28,7 +28,6 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
 ])
 
 const COLS = 100, ROWS = 40
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -94,24 +93,22 @@ function pillText(): string | null {
   return null
 }
 const lastTurnVisible = () => screenLines().some(l => l.includes('问题 8'))
+// 逐事件 pacing sleep 保留：滚轮事件需要逐个进入 hover/scroll 路径，
+// 每步之间没有可区分新旧帧的屏幕条件可轮询。
 const wheel = async (up: boolean, times: number) => {
   for (let i = 0; i < times; i++) {
     stdin.write(`\x1b[<${up ? 64 : 65};90;30M`)
     await sleep(150)
   }
 }
-/**
- * 按键后等待：给 until 则 settle 到该条件（断言的同一条件）；不给则保留
- * 固定 400ms——「钉底按 End 无操作」这类稳定性探针必须要固定窗口。
- */
-const pressKey = async (name: string, until?: () => boolean) => {
+/** 按键：等待由调用点的 settled 断言承担（「无操作」稳定性探针除外，
+ *  那里保留固定窗口）。 */
+const pressKey = (name: string) => {
   const seqs: Record<string, string> = {
     end: '\x1b[F',
     enter: '\r',
   }
   stdin.write(seqs[name]!)
-  if (until) await settle(until)
-  else await sleep(400)
 }
 
 // ── 1. 钉底：无 pill ──
@@ -119,67 +116,61 @@ check('钉底无 pill', pillText() === null, `pill=${JSON.stringify(pillText())}
 
 // ── 2. 上滚：常驻 pill；流入新消息后切计数 ──
 await wheel(true, 6)
-{
+check('上滚后 pill 出现（回到底部）', await settled(() => {
   const p = pillText()
-  check('上滚后 pill 出现（回到底部）', p !== null && p.includes('回到底部'), `pill=${JSON.stringify(p)}`)
-}
+  return p !== null && p.includes('回到底部')
+}), `pill=${JSON.stringify(pillText())}`)
 // 追加一轮新消息（模拟流式落定）
 rows.push({ id: 17, kind: 'user', text: '问题 9' })
 rows.push({ id: 18, kind: 'assistant', text: '回复 9 第 1 行\n回复 9 第 2 行' })
 emitChannel()
-await settle(() => {
+check('新消息后 pill 切计数', await settled(() => {
   const p = pillText()
   return p !== null && /2 条新消息/.test(p)
-})
-{
-  const p = pillText()
-  check('新消息后 pill 切计数', p !== null && /2 条新消息/.test(p), `pill=${JSON.stringify(p)}`)
-}
+}), `pill=${JSON.stringify(pillText())}`)
 
 // ── 3. End 键回底 ──
-await pressKey('end', () => lastTurnVisible() && pillText() === null)
-{
-  check('End 后回到底部（末轮可见）', lastTurnVisible())
-  check('End 后 pill 消失', pillText() === null, `pill=${JSON.stringify(pillText())}`)
-}
+pressKey('end')
+check('End 后回到底部（末轮可见）', await settled(() => lastTurnVisible()))
+check('End 后 pill 消失', await settled(() => pillText() === null), `pill=${JSON.stringify(pillText())}`)
 
 // ── 4. 上滚后 Enter 回底 ──
 await wheel(true, 8)
-{
-  check('再次上滚 pill 重现', pillText() !== null, `pill=${JSON.stringify(pillText())}`)
-}
-await pressKey('enter', () => lastTurnVisible() && pillText() === null)
-{
-  check('Enter 后回到底部', lastTurnVisible() && pillText() === null,
-    `last=${lastTurnVisible()} pill=${JSON.stringify(pillText())}`)
-}
+check('再次上滚 pill 重现', await settled(() => pillText() !== null), `pill=${JSON.stringify(pillText())}`)
+pressKey('enter')
+check('Enter 后回到底部', await settled(() => lastTurnVisible() && pillText() === null),
+  `last=${lastTurnVisible()} pill=${JSON.stringify(pillText())}`)
 
 // ── 5. 点击 pill 回底 ──
 await wheel(true, 8)
 {
-  const lines = screenLines()
   let pillRow = -1, pillCol = -1
-  for (let y = 0; y < ROWS && pillRow === -1; y++) {
-    const l = lines[y]!
-    const x = l.indexOf('↓')
-    if (x >= 0) { pillRow = y; pillCol = x }
-  }
+  await settle(() => {
+    const lines = screenLines()
+    pillRow = -1
+    pillCol = -1
+    for (let y = 0; y < ROWS && pillRow === -1; y++) {
+      const l = lines[y]!
+      const x = l.indexOf('↓')
+      if (x >= 0) { pillRow = y; pillCol = x }
+    }
+    return pillRow !== -1
+  })
   check('点击前 pill 可见', pillRow !== -1, `row=${pillRow}`)
   if (pillRow !== -1) {
     stdin.write(`\x1b[<0;${pillCol + 2};${pillRow + 1}M`)
     stdin.write(`\x1b[<0;${pillCol + 2};${pillRow + 1}m`)
-    await settle(() => lastTurnVisible() && pillText() === null)
-    check('点击 pill 后回到底部', lastTurnVisible() && pillText() === null,
+    check('点击 pill 后回到底部', await settled(() => lastTurnVisible() && pillText() === null),
       `last=${lastTurnVisible()} pill=${JSON.stringify(pillText())}`)
   }
 }
 
 // ── 6. 钉底按 End：无操作不崩 ──
-// 稳定性探针：期望状态不变（已在底部），不传 until、保留固定窗口。
-await pressKey('end')
-{
-  check('钉底按 End 无操作', lastTurnVisible() && pillText() === null)
-}
+// 稳定性探针：期望状态不变（已在底部），保留固定窗口——轮询已成立条件
+// 会立即返回等于没测。
+pressKey('end')
+await sleep(400)
+check('钉底按 End 无操作', lastTurnVisible() && pillText() === null)
 
 await inst.unmount()
 
@@ -200,11 +191,12 @@ await inst.unmount()
     { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
   )
   await settle(() => screenLines().some(l => l.includes('问题 20')))
-  // 上滚 30 格 → 中部（跳底距离 ≈ 150 行 ≫ 视口）
+  // 上滚 30 格 → 中部（跳底距离 ≈ 150 行 ≫ 视口）；逐事件 pacing 保留。
   for (let i = 0; i < 30; i++) {
     stdin.write('\x1b[<64;90;30M')
     await sleep(60)
   }
+  // 中部位置稳定窗：随后的回底延迟采样以此为起点，无可轮询条件。
   await sleep(300)
   // End 回底 + 采样
   stdin.write('\x1b[F')
@@ -214,6 +206,7 @@ await inst.unmount()
     if (screenLines().some(l => l.includes('问题 20'))) { settledAt = (s + 1) * 50; break }
   }
   check('远距 End 回底：末轮可见（≤600ms）', settledAt > 0, `settledAt=${settledAt}ms`)
+  // 回底后的空白带/pill 断言是稳定性探针，取样前保留固定稳定窗。
   await sleep(300)
   const lines = screenLines()
   // 空白行统计：转译区（跳过置顶头）连续全空行数 ≤ 6（轮间分隔正常 2-3 行）

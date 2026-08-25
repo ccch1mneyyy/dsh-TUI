@@ -20,7 +20,7 @@ const [
   { setLang },
   { LOCAL_COMMANDS },
   { stringWidth },
-  { settle, viewportLines },
+  { settle, settled, viewportLines, writeParsed },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -33,8 +33,6 @@ const [
   import('../src/ink/stringWidth.js'),
   import('./lib/term-test.mjs'),
 ])
-
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 let failures = 0
 function assert(cond: boolean, msg: string) {
@@ -85,32 +83,22 @@ console.log('CommandSuggestions 随 /lang 切换:')
 
   setLang('zh')
   app.rerender(React.createElement(CommandSuggestions, { commands, selectedIndex: 0, columns: COLS }))
-  await settle(() => {
-    const t = screenText(term, ROWS)
-    return t.includes('新开会话') && t.includes('压缩会话历史') && t.includes('切换计划模式')
-      && t.includes('Registry fallback text') && !t.includes('Toggle plan mode')
-  })
-  let text = screenText(term, ROWS)
-  assert(text.includes('新开会话'), 'zh：内置命令显示中文描述（新开会话）')
-  assert(text.includes('压缩会话历史'), 'zh：compact 显示中文描述')
-  assert(text.includes('切换计划模式'), 'zh：外部命令 plan 走 cmd-desc 中文映射')
-  assert(text.includes('Registry fallback text'), 'zh：未收录外部命令回退注册表原文')
-  assert(!text.includes('Toggle plan mode'), 'zh：已收录外部命令不再显示英文原文')
+  assert(await settled(() => screenText(term, ROWS).includes('新开会话')), 'zh：内置命令显示中文描述（新开会话）')
+  assert(await settled(() => screenText(term, ROWS).includes('压缩会话历史')), 'zh：compact 显示中文描述')
+  assert(await settled(() => screenText(term, ROWS).includes('切换计划模式')), 'zh：外部命令 plan 走 cmd-desc 中文映射')
+  assert(await settled(() => screenText(term, ROWS).includes('Registry fallback text')), 'zh：未收录外部命令回退注册表原文')
+  assert(await settled(() => !screenText(term, ROWS).includes('Toggle plan mode')), 'zh：已收录外部命令不再显示英文原文')
 
   setLang('en')
   app.rerender(React.createElement(CommandSuggestions, { commands, selectedIndex: 0, columns: COLS }))
-  await settle(() => {
-    const t = screenText(term, ROWS)
-    return t.includes('Start a new conversation') && t.includes('Toggle plan mode') && !t.includes('新开会话')
-  })
-  text = screenText(term, ROWS)
-  assert(text.includes('Start a new conversation'), 'en：内置命令回退 LOCAL_COMMANDS 英文原文')
-  assert(text.includes('Toggle plan mode'), 'en：外部命令 plan 回退注册表英文原文')
-  assert(!text.includes('新开会话'), 'en：不再残留中文描述')
+  assert(await settled(() => screenText(term, ROWS).includes('Start a new conversation')), 'en：内置命令回退 LOCAL_COMMANDS 英文原文')
+  assert(await settled(() => screenText(term, ROWS).includes('Toggle plan mode')), 'en：外部命令 plan 回退注册表英文原文')
+  assert(await settled(() => !screenText(term, ROWS).includes('新开会话')), 'en：不再残留中文描述')
 
   setLang('zh')
   app.unmount()
-  await sleep(100)
+  // 空写屏障：等在途的 term.write 解析完（取代 unmount 后固定 sleep）。
+  await writeParsed(term, '')
 }
 
 // --- 2. ? 帮助菜单随语言切换 --------------------------------------------------
@@ -130,23 +118,17 @@ console.log('HelpMenu 随 /lang 切换:')
 
   setLang('zh')
   app.rerender(React.createElement(HelpMenu, { commands }))
-  await settle(() => {
-    const t = screenText(term, ROWS)
-    return t.includes('/new — 新开会话') && t.includes('/rewind — 回退会话到历史消息')
-  })
-  let text = screenText(term, ROWS)
-  assert(text.includes('/new — 新开会话'), 'zh：帮助菜单显示 /new — 新开会话')
-  assert(text.includes('/rewind — 回退会话到历史消息'), 'zh：帮助菜单显示 rewind 中文描述')
+  assert(await settled(() => screenText(term, ROWS).includes('/new — 新开会话')), 'zh：帮助菜单显示 /new — 新开会话')
+  assert(await settled(() => screenText(term, ROWS).includes('/rewind — 回退会话到历史消息')), 'zh：帮助菜单显示 rewind 中文描述')
 
   setLang('en')
   app.rerender(React.createElement(HelpMenu, { commands }))
-  await settle(() => screenText(term, ROWS).includes('/new — Start a new conversation'))
-  text = screenText(term, ROWS)
-  assert(text.includes('/new — Start a new conversation'), 'en：帮助菜单显示英文原文')
+  assert(await settled(() => screenText(term, ROWS).includes('/new — Start a new conversation')), 'en：帮助菜单显示英文原文')
 
   setLang('zh')
   app.unmount()
-  await sleep(100)
+  // 空写屏障：等在途的 term.write 解析完（取代 unmount 后固定 sleep）。
+  await writeParsed(term, '')
 }
 
 // --- 3. 窄终端中文截断不劈字 --------------------------------------------------
@@ -162,11 +144,11 @@ console.log('窄终端中文描述截断:')
     React.createElement(CommandSuggestions, { commands, selectedIndex: 0, columns: COLS }),
     { stdout, exitOnCtrlC: false, patchConsole: false },
   )
-  // 断言条件（截断省略号）出现即帧已画到位；unmount 后保留短暂固定等待，
-  // 让尚在途的 term.write 回调全部落盘再读缓冲。
+  // 断言条件（截断省略号）出现即帧已画到位；unmount 后用空写屏障等尚在
+  // 途的 term.write 回调全部落盘再读缓冲（xterm write 队列 FIFO）。
   await settle(() => viewportLines(term, ROWS).some(line => line.includes('…')))
   app.unmount()
-  await sleep(100)
+  await writeParsed(term, '')
 
   const screenLines = viewportLines(term, ROWS)
   let sawEllipsis = false

@@ -94,11 +94,13 @@ npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
 
 # 2. Start it (first run auto-initializes the dsh-tui profile; needs pnpm)
 dsh-tui
+# Both `dsh-tui` and the short `dst` alias start the same TUI.
+dst
 ```
 
 Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`
 (the repository's `sh install.sh` wraps this step and checks the required
-commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
+commands), then `dsh-tui` (or `dst`) and `dsh --profile dsh-tui` are equivalent.
 
 > **New-user note**: if `dsh plugin` fails with `ERR_PNPM_IGNORED_BUILDS`
 > (pnpm ≥11 blocks dependencies that carry install scripts by default, e.g.
@@ -115,10 +117,10 @@ commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 > `/update` and `dsh-tui update` seed this configuration automatically —
 > no manual step needed.
 
-`dsh-tui --resume` restores the most recently selected session; on Windows
+`dsh-tui` (or its `dst` alias) with `--resume` restores the most recently selected session; on Windows
 the repository's `dsh-tui.cmd` works the same way.
 
-CLI subcommands (`dsh-tui help` prints the full usage):
+CLI subcommands (`dsh-tui help` or `dst help` prints the full usage; the `dst` alias accepts the same commands):
 
 | Command | Purpose |
 |---|---|

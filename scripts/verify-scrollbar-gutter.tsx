@@ -17,7 +17,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle, settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -29,7 +29,6 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
 ])
 
 const COLS = 100, ROWS = 40
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -136,12 +135,13 @@ const clickAt = (col: number, row: number) => {
 }
 
 // ── 1. 默认 timeline ──
-await settle(() => {
-  const snap = gutterSnapshot()
-  return snap.ticks.length > 0 && snap.chevrons.length === 2 && snap.thumbs.length === 0
-})
+// 各块断言均在 settle 捕获的同一快照 snap 上求值：等待条件与断言共用快照，无分叉。
 {
-  const snap = gutterSnapshot()
+  let snap = gutterSnapshot()
+  await settled(() => {
+    snap = gutterSnapshot()
+    return snap.ticks.length > 0 && snap.chevrons.length === 2 && snap.thumbs.length === 0
+  })
   check('默认 timeline：rail tick + chevron 存在', snap.ticks.length > 0 && snap.chevrons.length === 2,
     `ticks=${snap.ticks.length} chevrons=${snap.chevrons.length}`)
   check('默认 timeline：无 ██ 滑块', snap.thumbs.length === 0, `thumbs=${snap.thumbs.length}`)
@@ -149,34 +149,35 @@ await settle(() => {
 
 // ── 2. 切 scrollbar：██ 贴底，无 chevron/tick ──
 setGutter('scrollbar')
-await settle(() => {
-  const snap = gutterSnapshot()
-  const [, bottom] = gutterRange()
-  return snap.thumbs.length >= 2 && snap.chevrons.length === 0 && snap.ticks.length === 0 &&
-    snap.thumbs[snap.thumbs.length - 1] === bottom - 1
-})
 {
-  const snap = gutterSnapshot()
+  let snap = gutterSnapshot()
+  let bottom = gutterRange()[1]
+  await settle(() => {
+    snap = gutterSnapshot()
+    bottom = gutterRange()[1]
+    return snap.thumbs.length >= 2 && snap.chevrons.length === 0 && snap.ticks.length === 0 &&
+      snap.thumbs[snap.thumbs.length - 1] === bottom - 1
+  })
   check('scrollbar：██ 滑块出现', snap.thumbs.length >= 2, `thumbs=${snap.thumbs.length}`)
   check('scrollbar：无 timeline glyph', snap.chevrons.length === 0 && snap.ticks.length === 0,
     `chevrons=${snap.chevrons.length} ticks=${snap.ticks.length}`)
-  const [top, bottom] = gutterRange()
   check('scrollbar：钉底滑块贴底', snap.thumbs[snap.thumbs.length - 1] === bottom - 1,
     `last=${snap.thumbs[snap.thumbs.length - 1]} bottom=${bottom}`)
 }
 
 // ── 3. 上滚（whale 滚出视口）：滑块在轨道内且离开底端 ──
 await wheel(true, 16)
-await settle(() => {
-  const snap = gutterSnapshot()
-  const [top, bottom] = gutterRange()
-  if (snap.thumbs.length < 2) return false
-  const first = snap.thumbs[0]!, last = snap.thumbs[snap.thumbs.length - 1]!
-  return first >= top && last < bottom - 1
-})
 {
-  const snap = gutterSnapshot()
-  const [top, bottom] = gutterRange()
+  let snap = gutterSnapshot()
+  let range = gutterRange()
+  await settle(() => {
+    snap = gutterSnapshot()
+    range = gutterRange()
+    if (snap.thumbs.length < 2) return false
+    const first = snap.thumbs[0]!, last = snap.thumbs[snap.thumbs.length - 1]!
+    return first >= range[0] && last < range[1] - 1
+  })
+  const [top, bottom] = range
   check('上滚后滑块存在（非 whale）', snap.thumbs.length >= 2, `thumbs=${JSON.stringify(snap.thumbs)}`)
   if (snap.thumbs.length > 0) {
     const first = snap.thumbs[0]!, last = snap.thumbs[snap.thumbs.length - 1]!
@@ -189,8 +190,8 @@ await settle(() => {
 {
   const [top] = gutterRange()
   clickAt(COLS, top + 1)
-  await settle(() => screenLines().slice(0, 24).some(l => l.includes('问题 1')))
-  const lines = screenLines()
+  let lines: string[] = []
+  await settle(() => { lines = screenLines(); return lines.slice(0, 24).some(l => l.includes('问题 1')) })
   check('点击轨道顶后滚到顶（问题 1 可见）', lines.slice(0, 24).some(l => l.includes('问题 1')),
     `top4=${JSON.stringify(lines.slice(0, 4).map(l => l.trimEnd().slice(0, 24)))}`)
 }
@@ -214,21 +215,17 @@ const hasGutterGlyph = (): boolean => {
   return anyGlyph
 }
 setGutter('hidden')
-await settle(() => !hasGutterGlyph())
-{
-  const anyGlyph = hasGutterGlyph()
-  check('hidden：右缘无任何 gutter glyph', !anyGlyph)
-}
+check('hidden：右缘无任何 gutter glyph', await settled(() => !hasGutterGlyph()))
 
 // ── 6. 切回 timeline：rail 恢复 ──
 await wheel(false, 30)
 setGutter('timeline')
-await settle(() => {
-  const snap = gutterSnapshot()
-  return snap.ticks.length === 8 && snap.chevrons.length === 2
-})
 {
-  const snap = gutterSnapshot()
+  let snap = gutterSnapshot()
+  await settle(() => {
+    snap = gutterSnapshot()
+    return snap.ticks.length === 8 && snap.chevrons.length === 2
+  })
   check('切回 timeline：rail 恢复', snap.ticks.length === 8 && snap.chevrons.length === 2,
     `ticks=${snap.ticks.length} chevrons=${snap.chevrons.length}`)
 }
