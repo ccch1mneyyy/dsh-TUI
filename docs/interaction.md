@@ -320,7 +320,13 @@ transcript。
   `/activity status` 查看当前选择。
 - `/preset <id>` 与 `/preset status` 见配置文档。
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
-  `/effort status` 查看当前档位。
+  `/effort status` 查看当前档位。切换到 `high` / `xhigh` / `max` / `ultra`
+  时，输入框会播放一次 900ms 的主题色切换反馈：`high` 是单峰从左向右，
+  `xhigh` 是双峰从左向右，`max` 从两侧向中心收束，`ultra` 从中心向外展开
+  并使用主题彩虹色。动画会继承当前主题和会话 `/color` 强调色，ANSI 主题下
+  自动降级为离散调色板颜色；冷启动和重复选择当前档位不会重播。状态栏中的
+  `high` / `xhigh` 保持静态，`max` 显示低速高亮波，`ultra` 显示低频彩虹流光；
+  后两者仅在字段可见时使用共享时钟，隐藏或卸载后停止更新。
 - `/theme <name>` 与 `/theme status` 见主题文档。
 - `/lang` 切换中英界面语言（见「界面语言」）。
 - `/compact` 压缩会话历史；minimal preset（仅 bash+编辑器）下不可用。

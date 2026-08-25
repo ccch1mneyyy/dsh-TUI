@@ -58,6 +58,7 @@ function makeEnv({ withCommands = true, withApproval = true } = {}) {
       ? {
           commands: {
             list: () => [],
+            find: (_agent, name) => name === 'plan' ? { name: 'plan' } : undefined,
             execute: async (agent, line, _signal) => {
               commands.push(line)
               if (line.startsWith('/plan')) {
@@ -126,8 +127,16 @@ const baseOptions = {
   const ok = await channel.setEffort('max')
   check('setEffort(max) → true', ok === true)
   check('state.reasoningEffort = max', channel.reasoningEffort === 'max', String(channel.reasoningEffort))
-  const prefRaw = readFileSync(join(homedir(), '.dsh-tui', 'effort.json'), 'utf8')
+  const prefPath = join(homedir(), '.dsh-tui', 'effort.json')
+  const prefRaw = readFileSync(prefPath, 'utf8')
   check('effort pref persisted', prefRaw.includes('max'), prefRaw)
+
+  const version = channel.version
+  const notices = channel.notifications.length
+  const same = await channel.setEffort('max')
+  check('setEffort(current) → true', same === true)
+  check('same effort is a channel no-op', channel.version === version && channel.notifications.length === notices)
+  check('same effort leaves persisted preference unchanged', readFileSync(prefPath, 'utf8') === prefRaw)
 
   const before = channel.reasoningEffort
   const bad = await channel.setEffort('bogus')

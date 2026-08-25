@@ -120,6 +120,11 @@ const GROUPS = {
 // （帧在 EXIT_ALT_SCREEN 前、DISABLE 后 SHOW_CURSOR），handle 暴露
 // detach 方法供 finishExit 兜底闩锁。
     ["verify-exit-mouse-cleanup", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-cleanup.tsx']],
+// 退出查询泄漏回归（#507/#492）：退出清理（DISABLE）之后，健康探针/
+// 模式重断言/已 dispose 的 querier 都不得再写出任何 ENABLE 或查询
+// 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
+// 吞掉，不再落入 shell。
+    ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
@@ -341,8 +346,11 @@ const GROUPS = {
 // 场景（headless xterm）：三幕（双框同步扫光/档名居中聚拢/渐隐
 // 归零）断言帧间文本恒定、零行级 repaint、行数恒定、负路径全暗。
     ["verify-effort-ignition", ['node', '--import', 'tsx/esm', 'scripts/verify-effort-ignition.tsx']],
-// 前缀充能回归：四态 + 充能窗内真实前景色采样（暗→全值单调）。
+// 前缀充能回归：四态 + 主题 RGB 充能与 ANSI palette 降级。
     ["verify-effort-accent", ['node', '--import', 'tsx/esm', 'scripts/verify-effort-accent.tsx']],
+// 常驻推理等级流光：high/xhigh 静态零订阅，max/ultra 低频共享 Clock；
+// 隐藏与卸载退订，逐帧宽度/baseY 恒定且零滚屏控制。
+    ["verify-effort-persistent", ['node', '--import', 'tsx/esm', 'scripts/verify-effort-persistent.tsx']],
 // 缩放重排回归（实机反馈：打开长会话后最大化窗口）：判据是终局等价
 // ——缩放后的物理终端必须等于在新尺寸上全新渲染的同一状态。缩放会让
 // 树内每个测量所依据的宽度失效，而没有任何节点被标脏，文本节点会沿用

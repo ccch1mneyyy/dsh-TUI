@@ -432,6 +432,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     configuredLang: config.lang,
     configuredActivityFrames: config.activityFrames,
     effort: config.effort,
+    previewEfforts: config.previewEfforts,
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
@@ -1500,6 +1501,8 @@ type InkShutdownState = {
    * lingering parent stops racing the restarted TUI for keypresses.
    */
   detachStdinForHandoff?: () => void
+  /** Drain pending stdin bytes; the exit funnel re-drains after cleanup. */
+  drainStdin?: () => void
   frontFrame?: { cursor?: { x: number; y: number } }
   displayCursor?: { x: number; y: number } | null
 }
@@ -1555,6 +1558,16 @@ async function finishExit(
     ].join('')
     const suffix = notice === undefined ? '' : `${notice}\n`
     await writeStream(process.stdout, `${cleanup}\r\n${suffix}`)
+    // Re-drain AFTER the cleanup sequences have landed (#507): terminal
+    // replies and mouse packets already in flight when the exit started
+    // keep arriving while cleanup is being written — the detach-time drain
+    // cannot see them. Unconsumed at process exit they land in the shell's
+    // input queue (DECRPM/DA1/XTVERSION garbage pasted into the prompt).
+    // 150ms settle covers reply RTT on slow links (ssh/ghostty is #522's
+    // environment; 50ms proved too tight there) while staying well inside
+    // the exit window the user already waits through.
+    await new Promise<void>(resolve => setTimeout(resolve, 150))
+    runtime?.drainStdin?.()
     if (stderrNotice !== undefined) {
       await writeStream(process.stderr, `\n${stderrNotice}\n`)
     }
@@ -1569,6 +1582,7 @@ function readInkShutdownState(value: unknown): InkShutdownState | undefined {
   const candidate = value as Record<string, unknown>
   if (candidate.detachForShutdown !== undefined && typeof candidate.detachForShutdown !== 'function') return undefined
   if (candidate.detachStdinForHandoff !== undefined && typeof candidate.detachStdinForHandoff !== 'function') return undefined
+  if (candidate.drainStdin !== undefined && typeof candidate.drainStdin !== 'function') return undefined
   if (candidate.frontFrame !== undefined && !isFrameState(candidate.frontFrame)) return undefined
   if (candidate.displayCursor !== undefined && candidate.displayCursor !== null && !isCursorState(candidate.displayCursor)) return undefined
   return value as InkShutdownState

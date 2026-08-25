@@ -111,6 +111,58 @@ check(
   `reasoningEffort=${String(proposed.reasoningEffort)} (undefined would materialize the adapter default "max" at prepareCall)`,
 )
 
+const previewRoot = new Context()
+const previewLlm = new LlmRuntime(previewRoot)
+previewLlm.registerAdapter(['deepseek-official'], {
+  providerInfo(provider: string) {
+    return { id: provider, name: 'DeepSeek' }
+  },
+  providerRetryPolicy() {
+    return undefined
+  },
+  async resolveModel(provider: string, model: string) {
+    return {
+      provider,
+      id: model,
+      name: model,
+      reasoning: { efforts: ADAPTER_EFFORTS, defaultEffort: 'max' },
+    }
+  },
+  async *stream(): AsyncGenerator<never> {
+    throw new Error('not exercised')
+  },
+} as never)
+const previewCtx = previewRoot.extend()
+const previewAgent = {
+  ...agent,
+  id: 'a-preview',
+  ctx: previewCtx,
+  session: { id: 's-preview', seq: 0, events: [] },
+} as never
+const preview = createChannel(previewRoot as never, previewAgent, {
+  model: 'deepseek-v4-flash',
+  cwd: '/tmp',
+  provider: 'deepseek-official',
+  effort: 'high',
+  previewEfforts: ['ultra'],
+  activity: false,
+})
+await sleep(50)
+const previewList = await preview.listEfforts()
+check('preview: /effort exposes an extra ultra UI level',
+  previewList.efforts.some(effort => effort.id === 'ultra'),
+  previewList.efforts.map(effort => effort.id).join(','))
+check('preview: selecting ultra updates the visible effort',
+  await preview.setEffort('ultra') && preview.reasoningEffort === 'ultra', preview.reasoningEffort)
+const previewSeed = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+const previewRequest = (await previewCtx.waterfall(
+  'agent/request' as never,
+  { turn: 1, step: 1, signal: new AbortController().signal },
+  () => Promise.resolve(previewSeed),
+)) as { reasoningEffort?: string }
+check('preview: unsupported ultra never enters the live model request',
+  previewRequest.reasoningEffort !== 'ultra', `reasoningEffort=${String(previewRequest.reasoningEffort)}`)
+
 // ── control: no configured effort → the adapter default path stays open ──
 // A separate root: plain extend() children share one fiber, so two channels
 // on one root would both receive each other's agent-scoped waterfalls (the

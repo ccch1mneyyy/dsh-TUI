@@ -54,6 +54,10 @@ export interface Config {
    *  the startup status line until the first request header reports the
    *  live value. */
   effort?: string
+  /** Extra UI-only reasoning levels exposed by `/effort` for visual preview.
+   *  They never enter request configuration unless the live adapter also
+   *  advertises the same id. Intended for theme/animation development only. */
+  previewEfforts?: string[]
   /** Show the live working line derived in-process from base session events. */
   activity?: boolean
   /** Working-activity indicator preset: `claude`/`moon`/`comet`/`dots`/…
@@ -122,6 +126,7 @@ export const Config: Schema<Config> = Schema.object({
   cwd: Schema.string().required(false),
   workspace: Schema.string().required(false),
   effort: Schema.string().required(false),
+  previewEfforts: Schema.array(Schema.string()).required(false),
   activity: Schema.boolean().default(true),
   activityFrames: Schema.string().required(false),
   contextBar: Schema.boolean().default(true),

@@ -1,23 +1,11 @@
 /**
- * Effort ignition regression — the three-act overlay on the prompt border.
+ * Kilo-style reasoning-effort ignition regression.
  *
- * Part A asserts the math layer (waveform sampling, easings, envelope, the
- * per-column colour contract, boundary guards). Part B mounts the real
- * EffortInputBorder (self-drawn ╭─╮ / ╰─╯ rows; the top row carries the show)
- * in a headless xterm, one harness per scenario, and asserts:
- *
- * - The sweep is a single wave style (the shipped shape); the math layer
- *   below pins its contract directly.
- * - **Glyphs never change; only colours move.** The row's TEXT is
- *   byte-identical across frames (▁ × width, present at rest too) — the
- *   strongest form of the SGR-only rule, with no layout change at any
- *   point: the bright wave is foreground colour running over a constant
- *   ▁ layer, the dim rest is the same layer at its quiet end.
- * - **Mount/unmount never scroll**: the rows are permanent, but the whole
- *   stream still must contain no scroll sequences (#38/#39/#19/#10 family).
- * - **It returns to rest**: wave colours vanish after the style's total.
- * - **Negative paths stay dark**: cold mount on the top tier, single-tier
- *   table, missing table, and leaving the top tier sweep nothing.
+ * Pins the exported style resolver and per-line sampler, then mounts the real
+ * three-row prompt border with a deterministic shared clock. The checks cover
+ * high/xhigh left-to-right motion, max inward motion, ultra outward motion,
+ * the finite 900ms centered label, trigger/no-op/restart/cancel semantics,
+ * fixed geometry, absence of terminal scrolling, and clock cleanup.
  *
  * Run: node --import tsx/esm scripts/verify-effort-ignition.tsx
  */
@@ -27,10 +15,12 @@ const [
   { Writable, PassThrough },
   React,
   { Terminal: XTerm },
-  { render, Text, Box },
+  { render, Text },
   { EffortInputBorder },
-  { EffortTierBadge },
-  { ClockProvider },
+  badge,
+  { ClockContext },
+  { getTheme },
+  { effortBand, effortTheme },
   math,
 ] = await Promise.all([
   import('node:stream'),
@@ -40,6 +30,8 @@ const [
   import('../src/components/EffortInputBorder.js'),
   import('../src/components/EffortTierBadge.js'),
   import('../src/ink/components/ClockContext.js'),
+  import('../src/theme.js'),
+  import('../src/components/effort-theme.js'),
   import('../src/trajectory/effortIgnition.js'),
 ])
 
@@ -50,45 +42,226 @@ function check(name: string, ok: boolean, detail = ''): void {
   if (!ok) failures++
 }
 
-// --- Part A: math layer --------------------------------------------------------
-check('crest: 1 at the crest, 0 at one half-width out', math.crest(0) === 1 && math.crest(1) === 0)
-check('crest: beyond the half-width is silent, both directions',
-  math.crest(1.5) === 0 && math.crest(-1) === 0 && math.crest(-2) === 0)
-check('easings: endpoints are exact',
-  math.easeOutCubic(0) === 0 && math.easeOutCubic(1) === 1
-  && math.easeInOutCubic(0) === 0 && math.easeInOutCubic(1) === 1)
-check('easings: clamped outside [0,1]',
-  math.easeOutCubic(2) === 1 && math.easeInOutCubic(-3) === 0)
-check('line colors: exactly one entry per column',
-  math.ignitionLineColors({ elapsedMs: 300, width: 40, onLight: false }).length === 40)
-check('line colors: empty before start and after the end',
-  math.ignitionLineColors({ elapsedMs: 0, width: 40, onLight: false }).length === 0
-  && math.ignitionLineColors({ elapsedMs: math.SWEEP_TOTAL_MS + 1, width: 40, onLight: false }).length === 0)
-check('line colors: boundary guards (width 0, negative/NaN/at-total elapsed)',
-  math.ignitionLineColors({ elapsedMs: 300, width: 0, onLight: false }).length === 0
-  && math.ignitionLineColors({ elapsedMs: -5, width: 40, onLight: false }).length === 0
-  && math.ignitionLineColors({ elapsedMs: Number.NaN, width: 40, onLight: false }).length === 0
-  && math.ignitionLineColors({ elapsedMs: math.SWEEP_TOTAL_MS, width: 40, onLight: false }).length === 0)
-check('line colors: single-column terminal yields one entry',
-  math.ignitionLineColors({ elapsedMs: 300, width: 1, onLight: false }).length === 1)
-check('line colors: every painted entry is a truecolor rgb() string',
-  math
-    .ignitionLineColors({ elapsedMs: 200, width: 60, onLight: false })
-    .every(color => color === undefined || /^rgb\(\d+,\d+,\d+\)$/.test(String(color))))
-check('line colors: some columns are painted mid-wave',
-  math
-    .ignitionLineColors({ elapsedMs: 300, width: 80, onLight: false })
-    .some(color => color !== undefined))
-// --- Part B: three acts on the prompt border, then back to nothing --------
-const LEVELS = ['low', 'medium', 'high'] as const
-const COLS = 60
+type Style = unknown
+type Resolver = (effort: string | undefined) => Style
+type Palette = {
+  band: string
+  high: readonly string[]
+  xhigh: readonly string[]
+  max: readonly string[]
+  ultra: readonly string[]
+}
+type Sampler = (options: {
+  effort: string
+  style: Style
+  elapsedMs: number
+  width: number
+  onLight: boolean
+  palette?: Palette
+}) => ReadonlyArray<unknown>
 
-async function makeHarness(rows: number, driver: React.ReactNode) {
-  const term = new XTerm({ cols: COLS, rows, scrollback: 200, allowProposedApi: true })
+const { EffortTierBadge } = badge
+const badgeApi = badge as Record<string, unknown>
+const badgeWeights = badgeApi.effortBadgeWeights as ((effort: string, count: number, progress: number) => readonly number[]) | undefined
+const badgeGap = badgeApi.effortBadgeGap as ((effort: string, progress: number) => number) | undefined
+const api = math as Record<string, unknown>
+const resolver = (
+  api.resolveEffortIgnitionStyle
+  ?? api.effortIgnitionStyle
+  ?? api.ignitionStyleForEffort
+) as Resolver | undefined
+const sampler = api.ignitionLineColors as Sampler | undefined
+const accents = api.ignitionAccents as ((effort: string | undefined, onLight: boolean, palette?: Palette) => readonly string[]) | undefined
+const gradient = api.themeGradient as ((colors: readonly string[], progress: number) => string | undefined) | undefined
+const blendColor = api.blendThemeColor as ((base: string, accent: string, progress: number) => string) | undefined
+const duration = Number(
+  api.EFFORT_IGNITION_MS
+  ?? api.IGNITION_DURATION_MS
+  ?? api.IGNITION_TIMELINE_MS
+  ?? (api.IGNITION_TIMELINE as { durationMs?: number; totalMs?: number; fadeEndMs?: number } | undefined)?.durationMs
+  ?? (api.IGNITION_TIMELINE as { totalMs?: number } | undefined)?.totalMs
+  ?? (api.IGNITION_TIMELINE as { fadeEndMs?: number } | undefined)?.fadeEndMs,
+)
+
+check('API: effort ignition exports a style resolver', typeof resolver === 'function')
+check('API: effort ignition exports a line sampler', typeof sampler === 'function')
+check('API: effort ignition exports theme-gradient helpers',
+  typeof accents === 'function' && typeof gradient === 'function' && typeof blendColor === 'function')
+check('API: tier badge exports deterministic per-tier motion helpers',
+  typeof badgeWeights === 'function' && typeof badgeGap === 'function')
+check('timeline: every transition is finite at exactly 900ms', duration === 900, `duration ${String(duration)}`)
+
+const styles = new Map<string, Style>()
+for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+  const style = resolver?.(effort)
+  styles.set(effort, style)
+  check(`style: ${effort} resolves`, style !== undefined && style !== null && style !== false, String(style))
+}
+check('style: unsupported efforts resolve to no animation', resolver?.('medium') == null && resolver?.(undefined) == null)
+
+const earlyBadge = Object.fromEntries(
+  ['high', 'max', 'ultra'].map(effort => [effort, badgeWeights?.(effort, 5, 0.35) ?? []]),
+) as Record<string, readonly number[]>
+const twinBadge = badgeWeights?.('xhigh', 5, 0.5) ?? []
+check('badge high: letter energy enters strictly left-to-right',
+  earlyBadge.high[0]! > earlyBadge.high[2]! && earlyBadge.high[2]! >= earlyBadge.high[4]!, earlyBadge.high.join(','))
+check('badge xhigh: twin moving peaks differ from the single high front',
+  twinBadge.filter(weight => weight >= 0.45).length >= 2
+  && twinBadge.filter(weight => weight < 0.2).length >= 2
+  && twinBadge.join(',') !== (badgeWeights?.('high', 5, 0.5) ?? []).join(','), twinBadge.join(','))
+check('badge max: outer letters arrive before the center and metadata contracts inward',
+  earlyBadge.max[0]! > earlyBadge.max[2]! && earlyBadge.max[4]! > earlyBadge.max[2]!
+  && (badgeGap?.('max', 0.2) ?? 0) > (badgeGap?.('max', 0.8) ?? 0), earlyBadge.max.join(','))
+check('badge ultra: center arrives before the edges while metadata expands outward',
+  earlyBadge.ultra[2]! > earlyBadge.ultra[0]! && earlyBadge.ultra[2]! > earlyBadge.ultra[4]!
+  && (badgeGap?.('ultra', 0.2) ?? 0) < (badgeGap?.('ultra', 0.8) ?? 0), earlyBadge.ultra.join(','))
+check('badge: all four tiers settle to fully visible letters',
+  ['high', 'xhigh', 'max', 'ultra'].every(effort =>
+    (badgeWeights?.(effort, 5, 1) ?? []).every(weight => weight === 1)))
+
+const WIDTH = 61
+const CENTER = (WIDTH - 1) / 2
+const colors = (effort: string, elapsedMs: number, palette?: Palette): ReadonlyArray<unknown> =>
+  sampler?.({ effort, style: styles.get(effort), elapsedMs, width: WIDTH, onLight: false, palette }) ?? []
+const painted = (effort: string, elapsedMs: number): number[] =>
+  colors(effort, elapsedMs).flatMap((color, column) => color == null ? [] : [column])
+const samples = (effort: string): number[][] =>
+  Array.from({ length: 17 }, (_, index) => painted(effort, 50 + index * 50)).filter(columns => columns.length > 0)
+const centroid = (columns: readonly number[]): number =>
+  columns.length === 0 ? Number.NaN : columns.reduce((sum, column) => sum + column, 0) / columns.length
+const radius = (columns: readonly number[]): number =>
+  columns.length === 0 ? Number.NaN : columns.reduce((sum, column) => sum + Math.abs(column - CENTER), 0) / columns.length
+const groups = (columns: readonly number[]): number =>
+  columns.reduce((count, column, index) => count + (index === 0 || column > columns[index - 1]! + 1 ? 1 : 0), 0)
+const used = (values: readonly unknown[]): string[] =>
+  [...new Set(values.flatMap(value => typeof value === 'string' ? [value] : []))]
+
+for (const effort of ['high', 'xhigh']) {
+  const frames = samples(effort)
+  const early = frames[0] ?? []
+  const late = frames.at(-1) ?? []
+  check(`${effort}: painted band travels left-to-right`,
+    early.length > 0 && late.length > 0 && centroid(early) + WIDTH / 4 < centroid(late),
+    `centroid ${centroid(early).toFixed(1)}→${centroid(late).toFixed(1)}`)
+}
+{
+  const high = painted('high', 450)
+  const xhigh = painted('xhigh', 450)
+  check('high/xhigh: visual paths differ as one broad front versus twin narrow fronts',
+    groups(high) === 1 && groups(xhigh) === 2 && high.length > xhigh.length,
+    `groups ${groups(high)}/${groups(xhigh)}, columns ${high.length}/${xhigh.length}`)
+}
+{
+  const frames = samples('max')
+  const early = frames[0] ?? []
+  const late = frames.at(-1) ?? []
+  check('max: fronts move inward toward the center',
+    early.length > 0 && late.length > 0 && radius(early) > radius(late) + WIDTH / 5,
+    `radius ${radius(early).toFixed(1)}→${radius(late).toFixed(1)}`)
+}
+{
+  const frames = samples('ultra')
+  const early = frames[0] ?? []
+  const late = frames.at(-1) ?? []
+  check('ultra: fronts move outward from the center',
+    early.length > 0 && late.length > 0 && radius(late) > radius(early) + WIDTH / 5,
+    `radius ${radius(early).toFixed(1)}→${radius(late).toFixed(1)}`)
+}
+const darkTheme = getTheme('dark')
+const lightTheme = getTheme('light')
+const darkPalette = effortTheme(darkTheme) as Palette
+const lightPalette = effortTheme(lightTheme) as Palette
+check('theme: dark RGB palette is sourced from semantic Theme roles',
+  darkPalette.band === darkTheme.promptBorder
+  && darkPalette.high[0] === darkTheme.promptBorderShimmer
+  && darkPalette.xhigh[1] === darkTheme.permissionShimmer
+  && darkPalette.max[0] === darkTheme.warning
+  && darkPalette.ultra[6] === darkTheme.rainbow_violet
+  && Object.values(darkPalette).flat().every(color => color.startsWith('rgb(')))
+check('theme: light RGB palette keeps the same semantic mapping with different concrete colors',
+  lightPalette.band === lightTheme.promptBorder
+  && lightPalette.high[1] === lightTheme.claudeShimmer
+  && lightPalette.max[1] === lightTheme.warningShimmer
+  && lightPalette.ultra[0] === lightTheme.rainbow_red
+  && lightPalette.band !== darkPalette.band)
+check('theme: prompt-owned semantic and raw session accent colors resolve as the animation band',
+  effortBand(darkTheme, 'warning') === darkTheme.warning
+  && effortBand(darkTheme, '#123456') === '#123456'
+  && effortTheme(darkTheme, effortBand(darkTheme, 'warning')).band === darkTheme.warning
+  && effortTheme(darkTheme, effortBand(darkTheme, '#123456')).band === '#123456')
+const signatures = ['high', 'xhigh', 'max', 'ultra'].map(effort => used(colors(effort, 450, darkPalette)))
+check('theme: all four tiers produce distinct dark-theme RGB color signatures',
+  signatures.every(signature => signature.length > 0 && signature.every(color => color.startsWith('rgb(')))
+  && new Set(signatures.map(signature => signature.join('|'))).size === 4,
+  signatures.map((signature, index) => `${['high', 'xhigh', 'max', 'ultra'][index]}:${signature.length}`).join(', '))
+
+const customPalette: Palette = {
+  band: '#101010',
+  high: ['#123456', '#345678'],
+  xhigh: ['#2468ac', '#abcdef'],
+  max: ['#c08020', '#ffe080'],
+  ultra: ['#a00000', '#b06000', '#909000', '#008000', '#0060a0', '#302090', '#800080'],
+}
+check('custom fallback: raw non-rgb colors step between valid theme values without interpolation',
+  blendColor?.(customPalette.band, customPalette.high[0]!, 0.2) === customPalette.band
+  && blendColor?.(customPalette.band, customPalette.high[0]!, 0.8) === customPalette.high[0]
+  && gradient?.(customPalette.high, 0.2) === customPalette.high[0]
+  && gradient?.(customPalette.high, 0.8) === customPalette.high[1])
+for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+  const sampled = used(colors(effort, 450, customPalette))
+  const allowed = new Set(customPalette[effort as keyof Omit<Palette, 'band'>])
+  check(`custom fallback: ${effort} sampler preserves raw theme colors`,
+    sampled.length > 0 && sampled.every(color => allowed.has(color)), sampled.join(','))
+}
+
+const ansiPalette = effortTheme(getTheme('dark-ansi')) as Palette
+for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+  const sampled = used(colors(effort, 450, ansiPalette))
+  check(`ANSI fallback: ${effort} remains palette-based without invented RGB`,
+    sampled.length > 0 && sampled.every(color => color.startsWith('ansi:')), sampled.join(','))
+}
+
+for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+  check(`${effort}: sampler is dark at and after 900ms`,
+    painted(effort, 900).length === 0 && painted(effort, 901).length === 0)
+}
+
+const COLS = 60
+const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const
+
+type ManualClock = {
+  now: () => number
+  subscribe: (fn: () => void, keepAlive: boolean) => () => void
+  setTickInterval: (_ms: number) => void
+  advance: (ms: number) => void
+  subscriptions: () => number
+}
+function createManualClock(): ManualClock {
+  let now = 0
+  const listeners = new Set<() => void>()
+  return {
+    now: () => now,
+    subscribe(fn) {
+      listeners.add(fn)
+      return () => { listeners.delete(fn) }
+    },
+    setTickInterval() {},
+    advance(ms) {
+      now += ms
+      for (const listener of [...listeners]) listener()
+    },
+    subscriptions: () => listeners.size,
+  }
+}
+
+async function makeHarness(initial: string | undefined) {
+  const term = new XTerm({ cols: COLS, rows: 6, scrollback: 100, allowProposedApi: true })
   const writes: string[] = []
+  const clock = createManualClock()
+  let setEffort: React.Dispatch<React.SetStateAction<string | undefined>> = () => {}
   class FakeStdout extends Writable {
     columns = COLS
-    rows = rows
+    rows = 6
     isTTY = true
     _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
       writes.push(String(chunk))
@@ -101,148 +274,122 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
     ref(): this { return this }
     unref(): this { return this }
   }
-  const rowText = (y: number): string =>
+  function Driver(): React.ReactNode {
+    const [effort, update] = React.useState<string | undefined>(initial)
+    setEffort = update
+    return React.createElement(
+      ClockContext.Provider,
+      { value: clock },
+      React.createElement(
+        EffortInputBorder,
+        { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
+        React.createElement(Text, null,
+          ' ',
+          React.createElement(EffortTierBadge, {
+            effort,
+            levels: LEVELS,
+            onLight: false,
+            columns: COLS,
+            leadingColumns: 2,
+          }),
+        ),
+      ),
+    )
+  }
+  const stdout = new FakeStdout()
+  const instance = await render(React.createElement(Driver), {
+    stdout: stdout as never,
+    stdin: new FakeStdin() as never,
+    stderr: stdout as never,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  })
+  const row = (y: number): string =>
     term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? ''
-  const fgColors = (y: number): number => {
+  const fg = (y: number): number => {
     const line = term.buffer.active.getLine(term.buffer.active.baseY + y)
     if (line === undefined) return 0
     const found = new Set<number>()
     for (let x = 0; x < COLS; x++) {
       const cell = line.getCell(x)
-      if (cell !== undefined && cell.isFgRGB()) found.add(cell.getFgColor())
+      if (cell?.isFgRGB()) found.add(cell.getFgColor())
     }
     return found.size
   }
-  const instance = await render(
-    React.createElement(ClockProvider, null, driver),
-    {
-      stdout: new FakeStdout() as never,
-      stdin: new FakeStdin() as never,
-      stderr: new FakeStdout() as never,
-      exitOnCtrlC: false,
-      patchConsole: false,
-    },
-  )
-  return { term, writes, rowText, fgColors, instance }
+  const settle = async (): Promise<void> => { await sleep(45) }
+  const set = async (effort: string | undefined): Promise<void> => {
+    setEffort(effort)
+    await settle()
+  }
+  const advance = async (ms: number): Promise<void> => {
+    clock.advance(ms)
+    await settle()
+  }
+  await settle()
+  return { term, writes, clock, row, fg, set, advance, instance }
 }
 
-function borderNode(effort: string | undefined): React.ReactNode {
-  // Children mirror the real empty input row: block caret + centered badge.
-  return React.createElement(
-    EffortInputBorder,
-    { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Text, null,
-      ' ',
-      React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false, columns: COLS, leadingColumns: 2 })),
-  )
+const top = '╭' + '─'.repeat(COLS - 2) + '╮'
+const bottom = '╰' + '─'.repeat(COLS - 2) + '╯'
+const stableRows = (harness: Awaited<ReturnType<typeof makeHarness>>): boolean =>
+  harness.row(0).length === COLS
+  && harness.row(2).length === COLS
+  && harness.row(2) === bottom
+  && harness.row(3) === ''
+const centered = (line: string, effort: string): boolean => {
+  const letters = effort.toUpperCase().split('')
+  const columns: number[] = []
+  let cursor = 0
+  for (const letter of letters) {
+    const at = line.indexOf(letter, cursor)
+    if (at < 0) return false
+    columns.push(at)
+    cursor = at + 1
+  }
+  const gaps = columns.slice(1).map((column, index) => column - columns[index]! - 1)
+  const middle = (columns[0]! + columns.at(-1)!) / 2
+  return gaps.every(gap => gap === 1) && Math.abs(middle - (COLS - 1) / 2) <= 1
 }
+const hasScroll = (stream: string): boolean =>
+  /\x1b\[\d*[ST]/u.test(stream)
+  || /\x1b\[(?:\d+;)?\d*[rLM]/u.test(stream)
 
-function SweepDriver(): React.ReactNode {
-  const [effort, setEffort] = React.useState<string>('medium')
-  React.useEffect(() => {
-    const timer = setTimeout(() => setEffort('high'), 300)
-    return () => clearTimeout(timer)
-  }, [])
-  return borderNode(effort)
-}
-
-// Act timings from the component: switch at t=300 → elapsed = t-300.
-//   sweep [0,800); letters appear from 400 (M) / 540 (A) / 680 (X), full at
-//   ~840; fade [1100,1600); gone at 1600.
 {
-  const harness = await makeHarness(6, React.createElement(SweepDriver))
+  const harness = await makeHarness('high')
   try {
-    await sleep(150)
-    const restText = harness.rowText(0)
-    check('rest: plain theme border, no letters, one colour',
-      restText === '╭' + '─'.repeat(COLS - 2) + '╮' && harness.fgColors(0) <= 1)
-    check('rest: exactly three rows — bottom border sits directly under the input row',
-      harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯' && harness.rowText(3) === '')
-    // elapsed ≈ 300: mid-sweep, letters not started (LABEL_START 600).
-    await sleep(450)
-    check('act 1 sweep: a light band runs left→right on BOTH borders, no letters yet',
-      harness.fgColors(0) >= 2 && harness.fgColors(2) >= 2, `${harness.fgColors(0)}/${harness.fgColors(2)} colours`)
-    // elapsed ≈ 950: the tier name shows centered on the input row, and NO
-    // extra row appears — the row under it stays the bottom border.
-    await sleep(650)
-    const inputRow = harness.rowText(1)
-    const tierLetters = LEVELS[LEVELS.length - 1]!.toUpperCase().split('')
-    const firstAt = inputRow.indexOf(tierLetters[0]!)
-    check('act 2 label: letters emerged CENTERED while still converging (gap > 1)',
-      tierLetters.every(letter => inputRow.includes(letter)) && firstAt >= Math.floor(COLS / 2) - 12,
-      `col ${firstAt}: ${inputRow.trim().slice(0, 24)}`)
-    // elapsed ≈ 1450: converge done (600+800), gap locked at 1, pre-fade.
-    await sleep(500)
-    const settled = harness.rowText(1)
-    const spacedName = tierLetters.join(' ')
-    check('act 2 label: letters settled at one-space gap',
-      settled.includes(spacedName), settled.trim().slice(0, 24))
-    // 终态精确居中：字样中点字母落在终端几何中心列上。
-    const midLetter = tierLetters[Math.floor(tierLetters.length / 2)]!
-    const midAt = settled.indexOf(spacedName) + spacedName.indexOf(midLetter)
-    const terminalCenter = Math.round((COLS - 1) / 2)
-    check('act 2 label: settled dead-center on the terminal',
-      Math.abs(midAt - terminalCenter) <= 1, `mid at ${midAt}, center ${terminalCenter}`)
-    check('act 2 label: no extra row — bottom border never moves',
-      harness.rowText(2) === '╰' + '─'.repeat(COLS - 2) + '╯')
-    const labelColors = harness.fgColors(1)
-    check('act 2 label: the badge carries the accent family', labelColors >= 1, `${labelColors} colours`)
-    // elapsed ≈ 1700 (past FADE_END 1600): everything gone, border identical to rest.
+    check('cold: mounting on a supported tier is a no-op', harness.row(0) === top && harness.fg(0) <= 1 && harness.clock.subscriptions() === 0)
+    await harness.set('high')
+    check('same: selecting the current tier is a no-op', harness.fg(0) <= 1 && harness.clock.subscriptions() === 0)
+    await harness.set('medium')
+    check('unsupported: changing to a non-animated tier is a no-op', harness.fg(0) <= 1 && harness.clock.subscriptions() === 0)
+
     harness.writes.length = 0
-    await sleep(1050)
-    const stream = harness.writes.join('')
-    const scroll = [/\x1b\[\d*S/, /\x1b\[\d*T/].some(pattern => pattern.test(stream))
-    check('act 3 fade: badge and sweep are gone, border back to rest',
-      harness.rowText(0) === restText && harness.rowText(1).trim() === '' && harness.fgColors(0) <= 1)
-    check('lifecycle: no scroll sequences at any point', !scroll)
-    check('after the fade both borders rest in a single colour', harness.fgColors(0) <= 1 && harness.fgColors(2) <= 1)
+    await harness.set('xhigh')
+    check('start: supported effort owns one bounded clock subscription', harness.clock.subscriptions() > 0)
+    await harness.advance(550)
+    check('label: uppercase one-space effort is centered during the 900ms window', centered(harness.row(1), 'xhigh'), harness.row(1).trim())
+    check('geometry: animation remains exactly three stable rows', stableRows(harness))
+
+    await harness.set(undefined)
+    await harness.advance(1)
+    check('cancel: clearing effort removes animation and clock ownership', harness.fg(0) <= 1 && harness.row(1).trim() === '' && harness.clock.subscriptions() === 0)
+
+    await harness.set('max')
+    await harness.advance(500)
+    const before = harness.row(1)
+    await harness.set('ultra')
+    await harness.advance(100)
+    check('restart: a new supported effort replaces the active label from time zero', !harness.row(1).includes('M A X') && harness.row(1) !== before)
+    await harness.advance(800)
+    check('completion: exactly 900ms returns to rest and releases the clock',
+      harness.fg(0) <= 1 && harness.row(1).trim() === '' && harness.clock.subscriptions() === 0)
+    check('lifecycle: no scrolling while starting, cancelling, or restarting', !hasScroll(harness.writes.join('')))
   } finally {
     harness.instance.unmount()
+    await sleep(30)
+    check('cleanup: unmount leaves no shared-clock subscriptions', harness.clock.subscriptions() === 0)
   }
 }
-
-// --- Negative paths: no sweep, no letters, ever -------------------------------
-async function runDarkScenario(name: string, node: React.ReactNode) {
-  const harness = await makeHarness(6, node)
-  try {
-    await sleep(300)
-    harness.writes.length = 0
-    await sleep(1800)
-    const stream = harness.writes.join('')
-    const top = harness.rowText(0)
-    const dim = harness.fgColors(0) <= 1 && !/[A-Z]/.test(top.slice(1, -1)) && !/\x1b\[38;2;.*\x1b\[38;2;/.test(stream)
-    check(`${name}: nothing plays`, dim)
-  } finally {
-    harness.instance.unmount()
-  }
-}
-
-await runDarkScenario('cold mount on the top tier', borderNode('high'))
-function SingleTierDriver(): React.ReactNode {
-  return React.createElement(
-    EffortInputBorder,
-    { effort: 'high', levels: ['high'], columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Text, null, 'row'),
-  )
-}
-await runDarkScenario('single-tier table', React.createElement(SingleTierDriver))
-function NoTableDriver(): React.ReactNode {
-  return React.createElement(
-    EffortInputBorder,
-    { effort: 'high', levels: undefined, columns: COLS, onLight: false, idleColor: 'promptBorder' },
-    React.createElement(Text, null, 'row'),
-  )
-}
-await runDarkScenario('missing level table', React.createElement(NoTableDriver))
-function LeaveTopDriver(): React.ReactNode {
-  const [effort, setEffort] = React.useState<string>('high')
-  React.useEffect(() => {
-    const timer = setTimeout(() => setEffort('medium'), 300)
-    return () => clearTimeout(timer)
-  }, [])
-  return borderNode(effort)
-}
-await runDarkScenario('leaving the top tier', React.createElement(LeaveTopDriver))
 
 if (failures > 0) {
   console.error(`${failures} check(s) failed`)

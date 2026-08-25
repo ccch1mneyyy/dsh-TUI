@@ -431,6 +431,7 @@ const dict = {
   'effort-single-tier': { zh: '当前模型只有一档推理等级（{{name}}）', en: 'Current model has a single reasoning effort ({{name}})' },
   'effort-unsupported': { zh: '当前模型不支持推理等级切换', en: 'Current model does not support reasoning effort switching' },
   'effort-switched': { zh: '推理强度 → {{name}}', en: 'Reasoning effort → {{name}}' },
+  'effort-preview': { zh: '动画预览 → {{name}}（不会发送给模型）', en: 'Animation preview → {{name}} (not sent to the model)' },
   'effort-invalid': { zh: '未知推理等级 {{id}}（当前模型可选：{{ids}}）', en: 'Unknown reasoning effort {{id}} (this model offers: {{ids}})' },
   'effort-current': { zh: '当前推理强度 {{name}}', en: 'Current reasoning effort {{name}}' },
   'effort-usage': { zh: '用法：/effort（滑杆）| /effort <id> | /effort status', en: 'Usage: /effort (slider) | /effort <id> | /effort status' },

@@ -1481,6 +1481,9 @@ export function createChannel(
      *  startup until the first request/header event reports the adapter's
      *  live value. */
     effort?: string
+    /** Extra UI-only reasoning levels for visual preview. An id is applied to
+     *  model requests only when the live adapter advertises it too. */
+    previewEfforts?: readonly string[]
     /** Derive the working line from base session events; default on. */
     activity?: boolean
     /** Indicator preset for the working-activity line (`claude`/`moon`/
@@ -2039,13 +2042,26 @@ export function createChannel(
    *  to every newly bound agent once validated against its adapter's list. */
   let preferredEffort: string | undefined = options.effort ?? readEffortPref()
 
+  const previewEfforts = [...new Set(
+    (options.previewEfforts ?? []).map(id => id.trim().toLowerCase()).filter(id => id !== ''),
+  )]
+  const previewOptions = (): readonly EffortOption[] => previewEfforts.map(id => ({
+    id,
+    name: id.charAt(0).toUpperCase() + id.slice(1),
+    description: 'Visual preview only; not sent to the model',
+  }))
+  const mergeEfforts = (efforts: readonly EffortOption[]): readonly EffortOption[] => {
+    const ids = new Set(efforts.map(effort => effort.id))
+    return [...efforts, ...previewOptions().filter(effort => !ids.has(effort.id))]
+  }
+
   /** Pin `preferredEffort` on the live agent when its route offers it;
    *  silent no-op otherwise (the next request/header corrects the display). */
   const applyPreferredEffort = async (): Promise<void> => {
     if (preferredEffort === undefined || llmRuntime === undefined) return
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+      state.effortLevels = mergeEfforts(info.reasoning?.efforts ?? []).map(level => level.id)
       if (!info.reasoning?.efforts.some(effort => effort.id === preferredEffort)) return
       selection.current = {
         provider: state.provider,
@@ -2073,7 +2089,7 @@ export function createChannel(
       .resolveModelInfo(state.provider, state.model)
       .then(info => {
         if (generation !== effortLevelsGeneration) return
-        state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+        state.effortLevels = mergeEfforts(info.reasoning?.efforts ?? []).map(level => level.id)
         state.emit()
       })
       .catch(() => {
@@ -2088,6 +2104,7 @@ export function createChannel(
   const resolveEfforts = async (): Promise<
     | {
         efforts: ReadonlyArray<{ id: string; name: string; description?: string }>
+        adapterEffortIds: readonly string[]
         defaultEffort: string | undefined
       }
     | 'unavailable'
@@ -2096,9 +2113,10 @@ export function createChannel(
     if (llmRuntime === undefined) return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+      state.effortLevels = mergeEfforts(info.reasoning?.efforts ?? []).map(level => level.id)
       return {
-        efforts: info.reasoning?.efforts ?? [],
+        efforts: mergeEfforts(info.reasoning?.efforts ?? []),
+        adapterEffortIds: (info.reasoning?.efforts ?? []).map(effort => effort.id),
         defaultEffort: info.reasoning?.defaultEffort,
       }
     } catch (error) {
@@ -2110,18 +2128,22 @@ export function createChannel(
     }
   }
 
-  /** Pin one validated effort level on the live route: reroutes the next
-   *  request, persists the choice, and refreshes the StatusLine segment. */
-  const applyEffort = (effort: { id: string; name: string }): void => {
-    selection.current = {
-      provider: state.provider,
-      model: state.model,
-      reasoningEffort: ReasoningEffortId(effort.id),
+  /** Apply one offered level. Preview-only ids update the visible TUI state
+   *  but deliberately leave request selection and persisted model prefs alone. */
+  const applyEffort = (effort: { id: string; name: string }, preview: boolean): void => {
+    if (!preview) {
+      selection.current = {
+        provider: state.provider,
+        model: state.model,
+        reasoningEffort: ReasoningEffortId(effort.id),
+      }
+      preferredEffort = effort.id
+      writeEffortPref(effort.id)
     }
-    preferredEffort = effort.id
     state.reasoningEffort = effort.id
-    writeEffortPref(effort.id)
-    state.notify(t('effort-switched', { name: effort.name }))
+    state.notify(preview
+      ? t('effort-preview', { name: effort.name })
+      : t('effort-switched', { name: effort.name }))
     state.emit()
   }
 
@@ -2164,7 +2186,8 @@ export function createChannel(
       )
       return false
     }
-    applyEffort(found)
+    if (found.id === state.reasoningEffort) return true
+    applyEffort(found, !resolved.adapterEffortIds.includes(found.id))
     return true
   }
 

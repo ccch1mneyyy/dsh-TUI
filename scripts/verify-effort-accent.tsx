@@ -1,14 +1,6 @@
 /**
- * Effort accent regression — the `❯ ` prompt prefix under the top tier.
- *
- * Mounts the real glyph in a headless xterm and asserts the three states a
- * reader sees:
- *
- * - Off the top tier the prefix keeps its original dim rendering (no accent
- *   SGR beyond the working dim, byte-comparable output).
- * - Switching onto the top tier charges the prefix: bold + truecolor orange
- *   appears within the 150ms charge window and stays solid after it.
- * - Leaving the top tier restores the original rendering.
+ * Effort accent regression — the prompt prefix consumes the prompt-owned
+ * ignition frame instead of owning another clock or transition detector.
  *
  * Run: node --import tsx/esm scripts/verify-effort-accent.tsx
  */
@@ -18,18 +10,18 @@ const [
   { Writable, PassThrough },
   React,
   { Terminal: XTerm },
-  { render },
+  { render, ThemeProvider },
   { EffortChargeGlyph },
-  { ClockProvider },
-  { settle },
+  { EffortIgnitionContext },
+  { CHARGE_MS },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/EffortChargeGlyph.js'),
-  import('../src/ink/components/ClockContext.js'),
-  import('./lib/term-test.mjs'),
+  import('../src/components/EffortIgnitionContext.js'),
+  import('../src/trajectory/effortIgnition.js'),
 ])
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -56,86 +48,118 @@ class FakeStdin extends PassThrough {
   ref(): this { return this }
   unref(): this { return this }
 }
-// The painted cells of the first screen row as {glyph, fg-is-truecolor, bold}.
 function firstRow(): string {
   const line = term.buffer.active.getLine(term.buffer.active.baseY)
   if (line === undefined) return ''
   return Array.from({ length: cols }, (_, x) => line.getCell(x)?.getChars() ?? '').join('')
 }
-function prefixFgTruecolor(): boolean {
-  const line = term.buffer.active.getLine(term.buffer.active.baseY)
-  if (line === undefined) return false
-  for (let x = 0; x < 2; x++) {
-    if (line.getCell(x)?.isFgRGB()) return true
-  }
-  return false
+function prefixFg(): number | undefined {
+  const cell = term.buffer.active.getLine(term.buffer.active.baseY)?.getCell(0)
+  return cell?.isFgRGB() ? cell.getFgColor() : undefined
 }
 function prefixBold(): boolean {
-  const line = term.buffer.active.getLine(term.buffer.active.baseY)
-  if (line === undefined) return false
-  for (let x = 0; x < 2; x++) {
-    if ((line.getCell(x)?.isBold() ?? 0) > 0) return true
-  }
-  return false
+  const cell = term.buffer.active.getLine(term.buffer.active.baseY)?.getCell(0)
+  return (cell?.isBold() ?? 0) > 0
 }
 
+let setEffort: React.Dispatch<React.SetStateAction<string | undefined>> = () => {}
+let setElapsed: React.Dispatch<React.SetStateAction<number | null>> = () => {}
 function Driver(): React.ReactNode {
-  // medium → high (top) at t=300ms, back to medium at t=900ms.
-  const [effort, setEffort] = React.useState('medium')
-  React.useEffect(() => {
-    const timers = [
-      setTimeout(() => setEffort('high'), 300),
-      setTimeout(() => setEffort('medium'), 900),
-    ]
-    return () => timers.forEach(clearTimeout)
-  }, [])
+  const [effort, updateEffort] = React.useState<string | undefined>('medium')
+  const [elapsed, updateElapsed] = React.useState<number | null>(null)
+  setEffort = updateEffort
+  setElapsed = updateElapsed
+  const frame = elapsed === null
+    ? null
+    : { label: effort?.toUpperCase() ?? '', style: 'ltr' as const, elapsedMs: elapsed, durationMs: 900 }
   return (
-    <ClockProvider>
-      <EffortChargeGlyph effort={effort} levels={['low', 'medium', 'high']} working={false} />
-    </ClockProvider>
+    <ThemeProvider theme="dark">
+      <EffortIgnitionContext.Provider value={frame}>
+        <EffortChargeGlyph effort={effort} levels={['low', 'medium', 'high', 'max']} working={false} />
+      </EffortIgnitionContext.Provider>
+    </ThemeProvider>
   )
 }
 
-render(<Driver />, {
-  stdout: new FakeStdout() as never,
+const stdout = new FakeStdout()
+const instance = await render(<Driver />, {
+  stdout: stdout as never,
   stdin: new FakeStdin() as never,
-  stderr: new FakeStdout() as never,
+  stderr: stdout as never,
   exitOnCtrlC: false,
   patchConsole: false,
 })
+const settle = async (): Promise<void> => { await sleep(45) }
 
-// 稳定性/时窗探针（切档前不得出现 accent）：条件从挂载起就成立，轮询会
-// 立即返回，等于没测；且必须在 t=300ms 切档前采样——保留固定窗口。
-await sleep(200)
-check('off the top tier: plain prefix, no accent', firstRow().startsWith('❯') && !prefixFgTruecolor() && !prefixBold())
+try {
+  await settle()
+  check('unsupported tier: plain prefix, no accent', firstRow().startsWith('❯') && prefixFg() === undefined && !prefixBold())
 
-// Sample the prefix's actual FG colour across the charge window's tail and
-// the settle: a constant colour or a reversed ramp must fail here, not just
-// a missing accent. luma(Rec.601) is the ramp's monotone observable — dim
-// (band-tinted) is darker than full (hues[0]).
-const luma = (rgb: number): number =>
-  0.299 * ((rgb >> 16) & 0xff) + 0.587 * ((rgb >> 8) & 0xff) + 0.114 * (rgb & 0xff)
-const samples: number[] = []
-await sleep(120)
-for (let i = 0; i < 8; i++) {
-  const line = term.buffer.active.getLine(term.buffer.active.baseY)
-  const cell = line?.getCell(0)
-  if (cell !== undefined && cell.isFgRGB()) samples.push(cell.getFgColor())
-  await sleep(28)
+  setEffort('high')
+  setElapsed(0)
+  await settle()
+  const start = prefixFg()
+  check('supported tier starts bold truecolor charge', start !== undefined && prefixBold())
+
+  setElapsed(Math.floor(CHARGE_MS / 2))
+  await settle()
+  const middle = prefixFg()
+  setElapsed(CHARGE_MS)
+  await settle()
+  const full = prefixFg()
+  check('charge changes color across its bounded window', start !== undefined && middle !== undefined && full !== undefined && start !== middle && middle !== full)
+  check('past the charge window: accent stays solid', prefixBold() && full !== undefined)
+
+  setElapsed(null)
+  await settle()
+  check('supported tier keeps its steady accent after ignition', prefixBold() && prefixFg() === full)
+
+  setEffort('medium')
+  await settle()
+  check('leaving supported tiers restores the plain prefix', prefixFg() === undefined && !prefixBold())
+} finally {
+  instance.unmount()
 }
-check('charging onto the top tier: bold + truecolor accent', prefixFgTruecolor() && prefixBold())
-check('charge ramps dark→full (sampled, monotone)',
-  samples.length >= 3
-  && luma(samples[0]!) < luma(samples[samples.length - 1]!)
-  && samples.slice(1).some((value, index) => luma(value) >= luma(samples[index]!)),
-  `${samples.length} samples, luma ${samples.length ? Math.round(luma(samples[0]!)) : '?'}→${samples.length ? Math.round(luma(samples[samples.length - 1]!)) : '?'}`)
 
-// 稳定性探针（accent 必须持续存在）：条件此刻已成立，轮询会立即返回，
-// 测不到「保持」——保留固定窗口。
-await sleep(300)
-check('past the charge window: accent stays solid', prefixFgTruecolor() && prefixBold())
-await settle(() => !prefixFgTruecolor() && !prefixBold())
-check('off the top tier again: accent gone', !prefixFgTruecolor() && !prefixBold())
+{
+  const ansiTerm = new XTerm({ cols, rows, scrollback: 100, allowProposedApi: true })
+  class AnsiStdout extends Writable {
+    columns = cols
+    rows = rows
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+      ansiTerm.write(String(chunk), callback)
+    }
+  }
+  function AnsiDriver(): React.ReactNode {
+    return (
+      <ThemeProvider theme="dark-ansi">
+        <EffortIgnitionContext.Provider
+          value={{ label: 'ULTRA', style: 'outward', elapsedMs: CHARGE_MS, durationMs: 900 }}
+        >
+          <EffortChargeGlyph effort="ultra" levels={['ultra']} working={false} />
+        </EffortIgnitionContext.Provider>
+      </ThemeProvider>
+    )
+  }
+  const ansi = await render(<AnsiDriver />, {
+    stdout: new AnsiStdout() as never,
+    stdin: new FakeStdin() as never,
+    stderr: new AnsiStdout() as never,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  })
+  try {
+    await settle()
+    const cell = ansiTerm.buffer.active.getLine(ansiTerm.buffer.active.baseY)?.getCell(0)
+    check('ANSI theme: steady prefix uses a palette color without invented truecolor',
+      cell?.isFgPalette() === true && cell.isFgRGB() === false,
+      `palette=${cell?.getFgColor()}`)
+  } finally {
+    ansi.unmount()
+    ansiTerm.dispose()
+  }
+}
 
 if (failures > 0) {
   console.error(`${failures} check(s) failed`)

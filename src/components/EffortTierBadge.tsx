@@ -1,126 +1,157 @@
-/**
- * EffortTierBadge — 输入行尾的档位字样徽标：三幕点焰的第二幕载体
- * （与 EffortInputBorder 的双框扫光同一时间轴、同一触发），切到最高
- * 思考强度档时光带行至中段，输入行居中浮现档名（当前档名大写，字母间距从
- * 10 个空格减速聚拢到 1 个——连续位置逐字母取整保证帧帧有移动，
- * 明亮蓝加粗，由暗渐亮），随后随图层整体渐隐让位——行数恒定，静
- * 止时完全不渲染；输入行有文字时不显示（绝不遮挡内容）。
- *
- * 触发判定在渲染期做（props-变化-调整模式，与边框/充能组件同模
- * 式）；冷启动恢复偏好/单档表/无档位表/无共享时钟均不触发。时钟
- * 复用 Ink core 共享时钟，仅动画窗口订阅（keepAlive），播完归零。
- */
-import React, { useContext, useEffect, useReducer, useState } from 'react'
-import { Text } from '../ui.js'
-import { ClockContext } from '../ink/components/ClockContext.js'
-import { rgbString } from '../trajectory/motion.js'
-import type { RGBColor } from './Spinner/spinnerUtils.js'
-import { IGNITION_TIMELINE, ignitionHues } from '../trajectory/effortIgnition.js'
+/** Centered uppercase label driven by EffortInputBorder's single timeline. */
+import React, { useContext } from 'react'
+import { Text, useTheme } from '../ui.js'
+import type { Color } from '../ink/styles.js'
+import { getTheme, type Theme } from '../theme.js'
+import {
+  blendThemeColor,
+  crest,
+  ignitionAccents,
+  IGNITION_TIMELINE,
+  themeGradient,
+} from '../trajectory/effortIgnition.js'
+import { EffortIgnitionContext } from './EffortIgnitionContext.js'
+import { effortTheme } from './effort-theme.js'
 
-type Overlay = { label: string; startedAtMs: number }
+const LETTER_GAP = 1
+const REVEAL_MS = 430
 
-/** 字母间距聚拢：从 10 个空格减速收敛到 1 个（ease-out，快收慢停）。 */
-const GAP_START = 10
-const GAP_END = 1
-const CONVERGE_MS = 500
+type BadgeTier = 'high' | 'xhigh' | 'max' | 'ultra'
+
+function tier(effort: string): BadgeTier {
+  switch (effort.toLowerCase()) {
+    case 'xhigh':
+      return 'xhigh'
+    case 'max':
+      return 'max'
+    case 'ultra':
+      return 'ultra'
+    default:
+      return 'high'
+  }
+}
+
+function clamp(value: number): number {
+  return Math.min(1, Math.max(0, value))
+}
+
+function reveal(progress: number, arrival: number): number {
+  return clamp((progress - arrival * 0.65) / 0.35)
+}
+
+/** Per-letter ignition weights over 430ms: LTR, twin LTR peaks, inward, then outward. */
+export function effortBadgeWeights(effort: string, count: number, progress: number): readonly number[] {
+  const kind = tier(effort)
+  const phase = clamp(progress)
+  if (phase >= 1) return Array.from({ length: Math.max(0, count) }, () => 1)
+  return Array.from({ length: Math.max(0, count) }, (_, index) => {
+    const point = count <= 1 ? 0.5 : index / (count - 1)
+    const distance = Math.abs(point - 0.5) * 2
+    if (kind === 'high') return reveal(phase, point)
+    if (kind === 'max') return reveal(phase, 1 - distance)
+    if (kind === 'ultra') return reveal(phase, distance)
+    const front = phase * 1.6 - 0.1
+    const first = crest((point - front) / 0.18)
+    const second = crest((point - (front - 0.38)) / 0.15)
+    const settle = clamp((phase - 0.78) / 0.22)
+    return Math.max(first, second, settle)
+  })
+}
+
+/** Motion metadata for deterministic regression; rendering keeps fixed columns. */
+export function effortBadgeGap(effort: string, progress: number): number {
+  const phase = clamp(progress)
+  switch (tier(effort)) {
+    case 'max':
+      return 1 - phase
+    case 'ultra':
+      return phase
+    default:
+      return 0
+  }
+}
+
+function intensity(elapsedMs: number): number {
+  const brighten = Math.min(1, elapsedMs / IGNITION_TIMELINE.labelBrightenMs)
+  if (elapsedMs < IGNITION_TIMELINE.fadeStartMs) return brighten
+  const fade = 1 - (elapsedMs - IGNITION_TIMELINE.fadeStartMs)
+    / (IGNITION_TIMELINE.fadeEndMs - IGNITION_TIMELINE.fadeStartMs)
+  return brighten * Math.max(0, fade)
+}
+
+function positions(
+  label: string,
+  columns: number,
+  leadingColumns: number,
+): readonly number[] {
+  const center = Math.round((columns - 1) / 2) - leadingColumns
+  return Array.from({ length: label.length }, (_, index) => {
+    const offset = (index - (label.length - 1) / 2) * (1 + LETTER_GAP)
+    return offset >= 0 ? Math.round(center + offset) : 2 * center - Math.round(center - offset)
+  })
+}
+
+function effortBadgeColors(options: {
+  label: string
+  elapsedMs: number
+  alpha: number
+  onLight: boolean
+  theme: Theme
+}): readonly Color[] {
+  const palette = effortTheme(options.theme)
+  const accents = ignitionAccents(options.label, options.onLight, palette)
+  const weights = effortBadgeWeights(options.label, options.label.length, options.elapsedMs / REVEAL_MS)
+  return Array.from({ length: options.label.length }, (_, index) => {
+    const point = options.label.length <= 1 ? 0 : index / (options.label.length - 1)
+    const accent = themeGradient(accents, point) ?? accents[0]!
+    return blendThemeColor(palette.band, accent, options.alpha * weights[index]!) as Color
+  })
+}
 
 export function EffortTierBadge({
-  effort,
-  levels,
+  effort: _effort,
+  levels: _levels,
   onLight,
   columns,
   leadingColumns,
 }: {
-  /** 当前思考强度档 id；`undefined` 表示路线未声明。 */
   effort: string | undefined
-  /** 当前路线的档位表（低→高，末位为最高档）；未知时传 `undefined`。 */
   levels: readonly string[] | undefined
   onLight: boolean
-  /** 终端列数——居中锚点按终端几何中心计算（纯文本流，不引入嵌套 Box）。 */
   columns: number
-  /** badge 文本流之前该行已被占据的列数（❯ 与块光标等）——居中换算成
-   *  badge 流内列时要扣掉，否则整体偏右一个前缀宽。 */
   leadingColumns: number
 }): React.ReactNode {
-  const clock = useContext(ClockContext)
-  const [overlay, setOverlay] = useState<Overlay | null>(null)
-  const [prevEffort, setPrevEffort] = useState(effort)
-  const [, forceRender] = useReducer((tick: number) => tick + 1, 0)
+  const frame = useContext(EffortIgnitionContext)
+  const [themeName] = useTheme()
+  if (
+    frame === null
+    || frame.elapsedMs < IGNITION_TIMELINE.labelStartMs
+    || frame.elapsedMs >= frame.durationMs
+  ) return null
 
-  // 渲染期触发（与边框/充能同模式）：effort 变化的首帧就以新状态渲染。
-  if (effort !== prevEffort) {
-    setPrevEffort(effort)
-    if (
-      clock !== null &&
-      effort !== undefined &&
-      levels !== undefined &&
-      levels.length > 1 &&
-      effort === levels[levels.length - 1]
-    ) {
-      setOverlay({ label: effort.toUpperCase(), startedAtMs: clock.now() })
-    }
-  }
-
-  const elapsedMs =
-    overlay === null ? Infinity : Math.max(0, (clock?.now() ?? Date.now()) - overlay.startedAtMs)
-  useEffect(() => {
-    if (overlay === null || clock === null) return
-    return clock.subscribe(() => forceRender(), /* keepAlive */ true)
-  }, [overlay, clock])
-  useEffect(() => {
-    if (overlay !== null && elapsedMs >= IGNITION_TIMELINE.fadeEndMs) setOverlay(null)
-  }, [overlay, elapsedMs])
-
-  if (overlay === null || elapsedMs < IGNITION_TIMELINE.labelStartMs) return null
-  const brighten = Math.min(1, (elapsedMs - IGNITION_TIMELINE.labelStartMs) / IGNITION_TIMELINE.labelBrightenMs)
-  const fade =
-    elapsedMs < IGNITION_TIMELINE.fadeStartMs
-      ? 1
-      : Math.max(0, 1 - (elapsedMs - IGNITION_TIMELINE.fadeStartMs) / (IGNITION_TIMELINE.fadeEndMs - IGNITION_TIMELINE.fadeStartMs))
-  const alpha = brighten * fade
+  const elapsedMs = frame.elapsedMs - IGNITION_TIMELINE.labelStartMs
+  const alpha = intensity(frame.elapsedMs)
   if (alpha <= 0) return null
-  const band: RGBColor = onLight ? { r: 240, g: 240, b: 242 } : { r: 27, g: 30, b: 40 }
-  // 明亮蓝：accent 混白 35% 提亮（用户拍板的高亮观感）。
-  const hue = ignitionHues(onLight)[0]
-  const whiten = (x: number): number => Math.round(x + (255 - x) * 0.35)
-  const bright: RGBColor = { r: whiten(hue.r), g: whiten(hue.g), b: whiten(hue.b) }
-  const mix = (x: number, y: number): number => Math.round(x + (y - x) * alpha)
-  const color = rgbString({ r: mix(band.r, bright.r), g: mix(band.g, bright.g), b: mix(band.b, bright.b) })
-  // 字母间距聚拢（Codex 的 converge 语义）：间距是连续浮点，字母位置
-  // 以**行中心为锚**对称收缩——pos_i = center + (i-(n-1)/2)·(1+gap)，
-  // 左右字母各向中心移动一半（奇数档名的居中字母原位不动），两侧速
-  // 度天然均衡；每字母独立按连续位置取整落列，不同字母在不同帧跨
-  // 格，每帧至少一个在动（把间距整体取整会让 ease-out 慢末段上百毫
-  // 秒才跨一格，看起来就是卡顿）。曲线混入 15% 线性做末段保底速度。
-  const progress = Math.min(1, Math.max(0, (elapsedMs - IGNITION_TIMELINE.labelStartMs) / CONVERGE_MS))
-  // 跳变间隔均匀化：离散格子上「减速」若靠曲线导数趋零实现，末段会
-  // 出现几十帧不动一格的长停顿再突跳（卡感来源）。改为 90% 线性 +
-  // 10% easeOutQuad 的轻缓收尾——跳变间隔全程近似恒定（约 55ms/格），
-  // 仅末端轻微放慢，终端上的观感是均匀顺滑的聚拢。
-  const eased = 1 - progress
-  const easedWithFloor = 0.9 * eased + 0.1 * (1 - progress * progress)
-  const gapF = GAP_END + (GAP_START - GAP_END) * easedWithFloor
-  const letterCount = overlay.label.length
-  // 锚点是**终端几何中心**（不是 ❯/光标之后可用区的中心——那会整体
-  // 偏右约 1.5 格；可用区起点在左，其"中点"不含左部占位）。左右字母
-  // 严格镜像——Math.round 对 .5 恒向上，正负方向舍入不对称会让跨格
-  // 时刻错开；左字母的落列由右字母的舍入结果镜像得出（2C − col），
-  // M/X 每次同帧反向同跳，全程对称于终端中心。
-  const C = Math.round((columns - 1) / 2) - leadingColumns
-  let spaced = ''
+  const at = positions(frame.label, columns, leadingColumns)
+  const ink = effortBadgeColors({
+    label: frame.label,
+    elapsedMs,
+    alpha,
+    onLight,
+    theme: getTheme(themeName),
+  })
+
+  const runs: React.ReactNode[] = []
   let column = 0
-  for (let i = 0; i < letterCount; i++) {
-    const off = (i - (letterCount - 1) / 2) * (1 + gapF)
-    const at =
-      off >= 0
-        ? Math.round(C + off)
-        : 2 * C - Math.round(C - off)
-    spaced += ' '.repeat(Math.max(0, at - column)) + overlay.label[i]!
-    column = at + 1
+  for (let index = 0; index < frame.label.length; index++) {
+    const gap = Math.max(0, at[index]! - column)
+    if (gap > 0) runs.push(' '.repeat(gap))
+    runs.push(
+      <Text key={index} bold color={ink[index]}>
+        {frame.label[index]}
+      </Text>,
+    )
+    column = at[index]! + 1
   }
-  return (
-    <Text bold color={color} wrap="truncate-end">
-      {spaced}
-    </Text>
-  )
+  return <Text wrap="truncate-end">{runs}</Text>
 }
