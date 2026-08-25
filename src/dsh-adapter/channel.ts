@@ -4338,6 +4338,8 @@ export function createChannel(
     setFoldTerminalCommand(enabled) {
       if (enabled === state.foldTerminalCommand) return
       state.foldTerminalCommand = enabled
+      state.emit()
+    },
     setPromptSessionLabel(enabled) {
       if (enabled === state.promptSessionLabel) return
       state.promptSessionLabel = enabled
