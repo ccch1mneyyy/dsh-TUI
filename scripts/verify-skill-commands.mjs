@@ -115,7 +115,7 @@ check(
     channel.commandList.find(command => command.name === 'plan')?.external === true,
 )
 check(
-  'local command wins a name collision',
+  'review (removed from locals) stays single in the menu as the registered skill command',
   channel.commandList.filter(command => command.name === 'review').length === 1 &&
     channel.commandList.find(command => command.name === 'review')?.skill !== true,
 )
@@ -274,7 +274,14 @@ fire('skills/change')
     'a name another plugin owns is left alone',
     registered.get('plan')?.owner === 'other-plugin',
   )
-  check('a built-in local name is not registered', !registered.has('review'))
+  // #496: built-in skill names are no longer LOCAL_COMMANDS entries, so the
+  // collision filter no longer locks them out — the skill registers as a
+  // deterministic dispatch command (handler present) instead of silently
+  // falling back to the legacy activation prompt.
+  check(
+    'a built-in skill name registers as a dispatch command',
+    registered.has('review') && typeof registered.get('review')?.handler === 'function',
+  )
 
   const descriptor = registered.get('i-h')
   if (descriptor?.handler === undefined) {
