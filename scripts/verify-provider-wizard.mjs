@@ -22,6 +22,13 @@
  * 11. providerSetup availability must not call APIs absent from dsh-llm rc.6
  *    (regression: listModelDiscoveryNamespaces() is undefined there and the
  *    guard threw before the wizard could open).
+ * 13. OAuth branch: mode gains a third option, picking an unsigned provider
+ *    runs login, pushes a masked summary, reports success.
+ * 14. OAuth branch, signed-in provider choosing sign-out: logout runs, no
+ *    login attempt, outcome 'signed-out'.
+ * 15. OAuth branch, login failure: error surfaced with the cause.
+ * 16. without host.oauth the mode question stays two options (optional-plugin
+ *    contract).
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -86,6 +93,7 @@ function makeDeps(script, options = {}) {
       if (options.profileThrows) throw new Error('settings-rejected: unserviceable')
       calls.profiles.push([route, profile])
     },
+    ...(options.oauth ? { oauth: options.oauth } : {}),
   }
   const deps = {
     host,
@@ -407,6 +415,103 @@ const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
       'switch': true,
     }),
     JSON.stringify(custom.calls.hideFlags))
+}
+
+/**
+ * Build a dsh-auth-style OAuth host stub. `behavior.providers` overrides the
+ * status list; `behavior.loginThrows` makes login reject with that message.
+ */
+function oauthStub(behavior = {}) {
+  const calls = { listed: 0, logins: [], logouts: [] }
+  return {
+    calls,
+    providers: async () => {
+      calls.listed += 1
+      return behavior.providers ?? [
+        { provider: 'openai-codex', label: 'OpenAI Codex', oauthLabel: 'OpenAI (ChatGPT Plus/Pro)', loginLabel: 'Sign in with ChatGPT', signedIn: false, expiresAt: undefined, expired: false },
+        { provider: 'anthropic', label: 'Anthropic', oauthLabel: 'Anthropic (Claude Pro/Max)', loginLabel: undefined, signedIn: true, expiresAt: 1_787_000_000_000, expired: false },
+      ]
+    },
+    login: async provider => {
+      calls.logins.push(provider)
+      if (behavior.loginThrows) throw new Error(behavior.loginThrows)
+      return { provider, oauthLabel: 'OpenAI (ChatGPT Plus/Pro)', expiresAt: 1_787_000_000_000 }
+    },
+    logout: async provider => {
+      calls.logouts.push(provider)
+      return true
+    },
+  }
+}
+
+// 13. OAuth branch: mode offers three options, picking an unsigned provider
+// runs login, pushes a masked summary, and reports success.
+{
+  const oauth = oauthStub()
+  const { deps, calls } = makeDeps({
+    'mode': { selected: [t('provider-opt-oauth')] },
+    'oauth-provider': { selected: ['openai-codex'] },
+  }, { oauth })
+  const outcome = await runProviderWizard(deps)
+  check('13 oauth: outcome added', outcome === 'added', outcome)
+  check('13 oauth: mode offered the OAuth option',
+    Object.keys(calls.optionDescriptions.mode ?? {}).length === 3,
+    JSON.stringify(Object.keys(calls.optionDescriptions.mode ?? {})))
+  check('13 oauth: login ran for the chosen provider',
+    eq(oauth.calls.logins, ['openai-codex']), JSON.stringify(oauth.calls.logins))
+  check('13 oauth: masked summary pushed with the /model hint',
+    calls.pushed.length === 1 && calls.pushed[0].lines.length === 4
+      && calls.pushed[0].lines.some(line => line.includes('/model') || line.includes('模型')),
+    JSON.stringify(calls.pushed))
+  check('13 oauth: success notified',
+    calls.notifications.some(n => n.color === 'success'))
+}
+
+// 14. OAuth branch, signed-in provider choosing sign-out: logout runs, no
+// login attempt, outcome 'signed-out'.
+{
+  const oauth = oauthStub()
+  const { deps, calls } = makeDeps({
+    'mode': { selected: [t('provider-opt-oauth')] },
+    'oauth-provider': { selected: ['anthropic'] },
+    'oauth-signed-action': { selected: [t('provider-opt-oauth-logout')] },
+  }, { oauth })
+  const outcome = await runProviderWizard(deps)
+  check('14 oauth sign-out: outcome signed-out', outcome === 'signed-out', outcome)
+  check('14 oauth sign-out: logout ran, no login',
+    eq(oauth.calls.logouts, ['anthropic']) && eq(oauth.calls.logins, []))
+  check('14 oauth sign-out: summary notes the removed credential',
+    calls.pushed.length === 1 && calls.pushed[0].lines.length === 2)
+}
+
+// 15. OAuth branch, login failure: error surfaced, outcome 'failed', nothing
+// pushed.
+{
+  const oauth = oauthStub({ loginThrows: 'invalid_grant' })
+  const { deps, calls } = makeDeps({
+    'mode': { selected: [t('provider-opt-oauth')] },
+    'oauth-provider': { selected: ['openai-codex'] },
+  }, { oauth })
+  const outcome = await runProviderWizard(deps)
+  check('15 oauth failure: outcome failed', outcome === 'failed', outcome)
+  check('15 oauth failure: error notified with the cause',
+    calls.notifications.some(n => n.color === 'error' && n.text.includes('invalid_grant')),
+    JSON.stringify(calls.notifications))
+  check('15 oauth failure: nothing pushed', calls.pushed.length === 0)
+}
+
+// 16. without host.oauth the mode question stays exactly two options and the
+// OAuth branch is unreachable (regression for the optional-plugin contract).
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': 'cancel',
+  })
+  const outcome = await runProviderWizard(deps)
+  check('16 no oauth service: mode stayed two options',
+    Object.keys(calls.optionDescriptions.mode ?? {}).length === 2,
+    JSON.stringify(Object.keys(calls.optionDescriptions.mode ?? {})))
+  check('16 no oauth service: catalog cancel still cancels', outcome === 'cancelled', outcome)
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)

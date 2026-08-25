@@ -118,6 +118,7 @@ jobs:
           if-no-files-found: error
           path: |
             lib/
+            dsh-auth/lib/
             vendor/dsh-std/packages/core/lib/
             vendor/dsh-std/packages/manifest/lib/
             vendor/dsh-std/packages/connection/lib/

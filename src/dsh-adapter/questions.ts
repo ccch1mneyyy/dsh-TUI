@@ -28,6 +28,13 @@ export interface QuestionSelection {
   readonly custom?: string
 }
 
+/**
+ * In-progress answer state kept while navigating between questions. Drafts
+ * are deliberately separate from committed answers: leaving a question
+ * should preserve what the user typed without making it count as answered.
+ */
+export type QuestionDraft = QuestionSelection
+
 /** One queued or active ask, with its running answers. */
 interface PendingQuestion {
   readonly request: AskUserQuestionRequest
@@ -35,8 +42,10 @@ interface PendingQuestion {
   readonly batchId: number
   /** Index of the question currently shown (0-based). */
   index: number
-  /** Answers collected so far, in question order. */
-  readonly answers: AskUserQuestionAnswerItem[]
+  /** Committed answers by question index; an empty slot is not answered. */
+  readonly answers: Array<AskUserQuestionAnswerItem | undefined>
+  /** Uncommitted panel state by question index, used when navigating back. */
+  readonly drafts: Array<QuestionDraft | undefined>
   /**
    * Redact answer text in the transcript summary (e.g. a wizard asking for
    * an API key): the summary lines show `••••••` instead of the raw text so
@@ -59,6 +68,10 @@ export interface QuestionSnapshot {
   readonly total: number
   /** Questions answered before the current one. */
   readonly answered: number
+  /** Previously saved answer or draft for the current question. */
+  readonly draft?: QuestionDraft
+  /** Whether Esc should navigate to the previous question. */
+  readonly canGoBack: boolean
 }
 
 /** Completed batch summary, pushed into the transcript by the caller. */
@@ -82,9 +95,25 @@ function clip(text: string, max = 140): string {
   return `${text.slice(0, max)}…`
 }
 
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined
+}
+
+function copyDraft(draft: QuestionDraft): QuestionDraft {
+  return {
+    selected: [...draft.selected],
+    ...(draft.custom !== undefined ? { custom: draft.custom } : {}),
+  }
+}
+
+function selectionFromAnswer(answer: AskUserQuestionAnswerItem): QuestionDraft {
+  return copyDraft(answer)
+}
+
 function buildSummary(pending: PendingQuestion): QuestionSummary {
-  const lines = pending.answers.map(answer => {
-    const question = pending.request.questions.find(q => q.id === answer.id)
+  const lines = pending.request.questions.flatMap((question, index) => {
+    const answer = pending.answers[index]
+    if (answer === undefined) return []
     const text = pending.redact
       ? '••••••'
       : (() => {
@@ -93,7 +122,7 @@ function buildSummary(pending: PendingQuestion): QuestionSummary {
             ? labels === '' ? answer.custom : `${labels}：${answer.custom}`
             : labels
         })()
-    return `· ${question?.question ?? answer.id} → ${clip(text)}`
+    return `· ${question.question} → ${clip(text)}`
   })
   const total = pending.request.questions.length
   return {
@@ -163,12 +192,20 @@ export class QuestionStore {
       return
     }
     const question = pending.request.questions[pending.index]
+    const savedDraft = pending.drafts[pending.index]
+    const savedAnswer = pending.answers[pending.index]
     this.snapshotCache = question === undefined ? null : {
       key: `${pending.batchId}-${pending.index}`,
       question,
       position: pending.index + 1,
       total: pending.request.questions.length,
-      answered: pending.answers.length,
+      answered: pending.index,
+      ...(savedDraft !== undefined
+        ? { draft: savedDraft }
+        : savedAnswer !== undefined
+          ? { draft: selectionFromAnswer(savedAnswer) }
+          : {}),
+      canGoBack: pending.index > 0,
     }
   }
 
@@ -189,7 +226,8 @@ export class QuestionStore {
         request,
         batchId: ++this.batchSeq,
         index: 0,
-        answers: [],
+        answers: new Array<AskUserQuestionAnswerItem | undefined>(request.questions.length),
+        drafts: new Array<QuestionDraft | undefined>(request.questions.length),
         ...(options?.redact ? { redact: true } : {}),
         resolve,
         reject,
@@ -222,30 +260,50 @@ export class QuestionStore {
   }
 
   /**
-   * The user submitted an answer for the current question; advances the
-   * batch and settles it once every question is answered.
+   * The user submitted an answer for the current question; replaces any
+   * previous answer at that position, advances the batch, and settles it once
+   * every question is answered.
    * @param selection - Selected option labels plus optional custom text.
    */
   answerCurrent(selection: QuestionSelection): void {
     const pending = this.active
     const question = pending?.request.questions[pending.index]
     if (pending === undefined || question === undefined) return
-    pending.answers.push({
+    const answer: AskUserQuestionAnswerItem = {
       id: question.id,
       selected: [...selection.selected],
       ...(selection.custom !== undefined && selection.custom !== ''
         ? { custom: selection.custom }
         : {}),
-    })
+    }
+    pending.answers[pending.index] = answer
+    pending.drafts[pending.index] = copyDraft(selection)
     pending.index += 1
     if (pending.index >= pending.request.questions.length) {
       // Batch complete: settle the harness promise, remember a transcript
       // summary, and drain the next queued ask if any.
+      const answers = pending.answers.filter(isDefined)
       this.active = undefined
-      pending.resolve({ answers: [...pending.answers] })
+      pending.resolve({ answers })
       this.summaries.push(buildSummary(pending))
       this.startNext()
     }
+    this.rebuildSnapshot()
+    this.emit()
+  }
+
+  /**
+   * Navigate to the previous question without cancelling the batch. The
+   * caller supplies the panel's current draft so partially typed text can be
+   * restored when the user returns.
+   */
+  backCurrent(draft?: QuestionDraft): void {
+    const pending = this.active
+    if (pending === undefined || pending.index <= 0) return
+    if (draft !== undefined) {
+      pending.drafts[pending.index] = copyDraft(draft)
+    }
+    pending.index -= 1
     this.rebuildSnapshot()
     this.emit()
   }

@@ -420,6 +420,29 @@ export class LogUpdate {
         )
       }
 
+      // Record the scrollback rows stranded by this shrink. The terminal's
+      // scrollback cannot shrink with the content: rows that were above the
+      // viewport BEFORE the shrink stay there after it, but the heights
+      // formula below (height - viewport + cursorRestoreScroll) recomputes
+      // scrollback from the SMALLER next height on every following frame and
+      // undercounts by the shrink delta. Those frames then treat a
+      // scrolled-away row as reachable, the cursor-up move clamps at the
+      // viewport top, and the whole relative write chain lands one row low —
+      // stale duplicate rows and torn leading cells that no later sparse
+      // diff ever repairs (verify-trace-scene settle-gap flake). The
+      // shrink-to-below-viewport branch above already records this via
+      // shrinkAnchoredRepaint; this ordinary-diff shrink path must record it
+      // too. viewportY takes max(anchoredPad, heights formula), so the pad
+      // naturally hands back to the formula once growth scrolls the gap away.
+      if (!altScreen) {
+        const strandedScrollback =
+          Math.max(0, prev.screen.height - prev.viewport.height) +
+          cursorRestoreScroll
+        if (strandedScrollback > this.state.anchoredPad) {
+          this.state.anchoredPad = strandedScrollback
+        }
+      }
+
       // clear(N) moves cursor UP by N-1 lines and to column 0
       // This puts us at line prev.screen.height - N = next.screen.height
       // But we want to be at next.screen.height - 1 (bottom of new screen)

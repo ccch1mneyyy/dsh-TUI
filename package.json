@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.9.0",
+  "version": "0.9.2",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "license": "MIT",
   "repository": {
@@ -19,7 +19,8 @@
     "#dsh-ecosystem-spec/tui-channel": "./dsh-ecosystem-spec/protocols/tui-channel.js"
   },
   "bin": {
-    "dsh-tui": "./bin/dsh-tui.js"
+    "dsh-tui": "./bin/dsh-tui.js",
+    "dst": "./bin/dsh-tui.js"
   },
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
@@ -31,6 +32,10 @@
     "./working-activity": {
       "types": "./lib/types/working-activity.d.ts",
       "import": "./lib/types/working-activity.js"
+    },
+    "./oauth": {
+      "types": "./lib/types/oauth.d.ts",
+      "import": "./lib/types/oauth.js"
     },
     "./workspaces": {
       "types": "./lib/types/workspaces.d.ts",
@@ -84,7 +89,8 @@
   "scripts": {
     "clean": "node scripts/clean-lib.mjs",
     "build:dsh-std": "pnpm --dir vendor/dsh-std install --frozen-lockfile --ignore-scripts && pnpm --dir vendor/dsh-std --filter @dsh-std/core --filter @dsh-std/manifest --filter @dsh-std/connection --filter @dsh-std/presentation --filter @dsh-std/command --filter @dsh-std/storage --filter @dsh-std/messages -r build",
-    "compile": "npm run build:dsh-std && npm run clean && tsc -p tsconfig.json",
+    "build:dsh-auth": "pnpm --dir dsh-auth install --frozen-lockfile --ignore-scripts && pnpm --dir dsh-auth run build",
+    "compile": "npm run build:dsh-std && npm run build:dsh-auth && npm run clean && tsc -p tsconfig.json",
     "prepare": "node scripts/prepare-guard.mjs && npm run compile",
     "build": "npm run compile && npm run verify:build",
     "dev": "node scripts/dev-test.mjs",
@@ -93,8 +99,9 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:pointer-events && npm run verify:chat-overlay",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:liangshen-instruction-hint && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
+    "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
     "verify:herdr": "node --import tsx/esm scripts/verify-herdr-integration.ts",
     "verify:manifest-deps": "node --import tsx/esm scripts/verify-manifest-deps.ts",
@@ -107,6 +114,7 @@
     "verify:packaged-presets": "node scripts/verify-packaged-presets.mjs",
     "verify:minimal-preset-tools": "node scripts/verify-minimal-preset-tools.mjs",
     "verify:liangshen-bootstrap": "node scripts/verify-liangshen-bootstrap.mjs",
+    "verify:liangshen-instruction-hint": "node scripts/verify-liangshen-instruction-hint.mjs",
     "verify:liangshen-bash": "node scripts/verify-liangshen-bash.mjs",
     "verify:package": "npm pack --dry-run --json --ignore-scripts | node scripts/verify-package.mjs",
     "verify:bun-package": "node scripts/verify-bun-package.mjs",
@@ -121,6 +129,7 @@
     "verify:wheel-selection": "node --import tsx/esm scripts/verify-wheel-selection.ts",
     "verify:pointer-events": "node --import tsx/esm scripts/verify-pointer-events.ts",
     "verify:chat-overlay": "node --import tsx/esm scripts/verify-chat-overlay.ts",
+    "verify:approval-visibility": "node --import tsx/esm scripts/verify-approval-visibility.tsx",
     "sync:profile": "node scripts/sync-profile.mjs",
     "sync:profile:check": "node scripts/sync-profile.mjs --check"
   },
@@ -134,6 +143,7 @@
     "@deepseek-ai/dsh-cordis-host-runner": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6 || ^0.1.1-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-persona": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.6 || ^0.1.1-rc.1",
@@ -152,6 +162,35 @@
     "@deepseek-ai/dsh-workspace": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-agent-instructions": { "optional": true },
+    "@deepseek-ai/dsh-agent-presets": { "optional": true },
+    "@deepseek-ai/dsh-atomic-write": { "optional": true },
+    "@deepseek-ai/dsh-commands": { "optional": true },
+    "@deepseek-ai/dsh-cordis-host-runner": { "optional": true },
+    "@deepseek-ai/dsh-invariants": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-llm-pi-ai": { "optional": true },
+    "@deepseek-ai/dsh-persona": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-settings": { "optional": true },
+    "@deepseek-ai/dsh-skill": { "optional": true },
+    "@deepseek-ai/dsh-storage": { "optional": true },
+    "@deepseek-ai/dsh-storage-domain": { "optional": true },
+    "@deepseek-ai/dsh-storage-json": { "optional": true },
+    "@deepseek-ai/dsh-system-prompt": { "optional": true },
+    "@deepseek-ai/dsh-terminal": { "optional": true },
+    "@deepseek-ai/dsh-terminal-bash": { "optional": true },
+    "@deepseek-ai/dsh-tool-ask-user": { "optional": true },
+    "@deepseek-ai/dsh-tool-bash-persistent": { "optional": true },
+    "@deepseek-ai/dsh-tool-cordis": { "optional": true },
+    "@deepseek-ai/dsh-user-approval": { "optional": true },
+    "@deepseek-ai/dsh-user-questions": { "optional": true },
+    "@deepseek-ai/dsh-workspace": { "optional": true },
+    "@deepseek-ai/schemastery": { "optional": true }
+  },
   "dependencies": {
     "@dsh-std/command": "workspace:*",
     "@dsh-std/connection": "workspace:*",
@@ -168,7 +207,9 @@
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^3.0.0 || ^4.0.0",
     "diff": "^8.0.4",
+    "@deepseek-harness-tui/dsh-auth": "link:./dsh-auth",
     "dsh-working-activity": "^0.3.3",
+    "@earendil-works/pi-ai": "^0.82.1",
     "emoji-regex": "^10.0.0",
     "figures": "^6.1.0",
     "get-east-asian-width": "^1.0.0",
@@ -194,7 +235,8 @@
     "@dsh-std/manifest",
     "@dsh-std/messages",
     "@dsh-std/presentation",
-    "@dsh-std/storage"
+    "@dsh-std/storage",
+    "@deepseek-harness-tui/dsh-auth"
   ],
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -213,6 +255,7 @@
     "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6 || ^0.1.1-rc.1",
+    "@deepseek-ai/dsh-llm-pi-ai": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-persona": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-sandbox": "^0.1.0-rc.6 || ^0.1.1-rc.1",
     "@deepseek-ai/dsh-sandbox-policy": "^0.1.0-rc.6 || ^0.1.1-rc.1",

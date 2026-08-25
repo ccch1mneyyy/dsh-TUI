@@ -573,6 +573,17 @@ export class Node {
   _cGen = -1
   /** Number of populated cache slots. */
   _cN = 0
+  /**
+   * Generation of the last MEASURE-pass call that actually computed (cache
+   * miss with performLayout=false). Such a call recurses and overwrites the
+   * subtree's layout.* fields as scratch for whatever available size it was
+   * probing — which may differ from the node's final size. A subsequent
+   * layout-pass cache hit would restore only this node's own w/h and skip
+   * the child recursion, leaving descendants at the scratch geometry (the
+   * warm-resize 106-vs-105 wrap drift). Layout-pass early returns must
+   * therefore refuse to hit while _scratchGen === _generation.
+   */
+  _scratchGen = -1
   /** LRU write index into the cache arrays. */
   _cWr = 0
 
@@ -1483,9 +1494,19 @@ function commitCacheOutputs(node: Node, performLayout: boolean): void {
   if (performLayout) {
     node._lOutW = node.layout.width
     node._lOutH = node.layout.height
+    // A completed layout pass re-laid the whole subtree at the final
+    // constraints — any measure-pass scratch below has been overwritten,
+    // so this node may serve layout-cache hits again.
+    node._scratchGen = -1
   } else {
     node._mOutW = node.layout.width
     node._mOutH = node.layout.height
+    // This measure call actually computed: its recursion overwrote the
+    // subtree's layout.* as scratch for the probed size. Until a layout
+    // pass re-lays this subtree, layout-cache hits here must be refused
+    // (see _scratchGen). Leaves have no subtree to corrupt — skip them so
+    // measure-heavy text nodes keep their layout-cache hits.
+    if (node.children.length > 0) node._scratchGen = _generation
   }
 }
 
@@ -1552,6 +1573,10 @@ function layoutNode(
     if (
       !node.isDirty_ &&
       node._hasL &&
+      // A layout-pass hit restores only this node's own w/h and skips the
+      // child recursion — illegal while a same-generation measure compute
+      // has left the subtree at scratch geometry for a different probe size.
+      !(performLayout && node._scratchGen === _generation) &&
       node._lWM === widthMode &&
       node._lHM === heightMode &&
       node._lFW === forceWidth &&
@@ -1575,7 +1600,13 @@ function layoutNode(
     // Same-generation check covers fresh-mounted (dirty) nodes during
     // virtual scroll — the dirty chain invokes them ≥2^depth times, first
     // call writes cache, rest hit: 105k visits → ~10k for 1593-node tree.
-    if (node._cN > 0 && (sameGen || !node.isDirty_)) {
+    if (
+      node._cN > 0 &&
+      (sameGen || !node.isDirty_) &&
+      // Same scratch guard as _hasL: a layout-pass hit must not skip child
+      // recursion over a measure-scratched subtree.
+      !(performLayout && node._scratchGen === _generation)
+    ) {
       const cIn = node._cIn!
       for (let i = 0; i < node._cN; i++) {
         const o = i * 8

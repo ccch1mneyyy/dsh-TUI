@@ -4,9 +4,10 @@ import { basename } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
-import { EffortInputBorder } from './EffortInputBorder.js'
+import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
 import { isLightThemeActive } from '../theme.js'
+import { sessionColorHex } from '../cc/sessionColors.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import { noteAuxNumber } from '../ink/geometry-trace.js'
@@ -22,6 +23,7 @@ import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
@@ -305,9 +307,9 @@ export function PromptInput({
   // Double-tap Esc to clear (CC semantics).
   const escPendingRef = React.useRef(false)
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** True while a Ctrl+V clipboard read is in flight (ignore repeat keys). */
+  /** True while a clipboard paste read is in flight (ignore repeat keys). */
   const clipboardBusyRef = React.useRef(false)
-  /** True while the external editor owns the terminal (Ctrl+G round-trip). */
+  /** True while the external editor owns the terminal (editor-key round-trip). */
   const editorBusyRef = React.useRef(false)
   /** Enter dedupe window: cmd pipelines can deliver one Enter as `\r`+`\n`. */
   const lastEnterAtRef = React.useRef(0)
@@ -439,13 +441,18 @@ export function PromptInput({
    * Accept the selected file suggestion: replace ONLY the mention token at
    * the caret (prefix/suffix text survives), quoting whitespace paths. A
    * directory inserts `@dir/` without a trailing space so completion
-   * continues into it; a file completes the token with a space.
+   * continues into it; a file completes the token with a space. A typed
+   * `#L12-14` suffix is NOT part of the replacement — completion ends at
+   * `pathEnd` so the line range survives acceptance (issue #359).
    */
   const acceptFile = (candidate: FileCandidate) => {
     if (!mention) return
     const file = candidate.path
     const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
-    const insert = candidate.kind === 'directory' ? body : `${body} `
+    // A typed `#L12-14` suffix rides along AFTER the completed body (before
+    // the trailing space) — quoting a whitespace path must not detach it.
+    const suffix = mention.pathEnd === undefined ? '' : value.slice(mention.pathEnd, mention.end)
+    const insert = candidate.kind === 'directory' ? `${body}${suffix}` : `${body}${suffix} `
     const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
     setInput(next, mention.start + insert.length)
     setFileSelected(0)
@@ -676,10 +683,12 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+V / Cmd+V: raw mode hands the key to the app, so the clipboard is
-    // read here — text, file paths when the file manager copied files, or an
-    // exported temp-file path when the clipboard holds a raw image.
-    if (isMod(key) && input === 'v') {
+    // Clipboard paste (default Ctrl+V / Cmd+V, plus the Alt+V alias for
+    // terminals that intercept Ctrl+V — combos are user-remappable via
+    // /settings): raw mode hands the key to the app, so the clipboard is
+    // read here — text, file paths when the file manager copied files, or
+    // an exported temp-file path when the clipboard holds a raw image.
+    if (actionMatches('paste', input, key)) {
       if (clipboardBusyRef.current) return
       // Match insertAtCaret's overlay/selection dismissal up front: the
       // async continuation below only sets value/cursor, so a paste landing
@@ -736,8 +745,9 @@ export function PromptInput({
       return
     }
 
-    // Help is modal for modified keys and every Enter variant. Ctrl+V above
-    // is the intentional exception: paste closes Help and inserts visibly.
+    // Help is modal for modified keys and every Enter variant. The paste
+    // branch above is the intentional exception: paste closes Help and
+    // inserts visibly.
     // Swallow here before editor/submit/interrupt branches can mutate hidden
     // composer or working-turn state; plain typing still dismisses Help below.
     if (helpOpen && !key.escape && (key.ctrl || key.meta || key.super || key.return || input.includes('\n') || input.includes('\r'))) {
@@ -745,14 +755,15 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+G: edit the current draft in $VISUAL/$EDITOR (issue #123,
-    // readline's edit-and-execute-command). The draft is written to a temp
-    // file, the terminal is handed to the editor (Ink's alt-screen handoff),
-    // and the saved text replaces the input when it differs. The util maps
-    // every failure to an outcome, but the catch/finally here is the hard
-    // guarantee: a rejected promise must never kill the process, and the
-    // busy flag must always clear or Ctrl+G stays locked forever.
-    if (key.ctrl && input === 'g') {
+    // Ctrl+G (remappable via /settings): edit the current draft in
+    // $VISUAL/$EDITOR (issue #123, readline's edit-and-execute-command). The
+    // draft is written to a temp file, the terminal is handed to the editor
+    // (Ink's alt-screen handoff), and the saved text replaces the input when
+    // it differs. The util maps every failure to an outcome, but the
+    // catch/finally here is the hard guarantee: a rejected promise must
+    // never kill the process, and the busy flag must always clear or the
+    // editor key stays locked forever.
+    if (actionMatches('editor', input, key)) {
       editorBusyRef.current = true
       void (async () => {
         try {
@@ -1494,7 +1505,38 @@ export function PromptInput({
   const floatersOpen =
     helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen || peekOpen
   // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
-  const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
+  // `/color` 会话强调色优先于主题 promptBorder（plan 模式仍整体走 sage 绿）。
+  // `?? ''` 防御最小 mock channel（只声明用到的字段的回归脚本）。
+  const sessionAccent = sessionColorHex(channel.sessionColor ?? '')
+  const promptAccent = channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'promptBorder')
+  // 顶边框右侧的会话名标签（CC 风格 chip）：色随强调色；超宽截断，宽度
+  // 随终端列数伸缩但不超过 28 显示单元。默认关闭——`/settings` 的
+  // 「会话名标签」开关（dsh-tui.promptSessionLabel）开启后显示。
+  const sessionTitle = channel.sessionTitle ?? ''
+  const topRightLabel: InputBorderLabel | undefined =
+    channel.promptSessionLabel === true && sessionTitle !== ''
+      ? {
+          text: truncateToWidth(sessionTitle, Math.max(8, Math.min(28, columns - 8))),
+          color: channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'claude'),
+          ink: 'inverseText',
+        }
+      : undefined
+
+  // 浮层最佳路径（/ 命令卡、@ 文件卡、帮助/队列）经渲染器 absolute-overlay
+  // 机制覆盖转录尾部与状态行。若覆盖期间上方兄弟重绘（spinner 滴答、流式
+  // 文本），覆盖单元格会混入 prevScreen 的旧转录内容——"重叠变花"的根因
+  // （渲染器注释描述的同族问题）。Chat.tsx 对其浮层/高度切换都做视口重锚
+  // （Ctrl+O、loaded-context）；此处为斜杠/文件浮层的开关补上同样的恢复：
+  // 打开时保证卡片整块重绘、关闭时保证被覆盖行回到干净的转录内容，而非与
+  // scrollback 失同步后残留花屏。
+  const prevFloatersOpenRef = React.useRef(floatersOpen)
+  React.useLayoutEffect(() => {
+    if (floatersOpen === prevFloatersOpenRef.current) return
+    prevFloatersOpenRef.current = floatersOpen
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    ink?.invalidatePrevFrame()
+    ink?.reanchorViewport()
+  }, [floatersOpen])
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -1649,6 +1691,7 @@ export function PromptInput({
         columns={columns}
         onLight={isLightThemeActive(themeName)}
         idleColor={promptAccent}
+        topRightLabel={topRightLabel}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph

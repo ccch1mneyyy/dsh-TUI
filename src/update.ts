@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -319,6 +319,114 @@ export function tuiUpdatePluginArgs(profile: string, targetVersion?: string): st
 }
 
 /**
+ * Postinstall-only transitive dependencies of the dsh-tui chain
+ * (dsh-auth → @earendil-works/pi-ai → @google/genai + protobufjs, plus the
+ * esbuild/koffi peers of that chain): pnpm ≥11 refuses to run their build
+ * scripts unless the workspace allowlists them, and a profile that never
+ * opted in fails the WHOLE install with ERR_PNPM_IGNORED_BUILDS. None of
+ * these scripts is needed at runtime (the repo root allowBuilds them all to
+ * `false`), so the update flow pre-seeds the profile's pnpm-workspace.yaml
+ * with explicit `false` entries — an explicit decision pnpm honors silently.
+ */
+const PROFILE_ALLOW_BUILDS: Readonly<Record<string, false>> = {
+  '@google/genai': false,
+  esbuild: false,
+  koffi: false,
+  protobufjs: false,
+}
+
+/** The profile's pnpm-workspace.yaml (`$DSH_HOME ?? ~/.dsh` layout). */
+export function profileWorkspaceYamlPath(profile: string): string {
+  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  return join(dshHome, 'profiles', profile, 'pnpm-workspace.yaml')
+}
+
+/** What ensureProfileAllowBuilds did to the profile workspace file. */
+export interface AllowBuildsOutcome {
+  /** Keys already present before this run (left untouched). */
+  existing: string[]
+  /** Keys this run appended. */
+  added: string[]
+}
+
+/** YAML key spelling for an allowBuilds entry (scoped names need quotes). */
+function allowBuildsKeyLine(key: string): string {
+  const needsQuotes = key.includes('@') || key.includes('/')
+  return `  ${needsQuotes ? `'${key}'` : key}: false`
+}
+
+/**
+ * Make sure the profile's pnpm-workspace.yaml carries explicit `false`
+ * allowBuilds entries for the dsh-tui chain's postinstall-only deps, so a
+ * pnpm ≥11 update is not killed by ERR_PNPM_IGNORED_BUILDS. Best effort and
+ * idempotent: existing entries are never overwritten (an explicit user
+ * decision wins), a missing `allowBuilds:` block is appended, and a missing
+ * file is created. Returns undefined when the profile directory is absent or
+ * the file could not be updated — the caller still runs pnpm, whose own
+ * ERR_PNPM_IGNORED_BUILDS diagnostic stays the visible fallback.
+ */
+export function ensureProfileAllowBuilds(profile: string): AllowBuildsOutcome | undefined {
+  const yamlPath = profileWorkspaceYamlPath(profile)
+  try {
+    if (!existsSafe(dirname(yamlPath))) return undefined
+    let text = ''
+    try {
+      text = readFileSync(yamlPath, 'utf8')
+    } catch {
+      // Missing file — start from an empty document; writeFileSync creates it.
+    }
+    const lines = text.split(/\r?\n/u)
+    let blockStart = -1
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]
+      if (line !== '' && line === line.trimStart() && /^allowBuilds:/u.test(line)) {
+        blockStart = i
+        break
+      }
+    }
+    const present = new Set<string>()
+    if (blockStart !== -1) {
+      for (let i = blockStart + 1; i < lines.length; i += 1) {
+        const line = lines[i]
+        if (line === '' || line === line.trimStart()) break // dedent = block ends
+        const keyMatch = /^\s+('?)(.+?)\1:\s/u.exec(line)
+        if (keyMatch !== null) present.add(keyMatch[2])
+      }
+    }
+    const added = Object.keys(PROFILE_ALLOW_BUILDS).filter(key => !present.has(key))
+    if (added.length === 0) return { existing: [...present], added }
+    const insert = added.map(allowBuildsKeyLine)
+    if (blockStart !== -1) {
+      // Append after the block's last existing entry (before the next
+      // top-level key), so existing entries keep their position.
+      let blockEnd = blockStart + 1
+      for (let i = blockStart + 1; i < lines.length; i += 1) {
+        const line = lines[i]
+        if (line === '' || line === line.trimStart()) break
+        blockEnd = i + 1
+      }
+      lines.splice(blockEnd, 0, ...insert)
+    } else {
+      if (lines.length > 0 && lines[lines.length - 1] !== '') lines.push('')
+      lines.push('allowBuilds:', ...insert)
+    }
+    writeFileSync(yamlPath, `${lines.join('\n')}\n`)
+    return { existing: [...present], added }
+  } catch {
+    return undefined
+  }
+}
+
+function existsSafe(path: string): boolean {
+  try {
+    statSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * The pnpm Windows tmp-rename race signature (issue #225): pnpm swaps a
  * package directory via a `<name>_tmp_<pid>` staging dir, and a file lock or
  * AV scan makes the scandir/rename fail with ENOENT/EPERM/EBUSY. The failure
@@ -330,6 +438,90 @@ export function tuiUpdatePluginArgs(profile: string, targetVersion?: string): st
  */
 export function isTransientUpdateFailure(stderr: string): boolean {
   return /ENOENT|EPERM|EBUSY/i.test(stderr) && /_tmp_\d+/i.test(stderr)
+}
+
+/**
+ * The pnpm Linux flavor of the tmp-rename race (issue #479): the very same
+ * `importPackage` staging path, but overlayfs surfaces the second swap of an
+ * already-replaced package dir as EEXIST — deterministically, on every run,
+ * never transiently. A plain retry of the identical command ALWAYS fails the
+ * same way (the leftover `_tmp_<pid>_<threadId>` staging dir keeps colliding),
+ * so this signature must route to the recovery path
+ * (removeStalePackageInstall + rerun), not to the plain retry.
+ */
+export function isEexistTmpRenameFailure(stderr: string): boolean {
+  return /EEXIST/i.test(stderr) && /_tmp_\d+/i.test(stderr)
+}
+
+/**
+ * The dsh profile layout places plugin packages under
+ * `$DSH_HOME ?? ~/.dsh` — the same root dsh itself resolves
+ * (`dshHomePath is $DSH_HOME ?? ~/.dsh`, and packaged presets resolve
+ * identically). /update's recovery path needs this location to clear a
+ * half-updated install pnpm can no longer swap in place (issue #479).
+ */
+export function profilePackageDir(profile: string): string {
+  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  return join(dshHome, 'profiles', profile, 'node_modules', PACKAGE_NAME)
+}
+
+/** What removeStalePackageInstall actually cleared from disk. */
+export interface StaleInstallRemoval {
+  /**
+   * `removed` — the package dir (or its junction/symlink link) is gone;
+   * `absent` — it was not there to begin with (custom profile roots just
+   * miss); `failed` — an error other than ENOENT blocked the removal.
+   */
+  packageDir: 'removed' | 'absent' | 'failed'
+  /** Leftover pnpm staging dirs (`dsh-tui_tmp_<pid>_<threadId>`) removed. */
+  tmpDirs: string[]
+}
+
+/**
+ * Recovery for the pnpm tmp-rename races (issues #225/#479): remove the
+ * profile's installed copy of this package plus the sibling `_tmp_`
+ * staging dirs a crashed swap leaves behind, so the next installer run
+ * takes the fresh-install path instead of renaming over the collision.
+ * Field-verified workaround (issue #479): `rm -rf <pkg dir>` + rerun
+ * succeeds where ten plain retries fail.
+ *
+ * A junction/symlink at the package dir is UNLINKED only — the link is
+ * removed, the target tree (a dev checkout it may point at) is never
+ * traversed or deleted. Best effort throughout: this runs inside a
+ * failure-recovery branch, so an unusable result simply falls through to
+ * the rerun and the manual repair hint.
+ */
+export function removeStalePackageInstall(profile: string): StaleInstallRemoval {
+  const pkgDir = profilePackageDir(profile)
+  const scopeDir = dirname(pkgDir)
+  const removal: StaleInstallRemoval = { packageDir: 'absent', tmpDirs: [] }
+  try {
+    const stats = lstatSync(pkgDir)
+    // lstat reports junctions AND symlinks as isSymbolicLink — remove the
+    // link itself, never what it points at.
+    if (stats.isSymbolicLink() || stats.isDirectory()) {
+      rmSync(pkgDir, { recursive: true, force: true })
+      removal.packageDir = 'removed'
+    }
+  } catch (error) {
+    removal.packageDir = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'failed'
+  }
+  try {
+    for (const name of readdirSync(scopeDir)) {
+      if (!/^dsh-tui_tmp_\d+_\d+$/.test(name)) continue
+      const staging = join(scopeDir, name)
+      try {
+        rmSync(staging, { recursive: true, force: true })
+        removal.tmpDirs.push(name)
+      } catch {
+        // Staging leftovers are best effort; the package dir removal is
+        // the load-bearing half of the recovery.
+      }
+    }
+  } catch {
+    // Unreadable scope dir — nothing more to clear.
+  }
+  return removal
 }
 
 /**
@@ -394,6 +586,129 @@ export function migrateGlobalLauncher(): boolean {
   return false
 }
 
+/** Outcome of the install-only half of an update (no restart). */
+export interface TuiUpdateOutcome {
+  /** 0 = the profile now runs the intended version; non-zero = failed. */
+  code: number
+  /** Version installed before the update ran (the #307 stamp). */
+  updatedFrom: string
+  /** Version installed after the update ran, when readable. */
+  installed?: string
+}
+
+/**
+ * Install-only half of `/update`: run `dsh plugin add`, refuse boot-deadlock
+ * targets, verify the profile actually advanced, and migrate the global
+ * launcher. No restart — `updateTuiAndRestart` layers the session-preserving
+ * restart on top, and the `dsh-tui update` CLI stops here.
+ *
+ * @param profile - The dsh profile to update.
+ * @param targetVersion - Exact version from the preflight registry check, or
+ *   undefined when that check failed and pnpm should resolve latest.
+ * @returns The update exit code plus the before/after versions.
+ */
+export async function updateTui(
+  profile: string,
+  targetVersion?: string,
+): Promise<TuiUpdateOutcome> {
+  // Stamp the pre-update version BEFORE pnpm runs: it reads this package's
+  // manifest from disk, which the update replaces on the fly — a
+  // post-update read already sees the NEW version, and the restarted
+  // process then compares new-vs-new and false-alarms "version did not
+  // advance" on every successful update (issue #307's screenshots).
+  const updatedFrom = installedTuiVersion() ?? ''
+  const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
+  const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
+  // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
+  // build scripts (ERR_PNPM_IGNORED_BUILDS). The dsh-auth chain pulls in
+  // postinstall-only deps (@google/genai/protobufjs via pi-ai), so pre-seed
+  // the profile workspace with explicit `false` entries before pnpm runs.
+  const allowBuilds = ensureProfileAllowBuilds(profile)
+  if (allowBuilds !== undefined && allowBuilds.added.length > 0) {
+    process.stderr.write(
+      `dsh-tui: pre-seeded profile pnpm allowBuilds (${allowBuilds.added.join(', ')}) — ` +
+        'postinstall-only deps are explicitly ignored\n',
+    )
+  }
+  let updateStderr = ''
+  const capture = (chunk: string): void => { updateStderr += chunk }
+  let updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
+  // Transient Windows tmp-rename race (issue #225): retry the identical
+  // command once — it succeeds on a clean second run, and only the
+  // `_tmp_<pid>` race signature qualifies, never a real resolution error.
+  if (updateCode !== 0 && isTransientUpdateFailure(updateStderr)) {
+    process.stderr.write('dsh-tui: transient pnpm failure (Windows tmp-rename race) — retrying once…\n')
+    updateStderr = ''
+    updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
+  }
+  // Deterministic Linux tmp-rename race (issue #479): EEXIST never clears on
+  // a plain retry (the staging-dir collision reproduces every run), and a
+  // transient retry that failed again means the same leftover state. Both
+  // recover by removing the stale install + staging dirs, then rerunning —
+  // the field-verified workaround that takes pnpm down its fresh-install
+  // path instead of renaming over the collision.
+  if (updateCode !== 0 && (isEexistTmpRenameFailure(updateStderr) || isTransientUpdateFailure(updateStderr))) {
+    const flavor = isEexistTmpRenameFailure(updateStderr) ? 'EEXIST, issue #479' : 'retry failed, issue #225'
+    const removal = removeStalePackageInstall(profile)
+    const stagingNote = removal.tmpDirs.length > 0 ? ` + ${removal.tmpDirs.length} staging dir(s)` : ''
+    process.stderr.write(
+      `dsh-tui: pnpm tmp-rename race (${flavor}) — cleared the stale install ` +
+        `(package dir: ${removal.packageDir}${stagingNote}) and rerunning the update…\n`,
+    )
+    updateStderr = ''
+    updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
+  }
+  if (updateCode !== 0) return { code: updateCode, updatedFrom }
+
+  // A --latest fallback (preflight failed) on a stale mirror can still land
+  // on the 0.7.0–0.7.1 hard-inject range — restarting into it under an older
+  // global-launcher patch is the permanent boot deadlock of issues
+  // #183/#307. Refuse the restart when the version JUST moved there; a user
+  // who was already on it keeps their restart (their combo demonstrably
+  // boots) and gets the repair hint on the next /update instead.
+  const installedNow = installedTuiVersion()
+  if (installedNow !== undefined && installedNow !== updatedFrom && isBootDeadlockTarget(installedNow)) {
+    process.stderr.write(
+      `dsh-tui: update landed on ${installedNow}, which can permanently deadlock boot under older launcher patches ` +
+        `(#183/#307) — NOT restarting into it. Repair with:\n` +
+        `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@latest\n` +
+        `(if the mirror has not synced the latest release yet, retry later)\n`,
+    )
+    return { code: 1, updatedFrom, installed: installedNow }
+  }
+
+  // Post-update verification (issue #225): pnpm can report success yet leave
+  // the profile half-updated (manifest old / lockfile new). Verify against
+  // the preflight target; a full `install` reconciles lockfile →
+  // node_modules, and if the mismatch survives, stop before restarting into
+  // a mixed state and hand the user the exact repair command instead.
+  if (targetVersion !== undefined) {
+    let installed = installedTuiVersion()
+    if (installed !== targetVersion) {
+      await runProcess(dsh, ['plugin', '--profile', profile, 'install'], { shell: true })
+      installed = installedTuiVersion()
+    }
+    if (installed !== targetVersion) {
+      process.stderr.write(
+        `dsh-tui: update completed but the profile still runs ${installed ?? 'an unreadable version'} ` +
+          `(expected ${targetVersion}) — the profile is half-updated. Repair manually with:\n` +
+          `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@${targetVersion}\n`,
+      )
+      return { code: 1, updatedFrom, installed }
+    }
+  }
+
+  // Launcher migration (0.8.7): the freshly installed profile carries the
+  // delegating shim — stamp it over the global launcher so this is the LAST
+  // time the outer copy can lag. Best-effort; the alignment warning stays as
+  // the fallback when the copy is impossible.
+  if (migrateGlobalLauncher()) {
+    process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
+  }
+
+  return { code: 0, updatedFrom, installed: installedTuiVersion() }
+}
+
 /**
  * Update the installed dsh-tui package and restart the same launcher while
  * preserving the active session. The TUI must already be unmounted before
@@ -417,84 +732,79 @@ export async function updateTuiAndRestart(
   profile: string,
   targetVersion?: string,
 ): Promise<TuiUpdateResult> {
-  // Stamp the pre-update version BEFORE pnpm runs: it reads this package's
-  // manifest from disk, which the update replaces on the fly — a
-  // post-update read already sees the NEW version, and the restarted
-  // process then compares new-vs-new and false-alarms "version did not
-  // advance" on every successful update (issue #307's screenshots).
-  const updatedFrom = installedTuiVersion() ?? ''
-  const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
-  const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
-  let updateStderr = ''
-  const capture = (chunk: string): void => { updateStderr += chunk }
-  let updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
-  // Transient Windows tmp-rename race (issue #225): retry the identical
-  // command once — it succeeds on a clean second run, and only the
-  // `_tmp_<pid>` race signature qualifies, never a real resolution error.
-  if (updateCode !== 0 && isTransientUpdateFailure(updateStderr)) {
-    process.stderr.write('dsh-tui: transient pnpm failure (Windows tmp-rename race) — retrying once…\n')
-    updateStderr = ''
-    updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
-  }
-  if (updateCode !== 0) return { updateCode, restartCode: updateCode }
+  const outcome = await updateTui(profile, targetVersion)
+  const { updatedFrom } = outcome
+  if (outcome.code !== 0) return { updateCode: outcome.code, restartCode: outcome.code }
 
-  // A --latest fallback (preflight failed) on a stale mirror can still land
-  // on the 0.7.0–0.7.1 hard-inject range — restarting into it under an older
-  // global-launcher patch is the permanent boot deadlock of issues
-  // #183/#307. Refuse the restart when the version JUST moved there; a user
-  // who was already on it keeps their restart (their combo demonstrably
-  // boots) and gets the repair hint on the next /update instead.
-  const installedNow = installedTuiVersion()
-  if (installedNow !== undefined && installedNow !== updatedFrom && isBootDeadlockTarget(installedNow)) {
-    process.stderr.write(
-      `dsh-tui: update landed on ${installedNow}, which can permanently deadlock boot under older launcher patches ` +
-        `(#183/#307) — NOT restarting into it. Repair with:\n` +
-        `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@latest\n` +
-        `(if the mirror has not synced the latest release yet, retry later)\n`,
-    )
-    return { updateCode: 1, restartCode: 1 }
-  }
-
-  // Post-update verification (issue #225): pnpm can report success yet leave
-  // the profile half-updated (manifest old / lockfile new). Verify against
-  // the preflight target; a full `install` reconciles lockfile →
-  // node_modules, and if the mismatch survives, stop before restarting into
-  // a mixed state and hand the user the exact repair command instead.
-  if (targetVersion !== undefined) {
-    let installed = installedTuiVersion()
-    if (installed !== targetVersion) {
-      await runProcess(dsh, ['plugin', '--profile', profile, 'install'], { shell: true })
-      installed = installedTuiVersion()
-    }
-    if (installed !== targetVersion) {
-      process.stderr.write(
-        `dsh-tui: update completed but the profile still runs ${installed ?? 'an unreadable version'} ` +
-          `(expected ${targetVersion}) — the profile is half-updated. Repair manually with:\n` +
-          `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@${targetVersion}\n`,
-      )
-      return { updateCode: 1, restartCode: 1 }
-    }
-  }
-
-  // Launcher migration (0.8.7): the freshly installed profile carries the
-  // delegating shim — stamp it over the global launcher so this is the LAST
-  // time the outer copy can lag. Best-effort; the alignment warning stays as
-  // the fallback when the copy is impossible.
-  if (migrateGlobalLauncher()) {
-    process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
-  }
-
-  const restartCode = await runProcess(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
-    env: {
-      ...process.env,
-      // Dual-write the resume contract (issue #120): the cordis layer of a
-      // still-old TUI build reads only DSH_CC_RESUME_SESSION.
-      DSH_TUI_RESUME_SESSION: sessionId,
-      DSH_CC_RESUME_SESSION: sessionId,
-      [UPDATED_FROM_ENV]: updatedFrom,
-    },
+  // Restart through the same hardened handoff as /restart (issues
+  // #284/#307/#483): wait for the replacement's natural exit (the outer
+  // interpreter must not reclaim the console under it), re-assert the
+  // stdin detach from a watchdog so a revived pump cannot swallow the
+  // child's keypresses, and capture a fast-death stderr report. The old
+  // plain inherit spawn raced the interpreter for input on Windows
+  // Terminal (issue #483: "cannot type anything after /update").
+  const restartCode = await restartTui(sessionId, {
+    env: { [UPDATED_FROM_ENV]: updatedFrom },
+    kind: 'update',
   })
-  return { updateCode, restartCode }
+  return { updateCode: 0, restartCode }
+}
+
+/**
+ * Headless `dsh-tui update`: the `/update` decision flow (preflight, deadlock
+ * refusal, mirror-lag note, `--latest` fallback) followed by the install-only
+ * half — no TUI, no restart. The bin launcher dynamic-imports this from the
+ * profile copy's compiled lib.
+ *
+ * @param profile - The dsh profile to update.
+ * @returns Process exit code: 0 on success or already-latest, 1 otherwise.
+ */
+export async function cliUpdate(profile: string): Promise<number> {
+  const target = await resolveTuiUpdateTarget()
+  if (target.kind === 'latest') {
+    process.stdout.write(`dsh-tui: already the latest version (${target.current}).\n`)
+    return 0
+  }
+  let targetVersion: string | undefined
+  if (target.kind === 'update') {
+    // Mirror the /update flow exactly: refuse the 0.7.0–0.7.1 hard-inject
+    // range (permanent boot deadlock under older launcher patches, #183/#307)
+    // instead of installing it.
+    if (isBootDeadlockTarget(target.latest)) {
+      process.stderr.write(
+        `dsh-tui: refusing to update onto ${target.latest} — that range can permanently deadlock boot ` +
+          `(#183/#307). Latest on the official registry: ${target.authoritative ?? target.latest}. ` +
+          `If you use a mirror, retry after it syncs.\n`,
+      )
+      return 1
+    }
+    if (target.authoritative !== undefined) {
+      process.stdout.write(
+        `dsh-tui: note — your registry serves ${target.latest} while npmjs.org has ${target.authoritative} (mirror lag).\n`,
+      )
+    }
+    targetVersion = target.latest
+    process.stdout.write(`dsh-tui: updating ${target.current} → ${target.latest}…\n`)
+  } else {
+    process.stdout.write('dsh-tui: version check failed (offline or unreadable install) — falling back to `--latest`.\n')
+  }
+  const outcome = await updateTui(profile, targetVersion)
+  if (outcome.code === 0) {
+    // A preflight-less run (`--latest` fallback) can "succeed" as a pnpm
+    // no-op: same manifest before and after. Say so instead of printing a
+    // vacuous `updated X → X` — the /update path surfaces the same state via
+    // the DSH_TUI_UPDATED_FROM stamp on restart.
+    if (targetVersion === undefined && outcome.installed !== undefined && outcome.installed === outcome.updatedFrom) {
+      process.stdout.write(
+        `dsh-tui: version did not advance (still ${outcome.installed}) — already the latest, or the registry has no newer release yet.\n`,
+      )
+    } else {
+      process.stdout.write(
+        `dsh-tui: updated ${outcome.updatedFrom || '(unknown)'} → ${outcome.installed ?? '(unreadable)'}.\n`,
+      )
+    }
+  }
+  return outcome.code
 }
 
 /**
@@ -503,24 +813,26 @@ export async function updateTuiAndRestart(
  * same node process with the original argv and the dual-written resume
  * contract, so a fresh process re-boots the same profile and attaches the
  * same session. No installation is touched, so it works on any launch
- * (profile, source checkout, `--config` overlay).
+ * (profile, source checkout, `--config` overlay). `/update` reuses this
+ * handoff for its own restart tail (`kind: 'update'`): the keyboard-race
+ * hardening below is exactly the failure its users reported (issue #483:
+ * update restarts into a TUI that takes no input).
  *
  * The TUI must already be unmounted before this is called (same terminal
  * handoff contract as `updateTuiAndRestart`): the caller runs this from the
  * exit funnel's done callback, after finishExit detached the terminal and
  * the readable stdin pump.
  *
- * This waits for the replacement's natural exit, exactly like the proven
- * `/update` restart: the outer command interpreter that ran `dsh-tui`
- * reclaims the console the moment the launch chain (cmd → wrapper → this
- * process) unwinds, and an orphaned replacement still attached to the
- * console then fights the interpreter's own prompt and line reader for
- * every keypress (field evidence 2026-08-24: healthy child mounted the
- * UI, the old process exited on a 4s survival timer, the interpreter
- * printed its prompt over the TUI and the DA response bytes landed on
- * the prompt line). Waiting is safe because finishExit already paused
- * and unref'd this process's stdin — the child is the console's only
- * key reader (issues #284/#307).
+ * This waits for the replacement's natural exit: the outer command
+ * interpreter that ran `dsh-tui` reclaims the console the moment the
+ * launch chain (cmd → wrapper → this process) unwinds, and an orphaned
+ * replacement still attached to the console then fights the interpreter's
+ * own prompt and line reader for every keypress (field evidence
+ * 2026-08-24: healthy child mounted the UI, the old process exited on a
+ * 4s survival timer, the interpreter printed its prompt over the TUI and
+ * the DA response bytes landed on the prompt line). Waiting is safe
+ * because finishExit already paused and unref'd this process's stdin —
+ * the child is the console's only key reader (issues #284/#307).
  *
  * The 4s survival window remains a DIAGNOSIS marker only: a replacement
  * that dies within it never painted the TUI, and its captured stderr is
@@ -528,12 +840,28 @@ export async function updateTuiAndRestart(
  * late exit is quiet — by then the user owned a working TUI session.
  *
  * @param sessionId - Session to resume in the replacement process.
+ * @param options - `kind: 'update'` drops the /restart boot-diagnosis
+ *   marker and tags restart.log events for the update flow; `env` adds
+ *   marker variables for the replacement (e.g. DSH_TUI_UPDATED_FROM).
  * @returns 0 when the replacement ran and exited cleanly, 127 when it
  *   failed to start, otherwise the child's own exit code.
  */
-export async function restartTui(sessionId: string): Promise<number> {
+export interface TuiRestartOptions {
+  /** Extra env markers for the replacement process (/update's stamp). */
+  env?: Record<string, string>
+  /**
+   * 'update' reuses this handoff after an install: no
+   * DSH_TUI_RESTART_CHILD marker (that flag is /restart-only boot
+   * diagnostics) and restart.log events carry the update-restart tag.
+   */
+  kind?: 'restart' | 'update'
+}
+
+export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
+  const kind = options.kind ?? 'restart'
+  const tag = kind === 'update' ? 'update-restart' : 'restart'
   const argv = [...process.execArgv, ...process.argv.slice(1)]
-  logRestartEvent('restart: spawning replacement', {
+  logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,
     argv,
     cwd: process.cwd(),
@@ -553,8 +881,9 @@ export async function restartTui(sessionId: string): Promise<number> {
         DSH_TUI_RESUME_SESSION: sessionId,
         DSH_CC_RESUME_SESSION: sessionId,
         // Marks the replacement so its own boot logs to restart.log without
-        // noisy logging on every ordinary launch.
-        [RESTART_CHILD_ENV]: '1',
+        // noisy logging on every ordinary launch (/restart only).
+        ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
+        ...options.env,
       },
       // stdin/stdout stay inherited so the replacement owns the console the
       // moment it boots; stderr is captured so a boot failure is reportable
@@ -562,7 +891,7 @@ export async function restartTui(sessionId: string): Promise<number> {
       // the child dies, and a raw inherit write can vanish).
       stdio: ['inherit', 'inherit', 'pipe'],
     })
-    logRestartEvent('restart: replacement spawned', { childPid: child.pid })
+    logRestartEvent(`${tag}: replacement spawned`, { childPid: child.pid })
     // Handoff watchdog (field evidence 2026-08-24: restarted TUI mounts but
     // takes no input). Two jobs, both diagnosis-grade:
     // 1. SAMPLE this process's stdin state every second — if anything
@@ -613,26 +942,26 @@ export async function restartTui(sessionId: string): Promise<number> {
       // terminal report below, and unbounded output must not grow the file.
       if (loggedStderrBytes < 4096) {
         loggedStderrBytes += chunk.length
-        logRestartEvent('restart: replacement stderr', { text: chunk.toString('utf8').slice(0, 2048) })
+        logRestartEvent(`${tag}: replacement stderr`, { text: chunk.toString('utf8').slice(0, 2048) })
       }
     })
     // Diagnosis marker only — never resolves: after the window the child owns
     // the terminal, and this process must keep the launch chain open until
     // the replacement exits (see the header comment).
     const timer = setTimeout(() => {
-      logRestartEvent('restart: survival window passed, following the replacement until it exits')
+      logRestartEvent(`${tag}: survival window passed, following the replacement until it exits`)
     }, 4000)
     timer.unref()
     child.once('error', error => {
       clearTimeout(timer)
-      logRestartEvent('restart: spawn error', { message: error.message })
+      logRestartEvent(`${tag}: spawn error`, { message: error.message })
       writeHandoffNotice(`dsh-tui: failed to spawn the restart: ${error.message}\n`)
       resolve(127)
     })
     child.once('close', (code, signal) => {
       clearTimeout(timer)
       const elapsedMs = Date.now() - startedAt
-      logRestartEvent('restart: replacement exited', {
+      logRestartEvent(`${tag}: replacement exited`, {
         code: code ?? null,
         signal: signal ?? null,
         elapsedMs,
@@ -645,7 +974,7 @@ export async function restartTui(sessionId: string): Promise<number> {
         writeHandoffNotice(
           `dsh-tui: restart child exited during the handoff (code ${code ?? 'null'}` +
             `${signal === undefined || signal === null ? '' : `, signal ${signal}`}) — the TUI did not come up.` +
-            `${suffix}\nYour session is preserved; resume with the launcher or retry /restart.\n`,
+            `${suffix}\nYour session is preserved; resume with the launcher or retry the command.\n`,
         )
       } else if (code !== 0 && code !== null) {
         // Late nonzero exit: the session ended abnormally, say so briefly.

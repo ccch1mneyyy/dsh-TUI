@@ -28,9 +28,10 @@ const { join: joinPath } = await import('node:path')
 process.env.HOME = mkdtempSync(joinPath(tmpdir(), 'dshtui-edge-'))
 process.env.USERPROFILE = process.env.HOME
 
-const [{ Terminal: XTerm }, React] = await Promise.all([
+const [{ Terminal: XTerm }, React, { settle, sleep, viewportLines }] = await Promise.all([
   import('@xterm/headless'),
   import('react'),
+  import('./lib/term-test.mjs'),
 ])
 const { render } = await import('../src/ui.js')
 const { ModelPicker } = await import('../src/components/ModelPicker.js')
@@ -42,7 +43,6 @@ function check(name: string, ok: boolean, detail = ''): void {
 }
 
 const ROWS = 30
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 async function mountAt(cols: number) {
   // Name length lands the truncation ellipsis — and the focused+selected
@@ -80,6 +80,9 @@ async function mountAt(cols: number) {
         models, focusIndex, currentModel: 'p/m12', onHover: noop,
       }) as never,
     )
+    // 翻页前后屏幕形态没有可区分的观察点（长名的尾部序号被省略号截掉，
+    // 行文本与翻页前一致），对已成立条件轮询会立即返回等于没测；
+    // 保留固定窗口等重绘落盘。
     await sleep(400)
     const buf = term.buffer.active
     const texts: string[] = []
@@ -119,7 +122,12 @@ async function mountAt(cols: number) {
       patchConsole: false,
     },
   )
-  await sleep(400)
+  // 首帧：标题、页脚、焦点指示与选中勾都画出来才算挂载完成。
+  await settle(() => {
+    const lines = viewportLines(term, ROWS)
+    return lines.some(line => line.includes('模型')) && lines.some(line => line.includes('Enter'))
+      && lines.some(line => line.includes('❯')) && lines.some(line => line.includes('✓'))
+  })
   return { instance, frame, term }
 }
 

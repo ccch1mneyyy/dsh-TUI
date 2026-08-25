@@ -27,6 +27,8 @@ const GROUPS = {
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],
+// 问卷回退回归：答案按题覆盖、草稿恢复、Esc 分层语义与最终摘要。
+    ["verify-question-backtrack", ['node', '--import', 'tsx/esm', 'scripts/verify-question-backtrack.tsx']],
 // 提问面板全应用布局回归：短/长高录、activity tick 差分、resize 风暴。
     ["verify-askpanel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-layout.tsx']],
     ["repro-toolcards", ['node', '--import', 'tsx/esm', 'scripts/repro-toolcards.tsx']],
@@ -62,6 +64,10 @@ const GROUPS = {
     ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx'], { NODE_ENV: 'production' }],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
     ["verify-shrink", ['node', 'scripts/verify-shrink.mjs']],
+// 高于视口的收缩必须记 anchoredPad：终端 scrollback 不随内容收缩，
+// 高度差公式会少算 1 行 → 上移在视口顶被钳制 → 整帧相对写入链低一行
+// （verify-trace-scene settle-gap flake 的确定性蒸馏，红绿验证过）。
+    ["verify-shrink-anchored-pad", ['node', '--import', 'tsx/esm', 'scripts/verify-shrink-anchored-pad.tsx']],
 // unseen-count 上报契约回归：同值重复上报会在密集流式 commit 下把
 // setState 派发进 commit 内，嵌套更新计数连涨越过 React #185 上限
 // （#146 之后残留的活链）。只在计数变化时才允许上报。
@@ -109,9 +115,26 @@ const GROUPS = {
     ["verify-exit-resume-marker", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-resume-marker.tsx']],
 // 退出阶段 stderr/console 恢复回归（issue #42）：shutdown 解绑恢复物理流并注销监听器。
     ["verify-shutdown-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-stderr.tsx']],
+// 退出收尾运行时未命中回退：找不到 Ink runtime 时必须走完整 unmount 恢复终端。
+    ["verify-shutdown-fallback", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-fallback.tsx']],
+// 退出鼠标残留回归（issue #522）：detach 闩锁后自愈探针不再重写
+// ENABLE_MOUSE_TRACKING；unmount 在末帧渲染抛错时仍同步写完整清理
+// （帧在 EXIT_ALT_SCREEN 前、DISABLE 后 SHOW_CURSOR），handle 暴露
+// detach 方法供 finishExit 兜底闩锁。
+    ["verify-exit-mouse-cleanup", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-cleanup.tsx']],
+// 退出查询泄漏回归（#507/#492）：退出清理（DISABLE）之后，健康探针/
+// 模式重断言/已 dispose 的 querier 都不得再写出任何 ENABLE 或查询
+// 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
+// 吞掉，不再落入 shell。
+    ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
+// /update 恢复链路端到端回归（#479/#483）：假 dsh 按剧本重放 pnpm 失败
+// （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程
+// 走编译产物——验证陈旧安装清理后重跑成功、瞬时重试升级、真实失败不
+// 触发任何恢复且不破坏 profile，重启尾部向替代进程传递 env 契约。
+    ["verify-update-recovery", ['node', 'scripts/verify-update-recovery.mjs']],
 // /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
 // 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
 // 规则（provider-only pin 不挡偏好）、两命令的注册与解析。
@@ -119,6 +142,9 @@ const GROUPS = {
 // 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
 // 版本不一致提示、双语消息、shellQuote 转义规则。
     ["verify-launcher", ['node', 'scripts/verify-launcher.mjs']],
+// CLI 子命令回归（issue #509）：help/version 零环境应答（不触发自举
+// 与委托）、双语输出、profile 版本读取、只认第一个参数。
+    ["verify-cli-subcommands", ['node', 'scripts/verify-cli-subcommands.mjs']],
 // 剪贴板回归：text/uri-list 严格 URL 解析（远程 authority 拒绝、
 // query/fragment 剥离、畸形转义保留）、image/text MIME 挑选、插入格式化；
 // stub PATH 假 wl-paste/xclip 集成——CJK 跨 chunk、gnome verb 行、
@@ -188,6 +214,10 @@ const GROUPS = {
 // stdin 批量按键回归：同一读取内的文本、方向键、文本必须依次基于
 // 前一事件的输入状态执行，不能因 React 批处理读取旧闭包而丢字符。
     ["verify-batched-prompt-input", ['node', 'scripts/verify-batched-prompt-input.mjs']],
+// 快捷键 keymap 回归：共享组合语法、动作注册表与 /settings 改键
+// （Alt+V 粘贴别名、覆盖热更新、保留位集合、草稿冲突校验），以及
+// 真 Chat 里 Alt+V / 改键后的外部编辑器路径。
+    ["verify-keymap", ['node', 'scripts/verify-keymap.mjs']],
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],
@@ -233,6 +263,11 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
+// 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
+// （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
+// （渲染、Enter 菜单、字母直达执行、Esc）。
+    ["verify-session-tree", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree.tsx']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
 // ● 前缀、内容为空的行。
@@ -261,6 +296,16 @@ const GROUPS = {
 // 模型路由原子解析回归（issue #67）：完整 config > pref > default 整对
 // 生效，provider-only pin 不得与另一半拼接出错配路由。
     ["verify-model-route", ['node', 'scripts/verify-model-route.mjs']],
+// /model 二级选择器派生回归：provider 分组（首现排序、显示名回退、
+// 计数）与落焦规则（多 provider 聚焦当前组、单 provider 直达模型层、
+// 缺席当前 provider 落首行）。键盘与 overlay 归约由 verify-chat-overlay
+// 覆盖，这里钉住两层共用的纯派生。
+    ["verify-model-picker-groups", ['node', 'scripts/verify-model-picker-groups.mjs']],
+// 全屏出厂默认迁移回归（0.9.x schema + cordis.patch.yml false→true 翻转）：
+// 翻转前钉在 settings 用户层的显式 false 首启被 unset 一次（marker 仅在
+// 写入成功后落盘，失败下次自愈重试），此后再写的 false 是用户主动选择
+// 永不触碰；首启 apply 收到的值必须整键缺省而非 false。
+    ["verify-fullscreen-migration", ['node', 'scripts/verify-fullscreen-migration.mjs']],
 // CJK 显示宽度截断回归（issue #41）：4 处描述按终端显示宽度处理，
 // CJK 不劈字、窄终端布局不破。
     ["verify-cjk-truncate", ['node', '--import', 'tsx/esm', 'scripts/verify-cjk-truncate.tsx']],
@@ -338,6 +383,20 @@ const GROUPS = {
 // dsh-file: URL 编解码、相对路径按 cwd 解析、file:// 转换、Windows
 // start 组装——fileTarget.ts / openExternal.ts 的纯函数部分。
     ["verify-clickable-targets", ['node', '--import', 'tsx/esm', 'scripts/verify-clickable-targets.ts']],
+// 会话标识回归（issue #372）：/color 会话强调色（setSessionColor 调用 +
+// 边框 cell 级颜色重绘 + reset 恢复）、会话名标签渲染在输入框顶边框、
+// /recap 面板（摘要 + 建议标题 + a 键一键应用标题走 renameSession）。
+    ["verify-session-color-recap", ['node', '--import', 'tsx/esm', 'scripts/verify-session-color-recap.tsx']],
+// 打开会话自动总结回归（recapOnOpen）：挂载自动触发恰一次、灰行渲染、
+// hover 提示与关闭 chip、点击展开完整面板、a 应用标题、Esc 收起、
+// × 关闭、会话切换重新触发、失败静默、设置关闭不再触发。
+    ["verify-auto-recap", ['node', '--import', 'tsx/esm', 'scripts/verify-auto-recap.tsx']],
+// @ 引用行区间回归（issue #359）：`#L12-14` 后缀按 1-based 闭区间切片
+// 附加、endLine 越界 clamp 到文件尾、startLine 越界回退整文件并在块内
+// 注明、剥后路径未命中时回退字面路径（真叫 `…#L…` 的文件按整文件附加
+// 且模型看到字面路径）、双 miss 报用户原文、无后缀行为不变、目录忽略
+// 后缀。内存 fs stub，expandMentions 纯扩展逻辑。
+    ["verify-mention-lines", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-lines.ts']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得

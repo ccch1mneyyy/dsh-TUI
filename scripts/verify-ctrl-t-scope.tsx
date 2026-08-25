@@ -18,7 +18,7 @@ process.env.FORCE_COLOR = '3'
 // locale, none of which a runner is obliged to agree with.
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { settled, sleep }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -26,10 +26,9 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
     import('../src/ui.js'),
     import('../src/screens/Chat.js'),
     import('../src/dsh-adapter/questions.js'),
+    import('./lib/term-test.mjs'),
   ])
 const instances = (await import('../src/ink/instances.js')).default
-
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -201,44 +200,36 @@ const panelHeader = (text: string): string =>
     rows: [],
     pushLocal: (title: string, lines: readonly string[]) => { localReports.push({ title, lines }) },
   }))
-  await sleep(500)
-
-  const summary = harness.screen()
-  check('the startup context panel is on screen', /已加载上下文/.test(summary))
-  check('the collapsed panel claims Ctrl+P', panelHeader(summary).includes('Ctrl+P'), panelHeader(summary).trim())
+  check('the startup context panel is on screen', await settled(() => /已加载上下文/.test(harness.screen())))
+  check('the collapsed panel claims Ctrl+P', await settled(() => panelHeader(harness.screen()).includes('Ctrl+P')), panelHeader(harness.screen()).trim())
 
   harness.stdin.write(CTRL_P)
-  await sleep(500)
-  const expanded = harness.screen()
-  check('Ctrl+P expands the panel before the first message', expanded.includes('你是 dsh'),
-    expanded.split('\n')[0]?.trim() ?? '')
-  check('the expanded details still point to /context', expanded.includes('/context'),
-    expanded.split('\n').filter(line => line.includes('/context')).join(' | '))
+  check('Ctrl+P expands the panel before the first message', await settled(() => harness.screen().includes('你是 dsh')),
+    harness.screen().split('\n')[0]?.trim() ?? '')
+  check('the expanded details still point to /context', await settled(() => harness.screen().includes('/context')),
+    harness.screen().split('\n').filter(line => line.includes('/context')).join(' | '))
 
   harness.stdin.write(CTRL_P)
-  await sleep(500)
-  check('Ctrl+P collapses the panel again', !harness.screen().includes('你是 dsh'),
+  check('Ctrl+P collapses the panel again', await settled(() => !harness.screen().includes('你是 dsh')),
     panelHeader(harness.screen()).trim())
 
   harness.stdin.write(CTRL_T)
-  await sleep(500)
-  check('Ctrl+T opens the trajectory even before the first message', isScene(harness.screen()),
+  check('Ctrl+T opens the trajectory even before the first message', await settled(() => isScene(harness.screen())),
     harness.screen().split('\n')[0]?.trim())
 
   harness.stdin.write('q')
-  await sleep(400)
-  check('q returns to the context summary', /已加载上下文/.test(harness.screen()))
+  check('q returns to the context summary', await settled(() => /已加载上下文/.test(harness.screen())))
 
   harness.stdin.write('/context\r')
-  await sleep(400)
+  check('/context emits one local report', await settled(() => localReports.at(-1)?.title === '/context'))
   const report = localReports.at(-1)
-  check('/context emits one local report', report?.title === '/context')
   check('the report contains loaded-context details',
     report?.lines.some(line => line.includes('harness:identity')) === true)
 
   instance.unmount()
   instances.delete(process.stdout)
   harness.term.dispose()
+  // 卸载/dispose 的收尾 pacing：无可观测完成条件，保留固定小窗口。
   await sleep(40)
 }
 
@@ -249,18 +240,18 @@ const panelHeader = (text: string): string =>
     harness,
     makeChannel({ rows: [{ id: 1, kind: 'user', text: '第一条消息' }] }),
   )
+  // 稳定性探针（面板不得出现）：条件从挂载起就成立，轮询会立即返回，
+  // 测不到「不再出现」——保留固定窗口。
   await sleep(500)
 
   const before = harness.screen()
   check('the startup panel is gone once a row exists', !/已加载上下文/.test(before))
 
   harness.stdin.write(CTRL_T)
-  await sleep(500)
-  check('Ctrl+T opens the trajectory scene', isScene(harness.screen()), harness.screen().split('\n')[0]?.trim())
+  check('Ctrl+T opens the trajectory scene', await settled(() => isScene(harness.screen())), harness.screen().split('\n')[0]?.trim())
 
   harness.stdin.write('q')
-  await sleep(400)
-  check('q returns to the conversation', !isScene(harness.screen()))
+  check('q returns to the conversation', await settled(() => !isScene(harness.screen())))
 
   instance.unmount()
   instances.delete(process.stdout)

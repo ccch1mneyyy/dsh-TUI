@@ -192,7 +192,7 @@ r = runBin([])
 check('forward skew: hint names both versions', r.stderr.includes(`v${newerProfile}`) && r.stderr.includes(`v${ownVersion}`))
 check(
   'forward skew: tells user to align the global launcher',
-  r.stderr.includes(`npm install -g ${PACKAGE}@${newerProfile}`),
+  r.stderr.includes(`npm install -g --legacy-peer-deps ${PACKAGE}@${newerProfile}`),
 )
 check(
   'forward skew: never tells user to update the profile again',
@@ -279,7 +279,7 @@ rmSync(join(home, PKG_DIR, 'bin'), { recursive: true, force: true })
 resetStubLog()
 r = runBin([], { DSH_TUI_LANG: 'en' }, { delegating: true })
 check('shim: no bin fails loud with the reinstall hint', r.status === 1 && r.stderr.includes(`Reinstall the global launcher`))
-check('shim: reinstall hint names the npm command', r.stderr.includes(`npm install -g ${PACKAGE}`))
+check('shim: reinstall hint names the npm command', r.stderr.includes(`npm install -g --legacy-peer-deps ${PACKAGE}`))
 
 
 // --- 5. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）

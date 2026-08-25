@@ -19,9 +19,9 @@ process.env.DSH_TUI_LANG = 'zh'
 
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { settled, sleep } from './lib/term-test.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 let failures = 0
 const results: string[] = []
@@ -90,37 +90,37 @@ async function runDriver(): Promise<void> {
   reporter.push(failing)
   reporter.push(failing)
   reporter.push(failing)
+  // 稳定性探针（不得多出通知）：settle 会在第一条通知出现时立即返回，
+  // 测不到「只出一条」的上界——保留固定窗口。
   await sleep(150)
   check('去重：同一行连发 3 次只出一条通知', notices.length === 1)
   check('去重：通知带重复计数（重复 3 次）', notices[0]?.includes('重复 3 次') ?? false)
 
   reporter.push(failing)
+  // 稳定性探针（冷却期内不得出新通知）：条件在 push 前就成立，轮询等于
+  // 没测——保留固定窗口。
   await sleep(150)
   check('冷却：刚通知过的行在冷却期内静默', notices.length === 1)
 
+  // 纯排序等待：冷却窗口是墙钟时间，没有可观察的状态翻转——保留。
   await sleep(400)
   reporter.push(failing)
-  await sleep(150)
-  check('冷却结束：同一行可再次通知', notices.length === 2)
+  check('冷却结束：同一行可再次通知', await settled(() => notices.length === 2))
 
   reporter.push('Usage: tsx proxy.ts <url>')
-  await sleep(150)
-  check('不同的行各自成条通知', notices.length === 3 && (notices[2]?.includes('Usage:') ?? false))
+  check('不同的行各自成条通知', await settled(() => notices.length === 3 && (notices[2]?.includes('Usage:') ?? false)))
 
   reporter.push('\x1b[31mred-line\x1b[39m')
-  await sleep(150)
-  const ansiNotice = notices.at(-1) ?? ''
-  check('ANSI 转义被剥离', ansiNotice.includes('red-line') && !ansiNotice.includes('\x1b'))
+  check('ANSI 转义被剥离', await settled(() => (notices.at(-1) ?? '').includes('red-line') && !(notices.at(-1) ?? '').includes('\x1b')))
 
   const longLine = 'x'.repeat(100)
   reporter.push(longLine)
-  await sleep(150)
-  const longNotice = notices.at(-1) ?? ''
-  check('超长行被截断（带省略号）', longNotice.includes('…') && !longNotice.includes(longLine))
+  check('超长行被截断（带省略号）', await settled(() => (notices.at(-1) ?? '').includes('…') && !(notices.at(-1) ?? '').includes(longLine)))
 
   const countBefore = notices.length
   reporter.push('   ')
   reporter.push('')
+  // 稳定性探针（空行不得产生通知）：条件在 push 前就成立——保留固定窗口。
   await sleep(150)
   check('空行/纯空白行被丢弃', notices.length === countBefore)
 

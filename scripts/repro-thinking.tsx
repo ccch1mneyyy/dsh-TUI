@@ -10,7 +10,8 @@
  * 助手文本持续流式增长（强制内容增长 + stickyScroll），捕获全部帧字节，
  * 用 xterm-headless 回放后断言可见区干净：
  *
- * - 恰有 1 行含 'thinking'（spinner 行本身；灌入文本刻意不含该词）
+ * - 恰有 1 行以 spinner 状态 "· thinking)" 收尾（不能用裸词 'thinking'：
+ *   随机启动 tip 有 4/100 条文案含该词，撞上即误报）
  * - 无 'tthinking' 叠字
  * - 无孤立残影 't'（任意列，两侧为空白或行尾）
  *
@@ -19,7 +20,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { Terminal: XTerm }, fs] =
+const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { Terminal: XTerm }, fs, { writeParsed, viewportLines, sleep }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -28,6 +29,7 @@ const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }
     import('../src/dsh-adapter/questions.js'),
     import('@xterm/headless'),
     import('node:fs'),
+    import('./lib/term-test.mjs'),
   ])
 
 const COLS = Number(process.env.COLS ?? 100)
@@ -122,8 +124,9 @@ const instance = await render(
   },
 )
 
-// 启动稳定
-await new Promise(r => setTimeout(r, 500))
+// 启动稳定：让 spinner 先空转若干 50ms 动画帧——动画重绘本身是被测对象，
+// 固定墙钟 pacing 是场景的一部分，无可轮询的完成条件。
+await sleep(500)
 
 // 流式灌文本 ~6 秒（thinking 状态保持）。内容刻意全为中文、不含 'thinking'
 // 与孤立 ASCII 't'，让残影断言无歧义。
@@ -137,49 +140,55 @@ const CHUNKS = [
 ]
 for (const chunk of CHUNKS) {
   pushChunk(chunk)
-  await new Promise(r => setTimeout(r, 120))
+  // 120ms 是场景 pacing：流式增长与 50ms 动画帧交错才能诱发残影，
+  // 不是在等某个可观测状态。
+  await sleep(120)
 }
 
-// 再让 spinner 空转几帧
-await new Promise(r => setTimeout(r, 800))
+// 再让 spinner 空转几帧（墙钟 pacing：残影需要多帧重绘才会显形）
+await sleep(800)
 
 const byteStream = stdout.frames.join('')
 try { instance.unmount() } catch {}
 
 // ── xterm-headless 回放 ──
+// write 是异步分块解析的：必须等回调而不是固定 sleep，否则慢机器上
+// 断言读到解析了一半的屏幕。
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 500, allowProposedApi: true })
-term.write(byteStream)
-await new Promise(r => setTimeout(r, 1200))
+await writeParsed(term, byteStream)
 
-const buf = term.buffer.active
-const lines: string[] = []
-for (let y = 0; y < ROWS; y++) {
-  lines.push(buf.getLine(y)?.translateToString(true) ?? '')
-}
+// 扫可见视口（baseY 起的 ROWS 行）。裸 getLine(0..ROWS) 在有 scrollback 时
+// 读的是缓冲区开头：混入已滚出的旧行、漏掉视口底部 baseY 行——残影恰恰
+// 最容易出现在底部 spinner 附近。
+const lines = viewportLines(term, ROWS)
 
 // ── 残影检测 ──
 const problems: string[] = []
-let thinkingRows = 0
+let spinnerRows = 0
 lines.forEach((line, y) => {
-  if (line.includes('thinking')) thinkingRows++
+  // spinner 状态行以 "… · thinking)" 收尾；裸词 'thinking' 不能当指纹——
+  // 启动 tip 是 Math.random 抽的，100 条里 4 条文案含 'thinking'
+  // （如“工具卡/thinking/摘要点击展开”），抽中即误报（约 4%/次的假 flaky）。
+  if (/·\s*thinking\)/.test(line)) spinnerRows++
   if (/tthinking/.test(line)) problems.push(`row ${y}: 叠字残影 "tthinking" → ${JSON.stringify(line)}`)
-  // 孤立 't'：两侧为空白/行首行尾（灌入文本不含 ASCII 't'，出现即残影）
+  // 孤立 't'：两侧为空白/行首行尾（灌入文本与全部 tip 文案均不含孤立
+  // ASCII 't'，出现即残影）
   const m = line.match(/(?:^|\s)t(?=\s|$)/)
   if (m) problems.push(`row ${y}: 孤立残影 't' → ${JSON.stringify(line)}`)
 })
-if (thinkingRows !== 1) {
-  problems.push(`含 'thinking' 的行数为 ${thinkingRows}（期望 1，即 spinner 行本身）`)
+if (spinnerRows !== 1) {
+  problems.push(`spinner 状态行（"· thinking)" 结尾）数为 ${spinnerRows}（期望 1）`)
 }
 
 if (problems.length > 0) {
   const dump = '/tmp/repro-thinking-frames.bin'
   fs.writeFileSync(dump, byteStream)
   console.error(`FAIL: thinking spinner 残影回归（帧字节已存 ${dump}）`)
-  console.error(`=== xterm-headless replay: ${COLS}x${ROWS} (viewport baseY=${buf.baseY}) ===`)
+  console.error(`=== xterm-headless replay: ${COLS}x${ROWS} (viewport baseY=${term.buffer.active.baseY}) ===`)
   lines.forEach((line, y) => console.error(`${String(y).padStart(3)}|${line}`))
   for (const p of problems) console.error(`- ${p}`)
   process.exit(1)
 }
 
-console.log(`PASS: thinking spinner 无残影（${COLS}x${ROWS}，spinner 行恰 1 处 'thinking'）`)
+console.log(`PASS: thinking spinner 无残影（${COLS}x${ROWS}，spinner 状态行恰 1 行）`)
 process.exit(0)

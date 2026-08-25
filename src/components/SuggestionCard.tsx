@@ -1,6 +1,8 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import type { Color } from '../ink/styles.js'
+import type { Theme } from '../theme.js'
 import type { WheelEvent } from '../ink/events/wheel-event.js'
 
 /**
@@ -35,8 +37,8 @@ export function SuggestionCard({
   /** 嵌在顶边框里的标题（已本地化、含计数）。 */
   title: string
   columns: number
-  /** 边框色（主题 token）；缺省 promptBorder。 */
-  accent?: 'promptBorder' | 'planMode'
+  /** 边框色（主题 token 或裸色）；缺省 promptBorder。 */
+  accent?: keyof Theme | Color
   /** 底部 dim 提示行（滚动指示）；null/undefined 时不渲染。 */
   footer?: string | null
   /** 已渲染的行内容（每行一个节点），本组件为各行补上左右边框。 */

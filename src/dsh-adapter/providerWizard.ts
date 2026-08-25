@@ -49,6 +49,35 @@ export interface CatalogProviderCandidate {
   readonly displayName: string
 }
 
+/** One OAuth-capable provider a dsh-auth-style plugin mounts (masked state only). */
+export interface OAuthProviderStatus {
+  readonly provider: string
+  readonly label: string
+  readonly oauthLabel: string
+  readonly loginLabel: string | undefined
+  readonly signedIn: boolean
+  readonly expiresAt: number | undefined
+  readonly expired: boolean
+}
+
+/** One successful OAuth login. */
+export interface OAuthLoginResult {
+  readonly provider: string
+  readonly oauthLabel: string
+  readonly expiresAt: number
+}
+
+/**
+ * The `ctx.dshAuth` api, structural so this tree never imports the plugin:
+ * mounting dsh-auth (or anything exporting this shape) lights up the wizard's
+ * OAuth branch; absent it, the wizard behaves exactly as before.
+ */
+export interface OAuthSetupHost {
+  providers(): Promise<readonly OAuthProviderStatus[]>
+  login(provider?: string, signal?: AbortSignal): Promise<OAuthLoginResult>
+  logout(provider: string): Promise<boolean>
+}
+
 /**
  * Runtime capabilities the wizard needs, implemented by the channel over
  * `ctx.settings` / `ctx.credentials` / `ctx.llm`. `undefined` from
@@ -84,6 +113,8 @@ export interface ProviderSetupHost {
    * rejects when the adapter's validation deems it unserviceable.
    */
   writeProfile(route: string, profile: Record<string, unknown>): Promise<void>
+  /** The OAuth sign-in surface; absent when no dsh-auth-style plugin is mounted. */
+  readonly oauth?: OAuthSetupHost
 }
 
 export interface ProviderWizardDeps {
@@ -102,7 +133,7 @@ export interface ProviderWizardDeps {
   readonly switchModel: (provider: string, model: string) => Promise<boolean>
 }
 
-export type ProviderWizardOutcome = 'added' | 'cancelled' | 'failed'
+export type ProviderWizardOutcome = 'added' | 'signed-out' | 'cancelled' | 'failed'
 
 /** Max attempts for validated free-text prompts before giving up. */
 const MAX_RETRY = 3
@@ -161,13 +192,23 @@ export async function runProviderWizard(
   const { host, ask, notify, pushLocal } = deps
   try {
     // ── 1. mode ────────────────────────────────────────────────────────
+    const modeOptions = [
+      { label: t('provider-opt-catalog'), description: t('provider-opt-catalog-desc') },
+      { label: t('provider-opt-custom'), description: t('provider-opt-custom-desc') },
+    ]
+    // The OAuth branch exists only while a dsh-auth-style plugin is mounted;
+    // without the service the mode question stays exactly two options.
+    if (host.oauth !== undefined) {
+      modeOptions.push({ label: t('provider-opt-oauth'), description: t('provider-opt-oauth-desc') })
+    }
     const modeAnswer = await ask({
-      questions: [optionQuestion('mode', t('provider-q-mode'), [
-        { label: t('provider-opt-catalog'), description: t('provider-opt-catalog-desc') },
-        { label: t('provider-opt-custom'), description: t('provider-opt-custom-desc') },
-      ], { hideCustomInput: true })],
+      questions: [optionQuestion('mode', t('provider-q-mode'), modeOptions, { hideCustomInput: true })],
     })
-    const isCatalog = answerSelected(modeAnswer, 'mode')[0] === t('provider-opt-catalog')
+    const pickedMode = answerSelected(modeAnswer, 'mode')[0]
+    if (host.oauth !== undefined && pickedMode === t('provider-opt-oauth')) {
+      return runOAuthWizard(deps, host.oauth)
+    }
+    const isCatalog = pickedMode === t('provider-opt-catalog')
 
     // ── 2. route ───────────────────────────────────────────────────────
     let route = ''
@@ -361,6 +402,84 @@ export async function runProviderWizard(
     }
     const err = error instanceof Error ? error.message : String(error)
     notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
+    return 'failed'
+  }
+}
+
+/** Masked state line for one provider row in the OAuth pick question. */
+function oauthStateDescription(status: OAuthProviderStatus): string {
+  if (status.signedIn) {
+    return t('provider-oauth-state-in', { time: new Date(status.expiresAt ?? 0).toISOString() })
+  }
+  return status.expired
+    ? t('provider-oauth-state-expired')
+    : (status.loginLabel ?? status.oauthLabel)
+}
+
+/**
+ * The OAuth branch of `/provider`: pick a subscription provider, then sign
+ * in (the plugin's own question panels carry the flow — device codes,
+ * authorization URLs), or re-login / sign out when one is already signed in.
+ * No settings or credential writes happen here; the plugin owns its store.
+ */
+async function runOAuthWizard(
+  deps: ProviderWizardDeps,
+  oauth: OAuthSetupHost,
+): Promise<ProviderWizardOutcome> {
+  const { ask, notify, pushLocal } = deps
+  try {
+    const statuses = await oauth.providers()
+    if (statuses.length === 0) {
+      notify(t('provider-oauth-none'), { color: 'warning' })
+      return 'failed'
+    }
+    const pickAnswer = await ask({
+      questions: [optionQuestion('oauth-provider', t('provider-q-oauth'), statuses.map(status => ({
+        label: status.provider,
+        description: oauthStateDescription(status),
+      })), { hideCustomInput: true })],
+    })
+    const providerId = answerSelected(pickAnswer, 'oauth-provider')[0]
+    const status = statuses.find(row => row.provider === providerId)
+    if (status === undefined) return 'cancelled'
+
+    if (status.signedIn) {
+      const actionAnswer = await ask({
+        questions: [optionQuestion('oauth-signed-action', t('provider-q-oauth-signed', { provider: status.provider }), [
+          { label: t('provider-opt-oauth-relogin'), description: t('provider-opt-oauth-relogin-desc') },
+          { label: t('provider-opt-oauth-logout'), description: t('provider-opt-oauth-logout-desc') },
+          { label: t('provider-opt-confirm-cancel') },
+        ], { hideCustomInput: true })],
+      })
+      const action = answerSelected(actionAnswer, 'oauth-signed-action')[0]
+      if (action === t('provider-opt-oauth-logout')) {
+        await oauth.logout(status.provider)
+        pushLocal('/provider', [
+          t('provider-line-oauth-provider', { provider: status.provider }),
+          t('provider-line-oauth-out'),
+        ])
+        notify(t('provider-oauth-logout-ok', { provider: status.provider }), { color: 'success' })
+        return 'signed-out'
+      }
+      if (action !== t('provider-opt-oauth-relogin')) return 'cancelled'
+    }
+
+    const result = await oauth.login(status.provider)
+    pushLocal('/provider', [
+      t('provider-line-oauth-provider', { provider: result.provider }),
+      t('provider-line-oauth-flow', { flow: result.oauthLabel }),
+      t('provider-line-oauth-expires', { time: new Date(result.expiresAt).toISOString() }),
+      t('provider-switch-hint'),
+    ])
+    notify(t('provider-oauth-login-ok', { provider: result.provider }), { color: 'success' })
+    return 'added'
+  } catch (error) {
+    if (error instanceof UserQuestionError) {
+      notify(t('provider-cancelled'))
+      return 'cancelled'
+    }
+    const err = error instanceof Error ? error.message : String(error)
+    notify(t('provider-oauth-login-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
   }
 }

@@ -21,15 +21,14 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { sleep, settled }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
     import('@xterm/headless'),
     import('../src/ui.js'),
+    import('./lib/term-test.mjs'),
   ])
-
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -111,13 +110,17 @@ async function run(): Promise<void> {
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  await sleep(400)
-  check('the expanded frame is taller than the viewport', live.screen().length >= ROWS - 1,
+  check('the expanded frame is taller than the viewport', await settled(() => live.screen().length >= ROWS - 1),
     `${live.screen().length} rows visible of ${ROWS}`)
 
   const mark = live.writes.length
   setOpen?.(false)
-  await sleep(600)
+  check('the collapsed screen has no leftover body lines',
+    await settled(() => !live.screen().some(line => line.includes('body line'))),
+    live.screen().filter(line => line.includes('body line')).length + ' leftover')
+  check('the header appears exactly once',
+    await settled(() => live.screen().filter(line => line.includes('panel header')).length === 1),
+    `${live.screen().filter(line => line.includes('panel header')).length} copies`)
   if (process.env.DBG_SHRINK === '1') {
     live.writes.slice(mark).forEach((w, i) => {
       console.log(`[w${i}] ${JSON.stringify(w.slice(0, 160))}`)
@@ -126,6 +129,7 @@ async function run(): Promise<void> {
   const collapsed = live.screen()
   liveInstance.unmount()
   live.term.dispose()
+  // 卸载/dispose 的收尾 pacing：无可观测完成条件，保留固定小窗口。
   await sleep(40)
 
   // ── the same short state, built fresh ────────────────────────────────────
@@ -137,20 +141,14 @@ async function run(): Promise<void> {
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  await sleep(400)
+  const matches = await settled(() => cold.screen().join('\n') === collapsed.join('\n'))
   const fresh = cold.screen()
   coldInstance.unmount()
   cold.term.dispose()
 
-  check('the collapsed screen has no leftover body lines',
-    !collapsed.some(line => line.includes('body line')),
-    collapsed.filter(line => line.includes('body line')).length + ' leftover')
-  check('the header appears exactly once',
-    collapsed.filter(line => line.includes('panel header')).length === 1,
-    `${collapsed.filter(line => line.includes('panel header')).length} copies`)
   check('the collapsed screen matches a fresh render',
-    collapsed.join('\n') === fresh.join('\n'),
-    collapsed.join('\n') === fresh.join('\n')
+    matches,
+    matches
       ? ''
       : `after=${JSON.stringify(collapsed.slice(0, 4))} fresh=${JSON.stringify(fresh.slice(0, 4))}`)
 }

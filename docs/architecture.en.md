@@ -7,9 +7,9 @@
 ```text
 Cordis profile
   -> src/index.ts (plugin contract and Schema)
-  -> src/plugin.ts (services, Agent, and React lifecycle)
+  -> src/dsh-adapter/plugin.ts (services, Agent, and React lifecycle)
   -> DSH Agent / session / tool services
-  -> src/channel.ts (session/event -> Channel)
+  -> src/dsh-adapter/channel.ts (session/event -> Channel)
   -> src/screens/Chat.tsx (keyboard and mode orchestration)
   -> src/components/* (views)
   -> src/ui.ts (themed renderer facade)
@@ -22,8 +22,8 @@ Cordis profile
 | Module | Owns |
 | --- | --- |
 | `src/index.ts` | Cordis plugin name, injection declaration, config interface, and Schema; keep the entry small and lazy |
-| `src/plugin.ts` | TTY guard, questionnaire/skill registration, Agent create/resume, React mount, and the single cleanup funnel |
-| `src/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
+| `src/dsh-adapter/plugin.ts` | TTY guard, questionnaire/skill registration, Agent create/resume, React mount, and the single cleanup funnel |
+| `src/dsh-adapter/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |

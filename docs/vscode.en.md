@@ -18,7 +18,7 @@ integrated terminal** (xterm.js). This page covers two ways to use it:
    start; for when you do not want the extension.
 
 > Version note: `dsh-tui` on this page refers to this repository (the TUI
-> plugin, currently **0.8.3**; 0.7.0+ recommended); `dsh-tui-vscode` refers
+> plugin, currently **0.9.0**; 0.7.0+ recommended); `dsh-tui-vscode` refers
 > to the companion extension (currently **0.5.1**). The two version and
 > release independently. See the
 > [baobaolaodie/dsh-tui-vscode](https://github.com/baobaolaodie/dsh-tui-vscode)
