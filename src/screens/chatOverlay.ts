@@ -58,6 +58,7 @@ export type ChatOverlay =
   | { kind: 'model'; index: number }
   | { kind: 'skills'; index: number }
   | { kind: 'activity'; index: number }
+  | { kind: 'color'; index: number }
   | { kind: 'effort'; index: number }
   | { kind: 'preset'; index: number }
   | { kind: 'theme'; index: number }
@@ -178,6 +179,7 @@ export function chatOverlayReducer(state: ChatOverlay, action: ChatOverlayAction
         || state.kind === 'model'
         || state.kind === 'skills'
         || state.kind === 'activity'
+        || state.kind === 'color'
         || state.kind === 'effort'
         || state.kind === 'preset'
         || state.kind === 'theme'

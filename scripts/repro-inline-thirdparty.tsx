@@ -17,13 +17,14 @@ process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { sleep, settle, settled, writeParsed }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100
@@ -48,7 +49,6 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 function viewportLines(): string[] {
   const buf = term.buffer.active
   const start = Math.max(0, buf.length - ROWS)
@@ -91,6 +91,7 @@ const instance = await render(
 await sleep(3500)
 
 // 流式短回复并定格（保持帧高 < 视口，隔离"第三方输出"变量）。
+// 80ms 为模拟流式的 chunk 节拍（时间线本身是场景），保留固定 pacing。
 const msg = { id: id++, kind: 'assistant', text: '', streaming: true }
 channel.rows.push(msg); bump()
 for (let i = 0; i < 12; i++) {
@@ -100,6 +101,8 @@ for (let i = 0; i < 12; i++) {
 msg.streaming = false
 channel.working = false
 bump()
+// 定格稳定窗：golden 必须取自不再重绘的稳态帧，「内容可见」不等于「不再
+// 重绘」，无可轮询的完成条件——保留固定窗口。
 await sleep(600)
 
 // 对照基准：定格后的干净视口。
@@ -107,10 +110,10 @@ const golden = viewportLines()
 
 // ★ 静止期注入第三方输出（真机 #17 场景：mcp 子进程 stderr 直写 tty，
 //   打在空闲时的输入框下方——之后没有大重绘来自愈）。
-term.write('\r\n[5764] Error: Non-HTTPS URLs are only allowed for localhost\r\n[35540] Usage: npx tsx proxy.ts <https://server-url>\r\n')
-await sleep(100)
+await writeParsed(term, '\r\n[5764] Error: Non-HTTPS URLs are only allowed for localhost\r\n[35540] Usage: npx tsx proxy.ts <https://server-url>\r\n')
 
 // 之后只有轻微 UI 活动（通知/指标 tick 级别的小 diff）——真实空闲场景。
+// 固定窗口是场景语义：断言污染在轻微活动后仍存留（稳定性探针），不可轮询。
 channel.responseChars += 7; bump()
 await sleep(300)
 channel.responseChars += 7; bump()
@@ -128,9 +131,13 @@ const { default: instances } = await import('../src/ink/instances.js')
 const ink: any = instances.get(stdoutObj as any)
 check('前置：取到 ink 实例', !!ink)
 ink?.reassertTerminalModes?.()
-await sleep(400)
-
-const healed = viewportLines()
+// 等待与断言共用同一快照 healed：settle 谓词即后续两条 check 的条件，无分叉。
+let healed: string[] = []
+await settled(() => {
+  healed = viewportLines()
+  return !healed.some(l => l.includes('[5764] Error') || l.includes('[35540] Usage'))
+    && Array.from({ length: 12 }, (_, i) => `概览要点第 ${i + 1} 条`).every(t => healed.some(l => l.includes(t)))
+})
 console.log('=== 自愈后对照（G=干净基准 H=重锚后） ===')
 let diffRows = 0
 for (let y = 0; y < ROWS; y++) {

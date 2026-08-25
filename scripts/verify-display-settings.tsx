@@ -11,6 +11,7 @@ const [
   { StatusLine, formatCacheHitRate },
   { AssistantToolUseMessage },
   { DEFAULT_STATUS_BAR, formatContextUsage, normalizeStatusBar, normalizeToolBackground },
+  { homeDir },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -20,6 +21,7 @@ const [
   import('../src/screens/StatusLine.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
   import('../src/tuiDisplayPrefs.js'),
+  import('../src/utils/paths.js'),
 ])
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -79,6 +81,7 @@ const baseChannel = {
   modeIndex: 0,
   mode: { id: 'default', plan: false },
   model: 'display-model-probe',
+  cwd: 'C:/work/display-project',
   tokens: { input: 12_345, output: 6_789 },
   tps: 37,
   tpsSamples: [],
@@ -211,6 +214,49 @@ check('compact StatusLine shows model, effort, cwd basename, context, and cache'
   for (const marker of ['display-model-probe', 'max', 'display-project', 'ctx 77% (206k/266k)', 'cache 2.4%']) {
     assert.ok(compact.includes(marker), `missing ${JSON.stringify(marker)} in:\n${compact}`)
   }
+})
+
+const home = homeDir()
+const homeRoot = await renderStatus({ displayCwd: home, cwd: home })
+check('compact StatusLine collapses the home directory to a tilde', () => {
+  assert.ok(homeRoot.includes('~'), `missing home marker in:\n${homeRoot}`)
+  assert.ok(!homeRoot.includes(home), `raw home path leaked in:\n${homeRoot}`)
+})
+
+const homeRootWithSeparator = await renderStatus({ displayCwd: `${home}/`, cwd: `${home}/` })
+check('compact StatusLine collapses the home directory with a trailing separator', () => {
+  assert.ok(homeRootWithSeparator.includes('~'), `missing home marker in:\n${homeRootWithSeparator}`)
+  assert.ok(!homeRootWithSeparator.includes(home), `raw home path leaked in:\n${homeRootWithSeparator}`)
+})
+
+const homeChild = await renderStatus({
+  displayCwd: `${home}/dev/display-project`,
+  cwd: `${home}/dev/display-project`,
+  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
+})
+check('full StatusLine collapses paths below home', () => {
+  assert.ok(homeChild.includes('~/dev/display-project'), `missing collapsed home child in:\n${homeChild}`)
+  assert.ok(!homeChild.includes(home), `raw home path leaked in:\n${homeChild}`)
+})
+
+const external = await renderStatus({
+  displayCwd: '/opt/display-project',
+  cwd: '/opt/display-project',
+  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
+})
+check('full StatusLine keeps local paths outside home unchanged', () => {
+  assert.ok(external.includes('/opt/display-project'), `missing external cwd in:\n${external}`)
+  assert.ok(!external.includes('~/display-project'), `external cwd was collapsed:\n${external}`)
+})
+
+const providerDisplay = await renderStatus({
+  displayCwd: `${home}/remote-project`,
+  cwd: '/tmp/provider-alias',
+  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
+})
+check('full StatusLine preserves provider-owned display paths', () => {
+  assert.ok(providerDisplay.includes(`${home}/remote-project`), `missing provider cwd in:\n${providerDisplay}`)
+  assert.ok(!providerDisplay.includes('~/remote-project'), `provider cwd was collapsed:\n${providerDisplay}`)
 })
 
 check('compact StatusLine hides disabled optional fields', () => {

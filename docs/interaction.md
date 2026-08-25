@@ -16,8 +16,8 @@
 | `Ctrl+V` / `Alt+V` | 从系统剪贴板插入文本或文件；图片作为持久附件发送。终端拦截 `Ctrl+V` 时用 `Alt+V` |
 | `Ctrl+G` | 用外部编辑器（`$VISUAL` → `$EDITOR`）编辑当前输入，保存退出后回填；`:cq` 或非零退出保留原稿；未设置变量时提示配置，无 `vi` 兜底 |
 | `Esc` | 层级：关帮助 → 关命令菜单 → 关文件菜单（仅当前 `@` token）→ 中断回合并重投 pending 消息 → 有输入时清空 → 空输入连续两次 = 时间回溯 rewind；fullscreen 下有鼠标选区时优先取消选区（不复制） |
-| `Ctrl+C` | 工作时中断；空闲且有输入时清空；空输入时连续两次退出 |
-| `Ctrl+D` | 空闲时连续两次退出 |
+| `Ctrl+C` | 工作时中断；中断迟迟不收敛时再按一次强制退出；空闲且有输入时清空；空输入时连续两次退出 |
+| `Ctrl+D` | 与 `Ctrl+C` 同阶梯：工作中=中断（未收敛时再按=强制退出）；空闲时连续两次退出 |
 | `Ctrl+O` | 切换 transcript/verbose 详情，展开思考与完整工具参数/输出 |
 | `Ctrl+P` | 切换启动时加载的 loaded-context 面板（面板在屏时有效） |
 | `Ctrl+T` | 打开轨迹场景（等同 `/trace`）；场景内 `q`/`Esc` 返回对话 |
@@ -256,7 +256,9 @@ scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识�
 | `Space` | 多选题勾选或取消 |
 | `Tab` | 切换到自定义文本回答 |
 | `Enter` | 提交当前题 |
-| `Esc` | 取消整批提问，模型收到 `ASK_CANCELLED`（harness 侧中止仍报 `ASK_ABORTED`） |
+| `Esc`（第 2 题起） | 返回上一题并保留当前草稿 |
+| `Esc`（第 1 题） | 取消整批提问，模型收到 `ASK_CANCELLED` |
+| `Ctrl+C` | 从任意题取消整批提问，模型收到 `ASK_CANCELLED`（harness 侧中止仍报 `ASK_ABORTED`） |
 
 **最后一行是自由输入行**：直接在选项行打字 = 附加该选项标签 + 自定义文本一起
 提交（不必先 `Tab`），`Tab` 直达输入行。
@@ -300,9 +302,9 @@ transcript。
 
 | 分组 | 命令 |
 | --- | --- |
-| 会话 | `/new`、`/resume`、`/rename`、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`）、`/rewind`（时间回溯，同空输入双击 `Esc`） |
+| 会话 | `/new`、`/resume`、`/rename`、`/recap`（最近活动摘要 + 建议标题一键应用；设置 `recapOnOpen` 开启时打开会话自动出分隔线 + `回顾：` 摘要行，发送新消息后消失，默认开）、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`）、`/rewind`（时间回溯，同空输入双击 `Esc`） |
 | 状态 | `/context`、`/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents`、`/settings` |
-| 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/lang` |
+| 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/color`（会话强调色：无参打开调色板选择器，`<名>` 直接设置，`status`/`reset`；输入框边框 + 右上角会话名标签，按会话保存；标签默认关闭，`/settings` 可开）、`/lang` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/skills`、`/plugins`（`check <路径>` 校验插件清单） |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr-comments`、`/release-notes`、`/vuln-check` |
 | 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit`（别名 `/quit`、`/q`） |

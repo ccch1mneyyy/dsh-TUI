@@ -20,7 +20,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle, settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -28,10 +28,10 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100, ROWS = 40
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -116,7 +116,19 @@ const inst = await render(
   </AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(700)
+let bootSnap = railSnapshot()
+let bootOwner: number | null = null
+await settled(() => {
+  bootSnap = railSnapshot()
+  if (bootSnap.ticks.length !== 8 || bootSnap.activeRow === null || bootSnap.upRow === null || bootSnap.downRow === null) return false
+  // 断言同条件（#561 修复，保持）：初始 sticky 滚动到底与 rail active 重算
+  // 之间存在竞争，只等「tick 出现」在快 runner 上会断到 active 尚未对齐的
+  // 帧（块 1 的顶部锚定断言随机红）。settle 必须包含块 1 断言的同一不变量
+  // ——active 与视口顶行的轮次归属一致；真回归时此条件永不成立，超时后
+  // 断言照常红。块 1 的断言直接在本次捕获的快照上求值，无重读分叉。
+  bootOwner = topOwningTurn()
+  return bootOwner !== null && bootSnap.ticks.indexOf(bootSnap.activeRow) === bootOwner - 1
+})
 
 function screenLines(): string[] {
   const buf = term.buffer.active
@@ -165,6 +177,9 @@ function topOwningTurn(): number | null {
   }
   return null
 }
+// 逐事件 pacing sleep 保留：滚轮事件需要逐个进入 hover/scroll 路径，无可
+// 轮询的逐步条件；clickAt/hoverAt 的固定窗口同时是场景 5/6b「无操作/无卡」
+// 稳定性探针的现身时间，必须保留。
 const wheel = async (up: boolean, times: number) => {
   for (let i = 0; i < times; i++) {
     stdin.write(`\x1b[<${up ? 64 : 65};90;30M`)
@@ -182,26 +197,33 @@ const hoverAt = async (col: number, row: number) => {
 }
 
 // ── 1. 底部：rail 出现，8 tick，恰一个 ━━，active 顶部锚定 ──
+// 断言在 boot settle 捕获的同一快照上求值（#561 语义保持）。
 {
-  const snap = railSnapshot()
+  const snap = bootSnap
   check('rail 出现（▲/▼/tick 齐）', snap.upRow !== null && snap.downRow !== null && snap.ticks.length > 0,
     `up=${snap.upRow} down=${snap.downRow} ticks=${snap.ticks.length}`)
   check('恰 8 个 tick', snap.ticks.length === 8, `ticks=${snap.ticks.length}`)
   check('恰一个 ━━（active）', snap.activeRow !== null && snap.ticks.filter(y => y === snap.activeRow).length === 1,
     `active=${snap.activeRow}`)
-  const owner = topOwningTurn()
   const activeIndex = snap.activeRow !== null ? snap.ticks.indexOf(snap.activeRow) : -1
-  check('active = 视口顶行所属轮次（顶部锚定，非最新轮）', owner !== null && activeIndex === owner - 1,
-    `active#${activeIndex + 1} vs 顶行属于问题 ${owner}`)
+  check('active = 视口顶行所属轮次（顶部锚定，非最新轮）', bootOwner !== null && activeIndex === bootOwner - 1,
+    `active#${activeIndex + 1} vs 顶行属于问题 ${bootOwner}`)
 }
 
 // ── 2. 上滚 4 格：active 随边界移动且与顶行轮次一致 ──
 await wheel(true, 4)
 {
-  const snap = railSnapshot()
+  // 等待与断言共用同一快照：谓词即两条 check 条件的合取（#561 同款不变量）。
+  let snap = railSnapshot()
+  let owner: number | null = null
+  await settle(() => {
+    snap = railSnapshot()
+    owner = topOwningTurn()
+    return snap.ticks.length === 8 && snap.activeRow !== null
+      && owner !== null && snap.ticks.indexOf(snap.activeRow) === owner - 1
+  })
   check('上滚后仍恰 8 tick / 恰一个 ━━', snap.ticks.length === 8 && snap.activeRow !== null,
     `ticks=${snap.ticks.length} active=${snap.activeRow}`)
-  const owner = topOwningTurn()
   const activeIndex = snap.activeRow !== null ? snap.ticks.indexOf(snap.activeRow) : -1
   check('上滚后 active 与顶行轮次一致', owner !== null && activeIndex === owner - 1,
     `active#${activeIndex + 1} vs 顶行属于问题 ${owner}`)
@@ -214,12 +236,10 @@ await wheel(true, 4)
   check('第 3 个 tick 存在', tickRow !== undefined, `ticks=${JSON.stringify(snap.ticks)}`)
   if (tickRow !== undefined) {
     await clickAt(COLS, tickRow + 1)
-    const lines = screenLines()
-    check('点击后 问题 3 跳到转译区顶', lines.slice(0, 3).some(l => l.includes('问题 3')),
-      `top3=${JSON.stringify(lines.slice(0, 3).map(l => l.trimEnd()))}`)
-    const snap2 = railSnapshot()
-    check('点击后 ━━ 移到该 tick', snap2.activeRow === tickRow,
-      `active=${snap2.activeRow} expected=${tickRow}`)
+    check('点击后 问题 3 跳到转译区顶', await settled(() => screenLines().slice(0, 3).some(l => l.includes('问题 3'))),
+      `top3=${JSON.stringify(screenLines().slice(0, 3).map(l => l.trimEnd()))}`)
+    check('点击后 ━━ 移到该 tick', await settled(() => railSnapshot().activeRow === tickRow),
+      `active=${railSnapshot().activeRow} expected=${tickRow}`)
   }
 }
 
@@ -228,15 +248,13 @@ await wheel(true, 4)
   const snap = railSnapshot()
   if (snap.downRow !== null) {
     await clickAt(COLS, snap.downRow + 1)
-    const lines = screenLines()
-    check('▼ 后 问题 4 到顶', lines.slice(0, 3).some(l => l.includes('问题 4')),
-      `top3=${JSON.stringify(lines.slice(0, 3).map(l => l.trimEnd()))}`)
+    check('▼ 后 问题 4 到顶', await settled(() => screenLines().slice(0, 3).some(l => l.includes('问题 4'))),
+      `top3=${JSON.stringify(screenLines().slice(0, 3).map(l => l.trimEnd()))}`)
     const snap2 = railSnapshot()
     if (snap2.upRow !== null) {
       await clickAt(COLS, snap2.upRow + 1)
-      const lines2 = screenLines()
-      check('▲ 后 问题 3 回到顶', lines2.slice(0, 3).some(l => l.includes('问题 3')),
-        `top3=${JSON.stringify(lines2.slice(0, 3).map(l => l.trimEnd()))}`)
+      check('▲ 后 问题 3 回到顶', await settled(() => screenLines().slice(0, 3).some(l => l.includes('问题 3'))),
+        `top3=${JSON.stringify(screenLines().slice(0, 3).map(l => l.trimEnd()))}`)
     } else {
       check('▲ 行存在', false, 'upRow missing')
     }
@@ -253,6 +271,8 @@ await wheel(true, 40)
     `active=${snap.activeRow} first=${snap.ticks[0]}`)
   const before = screenLines()[0]
   if (snap.upRow !== null) {
+    // 稳定性探针：断言点击后「无操作」——clickAt 内置的固定窗口就是给
+    // 错误滚动留的现身时间，settle 对已成立条件会立即返回，等于没测。
     await clickAt(COLS, snap.upRow + 1)
     const after = screenLines()[0]
     check('顶部 ▲ 无操作（dim = no-op）', before === after, `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`)
@@ -268,20 +288,13 @@ await wheel(false, 20)
   check('第 2 个 tick 存在（悬停目标）', tickRow !== undefined, `ticks=${JSON.stringify(snap.ticks)}`)
   if (tickRow !== undefined) {
     await hoverAt(COLS, tickRow + 1)
-    const lines = screenLines()
-    const cardText = lines.some(l => {
-      const right = l.slice(55, 96)
-      return right.includes('问题 2')
-    })
-    const cardBorder = lines.some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮')
-      || l.slice(55, 97).includes('╰') || l.slice(55, 97).includes('╯'))
-    check('悬停弹出预览卡（含 问题 2）', cardText,
-      `right-half=${JSON.stringify(lines.filter(l => l.includes('问题 2')).slice(0, 2))}`)
-    check('预览卡圆角边框', cardBorder)
+    check('悬停弹出预览卡（含 问题 2）', await settled(() => screenLines().some(l => l.slice(55, 96).includes('问题 2'))),
+      `right-half=${JSON.stringify(screenLines().filter(l => l.includes('问题 2')).slice(0, 2))}`)
+    check('预览卡圆角边框', await settled(() => screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮')
+      || l.slice(55, 97).includes('╰') || l.slice(55, 97).includes('╯'))))
     // 移开：回到转译区中部（无 handler 的文本上）
     await hoverAt(30, 20)
-    const lines2 = screenLines()
-    check('移开后预览卡消失', !lines2.some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮')),
+    check('移开后预览卡消失', await settled(() => !screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))),
       'border still present')
   }
 }
@@ -296,6 +309,8 @@ await wheel(false, 20)
     await sleep(8)
     if (screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))) anyCard = true
   }
+  // 稳定性探针保留固定窗口：断言「卡不得出现」——settle 对已成立的
+  // 否定条件会立即返回，等于没给错误弹卡留出现身时间。
   await sleep(60)
   if (screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))) anyCard = true
   check('快速划过 tick 全程无预览卡（dwell 门）', !anyCard)
@@ -303,8 +318,7 @@ await wheel(false, 20)
   const row = snap.ticks[2]
   if (row !== undefined) {
     stdin.write(`\x1b[<35;${COLS};${row + 1}M`)
-    await sleep(350)
-    check('停留 350ms 后预览卡出现', screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮')))
+    check('停留 350ms 后预览卡出现', await settled(() => screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))))
     await hoverAt(30, 20)
   }
 }
@@ -314,6 +328,8 @@ await wheel(false, 20)
   ;(stdout as any).columns = 59
   stdout.emit('resize')
   term.resize(59, ROWS)
+  // 固定窗口保留：断言是「rail 不存在」的否定条件，resize 回流的瞬态
+  // 屏幕可能提早满足它——settle 会在重绘完成前就返回。
   await sleep(500)
   const hidden = !screenLines().some((_, y) => {
     const two = cellAt(y, 57) + cellAt(y, 58)
@@ -323,8 +339,12 @@ await wheel(false, 20)
   ;(stdout as any).columns = COLS
   stdout.emit('resize')
   term.resize(COLS, ROWS)
-  await sleep(500)
-  const snap = railSnapshot()
+  // 等待与断言共用同一快照。
+  let snap = railSnapshot()
+  await settle(() => {
+    snap = railSnapshot()
+    return snap.ticks.length === 8 && snap.upRow !== null
+  })
   check('恢复 100 列 rail 回来', snap.ticks.length === 8 && snap.upRow !== null,
     `ticks=${snap.ticks.length} up=${snap.upRow}`)
 }
@@ -360,8 +380,12 @@ await inst.unmount()
     </AlternateScreen>,
     { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(900)
-  const snap = railSnapshot()
+  // 等待与断言共用同一快照。
+  let snap = railSnapshot()
+  await settle(() => {
+    snap = railSnapshot()
+    return snap.ticks.length === 12 && snap.activeRow !== null
+  })
   check('工具重会话：rail 覆盖全部 12 轮', snap.ticks.length === 12,
     `ticks=${snap.ticks.length}（折叠窗口内仅 ~5 轮）`)
   check('工具重会话：恰一个 ━━', snap.activeRow !== null, `active=${snap.activeRow}`)
@@ -369,11 +393,18 @@ await inst.unmount()
   const firstTick = snap.ticks[0]
   if (firstTick !== undefined) {
     await clickAt(COLS, firstTick + 1)
-    await sleep(600)
-    const lines = screenLines()
+    // 揭示跳转先画转录区、━━ 后移：两条断言的条件都到位才算落定；断言在
+    // settle 捕获的同一快照上求值。
+    let lines = screenLines()
+    let snap2 = railSnapshot()
+    await settle(() => {
+      lines = screenLines()
+      snap2 = railSnapshot()
+      return lines.slice(0, 6).some(l => l.includes('问题 1'))
+        && snap2.activeRow !== null && snap2.ticks.indexOf(snap2.activeRow) === 0
+    })
     check('点击折叠 tick：问题 1 揭示并到顶', lines.slice(0, 6).some(l => l.includes('问题 1')),
       `top6=${JSON.stringify(lines.slice(0, 4).map(l => l.trimEnd().slice(0, 30)))}`)
-    const snap2 = railSnapshot()
     // 揭示后 sticky header 占 1 行 → 视口缩 1 → 整个 tick 块平移；按
     // 轮次索引断言（━�� 在第 0 个 tick 上），不按屏幕行号。
     check('揭示后 ━━ 移到首 tick（问题 1）', snap2.activeRow !== null && snap2.ticks.indexOf(snap2.activeRow) === 0,

@@ -18,8 +18,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import { render } from '../src/ui.js'
 import { MessageList } from '../src/components/MessageList.js'
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+import { sleep } from './lib/term-test.mjs'
 
 class Output extends Writable {
   columns = 100
@@ -74,6 +73,9 @@ const instance = await render(<MessageList rows={rows} {...props} />, {
 })
 
 // Let measurements settle (heights land, base corrects, count stabilizes).
+// Fixed window on purpose: the baseline below is "reports have STOPPED
+// arriving" — polling for the first positive report would capture settledLen
+// too early and misread later settling reports as no-op re-reports.
 await sleep(500)
 const settledLen = reports.length
 const settledValue = reports[settledLen - 1]
@@ -86,6 +88,8 @@ if (settledLen === 0 || settledValue === undefined || settledValue <= 0) {
 // count changes, so a correct report stays silent.
 for (let i = 0; i < 6; i++) {
   instance.rerender(<MessageList rows={rows} {...props} />)
+  // Stability probe (must NOT change): a wrong re-report needs a fixed window
+  // to show up — settle on the already-true "no new report" would be a no-op.
   await sleep(60)
 }
 const afterNoop = reports.length
@@ -101,6 +105,8 @@ if (afterNoop !== settledLen) {
 // A real change MUST still report exactly once: append a new row below the fold.
 rows.push({ id: 31, kind: 'assistant', text: 'fresh row\nwith two lines', streaming: false })
 instance.rerender(<MessageList rows={rows} {...props} />)
+// Fixed window on purpose: the assertion is "EXACTLY one new report" —
+// settling on the first report would return before a duplicate could land.
 await sleep(300)
 const finalLen = reports.length
 if (finalLen !== settledLen + 1 || reports[finalLen - 1] === settledValue) {

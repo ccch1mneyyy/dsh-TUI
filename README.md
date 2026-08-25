@@ -13,12 +13,6 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
   <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
   <img alt="官方收录" src="https://img.shields.io/badge/DeepSeek%20Harness%20官方公众号-收录-brightgreen">
-  <a href="https://github.com/ccch1mneyyy/dsh-TUI/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/ccch1mneyyy/dsh-TUI?style=flat-square&color=4b6fff"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
-</p>
-
-<p align="center">
-  <a href="https://trendshift.io/repositories/146168" title="GitHub Trending 日榜 #7 · TypeScript 口径"><img alt="Trendshift" src="https://trendshift.io/api/badge/trendshift/repositories/146168/daily?language=TypeScript"></a>
 </p>
 
 # dsh-TUI
@@ -33,59 +27,78 @@
 
 ## 🎉 官方收录
 
-本插件被 **DeepSeek Harness 官方公众号** 推文收录，作为"内测用户精选插件"展示：
+本插件被 **DeepSeek Harness 官方公众号** 推文收录，也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录与 [GitHub Trending](https://trendshift.io/repositories/146168) 收录，同时登上了Github Treding日榜第七
 
-<p align="center">
-  <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-TUI" width="560">
-</p>
-
-同时也被 [dshfind](https://dshfind.com/zh/plugins/ccch1mneyyy/dsh-TUI) 插件目录收录：
-
-<p align="center">
-  <a href="https://dshfind.com/zh/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=zh" alt="dsh-TUI on dshfind"></a>
-</p>
+<div align="center">
+  <table>
+    <tr>
+      <td align="center" valign="middle" width="50%">
+        <img src="screenshots/wechat-official.png" alt="DeepSeek Harness 官方公众号推文收录 dsh-TUI" width="480">
+        <br>
+        <strong>DeepSeek Harness 官方公众号推文收录</strong>
+      </td>
+      <td align="center" valign="middle" width="50%">
+        <a href="https://dshfind.com/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=zh" alt="dsh-TUI on dshfind" width="420"></a>
+        <br>
+        <strong>dshfind 插件目录收录</strong>
+        <br><br>
+        <a href="https://trendshift.io/repositories/146168" title="GitHub Trending 日榜 #7 · TypeScript 口径"><img alt="Trendshift" src="https://trendshift.io/api/badge/trendshift/repositories/146168/daily?language=TypeScript"></a>
+         <br>
+        <strong>dshfind Github Treding榜第七 </strong>
+      </td>
+    </tr>
+  </table>
+</div>
 
 ## 核心能力
 
-  - **终端原生交互**：流式 Markdown、结构化工具卡、命令与文件补全、`@` 文件引用
-    （消息任意位置补全，文本附加内容，PNG/JPEG/WebP/GIF 作为持久图片块发送）、历史搜索、消息选择、
-    inline/alternate-screen 两种渲染模式，以及 `/lang` 中英界面语言切换。
-  - **时间线导航**：Grok 式轮次 rail 覆盖**全部轮次（含折叠轮）**——折叠窗口只露
-    最近几轮时 rail 仍全景可达，点击刻度揭示对应轮并滚动到位；未钉底时
-    `Enter`/`End` 一键回底（远距一步到位不闪空白），新消息 pill 常驻可点击；
-    右侧 gutter 支持 timeline / scrollbar / hidden 三态设置。
-  - **可观察的 Agent 状态**：实时工作状态、上下文分段进度、TPS、缓存命中率、
+  - **终端交互**：低资源占用，长会话稳定可靠；多种主题切换，样式美观，实时显示工作状态、TPS、缓存命中率等
     推理等级、输入/输出 token 与 Git/会话信息。
-  - **完整会话工作流**：`/resume`、`/new`、`/compact`、`/export`、`/btw` 侧问、
-    模型切换，以及双击 `Esc` 发起的会话 rewind/fork。
-  - **DSH 官方能力接入**：Agent preset、Skills、MCP、Goals、Todos、子代理、
-    `ask_user_question` 问卷都通过现有服务或注册表连接。
-  - **为长会话设计**：事件驱动投影、差分终端输出、消息虚拟化、回放合并与有界缓存，
-    避免渲染成本和内存随会话无限增长；热路径**指纹缓存做到每帧零分配**
-    （3200 行会话每 16ms tick 省下 ~200KB GC 压力），wrapText 与 markdown
-    token 走全局 LRU 跨挂载复用，主屏打开分帧补画、渲染折叠窗口 300→120 行，
-    长会话恢复直达内容（跳过开场动画、落点锚定最新消息末行）。
+  - **功能全面**：`/resume`、`/new`、`/compact`、`/export`、`/btw`，模型热切换，原生subagent，会话fork，自动更新；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
+  - **扩展丰富**：原生浏览器交互，compter use等大量附属功能性扩展
+
+
 
 ## 界面预览
 
-![首屏：像素鲸鱼顶栏](screenshots/splash.png)
+<div align="center">
+  <table>
+    <tr>
+      <td align="center" valign="middle" width="50%">
+        <img src="screenshots/splash.png" alt="首屏：像素鲸鱼顶栏" width="480">
+        <br>
+        <strong>首屏：像素鲸鱼顶栏</strong>
+      </td>
+      <td align="center" valign="middle" width="50%">
+        <img src="screenshots/working-line.png" alt="工作状态行 + 上下文进度条" width="480">
+        <br>
+        <strong>工作状态行 + 上下文进度条</strong>
+      </td>
+    </tr>
+  </table>
+</div>
 
-![工作状态行 + 上下文进度条](screenshots/working-line.png)
 
 ## 快速开始
 
-前置条件：可用的终端 TTY、官方 `dsh` CLI，以及 `pnpm` 10+。运行模型还需要
-`DEEPSEEK_API_KEY`。
+前置条件：安装[Nodejs](https://nodejs.org/zh-cn)与[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)，注册`DEEPSEEK_API_KEY`。
+
+安装命令：
 
 ```sh
-# 1. 全局安装 CLI + 本插件（本插件自带 dsh-tui 直达命令）
 npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
-
-# 2. 启动（首次运行会自动初始化 dsh-tui profile，需 pnpm）
-dsh-tui
 ```
 
-备选——手工安装 profile（仓库根目录 `install.sh` 已封装，含 pnpm 预检）：
+启动命令：
+
+```bash
+# 完整命令
+dsh-tui
+# 如果你不想按键盘七次
+dst
+```
+
+如果你想手动安装，可以使用仓库根目录的 `install.sh`：
 
 ```sh
 sh install.sh
@@ -93,128 +106,32 @@ sh install.sh
 # 之后 dsh-tui 与 dsh --profile dsh-tui 等价
 ```
 
-`dsh-tui --resume` 恢复上次会话；Windows 也可用仓库里的 `dsh-tui.cmd`（等价）。
+> **新用户提示**：若 `dsh plugin` 安装时报 `ERR_PNPM_IGNORED_BUILDS`（pnpm ≥11 默认阻止带安装脚本的依赖，如 `@google/genai`、`protobufjs`——这些脚本运行时不需要，忽略即可），在 profile 的 `pnpm-workspace.yaml` 里加入：
+>
+> ```yaml
+> allowBuilds:
+>   '@google/genai': false
+>   protobufjs: false
+> ```
+>
+> `/update` 与 `dsh-tui update` 会自动写入这份配置，无需手工处理。
 
-### Herdr
+更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
-在 [Herdr](https://herdr.dev) pane 中直接运行 `dsh-tui` 即可，无需额外配置。
-dsh-TUI 会通过 Herdr 提供的本地接口上报 `idle`、`working`、`blocked` 状态；
-问卷或工具审批出现时标记为 `blocked`。离开 Herdr 运行时该集成完全不启用。
-Herdr 的 `agent start --kind dsh-tui`、session 身份与服务重启后自动恢复仍需 Herdr
-上游加入原生 agent kind；当前可正常保活、重连和观察手工启动的 pane。
 
-在 VS Code 中运行的完整指南（内置终端直接使用 + companion 扩展
-`dsh-tui-vscode`——**真实集成终端承载、体验与 Claude Code 官方扩展几乎一致、
-已上架 VS Code Marketplace**）见
-[在 VS Code 中运行 dsh-TUI](docs/vscode.md)。
 
-TUI 启动后会在后台检查当前 registry 是否有新版本；发现更新时直接输入 `/update`
-即可一键升级。`/update` 会更新当前 `dsh-tui` profile 中实际运行的 runtime、校验
-安装结果，然后自动重启并恢复当前会话。
-
-通过全局 `dsh-tui` 命令启动时，新版会自动将全局入口迁移/对齐为 delegating
-launcher（委托式启动器）：全局命令只负责转交给 profile 内副本，后续启动逻辑始终
-跟随 profile 版本。
-
-正常情况下不再需要额外执行：
-
-```sh
-npm install -g @deepseek-harness-tui/dsh-tui
-```
-
-旧版 `dsh-cc-tui` / `cc-tui` profile 的迁移命令与兼容数据说明见
-[安装与快速开始](docs/getting-started.md#从旧包迁移)。
-
-安装流程、profile 叠加机制、源码构建与常见问题见
-[安装与快速开始](docs/getting-started.md)。
-
-## 快捷键
-
-| 键 | 功能 |
-|---|---|
-| `Enter` | 空闲=发送（`Shift+Enter` 换行，无法上报修饰键时可用 `Ctrl+J`，mac Terminal.app 可用 `Option+Enter` 兜底，issue #110）；**模型工作时=steer**（注入下一步边界，不中断）；命令菜单打开时执行选中项 |
-| `Ctrl+Enter`（⌘Enter） | **打断当前回合并立即发送**（interrupt） |
-| `Alt+Up` | 把最后一条未处理消息取回输入框编辑（不中断回合） |
-| `Tab` | 补全 `/` 命令或 `@` 文件（目录可继续深入）；**模型工作时=follow-up**（排入当前回合之后） |
-| `Ctrl+C` | 中断当前回合；空闲时连按两次退出 |
-| `Esc` | 关闭命令/文件菜单；空闲双击清空输入；**空输入双击 = 时间回溯** |
-| `Ctrl+O` | 展开/收起详情（思考全文、工具参数与输出） |
-| `Ctrl+R` | 历史消息搜索 |
-| `/` | 会话内全文搜索（`n`/`N` 跳转） |
-| `Ctrl+V` / `Alt+V` | 粘贴文本或文件管理器中的文件；图片显示为 `[Image #N]` 并作为持久附件发送。终端拦截 `Ctrl+V` 时用 `Alt+V` |
-| `Ctrl+G` | 用 `$VISUAL`/`$EDITOR`（如 nvim）打开当前输入编辑，保存退出后回填 |
-| `?` | 快捷键菜单（仅输入框为空时响应） |
-| `Shift+↑` | 消息选择模式（Enter 展开单条） |
-| `Ctrl+P` | 切换启动时 loaded-context 面板（面板在屏时有效） |
-| `Home` / `End`、`Ctrl+A` / `Ctrl+E` | 逻辑行首 / 行尾；`Ctrl+E` 双义：输入框=行尾，转录中=展开/折叠隐藏的旧消息 |
-| `Ctrl+←` / `Ctrl+→`（⌘←/→） | 按词跳转 |
-| `Ctrl+U` / `Ctrl+K` | 删除光标前（至行首）/ 光标后（至行尾） |
-| `Ctrl+W` | 删除前一个单词 |
-
-**模型工作中的三态投递**：`Enter`=steer（注入下一步边界，不中断）· `Tab`=follow-up（排入当前回合之后）· `Ctrl+Enter`=interrupt（打断并立即发送）。
-
-**自定义快捷键**：上表带 `Ctrl+<键>` 的动作型快捷键（粘贴、历史搜索、外部编辑器、转录展开、轨迹、子代理面板、上下文面板、显示全部、重绘、待办折叠）都可在 `/settings` → `dsh-tui` → `Shortcuts` 分组中改键：填写 `alt+v`、`ctrl+shift+v` 这类组合，多个组合用逗号分隔，留空恢复默认；保存即生效，无需重启。与固定编辑键（`Ctrl+A/E/U/K/W`、`Ctrl+←/→`）或其它动作冲突的组合会被拒绝。cordis.yml 也可通过 `shortcuts.<action>` 静态指定（settings 用户层优先）。
-
-**macOS 修饰键**：上表中 Windows/Linux 的 `Ctrl+<键>` 在 macOS 上同时可用 `⌘<键>`
-（如 `⌘V` 粘贴、`⌘O` 展开详情、`⌘Enter` 立即发送）；仅 `Ctrl+C` / `Ctrl+D`
-（中断/退出）保持 Ctrl 不变，避免与 macOS 系统级 `⌘C` 复制等肌肉记忆冲突。
-`⌘` 需终端支持扩展键盘协议（iTerm2 / kitty / WezTerm / ghostty / tmux）；
-macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctrl`。
-
-**鼠标（全屏模式默认开启；`fullscreen: false` 可退回 inline 主屏模式；从旧版更新会一次性清除更新前保存的 inline 选择，之后仍可再改回）**
-
-| 操作 | 功能 |
-|---|---|
-| 拖拽选择 | 应用内文本选区，**松开即复制**（OSC 52 + `wl-copy`/`xclip`/`xsel` 原生兜底；tmux 内走 `load-buffer -w`），复制后自动取消选区并弹出「已复制 N 个字符」提示 |
-| 双击 / 三击 | 选词 / 选行，同样即选即复制 |
-| 滚轮 | 仅在 fullscreen 且鼠标跟踪启用时：Help 打开时滚动帮助，否则滚动消息列表（±3 行/格）；inline 模式不会把滚轮事件交给 TUI |
-| 单击时间线 rail 刻度 | 跳到对应轮次——rail 覆盖全部轮次（含折叠轮），点折叠刻度会先揭示该轮再滚动到位 |
-| `Esc` | 拖拽进行中取消选区（不复制） |
-| 单击消息行 | 展开/收起该行 |
-| 单击「加载更早消息」/「ctrl+e 显示前 N 条」 | 加载更早消息 / 展开全部 |
-| 单击 StickyHeader / 「↓ N new messages」 | 跳回固定消息处 / 滚动到底部 |
-| 单击超链接 | 打开浏览器 |
-| 键盘扩展选区 | 有选区时 `Shift+←/→/↑/↓/Home/End` 扩展/收缩（跨行环绕） |
-
-**问卷（模型发起 `ask_user_question` 时）**
-
-| 键 | 功能 |
-|---|---|
-| `↑/↓` | 选择选项 |
-| `Space` | 多选题勾选/取消 |
-| `Tab` | 切到自定义回答（不选选项直接打字） |
-| `Enter` | 提交当前选择 |
-| `Esc` / `Ctrl+C` | 取消整批提问（模型收到 ASK_CANCELLED，可继续对话） |
-
-**本地命令（CC 指令全集复刻，均走 DSH 官方链路）**
-
-| 分组 | 命令 |
-|---|---|
-| 会话 | `/new` 新会话 · `/resume` 会话浏览器（搜索、预览、跨项目、折叠子 agent 运行） · `/rename` 重命名会话 · `/workspace resume|rename|open` 管理工作区 · `/clear` 清屏 · `/compact` 压缩 · `/export` 导出 Markdown · `/trace` 轨迹场景（亦可 `Ctrl+T`） · `/rewind` 回退选择器（同空输入双击 Esc 的时间回溯） · `/btw <问题>` 侧问（不打断主回合、不写历史） |
-| 状态 | `/context` 已加载上下文明细 · `/status` 会话信息 · `/cost` token 用量 · `/doctor` 环境自检 · `/config` 配置来源 · `/init` 创建 AGENTS.md · `/settings` 设置面板（命名空间读取/编辑） |
-| 模型 | `/model` 选择器（**切换 = fork 会话续聊，历史保留**） · `/effort` 推理强度（滑杆 / `status` / `<id>`） · `/preset` Agent 预设（**已开始会话不可切换**，blank-only） · `/thinking` 思考显示 · `/tokens` token 明细 · `/activity` 工作状态行动画（`frames <名>` / `status`） · `/theme` 主题选择器 · `/lang` 中英界面切换（`/settings` 中亦可选择） |
-| 账号/策略 | `/provider` 添加模型提供方 · `/login` 凭证状态 · `/logout` 登出说明 · `/permissions` 权限说明 · `/add-dir` 文件策略范围 · `/hooks` · `/mcp` |
-| 技能 | `/audit` 代码审计 · `/bug` bug 报告 · `/review` 代码评审 · `/practice` 编程练习 · `/pr-comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查 |
-| 其它 | `/agents` 子代理列表 · `/skills` 技能目录 · `/plugins check <路径>` 插件诊断 · `/update` 自动更新并重启 · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit`（别名 `/quit` `/q`） |
-| 注册表 | `/plan` `/goal` `/feedback` `/permission`（DSH 命令注册表插件，随插件自动并入 `/` 菜单） |
-
-> 未知命令会作为普通消息发给模型（如 `/permission` 未挂载的组合里）。
-
-## 插件生态
+## 插件扩展与开发指南
 
 想为 dsh-TUI 做插件/扩展？欢迎加入生态！
 
-- **接口与兼容性协定**：[终端交互生态插件准入规范与实施标准](https://github.com/T-Auto/dsh-ecosystem-spec)
-- **插件开发指南**：[`docs/plugins.md`](docs/plugins.md)（接缝、契约、规范与验证清单）
+- **接口与兼容性协定 / 插件开发指南**：[终端交互生态插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)（准入规范、接缝、契约、验证清单）
 - **生态组织**：[dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)（社区插件与模板的家）
 - **模板仓库**：[plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)（从模板起步，5 分钟出一个插件）
 - **参考实现**：`dsh-working-activity`（实时工作状态行：TUI 槽位 + `activity/status` 会话事件双出口）
 
-核心仓库不迁移、社区插件独立成仓。组织只维护收录列表与准入规范，不对社区插件
-的功能、质量或安全作背书或担保；插件作者对自己的仓库保持完全所有权，并自行承担
-维护与安全责任。
 
-## 文档
+
+## 文档索引
 
 | 主题 | 内容 |
 | --- | --- |
@@ -225,112 +142,9 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 | [架构与限制](docs/architecture.md) | 运行链路、渲染与持久化设计、安全边界、已知限制 |
 | [VS Code 使用指南](docs/vscode.md) | 在 VS Code 集成终端运行 dsh-tui；companion 扩展 `dsh-tui-vscode` 提供与 Claude Code 官方扩展几乎一致的体验（已上架 Marketplace） |
 | [贡献与开发约定](docs/contributing.md) | 贡献流程、仓库地图、构建产物、验证矩阵与修改规则 |
-| [插件开发指南](docs/plugins.md) | 插件接缝（会话事件 / 槽位 / 技能 / 主题 / prompt 段）、契约、规范与收录 |
+| [插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | 接口与兼容性协定 / 插件准入规范 / 插件接缝 / 契约 / 验证清单（已并入 dsh-ecosystem-spec） |
 
 完整的中英文索引见 [`docs/README.md`](docs/README.md)。
-
-## 配置与扩展
-
-- **Agent preset**：四种官方 Agent 模式（`standard` / `code` / `minimal` / `cordis`）和
-  TUI 随包提供的“梁神模式”（`liangshen`），
-  `/preset` 切换；已产生对话的会话不可切换，空白会话立即生效。默认 preset 持久化
-  在 `~/.dsh-tui/agent-preset.json`；`/model` 的选择持久化在 `~/.dsh-tui/model.json`。
-  详见[配置参考](docs/configuration.md#agent-preset)。
-- **自定义主题**：`/theme` 选择器（`auto` 跟随系统/终端背景，内置 `light` / `dark` /
-  `dark-ansi`），也支持 `~/.dsh-tui/themes/<名字>.json` 自定义主题，选中即热切换
-  并持久化；`DSH_TUI_THEME` 环境变量 > 持久化选择 > OSC 11 终端背景自动检测。
-  详见[主题系统](docs/themes.md)。
-- **MCP**：通过 `@deepseek-ai/dsh-mcp-client` 挂载服务器，工具以
-  `mcp__<服务器>__<工具>` 注册；`/mcp` 查看连接状态。
-  详见[配置参考](docs/configuration.md#mcp)。
-
-## 工作方式
-
-```text
-dsh profile
-  -> dsh-base
-  -> dsh-TUI Cordis patch
-  -> Agent preset + DSH services
-  -> session/event
-  -> Channel projection
-  -> React components
-  -> ported Ink/Yoga renderer
-  -> terminal
-```
-
-TUI 只负责交互与呈现。会话日志是对话真源，模型调用、工具执行、fork/resume、
-compaction 和持久化继续由 DSH 服务拥有。更详细的模块边界与性能设计见
-[架构文档](docs/architecture.md)。
-
-```text
-聊天 / 工具基础事件 ──> 持久 Session 日志 ──> TUI / Web
-        └──────────────> ActivityTracker（内存）──> 仅 TUI 状态栏
-```
-
-## 技术要点
-
-- **Gentle Mist Blue 配色**：雾蓝只承担品牌、焦点、交互与高亮，正文保持中性灰；
-  启动时查询终端背景色（OSC 11）自动选浅色/深色调色板，终端不响应时回退深色。
-- **事件驱动渲染**：`session/event` 事件流 → 增量差分渲染，滚动状态独立维护。
-- **布局级虚拟化**：长会话的每帧成本从 O(全会话) 降到 O(可视窗口)——屏幕外的
-  消息行渲染为"量高占位符"，其子树完全不参与布局。
-- **零分配热路径**：visibleRows 管线（切片/过滤/边距）按 rows 身份、长度与
-  Uint8Array 流位指纹缓存——滚动 tick 上零数组/Map 分配，turn 落定的原地
-  写入也即时触发重建（空行过滤不滞后）；wrapText 与 markdown token 走全局
-  LRU，跨挂载复用测量结果。
-- **分帧补画与落点锚定**：主屏打开先挂尾部窗口再分帧补画历史；`/resume` 后
-  以最新消息末行可见且可达为终态断言，长会话恢复跳过开场动画直达内容。
-- **上下文进度条**：参考 pi-nano-context 算法（最大余数法分段着色 + 多级缩略读数）。
-- **TPS 仪表**：参考 pi-tps-meter——流式 1/8 格 gauge、历史 min-max sparkline、
-  速度语义色（≥50 绿 / ≥20 黄 / <20 红）。
-- **working-activity 生态**：工作状态行复用
-  [dsh-working-activity](https://github.com/ccch1mneyyy/working-activity)
-  的纯状态机，在进程内从基础会话事件派生，不向共享日志写入 UI 状态。
-- **终端粘贴**：raw 模式下 Ctrl+V 由应用接管，按平台读取系统剪贴板——Windows
-  走 PowerShell `Get-Clipboard`，macOS 走 `osascript`/`pbpaste`，Linux 自动探测
-  `wl-paste`/`xclip`/`xsel`；普通文件插入路径，图片文件生成 `@` 引用，剪贴板位图
-  写入附件库并在输入框显示 `[Image #N]`，纯文本原样插入光标处。
-
-## 已知限制
-
-- 注入上下文（plugin source 内容）未做独立展示，随系统提示词并入进度条统计。
-- `/model` 实时切换走"会话 fork 续聊"（DSH 无原位换模型 API）：历史原样保留，
-  新会话路由到新模型，旧会话仍留在 `/resume` 列表里；选择写入
-  `~/.dsh-tui/model.json`，重启与 `/new` 均沿用。
-- `Ctrl+V` 读剪贴板按平台依赖外部工具：Windows 用 PowerShell `Get-Clipboard`
-  （剪贴板被其他进程短暂锁定时自动重试，持续锁定时静默放弃）；macOS 用
-  `osascript`/`pbpaste`（Finder 多文件复制没有稳定的 AppleScript 读法，按
-  文本/图片回退）；Linux 需要 `wl-paste`/`xclip`/`xsel` 之一且会话可连接
-  （工具缺失或会话不可连接时提示无可用剪贴板工具）。不受支持的图片格式或附件
-  服务不可用时会保留临时文件引用作为降级路径。
-- 退出时以进程退出收尾，不等待 agent 异步落盘（持久化由 persistence 插件兜底）。
-- 工具级审批已实现：approval 服务 + TUI answerer（CC 式审批面板）消费审批流，
-  权限提升命令会弹出审批条。`/permission` 预设切换由 dsh-base 的
-  `permission-presets` 插件提供，profile 组合默认可用；裸组合 `cordis.yml`
-  未挂载该插件（无 `/permission` 命令）。
-- `/vim` `/connect` `/hooks` 为 CC 同名占位：对应能力在 DSH 侧无等价
-  机制，命令会给出明确说明而非静默。
-- `/thinking` 思考显示开关**不持久化**，重启或新会话回到默认。
-- minimal preset 下 `/compact` 不可用（minimal 不组合 compaction）。
-- `/update` 仅 `dsh --profile` 启动方式可用，回合运行中会拒绝。
-
-完整已知限制与安全边界见[架构与限制](docs/architecture.md)。
-
-## 开发
-
-CI 使用 Node 24 与 pnpm 11；包声明支持 Node `^22.19 || >=24`。
-
-```sh
-pnpm install --frozen-lockfile
-pnpm build
-pnpm smoke
-```
-
-`lib/types/` 是忽略入库的生成目录；`pnpm build` 会从干净输出目录重新编译并运行
-构建门禁。**Git URL 安装不受支持**（源 manifest 的 `@dsh-std/*` 为 workspace 依赖、
-`vendor/dsh-std` 为子模块、且 pnpm ≥11 默认拒绝 git 依赖的 `prepare` 脚本）；请安装
-registry 包：`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。渲染、问卷和工具卡
-改动还需运行对应回归脚本。
 
 
 
@@ -347,10 +161,7 @@ registry 包：`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`�
 
 ## 权限与安全边界
 
-`dsh-TUI` 不实现独立沙箱，而是使用当前 DSH profile 的文件、Shell、sandbox 与
-approval 策略。仓库提供的 profile 在非 Windows 平台默认采用工作区约束与审批；
-Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-access` 且不弹审批。
-在包含敏感凭证或不可信仓库的环境中启动前，请先检查 profile 配置。
+`dsh-TUI` 不实现独立沙箱，而是使用当前 DSH profile 的文件、Shell、sandbox 与 approval 策略。仓库提供的 profile 在非 Windows 平台默认采用工作区约束与审批；Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-access` 且不弹审批。在包含敏感凭证或不可信仓库的环境中启动前，请先检查 profile 配置。
 
 详见[权限边界与已知限制](docs/architecture.md#权限与安全边界)。
 
@@ -358,7 +169,7 @@ Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-acce
 
 朋友们开发的[社区、相关项目与周边工具](docs/links.md)
 
-## 趋势
+## Stars
 
 <!-- star-history:start -->
 [![Star History](https://raw.githubusercontent.com/ccch1mneyyy/dsh-TUI/bot-star-history/assets/star-history/star-history.png)](https://star-history.com/#ccch1mneyyy/dsh-TUI&Date)

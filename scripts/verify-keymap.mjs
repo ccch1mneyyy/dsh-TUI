@@ -43,6 +43,7 @@ import {
   resetKeymapOverrides,
   setKeymapOverrides,
 } from '../lib/types/utils/keymap.js'
+import { settle, settled, sleep, viewportLines } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -119,7 +120,6 @@ resetKeymapOverrides()
 // spawning a real editor that would hold the output pipes open.
 delete process.env.VISUAL
 delete process.env.EDITOR
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 const term = new XTerm({ cols: 110, rows: 34, scrollback: 100, allowProposedApi: true })
 
 function makeStreams() {
@@ -217,16 +217,11 @@ const instance = await render(
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
+// 启动等待保留固定 sleep：首帧内容（含随机 tip）没有稳定的轮询锚点。
 await sleep(700)
 setLang('en')
 
-const screen = () => {
-  const lines = []
-  for (let row = 0; row < term.rows; row += 1) {
-    lines.push(term.buffer.active.getLine(row)?.translateToString(true) ?? '')
-  }
-  return lines.join('\n')
-}
+const screen = () => viewportLines(term).join('\n')
 
 const promptText = () => {
   // Anchored at line start: the input border rows and hint lines can carry
@@ -241,13 +236,11 @@ const clipboardNotice = () => notifications.some(n => /clipboard|剪贴板/i.tes
 
 // Baseline: a plain 'v' types normally.
 stdin.write('v')
-await sleep(250)
-check('plain v types', promptText() === 'v', JSON.stringify(promptText()))
+check('plain v types', await settled(() => promptText() === 'v'), JSON.stringify(promptText()))
 
 // Ctrl+C clears the non-empty prompt (idle single press).
 stdin.write('\x03')
-await sleep(250)
-check('ctrl+c clears the prompt', promptText() === '', JSON.stringify(promptText()))
+check('ctrl+c clears the prompt', await settled(() => promptText() === ''), JSON.stringify(promptText()))
 
 // Alt+V arrives as ESC v. Whatever the clipboard holds, the paste branch
 // must consume the key: a prompt change or a clipboard notification are
@@ -255,24 +248,22 @@ check('ctrl+c clears the prompt', promptText() === '', JSON.stringify(promptText
 const beforeAltV = promptText()
 notifications.length = 0
 stdin.write('\x1bv')
-await sleep(800)
 check(
   'alt+v reaches the clipboard paste branch',
-  promptText() !== beforeAltV || clipboardNotice(),
+  await settled(() => promptText() !== beforeAltV || clipboardNotice()),
   JSON.stringify({ before: beforeAltV, after: promptText(), notices: notifications.map(n => n.text) }),
 )
 check('alt+v does not type a bare v on an empty clipboard', clipboardNotice() || promptText() !== 'v')
 
 // Ctrl+V (0x16) goes through the same branch.
 stdin.write('\x03')
-await sleep(250)
+await settle(() => promptText() === '')
 const beforeCtrlV = promptText()
 notifications.length = 0
 stdin.write('\x16')
-await sleep(800)
 check(
   'ctrl+v reaches the clipboard paste branch',
-  promptText() !== beforeCtrlV || clipboardNotice(),
+  await settled(() => promptText() !== beforeCtrlV || clipboardNotice()),
   JSON.stringify({ before: beforeCtrlV, after: promptText(), notices: notifications.map(n => n.text) }),
 )
 
@@ -280,12 +271,11 @@ check(
 // takes the key: with $VISUAL/$EDITOR unset the outcome is the
 // unavailable notification, and no 'g' is typed either way.
 stdin.write('\x03')
-await sleep(250)
+await settle(() => promptText() === '')
 setKeymapOverrides({ editor: 'alt+g' })
 notifications.length = 0
 stdin.write('\x1bg')
-await sleep(800)
-const editorNotice = notifications.some(n => /editor|编辑器/i.test(String(n.text)))
+const editorNotice = await settled(() => notifications.some(n => /editor|编辑器/i.test(String(n.text))))
 check('remapped alt+g editor key does not type g', promptText() !== 'g', JSON.stringify(promptText()))
 check('remapped editor key reached the editor path (notify seen)', editorNotice, JSON.stringify(notifications.map(n => n.text)))
 check('default ctrl+g no longer matches after remap', !actionMatches('editor', 'g', { ctrl: true }))

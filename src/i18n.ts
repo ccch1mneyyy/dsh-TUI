@@ -11,9 +11,18 @@
  *   5. `zh` (the original hard-coded language)
  *
  * `/lang` switches at runtime and hot-swaps the whole UI. The dictionary is
- * a flat key → per-language string map; `t(key, params)` substitutes
- * `{{name}}` placeholders with the given params. Missing keys render the
- * key itself so a typo is visible in the UI instead of silently blank.
+ * a flat key → per-language text map; `t(key, params)` substitutes
+ * `{{name}}` placeholders with the given params. A per-language value is
+ * either a plain template or `{ one, other }` plural forms selected via
+ * `Intl.PluralRules` on the `count` param (zh has no grammatical number and
+ * always resolves to `other`). Missing keys render the key itself so a typo
+ * is visible in the UI instead of silently blank.
+ *
+ * The dictionary shape is enforced at compile time (`satisfies` below):
+ * every entry carries zh, and en is optional only for the `cmd-desc-*`
+ * family whose en truth lives in the command registry (see {@link tOr}).
+ * scripts/verify-i18n.ts adds the checks types cannot express: placeholder
+ * parity between languages, single-brace typos, and dead keys.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -26,6 +35,14 @@ const PREFS_DIR = DATA_DIR
 
 /** The languages shipped with the plugin, in display order. */
 export const LANGS = ['zh', 'en'] as const
+
+/**
+ * One dictionary value in one language: a plain `{{name}}` template, or
+ * plural forms picked by the `count` param through `Intl.PluralRules`.
+ * Only `one`/`other` exist because those are the only CLDR categories zh
+ * and en use; a third shipped language may need more.
+ */
+export type I18nText = string | { one: string; other: string }
 
 const dict = {
   // ── channel.ts ───────────────────────────────────────────────────────
@@ -56,7 +73,7 @@ const dict = {
   'export-model': { zh: '- 模型: {{model}}', en: '- Model: {{model}}' },
   'export-session': { zh: '- 会话: {{id}}', en: '- Session: {{id}}' },
   'export-dir': { zh: '- 目录: {{cwd}}', en: '- Directory: {{cwd}}' },
-  'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: 'Attached {{count}} file reference(s)' },
+  'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: { one: 'Attached {{count}} file reference', other: 'Attached {{count}} file references' } },
   'mentions-missing': { zh: '未找到引用: {{paths}}', en: 'References not found: {{paths}}' },
   'send-failed': { zh: '发送失败 · {{err}}', en: 'Send failed · {{err}}' },
   'export-user-section': { zh: '## 用户', en: '## User' },
@@ -81,7 +98,7 @@ const dict = {
   'doctor-config-missing': { zh: '（不存在）', en: '(missing)' },
   'doctor-storage': { zh: '会话存储: {{dir}} {{state}}', en: 'Session storage: {{dir}} {{state}}' },
   'doctor-storage-uninit': { zh: '（未初始化）', en: '(not initialized)' },
-  'doctor-legacy-dir': { zh: '旧数据目录: ~/.dsh-tui 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）', en: 'Legacy data directory: ~/.dsh-tui still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)' },
+  'doctor-legacy-dir': { zh: '旧数据目录: ~/.dsh-cc 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）', en: 'Legacy data directory: ~/.dsh-cc still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)' },
   'subagent-not-mounted': { zh: '子代理服务未挂载（leaf 未启用 subagent）', en: 'Subagent service not mounted (leaf has no subagent)' },
   'subagent-none': { zh: '当前会话暂无子代理', en: 'No subagents in the current session' },
   'subagent-resumable': { zh: '可续', en: 'resumable' },
@@ -91,7 +108,6 @@ const dict = {
   'subagent-archived': { zh: ' 已归档', en: ' archived' },
   'subagent-query-failed': { zh: '查询失败 · {{err}}', en: 'Query failed · {{err}}' },
   'subagent-tools': { zh: '工具', en: 'Tools' },
-  'subagent-expand-hint': { zh: '按 Enter 展开完整输出', en: 'Press Enter to expand full output' },
   'subagent-status-running': { zh: '运行中', en: 'running' },
   'subagent-status-completed': { zh: '已完成', en: 'completed' },
   'subagent-status-failed': { zh: '失败', en: 'failed' },
@@ -102,6 +118,70 @@ const dict = {
   'rewind-fork-failed': { zh: '无法回退到该处 · {{err}}', en: 'Cannot rewind to this point · {{err}}' },
   'rewind-create-failed': { zh: '回退失败——无法创建替代会话', en: 'Rewind failed — could not create the replacement session' },
   'rewind-attach-failed': { zh: '已回退，但工作区挂载失败 · {{err}}', en: 'Session rewound, but workspace attachment failed · {{err}}' },
+  'rewind-no-persistence': { zh: '回退不可用——持久化服务未加载', en: 'Rewind unavailable — session persistence not loaded' },
+  'rewind-load-failed': { zh: '无法读取该会话日志 · {{err}}', en: 'Could not read that session log · {{err}}' },
+  'rewind-first-message': { zh: '不能回退到第一条消息之前', en: 'Cannot rewind past the very first message' },
+  'rewind-noop': { zh: '该点之后没有可回退的内容', en: 'Nothing to rewind past this point' },
+  'rewind-session-changed': { zh: '会话已切换，回退已放弃', en: 'The session changed; the rewind was dropped' },
+  'tree-unavailable': { zh: '会话树不可用——持久化服务未加载', en: 'Session tree unavailable — session persistence not loaded' },
+  'fork-unavailable': { zh: '分叉不可用——会话服务未加载', en: 'Fork unavailable — session services not loaded' },
+  'fork-while-working': { zh: '回合运行中，无法分叉会话', en: 'Cannot fork while a turn is running' },
+  'fork-failed': { zh: '分叉失败 · {{err}}', en: 'Fork failed · {{err}}' },
+  'fork-create-failed': { zh: '分叉失败——无法创建分叉会话', en: 'Fork failed — could not create the forked session' },
+  'fork-attach-failed': { zh: '已分叉，但工作区挂载失败 · {{err}}', en: 'Session forked, but workspace attachment failed · {{err}}' },
+  'fork-done': {
+    zh: '已分叉（{{id}}）——仍在原会话中\n新进程进入分叉：{{command}}',
+    en: 'Forked ({{id}}) — still in the original session\nEnter the fork in a new process: {{command}}',
+  },
+  // ── /tree screen (session family tree) ─────────────────────────────────
+  'tree-title': { zh: '会话树', en: 'Session tree' },
+  'tree-sessions': { zh: '会话', en: 'sessions' },
+  'tree-loading': { zh: '正在加载会话树…', en: 'Loading the session tree…' },
+  'tree-rewinding': { zh: '正在分叉并切换…', en: 'Forking and switching…' },
+  'tree-empty': { zh: '没有可显示的条目', en: 'No entries to show' },
+  'tree-truncated': { zh: '已截断', en: 'truncated' },
+  'tree-search': { zh: '输入即搜索…', en: 'Type to search…' },
+  'tree-filter-default': { zh: '默认', en: 'default' },
+  'tree-filter-no-tools': { zh: '无工具', en: 'no tools' },
+  'tree-filter-user-only': { zh: '仅用户', en: 'user only' },
+  'tree-filter-all': { zh: '全部', en: 'all' },
+  'tree-kind-user': { zh: '用户消息', en: 'user message' },
+  'tree-kind-assistant': { zh: '助手回复', en: 'assistant message' },
+  'tree-kind-tool': { zh: '工具调用', en: 'tool call' },
+  'tree-kind-compact': { zh: '压缩检查点', en: 'compaction' },
+  'tree-kind-interrupt': { zh: '中断', en: 'interrupt' },
+  'tree-kind-notice': { zh: '通知', en: 'notice' },
+  'tree-empty-fork': { zh: '（空分叉）', en: '(empty fork)' },
+  'tree-unreadable': { zh: '（日志无法读取）', en: '(unreadable log)' },
+  'tree-unloaded': { zh: '（超出预算未加载）', en: '(not loaded — over budget)' },
+  'tree-first-message': { zh: '不能回退到第一条消息之前', en: 'Cannot rewind past the very first message' },
+  'tree-adopt-live': { zh: '当前会话就在这条分支上', en: 'The live session is already on this branch' },
+  'tree-adopt-unavailable': { zh: '该分支无法整体切换（未加载到末端）', en: 'Cannot adopt this branch (its tip was not loaded)' },
+  'tree-menu-rewind': { zh: '回退到这里', en: 'Rewind here' },
+  'tree-menu-rewind-detail': { zh: '丢弃该轮对话，提示词回到输入框', en: 'Drops that turn; its prompt returns to the input' },
+  'tree-menu-fork': { zh: '从这分叉', en: 'Fork here' },
+  'tree-menu-fork-detail': { zh: '保留这条消息，从这里开新分支', en: 'Keeps this entry and branches here' },
+  'tree-menu-adopt': { zh: '切换到该分支', en: 'Adopt this branch' },
+  'tree-menu-adopt-detail': { zh: '保留整条分支并切换过去', en: 'Switches to the whole branch, content kept' },
+  'tree-menu-cancel': { zh: '取消', en: 'Cancel' },
+  'tree-confirm-rewind': { zh: '回退到「{{text}}」？', en: 'Rewind to "{{text}}"?' },
+  'tree-confirm-drop': { zh: '回退到「{{text}}」？该轮 {{n}} 条消息将丢弃', en: 'Rewind to "{{text}}"? Drops that turn ({{n}} entries)' },
+  'tree-confirm-adopt': { zh: '切换到「{{text}}」所在分支？', en: 'Switch to the branch of "{{text}}"?' },
+  'tree-confirm-drops-branch': { zh: '注意：该分支的全部内容都在这一轮里，回退后将看不到它们', en: 'Heads-up: this branch\u2019s whole content is that one turn — it disappears from the fork' },
+  'tree-hint': {
+    zh: '**Enter** 菜单 · **{{mod}}F** 从这分叉 · **{{mod}}B** 切到分支 · **{{mod}}O** 过滤 · 点击行出菜单 · 输入搜索 · Esc 退出',
+    en: '**Enter** menu · **{{mod}}F** fork here · **{{mod}}B** adopt branch · **{{mod}}O** filter · click a row for the menu · type to search · Esc exits',
+  },
+  'tree-hint-short': { zh: '**Enter** 菜单 · 点击行出菜单 · Esc 退出', en: '**Enter** menu · click a row · Esc exits' },
+  'tree-hint-menu': { zh: '**↑↓** 选择 · **Enter** 执行 · 首字母直达 · Esc 返回', en: '**↑↓** move · **Enter** run · letter keys jump · Esc back' },
+  'tree-hint-confirm': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
+  'tree-refused': { zh: '操作未执行（原因已记录到会话通知）', en: 'Not executed — the reason was notified to the conversation' },
+  'tree-rewind-failed': { zh: '操作失败 · {{message}}', en: 'Action failed · {{message}}' },
+  'tree-rewound': { zh: '已回退——编辑后重新发送', en: 'Rewound — edit and resend' },
+  'tree-forked': { zh: '已从此处分叉', en: 'Forked from this point' },
+  'tree-adopted': { zh: '已切换到该分支', en: 'Switched to that branch' },
+  'tree-preview-title': { zh: '预览', en: 'Preview' },
+  'tree-branch-live': { zh: '当前会话', en: 'live session' },
   'resume-while-working': { zh: '回合运行中，无法恢复会话', en: 'Cannot resume while a turn is running' },
   'resume-unavailable': { zh: '恢复不可用——agents 服务未加载', en: 'Resume unavailable — agents service not loaded' },
   'resume-failed': { zh: '恢复失败 · {{err}}', en: 'Resume failed · {{err}}' },
@@ -128,9 +208,6 @@ const dict = {
   // ── questions.ts ─────────────────────────────────────────────────────
   'questionnaire-answered': { zh: '📋 问卷已答 · {{total}} 题', en: '📋 Questionnaire answered · {{total}} questions' },
 
-  // ── customTheme.ts (doc example only) ───────────────────────────────
-  'theme-sakura-name': { zh: '樱花粉', en: 'Sakura Pink' },
-
   // ── utils/loaded-context.ts ─────────────────────────────────────────
   'context-truncated': { zh: '…（已截断）', en: '… (truncated)' },
   'context-sections': { zh: '系统提示词 {{n}} 段', en: 'System prompt {{n}} sections' },
@@ -145,7 +222,6 @@ const dict = {
   'context-panel-expand': { zh: '展开', en: 'Expand' },
   'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
   'copied-chars': { zh: '已复制 {{n}} 个字符', en: 'Copied {{n}} characters' },
-  'activity-usage-name': { zh: '/activity frames <名>', en: '/activity frames <name>' },
   'activity-current-preset': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
   'activity-switch-hint': { zh: '切换      /activity（选择器）或 /activity frames <名>', en: 'Switch      /activity (picker) or /activity frames <name>' },
   'activity-persist-hint': { zh: '持久化    ~/.dsh-tui/working-activity.json（重启后仍生效）', en: 'Persisted    ~/.dsh-tui/working-activity.json (survives restart)' },
@@ -159,7 +235,6 @@ const dict = {
   'preset-persist-hint': { zh: '持久化      ~/.dsh-tui/agent-preset.json（重启后仍生效；cordis.yml preset 优先）', en: 'Persisted      ~/.dsh-tui/agent-preset.json (survives restart; cordis.yml preset wins)' },
   'preset-lock-hint': { zh: '锁定规则    已开始的会话不可切换（官方 blank-only 规则）', en: 'Lock rule     started sessions cannot switch (official blank-only rule)' },
   'preset-roster-unmounted': { zh: '当前组合未挂载 agent-presets 名册（preset 不可用）', en: 'The agent-presets roster is not mounted (presets unavailable)' },
-  'theme-name-arg': { zh: '/theme <名字>', en: '/theme <name>' },
   'theme-current': { zh: '当前主题  {{name}}', en: 'Current theme  {{name}}' },
   'theme-switch-hint': { zh: '切换      /theme（选择器）或 /theme <名字>', en: 'Switch      /theme (picker) or /theme <name>' },
   'theme-persist-hint': { zh: '持久化    ~/.dsh-tui/theme.json（重启后仍生效；DSH_TUI_THEME 优先）', en: 'Persisted    ~/.dsh-tui/theme.json (survives restart; DSH_TUI_THEME wins)' },
@@ -180,14 +255,13 @@ const dict = {
   'workspace-uri-invalid': { zh: '无法解析工作区目标：{{uri}}', en: 'Cannot resolve workspace target: {{uri}}' },
   'workspace-uri-failed': { zh: '加载工作区失败 · {{err}}', en: 'Failed to load workspace · {{err}}' },
   'workspace-switch-working': { zh: 'Agent 运行中，无法切换工作区', en: 'Cannot switch workspaces while the agent is running' },
-  'workspace-open-invalid': { zh: '无法打开工作区：{target} 不是存在的目录', en: 'Cannot open workspace: {target} is not an existing directory' },
+  'workspace-open-invalid': { zh: '无法打开工作区：{{target}} 不是存在的目录', en: 'Cannot open workspace: {{target}} is not an existing directory' },
   'workspace-switched': { zh: '已切换工作区：{{target}}', en: 'Workspace switched: {{target}}' },
   'workspace-flow-hint': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** select · Esc to exit' },
   'workspace-flow-edit-hint': { zh: '**Enter** 选择当前目录 · Tab 手动输入路径 · Esc 退出', en: '**Enter** select current directory · Tab enter a path · Esc to exit' },
   'workspace-flow-input-hint': { zh: '输入绝对路径 · **Enter** 读取目录 · Esc 返回', en: 'Enter an absolute path · **Enter** load directory · Esc back' },
   'workspace-flow-input-empty': { zh: '目录路径不能为空', en: 'Directory path cannot be empty' },
   'workspace-flow-loading': { zh: '正在连接并读取目录… · Esc 关闭', en: 'Connecting and loading directories… · Esc to close' },
-  'workspace-command-usage': { zh: '用法：/workspace resume | rename <名称> | open <路径或 URI>{{commands}}', en: 'Usage: /workspace resume | rename <name> | open <path-or-URI>{{commands}}' },
   'workspace-menu-title': { zh: 'Workspace 操作', en: 'Workspace actions' },
   'workspace-menu-resume-desc': { zh: '切换到另一个工作区', en: 'Switch to another workspace' },
   'workspace-menu-rename-desc': { zh: '重命名当前工作区（需输入名称）', en: 'Rename the current workspace (needs a name)' },
@@ -225,6 +299,13 @@ const dict = {
   'login-base-url': { zh: 'Base URL: {{url}}', en: 'Base URL: {{url}}' },
   'login-official-endpoint': { zh: '官方端点', en: 'official endpoint' },
   'login-logout-hint': { zh: '使用 /provider 管理 DSH 凭据；若来源为 env，请删除对应环境变量并重启 dsh-tui', en: 'Manage DSH credentials with /provider; for env sources, remove the corresponding environment variable and restart dsh-tui' },
+  // /login 的 OAuth 账号状态段（dsh-auth 类插件挂载时追加）
+  'login-oauth-heading': { zh: '订阅账号（OAuth）:', en: 'Subscriptions (OAuth):' },
+  'login-oauth-row': { zh: '  {{provider}} — {{state}}', en: '  {{provider}} — {{state}}' },
+  'login-oauth-in': { zh: '已登录 · 令牌到期 {{time}}', en: 'signed in · token expires {{time}}' },
+  'login-oauth-expired': { zh: '已登录但令牌已过期，重新登录可恢复', en: 'signed in but the token expired — sign in again to restore' },
+  'login-oauth-signed-out': { zh: '未登录', en: 'not signed in' },
+  'login-oauth-hint': { zh: '  登录/登出：/provider 订阅账号登录，或 /auth login <provider>', en: '  Sign in/out: /provider subscription sign-in, or /auth login <provider>' },
   'permission-policy-hint': { zh: 'DSH 权限策略由 fs-policy / bash-sandbox 配置决定（当前 leaf：workspace 内读写、写入需已读文件）。', en: 'DSH permission policy is set by fs-policy / bash-sandbox config (current leaf: read/write in workspace, writes need a prior read).' },
   'permission-approval-hint': { zh: '审批通道已挂载：命令申请权限提升（sandbox_permissions）时弹出审批条，Yes 放行一次、No / Esc 拒绝。', en: 'The approval channel is mounted: sandbox escalations (sandbox_permissions) raise an approval bar — Yes allows once, No / Esc rejects.' },
   'permission-root-hint': { zh: '当前文件系统策略以工作目录为根：{{cwd}}', en: 'Current filesystem policy is rooted at the working directory: {{cwd}}' },
@@ -280,6 +361,25 @@ const dict = {
   'btw-hint-loading': { zh: 'Esc 取消', en: 'Esc cancel' },
   'btw-hint-done': { zh: '↑/↓ 滚动 · Space/Enter/Esc 关闭 · c 复制', en: '↑/↓ scroll · Space/Enter/Esc dismiss · c copy' },
   'btw-llm-unavailable': { zh: '侧问不可用（llm 服务未挂载）', en: 'Side question unavailable (llm service not mounted)' },
+  'recap-llm-unavailable': { zh: 'recap 不可用（llm 服务未挂载）', en: 'Recap unavailable (llm service not mounted)' },
+  'recap-no-activity': { zh: '会话还没有可总结的活动', en: 'No session activity to recap yet' },
+  'recap-answering': { zh: '正在总结最近活动…', en: 'Summarizing recent activity…' },
+  'recap-title-label': { zh: '建议标题', en: 'Suggested title' },
+  'recap-apply-title': { zh: '应用', en: 'Apply' },
+  'recap-title-applied': { zh: '已应用', en: 'Applied' },
+  'recap-title-applied-notify': { zh: '已将会话标题设为「{{title}}」', en: 'Session title set to "{{title}}"' },
+  'recap-hint': { zh: '↑/↓ 滚动 · Space/Enter/Esc 关闭 · c 复制{{apply}}', en: '↑/↓ scroll · Space/Enter/Esc dismiss · c copy{{apply}}' },
+  'recap-auto-hint': { zh: '点击展开查看/应用', en: 'Click to expand & apply' },
+  'recap-auto-close': { zh: '关闭', en: 'Dismiss' },
+  'recap-auto-line': { zh: '回顾：{{summary}}', en: 'Recap: {{summary}}' },
+  'recap-panel-title': { zh: '会话回顾', en: 'Session recap' },
+  'recap-panel-subtitle': { zh: '最近活动的快速复盘', en: 'A quick recap of recent activity' },
+  'color-current': { zh: '当前会话颜色  {{name}}', en: 'Current session color  {{name}}' },
+  'color-current-none': { zh: '当前会话未设置颜色（用主题默认）', en: 'No session color set (theme default)' },
+  'color-usage': { zh: '用法：/color <{{list}}|reset> —— 颜色按会话保存，resume 后仍在', en: 'Usage: /color <{{list}}|reset> — per-session, survives resume' },
+  'color-reset': { zh: '已清除会话颜色，恢复主题默认', en: 'Session color cleared — back to the theme default' },
+  'color-unknown': { zh: '未知颜色「{{name}}」· 可选：{{list}}', en: 'Unknown color "{{name}}" · available: {{list}}' },
+  'color-set': { zh: '会话颜色已设为 {{name}}', en: 'Session color set to {{name}}' },
   'exit-press-again': { zh: '再次按 Ctrl+C 退出', en: 'Press Ctrl+C again to exit' },
   'esc-again-rewind': { zh: '再次按 Esc 时间回溯', en: 'Press Esc again to rewind' },
   'esc-again-clear': { zh: '再次按 Esc 清空', en: 'Press Esc again to clear' },
@@ -292,7 +392,7 @@ const dict = {
   'tokens-usage-context': { zh: '{{usage}} · 上下文 {{percent}}%', en: '{{usage}} · {{percent}}% of context' },
 
   // ── plugin.ts — boot-time rename notices (issue #120) ───────────────
-  'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-tui 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）', en: 'Data directory copied from ~/.dsh-tui to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)' },
+  'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-cc 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）', en: 'Data directory copied from ~/.dsh-cc to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)' },
   'legacy-env-renamed': { zh: '环境变量 {{old}} 已更名为 {{new}}，旧名不再生效', en: 'Environment variable {{old}} was renamed to {{new}}; the old name no longer takes effect' },
 
   // ── plugin.ts — /update flow ───────────────────────────────────────
@@ -371,7 +471,6 @@ const dict = {
   'input-editor-failed': { zh: '外部编辑器失败：{{name}}', en: 'External editor failed: {{name}}' },
   'input-clipboard-read-failed': { zh: '读取剪贴板失败', en: 'Failed to read the clipboard' },
   'input-clipboard-unavailable': { zh: '无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）', en: 'Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)' },
-  'input-clipboard-image-saved': { zh: '剪贴板图片已保存为临时文件，已插入路径', en: 'Clipboard image saved to a temp file; path inserted' },
   'input-image-pasted': { zh: '已粘贴图片 {{token}}', en: 'Pasted image {{token}}' },
   'input-image-paste-failed': { zh: '粘贴图片失败：{{err}}', en: 'Could not paste image: {{err}}' },
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
@@ -380,20 +479,6 @@ const dict = {
   'input-fold-stats': { zh: '{{lines}} 行 · {{chars}} 字', en: '{{lines}} lines · {{chars}} chars' },
   'input-fold-hover': { zh: '悬停查看', en: 'hover to peek' },
   'input-fold-peek-footer': { zh: '… 共 {{lines}} 行 · 点击展开编辑', en: '… {{lines}} lines total · click to edit' },
-
-  // ── components/whaleFrames.ts (frame labels) ────────────────────────
-  'frame-blink': { zh: '眨眼', en: 'blink' },
-  'frame-fin-1': { zh: '动腹鳍1', en: 'fin1' },
-  'frame-fin-2': { zh: '动腹鳍2', en: 'fin2' },
-  'frame-spout-1': { zh: '喷水花1', en: 'spout1' },
-  'frame-spout-2': { zh: '喷水花2', en: 'spout2' },
-  'frame-spout-3': { zh: '喷水花3', en: 'spout3' },
-  'frame-spout-4': { zh: '喷水花4', en: 'spout4' },
-  'frame-spout-5': { zh: '喷水花5', en: 'spout5' },
-  'frame-spout-6': { zh: '喷水花6', en: 'spout6' },
-  'frame-tail-1': { zh: '摆尾巴1', en: 'tail1' },
-  'frame-tail-2': { zh: '摆尾巴2', en: 'tail2' },
-  'frame-tail-3': { zh: '摆尾巴3', en: 'tail3' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
@@ -411,6 +496,8 @@ const dict = {
   'sugg-effort-level-desc': { zh: '思考强度档位', en: 'Reasoning effort level' },
   'sugg-activity-frames-desc': { zh: '列出或切换动画帧预设', en: 'List or switch frame presets' },
   'sugg-activity-frame-desc': { zh: '动画帧预设', en: 'Animation frame preset' },
+  'sugg-color-reset-desc': { zh: '清除会话颜色，恢复主题默认', en: 'Clear the session color' },
+  'sugg-color-name-desc': { zh: '会话强调色', en: 'Session accent color' },
 
   // ── dsh-adapter/plugin.ts（/settings 全屏设置）───────────────────────
   'settings-fullscreen-restart': { zh: '全屏设置已保存，重启 dsh-tui 后生效', en: 'Fullscreen preference saved — restart dsh-tui to apply' },
@@ -522,7 +609,6 @@ const dict = {
 
   // ── picker 通用快捷键提示（整句本地化，zh 不用 "to" 结构；**段** 渲染为粗体主快捷键）─
   'hint-confirm-exit': { zh: '**Enter** 确认 · Esc 退出', en: '**Enter** to confirm · Esc to exit' },
-  'hint-confirm-cancel': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-select-exit': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** to select · Esc to exit' },
   'hint-fill-exit': { zh: '**Enter** 填入命令 · Esc 退出', en: '**Enter** to insert · Esc to exit' },
   'hint-rewind-back': { zh: '**Enter** 回退 · Esc 返回', en: '**Enter** to rewind · Esc to back' },
@@ -546,6 +632,10 @@ const dict = {
 
   // ── components/ModelPicker.tsx / ThemePicker.tsx / ActivityPicker.tsx / EffortSlider.tsx ──
   'picker-title-model': { zh: '模型', en: 'Model' },
+  'picker-group-recent': { zh: '最近使用', en: 'Recently used' },
+  'picker-group-count': { zh: '{{count}} 个模型', en: '{{count}} models' },
+  'hint-model-groups': { zh: '**Enter** 查看模型 · Esc 退出', en: '**Enter** to view models · Esc to exit' },
+  'hint-model-back': { zh: '**Enter** 切换模型 · Esc/⌫ 返回上级', en: '**Enter** to switch · Esc/⌫ to go back' },
   'picker-title-skills': { zh: '技能', en: 'Skills' },
   'skills-loading': { zh: '正在加载技能', en: 'Loading skills' },
   'skills-loading-subtitle': { zh: '正在查询技能注册表…', en: 'Querying the skill registry…' },
@@ -561,6 +651,7 @@ const dict = {
   'skills-source-custom': { zh: '自定义', en: 'custom' },
   'picker-title-theme': { zh: '颜色主题', en: 'Color theme' },
   'picker-title-activity': { zh: '指示器预设', en: 'Indicator preset' },
+  'picker-title-color': { zh: '会话强调色', en: 'Session accent color' },
   'picker-title-effort': { zh: '推理强度', en: 'Reasoning effort' },
   'model-loading': { zh: '正在加载模型', en: 'Loading models' },
   'model-loading-subtitle': { zh: '正在查询 provider…', en: 'Querying the provider…' },
@@ -591,10 +682,6 @@ const dict = {
     zh: '命令 "/{{name}}" 的调用已被拒绝——注册它的插件 "{{owner}}" 已被撤销 commands.invoke',
     en: 'Command "/{{name}}" invocation denied — its owner plugin "{{owner}}" lost commands.invoke',
   },
-  'plugins-check-tui-extension': {
-    zh: '注：该 manifest 依赖 TUI 宿主扩展面（tui.dsh/v1alpha1 DecisionEvents / session.*.intercept 权限），判定基于宿主扩展覆盖层而非 vendored 社区注册表。',
-    en: 'Note: this manifest relies on the TUI host-extension surface (tui.dsh/v1alpha1 DecisionEvents / session.*.intercept permissions); the verdict used the host extension overlay, not the vendored community registry.',
-  },
   // /plugins 诊断面（C-070 信任披露 + 协商诊断）
   'plugins-trust-banner': {
     zh: '插件与宿主同进程运行：授权是行为约束而非安全隔离；通过校验 ≠ 插件安全（C-070）。',
@@ -605,7 +692,7 @@ const dict = {
   'plugins-matrix-note': { zh: '授权矩阵（✓ 允许 / · 拒绝；仅显示有足迹的插件——授权文件、效果台账与存储目录的并集）：', en: 'Grant matrix (✓ allowed / · denied; plugins with footprints only — union of the grants file, effect ledger, and storage directory):' },
   'plugins-matrix-no-registry': { zh: '（权限注册表不可用）', en: '(permission registry unavailable)' },
   'plugins-matrix-empty': { zh: '（暂无插件足迹）', en: '(no plugin footprints yet)' },
-  'plugins-footprint-overflow': { zh: '…另有 {{count}} 个插件未显示', en: '…{{count}} more plugin(s) not shown' },
+  'plugins-footprint-overflow': { zh: '…另有 {{count}} 个插件未显示', en: { one: '…{{count}} more plugin not shown', other: '…{{count}} more plugins not shown' } },
   'plugins-ledger-empty': { zh: '效果台账为空。', en: 'The effect ledger is empty.' },
   'plugins-ledger-header': { zh: '效果台账（{{file}}）尾 5 条：', en: 'Effect ledger ({{file}}), last 5 records:' },
   'plugins-unknown-subcommand': { zh: '未知子命令：{{sub}}（支持：check <路径>）', en: 'Unknown subcommand: {{sub}} (supported: check <path>)' },
@@ -675,6 +762,8 @@ const dict = {
   'question-hint-enter': { zh: 'Enter 提交', en: 'Enter submit' },
   'question-hint-back': { zh: '↑ 返回选项', en: '↑ back to options' },
   'question-hint-esc': { zh: 'Esc 中断', en: 'Esc cancel' },
+  'question-hint-previous': { zh: 'Esc 上一题', en: 'Esc previous question' },
+  'question-hint-cancel': { zh: 'Ctrl+C 取消整批', en: 'Ctrl+C cancel batch' },
   'question-hint-selected': { zh: '已选 {{n}}', en: 'Selected {{n}}' },
   'question-hint-select': { zh: '↑/↓ 选择', en: '↑/↓ select' },
   'question-hint-multi': { zh: 'Space 多选', en: 'Space multi-select' },
@@ -698,18 +787,14 @@ const dict = {
   'subagent-count-running': { zh: '运行中', en: 'running' },
   'subagent-count-completed': { zh: '已完成', en: 'completed' },
   'subagent-count-failed': { zh: '失败', en: 'failed' },
-  'subagent-running-label': { zh: '运行中', en: 'Running' },
   'subagent-started': { zh: '开始时间', en: 'Started' },
   'subagent-completed': { zh: '完成时间', en: 'Completed' },
-  'subagent-id': { zh: 'ID', en: 'ID' },
   'subagent-error-label': { zh: '错误', en: 'Error' },
   'subagent-output-label': { zh: '输出', en: 'Output' },
   'subagent-no-output': { zh: '暂无输出', en: 'No output yet' },
   'subagent-dashboard-title': { zh: ' 子代理面板 ', en: ' Subagent Dashboard ' },
   'subagent-dashboard-hint-basic': { zh: '↑/↓ 浏览 · Esc 关闭', en: '↑/↓ browse · Esc close' },
   'subagent-dashboard-hint-detail': { zh: '↑/↓ 选择 · Enter 查看详情 · Esc 关闭', en: '↑/↓ select · Enter view detail · Esc close' },
-  'subagent-detail-hint-basic': { zh: '↑/↓ 滚动 · Enter/Esc 返回', en: '↑/↓ scroll · Enter/Esc back' },
-  'subagent-detail-hint-enhanced': { zh: '↑/↓ 滚动 · X 中断 · Esc 返回', en: '↑/↓ scroll · X interrupt · Esc back' },
   'subagent-card-prefix': { zh: '子代理：', en: 'Subagent: ' },
   'subagent-tab-summary': { zh: '摘要', en: 'Summary' },
   'subagent-no-summary': { zh: '暂无摘要', en: 'No summary yet' },
@@ -773,6 +858,25 @@ const dict = {
   'provider-q-switch': { zh: '立即切换到新 provider？', en: 'Switch to the new provider now?' },
   'provider-opt-switch-now': { zh: '切换到 {{model}}', en: 'Switch to {{model}}' },
   'provider-opt-switch-keep': { zh: '保持当前模型', en: 'Keep the current model' },
+  // /provider OAuth 分支（dsh-auth 等插件挂载 ctx.dshAuth 时出现）
+  'provider-opt-oauth': { zh: '订阅账号登录（OAuth）', en: 'Subscription sign-in (OAuth)' },
+  'provider-opt-oauth-desc': { zh: '用 ChatGPT / Claude / Grok 等官方订阅账号登录，无需 API key', en: 'Sign in with an official subscription (ChatGPT / Claude / Grok) — no API key' },
+  'provider-q-oauth': { zh: '登录哪个订阅账号？', en: 'Sign in to which subscription?' },
+  'provider-oauth-state-in': { zh: '已登录 · 令牌到期 {{time}}', en: 'Signed in · token expires {{time}}' },
+  'provider-oauth-state-expired': { zh: '已登录但令牌已过期，重新登录即可恢复', en: 'Signed in but the token expired — sign in again to restore' },
+  'provider-q-oauth-signed': { zh: '{{provider}} 已登录，接下来？', en: '{{provider}} is signed in — what next?' },
+  'provider-opt-oauth-relogin': { zh: '重新登录', en: 'Sign in again' },
+  'provider-opt-oauth-relogin-desc': { zh: '更换账号或刷新已有凭据', en: 'Switch accounts or refresh the stored credential' },
+  'provider-opt-oauth-logout': { zh: '登出', en: 'Sign out' },
+  'provider-opt-oauth-logout-desc': { zh: '删除本地保存的 OAuth 凭据', en: 'Remove the locally stored OAuth credential' },
+  'provider-oauth-none': { zh: '没有可 OAuth 登录的 provider（检查 dsh-auth 插件是否挂载）', en: 'No OAuth-capable providers (check whether the dsh-auth plugin is mounted)' },
+  'provider-oauth-login-ok': { zh: '{{provider}} 登录成功', en: 'Signed in to {{provider}}' },
+  'provider-oauth-login-failed': { zh: 'OAuth 登录失败 · {{{err}}}', en: 'OAuth sign-in failed · {{{err}}}' },
+  'provider-oauth-logout-ok': { zh: '{{provider}} 已登出', en: 'Signed out of {{provider}}' },
+  'provider-line-oauth-provider': { zh: '路由：{{provider}}', en: 'Route: {{provider}}' },
+  'provider-line-oauth-flow': { zh: '登录方式：{{flow}}', en: 'Sign-in: {{flow}}' },
+  'provider-line-oauth-expires': { zh: '令牌到期：{{time}}', en: 'Token expires: {{time}}' },
+  'provider-line-oauth-out': { zh: '已登出，本地 OAuth 凭据已删除', en: 'Signed out — the stored OAuth credential was removed' },
 
   // ── commands.ts — slash-command descriptions ─────────────────────────
   // zh-only on purpose: the English text stays in `LOCAL_COMMANDS` (and in
@@ -786,9 +890,12 @@ const dict = {
   'cmd-desc-compact': { zh: '压缩会话历史' },
   'cmd-desc-resume': { zh: '恢复历史会话' },
   'cmd-desc-rename': { zh: '重命名当前会话' },
+  'cmd-desc-recap': { zh: '生成最近会话活动摘要（可应用建议标题）' },
   'cmd-desc-quit': { zh: '退出 dsh-tui' },
   'cmd-desc-q': { zh: '退出 dsh-tui' },
   'cmd-desc-rewind': { zh: '回退会话到历史消息' },
+  'cmd-desc-tree': { zh: '浏览会话分叉树（回退/分叉/切分支）' },
+  'cmd-desc-fork': { zh: '把当前会话分叉为可恢复副本' },
   'cmd-desc-export': { zh: '导出会话为 Markdown 文件' },
   // Session / environment
   'cmd-desc-context': { zh: '查看已加载的上下文明细' },
@@ -804,6 +911,7 @@ const dict = {
   'cmd-desc-activity': { zh: '切换工作状态指示器预设' },
   'cmd-desc-preset': { zh: '切换 Agent 预设（含梁神模式）' },
   'cmd-desc-theme': { zh: '切换配色主题（auto 跟随系统，或内置/自定义）' },
+  'cmd-desc-color': { zh: '设置当前会话强调色（输入框边框与会话标签）' },
   'cmd-desc-lang': { zh: '切换界面语言（en / zh）' },
   'cmd-desc-model': { zh: '查看当前模型' },
   'cmd-desc-thinking': { zh: '显示或隐藏思考过程' },
@@ -892,26 +1000,8 @@ const dict = {
     zh: '**j/k** 翻页 · **enter/esc** 收起 · **q** 退出',
     en: '**j/k** page · **enter/esc** collapse · **q** exit',
   },
-  'traj-empty': { zh: '暂无轨迹事件', en: 'No trajectory events yet' },
   'traj-hint-failure': { zh: '{{key}} 看完整轨迹', en: '{{key}} for the full trajectory' },
-  
-  // ── subagent UI ──────────────────────────────────────────────────────
-  'subagent.unnamed': { zh: '未命名子代理', en: 'Unnamed subagent' },
-  'subagent.no-model': { zh: '未知模型', en: 'Unknown model' },
-  'subagent.status.running': { zh: '运行中', en: 'Running' },
-  'subagent.status.completed': { zh: '已完成', en: 'Completed' },
-  'subagent.status.failed': { zh: '失败', en: 'Failed' },
-  'subagent.status.pending': { zh: '等待中', en: 'Pending' },
-  'subagent.dashboard.title': { zh: '子代理面板', en: 'Subagent Dashboard' },
-  'subagent.dashboard.stats': { zh: '运行中: {{running}} · 已完成: {{completed}} · 失败: {{failed}}', en: 'Running: {{running}} · Completed: {{completed}} · Failed: {{failed}}' },
-  'subagent.dashboard.empty': { zh: '暂无子代理', en: 'No subagents yet' },
-  'subagent.dashboard.help': { zh: '↑↓ 选择 · Enter 查看详情 · Esc 返回', en: '↑↓ select · Enter view details · Esc back' },
-  'subagent.detail.not-found': { zh: '子代理未找到', en: 'Subagent not found' },
-  'subagent.detail.press-esc': { zh: '按 Esc 返回', en: 'Press Esc to go back' },
-  'subagent.detail.output': { zh: '输出', en: 'Output' },
-  'subagent.detail.no-output': { zh: '暂无输出', en: 'No output yet' },
-  'subagent.detail.help': { zh: 'Esc 返回面板', en: 'Esc back to dashboard' },
-} as const
+} as const satisfies Record<string, { zh: I18nText; en?: I18nText }>
 
 export type I18nKey = keyof typeof dict
 export type I18nParams = Record<string, string | number>
@@ -958,8 +1048,27 @@ export function isLang(value: unknown): value is Lang {
  * @param params - Placeholder values.
  */
 export function t(key: I18nKey, params: I18nParams = {}): string {
-  const entry = dict[key] as { zh: string; en: string } | undefined
-  const template = entry?.[activeLang] ?? key
+  const entry = dict[key] as Partial<Record<Lang, I18nText>> | undefined
+  return substitute(pickText(entry?.[activeLang], params) ?? key, params)
+}
+
+// Cached per shipped language; CLDR-backed and built into Node, so zh always
+// selects `other` and en selects `one` exactly at count 1.
+const pluralRules: Record<Lang, Intl.PluralRules> = {
+  zh: new Intl.PluralRules('zh'),
+  en: new Intl.PluralRules('en'),
+}
+
+/** Resolve plural forms to one template using the `count` param. */
+function pickText(text: I18nText | undefined, params: I18nParams): string | undefined {
+  if (text === undefined || typeof text === 'string') return text
+  const count = Number(params.count)
+  const category = pluralRules[activeLang].select(Number.isFinite(count) ? count : 0)
+  return category === 'one' ? text.one : text.other
+}
+
+/** Substitute `{{name}}` placeholders, leaving unknown names visible. */
+function substitute(template: string, params: I18nParams): string {
   return template.replace(/\{\{(\w+)\}\}/g, (match, name: string) =>
     name in params ? String(params[name]) : match,
   )
@@ -976,12 +1085,12 @@ export function t(key: I18nKey, params: I18nParams = {}): string {
  * @param params - Placeholder values substituted into whichever text wins.
  */
 export function tOr(key: string, fallback: string, params: I18nParams = {}): string {
-  const entry = (dict as Record<string, { zh?: string; en?: string }>)[key]
-  const template = entry?.[activeLang] ?? fallback
-  return template.replace(/\{\{(\w+)\}\}/g, (match, name: string) =>
-    name in params ? String(params[name]) : match,
-  )
+  const entry = (dict as Record<string, Partial<Record<Lang, I18nText>>>)[key]
+  return substitute(pickText(entry?.[activeLang], params) ?? fallback, params)
 }
+
+/** Read-only view of the dictionary for audits (scripts/verify-i18n.ts). */
+export const i18nDict: Readonly<Record<string, { readonly zh?: I18nText; readonly en?: I18nText }>> = dict
 
 // ── persistence (~/.dsh-tui/lang.json) ─────────────────────────────────
 
@@ -1022,12 +1131,16 @@ export function writeLangPref(lang: Lang, dir: string = PREFS_DIR): boolean {
 
 /**
  * Guess the user's language from the OS locale (`LC_ALL`, `LC_MESSAGES`,
- * `LANG`), defaulting to `zh`. Only consulted when nothing else (env var,
- * cordis.yml `lang`, persisted `/lang` choice) pinned a language.
- * The POSIX/C locale means "no locale selected" and conventionally maps to
- * English — importantly it is what CI runners (LANG=C.UTF-8) report, so
- * tests asserting English UI copy stay deterministic. An absent locale
- * variable (typical on Windows) still defaults to `zh`.
+ * `LANG`). Only consulted when nothing else (env var, cordis.yml `lang`,
+ * persisted `/lang` choice) pinned a language. `zh*` maps to zh; every
+ * other stated locale (en, but also fr/de/ja/…) maps to en — English is
+ * the lingua-franca fallback for a locale we don't ship, and a German
+ * user must not get a Chinese UI. The POSIX/C locale means "no locale
+ * selected" and conventionally maps to English — importantly it is what
+ * CI runners (LANG=C.UTF-8) report, so tests asserting English UI copy
+ * stay deterministic. Only an ABSENT locale (typical on Windows, where
+ * these POSIX vars don't exist and imply nothing about the user) keeps
+ * the zh default.
  */
 export function detectLocaleLang(): Lang {
   // `||` (not `??`): an EMPTY locale variable means "unset" and must fall
@@ -1038,10 +1151,8 @@ export function detectLocaleLang(): Lang {
     process.env.LANG ||
     ''
   const locale = raw.split('.')[0]?.toLowerCase() ?? ''
-  if (locale.startsWith('zh')) return 'zh'
-  if (locale.startsWith('en')) return 'en'
-  if (locale === 'c' || locale === 'posix') return 'en'
-  return 'zh'
+  if (locale === '') return 'zh'
+  return locale.startsWith('zh') ? 'zh' : 'en'
 }
 
 /**

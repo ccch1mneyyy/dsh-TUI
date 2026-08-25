@@ -261,6 +261,16 @@
       name: '@deepseek-ai/dsh-cordis-host-runner'
       disabled: !!js "[...ctx.loader.entries()].some(entry => entry.options.id === 'cordis-host-runner' && entry.options.name === '@deepseek-ai/dsh-cordis-host-runner' && !entry.disabled)"
 
+    # Subscription OAuth sign-in (bundled dsh-auth dependency): mounts the
+    # ChatGPT/Codex, Claude Pro/Max and SuperGrok provider routes plus the
+    # /auth command; the TUI's /provider wizard gains its OAuth branch from
+    # the ctx.dshAuth service this row provides. Entry-level inject only —
+    # the plugin module's own inject is empty so a stale patch cannot
+    # deadlock a composition lacking these services (#183 pattern).
+    - id: dsh-tui-auth
+      name: '@deepseek-harness-tui/dsh-tui/oauth'
+      inject: [llm, commands]
+
     # The interactive front door. The plugin creates/resumes its agent at
     # runtime, seeds the startup status line, and disposes the whole app tree
     # (exiting the process) when the TUI unmounts. `dsh-tui --resume`

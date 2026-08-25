@@ -50,7 +50,7 @@ process.env.FORCE_COLOR = '3'
 // to agree with.
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { sleep }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -58,10 +58,12 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
     import('../src/ui.js'),
     import('../src/screens/Chat.js'),
     import('../src/dsh-adapter/questions.js'),
+    import('./lib/term-test.mjs'),
   ])
 const instances = (await import('../src/ink/instances.js')).default
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+// sleep 全部保留：本文件的 oracle 是「两次渲染的最终屏等价」——期望内容
+// 本身来自另一次渲染，没有可轮询的谓词，只能等固定窗口让渲染落定。
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -276,6 +278,7 @@ async function equivalence(from: [number, number], to: [number, number]): Promis
 
   const live = makeHarness(fromCols, fromRows)
   const liveInstance = await mount(live)
+  // 挂载后固定静置窗保留：等价 oracle 的期望内容来自另一次渲染，本侧无可轮询谓词。
   await sleep(420)
 
   // The emulator reflows exactly as a real terminal does; the app learns about

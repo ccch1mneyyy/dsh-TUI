@@ -10,13 +10,14 @@ process.env.FORCE_COLOR = '3'
 // module import resolves the startup lang (env > persisted > locale).
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { settle, settled, sleep, screenHas }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100
@@ -39,7 +40,6 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 function pillText(): string {
   const buf = term.buffer.active
   for (let y = 0; y < ROWS; y++) {
@@ -95,6 +95,9 @@ const instance = await render(
   </AlternateScreen>,
   { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
+// Startup wait stays a fixed window: the first assertion is a negative probe
+// (no pill may exist) — settling on an already-true condition would return on
+// a blank screen and test nothing.
 await sleep(600)
 
 // SGR mouse: 64=wheel up, 65=wheel down; position inside the scroll area.
@@ -112,13 +115,15 @@ check('at bottom: no pill initially', pillText() === '', JSON.stringify(pillText
 
 // scroll well up, then 8 new rows arrive
 wheel('up', 6)
-await sleep(500)
+// 滚离底部的可观测条件：最后一条消息移出视口。
+await settle(() => !screenHas(term, '消息 30:'))
 addRows(8)
-await sleep(500)
-const pill0 = pillText()
-check('pill appears with the new-message count', /8 new messages/.test(pill0), pill0)
+check('pill appears with the new-message count', await settled(() => /8 new messages/.test(pillText())), pillText())
 
-// wheel down in small steps: the count must DECREASE monotonically
+// wheel down in small steps: the count must DECREASE monotonically.
+// The per-step sleeps stay fixed: this loop SAMPLES the pill after each step
+// (there is no target state to settle on — the samples themselves are the
+// data the monotonicity assertions consume).
 const seen: string[] = []
 let prev = 8
 let monotonic = true
@@ -133,7 +138,7 @@ for (let step = 0; step < 12; step++) {
 }
 check('count decrements while scrolling down (not pinned at max)', seen.some(v => v !== 'gone' && v !== '8') , seen.join(' → '))
 check('count never increases while scrolling down', monotonic, seen.join(' → '))
-check('pill gone at the bottom', pillText() === '', JSON.stringify(pillText()))
+check('pill gone at the bottom', await settled(() => pillText() === ''), JSON.stringify(pillText()))
 
 await instance.unmount()
 process.exit(failed)

@@ -31,6 +31,7 @@ import { render } from '../lib/types/ui.js'
 import { Chat } from '../lib/types/screens/Chat.js'
 import { setLang } from '../lib/types/i18n.js'
 import instances from '../lib/types/ink/instances.js'
+import { settle, settled, sleep } from './lib/term-test.mjs'
 
 const { Terminal } = xtermPkg
 
@@ -39,8 +40,6 @@ function check(name, ok, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
 const COLS = 110
 const ROWS = 34
 
@@ -238,116 +237,142 @@ const instance = await render(
 // does. Without this the browser would render with inline geometry and the
 // test would be measuring an artefact of its own rig.
 for (const value of instances.values()) instances.set(process.stdout, value)
-await sleep(700)
 
 const flat = (s) => s.replace(/\s+/g, ' ')
 
-/** The composed screen, as the user sees it. */
+/** The composed screen, as the user sees it. Reads from baseY: before the
+ *  browser enters the alternate screen the harness is in inline mode, where
+ *  scrollback would shift the viewport (baseY is 0 in the alt screen). */
 const screen = () => {
   const buf = stdout.term.buffer.active
   return Array.from({ length: stdout.term.rows }, (_, y) =>
-    (buf.getLine(y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
+    (buf.getLine(buf.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
     .join('\n')
 }
 
-async function windowed(action, settle = 300) {
+async function windowed(action, settleMs = 300) {
   stdout.frames.length = 0
   action()
-  await sleep(settle)
+  await sleep(settleMs)
   return toPlain(stdout.frames.join(''))
 }
 
 setLang('en')
 
+// 启动落定：composer 提示符出现即可接收输入。
+await settle(() => screen().includes('❯'))
+
 // ── open the browser ────────────────────────────────────────────────────
-await windowed(() => stdin.write('/resume'), 250)
-await windowed(() => stdin.write('\r'), 600)
+stdin.write('/resume')
+await settle(() => flat(screen()).includes('/resume'))
+stdin.write('\r')
+check('the browser opens as a screen', await settled(() => /Resume session/.test(flat(screen()))), flat(screen()).slice(0, 120))
+check('conversations are listed', await settled(() => /gamma/.test(screen()) && /beta/.test(screen()) && /alpha/.test(screen())))
 let s = screen()
-check('the browser opens as a screen', /Resume session/.test(flat(s)), flat(s).slice(0, 120))
-check('conversations are listed', /gamma/.test(s) && /beta/.test(s) && /alpha/.test(s))
 check('the current model-switch lineage is not offered as another conversation', !/before model switch/.test(s) && !/after model switch/.test(s))
 check('delegated runs are NOT listed by default', !/delegated one/.test(s) && !/delegated two/.test(s))
-check('but they are counted', /2 runs folded/.test(flat(s)), flat(s).slice(0, 200))
+check('but they are counted', await settled(() => /2 runs folded/.test(flat(screen()))), flat(screen()).slice(0, 200))
 check('a session with no conversation is never a row', !/^\s*❯?\s*tmp\b/m.test(s))
-check('and it is counted too', /1 empty/.test(flat(s)), flat(s).slice(0, 200))
-check('the count reflects only what is shown', /3 sessions/.test(flat(s)), flat(s).slice(0, 200))
-check('metadata rides under each title', /2\.0 KB/.test(flat(s)) && /deepseek-v4-pro/.test(flat(s)))
-check('focus starts on the MRU top row (gamma)', /❯\s*gamma/.test(s), s.split('\n').filter(l => l.includes('❯')).join('|'))
+check('and it is counted too', await settled(() => /1 empty/.test(flat(screen()))), flat(screen()).slice(0, 200))
+check('the count reflects only what is shown', await settled(() => /3 sessions/.test(flat(screen()))), flat(screen()).slice(0, 200))
+check('metadata rides under each title', await settled(() => /2\.0 KB/.test(flat(screen())) && /deepseek-v4-pro/.test(flat(screen()))))
+check('focus starts on the MRU top row (gamma)', await settled(() => /❯\s*gamma/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
 
 // ── held arrow keys ─────────────────────────────────────────────────────
 // A held key (or a paste) arrives as several key events out of ONE stdin
 // chunk, all handled before React re-renders. Every one of them must move
 // the cursor; a handler reading its start position from the render closure
 // would compute them all from the same row and keep only the last.
-await windowed(() => stdin.write('\x1b[B\x1b[B'), 450) // two ↓ in one chunk
-s = screen()
-check('two arrows in one chunk move two rows, not one', /❯\s*alpha/.test(s), s.split('\n').filter(l => l.includes('❯')).join('|'))
-await windowed(() => stdin.write('\x1b[A\x1b[A'), 450) // two ↑ back to the top
-check('and back again', /❯\s*gamma/.test(screen()))
+stdin.write('\x1b[B\x1b[B') // two ↓ in one chunk
+check('two arrows in one chunk move two rows, not one', await settled(() => /❯\s*alpha/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
+stdin.write('\x1b[A\x1b[A') // two ↑ back to the top
+check('and back again', await settled(() => /❯\s*gamma/.test(screen())))
 // Control bytes this screen does not claim must never be typed into the
 // search box. A chord arriving as raw C0 (here two ctrl+s in one chunk, which
 // the parser hands over as literal control characters rather than as the
 // shortcut) used to land in the query and leave a filter matching nothing,
 // with nothing on screen to explain why the list went empty.
+// Stability probe (the query and list must NOT change; the expected final
+// screen equals the current one, so a settle would return immediately) —
+// keep the fixed window for a wrong repaint to show up.
 await windowed(() => stdin.write('\x13\x13'), 500)
 // An empty query still shows the placeholder; a polluted one would not.
 check('unclaimed control bytes never reach the search box', /Type to search/.test(flat(screen())), flat(screen()).slice(0, 200))
 check('and the list is untouched by them', /gamma/.test(screen()) && /alpha/.test(screen()) && /3 sessions/.test(flat(screen())))
 
 // ── search ──────────────────────────────────────────────────────────────
-await windowed(() => stdin.write('alph'), 400)
-s = screen()
-check('typing filters the list', /alpha/.test(s) && !/gamma/.test(s), flat(s).slice(0, 200))
-check('the cursor lands on the surviving row', /❯\s*alpha/.test(s))
+stdin.write('alph')
+check('typing filters the list', await settled(() => /alpha/.test(screen()) && !/gamma/.test(screen())), flat(screen()).slice(0, 200))
+check('the cursor lands on the surviving row', await settled(() => /❯\s*alpha/.test(screen())))
+// Fixed window kept: the assertion condition (/alpha/) already holds before
+// the backspace — the only change is one query character, which these
+// regexes cannot distinguish ('alpha' contains 'alph'), so a settle would
+// return on the stale screen.
 await windowed(() => stdin.write('\x7f'), 300) // backspace
 s = screen()
 check('backspace widens the query again', /alpha/.test(s))
-await windowed(() => stdin.write('\x1b'), 350) // Esc clears the query first
-s = screen()
-check('Esc clears the query rather than leaving', /gamma/.test(s) && /Resume session/.test(flat(s)))
+stdin.write('\x1b') // Esc clears the query first
+check('Esc clears the query rather than leaving',
+  await settled(() => /gamma/.test(screen()) && /Resume session/.test(flat(screen()))))
 
 // ── reveal the delegated runs ───────────────────────────────────────────
-await windowed(() => stdin.write('\x13'), 400) // ctrl+s
+stdin.write('\x13') // ctrl+s
+check('ctrl+s reveals the delegated runs', await settled(() => /audit run/.test(screen())), flat(screen()).slice(0, 300))
 s = screen()
-check('ctrl+s reveals the delegated runs', /audit run/.test(s), flat(s).slice(0, 300))
 check('nothing is folded any more', /0 runs folded/.test(flat(s)) || !/runs folded/.test(flat(s)))
 const runLine = s.split('\n').find((l) => l.includes('audit run')) ?? ''
 check('a run is indented under its parent', /^\s{3,}/.test(runLine), JSON.stringify(runLine))
-await windowed(() => stdin.write('\x13'), 400) // fold them back
-check('ctrl+s folds them away again', !/audit run/.test(screen()))
+stdin.write('\x13') // fold them back
+check('ctrl+s folds them away again', await settled(() => !/audit run/.test(screen())))
 
 // ── rename, and the cursor that follows it ──────────────────────────────
-await windowed(() => stdin.write('\x1b[B'), 300) // ↓ → beta
-s = await windowed(() => stdin.write('\x12'), 350) // ctrl+r → rename
-check('rename prefills the editor with the focused title', /✎ beta/.test(flat(s)), flat(s).slice(-160))
-await windowed(() => stdin.write('renamed'), 250)
-await windowed(() => stdin.write('\r'), 700)
+stdin.write('\x1b[B') // ↓ → beta
+await settle(() => /❯\s*beta/.test(screen()))
+// The prefill assertion reads the PAINTED window (per-cell diff semantics),
+// so poll the accumulating frame bytes for the same condition.
+stdout.frames.length = 0
+stdin.write('\x12') // ctrl+r → rename
+check('rename prefills the editor with the focused title',
+  await settled(() => /✎ beta/.test(flat(toPlain(stdout.frames.join(''))))),
+  flat(toPlain(stdout.frames.join(''))).slice(-160))
+stdin.write('renamed')
+await settle(() => /betarenamed/.test(screen()))
+stdin.write('\r')
 check(
   'the rename call hit the intended session',
-  channel.calls.rename.length === 1 && channel.calls.rename[0][0] === 's-mid',
+  await settled(() => channel.calls.rename.length === 1 && channel.calls.rename[0][0] === 's-mid'),
   JSON.stringify(channel.calls.rename),
 )
-await sleep(60)
-s = screen()
-const renamedRow = s.split('\n').find((l) => l.includes('betarenamed')) ?? ''
 check(
   'the cursor followed the renamed session to its new position',
-  /❯\s*betarenamed/.test(renamedRow),
-  JSON.stringify(renamedRow),
+  await settled(() => {
+    const row = screen().split('\n').find((l) => l.includes('betarenamed')) ?? ''
+    return /❯\s*betarenamed/.test(row)
+  }),
+  JSON.stringify(screen().split('\n').find((l) => l.includes('betarenamed')) ?? ''),
 )
 
 // ── delete: the guard, the cancel, the commit ───────────────────────────
 // Composed screen, not the painted window: the notice row this replaces sat
 // on the same line, so the per-cell diff legitimately emits only the changed
 // characters and a regex over those bytes can never match.
-await windowed(() => stdin.write('\x04'), 400) // ctrl+d
-check('the confirmation names the focused session', /Delete "betarenamed"/.test(flat(screen())), flat(screen()).slice(-220))
+stdin.write('\x04') // ctrl+d
+check('the confirmation names the focused session',
+  await settled(() => /Delete "betarenamed"/.test(flat(screen()))), flat(screen()).slice(-220))
+// Negative probe (Ctrl+Enter must NOT confirm): nothing is supposed to
+// change, so a settle would return immediately — keep the fixed window.
 await windowed(() => stdin.write('\x1b[13;5u'), 400) // Ctrl+Enter must not confirm
 check('Ctrl+Enter does not confirm an irreversible delete', channel.calls.delete.length === 0, JSON.stringify(channel.calls.delete))
-await windowed(() => stdin.write('\x1b'), 350) // Esc cancels
-check('Esc cancels the confirmation', !/Delete "/.test(flat(screen())) && channel.calls.delete.length === 0)
-await windowed(() => stdin.write('\x04'), 400)
-await windowed(() => stdin.write('\x1b[13u\x1b[13u'), 700)
+stdin.write('\x1b') // Esc cancels
+check('Esc cancels the confirmation',
+  await settled(() => !/Delete "/.test(flat(screen())) && channel.calls.delete.length === 0))
+stdin.write('\x04')
+await settle(() => /Delete "betarenamed"/.test(flat(screen())))
+stdin.write('\x1b[13u\x1b[13u')
+// 先等屏幕呈现删除结果（两次 Enter 同批处理完毕），再断言「恰好一次」：
+// 直接对 delete.length === 1 轮询可能在第二次 Enter 生效前提前通过。
+const deleteEffectsPainted = await settled(() =>
+  /Deleted session betarenamed/.test(flat(screen())) && /2 sessions/.test(flat(screen())))
 check(
   'repeated Enter commits one delete, on the session the confirmation named',
   channel.calls.delete.length === 1 && channel.calls.delete[0] === 's-mid',
@@ -356,16 +381,17 @@ check(
 // The notice line names what was deleted, so "gone" is asserted on the list
 // itself: one fewer session, and no row carrying that title any more.
 s = screen()
-check('the browser says what it did, on the screen the user is looking at', /Deleted session betarenamed/.test(flat(s)), flat(s).slice(-200))
+check('the browser says what it did, on the screen the user is looking at', deleteEffectsPainted && /Deleted session betarenamed/.test(flat(s)), flat(s).slice(-200))
 check('the deleted row leaves the list', /2 sessions/.test(flat(s)) && !s.split('\n').some(l => /^[❯\s]*betarenamed/.test(l)), flat(s).slice(0, 200))
 
 // ── resume failure detail ──────────────────────────────────────────────────
-await windowed(() => stdin.write('\r'), 500)
+stdin.write('\r')
+const failureShown = await settled(() => /corrupt session log: seq gap in committed region/.test(flat(screen())))
 s = screen()
 check('a failed resume stays in the browser', /Resume session/.test(flat(s)), flat(s).slice(0, 180))
 check(
   'the browser shows the real resume failure',
-  /corrupt session log: seq gap in committed region/.test(flat(s)),
+  failureShown,
   flat(s).slice(-220),
 )
 check(
@@ -375,9 +401,9 @@ check(
 )
 
 // ── leaving ─────────────────────────────────────────────────────────────
-await windowed(() => stdin.write('\x1b'), 500)
-s = screen()
-check('Esc leaves the browser and restores the conversation', !/Resume session/.test(flat(s)), flat(s).slice(0, 160))
+stdin.write('\x1b')
+check('Esc leaves the browser and restores the conversation',
+  await settled(() => !/Resume session/.test(flat(screen()))), flat(screen()).slice(0, 160))
 
 instance.unmount()
 instances.delete(process.stdout)

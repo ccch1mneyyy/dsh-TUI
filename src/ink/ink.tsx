@@ -36,7 +36,7 @@ import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './searchHighlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
-import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
+import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
@@ -1173,6 +1173,10 @@ export default class Ink {
    */
   reassertTerminalModes = (includeAltScreen = false): void => {
     if (!this.options.stdout.isTTY) return;
+    // Shutdown latch: the >5s idle-gap trigger (or an event-loop stall
+    // detector firing during the dispose window) must not re-assert mouse
+    // tracking after the exit cleanup disabled it (issue #522).
+    if (this.isUnmounted) return;
     // Don't touch the terminal during an editor handoff — re-enabling kitty
     // keyboard here would undo enterAlternateScreen's disable and nano would
     // start seeing CSI-u sequences again.
@@ -1334,6 +1338,13 @@ export default class Ink {
    */
   private lastHealthProbeAt = 0;
   probeAltScreenHealth = (): void => {
+    // Shutdown latch: during the dispose window after detachForShutdown
+    // (up to the 5s fallback exit) stray input, focus, resize or a pending
+    // DECRPM reply would otherwise re-write ENABLE_MOUSE_TRACKING AFTER the
+    // exit cleanup's DISABLE_MOUSE_TRACKING — the mouse-reporting residue
+    // the shell then echoes as SGR garbage (issue #522). isUnmounted is set
+    // by detachForShutdown() before any cleanup sequence is written.
+    if (this.isUnmounted) return;
     const now = Date.now();
     if (now - this.lastHealthProbeAt < 250) return;
     this.lastHealthProbeAt = now;
@@ -1343,6 +1354,12 @@ export default class Ink {
     }
     const querier = this.app?.querier;
     if (querier === undefined) return;
+    // macOS Terminal.app prints the trailing `p` of `CSI ? 1049 $ p` as
+    // literal text instead of ignoring the unsupported query, leaking a
+    // visible character at the cursor on every probe. The blind
+    // mouse-tracking re-assert above still runs there — only the round trip
+    // is skipped, which costs nothing: Terminal.app never answered it.
+    if (!supportsDecrqmProbe()) return;
     void Promise.all([querier.send(decrqm(1049)), querier.flush()]).then(([reply]) => {
       // DECRPM status: 1/3 = set, 2/4 = reset, 0/undefined = unknown.
       // Heal only on a POSITIVE reset — an unanswered probe must not
@@ -1368,6 +1385,11 @@ export default class Ink {
    * stays true. ENTER_ALT_SCREEN is a terminal-side no-op if already in alt.
    */
   private reenterAltScreen(): void {
+    // Same shutdown latch as probeAltScreenHealth: a DECRPM reply resolving
+    // after detachForShutdown (or a SIGCONT racing unmount) must not re-enter
+    // the alt screen or re-enable mouse tracking past the exit cleanup
+    // (issue #522).
+    if (this.isUnmounted) return;
     this.options.stdout.write(ENTER_ALT_SCREEN + ERASE_SCREEN + CURSOR_HOME + (this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : ''));
     this.resetFramesForAltScreen();
   }
@@ -1919,7 +1941,16 @@ export default class Ink {
     if (this.isUnmounted) {
       return;
     }
-    this.renderNow();
+    // The final frame render is best-effort: a mid-state React commit can
+    // throw (agent still working at the exact exit moment). It must NOT
+    // skip the synchronous cleanup block below — a skipped DISABLE_*
+    // leaves mouse reporting on past process exit, and the shell echoes
+    // SGR garbage for every click/drag/wheel (issue #522).
+    try {
+      this.renderNow();
+    } catch (renderError) {
+      logError(renderError instanceof Error ? renderError : new Error(String(renderError)));
+    }
     this.unsubscribeExit();
     if (typeof this.restoreConsole === 'function') {
       this.restoreConsole();
@@ -1930,43 +1961,57 @@ export default class Ink {
     // Non-TTY environments don't handle erasing ansi escapes well, so it's better to
     // only render last frame of non-static output
     const diff = this.log.renderPreviousOutput_DEPRECATED(this.frontFrame);
-    writeDiffToTerminal(this.terminal, optimize(diff));
+    const lastFrame = serializeDiff(this.terminal, optimize(diff));
 
     // Clean up terminal modes synchronously before process exit.
     // React's componentWillUnmount won't run in time when process.exit() is called,
     // so we must reset terminal modes here to prevent escape sequence leakage.
-    // Use writeSync to stdout (fd 1) to ensure writes complete before exit.
-    // We unconditionally send all disable sequences because terminal detection
-    // may not work correctly (e.g., in tmux, screen) and these are no-ops on
-    // terminals that don't support them.
+    // Use writeSync to the stdout stream's own fd (not a hard-coded 1 — a
+    // host that runs the TUI on a non-1 TTY would drop every sequence while
+    // the enable writes still reach the TTY, issue #522) to ensure writes
+    // complete before exit. We unconditionally send all disable sequences
+    // because terminal detection may not work correctly (e.g., in tmux,
+    // screen) and these are no-ops on terminals that don't support them.
     /* eslint-disable custom-rules/no-sync-fs -- process exiting; async writes would be dropped */
     if (this.options.stdout.isTTY) {
+      // Node's TTY WriteStream exposes .fd; the NodeJS.WriteStream interface
+      // doesn't declare it, hence the local intersection cast.
+      const stdoutWithFd = this.options.stdout as NodeJS.WriteStream & { fd?: number | null };
+      const stdoutFd = typeof stdoutWithFd.fd === 'number' ? stdoutWithFd.fd : 1;
+      // The last frame must land on the ALT screen while it is still up:
+      // writing it through the async stream would race the synchronous
+      // EXIT_ALT_SCREEN below and the frame bytes would arrive AFTER the
+      // switch to the main screen, painting misplaced residue over the
+      // shell (issue #522).
+      if (lastFrame !== '') {
+        writeSync(stdoutFd, lastFrame);
+      }
       if (this.altScreenActive) {
         // <AlternateScreen>'s unmount effect won't run during signal-exit.
         // Exit alt screen FIRST so other cleanup sequences go to the main screen.
-        writeSync(1, EXIT_ALT_SCREEN);
+        writeSync(stdoutFd, EXIT_ALT_SCREEN);
       }
       // Disable mouse tracking — unconditional because altScreenActive can be
       // stale if AlternateScreen's unmount (which flips the flag) raced a
       // blocked event loop + SIGINT. No-op if tracking was never enabled.
-      writeSync(1, DISABLE_MOUSE_TRACKING);
+      writeSync(stdoutFd, DISABLE_MOUSE_TRACKING);
       // Drain stdin so in-flight mouse events don't leak to the shell
       this.drainStdin();
       // Disable extended key reporting (both kitty and modifyOtherKeys)
-      writeSync(1, DISABLE_MODIFY_OTHER_KEYS);
-      writeSync(1, DISABLE_KITTY_KEYBOARD);
+      writeSync(stdoutFd, DISABLE_MODIFY_OTHER_KEYS);
+      writeSync(stdoutFd, DISABLE_KITTY_KEYBOARD);
       // Disable win32-input-mode (no-op where never enabled)
-      writeSync(1, DISABLE_WIN32_INPUT_MODE);
+      writeSync(stdoutFd, DISABLE_WIN32_INPUT_MODE);
       // Disable focus events (DECSET 1004)
-      writeSync(1, DFE);
+      writeSync(stdoutFd, DFE);
       // Disable bracketed paste mode
-      writeSync(1, DBP);
+      writeSync(stdoutFd, DBP);
       // Show cursor
-      writeSync(1, SHOW_CURSOR);
+      writeSync(stdoutFd, SHOW_CURSOR);
       // Clear iTerm2 progress bar
-      writeSync(1, CLEAR_ITERM2_PROGRESS);
+      writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
       // Clear tab status (OSC 21337) so a stale dot doesn't linger
-      if (supportsTabStatus()) writeSync(1, wrapForMultiplexer(CLEAR_TAB_STATUS));
+      if (supportsTabStatus()) writeSync(stdoutFd, wrapForMultiplexer(CLEAR_TAB_STATUS));
     }
     /* eslint-enable custom-rules/no-sync-fs */
 

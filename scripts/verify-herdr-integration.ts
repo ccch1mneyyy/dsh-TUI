@@ -71,6 +71,9 @@ class TestBlockingStore extends ObservableState {
 
   assert.ok(integration, 'Herdr environment should enable the integration')
   await integration.settled()
+  const initialSequence = Number(calls[0]?.args.at(10))
+  assert.ok(Number.isSafeInteger(initialSequence), 'sequence should be an integer')
+  assert.ok(initialSequence >= 1_000_000_000_000, 'sequence should be seeded from the current time')
   assert.deepEqual(calls, [{
     file: 'C:\\Tools\\herdr.exe',
     args: [
@@ -78,7 +81,7 @@ class TestBlockingStore extends ObservableState {
       '--source', 'custom:dsh-tui',
       '--agent', 'dsh-tui',
       '--state', 'idle',
-      '--seq', '1',
+      '--seq', String(initialSequence),
     ],
   }])
 
@@ -91,7 +94,7 @@ class TestBlockingStore extends ObservableState {
     '--source', 'custom:dsh-tui',
     '--agent', 'dsh-tui',
     '--state', 'working',
-    '--seq', '2',
+    '--seq', String(initialSequence + 1),
   ])
 
   questions.snapshot = { key: 'question-1' }
@@ -103,7 +106,7 @@ class TestBlockingStore extends ObservableState {
     '--agent', 'dsh-tui',
     '--state', 'blocked',
     '--message', 'Waiting for user input',
-    '--seq', '3',
+    '--seq', String(initialSequence + 2),
   ])
 
   approvals.snapshot = { key: 'approval-1' }
@@ -137,7 +140,7 @@ class TestBlockingStore extends ObservableState {
     'pane', 'release-agent', 'w1:p2',
     '--source', 'custom:dsh-tui',
     '--agent', 'dsh-tui',
-    '--seq', '6',
+    '--seq', String(initialSequence + 5),
   ])
   await integration.dispose()
   assert.equal(calls.length, 6, 'dispose must be idempotent')

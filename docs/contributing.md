@@ -40,9 +40,9 @@ DeepSeek Harness 拥有，TUI 只消费它们。
 ## 仓库地图（Repository Map）
 
 - `src/index.ts`：公共 Cordis 插件入口、配置 Schema，与对运行时插件的惰性移交。
-- `src/plugin.ts`：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载，以及
+- `src/dsh-adapter/plugin.ts`：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载，以及
   终端/进程的收尾清理。
-- `src/channel.ts`：事件到视图的投影 + 非 React 的动作面。把 DSH 会话事件
+- `src/dsh-adapter/channel.ts`：事件到视图的投影 + 非 React 的动作面。把 DSH 会话事件
   翻译成 transcript 行，实现 submit、steer、rewind、resume、模型/preset 切换、
   本地报告及相关状态迁移。
 - `src/screens/Chat.tsx`：顶层交互协调器。负责模态优先级、全局键盘、滚动/
@@ -60,7 +60,7 @@ DeepSeek Harness 拥有，TUI 只消费它们。
 - `src/cc/`：为 Claude Code 风格 UI 适配的终端格式化与呈现辅助。
 - `src/*Prefs.ts`、`src/customTheme.ts`、`src/sessionHistory.ts`：持久化的
   用户偏好与 `~/.dsh-tui` 下的本地会话元数据。
-- `skills/*/SKILL.md`：随 npm 包分发的技能，由 `src/packaged-skills.ts` 注册。
+- `skills/*/SKILL.md`：随 npm 包分发的技能，由 `src/dsh-adapter/packaged-skills.ts` 注册。
 - `cordis.patch.yml`：profile 安装时使用的包级 bundle 覆盖层。行的顺序、行 ID、
   被禁用的 host 行、insert/override 语义都很关键。
 - `cordis.yml`：直接 Cordis/DSH 启动的完整裸组合示例。
@@ -77,9 +77,9 @@ DeepSeek Harness 拥有，TUI 只消费它们。
 ```text
 Cordis config
   -> src/index.ts
-  -> src/plugin.ts
+  -> src/dsh-adapter/plugin.ts
   -> DSH agent/session services
-  -> src/channel.ts (session events -> Channel snapshot)
+  -> src/dsh-adapter/channel.ts (session events -> Channel snapshot)
   -> src/screens/Chat.tsx
   -> src/components/*
   -> src/ui.ts
@@ -218,7 +218,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 
 ### Cordis 生命周期与配置
 
-- 保持 `src/index.ts` 是小的公共插件契约、`src/plugin.ts` 是运行时实现。
+- 保持 `src/index.ts` 是小的公共插件契约、`src/dsh-adapter/plugin.ts` 是运行时实现。
   除非任务有意改插件加载契约，否则保留惰性移交。
 - 资源通过 Cordis 注册，用 `ctx.effect` 或既有单一退出漏斗清理。渲染失败必须
   响亮且非零退出；正常退出必须在进程退出前恢复终端状态。
@@ -296,9 +296,9 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 插件配置或环境行为 | `src/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`、`README.md`、`README_EN.md` |
 | Slash 命令或快捷键 | `src/commands.ts`、`src/screens/Chat.tsx`、帮助/输入组件、双 README、相关技能映射/测试 |
 | 主题契约或持久化主题行为 | `src/theme.ts`、所有色板、主题 provider/picker、自定义主题解析器、主题验证、双 README |
-| 会话/channel 行为 | `src/channel.ts`、受影响的 UI 投影、编译产物、聚焦 channel/回放回归 |
+| 会话/channel 行为 | `src/dsh-adapter/channel.ts`、受影响的 UI 投影、编译产物、聚焦 channel/回放回归 |
 | 渲染器/布局行为 | `src/ink/` 或 Yoga 源、编译产物、CI 回归、聚焦滚动/resize/PTY 探针 |
-| 打包技能 | `skills/<name>/SKILL.md`、`src/packaged-skills.ts` 假设、暴露为 slash 命令时的提示/映射 |
+| 打包技能 | `skills/<name>/SKILL.md`、`src/dsh-adapter/packaged-skills.ts` 假设、暴露为 slash 命令时的提示/映射 |
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
 
@@ -313,5 +313,11 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 - 发布由 tag 驱动：`.github/workflows/publish.yml` 要求 `v*` tag 与
   `package.json` 版本完全一致，随后构建、跑聚焦回归并发布 npm。版本变更与
   tag 是发布操作，不是日常清理。
+- Release note 带贡献者署名：建 GitHub Release 用
+  `gh release create vX.Y.Z --notes-file notes.md --generate-notes`——手写摘要
+  在前，GitHub 在后面自动追加 What's Changed（PR 标题 + 作者 + 链接）、
+  New Contributors 与 Full Changelog；`.github/release.yml` 从自动清单里排除
+  bot。手写摘要中来自外部贡献者的条目在末尾标 `（#PR号 by @用户名）`，维护者
+  自己的条目不标；裸写 `#123` 与 `@user`，GitHub 渲染成链接。
 - 移交代码改动前检查 `git diff --check`、源码 diff、生成 diff 与 `git status`，
   并如实报告跑了哪些验证、哪些平台/凭证相关的检查没跑。
