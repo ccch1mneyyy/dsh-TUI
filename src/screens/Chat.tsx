@@ -1,5 +1,5 @@
 import React from 'react'
-import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
+import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type Lang } from '../i18n.js'
 import { readThemePref } from '../themePrefs.js'
 import { readPresetPref } from '../presetPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
@@ -129,23 +129,6 @@ const NO_ROWS: readonly ChatRow[] = []
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
-}
-
-/**
- * CC's built-in skill commands, driven through the DSH skill system: each
- * submits an activation prompt the model resolves via its skill catalog/load
- * tools (the corresponding SKILL.md ships under ~/.dsh/skills with dsh-tui).
- */
-// i18n keys, not resolved strings: module scope evaluates before apply()'s
-// setLang, so t() must run at the call site to follow the active language.
-const SKILL_PROMPTS: Readonly<Record<string, I18nKey>> = {
-  audit: 'skill-audit-prompt',
-  bug: 'skill-bug-prompt',
-  practice: 'skill-practice-prompt',
-  review: 'skill-review-prompt',
-  pr_comments: 'skill-pr-comments-prompt',
-  'release-notes': 'skill-release-notes-prompt',
-  'vuln-check': 'skill-vuln-check-prompt',
 }
 
 /** Terminal-title spinner frames (CC's TITLE_ANIMATION_FRAMES). */
@@ -1837,20 +1820,6 @@ export function Chat({
         setHelpOpen(false)
         channel.pushLocal('/connect', [t('connect-none')])
         return true
-      case 'audit':
-      case 'bug':
-      case 'practice':
-      case 'review':
-      case 'pr_comments':
-      case 'release-notes':
-      case 'vuln-check': {
-        // CC's skill commands: drive the DSH skill system by sending the
-        // activation prompt to the model (it loads the skill via its skill
-        // catalog/load tools when the SKILL.md ships in ~/.dsh/skills).
-        const key = SKILL_PROMPTS[name]
-        if (key) channel.submit(t(key))
-        return true
-      }
       default: {
         // Plugin-registered command (DSH command registry): dispatch through
         // the channel, whose execution logs command/run + command/done (the

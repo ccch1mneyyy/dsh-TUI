@@ -330,9 +330,10 @@ the required credentials.
   update declaration, dispatch, help/documentation, the i18n description
   (`cmd-desc-<name>` in `src/i18n.ts`, zh only — en falls back to the
   declaration), and any packaged skill mapping together.
-- Skill command spelling is not always the directory spelling. For example,
-  the local `/pr_comments` command activates the packaged `pr-comments` skill.
-  Preserve explicit mappings and host naming constraints.
+- Built-in skill commands stay out of LOCAL_COMMANDS: packaged skills register
+  through the registry as deterministically dispatched commands (#496), and the
+  command name must equal the SKILL.md registration name (kebab-case) or the
+  collision filter drops it.
 - Keep `ask_user_question` serialized through `QuestionStore`; concurrent
   questions are intentionally presented FIFO and summarized after completion.
 

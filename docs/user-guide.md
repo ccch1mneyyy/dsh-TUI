@@ -261,11 +261,12 @@ dsh-tui
 | `/bug` | Bug 报告 |
 | `/practice` | 编程练习 |
 | `/review` | 代码评审 |
-| `/pr_comments` | PR 评论（注：skill 注册名是 `pr-comments`，菜单中可能同时出现两个条目） |
+| `/pr-comments` | PR 评论 |
 | `/release-notes` | 发布说明 |
 | `/vuln-check` | 漏洞检查 |
 
-技能命令把激活提示发给模型，模型经 `skills/` 目录加载对应 `SKILL.md` 执行。
+技能命令由 host 注入对应 `SKILL.md` 的技能正文后执行，参数原样随行
+（详见 §4.8）；`/skills` 浏览技能目录。
 
 ### 3.6 占位命令
 
@@ -367,8 +368,8 @@ dsh-tui
 ### 4.8 技能 / 注册表 / Goals-Todos
 
 - 打包技能（`/audit` 代码审计 · `/bug` bug 报告 · `/review` 评审 · `/practice` 练习 ·
-  `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查）：
-  命令发送激活提示，模型加载 `SKILL.md` 执行；`/skills` 浏览技能目录。
+  `/pr-comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查）：
+  命令由 host 注入技能正文后执行，参数原样随行；`/skills` 浏览技能目录。
 - `/plan` `/goal` `/feedback` `/permission`：来自 DSH 命令注册表，随组合并入 `/` 菜单。
 - **Goals/Todos 面板自动出现**：模型写入 goal/todo 时在输入框上方实时渲染（🎯 目标 + phase 徽章 +
   树形 todo 最多 8 行），无需任何操作；agent 空闲时自动隐藏已完成项。

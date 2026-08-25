@@ -1,6 +1,6 @@
 ---
 name: pr-comments
-description: Use when the user asks to review pull request comments, or when the /pr_comments command runs — fetch and analyze PR review comments on the current branch and summarize actionable items.
+description: Use when the user asks to review pull request comments, or when the /pr-comments command runs — fetch and analyze PR review comments on the current branch and summarize actionable items.
 ---
 
 # Pull Request Comments Review

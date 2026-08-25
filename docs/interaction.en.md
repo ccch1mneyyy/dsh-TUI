@@ -339,7 +339,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Status | `/context`, `/status`, `/cost`, `/config`, `/doctor`, `/init`, `/agents`, `/settings` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/color` (session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`; input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`), `/lang` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/skills`, `/plugins` (`check <path>` validates a plugin manifest) |
-| Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr_comments`, `/release-notes`, `/vuln-check` |
+| Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr-comments`, `/release-notes`, `/vuln-check` |
 | Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` (aliases `/quit`, `/q`) |
 | Registry | `/plan`, `/goal`, and any other command registered by the DSH composition |
 
@@ -371,9 +371,9 @@ Additional forms:
   without restarting.
 - `/plan [off|message]` and `/goal ...` are handled by DSH command plugins and
   recorded as session events.
-- Skill commands submit activation prompts. The actual skill is loaded through
-  the DSH skill registry. Packaged `skills/` register at startup and may be
-  overridden by same-name project or user skills.
+- Skill commands are executed by the host injecting the corresponding
+  `SKILL.md` body, with arguments passed through unchanged. Packaged `skills/`
+  register at startup and may be overridden by same-name project or user skills.
 
 `/vim`, `/connect`, and `/hooks` are currently compatibility
 placeholders. When the DSH composition has no matching capability, each

@@ -280,6 +280,11 @@ const GROUPS = {
 // 菜单与 Tab 补全（skill 标记、与 locals/注册表撞名让位），
 // skills/change 实时增删，读取失败保留 last-good。
     ["verify-skill-commands", ['node', 'scripts/verify-skill-commands.mjs']],
+// 内置技能命令确定性直调回归（issue #496/#416）：本地名单不再截留打包
+// 技能名、注册名与 SKILL.md 对齐（kebab-case）、skillsRoot 双层候选路径、
+// 旧 SKILL_PROMPTS/i18n 键彻底移除。技能直调不在 CI 里就会随接口演进
+// 静默退化回"客套话提示词"路径。
+    ["verify-skill-direct-invocation", ['node', '--import', 'tsx/esm', 'scripts/verify-skill-direct-invocation.ts']],
 // 轨迹投影回归（issue #80 演进）：增量折叠与全量折叠在每个切分点终态
 // 等价（机械 oracle）、六类括号配对、增广事件守卫的全变异模糊测试、
 // 未知事件前向兼容、连发折叠边界、无 chunk 的步不伪造 TTFT。
