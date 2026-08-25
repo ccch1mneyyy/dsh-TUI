@@ -92,7 +92,9 @@ const stripAnsi = text => text
   .replace(/\x1b\]9;[^\x07]*\x07/g, '')
 const WHALE_OUTLINE = '\x1b[38;2;20;38;96m'
 
-async function renderHeader({ columns, whale }) {
+// `ready`（可选）：call site 断言里比默认文字条件更强的正向条件必须并入
+// 等待谓词（#561 弱条件分叉），否则 settle 等到文字就返回、断言到旧帧。
+async function renderHeader({ columns, whale, ready }) {
   const stdout = new FakeOutput(columns)
   const stderr = new FakeOutput(columns)
   const props = { model: 'whale-model-probe', cwd: '/whale/cwd' }
@@ -112,8 +114,10 @@ async function renderHeader({ columns, whale }) {
     },
   )
   await settle(() => {
-    const plain = stripAnsi(stdout.writes.join(''))
+    const raw = stdout.writes.join('')
+    const plain = stripAnsi(raw)
     return plain.includes('dsh-TUI') && plain.includes('whale-model-probe')
+      && (ready === undefined || ready(raw))
   })
   const raw = stdout.writes.join('')
   await instance.unmount()
@@ -140,7 +144,7 @@ check('setWhale(true) restores the default view', () => {
 })
 
 // Real LogoHeader -> LogoV2 rendering: default, explicit opt-out, and narrow fallback.
-const wideDefault = await renderHeader({ columns: 100 })
+const wideDefault = await renderHeader({ columns: 100, ready: raw => raw.includes(WHALE_OUTLINE) })
 check('wide LogoHeader shows whale by default', () => {
   assert.ok(wideDefault.raw.includes(WHALE_OUTLINE), 'whale palette marker missing')
   assert.ok(wideDefault.plain.includes('dsh-TUI'), 'text logo missing')

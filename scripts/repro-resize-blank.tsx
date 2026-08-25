@@ -9,7 +9,7 @@ process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'Orca'
 process.env.DSH_TUI_THEME = 'dark'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { default: instances }, { settle }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { default: instances }, { settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -22,7 +22,6 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
 
 let COLS = 232
 const ROWS = 71
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (extra ? '  (' + extra + ')' : ''))
@@ -110,11 +109,12 @@ await render(
 const ink: any = instances.get(stdout)
 if (!ink) { console.log('FAIL 未找到 Ink 实例'); process.exit(1) }
 ink.setAltScreenActive(true, true)
-// boot 是唯一的 false→true 等待（消息区从空到有内容）；后面全部 resize
-// 断言是「不得空白」稳定性探针，保留固定窗口。
-await settle(() => density() >= 3)
+// boot 是唯一的 false→true 等待（消息区从空到有内容）——settled 终值直接
+// 交给断言；后面全部 resize 断言是「不得空白」稳定性探针，保留固定窗口。
+const booted = await settled(() => density() >= 3)
 check('alt-screen 已激活', ink.isAltScreenActive === true)
-assertVisible('启动落定 400 行')
+check('[启动落定 400 行] 消息区非空', booted, 'density=' + density())
+if (!booted) dump('启动落定 400 行')
 
 function doResize(w: number, h: number) {
   stdout.columns = w

@@ -42,7 +42,7 @@ class FakeStdin extends PassThrough {
 // 等待/读屏走公共辅助（issue #532）：settle 轮询到预期状态再断言——固定
 // sleep 在慢 runner 上会断言到旧屏幕。alt-screen 下 baseY 恒 0，视口读取
 // 与旧的 getLine(0..ROWS) 直扫等价。
-const { sleep, settle } = termTest
+const { settle, settled } = termTest
 const screenHas = (s: string): boolean => termTest.screenHas(term, s)
 
 const listeners = new Set<() => void>()
@@ -84,7 +84,7 @@ const instance = await render(
   </AlternateScreen>,
   { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(600)
+await settle(() => termTest.viewportLines(term).some(l => l.trim().length > 0))
 
 let failed = 0
 const check = (name: string, ok: boolean, extra = '') => {
@@ -94,24 +94,20 @@ const check = (name: string, ok: boolean, extra = '') => {
 
 // 1. type text, ctrl+c → cleared, no exit, no exit-arm notification
 stdinObj.write('hello world')
-await settle(() => screenHas('hello world'))
-check('typed text visible in prompt', screenHas('hello world'))
+check('typed text visible in prompt', await settled(() => screenHas('hello world')))
 stdinObj.write('\x03')
-await settle(() => !screenHas('hello world'))
-check('ctrl+c clears non-empty input', !screenHas('hello world'))
+check('ctrl+c clears non-empty input', await settled(() => !screenHas('hello world')))
 check('ctrl+c with text does not exit', !exited)
 check('ctrl+c with text does not arm exit', !screenHas('Press Ctrl+C again'), JSON.stringify(channel.notifications))
 
 // 2. ctrl+c on empty input → arms exit
 stdinObj.write('\x03')
-await settle(() => screenHas('Press Ctrl+C again') || channel.notifications.length > 0)
-check('ctrl+c on empty input arms exit', screenHas('Press Ctrl+C again') || channel.notifications.length > 0, JSON.stringify(channel.notifications))
+check('ctrl+c on empty input arms exit', await settled(() => screenHas('Press Ctrl+C again') || channel.notifications.length > 0), JSON.stringify(channel.notifications))
 check('first press does not exit', !exited)
 
 // 3. second press exits
 stdinObj.write('\x03')
-await settle(() => exited)
-check('second ctrl+c exits', exited)
+check('second ctrl+c exits', await settled(() => exited))
 
 await instance.unmount()
 process.exit(failed)

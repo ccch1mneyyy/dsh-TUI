@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { settle } from './lib/term-test.mjs'
+import { settled } from './lib/term-test.mjs'
 
 const testHome = mkdtempSync(join(tmpdir(), 'dsh-tui-activity-home-'))
 process.env.HOME = testHome
@@ -144,8 +144,7 @@ sessionEvent()(agent.session, {
 assert.equal(channel.workingActivity?.phase, 'tool')
 
 const elapsedBeforeTick = channel.workingActivity.turnElapsedMs
-await settle(() => channel.workingActivity.turnElapsedMs >= elapsedBeforeTick + 450)
-assert.ok(channel.workingActivity.turnElapsedMs >= elapsedBeforeTick + 450, '500 ms timer refreshes elapsed state')
+assert.ok(await settled(() => channel.workingActivity.turnElapsedMs >= elapsedBeforeTick + 450), '500 ms timer refreshes elapsed state')
 
 sessionEvent()(agent.session, {
   type: 'tool/result', seq: 3, time: Date.now(),

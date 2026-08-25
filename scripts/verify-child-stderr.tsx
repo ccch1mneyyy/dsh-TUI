@@ -19,10 +19,9 @@ process.env.DSH_TUI_LANG = 'zh'
 
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { settle } from './lib/term-test.mjs'
+import { settled, sleep } from './lib/term-test.mjs'
 
 const SELF = fileURLToPath(import.meta.url)
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 let failures = 0
 const results: string[] = []
@@ -106,23 +105,17 @@ async function runDriver(): Promise<void> {
   // 纯排序等待：冷却窗口是墙钟时间，没有可观察的状态翻转——保留。
   await sleep(400)
   reporter.push(failing)
-  await settle(() => notices.length === 2)
-  check('冷却结束：同一行可再次通知', notices.length === 2)
+  check('冷却结束：同一行可再次通知', await settled(() => notices.length === 2))
 
   reporter.push('Usage: tsx proxy.ts <url>')
-  await settle(() => notices.length === 3 && (notices[2]?.includes('Usage:') ?? false))
-  check('不同的行各自成条通知', notices.length === 3 && (notices[2]?.includes('Usage:') ?? false))
+  check('不同的行各自成条通知', await settled(() => notices.length === 3 && (notices[2]?.includes('Usage:') ?? false)))
 
   reporter.push('\x1b[31mred-line\x1b[39m')
-  await settle(() => (notices.at(-1) ?? '').includes('red-line') && !(notices.at(-1) ?? '').includes('\x1b'))
-  const ansiNotice = notices.at(-1) ?? ''
-  check('ANSI 转义被剥离', ansiNotice.includes('red-line') && !ansiNotice.includes('\x1b'))
+  check('ANSI 转义被剥离', await settled(() => (notices.at(-1) ?? '').includes('red-line') && !(notices.at(-1) ?? '').includes('\x1b')))
 
   const longLine = 'x'.repeat(100)
   reporter.push(longLine)
-  await settle(() => (notices.at(-1) ?? '').includes('…') && !(notices.at(-1) ?? '').includes(longLine))
-  const longNotice = notices.at(-1) ?? ''
-  check('超长行被截断（带省略号）', longNotice.includes('…') && !longNotice.includes(longLine))
+  check('超长行被截断（带省略号）', await settled(() => (notices.at(-1) ?? '').includes('…') && !(notices.at(-1) ?? '').includes(longLine)))
 
   const countBefore = notices.length
   reporter.push('   ')

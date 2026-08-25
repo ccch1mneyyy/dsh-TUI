@@ -13,7 +13,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable }, React, { render, Text }, { PluginSceneBoundary }, { settle }] = await Promise.all([
+const [{ Writable }, React, { render, Text }, { PluginSceneBoundary }, { settled }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('../src/ui.js'),
@@ -49,8 +49,7 @@ const healthy = await render(
   </PluginSceneBoundary>,
   { stdout: new FakeStdout() as never, stderr: new FakeStderr() as never, patchConsole: false, exitOnCtrlC: false },
 )
-await settle(() => frames.join('').includes('scene-ok-content'))
-check('healthy scene content painted', frames.join('').includes('scene-ok-content'))
+check('healthy scene content painted', await settled(() => frames.join('').includes('scene-ok-content')))
 await healthy.unmount()
 
 // --- 2. throwing scene is caught, reported once, and stops painting --------
@@ -68,8 +67,7 @@ const crashed = await render(
   </PluginSceneBoundary>,
   { stdout: new FakeStdout() as never, stderr: new FakeStderr() as never, patchConsole: false, exitOnCtrlC: false },
 )
-await settle(() => reports.length === 1)
-check('boundary reports the crash exactly once', reports.length === 1, `reports=${reports.length}`)
+check('boundary reports the crash exactly once', await settled(() => reports.length === 1), `reports=${reports.length}`)
 check('report carries scene id and error message',
   reports[0]?.id === 'demo' && reports[0]?.message.includes('boom-场景炸了'),
   JSON.stringify(reports[0]))
