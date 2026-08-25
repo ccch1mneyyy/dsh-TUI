@@ -432,6 +432,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     configuredLang: config.lang,
     configuredActivityFrames: config.activityFrames,
     effort: config.effort,
+    previewEfforts: config.previewEfforts,
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.

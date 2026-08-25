@@ -33,6 +33,8 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
     # 工作区时写绝对路径（如 cwd: /repo/packages/app），不要用
     # `!!js process.cwd()`（那会把工作区钉死在启动子目录上，issue #96）。
     effort: max
+    # 仅动画/主题开发时使用；预览档位不会发送给不支持它的模型
+    # previewEfforts: [ultra]
     activity: true
     activityFrames: claude
     contextBar: true
@@ -49,6 +51,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `cwd` | 启动目录所在的 git worktree 根（不在任何 worktree 内时为 `process.cwd()`；家目录的 dotfiles 仓不算） | TUI 会话侧工作区：agent meta、`@` 补全/提及展开、/resume 过滤、状态栏；恢复已有会话时以该会话持久化的 cwd 为准。注意 bash/fs-policy/sandbox 的根仍由组合层 cordis 配置决定（默认启动目录，归 dsh-base 管），与这里的会话侧 cwd 可能不同 |
 | `workspace` | 未设置 | 启动工作区目标；可用本地路径、`file://` URI 或插件提供的 URI，设置后优先于 `cwd` |
 | `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按模型档位校验，deepseek 仅 off/high/max，非法档位静默回落默认；优先于 `/effort` 持久化选择），兼作顶栏启动显示 |
+| `previewEfforts` | 未设置 | 额外加入 `/effort` 的 UI-only 动画预览档位；仅改变 TUI 显示，不写入持久化偏好，也不会把当前模型未公布的档位发送给模型。用于主题/动画开发验收，例如 `[ultra]` |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `activity` | `true` | 是否显示实时工作状态行 |
 | `activityFrames` | 持久化选择或 `claude` | 工作状态动画预设；也可通过 `/activity` 修改 |

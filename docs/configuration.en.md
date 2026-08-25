@@ -35,6 +35,8 @@ A complete common override looks like this:
     # absolute path (e.g. cwd: /repo/packages/app), NOT `!!js process.cwd()`
     # (that pins the workspace to the launch subdirectory, issue #96).
     effort: max
+    # Animation/theme development only; unsupported preview levels stay UI-only
+    # previewEfforts: [ultra]
     activity: true
     activityFrames: claude
     contextBar: true
@@ -51,6 +53,7 @@ A complete common override looks like this:
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
 | `effort` | normally `max` in the bundle | Reasoning effort actually applied to every request (validated against model levels; deepseek supports only off/high/max and invalid levels silently fall back to the adapter default; wins over the persisted `/effort` choice), also shown in the header at startup |
+| `previewEfforts` | unset | Extra UI-only `/effort` levels for animation previews. They change the TUI without persisting the choice or sending a level the current model did not advertise. Intended for theme/motion development, for example `[ultra]` |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
