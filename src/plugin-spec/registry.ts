@@ -8,7 +8,7 @@ import { createAdmissionCatalog } from './tui-extension.js'
 import type { ContractRegistry, PermissionEntry, PermissionRegistry, RegistryEntry } from './types.js'
 
 export const DSH_STD_REVISION = '614dfa1ac168db79fcf4577cf0ebb34e2e3b944b'
-export const ECOSYSTEM_SPEC_REVISION = '2d0236f7d4579814d9d177a58d03ebd168025960'
+export const ECOSYSTEM_SPEC_REVISION = '04d6798152db1df8523d97f51541adf42d3e41d9'
 
 export interface SpecData {
   dir: string

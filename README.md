@@ -49,6 +49,7 @@
     </tr>
   </table>
 </div>
+
 ## 核心能力
 
   - **终端交互**：低资源占用，长会话稳定可靠；多种主题切换，样式美观，实时显示工作状态、TPS、缓存命中率等
@@ -123,8 +124,7 @@ sh install.sh
 
 想为 dsh-TUI 做插件/扩展？欢迎加入生态！
 
-- **接口与兼容性协定**：[终端交互生态插件准入规范与实施标准](https://github.com/T-Auto/dsh-ecosystem-spec)
-- **插件开发指南**：[`docs/plugins.md`](docs/plugins.md)（接缝、契约、规范与验证清单）
+- **接口与兼容性协定 / 插件开发指南**：[终端交互生态插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)（准入规范、接缝、契约、验证清单）
 - **生态组织**：[dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)（社区插件与模板的家）
 - **模板仓库**：[plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)（从模板起步，5 分钟出一个插件）
 - **参考实现**：`dsh-working-activity`（实时工作状态行：TUI 槽位 + `activity/status` 会话事件双出口）
@@ -142,7 +142,7 @@ sh install.sh
 | [架构与限制](docs/architecture.md) | 运行链路、渲染与持久化设计、安全边界、已知限制 |
 | [VS Code 使用指南](docs/vscode.md) | 在 VS Code 集成终端运行 dsh-tui；companion 扩展 `dsh-tui-vscode` 提供与 Claude Code 官方扩展几乎一致的体验（已上架 Marketplace） |
 | [贡献与开发约定](docs/contributing.md) | 贡献流程、仓库地图、构建产物、验证矩阵与修改规则 |
-| [插件开发指南](docs/plugins.md) | 插件接缝（会话事件 / 槽位 / 技能 / 主题 / prompt 段）、契约、规范与收录 |
+| [插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | 接口与兼容性协定 / 插件准入规范 / 插件接缝 / 契约 / 验证清单（已并入 dsh-ecosystem-spec） |
 
 完整的中英文索引见 [`docs/README.md`](docs/README.md)。
 

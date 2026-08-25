@@ -46,7 +46,7 @@ import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
-import { getHostSettingsSections, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import instances from '../ink/instances.js'
@@ -778,10 +778,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       },
     }
   })
-  const settingsSections = getHostSettingsSections(
-    ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-  )
-  if (settingsSections !== undefined) {
+  // Prefer the composition's sections service; fall back to the in-package
+  // local host. Real compositions have been observed disposing the whole
+  // dsh-tui-* host-seam insert list right after load (issue #557), which
+  // left this registration silently skipped and /settings read-only.
+  // channel.ts reads through the same fallback, so both sides meet in the
+  // same registry either way.
+  {
+    const settingsSections = getHostSettingsSections(
+      ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
+    ) ?? getLocalSettingsSectionsHost()
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
       title: 'dsh-tui',

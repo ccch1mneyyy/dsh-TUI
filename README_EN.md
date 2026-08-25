@@ -94,11 +94,13 @@ npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
 
 # 2. Start it (first run auto-initializes the dsh-tui profile; needs pnpm)
 dsh-tui
+# Both `dsh-tui` and the short `dst` alias start the same TUI.
+dst
 ```
 
 Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`
 (the repository's `sh install.sh` wraps this step and checks the required
-commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
+commands), then `dsh-tui` (or `dst`) and `dsh --profile dsh-tui` are equivalent.
 
 > **New-user note**: if `dsh plugin` fails with `ERR_PNPM_IGNORED_BUILDS`
 > (pnpm ≥11 blocks dependencies that carry install scripts by default, e.g.
@@ -115,10 +117,10 @@ commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 > `/update` and `dsh-tui update` seed this configuration automatically —
 > no manual step needed.
 
-`dsh-tui --resume` restores the most recently selected session; on Windows
+`dsh-tui` (or its `dst` alias) with `--resume` restores the most recently selected session; on Windows
 the repository's `dsh-tui.cmd` works the same way.
 
-CLI subcommands (`dsh-tui help` prints the full usage):
+CLI subcommands (`dsh-tui help` or `dst help` prints the full usage; the `dst` alias accepts the same commands):
 
 | Command | Purpose |
 |---|---|
@@ -259,7 +261,7 @@ so keep using `Ctrl`.
 | [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
 | [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers an experience almost identical to the official Claude Code extension (on the Marketplace) |
 | [Contributing](docs/contributing.en.md) | Contribution workflow, repository map, build artifacts, verification matrix, change rules |
-| [Plugin development](docs/plugins.en.md) | Plugin seams (session events / slots / skills / themes / prompt sections), contract, conventions, listing |
+| [Plugin admission & development](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | Interface & compatibility agreement / plugin admission spec / seams / contracts / verification checklist (merged into dsh-ecosystem-spec) |
 
 The complete bilingual index is [`docs/README.md`](docs/README.md).
 
@@ -397,8 +399,7 @@ changes also require the relevant regression scripts.
 
 Want to build a plugin or extension for dsh-TUI? Join the ecosystem:
 
-- **Plugin development guide**: [`docs/plugins.en.md`](docs/plugins.en.md)
-  (seams, contract, conventions, and verification checklist)
+- **Interface & compatibility agreement / Plugin development guide**: [Terminal Interactive Ecosystem Plugin Admission and Development Guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) (admission spec, seams, contracts, verification checklist)
 - **Organization**: [dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)
   (home of community plugins and templates)
 - **Template repository**: [plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)

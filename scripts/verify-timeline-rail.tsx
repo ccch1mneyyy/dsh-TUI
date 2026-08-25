@@ -119,7 +119,13 @@ const inst = await render(
 )
 await settle(() => {
   const snap = railSnapshot()
-  return snap.ticks.length === 8 && snap.activeRow !== null && snap.upRow !== null && snap.downRow !== null
+  if (snap.ticks.length !== 8 || snap.activeRow === null || snap.upRow === null || snap.downRow === null) return false
+  // 断言同条件：初始 sticky 滚动到底与 rail active 重算之间存在竞争，
+  // 只等「tick 出现」在快 runner 上会断到 active 尚未对齐的帧（块 1 的
+  // 顶部锚定断言随机红）。settle 必须包含块 1 断言的同一不变量——active
+  // 与视口顶行的轮次归属一致；真回归时此条件永不成立，超时后断言照常红。
+  const owner = topOwningTurn()
+  return owner !== null && snap.ticks.indexOf(snap.activeRow) === owner - 1
 })
 
 function screenLines(): string[] {
