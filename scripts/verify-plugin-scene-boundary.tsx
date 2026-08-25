@@ -13,11 +13,12 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable }, React, { render, Text }, { PluginSceneBoundary }] = await Promise.all([
+const [{ Writable }, React, { render, Text }, { PluginSceneBoundary }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('../src/ui.js'),
   import('../src/components/PluginSceneBoundary.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 let failed = 0
@@ -41,8 +42,6 @@ class FakeStderr extends Writable {
   override _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
 }
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-
 // --- 1. healthy scene renders through untouched ----------------------------
 const healthy = await render(
   <PluginSceneBoundary id="ok" onError={() => { check('healthy scene never reports', false) }}>
@@ -50,7 +49,7 @@ const healthy = await render(
   </PluginSceneBoundary>,
   { stdout: new FakeStdout() as never, stderr: new FakeStderr() as never, patchConsole: false, exitOnCtrlC: false },
 )
-await sleep(100)
+await settle(() => frames.join('').includes('scene-ok-content'))
 check('healthy scene content painted', frames.join('').includes('scene-ok-content'))
 await healthy.unmount()
 
@@ -69,7 +68,7 @@ const crashed = await render(
   </PluginSceneBoundary>,
   { stdout: new FakeStdout() as never, stderr: new FakeStderr() as never, patchConsole: false, exitOnCtrlC: false },
 )
-await sleep(150)
+await settle(() => reports.length === 1)
 check('boundary reports the crash exactly once', reports.length === 1, `reports=${reports.length}`)
 check('report carries scene id and error message',
   reports[0]?.id === 'demo' && reports[0]?.message.includes('boom-场景炸了'),

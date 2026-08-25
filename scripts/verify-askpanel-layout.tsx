@@ -12,13 +12,14 @@ export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本�
 
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -152,7 +153,7 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
   )
   await sleep(600)
   void store.ask({ questions: [EXACT_QUESTION] } as never)
-  await sleep(600)
+  await settle(() => REQUIRED.every(t => screen().includes(t)))
   check(`静态渲染（${name}）`, screen())
   app.unmount()
   await sleep(100)
@@ -211,7 +212,7 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
     stdout.emit('resize')
     await sleep(90)
   }
-  await sleep(800)
+  await settle(() => REQUIRED.every(t => screen().includes(t)))
   check('resize 风暴后（130x42）', screen())
   app.unmount()
   await sleep(100)

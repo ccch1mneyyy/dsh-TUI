@@ -377,7 +377,7 @@ declare module '@deepseek-ai/dsh-session/types' {
 ```
 
 > dsh-TUI's profile carries its own compatibility repair
-> (`src/compat/sessionLog.ts`) that patches third-party event types, so resume
+> (`src/dsh-adapter/compat/sessionLog.ts`) that patches third-party event types, so resume
 > works in the dsh-tui profile regardless; bare compositions, Web, and other
 > headless consumers have no such repair — registration is still mandatory.
 
@@ -398,7 +398,7 @@ slot, the plugin silently has no effect.
 
 Note: **dsh-TUI itself does not provide the `tuiPrompt` service** — it consumes
 `activity/status` events directly to render the working line (see
-`src/channel.ts` and `src/components/ActivityLine.tsx`). If your plugin targets
+`src/dsh-adapter/channel.ts` and `src/components/ActivityLine.tsx`). If your plugin targets
 both the official TUI and dsh-TUI, adopt `dsh-working-activity`'s **dual-outlet**
 pattern: the prompt slot for the official TUI, log-only events for dsh-TUI and
 other consumers.
@@ -421,7 +421,7 @@ registry?.register({
 })
 ```
 
-See the core package's `src/packaged-skills.ts`: single-line scalar frontmatter
+See the core package's `src/dsh-adapter/packaged-skills.ts`: single-line scalar frontmatter
 (`name`, `description`); duplicate or invalid entries are skipped — **a skill
 registration failure must never take down TUI boot**. Once registered, the skill
 is usable through DSH's `/skill` surface.

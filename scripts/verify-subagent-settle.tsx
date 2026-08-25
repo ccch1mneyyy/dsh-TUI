@@ -96,6 +96,9 @@ const channel: any = {
 }
 const bump = () => { channel.version++; for (const cb of listeners) (cb as () => void)() }
 
+/** 固定窗口刻意保留（不换 settle）：帧计数窗口本身就是被测对象——
+ *  「settled 后空闲帧数 = 0」是不得发生渲染的稳定性探针，对已成立
+ *  条件轮询会立即返回，等于没测。 */
 async function countIdleFrames(windowMs: number): Promise<number> {
   await sleep(300)
   const before = frameCount

@@ -561,8 +561,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-esc',
     group: 'pitfalls',
-    zh: '审批条 Esc=拒绝；问卷 Esc=取消整批提问',
-    en: 'Esc rejects approvals and cancels question batches',
+    zh: '审批条 Esc=拒绝；问卷第 2 题起 Esc=上一题，Ctrl+C=取消整批',
+    en: 'Esc rejects approvals; question batches use Esc for previous and Ctrl+C to cancel',
   },
   {
     id: 'pit-ctrl-c',

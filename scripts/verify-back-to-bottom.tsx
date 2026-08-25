@@ -16,7 +16,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -24,6 +24,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100, ROWS = 40
@@ -77,6 +78,8 @@ const inst = await render(
   </AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
+// 启动等待保留固定窗口：首个断言是「钉底无 pill」的稳定性探针，对已成立
+// 条件（空屏也无 pill）轮询立即返回等于没测。
 await sleep(700)
 
 function screenLines(): string[] {
@@ -97,13 +100,18 @@ const wheel = async (up: boolean, times: number) => {
     await sleep(150)
   }
 }
-const pressKey = async (name: string) => {
+/**
+ * 按键后等待：给 until 则 settle 到该条件（断言的同一条件）；不给则保留
+ * 固定 400ms——「钉底按 End 无操作」这类稳定性探针必须要固定窗口。
+ */
+const pressKey = async (name: string, until?: () => boolean) => {
   const seqs: Record<string, string> = {
     end: '\x1b[F',
     enter: '\r',
   }
   stdin.write(seqs[name]!)
-  await sleep(400)
+  if (until) await settle(until)
+  else await sleep(400)
 }
 
 // ── 1. 钉底：无 pill ──
@@ -119,14 +127,17 @@ await wheel(true, 6)
 rows.push({ id: 17, kind: 'user', text: '问题 9' })
 rows.push({ id: 18, kind: 'assistant', text: '回复 9 第 1 行\n回复 9 第 2 行' })
 emitChannel()
-await sleep(500)
+await settle(() => {
+  const p = pillText()
+  return p !== null && /2 条新消息/.test(p)
+})
 {
   const p = pillText()
   check('新消息后 pill 切计数', p !== null && /2 条新消息/.test(p), `pill=${JSON.stringify(p)}`)
 }
 
 // ── 3. End 键回底 ──
-await pressKey('end')
+await pressKey('end', () => lastTurnVisible() && pillText() === null)
 {
   check('End 后回到底部（末轮可见）', lastTurnVisible())
   check('End 后 pill 消失', pillText() === null, `pill=${JSON.stringify(pillText())}`)
@@ -137,7 +148,7 @@ await wheel(true, 8)
 {
   check('再次上滚 pill 重现', pillText() !== null, `pill=${JSON.stringify(pillText())}`)
 }
-await pressKey('enter')
+await pressKey('enter', () => lastTurnVisible() && pillText() === null)
 {
   check('Enter 后回到底部', lastTurnVisible() && pillText() === null,
     `last=${lastTurnVisible()} pill=${JSON.stringify(pillText())}`)
@@ -157,13 +168,14 @@ await wheel(true, 8)
   if (pillRow !== -1) {
     stdin.write(`\x1b[<0;${pillCol + 2};${pillRow + 1}M`)
     stdin.write(`\x1b[<0;${pillCol + 2};${pillRow + 1}m`)
-    await sleep(500)
+    await settle(() => lastTurnVisible() && pillText() === null)
     check('点击 pill 后回到底部', lastTurnVisible() && pillText() === null,
       `last=${lastTurnVisible()} pill=${JSON.stringify(pillText())}`)
   }
 }
 
 // ── 6. 钉底按 End：无操作不崩 ──
+// 稳定性探针：期望状态不变（已在底部），不传 until、保留固定窗口。
 await pressKey('end')
 {
   check('钉底按 End 无操作', lastTurnVisible() && pillText() === null)
@@ -187,7 +199,7 @@ await inst.unmount()
     </AlternateScreen>,
     { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(700)
+  await settle(() => screenLines().some(l => l.includes('问题 20')))
   // 上滚 30 格 → 中部（跳底距离 ≈ 150 行 ≫ 视口）
   for (let i = 0; i < 30; i++) {
     stdin.write('\x1b[<64;90;30M')

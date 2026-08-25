@@ -17,6 +17,7 @@ const [
   { render },
   { Chat },
   { setLang },
+  { settle, viewportLines },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -24,6 +25,7 @@ const [
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/i18n.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100
@@ -54,12 +56,7 @@ class FakeStdin extends PassThrough {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 function screenText(): string {
-  const buffer = term.buffer.active
-  const lines: string[] = []
-  for (let y = 0; y < ROWS; y++) {
-    lines.push(buffer.getLine(y)?.translateToString(true) ?? '')
-  }
-  return lines.join('\n')
+  return viewportLines(term, ROWS).join('\n')
 }
 
 let failures = 0
@@ -189,14 +186,14 @@ const instance = await render(
     patchConsole: false,
   },
 )
-await sleep(500)
+await settle(() => screenText().includes('SECRET_REASONING_TRACE'))
 
 check('切换前流式思考行可见', screenText().includes('SECRET_REASONING_TRACE'))
 
 stdin.write('/thinking')
-await sleep(150)
+await settle(() => screenText().includes('/thinking'))
 stdin.write('\r')
-await sleep(300)
+await settle(() => screenText().includes('思考过程显示'))
 
 let screen = screenText()
 check('对话框明确这是思考过程显示设置', screen.includes('思考过程显示'))
@@ -204,9 +201,12 @@ check('对话框明确不改变模型思考行为', screen.includes('不改变�
 check('隐藏项说明模型仍会照常思考', screen.includes('模型仍会照常思考'))
 
 stdin.write('\x1b[B')
+// 排序 sleep 保留：选中项移动只改高亮色，不改可见文本，屏上无可 settle 的内容。
 await sleep(120)
 stdin.write('\r')
-await sleep(300)
+// 对话框盖住转录区时「思考行不可见」早已成立，settle 屏幕条件会提前返回；
+// 通知只在确认处理后才写入，才是确认已生效的信号（也是下方断言之一）。
+await settle(() => channel.notifications.includes('思考过程：隐藏'))
 
 screen = screenText()
 check('隐藏立即生效，不出现质量警告', !screen.includes('可能降低质量'))
@@ -217,9 +217,9 @@ check('通知准确说明思考过程已隐藏', channel.notifications.includes(
 
 setLang('en')
 stdin.write('/thinking')
-await sleep(150)
+await settle(() => screenText().includes('/thinking'))
 stdin.write('\r')
-await sleep(300)
+await settle(() => screenText().includes('Thinking display'))
 
 screen = screenText()
 check('English dialog describes thinking display', screen.includes('Thinking display'))
@@ -227,9 +227,10 @@ check('English dialog says model behavior is unchanged', screen.includes('does n
 check('English shown option describes conversation visibility', screen.includes("Show DeepSeek's reasoning"))
 
 stdin.write('\x1b[A')
+// 排序 sleep 保留：选中项移动只改高亮色，不改可见文本，屏上无可 settle 的内容。
 await sleep(120)
 stdin.write('\r')
-await sleep(300)
+await settle(() => screenText().includes('SECRET_REASONING_TRACE'))
 
 screen = screenText()
 check('showing reasoning again takes effect immediately', screen.includes('SECRET_REASONING_TRACE'))

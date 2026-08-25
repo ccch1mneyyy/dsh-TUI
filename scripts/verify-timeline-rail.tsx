@@ -20,7 +20,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -28,6 +28,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100, ROWS = 40
@@ -116,7 +117,10 @@ const inst = await render(
   </AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(700)
+await settle(() => {
+  const snap = railSnapshot()
+  return snap.ticks.length === 8 && snap.activeRow !== null && snap.upRow !== null && snap.downRow !== null
+})
 
 function screenLines(): string[] {
   const buf = term.buffer.active
@@ -253,6 +257,8 @@ await wheel(true, 40)
     `active=${snap.activeRow} first=${snap.ticks[0]}`)
   const before = screenLines()[0]
   if (snap.upRow !== null) {
+    // 稳定性探针：断言点击后「无操作」——clickAt 内置的固定窗口就是给
+    // 错误滚动留的现身时间，settle 对已成立条件会立即返回，等于没测。
     await clickAt(COLS, snap.upRow + 1)
     const after = screenLines()[0]
     check('顶部 ▲ 无操作（dim = no-op）', before === after, `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`)
@@ -296,6 +302,8 @@ await wheel(false, 20)
     await sleep(8)
     if (screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))) anyCard = true
   }
+  // 稳定性探针保留固定窗口：断言「卡不得出现」——settle 对已成立的
+  // 否定条件会立即返回，等于没给错误弹卡留出现身时间。
   await sleep(60)
   if (screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))) anyCard = true
   check('快速划过 tick 全程无预览卡（dwell 门）', !anyCard)
@@ -303,7 +311,7 @@ await wheel(false, 20)
   const row = snap.ticks[2]
   if (row !== undefined) {
     stdin.write(`\x1b[<35;${COLS};${row + 1}M`)
-    await sleep(350)
+    await settle(() => screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮')))
     check('停留 350ms 后预览卡出现', screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮')))
     await hoverAt(30, 20)
   }
@@ -314,6 +322,8 @@ await wheel(false, 20)
   ;(stdout as any).columns = 59
   stdout.emit('resize')
   term.resize(59, ROWS)
+  // 固定窗口保留：断言是「rail 不存在」的否定条件，resize 回流的瞬态
+  // 屏幕可能提早满足它——settle 会在重绘完成前就返回。
   await sleep(500)
   const hidden = !screenLines().some((_, y) => {
     const two = cellAt(y, 57) + cellAt(y, 58)
@@ -323,7 +333,10 @@ await wheel(false, 20)
   ;(stdout as any).columns = COLS
   stdout.emit('resize')
   term.resize(COLS, ROWS)
-  await sleep(500)
+  await settle(() => {
+    const snap = railSnapshot()
+    return snap.ticks.length === 8 && snap.upRow !== null
+  })
   const snap = railSnapshot()
   check('恢复 100 列 rail 回来', snap.ticks.length === 8 && snap.upRow !== null,
     `ticks=${snap.ticks.length} up=${snap.upRow}`)
@@ -360,7 +373,10 @@ await inst.unmount()
     </AlternateScreen>,
     { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(900)
+  await settle(() => {
+    const snap = railSnapshot()
+    return snap.ticks.length === 12 && snap.activeRow !== null
+  })
   const snap = railSnapshot()
   check('工具重会话：rail 覆盖全部 12 轮', snap.ticks.length === 12,
     `ticks=${snap.ticks.length}（折叠窗口内仅 ~5 轮）`)
@@ -369,7 +385,12 @@ await inst.unmount()
   const firstTick = snap.ticks[0]
   if (firstTick !== undefined) {
     await clickAt(COLS, firstTick + 1)
-    await sleep(600)
+    // 揭示跳转先画转录区、━━ 后移：两条断言的条件都到位才算落定。
+    await settle(() => {
+      const snap = railSnapshot()
+      return screenLines().slice(0, 6).some(l => l.includes('问题 1'))
+        && snap.activeRow !== null && snap.ticks.indexOf(snap.activeRow) === 0
+    })
     const lines = screenLines()
     check('点击折叠 tick：问题 1 揭示并到顶', lines.slice(0, 6).some(l => l.includes('问题 1')),
       `top6=${JSON.stringify(lines.slice(0, 4).map(l => l.trimEnd().slice(0, 30)))}`)

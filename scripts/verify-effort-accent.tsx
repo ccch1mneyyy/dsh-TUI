@@ -21,6 +21,7 @@ const [
   { render },
   { EffortChargeGlyph },
   { ClockProvider },
+  { settle },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -28,6 +29,7 @@ const [
   import('../src/ui.js'),
   import('../src/components/EffortChargeGlyph.js'),
   import('../src/ink/components/ClockContext.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -102,6 +104,8 @@ render(<Driver />, {
   patchConsole: false,
 })
 
+// 稳定性/时窗探针（切档前不得出现 accent）：条件从挂载起就成立，轮询会
+// 立即返回，等于没测；且必须在 t=300ms 切档前采样——保留固定窗口。
 await sleep(200)
 check('off the top tier: plain prefix, no accent', firstRow().startsWith('❯') && !prefixFgTruecolor() && !prefixBold())
 
@@ -126,9 +130,11 @@ check('charge ramps dark→full (sampled, monotone)',
   && samples.slice(1).some((value, index) => luma(value) >= luma(samples[index]!)),
   `${samples.length} samples, luma ${samples.length ? Math.round(luma(samples[0]!)) : '?'}→${samples.length ? Math.round(luma(samples[samples.length - 1]!)) : '?'}`)
 
+// 稳定性探针（accent 必须持续存在）：条件此刻已成立，轮询会立即返回，
+// 测不到「保持」——保留固定窗口。
 await sleep(300)
 check('past the charge window: accent stays solid', prefixFgTruecolor() && prefixBold())
-await sleep(500)
+await settle(() => !prefixFgTruecolor() && !prefixBold())
 check('off the top tier again: accent gone', !prefixFgTruecolor() && !prefixBold())
 
 if (failures > 0) {

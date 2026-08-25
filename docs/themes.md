@@ -16,8 +16,8 @@ dsh-TUI 提供三套 Gentle Mist Blue 色板，外加一个 `auto` 伪主题：
 未明确指定主题时，TUI 会通过 OSC 11 查询终端背景并在 `light` 与 `dark` 之间
 选择；终端不响应时回退到 `dark`。
 
-`auto` 把这次性启动检测变成常驻选择：它在 `/theme`、`CC_TUI_THEME`、
-`~/.dsh-cc/theme.json` 中都是合法值。选中 `auto` 时立即应用上次检测结果，并
+`auto` 把这次性启动检测变成常驻选择：它在 `/theme`、`DSH_TUI_THEME`、
+`~/.dsh-tui/theme.json` 中都是合法值。选中 `auto` 时立即应用上次检测结果，并
 在后台重新查询 OSC 11——跟随系统主题的终端切换深浅色后，再次选择 `auto`（或
 重启）即可跟上。`/theme status` 会显示 `auto` 当前解析到的色板。解析结果通过
 `getTheme('auto')` 对所有消费方生效。注意：用户自定义主题若命名为 `auto` 会被

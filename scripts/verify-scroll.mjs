@@ -25,14 +25,13 @@
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render, Text, ScrollBox } from '../lib/types/ui.js'
+import { settle } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
-
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 function makeStreams() {
   const stdout = new Writable({
@@ -86,7 +85,9 @@ async function run() {
       })
     },
   })
-  await sleep(400)
+  // The extra frame clause is ordering: scrollTo below needs the first
+  // full-height layout committed, which the fixed sleep used to cover.
+  await settle(() => scrollHandle !== null && frameLog.at(-1)?.scrollHeight === 60)
   if (!scrollHandle) {
     check('ScrollBox handle attached', false)
     process.exit(failed)
@@ -95,7 +96,7 @@ async function run() {
 
   // ---- bottom-scrolled: 60 rows, maxScroll 36, scroll to 36.
   scrollHandle.scrollTo(36)
-  await sleep(400)
+  await settle(() => frameLog.at(-1)?.scrollTop === 36 && frameLog.at(-1)?.scrollHeight === 60)
   const bottomScrolled = frameLog.at(-1)
   check('bottom scroll landed at maxScroll', bottomScrolled.scrollTop === 36 && bottomScrolled.scrollHeight === 60, JSON.stringify(bottomScrolled))
 
@@ -105,23 +106,29 @@ async function run() {
   // sticky; a sticky shrink frame clamps to the collapsed maxScroll (#421:
   // freezing past the content paints blank — see the docstring exception).
   instance.rerender(makeScroller(20))
-  await sleep(400)
+  await settle(() => {
+    const f = frameLog.find(f => f.scrollHeight === 24)
+    return f !== undefined && f.scrollTop === 0
+  })
   const shrinkFrame = frameLog.find(f => f.scrollHeight === 24)
   check('shrink frame clamps the re-pinned sticky view to the collapsed bottom', shrinkFrame !== undefined && shrinkFrame.scrollTop === 0, JSON.stringify(shrinkFrame ?? frameLog.at(-1)))
 
   // ---- grow back: 60 rows. Position re-validated at the bottom.
   instance.rerender(makeScroller(60))
-  await sleep(400)
+  await settle(() => frameLog.at(-1)?.scrollTop === 36 && frameLog.at(-1)?.scrollHeight === 60)
   const grownFrame = frameLog.at(-1)
   check('grow-back frame stays at the bottom', grownFrame.scrollTop === 36 && grownFrame.scrollHeight === 60, JSON.stringify(grownFrame))
 
   // ---- mid-scrolled: 60 rows, scroll to 10 (away from bottom), shrink, grow.
   instance.rerender(makeScroller(60))
-  await sleep(400)
+  await settle(() => frameLog.at(-1)?.scrollHeight === 60)
   scrollHandle.scrollTo(10)
-  await sleep(400)
+  await settle(() => frameLog.at(-1)?.scrollTop === 10)
   instance.rerender(makeScroller(20))
-  await sleep(400)
+  await settle(() => {
+    const f = frameLog.filter(f => f.scrollHeight === 24).at(-1)
+    return f !== undefined && f.scrollTop === 10
+  })
   const midShrink = frameLog.filter(f => f.scrollHeight === 24).at(-1)
   check('mid-scroll shrink frame keeps the position', midShrink !== undefined && midShrink.scrollTop === 10, JSON.stringify(midShrink ?? frameLog.at(-1)))
 
@@ -130,7 +137,7 @@ async function run() {
   // computed from the artifact frame (opentui #709: content-size changes
   // must not reset the manual-scroll state).
   instance.rerender(makeScroller(60))
-  await sleep(400)
+  await settle(() => frameLog.at(-1)?.scrollTop === 10 && frameLog.at(-1)?.scrollHeight === 60)
   const midGrown = frameLog.at(-1)
   check('post-shrink grow frame keeps the mid position', midGrown.scrollTop === 10 && midGrown.scrollHeight === 60, JSON.stringify(midGrown))
 

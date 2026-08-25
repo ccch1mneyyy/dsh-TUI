@@ -2,11 +2,12 @@
 
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { render, ThemeProvider, Text }] =
+const [{ PassThrough, Writable }, React, { render, ThemeProvider, Text }, { settle }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
     import('../src/ui.js'),
+    import('./lib/term-test.mjs'),
   ])
 
 class FakeStdout extends Writable {
@@ -59,7 +60,7 @@ const instance = await render(
   },
 )
 
-await new Promise(resolve => setTimeout(resolve, 100))
+await settle(() => stdout.frames.join('').includes('\x1b[48;2;255;215;95m'))
 await instance.unmount()
 
 const output = stdout.frames.join('')

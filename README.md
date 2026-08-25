@@ -95,6 +95,17 @@ sh install.sh
 
 `dsh-tui --resume` 恢复上次会话；Windows 也可用仓库里的 `dsh-tui.cmd`（等价）。
 
+CLI 子命令（`dsh-tui help` 查看完整用法）：
+
+| 命令 | 作用 |
+|---|---|
+| `dsh-tui update` | 升级 profile 到最新版本并对齐启动器（与 TUI 内 `/update` 同一套安装逻辑，不重启进 TUI） |
+| `dsh-tui doctor` | 启动前环境诊断：dsh/pnpm、profile 安装与版本对齐、密钥是否已设置（只报状态不报值）、配置文件存在性；与 TUI 内 `/doctor` 的会话内诊断互补 |
+| `dsh-tui version` | 显示启动器与 profile 两侧版本（`--version`/`-v` 等价） |
+| `dsh-tui help` | 显示用法（`--help`/`-h` 等价） |
+
+`help`/`version` 在未安装 dsh、profile 未初始化时同样可用；`update` 需要 dsh（缺失时给出安装指引）；其余参数保持原样透传给 `dsh --profile dsh-tui`。仓库根的 `dsh-tui.cmd` 是直连 `dsh --profile` 的启动 wrapper，不含子命令——子命令属于 npm 安装的 `dsh-tui` 命令。
+
 ### Herdr
 
 在 [Herdr](https://herdr.dev) pane 中直接运行 `dsh-tui` 即可，无需额外配置。
@@ -184,7 +195,8 @@ macOS 自带 Terminal.app 会自行消费 `⌘` 快捷键，请继续使用 `Ctr
 | `Space` | 多选题勾选/取消 |
 | `Tab` | 切到自定义回答（不选选项直接打字） |
 | `Enter` | 提交当前选择 |
-| `Esc` / `Ctrl+C` | 取消整批提问（模型收到 ASK_CANCELLED，可继续对话） |
+| `Esc`（第 2 题起） | 返回上一题并保留当前草稿 |
+| `Esc`（第 1 题）/ `Ctrl+C` | 取消整批提问（模型收到 ASK_CANCELLED，可继续对话） |
 
 **本地命令（CC 指令全集复刻，均走 DSH 官方链路）**
 

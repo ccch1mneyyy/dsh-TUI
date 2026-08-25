@@ -23,7 +23,7 @@
  *
  * Run: node scripts/verify-update.mjs
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -271,11 +271,14 @@ check(
 )
 // The --latest fallback (preflight failed) can also land on the deadlock
 // range on a stale mirror: the post-install guard must refuse a restart
-// into a version that JUST moved into 0.7.0–0.7.1. Two occurrences = the
-// export plus the call inside updateTuiAndRestart.
+// into a version that JUST moved into 0.7.0–0.7.1. Three occurrences = the
+// export + the post-install guard in updateTui + the CLI preflight refusal
+// in cliUpdate — a plain count would pass with the guard deleted, so pin
+// the guard's own call shape too.
 check(
   'deadlock: post-install guard refuses a fresh landing on the range',
-  (compiledSource.match(/isBootDeadlockTarget/g) ?? []).length >= 2,
+  (compiledSource.match(/isBootDeadlockTarget/g) ?? []).length >= 3
+    && /installedNow !== updatedFrom && isBootDeadlockTarget\(installedNow\)/.test(compiledSource),
 )
 
 // ---- launcher bridge (0.8.3): the compiled runtime must keep the
@@ -422,9 +425,10 @@ try {
 }
 
 // ---- recovery wiring (issue #479): the EEXIST signature and the stale
-// install removal must be reachable from updateTuiAndRestart, and the
-// /update restart tail must ride the hardened restartTui handoff (#483).
-const updateFnStart = compiledSource.indexOf('export async function updateTuiAndRestart')
+// install removal must be reachable from the shared install half (updateTui,
+// which updateTuiAndRestart delegates to), and the /update restart tail must
+// ride the hardened restartTui handoff (#483).
+const updateFnStart = compiledSource.indexOf('export async function updateTui')
 const restartFnStart = compiledSource.indexOf('export async function restartTui')
 const updateSegment = compiledSource.slice(updateFnStart, restartFnStart)
 check(
@@ -443,6 +447,63 @@ check(
   'restartTui: update kind skips the /restart boot-diagnosis marker',
   /kind === 'restart' \? \{ \[RESTART_CHILD_ENV\]: '1' \} : \{\}/.test(compiledSource),
 )
+
+// ---- CLI update（issue #509）：安装半程与 /update 共用同一实现 ----------------
+// updateTui 是 updateTuiAndRestart 的安装半程，cliUpdate 是 bin 启动器
+// 动态 import 的无头入口——两者必须存在于编译产物，且 updateTuiAndRestart
+// 委托 updateTui 而不是保留一份拷贝（DRY 契约：装机逻辑只有一份）。
+{
+  const mod = await import('../lib/types/update.js')
+  check('cli: updateTui is exported from the compiled lib', typeof mod.updateTui === 'function')
+  check('cli: cliUpdate is exported from the compiled lib', typeof mod.cliUpdate === 'function')
+  check(
+    'cli: updateTuiAndRestart delegates to updateTui (single install path)',
+    /updateTuiAndRestart[\s\S]{0,400}await updateTui\(/.test(compiledSource),
+  )
+}
+
+// ---- cli: 真实 cliUpdate 的「版本未前进」路径（预检失败 + --latest no-op）------
+// 拷贝的编译模块 + 版本固定的 manifest：registry 指向必然拒绝连接的地址
+// （预检 → unknown → --latest 兜底），stub dsh 什么都不装、返回 0。安装前后
+// installedTuiVersion 相同——必须如实打印 version did not advance，绝不打印
+// 虚假的 updated X → X。真实模块、真实子进程，只有网络与 dsh 是假的。
+{
+  const scratch3 = mkdtempSync(join(tmpdir(), 'verify-update-cli-'))
+  const ENV_BACKUP = { reg: process.env.NPM_CONFIG_REGISTRY, regL: process.env.npm_config_registry, path: process.env.PATH }
+  try {
+    symlinkSync(join(repoRoot, 'node_modules'), join(scratch3, 'node_modules'))
+    const pkgRoot = join(scratch3, 'pkg')
+    copyUpdateModule(join(pkgRoot, 'lib', 'types'))
+    writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '2.0.0', type: 'module' }))
+    const stubDir = join(scratch3, 'stub-bin')
+    mkdirSync(stubDir, { recursive: true })
+    writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(stubDir, 'dsh'), 0o755)
+    process.env.NPM_CONFIG_REGISTRY = 'http://127.0.0.1:1'
+    delete process.env.npm_config_registry
+    process.env.PATH = stubDir
+    const cliMod = await import(`${pathToFileURL(join(pkgRoot, 'lib', 'types', 'update.js'))}?probe=cli`)
+    let captured = ''
+    const origWrite = process.stdout.write.bind(process.stdout)
+    process.stdout.write = chunk => { captured += String(chunk); return true }
+    let code
+    try {
+      code = await cliMod.cliUpdate('dsh-tui')
+    } finally {
+      process.stdout.write = origWrite
+    }
+    check('cli: no-op --latest 兜底以 0 退出', code === 0, `code=${code}`)
+    check('cli: 版本未前进时如实提示', captured.includes('version did not advance'), JSON.stringify(captured.slice(0, 120)))
+    check('cli: 不打印虚假的 updated X → X', !captured.includes('updated 2.0.0'))
+  } finally {
+    if (ENV_BACKUP.reg === undefined) delete process.env.NPM_CONFIG_REGISTRY
+    else process.env.NPM_CONFIG_REGISTRY = ENV_BACKUP.reg
+    if (ENV_BACKUP.regL === undefined) delete process.env.npm_config_registry
+    else process.env.npm_config_registry = ENV_BACKUP.regL
+    process.env.PATH = ENV_BACKUP.path
+    rmSync(scratch3, { recursive: true, force: true })
+  }
+}
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`)

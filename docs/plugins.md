@@ -314,7 +314,7 @@ declare module '@deepseek-ai/dsh-session/types' {
 }
 ```
 
-> dsh-TUI 的 profile 自身带兼容修复（`src/compat/sessionLog.ts`），会修补第三方
+> dsh-TUI 的 profile 自身带兼容修复（`src/dsh-adapter/compat/sessionLog.ts`），会修补第三方
 > 事件类型，所以在 dsh-tui profile 里 resume 依然可用；但裸组合、Web 或其他
 > headless 消费者没有这层修复——注册仍然必须做。
 
@@ -332,7 +332,7 @@ handle?.set('实时内容')  // 模板里 ${my-slot} 的值
 `'${cwd}${git/worktree}${activity}${model}…'`）；模板没有该槽位时插件静默无效果。
 
 注意：**dsh-TUI 本身不提供 `tuiPrompt` 服务**——它直接消费 `activity/status`
-事件渲染工作状态行（见 `src/channel.ts` 与 `src/components/ActivityLine.tsx`）。
+事件渲染工作状态行（见 `src/dsh-adapter/channel.ts` 与 `src/components/ActivityLine.tsx`）。
 如果你的插件同时面向官方 TUI 和 dsh-TUI，就采用 `dsh-working-activity` 的
 **双出口**模式：槽位给官方 TUI，log-only 事件给 dsh-TUI 与其他消费者。
 
@@ -353,7 +353,7 @@ registry?.register({
 })
 ```
 
-参考主包 `src/packaged-skills.ts`：单行标量 frontmatter（`name`、`description`），
+参考主包 `src/dsh-adapter/packaged-skills.ts`：单行标量 frontmatter（`name`、`description`），
 重复或无效条目跳过，**绝不让技能注册失败拖垮 TUI 启动**。注册成功后技能即可
 通过 DSH 的 `/skill` 面使用。
 

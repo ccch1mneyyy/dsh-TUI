@@ -478,29 +478,31 @@ export function migrateGlobalLauncher(): boolean {
   return false
 }
 
+/** Outcome of the install-only half of an update (no restart). */
+export interface TuiUpdateOutcome {
+  /** 0 = the profile now runs the intended version; non-zero = failed. */
+  code: number
+  /** Version installed before the update ran (the #307 stamp). */
+  updatedFrom: string
+  /** Version installed after the update ran, when readable. */
+  installed?: string
+}
+
 /**
- * Update the installed dsh-tui package and restart the same launcher while
- * preserving the active session. The TUI must already be unmounted before
- * this is called so pnpm output cannot corrupt the rendered terminal frame.
+ * Install-only half of `/update`: run `dsh plugin add`, refuse boot-deadlock
+ * targets, verify the profile actually advanced, and migrate the global
+ * launcher. No restart — `updateTuiAndRestart` layers the session-preserving
+ * restart on top, and the `dsh-tui update` CLI stops here.
  *
- * When the preflight registry check resolved an exact target, pass that
- * version to pnpm instead of resolving `latest` a second time. This avoids a
- * stale mirror/dist-tag response between the check and install. If preflight
- * failed, retain the `--latest` fallback: a plain `pnpm update` stays inside
- * the manifest range and can restart unchanged across minor releases.
- *
- * @param sessionId - Session to resume in the replacement process.
- * @param profile - The dsh profile this TUI was launched with; updating any
- *   other profile would leave the running install untouched.
- * @param targetVersion - Exact version returned by the preflight registry
- *   check, or undefined when that check failed and pnpm should resolve latest.
- * @returns Exit codes for the update run and the replacement process.
+ * @param profile - The dsh profile to update.
+ * @param targetVersion - Exact version from the preflight registry check, or
+ *   undefined when that check failed and pnpm should resolve latest.
+ * @returns The update exit code plus the before/after versions.
  */
-export async function updateTuiAndRestart(
-  sessionId: string,
+export async function updateTui(
   profile: string,
   targetVersion?: string,
-): Promise<TuiUpdateResult> {
+): Promise<TuiUpdateOutcome> {
   // Stamp the pre-update version BEFORE pnpm runs: it reads this package's
   // manifest from disk, which the update replaces on the fly — a
   // post-update read already sees the NEW version, and the restarted
@@ -537,7 +539,7 @@ export async function updateTuiAndRestart(
     updateStderr = ''
     updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })
   }
-  if (updateCode !== 0) return { updateCode, restartCode: updateCode }
+  if (updateCode !== 0) return { code: updateCode, updatedFrom }
 
   // A --latest fallback (preflight failed) on a stale mirror can still land
   // on the 0.7.0–0.7.1 hard-inject range — restarting into it under an older
@@ -553,7 +555,7 @@ export async function updateTuiAndRestart(
         `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@latest\n` +
         `(if the mirror has not synced the latest release yet, retry later)\n`,
     )
-    return { updateCode: 1, restartCode: 1 }
+    return { code: 1, updatedFrom, installed: installedNow }
   }
 
   // Post-update verification (issue #225): pnpm can report success yet leave
@@ -573,7 +575,7 @@ export async function updateTuiAndRestart(
           `(expected ${targetVersion}) — the profile is half-updated. Repair manually with:\n` +
           `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@${targetVersion}\n`,
       )
-      return { updateCode: 1, restartCode: 1 }
+      return { code: 1, updatedFrom, installed }
     }
   }
 
@@ -584,6 +586,36 @@ export async function updateTuiAndRestart(
   if (migrateGlobalLauncher()) {
     process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
   }
+
+  return { code: 0, updatedFrom, installed: installedTuiVersion() }
+}
+
+/**
+ * Update the installed dsh-tui package and restart the same launcher while
+ * preserving the active session. The TUI must already be unmounted before
+ * this is called so pnpm output cannot corrupt the rendered terminal frame.
+ *
+ * When the preflight registry check resolved an exact target, pass that
+ * version to pnpm instead of resolving `latest` a second time. This avoids a
+ * stale mirror/dist-tag response between the check and install. If preflight
+ * failed, retain the `--latest` fallback: a plain `pnpm update` stays inside
+ * the manifest range and can restart unchanged across minor releases.
+ *
+ * @param sessionId - Session to resume in the replacement process.
+ * @param profile - The dsh profile this TUI was launched with; updating any
+ *   other profile would leave the running install untouched.
+ * @param targetVersion - Exact version returned by the preflight registry
+ *   check, or undefined when that check failed and pnpm should resolve latest.
+ * @returns Exit codes for the update run and the replacement process.
+ */
+export async function updateTuiAndRestart(
+  sessionId: string,
+  profile: string,
+  targetVersion?: string,
+): Promise<TuiUpdateResult> {
+  const outcome = await updateTui(profile, targetVersion)
+  const { updatedFrom } = outcome
+  if (outcome.code !== 0) return { updateCode: outcome.code, restartCode: outcome.code }
 
   // Restart through the same hardened handoff as /restart (issues
   // #284/#307/#483): wait for the replacement's natural exit (the outer
@@ -596,7 +628,64 @@ export async function updateTuiAndRestart(
     env: { [UPDATED_FROM_ENV]: updatedFrom },
     kind: 'update',
   })
-  return { updateCode, restartCode }
+  return { updateCode: 0, restartCode }
+}
+
+/**
+ * Headless `dsh-tui update`: the `/update` decision flow (preflight, deadlock
+ * refusal, mirror-lag note, `--latest` fallback) followed by the install-only
+ * half — no TUI, no restart. The bin launcher dynamic-imports this from the
+ * profile copy's compiled lib.
+ *
+ * @param profile - The dsh profile to update.
+ * @returns Process exit code: 0 on success or already-latest, 1 otherwise.
+ */
+export async function cliUpdate(profile: string): Promise<number> {
+  const target = await resolveTuiUpdateTarget()
+  if (target.kind === 'latest') {
+    process.stdout.write(`dsh-tui: already the latest version (${target.current}).\n`)
+    return 0
+  }
+  let targetVersion: string | undefined
+  if (target.kind === 'update') {
+    // Mirror the /update flow exactly: refuse the 0.7.0–0.7.1 hard-inject
+    // range (permanent boot deadlock under older launcher patches, #183/#307)
+    // instead of installing it.
+    if (isBootDeadlockTarget(target.latest)) {
+      process.stderr.write(
+        `dsh-tui: refusing to update onto ${target.latest} — that range can permanently deadlock boot ` +
+          `(#183/#307). Latest on the official registry: ${target.authoritative ?? target.latest}. ` +
+          `If you use a mirror, retry after it syncs.\n`,
+      )
+      return 1
+    }
+    if (target.authoritative !== undefined) {
+      process.stdout.write(
+        `dsh-tui: note — your registry serves ${target.latest} while npmjs.org has ${target.authoritative} (mirror lag).\n`,
+      )
+    }
+    targetVersion = target.latest
+    process.stdout.write(`dsh-tui: updating ${target.current} → ${target.latest}…\n`)
+  } else {
+    process.stdout.write('dsh-tui: version check failed (offline or unreadable install) — falling back to `--latest`.\n')
+  }
+  const outcome = await updateTui(profile, targetVersion)
+  if (outcome.code === 0) {
+    // A preflight-less run (`--latest` fallback) can "succeed" as a pnpm
+    // no-op: same manifest before and after. Say so instead of printing a
+    // vacuous `updated X → X` — the /update path surfaces the same state via
+    // the DSH_TUI_UPDATED_FROM stamp on restart.
+    if (targetVersion === undefined && outcome.installed !== undefined && outcome.installed === outcome.updatedFrom) {
+      process.stdout.write(
+        `dsh-tui: version did not advance (still ${outcome.installed}) — already the latest, or the registry has no newer release yet.\n`,
+      )
+    } else {
+      process.stdout.write(
+        `dsh-tui: updated ${outcome.updatedFrom || '(unknown)'} → ${outcome.installed ?? '(unreadable)'}.\n`,
+      )
+    }
+  }
+  return outcome.code
 }
 
 /**

@@ -11,6 +11,7 @@
  */
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 import { LOCAL_COMMANDS } from '../lib/types/commands.js'
+import { settle } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -100,7 +101,9 @@ check(
   !channel.commandList.some(command => command.name === 'i-h'),
 )
 
-await tick()
+await settle(() =>
+  channel.commandList.some(command => command.name === 'i-h') &&
+  channel.commandList.some(command => command.name === 'helper'))
 
 // ---- async phase: user-invocable skills merged, marked, deduped
 const names = channel.commandList.map(command => command.name)
@@ -142,7 +145,9 @@ if (skillsChange === undefined || skillsChange.length === 0) {
 } else {
   check('skills/change handler captured', true)
   fire('skills/change')
-  await tick()
+  await settle(() =>
+    channel.commandList.some(command => command.name === 'newskill') &&
+    !channel.commandList.some(command => command.name === 'helper'))
   const refreshed = channel.commandList.map(command => command.name)
   check('removed skill leaves the menu', !refreshed.includes('helper'))
   check('added skill enters the menu', refreshed.includes('newskill'))
@@ -158,7 +163,7 @@ ctx.get = (name) => {
 let warned = 0
 ctx.logger = { warn() { warned += 1 } }
 fire('skills/change')
-await tick()
+await settle(() => warned >= 1)
 {
   const after = channel.commandList.map(command => command.name)
   check(
@@ -184,7 +189,7 @@ ctx.get = (name) => {
 }
 warned = 0
 fire('skills/change')
-await tick()
+await settle(() => warned >= 1)
 {
   const after = channel.commandList.map(command => command.name)
   check(
@@ -207,7 +212,9 @@ ctx.get = (name) => {
   return undefined
 }
 fire('skills/change')
-await tick()
+await settle(() =>
+  !channel.commandList.some(command => command.name === 'i-h') &&
+  !channel.commandList.some(command => command.name === 'newskill'))
 {
   const after = channel.commandList.map(command => command.name)
   check(
@@ -235,9 +242,11 @@ await tick()
     skills: [{ name: 'live', description: 'Live skill', invocation: { modelInvocable: true, userInvocable: true } }],
     complete: true,
   })
-  await tick()
+  await settle(() => channel.commandList.some(command => command.name === 'live'))
   check('superseding read repopulates the menu', channel.commandList.some(command => command.name === 'live'))
   pending[0].reject(new Error('stale scan failed'))
+  // Stability probe (nothing may change, nothing may warn): a settle over an
+  // already-true condition returns immediately — keep the fixed window.
   await tick()
   check('stale read failure logs no warning', staleWarned === 0, `warned=${staleWarned}`)
   check(
@@ -274,8 +283,7 @@ await tick()
     { name: 'review', description: 'Shadow skill (review)', invocation: { modelInvocable: true, userInvocable: true } },
   )
   fire('skills/change')
-  await tick()
-  await tick()
+  await settle(() => typeof registered.get('i-h')?.handler === 'function')
 
   check(
     'user-invocable skill is registered as a real command',
@@ -315,7 +323,7 @@ await tick()
     agent.followups.length = 0
     const outcome = await descriptor.handler({ agent, rawInput: ' 做年终总结', signal: undefined })
     check('kernel path reports success', outcome?.kind === 'success', JSON.stringify(outcome))
-    await tick()
+    await settle(() => agent.followups.length === 1)
     const gesture = agent.followups[0]
     check('kernel path delivers exactly one message', agent.followups.length === 1)
     check(

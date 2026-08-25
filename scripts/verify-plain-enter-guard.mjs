@@ -27,6 +27,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
+import { settle } from './lib/term-test.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -82,6 +83,9 @@ await sleep(500)
 
 // Modifier Enters must be inert in the panel (they were inert text tokens
 // before #110; the guard restores that for decision paths).
+// Stability probes (nothing may be decided): a settle would return
+// immediately on the already-true condition — keep fixed windows so a
+// wrong decision has time to surface.
 stdin.write('\x1b\r') // Option+Enter (ESC CR) → meta+return
 await sleep(250)
 check('Option+Enter (ESC CR) does not decide', decisions.length === 0, JSON.stringify(decisions))
@@ -96,7 +100,7 @@ check('Shift+Enter (CSI 13;2u) does not decide', decisions.length === 0, JSON.st
 
 // Plain Enter still confirms the focused row (default 0 = allowed-once).
 stdin.write('\r')
-await sleep(250)
+await settle(() => decisions.length === 1 && decisions[0] === 'allowed-once')
 check('plain Enter decides the focused outcome', decisions.length === 1 && decisions[0] === 'allowed-once', JSON.stringify(decisions))
 
 instance.unmount()

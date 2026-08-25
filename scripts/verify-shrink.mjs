@@ -32,6 +32,7 @@ const { Writable, PassThrough } = await import('node:stream')
 const React = await import('react')
 const m = await import('@xterm/headless'); const XTerm = m.default?.Terminal ?? m.Terminal
 const { render, Box, Text } = await import('../lib/types/ui.js')
+const { settle } = await import('./lib/term-test.mjs')
 
 const COLS = 100
 const ROWS = 28
@@ -63,8 +64,6 @@ function makeStreams(term) {
   return { stdout, stderr, stdin }
 }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms))
-
 let failed = 0
 function check(name, ok, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -92,12 +91,32 @@ function check(name, ok, extra = '') {
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  await sleep(500)
+  // 主屏收缩语义按「buffer 尾窗口」读（刻意非视口读取：scrollback 是断言
+  // 的一部分）。
+  const tailWindow = () => {
+    const buf = term.buffer.active
+    const start = Math.max(0, buf.length - ROWS)
+    const lines = []
+    for (let y = start; y < buf.length; y++) {
+      lines.push((buf.getLine(y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
+    }
+    return lines
+  }
+  // 初始帧落定（marker 已解析）后再取 shrink 字节窗口的边界。
+  await settle(() => tailWindow().some(l => l.includes('BOTTOM_PINNED_MARKER')))
   const framesBefore = stdout.frames.length
 
   // Shrink: 60 -> 40 lines.
   instance.rerender(React.createElement(App, { lineCount: 40 }))
-  await sleep(500)
+  await settle(() => {
+    const lines = tailWindow()
+    const nums = lines
+      .map(l => /^line (\d+) padded content$/.exec(l.trim()))
+      .filter(Boolean)
+      .map(match => Number(match[1]))
+    return !lines.some(l => /line (4\d|5\d) padded/.test(l)) &&
+      nums.length > 0 && nums[nums.length - 1] === 39
+  })
   const shrinkBytes = stdout.frames.slice(framesBefore).join('')
 
   // 1. 无 scrollback 沉积、无 WT 跳顶序列。

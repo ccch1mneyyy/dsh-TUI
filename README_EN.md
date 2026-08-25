@@ -101,6 +101,21 @@ commands), then `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 `dsh-tui --resume` restores the most recently selected session; on Windows
 the repository's `dsh-tui.cmd` works the same way.
 
+CLI subcommands (`dsh-tui help` prints the full usage):
+
+| Command | Purpose |
+|---|---|
+| `dsh-tui update` | Update the profile to the latest release and align the launcher (same install logic as the in-TUI `/update`, without restarting into the TUI) |
+| `dsh-tui doctor` | Pre-flight environment checks: dsh/pnpm, profile install and version alignment, whether the API key is set (state only, never the value), config file presence; complements the in-TUI `/doctor` session diagnostics |
+| `dsh-tui version` | Show the launcher and profile versions (`--version`/`-v` are equivalent) |
+| `dsh-tui help` | Show usage (`--help`/`-h` are equivalent) |
+
+`help`/`version` work even when dsh is missing or the profile is not initialized; `update` needs dsh (a missing dsh gets an install hint);
+every other argument is still forwarded verbatim to `dsh --profile dsh-tui`.
+The repository-root `dsh-tui.cmd` is a launch wrapper that goes straight to
+`dsh --profile` and carries no subcommands — subcommands belong to the
+npm-installed `dsh-tui` command.
+
 ### Herdr
 
 Run `dsh-tui` directly in a [Herdr](https://herdr.dev) pane; no extra setup is
@@ -176,7 +191,7 @@ terminal support for the extended keyboard protocol (iTerm2 / kitty / WezTerm /
 ghostty / tmux); macOS's built-in Terminal.app consumes `⌘` shortcuts itself,
 so keep using `Ctrl`.
 
-**Mouse** (fullscreen is the factory default since 0.8.8; set `fullscreen: false` to restore the inline main screen; updating from an older version clears a previously saved inline choice once — you can still pick inline again afterwards)
+**Mouse** (fullscreen is the factory default since 0.9.0; set `fullscreen: false` to restore the inline main screen; updating from an older version clears a previously saved inline choice once — you can still pick inline again afterwards)
 
 | Action | Function |
 |---|---|
@@ -199,7 +214,8 @@ so keep using `Ctrl`.
 | `Space` | Toggle multi-select options |
 | `Tab` | Switch to a custom answer (type directly without picking an option) |
 | `Enter` | Submit the current selection |
-| `Esc` / `Ctrl+C` | Cancel the whole question batch (the model receives ASK_CANCELLED and can continue the conversation) |
+| `Esc` (from question 2 onward) | Return to the previous question and keep the current draft |
+| `Esc` (from question 1) / `Ctrl+C` | Cancel the whole question batch (the model receives ASK_CANCELLED and can continue the conversation) |
 
 **Local commands** (a full replica of the CC command set, all routed through the official DSH pipeline)
 

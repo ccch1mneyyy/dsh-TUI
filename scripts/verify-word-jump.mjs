@@ -37,6 +37,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
+import { settle } from './lib/term-test.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -113,7 +114,8 @@ await feed('\x1b[D')    // bare Left  → caret 6 (single char; jump bug: 0)
 await feed('Z')
 await feed('\x1b[1;5C') // Ctrl+Right → caret 14 (end of "…world")
 await feed('Q')
-await feed('\r')
+stdin.write('\r')
+await settle(() => submitted.length === 1 && submitted[0] === 'hello ZYXworldQ')
 
 check(
   'caret moves + inserts compose to the expected submitted text',

@@ -11,9 +11,18 @@
  *   5. `zh` (the original hard-coded language)
  *
  * `/lang` switches at runtime and hot-swaps the whole UI. The dictionary is
- * a flat key → per-language string map; `t(key, params)` substitutes
- * `{{name}}` placeholders with the given params. Missing keys render the
- * key itself so a typo is visible in the UI instead of silently blank.
+ * a flat key → per-language text map; `t(key, params)` substitutes
+ * `{{name}}` placeholders with the given params. A per-language value is
+ * either a plain template or `{ one, other }` plural forms selected via
+ * `Intl.PluralRules` on the `count` param (zh has no grammatical number and
+ * always resolves to `other`). Missing keys render the key itself so a typo
+ * is visible in the UI instead of silently blank.
+ *
+ * The dictionary shape is enforced at compile time (`satisfies` below):
+ * every entry carries zh, and en is optional only for the `cmd-desc-*`
+ * family whose en truth lives in the command registry (see {@link tOr}).
+ * scripts/verify-i18n.ts adds the checks types cannot express: placeholder
+ * parity between languages, single-brace typos, and dead keys.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -26,6 +35,14 @@ const PREFS_DIR = DATA_DIR
 
 /** The languages shipped with the plugin, in display order. */
 export const LANGS = ['zh', 'en'] as const
+
+/**
+ * One dictionary value in one language: a plain `{{name}}` template, or
+ * plural forms picked by the `count` param through `Intl.PluralRules`.
+ * Only `one`/`other` exist because those are the only CLDR categories zh
+ * and en use; a third shipped language may need more.
+ */
+export type I18nText = string | { one: string; other: string }
 
 const dict = {
   // ── channel.ts ───────────────────────────────────────────────────────
@@ -56,7 +73,7 @@ const dict = {
   'export-model': { zh: '- 模型: {{model}}', en: '- Model: {{model}}' },
   'export-session': { zh: '- 会话: {{id}}', en: '- Session: {{id}}' },
   'export-dir': { zh: '- 目录: {{cwd}}', en: '- Directory: {{cwd}}' },
-  'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: 'Attached {{count}} file reference(s)' },
+  'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: { one: 'Attached {{count}} file reference', other: 'Attached {{count}} file references' } },
   'mentions-missing': { zh: '未找到引用: {{paths}}', en: 'References not found: {{paths}}' },
   'send-failed': { zh: '发送失败 · {{err}}', en: 'Send failed · {{err}}' },
   'export-user-section': { zh: '## 用户', en: '## User' },
@@ -91,7 +108,6 @@ const dict = {
   'subagent-archived': { zh: ' 已归档', en: ' archived' },
   'subagent-query-failed': { zh: '查询失败 · {{err}}', en: 'Query failed · {{err}}' },
   'subagent-tools': { zh: '工具', en: 'Tools' },
-  'subagent-expand-hint': { zh: '按 Enter 展开完整输出', en: 'Press Enter to expand full output' },
   'subagent-status-running': { zh: '运行中', en: 'running' },
   'subagent-status-completed': { zh: '已完成', en: 'completed' },
   'subagent-status-failed': { zh: '失败', en: 'failed' },
@@ -128,9 +144,6 @@ const dict = {
   // ── questions.ts ─────────────────────────────────────────────────────
   'questionnaire-answered': { zh: '📋 问卷已答 · {{total}} 题', en: '📋 Questionnaire answered · {{total}} questions' },
 
-  // ── customTheme.ts (doc example only) ───────────────────────────────
-  'theme-sakura-name': { zh: '樱花粉', en: 'Sakura Pink' },
-
   // ── utils/loaded-context.ts ─────────────────────────────────────────
   'context-truncated': { zh: '…（已截断）', en: '… (truncated)' },
   'context-sections': { zh: '系统提示词 {{n}} 段', en: 'System prompt {{n}} sections' },
@@ -152,7 +165,6 @@ const dict = {
   'context-panel-expand': { zh: '展开', en: 'Expand' },
   'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
   'copied-chars': { zh: '已复制 {{n}} 个字符', en: 'Copied {{n}} characters' },
-  'activity-usage-name': { zh: '/activity frames <名>', en: '/activity frames <name>' },
   'activity-current-preset': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
   'activity-switch-hint': { zh: '切换      /activity（选择器）或 /activity frames <名>', en: 'Switch      /activity (picker) or /activity frames <name>' },
   'activity-persist-hint': { zh: '持久化    ~/.dsh-tui/working-activity.json（重启后仍生效）', en: 'Persisted    ~/.dsh-tui/working-activity.json (survives restart)' },
@@ -166,7 +178,6 @@ const dict = {
   'preset-persist-hint': { zh: '持久化      ~/.dsh-tui/agent-preset.json（重启后仍生效；cordis.yml preset 优先）', en: 'Persisted      ~/.dsh-tui/agent-preset.json (survives restart; cordis.yml preset wins)' },
   'preset-lock-hint': { zh: '锁定规则    已开始的会话不可切换（官方 blank-only 规则）', en: 'Lock rule     started sessions cannot switch (official blank-only rule)' },
   'preset-roster-unmounted': { zh: '当前组合未挂载 agent-presets 名册（preset 不可用）', en: 'The agent-presets roster is not mounted (presets unavailable)' },
-  'theme-name-arg': { zh: '/theme <名字>', en: '/theme <name>' },
   'theme-current': { zh: '当前主题  {{name}}', en: 'Current theme  {{name}}' },
   'theme-switch-hint': { zh: '切换      /theme（选择器）或 /theme <名字>', en: 'Switch      /theme (picker) or /theme <name>' },
   'theme-persist-hint': { zh: '持久化    ~/.dsh-tui/theme.json（重启后仍生效；DSH_TUI_THEME 优先）', en: 'Persisted    ~/.dsh-tui/theme.json (survives restart; DSH_TUI_THEME wins)' },
@@ -187,14 +198,13 @@ const dict = {
   'workspace-uri-invalid': { zh: '无法解析工作区目标：{{uri}}', en: 'Cannot resolve workspace target: {{uri}}' },
   'workspace-uri-failed': { zh: '加载工作区失败 · {{err}}', en: 'Failed to load workspace · {{err}}' },
   'workspace-switch-working': { zh: 'Agent 运行中，无法切换工作区', en: 'Cannot switch workspaces while the agent is running' },
-  'workspace-open-invalid': { zh: '无法打开工作区：{target} 不是存在的目录', en: 'Cannot open workspace: {target} is not an existing directory' },
+  'workspace-open-invalid': { zh: '无法打开工作区：{{target}} 不是存在的目录', en: 'Cannot open workspace: {{target}} is not an existing directory' },
   'workspace-switched': { zh: '已切换工作区：{{target}}', en: 'Workspace switched: {{target}}' },
   'workspace-flow-hint': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** select · Esc to exit' },
   'workspace-flow-edit-hint': { zh: '**Enter** 选择当前目录 · Tab 手动输入路径 · Esc 退出', en: '**Enter** select current directory · Tab enter a path · Esc to exit' },
   'workspace-flow-input-hint': { zh: '输入绝对路径 · **Enter** 读取目录 · Esc 返回', en: 'Enter an absolute path · **Enter** load directory · Esc back' },
   'workspace-flow-input-empty': { zh: '目录路径不能为空', en: 'Directory path cannot be empty' },
   'workspace-flow-loading': { zh: '正在连接并读取目录… · Esc 关闭', en: 'Connecting and loading directories… · Esc to close' },
-  'workspace-command-usage': { zh: '用法：/workspace resume | rename <名称> | open <路径或 URI>{{commands}}', en: 'Usage: /workspace resume | rename <name> | open <path-or-URI>{{commands}}' },
   'workspace-menu-title': { zh: 'Workspace 操作', en: 'Workspace actions' },
   'workspace-menu-resume-desc': { zh: '切换到另一个工作区', en: 'Switch to another workspace' },
   'workspace-menu-rename-desc': { zh: '重命名当前工作区（需输入名称）', en: 'Rename the current workspace (needs a name)' },
@@ -378,7 +388,6 @@ const dict = {
   'input-editor-failed': { zh: '外部编辑器失败：{{name}}', en: 'External editor failed: {{name}}' },
   'input-clipboard-read-failed': { zh: '读取剪贴板失败', en: 'Failed to read the clipboard' },
   'input-clipboard-unavailable': { zh: '无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）', en: 'Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)' },
-  'input-clipboard-image-saved': { zh: '剪贴板图片已保存为临时文件，已插入路径', en: 'Clipboard image saved to a temp file; path inserted' },
   'input-image-pasted': { zh: '已粘贴图片 {{token}}', en: 'Pasted image {{token}}' },
   'input-image-paste-failed': { zh: '粘贴图片失败：{{err}}', en: 'Could not paste image: {{err}}' },
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
@@ -387,20 +396,6 @@ const dict = {
   'input-fold-stats': { zh: '{{lines}} 行 · {{chars}} 字', en: '{{lines}} lines · {{chars}} chars' },
   'input-fold-hover': { zh: '悬停查看', en: 'hover to peek' },
   'input-fold-peek-footer': { zh: '… 共 {{lines}} 行 · 点击展开编辑', en: '… {{lines}} lines total · click to edit' },
-
-  // ── components/whaleFrames.ts (frame labels) ────────────────────────
-  'frame-blink': { zh: '眨眼', en: 'blink' },
-  'frame-fin-1': { zh: '动腹鳍1', en: 'fin1' },
-  'frame-fin-2': { zh: '动腹鳍2', en: 'fin2' },
-  'frame-spout-1': { zh: '喷水花1', en: 'spout1' },
-  'frame-spout-2': { zh: '喷水花2', en: 'spout2' },
-  'frame-spout-3': { zh: '喷水花3', en: 'spout3' },
-  'frame-spout-4': { zh: '喷水花4', en: 'spout4' },
-  'frame-spout-5': { zh: '喷水花5', en: 'spout5' },
-  'frame-spout-6': { zh: '喷水花6', en: 'spout6' },
-  'frame-tail-1': { zh: '摆尾巴1', en: 'tail1' },
-  'frame-tail-2': { zh: '摆尾巴2', en: 'tail2' },
-  'frame-tail-3': { zh: '摆尾巴3', en: 'tail3' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
@@ -529,7 +524,6 @@ const dict = {
 
   // ── picker 通用快捷键提示（整句本地化，zh 不用 "to" 结构；**段** 渲染为粗体主快捷键）─
   'hint-confirm-exit': { zh: '**Enter** 确认 · Esc 退出', en: '**Enter** to confirm · Esc to exit' },
-  'hint-confirm-cancel': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-select-exit': { zh: '**Enter** 选择 · Esc 退出', en: '**Enter** to select · Esc to exit' },
   'hint-fill-exit': { zh: '**Enter** 填入命令 · Esc 退出', en: '**Enter** to insert · Esc to exit' },
   'hint-rewind-back': { zh: '**Enter** 回退 · Esc 返回', en: '**Enter** to rewind · Esc to back' },
@@ -598,10 +592,6 @@ const dict = {
     zh: '命令 "/{{name}}" 的调用已被拒绝——注册它的插件 "{{owner}}" 已被撤销 commands.invoke',
     en: 'Command "/{{name}}" invocation denied — its owner plugin "{{owner}}" lost commands.invoke',
   },
-  'plugins-check-tui-extension': {
-    zh: '注：该 manifest 依赖 TUI 宿主扩展面（tui.dsh/v1alpha1 DecisionEvents / session.*.intercept 权限），判定基于宿主扩展覆盖层而非 vendored 社区注册表。',
-    en: 'Note: this manifest relies on the TUI host-extension surface (tui.dsh/v1alpha1 DecisionEvents / session.*.intercept permissions); the verdict used the host extension overlay, not the vendored community registry.',
-  },
   // /plugins 诊断面（C-070 信任披露 + 协商诊断）
   'plugins-trust-banner': {
     zh: '插件与宿主同进程运行：授权是行为约束而非安全隔离；通过校验 ≠ 插件安全（C-070）。',
@@ -612,7 +602,7 @@ const dict = {
   'plugins-matrix-note': { zh: '授权矩阵（✓ 允许 / · 拒绝；仅显示有足迹的插件——授权文件、效果台账与存储目录的并集）：', en: 'Grant matrix (✓ allowed / · denied; plugins with footprints only — union of the grants file, effect ledger, and storage directory):' },
   'plugins-matrix-no-registry': { zh: '（权限注册表不可用）', en: '(permission registry unavailable)' },
   'plugins-matrix-empty': { zh: '（暂无插件足迹）', en: '(no plugin footprints yet)' },
-  'plugins-footprint-overflow': { zh: '…另有 {{count}} 个插件未显示', en: '…{{count}} more plugin(s) not shown' },
+  'plugins-footprint-overflow': { zh: '…另有 {{count}} 个插件未显示', en: { one: '…{{count}} more plugin not shown', other: '…{{count}} more plugins not shown' } },
   'plugins-ledger-empty': { zh: '效果台账为空。', en: 'The effect ledger is empty.' },
   'plugins-ledger-header': { zh: '效果台账（{{file}}）尾 5 条：', en: 'Effect ledger ({{file}}), last 5 records:' },
   'plugins-unknown-subcommand': { zh: '未知子命令：{{sub}}（支持：check <路径>）', en: 'Unknown subcommand: {{sub}} (supported: check <path>)' },
@@ -682,6 +672,8 @@ const dict = {
   'question-hint-enter': { zh: 'Enter 提交', en: 'Enter submit' },
   'question-hint-back': { zh: '↑ 返回选项', en: '↑ back to options' },
   'question-hint-esc': { zh: 'Esc 中断', en: 'Esc cancel' },
+  'question-hint-previous': { zh: 'Esc 上一题', en: 'Esc previous question' },
+  'question-hint-cancel': { zh: 'Ctrl+C 取消整批', en: 'Ctrl+C cancel batch' },
   'question-hint-selected': { zh: '已选 {{n}}', en: 'Selected {{n}}' },
   'question-hint-select': { zh: '↑/↓ 选择', en: '↑/↓ select' },
   'question-hint-multi': { zh: 'Space 多选', en: 'Space multi-select' },
@@ -705,18 +697,14 @@ const dict = {
   'subagent-count-running': { zh: '运行中', en: 'running' },
   'subagent-count-completed': { zh: '已完成', en: 'completed' },
   'subagent-count-failed': { zh: '失败', en: 'failed' },
-  'subagent-running-label': { zh: '运行中', en: 'Running' },
   'subagent-started': { zh: '开始时间', en: 'Started' },
   'subagent-completed': { zh: '完成时间', en: 'Completed' },
-  'subagent-id': { zh: 'ID', en: 'ID' },
   'subagent-error-label': { zh: '错误', en: 'Error' },
   'subagent-output-label': { zh: '输出', en: 'Output' },
   'subagent-no-output': { zh: '暂无输出', en: 'No output yet' },
   'subagent-dashboard-title': { zh: ' 子代理面板 ', en: ' Subagent Dashboard ' },
   'subagent-dashboard-hint-basic': { zh: '↑/↓ 浏览 · Esc 关闭', en: '↑/↓ browse · Esc close' },
   'subagent-dashboard-hint-detail': { zh: '↑/↓ 选择 · Enter 查看详情 · Esc 关闭', en: '↑/↓ select · Enter view detail · Esc close' },
-  'subagent-detail-hint-basic': { zh: '↑/↓ 滚动 · Enter/Esc 返回', en: '↑/↓ scroll · Enter/Esc back' },
-  'subagent-detail-hint-enhanced': { zh: '↑/↓ 滚动 · X 中断 · Esc 返回', en: '↑/↓ scroll · X interrupt · Esc back' },
   'subagent-card-prefix': { zh: '子代理：', en: 'Subagent: ' },
   'subagent-tab-summary': { zh: '摘要', en: 'Summary' },
   'subagent-no-summary': { zh: '暂无摘要', en: 'No summary yet' },
@@ -915,26 +903,8 @@ const dict = {
     zh: '**j/k** 翻页 · **enter/esc** 收起 · **q** 退出',
     en: '**j/k** page · **enter/esc** collapse · **q** exit',
   },
-  'traj-empty': { zh: '暂无轨迹事件', en: 'No trajectory events yet' },
   'traj-hint-failure': { zh: '{{key}} 看完整轨迹', en: '{{key}} for the full trajectory' },
-  
-  // ── subagent UI ──────────────────────────────────────────────────────
-  'subagent.unnamed': { zh: '未命名子代理', en: 'Unnamed subagent' },
-  'subagent.no-model': { zh: '未知模型', en: 'Unknown model' },
-  'subagent.status.running': { zh: '运行中', en: 'Running' },
-  'subagent.status.completed': { zh: '已完成', en: 'Completed' },
-  'subagent.status.failed': { zh: '失败', en: 'Failed' },
-  'subagent.status.pending': { zh: '等待中', en: 'Pending' },
-  'subagent.dashboard.title': { zh: '子代理面板', en: 'Subagent Dashboard' },
-  'subagent.dashboard.stats': { zh: '运行中: {{running}} · 已完成: {{completed}} · 失败: {{failed}}', en: 'Running: {{running}} · Completed: {{completed}} · Failed: {{failed}}' },
-  'subagent.dashboard.empty': { zh: '暂无子代理', en: 'No subagents yet' },
-  'subagent.dashboard.help': { zh: '↑↓ 选择 · Enter 查看详情 · Esc 返回', en: '↑↓ select · Enter view details · Esc back' },
-  'subagent.detail.not-found': { zh: '子代理未找到', en: 'Subagent not found' },
-  'subagent.detail.press-esc': { zh: '按 Esc 返回', en: 'Press Esc to go back' },
-  'subagent.detail.output': { zh: '输出', en: 'Output' },
-  'subagent.detail.no-output': { zh: '暂无输出', en: 'No output yet' },
-  'subagent.detail.help': { zh: 'Esc 返回面板', en: 'Esc back to dashboard' },
-} as const
+} as const satisfies Record<string, { zh: I18nText; en?: I18nText }>
 
 export type I18nKey = keyof typeof dict
 export type I18nParams = Record<string, string | number>
@@ -981,8 +951,27 @@ export function isLang(value: unknown): value is Lang {
  * @param params - Placeholder values.
  */
 export function t(key: I18nKey, params: I18nParams = {}): string {
-  const entry = dict[key] as { zh: string; en: string } | undefined
-  const template = entry?.[activeLang] ?? key
+  const entry = dict[key] as Partial<Record<Lang, I18nText>> | undefined
+  return substitute(pickText(entry?.[activeLang], params) ?? key, params)
+}
+
+// Cached per shipped language; CLDR-backed and built into Node, so zh always
+// selects `other` and en selects `one` exactly at count 1.
+const pluralRules: Record<Lang, Intl.PluralRules> = {
+  zh: new Intl.PluralRules('zh'),
+  en: new Intl.PluralRules('en'),
+}
+
+/** Resolve plural forms to one template using the `count` param. */
+function pickText(text: I18nText | undefined, params: I18nParams): string | undefined {
+  if (text === undefined || typeof text === 'string') return text
+  const count = Number(params.count)
+  const category = pluralRules[activeLang].select(Number.isFinite(count) ? count : 0)
+  return category === 'one' ? text.one : text.other
+}
+
+/** Substitute `{{name}}` placeholders, leaving unknown names visible. */
+function substitute(template: string, params: I18nParams): string {
   return template.replace(/\{\{(\w+)\}\}/g, (match, name: string) =>
     name in params ? String(params[name]) : match,
   )
@@ -999,12 +988,12 @@ export function t(key: I18nKey, params: I18nParams = {}): string {
  * @param params - Placeholder values substituted into whichever text wins.
  */
 export function tOr(key: string, fallback: string, params: I18nParams = {}): string {
-  const entry = (dict as Record<string, { zh?: string; en?: string }>)[key]
-  const template = entry?.[activeLang] ?? fallback
-  return template.replace(/\{\{(\w+)\}\}/g, (match, name: string) =>
-    name in params ? String(params[name]) : match,
-  )
+  const entry = (dict as Record<string, Partial<Record<Lang, I18nText>>>)[key]
+  return substitute(pickText(entry?.[activeLang], params) ?? fallback, params)
 }
+
+/** Read-only view of the dictionary for audits (scripts/verify-i18n.ts). */
+export const i18nDict: Readonly<Record<string, { readonly zh?: I18nText; readonly en?: I18nText }>> = dict
 
 // ── persistence (~/.dsh-tui/lang.json) ─────────────────────────────────
 
@@ -1045,12 +1034,16 @@ export function writeLangPref(lang: Lang, dir: string = PREFS_DIR): boolean {
 
 /**
  * Guess the user's language from the OS locale (`LC_ALL`, `LC_MESSAGES`,
- * `LANG`), defaulting to `zh`. Only consulted when nothing else (env var,
- * cordis.yml `lang`, persisted `/lang` choice) pinned a language.
- * The POSIX/C locale means "no locale selected" and conventionally maps to
- * English — importantly it is what CI runners (LANG=C.UTF-8) report, so
- * tests asserting English UI copy stay deterministic. An absent locale
- * variable (typical on Windows) still defaults to `zh`.
+ * `LANG`). Only consulted when nothing else (env var, cordis.yml `lang`,
+ * persisted `/lang` choice) pinned a language. `zh*` maps to zh; every
+ * other stated locale (en, but also fr/de/ja/…) maps to en — English is
+ * the lingua-franca fallback for a locale we don't ship, and a German
+ * user must not get a Chinese UI. The POSIX/C locale means "no locale
+ * selected" and conventionally maps to English — importantly it is what
+ * CI runners (LANG=C.UTF-8) report, so tests asserting English UI copy
+ * stay deterministic. Only an ABSENT locale (typical on Windows, where
+ * these POSIX vars don't exist and imply nothing about the user) keeps
+ * the zh default.
  */
 export function detectLocaleLang(): Lang {
   // `||` (not `??`): an EMPTY locale variable means "unset" and must fall
@@ -1061,10 +1054,8 @@ export function detectLocaleLang(): Lang {
     process.env.LANG ||
     ''
   const locale = raw.split('.')[0]?.toLowerCase() ?? ''
-  if (locale.startsWith('zh')) return 'zh'
-  if (locale.startsWith('en')) return 'en'
-  if (locale === 'c' || locale === 'posix') return 'en'
-  return 'zh'
+  if (locale === '') return 'zh'
+  return locale.startsWith('zh') ? 'zh' : 'en'
 }
 
 /**

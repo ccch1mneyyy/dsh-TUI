@@ -14,6 +14,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { PromptInput } from '../lib/types/components/PromptInput.js'
+import { settle } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -73,7 +74,7 @@ await new Promise(resolve => setTimeout(resolve, 500))
 stdin.write('a\x1b[Db')
 await new Promise(resolve => setTimeout(resolve, 200))
 stdin.write('\r')
-await new Promise(resolve => setTimeout(resolve, 300))
+await settle(() => submitted.length === 1 && submitted[0] === 'ba')
 
 check(
   'batched text, cursor movement, text, and Enter submit the composed value',
@@ -87,7 +88,7 @@ check(
 stdin.write('\x1b[65;30;20320;1;0;1_\x1b[65;30;22909;1;0;1_')
 await new Promise(resolve => setTimeout(resolve, 200))
 stdin.write('\r')
-await new Promise(resolve => setTimeout(resolve, 300))
+await settle(() => submitted.length === 2 && submitted[1] === '你好')
 
 check(
   'batched Termy win32 IME records preserve every committed character',
@@ -102,7 +103,7 @@ channel.working = true
 stdin.write('\x1b[78;49;110;1;0;1_\x1b[80;25;112;1;0;1_\x1b[77;50;109;1;0;1_')
 await new Promise(resolve => setTimeout(resolve, 200))
 stdin.write('\r')
-await new Promise(resolve => setTimeout(resolve, 300))
+await settle(() => steered.length === 1 && steered[0] === 'npm')
 
 check(
   'batched Windows input while streaming preserves npm before steer',
@@ -127,7 +128,8 @@ for (const [index, [label, newlineKey, prefix]] of multilineCases.entries()) {
   stdin.write(`${prefix} second`)
   await new Promise(resolve => setTimeout(resolve, 100))
   stdin.write('\r')
-  await new Promise(resolve => setTimeout(resolve, 300))
+  await settle(() => submitted.length === index + 3
+    && submitted[index + 2] === `${prefix} first\n${prefix} second`)
 
   check(
     `${label} inserts a newline before Enter submits the multiline draft`,

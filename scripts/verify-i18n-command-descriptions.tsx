@@ -20,6 +20,7 @@ const [
   { setLang },
   { LOCAL_COMMANDS },
   { stringWidth },
+  { settle, viewportLines },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -30,6 +31,7 @@ const [
   import('../src/i18n.js'),
   import('../src/commands.js'),
   import('../src/ink/stringWidth.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -56,10 +58,7 @@ function makeTerm(cols: number, rows: number) {
 }
 
 function screenText(term: InstanceType<typeof XTerm>, rows: number): string {
-  const buf = term.buffer.active
-  const lines: string[] = []
-  for (let y = 0; y < rows; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
-  return lines.join('\n')
+  return viewportLines(term, rows).join('\n')
 }
 
 // 混合清单：内置命令 + 已收录外部命令（plan）+ 未收录外部命令。
@@ -81,11 +80,16 @@ console.log('CommandSuggestions 随 /lang 切换:')
     React.createElement(CommandSuggestions, { commands, selectedIndex: 0, columns: COLS }),
     { stdout, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(300)
+  // 初始渲染的语言取决于环境，命令名与语言无关——以其出现为首帧信号。
+  await settle(() => screenText(term, ROWS).includes('new'))
 
   setLang('zh')
   app.rerender(React.createElement(CommandSuggestions, { commands, selectedIndex: 0, columns: COLS }))
-  await sleep(200)
+  await settle(() => {
+    const t = screenText(term, ROWS)
+    return t.includes('新开会话') && t.includes('压缩会话历史') && t.includes('切换计划模式')
+      && t.includes('Registry fallback text') && !t.includes('Toggle plan mode')
+  })
   let text = screenText(term, ROWS)
   assert(text.includes('新开会话'), 'zh：内置命令显示中文描述（新开会话）')
   assert(text.includes('压缩会话历史'), 'zh：compact 显示中文描述')
@@ -95,7 +99,10 @@ console.log('CommandSuggestions 随 /lang 切换:')
 
   setLang('en')
   app.rerender(React.createElement(CommandSuggestions, { commands, selectedIndex: 0, columns: COLS }))
-  await sleep(200)
+  await settle(() => {
+    const t = screenText(term, ROWS)
+    return t.includes('Start a new conversation') && t.includes('Toggle plan mode') && !t.includes('新开会话')
+  })
   text = screenText(term, ROWS)
   assert(text.includes('Start a new conversation'), 'en：内置命令回退 LOCAL_COMMANDS 英文原文')
   assert(text.includes('Toggle plan mode'), 'en：外部命令 plan 回退注册表英文原文')
@@ -118,18 +125,22 @@ console.log('HelpMenu 随 /lang 切换:')
     React.createElement(HelpMenu, { commands }),
     { stdout, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(300)
+  // 同上：以语言无关的命令名出现为首帧信号。
+  await settle(() => screenText(term, ROWS).includes('/new'))
 
   setLang('zh')
   app.rerender(React.createElement(HelpMenu, { commands }))
-  await sleep(200)
+  await settle(() => {
+    const t = screenText(term, ROWS)
+    return t.includes('/new — 新开会话') && t.includes('/rewind — 回退会话到历史消息')
+  })
   let text = screenText(term, ROWS)
   assert(text.includes('/new — 新开会话'), 'zh：帮助菜单显示 /new — 新开会话')
   assert(text.includes('/rewind — 回退会话到历史消息'), 'zh：帮助菜单显示 rewind 中文描述')
 
   setLang('en')
   app.rerender(React.createElement(HelpMenu, { commands }))
-  await sleep(200)
+  await settle(() => screenText(term, ROWS).includes('/new — Start a new conversation'))
   text = screenText(term, ROWS)
   assert(text.includes('/new — Start a new conversation'), 'en：帮助菜单显示英文原文')
 
@@ -151,14 +162,16 @@ console.log('窄终端中文描述截断:')
     React.createElement(CommandSuggestions, { commands, selectedIndex: 0, columns: COLS }),
     { stdout, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(300)
+  // 断言条件（截断省略号）出现即帧已画到位；unmount 后保留短暂固定等待，
+  // 让尚在途的 term.write 回调全部落盘再读缓冲。
+  await settle(() => viewportLines(term, ROWS).some(line => line.includes('…')))
   app.unmount()
   await sleep(100)
 
-  const buf = term.buffer.active
+  const screenLines = viewportLines(term, ROWS)
   let sawEllipsis = false
   for (let y = 0; y < ROWS; y++) {
-    const line = buf.getLine(y)?.translateToString(true) ?? ''
+    const line = screenLines[y] ?? ''
     if (line.trim() === '') continue
     const w = stringWidth(line)
     assert(w <= COLS, `第 ${y} 行宽 ${w} ≤ 终端宽 ${COLS}：'${line.trimEnd()}'`)

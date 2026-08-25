@@ -18,7 +18,7 @@ Without an explicit choice, the TUI queries the terminal background with OSC
 not answer.
 
 `auto` turns that one-shot startup detection into a standing choice: it is a
-valid value for `/theme`, `CC_TUI_THEME`, and `~/.dsh-cc/theme.json`. Selecting
+valid value for `/theme`, `DSH_TUI_THEME`, and `~/.dsh-tui/theme.json`. Selecting
 `auto` applies the last detected base immediately and re-queries OSC 11 in the
 background — on terminals that follow the system theme, picking `auto` again
 (or restarting) catches up after a system light/dark switch. `/theme status`

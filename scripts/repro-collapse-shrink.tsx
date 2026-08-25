@@ -21,15 +21,14 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { sleep, settle }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
     import('@xterm/headless'),
     import('../src/ui.js'),
+    import('./lib/term-test.mjs'),
   ])
-
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -111,13 +110,15 @@ async function run(): Promise<void> {
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  await sleep(400)
+  await settle(() => live.screen().length >= ROWS - 1)
   check('the expanded frame is taller than the viewport', live.screen().length >= ROWS - 1,
     `${live.screen().length} rows visible of ${ROWS}`)
 
   const mark = live.writes.length
   setOpen?.(false)
-  await sleep(600)
+  await settle(() =>
+    !live.screen().some(line => line.includes('body line'))
+    && live.screen().filter(line => line.includes('panel header')).length === 1)
   if (process.env.DBG_SHRINK === '1') {
     live.writes.slice(mark).forEach((w, i) => {
       console.log(`[w${i}] ${JSON.stringify(w.slice(0, 160))}`)
@@ -137,7 +138,7 @@ async function run(): Promise<void> {
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  await sleep(400)
+  await settle(() => cold.screen().join('\n') === collapsed.join('\n'))
   const fresh = cold.screen()
   coldInstance.unmount()
   cold.term.dispose()

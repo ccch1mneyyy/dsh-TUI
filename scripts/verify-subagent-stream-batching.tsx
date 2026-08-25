@@ -29,10 +29,11 @@ process.env.HOME = isolatedHome
 process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 
-const [{ Context }, { createChannel }, { SubagentActivityStore }] = await Promise.all([
+const [{ Context }, { createChannel }, { SubagentActivityStore }, { settle }] = await Promise.all([
   import('@deepseek-ai/cordis'),
   import('../src/dsh-adapter/channel.js'),
   import('../src/dsh-adapter/subagents.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 let failed = 0
@@ -84,7 +85,7 @@ const chunk = (text: string) => ({ type: 'assistant/chunk', data: { chunk: { typ
 ;(ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit('subagent/start', {
   id: 'child-agent', runId: 'run-1', provider: 'fake-provider',
 })
-await sleep(50)
+await settle(() => channel.subagents.length === 1 && channel.subagents[0]?.agentId === 'child-agent')
 const linked = channel.subagents.length === 1 && channel.subagents[0]!.agentId === 'child-agent'
 check('subagent/start 建立 tracked subagent', linked, JSON.stringify(channel.subagents.map(s => s.agentId)))
 
@@ -100,6 +101,8 @@ for (let i = 0; i < BURST; i++) {
 // 同 tick 发完：此时投影应远少于 chunk 数（仅 start 路径与 store 内部，
 // channel 层的投影最多 0 次——全部延迟到 16ms flush）
 const syncProjections = snapshotCalls
+// 固定窗口保留：下方「flush 后投影次数受帧数约束」是不得超额的稳定性探针，
+// settle 会在首次 flush（内容齐了）就返回，错过窗口后段的多余投影。
 await sleep(120) // 等 16ms flush 落定
 const subRow = channel.rows.find(r => r.kind === 'subagent')
 const projected = (subRow?.subagent?.outputLines ?? []).join('')
@@ -123,7 +126,8 @@ const endedRow = channel.rows.find(r => r.kind === 'subagent')
 check('subagent/end 状态同步可见（completed）', endedRow?.subagent?.status === 'completed', 'status=' + String(endedRow?.subagent?.status))
 check('end 前最后一帧 chunk 已含在投影中', (endedRow?.subagent?.outputLines ?? []).join('') === expected, 'len=' + (endedRow?.subagent?.outputLines ?? []).length)
 check('final summary 不被延迟覆盖', endedRow?.subagent?.summary === '最终结论', 'summary=' + String(endedRow?.subagent?.summary))
-// 被取代的延迟 flush 不再重复投影
+// 被取代的延迟 flush 不再重复投影。固定窗口保留：这是「不得发生」的稳定
+// 性探针，对已成立条件轮询会立即返回，等于没测。
 const afterEnd = snapshotCalls
 await sleep(80)
 check('被取代的延迟 flush 无多余投影', snapshotCalls - afterEnd <= 1, `extra=${snapshotCalls - afterEnd}`)

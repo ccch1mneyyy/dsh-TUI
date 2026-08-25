@@ -16,7 +16,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -24,6 +24,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100, ROWS = 40
@@ -95,7 +96,10 @@ const inst = await render(
   <AlternateScreen><Chat channel={channel} questionStore={new QuestionStore()} fullscreen /></AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(700)
+await settle(() => {
+  const screen = screenLines().join('\n')
+  return screen.includes('Bash') && screen.includes('REALBODY-END') && screen.includes('REALBODY2-END')
+})
 
 {
   const lines = screenLines()
@@ -119,7 +123,7 @@ await sleep(700)
 const streamRow = rows.find(r => r.id === 4)!
 streamRow.streaming = false
 channel.emit()
-await sleep(500)
+await settle(() => loneDotLines(screenLines()).length === 0)
 {
   const lines = screenLines()
   check('落定翻转后空 assistant 行被过滤（缓存流位指纹生效）', loneDotLines(lines).length === 0,
@@ -129,6 +133,8 @@ await sleep(500)
 // 用户空文本行不受影响（kind 限定）：一个空 user 行仍渲染其气泡形状
 rows.push({ id: 5, kind: 'user', text: '' })
 channel.emit()
+// 稳定性探针（界面必须仍存活）：❯ 在 emit 前就在屏上，轮询会立即返回，
+// 测不到「没有崩掉」——保留固定窗口让潜在崩溃有时间显形。
 await sleep(400)
 check('空 user 行不受 assistant 过滤影响（无崩溃、界面存活）', screenLines().some(l => l.includes('❯')))
 

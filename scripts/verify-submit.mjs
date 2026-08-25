@@ -18,6 +18,7 @@
  * Run with plain node against the compiled lib: `node scripts/verify-submit.mjs`
  */
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
+import { settle } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -26,8 +27,8 @@ function check(name, ok, extra = '') {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
-/** 投递链（sendChain）落定：expandMentions + followup/steer 都是微任务级。 */
-const settle = () => sleep(10)
+// 投递链（sendChain）落定：expandMentions + followup/steer 都是微任务级，
+// settle 轮询到断言条件出现（./lib/term-test.mjs）。
 
 const handlers = new Map()
 const ctx = {
@@ -80,13 +81,13 @@ const channel = createChannel(ctx, agent, {
 
 // ---- followup (Tab queue) path
 channel.submit('  第一条消息  ')
-await settle()
+await settle(() => followupCalls.length === 1 && followupCalls[0]?.content?.[0]?.text === '第一条消息')
 check('submit → agent.followup', followupCalls.length === 1 && followupCalls[0]?.content?.[0]?.text === '第一条消息')
 check('submit tracked as pending followup', channel.pending.length === 1 && channel.pending[0]?.placement === 'followup', JSON.stringify(channel.pending))
 
 // ---- steer (Enter while working) path
 channel.steer('第二条消息')
-await settle()
+await settle(() => steerCalls.length === 1 && steerCalls[0]?.content?.[0]?.text === '第二条消息')
 check('steer → agent.steer', steerCalls.length === 1 && steerCalls[0]?.content?.[0]?.text === '第二条消息')
 check('steer tracked as pending steer', channel.pending.length === 2 && channel.pending[1]?.placement === 'steer', JSON.stringify(channel.pending))
 check('blank steer ignored', channel.steer('   ') === undefined && steerCalls.length === 1)
@@ -106,7 +107,7 @@ if (discardedHandler) {
 
 // ---- removePending pulls a message back out of the inbox
 channel.steer('撤回我')
-await settle()
+await settle(() => channel.pending.length === 1)
 check('steer for removal tracked', channel.pending.length === 1, JSON.stringify(channel.pending))
 const removed = channel.removePending(channel.pending[0]?.id ?? '')
 check('removePending → agent.inbox.remove', removed === true && inboxRemovals.length === 1)
@@ -115,7 +116,7 @@ check('removePending unknown id is false', channel.removePending('nope') === fal
 
 // ---- inbox.remove refuses (already claimed) → pending kept, no ghost send
 channel.steer('已被认领')
-await settle()
+await settle(() => channel.pending.length === 1)
 inboxRemoveResult = false
 check('refused pull-back keeps pending', channel.removePending(channel.pending[0]?.id ?? '') === false && channel.pending.length === 1, JSON.stringify(channel.pending))
 inboxRemoveResult = true
@@ -148,7 +149,7 @@ const interruptChannel = createChannel(ctx, interruptAgent, {
 })
 check('interruptAndDeliver trims and counts', interruptChannel.interruptAndDeliver(['插话一', '   ', '插话二']) === 2)
 check('interruptAndDeliver cancels without keepInbox', interruptCalls.length === 1 && interruptCalls[0].options === undefined, JSON.stringify(interruptCalls))
-await sleep(10)
+await settle(() => interruptFollowups.length === 2 && interruptChannel.pending.length === 2)
 check('re-queued without waiting for idle (all texts)', interruptFollowups.length === 2 && interruptChannel.pending.length === 2, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
 check('re-queued as followup', interruptChannel.pending.every(p => p.placement === 'followup'))
 resolveIdle?.()
@@ -180,6 +181,8 @@ const interruptChannel2 = createChannel(ctx, interruptAgent2, {
 interruptChannel2.interruptAndDeliver(['x'])
 interruptChannel2.interruptAndDeliver(['y'])
 resolveIdle2()
+// Stability probe (must NOT double-deliver): a settle would return as soon
+// as 'y' lands and could miss a late wrongful 'x' — keep the fixed window.
 await sleep(10)
 check('double interrupt does not double-deliver', interruptFollowups.filter(m => m.content?.[0]?.text === 'x').length === 0 && interruptFollowups.filter(m => m.content?.[0]?.text === 'y').length === 1, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
 
@@ -208,7 +211,7 @@ const convergenceChannel = createChannel(ctx, convergenceAgent, {
   activity: false,
 })
 convergenceChannel.interruptAndDeliver(['取消后立即恢复'])
-await sleep(10)
+await settle(() => convergenceFollowups.length === 1 && convergenceChannel.pending.length === 1)
 check('cancel convergence does not depend on whenIdle', convergenceFollowups.length === 1 && convergenceChannel.pending.length === 1, JSON.stringify(convergenceFollowups))
 
 // No whenIdle observer: delivery still uses the same convergence wake.
@@ -230,7 +233,7 @@ const fallbackChannel = createChannel(ctx, fallbackAgent, {
   activity: false,
 })
 fallbackChannel.interruptAndDeliver(['兜底投递'])
-await sleep(10)
+await settle(() => fallbackCalls.length === 1 && fallbackChannel.pending.length === 1)
 check('no-whenIdle agent still receives the wake', fallbackCalls.length === 1 && fallbackChannel.pending.length === 1, JSON.stringify(fallbackCalls))
 
 process.exit(failed)

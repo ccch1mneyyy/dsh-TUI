@@ -14,6 +14,7 @@ const [
   { render, ThemeProvider },
   { LogoHeader },
   { createChannel },
+  { settle },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -21,6 +22,7 @@ const [
   import('../src/ui.js'),
   import('../src/components/MessageList.js'),
   import('../src/dsh-adapter/channel.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 let checks = 0
@@ -85,7 +87,6 @@ class FakeOutput extends Writable {
   }
 }
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const stripAnsi = text => text
   .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
   .replace(/\x1b\]9;[^\x07]*\x07/g, '')
@@ -110,7 +111,10 @@ async function renderHeader({ columns, whale }) {
       patchConsole: false,
     },
   )
-  await sleep(180)
+  await settle(() => {
+    const plain = stripAnsi(stdout.writes.join(''))
+    return plain.includes('dsh-TUI') && plain.includes('whale-model-probe')
+  })
   const raw = stdout.writes.join('')
   await instance.unmount()
   return { raw, plain: stripAnsi(raw) }

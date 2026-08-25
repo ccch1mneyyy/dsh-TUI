@@ -9,7 +9,7 @@ process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'Orca'
 process.env.DSH_TUI_THEME = 'dark'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { default: instances }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { default: instances }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -17,6 +17,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/ink/instances.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 let COLS = 232
@@ -109,7 +110,9 @@ await render(
 const ink: any = instances.get(stdout)
 if (!ink) { console.log('FAIL 未找到 Ink 实例'); process.exit(1) }
 ink.setAltScreenActive(true, true)
-await sleep(1200)
+// boot 是唯一的 false→true 等待（消息区从空到有内容）；后面全部 resize
+// 断言是「不得空白」稳定性探针，保留固定窗口。
+await settle(() => density() >= 3)
 check('alt-screen 已激活', ink.isAltScreenActive === true)
 assertVisible('启动落定 400 行')
 
@@ -121,6 +124,8 @@ function doResize(w: number, h: number) {
 }
 
 // ---- 现场形态的 burst ----
+// 各落定/闲置等待保留固定 sleep：断言的 density>=3 平时恒真（空白才是
+// 回归症状），对已成立条件轮询立即返回等于没测。
 const bursts: Array<Array<[number, number]>> = [
   [[231, 71], [232, 71]],
   [[235, 71]],

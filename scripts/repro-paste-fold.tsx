@@ -28,13 +28,14 @@ const dataDir = mkdtempSync(join(tmpdir(), 'repro-paste-fold-data-'))
 process.env.HOME = dataDir
 process.env.USERPROFILE = dataDir
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, termTest] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100
@@ -57,24 +58,14 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-function screenHas(s: string): boolean {
-  const buf = term.buffer.active
-  for (let y = 0; y < ROWS; y++) {
-    if ((buf.getLine(y)?.translateToString(true) ?? '').includes(s)) return true
-  }
-  return false
-}
-/** 0-indexed position of the first occurrence of `s` on the screen. */
-function findText(s: string): { col: number; row: number } | null {
-  const buf = term.buffer.active
-  for (let row = 0; row < ROWS; row++) {
-    const line = buf.getLine(row)?.translateToString(true) ?? ''
-    const col = line.indexOf(s)
-    if (col >= 0) return { col, row }
-  }
-  return null
-}
+// 等待/读屏走公共辅助（issue #532）：settle 轮询到预期状态再断言——
+// 固定 sleep 在慢 runner 上会断言到旧屏幕（旧 300ms 版本挂过 CI，而
+// 后续 submit 断言通过，证明状态早已正确）；真回归仍会红（条件永不
+// 满足则超时后断言照常失败）。alt-screen 下 baseY 恒 0，视口读取与
+// 旧的 getLine(0..ROWS) 直扫等价。
+const { sleep, settle } = termTest
+const screenHas = (s: string): boolean => termTest.screenHas(term, s)
+const findText = (s: string): { col: number; row: number } | null => termTest.findText(term, s)
 
 const listeners = new Set<() => void>()
 let submitted = ''
@@ -143,7 +134,7 @@ const click = (col: number, row: number) => {
 try {
   // 1. A big bracketed paste folds into an atomic block chip.
   stdinObj.write(`\x1b[200~${pasted}\x1b[201~`)
-  await sleep(500)
+  await settle(() => screenHas('▸ 12 lines') && screenHas('fold-line-0'))
   check('big paste folds into block chip', screenHas('▸ 12 lines'), screenHas('▸ 12 lines') ? '' : 'no chip stats on screen')
   check('chip shows the first-line preview', screenHas('fold-line-0'))
   check('block text hides the later lines', !screenHas('FOURTH_MARKER'))
@@ -153,14 +144,16 @@ try {
   //    Clicking a card row expands the block into the editable input.
   let pos = findText('fold-line-0')
   if (pos) hover(pos.col + 1, pos.row + 1)
-  await sleep(400)
+  await settle(() => screenHas('FOURTH_MARKER') && screenHas('▸ 12 lines'))
   check('hover pops the peek card with block head',
     screenHas('FOURTH_MARKER') && screenHas('▸ 12 lines'))
   check('peek card caps the tail rows', !screenHas('EIGHTH_MARKER'))
   const cardPos = findText('FOURTH_MARKER')
   if (cardPos) click(cardPos.col + 1, cardPos.row + 1)
-  await sleep(400)
+  await settle(() => screenHas('EIGHTH_MARKER'))
   check('card click expands the block for editing', screenHas('EIGHTH_MARKER'))
+  // Stability probe (must NOT change): a settle would return immediately,
+  // so give any wrong repaint a fixed window to show up instead.
   hover(1, 1)
   await sleep(400)
   check('expansion stays after the mouse leaves', screenHas('EIGHTH_MARKER'))
@@ -169,17 +162,17 @@ try {
   //    caret to line 0, the window returns to the head and row 0 shows the
   //    prefix); then the chip click expands the block again.
   stdinObj.write('\x1b[A'.repeat(11))
-  await sleep(300)
+  await settle(() => findText('▾ 12 lines') !== null)
   let prefix = findText('▾ 12 lines')
   check('expanded input shows the ▾ fold prefix', prefix !== null)
   if (prefix) {
     click(prefix.col + 1, prefix.row + 1)
-    await sleep(400)
+    await settle(() => !screenHas('FOURTH_MARKER') && screenHas('▸ 12 lines'))
     check('▾ prefix folds the input into a block', !screenHas('FOURTH_MARKER') && screenHas('▸ 12 lines'))
   }
   pos = findText('fold-line-0')
   if (pos) click(pos.col + 1, pos.row + 1)
-  await sleep(400)
+  await settle(() => screenHas('EIGHTH_MARKER') && !screenHas('▸ 12 lines'))
   // The caret was dragged to the block's end when folding, so the expanded
   // input shows the TAIL window (EIGHTH_MARKER) — and no chip.
   check('chip click expands the block', screenHas('EIGHTH_MARKER') && !screenHas('▸ 12 lines'))
@@ -189,11 +182,11 @@ try {
   // Fold back for the typing test below (Up ×11 walks the caret to line 0
   // where the ▾ prefix is visible again).
   stdinObj.write('\x1b[A'.repeat(11))
-  await sleep(300)
+  await settle(() => findText('▾ 12 lines') !== null)
   prefix = findText('▾ 12 lines')
   if (prefix) {
     click(prefix.col + 1, prefix.row + 1)
-    await sleep(400)
+    await settle(() => screenHas('▸ 12 lines'))
     check('▾ prefix folds again', screenHas('▸ 12 lines'))
   }
 
@@ -204,66 +197,68 @@ try {
   //    Enter submits. Batch Backspace (several keys in one stdin read)
   //    must delete one char per key even with a block present.
   stdinObj.write('zzctrl')
-  await sleep(300)
+  await settle(() => screenHas('zzctrl'))
   stdinObj.write('\x7f'.repeat(3))
-  await sleep(300)
+  await settle(() => screenHas('zzc') && !screenHas('zzctrl'))
   check('control: batch Backspace deletes 3 chars, block stays',
     screenHas('zzc') && !screenHas('zzctrl') && screenHas('▸ 12 lines'))
   stdinObj.write('\x7f'.repeat(3))
-  await sleep(300)
+  await settle(() => !screenHas('zzc'))
   stdinObj.write('tail')
-  await sleep(400)
+  await settle(() => screenHas('tail'))
   check('typing keeps the block folded', screenHas('▸ 12 lines') && screenHas('tail'))
   stdinObj.write('\x7f'.repeat(4))
-  await sleep(300)
+  await settle(() => !screenHas('tail'))
   check('Backspace removes the typed char, block stays folded',
     screenHas('▸ 12 lines') && !screenHas('tail'))
   stdinObj.write('\x1b')
-  await sleep(400)
+  await settle(() => screenHas('EIGHTH_MARKER') && !screenHas('▸ 12 lines'))
   check('Esc expands the block (does not clear)', screenHas('EIGHTH_MARKER') && !screenHas('▸ 12 lines'))
   // Esc on the EXPANDED big input folds it back into a block — the toggle
   // is lossless; clearing a big draft goes through Backspace/Ctrl+C.
   stdinObj.write('\x1b')
-  await sleep(400)
+  await settle(() => screenHas('▸ 12 lines'))
   check('Esc on expanded big input folds it back', screenHas('▸ 12 lines'))
   stdinObj.write('\x1b')
-  await sleep(400)
+  await settle(() => !screenHas('▸ 12 lines') && screenHas('EIGHTH_MARKER'))
   check('Esc on the block expands again', !screenHas('▸ 12 lines') && screenHas('EIGHTH_MARKER'))
   stdinObj.write('\r')
-  await sleep(400)
+  await settle(() => submitted !== '')
   check('Enter submits the full text', submitted === pasted, `got ${submitted.length} chars`)
 
   // 5. Text typed BEFORE the block stays visible and is submitted with it.
   submitted = ''
   stdinObj.write('pre:')
-  await sleep(300)
+  await settle(() => screenHas('pre:'))
   stdinObj.write(`\x1b[200~${pasted}\x1b[201~`)
-  await sleep(500)
+  await settle(() => screenHas('▸ 12 lines') && screenHas('pre:'))
   check('paste after text folds; head text stays visible',
     screenHas('▸ 12 lines') && screenHas('pre:'))
   stdinObj.write('\r')
-  await sleep(400)
+  await settle(() => submitted !== '')
   check('submit includes the head text', submitted === 'pre:' + pasted)
 
   // 6. Backspace at the block's tail deletes the WHOLE block in one key;
   //    Enter on the now-empty prompt submits nothing.
   submitted = 'sentinel'
   stdinObj.write(`\x1b[200~${pasted}\x1b[201~`)
-  await sleep(500)
+  await settle(() => screenHas('▸ 12 lines'))
   check('paste folds again', screenHas('▸ 12 lines'))
   stdinObj.write('\x7f')
-  await sleep(400)
+  await settle(() => !screenHas('▸ 12 lines') && !screenHas('fold-line-0'))
   check('Backspace deletes the whole block',
     !screenHas('▸ 12 lines') && !screenHas('fold-line-0'))
+  // Negative probe (nothing may be submitted): a settle has no state change
+  // to wait for — keep a fixed window for a wrong submit to surface.
   stdinObj.write('\r')
   await sleep(400)
   check('Enter after block delete submits nothing', submitted === 'sentinel')
 
   // 7. Small (non-foldable) inputs keep the classic Esc = clear behavior.
   stdinObj.write('tiny')
-  await sleep(300)
+  await settle(() => screenHas('tiny'))
   stdinObj.write('\x1b')
-  await sleep(300)
+  await settle(() => !screenHas('tiny'))
   check('Esc clears a small (non-foldable) input', !screenHas('tiny'))
 } finally {
   await instance.unmount()

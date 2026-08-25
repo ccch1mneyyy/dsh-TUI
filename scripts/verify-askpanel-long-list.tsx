@@ -8,12 +8,13 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal }, { render }, { AskUserQuestionPanel }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal }, { render }, { AskUserQuestionPanel }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/questions/AskUserQuestionPanel.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 class FakeStdin extends PassThrough {
@@ -54,19 +55,23 @@ function viewport(): string {
     buffer.getLine(buffer.viewportY + y)?.translateToString(true) ?? '').join('\n')
 }
 
-await delay(400)
+// 每个快照 settle 到「焦点标签在屏且恰一个 ●」——断言的同一条件；只盯焦点
+// 标签会在旧焦点行尚未擦除的半解析帧上提前返回。
+const settled = (label: string): boolean =>
+  viewport().includes(label) && viewport().split('\n').filter(line => line.includes('●')).length === 1
+await settle(() => settled('● provider-00'))
 const initial = viewport()
 for (let index = 0; index < 25; index += 1) {
   stdin.write('\x1b[B')
   await delay(20)
 }
-await delay(300)
+await settle(() => settled('● provider-25'))
 const moved = viewport()
 
 terminal.resize(90, 18)
 stdout.rows = 18
 stdout.emit('resize')
-await delay(300)
+await settle(() => settled('● provider-25'))
 const resized = viewport()
 
 let failures = 0

@@ -8,12 +8,13 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }] = await Promise.all([
+const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 90
@@ -92,12 +93,16 @@ const editTool = {
 }
 
 const app = await render(card('edit', editTool), { stdout, debug: true, exitOnCtrlC: false })
-await sleep(250)
+await settle(() => rowOf('- const a = 1') >= 0 && rowOf('+ const a = 2') >= 0)
 
-/** Swap the rendered card; key forces a clean remount per scenario. */
-async function show(key: string, tool: Record<string, unknown>, verbose = false): Promise<void> {
+/**
+ * Swap the rendered card; key forces a clean remount per scenario. `ready`
+ * is polled until the new card's distinctive content is parsed (the old
+ * fixed 250ms could sample a half-parsed screen on slow runners).
+ */
+async function show(key: string, tool: Record<string, unknown>, ready: () => boolean, verbose = false): Promise<void> {
   app.rerender(card(key, tool, verbose))
-  await sleep(250)
+  await settle(ready)
 }
 
 // 1. Settled Edit: diff body, red `- ` / green `+ ` lines under the ⎿ gutter.
@@ -120,7 +125,7 @@ await show('write', {
     title: 'Write /tmp/new.ts',
     diffs: [{ path: '/tmp/new.ts', oldText: null, newText: 'hello\nworld' }],
   },
-})
+}, () => screen().includes('+ hello') && screen().includes('+ world'))
 {
   const s = screen()
   check('新建文件标题为「Write /tmp/new.ts」', s.includes('Write /tmp/new.ts'))
@@ -134,7 +139,7 @@ await show('bash', {
   callView: { card: 'terminal', title: 'ls -la' },
   resultView: { card: 'terminal', output: 'total 8\nfile1\nfile2', exitCode: 0 },
   resultFull: 'total 8\nfile1\nfile2',
-})
+}, () => screen().includes('Bash(ls -la)') && rowOf('total 8') >= 0)
 {
   const s = screen()
   check('终端卡标题为「Bash(ls -la)」', s.includes('Bash(ls -la)'))
@@ -148,7 +153,7 @@ await show('bash-err', {
   callView: { card: 'terminal', title: 'false' },
   resultView: { card: 'terminal', output: '', exitCode: 1 },
   resultFull: '',
-})
+}, () => rowOf('Exit code 1') >= 0)
 check('非零退出显示 Exit code 行', rowOf('Exit code 1') >= 0)
 
 // 5. Read 卡：正文剥离 <path>/<content> 信封。
@@ -161,7 +166,7 @@ await show('read', {
     content: [{ type: 'text', text: 'line one\nline two' }],
   },
   resultFull: '<path>/tmp/x.ts</path>\n<content>\nline one\nline two\n</content>',
-})
+}, () => rowOf('line one') >= 0)
 {
   const s = screen()
   check('Read 正文无信封标签', s.includes('line one') && !s.includes('<content>') && !s.includes('<path>'))
@@ -173,7 +178,7 @@ await show('read', {
 await show('fallback', {
   name: 'read',
   resultFull: 'raw output here',
-})
+}, () => rowOf('raw output here') >= 0)
 {
   const s = screen()
   check('无视图时回退 Name(args) 标题', s.includes('Read({"file_path":"/tmp/a.ts"})'))
@@ -187,7 +192,7 @@ await show('cap', {
   callView: { card: 'terminal', title: 'seq 6' },
   resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
   resultFull: '1\n2\n3\n4\n5\n6',
-})
+}, () => screen().includes('… +3 lines (ctrl+o to expand)'))
 {
   const s = screen()
   check('文本正文折叠为 3 行 + 提示', s.includes('… +3 lines (ctrl+o to expand)') && rowOf('4') === -1)
@@ -197,7 +202,7 @@ await show('cap-open', {
   callView: { card: 'terminal', title: 'seq 6' },
   resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
   resultFull: '1\n2\n3\n4\n5\n6',
-}, true)
+}, () => rowOf('6') >= 0 && !screen().includes('ctrl+o to expand'), true)
 check('verbose 不折叠', rowOf('6') >= 0 && !screen().includes('ctrl+o to expand'))
 
 // 8. 错误卡：errorText 红色缩进。
@@ -205,7 +210,7 @@ await show('error', {
   name: 'read',
   status: 'error',
   errorText: 'Error: ENOENT',
-})
+}, () => rowOf('Error: ENOENT') >= 0)
 {
   const row = rowOf('Error: ENOENT')
   check('错误行带 ⎿ 缩进', row >= 0 && lines()[row]!.startsWith(' ⎿ Error: ENOENT'))
@@ -221,26 +226,30 @@ await show('running-diff', {
     title: 'Edit /tmp/a.ts',
     diffs: [{ path: '/tmp/a.ts', oldText: 'old', newText: 'new' }],
   },
-})
+}, () => rowOf('- old') >= 0 && rowOf('+ new') >= 0)
 check('运行中展示待定 diff', rowOf('- old') >= 0 && rowOf('+ new') >= 0)
 
 // 10. 状态点：分类定色、失败红 ✗。
-await show('dot-bash', { name: 'bash', argsText: '{"command":"ls"}' })
+await show('dot-bash', { name: 'bash', argsText: '{"command":"ls"}' },
+  () => rowOf('Bash') >= 0 && (lines()[rowOf('Bash')] ?? '').includes('•'))
 {
   const row = rowOf('Bash')
   check('bash 点为鼠尾草绿小点', row >= 0 && lines()[row]!.includes('•') && fgAt(lines()[row]!.indexOf('•'), row) === 0x7fae99)
 }
-await show('dot-read', { name: 'read' })
+await show('dot-read', { name: 'read' },
+  () => rowOf('Read') >= 0 && (lines()[rowOf('Read')] ?? '').includes('•'))
 {
   const row = rowOf('Read')
   check('read 点为青蓝小点', row >= 0 && fgAt(lines()[row]!.indexOf('•'), row) === 0x82b8c7)
 }
-await show('dot-edit', { name: 'edit' })
+await show('dot-edit', { name: 'edit' },
+  () => rowOf('Edit') >= 0 && (lines()[rowOf('Edit')] ?? '').includes('•'))
 {
   const row = rowOf('Edit')
   check('edit 点为雾紫小点', row >= 0 && fgAt(lines()[row]!.indexOf('•'), row) === 0xb3a0d4)
 }
-await show('dot-error', { name: 'bash', status: 'error', errorText: 'boom' })
+await show('dot-error', { name: 'bash', status: 'error', errorText: 'boom' },
+  () => rowOf('Bash') >= 0 && (lines()[rowOf('Bash')] ?? '').includes('✗'))
 {
   const row = rowOf('Bash')
   check('失败点变红 ✗', row >= 0 && lines()[row]!.includes('✗') && fgAt(lines()[row]!.indexOf('✗'), row) === 0xda8a93)
@@ -262,7 +271,7 @@ await show('multi-hunk', {
       { path: '/tmp/a.ts', oldText: 'l9', newText: 'l9c' },
     ],
   },
-})
+}, () => rowOf('⋯') >= 0 && rowOf('- l1') >= 0 && rowOf('+ l9c') >= 0)
 check('多 hunk 用 ⋯ 分隔', rowOf('⋯') >= 0 && rowOf('- l1') >= 0 && rowOf('+ l9c') >= 0)
 
 // 11. Grep 搜索卡：按文件分组的 matches。
@@ -277,7 +286,7 @@ await show('grep', {
     total: 7,
   },
   resultFull: 'src/a.ts:12: // TODO fix',
-})
+}, () => rowOf('12: // TODO fix') >= 0 && rowOf('(7 total)') >= 0)
 {
   const s = screen()
   check('搜索卡标题回退到 call 标题', s.includes('Grep TODO in src'))
@@ -296,7 +305,7 @@ await show('glob', {
     total: 2,
   },
   resultFull: 'src/a.ts\nsrc/b.ts',
-})
+}, () => rowOf('src/b.ts') >= 0)
 check('Glob paths 逐行列出', rowOf('src/a.ts') >= 0 && rowOf('src/b.ts') >= 0)
 
 app.unmount()

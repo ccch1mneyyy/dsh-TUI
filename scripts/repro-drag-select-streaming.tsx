@@ -23,7 +23,7 @@ process.env.DSH_TUI_LANG = 'zh'
 process.env.SSH_CONNECTION = 'headless-repro'
 delete process.env.TMUX
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, termTest] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -31,12 +31,16 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('./lib/term-test.mjs'),
 ])
 const { default: instances } = await import('../src/ink/instances.js')
 const { stringWidth } = await import('../src/ink/stringWidth.js')
 
 const COLS = 100, ROWS = 40
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+// 等待/读屏走公共辅助（issue #532）：settle 轮询到预期状态再断言——固定
+// sleep 在慢 runner 上会断言到旧屏幕。alt-screen 下 baseY 恒 0，视口读取
+// 与直扫等价。
+const { sleep, settle } = termTest
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -110,8 +114,7 @@ inst.rerender(tree)
 await sleep(900)
 
 function screenLines(): string[] {
-  const buf = term.buffer.active
-  return Array.from({ length: ROWS }, (_, y) => buf.getLine(buf.baseY + y)?.translateToString(true) ?? '')
+  return termTest.viewportLines(term, ROWS)
 }
 
 function osc52Payloads(): string[] {
@@ -135,15 +138,15 @@ async function dragOver(marker: string, a: number, b: number): Promise<void> {
   stdin.write(`\x1b[<32;${col0 + b + 1};${row + 1}M`)   // drag (motion)
   await sleep(80)
   stdin.write(`\x1b[<0;${col0 + b + 1};${row + 1}m`)    // release
-  await sleep(350)
 }
 
 // ── 对照组：静息（sticky 底部），拖选尾部标记 ──
 writes.length = 0
 await dragOver(TMARK, 2, 10)
 {
-  const payloads = osc52Payloads()
   const expect = TMARK.slice(2, 10 + 1)
+  await settle(() => osc52Payloads().includes(expect))
+  const payloads = osc52Payloads()
   check('静息拖选 → OSC 52 携带完整选中文本', payloads.includes(expect),
     `payloads=${JSON.stringify(payloads)} expect="${expect}"`)
 }
@@ -153,6 +156,8 @@ for (let i = 0; i < 90 && !screenLines().some(l => l.includes(HMARK)); i++) {
   stdin.write('\x1b[<64;90;20M')  // wheel up，小步走到标记可见
   await sleep(12)
 }
+// 稳定性窗口（不得改变）：上面的轮询循环已见到 HMARK，settle 会立即返回
+// 等于没测——固定窗口让滚轮连发后的错误重绘（标记被冲掉）有机会暴露。
 await sleep(400)
 {
   const lines = screenLines()
@@ -186,8 +191,9 @@ streamRow.streaming = undefined
 await sleep(400)
 
 {
-  const payloads = osc52Payloads()
   const expect = HMARK.slice(3, 11 + 1)
+  await settle(() => osc52Payloads().includes(expect))
+  const payloads = osc52Payloads()
   check('流式并发时拖选 → OSC 52 携带完整选中文本', payloads.includes(expect),
     `payloads=${JSON.stringify(payloads)} expect="${expect}"`)
 }
@@ -197,8 +203,9 @@ writes.length = 0
 await sleep(200)
 try {
   await dragOver(HMARK, 3, 11)
-  const payloads = osc52Payloads()
   const expect = HMARK.slice(3, 11 + 1)
+  await settle(() => osc52Payloads().includes(expect))
+  const payloads = osc52Payloads()
   check('流式结束后拖选 → 恢复完整', payloads.includes(expect),
     `payloads=${JSON.stringify(payloads)} expect="${expect}"`)
 } catch (e) {

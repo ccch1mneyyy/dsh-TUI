@@ -179,6 +179,12 @@ for (const lang of ['zh', 'en']) {
       )
     }
 
+    // Fixed sleeps kept on purpose (settle would not help here): every
+    // assertion is a layout INVARIANT — no wrapped line, hint row last —
+    // that already holds on the pre-keystroke screen, so polling for it
+    // returns immediately on the stale frame and the new frame goes
+    // untested. The window gives each repaint (and the async session list)
+    // time to land before the invariant is re-checked.
     inspect('initial')
     for (const [keys, label] of KEYS) {
       stdin.write(keys)

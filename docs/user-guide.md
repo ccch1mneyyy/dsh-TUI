@@ -137,7 +137,7 @@ dsh-tui
 ### 2.7 各场景键位
 
 **问卷（模型 ask_user_question）**
-`↑/↓` 选择 · `Space` 多选勾选 · `Tab` 切自定义回答 · `Enter` 提交 · `Esc`/`Ctrl+C` 取消整批提问
+`↑/↓` 选择 · `Space` 多选勾选 · `Tab` 切自定义回答 · `Enter` 提交 · 第 2 题起 `Esc` 返回上一题 · 第 1 题 `Esc` 或任意题 `Ctrl+C` 取消整批提问
 
 **计划评审（plan review）**
 `↑/↓` 移动 · `1`/`2` 数字快选（反馈为空时）· 打字=反馈 · `Enter` 提交 · `Esc` 打断评审
@@ -356,7 +356,7 @@ dsh-tui
 
 **问卷（模型 ask_user_question）**：面板独占键盘；`↑/↓` 选选项、`Space` 多选、
 `Enter` 提交。**最后一行是自由输入行**——在选项行直接打字 = 附加该选项标签 + 自定义文本一起提交；
-`Tab` 直达输入行。`Esc`/`Ctrl+C` 取消整批提问（模型收到 ASK_CANCELLED）。
+`Tab` 直达输入行。第 2 题起按 `Esc` 返回上一题并保留草稿；第 1 题按 `Esc`，或任意题按 `Ctrl+C`，取消整批提问（模型收到 ASK_CANCELLED）。
 计划评审卡片：`1`/`2` 数字快选；**批准必须无反馈文本**（带反馈视为"继续规划"）。
 
 **工具审批**：命令申请权限提升时弹出审批条（工具名 + 完整命令 + 原因）。
@@ -513,7 +513,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 
 **避坑**
 22. `/compact`、`/model` 在回合运行中会被拒绝——先 `Ctrl+C` 或等回合结束。
-23. 审批条 `Esc` = 拒绝（fail closed）；问卷 `Esc` = 取消整批（模型会收到取消信号）。
+23. 审批条 `Esc` = 拒绝（fail closed）；问卷第 2 题起 `Esc` = 返回上一题，第 1 题 `Esc` 或任意题 `Ctrl+C` = 取消整批（模型会收到取消信号）。
 24. `/update` 只更新 profile runtime 不动全局安装；提示版本错位时按提示执行
     `npm install -g @deepseek-harness-tui/dsh-tui@<版本>` 对齐启动器。
 25. macOS 的 ⌘ 键需要 iTerm2/kitty/WezTerm/ghostty/tmux；Terminal.app 用 Ctrl 即可。

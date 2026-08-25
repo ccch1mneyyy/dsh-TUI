@@ -17,7 +17,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -25,6 +25,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100, ROWS = 40
@@ -71,10 +72,10 @@ const channel: any = {
   commandCompletions: (input: string) => completeCommands(input),
 }
 const emitChannel = () => { channel.version++; for (const l of listeners) l() }
-const setGutter = async (mode: string) => {
+// 切换后由各调用点 settle 到断言条件出现（./lib/term-test.mjs）。
+const setGutter = (mode: string) => {
   channel.scrollGutter = mode
   emitChannel()
-  await sleep(400)
 }
 
 const inst = await render(
@@ -83,8 +84,6 @@ const inst = await render(
   </AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(700)
-
 function screenLines(): string[] {
   const buf = term.buffer.active
   return Array.from({ length: ROWS }, (_, y) => buf.getLine(buf.baseY + y)?.translateToString(true) ?? '')
@@ -123,19 +122,24 @@ function gutterSnapshot(): { thumbs: number[]; ticks: number[]; chevrons: number
   }
   return { thumbs, ticks, chevrons }
 }
+// 逐事件 pacing sleep 保留：滚轮事件需要逐个进入 hover/scroll 路径，
+// 每步之间没有可区分新旧帧的屏幕条件可轮询。
 const wheel = async (up: boolean, times: number) => {
   for (let i = 0; i < times; i++) {
     stdin.write(`\x1b[<${up ? 64 : 65};90;30M`)
     await sleep(150)
   }
 }
-const clickAt = async (col: number, row: number) => {
+const clickAt = (col: number, row: number) => {
   stdin.write(`\x1b[<0;${col};${row}M`)
   stdin.write(`\x1b[<0;${col};${row}m`)
-  await sleep(400)
 }
 
 // ── 1. 默认 timeline ──
+await settle(() => {
+  const snap = gutterSnapshot()
+  return snap.ticks.length > 0 && snap.chevrons.length === 2 && snap.thumbs.length === 0
+})
 {
   const snap = gutterSnapshot()
   check('默认 timeline：rail tick + chevron 存在', snap.ticks.length > 0 && snap.chevrons.length === 2,
@@ -144,7 +148,13 @@ const clickAt = async (col: number, row: number) => {
 }
 
 // ── 2. 切 scrollbar：██ 贴底，无 chevron/tick ──
-await setGutter('scrollbar')
+setGutter('scrollbar')
+await settle(() => {
+  const snap = gutterSnapshot()
+  const [, bottom] = gutterRange()
+  return snap.thumbs.length >= 2 && snap.chevrons.length === 0 && snap.ticks.length === 0 &&
+    snap.thumbs[snap.thumbs.length - 1] === bottom - 1
+})
 {
   const snap = gutterSnapshot()
   check('scrollbar：██ 滑块出现', snap.thumbs.length >= 2, `thumbs=${snap.thumbs.length}`)
@@ -157,6 +167,13 @@ await setGutter('scrollbar')
 
 // ── 3. 上滚（whale 滚出视口）：滑块在轨道内且离开底端 ──
 await wheel(true, 16)
+await settle(() => {
+  const snap = gutterSnapshot()
+  const [top, bottom] = gutterRange()
+  if (snap.thumbs.length < 2) return false
+  const first = snap.thumbs[0]!, last = snap.thumbs[snap.thumbs.length - 1]!
+  return first >= top && last < bottom - 1
+})
 {
   const snap = gutterSnapshot()
   const [top, bottom] = gutterRange()
@@ -171,15 +188,15 @@ await wheel(true, 16)
 // ── 4. 点击轨道顶部：滚到顶（whale 回到视口，跳过滑块位置断言）──
 {
   const [top] = gutterRange()
-  await clickAt(COLS, top + 1)
+  clickAt(COLS, top + 1)
+  await settle(() => screenLines().slice(0, 24).some(l => l.includes('问题 1')))
   const lines = screenLines()
   check('点击轨道顶后滚到顶（问题 1 可见）', lines.slice(0, 24).some(l => l.includes('问题 1')),
     `top4=${JSON.stringify(lines.slice(0, 4).map(l => l.trimEnd().slice(0, 24)))}`)
 }
 
 // ── 5. 切 hidden：无 gutter（whale 的 █ 不算——只查 timeline/scrollbar glyph）──
-await setGutter('hidden')
-{
+const hasGutterGlyph = (): boolean => {
   const [top, bottom] = gutterRange()
   let anyGlyph = false
   for (let y = top; y < bottom; y++) {
@@ -194,12 +211,22 @@ await setGutter('hidden')
       if (!whale) anyGlyph = true
     }
   }
+  return anyGlyph
+}
+setGutter('hidden')
+await settle(() => !hasGutterGlyph())
+{
+  const anyGlyph = hasGutterGlyph()
   check('hidden：右缘无任何 gutter glyph', !anyGlyph)
 }
 
 // ── 6. 切回 timeline：rail 恢复 ──
 await wheel(false, 30)
-await setGutter('timeline')
+setGutter('timeline')
+await settle(() => {
+  const snap = gutterSnapshot()
+  return snap.ticks.length === 8 && snap.chevrons.length === 2
+})
 {
   const snap = gutterSnapshot()
   check('切回 timeline：rail 恢复', snap.ticks.length === 8 && snap.chevrons.length === 2,

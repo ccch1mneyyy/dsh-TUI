@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
+import { settle } from './lib/term-test.mjs'
 
 const home = mkdtempSync(join(tmpdir(), 'dsh-tui-history-draft-'))
 process.env.HOME = home
@@ -78,18 +79,24 @@ const write = async (input) => {
 }
 
 try {
+  // Startup and typing/arrow ordering keep fixed waits: the fake stdout
+  // discards frames, so there is nothing observable to settle on for them.
+  // Each Enter's effect IS observable through `submitted`, so settle there.
   await wait(300)
   await write('first')
-  await write('\r')
+  stdin.write('\r')
+  await settle(() => submitted.length === 1)
   await write('second')
-  await write('\r')
+  stdin.write('\r')
+  await settle(() => submitted.length === 2)
   await write('unfinished draft')
 
   // Repeated Up clamps at the oldest entry; repeated Down returns to and
   // stays on the draft after passing the newest entry.
   for (let i = 0; i < 3; i += 1) await write('\x1b[A')
   for (let i = 0; i < 3; i += 1) await write('\x1b[B')
-  await write('\r')
+  stdin.write('\r')
+  await settle(() => submitted.length === 3)
 
   if (submitted.length !== 3 || submitted[2] !== 'unfinished draft') {
     console.error(`FAIL: unfinished draft was not restored: ${JSON.stringify(submitted)}`)

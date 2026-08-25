@@ -20,7 +20,7 @@ process.env.FORCE_COLOR = '3'
 // module import resolves the startup lang (env > persisted > locale).
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { ApprovalStore }, commandModule] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { ApprovalStore }, commandModule, { settle, viewportLines }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -29,6 +29,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
   import('../src/dsh-adapter/questions.js'),
   import('../src/dsh-adapter/approvals.js'),
   import('../src/commands.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100
@@ -53,6 +54,9 @@ class FakeStdin extends PassThrough {
 }
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 function screenText(): string {
+  // 刻意读缓冲区开头而非视口：本 inline harness 下 /settings 屏的标题行会被
+  // 滚进 scrollback（baseY 上方），断言以完整首帧内容为目标——换成 baseY 视口
+  // 读取会丢标题（实测 'Plugin settings' 断言失败）。
   const buf = term.buffer.active
   const lines: string[] = []
   for (let y = 0; y < ROWS; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
@@ -179,13 +183,16 @@ const instance = await render(
   <Chat fullscreen channel={channel} questionStore={new QuestionStore()} approvalStore={new ApprovalStore()} />,
   { stdout: new FakeStdout(), stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(600)
+await settle(() => screenText().includes('Explore the uncharted'))
 
 // 1. /settings opens the screen with the section and its seeded values.
+// The 200ms below stays a fixed ordering sleep: the Enter that follows needs
+// the slash-completion overlay to be key-ready, which is not observable as
+// screen content.
 stdin.write('/settings')
 await sleep(200)
 stdin.write('\r')
-await sleep(500)
+await settle(() => screenText().includes('Plugin settings'))
 assert(screenText().includes('Plugin settings'), 'screen opens with the title')
 assert(screenText().includes('Demo settings') && screenText().includes('(demo-plugin)'), 'section header renders')
 assert(screenText().includes('Enabled') && screenText().includes('true'), 'boolean field shows its value')
@@ -193,10 +200,10 @@ assert(screenText().includes('overridden'), 'user-layer presence marks the overr
 
 // 2. Enter stages a boolean toggle; `s` saves it as a fenced set op.
 stdin.write('\r')
-await sleep(300)
+await settle(() => screenText().includes('unsaved'))
 assert(screenText().includes('unsaved'), 'staged toggle marks the section dirty')
 stdin.write('s')
-await sleep(400)
+await settle(() => mutations.length === 1)
 assert(mutations.length === 1, 'save wrote exactly one mutation')
 const first = mutations[0]
 assert(first?.ns === 'demo-plugin' && first.expected === 3, 'write fenced by the seeded revision')
@@ -216,10 +223,13 @@ await sleep(200)
 stdin.write('10')
 await sleep(200)
 stdin.write('\r')
+// Fixed sleep kept: '10' is already on screen while the edit is open, so a
+// settle on the assertion's condition would return before the Enter is
+// processed — and the next key ('s') would land inside the editor.
 await sleep(200)
 assert(screenText().includes('10'), 'staged number draft renders')
 stdin.write('s')
-await sleep(400)
+await settle(() => mutations.length === 2)
 assert(mutations.length === 2, 'second save wrote')
 const secondOps = mutations[1]?.ops as { op: string; path: readonly string[]; value?: unknown }[]
 assert(secondOps?.[0]?.op === 'set' && secondOps[0].path.join('.') === 'limit' && secondOps[0].value === 10, 'number draft became a numeric set op')
@@ -238,7 +248,7 @@ await sleep(150)
 stdin.write('\x1b[B') // ↓ into other-plugin's Mode field
 await sleep(300)
 stdin.write('\x1b') // Esc: focused section is clean, demo-plugin is dirty
-await sleep(400)
+await settle(() => screenText().includes('Discarded all unsaved edits'))
 assert(screenText().includes('Discarded all unsaved edits'), 'Esc discards staged edits across ALL sections')
 assert(screenText().includes('Other settings'), 'screen stays open after the discard')
 assert(mutations.length === 2, 'discard wrote nothing')
@@ -248,6 +258,8 @@ assert(mutations.length === 2, 'discard wrote nothing')
 // (unstable host identity re-firing host-keyed effects) shows up as
 // unbounded growth; a settled screen makes no calls at all. The bound is
 // generous — a real loop runs thousands of renders in this window.
+// Stability probe (calls must NOT grow): polling an already-true condition
+// would return immediately and test nothing — keep the fixed window.
 const quietCalls = settingsHostCalls
 await sleep(600)
 assert(settingsHostCalls - quietCalls < 50, 'idle screen settles (no render loop through the host)')
@@ -258,7 +270,7 @@ assert(settingsHostCalls - quietCalls < 50, 'idle screen settles (no render loop
 // (SessionBrowser shows the same artifact; pre-existing renderer behavior,
 // not this screen's doing).
 stdin.write('\x1b')
-await sleep(900)
+await settle(() => screenText().includes('Explore the uncharted'))
 assert(screenText().includes('Explore the uncharted'), 'second Esc returns to the conversation')
 
 await instance.unmount()
@@ -276,10 +288,7 @@ class GroupStdout extends Writable {
   _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { groupTerm.write(String(chunk), cb) }
 }
 function groupScreenText(): string {
-  const buf = groupTerm.buffer.active
-  const lines: string[] = []
-  for (let y = 0; y < GROUP_ROWS; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
-  return lines.join('\n')
+  return viewportLines(groupTerm, GROUP_ROWS).join('\n')
 }
 docs['group-plugin'] = {
   revision: 5,
@@ -302,13 +311,13 @@ const groupInstance = await render(
   <Settings channel={groupChannel} onClose={() => { groupClosed = true }} />,
   { stdout: new GroupStdout(), stdin: groupStdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(600)
+await settle(() => groupScreenText().includes('Name') && groupScreenText().includes('Advanced'))
 assert(groupScreenText().includes('Name') && groupScreenText().includes('Advanced'), 'group root renders ungrouped fields and group entry', groupScreenText())
 assert(!groupScreenText().includes('Endpoint'), 'group root hides grouped fields', groupScreenText())
 groupStdin.write('\x1b[B') // ↓ from Name to Advanced
 await sleep(200)
 groupStdin.write('\r')
-await sleep(400)
+await settle(() => groupScreenText().includes('Endpoint') && groupScreenText().includes('Esc back'))
 // The headless renderer leaves the first row stale across in-place screen
 // transitions, so assert navigation through group-only content and its hint.
 assert(groupScreenText().includes('Endpoint') && groupScreenText().includes('Esc back'), 'Enter opens the group page', groupScreenText())
@@ -322,18 +331,21 @@ for (let i = 0; i < 3; i++) {
 groupStdin.write('new')
 await sleep(150)
 groupStdin.write('\r')
+// Fixed sleep kept: 'new' is already on screen inside the open editor, so a
+// settle on the assertion's condition would return before the Enter staged
+// the draft — and the next key would land in the wrong mode.
 await sleep(300)
 assert(groupScreenText().includes('new'), 'group field draft is staged', groupScreenText())
 groupStdin.write('\x1b')
-await sleep(300)
+await settle(() => groupScreenText().includes('unsaved') && !groupScreenText().includes('Endpoint'))
 assert(groupScreenText().includes('unsaved') && !groupScreenText().includes('Endpoint'), 'Esc returns to root without dropping the staged edit', groupScreenText())
 groupStdin.write('\x1b[B')
 await sleep(200)
 groupStdin.write('\r')
-await sleep(300)
+await settle(() => groupScreenText().includes('new'))
 assert(groupScreenText().includes('new'), 're-entering the group restores the staged draft', groupScreenText())
 groupStdin.write('s')
-await sleep(400)
+await settle(() => mutations.length === 3)
 const groupMutation = mutations[2]
 const groupOps = groupMutation?.ops as { op: string; path: readonly string[]; value?: unknown }[]
 assert(groupMutation?.ns === 'group-plugin' && groupMutation.expected === 5, 'group save is revision-fenced')
@@ -342,7 +354,7 @@ assert((docs['group-plugin']?.value.advanced as Record<string, unknown> | undefi
 groupStdin.write('\x1b')
 await sleep(200)
 groupStdin.write('\x1b')
-await sleep(300)
+await settle(() => groupClosed)
 assert(groupClosed, 'clean group screen exits from the root page')
 await groupInstance.unmount()
 
@@ -363,10 +375,7 @@ class SmallStdout extends Writable {
   _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { smallTerm.write(String(chunk), cb) }
 }
 function smallScreenText(): string {
-  const buf = smallTerm.buffer.active
-  const lines: string[] = []
-  for (let y = 0; y < SMALL_ROWS; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
-  return lines.join('\n')
+  return viewportLines(smallTerm, SMALL_ROWS).join('\n')
 }
 docs['long-plugin'] = {
   revision: 1,
@@ -385,7 +394,7 @@ const smallInstance = await render(
   <Settings channel={smallChannel} onClose={() => { smallClosed = true }} />,
   { stdout: new SmallStdout(), stdin: smallStdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(600)
+await settle(() => smallScreenText().includes('Long settings'))
 assert(smallScreenText().includes('Long settings'), 'small terminal opens the screen', smallScreenText())
 assert(smallScreenText().includes('Field 0') && !smallScreenText().includes('Field 15'), 'top of the list renders first', smallScreenText())
 for (let i = 0; i < 15; i++) {
@@ -395,7 +404,7 @@ for (let i = 0; i < 15; i++) {
 assert(smallScreenText().includes('Field 15'), 'focus on the last field scrolls it into view', smallScreenText())
 assert(!smallScreenText().includes('Field 0'), 'scrolled-out fields leave the viewport', smallScreenText())
 smallStdin.write('\x1b')
-await sleep(400)
+await settle(() => smallClosed)
 assert(smallClosed, 'Esc on a clean screen closes it')
 await smallInstance.unmount()
 
@@ -408,10 +417,7 @@ class GroupedSmallStdout extends Writable {
   _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { groupedSmallTerm.write(String(chunk), cb) }
 }
 function groupedSmallScreenText(): string {
-  const buf = groupedSmallTerm.buffer.active
-  const lines: string[] = []
-  for (let y = 0; y < SMALL_ROWS; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '')
-  return lines.join('\n')
+  return viewportLines(groupedSmallTerm, SMALL_ROWS).join('\n')
 }
 docs['long-group-plugin'] = {
   revision: 1,
@@ -430,10 +436,10 @@ const groupedSmallInstance = await render(
   <Settings channel={groupedSmallChannel} onClose={() => {}} />,
   { stdout: new GroupedSmallStdout(), stdin: groupedSmallStdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(500)
+await settle(() => groupedSmallScreenText().includes('Advanced fields') && !groupedSmallScreenText().includes('Grouped field 0'))
 assert(groupedSmallScreenText().includes('Advanced fields') && !groupedSmallScreenText().includes('Grouped field 0'), 'short group root hides grouped fields', groupedSmallScreenText())
 groupedSmallStdin.write('\r')
-await sleep(300)
+await settle(() => groupedSmallScreenText().includes('Grouped field 0') && !groupedSmallScreenText().includes('Grouped field 15'))
 assert(groupedSmallScreenText().includes('Grouped field 0') && !groupedSmallScreenText().includes('Grouped field 15'), 'short group page starts at its first field', groupedSmallScreenText())
 for (let i = 0; i < 15; i++) {
   groupedSmallStdin.write('\x1b[B')

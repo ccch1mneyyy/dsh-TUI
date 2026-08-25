@@ -91,6 +91,9 @@ const instance = await render(<QueryProbe />, {
 })
 
 await waitFor(() => stdout.output.includes('\x1b]11;?') && stdout.output.includes('\x1b[>0q'))
+// Stability probe (must NOT change): raw mode is already true here and must
+// stay true while the replies are late — a settle on the already-true
+// condition would return immediately, so keep a fixed delay window.
 await sleep(450)
 assert.equal(stdin.isRaw, true, 'late terminal replies must remain protected by raw mode')
 
