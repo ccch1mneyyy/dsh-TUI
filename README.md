@@ -53,7 +53,7 @@
 ## 核心能力
 
   - **终端交互**：低资源占用，长会话稳定可靠；多种主题切换，样式美观，实时显示工作状态、TPS、缓存命中率等
-    推理等级、输入/输出 token 与 Git/会话信息。
+    推理等级、输入/输出 token 与 Git/会话信息；切换 `high` / `xhigh` / `max` / `ultra` 时播放对应方向的有界输入框动画。
   - **功能全面**：`/resume`、`/new`、`/compact`、`/export`、`/btw`，模型热切换，原生subagent，会话fork，自动更新；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
   - **扩展丰富**：原生浏览器交互，compter use等大量附属功能性扩展
 

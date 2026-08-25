@@ -320,7 +320,9 @@ transcript。
   `/activity status` 查看当前选择。
 - `/preset <id>` 与 `/preset status` 见配置文档。
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
-  `/effort status` 查看当前档位。
+  `/effort status` 查看当前档位。切换到 `high` / `xhigh` / `max` / `ultra`
+  时，输入框会播放一次有界切换反馈：前两档由左向右扫光，`max` 向中心收束，
+  `ultra` 从中心向外展开；冷启动和重复选择当前档位不会重播。
 - `/theme <name>` 与 `/theme status` 见主题文档。
 - `/lang` 切换中英界面语言（见「界面语言」）。
 - `/compact` 压缩会话历史；minimal preset（仅 bash+编辑器）下不可用。

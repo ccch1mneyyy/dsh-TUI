@@ -2161,6 +2161,7 @@ export function createChannel(
       )
       return false
     }
+    if (found.id === state.reasoningEffort) return true
     applyEffort(found)
     return true
   }
