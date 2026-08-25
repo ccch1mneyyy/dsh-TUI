@@ -189,6 +189,34 @@ export function isXtermJs(): boolean {
   return xtversionName?.startsWith('xterm.js') ?? false
 }
 
+/**
+ * True when the terminal can be safely probed with DECRQM
+ * (`CSI ? <mode> $ p`).
+ *
+ * DECRQM carries a `$` intermediate byte before its final `p`. A conforming
+ * parser consumes the whole sequence and either answers with DECRPM or stays
+ * silent, so callers have historically treated an unanswered probe as
+ * "unsupported" and sent it unconditionally. macOS Terminal.app breaks that
+ * assumption: it does not implement DECRQM *and* its CSI parser gives up at
+ * the `$`, printing the trailing `p` to the screen as literal text. Every
+ * probe therefore leaks a visible `p` at the cursor.
+ *
+ * Terminal.app reports `TERM=xterm-256color`, so TERM sniffing cannot tell it
+ * apart from a real xterm — `TERM_PROGRAM=Apple_Terminal` is the only marker.
+ * It is not forwarded over SSH, which matches the scope of the bug: the leak
+ * only happens when the sequence reaches Terminal.app's own parser, and a
+ * remote session is parsed by whatever terminal is actually attached.
+ *
+ * Kept as an exclusion rather than an allowlist so unknown terminals keep the
+ * (correct, spec-conforming) probe and only the known-broken one opts out.
+ * Same failure mode as the extended-keys allowlist below: assuming terminals
+ * silently ignore unknown CSI is not safe in practice.
+ * @returns true when it is safe to send a DECRQM probe.
+ */
+export function supportsDecrqmProbe(): boolean {
+  return process.env.TERM_PROGRAM !== 'Apple_Terminal'
+}
+
 // Terminals known to correctly implement the Kitty keyboard protocol
 // (CSI >1u) and/or xterm modifyOtherKeys (CSI >4;2m) for ctrl+shift+<letter>
 // disambiguation. We previously enabled unconditionally (#23350), assuming

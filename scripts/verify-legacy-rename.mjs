@@ -70,6 +70,15 @@ check('RENAMED_ENV: CC_TUI_THEME → DSH_TUI_THEME', RENAMED_ENV.CC_TUI_THEME ==
 check('RENAMED_ENV: DSH_CC_SESSION_ROOT → DSH_TUI_SESSION_ROOT', RENAMED_ENV.DSH_CC_SESSION_ROOT === 'DSH_TUI_SESSION_ROOT')
 check('RENAMED_ENV: every new name starts with DSH_TUI_', Object.values(RENAMED_ENV).every(name => name.startsWith('DSH_TUI_')))
 
+// --- 4. User-facing rename notices name the old and new directories correctly.
+const i18n = readFileSync(join(root, 'src', 'i18n.ts'), 'utf8')
+check('i18n: boot migration notice says ~/.dsh-cc → ~/.dsh-tui',
+  i18n.includes("'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-cc 复制到 ~/.dsh-tui")
+    && i18n.includes("en: 'Data directory copied from ~/.dsh-cc to ~/.dsh-tui"))
+check('i18n: doctor legacy notice says ~/.dsh-cc migrated to ~/.dsh-tui',
+  i18n.includes("'doctor-legacy-dir': { zh: '旧数据目录: ~/.dsh-cc 仍存在")
+    && i18n.includes("en: 'Legacy data directory: ~/.dsh-cc still exists"))
+
 rmSync(tmp, { recursive: true, force: true })
 if (failures > 0) {
   console.error(`verify-legacy-rename: ${failures} check(s) failed`)

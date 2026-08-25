@@ -1,12 +1,17 @@
 /**
  * Delayed terminal-query replies must stay in raw mode and never become
  * visible shell input. Covers concurrent OSC 11 and XTVERSION batches.
+ *
+ * Also covers the DECRQM probe gate: macOS Terminal.app prints the trailing
+ * `p` of `CSI ? 1049 $ p` as literal text, so the alt-screen health probe
+ * must be skipped there and kept everywhere else.
  */
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
 import React, { useEffect } from 'react'
-import { render, Text, useStdin } from '../src/ui.js'
+import { AlternateScreen, render, Text, useInput, useStdin } from '../src/ui.js'
 import { oscColor } from '../src/ink/terminal-querier.js'
+import { supportsDecrqmProbe } from '../src/ink/terminal.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
 class FakeStdout extends Writable {
@@ -102,3 +107,96 @@ assert.deepEqual(visibleInput, [], 'terminal responses must not reach input list
 
 instance.unmount()
 console.log('PASS: delayed OSC/XTVERSION replies stay raw and leave no visible residue')
+
+// -- DECRQM probe gate (Terminal.app leaks the trailing `p`) ----------------
+//
+// Terminal.app does not implement DECRQM and its CSI parser abandons the
+// sequence at the `$` intermediate byte, printing `p` at the cursor. The probe
+// runs on every interaction dispatch, so an ungated probe spells a visible
+// `p` per keypress. TERM=xterm-256color there, so TERM_PROGRAM is the only
+// usable marker.
+const realTermProgram = process.env.TERM_PROGRAM
+
+// The probe rides on keyboard dispatch, which only runs when the tree
+// actually consumes input.
+function ProbeKeyConsumer(): React.ReactNode {
+  useInput(() => {})
+  return <Text>decrqm gate</Text>
+}
+
+process.env.TERM_PROGRAM = 'Apple_Terminal'
+assert.equal(
+  supportsDecrqmProbe(),
+  false,
+  'Apple_Terminal must be excluded from DECRQM probes',
+)
+
+for (const term of ['iTerm.app', 'ghostty', 'WezTerm', 'vscode']) {
+  process.env.TERM_PROGRAM = term
+  assert.equal(supportsDecrqmProbe(), true, `${term} must keep the DECRQM probe`)
+}
+
+// Unknown/unset terminals keep the spec-conforming probe: this is an
+// exclusion of one known-broken terminal, not an allowlist.
+delete process.env.TERM_PROGRAM
+assert.equal(
+  supportsDecrqmProbe(),
+  true,
+  'an unknown terminal must keep the DECRQM probe',
+)
+
+// End-to-end: a keypress must not put `$p` on the wire under Terminal.app.
+// Asserted against real stdout bytes over the real trigger path (input
+// dispatch calls probeAltScreenHealth) — the leak is a write, not a
+// predicate, and this is exactly the user-visible scenario: one stray `p`
+// per keystroke, landing at the cursor inside the prompt.
+//
+// <AlternateScreen> is required: the probe early-returns unless the instance
+// is in alt-screen, so an inline tree would pass this assertion vacuously.
+async function decrqmProbeBytes(termProgram: string): Promise<string> {
+  process.env.TERM_PROGRAM = termProgram
+  const probeStdin = new FakeStdin()
+  const probeStdout = new FakeStdout()
+  const probeInstance = await render(
+    <AlternateScreen>
+      <ProbeKeyConsumer />
+    </AlternateScreen>,
+    {
+      stdin: probeStdin,
+      stdout: probeStdout,
+      stderr: new FakeStderr(),
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  await settled(() => probeStdout.output.includes('\x1b[?1049h'))
+  const beforeKeypress = probeStdout.output.length
+  probeStdin.write('a')
+  probeStdin.write('\x7f')
+  // Negative-assertion observation window: the leak (if any) is written
+  // asynchronously after dispatch, so the slice must span a fixed delay.
+  await sleep(120)
+  const emitted = probeStdout.output.slice(beforeKeypress)
+  probeInstance.unmount()
+  return emitted
+}
+
+assert.equal(
+  (await decrqmProbeBytes('Apple_Terminal')).includes('$p'),
+  false,
+  'Terminal.app must never receive a DECRQM probe (leaks a visible `p`)',
+)
+
+// Guard the guard: the same path on a conforming terminal must still probe,
+// otherwise this assertion pair would also pass with the probe deleted
+// outright (losing the alt-screen self-heal).
+assert.equal(
+  (await decrqmProbeBytes('iTerm.app')).includes('\x1b[?1049$p'),
+  true,
+  'conforming terminals must keep the alt-screen DECRQM probe',
+)
+
+if (realTermProgram === undefined) delete process.env.TERM_PROGRAM
+else process.env.TERM_PROGRAM = realTermProgram
+
+console.log('PASS: DECRQM probe is gated off for Apple_Terminal and kept elsewhere')
