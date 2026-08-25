@@ -10,6 +10,7 @@
 | **plugin-template** | <https://github.com/dsh-tui-ecosystem/plugin-template> | 插件开发模板仓库（配合[插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)使用） |
 | **dsplugin.app** | <https://dsplugin.app/plugins/dsh-cc-tui> | DeepSeek Harness 社区插件目录中的本插件页 |
 | **dshfind** | <https://dshfind.com> | DeepSeek Harness 的中文学习与分享社区 |
+| **dsh-synapse** | <https://github.com/Suxeca/dsh-synapse> | 可视化非线性会话地图：将 DSH 会话、追问与分支组织为交互画布，支持跨设备同步与 dsh-tui 状态行伴随协同 |
 | **dsh-tui-vscode** | <https://github.com/baobaolaodie/dsh-tui-vscode> | dsh-TUI 的 VS Code companion 扩展：真实集成终端承载，体验与 Claude Code 官方扩展几乎一致（已上架 VS Code Marketplace） |
 | **deepseek-harness-ux** | <https://github.com/ayuanwong/deepseek-harness-ux> | 让你的 DeepSeek Harness 工作过程一目了然！ |
 | **dsh-tianshu-tui** | <https://github.com/huiliyi37/dsh-tianshu-tui> | Tianshu 风格的 dsh-tui |
