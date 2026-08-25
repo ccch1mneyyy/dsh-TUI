@@ -49,6 +49,8 @@ import { OverlayAbove } from '../components/OverlayAbove.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
+import { BalanceReportRow } from '../components/BalanceReportRow.js'
+import type { BalanceResult } from '../deepseekBalance.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
@@ -437,6 +439,27 @@ export function Chat({
     recapAbortRef.current = null
     setRecap(null)
   }
+  /** /balance report (`BalanceReportRow`): pure UI state like /recap — the
+   *  result never enters the transcript or session log. Clicking the row
+   *  re-queries (refreshing keeps the stale summary visible); a session
+   *  switch retires the report. */
+  const [balance, setBalance] = React.useState<{
+    result: BalanceResult | null
+    refreshing: boolean
+  } | null>(null)
+  const balanceSeqRef = React.useRef(0)
+  const runBalance = React.useCallback(() => {
+    const seq = ++balanceSeqRef.current
+    setBalance(prev => ({ result: prev?.result ?? null, refreshing: true }))
+    void channel.balanceInfo().then(result => {
+      if (balanceSeqRef.current !== seq) return
+      setBalance({ result, refreshing: false })
+    })
+  }, [channel])
+  const balanceSessionId = channel.agentId
+  React.useEffect(() => {
+    setBalance(null)
+  }, [balanceSessionId])
   // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
   // (mount = open/resume, rewind/fork included), summarize its tail into
   // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
@@ -1445,6 +1468,15 @@ export function Chat({
         lines.push(t('cost-note'))
         setHelpOpen(false)
         channel.pushLocal('/cost', lines)
+        return true
+      }
+      case 'balance': {
+        // DeepSeek official account balance (free read-only endpoint): the
+        // channel resolves DEEPSEEK_API_KEY through the credentials seam and
+        // queries api.deepseek.com/user/balance. The result renders as the
+        // interactive BalanceReportRow (hover for details, click to refresh).
+        setHelpOpen(false)
+        runBalance()
         return true
       }
       case 'settings': {
@@ -3168,6 +3200,16 @@ export function Chat({
             streaming={!recap.done}
             onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
             onDismiss={() => closeRecap()}
+          />
+        )}
+        {balance !== null && (
+          <BalanceReportRow
+            result={balance.result}
+            refreshing={balance.refreshing}
+            tokens={channel.tokens}
+            model={channel.model}
+            onRefresh={runBalance}
+            onDismiss={() => setBalance(null)}
           />
         )}
         {statusEntries.length > 0 && (

@@ -15,6 +15,8 @@ import {
 import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
 import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
+import { fetchBalance, type BalanceResult } from '../deepseekBalance.js'
+import { isPeakHour } from '../deepseekPricing.js'
 /** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
 type SideQuestionLlm = {
   stream(options: object): AsyncIterable<StreamChunk>
@@ -341,10 +343,40 @@ export interface ChatRow {
  */
 const SKILL_COMMAND_RETRY_MS = 800
 
+/** One 计费时段（高峰/空闲）的 token 累计。 */
+export interface TokenBucket {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
 /** Running token totals across the session's assistant messages. */
 export interface TokenUsage {
   input: number
   output: number
+  /** Prompt-cache hit tokens across the session (priced at the hit rate). */
+  cacheRead: number
+  /** Prompt-cache write tokens across the session (priced with uncached input). */
+  cacheWrite: number
+  /** Peak-hour tokens (billed at peak rates) — each usage lands in a bucket
+   *  by its event time, so a session spanning both windows is priced per
+   *  window instead of all at the current rate. */
+  peak: TokenBucket
+  /** Off-peak-hour tokens (billed at idle rates). */
+  idle: TokenBucket
+}
+
+/** 全零 token 累计（新会话 / 复位用）。 */
+export function emptyTokenUsage(): TokenUsage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  }
 }
 
 /** In-process working-line snapshot derived from the base session stream. */
@@ -788,6 +820,11 @@ export interface Channel {
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login`; undefined without the service. */
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
+  /** DeepSeek official account balance for `/balance`: resolves
+   *  `DEEPSEEK_API_KEY` through the credentials seam (env fallback) and
+   *  queries the official balance endpoint. The key is used only for the
+   *  request header — never logged, printed or persisted. */
+  balanceInfo(): Promise<BalanceResult>
   /** Runtime capabilities for the `/provider` wizard, over the settings /
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */
@@ -1107,6 +1144,8 @@ export interface ChannelState {
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login` (see the public Channel type). */
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
+  /** DeepSeek official balance for `/balance` (see the public Channel type). */
+  balanceInfo(): Promise<BalanceResult>
   /** `/provider` wizard capabilities (see the public Channel type). */
   providerSetup(): ProviderSetupHost | undefined
   /** OAuth sign-in states (see the public Channel type). */
@@ -1982,7 +2021,7 @@ export function createChannel(
     state.goal = undefined
     state.sessionTitle = ''
     state.sessionColor = ''
-    state.tokens = { input: 0, output: 0 }
+    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
     state.responseChars = 0
     state.activeToolCount = 0
     state.lastUserText = ''
@@ -2543,7 +2582,7 @@ export function createChannel(
     agentId: agent.id,
     model: options.model,
     provider: options.provider,
-    tokens: { input: 0, output: 0 },
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd,
     displayCwd: workspaceService.describe(options.cwd).description ?? options.cwd,
     gitBranch: undefined,
@@ -3837,7 +3876,7 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.sessionColor = ''
-      state.tokens = { input: 0, output: 0 }
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
@@ -4017,7 +4056,7 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.sessionColor = ''
-      state.tokens = { input: 0, output: 0 }
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
@@ -4206,7 +4245,7 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.sessionColor = ''
-      state.tokens = { input: 0, output: 0 }
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
@@ -4519,6 +4558,25 @@ export function createChannel(
         | undefined
       if (!credentials) return undefined
       return credentials.describe(ref)
+    },
+    async balanceInfo() {
+      // Same key resolution order as the community balance plugins: the
+      // harness credentials seam first, the process environment as fallback
+      // (the /doctor check reads the env directly). The value rides only in
+      // the Authorization header — never logged, printed or persisted.
+      const credentials = ctx.get('credentials') as
+        | { resolve(ref: string): Promise<{ value: string } | undefined> }
+        | undefined
+      let apiKey = ''
+      if (credentials !== undefined) {
+        try {
+          apiKey = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value ?? ''
+        } catch {
+          apiKey = ''
+        }
+      }
+      if (apiKey === '') apiKey = process.env.DEEPSEEK_API_KEY ?? ''
+      return fetchBalance(apiKey)
     },
     settingsHost(): SettingsHost | undefined {
       if (settingsHostResolved) return settingsHostCache
@@ -6140,6 +6198,23 @@ ${output}
           state.tokens.input += usage.inputTokens ?? 0
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
           state.tokens.output += usage.outputTokens ?? 0
+          // Cache split totals feed the session cost estimate (hit-priced
+          // input vs. uncached input) — the durable replay may lack them.
+          state.tokens.cacheRead += usage.cacheReadTokens ?? 0
+          state.tokens.cacheWrite += usage.cacheWriteTokens ?? 0
+          // Peak/idle bucketing by the request's own time (the durable replay
+          // replays historical events, so a resumed session prices each
+          // request at the rate window it actually ran in — the session cost
+          // estimate never prices the whole session at the current window).
+          {
+            const bucket = isPeakHour(new Date(event.time))
+              ? state.tokens.peak
+              : state.tokens.idle
+            bucket.input += usage.inputTokens ?? 0
+            bucket.output += usage.outputTokens ?? 0
+            bucket.cacheRead += usage.cacheReadTokens ?? 0
+            bucket.cacheWrite += usage.cacheWriteTokens ?? 0
+          }
           // The most recent request's usage describes the CURRENT context:
           // input (uncached) + cache hits all occupy the window. Cache hits
           // also drive the status-line `cache N` readout.

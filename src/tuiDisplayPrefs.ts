@@ -27,6 +27,9 @@ export interface StatusBarConfig {
   cache: boolean
   /** Running input/output token totals. */
   tokens: boolean
+  /** Estimated session spend (≈¥, DeepSeek official pricing — only shown
+   *  for official DeepSeek providers whose model has a known price). */
+  cost: boolean
   /** Live and recent output speed. */
   tps: boolean
   /** Current git branch. */
@@ -58,6 +61,7 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   contextUsage: true,
   cache: true,
   tokens: false,
+  cost: true,
   tps: false,
   gitBranch: false,
   sessionTitle: false,

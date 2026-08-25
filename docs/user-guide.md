@@ -216,6 +216,7 @@ dsh-tui
 | `/context` | 无 | 已加载上下文明细（指令/运行时上下文/技能/工具等） |
 | `/status` | 无 | 模型+effort、工作/空闲、会话 id、目录+git 分支、token、缓存命中率、上下文百分比、会话标题 |
 | `/cost` | 无 | token 用量 + 缓存命中率（DSH 不提供费用计量） |
+| `/balance` | 无 | DeepSeek 官方账户余额（免费只读接口）：摘要行 + hover 明细（各币种赠送/充值拆分、当前计费时段与单价、本会话 token 与花费估算），点击刷新、`×` 关闭。密钥经 DSH 凭据解析（`DEEPSEEK_API_KEY`，环境变量兜底），仅在请求头中使用 |
 | `/config` | 无 | 配置来源：`cordis.patch.yml` 路径、启动方式、模型路由 |
 | `/doctor` | 无 | 环境自检 |
 | `/init` | 无 | 在工作目录创建 `AGENTS.md`（created / exists / failed 三态提示） |
@@ -405,10 +406,10 @@ dsh-tui
 右缘读数如 `ctx 12.3k/1.0M 1.2% 988.9k`（窄屏自动缩短）。
 
 **Row 2 — 状态字段行**（每个字段独立开关，见 `/settings`）
-- 左组：模型 → TPS → thinking 推理等级 → mode 会话模式 → ctx 上下文占用 → cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）
+- 左组：模型 → TPS → thinking 推理等级 → mode 会话模式 → ctx 上下文占用 → cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→ cost 本会话花费估算（`≈¥0.05 谷`：`≈¥` + 当前计费时段短标记 峰/谷；仅 DeepSeek 官方 provider 且模型有已知单价时显示；hover 查看高峰/空闲拆分与输入/输出/缓存明细）。估算按每次请求的发生时刻分高峰/空闲桶、各按官方对应单价计（高峰期 = 梁文峰，低谷期 = 梁文谷），跨时段会话不会被整段按当前时段计价；估算非账单，以 DeepSeek 平台为准
 - 右组：git 分支 → 工作目录（紧凑模式仅 basename）→ 会话标题 → 短会话 ID（`#` + 前 8 位，与日志文件名对应，方便 `--resume` 定位）
 - `statusBar.compact` 时左右合并为单行。
-- 默认开：compact / model / thinking / cwd / contextUsage / cache；默认关：tokens / tps / gitBranch / sessionTitle / sessionId / mode / contextBar / activity / trajectory。
+- 默认开：compact / model / thinking / cwd / contextUsage / cache / cost；默认关：tokens / tps / gitBranch / sessionTitle / sessionId / mode / contextBar / activity / trajectory。
 
 **Row 3 — 提示 / 工作活动 + 迷你轨迹条**
 - 空闲显示 `? for shortcuts`，回合运行中显示 `esc to interrupt`，消息选择中显示 `esc to return to input`。
@@ -425,7 +426,7 @@ dsh-tui
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**编辑是暂存制**：`s` 保存 / `d` 放弃 / `Esc` 丢弃脏区退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 19 个字段：
+dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 20 个字段：
 
 | 字段 | 说明 |
 |---|---|
@@ -434,7 +435,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 19 �
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
-| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
+| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 `~/.dsh/settings.yaml`。
 provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / modes

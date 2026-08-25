@@ -945,6 +945,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           kind: 'boolean',
         },
         {
+          path: ['statusBar', 'cost'],
+          label: 'Show session cost estimate',
+          descriptions: { zh: '显示本会话花费估算' },
+          hint: 'Show the estimated session spend (≈¥) next to the token totals. Only appears for official DeepSeek providers whose model has a known price; the estimate follows the official per-million-token rates (peak/idle hours) and is not a bill.',
+          hintDescriptions: { zh: '在 Token 总量旁显示本会话花费估算（≈¥）。仅在使用 DeepSeek 官方 API key 且模型有已知单价时显示；按官方每百万 token 单价（高峰/空闲时段）估算，非账单。' },
+          group: 'status-bar',
+          kind: 'boolean',
+        },
+        {
           path: ['statusBar', 'tps'],
           label: 'Show output speed',
           descriptions: { zh: '显示输出速度' },

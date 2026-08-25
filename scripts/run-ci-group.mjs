@@ -301,6 +301,11 @@ const GROUPS = {
 // 模型路由原子解析回归（issue #67）：完整 config > pref > default 整对
 // 生效，provider-only pin 不得与另一半拼接出错配路由。
     ["verify-model-route", ['node', 'scripts/verify-model-route.mjs']],
+// /balance 余额查询与状态栏花费估算回归：fetchBalance 响应解析与失败
+// 分类（401/HTTP/网络/非法/空 key/超时/baseUrl）、官方单价表最长前缀
+// 匹配、北京时间高峰/空闲时段边界、缓存命中计价、未知模型与零 token
+// 不估算、官方 provider 判定。注入 fake fetch，不发真实请求。
+    ["verify-balance", ['node', '--import', 'tsx/esm', 'scripts/verify-balance.tsx']],
 // /model 二级选择器派生回归：provider 分组（首现排序、显示名回退、
 // 计数）与落焦规则（多 provider 聚焦当前组、单 provider 直达模型层、
 // 缺席当前 provider 落首行）。键盘与 overlay 归约由 verify-chat-overlay
