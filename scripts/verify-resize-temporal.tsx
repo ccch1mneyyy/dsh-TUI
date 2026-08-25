@@ -17,7 +17,7 @@ process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'kitty'
 process.env.DSH_TUI_THEME = 'dark'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { default: instances }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { default: instances }, { settle, settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -25,11 +25,11 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/ink/instances.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const BASE_COLS = 108
 const ROWS = 34
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (extra ? '  (' + extra + ')' : ''))
@@ -113,16 +113,23 @@ function doResize(app: { stdout: any; term: typeof XTerm.prototype }, w: number,
 
 // ================= 1+2. 时间稳定性 & 往返循环 =================
 const app = await mountChat(makeRows())
-await sleep(1500)
-await app.flush()
-
-const baseline = screenLines(app.term)
 const composerY = (lines: string[]) => lines.findIndex(l => l.includes('╭'))
 const sentinelY = (lines: string[]) => lines.findIndex(l => l.includes('SENTINEL-TAIL'))
-check('基线含 composer 与 sentinel', composerY(baseline) >= 0 && sentinelY(baseline) >= 0, `composer=${composerY(baseline)} sentinel=${sentinelY(baseline)}`)
+// 基线就绪 = composer 与 transcript 最后一行（sentinel）都已上屏，且右缘
+// 滚动条（▴）已画上——滚动条在首个内容帧之后的一帧才出现，只等内容会把
+// 无滚动条的早帧当基线，导致回基线比对必挂。
+const baselineReady = await settled(() => {
+  const lines = screenLines(app.term)
+  return composerY(lines) >= 0 && sentinelY(lines) >= 0 && lines.some(l => l.endsWith('▴'))
+})
+await app.flush()
+const baseline = screenLines(app.term)
+check('基线含 composer 与 sentinel', baselineReady, `composer=${composerY(baseline)} sentinel=${sentinelY(baseline)}`)
 
 // ---- 1. resize 落定后不得继续漂 ----
 doResize(app, 90, ROWS)
+// 固定墙钟采样点保留：250ms 与 1000ms 的对比本身是被测语义（「状态不得
+// 再改变」探针），轮询会在首个成立帧立即返回，等于没测。
 await sleep(250); await app.flush()
 const at250 = screenLines(app.term)
 await sleep(750); await app.flush()
@@ -132,29 +139,34 @@ check('resize 落定后 250ms 与 1000ms 画面一致（时间不变量）', at2
 // ---- 2. 90↔150 循环 20 次后回基线 ----
 for (let i = 0; i < 20; i++) {
   doResize(app, i % 2 === 0 ? 150 : 90, ROWS)
-  await sleep(12)
+  await sleep(12) // 固定 pacing 保留：制造快速连环 resize 竞争，本身无可轮询条件
   await app.flush()
 }
 doResize(app, BASE_COLS, ROWS)
-await sleep(400); await app.flush()
+const roundTripSettled = await settled(() => screenLines(app.term).join('\n') === baseline.join('\n'))
+// 收敛后保留固定稳定窗：迟到的 resize repaint 可能在首个相等帧之后才漂移，
+// 轮询在首帧相等即返回，盖不住「之后不得再漂」的时间语义——终态再比对一次。
+await sleep(250); await app.flush()
 const roundTrip = screenLines(app.term)
-check('20 次宽度循环后画面回到基线（无累计漂移）', roundTrip.join('\n') === baseline.join('\n'), `composer ${composerY(baseline)}→${composerY(roundTrip)}, sentinel ${sentinelY(baseline)}→${sentinelY(roundTrip)}`)
+check('20 次宽度循环后画面回到基线（无累计漂移）', roundTripSettled && roundTrip.join('\n') === baseline.join('\n'), `composer ${composerY(baseline)}→${composerY(roundTrip)}, sentinel ${sentinelY(baseline)}→${sentinelY(roundTrip)}`)
 app.unmount()
-await sleep(150)
+await sleep(150) // 固定小窗保留：unmount 收尾写出无完成回调可等
 
 // ================= 3. 流中 resize：终态 == 冷渲染 =================
 const liveRows = makeRows()
 const streamRow: any = { id: 9999, kind: 'assistant', text: '', streaming: true }
 liveRows.push(streamRow)
 const app2 = await mountChat(liveRows)
-await sleep(1500); await app2.flush()
+// 等首帧就绪（sentinel 上屏）再开始流式：等待后只操作不断言 → settle
+await settle(() => sentinelY(screenLines(app2.term)) >= 0)
+await app2.flush()
 
 const STREAM_TEXT = '流式内容：第一段论述比较长，用来触发宽度变化下的重排。'.repeat(8) + '\n\n- 要点甲\n- 要点乙\n- 结论 TAILMARK-终'
 // 逐段流入，期间反复 resize（resize + live mutation 竞争）
 for (let i = 0; i < 10; i++) {
   streamRow.text = STREAM_TEXT.slice(0, Math.floor((STREAM_TEXT.length * (i + 1)) / 10))
   app2.bump()
-  await sleep(40)
+  await sleep(40) // 固定 pacing 保留：模拟流式节奏，与 resize 的竞争时序本身是被测对象
   if (i % 3 === 0) { doResize(app2, i % 2 === 0 ? 88 : 132, ROWS) }
   await app2.flush()
 }
@@ -162,21 +174,25 @@ streamRow.text = STREAM_TEXT
 streamRow.streaming = false
 doResize(app2, BASE_COLS, ROWS)
 app2.bump()
+// 固定窗口保留：尾标记在 finalize 前的流式帧里已上屏（末次切片即全文），
+// 轮询 tail 计数会对已成立条件立即返回、抓到旧宽度的中间帧；这里等的是
+// 回到 BASE_COLS 的终帧落定，无独立可轮询条件（终帧对错由冷渲染比对把关）。
 await sleep(600); await app2.flush()
 const warm = screenLines(app2.term)
 // 计数用全文唯一的尾标记（正文字符串内部有 repeat，不能当标记）
 const streamedOnce = warm.join('\n').split('TAILMARK-终').length - 1
 check('finalize 后流式文本恰好出现一次（无重复）', streamedOnce === 1, 'occurrences=' + streamedOnce)
 app2.unmount()
-await sleep(150)
+await sleep(150) // 固定小窗保留：unmount 收尾写出无完成回调可等
 
 // 冷渲染：同最终内容、同尺寸、从零渲染
 const coldRows = makeRows()
 coldRows.push({ id: 9999, kind: 'assistant', text: STREAM_TEXT, streaming: false })
 const app3 = await mountChat(coldRows)
-await sleep(1500); await app3.flush()
-const cold = screenLines(app3.term)
-check('流中 resize 终态 == 冷渲染（live mutation 竞争无残留几何）', warm.join('\n') === cold.join('\n'))
+const coldConverged = await settled(() => screenLines(app3.term).join('\n') === warm.join('\n'))
+// 同上：首个相等帧之后仍可能有迟到 repaint，固定稳定窗后取终态再比对。
+await sleep(250); await app3.flush()
+check('流中 resize 终态 == 冷渲染（live mutation 竞争无残留几何）', coldConverged && screenLines(app3.term).join('\n') === warm.join('\n'))
 app3.unmount()
 
 console.log(failed === 0 ? '\nALL PASS' : '\n' + failed + ' 项失败')

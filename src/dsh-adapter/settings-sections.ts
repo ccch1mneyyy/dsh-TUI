@@ -199,8 +199,8 @@ function settingsSectionStateFor(runtime: TuiSettingsSectionsRuntime): SettingsS
   return state
 }
 
-function registerSection(runtime: TuiSettingsSectionsRuntime, section: TuiSettingsSection, owner?: object): () => void {
-  const state = settingsSectionStateFor(runtime)
+function registerSection(runtime: TuiSettingsSectionsRuntime | SettingsSectionState, section: TuiSettingsSection, owner?: object): () => void {
+  const state = isSectionState(runtime) ? runtime : settingsSectionStateFor(runtime)
   const ns = section.ns.trim()
   if (!/^[a-z][a-z0-9_-]*$/u.test(ns)) throw new TypeError(`invalid TUI settings-section namespace: ${section.ns}`)
   if (state.sections.has(ns)) throw new Error(`TUI settings section "${ns}" is already registered`)
@@ -254,8 +254,8 @@ function registerSection(runtime: TuiSettingsSectionsRuntime, section: TuiSettin
   }
 }
 
-function subscribeSections(runtime: TuiSettingsSectionsRuntime, listener: () => void, owner?: object): () => void {
-  const state = settingsSectionStateFor(runtime)
+function subscribeSections(runtime: TuiSettingsSectionsRuntime | SettingsSectionState, listener: () => void, owner?: object): () => void {
+  const state = isSectionState(runtime) ? runtime : settingsSectionStateFor(runtime)
   const entry = { owner, listener }
   state.listeners.add(entry)
   return () => {
@@ -277,6 +277,42 @@ export function getHostSettingsSections(runtime: TuiSettingsSectionsRuntime | un
   } catch {
     return undefined
   }
+}
+
+function isSectionState(value: object): value is SettingsSectionState {
+  return value instanceof Map === false && 'sections' in value && 'listeners' in value
+}
+
+/**
+ * In-package fallback registry: some real compositions dispose the
+ * `dsh-tui-settings-sections` service row right after it loads (the whole
+ * dsh-tui-* host-seam insert list is affected — see the issue-#183 skew
+ * family), leaving `ctx.get('tuiSettingsSections')` permanently undefined.
+ * The TUI's own section must not depend on that: plugin.ts registers into —
+ * and channel.ts reads from — this local host whenever the composition
+ * service is unavailable. Third-party sections still require the service
+ * row; the local host only carries the TUI's own section.
+ */
+const localSectionsState: SettingsSectionState = {
+  sections: new Map(),
+  owners: new Map(),
+  listeners: new Set(),
+  host: undefined,
+}
+
+export function getLocalSettingsSectionsHost(): TuiSettingsSectionsHost {
+  localSectionsState.host ??= Object.freeze({
+    register(section: TuiSettingsSection) {
+      return registerSection(localSectionsState, section)
+    },
+    list() {
+      return [...localSectionsState.sections.values()]
+    },
+    subscribe(listener: () => void) {
+      return subscribeSections(localSectionsState, listener)
+    },
+  })
+  return localSectionsState.host
 }
 
 export default TuiSettingsSectionsRuntime

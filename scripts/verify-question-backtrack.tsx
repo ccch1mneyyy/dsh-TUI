@@ -21,6 +21,7 @@ const [
   { render },
   { AskUserQuestionPanel },
   { QuestionStore },
+  { settle, settled },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -28,9 +29,8 @@ const [
   import('../src/ui.js'),
   import('../src/components/questions/AskUserQuestionPanel.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('./lib/term-test.mjs'),
 ])
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 // ── Store state machine ────────────────────────────────────────────────
 const store = new QuestionStore()
@@ -106,12 +106,12 @@ const app = await render(React.createElement(AskUserQuestionPanel, {
   onBack: (draft: unknown) => { backDraft = draft },
   onCancel: () => { cancelled = true },
 }), { stdout, stdin, stderr: new FakeStdout(), exitOnCtrlC: false, patchConsole: false })
-await sleep(300)
-assert.ok(screen().includes('draft text'))
-assert.ok(screen().includes('● Beta'))
+assert.ok(await settled(() => screen().includes('draft text')))
+assert.ok(await settled(() => screen().includes('● Beta')))
 
 stdin.write('\x1b')
-await sleep(200)
+// onBack 回调同步整体赋值 backDraft；等回调触发后值即终态，深比较为同步派生断言。
+assert.ok(await settled(() => backDraft !== undefined))
 assert.deepEqual(backDraft, { selected: ['Beta'], custom: 'draft text' })
 assert.equal(cancelled, false)
 
@@ -123,10 +123,9 @@ app.rerender(React.createElement(AskUserQuestionPanel, {
   onAnswer() {},
   onCancel: () => { cancelled = true },
 }))
-await sleep(200)
+await settle(() => screen().includes('第一题'))
 stdin.write('\x1b')
-await sleep(200)
-assert.equal(cancelled, true)
+assert.equal(await settled(() => cancelled), true)
 
 await app.unmount()
 terminal.dispose()

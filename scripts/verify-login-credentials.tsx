@@ -14,7 +14,7 @@ const [
   { QuestionStore },
   { LOCAL_COMMANDS },
   { setLang },
-  { settle },
+  { settled, sleep },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -50,7 +50,6 @@ class FakeStdin extends PassThrough {
   unref() { return this }
 }
 
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const SECRET_SENTINEL = 'test-secret-must-not-appear'
 
 function makeChannel(status: unknown) {
@@ -154,12 +153,14 @@ async function runLogin(status: unknown) {
       patchConsole: false,
     },
   )
-  // 启动等待保留固定 delay：假 stdout 丢弃全部帧，没有可轮询的观察点。
-  await delay(500)
+  // 启动等待保留固定 sleep：假 stdout 丢弃全部帧，没有可轮询的观察点。
+  await sleep(500)
   stdin.write('/login\r')
-  await settle(() => channel.localCalls.length === 1)
+  const reported = await settled(() => channel.localCalls.length === 1)
   await instance.unmount()
-  assert.equal(channel.localCalls.length, 1, '/login must produce one local report')
+  assert.ok(reported, '/login must produce one local report')
+  // 卸载后再精确计数：迟到的第二条 report 只有在这里才会被发现。
+  assert.equal(channel.localCalls.length, 1, '/login must produce exactly one local report (post-unmount)')
   assert.deepEqual(channel.credentialRefs, ['DEEPSEEK_API_KEY'], '/login must query the credentials service')
   return channel.localCalls[0].lines
 }

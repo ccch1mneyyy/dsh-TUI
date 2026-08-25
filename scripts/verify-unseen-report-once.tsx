@@ -18,8 +18,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import { render } from '../src/ui.js'
 import { MessageList } from '../src/components/MessageList.js'
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+import { sleep } from './lib/term-test.mjs'
 
 class Output extends Writable {
   columns = 100
