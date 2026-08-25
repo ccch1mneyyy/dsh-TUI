@@ -120,6 +120,11 @@ const GROUPS = {
 // （帧在 EXIT_ALT_SCREEN 前、DISABLE 后 SHOW_CURSOR），handle 暴露
 // detach 方法供 finishExit 兜底闩锁。
     ["verify-exit-mouse-cleanup", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-cleanup.tsx']],
+// 退出查询泄漏回归（#507/#492）：退出清理（DISABLE）之后，健康探针/
+// 模式重断言/已 dispose 的 querier 都不得再写出任何 ENABLE 或查询
+// 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
+// 吞掉，不再落入 shell。
+    ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
