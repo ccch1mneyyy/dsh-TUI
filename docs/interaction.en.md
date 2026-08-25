@@ -354,10 +354,15 @@ Additional forms:
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live);
   `/effort <id>` sets a level directly; `/effort status` reports the current one.
-  Switching to `high`, `xhigh`, `max`, or `ultra` plays one bounded prompt
-  transition: the first two sweep left-to-right, `max` contracts inward, and
-  `ultra` expands outward. Startup restoration and reselecting the current tier
-  do not replay it.
+  Switching to `high`, `xhigh`, `max`, or `ultra` plays one 900ms theme-native
+  prompt transition: `high` uses one left-to-right front, `xhigh` uses twin
+  left-to-right fronts, `max` contracts from both edges, and `ultra` expands
+  from the center with the theme rainbow. The transition follows the active
+  theme and per-session `/color` accent, with discrete palette fallback for
+  ANSI themes. Startup restoration and reselecting the current tier do not
+  replay it. In the status line, `high` and `xhigh` stay static, while `max`
+  keeps a slow highlight wave and `ultra` a low-rate rainbow shimmer; those
+  steady animations share the clock only while the field is visible.
 - `/theme <name>` and `/theme status` are described in the theme guide.
 - `/lang` toggles the interface language (see “Interface language”).
 - `/compact` compresses the session history; unavailable under the minimal

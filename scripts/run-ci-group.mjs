@@ -346,8 +346,11 @@ const GROUPS = {
 // 场景（headless xterm）：三幕（双框同步扫光/档名居中聚拢/渐隐
 // 归零）断言帧间文本恒定、零行级 repaint、行数恒定、负路径全暗。
     ["verify-effort-ignition", ['node', '--import', 'tsx/esm', 'scripts/verify-effort-ignition.tsx']],
-// 前缀充能回归：四态 + 充能窗内真实前景色采样（暗→全值单调）。
+// 前缀充能回归：四态 + 主题 RGB 充能与 ANSI palette 降级。
     ["verify-effort-accent", ['node', '--import', 'tsx/esm', 'scripts/verify-effort-accent.tsx']],
+// 常驻推理等级流光：high/xhigh 静态零订阅，max/ultra 低频共享 Clock；
+// 隐藏与卸载退订，逐帧宽度/baseY 恒定且零滚屏控制。
+    ["verify-effort-persistent", ['node', '--import', 'tsx/esm', 'scripts/verify-effort-persistent.tsx']],
 // 缩放重排回归（实机反馈：打开长会话后最大化窗口）：判据是终局等价
 // ——缩放后的物理终端必须等于在新尺寸上全新渲染的同一状态。缩放会让
 // 树内每个测量所依据的宽度失效，而没有任何节点被标脏，文本节点会沿用

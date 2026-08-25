@@ -4,11 +4,11 @@
  * and repeated values stay idle, while leaving a supported tier cancels now.
  */
 import React, { useContext, useEffect, useReducer, useState } from 'react'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTheme } from '../ui.js'
 import { ClockContext } from '../ink/components/ClockContext.js'
 import type { Color } from '../ink/styles.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import type { Theme } from '../theme.js'
+import { getTheme, type Theme } from '../theme.js'
 import {
   effortIgnitionStyle,
   IGNITION_TIMELINE,
@@ -16,6 +16,7 @@ import {
   type EffortIgnitionStyle,
 } from '../trajectory/effortIgnition.js'
 import { EffortIgnitionContext, type EffortIgnitionFrame } from './EffortIgnitionContext.js'
+import { effortBand, effortTheme } from './effort-theme.js'
 
 type Overlay = { label: string; style: EffortIgnitionStyle; startedAtMs: number }
 
@@ -86,6 +87,9 @@ export function EffortInputBorder({
   children: React.ReactNode
 }): React.ReactNode {
   const clock = useContext(ClockContext)
+  const [themeName] = useTheme()
+  const theme = getTheme(themeName)
+  const palette = effortTheme(theme, effortBand(theme, idleColor))
   const [overlay, setOverlay] = useState<Overlay | null>(null)
   const [previous, setPrevious] = useState(effort)
   const [, render] = useReducer((tick: number) => tick + 1, 0)
@@ -114,7 +118,7 @@ export function EffortInputBorder({
   const midWidth = Math.max(0, columns - 2)
   const sweepColors =
     active && midWidth > 0
-      ? ignitionLineColors({ elapsedMs, width: midWidth, onLight, style: overlay.style, effort: overlay.label })
+      ? ignitionLineColors({ elapsedMs, width: midWidth, onLight, style: overlay.style, effort: overlay.label, palette })
       : []
   const runs: Array<{ glyph: string; color: keyof Theme | Color }> = []
   for (let index = 0; index < midWidth; index++) {

@@ -10,7 +10,7 @@ const [
   { Writable, PassThrough },
   React,
   { Terminal: XTerm },
-  { render },
+  { render, ThemeProvider },
   { EffortChargeGlyph },
   { EffortIgnitionContext },
   { CHARGE_MS },
@@ -73,9 +73,11 @@ function Driver(): React.ReactNode {
     ? null
     : { label: effort?.toUpperCase() ?? '', style: 'ltr' as const, elapsedMs: elapsed, durationMs: 900 }
   return (
-    <EffortIgnitionContext.Provider value={frame}>
-      <EffortChargeGlyph effort={effort} levels={['low', 'medium', 'high', 'max']} working={false} />
-    </EffortIgnitionContext.Provider>
+    <ThemeProvider theme="dark">
+      <EffortIgnitionContext.Provider value={frame}>
+        <EffortChargeGlyph effort={effort} levels={['low', 'medium', 'high', 'max']} working={false} />
+      </EffortIgnitionContext.Provider>
+    </ThemeProvider>
   )
 }
 
@@ -117,6 +119,46 @@ try {
   check('leaving supported tiers restores the plain prefix', prefixFg() === undefined && !prefixBold())
 } finally {
   instance.unmount()
+}
+
+{
+  const ansiTerm = new XTerm({ cols, rows, scrollback: 100, allowProposedApi: true })
+  class AnsiStdout extends Writable {
+    columns = cols
+    rows = rows
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+      ansiTerm.write(String(chunk), callback)
+    }
+  }
+  function AnsiDriver(): React.ReactNode {
+    return (
+      <ThemeProvider theme="dark-ansi">
+        <EffortIgnitionContext.Provider
+          value={{ label: 'ULTRA', style: 'outward', elapsedMs: CHARGE_MS, durationMs: 900 }}
+        >
+          <EffortChargeGlyph effort="ultra" levels={['ultra']} working={false} />
+        </EffortIgnitionContext.Provider>
+      </ThemeProvider>
+    )
+  }
+  const ansi = await render(<AnsiDriver />, {
+    stdout: new AnsiStdout() as never,
+    stdin: new FakeStdin() as never,
+    stderr: new AnsiStdout() as never,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  })
+  try {
+    await settle()
+    const cell = ansiTerm.buffer.active.getLine(ansiTerm.buffer.active.baseY)?.getCell(0)
+    check('ANSI theme: steady prefix uses a palette color without invented truecolor',
+      cell?.isFgPalette() === true && cell.isFgRGB() === false,
+      `palette=${cell?.getFgColor()}`)
+  } finally {
+    ansi.unmount()
+    ansiTerm.dispose()
+  }
 }
 
 if (failures > 0) {

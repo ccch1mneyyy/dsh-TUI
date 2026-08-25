@@ -17,8 +17,10 @@ const [
   { Terminal: XTerm },
   { render, Text },
   { EffortInputBorder },
-  { EffortTierBadge },
+  badge,
   { ClockContext },
+  { getTheme },
+  { effortBand, effortTheme },
   math,
 ] = await Promise.all([
   import('node:stream'),
@@ -28,6 +30,8 @@ const [
   import('../src/components/EffortInputBorder.js'),
   import('../src/components/EffortTierBadge.js'),
   import('../src/ink/components/ClockContext.js'),
+  import('../src/theme.js'),
+  import('../src/components/effort-theme.js'),
   import('../src/trajectory/effortIgnition.js'),
 ])
 
@@ -40,14 +44,26 @@ function check(name: string, ok: boolean, detail = ''): void {
 
 type Style = unknown
 type Resolver = (effort: string | undefined) => Style
+type Palette = {
+  band: string
+  high: readonly string[]
+  xhigh: readonly string[]
+  max: readonly string[]
+  ultra: readonly string[]
+}
 type Sampler = (options: {
   effort: string
   style: Style
   elapsedMs: number
   width: number
   onLight: boolean
+  palette?: Palette
 }) => ReadonlyArray<unknown>
 
+const { EffortTierBadge } = badge
+const badgeApi = badge as Record<string, unknown>
+const badgeWeights = badgeApi.effortBadgeWeights as ((effort: string, count: number, progress: number) => readonly number[]) | undefined
+const badgeGap = badgeApi.effortBadgeGap as ((effort: string, progress: number) => number) | undefined
 const api = math as Record<string, unknown>
 const resolver = (
   api.resolveEffortIgnitionStyle
@@ -55,6 +71,9 @@ const resolver = (
   ?? api.ignitionStyleForEffort
 ) as Resolver | undefined
 const sampler = api.ignitionLineColors as Sampler | undefined
+const accents = api.ignitionAccents as ((effort: string | undefined, onLight: boolean, palette?: Palette) => readonly string[]) | undefined
+const gradient = api.themeGradient as ((colors: readonly string[], progress: number) => string | undefined) | undefined
+const blendColor = api.blendThemeColor as ((base: string, accent: string, progress: number) => string) | undefined
 const duration = Number(
   api.EFFORT_IGNITION_MS
   ?? api.IGNITION_DURATION_MS
@@ -66,6 +85,10 @@ const duration = Number(
 
 check('API: effort ignition exports a style resolver', typeof resolver === 'function')
 check('API: effort ignition exports a line sampler', typeof sampler === 'function')
+check('API: effort ignition exports theme-gradient helpers',
+  typeof accents === 'function' && typeof gradient === 'function' && typeof blendColor === 'function')
+check('API: tier badge exports deterministic per-tier motion helpers',
+  typeof badgeWeights === 'function' && typeof badgeGap === 'function')
 check('timeline: every transition is finite at exactly 900ms', duration === 900, `duration ${String(duration)}`)
 
 const styles = new Map<string, Style>()
@@ -76,10 +99,30 @@ for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
 }
 check('style: unsupported efforts resolve to no animation', resolver?.('medium') == null && resolver?.(undefined) == null)
 
+const earlyBadge = Object.fromEntries(
+  ['high', 'max', 'ultra'].map(effort => [effort, badgeWeights?.(effort, 5, 0.35) ?? []]),
+) as Record<string, readonly number[]>
+const twinBadge = badgeWeights?.('xhigh', 5, 0.5) ?? []
+check('badge high: letter energy enters strictly left-to-right',
+  earlyBadge.high[0]! > earlyBadge.high[2]! && earlyBadge.high[2]! >= earlyBadge.high[4]!, earlyBadge.high.join(','))
+check('badge xhigh: twin moving peaks differ from the single high front',
+  twinBadge.filter(weight => weight > 0.5).length >= 2
+  && twinBadge.filter(weight => weight < 0.2).length >= 2
+  && twinBadge.join(',') !== (badgeWeights?.('high', 5, 0.5) ?? []).join(','), twinBadge.join(','))
+check('badge max: outer letters arrive before the center and metadata contracts inward',
+  earlyBadge.max[0]! > earlyBadge.max[2]! && earlyBadge.max[4]! > earlyBadge.max[2]!
+  && (badgeGap?.('max', 0.2) ?? 0) > (badgeGap?.('max', 0.8) ?? 0), earlyBadge.max.join(','))
+check('badge ultra: center arrives before the edges while metadata expands outward',
+  earlyBadge.ultra[2]! > earlyBadge.ultra[0]! && earlyBadge.ultra[2]! > earlyBadge.ultra[4]!
+  && (badgeGap?.('ultra', 0.2) ?? 0) < (badgeGap?.('ultra', 0.8) ?? 0), earlyBadge.ultra.join(','))
+check('badge: all four tiers settle to fully visible letters',
+  ['high', 'xhigh', 'max', 'ultra'].every(effort =>
+    (badgeWeights?.(effort, 5, 1) ?? []).every(weight => weight === 1)))
+
 const WIDTH = 61
 const CENTER = (WIDTH - 1) / 2
-const colors = (effort: string, elapsedMs: number): ReadonlyArray<unknown> =>
-  sampler?.({ effort, style: styles.get(effort), elapsedMs, width: WIDTH, onLight: false }) ?? []
+const colors = (effort: string, elapsedMs: number, palette?: Palette): ReadonlyArray<unknown> =>
+  sampler?.({ effort, style: styles.get(effort), elapsedMs, width: WIDTH, onLight: false, palette }) ?? []
 const painted = (effort: string, elapsedMs: number): number[] =>
   colors(effort, elapsedMs).flatMap((color, column) => color == null ? [] : [column])
 const samples = (effort: string): number[][] =>
@@ -88,6 +131,10 @@ const centroid = (columns: readonly number[]): number =>
   columns.length === 0 ? Number.NaN : columns.reduce((sum, column) => sum + column, 0) / columns.length
 const radius = (columns: readonly number[]): number =>
   columns.length === 0 ? Number.NaN : columns.reduce((sum, column) => sum + Math.abs(column - CENTER), 0) / columns.length
+const groups = (columns: readonly number[]): number =>
+  columns.reduce((count, column, index) => count + (index === 0 || column > columns[index - 1]! + 1 ? 1 : 0), 0)
+const used = (values: readonly unknown[]): string[] =>
+  [...new Set(values.flatMap(value => typeof value === 'string' ? [value] : []))]
 
 for (const effort of ['high', 'xhigh']) {
   const frames = samples(effort)
@@ -96,6 +143,13 @@ for (const effort of ['high', 'xhigh']) {
   check(`${effort}: painted band travels left-to-right`,
     early.length > 0 && late.length > 0 && centroid(early) + WIDTH / 4 < centroid(late),
     `centroid ${centroid(early).toFixed(1)}→${centroid(late).toFixed(1)}`)
+}
+{
+  const high = painted('high', 450)
+  const xhigh = painted('xhigh', 450)
+  check('high/xhigh: visual paths differ as one broad front versus twin narrow fronts',
+    groups(high) === 1 && groups(xhigh) === 2 && high.length > xhigh.length,
+    `groups ${groups(high)}/${groups(xhigh)}, columns ${high.length}/${xhigh.length}`)
 }
 {
   const frames = samples('max')
@@ -113,6 +167,59 @@ for (const effort of ['high', 'xhigh']) {
     early.length > 0 && late.length > 0 && radius(late) > radius(early) + WIDTH / 5,
     `radius ${radius(early).toFixed(1)}→${radius(late).toFixed(1)}`)
 }
+const darkTheme = getTheme('dark')
+const lightTheme = getTheme('light')
+const darkPalette = effortTheme(darkTheme) as Palette
+const lightPalette = effortTheme(lightTheme) as Palette
+check('theme: dark RGB palette is sourced from semantic Theme roles',
+  darkPalette.band === darkTheme.promptBorder
+  && darkPalette.high[0] === darkTheme.promptBorderShimmer
+  && darkPalette.xhigh[1] === darkTheme.permissionShimmer
+  && darkPalette.max[0] === darkTheme.warning
+  && darkPalette.ultra[6] === darkTheme.rainbow_violet
+  && Object.values(darkPalette).flat().every(color => color.startsWith('rgb(')))
+check('theme: light RGB palette keeps the same semantic mapping with different concrete colors',
+  lightPalette.band === lightTheme.promptBorder
+  && lightPalette.high[1] === lightTheme.claudeShimmer
+  && lightPalette.max[1] === lightTheme.warningShimmer
+  && lightPalette.ultra[0] === lightTheme.rainbow_red
+  && lightPalette.band !== darkPalette.band)
+check('theme: prompt-owned semantic and raw session accent colors resolve as the animation band',
+  effortBand(darkTheme, 'warning') === darkTheme.warning
+  && effortBand(darkTheme, '#123456') === '#123456'
+  && effortTheme(darkTheme, effortBand(darkTheme, 'warning')).band === darkTheme.warning)
+const signatures = ['high', 'xhigh', 'max', 'ultra'].map(effort => used(colors(effort, 450, darkPalette)))
+check('theme: all four tiers produce distinct dark-theme RGB color signatures',
+  signatures.every(signature => signature.length > 0 && signature.every(color => color.startsWith('rgb(')))
+  && new Set(signatures.map(signature => signature.join('|'))).size === 4,
+  signatures.map((signature, index) => `${['high', 'xhigh', 'max', 'ultra'][index]}:${signature.length}`).join(', '))
+
+const customPalette: Palette = {
+  band: '#101010',
+  high: ['#123456', '#345678'],
+  xhigh: ['#2468ac', '#abcdef'],
+  max: ['#c08020', '#ffe080'],
+  ultra: ['#a00000', '#b06000', '#909000', '#008000', '#0060a0', '#302090', '#800080'],
+}
+check('custom fallback: raw non-rgb colors step between valid theme values without interpolation',
+  blendColor?.(customPalette.band, customPalette.high[0]!, 0.2) === customPalette.band
+  && blendColor?.(customPalette.band, customPalette.high[0]!, 0.8) === customPalette.high[0]
+  && gradient?.(customPalette.high, 0.2) === customPalette.high[0]
+  && gradient?.(customPalette.high, 0.8) === customPalette.high[1])
+for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+  const sampled = used(colors(effort, 450, customPalette))
+  const allowed = new Set(customPalette[effort as keyof Omit<Palette, 'band'>])
+  check(`custom fallback: ${effort} sampler preserves raw theme colors`,
+    sampled.length > 0 && sampled.every(color => allowed.has(color)), sampled.join(','))
+}
+
+const ansiPalette = effortTheme(getTheme('dark-ansi')) as Palette
+for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
+  const sampled = used(colors(effort, 450, ansiPalette))
+  check(`ANSI fallback: ${effort} remains palette-based without invented RGB`,
+    sampled.length > 0 && sampled.every(color => color.startsWith('ansi:')), sampled.join(','))
+}
+
 for (const effort of ['high', 'xhigh', 'max', 'ultra']) {
   check(`${effort}: sampler is dark at and after 900ms`,
     painted(effort, 900).length === 0 && painted(effort, 901).length === 0)

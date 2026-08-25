@@ -1,6 +1,15 @@
 /** Named effort tiers own distinct border-front motion. */
 export type EffortIgnitionStyle = 'ltr' | 'inward' | 'outward'
 
+/** Resolved theme colours used by the bounded effort transition. */
+export interface EffortIgnitionPalette {
+  readonly band: string
+  readonly high: readonly string[]
+  readonly xhigh: readonly string[]
+  readonly max: readonly string[]
+  readonly ultra: readonly string[]
+}
+
 /** One bounded prompt transition: the centered label exists for exactly 900ms. */
 export const IGNITION_TIMELINE = {
   sweepMs: 900,
@@ -12,15 +21,19 @@ export const IGNITION_TIMELINE = {
 } as const
 
 /**
- * Effort ignition motion math — pure functions, zero dependencies.
- * Consumers keep glyphs constant and change foreground colours per frame, so
- * border animation remains SGR-only.
+ * Effort ignition motion math. Consumers keep row count and dimensions fixed;
+ * the border changes only foreground colours while the middle row owns the
+ * bounded tier label.
  */
-import type { RGBColor } from '../components/Spinner/spinnerUtils.js'
+import { parseRGB, type RGBColor } from '../components/Spinner/spinnerUtils.js'
 import { rgbString } from './motion.js'
 
 export const SWEEP_TOTAL_MS = IGNITION_TIMELINE.sweepMs
-const WAVE_HALF_WIDTH = 14
+const HIGH_HALF_WIDTH = 14
+const XHIGH_HALF_WIDTH = 5
+const MAX_HALF_WIDTH = 11
+const ULTRA_HALF_WIDTH = 8
+const XHIGH_SEPARATION = 13
 const LAUNCH = 0.05
 const TRAVEL = 0.78
 
@@ -41,8 +54,12 @@ const ULTRA_LIGHT: RGBColor = { r: 120, g: 80, b: 235 }
 const BAND_DARK: RGBColor = { r: 27, g: 30, b: 40 }
 const BAND_LIGHT: RGBColor = { r: 240, g: 240, b: 242 }
 
+function tier(effort: string | undefined): string {
+  return effort?.toLowerCase() ?? ''
+}
+
 export function effortIgnitionStyle(effort: string | undefined): EffortIgnitionStyle | undefined {
-  switch (effort?.toLowerCase()) {
+  switch (tier(effort)) {
     case 'high':
     case 'xhigh':
       return 'ltr'
@@ -60,7 +77,7 @@ export function ignitionHues(onLight: boolean): readonly [RGBColor, RGBColor, RG
 }
 
 export function effortIgnitionHue(effort: string | undefined, onLight: boolean): RGBColor {
-  switch (effort?.toLowerCase()) {
+  switch (tier(effort)) {
     case 'xhigh':
       return ignitionHues(onLight)[1]
     case 'max':
@@ -96,25 +113,56 @@ export function easeInOutCubic(progress: number): number {
   return 1 - (inverse * inverse * inverse) / 2
 }
 
-function centers(elapsed: number, width: number, style: EffortIgnitionStyle): readonly number[] {
+function waveWidth(effort: string | undefined): number {
+  switch (tier(effort)) {
+    case 'xhigh':
+      return XHIGH_HALF_WIDTH
+    case 'max':
+      return MAX_HALF_WIDTH
+    case 'ultra':
+      return ULTRA_HALF_WIDTH
+    default:
+      return HIGH_HALF_WIDTH
+  }
+}
+
+function centers(
+  elapsed: number,
+  width: number,
+  style: EffortIgnitionStyle,
+  effort: string | undefined,
+): readonly number[] {
   const raw = (elapsed - LAUNCH) / TRAVEL
   if (raw < 0 || raw > 1) return []
   const progress = easeInOutCubic(raw)
-  const left = -WAVE_HALF_WIDTH
-  const right = width - 1 + WAVE_HALF_WIDTH
+  const half = waveWidth(effort)
+  const left = -half
+  const right = width - 1 + half
   const middle = (width - 1) / 2
-  if (style === 'ltr') return [left + progress * (right - left)]
+  if (style === 'ltr') {
+    const center = left + progress * (right - left)
+    return tier(effort) === 'xhigh'
+      ? [center - XHIGH_SEPARATION / 2, center + XHIGH_SEPARATION / 2]
+      : [center]
+  }
   if (style === 'inward') {
     return [left + progress * (middle - left), right - progress * (right - middle)]
   }
   return [middle - progress * (middle - left), middle + progress * (right - middle)]
 }
 
-function sampleColumn(elapsed: number, column: number, width: number, style: EffortIgnitionStyle): number {
+function sampleColumn(
+  elapsed: number,
+  column: number,
+  width: number,
+  style: EffortIgnitionStyle,
+  effort: string | undefined,
+): number {
+  const half = waveWidth(effort)
   return Math.min(
     1,
-    centers(elapsed, width, style).reduce(
-      (weight, center) => Math.max(weight, crest(Math.abs(column - center) / WAVE_HALF_WIDTH)),
+    centers(elapsed, width, style, effort).reduce(
+      (weight, center) => Math.max(weight, crest(Math.abs(column - center) / half)),
       0,
     ),
   )
@@ -128,27 +176,89 @@ export function blend(a: RGBColor, b: RGBColor, t: number): RGBColor {
   }
 }
 
+/** RGB-interpolate theme values; step safely between valid raw colours otherwise. */
+export function blendThemeColor(base: string, accent: string, progress: number): string {
+  const p = Math.min(1, Math.max(0, progress))
+  if (p <= 0) return base
+  if (p >= 1) return accent
+  const from = parseRGB(base)
+  const to = parseRGB(accent)
+  if (from === null || to === null) return p < 0.45 ? base : accent
+  return rgbString(blend(from, to, p))
+}
+
+/** Sample a resolved theme ramp, preserving ANSI/custom values as hard stops. */
+export function themeGradient(colors: readonly string[], progress: number): string | undefined {
+  if (colors.length === 0) return undefined
+  if (colors.length === 1) return colors[0]
+  const p = Math.min(1, Math.max(0, progress)) * (colors.length - 1)
+  const index = Math.min(colors.length - 2, Math.floor(p))
+  return blendThemeColor(colors[index]!, colors[index + 1]!, p - index)
+}
+
+/** Theme accents for a tier, with the historical truecolor pair as fallback. */
+export function ignitionAccents(
+  effort: string | undefined,
+  onLight: boolean,
+  palette?: EffortIgnitionPalette,
+): readonly string[] {
+  const colors = palette?.[tier(effort) as keyof Omit<EffortIgnitionPalette, 'band'>]
+  if (Array.isArray(colors) && colors.length > 0) return colors
+  return [rgbString(effortIgnitionHue(effort, onLight))]
+}
+
+function accentAt(options: {
+  effort: string | undefined
+  onLight: boolean
+  palette?: EffortIgnitionPalette
+  elapsed: number
+  column: number
+  width: number
+}): string {
+  const colors = ignitionAccents(options.effort, options.onLight, options.palette)
+  if (colors.length === 1) return colors[0]!
+  const position = options.width <= 1 ? 0 : options.column / (options.width - 1)
+  const phase = tier(options.effort) === 'ultra'
+    ? (position + options.elapsed / (SWEEP_TOTAL_MS / 1000) * 0.2) % 1
+    : position
+  return themeGradient(colors, phase) ?? colors[0]!
+}
+
 export function ignitionLineColors(options: {
   elapsedMs: number
   width: number
   onLight: boolean
   style?: EffortIgnitionStyle
   effort?: string
+  palette?: EffortIgnitionPalette
 }): ReadonlyArray<string | undefined> {
   const elapsed = options.elapsedMs / 1000
   const total = SWEEP_TOTAL_MS / 1000
   if (options.width <= 0 || !Number.isFinite(elapsed) || elapsed <= 0 || elapsed >= total) return []
   const style = options.style ?? 'ltr'
-  const hue = effortIgnitionHue(options.effort, options.onLight)
-  const band = options.onLight ? BAND_LIGHT : BAND_DARK
+  const band = options.palette?.band ?? rgbString(options.onLight ? BAND_LIGHT : BAND_DARK)
   const colors: Array<string | undefined> = new Array(options.width)
   for (let column = 0; column < options.width; column++) {
-    const weight = sampleColumn(elapsed, column, options.width, style)
+    const weight = sampleColumn(elapsed, column, options.width, style, options.effort)
     if (weight <= 0.01) {
       colors[column] = undefined
       continue
     }
-    const tinted = blend(band, hue, weight)
+    const accent = accentAt({
+      effort: options.effort,
+      onLight: options.onLight,
+      palette: options.palette,
+      elapsed,
+      column,
+      width: options.width,
+    })
+    const baseRgb = parseRGB(band)
+    const accentRgb = parseRGB(accent)
+    if (baseRgb === null || accentRgb === null) {
+      colors[column] = weight >= 0.35 ? accent : undefined
+      continue
+    }
+    const tinted = blend(baseRgb, accentRgb, weight)
     colors[column] = rgbString({
       r: Math.round(tinted.r / 8) * 8,
       g: Math.round(tinted.g / 8) * 8,

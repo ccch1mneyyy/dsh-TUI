@@ -10,6 +10,7 @@ import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
 import { ContextBarView } from '../components/ContextBarView.js'
+import { PersistentEffortLabel } from '../components/PersistentEffortLabel.js'
 import {
   USED_SEGMENTS,
   renderMiniContextBar,
@@ -139,7 +140,7 @@ export function StatusLine({
   if (statusBar.thinking && channel.reasoningEffort !== undefined) {
     contextParts.push({
       key: 'effort',
-      node: <Text color="inactiveShimmer">{channel.reasoningEffort}</Text>,
+      node: <PersistentEffortLabel effort={channel.reasoningEffort} />,
     })
   }
   if (statusBar.mode && channel.modeIndex > 0) {

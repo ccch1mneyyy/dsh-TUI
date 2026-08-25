@@ -56,8 +56,9 @@ the interface, and removing it leaves no core modifications behind.
   timeline / scrollbar / hidden modes.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata;
-  switching to `high`, `xhigh`, `max`, or `ultra` plays a bounded directional
-  prompt animation.
+  switching to `high`, `xhigh`, `max`, or `ultra` plays a theme-native
+  directional prompt animation, while `max` and `ultra` retain a low-rate
+  steady shimmer in the status line.
 - **Complete session workflow**: `/resume`, `/new`, `/workspace`, `/compact`, `/export`, the
   `/btw` side question, model switching, and double-`Esc` rewind through a
   session fork.
