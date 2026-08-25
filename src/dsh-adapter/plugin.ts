@@ -24,7 +24,7 @@ import { readPresetPref } from '../presetPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
-import { clearResumeTarget, writeResumeTarget } from '../sessionHistory.js'
+import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
@@ -382,9 +382,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   const sessionCwd = initialWorkspace?.cwd ?? resolveSessionCwd(config.cwd)
   const meta = { cwd: sessionCwd }
+  // Launch-time resume target: the env handoff (launchers like naive-dsh) wins;
+  // `dsh --profile tui` forwards `--resume` verbatim instead, so fall back to
+  // parsing the forwarded app args (parity with the standalone bin).
+  const launchSessionId = config.sessionId ?? resumeTargetFromArgv(process.argv.slice(2))
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,
-    config.sessionId,
+    launchSessionId,
     configuredRoute,
     startupRoute,
     meta,
@@ -1385,10 +1389,16 @@ async function resolveAgent(
         route: resumeRoute ?? recordedModelRoute(resumed.agent.session.events),
       }
     } catch (error) {
-      // No artifact (first run / cleared storage) or persistence not
-      // mounted: fall through to a fresh session, but stay loud in the log.
-      ctx.logger.warn(
-        `dsh-tui: resume of "${requestedSessionId}" failed: ${error instanceof Error ? error.message : String(error)}`,
+      // A launch-time --resume is an explicit request: silently substituting a
+      // fresh session presents a cold conversation as the resumed one (the
+      // "resume did nothing" failure mode — the warn below never reached a
+      // terminal). Fail the boot loudly instead; the loader surfaces this to
+      // stderr. The in-session /resume picker has its own error path.
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `dsh-tui: cannot resume session "${requestedSessionId}": ${reason} — ` +
+        'the stored log is unreadable or corrupt; no fresh session was started instead. ' +
+        'Drop --resume to start fresh, or repair the session log first.',
       )
     }
   }
