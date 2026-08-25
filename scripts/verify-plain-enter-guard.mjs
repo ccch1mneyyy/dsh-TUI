@@ -27,7 +27,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
-import { settle } from './lib/term-test.mjs'
+import { settled, sleep } from './lib/term-test.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -68,8 +68,6 @@ function makeStreams() {
   return { stdout, stderr, stdin }
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-
 const decisions = []
 const { stdout, stderr, stdin } = makeStreams()
 const instance = await render(
@@ -79,6 +77,7 @@ const instance = await render(
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
+// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
 await sleep(500)
 
 // Modifier Enters must be inert in the panel (they were inert text tokens
@@ -100,8 +99,7 @@ check('Shift+Enter (CSI 13;2u) does not decide', decisions.length === 0, JSON.st
 
 // Plain Enter still confirms the focused row (default 0 = allowed-once).
 stdin.write('\r')
-await settle(() => decisions.length === 1 && decisions[0] === 'allowed-once')
-check('plain Enter decides the focused outcome', decisions.length === 1 && decisions[0] === 'allowed-once', JSON.stringify(decisions))
+check('plain Enter decides the focused outcome', await settled(() => decisions.length === 1 && decisions[0] === 'allowed-once'), JSON.stringify(decisions))
 
 instance.unmount()
 

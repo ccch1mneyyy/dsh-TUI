@@ -37,10 +37,10 @@ const { default: instances } = await import('../src/ink/instances.js')
 const { stringWidth } = await import('../src/ink/stringWidth.js')
 
 const COLS = 100, ROWS = 40
-// 等待/读屏走公共辅助（issue #532）：settle 轮询到预期状态再断言——固定
-// sleep 在慢 runner 上会断言到旧屏幕。alt-screen 下 baseY 恒 0，视口读取
-// 与直扫等价。
-const { sleep, settle } = termTest
+// 等待/读屏走公共辅助（issue #532）：settled 轮询到谓词为真后返回终值，
+// 等待与断言共用同一条件——固定 sleep 在慢 runner 上会断言到旧屏幕。
+// alt-screen 下 baseY 恒 0，视口读取与直扫等价。
+const { sleep, settled } = termTest
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -111,6 +111,8 @@ const inst = await render(tree, {
 instances.set(process.stdout, instances.get(stdout)!)
 inst.rerender(tree)
 
+// 首帧挂载 pacing：等 React 树完成首次渲染与鼠标/选取 hook 挂接，
+// 无单一可观测条件。
 await sleep(900)
 
 function screenLines(): string[] {
@@ -145,10 +147,8 @@ writes.length = 0
 await dragOver(TMARK, 2, 10)
 {
   const expect = TMARK.slice(2, 10 + 1)
-  await settle(() => osc52Payloads().includes(expect))
-  const payloads = osc52Payloads()
-  check('静息拖选 → OSC 52 携带完整选中文本', payloads.includes(expect),
-    `payloads=${JSON.stringify(payloads)} expect="${expect}"`)
+  check('静息拖选 → OSC 52 携带完整选中文本', await settled(() => osc52Payloads().includes(expect)),
+    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}"`)
 }
 
 // ── 回归组：上滚阅读到中部历史 + 尾部流式并发 ──
@@ -180,6 +180,8 @@ const streamLoop = (async () => {
   }
 })()
 
+// 真实墙钟语义：拖选必须落在 2.6s 流式窗口的中段——streamed>0 一到就返回
+// 的轮询表达不了"流式进行中"这个并发时点，保留固定等待。
 await sleep(400)  // 流式已在跑
 try {
   await dragOver(HMARK, 3, 11)
@@ -188,26 +190,24 @@ try {
 }
 await streamLoop
 streamRow.streaming = undefined
+// 流式收尾后的重绘 pacing：无单一可观测条件（下面的 settled 只等 OSC 52）。
 await sleep(400)
 
 {
   const expect = HMARK.slice(3, 11 + 1)
-  await settle(() => osc52Payloads().includes(expect))
-  const payloads = osc52Payloads()
-  check('流式并发时拖选 → OSC 52 携带完整选中文本', payloads.includes(expect),
-    `payloads=${JSON.stringify(payloads)} expect="${expect}"`)
+  check('流式并发时拖选 → OSC 52 携带完整选中文本', await settled(() => osc52Payloads().includes(expect)),
+    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}"`)
 }
 
 // ── 附加：流式结束后（静息）再拖一次，看是否恢复 ──
 writes.length = 0
+// 静息 pacing：给上一次选区/复制状态一个收尾窗口，无单一可观测条件。
 await sleep(200)
 try {
   await dragOver(HMARK, 3, 11)
   const expect = HMARK.slice(3, 11 + 1)
-  await settle(() => osc52Payloads().includes(expect))
-  const payloads = osc52Payloads()
-  check('流式结束后拖选 → 恢复完整', payloads.includes(expect),
-    `payloads=${JSON.stringify(payloads)} expect="${expect}"`)
+  check('流式结束后拖选 → 恢复完整', await settled(() => osc52Payloads().includes(expect)),
+    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}"`)
 } catch (e) {
   check('流式结束后标记行仍可见', false, String(e))
 }

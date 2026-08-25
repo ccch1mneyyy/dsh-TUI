@@ -43,7 +43,7 @@ const [
   { dispatchTuiDecision, normalizeCancelDecision },
   { stringWidth },
   { KNOWN_SESSION_EVENT_TYPES },
-  { settle },
+  { settle, settled, sleep },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -96,8 +96,6 @@ const plainText = (frames: string[]) => frames
   .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
   .replace(/\x1b\]9;[^\x07]*\x07/g, '')
   .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 let failures = 0
 const check = (name: string, ok: boolean, detail = '') => {
@@ -224,7 +222,8 @@ ctx.plugin(TuiDialogRuntime)
 ctx.plugin(TuiStatusRuntime)
 ctx.plugin(TuiShortcutRuntime)
 ctx.plugin(TuiRendererRuntime)
-await sleep(100)
+await settle(() => ctx.get('tuiDialogs') !== undefined && ctx.get('tuiStatus') !== undefined
+  && ctx.get('tuiShortcuts') !== undefined && ctx.get('tuiRenderers') !== undefined)
 
 // Plugin-facing extension calls must originate from a live child activation.
 // Calling these services through the composition root would bind effects to
@@ -237,7 +236,7 @@ const pluginFiber = ctx.plugin({
     pluginCtx = candidate
   },
 })
-await sleep(50)
+await settle(() => pluginCtx !== undefined)
 if (pluginCtx === undefined) {
   await Promise.resolve(pluginFiber.dispose())
   throw new Error('UI extension probe did not start')
@@ -478,8 +477,7 @@ const plugin = pluginCtx
   let fired = 0
   plugin.tuiShortcuts.register('alt+z', { description: 'fire', handler: () => { fired += 1 } })
   check('tuiShortcuts.dispatch: matching key consumed', shortcutHost.dispatch('z', { meta: true }) === true)
-  await settle(() => fired === 1)
-  check('tuiShortcuts.dispatch: handler ran', fired === 1)
+  check('tuiShortcuts.dispatch: handler ran', await settled(() => fired === 1))
   check('tuiShortcuts.dispatch: non-matching key passes through', shortcutHost.dispatch('q', { ctrl: true }) === false)
 
   // Throwing handler → onError, never propagated.
@@ -490,8 +488,7 @@ const plugin = pluginCtx
     handler: () => { throw new Error('handler exploded') },
   })
   shortcutHost.dispatch('y', { meta: true })
-  await settle(() => errored === 'alt+y')
-  check('tuiShortcuts.dispatch: handler error routed to onError', errored === 'alt+y')
+  check('tuiShortcuts.dispatch: handler error routed to onError', await settled(() => errored === 'alt+y'))
   removeErrorHandler()
 
   // dispose unregisters
@@ -577,7 +574,7 @@ const plugin = pluginCtx
     },
   }))
   guardCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-  await sleep(50)
+  await settle(() => guardCtx.get('tuiPluginHost') !== undefined)
   const admitted = await mountAdmitted(guardCtx, 'my-guard-export', testManifest({
     id: 'my-guard',
     requires: [DECISION_COORDINATE],
@@ -608,7 +605,9 @@ const plugin = pluginCtx
       c.on('tui/compact', () => ({ cancel: true }))
     },
   })
-  await sleep(100)
+  // 拒绝在订阅时即发出 warn：等两条 denial 警告落地即代表插件 apply 已跑完。
+  await settle(() => guardWarnings.some(line => line.includes('"evil-plugin"') && line.includes('session.input.intercept'))
+    && guardWarnings.some(line => line.includes('session.compact.intercept')))
   check('decision guard: ungranted subscription never enters the chain',
     (await dispatchTuiDecision(guardCtx, 'tui/input', { text: '别的', sessionId: 'ui-session' }, passThrough)) === undefined
     && (await dispatchTuiDecision(guardCtx, 'tui/compact', { sessionId: 'ui-session' }, normalizeCancelDecision)) === undefined)
@@ -626,9 +625,8 @@ const plugin = pluginCtx
     { order: 'ui-observe' },
   )
   await dispatchTuiDecision(guardCtx, 'tui/session-switched', { sessionId: 'ui-session' }, () => undefined)
-  await settle(() => observed && !guardWarnings.some(line => line.includes('tui/session-switched')))
   check('decision guard: observe-class events stay ungated',
-    observed && !guardWarnings.some(line => line.includes('tui/session-switched')))
+    await settled(() => observed && !guardWarnings.some(line => line.includes('tui/session-switched'))))
   observeRelease()
   release()
 
@@ -692,6 +690,7 @@ const instance = await render(
   />,
   { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
+// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
 await sleep(600)
 const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 
@@ -704,30 +703,28 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
       { id: 'second', label: '第二项', description: '带描述' },
     ],
   })
-  await settle(() => screen().includes('挑一个') && screen().includes('第二项'))
   check('ui: select dialog renders title + options',
-    screen().includes('挑一个') && screen().includes('第二项'), screen().slice(-200))
+    await settled(() => screen().includes('挑一个') && screen().includes('第二项')), screen().slice(-200))
   stdin.write('\x1b[B')
+  // 按键间 pacing：等上一键的编辑/选中态落地再发下一键，选中高亮是颜色，
+  // ANSI 洗净后无可观测条件（本文件后续同类 sleep 同理）。
   await sleep(150)
   stdin.write('\r')
   check('ui: select ↓+Enter resolves the second id', (await pending) === 'second')
-  await settle(() => dialogStore.getSnapshot() === null)
-  check('ui: dialog closed after settle', dialogStore.getSnapshot() === null)
+  check('ui: dialog closed after settle', await settled(() => dialogStore.getSnapshot() === null))
 }
 
 // FIFO: the second dialog waits for the first to settle. Confirm: Enter = yes.
 {
   const first = plugin.tuiDialogs.confirm({ title: '确认一下', message: '要做吗' })
   const second = plugin.tuiDialogs.select({ title: '排队的选择', options: [{ id: 'only', label: '唯一' }] })
-  await settle(() => screen().includes('确认一下') && screen().includes('要做吗'))
   check('ui: confirm renders with message + localized defaults',
-    screen().includes('确认一下') && screen().includes('要做吗'), screen().slice(-200))
+    await settled(() => screen().includes('确认一下') && screen().includes('要做吗')), screen().slice(-200))
   check('ui: FIFO — second dialog still queued', dialogStore.getSnapshot()?.kind === 'confirm')
   stdin.write('\r') // Enter on 是 → true
   check('ui: confirm Enter resolves true', (await first) === true)
-  await settle(() => screen().includes('排队的选择'))
   check('ui: queued select now active',
-    screen().includes('排队的选择'), screen().slice(-200))
+    await settled(() => screen().includes('排队的选择')), screen().slice(-200))
   stdin.write('\x1b') // Esc cancels the select
   check('ui: Esc cancels → undefined', (await second) === undefined)
 }
@@ -735,8 +732,8 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 // Input: placeholder shown when empty; typed text resolves.
 {
   const pending = plugin.tuiDialogs.input({ title: '说点什么', placeholder: '占位提示', initial: '' })
-  await settle(() => screen().includes('占位提示'))
-  check('ui: input dialog renders placeholder', screen().includes('占位提示'), screen().slice(-200))
+  check('ui: input dialog renders placeholder', await settled(() => screen().includes('占位提示')), screen().slice(-200))
+  // 逐字符按键间 pacing（同上，无可观测条件）。
   for (const ch of '你好') { stdin.write(ch); await sleep(60) }
   stdin.write('\r')
   check('ui: input Enter resolves the typed text', (await pending) === '你好')
@@ -747,6 +744,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   const pending = plugin.tuiDialogs.input({ title: '改改', initial: '原文' })
   await settle(() => screen().includes('原文'))
   stdin.write('\x7f') // backspace removes 文
+  // 按键间 pacing（同上）。
   await sleep(150)
   stdin.write('\r')
   check('ui: input initial pre-fills and edits', (await pending) === '原')
@@ -779,6 +777,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   await sleep(300)
   const chunk = '多行\n粘贴\x07' + '长'.repeat(600)
   stdin.write(`\x1b[200~${chunk}\x1b[201~`)
+  // 粘贴解析 pacing：等整段粘贴落入输入值再发 Enter（同上，无可观测条件）。
   await sleep(250)
   stdin.write('\r')
   const resolved = await pending
@@ -821,6 +820,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   stdin.write('\x1b[B\r') // Down + Enter in one chunk
   check('ui: batched ↓+Enter settles the NEW focus, not the stale one',
     (await pending) === 'second')
+  // 面板收起重绘 pacing：下一面板标题在增量重绘下会片段化，无可靠观察点。
   await sleep(200)
 }
 {
@@ -828,6 +828,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   await settle(() => screen().includes('同批确认'))
   stdin.write('\x1b[C\r') // Right + Enter in one chunk → focus 否 → false
   check('ui: batched →+Enter settles the moved focus', (await pending) === false)
+  // 面板收起重绘 pacing（同上）。
   await sleep(200)
 }
 // Two Backspaces in one chunk must BOTH delete (each seeing the other's
@@ -836,6 +837,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   const pending = plugin.tuiDialogs.input({ title: '同批退格', initial: 'abcd' })
   await settle(() => screen().includes('同批退格'))
   stdin.write('\x7f\x7f')
+  // 按键间 pacing（同上）。
   await sleep(150)
   stdin.write('\r')
   check('ui: batched Backspace×2 deletes both characters', (await pending) === 'ab')
@@ -849,9 +851,9 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   // 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点——保留。
   await sleep(300)
   stdin.write('\x1b[D') // left: cursor between 😊 and b
-  await sleep(120)
+  await sleep(120) // 按键间 pacing（同上）
   stdin.write('\x7f') // backspace deletes the whole emoji
-  await sleep(120)
+  await sleep(120) // 按键间 pacing（同上）
   stdin.write('\r')
   check('ui: Backspace deletes a whole emoji (no lone surrogate)',
     (await pending) === 'ab')
@@ -861,7 +863,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   // 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点——保留。
   await sleep(300)
   stdin.write('\x7f') // single backspace at end of the sole emoji
-  await sleep(150)
+  await sleep(150) // 按键间 pacing（同上）
   stdin.write('\r')
   check('ui: Backspace on the sole emoji empties the value', (await pending) === '')
 }
@@ -872,9 +874,9 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   // Left ×2 from the end: code-point steps land BEFORE the emoji (a UTF-16
   // step would park the cursor mid-surrogate and split the pair on insert).
   stdin.write('\x1b[D\x1b[D')
-  await sleep(120)
+  await sleep(120) // 按键间 pacing（同上）
   stdin.write('z')
-  await sleep(120)
+  await sleep(120) // 按键间 pacing（同上）
   stdin.write('\r')
   check('ui: arrow keys step by code point (insert never splits a pair)',
     (await pending) === 'z😊x')
@@ -883,8 +885,8 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 // Status line: appears on set, disappears on clear.
 {
   plugin.tuiStatus.set('demo-plugin', '构建中 42%')
-  await settle(() => screen().includes('构建中 42%'))
-  check('ui: status line renders the contribution', screen().includes('构建中 42%'), screen().slice(-300))
+  check('ui: status line renders the contribution',
+    await settled(() => screen().includes('构建中 42%')), screen().slice(-300))
   // The incremental renderer only writes diffs: after the clear, assert on
   // frames written FROM the clear on — earlier frames legitimately still
   // contain the set text.
@@ -902,10 +904,9 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 {
   let fired = 0
   plugin.tuiShortcuts.register('alt+p', { description: 'ui fire', handler: () => { fired += 1 } })
-  await sleep(100)
+  await settle(() => plugin.tuiShortcuts.list().some(entry => entry.combo === 'alt+p'))
   stdin.write('\x1bp') // alt+p
-  await settle(() => fired >= 1)
-  check('ui: plugin shortcut handler fired through Chat', fired >= 1, String(fired))
+  check('ui: plugin shortcut handler fired through Chat', await settled(() => fired >= 1), String(fired))
   check('ui: shortcut keypress never reached submit', channel.submitCalls.length === 0)
 }
 

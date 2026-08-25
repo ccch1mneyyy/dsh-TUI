@@ -279,16 +279,16 @@ function family() {
 
 // ── 屏幕层：无头组装 ─────────────────────────────────────────────────────
 {
-  const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { SessionTree }] = await Promise.all([
+  const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { SessionTree }, { settle, settled, sleep }] = await Promise.all([
     import('node:stream'),
     import('react'),
     import('@xterm/headless'),
     import('../src/ui.js'),
     import('../src/screens/SessionTree.js'),
+    import('./lib/term-test.mjs'),
   ])
 
   const COLS = 120, ROWS = 32
-  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
     columns = COLS; rows = ROWS; isTTY = true
@@ -332,37 +332,34 @@ function family() {
     </AlternateScreen>,
     { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(600)
-
-  check('screen: 标题渲染', text().includes('会话树'))
-  check('screen: 树行渲染（根问句）', text().includes('u0-问根'))
-  check('screen: fork 分支渲染（新方向）', text().includes('f1-新方向'))
-  check('screen: 连接线渲染', text().includes('├─') || text().includes('└─'))
-  check('screen: 预览面板渲染', text().includes('预览'))
+  check('screen: 标题渲染', await settled(() => text().includes('会话树')))
+  check('screen: 树行渲染（根问句）', await settled(() => text().includes('u0-问根')))
+  check('screen: fork 分支渲染（新方向）', await settled(() => text().includes('f1-新方向')))
+  check('screen: 连接线渲染', await settled(() => text().includes('├─') || text().includes('└─')))
+  check('screen: 预览面板渲染', await settled(() => text().includes('预览')))
 
   // Enter 打开操作菜单（焦点在活动叶 = live 会话，无切换选项）
   stdin.write('\r')
-  await sleep(250)
-  check('screen: Enter 打开操作菜单', text().includes('回退到这里') && text().includes('从这分叉'))
+  check('screen: Enter 打开操作菜单', await settled(() => text().includes('回退到这里') && text().includes('从这分叉')))
   check('screen: live 会话不提供切换选项', !text().includes('切换到该分支'))
   // Esc 关菜单，移到死分支（F2:14）再开：切换选项出现
   stdin.write('\x1b')
-  await sleep(150)
+  await settle(() => !text().includes('回退到这里'))
   stdin.write('\x1b[B\x1b[B\x1b[B')
+  // 焦点移动只改高亮样式，translateToString 读不到——无可观测文本条件，
+  // 保留固定 pacing 等按键被处理。
   await sleep(200)
   stdin.write('\r')
-  await sleep(250)
-  check('screen: 死分支提供切换选项', text().includes('切换到该分支'))
+  check('screen: 死分支提供切换选项', await settled(() => text().includes('切换到该分支')))
 
   // 字母直达：f = 从这分叉（焦点在 F2:14，经 channel 记录并关屏）
   stdin.write('f')
-  await sleep(300)
   check(
     'screen: 字母直达执行分叉',
-    calls.length === 1 && calls[0]!.sessionId === 'F2' && calls[0]!.mode === 'fork',
+    await settled(() => calls.length === 1 && calls[0]!.sessionId === 'F2' && calls[0]!.mode === 'fork'),
     JSON.stringify(calls),
   )
-  check('screen: 执行成功后关屏', closed === true)
+  check('screen: 执行成功后关屏', await settled(() => closed === true))
   await inst.unmount()
 
   // 再开一次：Esc 退出（无查询时）
@@ -378,10 +375,11 @@ function family() {
     </AlternateScreen>,
     { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(400)
+  // 等新实例的界面就绪再发 Esc（前一实例 unmount 已离开 alt-screen，
+  // 标题只会出现在新帧里）。
+  await settle(() => text().includes('会话树'))
   stdin.write('\x1b')
-  await sleep(200)
-  check('screen: Esc 直接退出', closed === true)
+  check('screen: Esc 直接退出', await settled(() => closed === true))
   await inst2.unmount()
 }
 

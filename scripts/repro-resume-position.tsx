@@ -26,7 +26,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle, settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -38,7 +38,6 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
 ])
 
 const COLS = 100, ROWS = 40
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -145,8 +144,8 @@ function makeChannel(initialRows: any[]) {
   return channel
 }
 
-function assertLanded(tag: string, ms: number): void {
-  const lines = screenLines()
+function assertLanded(tag: string, ms: number, snapshot?: string[]): void {
+  const lines = snapshot ?? screenLines()
   const screen = lines.join('\n')
   const tailVisible = screen.includes('TAILMARK_Q7X')
   const midVisible = screen.includes('MIDMARK_Z9')
@@ -170,8 +169,10 @@ function assertLanded(tag: string, ms: number): void {
     { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
   )
   const t0 = performance.now()
-  await settle(() => screenLines().join('\n').includes('TAILMARK_Q7X'))
-  assertLanded('S1 boot--resume', performance.now() - t0)
+  // 等待与断言共用同一快照：assertLanded 在 settle 捕获的 lines 上求值。
+  let lines: string[] = []
+  await settle(() => { lines = screenLines(); return lines.join('\n').includes('TAILMARK_Q7X') })
+  assertLanded('S1 boot--resume', performance.now() - t0, lines)
   await inst.unmount()
 }
 
@@ -184,9 +185,9 @@ for (const [tag, scrollFirst] of [['S2 resume(at-bottom)', false], ['S3 resume(s
   )
   await settle(() => screenLines().join('\n').includes('问题 15'))
   if (scrollFirst) {
+    // 逐事件 pacing：滚轮事件逐个进入 scroll 路径。
     for (let i = 0; i < 12; i++) { stdin.write('\x1b[<64;50;20M'); await sleep(16) }
-    await settle(() => !screenLines().join('\n').includes('问题 15'))
-    check(`${tag}: 前置——上滚后视口离开底部`, !screenLines().join('\n').includes('问题 15'))
+    check(`${tag}: 前置——上滚后视口离开底部`, await settled(() => !screenLines().join('\n').includes('问题 15')))
   }
   // /resume → 浏览器 → Enter 恢复聚焦会话
   // 两处保留固定 sleep（排序用途）：紧随的 Enter 依赖补全浮层/浏览器的按键
@@ -196,7 +197,7 @@ for (const [tag, scrollFirst] of [['S2 resume(at-bottom)', false], ['S3 resume(s
   await sleep(300)
   stdin.write('\r')
   await sleep(500)
-  check(`${tag}: 浏览器打开`, screenLines().some(l => l.includes('历史会话')), '')
+  check(`${tag}: 浏览器打开`, await settled(() => screenLines().some(l => l.includes('历史会话'))), '')
   stdin.write('\r') // Enter → resumeTo → onClose
   // 保留固定 sleep：紧随的「滚 1 上 2 下」自愈探针依赖行高测量已静息——
   // settle 到 TAILMARK 首次上屏就开滚，滚回底部的格数会因高度仍在估算而
@@ -211,8 +212,7 @@ for (const [tag, scrollFirst] of [['S2 resume(at-bottom)', false], ['S3 resume(s
   stdin.write('\x1b[<65;50;20M')
   await sleep(120)
   stdin.write('\x1b[<65;50;20M')
-  await settle(() => screenLines().join('\n').includes('TAILMARK_Q7X'))
-  const healed = screenLines().join('\n').includes('TAILMARK_Q7X')
+  const healed = await settled(() => screenLines().join('\n').includes('TAILMARK_Q7X'))
   check(`${tag}: 滚离后滚回底部，最新消息可见`, healed)
   if (!healed) {
     console.log('  ──── 自愈探针后视口 ────')

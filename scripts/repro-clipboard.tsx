@@ -70,10 +70,10 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-// 等待/读屏走公共辅助（issue #532）：settle 轮询到预期状态再断言——固定
-// sleep 在慢 runner 上会断言到旧屏幕。alt-screen 下 baseY 恒 0，视口读取
-// 与旧的 getLine(0..ROWS) 直扫等价。
-const { sleep, settle } = termTest
+// 等待/读屏走公共辅助（issue #532）：settled 轮询到谓词为真后返回终值，
+// 等待与断言共用同一条件——固定 sleep 在慢 runner 上会断言到旧屏幕。
+// alt-screen 下 baseY 恒 0，视口读取与旧的 getLine(0..ROWS) 直扫等价。
+const { sleep, settled } = termTest
 const screenHas = (s: string): boolean => termTest.screenHas(term, s)
 
 const listeners = new Set<() => void>()
@@ -114,6 +114,7 @@ const instance = await render(
   </AlternateScreen>,
   { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
+// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
 await sleep(600)
 
 let failed = 0
@@ -125,20 +126,16 @@ const check = (name: string, ok: boolean, extra = '') => {
 try {
   // 1. '?' opens the help overlay; Ctrl+V must close it up front.
   stdinObj.write('?')
-  await settle(() => screenHas('? for this help'))
-  check('? opens the help overlay', screenHas('? for this help'))
+  check('? opens the help overlay', await settled(() => screenHas('? for this help')))
   stdinObj.write('\x16')
-  await settle(() => !screenHas('? for this help'))
-  check('Ctrl+V closes the help overlay before the read resolves', !screenHas('? for this help'))
+  check('Ctrl+V closes the help overlay before the read resolves', await settled(() => !screenHas('? for this help')))
 
   // 2. The stub clipboard text lands in the prompt.
-  await settle(() => screenHas('UI粘贴内容'))
-  check('clipboard text lands in the prompt', screenHas('UI粘贴内容'))
+  check('clipboard text lands in the prompt', await settled(() => screenHas('UI粘贴内容')))
 
   // 3. Busy latch released: a second Ctrl+V pastes again (doubled text).
   stdinObj.write('\x16')
-  await settle(() => screenHas('UI粘贴内容UI粘贴内容'))
-  check('second Ctrl+V pastes again (busy latch released)', screenHas('UI粘贴内容UI粘贴内容'))
+  check('second Ctrl+V pastes again (busy latch released)', await settled(() => screenHas('UI粘贴内容UI粘贴内容')))
 } finally {
   await instance.unmount()
   rmSync(stubDir, { recursive: true, force: true })
