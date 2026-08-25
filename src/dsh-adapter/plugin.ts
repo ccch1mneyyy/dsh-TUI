@@ -1508,9 +1508,19 @@ async function finishExit(
   done: () => void,
 ): Promise<void> {
   try {
-    const runtime = readInkShutdownState(instances.get(process.stdout))
-    if (runtime === undefined && instance !== undefined) {
+    // Resolve the Ink runtime twice: the instances map is keyed by stdout
+    // identity, so a replaced/overridden stdout misses it; the render()
+    // handle is the caller's own instance and always matches (issue #522 —
+    // a missed lookup skipped detachForShutdown, leaving the stdin pump,
+    // TTY handlers and querier alive so the self-heal probe re-wrote
+    // ENABLE_MOUSE_TRACKING after DISABLE_MOUSE_TRACKING had been sent).
+    const fromMap = readInkShutdownState(instances.get(process.stdout))
+    const fromHandle = instance === undefined ? undefined : readInkShutdownState(instance)
+    const runtime = fromMap ?? fromHandle
+    if (runtime === undefined) {
       ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
+    } else if (fromMap === undefined) {
+      ctx.logger.debug('dsh-tui: Ink runtime resolved from the render handle (instances map missed); detaching')
     }
     const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
 

@@ -259,7 +259,7 @@ so keep using `Ctrl`.
 | [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
 | [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers an experience almost identical to the official Claude Code extension (on the Marketplace) |
 | [Contributing](docs/contributing.en.md) | Contribution workflow, repository map, build artifacts, verification matrix, change rules |
-| [Plugin development](docs/plugins.en.md) | Plugin seams (session events / slots / skills / themes / prompt sections), contract, conventions, listing |
+| [Plugin admission & development](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | Interface & compatibility agreement / plugin admission spec / seams / contracts / verification checklist (merged into dsh-ecosystem-spec) |
 
 The complete bilingual index is [`docs/README.md`](docs/README.md).
 
@@ -397,8 +397,7 @@ changes also require the relevant regression scripts.
 
 Want to build a plugin or extension for dsh-TUI? Join the ecosystem:
 
-- **Plugin development guide**: [`docs/plugins.en.md`](docs/plugins.en.md)
-  (seams, contract, conventions, and verification checklist)
+- **Interface & compatibility agreement / Plugin development guide**: [Terminal Interactive Ecosystem Plugin Admission and Development Guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) (admission spec, seams, contracts, verification checklist)
 - **Organization**: [dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)
   (home of community plugins and templates)
 - **Template repository**: [plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)
