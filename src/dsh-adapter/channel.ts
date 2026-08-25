@@ -490,6 +490,11 @@ export interface Channel {
    *  the prompt-input border + session label chip accent (cc/sessionColors). */
   readonly sessionColor: string
   readonly agentId: string
+  /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
+   *  into the dim AutoRecapRow when the session opens/resumes. Read live
+   *  (settings service), so a `/settings` change applies on the next
+   *  session switch; absent settings service → on. */
+  readonly autoRecapOnOpen: boolean
   /** Resolved model id (from the plugin config). */
   readonly model: string
   /** Provider route of the live agent. */
@@ -906,6 +911,7 @@ export interface ChannelState {
   status: AgentStatus | 'starting' | 'disposed'
   sessionTitle: string
   sessionColor: string
+  autoRecapOnOpen: boolean
   agentId: string
   model: string
   provider: string
@@ -2501,6 +2507,17 @@ export function createChannel(
     status: 'starting',
     sessionTitle: '',
     sessionColor: '',
+    get autoRecapOnOpen(): boolean {
+      // Live read (not a boot snapshot): a /settings change applies on the
+      // next session switch. No settings service → off (framework absent,
+      // e.g. headless fixtures — nothing to configure and no llm route).
+      const settings = ctx.get('settings') as
+        | { describe(options?: { redactSecrets?: boolean }): readonly { ns: string; value: unknown }[] }
+        | undefined
+      if (settings === undefined) return false
+      const ns = settings.describe({ redactSecrets: true }).find(entry => entry.ns === 'dsh-tui')
+      return (ns?.value as Record<string, unknown> | undefined)?.recapOnOpen !== false
+    },
     agentId: agent.id,
     model: options.model,
     provider: options.provider,

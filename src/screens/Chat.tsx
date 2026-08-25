@@ -48,6 +48,7 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
+import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
@@ -431,7 +432,11 @@ export function Chat({
   }
   /** /recap overlay (pi-recap semantics): pure UI state like /btw — the
    *  summary never enters the transcript or session log; applying the
-   *  proposed title goes through the normal /rename path. */
+   *  proposed title goes through the normal /rename path. `auto` marks the
+   *  recapOnOpen-triggered run (rendered as the dim AutoRecapRow until
+   *  expanded); `expanded` lifts an auto recap into the full RecapPanel;
+   *  `rowsAtTrigger` is the last user-row id when the auto run started —
+   *  a newer user row (the user starts a new message) retires the recap. */
   const [recap, setRecap] = React.useState<{
     raw: string
     summary: string
@@ -439,6 +444,9 @@ export function Chat({
     error?: string
     done: boolean
     titleApplied: boolean
+    auto?: boolean
+    expanded?: boolean
+    rowsAtTrigger?: number
   } | null>(null)
   const recapAbortRef = React.useRef<AbortController | null>(null)
   const closeRecap = () => {
@@ -446,6 +454,51 @@ export function Chat({
     recapAbortRef.current = null
     setRecap(null)
   }
+  // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
+  // (mount = open/resume, rewind/fork included), summarize its tail into
+  // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
+  // surfaces them; the summary never enters the transcript or session log.
+  const autoRecapSessionId = channel.agentId
+  React.useEffect(() => {
+    // A session switch retires the previous recap outright — an old
+    // session's 回顾 has no place above a new conversation.
+    setRecap(null)
+    if (!channel.autoRecapOnOpen) return
+    // No conversation yet (/new): nothing to recap, don't even fire.
+    if (!channel.rows.some(row => row.kind === 'user' || row.kind === 'assistant')) return
+    recapAbortRef.current?.abort()
+    const controller = new AbortController()
+    recapAbortRef.current = controller
+    const lastUserId = channel.rows.filter(row => row.kind === 'user').at(-1)?.id ?? -1
+    setRecap({ raw: '', summary: '', error: undefined, done: false, titleApplied: false, auto: true, expanded: false, rowsAtTrigger: lastUserId })
+    void channel.recapRecent({
+      signal: controller.signal,
+      onText: delta => setRecap(prev => (prev ? { ...prev, raw: prev.raw + delta } : prev)),
+    }).then(result => {
+      if (controller.signal.aborted) return
+      setRecap(prev => {
+        if (prev === null || !prev.auto) return prev
+        // Auto mode stays quiet on failure (no activity / llm missing / error).
+        if (result.summary === null) return null
+        return { ...prev, summary: result.summary, title: result.title, error: result.error, done: true }
+      })
+    })
+    return () => controller.abort()
+  }, [autoRecapSessionId])
+  // The user starts a new message → the auto recap has served its purpose
+  // (catching them up) and bows out. A newer user row is the signal; the
+  // assistant's own streamed rows don't count.
+  const lastUserRowId = channel.rows.filter(row => row.kind === 'user').at(-1)?.id ?? -1
+  React.useEffect(() => {
+    if (
+      recap !== null &&
+      recap.auto &&
+      recap.rowsAtTrigger !== undefined &&
+      lastUserRowId > recap.rowsAtTrigger
+    ) {
+      closeRecap()
+    }
+  }, [lastUserRowId, recap])
   /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
   /** Detail view for a specific subagent (opened from dashboard). */
@@ -1724,7 +1777,7 @@ export function Chat({
         recapAbortRef.current?.abort()
         const controller = new AbortController()
         recapAbortRef.current = controller
-        setRecap({ raw: '', summary: '', error: undefined, done: false, titleApplied: false })
+        setRecap({ raw: '', summary: '', error: undefined, done: false, titleApplied: false, auto: false, expanded: true })
         void channel.recapRecent({
           signal: controller.signal,
           onText: delta => setRecap(prev => (prev ? { ...prev, raw: prev.raw + delta } : prev)),
@@ -3079,6 +3132,14 @@ export function Chat({
           collapsed={todoCollapsed}
           onToggle={() => setTodoCollapsed(previous => !previous)}
         />
+        {recap !== null && recap.auto && !recap.expanded && (
+          <AutoRecapRow
+            summary={recap.summary}
+            streaming={!recap.done}
+            onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
+            onDismiss={() => closeRecap()}
+          />
+        )}
         {statusEntries.length > 0 && (
           // Plugin status contributions (tuiStatus seam): one joined line,
           // truncated by the Text wrap contract — the host owns the layout,
@@ -3104,7 +3165,7 @@ export function Chat({
           <Box flexDirection="column" marginTop={1}>
             <TipsPanel onClose={() => dispatchOverlay({ type: 'close-if', kind: 'tips' })} />
           </Box>
-        ) : recap !== null ? (
+        ) : recap !== null && (!recap.auto || recap.expanded) ? (
           <Box flexDirection="column" marginTop={1}>
             <RecapPanel
               summary={recap.summary}
@@ -3112,7 +3173,15 @@ export function Chat({
               error={recap.error}
               streaming={!recap.done}
               titleApplied={recap.titleApplied}
-              onClose={closeRecap}
+              onClose={() => {
+                // An expanded auto recap collapses back to its dim row;
+                // a manual /recap closes outright.
+                if (recap.auto) {
+                  setRecap(prev => (prev ? { ...prev, expanded: false } : prev))
+                } else {
+                  closeRecap()
+                }
+              }}
               onCopy={() => {
                 void setClipboard(recap.summary ?? '').then(raw => { if (raw) writeRaw?.(raw) })
                 channel.notify(t('copied-chars', { n: (recap.summary ?? '').length }), { timeoutMs: 1500 })

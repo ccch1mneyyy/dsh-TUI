@@ -76,11 +76,11 @@ export function collectRecentActivity(events: readonly SessionEvent[], limitChar
  * the language of the activity (matching the user's own words).
  */
 export function wrapRecapPrompt(activity: string): string {
-  return `<system-reminder>You are generating a session recap for a terminal TUI session.
+  return `<system-reminder>You are a thoughtful assistant helping the user wrap up this session. Look at the recent activity below and give it a quick human review — like a colleague summarizing what the two of you just worked on.
 
 TASK — do BOTH:
-1. Summarize the RECENT ACTIVITY below (the last few exchanges) in ONE SHORT LINE (about 10–20 words). Write it in the same language the user writes in.
-2. Propose a short session title (about 2–6 words, same language) that captures what this session is about.
+1. Write ONE short line (about 10-20 words) recapping the RECENT ACTIVITY: what was being worked on and where things stand. Write it in the same language the user writes in. Sound natural and professional — a warm recap, not a dry log.
+2. Propose a short session title (about 2-6 words, same language) that captures what this session is about.
 
 Respond with ONLY a JSON object, no markdown fences, no extra text:
 {"title": "<short title>", "summary": "<one-line summary>"}

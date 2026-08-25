@@ -319,6 +319,114 @@ export function tuiUpdatePluginArgs(profile: string, targetVersion?: string): st
 }
 
 /**
+ * Postinstall-only transitive dependencies of the dsh-tui chain
+ * (dsh-auth → @earendil-works/pi-ai → @google/genai + protobufjs, plus the
+ * esbuild/koffi peers of that chain): pnpm ≥11 refuses to run their build
+ * scripts unless the workspace allowlists them, and a profile that never
+ * opted in fails the WHOLE install with ERR_PNPM_IGNORED_BUILDS. None of
+ * these scripts is needed at runtime (the repo root allowBuilds them all to
+ * `false`), so the update flow pre-seeds the profile's pnpm-workspace.yaml
+ * with explicit `false` entries — an explicit decision pnpm honors silently.
+ */
+const PROFILE_ALLOW_BUILDS: Readonly<Record<string, false>> = {
+  '@google/genai': false,
+  esbuild: false,
+  koffi: false,
+  protobufjs: false,
+}
+
+/** The profile's pnpm-workspace.yaml (`$DSH_HOME ?? ~/.dsh` layout). */
+export function profileWorkspaceYamlPath(profile: string): string {
+  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  return join(dshHome, 'profiles', profile, 'pnpm-workspace.yaml')
+}
+
+/** What ensureProfileAllowBuilds did to the profile workspace file. */
+export interface AllowBuildsOutcome {
+  /** Keys already present before this run (left untouched). */
+  existing: string[]
+  /** Keys this run appended. */
+  added: string[]
+}
+
+/** YAML key spelling for an allowBuilds entry (scoped names need quotes). */
+function allowBuildsKeyLine(key: string): string {
+  const needsQuotes = key.includes('@') || key.includes('/')
+  return `  ${needsQuotes ? `'${key}'` : key}: false`
+}
+
+/**
+ * Make sure the profile's pnpm-workspace.yaml carries explicit `false`
+ * allowBuilds entries for the dsh-tui chain's postinstall-only deps, so a
+ * pnpm ≥11 update is not killed by ERR_PNPM_IGNORED_BUILDS. Best effort and
+ * idempotent: existing entries are never overwritten (an explicit user
+ * decision wins), a missing `allowBuilds:` block is appended, and a missing
+ * file is created. Returns undefined when the profile directory is absent or
+ * the file could not be updated — the caller still runs pnpm, whose own
+ * ERR_PNPM_IGNORED_BUILDS diagnostic stays the visible fallback.
+ */
+export function ensureProfileAllowBuilds(profile: string): AllowBuildsOutcome | undefined {
+  const yamlPath = profileWorkspaceYamlPath(profile)
+  try {
+    if (!existsSafe(dirname(yamlPath))) return undefined
+    let text = ''
+    try {
+      text = readFileSync(yamlPath, 'utf8')
+    } catch {
+      // Missing file — start from an empty document; writeFileSync creates it.
+    }
+    const lines = text.split(/\r?\n/u)
+    let blockStart = -1
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]
+      if (line !== '' && line === line.trimStart() && /^allowBuilds:/u.test(line)) {
+        blockStart = i
+        break
+      }
+    }
+    const present = new Set<string>()
+    if (blockStart !== -1) {
+      for (let i = blockStart + 1; i < lines.length; i += 1) {
+        const line = lines[i]
+        if (line === '' || line === line.trimStart()) break // dedent = block ends
+        const keyMatch = /^\s+('?)(.+?)\1:\s/u.exec(line)
+        if (keyMatch !== null) present.add(keyMatch[2])
+      }
+    }
+    const added = Object.keys(PROFILE_ALLOW_BUILDS).filter(key => !present.has(key))
+    if (added.length === 0) return { existing: [...present], added }
+    const insert = added.map(allowBuildsKeyLine)
+    if (blockStart !== -1) {
+      // Append after the block's last existing entry (before the next
+      // top-level key), so existing entries keep their position.
+      let blockEnd = blockStart + 1
+      for (let i = blockStart + 1; i < lines.length; i += 1) {
+        const line = lines[i]
+        if (line === '' || line === line.trimStart()) break
+        blockEnd = i + 1
+      }
+      lines.splice(blockEnd, 0, ...insert)
+    } else {
+      if (lines.length > 0 && lines[lines.length - 1] !== '') lines.push('')
+      lines.push('allowBuilds:', ...insert)
+    }
+    writeFileSync(yamlPath, `${lines.join('\n')}\n`)
+    return { existing: [...present], added }
+  } catch {
+    return undefined
+  }
+}
+
+function existsSafe(path: string): boolean {
+  try {
+    statSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * The pnpm Windows tmp-rename race signature (issue #225): pnpm swaps a
  * package directory via a `<name>_tmp_<pid>` staging dir, and a file lock or
  * AV scan makes the scandir/rename fail with ENOENT/EPERM/EBUSY. The failure
@@ -511,6 +619,17 @@ export async function updateTui(
   const updatedFrom = installedTuiVersion() ?? ''
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
+  // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
+  // build scripts (ERR_PNPM_IGNORED_BUILDS). The dsh-auth chain pulls in
+  // postinstall-only deps (@google/genai/protobufjs via pi-ai), so pre-seed
+  // the profile workspace with explicit `false` entries before pnpm runs.
+  const allowBuilds = ensureProfileAllowBuilds(profile)
+  if (allowBuilds !== undefined && allowBuilds.added.length > 0) {
+    process.stderr.write(
+      `dsh-tui: pre-seeded profile pnpm allowBuilds (${allowBuilds.added.join(', ')}) — ` +
+        'postinstall-only deps are explicitly ignored\n',
+    )
+  }
   let updateStderr = ''
   const capture = (chunk: string): void => { updateStderr += chunk }
   let updateCode = await runProcess(dsh, updateArgs, { shell: true, onStderr: capture })

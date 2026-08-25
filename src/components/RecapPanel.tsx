@@ -1,14 +1,17 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize } from '../ui.js'
 import { SpinnerGlyph } from './Spinner/SpinnerGlyph.js'
+import { Pane } from './design-system/Pane.js'
 import { t } from '../i18n.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 
 /**
- * `/recap` panel (pi-recap semantics): title line with the proposed
- * session title (apply via `a`/click), a scrollable one-line summary
- * body (error / summary / answering spinner), and a hint line. Owns the
- * keyboard while open, mirroring BtwPanel.
+ * `/recap` panel (pi-recap semantics), in the picker/dialog visual
+ * language: a permission-colored Pane with a title bar (会话回顾), a
+ * scrollable summary body (error / summary / answering spinner), the
+ * proposed session title row (apply via `a` or clicking the chip), and a
+ * dim italic hint line (click to copy, same as `c`). Owns the keyboard
+ * while open, mirroring BtwPanel.
  */
 export function RecapPanel({
   summary,
@@ -73,31 +76,20 @@ export function RecapPanel({
 
   const settled = summary !== '' || error !== undefined
   return (
-    <Box flexDirection="column">
-      <Text>
-        <Text color="warning" bold>/recap </Text>
-        {title !== undefined && (
-          <Text dimColor>
-            {t('recap-title-label')}:{' '}
-            <Text color="suggestion">{title}</Text>
-            {titleApplied ? (
-              <Text color="success"> ✓ {t('recap-title-applied')}</Text>
-            ) : (
-              <Text color="success" bold>
-                {' '}
-                [{t('recap-apply-title')}]
-              </Text>
-            )}
+    <Pane color="permission">
+      <Box flexDirection="column">
+        <Box marginBottom={1}>
+          <Text color="remember" bold>
+            {t('recap-panel-title')}
           </Text>
-        )}
-      </Text>
-      <Box flexDirection="column" maxHeight={Math.max(5, rows - 8)}>
-        <Box marginLeft={2} flexDirection="column" flexGrow={1}>
+          <Text dimColor> · {t('recap-panel-subtitle')}</Text>
+        </Box>
+        <Box flexDirection="column" maxHeight={Math.max(5, rows - 11)}>
           <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
             {error !== undefined ? (
               <Text color="error">{error}</Text>
             ) : summary !== '' ? (
-              <Text wrap="truncate-end">{summary}</Text>
+              <Text>{summary}</Text>
             ) : (
               <Box>
                 <SpinnerGlyph frame={frame} messageColor="warning" />
@@ -106,13 +98,29 @@ export function RecapPanel({
             )}
           </ScrollBox>
         </Box>
+        {title !== undefined && (
+          <Box flexDirection="row" marginTop={1}>
+            <Text dimColor>{t('recap-title-label')}: </Text>
+            <Text color="suggestion">{title}</Text>
+            {titleApplied ? (
+              <Text color="success"> ✓ {t('recap-title-applied')}</Text>
+            ) : (
+              <Box onClick={canApply ? onApplyTitle : undefined}>
+                <Text color="success" bold>
+                  {' '}
+                  [{t('recap-apply-title')}]
+                </Text>
+              </Box>
+            )}
+          </Box>
+        )}
+        {/* 提示行可点击复制（与 c 键同路径） */}
+        <Box onClick={settled ? onCopy : undefined}>
+          <Text dimColor italic>
+            {t('recap-hint', { apply: canApply ? ' · a ' + t('recap-apply-title') : '' })}
+          </Text>
+        </Box>
       </Box>
-      {/* 提示行可点击复制（与 c 键同路径） */}
-      <Box onClick={settled ? onCopy : undefined}>
-        <Text dimColor>
-          {t('recap-hint', { apply: canApply ? ' · a ' + t('recap-apply-title') : '' })}
-        </Text>
-      </Box>
-    </Box>
+    </Pane>
   )
 }
