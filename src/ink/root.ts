@@ -60,6 +60,22 @@ export type Instance = {
    * Returns a promise, which resolves when app is unmounted.
    */
   waitUntilExit: Ink['waitUntilExit']
+  /**
+   * Detach the Ink runtime for process-level shutdown: latches isUnmounted
+   * (gating every mouse/alt-screen re-assert), cancels pending renders,
+   * releases TTY handlers and stdin raw mode, and disposes the querier.
+   * Exposed on the handle so shutdown code can latch the runtime even when
+   * the global instances map lookup misses (stdout identity drift, issue
+   * #522) — without it, the cleanup-vs-self-heal window re-enables mouse
+   * tracking after DISABLE_MOUSE_TRACKING has already been written.
+   */
+  detachForShutdown: Ink['detachForShutdown']
+  /**
+   * Fully detach stdin before handing the terminal to a child process that
+   * inherits it (the /update and /restart handoffs). See Ink's own method
+   * for the listener/pump semantics.
+   */
+  detachStdinForHandoff: Ink['detachStdinForHandoff']
   cleanup: () => void
 }
 
@@ -107,6 +123,8 @@ export const renderSync = (
       instance.unmount()
     },
     waitUntilExit: instance.waitUntilExit,
+    detachForShutdown: () => instance.detachForShutdown(),
+    detachStdinForHandoff: () => instance.detachStdinForHandoff(),
     cleanup: () => instances.delete(inkOptions.stdout),
   }
 }

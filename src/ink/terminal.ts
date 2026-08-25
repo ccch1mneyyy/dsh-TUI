@@ -334,14 +334,22 @@ export type Terminal = {
  * @param diff - the frame diff patches to render.
  * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
  */
-export function writeDiffToTerminal(
+/**
+ * Serialize a frame diff into a single ANSI string (BSU/ESU-wrapped unless
+ * skipSyncMarkers is set). Empty string when the diff has no patches.
+ * Extracted from writeDiffToTerminal so shutdown paths can write the last
+ * frame synchronously (issue #522: an async frame write racing the
+ * synchronous EXIT_ALT_SCREEN lands on the MAIN screen after the alt
+ * screen is gone, leaving misplaced residue).
+ */
+export function serializeDiff(
   terminal: Terminal,
   diff: Diff,
   skipSyncMarkers = false,
-): void {
+): string {
   // No output if there are no patches
   if (diff.length === 0) {
-    return
+    return ''
   }
 
   // BSU/ESU wrapping is opt-out to keep main-screen behavior unchanged.
@@ -425,5 +433,25 @@ export function writeDiffToTerminal(
   // Add synchronized update end and flush buffer
   if (useSync) buffer += ESU
   dumpFrame(buffer)
+  return buffer
+}
+
+/**
+ * Write a frame diff to the terminal as a single buffered write. Wraps
+ * the output in BSU/ESU synchronized-update markers unless skipSyncMarkers
+ * is set. No-op when the diff contains no patches.
+ * @param terminal - the terminal to write to.
+ * @param diff - the frame diff patches to render.
+ * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
+ */
+export function writeDiffToTerminal(
+  terminal: Terminal,
+  diff: Diff,
+  skipSyncMarkers = false,
+): void {
+  const buffer = serializeDiff(terminal, diff, skipSyncMarkers)
+  if (buffer === '') {
+    return
+  }
   terminal.stdout.write(buffer)
 }
