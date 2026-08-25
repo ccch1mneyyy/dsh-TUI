@@ -6305,7 +6305,11 @@ ${output}
           nextRowId += 1
           break
         }
-        const detail = reason.kind === 'error' ? reason.error.message : ''
+        // The notice renders as a single-line Divider title: error.message
+        // can carry newlines/control chars, and an embedded \n splits the
+        // rule across rows. cleanRenderText is the render-path single-line
+        // contract (sessionTree's preview() folds likewise for the tree).
+        const detail = reason.kind === 'error' ? cleanRenderText(reason.error.message, NOTICE_CELLS) : ''
         state.rows.push({ id: nextRowId, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         nextRowId += 1
         state.notify(
