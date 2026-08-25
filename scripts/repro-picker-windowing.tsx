@@ -66,7 +66,7 @@ const [
   { createChannel },
   { listWindow },
   { ListItem },
-  { settle, viewportLines },
+  { settle, settled, sleep, viewportLines },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -101,8 +101,6 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-
 // console.error 收集（四/五次审查）：生产默认 patchConsole，React key
 // warning 会被写进错误日志而非终端；这里拦截 console.error 并在结尾做
 // **严格零断言**——只筛 React 警告会静默吞掉其他错误让 CI 误绿（五次审查
@@ -243,12 +241,13 @@ for (const c of winCases) {
     </Box>,
     { stdout: new FakeStdout2(), stdin: new FakeStdin(), stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
   )
-  // 落定：等全部标记行（M0..M4）上屏再取快照断言（原固定 300ms）。
+  // 落定：等全部标记行（M0..M4）上屏（原固定 300ms）——断言在 settle 捕获
+  // 的同一快照 lines2 上求值，无重读分叉。
+  let lines2: string[] = []
   await settle(() => {
-    const ls = viewportLines(term2, ROWS)
-    return ['M0', 'M1', 'M2', 'M3', 'M4'].every(m => ls.some(l => l.includes(m)))
+    lines2 = viewportLines(term2, ROWS)
+    return ['M0', 'M1', 'M2', 'M3', 'M4'].every(m => lines2.some(l => l.includes(m)))
   })
-  const lines2 = viewportLines(term2, ROWS)
   const rowOf2 = (needle: string) => lines2.findIndex(l => l.includes(needle))
   check('契约：顶层字符串换行压平（恰 1 行）',
     rowOf2('M1') === rowOf2('M0') + 2 && (lines2[rowOf2('M0') + 1] ?? '').includes('Foo Bar'),
@@ -324,8 +323,11 @@ const instance = await render(
   <Chat channel={channel as never} questionStore={new QuestionStore()} onExit={() => {}} />,
   { stdout: new FakeStdout(), stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(1200)
+// boot 落定：转录尾行上屏即可开始逐键交互（原固定 1200ms）。
+await settle(() => screenLines().some(l => l.includes('rewind 消息 29')))
 
+// 逐键 stepMs 与各步 100–400ms 固定窗口为按键序列的 ordering pacing：
+// 浮层 key-ready / 关闭过渡无法用纯文本屏幕内容观测（同 repro-settings）。
 const typeKeys = async (s: string, stepMs = 40) => {
   for (const ch of s) { stdin.write(ch); await sleep(stepMs) }
 }
@@ -336,15 +338,13 @@ const typeKeys = async (s: string, stepMs = 40) => {
   await typeKeys('/model')
   await sleep(200)
   stdin.write('\r')
-  await settle(() => focusLineVisible('Model 00'))
   // 焦点初始落在当前模型 model-00（索引 0）：每项 2 行也必须留在屏内。
-  check('/model 焦点 0 在屏（带描述，每项 2 行）', focusLineVisible('Model 00'))
+  check('/model 焦点 0 在屏（带描述，每项 2 行）', await settled(() => focusLineVisible('Model 00')))
   check('/model 打开缓冲区零增长', term.buffer.active.length === bufBefore,
     `${bufBefore} → ${term.buffer.active.length}`)
   dump('model focus 0')
   for (let i = 0; i < 20; i++) { stdin.write('\x1b[B'); await sleep(25) }
-  await settle(() => focusLineVisible('Model 20'))
-  check('/model ↓×20 焦点 20 在屏', focusLineVisible('Model 20'))
+  check('/model ↓×20 焦点 20 在屏', await settled(() => focusLineVisible('Model 20')))
   dump('model focus 20')
   stdin.write('\x1b')
   await sleep(400)
@@ -354,22 +354,19 @@ const typeKeys = async (s: string, stepMs = 40) => {
 {
   const bufBefore = term.buffer.active.length
   stdin.write('\x12') // ctrl+r
-  await settle(() => focusLineVisible('/model'))
   // 历史新→旧：最新一条是上一阶段真实键入的 '/model'（appendHistory 落盘），
   // 之后才是预置的 histcmd-29…00。焦点 0 = '/model'。
-  check('ctrl+r 焦点 0 在屏（2 行项 + gap）', focusLineVisible('/model'))
+  check('ctrl+r 焦点 0 在屏（2 行项 + gap）', await settled(() => focusLineVisible('/model')))
   check('ctrl+r 打开缓冲区零增长', term.buffer.active.length === bufBefore,
     `${bufBefore} → ${term.buffer.active.length}`)
   dump('history focus 0')
   stdin.write('\x1b[A') // ↑ 从 0 回绕到末项
-  await settle(() => focusLineVisible('histcmd-00'))
-  check('ctrl+r ↑ 回绕末项焦点在屏', focusLineVisible('histcmd-00'))
+  check('ctrl+r ↑ 回绕末项焦点在屏', await settled(() => focusLineVisible('histcmd-00')))
   stdin.write('\x1b[B') // ↓ 回绕回 0
   await sleep(200)
   for (let i = 0; i < 15; i++) { stdin.write('\x1b[B'); await sleep(25) }
-  await settle(() => focusLineVisible('histcmd-15'))
   // 索引 15 = histcmd-15（索引 0 是 '/model'，索引 1 才是 histcmd-29）。
-  check('ctrl+r ↓×15 焦点 15 在屏', focusLineVisible('histcmd-15'))
+  check('ctrl+r ↓×15 焦点 15 在屏', await settled(() => focusLineVisible('histcmd-15')))
   dump('history focus 15')
   stdin.write('\x1b')
   await sleep(400)
@@ -383,12 +380,13 @@ const typeKeys = async (s: string, stepMs = 40) => {
   await typeKeys('/theme')
   await sleep(200)
   stdin.write('\r')
+  // 断言在 settle 捕获的同一快照 lines 上求值，无重读分叉。
+  let lines: string[] = []
   await settle(() => {
-    const ls = screenLines()
-    const row = ls.findIndex(l => l.includes('Foo Bar NL'))
-    return row !== -1 && (ls[row] ?? '').includes('██')
+    lines = screenLines()
+    const row = lines.findIndex(l => l.includes('Foo Bar NL'))
+    return row !== -1 && (lines[row] ?? '').includes('██')
   })
-  const lines = screenLines()
   const nameRow = lines.findIndex(l => l.includes('Foo Bar NL'))
   check('/theme 换行 displayName 单行渲染且色块同行',
     nameRow !== -1 && (lines[nameRow] ?? '').includes('██'),
@@ -403,25 +401,22 @@ const typeKeys = async (s: string, stepMs = 40) => {
 // ------------------------------------------------------------ RewindPicker
 {
   const bufBefore = term.buffer.active.length
-  stdin.write('\x1b') // 双击 Esc（空输入）打开 rewind
+  stdin.write('\x1b') // 双击 Esc（空输入）打开 rewind——双击判定窗口是墙钟语义
   await sleep(100)
   stdin.write('\x1b')
-  await settle(() => focusLineVisible('rewind 消息 29'))
   // 焦点 0 = 最新用户消息；首项带 'last message' 描述（2 行）。
-  check('rewind 焦点 0 在屏（首项 2 行）', focusLineVisible('rewind 消息 29'))
-  check('rewind 首项描述行在屏', screenLines().some(l => l.includes('最近一条消息')))
+  check('rewind 焦点 0 在屏（首项 2 行）', await settled(() => focusLineVisible('rewind 消息 29')))
+  check('rewind 首项描述行在屏', await settled(() => screenLines().some(l => l.includes('最近一条消息'))))
   check('rewind 打开缓冲区零增长', term.buffer.active.length === bufBefore,
     `${bufBefore} → ${term.buffer.active.length}`)
   dump('rewind focus 0')
   stdin.write('\x1b[A') // ↑ 回绕到末项 = 最老一条
-  await settle(() => focusLineVisible('rewind 消息 00'))
-  check('rewind ↑ 回绕末项焦点在屏', focusLineVisible('rewind 消息 00'))
+  check('rewind ↑ 回绕末项焦点在屏', await settled(() => focusLineVisible('rewind 消息 00')))
   stdin.write('\x1b[B') // ↓ 回绕回 0
   await sleep(200)
   for (let i = 0; i < 15; i++) { stdin.write('\x1b[B'); await sleep(25) }
-  await settle(() => focusLineVisible('rewind 消息 14'))
   // 索引 15 = rewind 消息 14（索引 0 是最新的 29）。
-  check('rewind ↓×15 焦点 15 在屏', focusLineVisible('rewind 消息 14'))
+  check('rewind ↓×15 焦点 15 在屏', await settled(() => focusLineVisible('rewind 消息 14')))
   dump('rewind focus 15')
   stdin.write('\x1b')
   await sleep(400)

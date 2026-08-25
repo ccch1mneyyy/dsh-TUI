@@ -28,7 +28,7 @@ const reproHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-repro-home-'))
 process.env.HOME = reproHome
 process.env.USERPROFILE = reproHome
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { createChannel }, { settle }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { createChannel }, { settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -65,8 +65,6 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-
 function fullBufferLines(): string[] {
   const buf = term.buffer.active
   const out: string[] = []
@@ -179,18 +177,19 @@ const SPLASH = '探索未至之境'
 const HIST0 = '历史问题 0：检查一下构建配置'
 const HIST1 = '历史回答 1：'
 // boot 落定：轮询到 splash 与历史行都上屏再断言（原固定 1200ms 在慢
-// runner 上会断言到未画完的缓冲区）。
-await settle(() => countMarker(SPLASH) === 1 && countMarker(HIST0) === 1 && countMarker(HIST1) === 1)
-
-console.log(`boot: buffer=${term.buffer.active.length} 行 (视口 ${ROWS})`)
-check('boot 后 splash 恰好一份', countMarker(SPLASH) === 1, `实际 ${countMarker(SPLASH)}`)
-check('boot 后历史行恰好一份', countMarker(HIST0) === 1 && countMarker(HIST1) === 1,
+// runner 上会断言到未画完的缓冲区）——等待与断言共用同一谓词（settled）。
+check('boot 后 splash 恰好一份', await settled(() => countMarker(SPLASH) === 1), `实际 ${countMarker(SPLASH)}`)
+check('boot 后历史行恰好一份', await settled(() => countMarker(HIST0) === 1 && countMarker(HIST1) === 1),
   `问题=${countMarker(HIST0)} 回答=${countMarker(HIST1)}`)
+console.log(`boot: buffer=${term.buffer.active.length} 行 (视口 ${ROWS})`)
 
 // ---- 走真实 UI 路径：输入 /model → 回车开 picker → ↓ → 回车切换 ----------------
 // 与真机操作逐键一致：补全面板、picker、notify、fork+replay 全部经过。
 const bufLen = (tag: string) =>
   console.log(`  [${tag}] buffer=${term.buffer.active.length} scrollback=${term.buffer.active.baseY}`)
+// 逐键 40ms 与各步 200/600ms 均为按键序列的 ordering pacing：补全浮层/
+// picker 的 key-ready 状态无法用纯文本屏幕内容观测（同 repro-settings），
+// 保留固定窗口。
 const typeKeys = async (keys: string) => {
   for (const ch of keys) {
     stdin.write(ch)
@@ -212,7 +211,7 @@ stdin.write('\r')            // 确认 → fork + replay
 await sleep(1500)
 bufLen('switched')
 
-check('切换后模型名生效', channel.model === 'deepseek-v4-pro', `实际 ${channel.model}`)
+check('切换后模型名生效', await settled(() => channel.model === 'deepseek-v4-pro'), `实际 ${channel.model}`)
 check('切换后 splash 恰好一份', countMarker(SPLASH) === 1, `实际 ${countMarker(SPLASH)}`)
 check('切换后历史行恰好一份', countMarker(HIST0) === 1 && countMarker(HIST1) === 1,
   `问题=${countMarker(HIST0)} 回答=${countMarker(HIST1)}`)

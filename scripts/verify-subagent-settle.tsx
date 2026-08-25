@@ -16,18 +16,18 @@ process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'kitty'
 process.env.DSH_TUI_THEME = 'dark'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100
 const ROWS = 32
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (extra ? '  (' + extra + ')' : ''))
@@ -113,7 +113,8 @@ await render(
   { stdout, stdin, stderr, exitOnCtrlC: false, patchConsole: false, onFrame: () => { frameCount++ } },
 )
 
-// 开机动画（LogoV2 splash）落定后再测
+// 开机动画（LogoV2 splash）落定后再测——动画时长是墙钟语义，无可轮询的
+// 定格条件，保留固定窗口。
 await sleep(1800)
 
 // ---- 控制组：2 张 running 卡片 → 空闲窗口内必须有帧 ----
@@ -131,6 +132,8 @@ channelRows.forEach(row => {
   sub.stopReason = 'completed'
 })
 bump()
+// 过渡帧吸收窗：completed 重排的收尾帧无可轮询的完成条件，保留固定窗口
+// （countIdleFrames 自带的 300ms 预滚同理）。
 await sleep(300)
 
 const settledFrames = await countIdleFrames(1000)

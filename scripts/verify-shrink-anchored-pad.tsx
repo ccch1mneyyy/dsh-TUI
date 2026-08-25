@@ -23,15 +23,14 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { sleep }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
     import('@xterm/headless'),
     import('../src/ui.js'),
+    import('./lib/term-test.mjs'),
   ])
-
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -63,6 +62,7 @@ const bufferLines = (): string[] => {
     (buffer.getLine(row)?.translateToString(true) ?? '').replace(/\s+$/, ''),
   )
 }
+// 语义与 lib settle 不同（超时响亮 FAIL 而非静默返回），按 R6 就地保留。
 const waitFor = async (what: string, pred: () => boolean): Promise<void> => {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (pred()) return
@@ -125,10 +125,23 @@ const edited = Array.from({ length: ROWS + 1 }, (_, index) => label(index))
 edited[2] = 'MARKER-STRANDED-ROW'
 edited[5] = 'MARKER-VISIBLE-ROW'
 setLines(edited)
-await waitFor('edit painted', () => bufferLines().some(line => line.includes('MARKER-VISIBLE-ROW')))
+// 等待与断言共用同一快照 observed：谓词即下方全部 check 条件的合取（旧谓词
+// 只等 marker 出现，弱于「恰好一次 + 旧文本清除 + 相邻关系」的断言条件）。
+let observed: string[] = []
+await waitFor('edit painted', () => {
+  observed = bufferLines()
+  const markerRows = observed
+    .map((line, row) => (line.includes('MARKER-VISIBLE-ROW') ? row : -1))
+    .filter(row => row >= 0)
+  const oldTextRows = observed
+    .map((line, row) => (line === label(5) ? row : -1))
+    .filter(row => row >= 0)
+  const neighborRow = observed.findIndex(line => line === label(6))
+  return markerRows.length === 1 && oldTextRows.length === 0
+    && neighborRow >= 0 && markerRows[0] === neighborRow - 1
+})
 
 {
-  const observed = bufferLines()
   const markerRows = observed
     .map((line, row) => (line.includes('MARKER-VISIBLE-ROW') ? row : -1))
     .filter(row => row >= 0)
