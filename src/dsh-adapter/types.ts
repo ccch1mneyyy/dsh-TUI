@@ -6,7 +6,7 @@
  * upstream coupling in one tree (src/dsh-adapter/) so an upstream rc bump
  * breaks exactly one module, never the whole UI.
  */
-export type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
+export type { LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 export type { Agent, AgentHandle, AgentStatus, CreateAgentOptions, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 export type { SessionId, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 export type { CommandRuntime } from '@deepseek-ai/dsh-commands'

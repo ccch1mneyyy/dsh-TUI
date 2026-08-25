@@ -12,6 +12,7 @@
     "dsh-tui-extensions",
     "dsh-tui-agent-presets",
     "dsh-tui-cordis-host-runner",
+    "dsh-tui-auth",
     "dsh-tui",
     "working-activity"
   ],
