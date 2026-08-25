@@ -16,8 +16,8 @@
 | `Ctrl+V` / `Alt+V` | Insert clipboard text or files; images are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |
 | `Ctrl+G` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR`); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft; with neither variable set the TUI asks you to configure one (no `vi` fallback) |
 | `Esc` | Ladder: close help → close the command menu → close the file menu (only the current `@` token) → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind; in fullscreen, an active mouse selection is cleared first (not copied) |
-| `Ctrl+C` | Interrupt while working; clear non-empty idle input; press twice on empty input to exit |
-| `Ctrl+D` | Press twice while idle to exit |
+| `Ctrl+C` | Interrupt while working; press again while the interrupt is still settling to force-exit; clear non-empty idle input; press twice on empty input to exit |
+| `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output |
 | `Ctrl+P` | Toggle the loaded-context panel shown at startup (while it is on screen) |
 | `Ctrl+T` | Open the trajectory scene (same as `/trace`); `q`/`Esc` returns to the conversation |

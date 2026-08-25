@@ -2488,7 +2488,21 @@ export function Chat({
       // double-press exit when the input is empty; ctrl+d keeps the
       // time-based double-press exit regardless.
       if (channel.working) {
-        channel.cancel()
+        // First press while working only interrupts. If that abort is still
+        // converging (cancelPending) the next press is the user insisting on
+        // leaving: go straight to the exit funnel. Without this, a stuck turn
+        // (long tool call that never settles, silent stream) swallows every
+        // Ctrl+C forever — raw mode keeps the launcher's SIGINT escape
+        // unreachable until the TUI exits.
+        if (channel.cancelPending) {
+          onExit()
+        } else {
+          channel.cancel()
+          // Interrupt replaces any previously armed exit: the next press
+          // must re-confirm instead of exiting out from under the turn.
+          exitPendingRef.current = false
+          if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
+        }
       } else if (input === 'c' && promptControllerRef.current?.hasText()) {
         promptControllerRef.current.clear()
         // A pending exit arm no longer makes sense once the user is editing.

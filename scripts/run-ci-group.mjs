@@ -115,6 +115,8 @@ const GROUPS = {
     ["verify-exit-resume-marker", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-resume-marker.tsx']],
 // 退出阶段 stderr/console 恢复回归（issue #42）：shutdown 解绑恢复物理流并注销监听器。
     ["verify-shutdown-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-stderr.tsx']],
+// 退出收尾运行时未命中回退：找不到 Ink runtime 时必须走完整 unmount 恢复终端。
+    ["verify-shutdown-fallback", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-fallback.tsx']],
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],

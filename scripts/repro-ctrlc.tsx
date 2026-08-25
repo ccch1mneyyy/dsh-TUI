@@ -3,6 +3,8 @@
  * 1. type text → ctrl+c clears the input, app keeps running
  * 2. ctrl+c on empty input → arms exit ("Press Ctrl+C again to exit")
  * 3. second ctrl+c → exits
+ * 4. working → first ctrl+c only interrupts (cancel runs once)
+ * 5. working + cancelPending → second ctrl+c force-exits
  */
 process.env.FORCE_COLOR = '3'
 // This script asserts English UI copy; pin the language before any
@@ -60,6 +62,7 @@ const channel: any = {
   displayCwd: '/tmp/demo',
   gitBranch: 'main',
   working: false,
+  cancelPending: false,
   spinnerMode: 'requesting',
   responseChars: 0,
   activeToolCount: 0,
@@ -112,6 +115,26 @@ check('first press does not exit', !exited)
 stdinObj.write('\x03')
 await settle(() => exited)
 check('second ctrl+c exits', exited)
+
+// 4. working + first ctrl+c → only interrupts (cancel runs once), no exit
+exited = false
+channel.working = true
+channel.cancelPending = false
+let cancels = 0
+channel.cancel = () => {
+  cancels += 1
+  channel.cancelPending = true
+  bump0()
+}
+stdinObj.write('\x03')
+await settle(() => cancels === 1)
+check('ctrl+c while working interrupts', cancels === 1)
+check('interrupt press does not exit', !exited)
+
+// 5. working + cancelPending → the next press force-exits
+stdinObj.write('\x03')
+await settle(() => exited)
+check('second ctrl+c while the abort is pending force-exits', exited)
 
 await instance.unmount()
 process.exit(failed)

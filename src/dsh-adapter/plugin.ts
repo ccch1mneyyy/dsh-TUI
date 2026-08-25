@@ -1473,8 +1473,11 @@ type InkShutdownState = {
   displayCursor?: { x: number; y: number } | null
 }
 
-/** Finish terminal I/O before handing control to a process-level exit action. */
-async function finishExit(
+/**
+ * Finish terminal I/O before handing control to a process-level exit action.
+ * Exported for scripts/verify-shutdown-fallback.
+ */
+export async function finishExit(
   ctx: Context,
   instance: Awaited<ReturnType<typeof render>> | undefined,
   fullscreen: boolean,
@@ -1485,7 +1488,17 @@ async function finishExit(
   try {
     const runtime = readInkShutdownState(instances.get(process.stdout))
     if (runtime === undefined && instance !== undefined) {
-      ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
+      ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using full unmount as the terminal-restore fallback')
+      // Lookup-miss (custom stdout embedders): the registry cannot hand us
+      // the detach hooks, so run the full Ink unmount first. It restores raw
+      // mode, alt screen and listeners synchronously before the notice below
+      // is written — the process must never hand a broken terminal back to
+      // the shell.
+      try {
+        instance.unmount()
+      } catch {
+        ctx.logger.debug('dsh-tui: Ink shutdown unmount fallback failed; continuing with generic terminal cleanup')
+      }
     }
     const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
 

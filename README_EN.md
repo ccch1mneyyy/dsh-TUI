@@ -164,7 +164,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+Enter` (⌘Enter) | **Interrupt the current turn and send immediately** (interrupt) |
 | `Alt+Up` | Pull the last unhandled message back into the input for editing (without interrupting the turn) |
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
-| `Ctrl+C` | Interrupt the current turn; press twice while idle to exit |
+| `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit |
 | `Esc` | Close the command/file menu; double-press while idle clears the input; **double-press on empty input = time rewind** |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
 | `Ctrl+R` | History search |
