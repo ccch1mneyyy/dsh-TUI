@@ -1055,10 +1055,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   // Positional command-line arguments are the initial prompt (issue #53):
   // `dsh-tui "run the tests"` forwards positionals through the dsh CLI,
-  // which mounts them as ctx.cmdlineArgs. Submit once the channel exists —
+  // which mounts them as ctx.cmdlineArgs. The service shape drifted across
+  // dsh-cmdline builds — `{ get() }` is the current contract, older builds
+  // exposed `{ args }` — so read both. Submit once the channel exists;
   // delivery goes through the normal pending/inbox chain, so no special
   // timing is needed; flag-shaped leftovers are not prompt text.
-  const cmdlineArgs = (ctx as { cmdlineArgs?: { args?: readonly string[] } }).cmdlineArgs?.args
+  const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
+  const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
   const initialPrompt = cmdlineArgs?.filter(arg => !arg.startsWith('-')).join(' ').trim()
   if (initialPrompt) channel.submit(initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
