@@ -355,6 +355,11 @@ export function Chat({
   /** Two-level /model: the drilled-in provider route; undefined = group level.
    *  Reset on open; stale ids resolve back to the group level via `activeModelGroup`. */
   const [modelGroup, setModelGroup] = React.useState<string | undefined>(undefined)
+  /** True while the picker sits in the single-provider fast path (drilled in
+   *  at open, the group level never shown): Esc closes directly and no back
+   *  hint renders — a pinned recents pseudo-group must not fake a two-level
+   *  walk the user never saw (issue #527 regression: repro-picker-windowing). */
+  const [modelPickerDirect, setModelPickerDirect] = React.useState(false)
   /** Group rows over the current catalog, first-appearance (registry) order,
    *  with the pinned recents pseudo-group first when any entry is catalogued. */
   const modelGroups = React.useMemo(
@@ -1193,12 +1198,14 @@ export function Chat({
         {
           const landing = modelPickerLanding(models, channel.provider, channel.model, recentsNow)
           setModelGroup(landing.group)
+          setModelPickerDirect(landing.group !== undefined)
           dispatchOverlay({ type: 'open', overlay: { kind: 'model', index: landing.index } })
         }
         void channel.listModels().then((list) => {
           setModels(list)
           const landing = modelPickerLanding(list, channel.provider, channel.model, recentsNow)
           setModelGroup(landing.group)
+          setModelPickerDirect(landing.group !== undefined)
           dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
         })
         void channel.listProviders().then(setProviderInfos).catch(() => setProviderInfos([]))
@@ -2355,7 +2362,7 @@ export function Chat({
           dispatchOverlay({ type: 'close' })
         }
       } else if (key.escape || key.backspace) {
-        if (activeModelGroup !== undefined && modelGroups.length > 1) {
+        if (activeModelGroup !== undefined && modelGroups.length > 1 && !modelPickerDirect) {
           setModelGroup(undefined)
           const groupIndex = Math.max(0, modelGroups.findIndex(group => group.provider === activeModelGroup))
           dispatchOverlay({ type: 'set-index', kind: 'model', index: groupIndex })
@@ -3271,7 +3278,7 @@ export function Chat({
                   groupLabel={activeModelGroup === RECENTS_GROUP_PROVIDER
                     ? t('picker-group-recent')
                     : modelGroups.find(group => group.provider === activeModelGroup)?.label}
-                  showBack={modelGroups.length > 1}
+                  showBack={modelGroups.length > 1 && !modelPickerDirect}
                   showProviderPrefix={activeModelGroup === RECENTS_GROUP_PROVIDER}
                   focusIndex={overlay.index}
                   currentModel={`${channel.provider}/${channel.model}`}
