@@ -23,6 +23,7 @@ import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/d
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
+import { shrinkImageToLimits } from '../utils/imageResize.js'
 import { extname, isAbsolute, join } from 'node:path'
 import { completeCommands, HIDDEN_COMMAND_NAMES, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../sessionHistory.js'
@@ -2759,12 +2760,30 @@ export function createChannel(
       if (!attachments.imageLimits.mediaTypes.includes(input.mediaType)) {
         throw new Error(`${input.mediaType} images are not accepted by this profile`)
       }
-      if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
+      // 准入前降采样（CC 同款）：现代屏幕全屏截图单边普遍超过默认单边
+      // 限值，等比缩进限后再提交；sharp 缺席时原样提交，由服务端严格
+      // 准入报错兜底。字节检查对降采样结果执行。
+      const shrunk = await shrinkImageToLimits(input.data, input.mediaType, {
+        maxImageBytes: attachments.imageLimits.maxImageBytes,
+        maxImageDimension: attachments.imageLimits.maxImageDimension,
+      })
+      if (shrunk.data.byteLength > attachments.imageLimits.maxImageBytes) {
         throw new Error(`image exceeds this profile's per-image size limit`)
       }
-      const attachment = await attachments.saveImage(input)
+      // 降采样会转码为 png：按转换后的类型复查允许列表——否则 profile 只
+      // 允 jpeg 时会「粘贴成功通知、提交时 token 落 missing」三处基准不一。
+      if (!attachments.imageLimits.mediaTypes.includes(shrunk.mediaType)) {
+        throw new Error(`image shrinking to ${shrunk.mediaType} is not accepted by this profile`)
+      }
+      const attachment = await attachments.saveImage({
+        data: shrunk.data,
+        mediaType: shrunk.mediaType,
+        name: input.name,
+      })
       stagedImageSequence += 1
-      const token = `[Image #${stagedImageSequence}]`
+      // 尺寸未知（头解析失败且未缩放）时省略 (W×H)，与 CC 的 [image #N (W×H)] 对齐。
+      const sizeSuffix = shrunk.width > 0 && shrunk.height > 0 ? ` (${shrunk.width}×${shrunk.height})` : ''
+      const token = `[Image #${stagedImageSequence}${sizeSuffix}]`
       stagedImages.set(token, attachment)
       // References are content-addressed and durable. This map only connects
       // editable prompt placeholders to them; cap it to bound a long TUI run.
@@ -6928,6 +6947,8 @@ export interface MentionAttachments {
     readonly maxImageBytes: number
     readonly maxImagesPerMessage: number
     readonly maxMessageImageBytes: number
+    /** 单边像素上限；旧运行时 attachment 域未暴露时为 undefined（降采样退化为仅字节约束）。 */
+    readonly maxImageDimension?: number
     readonly mediaTypes: readonly MentionImageMediaType[]
   }
   saveImage(input: { data: Uint8Array; mediaType: MentionImageMediaType; name?: string }): Promise<MentionImageBlock['attachment']>

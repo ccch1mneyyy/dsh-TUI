@@ -598,6 +598,9 @@ export function PromptInput({
   }
 
   /** Line index of the cursor; -1 when the cursor is at the very end. */
+  /** Column of the cursor within its line. */
+
+  /** Line index of the cursor within the text (fold-block helpers from main). */
   const cursorLine = (text: string, cursorOffset: number) => {
     const before = text.slice(0, cursorOffset)
     return before.split('\n').length - 1
@@ -671,15 +674,41 @@ export function PromptInput({
       setFileSelected(0)
     }
 
-    // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click): insert
-    // verbatim at the caret. Paste content may contain newlines — that is
-    // NOT Enter — so this branch runs before the whole-line submit rule.
+    // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click / 拖拽):
+    // insert verbatim at the caret. Paste content may contain newlines —
+    // that is NOT Enter — so this branch runs before the whole-line submit
+    // rule. 拖拽进终端的图片以单一绝对路径形态到达（kitty 等把文件落成
+    // 路径文本粘贴）——识别为图片时走 stageImage 转成 token，与 Ctrl+V
+    // 剪贴板图片同一条准入管道；其余情况（普通文件/多行文本）保持原样。
     if (event?.isPasted && input.length > 0) {
-      const text = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-      insertAtCaret(text)
+      const pasted = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      // 与 Ctrl+V 分支同款前置：帮助浮层开着时插入会落在面板背后。
+      if (helpOpen) onToggleHelp()
+      // 拖拽图片路径（kitty 形态：单一图片绝对路径/file:// URI）→ stageImage
+      // 管道转附件 token；与 main 的大粘贴折叠语义正交（路径是短文本不折叠）。
+      const asPath = decodeFileUri(pasted.trim())
+      if (asPath !== undefined && !asPath.includes('\n') && !asPath.includes(' ')) {
+        const mediaType = clipboardImageMediaType(asPath)
+        if (mediaType !== undefined) {
+          void readFile(asPath)
+            .then(data => channel.stageImage({ data: new Uint8Array(data), mediaType, name: basename(asPath) }))
+            .then(token => {
+              insertClipboardAtCaret(`${token} `)
+              channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+            })
+            .catch(() => {
+              // 读失败或被准入拒绝：按普通文本插入路径，保留拖拽的原语义
+              // 与 main 的大粘贴折叠（回退文本同样可能超阈值）。
+              insertClipboardAtCaret(pasted)
+              if (isBigInput(pasted)) updateFoldBlock({ start: cursor, end: cursor + pasted.length })
+            })
+          return
+        }
+      }
+      insertAtCaret(pasted)
       // A big paste becomes a CC-style fold block right away (hover peeks
       // at it); an existing block is replaced by the new paste's span.
-      if (isBigInput(text)) updateFoldBlock({ start: cursor, end: cursor + text.length })
+      if (isBigInput(pasted)) updateFoldBlock({ start: cursor, end: cursor + pasted.length })
       return
     }
 
@@ -990,6 +1019,19 @@ export function PromptInput({
         setInput(value, block.start)
         return
       }
+      // 视觉行导航（无 fold block 时接管 ↑ 的普通路径——逻辑行的超集）：
+      // 折行后的屏幕行间移动光标，仅在首视觉行才继续走到历史遍历——
+      // 单段超长文本按逻辑行判定会让 ↑ 直接换历史条目（整框内容突变
+      // 与高度跳变）。block 存在时块是原子行，走下方 main 的逻辑行路径。
+      if (!block) {
+        const upGeo = visualNavGeometry(value, cursor, Math.max(10, columns - 3))
+        if (upGeo.row > 0) {
+          const targetRow = upGeo.row - 1
+          const target = upGeo.rows[targetRow] ?? ''
+          setInput(value, upGeo.rowStarts[targetRow]! + Math.min(upGeo.colChars, target.length))
+          return
+        }
+      }
       const line = cursorLine(value, cursor)
       if (line > 0) {
         // Move to the previous line, clamping to its length.
@@ -1065,6 +1107,17 @@ export function PromptInput({
         }
         setInput(value, block.end)
         return
+      }
+      // 视觉行导航（与 ↑ 对称，!block 时接管）：仅在末视觉行才继续走到
+      // 历史遍历。
+      if (!block) {
+        const downGeo = visualNavGeometry(value, cursor, Math.max(10, columns - 3))
+        if (downGeo.row < downGeo.rows.length - 1) {
+          const targetRow = downGeo.row + 1
+          const target = downGeo.rows[targetRow] ?? ''
+          setInput(value, downGeo.rowStarts[targetRow]! + Math.min(downGeo.colChars, target.length))
+          return
+        }
       }
       const line = cursorLine(value, cursor)
       const lines = value.split('\n')
@@ -1714,6 +1767,42 @@ export function PromptInput({
       </EffortInputBorder>
     </Box>
   )
+}
+
+/** ↑/↓ 视觉行导航的几何：光标所在视觉行号、行内字符列，以及每个
+ * 视觉行在 value 中的起始下标（由 wrapToWidth 的切行反推：行内容在
+ * value 中连续按序，行尾若为逻辑行边界则跳过一个 \n）。单段超长文本
+ * 折成多个视觉行时 ↑/↓ 用它逐视觉行移动光标，而不是掉进历史遍历。 */
+function visualNavGeometry(value: string, cursor: number, width: number): {
+  row: number
+  colChars: number
+  rowStarts: number[]
+  rows: string[]
+} {
+  const rows = wrapToWidth(value, width)
+  const prefix = wrapToWidth(value.slice(0, cursor), width)
+  const colChars = prefix[prefix.length - 1]!.length
+  const rowStarts: number[] = []
+  let consumed = 0
+  for (const r of rows) {
+    rowStarts.push(consumed)
+    consumed += r.length
+    if (value[consumed] === '\n') consumed += 1
+  }
+  return { row: prefix.length - 1, colChars, rowStarts, rows }
+}
+
+/** 粘贴内容的单一文件路径形态：file:// URI 解包、裸绝对路径原样；
+ * 除此之外（多行、含空格、相对文本）返回 undefined。 */
+function decodeFileUri(text: string): string | undefined {
+  if (text.startsWith('file://')) {
+    try {
+      return decodeURIComponent(new URL(text).pathname)
+    } catch {
+      return undefined
+    }
+  }
+  return text.startsWith('/') ? text : undefined
 }
 
 /**

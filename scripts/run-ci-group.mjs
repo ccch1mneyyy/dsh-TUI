@@ -101,6 +101,11 @@ const GROUPS = {
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
 // 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
     ["verify-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-keys.tsx']],
+// 输入框视觉行导航回归：↑/↓ 按视觉行（折行后屏幕行）移动光标，仅
+// 首/末视觉行进入历史遍历——单段超长文本不再被历史替换。
+    ["verify-prompt-visual-nav", ['node', '--import', 'tsx/esm', 'scripts/verify-prompt-visual-nav.tsx']],
+// 图片粘贴增强回归：尺寸头解析、拖拽路径→token、降采样降级路径。
+    ["verify-image-paste", ['node', '--import', 'tsx/esm', 'scripts/verify-image-paste.tsx']],
 // 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
 // 回复只进 querier，不回显成终端残影。
     ["verify-terminal-queries", ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-queries.tsx']],
