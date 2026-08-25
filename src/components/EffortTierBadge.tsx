@@ -39,7 +39,7 @@ function reveal(progress: number, arrival: number): number {
   return clamp((progress - arrival * 0.65) / 0.35)
 }
 
-/** Per-letter ignition weights: LTR, twin LTR peaks, inward, then outward. */
+/** Per-letter ignition weights over 430ms: LTR, twin LTR peaks, inward, then outward. */
 export function effortBadgeWeights(effort: string, count: number, progress: number): readonly number[] {
   const kind = tier(effort)
   const phase = clamp(progress)
@@ -52,7 +52,7 @@ export function effortBadgeWeights(effort: string, count: number, progress: numb
     if (kind === 'ultra') return reveal(phase, distance)
     const front = phase * 1.6 - 0.1
     const first = crest((point - front) / 0.18)
-    const second = crest((point - (front - 0.38)) / 0.14)
+    const second = crest((point - (front - 0.38)) / 0.15)
     const settle = clamp((phase - 0.78) / 0.22)
     return Math.max(first, second, settle)
   })
@@ -83,7 +83,6 @@ function positions(
   label: string,
   columns: number,
   leadingColumns: number,
-  elapsedMs: number,
 ): readonly number[] {
   const center = Math.round((columns - 1) / 2) - leadingColumns
   return Array.from({ length: label.length }, (_, index) => {
@@ -92,7 +91,7 @@ function positions(
   })
 }
 
-function colors(options: {
+function effortBadgeColors(options: {
   label: string
   elapsedMs: number
   alpha: number
@@ -133,8 +132,8 @@ export function EffortTierBadge({
   const elapsedMs = frame.elapsedMs - IGNITION_TIMELINE.labelStartMs
   const alpha = intensity(frame.elapsedMs)
   if (alpha <= 0) return null
-  const at = positions(frame.label, columns, leadingColumns, elapsedMs)
-  const ink = colors({
+  const at = positions(frame.label, columns, leadingColumns)
+  const ink = effortBadgeColors({
     label: frame.label,
     elapsedMs,
     alpha,

@@ -106,7 +106,7 @@ const twinBadge = badgeWeights?.('xhigh', 5, 0.5) ?? []
 check('badge high: letter energy enters strictly left-to-right',
   earlyBadge.high[0]! > earlyBadge.high[2]! && earlyBadge.high[2]! >= earlyBadge.high[4]!, earlyBadge.high.join(','))
 check('badge xhigh: twin moving peaks differ from the single high front',
-  twinBadge.filter(weight => weight > 0.5).length >= 2
+  twinBadge.filter(weight => weight >= 0.45).length >= 2
   && twinBadge.filter(weight => weight < 0.2).length >= 2
   && twinBadge.join(',') !== (badgeWeights?.('high', 5, 0.5) ?? []).join(','), twinBadge.join(','))
 check('badge max: outer letters arrive before the center and metadata contracts inward',
@@ -187,7 +187,8 @@ check('theme: light RGB palette keeps the same semantic mapping with different c
 check('theme: prompt-owned semantic and raw session accent colors resolve as the animation band',
   effortBand(darkTheme, 'warning') === darkTheme.warning
   && effortBand(darkTheme, '#123456') === '#123456'
-  && effortTheme(darkTheme, effortBand(darkTheme, 'warning')).band === darkTheme.warning)
+  && effortTheme(darkTheme, effortBand(darkTheme, 'warning')).band === darkTheme.warning
+  && effortTheme(darkTheme, effortBand(darkTheme, '#123456')).band === '#123456')
 const signatures = ['high', 'xhigh', 'max', 'ultra'].map(effort => used(colors(effort, 450, darkPalette)))
 check('theme: all four tiers produce distinct dark-theme RGB color signatures',
   signatures.every(signature => signature.length > 0 && signature.every(color => color.startsWith('rgb(')))

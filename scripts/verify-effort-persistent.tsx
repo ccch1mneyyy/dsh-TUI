@@ -10,6 +10,7 @@
 process.env.FORCE_COLOR = '3'
 
 const [
+  { readFile },
   { Writable, PassThrough },
   React,
   { Terminal: XTerm },
@@ -18,6 +19,7 @@ const [
   { PersistentEffortLabel },
   { StatusLine },
 ] = await Promise.all([
+  import('node:fs/promises'),
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -36,6 +38,14 @@ function check(name: string, ok: boolean, detail = ''): void {
 
 const COLS = 24
 const ROWS = 3
+
+const source = await readFile(new URL('../src/components/PersistentEffortLabel.tsx', import.meta.url), 'utf8')
+const frameMatch = /const FRAME_MS = (\d+)/u.exec(source)
+const frameMs = Number(frameMatch?.[1])
+check('source: persistent animation gates React frames to 100–125ms',
+  Number.isFinite(frameMs) && frameMs >= 100 && frameMs <= 125, `FRAME_MS=${String(frameMs)}`)
+check('source: persistent label never mutates the shared clock or owns an interval',
+  !source.includes('setTickInterval') && !source.includes('setInterval('))
 
 type ManualClock = {
   now: () => number
@@ -162,11 +172,15 @@ try {
     line().trimEnd() === 'max' && max0.length === 3 && new Set(max0).size > 1 && clock.subscriptions() === 1,
     `${JSON.stringify(line())} colors=${max0.join(',')} subscriptions=${clock.subscriptions()}`)
   writes.length = 0
-  await advance(1440)
-  const max1 = colors()
-  check('max: shared-clock progress moves the steady shimmer without changing geometry',
+  const maxFrames: string[][] = [max0]
+  for (let index = 0; index < 16 && maxFrames.at(-1)?.join(',') === max0.join(','); index++) {
+    await advance(frameMs)
+    maxFrames.push(colors())
+  }
+  const max1 = maxFrames.at(-1) ?? []
+  check('max: shared-clock progress moves the gated shimmer without changing geometry',
     max1.join(',') !== max0.join(',') && stable('max', startBaseY),
-    `${max0.join(',')}→${max1.join(',')} line=${JSON.stringify(line())} baseY=${term.buffer.active.baseY}`)
+    `${max0.join(',')}→${max1.join(',')} across ${maxFrames.length - 1} gated frame(s)`)
   check('max frames: steady shimmer emits no terminal scroll controls', !hasScroll(writes.join('')))
 
   await set('ultra')
@@ -174,7 +188,7 @@ try {
   check('ultra: switching animated tiers keeps a single shared-clock owner',
     line().trimEnd() === 'ultra' && ultra0.length === 5 && new Set(ultra0).size > 2 && clock.subscriptions() === 1)
   writes.length = 0
-  await advance(420)
+  await advance(frameMs)
   const ultra1 = colors()
   check('ultra: shared-clock progress rotates the rainbow without changing width',
     ultra1.join(',') !== ultra0.join(',') && stable('ultra', startBaseY))
