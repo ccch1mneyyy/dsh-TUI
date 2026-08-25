@@ -2,6 +2,8 @@ import React from 'react'
 import { Text } from '../ui.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
+import type { Color } from '../ink/styles.js'
+import type { Theme } from '../theme.js'
 import type { FileCandidate } from '../utils/fileSuggestions.js'
 import { t } from '../i18n.js'
 import { POINTER } from '../cc/figures.js'
@@ -38,7 +40,7 @@ export function FileSuggestions({
   columns: number
   /** `@` 触发 token 里已输入的查询（`mention.query`），用于名字前缀高亮。 */
   query?: string
-  accent?: 'promptBorder' | 'planMode'
+  accent?: keyof Theme | Color
   /** 鼠标点击行（fullscreen）：上报过滤后列表的绝对索引（与键盘
    *  selectedIndex 同一索引空间），接受路径由 PromptInput 复用。 */
   onPick?: (index: number) => void

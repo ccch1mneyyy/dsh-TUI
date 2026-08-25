@@ -4,9 +4,10 @@ import { basename } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
-import { EffortInputBorder } from './EffortInputBorder.js'
+import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
 import { isLightThemeActive } from '../theme.js'
+import { sessionColorHex } from '../cc/sessionColors.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import { noteAuxNumber } from '../ink/geometry-trace.js'
@@ -440,13 +441,18 @@ export function PromptInput({
    * Accept the selected file suggestion: replace ONLY the mention token at
    * the caret (prefix/suffix text survives), quoting whitespace paths. A
    * directory inserts `@dir/` without a trailing space so completion
-   * continues into it; a file completes the token with a space.
+   * continues into it; a file completes the token with a space. A typed
+   * `#L12-14` suffix is NOT part of the replacement — completion ends at
+   * `pathEnd` so the line range survives acceptance (issue #359).
    */
   const acceptFile = (candidate: FileCandidate) => {
     if (!mention) return
     const file = candidate.path
     const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
-    const insert = candidate.kind === 'directory' ? body : `${body} `
+    // A typed `#L12-14` suffix rides along AFTER the completed body (before
+    // the trailing space) — quoting a whitespace path must not detach it.
+    const suffix = mention.pathEnd === undefined ? '' : value.slice(mention.pathEnd, mention.end)
+    const insert = candidate.kind === 'directory' ? `${body}${suffix}` : `${body}${suffix} `
     const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
     setInput(next, mention.start + insert.length)
     setFileSelected(0)
@@ -1499,7 +1505,22 @@ export function PromptInput({
   const floatersOpen =
     helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen || peekOpen
   // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
-  const promptAccent = channel.mode.plan === true ? 'planMode' : 'promptBorder'
+  // `/color` 会话强调色优先于主题 promptBorder（plan 模式仍整体走 sage 绿）。
+  // `?? ''` 防御最小 mock channel（只声明用到的字段的回归脚本）。
+  const sessionAccent = sessionColorHex(channel.sessionColor ?? '')
+  const promptAccent = channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'promptBorder')
+  // 顶边框右侧的会话名标签（CC 风格 chip）：色随强调色；超宽截断，宽度
+  // 随终端列数伸缩但不超过 28 显示单元。默认关闭——`/settings` 的
+  // 「会话名标签」开关（dsh-tui.promptSessionLabel）开启后显示。
+  const sessionTitle = channel.sessionTitle ?? ''
+  const topRightLabel: InputBorderLabel | undefined =
+    channel.promptSessionLabel === true && sessionTitle !== ''
+      ? {
+          text: truncateToWidth(sessionTitle, Math.max(8, Math.min(28, columns - 8))),
+          color: channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'claude'),
+          ink: 'inverseText',
+        }
+      : undefined
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -1654,6 +1675,7 @@ export function PromptInput({
         columns={columns}
         onLight={isLightThemeActive(themeName)}
         idleColor={promptAccent}
+        topRightLabel={topRightLabel}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
           <EffortChargeGlyph

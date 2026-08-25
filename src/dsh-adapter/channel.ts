@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandExecution, CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
-import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo } from '@deepseek-ai/dsh-llm'
+import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
   isTokenDelta,
@@ -13,24 +13,38 @@ import {
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
+import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
+import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 /** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
 type SideQuestionLlm = {
   stream(options: object): AsyncIterable<StreamChunk>
 }
-import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
 import { completeCommands, HIDDEN_COMMAND_NAMES, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../sessionHistory.js'
-import { appendSessionTitle, deleteSessionLog, ensureLegacySessionEventTypes, sessionsRoots } from './compat/index.js'
+import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
+import {
+  buildSessionTree,
+  forkTarget,
+  liveTailWindow,
+  rewindTarget,
+  turnUserText,
+  type FamilySession,
+  type SessionTreeData,
+} from './sessionTree.js'
+import { resolveDshProfileName } from '../update.js'
 import {
   listSummaries,
   locateSession,
   noteBranch,
   previewSession,
+  readHeader,
   type PreviewEntry,
+  type RawSessionHeader,
   type SessionSource,
   type SessionSummary,
 } from './sessions/index.js'
@@ -39,7 +53,7 @@ import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../util
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
-import type { ProviderSetupHost } from './providerWizard.js'
+import type { OAuthProviderStatus, OAuthSetupHost, ProviderSetupHost } from './providerWizard.js'
 import { readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
@@ -471,7 +485,16 @@ export interface Channel {
   readonly rows: readonly ChatRow[]
   readonly status: AgentStatus | 'starting' | 'disposed'
   readonly sessionTitle: string
+  /** Per-session accent color name (`/color`), '' when unset — persisted via
+   *  a `session/color` log event so it survives resume/rewind. Renders as
+   *  the prompt-input border + session label chip accent (cc/sessionColors). */
+  readonly sessionColor: string
   readonly agentId: string
+  /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
+   *  into the dim AutoRecapRow when the session opens/resumes. Read live
+   *  (settings service), so a `/settings` change applies on the next
+   *  session switch; absent settings service → on. */
+  readonly autoRecapOnOpen: boolean
   /** Resolved model id (from the plugin config). */
   readonly model: string
   /** Provider route of the live agent. */
@@ -545,6 +568,9 @@ export interface Channel {
    *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
    *  nothing). */
   readonly scrollGutter: ScrollGutterMode
+  /** Whether the session-name chip shows on the prompt top border's right
+   *  side (settings `dsh-tui.promptSessionLabel`; off by default). */
+  readonly promptSessionLabel: boolean
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
@@ -667,6 +693,25 @@ export interface Channel {
    * choices to the confirm pane, null means no opinion (plain confirm).
    */
   promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
+  /**
+   * The session family tree for the /tree screen (pi's Session Tree): the
+   * live session's whole lineage — ancestors, siblings, descendants —
+   * stitched across fork sessions into one message-level tree. `null` (with
+   * a notify) when session persistence is unavailable or the live session
+   * swapped while the family loaded.
+   */
+  buildSessionTree(): Promise<SessionTreeData | null>
+  /**
+   * Session-tree fork: `rewind` drops the picked user turn (its prompt comes
+   * back as the returned text), `fork` keeps the picked entry. `seq` is the
+   * tree entry's source event seq inside `sessionId`'s log; `sessionId` may
+   * be any family member (adopting a dead branch forks IT at the picked
+   * point). Null = refused (the channel notified why).
+   */
+  rewindToNode(sessionId: string, seq: number, mode?: 'rewind' | 'fork'): Promise<string | null>
+  /** `/fork`: fork the current session at its tip into a persisted copy the
+   *  user enters via `/resume` — the live session keeps running untouched. */
+  forkSession(): Promise<boolean>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<ResumeResult>
   /** Start a fresh conversation (`/new`): a brand-new agent + session, the
@@ -731,6 +776,8 @@ export interface Channel {
   setActivityFrames(name: string): boolean
   /** Advertised models across every registered provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Provider display identities for the same routes (picker group labels). */
+  listProviders(): Promise<readonly LlmProviderInfo[]>
   /** The live agent's full skill catalog for `/skills` (issue #204) — name,
    *  description, invocation flags and source bucket. Undefined on a failed
    *  or incomplete registry read (the picker shows an error); empty only
@@ -742,6 +789,9 @@ export interface Channel {
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */
   providerSetup(): ProviderSetupHost | undefined
+  /** OAuth sign-in states from a mounted dsh-auth-style plugin; undefined
+   *  without the plugin, so `/login` renders exactly what it did before. */
+  oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined>
   /**
    * Runtime capabilities for the `/settings` screen, over the settings /
    * credentials seams; undefined when the composition lacks the settings
@@ -768,6 +818,14 @@ export interface Channel {
   /** Rename the current session (CC's /rename): appends a `session/title`
    *  event, which the status line and the /resume picker both read. */
   renameSession(title: string): void
+  /** Set the current session's accent color (`/color <name>`): appends a
+   *  `session/color` event; '' clears it back to the theme default. */
+  setSessionColor(color: string): void
+  /** Generate a recap of the session's recent activity (`/recap`): one
+   *  tool-less LLM call over the tail exchanges, returning a one-line
+   *  summary plus an optional proposed title. The answer is pure UI state
+   *  and never enters the session log. */
+  recapRecent(options?: { signal?: AbortSignal; onText?: (delta: string) => void }): Promise<RecapOutcome>
   /** Delete a persisted session (`/resume` picker ctrl+d): removes its log
    *  directory, its last-used entry, and the resume marker when it points
    *  here. False for the live session or a missing/unwritable log. */
@@ -858,6 +916,8 @@ export interface ChannelState {
   rows: ChatRow[]
   status: AgentStatus | 'starting' | 'disposed'
   sessionTitle: string
+  sessionColor: string
+  autoRecapOnOpen: boolean
   agentId: string
   model: string
   provider: string
@@ -906,6 +966,8 @@ export interface ChannelState {
   toolBackground: ToolBackground
   /** Transcript gutter mode (see the public Channel type). */
   scrollGutter: ScrollGutterMode
+  /** Session-name chip on the prompt border (see the public Channel type). */
+  promptSessionLabel: boolean
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
@@ -916,6 +978,8 @@ export interface ChannelState {
   setToolBackground(background: ToolBackground): void
   /** Apply a transcript gutter mode change. */
   setScrollGutter(mode: ScrollGutterMode): void
+  /** Apply a prompt session-name chip change. */
+  setPromptSessionLabel(enabled: boolean): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -943,6 +1007,12 @@ export interface ChannelState {
     question: string,
     options?: { signal?: AbortSignal; onText?: (delta: string) => void },
   ): Promise<{ answer: string | null; error?: string }>
+  /** 会话 recap（见 public Channel.recapRecent）。 */
+  recapRecent(
+    options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+  ): Promise<RecapOutcome>
+  /** 会话强调色（见 public Channel.setSessionColor）。 */
+  setSessionColor(color: string): void
   /** Effective slash commands (see the public Channel type). */
   commandList: readonly LocalCommand[]
   /** Context-aware slash completions (see the public Channel type). */
@@ -983,6 +1053,12 @@ export interface ChannelState {
   rewindTo(row: ChatRow, mode?: string | null): Promise<string | null>
   /** @internal rewind decision prompt (see the public Channel.promptRewind). */
   promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
+  /** @internal session-tree assembly (see the public Channel.buildSessionTree). */
+  buildSessionTree(): Promise<SessionTreeData | null>
+  /** @internal tree-entry rewind/fork (see the public Channel.rewindToNode). */
+  rewindToNode(sessionId: string, seq: number, mode?: 'rewind' | 'fork'): Promise<string | null>
+  /** @internal tip fork (see the public Channel.forkSession). */
+  forkSession(): Promise<boolean>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<ResumeResult>
   /** Start a fresh conversation (`/new`). */
@@ -1018,12 +1094,16 @@ export interface ChannelState {
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Provider display identities (see the public Channel type). */
+  listProviders(): Promise<readonly LlmProviderInfo[]>
   /** The live agent's skill catalog for `/skills` (see the public Channel type). */
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login` (see the public Channel type). */
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
   /** `/provider` wizard capabilities (see the public Channel type). */
   providerSetup(): ProviderSetupHost | undefined
+  /** OAuth sign-in states (see the public Channel type). */
+  oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined>
   /** `/settings` screen capabilities (see the public Channel type). */
   settingsHost(): SettingsHost | undefined
   /** Plugin-declared settings sections (see the public Channel type). */
@@ -1424,6 +1504,9 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
     scrollGutter?: ScrollGutterMode
+    /** Session-name chip on the prompt top border; default off (settings
+     *  `dsh-tui.promptSessionLabel`). */
+    promptSessionLabel?: boolean
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -1838,7 +1921,7 @@ export function createChannel(
   /** Fire-and-forget `tui/session-switched` (parallel): per-session plugin
    *  state rebinds here. Listener failures are logged, never propagated —
    *  the switch itself already succeeded. */
-  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind', sessionId: string, previousSessionId: string): void => {
+  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind' | 'fork', sessionId: string, previousSessionId: string): void => {
       try {
         void dispatchTuiNotification(ctx, 'tui/session-switched', { kind, sessionId, previousSessionId, cwd: state.cwd }).catch((error: unknown) => {
           ctx.logger.warn('dsh-tui: tui/session-switched listener failed: %o', error)
@@ -1848,6 +1931,86 @@ export function createChannel(
       // switch itself already succeeded, so this stays a log line.
       ctx.logger.warn('dsh-tui: tui/session-switched dispatch failed: %o', error)
     }
+  }
+
+  /**
+   * Swap the live agent for a freshly created fork (rewindTo and the session
+   * tree's rewindToNode share this tail): reset every session-scoped
+   * projection, replay the fork's seed into a fresh transcript (tokens/
+   * spinner counters land back at the rewind point, matching the fork),
+   * rebind subscriptions to the new agent, and free the replaced handle.
+   * Returns the source session's id (for the session-switched notification).
+   */
+  const adoptForkedAgent = (
+    handle: AgentHandle,
+    seed: readonly SessionEvent[],
+    agentPreset: string | undefined,
+    childId: SessionId,
+  ): string => {
+    // Replay the forked history into a fresh transcript (tokens/spinner
+    // counters land back at the rewind point, matching the fork).
+    streaming = undefined
+    reasoning = undefined
+    // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
+    // keep it out of the next turn's settle logs and revive cache.
+    sealedReasoning.length = 0
+    lastReasoningRow = undefined
+    toolCards.clear()
+    nextRowId = 0
+    state.rows.length = 0
+    // Goal/todo/title are session-scoped; the replay re-derives them for
+    // the session being entered (or leaves them empty).
+    state.todos = []
+    // Queued-but-undelivered messages live in the OLD agent's inbox; the
+    // swap must drop their previews or they linger forever (unretirable —
+    // retire events are filtered to the new agent, unwithdrawable — the
+    // new inbox never heard of them).
+    state.pending = []
+    state.goal = undefined
+    state.sessionTitle = ''
+    state.sessionColor = ''
+    state.tokens = { input: 0, output: 0 }
+    state.responseChars = 0
+    state.activeToolCount = 0
+    state.lastUserText = ''
+    state.working = false
+    state.cancelPending = false
+    state.spinnerMode = 'requesting'
+    state.status = handle.agent.status
+    state.agentId = handle.agent.id
+    state.agentPreset = agentPreset
+    state.tps = undefined
+    state.tpsSamples = []
+    state.lastUsage = undefined
+    state.workingActivity = undefined
+    state.contextSegments = {
+      system: 0,
+      prompt: 0,
+      assistant: 0,
+      thinking: 0,
+      tools: 0,
+    }
+    replayEvents(seed)
+    settleStreaming()
+    // A seed ending mid-turn replays a turn/start that set working=true;
+    // the boot path resets this after replay — mirror it here so an idle
+    // rewound agent doesn't sit with a live spinner (a still-running
+    // agent re-asserts on its next event).
+    state.working = handle.agent.status === 'running'
+    // Rebind subscriptions to the new agent, then free the old one.
+    const oldHandle = currentHandle
+    const sourceSessionId = String(agent.session.id)
+    agent = handle.agent
+    currentHandle = handle
+    bindAgent()
+    refreshCommandList()
+    void refreshLoadedContext()
+    void refreshSkillCommands()
+    // The forked session (rewind) becomes the most recently used.
+    touchSession(childId)
+    state.emit()
+    void oldHandle?.dispose().catch(() => {})
+    return sourceSessionId
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
@@ -2352,6 +2515,18 @@ export function createChannel(
     rows: [],
     status: 'starting',
     sessionTitle: '',
+    sessionColor: '',
+    get autoRecapOnOpen(): boolean {
+      // Live read (not a boot snapshot): a /settings change applies on the
+      // next session switch. No settings service → off (framework absent,
+      // e.g. headless fixtures — nothing to configure and no llm route).
+      const settings = ctx.get('settings') as
+        | { describe(options?: { redactSecrets?: boolean }): readonly { ns: string; value: unknown }[] }
+        | undefined
+      if (settings === undefined) return false
+      const ns = settings.describe({ redactSecrets: true }).find(entry => entry.ns === 'dsh-tui')
+      return (ns?.value as Record<string, unknown> | undefined)?.recapOnOpen !== false
+    },
     agentId: agent.id,
     model: options.model,
     provider: options.provider,
@@ -2386,6 +2561,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
+    promptSessionLabel: options.promptSessionLabel === true,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,
@@ -2440,6 +2616,18 @@ export function createChannel(
                 description: `User theme (${spec.base} base)`,
                 descriptionKey: 'sugg-theme-user-desc',
               })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'color') {
+          return [
+            { name: 'status', description: 'Show the current session color', descriptionKey: 'sugg-status-desc' },
+            { name: 'reset', description: 'Clear the session color', descriptionKey: 'sugg-color-reset-desc' },
+            ...SESSION_COLOR_NAMES.map((name) => ({
+              name,
+              description: 'Session accent color',
+              descriptionKey: 'sugg-color-name-desc',
+              ...(state.sessionColor === name ? { tag: 'current' } : {}),
+            })),
           ]
         }
         if (path.length === 1 && path[0] === 'effort') {
@@ -2816,68 +3004,9 @@ export function createChannel(
           { color: 'warning', timeoutMs: 8000 },
         )
       }
-      // Replay the forked history into a fresh transcript (tokens/spinner
-      // counters land back at the rewind point, matching the fork).
-      streaming = undefined
-      reasoning = undefined
-      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
-      // keep it out of the next turn's settle logs and revive cache.
-      sealedReasoning.length = 0
-      lastReasoningRow = undefined
-      toolCards.clear()
-      nextRowId = 0
-      state.rows.length = 0
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.cancelPending = false
-      state.spinnerMode = 'requesting'
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.agentPreset = rewindComposed.agentPreset
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      replayEvents(seed)
-      settleStreaming()
-      // A seed ending mid-turn replays a turn/start that set working=true;
-      // the boot path resets this after replay — mirror it here so an idle
-      // rewound agent doesn't sit with a live spinner (a still-running
-      // agent re-asserts on its next event).
-      state.working = handle.agent.status === 'running'
-      // Rebind subscriptions to the new agent, then free the old one.
-      const oldHandle = currentHandle
-      const sourceSessionId = String(agent.session.id)
-      agent = handle.agent
-      currentHandle = handle
-      bindAgent()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      // The forked session (rewind) becomes the most recently used.
-      touchSession(childId)
-      state.emit()
-      void oldHandle?.dispose().catch(() => {})
+      // Swap the live agent for the fork (shared with rewindToNode): replay
+      // the seed, rebind, and free the replaced handle.
+      const sourceSessionId = adoptForkedAgent(handle, seed, rewindComposed.agentPreset, childId)
       // Decision-event pair around the completed rewind: `tui/rewind-done`
       // (the first non-empty string is toasted as the post-rewind summary,
       // e.g. a plugin reporting restored files) and the generic
@@ -2914,6 +3043,683 @@ export function createChannel(
       }
       notifySessionSwitched('rewind', String(childId), sourceSessionId)
       return row.text
+    },
+    async buildSessionTree(): Promise<SessionTreeData | null> {
+      const persistence = ctx.get('sessionPersistence') as
+        | (SessionSource & {
+          // Optional at runtime: fakes and third-party backends may not
+          // implement the full coordinator surface.
+          inspect?(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[] }>
+        })
+        | undefined
+      if (!persistence) {
+        state.notify(t('tree-unavailable'), { color: 'error' })
+        return null
+      }
+      // Pin the live session snapshot NOW: every await below (list/inspect)
+      // is a window in which a fire-and-forget switch (/new, /resume,
+      // /model) can swap `agent`. Reading agent.session piecemeal would
+      // stitch the NEW session's events under the OLD session's id — a
+      // confirm would then rewind from the wrong persisted log. Everything
+      // below reads this snapshot, and the result is discarded if the live
+      // session moved on before the build finished.
+      const liveSession = agent.session
+      const currentId = String(liveSession.id)
+      // Same enumerate as the /resume listing (snapshots when the backend
+      // offers revisions, plain list otherwise), each header narrowed through
+      // the sessions reader — one malformed header costs that session its
+      // metadata, never the whole tree. `raw` stays the backend's own header
+      // object for locate() below.
+      let listed: { header: RawSessionHeader; raw: unknown }[] = []
+      try {
+        if (typeof persistence.listSnapshots === 'function') {
+          const snapshots = await persistence.listSnapshots()
+          listed = snapshots.flatMap(snapshot => {
+            const raw = (snapshot as { header?: unknown } | null)?.header
+            const header = readHeader(raw)
+            return header === undefined ? [] : [{ header, raw }]
+          })
+        } else if (typeof persistence.list === 'function') {
+          const headers = await persistence.list()
+          listed = headers.flatMap(raw => {
+            const header = readHeader(raw)
+            return header === undefined ? [] : [{ header, raw }]
+          })
+        }
+      } catch {
+        // A listing failure degrades the tree to the live session only.
+      }
+      // Same cwd scoping as /resume (Claude Code's project dimension): forks
+      // inherit cwd, so the family never crosses projects — and the match is
+      // the project-aware one /resume uses, so a pre-upgrade subdirectory
+      // path, Windows separators, or a case variant on one header cannot
+      // quietly amputate the ancestors and siblings it records. Subagent
+      // child sessions carry parentSession too, but they are delegation
+      // artifacts, not rewind branches — exclude them from the family.
+      const local = listed.filter(entry =>
+        sessionCwdMatches(state.cwd, entry.header.cwd ?? '') &&
+        entry.header.origin !== 'subagent' &&
+        (entry.header.delegationDepth ?? 0) === 0,
+      )
+      const headerById = new Map(local.map(entry => [entry.header.id, entry]))
+      // The live session's header may not be materialized in list() yet
+      // (the jsonl backend writes on first append) — overlay the in-memory
+      // header so the ancestor walk below still finds a fresh fork's parent.
+      const liveMeta = (liveSession as { header?: SessionHeader }).header
+      if (!headerById.has(currentId) && liveMeta !== undefined) {
+        headerById.set(currentId, { header: readHeader(liveMeta) ?? { id: currentId, cwd: undefined, createdAt: undefined, parentSession: undefined, origin: undefined, delegationDepth: undefined, seedLength: undefined, agentPreset: undefined }, raw: liveMeta })
+      }
+      // Family = the live session's ancestor chain PLUS every descendant of
+      // its topmost known ancestor (siblings and cousins included).
+      const childrenByParent = new Map<string, string[]>()
+      for (const entry of local) {
+        if (entry.header.parentSession === undefined) continue
+        const list = childrenByParent.get(entry.header.parentSession)
+        if (list === undefined) childrenByParent.set(entry.header.parentSession, [entry.header.id])
+        else list.push(entry.header.id)
+      }
+      const ancestorIds: string[] = []
+      {
+        const visited = new Set<string>([currentId])
+        let cursor = headerById.get(currentId)
+        while (cursor?.header.parentSession !== undefined) {
+          const parentId = cursor.header.parentSession
+          if (visited.has(parentId)) break
+          visited.add(parentId)
+          if (!headerById.has(parentId)) break
+          ancestorIds.push(parentId)
+          cursor = headerById.get(parentId)
+        }
+      }
+      // BFS from the topmost ancestor. The scan must NOT be gated by family
+      // membership: ancestor-chain nodes are already in the family, and
+      // skipping them here would never enumerate their other children —
+      // siblings/cousins forking off a MIDDLE ancestor would be lost.
+      const family = new Set<string>([currentId, ...ancestorIds])
+      {
+        const scanned = new Set<string>()
+        const queue = [ancestorIds.at(-1) ?? currentId]
+        while (queue.length > 0) {
+          const id = queue.shift()!
+          if (scanned.has(id)) continue
+          scanned.add(id)
+          family.add(id)
+          for (const child of childrenByParent.get(id) ?? []) {
+            queue.push(child)
+          }
+        }
+      }
+      // Processing order is TOPOLOGICAL (a parent before its children): the
+      // coverage bookkeeping below — which seq range each chain already
+      // shows — feeds the next read's inherited-prefix skip, so a parent
+      // must be read before its forks. Within each sibling group the live
+      // chain wins, then newest first (the same priority the read budget
+      // always had).
+      const ancestorSet = new Set(ancestorIds)
+      const priorityOf = (a: string, b: string): number => {
+        const aChain = a === currentId || ancestorSet.has(a)
+        const bChain = b === currentId || ancestorSet.has(b)
+        if (aChain !== bChain) return aChain ? -1 : 1
+        return (headerById.get(b)?.header.createdAt ?? 0) - (headerById.get(a)?.header.createdAt ?? 0)
+      }
+      const kidsOf = new Map<string, string[]>()
+      const familyRoots: string[] = []
+      for (const id of family) {
+        const parentId = headerById.get(id)?.header.parentSession
+        if (parentId !== undefined && parentId !== id && family.has(parentId)) {
+          const list = kidsOf.get(parentId)
+          if (list === undefined) kidsOf.set(parentId, [id])
+          else list.push(id)
+        } else {
+          familyRoots.push(id)
+        }
+      }
+      familyRoots.sort(priorityOf)
+      for (const list of kidsOf.values()) list.sort(priorityOf)
+      const ordered: string[] = []
+      {
+        const seen = new Set<string>()
+        const stack = [...familyRoots].reverse()
+        while (stack.length > 0) {
+          const id = stack.pop()!
+          if (seen.has(id)) continue
+          seen.add(id)
+          ordered.push(id)
+          const kids = kidsOf.get(id)
+          if (kids !== undefined) {
+            for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!)
+          }
+        }
+        // Cycle-broken leftovers (corrupt parent headers) — never drop one.
+        for (const id of [...family].sort(priorityOf)) {
+          if (!seen.has(id)) ordered.push(id)
+        }
+      }
+      // Caps: the ancestor chain + live session ALWAYS stay selected — the
+      // structural invariant (the live branch must reach the family root)
+      // outranks the session cap, which therefore evicts only non-ancestors.
+      // The event budget bounds the READ cost too: non-live logs decode
+      // lazily and stop at the remaining budget (see below), the live
+      // session keeps only its tail.
+      const MAX_TREE_SESSIONS = 24
+      const MAX_TREE_EVENTS = 200_000
+      // The event budget alone does NOT bound read cost: skipped envelopes
+      // (ignorable frames, headers) are paid for but never collected, so a
+      // noisy log can return ZERO events and leave the next log a full scan
+      // allowance — 23 logs × ~800k envelopes would block the TUI for
+      // seconds. scanBudget caps the TOTAL envelopes inspected across all
+      // logs (the reader reports its real scanned count); per-log caps
+      // derive from the event budget as before, and the smaller of the two
+      // applies, so one flood cannot starve every later sibling either.
+      const MAX_TREE_SCANNED = defaultMaxScanned(MAX_TREE_EVENTS)
+      let scanBudget = MAX_TREE_SCANNED
+      const selected = new Set<string>()
+      let slots = MAX_TREE_SESSIONS
+      for (const id of ordered) {
+        const chain = id === currentId || ancestorSet.has(id)
+        if (chain || slots > 0) {
+          selected.add(id)
+          if (!chain) slots -= 1
+        }
+      }
+      // The live session's events come from memory (its header may not be
+      // materialized yet — the jsonl backend writes on first append).
+      const liveHeader = headerById.get(currentId)
+      const familySessions: FamilySession[] = []
+      let truncated = selected.size < family.size
+      let eventBudget = 0
+      // Coverage bookkeeping: coveredThrough(S) = the highest K such that
+      // [0..K] is already displayed by S's chain or an ancestor's. A fork's
+      // inherited seed prefix duplicates that range, so non-live reads SKIP
+      // it (the reader's skipBelowSeq): the prefix still costs scan budget
+      // (its bytes are read and parsed) but NOT the event budget — a fork
+      // of a huge parent pays only for its OWN events, so two small forks
+      // of a 70k-event parent both stay visible. Unreadable/unloaded
+      // sessions are transparent: they claim nothing beyond what their own
+      // ancestors covered, so a fork of a dead branch dedups against the
+      // grandparent instead of hiding its self-contained history.
+      const coveredThrough = new Map<string, number>()
+      for (const id of ordered) {
+        if (!selected.has(id)) continue
+        const entry = headerById.get(id)
+        if (id === currentId) {
+          const liveParentId = liveHeader?.header.parentSession ?? liveMeta?.parentSession
+          const liveParent = liveParentId !== undefined ? String(liveParentId) : undefined
+          const parentCovered = liveParent !== undefined
+            ? (coveredThrough.get(liveParent) ?? -1)
+            : -1
+          const liveEvents = liveSession.events
+          const remaining = Math.max(0, MAX_TREE_EVENTS - eventBudget)
+          // The live session's in-memory log is SELF-CONTAINED: a fork's
+          // events still carry the inherited seed prefix, which the parent's
+          // chain already displays (and already charged to the budget).
+          // Skipping it exactly like the non-live reads do keeps a live fork
+          // of a huge parent from spending the whole family budget on
+          // duplicated history and evicting its own siblings.
+          const liveSeed = liveHeader?.header.seedLength ?? liveMeta?.seedLength
+          const skipBelow =
+            liveParent !== undefined && liveSeed !== undefined
+              ? Math.min(liveSeed, parentCovered + 1)
+              : 0
+          const own = skipBelow > 0 ? liveEvents.filter(event => event.seq >= skipBelow) : liveEvents
+          // A live session larger than the remaining budget keeps its TAIL,
+          // aligned to whole turns (sessionTree.liveTailWindow): leftover
+          // entries of a turn whose turn/start was cut away render as
+          // selectable rows that can never rewind; a window holding no
+          // turn/start at all (one oversized LAST turn spans the budget)
+          // retries over the earlier complete turns instead of blacking the
+          // session out. Rewind itself never reads this copy (rewindToNode
+          // forks the real session), so the slice only narrows what the tree
+          // can display.
+          const events = liveTailWindow(own, remaining)
+          // Charge the KEPT tail, not the in-memory length: extraction only
+          // ever touches `events`, and charging the full log would black out
+          // every other family member's budget behind a discarded prefix.
+          eventBudget += events.length
+          if (events.length !== own.length) truncated = true
+          familySessions.push({
+            id,
+            createdAt: liveHeader?.header.createdAt ?? liveMeta?.createdAt ?? Date.now(),
+            ...(liveParent !== undefined ? { parentSession: liveParent } : {}),
+            ...(liveHeader?.header.seedLength !== undefined || liveMeta?.seedLength !== undefined
+              ? { seedLength: liveHeader?.header.seedLength ?? liveMeta!.seedLength }
+              : {}),
+            events,
+            live: true,
+            // The in-memory log always reaches the tip (liveTailWindow trims
+            // the head only), so the adopt/warning UX facts are derivable.
+            tailComplete: true,
+          })
+          // A kept tail cut off the front connects to nothing — coverage
+          // stays at the parent's (a fork of the live session re-reads the
+          // hidden prefix from its own log).
+          const firstKept = events.length > 0 ? events[0]!.seq : Number.POSITIVE_INFINITY
+          const lastKept = events.length > 0 ? events[events.length - 1]!.seq : -1
+          coveredThrough.set(
+            id,
+            firstKept <= parentCovered + 1 ? Math.max(parentCovered, lastKept) : parentCovered,
+          )
+          continue
+        }
+        const header = entry?.header
+        const parentId = header?.parentSession
+        const parentCovered = parentId !== undefined ? (coveredThrough.get(parentId) ?? -1) : -1
+        // Never skip past the seed prefix: events beyond it are this
+        // session's OWN — no ancestor can show them. A parent that was never
+        // read (evicted, or outside the family) covers nothing (skip 0).
+        const skipBelow =
+          parentId !== undefined && header?.seedLength !== undefined
+            ? Math.min(header.seedLength, parentCovered + 1)
+            : 0
+        const facts = {
+          id,
+          createdAt: header?.createdAt ?? 0,
+          ...(parentId !== undefined ? { parentSession: parentId } : {}),
+          ...(header?.seedLength !== undefined ? { seedLength: header.seedLength } : {}),
+        }
+        if (eventBudget >= MAX_TREE_EVENTS || scanBudget <= 0) {
+          // Budget spent: keep the STRUCTURE — the session degrades to an
+          // unloaded placeholder so its branch (and any ancestor chain
+          // through it) stays visible instead of vanishing from the tree.
+          truncated = true
+          familySessions.push({ ...facts, events: [], live: false, unloaded: true })
+          coveredThrough.set(id, parentCovered)
+          continue
+        }
+        // Read-only, tolerant, bounded: the compat reader decodes frames
+        // lazily and stops at the remaining event budget. Browsing the tree
+        // must never REWRITE history logs (the ignorable-marking repair
+        // stays on the explicit resume/rewind path), and the strict backend
+        // inspect would both reject third-party event types wholesale and
+        // parse chunk-heavy logs whole. Header facts come from list().
+        const remaining = MAX_TREE_EVENTS - eventBudget
+        // Source precedence, all read-only:
+        //  1. persistence.locate — the backend's OWN artifact resolution is
+        //     authoritative (custom root, workspace-key scheme). When it
+        //     names a path, ONLY that file is read: falling back to a
+        //     same-id copy under the stock root could surface a STALE log
+        //     from another backend configuration. A locate miss or an ABSENT
+        //     file falls through to inspect, never to the stock scan.
+        //  2. Stock root scan — only for backends WITHOUT locate (fakes,
+        //     older custom implementations).
+        //  3. inspect — the backend's strict read (non-file backends), with
+        //     the same budget enforced on what we keep — and ONLY when the
+        //     file read found NOTHING (undefined). A read that failed on a
+        //     safety cap or corruption (failed) must never escalate here:
+        //     inspect parses the WHOLE log up front, so falling through
+        //     would re-read unboundedly exactly the logs the caps exist to
+        //     bound (64 MiB frames, decode bombs) — degrade to a placeholder
+        //     instead.
+        let events: readonly SessionEvent[] | undefined
+        let complete = true
+        let failed = false
+        // First seq the chosen source actually covers: the file readers start
+        // at the inherited-prefix skip, inspect always hands the whole log.
+        let readFrom = 0
+        // Per-log scan allowance: the usual 4×-of-remaining derivation,
+        // clamped to what the tree-level scan budget still has.
+        const scanAllowance = Math.min(defaultMaxScanned(remaining), scanBudget)
+        const locate = persistence.locate
+        const hasLocate = typeof locate === 'function'
+        if (hasLocate && entry !== undefined) {
+          let locatedPath: string | undefined
+          try {
+            const location: unknown = locate.call(persistence, entry.raw)
+            // Only the jsonl kind enters the compat file layer — a foreign
+            // kind's artifact is the backend's own format (inspect below).
+            if (location !== null && typeof location === 'object') {
+              const record = location as { kind?: unknown; path?: unknown }
+              if (record.kind === 'jsonl' && typeof record.path === 'string') {
+                locatedPath = record.path
+              }
+            }
+          } catch {
+            // Best effort — a locate hiccup falls through to inspect.
+          }
+          if (locatedPath !== undefined) {
+            const viaPath = readSessionEventsFromFile(locatedPath, remaining, scanAllowance, skipBelow)
+            if (viaPath !== undefined) {
+              scanBudget -= viaPath.scanned
+              if (viaPath.failed === true) failed = true
+              else {
+                events = viaPath.events
+                complete = viaPath.complete
+                readFrom = skipBelow
+              }
+            }
+          }
+        } else if (!hasLocate) {
+          const read = readSessionEventsFromLog(id, remaining, scanAllowance, skipBelow)
+          if (read !== undefined) {
+            scanBudget -= read.scanned
+            if (read.failed === true) failed = true
+            else {
+              events = read.events
+              complete = read.complete
+              readFrom = skipBelow
+            }
+          }
+        }
+        if (!failed && events === undefined && typeof persistence.inspect === 'function') {
+          try {
+            const inspection = await persistence.inspect(SessionId(id))
+            // inspect parses the WHOLE log up front: charge the full length
+            // to the scan budget (may overdraw; the next iterations skip).
+            scanBudget -= inspection.events.length
+            // Non-file backends hand back the self-contained log from seq 0:
+            // the inherited-prefix skip the file readers got must apply here
+            // too, or a long prefix would fill the slice and the branch's OWN
+            // events — the only ones nobody else displays — would be cut.
+            const all = skipBelow > 0 ? inspection.events.filter(event => event.seq >= skipBelow) : inspection.events
+            readFrom = skipBelow
+            events = all
+            if (events.length > remaining) {
+              events = events.slice(0, remaining)
+              complete = false
+            }
+          } catch {
+            events = undefined
+          }
+        }
+        if (failed || events === undefined) {
+          // An unreadable log keeps the branch structure, no entries — and
+          // stays transparent for coverage, so a fork of this branch dedups
+          // against the grandparent instead of hiding its own history.
+          familySessions.push({ ...facts, events: [], live: false, unreadable: true })
+          coveredThrough.set(id, parentCovered)
+          continue
+        }
+        eventBudget += events.length
+        if (!complete) truncated = true
+        // tailComplete gates the branch-adopt target and the drop-turn
+        // warning: a budget-sliced read lost the tail, and a tip computed
+        // from it would fork mid-branch while claiming to keep everything.
+        familySessions.push({ ...facts, events, live: false, ...(complete ? { tailComplete: true } : {}) })
+        const lastRead = events.length > 0 ? events[events.length - 1]!.seq : -1
+        coveredThrough.set(
+          id,
+          readFrom <= parentCovered + 1 ? Math.max(parentCovered, lastRead) : parentCovered,
+        )
+      }
+      // A session swap mid-build invalidates the whole assembly (it mixes
+      // the snapshot's lineage with headers listed for the OLD cwd state):
+      // drop it silently — the reopened tree rebuilds on the new session.
+      if (agent.session !== liveSession) return null
+      return buildSessionTree(familySessions, currentId, truncated)
+    },
+    async rewindToNode(sessionId: string, seq: number, mode: 'rewind' | 'fork' = 'rewind'): Promise<string | null> {
+      const agents = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!agents) {
+        state.notify(t('rewind-unavailable'), { color: 'error' })
+        return null
+      }
+      // Pin the entry-time session: the awaits below (log load, preset
+      // compose, agent create) are windows in which a queued switch
+      // (/new, /resume, /model) can swap `agent` — the mutation queue only
+      // serializes the REPLACING entries, so the boundary and restored text
+      // derive from THIS session's log and any swap along the way aborts
+      // the rewind (forking or disposing whatever agent happens to be
+      // current at the end would rewind the wrong session).
+      const entrySession = agent.session
+      const currentId = String(entrySession.id)
+      const childId = SessionId(randomUUID())
+      // Source events: the live session from memory; any other family member
+      // from its durable log (legacy event types registered first — the same
+      // in-process compat seam as resumeTo, since load validates known types).
+      let sourceEvents: readonly SessionEvent[]
+      let sourceCwd = state.cwd
+      let forkFromLive = true
+      if (sessionId === currentId) {
+        sourceEvents = entrySession.events
+      } else {
+        forkFromLive = false
+        const persistence = ctx.get('sessionPersistence') as
+          | {
+            load(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>
+          }
+          | undefined
+        if (!persistence || typeof persistence.load !== 'function') {
+          state.notify(t('rewind-no-persistence'), { color: 'error' })
+          return null
+        }
+        try {
+          ensureLegacySessionEventTypes()
+          const loaded = await persistence.load(SessionId(sessionId))
+          sourceEvents = loaded.events
+          sourceCwd = loaded.meta.cwd ?? state.cwd
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          state.notify(t('rewind-load-failed', { err: message }), { color: 'error' })
+          return null
+        }
+      }
+      // DSH event order is `turn/start → user/message → … → turn/end`, and a
+      // fork seed must not end inside an open turn. pi's navigateTree
+      // semantics mapped onto that constraint (sessionTree.rewindTarget): a
+      // USER message drops its turn — the boundary sits just before the
+      // turn/start and the prompt comes back into the input for re-editing;
+      // any OTHER entry keeps through its enclosing STEP — a mid-turn cut at
+      // the step/end with the turn closed synthetically (DSH agentic turns
+      // span thousands of events, so turn-granular keeping would barely move
+      // the visible history). Fork mode (pi's /fork) instead KEEPS the
+      // picked entry: a user message cuts right after itself (the turn's
+      // reply drops) and never returns text to the input.
+      const target = mode === 'fork'
+        ? forkTarget(sourceEvents, seq)
+        : rewindTarget(sourceEvents, seq)
+      const boundary = target.boundary
+      if (boundary < 0) {
+        state.notify(t('rewind-first-message'), { color: 'error' })
+        return null
+      }
+      // Keeping the entry can still be a NO-OP: when nothing message-bearing
+      // follows the boundary (only a turn/end, or nothing at all), the fork's
+      // transcript would be identical to the live one. pi truncates to right
+      // after the entry; DSH's step/turn-closed seed cannot always express
+      // that, so the honest answer is to say there is nothing to rewind. A
+      // DEAD session's tip still forks: that adopts the branch, a real
+      // switch.
+      if (forkFromLive && !sourceEvents.some(event =>
+        event.seq > boundary &&
+        (event.type === 'user/message' || event.type === 'assistant/message' ||
+          event.type === 'tool/call' || event.type === 'tool/result'))) {
+        state.notify(t('rewind-noop'), { color: 'warning' })
+        return null
+      }
+      // The dropped turn's own prompt text, restored into the input after
+      // the swap ('' whenever the entry was kept — fork mode included — or
+      // the turn had no human-typed text to restore).
+      const restoredText = mode === 'fork' ? '' : turnUserText(sourceEvents, seq)
+      // The fork continues under the source session's own preset: switches
+      // are blank-only, so every `agent-preset/selected` event predates any
+      // rewind boundary and the source log resolves the exact composition.
+      // The route likewise stays the live one — a rewind continues the same
+      // conversation, so a `/model` switch must survive it (issue #30).
+      const sourcePreset = forkFromLive
+        ? runningPresetOf(entrySession)
+        : ((await resolvePersistedPreset(ctx, SessionId(sessionId))) ?? runningPresetOf(entrySession))
+      const rewindComposed = await composePreset(ctx, sourcePreset)
+      // Everything fallible is done — only NOW stop a running turn (a load
+      // or preset failure above must not kill it). But bail first when the
+      // live session was swapped during those awaits: cancelling/forking
+      // now would hit the NEW session with THIS session's boundary.
+      if (agent.session !== entrySession) {
+        state.notify(t('rewind-session-changed'), { color: 'error' })
+        return null
+      }
+      // Stop a running turn first and WAIT for its turn/end to land: fork
+      // rejects boundaries inside open turns, and Agent.cancel() closes the
+      // turn asynchronously (a long thinking turn can take seconds to
+      // settle). Cross-session rewinds need this too: the live agent is
+      // about to be disposed, and its turn must close cleanly.
+      const wasWorking = state.working
+      const cancelSeq = agent.session.seq
+      if (wasWorking) agent.cancel({ kind: 'user' })
+      if (wasWorking) {
+        const turnSettled = await waitForTurnEnd(agent.session, cancelSeq, 30000)
+        if (!turnSettled) {
+          state.notify(t('rewind-settling'), { color: 'error' })
+          return null
+        }
+      }
+      // Slice the seed from the PINNED event snapshot. Never sessions.fork
+      // here: fork() rejects a boundary inside an open turn, which is
+      // exactly where a keep-style cut lands (closeTurn set) — close it
+      // with the exact event a real user interrupt writes instead (the
+      // persistence layer closes crash-orphaned turns the same way).
+      // agents.create validates the result itself (contiguous from seq 0,
+      // no open turns).
+      const seed = sourceEvents.filter(event => event.seq <= boundary)
+      if (target.closeTurn !== undefined) {
+        const last = seed[seed.length - 1]
+        if (last !== undefined) {
+          seed.push({
+            type: 'turn/end',
+            seq: last.seq + 1,
+            time: last.time + 1,
+            data: { turn: target.closeTurn, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+          })
+        }
+      }
+      let handle: AgentHandle
+      try {
+        handle = await agents.create({
+          sessionId: childId,
+          seed,
+          meta: {
+            cwd: sourceCwd,
+            parentSession: SessionId(sessionId),
+            seedLength: seed.length,
+            ...(rewindComposed.agentPreset === undefined
+              ? {}
+              : { agentPreset: rewindComposed.agentPreset }),
+          },
+          agentOptions: { provider: state.provider, model: state.model },
+          ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
+        })
+      } catch {
+        state.notify(t('rewind-create-failed'), { color: 'error' })
+        return null
+      }
+      try {
+        await attachSessionToWorkspace(ctx, sourceCwd, childId)
+      } catch (error) {
+        state.notify(
+          t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+          { color: 'warning', timeoutMs: 8000 },
+        )
+      }
+      // The create await was another swap window: adopting now would dispose
+      // the NEW session's agent. Free the fork we just made and bail.
+      if (agent.session !== entrySession) {
+        void handle.dispose().catch(() => {})
+        state.notify(t('rewind-session-changed'), { color: 'error' })
+        return null
+      }
+      // Replay the forked history into a fresh transcript (the same swap
+      // tail rewindTo runs), then announce the session switch.
+      const sourceSessionId = adoptForkedAgent(handle, seed, rewindComposed.agentPreset, childId)
+      notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
+      return restoredText
+    },
+    async forkSession(): Promise<boolean> {
+      const sessions = ctx.get('sessions') as
+        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
+        | undefined
+      const agents = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!sessions || !agents) {
+        state.notify(t('fork-unavailable'), { color: 'error' })
+        return false
+      }
+      // kimi-code /fork semantics: refuse mid-turn instead of cancelling —
+      // the fork must not surprise the user by killing their running turn,
+      // and sessions.fork rejects an open-turn log anyway.
+      if (state.working) {
+        state.notify(t('fork-while-working'), { color: 'warning' })
+        return false
+      }
+      const source = agent.session
+      const childId = SessionId(randomUUID())
+      // No boundary: the whole (turn-closed) log. Slice via sessions.fork for
+      // the same validation the rewind path gets, never sessions.fork's
+      // session-storing sibling — agents.create must own the new session.
+      let seed: readonly SessionEvent[]
+      try {
+        seed = sessions.fork(source).events
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(t('fork-failed', { err: message }), { color: 'error' })
+        return false
+      }
+      // Same preset/route rule as a rewind fork: the source log's own
+      // composition, the live route (a /model switch survives forking).
+      const forkComposed = await composePreset(ctx, runningPresetOf(source))
+      let handle: AgentHandle
+      try {
+        handle = await agents.create({
+          sessionId: childId,
+          seed,
+          meta: {
+            cwd: state.cwd,
+            // NO parentSession: a /fork copy is an independent conversation
+            // (kimi-code semantics — a copy of the message list under a new
+            // root session, like /new plus the history), not a rewind branch.
+            // Recording lineage would fold it into the source's family in
+            // /resume and the user would never find it.
+            seedLength: seed.length,
+            ...(forkComposed.agentPreset === undefined
+              ? {}
+              : { agentPreset: forkComposed.agentPreset }),
+          },
+          agentOptions: { provider: state.provider, model: state.model },
+          ...(forkComposed.setup === undefined ? {} : { setup: forkComposed.setup }),
+        })
+      } catch {
+        state.notify(t('fork-create-failed'), { color: 'error' })
+        return false
+      }
+      // STAY in the source session: adopting the fork would dispose the live
+      // agent (killing its in-flight turn and background tasks) — the fork is
+      // an independent copy the user enters via /resume or the printed resume
+      // command. The teardown order matters:
+      // 1. attach while the fork's agent is still LIVE — the workspace's
+      //    header read resolves live sessions from the registry, so attaching
+      //    after dispose races the persistence index and can fail with
+      //    "cannot validate session".
+      // 2. await the dispose so the seed log finishes flushing…
+      // 3. …then append the Fork: title — appending mid-flush races the
+      //    writer and the frame is silently dropped.
+      try {
+        await attachSessionToWorkspace(ctx, state.cwd, childId)
+      } catch (error) {
+        state.notify(
+          t('fork-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+          { color: 'warning', timeoutMs: 8000 },
+        )
+      }
+      try {
+        await handle.dispose()
+      } catch (error: unknown) {
+        ctx.logger.warn('dsh-tui: forked session dispose failed: %o', error)
+      }
+      // kimi's naming convention: the fork wears `Fork: <source title>` (the
+      // prefix stays English in both locales). Best effort — a backend whose
+      // log the compat layer cannot reach just leaves the fork untitled.
+      const sourceTitle = state.sessionTitle.trim()
+      appendSessionTitle(String(childId), `Fork: ${sourceTitle === '' ? String(source.id).slice(0, 8) : sourceTitle}`)
+      // The same resume-command shape the exit hint prints (plugin.ts
+      // resumeCommand): DSH_TUI_RESUME_SESSION + the boot profile.
+      const profile = resolveDshProfileName()
+      const boot = profile === undefined ? 'dsh --config cordis.yml' : `dsh --profile ${profile}`
+      const command = process.platform === 'win32'
+        ? `dsh-tui --resume ${childId}`
+        : `DSH_TUI_RESUME_SESSION=${childId} ${boot}`
+      state.notify(t('fork-done', { id: String(childId), command }), { timeoutMs: 8000 })
+      return true
     },
     async resumeTo(sessionId: string): Promise<ResumeResult> {
       // Switch the live agent to a persisted session: /resume picker Enter
@@ -3016,6 +3822,7 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
+      state.sessionColor = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -3195,6 +4002,7 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
+      state.sessionColor = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -3383,6 +4191,7 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
+      state.sessionColor = ''
       state.tokens = { input: 0, output: 0 }
       state.responseChars = 0
       state.activeToolCount = 0
@@ -3510,6 +4319,11 @@ export function createChannel(
       const normalized = normalizeScrollGutter(mode)
       if (normalized === state.scrollGutter) return
       state.scrollGutter = normalized
+      state.emit()
+    },
+    setPromptSessionLabel(enabled) {
+      if (enabled === state.promptSessionLabel) return
+      state.promptSessionLabel = enabled
       state.emit()
     },
     setStatusBar(config) {
@@ -3649,6 +4463,14 @@ export function createChannel(
       const providers = llm.listProviders()
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
+    },
+    listProviders() {
+      // Group labels for the two-level /model picker: the registry's own
+      // display names, detached so a registry swap cannot leak through.
+      const llm = ctx.get('llm') as
+        | { listProviders(): readonly { id: string; name: string }[] }
+        | undefined
+      return Promise.resolve(llm === undefined ? [] : llm.listProviders().map(info => ({ ...info })))
     },
     async listSkills() {
       // snapshot() over list(): only a COMPLETE observation is authoritative
@@ -3794,7 +4616,12 @@ export function createChannel(
       }
       const revision = (): number | undefined =>
         settings.describe().find(descriptor => descriptor.ns === 'llm-pi-ai')?.revision
+      // The OAuth sign-in surface (dsh-auth-style plugin), structural and
+      // optional: mounting the plugin lights up the wizard's OAuth branch,
+      // and without it the wizard is exactly what it was before.
+      const oauthApi = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
       return {
+        ...(oauthApi === undefined ? {} : { oauth: oauthApi }),
         listCatalogProviders() {
           // declared === true marks routes the adapter knows only because a
           // stored profile names them (user-added); the rest are activatable
@@ -3839,6 +4666,12 @@ export function createChannel(
           }
         },
       }
+    },
+    async oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined> {
+      // Same optional seam the wizard's OAuth branch reads: absent plugin →
+      // undefined, and `/login` renders exactly its pre-plugin lines.
+      const api = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
+      return api === undefined ? undefined : api.providers()
     },
     async sideQuestion(
       question: string,
@@ -3928,6 +4761,57 @@ export function createChannel(
       agent.session.append('session/title', { title })
       state.sessionTitle = title
       state.emit()
+    },
+    setSessionColor(color) {
+      // `session/color` is a dsh-tui plugin event — not in dsh-session's
+      // typed union, so appended through the same cast applyMode uses for
+      // its sandbox/approval overrides. It replays on resume/rewind like
+      // session/title, keeping each session's accent color its own.
+      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
+        .append('session/color', { color })
+      state.sessionColor = color
+      state.emit()
+    },
+    async recapRecent(options) {
+      // `/recap` (pi-recap semantics): one tool-less LLM call over the
+      // session's TAIL exchanges — unlike /btw it does not replay the full
+      // derived history (the excerpt IS the payload), so it stays cheap.
+      // The answer is pure UI state: never appended to the session log.
+      const llm = ctx.get('llm') as SideQuestionLlm | undefined
+      if (!llm) return { summary: null, error: t('recap-llm-unavailable') }
+      const header = agent.session.requestHeader()
+      const config = header?.config
+      const activity = collectRecentActivity(agent.session.events, RECAP_RECENT_CHARS)
+      if (activity === '') return { summary: null, error: t('recap-no-activity') }
+      const messages: Message[] = [
+        createUserMessage({
+          content: [{ type: 'text', text: wrapRecapPrompt(activity) }],
+          source: { kind: 'plugin', plugin: 'dsh-tui/recap' },
+        }),
+      ]
+      const request: Record<string, unknown> = {
+        provider: config?.provider ?? state.provider,
+        model: config?.model ?? state.model,
+        messages,
+        ...(header?.system !== undefined && { system: header.system }),
+        ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
+        ...(config?.temperature !== undefined && { temperature: config.temperature }),
+        ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),
+        ...(config?.stop !== undefined && { stop: [...config.stop] }),
+        sessionId: agent.session.id,
+        ...(options?.signal && { signal: options.signal }),
+      }
+      const outcome = await runSideQuestion({
+        stream: llm.stream.bind(llm),
+        options: request,
+        onText: options?.onText,
+        signal: options?.signal,
+      })
+      if (outcome.answer === null) return { summary: null, error: outcome.error }
+      const parsed = parseRecapResponse(outcome.answer)
+      return parsed.title === undefined
+        ? { summary: parsed.summary }
+        : { summary: parsed.summary, title: parsed.title }
     },
     async deleteSession(sessionId) {
       // The live session's log is still being appended by this process —
@@ -5491,6 +6375,13 @@ ${output}
           nextRowId += 1
           break
         }
+        // `/color` accent (dsh-tui plugin event, replayed on resume/rewind
+        // like session/title): last write wins, '' clears to the default.
+        if ((event as { type: string }).type === 'session/color') {
+          const data = event.data as unknown as { color?: unknown }
+          state.sessionColor = typeof data.color === 'string' ? data.color : ''
+          break
+        }
         // Custom plugin events (tuiRenderers seam): a registered renderer
         // maps the payload to text rows — title as a local row, body as
         // preview-clipped local-output rows, same shape pushLocal uses.
@@ -6074,6 +6965,25 @@ function mentionImageMediaType(path: string): MentionImageMediaType | undefined 
   return MENTION_IMAGE_MEDIA_TYPES[extname(path).toLowerCase()]
 }
 
+/** One mention target that resolved and stat'ed to something attachable. */
+interface ResolvedMention {
+  target: { displayPath: string }
+  info: { type: 'file' | 'directory' | 'other' }
+}
+
+/** Resolve+stat one candidate path; undefined when it throws OR stats
+ * absent — both are a miss for strip-first mention resolution (issue #359). */
+async function tryResolveMention(fs: MentionFs, absolute: string): Promise<ResolvedMention | undefined> {
+  try {
+    const target = await fs.resolve(absolute)
+    const info = await fs.stat(target)
+    if (info === undefined) return undefined
+    return { target, info }
+  } catch {
+    return undefined
+  }
+}
+
 export interface MentionExpansion {
   /** Model-facing blocks: the typed text first, one block per attachment. */
   blocks: ContentBlock[]
@@ -6107,64 +7017,95 @@ export async function expandMentions(
   let imageBytes = 0
   if (fs !== undefined) {
     for (const mention of mentions) {
+    const display = mention.literal ?? mention.path
     const imageMediaType = mentionImageMediaType(mention.path)
     if (budget <= 0 && imageMediaType === undefined) break
     // Mentions resolve against the session cwd, same as the model-facing fs
-    // tools; absolute paths pass through untouched.
+    // tools; absolute paths pass through untouched. A `#L12-14` line suffix
+    // (issue #359) is stripped before resolution; when the stripped path
+    // misses, the typed literal (suffix intact) gets ONE fallback try so
+    // filenames genuinely containing `#L…` still resolve as whole files.
     const absolute = isAbsolute(mention.path) ? mention.path : join(cwd, mention.path)
-    let target: { displayPath: string }
-    let info: { type: 'file' | 'directory' | 'other' } | undefined
-    try {
-      target = await fs.resolve(absolute)
-      info = await fs.stat(target)
-    } catch {
-      missing.push(mention.path)
+    let resolved = await tryResolveMention(fs, absolute)
+    let literalFallback = false
+    if (resolved === undefined && mention.literal !== undefined) {
+      const literalPath = isAbsolute(mention.literal) ? mention.literal : join(cwd, mention.literal)
+      resolved = await tryResolveMention(fs, literalPath)
+      literalFallback = resolved !== undefined
+    }
+    if (resolved === undefined) {
+      missing.push(display)
       continue
     }
+    const { target, info } = resolved
+    // On a literal-fallback hit the attached file IS the typed name — the
+    // model must see that path, not the suffix-stripped one.
+    const shownPath = literalFallback ? display : mention.path
+    // …and judge image-ness by the typed extension in that case too.
+    const imageType = literalFallback && mention.literal !== undefined
+      ? mentionImageMediaType(mention.literal)
+      : imageMediaType
     if (info?.type === 'file') {
-      if (imageMediaType !== undefined && attachments !== undefined && fs.readBytes !== undefined) {
+      if (imageType !== undefined && attachments !== undefined && fs.readBytes !== undefined) {
         const limits = attachments.imageLimits
-        if (!limits.mediaTypes.includes(imageMediaType) || imageCount >= limits.maxImagesPerMessage) {
-          missing.push(mention.path)
+        if (!limits.mediaTypes.includes(imageType) || imageCount >= limits.maxImagesPerMessage) {
+          missing.push(display)
           continue
         }
         try {
           const data = await fs.readBytes(target, undefined, limits.maxImageBytes)
           if (imageBytes + data.byteLength > limits.maxMessageImageBytes) {
-            missing.push(mention.path)
+            missing.push(display)
             continue
           }
           const attachment = await attachments.saveImage({
             data,
-            mediaType: imageMediaType,
+            mediaType: imageType,
             name: basename(target.displayPath),
           })
           blocks.push({ type: 'image', attachment })
           imageCount += 1
           imageBytes += data.byteLength
-          attached.push(mention.path)
+          attached.push(display)
         } catch {
-          missing.push(mention.path)
+          missing.push(display)
         }
         continue
       }
       try {
         const cap = Math.min(MENTION_MAX_FILE_CHARS, budget)
-        let content = await fs.readText(target)
+        const content = await fs.readText(target)
+        let body = content
         let truncated = false
-        if (content.length > cap) {
-          content = content.slice(0, cap)
+        let header = `<attached-file path="${shownPath}">`
+        if (mention.startLine !== undefined && !literalFallback) {
+          // Line-range slice (issue #359): 1-based inclusive. An endLine
+          // past EOF clamps to the file; a startLine past EOF falls back
+          // to the whole file with an in-band note — never a silent
+          // empty attach. Line ranges never apply to literal-fallback
+          // hits (those files really are named `…#L…`, no suffix typed).
+          const lines = content.split('\n')
+          if (mention.startLine > lines.length) {
+            header = `<attached-file path="${shownPath}" lines="${mention.startLine}-${mention.endLine}" note="requested lines beyond EOF (file has ${lines.length} line${lines.length === 1 ? '' : 's'}); whole file attached">`
+          } else {
+            const endLine = Math.min(mention.endLine ?? mention.startLine, lines.length)
+            header = `<attached-file path="${shownPath}" lines="${mention.startLine}${endLine === mention.startLine ? '' : `-${endLine}`}">`
+            body = lines.slice(mention.startLine - 1, endLine).join('\n')
+          }
+        }
+        if (body.length > cap) {
+          body = body.slice(0, cap)
           truncated = true
         }
-        budget -= content.length
+        budget -= body.length
         blocks.push({
           type: 'text',
-          text: `<attached-file path="${mention.path}">\n${content}${truncated ? '\n[… truncated]' : ''}\n</attached-file>`,
+          text: `${header}\n${body}${truncated ? '\n[… truncated]' : ''}\n</attached-file>`,
         })
-        attached.push(mention.path)
+        attached.push(display)
       } catch {
         // Binary/undecodable or unreadable — report it like a miss.
-        missing.push(mention.path)
+        missing.push(display)
       }
       continue
     }
@@ -6181,16 +7122,16 @@ export async function expandMentions(
         budget -= body.length
         blocks.push({
           type: 'text',
-          text: `<attached-directory path="${mention.path}">\n${body}\n</attached-directory>`,
+          text: `<attached-directory path="${shownPath}">\n${body}\n</attached-directory>`,
         })
-        attached.push(mention.path)
+        attached.push(display)
       } catch {
-        missing.push(mention.path)
+        missing.push(display)
       }
       continue
     }
     // Absent (stat → undefined) or a special file.
-    missing.push(mention.path)
+    missing.push(display)
     }
   }
   if (attachments !== undefined && stagedImages !== undefined) {

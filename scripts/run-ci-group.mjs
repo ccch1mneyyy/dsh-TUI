@@ -253,6 +253,11 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
+// 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
+// （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
+// （渲染、Enter 菜单、字母直达执行、Esc）。
+    ["verify-session-tree", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree.tsx']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
 // ● 前缀、内容为空的行。
@@ -281,6 +286,11 @@ const GROUPS = {
 // 模型路由原子解析回归（issue #67）：完整 config > pref > default 整对
 // 生效，provider-only pin 不得与另一半拼接出错配路由。
     ["verify-model-route", ['node', 'scripts/verify-model-route.mjs']],
+// /model 二级选择器派生回归：provider 分组（首现排序、显示名回退、
+// 计数）与落焦规则（多 provider 聚焦当前组、单 provider 直达模型层、
+// 缺席当前 provider 落首行）。键盘与 overlay 归约由 verify-chat-overlay
+// 覆盖，这里钉住两层共用的纯派生。
+    ["verify-model-picker-groups", ['node', 'scripts/verify-model-picker-groups.mjs']],
 // 全屏出厂默认迁移回归（0.9.x schema + cordis.patch.yml false→true 翻转）：
 // 翻转前钉在 settings 用户层的显式 false 首启被 unset 一次（marker 仅在
 // 写入成功后落盘，失败下次自愈重试），此后再写的 false 是用户主动选择
@@ -363,6 +373,20 @@ const GROUPS = {
 // dsh-file: URL 编解码、相对路径按 cwd 解析、file:// 转换、Windows
 // start 组装——fileTarget.ts / openExternal.ts 的纯函数部分。
     ["verify-clickable-targets", ['node', '--import', 'tsx/esm', 'scripts/verify-clickable-targets.ts']],
+// 会话标识回归（issue #372）：/color 会话强调色（setSessionColor 调用 +
+// 边框 cell 级颜色重绘 + reset 恢复）、会话名标签渲染在输入框顶边框、
+// /recap 面板（摘要 + 建议标题 + a 键一键应用标题走 renameSession）。
+    ["verify-session-color-recap", ['node', '--import', 'tsx/esm', 'scripts/verify-session-color-recap.tsx']],
+// 打开会话自动总结回归（recapOnOpen）：挂载自动触发恰一次、灰行渲染、
+// hover 提示与关闭 chip、点击展开完整面板、a 应用标题、Esc 收起、
+// × 关闭、会话切换重新触发、失败静默、设置关闭不再触发。
+    ["verify-auto-recap", ['node', '--import', 'tsx/esm', 'scripts/verify-auto-recap.tsx']],
+// @ 引用行区间回归（issue #359）：`#L12-14` 后缀按 1-based 闭区间切片
+// 附加、endLine 越界 clamp 到文件尾、startLine 越界回退整文件并在块内
+// 注明、剥后路径未命中时回退字面路径（真叫 `…#L…` 的文件按整文件附加
+// 且模型看到字面路径）、双 miss 报用户原文、无后缀行为不变、目录忽略
+// 后缀。内存 fs stub，expandMentions 纯扩展逻辑。
+    ["verify-mention-lines", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-lines.ts']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得

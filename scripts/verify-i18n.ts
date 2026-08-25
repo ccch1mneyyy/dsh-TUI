@@ -19,7 +19,9 @@ import { i18nDict, type I18nText } from '../src/i18n.js'
 //   traj-sort-*   src/screens/TrajectoryScene.tsx  t(`traj-sort-${sort}`)
 //   traj-proj-*   src/screens/TrajectoryScene.tsx  t(`traj-proj-${projection}`)
 //   logo-drift-*  src/components/LogoV2.tsx        tOr(`logo-drift-${kind}`)
-const DYNAMIC_PREFIXES = ['cmd-desc-', 'traj-sort-', 'traj-proj-', 'logo-drift-']
+//   tree-filter-* src/screens/SessionTree.tsx      t(`tree-filter-${filter}`)
+//   tree-kind-*   src/screens/SessionTree.tsx      t(`tree-kind-${entry.kind}`)
+const DYNAMIC_PREFIXES = ['cmd-desc-', 'traj-sort-', 'traj-proj-', 'logo-drift-', 'tree-filter-', 'tree-kind-']
 
 let failures = 0
 function fail(msg: string) {

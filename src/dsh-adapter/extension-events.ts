@@ -335,7 +335,7 @@ export type TuiSessionSwitchDecision =
  * before (not currently produced — every switch has a live source).
  */
 export interface TuiSessionSwitchedEvent extends TuiDecisionContext {
-  kind: 'new' | 'resume' | 'rewind'
+  kind: 'new' | 'resume' | 'rewind' | 'fork'
   /** The session that just went live. */
   sessionId: string
   previousSessionId?: string

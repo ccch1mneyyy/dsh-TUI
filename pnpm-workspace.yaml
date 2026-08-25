@@ -30,6 +30,7 @@ overrides:
   '@deepseek-ai/dsh-home-paths': 0.1.1-rc.2
   '@deepseek-ai/dsh-invariants': 0.1.1-rc.2
   '@deepseek-ai/dsh-llm': 0.1.1-rc.2
+  '@deepseek-ai/dsh-llm-pi-ai': 0.1.1-rc.2
   '@deepseek-ai/dsh-persona': 0.1.1-rc.2
   '@deepseek-ai/dsh-sandbox': 0.1.1-rc.2
   '@deepseek-ai/dsh-sandbox-policy': 0.1.1-rc.2
@@ -59,8 +60,12 @@ overrides:
   '@deepseek-ai/dsh-workspace': 0.1.1-rc.2
 
 allowBuilds:
+  # Optional postinstall-only (pi-ai transitive deps): nothing at runtime
+  # needs their build scripts.
+  '@google/genai': false
   esbuild: false
   koffi: false
+  protobufjs: false
 minimumReleaseAgeExclude:
   - '@deepseek-ai/cordis-plugin-include@1.0.6'
   - '@deepseek-ai/cordis-plugin-loader@1.0.2'
@@ -79,6 +84,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-home-paths@0.1.0-rc.6 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-invariants@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-llm@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
+  - '@deepseek-ai/dsh-llm-pi-ai@0.1.1-rc.2'
   - '@deepseek-ai/dsh-persona@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-pwsh-local@0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-sandbox-policy@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
