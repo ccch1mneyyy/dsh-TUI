@@ -29,7 +29,7 @@ process.env.HOME = isolatedHome
 process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 
-const [{ Context }, { createChannel }, { SubagentActivityStore }, { settle }] = await Promise.all([
+const [{ Context }, { createChannel }, { SubagentActivityStore }, { settled, sleep }] = await Promise.all([
   import('@deepseek-ai/cordis'),
   import('../src/dsh-adapter/channel.js'),
   import('../src/dsh-adapter/subagents.js'),
@@ -41,7 +41,6 @@ function check(name: string, ok: boolean, extra = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 // ── snapshot 计数插桩：包一层原方法 ──
 let snapshotCalls = 0
@@ -85,9 +84,7 @@ const chunk = (text: string) => ({ type: 'assistant/chunk', data: { chunk: { typ
 ;(ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit('subagent/start', {
   id: 'child-agent', runId: 'run-1', provider: 'fake-provider',
 })
-await settle(() => channel.subagents.length === 1 && channel.subagents[0]?.agentId === 'child-agent')
-const linked = channel.subagents.length === 1 && channel.subagents[0]!.agentId === 'child-agent'
-check('subagent/start 建立 tracked subagent', linked, JSON.stringify(channel.subagents.map(s => s.agentId)))
+check('subagent/start 建立 tracked subagent', await settled(() => channel.subagents.length === 1 && channel.subagents[0]?.agentId === 'child-agent'), JSON.stringify(channel.subagents.map(s => s.agentId)))
 
 // ── 1. chunk 风暴：200 个 delta 同步连发（事件循环同一 tick 内）──
 const BURST = 200

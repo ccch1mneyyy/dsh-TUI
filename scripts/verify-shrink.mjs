@@ -108,14 +108,18 @@ function check(name, ok, extra = '') {
 
   // Shrink: 60 -> 40 lines.
   instance.rerender(React.createElement(App, { lineCount: 40 }))
+  // 等待与断言共用同一快照 viewport：谓词覆盖下方全部语义断言的条件
+  // （含 marker——旧谓词更弱，缺 marker 项），断言在同一快照上求值，无分叉。
+  let viewport = []
   await settle(() => {
-    const lines = tailWindow()
-    const nums = lines
+    viewport = tailWindow()
+    const nums = viewport
       .map(l => /^line (\d+) padded content$/.exec(l.trim()))
       .filter(Boolean)
       .map(match => Number(match[1]))
-    return !lines.some(l => /line (4\d|5\d) padded/.test(l)) &&
-      nums.length > 0 && nums[nums.length - 1] === 39
+    return !viewport.some(l => /line (4\d|5\d) padded/.test(l)) &&
+      nums.length > 0 && nums[nums.length - 1] === 39 &&
+      viewport.some(l => l.includes('BOTTOM_PINNED_MARKER'))
   })
   const shrinkBytes = stdout.frames.slice(framesBefore).join('')
 
@@ -129,13 +133,7 @@ function check(name, ok, extra = '') {
     !/\x1b\[2J|\x1b\[3J/.test(shrinkBytes),
   )
 
-  // 2-4. xterm 重建的视口语义断言。
-  const buf = term.buffer.active
-  const start = Math.max(0, buf.length - ROWS)
-  const viewport = []
-  for (let y = start; y < buf.length; y++) {
-    viewport.push((buf.getLine(y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
-  }
+  // 2-4. xterm 重建的视口语义断言（在 settle 捕获的同一快照 viewport 上）。
   const markerRow = viewport.findIndex(l => l.includes('BOTTOM_PINNED_MARKER'))
   check('marker visible in viewport', markerRow >= 0)
   check(

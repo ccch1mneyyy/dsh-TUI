@@ -21,7 +21,7 @@ const [
   { render },
   { EffortChargeGlyph },
   { ClockProvider },
-  { settle },
+  { settled, sleep },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -32,7 +32,6 @@ const [
   import('./lib/term-test.mjs'),
 ])
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 let failures = 0
 function check(name: string, ok: boolean, detail = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${detail === '' ? '' : ` (${detail})`}`)
@@ -134,8 +133,7 @@ check('charge ramps dark→full (sampled, monotone)',
 // 测不到「保持」——保留固定窗口。
 await sleep(300)
 check('past the charge window: accent stays solid', prefixFgTruecolor() && prefixBold())
-await settle(() => !prefixFgTruecolor() && !prefixBold())
-check('off the top tier again: accent gone', !prefixFgTruecolor() && !prefixBold())
+check('off the top tier again: accent gone', await settled(() => !prefixFgTruecolor() && !prefixBold()))
 
 if (failures > 0) {
   console.error(`${failures} check(s) failed`)
