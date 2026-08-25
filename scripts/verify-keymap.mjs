@@ -43,7 +43,7 @@ import {
   resetKeymapOverrides,
   setKeymapOverrides,
 } from '../lib/types/utils/keymap.js'
-import { settle, viewportLines } from './lib/term-test.mjs'
+import { settle, settled, sleep, viewportLines } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -120,7 +120,6 @@ resetKeymapOverrides()
 // spawning a real editor that would hold the output pipes open.
 delete process.env.VISUAL
 delete process.env.EDITOR
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 const term = new XTerm({ cols: 110, rows: 34, scrollback: 100, allowProposedApi: true })
 
 function makeStreams() {
@@ -237,13 +236,11 @@ const clipboardNotice = () => notifications.some(n => /clipboard|剪贴板/i.tes
 
 // Baseline: a plain 'v' types normally.
 stdin.write('v')
-await settle(() => promptText() === 'v')
-check('plain v types', promptText() === 'v', JSON.stringify(promptText()))
+check('plain v types', await settled(() => promptText() === 'v'), JSON.stringify(promptText()))
 
 // Ctrl+C clears the non-empty prompt (idle single press).
 stdin.write('\x03')
-await settle(() => promptText() === '')
-check('ctrl+c clears the prompt', promptText() === '', JSON.stringify(promptText()))
+check('ctrl+c clears the prompt', await settled(() => promptText() === ''), JSON.stringify(promptText()))
 
 // Alt+V arrives as ESC v. Whatever the clipboard holds, the paste branch
 // must consume the key: a prompt change or a clipboard notification are
@@ -251,10 +248,9 @@ check('ctrl+c clears the prompt', promptText() === '', JSON.stringify(promptText
 const beforeAltV = promptText()
 notifications.length = 0
 stdin.write('\x1bv')
-await settle(() => promptText() !== beforeAltV || clipboardNotice())
 check(
   'alt+v reaches the clipboard paste branch',
-  promptText() !== beforeAltV || clipboardNotice(),
+  await settled(() => promptText() !== beforeAltV || clipboardNotice()),
   JSON.stringify({ before: beforeAltV, after: promptText(), notices: notifications.map(n => n.text) }),
 )
 check('alt+v does not type a bare v on an empty clipboard', clipboardNotice() || promptText() !== 'v')
@@ -265,10 +261,9 @@ await settle(() => promptText() === '')
 const beforeCtrlV = promptText()
 notifications.length = 0
 stdin.write('\x16')
-await settle(() => promptText() !== beforeCtrlV || clipboardNotice())
 check(
   'ctrl+v reaches the clipboard paste branch',
-  promptText() !== beforeCtrlV || clipboardNotice(),
+  await settled(() => promptText() !== beforeCtrlV || clipboardNotice()),
   JSON.stringify({ before: beforeCtrlV, after: promptText(), notices: notifications.map(n => n.text) }),
 )
 
@@ -280,8 +275,7 @@ await settle(() => promptText() === '')
 setKeymapOverrides({ editor: 'alt+g' })
 notifications.length = 0
 stdin.write('\x1bg')
-await settle(() => notifications.some(n => /editor|编辑器/i.test(String(n.text))))
-const editorNotice = notifications.some(n => /editor|编辑器/i.test(String(n.text)))
+const editorNotice = await settled(() => notifications.some(n => /editor|编辑器/i.test(String(n.text))))
 check('remapped alt+g editor key does not type g', promptText() !== 'g', JSON.stringify(promptText()))
 check('remapped editor key reached the editor path (notify seen)', editorNotice, JSON.stringify(notifications.map(n => n.text)))
 check('default ctrl+g no longer matches after remap', !actionMatches('editor', 'g', { ctrl: true }))

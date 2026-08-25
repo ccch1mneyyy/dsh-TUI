@@ -5,9 +5,14 @@
  * stdin 解析 → React 状态 → 节流渲染 → xterm 异步解析。它没有固定上界，
  * 所以「固定 sleep 后断言」在慢 runner 上会断言到旧屏幕。
  *
- * - settle(pred)      取代「sleep 后断言」：轮询到预期状态出现再让调用方
- *                     断言。超时不抛错——紧随其后的断言用同一条件失败，
- *                     并打印脚本自己的诊断；真回归仍然会红。
+ * - settled(pred)     取代「sleep 后断言」与「settle 后断言」：轮询到谓词
+ *                     为真（或超时）后返回谓词终值，调用方把返回值直接交给
+ *                     自己的 check/assert——等待条件与断言条件是同一个表达式，
+ *                     「settle 等到 A、断言却要 B」这类分叉（#561）在写法上
+ *                     不可能出现。
+ * - settle(pred)      仅用于「等到某状态再继续操作」且后面没有紧随断言的
+ *                     场景（如等界面就绪再发按键）。等待后要断言的一律用
+ *                     settled。超时静默返回。
  * - writeParsed(term) 取代「write + sleep」：xterm 的 write 异步分块解析，
  *                     buffer 只在回调触发后才反映写入（官方文档语义）。
  * - viewportLines()   取代「getLine(0..ROWS) 直扫」：inline 模式有
@@ -23,19 +28,35 @@
 /** @param {number} ms */
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+// CI 共享 runner 有负载抖动，条件成立即返回，加大上限只影响真失败的耗时。
+const DEFAULT_TIMEOUT_MS = process.env.CI ? 8000 : 4000
+
 /**
- * 轮询到 pred() 为真（30ms 间隔，默认上限 4s）。超时静默返回，由调用方
- * 紧随其后的断言以同一条件失败。
+ * 轮询到 pred() 为真（30ms 间隔，默认上限本地 4s / CI 8s）。超时静默返回。
+ * 只用于「等到某状态再继续操作」；等待后要断言的用 settled。
  * @param {() => boolean} pred
  * @param {{ timeoutMs?: number, stepMs?: number }} [opts]
  */
 export async function settle(pred, opts = {}) {
   const stepMs = opts.stepMs ?? 30
-  const deadline = Date.now() + (opts.timeoutMs ?? 4000)
+  const deadline = Date.now() + (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   while (Date.now() < deadline) {
     if (pred()) return
     await sleep(stepMs)
   }
+}
+
+/**
+ * 轮询到 pred() 为真后返回其终值（超时返回最后一次求值结果）。
+ * 用法：`check('label', await settled(() => cond))`——等待与断言共用
+ * 同一个谓词，条件只写一遍。
+ * @param {() => boolean} pred
+ * @param {{ timeoutMs?: number, stepMs?: number }} [opts]
+ * @returns {Promise<boolean>}
+ */
+export async function settled(pred, opts = {}) {
+  await settle(pred, opts)
+  return Boolean(pred())
 }
 
 /**

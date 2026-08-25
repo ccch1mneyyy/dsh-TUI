@@ -17,13 +17,14 @@ process.env.TERM_PROGRAM = 'WezTerm'  // DEC-2026 同步输出路径（与真机
 process.env.DSH_TUI_THEME = 'dark'    // 跳过 OSC 11 探测，保持确定性
 process.env.DSH_TUI_LANG = 'zh'       // 固定中文 UI（splash 标语断言）
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100
@@ -75,7 +76,9 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+// 本脚本的全部 sleep 都是模拟流式时间线的固定节奏（chunk 节拍、tick 窗口、
+// 收尾稳定窗）：断言是「scrollback 恰好一份拷贝 / 不得重复」的稳定性探针，
+// 换成对已成立条件的轮询会立即返回、错过晚到的污染帧——保留墙钟语义。
 
 /** 整个 buffer（scrollback + 视口）逐行取纯文本。 */
 function fullBufferLines(): string[] {

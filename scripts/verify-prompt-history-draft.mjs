@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
-import { settle } from './lib/term-test.mjs'
+import { settle, settled, sleep } from './lib/term-test.mjs'
 
 const home = mkdtempSync(join(tmpdir(), 'dsh-tui-history-draft-'))
 process.env.HOME = home
@@ -72,17 +72,16 @@ const instance = await render(
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
 
-const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 const write = async (input) => {
   stdin.write(input)
-  await wait(120)
+  await sleep(120)
 }
 
 try {
   // Startup and typing/arrow ordering keep fixed waits: the fake stdout
   // discards frames, so there is nothing observable to settle on for them.
   // Each Enter's effect IS observable through `submitted`, so settle there.
-  await wait(300)
+  await sleep(300)
   await write('first')
   stdin.write('\r')
   await settle(() => submitted.length === 1)
@@ -96,9 +95,9 @@ try {
   for (let i = 0; i < 3; i += 1) await write('\x1b[A')
   for (let i = 0; i < 3; i += 1) await write('\x1b[B')
   stdin.write('\r')
-  await settle(() => submitted.length === 3)
+  const draftRestored = await settled(() => submitted.length === 3 && submitted[2] === 'unfinished draft')
 
-  if (submitted.length !== 3 || submitted[2] !== 'unfinished draft') {
+  if (!draftRestored) {
     console.error(`FAIL: unfinished draft was not restored: ${JSON.stringify(submitted)}`)
     process.exitCode = 1
   } else {
