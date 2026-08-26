@@ -15,6 +15,7 @@ const PACKAGE_NAME = '@deepseek-harness-tui/dsh-tui'
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
 const GITHUB_REPO = 'ccch1mneyyy/dsh-TUI'
 const UPDATE_CHECK_TIMEOUT_MS = 4000
+const STANDALONE_DOWNLOAD_TIMEOUT_MS = 300000
 /** env marker set on the /update restart; the new process verifies it at boot. */
 const UPDATED_FROM_ENV = 'DSH_TUI_UPDATED_FROM'
 /**
@@ -323,10 +324,18 @@ export async function downloadAndReplaceStandaloneBinary(
     const downloadPath = join(tempDir, assetName)
 
     onProgress?.(`downloading: ${downloadUrl}`)
-    const response = await fetch(downloadUrl, {
-      headers: { 'user-agent': 'dsh-tui-updater' },
-      redirect: 'follow',
-    })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), STANDALONE_DOWNLOAD_TIMEOUT_MS)
+    let response: Response
+    try {
+      response = await fetch(downloadUrl, {
+        headers: { 'user-agent': 'dsh-tui-updater' },
+        redirect: 'follow',
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} ${response.statusText}`)
     }
@@ -351,18 +360,7 @@ export async function downloadAndReplaceStandaloneBinary(
     }
 
     const binaryName = process.platform === 'win32' ? 'dsh-tui.exe' : 'dsh-tui'
-    let newBinaryPath = join(extractDir, binaryName)
-    if (!existsSync(newBinaryPath)) {
-      const files = readdirSync(extractDir)
-      for (const f of files) {
-        const candidate = join(extractDir, f)
-        if (statSync(candidate).isFile()) {
-          newBinaryPath = candidate
-          break
-        }
-      }
-    }
-
+    const newBinaryPath = join(extractDir, binaryName)
     if (!existsSync(newBinaryPath)) {
       throw new Error('No executable binary found in release archive')
     }

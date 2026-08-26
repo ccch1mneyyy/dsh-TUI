@@ -33,9 +33,9 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-if (process.platform === 'win32') {
+if (process.platform === 'win32' && process.env.DSH_TUI_STANDALONE_BINARY) {
   try {
-    const oldBinary = `${process.execPath}.old`
+    const oldBinary = `${process.env.DSH_TUI_STANDALONE_BINARY}.old`
     if (existsSync(oldBinary)) rmSync(oldBinary, { force: true })
   } catch {
     // Best effort cleanup.

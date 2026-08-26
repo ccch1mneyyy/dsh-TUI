@@ -1154,7 +1154,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }
         const hintText = isStandaloneRuntime()
           ? t('update-standalone-starting')
-          : 'Updating @deepseek-harness-tui/dsh-tui and restarting…'
+          : t('update-starting')
         void finishExit(
           ctx,
           instance,

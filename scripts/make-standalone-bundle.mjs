@@ -70,17 +70,13 @@ if (existsSync(entryFile)) {
   writeFileSync(entryFile, entryContent, 'utf8')
 }
 
-// 2. 检查 runtime.tar.gz
-console.log('==> 检查 runtime.tar.gz 运行时资源包…')
-if (!existsSync(runtimeTar)) {
-  const nodeModulesDir = join(standaloneDir, 'node_modules')
-  if (!existsSync(nodeModulesDir)) {
-    console.log('    node_modules 不存在，正在执行 pnpm install…')
-    execSync('pnpm install --no-frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
-  }
-  console.log('    正在打包 node_modules 到 runtime.tar.gz…')
-  execFileSync('tar', ['-czf', runtimeTar, 'node_modules'], { cwd: standaloneDir, stdio: 'inherit' })
-}
+// 2. 构建 runtime.tar.gz 运行时资源包
+console.log('==> 构建 runtime.tar.gz 运行时资源包…')
+rmSync(runtimeTar, { force: true })
+console.log('    正在执行 pnpm install…')
+execSync('pnpm install --no-frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
+console.log('    正在打包 node_modules 到 runtime.tar.gz…')
+execFileSync('tar', ['-czf', runtimeTar, 'node_modules'], { cwd: standaloneDir, stdio: 'inherit' })
 const tarStat = statSync(runtimeTar)
 console.log(`    [OK] runtime.tar.gz (${(tarStat.size / 1024 / 1024).toFixed(2)} MB)`)
 
@@ -99,7 +95,7 @@ mkdirSync(outDir, { recursive: true })
 console.log(`\n==> 编译 Standalone 二进制 (${targets})…`)
 const pkgArgs = [
   '--yes',
-  '@yao-pkg/pkg',
+  '@yao-pkg/pkg@6.22.0',
   entryFile,
   '--config',
   pkgConfig,
