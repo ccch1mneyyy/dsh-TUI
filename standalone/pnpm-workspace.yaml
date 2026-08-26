@@ -1,0 +1,23 @@
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+
+supportedArchitectures:
+  os:
+    - linux
+    - darwin
+    - win32
+  cpu:
+    - x64
+    - arm64
+  libc:
+    - glibc
+
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
+
+minimumReleaseAgeExclude:
+  - '@deepseek-harness-tui/dsh-tui@0.9.2'

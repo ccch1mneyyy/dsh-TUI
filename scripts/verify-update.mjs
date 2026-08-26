@@ -48,6 +48,9 @@ const {
   removeStalePackageInstall,
   ensureProfileAllowBuilds,
   profileWorkspaceYamlPath,
+  isStandaloneRuntime,
+  getStandaloneBinaryPath,
+  getStandaloneAssetName,
 } = await import('../lib/types/update.js')
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
 const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQuote.js', import.meta.url))
@@ -607,8 +610,49 @@ check(
   }
 }
 
+// ---- standalone: 便携包环境检测与资产名称解析 --------------------------------
+{
+  const origEnv = {
+    standalone: process.env.DSH_TUI_STANDALONE,
+    binary: process.env.DSH_TUI_STANDALONE_BINARY,
+    dshHome: process.env.DSH_HOME,
+  }
+  try {
+    delete process.env.DSH_TUI_STANDALONE
+    delete process.env.DSH_TUI_STANDALONE_BINARY
+    process.env.DSH_HOME = '/home/user/.dsh'
+    check('standalone: 默认非便携模式', isStandaloneRuntime() === false)
+
+    process.env.DSH_TUI_STANDALONE = '1'
+    check('standalone: DSH_TUI_STANDALONE=1 识别为便携模式', isStandaloneRuntime() === true)
+
+    delete process.env.DSH_TUI_STANDALONE
+    process.env.DSH_TUI_STANDALONE_BINARY = '/tmp/dsh-tui'
+    check('standalone: DSH_TUI_STANDALONE_BINARY 识别为便携模式', isStandaloneRuntime() === true)
+    check('standalone: getStandaloneBinaryPath 返回指定路径', getStandaloneBinaryPath() === '/tmp/dsh-tui')
+
+    delete process.env.DSH_TUI_STANDALONE_BINARY
+    process.env.DSH_HOME = '/home/user/.dsh-tui-standalone'
+    check('standalone: DSH_HOME 包含 dsh-tui-standalone 识别为便携模式', isStandaloneRuntime() === true)
+
+    // 资产名称匹配
+    check('standalone: Windows 资产名匹配', getStandaloneAssetName('win32', 'x64') === 'dsh-tui-standalone-win-x64.zip')
+    check('standalone: macOS arm64 资产名匹配', getStandaloneAssetName('darwin', 'arm64') === 'dsh-tui-standalone-darwin-arm64.tar.gz')
+    check('standalone: macOS x64 资产名匹配', getStandaloneAssetName('darwin', 'x64') === 'dsh-tui-standalone-darwin-x64.tar.gz')
+    check('standalone: Linux x64 资产名匹配', getStandaloneAssetName('linux', 'x64') === 'dsh-tui-standalone-linux-x64.tar.gz')
+  } finally {
+    if (origEnv.standalone === undefined) delete process.env.DSH_TUI_STANDALONE
+    else process.env.DSH_TUI_STANDALONE = origEnv.standalone
+    if (origEnv.binary === undefined) delete process.env.DSH_TUI_STANDALONE_BINARY
+    else process.env.DSH_TUI_STANDALONE_BINARY = origEnv.binary
+    if (origEnv.dshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = origEnv.dshHome
+  }
+}
+
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`)
   process.exit(1)
 }
 console.log('\nall checks passed')
+

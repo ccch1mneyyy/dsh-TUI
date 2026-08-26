@@ -1,0 +1,179 @@
+#!/usr/bin/env node
+/**
+ * 生成 dsh-TUI 便携包（Standalone Single Executable Bundles）。
+ *
+ * 用法：
+ *   node scripts/make-standalone-bundle.mjs [--out <dir>] [--targets <targets>]
+ *
+ * 产物：<out>/ 目录下各平台的压缩包：
+ *   - dsh-tui-standalone-linux-x64.tar.gz  (内含 dsh-tui)
+ *   - dsh-tui-standalone-win-x64.zip       (内含 dsh-tui.exe)
+ *   - dsh-tui-standalone-darwin-arm64.tar.gz (内含 dsh-tui)
+ *   - dsh-tui-standalone-darwin-x64.tar.gz (内含 dsh-tui)
+ */
+import { execFileSync, execSync } from 'node:child_process'
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const version = pkg.version
+
+const argOut = process.argv.indexOf('--out')
+const outDir = resolve(argOut >= 0 ? process.argv[argOut + 1] : join(root, 'dist-standalone'))
+
+const argTargets = process.argv.indexOf('--targets')
+const defaultTargets = 'node24-linux-x64,node24-win-x64,node24-macos-arm64,node24-macos-x64'
+const targets = argTargets >= 0 ? process.argv[argTargets + 1] : defaultTargets
+
+const standaloneDir = join(root, 'standalone')
+const entryFile = join(standaloneDir, 'entry.mjs')
+const pkgConfig = join(standaloneDir, 'pkg.config.json')
+const runtimeTar = join(standaloneDir, 'runtime.tar.gz')
+
+console.log(`\n============================================`)
+console.log(`  dsh-TUI Standalone Bundle Builder`)
+console.log(`  Version: ${version}`)
+console.log(`  Targets: ${targets}`)
+console.log(`  Output:  ${outDir}`)
+console.log(`============================================\n`)
+
+// 1. 同步版本号
+console.log('==> 同步版本号到 standalone 配置…')
+const standalonePkgPath = join(standaloneDir, 'package.json')
+if (existsSync(standalonePkgPath)) {
+  const sPkg = JSON.parse(readFileSync(standalonePkgPath, 'utf8'))
+  if (sPkg.dependencies && sPkg.dependencies['@deepseek-harness-tui/dsh-tui']) {
+    sPkg.dependencies['@deepseek-harness-tui/dsh-tui'] = version
+  }
+  writeFileSync(standalonePkgPath, `${JSON.stringify(sPkg, null, 2)}\n`, 'utf8')
+}
+
+if (existsSync(entryFile)) {
+  let entryContent = readFileSync(entryFile, 'utf8')
+  entryContent = entryContent.replace(
+    /const TUI_VERSION = '.*?'/,
+    `const TUI_VERSION = '${version}'`,
+  )
+  writeFileSync(entryFile, entryContent, 'utf8')
+}
+
+// 2. 检查 runtime.tar.gz
+console.log('==> 检查 runtime.tar.gz 运行时资源包…')
+if (!existsSync(runtimeTar)) {
+  const nodeModulesDir = join(standaloneDir, 'node_modules')
+  if (!existsSync(nodeModulesDir)) {
+    console.log('    node_modules 不存在，正在执行 pnpm install…')
+    execSync('pnpm install --no-frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
+  }
+  console.log('    正在打包 node_modules 到 runtime.tar.gz…')
+  execFileSync('tar', ['-czf', runtimeTar, 'node_modules'], { cwd: standaloneDir, stdio: 'inherit' })
+}
+const tarStat = statSync(runtimeTar)
+console.log(`    [OK] runtime.tar.gz (${(tarStat.size / 1024 / 1024).toFixed(2)} MB)`)
+
+if (process.argv.includes('--skip-pkg')) {
+  console.log('\n[OK] --skip-pkg 指定，跳过 pkg 二进制编译。')
+  process.exit(0)
+}
+
+// 3. 准备输出目录与临时构建目录
+const stageDir = join(outDir, '.stage')
+rmSync(stageDir, { recursive: true, force: true })
+mkdirSync(stageDir, { recursive: true })
+mkdirSync(outDir, { recursive: true })
+
+// 4. 调用 pkg 编译
+console.log(`\n==> 编译 Standalone 二进制 (${targets})…`)
+const pkgArgs = [
+  '--yes',
+  '@yao-pkg/pkg',
+  entryFile,
+  '--config',
+  pkgConfig,
+  '--targets',
+  targets,
+  '--out-path',
+  stageDir,
+  '--compress',
+  'GZip',
+  '--no-bytecode',
+  '--public',
+]
+execFileSync('npx', pkgArgs, { cwd: root, stdio: 'inherit' })
+
+// 5. 整理产物并归档压缩
+console.log(`\n==> 打包压缩各平台便携包…`)
+const stagedFiles = readdirSync(stageDir)
+
+const targetMap = [
+  { match: /(?:entry-linux(?:-x64)?|^entry$)/i, platform: 'linux-x64', binary: 'dsh-tui', format: 'tar.gz' },
+  { match: /entry-win(?:-x64)?(?:\.exe)?/i, platform: 'win-x64', binary: 'dsh-tui.exe', format: 'zip' },
+  { match: /entry-macos-arm64|entry-darwin-arm64/i, platform: 'darwin-arm64', binary: 'dsh-tui', format: 'tar.gz' },
+  { match: /entry-macos(?:-x64)?|entry-darwin-x64/i, platform: 'darwin-x64', binary: 'dsh-tui', format: 'tar.gz' },
+]
+
+for (const stagedFile of stagedFiles) {
+  const stagedPath = join(stageDir, stagedFile)
+  const stat = statSync(stagedPath)
+  if (!stat.isFile()) continue
+
+  let matched = null
+  for (const item of targetMap) {
+    if (item.match.test(stagedFile)) {
+      matched = item
+      break
+    }
+  }
+
+  const platform = matched ? matched.platform : stagedFile
+  const binaryName = matched ? matched.binary : stagedFile
+  const format = matched ? matched.format : 'tar.gz'
+  const archiveName = `dsh-tui-standalone-${platform}.${format}`
+  const archivePath = join(outDir, archiveName)
+
+  // 临时存放二进制并赋权
+  const binDir = join(stageDir, `bin-${platform}`)
+  rmSync(binDir, { recursive: true, force: true })
+  mkdirSync(binDir, { recursive: true })
+  const targetBinPath = join(binDir, binaryName)
+  copyFileSync(stagedPath, targetBinPath)
+  try {
+    chmodSync(targetBinPath, 0o755)
+  } catch {
+    // Windows file permissions
+  }
+
+  // 压缩归档
+  if (existsSync(archivePath)) rmSync(archivePath, { force: true })
+  if (format === 'zip') {
+    if (process.platform === 'win32') {
+      execFileSync('powershell', [
+        '-NoProfile', '-Command',
+        `Compress-Archive -Path '${targetBinPath}' -DestinationPath '${archivePath}' -Force`,
+      ], { stdio: 'inherit' })
+    } else {
+      execFileSync('zip', ['-j', archivePath, targetBinPath], { stdio: 'inherit' })
+    }
+  } else {
+    execFileSync('tar', ['-czf', archivePath, '-C', binDir, binaryName], { stdio: 'inherit' })
+  }
+
+  const archStat = statSync(archivePath)
+  console.log(`    [OK] ${archiveName} (${(archStat.size / 1024 / 1024).toFixed(2)} MB)`)
+}
+
+rmSync(stageDir, { recursive: true, force: true })
+console.log(`\n便携包构建完成！产物位于：${outDir}`)

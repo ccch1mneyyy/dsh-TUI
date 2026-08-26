@@ -28,10 +28,19 @@
  * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+
+if (process.platform === 'win32') {
+  try {
+    const oldBinary = `${process.execPath}.old`
+    if (existsSync(oldBinary)) rmSync(oldBinary, { force: true })
+  } catch {
+    // Best effort cleanup.
+  }
+}
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ownDir = dirname(here)
