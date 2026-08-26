@@ -215,7 +215,6 @@ export function PlanReviewPanel({
       <Divider
         color="permission"
         title={` ${question.header ?? t('plan-review-fallback-header')} `}
-        padding={4}
       />
       <Box flexDirection="column" marginTop={1}>
         <Text bold wrap="wrap">

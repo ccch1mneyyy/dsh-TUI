@@ -397,6 +397,10 @@ const GROUPS = {
 // 启动上下文摘要窄终端回归（issue #167）：摘要与 Ctrl+T 提示必须
 // 作为一条可截断文本布局，不能换行后互相穿插。
     ["verify-loaded-context-width", ['node', '--import', 'tsx/esm', 'scripts/verify-loaded-context-width.tsx']],
+// Divider 可用宽度回归：横线按 Yoga 实际授予的宽度渲染（测量撑满
+// Box），嵌套在更窄容器里（transcript 旁 2 列 timeline rail 排水沟）
+// 不再按整终端宽度换行到第二行——「Conversation compacted」窄窗劈裂。
+    ["verify-divider-width", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-width.tsx']],
 // thinking spinner 残影回归（issue #72）：text-default emoji（✳）
 // 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
     ["repro-thinking", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking.tsx']],
