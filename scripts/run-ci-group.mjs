@@ -407,6 +407,20 @@ const GROUPS = {
 // 且模型看到字面路径）、双 miss 报用户原文、无后缀行为不变、目录忽略
 // 后缀。内存 fs stub，expandMentions 纯扩展逻辑。
     ["verify-mention-lines", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-lines.ts']],
+// 问卷 provider 抢注守卫回归（issue #98 安全收尾）：DUPLICATE_PROVIDER
+// 只对宿主前端白名单（dsh-web-app / dsh-tui 自身的 symbol 标记）静默
+// 让位；第三方在位或无身份信息走告警路径。判定为纯函数 + 真实
+// UserQuestionService 端到端。
+    ["verify-question-provider-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-question-provider-guard.tsx']],
+// secret.ref 保留名单守卫回归：第三方设置区块的 DEEPSEEK_API_KEY /
+// DEEPSEEK_、DSH_ 前缀 ref 在注册层被摘除（其余字段照常）、宿主身份
+// 放行、channel.settingsHost().writeCredential 对保留 ref 抛 i18n 文案
+// ——防"给插件配 key"假象下覆盖主凭据。
+    ["verify-secret-ref-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-secret-ref-guard.tsx']],
+// 审批面板外部来源徽标回归：无 callId / 配对不到 tool/call / call 已有
+// tool/result（重放真实命令文本）的审批请求在面板数据带 external 标记
+// 并醒目渲染 [external] 提示；活跃（未落定）调用不带标记、命令照常恢复。
+    ["verify-approval-source-badge", ['node', '--import', 'tsx/esm', 'scripts/verify-approval-source-badge.tsx']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得
