@@ -1148,7 +1148,9 @@ export function readLangPref(dir: string = PREFS_DIR): Lang | undefined {
 /** Persist the chosen language (best effort). */
 export function writeLangPref(lang: Lang, dir: string = PREFS_DIR): boolean {
   try {
-    mkdirSync(dir, { recursive: true })
+    // 0700 on creation: DATA_DIR hosts private history/logs; match that mode
+    // whenever this happens to be the first writer.
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
     writeFileSync(join(dir, 'lang.json'), JSON.stringify({ lang }, null, 2))
     return true
   } catch {
