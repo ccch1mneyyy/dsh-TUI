@@ -833,7 +833,7 @@ const dict = {
 
   // ── components/questions/PlanReviewPanel.tsx ────────────────────────
   'plan-review-fallback-header': { zh: '计划评审', en: 'Plan review' },
-  'plan-review-exit-label': { zh: 'Exit planning', en: 'Exit planning' },
+  'plan-review-exit-label': { zh: '退出规划', en: 'Exit planning' },
   'plan-review-exit-description': { zh: '退出 plan mode 并关闭 /planPrompt 注入（不批准当前计划）', en: 'Leave plan mode and turn off the /planPrompt injection without approving this plan.' },
   'plan-review-feedback-placeholder': { zh: '输入反馈，告诉模型要改什么…', en: 'Tell the model what to change…' },
   'plan-review-approve-needs-empty': { zh: '请先清空反馈再批准（或在输入行回车提交反馈）', en: 'Clear the feedback to approve (or press Enter on the input row to send it)' },
