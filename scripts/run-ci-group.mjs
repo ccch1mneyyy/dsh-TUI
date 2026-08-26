@@ -256,15 +256,24 @@ const GROUPS = {
 // 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
 // Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
 // 自环境变量，不转义即可注入任意命令；解压与替换之间的提取树校验拒绝
-// 符号链接与逃逸条目（GNU tar 实测会落地 symlink 成员，zip-slip 落地
-// 形式）。恶意 zip/tar.gz fixture 由 python3 构造（../evil.txt 成员、
-// 指向 /etc/passwd 的链接成员）。
+// 符号链接、逃逸条目与硬链接成员（GNU tar 实测会落地 symlink 成员，
+// zip-slip 落地形式；LNKTYPE 指向树内目标时落地 nlink=2）。
+// 恶意 zip/tar.gz fixture 由 python3 构造（../evil.txt 成员、
+// 指向 /etc/passwd 的链接成员、指向树内目标的硬链接成员）。
     ["verify-update-extract", ['node', '--import', 'tsx/esm', 'scripts/verify-update-extract.tsx']],
 // 便携包更新下载 SHA256 校验回归：SHA256SUMS 清单解析（两空格/二进制
 // 星号/裸 digest 旁注）、篡改资产字节 fail-closed 拒绝且磁盘零残留、
-// 无 sums 走 transition 警告、content-length 超 512MB 读 body 前拒绝。
-// 本地 http server + 临时假二进制，不发真实请求。
+// 无 sums 走 transition 警告、content-length 超 512MB 读 body 前拒绝、
+// 无 content-length 无界流读到上限即刻断连（注入小上限）、镜像回退
+// （API 失败→registry→直链）同样探测固定命名清单并强校验。本地 http
+// server + mock fetch + 临时假二进制，不发真实请求。
     ["verify-update-checksum", ['node', '--import', 'tsx/esm', 'scripts/verify-update-checksum.tsx']],
+// 便携包运行时缓存守卫回归：解压树启动链（bin→主模块两级闭包）的
+// 哈希清单——清单内 JS 篡改/删除 → not ready 自愈重建、旧格式 marker
+// （仅 bundleId）自愈升级、清单外文件不设防（边界确认）、cacheBase
+// 幂等收紧 0700（ready 短路与冷路径）。mini runtime fixture 由清单
+// 造树 + 系统 tar 打包，解压器注入。
+    ["verify-standalone-cache-guard", ['node', 'scripts/verify-standalone-cache-guard.mjs']],
   ],
   'channel-ui': [
 // channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
