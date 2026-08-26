@@ -31,15 +31,35 @@ export interface ApprovalSnapshot {
    * unknown callId, or the paired call already settled). The approval
    * waterfall is an in-process event any plugin can dispatch, so the panel
    * renders a loud warning instead of presenting the text as the agent's own
-   * pending command.
+   * pending command. The verdict is re-checked while the ask is queued or on
+   * the panel, so it may also appear late — once a same-callId sibling ask
+   * is allowed and its tool/result lands (P-4).
    */
   readonly external?: true
+}
+
+/**
+ * Internal mutable twin of the snapshot body. `external` is a point-in-time
+ * verdict (is the paired tool call still unresolved?) that later re-checks
+ * may set — see {@link ApprovalStore.refreshActiveExternal}.
+ */
+interface PendingSnapshot {
+  toolName: string
+  reason?: string
+  command?: string
+  external?: true
 }
 
 /** One queued or active approval ask. */
 interface PendingApproval {
   readonly key: string
-  readonly snapshot: Omit<ApprovalSnapshot, 'key'>
+  /**
+   * The original request, kept so the source badge can be re-checked while
+   * this ask sits in the queue or on the panel (the session log keeps
+   * appending after park()).
+   */
+  readonly request: ApprovalRequest
+  snapshot: PendingSnapshot
   resolve: (outcome: ApprovalOutcome) => void
   onAbort: () => void
 }
@@ -122,6 +142,13 @@ export class ApprovalStore {
    * nothing changed (a fresh object per call would loop re-renders).
    */
   private snapshotCache: ApprovalSnapshot | null = null
+  /**
+   * Length of the session log at the last liveness evaluation of the active
+   * ask. Events only append, so an unchanged length means no verdict can
+   * have flipped — re-checks below this guard are skipped.
+   */
+  private externalCheckedAtEvents = -1
+  private notifyQueued = false
 
   /**
    * Subscribe to store changes (useSyncExternalStore contract).
@@ -136,15 +163,30 @@ export class ApprovalStore {
   }
 
   /**
-   * The approval the TUI should render now, or null when idle.
+   * The approval the TUI should render now, or null when idle. Re-checks the
+   * active ask's source badge against the current session log (see
+   * {@link refreshActiveExternal}) so a badge that flips while the ask is on
+   * the panel surfaces without waiting for another store mutation.
    * @returns The cached snapshot; the reference is stable between mutations.
    */
   getSnapshot(): ApprovalSnapshot | null {
+    this.refreshActiveExternal()
     return this.snapshotCache
   }
 
   private emit(): void {
     for (const listener of this.listeners) listener()
+  }
+
+  /** Notify on a microtask so a re-check triggered inside getSnapshot
+   * (during a React render) never fires listeners synchronously mid-render. */
+  private scheduleNotify(): void {
+    if (this.notifyQueued) return
+    this.notifyQueued = true
+    queueMicrotask(() => {
+      this.notifyQueued = false
+      this.emit()
+    })
   }
 
   /** Rebuild the cached snapshot after any mutation of active. */
@@ -153,6 +195,31 @@ export class ApprovalStore {
     this.snapshotCache = pending === undefined
       ? null
       : { key: pending.key, ...pending.snapshot }
+  }
+
+  /**
+   * Re-run the source-badge verdict for the active ask (P-4).
+   *
+   * The external flag computed at park() is only a point-in-time verdict. A
+   * forger can dispatch a second request carrying the SAME callId as a
+   * genuinely pending one — both look live at park time; once the first is
+   * allowed and its tool/result lands, the twin surfaces with a callId that
+   * no longer has an unresolved call and must not keep the unmarked panel
+   * data. Re-checked when an ask becomes active (promotion) and whenever the
+   * snapshot is read (the result usually lands AFTER the twin was promoted).
+   * The session log only appends, so the verdict can only flip live→
+   * external, never back — the badge may appear late but never falsely.
+   */
+  private refreshActiveExternal(): void {
+    const pending = this.active
+    if (pending === undefined || pending.snapshot.external === true) return
+    const events = pending.request.agent.session.events
+    if (events.length === this.externalCheckedAtEvents) return
+    this.externalCheckedAtEvents = events.length
+    if (isLiveToolApproval(pending.request)) return
+    pending.snapshot.external = true
+    this.rebuildSnapshot()
+    this.scheduleNotify()
   }
 
   /**
@@ -173,6 +240,7 @@ export class ApprovalStore {
       const external = !isLiveToolApproval(req)
       const pending: PendingApproval = {
         key: String(++this.seq),
+        request: req,
         snapshot: {
           toolName: req.toolName,
           ...(req.reason !== undefined ? { reason: req.reason } : {}),
@@ -199,10 +267,16 @@ export class ApprovalStore {
     })
   }
 
-  /** Advance to the next queued ask, if any. */
+  /** Advance to the next queued ask, if any. The promoted ask's source
+   * badge is re-checked against the log that has kept appending since it
+   * was parked (P-4: a same-callId twin parked while live may surface long
+   * after its call settled). */
   private startNext(): void {
     if (this.active !== undefined || this.queue.length === 0) return
     this.active = this.queue.shift()
+    // Fresh active: force a fresh verdict regardless of the length memo.
+    this.externalCheckedAtEvents = -1
+    this.refreshActiveExternal()
     this.rebuildSnapshot()
     this.emit()
   }

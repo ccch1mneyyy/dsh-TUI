@@ -37,6 +37,16 @@ const [
 
 type SessionEvent = { type: string; seq: number; time: number; data: Record<string, unknown> }
 
+/** 构造一条配对指定 callId 的已落定 tool/result 事件。 */
+function toolResult(callId: string): SessionEvent {
+  return {
+    type: 'tool/result',
+    seq: 2,
+    time: Date.now() - 1000,
+    data: { turn: 1, step: 1, message: { source: { callId } } },
+  }
+}
+
 /** 构造一段最小会话日志：一个工具调用 + 可选的已落定结果。 */
 function events(callId: string, opts: { resolved?: boolean } = {}): SessionEvent[] {
   const seed: SessionEvent[] = [
@@ -47,14 +57,7 @@ function events(callId: string, opts: { resolved?: boolean } = {}): SessionEvent
       data: { turn: 1, step: 1, callId, name: 'Bash', arguments: JSON.stringify({ command: 'rm -rf /tmp/real-command' }) },
     },
   ]
-  if (opts.resolved) {
-    seed.push({
-      type: 'tool/result',
-      seq: 2,
-      time: Date.now() - 1000,
-      data: { turn: 1, step: 1, message: { source: { callId } } },
-    })
-  }
+  if (opts.resolved) seed.push(toolResult(callId))
   return seed
 }
 
@@ -91,6 +94,46 @@ assert.equal(callless!.external, true, 'a request without a callId is not from a
 const unknown = await parkedSnapshot(approvalRequest('call-ghost', events('call-live')))
 assert.equal(unknown!.external, true, 'a callId matching no tool call must be marked external')
 assert.equal(unknown!.command, undefined)
+
+// ── P-4：callId 复用窗口——同 callId 第二条在第一条落定后必须复查 ──────
+// 红队场景：合法请求（callId=X 无 result）挂起期间，伪造者用同 callId
+// 二次注入——入队时 X 尚未落定，两条都判 live 无徽标；用户允许第一条 →
+// 工具执行、X 落定 tool/result → 伪造请求成为当前面板。external 若只在
+// park() 入队时定型，弹出/渲染永不复查 → 伪造请求无徽标 → 误确认。
+{
+  // 时序 1（真实顺序）：twin 先被弹出成为当前面板，tool/result 后落地
+  // ——徽标只能靠「读取当前条时」的重查补上。
+  const store = new ApprovalStore()
+  const log = events('call-twin')
+  const first = store.park(approvalRequest('call-twin', log))
+  const second = store.park(approvalRequest('call-twin', log))
+  assert.equal(store.getSnapshot()!.external, undefined,
+    'the twin is genuinely live while its callId is unresolved — no badge yet')
+  store.decide('allowed-once') // 第一条落定，twin 立即成为当前面板
+  assert.equal(await first, 'allowed-once')
+  log.push(toolResult('call-twin')) // 工具执行，X 落定
+  assert.equal(store.getSnapshot()!.external, true,
+    'P-4: once the twin surfaces and its callId settles, the badge must appear (read-time recheck)')
+  store.settleAll('cancelled')
+  assert.equal(await second, 'cancelled')
+}
+{
+  // 时序 2：tool/result 先落地、twin 后被弹出——徽标靠「弹出下一条时」
+  // 的重查补上。
+  const store = new ApprovalStore()
+  const log = [...events('call-a'), ...events('call-b')]
+  const first = store.park(approvalRequest('call-a', log))
+  const second = store.park(approvalRequest('call-b', log)) // 伪造孪生，排队
+  assert.equal(store.getSnapshot()!.external, undefined,
+    'the active call-a is still unresolved — no badge for it')
+  log.push(toolResult('call-b')) // call-b 在第一条还挂着时落定
+  store.decide('allowed-once') // 弹出 twin——复查必须发现 call-b 已落定
+  assert.equal(store.getSnapshot()!.external, true,
+    'P-4: a twin promoted after its callId settled must carry the badge (promotion-time recheck)')
+  store.settleAll('cancelled')
+  assert.equal(await first, 'allowed-once')
+  assert.equal(await second, 'cancelled')
+}
 
 // ── 面板渲染：external 行可见，非 external 不出现 ─────────────────────
 setLang('zh')

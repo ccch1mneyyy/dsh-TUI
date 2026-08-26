@@ -421,6 +421,9 @@ const GROUPS = {
 // 审批面板外部来源徽标回归：无 callId / 配对不到 tool/call / call 已有
 // tool/result（重放真实命令文本）的审批请求在面板数据带 external 标记
 // 并醒目渲染 [external] 提示；活跃（未落定）调用不带标记、命令照常恢复。
+// P-4 复查窗口：同 callId 的第二条（伪造孪生）入队时判 live，第一条被
+// 允许、tool/result 落定后孪生弹出/渲染时徽标必须补上（弹出时 + 读取
+// 当前条时重跑活跃判定）。
     ["verify-approval-source-badge", ['node', '--import', 'tsx/esm', 'scripts/verify-approval-source-badge.tsx']],
   ],
   'flaky-observation': [
