@@ -75,7 +75,12 @@ if (existsSync(entryFile)) {
 console.log('==> 构建 runtime.tar.gz 运行时资源包…')
 rmSync(runtimeTar, { force: true })
 console.log('    正在执行 pnpm install…')
-execSync('pnpm install --no-frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
+// --frozen-lockfile：便携包供应链锁死——install 只按 pnpm-lock.yaml 的
+// 已解析版本装包，绝不隐式改 lock 拉新（--no-frozen-lockfile 会让每次
+// 构建重新解析依赖，被投毒的镜像/registry 能在构建机无感知换入恶意
+// 版本并打进发布产物）。lock 失配会直接失败，提示提交新的 lock 而非
+// 构建期静默重解析。
+execSync('pnpm install --frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
 console.log('    正在打包 node_modules 到 runtime.tar.gz…')
 execFileSync('tar', ['-czf', runtimeTar, 'node_modules'], { cwd: standaloneDir, stdio: 'inherit' })
 const tarStat = statSync(runtimeTar)
