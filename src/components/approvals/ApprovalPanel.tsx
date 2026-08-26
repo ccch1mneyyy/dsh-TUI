@@ -61,6 +61,9 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
       <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} padding={4} />
       <Box flexDirection="column" marginTop={1}>
+        {approval.external === true && (
+          <Text color="warning" wrap="wrap">[external] {t('approval-external-hint')}</Text>
+        )}
         {approval.command !== undefined && (
           <Box flexDirection="column" paddingX={2}>
             <Text dimColor wrap="wrap">

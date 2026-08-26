@@ -803,6 +803,7 @@ const dict = {
 
   // ── components/approvals/ApprovalPanel.tsx ──────────────────────────
   'approval-waiting': { zh: ' ⏳ 等待审批 · {{tool}} ', en: ' Awaiting approval · {{tool}} ' },
+  'approval-external-hint': { zh: '外部来源：该审批未关联当前会话的活跃工具调用，命令文本可能被伪造，请核实后再决定', en: 'External origin: this approval is not tied to a live tool call of this session — the command text may be forged; verify before deciding' },
   'approval-proceed': { zh: '要允许这次操作吗？', en: 'Do you want to proceed?' },
   'approval-yes': { zh: '允许（仅本次）', en: 'Yes, allow once' },
   'approval-no': { zh: '拒绝', en: 'No' },

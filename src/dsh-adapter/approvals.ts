@@ -26,6 +26,14 @@ export interface ApprovalSnapshot {
   readonly reason?: string
   /** The gated command, recovered from the paired tool/call event. */
   readonly command?: string
+  /**
+   * The request is not anchored to a live tool call of this session (no or
+   * unknown callId, or the paired call already settled). The approval
+   * waterfall is an in-process event any plugin can dispatch, so the panel
+   * renders a loud warning instead of presenting the text as the agent's own
+   * pending command.
+   */
+  readonly external?: true
 }
 
 /** One queued or active approval ask. */
@@ -66,6 +74,36 @@ function commandOf(req: ApprovalRequest): string | undefined {
     return raw.length <= COMMAND_CLIP ? raw : `${raw.slice(0, COMMAND_CLIP)}…`
   }
   return undefined
+}
+
+/**
+ * Whether the approval is anchored to a live, unresolved tool call of the
+ * session. The permission layer gates a call BEFORE it executes: at gating
+ * time the paired tool/call event exists and no tool/result for that callId
+ * has landed yet. A request without a callId, with a callId matching no
+ * event, or referencing an already-settled call therefore did not come from
+ * the agent's live execution — most plausibly a forged waterfall dispatch
+ * replaying real session text.
+ */
+function isLiveToolApproval(req: ApprovalRequest): boolean {
+  if (req.callId === undefined) return false
+  const events = req.agent.session.events
+  let callIndex = -1
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event: SessionEvent = events[i]!
+    if (event.type !== 'tool/call') continue
+    if (String(event.data.callId) !== String(req.callId)) continue
+    callIndex = i
+    break
+  }
+  if (callIndex === -1) return false
+  for (let i = callIndex + 1; i < events.length; i += 1) {
+    const event: SessionEvent = events[i]!
+    if (event.type !== 'tool/result') continue
+    const resultCallId = (event.data.message as { source?: { callId?: unknown } } | undefined)?.source?.callId
+    if (String(resultCallId) === String(req.callId)) return false
+  }
+  return true
 }
 
 /**
@@ -127,12 +165,19 @@ export class ApprovalStore {
   park(req: ApprovalRequest): Promise<ApprovalOutcome> {
     return new Promise<ApprovalOutcome>(resolve => {
       const command = commandOf(req)
+      // Source badge: park() is reached through the approval/request
+      // waterfall, which any in-process plugin can dispatch — the agent-id
+      // gate in plugin.ts says whose SESSION it names, not that a live tool
+      // call actually raised it. Mark everything not anchored to an
+      // unresolved tool call so the panel can warn.
+      const external = !isLiveToolApproval(req)
       const pending: PendingApproval = {
         key: String(++this.seq),
         snapshot: {
           toolName: req.toolName,
           ...(req.reason !== undefined ? { reason: req.reason } : {}),
           ...(command !== undefined ? { command } : {}),
+          ...(external ? { external: true } : {}),
         },
         resolve,
         onAbort: () => {
