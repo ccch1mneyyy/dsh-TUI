@@ -30,6 +30,13 @@ const HYPERLINK_SCHEMES = new Set(['http:', 'https:', 'dsh-file:', 'file:', 'mai
 // exit strips again — this is the entry side of the same defense).
 const URL_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f\x20]/g
 
+// Display text keeps spaces (legitimate in link labels) but drops every
+// other control character: an OSC 8 sequence smuggled into `content` would
+// survive the plain-text wrap verbatim, hijack cell.hyperlink after
+// tokenize, and repaint a phish link over the legitimate URL.
+// Same set minus the space.
+const DISPLAY_TEXT_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g
+
 function sanitizeHyperlinkUrl(raw: string): string | null {
   const url = raw.replace(URL_CONTROL_CHARS, '')
   const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(url)
@@ -64,7 +71,8 @@ export function createHyperlink(
 
   // Apply basic ANSI blue color - wrap-ansi preserves this across line breaks
   // RGB colors (like theme colors) are NOT preserved by wrap-ansi with OSC 8
-  const displayText = content ?? safeUrl
+  const safeContent = content?.replace(DISPLAY_TEXT_CONTROL_CHARS, '')
+  const displayText = safeContent ?? safeUrl
   const style = options?.style ?? ((text: string) => chalk.blue(text))
   const coloredText = style(displayText)
   return `${OSC8_START}${safeUrl}${OSC8_END}${coloredText}${OSC8_START}${OSC8_END}`

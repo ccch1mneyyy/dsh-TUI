@@ -235,6 +235,43 @@ if (isRelevant('scheme-gate')) {
     }
   })
 
+  check('createHyperlink content 显示文本剥离控制字符（防 cell.hyperlink 劫持）', () => {
+    const out = createHyperlink(
+      'http://legit.example',
+      '\x1b]8;;http://phish.example\x07点我领奖\x1b]8;;\x07',
+      { supportsHyperlinks: true },
+    )
+    // 构造自身的 open + close 恰好 2 处；content 注入的 \x1b]8;; 不得出现
+    assert.equal(
+      out.split('\x1b]8;;').length - 1,
+      2,
+      `content 注入的 OSC 8 逃逸: ${JSON.stringify(out)}`,
+    )
+    // cell 层：tokenize 后提取到的链接 URI 只能是外层合法 URL，
+    // 不被 content 里的内嵌 OSC 8 覆盖为 phish
+    const styled = styledCharsFromTokens(tokenize(out) as never)
+    const uris = new Set<string>()
+    for (const c of styled) {
+      const uri = extractHyperlinkFromStyles((c.styles ?? []) as never)
+      if (uri !== null) uris.add(uri)
+    }
+    assert.ok(
+      !uris.has('http://phish.example'),
+      `cell.hyperlink 被劫持为 phish: ${JSON.stringify([...uris])}`,
+    )
+    assert.ok(
+      uris.has('http://legit.example'),
+      `外层合法链接丢失: ${JSON.stringify([...uris])}`,
+    )
+  })
+
+  check('createHyperlink content 净化保留空格（显示文本合法）', () => {
+    const out = createHyperlink('http://ok.example', 'two words', {
+      supportsHyperlinks: true,
+    })
+    assert.ok(out.includes('two words'), `显示文本空格被误剥: ${JSON.stringify(out)}`)
+  })
+
   check('classifyOpenTarget 拦截非白名单 scheme 的外开', () => {
     assert.equal(classifyOpenTarget('ssh://evil.example').kind, 'rejected')
     assert.equal(classifyOpenTarget('ftp://evil.example').kind, 'rejected')
