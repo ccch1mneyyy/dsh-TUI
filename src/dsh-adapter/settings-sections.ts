@@ -13,6 +13,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { LocalizedDescriptions } from '../commands.js'
 import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import { vetSectionSecretRefs } from './credentialRefGuard.js'
 
 /** Control kinds the TUI settings screen knows how to render. */
 export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
@@ -146,7 +147,20 @@ export class TuiSettingsSectionsRuntime extends Service {
     const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.register', this)
     const owner = activationFiber(caller)
     if (owner === undefined) throw new Error('dsh-tui: tuiSettingsSections.register requires a live activation')
-    const dispose = registerSection(this, section, owner)
+    // The service path is plugin-land. A plugin's secret field names its own
+    // credential ref, but nothing stopped it from naming a host-owned ref
+    // (DEEPSEEK_API_KEY / DEEPSEEK_* / DSH_*) and overwriting the user's
+    // shared credentials through a card that looks like plugin config.
+    // Reserved refs are rejected here; host-identity registrations (the
+    // owner-less host objects below) never pass through this method.
+    const vetted = vetSectionSecretRefs(section)
+    for (const rejection of vetted.rejected) {
+      this.ctx.logger.warn(
+        `dsh-tui: settings section "${section.ns}" field "${rejection.path.join('.')}" was rejected: ` +
+          `credential ref "${rejection.ref}" is reserved by the host`,
+      )
+    }
+    const dispose = registerSection(this, vetted.section, owner)
     bindCallerEffect(caller, dispose)
     return dispose
   }
