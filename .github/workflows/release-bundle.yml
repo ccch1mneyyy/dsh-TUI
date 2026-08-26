@@ -1,10 +1,13 @@
-name: Build installer bundle
+name: Build release bundles
 
-# 发布新 Release 时自动构建"一键安装整合包"并上传为该 Release 的资产：
-#   dsh-tui-setup.zip（下载链接固定为
-#   https://github.com/ccch1mneyyy/dsh-TUI/releases/latest/download/dsh-tui-setup.zip，
-#   官网部署时自动拉取最新版，见 dsh-tui-site 的 deploy workflow）。
-# 也可手动触发：Actions → Build installer bundle → Run workflow → 填 tag。
+# 发布新 Release 时自动构建"一键安装整合包"与各平台"便携包"并上传为该 Release 的资产：
+#   - dsh-tui-setup.zip（一键安装脚本整合包）
+#   - dsh-tui-standalone-linux-x64.tar.gz（Linux x64 便携版）
+#   - dsh-tui-standalone-linux-arm64.tar.gz（Linux arm64 便携版）
+#   - dsh-tui-standalone-win-x64.zip（Windows x64 便携版）
+#   - dsh-tui-standalone-darwin-arm64.tar.gz（macOS Apple Silicon 便携版）
+#   - dsh-tui-standalone-darwin-x64.tar.gz（macOS Intel 便携版）
+# 也可手动触发：Actions → Build release bundles → Run workflow → 填 tag。
 
 on:
   release:
@@ -24,10 +27,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
 
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: pnpm
 
       - name: Generate installer bundle
         run: node scripts/make-installer-bundle.mjs --out dist-bundle
@@ -36,6 +46,9 @@ jobs:
         run: |
           bash -n dist-bundle/dsh-tui-setup/install.sh
           pwsh -NoProfile -Command "[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 'dist-bundle/dsh-tui-setup/install.ps1')) | Out-Null"
+
+      - name: Generate standalone portable bundles
+        run: node scripts/make-standalone-bundle.mjs --out dist-standalone
 
       - name: Upload to release
         env:
@@ -47,5 +60,6 @@ jobs:
             tag="$(gh release list --limit 1 --json tagName -q '.[0].tagName')"
           fi
           [ -n "$tag" ] || { echo "no tag given"; exit 1; }
-          echo "Uploading dist-bundle/dsh-tui-setup.zip -> $tag"
-          gh release upload "$tag" dist-bundle/dsh-tui-setup.zip --clobber
+          echo "Uploading release artifacts -> $tag"
+          gh release upload "$tag" dist-bundle/dsh-tui-setup.zip dist-standalone/* --clobber
+

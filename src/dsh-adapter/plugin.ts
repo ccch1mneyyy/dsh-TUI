@@ -26,7 +26,7 @@ import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
+import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -1201,11 +1201,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         } catch {
           // Resume persistence is best effort and must never block an update.
         }
+        const hintText = isStandaloneRuntime()
+          ? t('update-standalone-starting')
+          : t('update-starting')
         void finishExit(
           ctx,
           instance,
           bootedFullscreen,
-          'Updating @deepseek-harness-tui/dsh-tui and restarting…',
+          hintText,
           undefined,
           () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
         )
@@ -1333,7 +1336,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           }
           updateTargetVersion = target.latest
         }
-        channel.notify(t('update-starting'))
+        if (isStandaloneRuntime()) {
+          channel.notify(t('update-standalone-starting'))
+        } else {
+          channel.notify(t('update-starting'))
+        }
         updateRequested = true
         handleExit()
       })
@@ -1377,8 +1384,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // command remains available regardless of network access.
   void checkForTuiUpdate().then((update) => {
     if (update === undefined || exited || updateRequested) return
+    const key = update.isStandalone ? 'update-standalone-available' : 'update-available'
     channel.notify(
-      t('update-available', { current: update.current, latest: update.latest }),
+      t(key, { current: update.current, latest: update.latest }),
       { color: 'warning', timeoutMs: 12000 },
     )
   })

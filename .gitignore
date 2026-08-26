@@ -6,6 +6,10 @@ package-lock.json
 *.tsbuildinfo
 *.tgz
 /dist-bundle/
+/dist-standalone/
+/standalone/runtime.tar.gz
+/standalone/node_modules/
+/standalone/dist/
 .tmp/
 .dsh-prompt-debug.json
 HANDOVER.md

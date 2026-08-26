@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process'
-import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +13,9 @@ export { shellQuote }
 
 const PACKAGE_NAME = '@deepseek-harness-tui/dsh-tui'
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
+const GITHUB_REPO = 'ccch1mneyyy/dsh-TUI'
 const UPDATE_CHECK_TIMEOUT_MS = 4000
+const STANDALONE_DOWNLOAD_TIMEOUT_MS = 300000
 /** env marker set on the /update restart; the new process verifies it at boot. */
 const UPDATED_FROM_ENV = 'DSH_TUI_UPDATED_FROM'
 /**
@@ -86,13 +88,15 @@ export function writeHandoffNotice(text: string): void {
 export interface TuiUpdateInfo {
   current: string
   latest: string
+  isStandalone?: boolean
+  downloadUrl?: string
 }
 
 /** What a fresh registry lookup says about this install. */
 export type TuiUpdateTarget =
-  | { kind: 'update'; current: string; latest: string; authoritative?: string }
-  | { kind: 'latest'; current: string }
-  | { kind: 'unknown' }
+  | { kind: 'update'; current: string; latest: string; authoritative?: string; isStandalone?: boolean; downloadUrl?: string }
+  | { kind: 'latest'; current: string; isStandalone?: boolean }
+  | { kind: 'unknown'; isStandalone?: boolean }
 
 export interface TuiUpdateResult {
   /** Exit code of the `dsh plugin update` run (0 = the package was updated). */
@@ -214,6 +218,185 @@ async function fetchLatestVersion(registryBase: string): Promise<string | undefi
 }
 
 /**
+ * Detect whether the current process is running in standalone / portable package mode.
+ *
+ * @returns `true` when running inside a standalone binary distribution, `false` otherwise.
+ */
+export function isStandaloneRuntime(): boolean {
+  return (
+    process.env.DSH_TUI_STANDALONE === '1' ||
+    process.env.DSH_TUI_STANDALONE_BINARY !== undefined ||
+    (typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME.includes('dsh-tui-standalone'))
+  )
+}
+
+/**
+ * Get the path to the current standalone executable binary.
+ *
+ * @returns The resolved executable path from environment or `process.execPath`.
+ */
+export function getStandaloneBinaryPath(): string {
+  return process.env.DSH_TUI_STANDALONE_BINARY ?? process.execPath
+}
+
+/**
+ * Get the expected release asset file name for the current platform and architecture.
+ *
+ * @param platform - Node.js platform identifier (e.g. `'linux'`, `'win32'`, `'darwin'`).
+ * @param arch - Node.js architecture identifier (e.g. `'x64'`, `'arm64'`).
+ * @returns The archive file name matching the target platform.
+ */
+export function getStandaloneAssetName(platform = process.platform, arch = process.arch): string {
+  if (platform === 'win32') {
+    return 'dsh-tui-standalone-win-x64.zip'
+  }
+  if (platform === 'darwin') {
+    return arch === 'arm64'
+      ? 'dsh-tui-standalone-darwin-arm64.tar.gz'
+      : 'dsh-tui-standalone-darwin-x64.tar.gz'
+  }
+  return arch === 'arm64'
+    ? 'dsh-tui-standalone-linux-arm64.tar.gz'
+    : 'dsh-tui-standalone-linux-x64.tar.gz'
+}
+
+/**
+ * Fetch latest release info from GitHub Releases API for the standalone asset.
+ *
+ * @returns Release version tag and matching asset download URL, or `undefined` on any failure.
+ */
+export async function fetchGithubLatestRelease(): Promise<{ version: string; downloadUrl?: string } | undefined> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS)
+  try {
+    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: { accept: 'application/vnd.github.v3+json', 'user-agent': 'dsh-tui-updater' },
+      signal: controller.signal,
+    })
+    if (!response.ok) return undefined
+    const payload: unknown = await response.json()
+    if (!isRecord(payload) || typeof payload.tag_name !== 'string') return undefined
+    const rawTag = payload.tag_name.replace(/^v/, '')
+    const version = valid(rawTag)
+    if (version === null) return undefined
+    const assetName = getStandaloneAssetName()
+    let downloadUrl: string | undefined
+    if (Array.isArray(payload.assets)) {
+      const asset = (payload.assets as unknown[]).find(
+        (a: unknown) => isRecord(a) && a.name === assetName && typeof a.browser_download_url === 'string',
+      ) as Record<string, unknown> | undefined
+      if (asset !== undefined && typeof asset.browser_download_url === 'string') {
+        downloadUrl = asset.browser_download_url
+      }
+    }
+    if (downloadUrl === undefined) {
+      downloadUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${assetName}`
+    }
+    return { version, downloadUrl }
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+/**
+ * Download the new standalone release binary package and atomically replace the running binary.
+ *
+ * @param downloadUrl - Direct URL to download the release archive.
+ * @param onProgress - Optional callback invoked with progress status strings.
+ * @returns Object indicating success or an error message on failure.
+ */
+export async function downloadAndReplaceStandaloneBinary(
+  downloadUrl: string,
+  onProgress?: (text: string) => void,
+): Promise<{ success: boolean; error?: string }> {
+  const tempDir = join(
+    process.env.DSH_TUI_STANDALONE_CACHE ?? join(homedir(), '.cache', 'dsh-tui-standalone'),
+    `.update-${Date.now()}-${process.pid}`,
+  )
+  try {
+    const currentBinary = getStandaloneBinaryPath()
+    const targetDir = dirname(currentBinary)
+    const assetName = getStandaloneAssetName()
+    const isZip = assetName.endsWith('.zip')
+    mkdirSync(tempDir, { recursive: true })
+    const downloadPath = join(tempDir, assetName)
+
+    onProgress?.(`downloading: ${downloadUrl}`)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), STANDALONE_DOWNLOAD_TIMEOUT_MS)
+    let response: Response
+    try {
+      response = await fetch(downloadUrl, {
+        headers: { 'user-agent': 'dsh-tui-updater' },
+        redirect: 'follow',
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}`)
+    }
+    const buffer = Buffer.from(await response.arrayBuffer())
+    writeFileSync(downloadPath, buffer)
+
+    onProgress?.('extracting…')
+    const extractDir = join(tempDir, 'extracted')
+    mkdirSync(extractDir, { recursive: true })
+
+    if (isZip) {
+      if (process.platform === 'win32') {
+        execFileSync('powershell', [
+          '-NoProfile', '-Command',
+          `Expand-Archive -Path '${downloadPath}' -DestinationPath '${extractDir}' -Force`,
+        ])
+      } else {
+        execFileSync('unzip', ['-o', downloadPath, '-d', extractDir])
+      }
+    } else {
+      execFileSync('tar', ['-xzf', downloadPath, '-C', extractDir])
+    }
+
+    const binaryName = process.platform === 'win32' ? 'dsh-tui.exe' : 'dsh-tui'
+    const newBinaryPath = join(extractDir, binaryName)
+    if (!existsSync(newBinaryPath)) {
+      throw new Error('No executable binary found in release archive')
+    }
+
+    onProgress?.('replacing binary…')
+    if (process.platform !== 'win32') {
+      try { chmodSync(newBinaryPath, 0o755) } catch {}
+    }
+
+    if (process.platform === 'win32') {
+      const oldBinary = `${currentBinary}.old`
+      try { rmSync(oldBinary, { force: true }) } catch {}
+      renameSync(currentBinary, oldBinary)
+      try {
+        copyFileSync(newBinaryPath, currentBinary)
+      } catch (copyError) {
+        // Restore the original executable if copying the new binary failed.
+        try { renameSync(oldBinary, currentBinary) } catch {}
+        throw copyError
+      }
+    } else {
+      const stagedTarget = join(targetDir, `.dsh-tui-new-${process.pid}`)
+      copyFileSync(newBinaryPath, stagedTarget)
+      chmodSync(stagedTarget, 0o755)
+      renameSync(stagedTarget, currentBinary)
+    }
+
+    try { rmSync(tempDir, { recursive: true, force: true }) } catch {}
+    return { success: true }
+  } catch (error) {
+    try { rmSync(tempDir, { recursive: true, force: true }) } catch {}
+    return { success: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
  * Classify this install against a fresh registry lookup: an update is
  * available, the install is already latest, or the answer is unknown
  * (offline / registry error / unreadable own version).
@@ -230,6 +413,15 @@ export async function resolveTuiUpdateTarget(): Promise<TuiUpdateTarget> {
   const current = installedTuiVersion()
   const currentVersion = current === undefined ? null : valid(current)
   if (currentVersion === null) return { kind: 'unknown' }
+
+  if (isStandaloneRuntime()) {
+    const ghRelease = await fetchGithubLatestRelease()
+    const latest = ghRelease?.version ?? (await fetchLatestVersion(resolveRegistryBase()))
+    if (latest === undefined) return { kind: 'unknown' }
+    if (!gt(latest, currentVersion)) return { kind: 'latest', current: currentVersion, isStandalone: true }
+    const downloadUrl = ghRelease?.downloadUrl ?? `https://github.com/${GITHUB_REPO}/releases/download/v${latest}/${getStandaloneAssetName()}`
+    return { kind: 'update', current: currentVersion, latest, isStandalone: true, downloadUrl }
+  }
 
   const registryBase = resolveRegistryBase()
   const [latest, official] = await Promise.all([
@@ -249,7 +441,9 @@ export async function resolveTuiUpdateTarget(): Promise<TuiUpdateTarget> {
  */
 export async function checkForTuiUpdate(): Promise<TuiUpdateInfo | undefined> {
   const target = await resolveTuiUpdateTarget()
-  return target.kind === 'update' ? { current: target.current, latest: target.latest } : undefined
+  return target.kind === 'update'
+    ? { current: target.current, latest: target.latest, isStandalone: target.isStandalone, downloadUrl: target.downloadUrl }
+    : undefined
 }
 
 interface ProcessOptions {  env?: NodeJS.ProcessEnv
@@ -617,6 +811,30 @@ export async function updateTui(
   // process then compares new-vs-new and false-alarms "version did not
   // advance" on every successful update (issue #307's screenshots).
   const updatedFrom = installedTuiVersion() ?? ''
+
+  if (isStandaloneRuntime()) {
+    const target = await resolveTuiUpdateTarget()
+    const latestVersion = targetVersion ?? (target.kind === 'update' ? target.latest : undefined)
+    const downloadUrl = (target.kind === 'update' && target.downloadUrl)
+      ? target.downloadUrl
+      : (latestVersion ? `https://github.com/${GITHUB_REPO}/releases/download/v${latestVersion}/${getStandaloneAssetName()}` : undefined)
+
+    if (downloadUrl === undefined || latestVersion === undefined) {
+      process.stderr.write('dsh-tui: 无法解析便携包更新下载地址\n')
+      return { code: 1, updatedFrom }
+    }
+
+    process.stderr.write(`dsh-tui: 正在更新便携包 (${updatedFrom || 'current'} → ${latestVersion})…\n`)
+    const result = await downloadAndReplaceStandaloneBinary(downloadUrl, msg => {
+      process.stderr.write(`dsh-tui: ${msg}\n`)
+    })
+    if (!result.success) {
+      process.stderr.write(`dsh-tui: 便携包更新失败: ${result.error ?? '未知错误'}\n`)
+      return { code: 1, updatedFrom }
+    }
+    return { code: 0, updatedFrom, installed: latestVersion }
+  }
+
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
   // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
@@ -764,6 +982,18 @@ export async function cliUpdate(profile: string): Promise<number> {
   if (target.kind === 'latest') {
     process.stdout.write(`dsh-tui: already the latest version (${target.current}).\n`)
     return 0
+  }
+  if (isStandaloneRuntime()) {
+    if (target.kind === 'update') {
+      process.stdout.write(`dsh-tui: updating standalone binary ${target.current} → ${target.latest}…\n`)
+      const outcome = await updateTui(profile, target.latest)
+      if (outcome.code === 0) {
+        process.stdout.write(`dsh-tui: standalone binary updated successfully (${outcome.updatedFrom || target.current} → ${outcome.installed}).\n`)
+      }
+      return outcome.code
+    }
+    process.stderr.write('dsh-tui: version check failed (offline or unreachable registry).\n')
+    return 1
   }
   let targetVersion: string | undefined
   if (target.kind === 'update') {

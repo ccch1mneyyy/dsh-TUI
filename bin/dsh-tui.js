@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-tui — 双态启动器（delegating launcher，0.9.2）。
+ * dsh-tui — 双态启动器（delegating launcher，0.9.3）。
  *
  * 同一个文件按“自己住在哪”决定扮演的角色：
  *
@@ -28,13 +28,29 @@
  * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+if (process.platform === 'win32' && process.env.DSH_TUI_STANDALONE_BINARY) {
+  try {
+    const oldBinary = `${process.env.DSH_TUI_STANDALONE_BINARY}.old`
+    if (existsSync(oldBinary)) rmSync(oldBinary, { force: true })
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
 const here = dirname(fileURLToPath(import.meta.url))
 const ownDir = dirname(here)
+
+/**
+ * Read and parse a JSON file safely.
+ *
+ * @param {string} p - File path to parse.
+ * @returns {any} Parsed JSON content or undefined.
+ */
 const readJson = p => {
   try {
     return JSON.parse(readFileSync(p, 'utf8'))
@@ -50,6 +66,12 @@ const PROFILE = 'dsh-tui'
 // --- 内联小工具（见文件头：零 lib 依赖是迁移契约的一部分）---------------------
 // 与 lib/types/utils/shellQuote.js 同语义的最小实现：cmd.exe 以空格拼接参数
 // 且不做转义，含空格/引号的参数必须整体加引号（内层引号与反斜杠转义）。
+/**
+ * Quote an array of arguments for cmd.exe.
+ *
+ * @param {string[]} args - Argument tokens.
+ * @returns {string[]} Quoted argument tokens.
+ */
 const shellQuote = args =>
   args.map(arg => {
     const s = String(arg)

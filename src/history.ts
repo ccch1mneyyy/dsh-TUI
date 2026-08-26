@@ -15,7 +15,7 @@ export type HistoryEntry = {
 }
 
 const HISTORY_LIMIT = 200
-const LOCK_RETRY_LIMIT = 50
+const LOCK_RETRY_LIMIT = 500
 const LOCK_RETRY_DELAY_MS = 5
 const STALE_LOCK_MS = 30_000
 
@@ -51,7 +51,7 @@ function withHistoryLock(write: () => void): void {
       const code = (error as NodeJS.ErrnoException).code
       if (code !== 'EEXIST') throw error
       if (removeStaleHistoryLock()) continue
-      sleepSync(LOCK_RETRY_DELAY_MS)
+      sleepSync(LOCK_RETRY_DELAY_MS + Math.floor(Math.random() * 5))
     }
   }
   throw new Error('history lock busy')
