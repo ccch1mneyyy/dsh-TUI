@@ -252,7 +252,7 @@ const GROUPS = {
 // isWrapped 断言没有任何一行溢出终端宽度，并要求提示行始终是最后一行
 // （等价于「上方每个区域都放得下、没有多占行、没有被挤出屏幕」）。
 // 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
-    ["verify-session-browser-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-session-browser-layout.mjs']],
+    ["verify-session-browser-layout", ['node', 'scripts/verify-session-browser-layout.mjs']],
 // 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
 // Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
 // 自环境变量，不转义即可注入任意命令；解压与替换之间的提取树校验拒绝

@@ -53,8 +53,9 @@ const {
   writeFileSync,
 } = fs
 
-// 运行时缓存完整性守卫（哈希清单 + runtimeReady/ensureRuntime；逻辑唯一
-// 来源在 cacheGuard.cjs，scripts/verify-standalone-cache-guard.mjs 直测）。
+// Runtime cache integrity guard (hash manifest + runtimeReady/ensureRuntime;
+// single source of truth in cacheGuard.cjs, tested directly by
+// scripts/verify-standalone-cache-guard.mjs).
 const { ensureRuntime } = require('./cacheGuard.cjs')
 
 const TUI_VERSION = '0.9.2'
