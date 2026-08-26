@@ -338,6 +338,18 @@ function family() {
   check('screen: 连接线渲染', await settled(() => text().includes('├─') || text().includes('└─')))
   check('screen: 预览面板渲染', await settled(() => text().includes('预览')))
 
+  // 鼠标滚轮：SGR wheel-down 打在树区域 = 光标下移一行（光标居中窗口，
+  // 滚动即跟随），wheel-up 回去——与真实全屏终端投递同构。
+  {
+    const wheelRow = screen().findIndex(line => line.includes('❯')) + 1 // SGR 1-indexed
+    stdin.write(`\x1b[<65;10;${wheelRow}M`)
+    await sleep(200)
+    check('screen: 鼠标滚轮下移光标一行', screen().findIndex(line => line.includes('❯')) === wheelRow, screen().filter(line => line.includes('❯')).join('|'))
+    stdin.write(`\x1b[<64;10;${wheelRow}M`)
+    await sleep(200)
+    check('screen: 鼠标滚轮上移回去', screen().findIndex(line => line.includes('❯')) === wheelRow - 1, screen().filter(line => line.includes('❯')).join('|'))
+  }
+
   // Enter 打开操作菜单（焦点在活动叶 = live 会话，无切换选项）
   stdin.write('\r')
   check('screen: Enter 打开操作菜单', await settled(() => text().includes('回退到这里') && text().includes('从这分叉')))

@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import type { WheelEvent } from '../ink/events/wheel-event.js'
 import { Divider } from '../components/design-system/Divider.js'
 import { HintLine } from '../components/design-system/HintLine.js'
 import { SearchBox } from '../components/SearchBox.js'
@@ -7,6 +8,7 @@ import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
 import { spreadRow, tailWidth, truncateWidth, wrapWidth } from '../sessions/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { TICK, MULTIPLICATION_X } from '../cc/figures.js'
 import { t } from '../i18n.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 import {
@@ -132,10 +134,19 @@ function clampPrefix(prefix: string, budget: number): string {
   return `…${tailWidth(prefix, budget - 1)}`
 }
 
-/** Rows the layout cannot do without: header, search box, hints. */
-const MANDATORY_LINES = 3
-/** Both dividers, in the order they earn their row (header rule first). */
-const RULE_PRIORITY = [0, 1] as const
+/**
+ * Rows the layout cannot do without: the header, the bordered search card
+ * (three rows), the notice slot, and the hints. Everything else — the rule,
+ * the tree itself — yields before these do.
+ */
+const MANDATORY_LINES = 6
+/**
+ * The one horizontal rule, above the hints. The search card's own border
+ * separates it from the header and the tree (the two rules that used to
+ * flank it are gone); the rule that remains lifts the hints off the content —
+ * decoration, and the first thing a short terminal drops.
+ */
+const RULE_PRIORITY = [2] as const
 /** Width from which the preview pane sits beside the list instead of below. */
 const SPLIT_MIN_COLUMNS = 100
 /** Lines the bottom preview block may take on narrow terminals. */
@@ -407,6 +418,16 @@ export function SessionTree({
     setSelectedId(list[at]?.node.id ?? null)
   }
 
+  /**
+   * Mouse wheel over the tree walks the cursor (cursor-centered window, so
+   * rolling IS scrolling; the hover-driven preview rides along). The menu /
+   * confirm seats keep the keyboard as sole owner.
+   */
+  const handleWheel = (event: WheelEvent): void => {
+    if (seat !== 'tree') return
+    step(event.deltaY >= 0 ? 1 : -1, 1, false)
+  }
+
   useInput((input, key) => {
     // While an action is in flight the seat swallows every key — closing now
     // would drop the user back into a half-swapped session.
@@ -477,7 +498,9 @@ export function SessionTree({
     seat === 'tree' && previewEntry !== null && columns < SPLIT_MIN_COLUMNS && hoverId !== null
       ? PREVIEW_BLOCK_LINES
       : 0
-  const extraLines = (notice === undefined ? 0 : 1) + menuLines + confirmLines + previewBlock
+  // The notice slot is mandatory (permanent): a rewind/fork report must never
+  // shift the tree by arriving.
+  const extraLines = menuLines + confirmLines + previewBlock
   const ruleBudget = Math.max(0, Math.min(RULE_PRIORITY.length, rows - MANDATORY_LINES - extraLines))
   const rules = new Set<number>(RULE_PRIORITY.slice(0, ruleBudget))
   const listHeight = Math.max(0, rows - MANDATORY_LINES - extraLines - rules.size)
@@ -516,7 +539,6 @@ export function SessionTree({
         <Box flexShrink={0}>
           <Text color="remember" bold>{truncateWidth(` ${t('tree-title')}`, inputBudget)}</Text>
         </Box>
-        {rules.has(0) && (<Box flexShrink={0}><Divider width={columns} /></Box>)}
         <Box flexShrink={0}>
           <Text dimColor italic>{` ${truncateWidth(busy ? t('tree-rewinding') : t('tree-loading'), inputBudget)}`}</Text>
         </Box>
@@ -531,18 +553,24 @@ export function SessionTree({
         <Text color="remember" bold>{header.left}</Text>
         <Text dimColor>{`${' '.repeat(header.gap)}${header.right}`}</Text>
       </Box>
-      {rules.has(0) && (<Box flexShrink={0}><Divider width={columns} /></Box>)}
+      {/* The search card: its round border separates it from the header and
+          the tree, so no divider rows flank it. */}
       <Box flexShrink={0}>
         <SearchBox
           query={tailWidth(query, inputBudget)}
           isFocused={seat === 'tree'}
           isTerminalFocused={isTerminalFocused}
           placeholder={truncateWidth(t('tree-search'), inputBudget)}
-          borderless
         />
       </Box>
 
-      <Box flexGrow={1} flexShrink={1}>
+      {/* ink-box host for the wheel — Box flavors drop onWheel into the style
+          rest (SuggestionCard precedent); the row direction keeps the tree
+          and the preview side by side. */}
+      <ink-box
+        style={{ flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}
+        onWheel={handleWheel}
+      >
         <Box flexDirection="column" width={listWidth} height={listHeight} flexShrink={0}>
           {visible.length === 0 && (
             <Text dimColor italic>{` ${truncateWidth(t('tree-empty'), Math.max(0, listWidth - 2))}`}</Text>
@@ -578,7 +606,7 @@ export function SessionTree({
             now={Date.now()}
           />
         )}
-      </Box>
+      </ink-box>
 
       {previewBlock > 0 && previewEntry !== null && (
         <PreviewPane
@@ -592,13 +620,15 @@ export function SessionTree({
         />
       )}
 
-      {notice !== undefined && (
-        <Box flexShrink={0}>
-          <Text color={notice.tone === 'error' ? 'error' : 'success'}>
-            {` ${truncateWidth(notice.text, inputBudget)}`}
-          </Text>
-        </Box>
-      )}
+      {/* Permanent notice slot (blank while quiet) with a toast glyph — a
+          rewind/fork report must never shift the tree by arriving. */}
+      <Box flexShrink={0}>
+        <Text color={notice?.tone === 'error' ? 'error' : 'success'}>
+          {notice === undefined
+            ? ' '
+            : ` ${notice.tone === 'error' ? MULTIPLICATION_X : TICK} ${truncateWidth(notice.text, inputBudget - 2)}`}
+        </Text>
+      </Box>
 
       {seat === 'menu' && menuEntry !== null && (
         <Box flexDirection="column" flexShrink={0}>
@@ -647,7 +677,7 @@ export function SessionTree({
         </Box>
       )}
 
-      {rules.has(1) && (<Box flexShrink={0}><Divider width={columns} /></Box>)}
+      {rules.has(2) && (<Box flexShrink={0}><Divider width={columns} /></Box>)}
       <Box flexShrink={0}>
         <Text dimColor italic>
           <HintLine text={hint} />
