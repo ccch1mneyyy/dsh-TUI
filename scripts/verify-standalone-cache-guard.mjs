@@ -145,6 +145,27 @@ await scenario('out-of-manifest', async env => {
   check('清单外文件被篡改不触发 not ready（边界确认）', readyOf(env))
 })
 
+// ═══════════════ P-7：cacheBase 幂等收紧 0700 ═══════════════
+
+await scenario('perm-ready-path', async env => {
+  // ready 短路路径也要收紧：预置 0755 + 已 ready 的缓存
+  await ensureRuntime(env)
+  chmodSync(env.cacheBase, 0o755)
+  check('预置 0755 后确实是非 0700（fixture 有效性）', (statSync(env.cacheBase).mode & 0o777) === 0o755)
+  await ensureRuntime(env)
+  check('ready 短路路径的 ensureRuntime 把 cacheBase 收回 0700', (statSync(env.cacheBase).mode & 0o777) === 0o700,
+    `mode=${(statSync(env.cacheBase).mode & 0o777).toString(8)}`)
+})
+
+{
+  // 冷路径（首次创建）：新目录也应收紧
+  const env = makeEnv('perm-cold')
+  await ensureRuntime(env)
+  check('冷路径创建的 cacheBase 同样是 0700', (statSync(env.cacheBase).mode & 0o777) === 0o700,
+    `mode=${(statSync(env.cacheBase).mode & 0o777).toString(8)}`)
+  try { rmSync(env.cacheBase, { recursive: true, force: true }) } catch { /* best effort */ }
+}
+
 // entry.mjs 集成确认：不再自带独立的 runtimeReady/ensureRuntime 定义，
 // 改为 require cacheGuard（同一份守卫逻辑，测试直接覆盖它）。
 {

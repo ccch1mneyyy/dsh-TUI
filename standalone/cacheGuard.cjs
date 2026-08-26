@@ -142,6 +142,21 @@ function runtimeReady({ runtimeRoot, bundleId, requiredPaths = [] }) {
 }
 
 /**
+ * 幂等把 cacheBase 收紧到 0700（红队 P-7）：解压出的运行时含完整可执行
+ * 代码，缓存目录按默认 umask 落成 0755/0775 时同机其他用户可读。每次
+ * ensureRuntime 入口（含 ready 短路路径）chmod 一次——已存在与刚创建的
+ * 目录一并覆盖；chmod 失败（只读文件系统等）静默忽略，权限收紧是纵深
+ * 防御，不得阻断启动。
+ */
+const tightenCacheBase = cacheBase => {
+  try {
+    fs.chmodSync(cacheBase, 0o700)
+  } catch {
+    // Best effort: never block boot over permissions.
+  }
+}
+
+/**
  * 确保运行时解压就绪（原 entry.mjs 逻辑整体迁入，逻辑唯一来源便于测试）：
  * not ready（含并发竞争导致的半成品）→ 在 cacheBase 下解压到临时目录
  * → 写哈希清单 marker → 原子 rename 到 runtimeRoot。
@@ -159,9 +174,13 @@ function runtimeReady({ runtimeRoot, bundleId, requiredPaths = [] }) {
 async function ensureRuntime(options) {
   const { cacheBase, runtimeRoot, bundleId, archivePath, extract, requiredPaths = [], log } = options
   const ready = () => runtimeReady({ runtimeRoot, bundleId, requiredPaths })
+  // 每次启动幂等收紧缓存目录权限（P-7），ready 短路路径同样经过。
+  tightenCacheBase(cacheBase)
   if (ready()) return
 
   mkdirSync(cacheBase, { recursive: true })
+  // mkdir 按当前 umask 建目录（常见 0755/0775），刚创建的同样收紧。
+  tightenCacheBase(cacheBase)
   const temporaryRoot = join(cacheBase, `.extract-${bundleId}-${process.pid}`)
   const temporaryArchive = join(cacheBase, `.runtime-${bundleId}-${process.pid}.tar.gz`)
   rmSync(temporaryRoot, { recursive: true, force: true })
