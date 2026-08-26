@@ -123,9 +123,11 @@ function frame(term) {
 
 // Widths span the two-column split threshold (100) and the narrow tiers;
 // heights span "comfortable" down to "barely enough for the chrome".
-// 6 rows is the floor by construction: the chrome is six lines, so that is
-// the shortest terminal where every region still has somewhere to be.
-const SIZES = [[180, 44], [120, 30], [110, 34], [99, 24], [80, 20], [60, 14], [46, 10], [40, 8], [52, 6]]
+// 7 rows is the floor by construction: the chrome is six lines (header,
+// three-row search card, notice slot, hints) and a rename/confirm row can
+// add one more, so that is the shortest terminal where every region still
+// has somewhere to be.
+const SIZES = [[180, 44], [120, 30], [110, 34], [99, 24], [80, 20], [60, 14], [46, 10], [40, 8], [52, 7]]
 const KEYS = [
   ['\t', 'preview on'],
   ['\x13', 'runs revealed'],
