@@ -86,7 +86,8 @@ import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { SubagentDetailScene } from '../components/SubagentDetailScene.js'
 import { FileActionsPanel, FILE_ACTION_COUNT } from '../components/FileActionsPanel.js'
 import { openExternal, openFile, revealInFileManager } from '../utils/openExternal.js'
-import { fileUrlToPath, parseFileLinkUrl, resolveTargetPath } from '../utils/fileTarget.js'
+import { resolveTargetPath } from '../utils/fileTarget.js'
+import { classifyOpenTarget } from '../utils/urlGuard.js'
 import { statSync } from 'node:fs'
 import { setClipboard } from '../ink/termio/osc.js'
 import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
@@ -596,17 +597,18 @@ export function Chat({
   }, [])
 
   const handleOpenTarget = React.useCallback((url: string): void => {
-    const rawPath = parseFileLinkUrl(url)
-    if (rawPath !== undefined) {
-      openFileActions(rawPath)
+    const classification = classifyOpenTarget(url)
+    if (classification.kind === 'file-actions') {
+      openFileActions(classification.path)
       return
     }
-    const filePath = fileUrlToPath(url)
-    if (filePath !== undefined) {
-      openFileActions(filePath)
+    if (classification.kind === 'external') {
+      openExternal(url)
       return
     }
-    openExternal(url)
+    // Non-http(s) schemes from model/plugin-shaped links are not handed to
+    // the OS handler — see urlGuard.ts. Silently ignored: a toast needs
+    // channel state the Ink click path does not carry.
   }, [openFileActions])
 
   // Wire the click-to-open callback into the Ink instance (the field is

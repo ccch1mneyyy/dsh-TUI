@@ -19,6 +19,24 @@ type HyperlinkOptions = {
   style?: (text: string) => string
 }
 
+/** Schemes a rendered hyperlink may point at. Anything else degrades to
+ * plain display text: link targets come from model output and file
+ * contents, and an arbitrary scheme would reach the OS handler on click. */
+const HYPERLINK_SCHEMES = new Set(['http:', 'https:', 'dsh-file:', 'file:', 'mailto:'])
+
+// Control characters never legitimately appear in a URL; stripping them
+// before the scheme check keeps `java\x00script:` from passing as a
+// relative reference and keeps the embedded URL 7-bit clean (the osc()
+// exit strips again — this is the entry side of the same defense).
+const URL_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f\x20]/g
+
+function sanitizeHyperlinkUrl(raw: string): string | null {
+  const url = raw.replace(URL_CONTROL_CHARS, '')
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(url)
+  if (scheme === null) return null
+  return HYPERLINK_SCHEMES.has(`${scheme[1].toLowerCase()}:`) ? url : null
+}
+
 /**
  * Create a clickable hyperlink using OSC 8 escape sequences.
  * Falls back to plain text if the terminal doesn't support hyperlinks.
@@ -36,14 +54,18 @@ export function createHyperlink(
   options?: HyperlinkOptions,
 ): string {
   const hasSupport = options?.supportsHyperlinks ?? supportsHyperlinks()
-  if (!hasSupport) {
-    return url
+  const safeUrl = sanitizeHyperlinkUrl(url)
+  if (!hasSupport || safeUrl === null) {
+    // Degrade to the plain display text — for a rejected scheme that is
+    // the content alone (never the raw url: `javascript:...` must not
+    // reach the screen either), for a supported terminal it is the url.
+    return safeUrl === null ? (content ?? '') : url
   }
 
   // Apply basic ANSI blue color - wrap-ansi preserves this across line breaks
   // RGB colors (like theme colors) are NOT preserved by wrap-ansi with OSC 8
-  const displayText = content ?? url
+  const displayText = content ?? safeUrl
   const style = options?.style ?? ((text: string) => chalk.blue(text))
   const coloredText = style(displayText)
-  return `${OSC8_START}${url}${OSC8_END}${coloredText}${OSC8_START}${OSC8_END}`
+  return `${OSC8_START}${safeUrl}${OSC8_END}${coloredText}${OSC8_START}${OSC8_END}`
 }

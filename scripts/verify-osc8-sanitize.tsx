@@ -113,5 +113,53 @@ if (isRelevant('end-to-end')) {
   })
 }
 
+if (isRelevant('scheme-gate')) {
+  console.log('scheme 门禁（入口降级 + 点击面拦截）')
+
+  const { createHyperlink } = await import('../src/cc/hyperlink.js')
+  const { classifyOpenTarget } = await import('../src/utils/urlGuard.js')
+
+  check('createHyperlink 拒绝 javascript: scheme（降级纯文本）', () => {
+    const out = createHyperlink('javascript:alert(1)', 'click', { supportsHyperlinks: true })
+    assert.ok(!out.includes('\x1b]8;;'), `危险 scheme 未降级: ${JSON.stringify(out)}`)
+    assert.ok(!out.includes('javascript:'), `危险 scheme 明文外泄: ${JSON.stringify(out)}`)
+  })
+
+  check('createHyperlink 拒绝 data: scheme', () => {
+    const out = createHyperlink('data:text/html,<script>', 'click', { supportsHyperlinks: true })
+    assert.ok(!out.includes('\x1b]8;;'), `危险 scheme 未降级: ${JSON.stringify(out)}`)
+  })
+
+  check('createHyperlink 拒绝大小写混淆（JaVaScRiPt:）', () => {
+    const out = createHyperlink('JaVaScRiPt:alert(1)', 'click', { supportsHyperlinks: true })
+    assert.ok(!out.includes('\x1b]8;;'), `大小写混淆绕过: ${JSON.stringify(out)}`)
+  })
+
+  check('createHyperlink 拒绝控制字符混淆（java\\x00script:）', () => {
+    const out = createHyperlink('java\x00script:alert(1)', 'click', { supportsHyperlinks: true })
+    assert.ok(!out.includes('\x1b]8;;'), `控制字符混淆绕过: ${JSON.stringify(out)}`)
+  })
+
+  check('createHyperlink 放行 http/https/dsh-file/file/mailto', () => {
+    for (const url of ['http://ok.example', 'https://ok.example/x', 'dsh-file:///a/b.ts#L1', 'file:///tmp/x', 'mailto:a@b.c']) {
+      const out = createHyperlink(url, 'x', { supportsHyperlinks: true })
+      assert.ok(out.includes('\x1b]8;;'), `合法 scheme 被误拒: ${url} -> ${JSON.stringify(out)}`)
+    }
+  })
+
+  check('classifyOpenTarget 拦截非白名单 scheme 的外开', () => {
+    assert.equal(classifyOpenTarget('ssh://evil.example').kind, 'rejected')
+    assert.equal(classifyOpenTarget('ftp://evil.example').kind, 'rejected')
+    assert.equal(classifyOpenTarget('javascript:alert(1)').kind, 'rejected')
+  })
+
+  check('classifyOpenTarget 放行 http/https 与文件链接', () => {
+    assert.equal(classifyOpenTarget('https://ok.example').kind, 'external')
+    assert.equal(classifyOpenTarget('http://ok.example').kind, 'external')
+    assert.equal(classifyOpenTarget('dsh-file:///a/b.ts#L1').kind, 'file-actions')
+    assert.equal(classifyOpenTarget('file:///tmp/x').kind, 'file-actions')
+  })
+}
+
 console.log(failures === 0 ? 'ALL PASS' : `${failures} FAIL`)
 process.exit(failures === 0 ? 0 : 1)
