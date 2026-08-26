@@ -49,6 +49,31 @@ transcript 模式中打开会话全文搜索。全文搜索使用 `n`/`N` 在结
 | `Ctrl+K` | 删除光标后内容 |
 | `Ctrl+W` | 删除前一个单词 |
 
+### vim 编辑模式（`/vim`）
+
+`/vim` 切换输入框的 vim 编辑模式（会话级、不持久化）：开启后输入框左侧出现
+`INSERT` 徽标，打字照常；`Esc` 切到 `NORMAL` 徽标，裸键按 vim 语义处理。
+
+| NORMAL 键 | 行为 |
+| --- | --- |
+| `h` / `l` | 左 / 右移一个字符 |
+| `j` / `k` | 下 / 上一行（多行输入） |
+| `0` / `^` / `$` | 行首 / 行首首个非空白 / 行尾 |
+| `w` / `b` | 下一个 / 上一个词首（空白分词） |
+| `x` / `X` | 删除光标处 / 光标前字符（行尾时 `x` 删最后一个字符） |
+| `d` + 第二键 | `dd` 删整行（含换行）· `d$` 删至行尾 · `d0`/`d^` 删至行首 · `dw` 删至词尾 |
+| `u` | 撤销最近一次 vim 编辑（栈上限 100） |
+| `i` / `I` / `a` / `A` | 光标处 / 行首首个非空白 / 光标后 / 行尾进入 INSERT |
+| `o` / `O` | 下方 / 上方新建一行并进入 INSERT |
+| `/` | 插入 `/` 并切回 INSERT（打开命令菜单） |
+| `Esc` | 取消待决 `d`；其余无操作（不触发现有清空 / 双击 rewind 语义） |
+| `Enter` / `Tab` / 方向键 / `Ctrl+*` 组合 | 照常放行（发送、补全、历史、编辑快捷键等） |
+| 其他裸键 | 忽略，不插入 |
+
+注意：vim 开启时 `Esc` 归 vim 管——时间回溯请退出 vim 模式后双击 `Esc` 或
+用 `/rewind`；回合运行中 insert 模式下按 `Esc` 也只是回 normal，打断回合用
+`Ctrl+C` / `Ctrl+Enter`。NORMAL 下清空输入用 `Ctrl+C` 或 `dd`。
+
 Bracketed paste（右键或终端原生粘贴）会原样插入，包括换行，不会把粘贴内容误当
 成 Enter 提交。
 
@@ -307,7 +332,7 @@ transcript。
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/color`（会话强调色：无参打开调色板选择器，`<名>` 直接设置，`status`/`reset`；输入框边框 + 右上角会话名标签，按会话保存；标签默认关闭，`/settings` 可开）、`/lang` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/skills`、`/plugins`（`check <路径>` 校验插件清单） |
 | 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr-comments`、`/release-notes`、`/vuln-check` |
-| 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit`（别名 `/quit`、`/q`） |
+| 其他 | `/update`、`/vim`（vim 编辑模式开关，见「输入编辑」）、`/terminal-setup`、`/connect`、`/help`、`/exit`（别名 `/quit`、`/q`） |
 | 注册表 | `/plan`、`/goal`，以及当前 DSH 组合注册的其他命令 |
 
 补充语法：
@@ -335,5 +360,5 @@ transcript。
 - Skill 命令由 host 注入对应 `SKILL.md` 的技能正文后执行，参数原样随行；
   包内 `skills/` 会在插件启动时自动注册，也可用项目或用户目录中的同名 skill 覆盖。
 
-`/vim`、`/connect`、`/hooks` 当前是兼容占位命令；当 DSH 组合没有
+`/connect`、`/hooks` 当前是兼容占位命令；当 DSH 组合没有
 对应能力时会给出明确说明，而不是静默执行。
