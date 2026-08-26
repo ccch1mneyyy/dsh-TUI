@@ -221,6 +221,9 @@ const GROUPS = {
 // （Alt+V 粘贴别名、覆盖热更新、保留位集合、草稿冲突校验），以及
 // 真 Chat 里 Alt+V / 改键后的外部编辑器路径。
     ["verify-keymap", ['node', 'scripts/verify-keymap.mjs']],
+// vim 编辑模式回归（/vim 命令 + normal/insert 键位 + 徽标 + 撤销栈 +
+// insert Esc 让位回合打断）。
+    ["verify-vim-mode", ['node', 'scripts/verify-vim-mode.mjs']],
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],
