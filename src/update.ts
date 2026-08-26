@@ -301,6 +301,60 @@ export async function fetchGithubLatestRelease(): Promise<{ version: string; dow
 }
 
 /**
+ * Escape a value for embedding in a PowerShell single-quoted literal: only
+ * `''` needs escaping there (same convention as `buildPsScript` in
+ * src/utils/clipboard.ts). Extract/archive paths derive from environment
+ * variables (`DSH_TUI_STANDALONE_CACHE`), so an unescaped `'` closes the
+ * literal and turns the rest of the path into executable command text.
+ * @param value - Raw string to embed between single quotes.
+ * @returns The value with every `'` doubled.
+ */
+export function escapePsSingleQuoted(value: string): string {
+  return value.replace(/'/g, "''")
+}
+
+/**
+ * How the Windows half of the standalone updater extracts the downloaded zip:
+ * prefer the bsdtar `tar.exe` Windows 10 1809+ ships (it reads zip, and the
+ * array argv never goes through a shell, so there is no quoting surface at
+ * all), and only fall back to `Expand-Archive` when tar is missing — with
+ * both paths escaped as single-quoted literals. Extracted as a pure function
+ * so scripts/verify-update-extract.tsx can pin the no-injection contract.
+ * @param downloadPath - Path of the downloaded archive (attacker-influenced
+ *   via cache-dir environment variables).
+ * @param extractDir - Destination directory for extraction.
+ * @param tarAvailable - Whether `tar --version` ran successfully (probed once
+ *   per update with {@link windowsTarAvailable}).
+ * @returns The child command plus its argv — array form for both tools.
+ */
+export type WindowsExtractPlan =
+  | { tool: 'tar'; args: string[] }
+  | { tool: 'powershell'; args: string[] }
+
+export function windowsExtractPlan(downloadPath: string, extractDir: string, tarAvailable: boolean): WindowsExtractPlan {
+  if (tarAvailable) {
+    return { tool: 'tar', args: ['-xf', downloadPath, '-C', extractDir] }
+  }
+  return {
+    tool: 'powershell',
+    args: [
+      '-NoProfile', '-Command',
+      `Expand-Archive -Path '${escapePsSingleQuoted(downloadPath)}' -DestinationPath '${escapePsSingleQuoted(extractDir)}' -Force`,
+    ],
+  }
+}
+
+/** Probe for the Windows 10+ built-in bsdtar (missing on older LTSC images). */
+function windowsTarAvailable(): boolean {
+  try {
+    execFileSync('tar', ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Download the new standalone release binary package and atomically replace the running binary.
  *
  * @param downloadUrl - Direct URL to download the release archive.
@@ -348,10 +402,12 @@ export async function downloadAndReplaceStandaloneBinary(
 
     if (isZip) {
       if (process.platform === 'win32') {
-        execFileSync('powershell', [
-          '-NoProfile', '-Command',
-          `Expand-Archive -Path '${downloadPath}' -DestinationPath '${extractDir}' -Force`,
-        ])
+        // Array argv both ways: tar.exe (Win10+ bsdtar) has no shell quoting
+        // surface, and the Expand-Archive fallback escapes both paths as
+        // single-quoted literals — the paths derive from user environment
+        // variables, so a raw `'` must never reach the command text.
+        const plan = windowsExtractPlan(downloadPath, extractDir, windowsTarAvailable())
+        execFileSync(plan.tool, plan.args)
       } else {
         execFileSync('unzip', ['-o', downloadPath, '-d', extractDir])
       }

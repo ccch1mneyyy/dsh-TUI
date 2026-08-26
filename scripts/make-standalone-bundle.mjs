@@ -161,10 +161,25 @@ for (const stagedFile of stagedFiles) {
   if (existsSync(archivePath)) rmSync(archivePath, { force: true })
   if (format === 'zip') {
     if (process.platform === 'win32') {
-      execFileSync('powershell', [
-        '-NoProfile', '-Command',
-        `Compress-Archive -Path '${targetBinPath}' -DestinationPath '${archivePath}' -Force`,
-      ], { stdio: 'inherit' })
+      // 优先 Windows 10+ 自带 bsdtar（-a 按后缀写 zip），数组参数不经
+      // shell、无注入面；tar 缺失才回退 Compress-Archive——路径含 `'`
+      // 会闭合单引号字面量注入命令，必须按 PowerShell 约定把 ' 双写为 ''
+      // （与 src/update.ts 的 escapePsSingleQuoted 同款）。
+      let tarOk = true
+      try {
+        execFileSync('tar', ['--version'], { stdio: 'ignore' })
+      } catch {
+        tarOk = false
+      }
+      if (tarOk) {
+        execFileSync('tar', ['-a', '-cf', archivePath, '-C', binDir, binaryName], { stdio: 'inherit' })
+      } else {
+        const psQuote = (s) => `'${s.replace(/'/g, "''")}'`
+        execFileSync('powershell', [
+          '-NoProfile', '-Command',
+          `Compress-Archive -Path ${psQuote(targetBinPath)} -DestinationPath ${psQuote(archivePath)} -Force`,
+        ], { stdio: 'inherit' })
+      }
     } else {
       execFileSync('zip', ['-j', archivePath, targetBinPath], { stdio: 'inherit' })
     }
