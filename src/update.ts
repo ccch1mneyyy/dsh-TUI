@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gte, gt, lt, valid } from 'semver'
 import { shellQuote } from './utils/shellQuote.js'
@@ -436,6 +436,59 @@ function windowsTarAvailable(): boolean {
   }
 }
 
+/** What {@link validateExtractedTree} says about an extracted release tree. */
+export interface ExtractedTreeCheck {
+  ok: boolean
+  /** First offending entry (path + why) when ok is false. */
+  reason?: string
+}
+
+/**
+ * Zip-slip / symlink guard between extraction and replacement (security
+ * review, medium): walk the freshly extracted tree WITHOUT following links
+ * and require every entry to be a regular file or directory whose resolved
+ * path stays inside the extract dir. GNU tar happily materializes symlink
+ * members pointing outside (verified: `link.txt -> /etc/passwd` lands on
+ * disk), and the follow-up copyFileSync would then read/write through the
+ * link; `../` members are also refused by tar/unzip themselves, but the
+ * prefix check here keeps the guard local and future-proof against a
+ * different extractor. The node-tar strict equivalent (preservePaths: false +
+ * strict) is in standalone/entry.mjs — this covers the system-tool paths
+ * entry.mjs cannot. Symlinks are rejected outright (defense in depth: a
+ * "harmless" in-tree link is still indistinguishable from a hostile one at
+ * this layer), as are fifo/socket/device entries.
+ * @param extractDir - Directory the archive was extracted into.
+ * @returns ok plus the first offending entry's path.
+ */
+export function validateExtractedTree(extractDir: string): ExtractedTreeCheck {
+  const root = resolve(extractDir)
+  const walk = (dir: string): ExtractedTreeCheck => {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch (error) {
+      return { ok: false, reason: `unreadable directory ${dir}: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    for (const entry of entries) {
+      const full = resolve(join(dir, entry.name))
+      if (full !== root && !full.startsWith(root + sep)) {
+        return { ok: false, reason: `entry escapes the extract directory: ${full}` }
+      }
+      if (entry.isSymbolicLink()) {
+        return { ok: false, reason: `symbolic link in release archive: ${full}` }
+      }
+      if (entry.isDirectory()) {
+        const sub = walk(full)
+        if (!sub.ok) return sub
+      } else if (!entry.isFile()) {
+        return { ok: false, reason: `non-regular entry in release archive: ${full}` }
+      }
+    }
+    return { ok: true }
+  }
+  return walk(root)
+}
+
 /**
  * Fetch and size-cap a release's SHA256SUMS manifest. Any failure throws —
  * a release that declares a manifest must actually be verifiable (fail
@@ -568,10 +621,29 @@ export async function downloadAndReplaceStandaloneBinary(
       execFileSync('tar', ['-xzf', downloadPath, '-C', extractDir])
     }
 
+    // Zip-slip / symlink guard (see validateExtractedTree): nothing from the
+    // archive may be followed out of the extract dir before the replace.
+    const treeCheck = validateExtractedTree(extractDir)
+    if (!treeCheck.ok) {
+      throw new Error(`unsafe release archive rejected: ${treeCheck.reason ?? 'unknown extraction anomaly'}`)
+    }
+
     const binaryName = process.platform === 'win32' ? 'dsh-tui.exe' : 'dsh-tui'
     const newBinaryPath = join(extractDir, binaryName)
     if (!existsSync(newBinaryPath)) {
       throw new Error('No executable binary found in release archive')
+    }
+    // The replacement source itself must be a plain regular file — a symlink
+    // or device at exactly the expected name is the sharpest zip-slip probe
+    // (copyFileSync would follow it).
+    let newBinaryStat
+    try {
+      newBinaryStat = lstatSync(newBinaryPath)
+    } catch {
+      throw new Error(`expected binary entry unreadable: ${newBinaryPath}`)
+    }
+    if (!newBinaryStat.isFile()) {
+      throw new Error(`expected binary entry is not a regular file: ${newBinaryPath}`)
     }
 
     onProgress?.('replacing binary…')
