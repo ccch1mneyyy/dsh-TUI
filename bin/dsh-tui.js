@@ -42,8 +42,12 @@ if (process.platform === 'win32') {
   }
 }
 
-const here = dirname(fileURLToPath(import.meta.url))
-const ownDir = dirname(here)
+/**
+ * Read and parse a JSON file safely.
+ *
+ * @param {string} p - File path to parse.
+ * @returns {any} Parsed JSON content or undefined.
+ */
 const readJson = p => {
   try {
     return JSON.parse(readFileSync(p, 'utf8'))
@@ -59,6 +63,12 @@ const PROFILE = 'dsh-tui'
 // --- 内联小工具（见文件头：零 lib 依赖是迁移契约的一部分）---------------------
 // 与 lib/types/utils/shellQuote.js 同语义的最小实现：cmd.exe 以空格拼接参数
 // 且不做转义，含空格/引号的参数必须整体加引号（内层引号与反斜杠转义）。
+/**
+ * Quote an array of arguments for cmd.exe.
+ *
+ * @param {string[]} args - Argument tokens.
+ * @returns {string[]} Quoted argument tokens.
+ */
 const shellQuote = args =>
   args.map(arg => {
     const s = String(arg)

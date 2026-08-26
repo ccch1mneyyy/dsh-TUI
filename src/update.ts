@@ -218,6 +218,8 @@ async function fetchLatestVersion(registryBase: string): Promise<string | undefi
 
 /**
  * Detect whether the current process is running in standalone / portable package mode.
+ *
+ * @returns `true` when running inside a standalone binary distribution, `false` otherwise.
  */
 export function isStandaloneRuntime(): boolean {
   return (
@@ -229,6 +231,8 @@ export function isStandaloneRuntime(): boolean {
 
 /**
  * Get the path to the current standalone executable binary.
+ *
+ * @returns The resolved executable path from environment or `process.execPath`.
  */
 export function getStandaloneBinaryPath(): string {
   return process.env.DSH_TUI_STANDALONE_BINARY ?? process.execPath
@@ -236,6 +240,10 @@ export function getStandaloneBinaryPath(): string {
 
 /**
  * Get the expected release asset file name for the current platform and architecture.
+ *
+ * @param platform - Node.js platform identifier (e.g. `'linux'`, `'win32'`, `'darwin'`).
+ * @param arch - Node.js architecture identifier (e.g. `'x64'`, `'arm64'`).
+ * @returns The archive file name matching the target platform.
  */
 export function getStandaloneAssetName(platform = process.platform, arch = process.arch): string {
   if (platform === 'win32') {
@@ -251,7 +259,11 @@ export function getStandaloneAssetName(platform = process.platform, arch = proce
     : 'dsh-tui-standalone-linux-x64.tar.gz'
 }
 
-/** Fetch latest release info from GitHub Releases; undefined on any failure. */
+/**
+ * Fetch latest release info from GitHub Releases API for the standalone asset.
+ *
+ * @returns Release version tag and matching asset download URL, or `undefined` on any failure.
+ */
 export async function fetchGithubLatestRelease(): Promise<{ version: string; downloadUrl?: string } | undefined> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS)
@@ -288,7 +300,11 @@ export async function fetchGithubLatestRelease(): Promise<{ version: string; dow
 }
 
 /**
- * Download the new standalone release binary package and replace the running binary.
+ * Download the new standalone release binary package and atomically replace the running binary.
+ *
+ * @param downloadUrl - Direct URL to download the release archive.
+ * @param onProgress - Optional callback invoked with progress status strings.
+ * @returns Object indicating success or an error message on failure.
  */
 export async function downloadAndReplaceStandaloneBinary(
   downloadUrl: string,
@@ -360,7 +376,13 @@ export async function downloadAndReplaceStandaloneBinary(
       const oldBinary = `${currentBinary}.old`
       try { rmSync(oldBinary, { force: true }) } catch {}
       renameSync(currentBinary, oldBinary)
-      copyFileSync(newBinaryPath, currentBinary)
+      try {
+        copyFileSync(newBinaryPath, currentBinary)
+      } catch (copyError) {
+        // Restore the original executable if copying the new binary failed.
+        try { renameSync(oldBinary, currentBinary) } catch {}
+        throw copyError
+      }
     } else {
       const stagedTarget = join(targetDir, `.dsh-tui-new-${process.pid}`)
       copyFileSync(newBinaryPath, stagedTarget)

@@ -57,9 +57,11 @@ const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQu
 const compiledPathsPath = fileURLToPath(new URL('../lib/types/utils/paths.js', import.meta.url))
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
-// The compiled update.js imports ./utils/shellQuote.js and ./utils/paths.js
-// (the /restart log lives under DATA_DIR) — mirror all three into every
-// scratch layout or the import dies with ERR_MODULE_NOT_FOUND.
+/**
+ * Mirror compiled update module and its dependencies into a scratch directory.
+ *
+ * @param {string} dstDir - Destination directory to receive the modules.
+ */
 function copyUpdateModule(dstDir) {
   mkdirSync(join(dstDir, 'utils'), { recursive: true })
   cpSync(compiledModulePath, join(dstDir, 'update.js'))

@@ -69,6 +69,11 @@ const completeMarker = join(runtimeRoot, '.complete')
 const dshBin = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 const tuiRoot = join(runtimeRoot, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
 
+/**
+ * Check if the standalone runtime cache directory is already extracted and ready.
+ *
+ * @returns `true` if the complete marker matches the bundle ID and entry files exist.
+ */
 const runtimeReady = () => {
   try {
     return readFileSync(completeMarker, 'utf8').trim() === BUNDLE_ID && existsSync(dshBin) && existsSync(join(tuiRoot, 'cordis.patch.yml'))
@@ -77,6 +82,11 @@ const runtimeReady = () => {
   }
 }
 
+/**
+ * Ensure the bundled runtime archive is unpacked into the cache directory.
+ *
+ * @returns Promise that resolves once extraction is complete.
+ */
 async function ensureRuntime() {
   if (runtimeReady()) return
 
@@ -98,8 +108,18 @@ async function ensureRuntime() {
     })
     rmSync(temporaryArchive, { force: true })
     writeFileSync(join(temporaryRoot, '.complete'), `${BUNDLE_ID}\n`)
-    if (!runtimeReady() && existsSync(runtimeRoot)) rmSync(runtimeRoot, { recursive: true, force: true })
-    renameSync(temporaryRoot, runtimeRoot)
+    if (runtimeReady()) {
+      // Another process installed the same bundle while we extracted.
+      rmSync(temporaryRoot, { recursive: true, force: true })
+      return
+    }
+    if (existsSync(runtimeRoot)) rmSync(runtimeRoot, { recursive: true, force: true })
+    try {
+      renameSync(temporaryRoot, runtimeRoot)
+    } catch (error) {
+      if (!runtimeReady()) throw error
+      rmSync(temporaryRoot, { recursive: true, force: true })
+    }
   } catch (error) {
     rmSync(temporaryArchive, { force: true })
     rmSync(temporaryRoot, { recursive: true, force: true })
@@ -107,6 +127,11 @@ async function ensureRuntime() {
   }
 }
 
+/**
+ * Link or update the node_modules symbolic link in the target profile directory.
+ *
+ * @param profileDir - Absolute path to the standalone profile directory.
+ */
 function replaceNodeModulesLink(profileDir) {
   const linkPath = join(profileDir, 'node_modules')
   const target = join(runtimeRoot, 'node_modules')
@@ -117,9 +142,13 @@ function replaceNodeModulesLink(profileDir) {
   } catch {
     // Missing links are created below.
   }
-  symlinkSync(target, linkPath, 'dir')
+  const type = process.platform === 'win32' ? 'junction' : 'dir'
+  symlinkSync(target, linkPath, type)
 }
 
+/**
+ * Configure and initialize the standalone profile environment with cordis patch and dependencies.
+ */
 function ensureProfile() {
   const standaloneHome = resolve(
     process.env.DSH_TUI_STANDALONE_HOME ?? join(homedir(), '.dsh-tui-standalone'),
