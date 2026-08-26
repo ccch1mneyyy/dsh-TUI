@@ -19,10 +19,11 @@ const UPDATE_CHECK_TIMEOUT_MS = 4000
 const STANDALONE_DOWNLOAD_TIMEOUT_MS = 300000
 /**
  * Hard cap on a single release asset the updater will accept, checked against
- * the declared content-length BEFORE the body is buffered (and again on the
- * actual byte count for chunked responses without a header). A corrupted or
- * hostile mirror must not be able to pin the process in an unbounded
- * arrayBuffer().
+ * the declared content-length BEFORE the body is buffered, and enforced as a
+ * mid-stream abort while the body downloads (a chunked response with no
+ * content-length header is interrupted at the cap instead of buffered whole —
+ * a hostile mirror must not be able to pin the process in an unbounded
+ * arrayBuffer() and OOM it).
  */
 const MAX_ASSET_BYTES = 512 * 1024 * 1024
 /** The SHA256SUMS manifest itself is plain text; anything past this is broken. */
@@ -522,6 +523,15 @@ async function fetchChecksumManifest(checksumUrl: string): Promise<string> {
   }
 }
 
+/** Options for {@link downloadAndReplaceStandaloneBinary} — injectable for tests. */
+export interface StandaloneDownloadOptions {
+  /**
+   * Override the asset size cap (default {@link MAX_ASSET_BYTES}). Tests
+   * inject a small value so the mid-stream abort path runs in milliseconds.
+   */
+  maxAssetBytes?: number
+}
+
 /**
  * Download the new standalone release binary package and atomically replace the running binary.
  *
@@ -537,13 +547,16 @@ async function fetchChecksumManifest(checksumUrl: string): Promise<string> {
  * @param downloadUrl - Direct URL to download the release archive.
  * @param onProgress - Optional callback invoked with progress status strings.
  * @param checksumUrl - SHA256SUMS manifest URL for the release, when known.
+ * @param options - Injectable download limits (tests pass a small cap).
  * @returns Object indicating success or an error message on failure.
  */
 export async function downloadAndReplaceStandaloneBinary(
   downloadUrl: string,
   onProgress?: (text: string) => void,
   checksumUrl?: string,
+  options: StandaloneDownloadOptions = {},
 ): Promise<{ success: boolean; error?: string }> {
+  const maxAssetBytes = options.maxAssetBytes ?? MAX_ASSET_BYTES
   const tempDir = join(
     process.env.DSH_TUI_STANDALONE_CACHE ?? join(homedir(), '.cache', 'dsh-tui-standalone'),
     `.update-${Date.now()}-${process.pid}`,
@@ -573,16 +586,36 @@ export async function downloadAndReplaceStandaloneBinary(
       throw new Error(`HTTP ${response.status} ${response.statusText}`)
     }
     // Size cap, part 1: the declared length rejects before a single body byte
-    // is buffered. Part 2 (actual byteLength below) covers chunked responses
-    // that ship no content-length header.
+    // is buffered. Part 2 (the streaming loop below) aborts a chunked
+    // response mid-transfer at the same cap — a stream without a
+    // content-length header never gets buffered whole.
     const declaredLength = Number(response.headers.get('content-length') ?? Number.NaN)
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_ASSET_BYTES) {
-      throw new Error(`release asset declares ${declaredLength} bytes, over the ${MAX_ASSET_BYTES} download cap`)
+    if (Number.isFinite(declaredLength) && declaredLength > maxAssetBytes) {
+      throw new Error(`release asset declares ${declaredLength} bytes, over the ${maxAssetBytes} download cap`)
     }
-    const buffer = Buffer.from(await response.arrayBuffer())
-    if (buffer.byteLength > MAX_ASSET_BYTES) {
-      throw new Error(`release asset is ${buffer.byteLength} bytes, over the ${MAX_ASSET_BYTES} download cap`)
+    if (response.body === null) {
+      throw new Error('release asset response has no body stream')
     }
+    // Size cap, part 2: stream the body and abort the connection the moment
+    // the running total passes the cap. The read-then-check pattern this
+    // replaces buffered the whole transfer first (a 96MB headerless response
+    // was measured resident at ~3x before the check ran), so a hostile
+    // unbounded stream could OOM the process; now the excess is never read.
+    const reader = response.body.getReader()
+    const chunks: Buffer[] = []
+    let received = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done === true) break
+      received += value.byteLength
+      if (received > maxAssetBytes) {
+        controller.abort()
+        try { await reader.cancel() } catch { /* already aborted */ }
+        throw new Error(`release asset streamed past ${received} bytes, over the ${maxAssetBytes} download cap`)
+      }
+      chunks.push(Buffer.from(value))
+    }
+    const buffer = Buffer.concat(chunks, received)
     writeFileSync(downloadPath, buffer)
 
     if (checksumUrl === undefined) {

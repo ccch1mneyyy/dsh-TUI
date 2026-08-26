@@ -12,7 +12,10 @@
  *  - downloadAndReplaceStandaloneBinary（本地 http server + 临时假二进制）：
  *    (a) sums 匹配 → 替换成功；篡改资产字节 → 拒绝替换且磁盘不留下载
  *    残留；(c) 无 sums → transition 期警告路径继续；
- *  - 下载体积上限：content-length 声明超过 512MB 直接拒绝。
+ *  - 下载体积上限：content-length 声明超过 512MB 直接拒绝；
+ *  - 流式中断（DoS，红队 P-5）：无 content-length 的无界流在「读到上限
+ *    即刻」断连中止——server 侧只送出上限附近的字节而非全量，资产
+ *    不落盘（注入 2MB 小上限测同一代码路径）。
  *
  * Run: node --import tsx/esm scripts/verify-update-checksum.tsx
  */
@@ -76,12 +79,17 @@ if (typeof verifyAssetChecksum === 'function') {
 // 归档字节（tampered 标志切换内容），/SHA256SUMS 返回清单。
 let tamperAsset = false
 let omitSums = false
+// 无界流统计：server 侧实际写出的字节数（客户端断连即停止累计）。
+let streamWritten = 0
+let streamClosed = false
+const STREAM_CHUNK = 64 * 1024
+const STREAM_CHUNKS = 128 // 总量 8MB，注入上限 2MB → 中断应发生在约 1/4 处
 const realAssetBytes = makeAssetArchive('legit-new-binary\n')
 const evilAssetBytes = makeAssetArchive('evil-tampered-binary\n')
 const realDigest = createHash('sha256').update(realAssetBytes).digest('hex')
 const ASSET_NAME = 'dsh-tui-standalone-linux-x64.tar.gz'
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = req.url ?? ''
   // 注意：fetchGithubLatestRelease 请求的是 `<apiBaseUrl>/repos/<repo>/releases/latest`。
   if (url === '/repos/ccch1mneyyy/dsh-TUI/releases/latest') {
@@ -111,6 +119,22 @@ const server = http.createServer((req, res) => {
   if (url === '/huge') {
     // 声明超限的 content-length：检查必须发生在读 body 之前。
     res.writeHead(200, { 'content-length': String(600 * 1024 * 1024) })
+    res.end()
+    return
+  }
+  if (url === '/stream-unbounded') {
+    // 无 content-length 的无界流（chunked）：恶意镜像可用它把 arrayBuffer()
+    // 全量读进内存后才检查。按 backpressure 节流写出，客户端断连后停止
+    // 累计，streamWritten 即「对端实际消费的量级」。
+    res.writeHead(200)
+    res.on('close', () => { streamClosed = true })
+    const chunk = Buffer.alloc(STREAM_CHUNK, 0x41)
+    for (let i = 0; i < STREAM_CHUNKS && !streamClosed; i++) {
+      const writable = res.write(chunk)
+      streamWritten += chunk.length
+      if (!writable) await new Promise<void>(resolve => res.once('drain', resolve))
+      await new Promise<void>(resolve => setImmediate(resolve))
+    }
     res.end()
     return
   }
@@ -159,7 +183,8 @@ process.env.DSH_TUI_STANDALONE_BINARY = fakeCurrentBinary
 process.env.DSH_TUI_STANDALONE_CACHE = cacheDir
 
 const downloadFn = updateModule.downloadAndReplaceStandaloneBinary as
-  | ((url: string, onProgress?: (text: string) => void, checksumUrl?: string) =>
+  | ((url: string, onProgress?: (text: string) => void, checksumUrl?: string,
+      options?: { maxAssetBytes?: number }) =>
       Promise<{ success: boolean; error?: string }>)
   | undefined
 
@@ -219,6 +244,28 @@ if (typeof downloadFn === 'function') {
     JSON.stringify(hugeResult.error),
   )
   check('超限拒绝后缓存目录无下载残留', cacheLeftovers().length === 0, cacheLeftovers().join(','))
+
+  // (e) 无 content-length 的无界流（红队 P-5）：注入 2MB 小上限（同一
+  // 代码路径，默认 512MB），server 发 8MB。断言「读中断点」——server
+  // 只送出上限附近（远小于全量）的字节、结果失败、不落盘。红态
+  // （修复前 arrayBuffer 全量读入）：8MB 全部送出且错误来自后续解压。
+  const streamCap = 2 * 1024 * 1024
+  streamWritten = 0
+  streamClosed = false
+  const streamResult = await downloadFn(`${base}/stream-unbounded`, undefined, undefined, { maxAssetBytes: streamCap })
+  const totalStream = STREAM_CHUNK * STREAM_CHUNKS
+  check(
+    '无界流在超出上限时中断（server 送出远小于全量的字节）',
+    streamWritten < totalStream * 0.9 && streamWritten <= streamCap + STREAM_CHUNK * 4,
+    `written=${streamWritten} total=${totalStream} cap=${streamCap}`,
+  )
+  check('无界流超限被拒绝', !streamResult.success, JSON.stringify(streamResult))
+  check(
+    '无界流拒绝错误信息提及大小上限',
+    /over the .* cap|上限|超过/i.test(streamResult.error ?? ''),
+    JSON.stringify(streamResult.error),
+  )
+  check('无界流拒绝后缓存目录无下载残留', cacheLeftovers().length === 0, cacheLeftovers().join(','))
 } else {
   check('downloadAndReplaceStandaloneBinary 已导出', false)
 }
