@@ -19,6 +19,10 @@
  * copyFileSync 跟随链接读写链接目标；`../` 成员依赖解压器自身拒绝（GNU
  * tar 报错、unzip 剥离前缀），这里断言恶意包解压后树内无逃逸条目。
  *
+ * 硬链接防护（红队 P-6）：busybox tar 等不清理 linkname 的解压器会把
+ * 硬链接成员原样落地（nlink>1）；GNU tar 拦绝对/相对外部链接是解压器
+ * 行为而非代码保证，树校验对 nlink>1 的常规文件一律拒绝。
+ *
  * Run: node --import tsx/esm scripts/verify-update-extract.tsx
  */
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -210,6 +214,44 @@ if (typeof validateExtractedTree === 'function') {
     )
     const tarCheck = validateExtractedTree(tarOut)
     check('含 symlink 成员的 tar.gz 解压树被检测函数拒绝', !tarCheck.ok, JSON.stringify(tarCheck))
+
+    // 硬链接成员（红队 P-6）：python3 tarfile 写 LNKTYPE 成员指向树内目标
+    // ——树内目标让 GNU tar 成功落地 nlink=2 的硬链接（linkname 指向树外
+    // 的绝对/相对路径时 GNU tar 自己拒绝，但那是解压器行为；busybox tar
+    // 等不清理 linkname 的解压器会把硬链接原样落地）。校验必须按
+    // lstatSync().nlink > 1 一律拒绝。fixture 在测试临时目录里；若所在
+    // fs 不支持硬链接（极少见）则跳过并注明。
+    const hardDir = join(scratch, 'hardlink')
+    const hardOut = join(hardDir, 'extracted')
+    mkdirSync(hardOut, { recursive: true })
+    const hardTar = join(hardDir, 'hard.tar.gz')
+    execFileSync('python3', [
+      '-c',
+      'import tarfile,io,sys;'
+      + 't=tarfile.open(sys.argv[1],"w:gz");'
+      + 'data=b"binary";'
+      + 'ti=tarfile.TarInfo("dsh-tui");ti.size=len(data);t.addfile(ti,io.BytesIO(data));'
+      + 'hl=tarfile.TarInfo("hard.txt");hl.type=tarfile.LNKTYPE;hl.linkname="dsh-tui";t.addfile(hl);'
+      + 't.close()',
+      hardTar,
+    ])
+    try {
+      execFileSync('tar', ['-xzf', hardTar, '-C', hardOut], { stdio: 'ignore' })
+      const hardStat = statSync(join(hardOut, 'hard.txt'))
+      if (hardStat.nlink > 1) {
+        check(
+          `硬链接成员落地 nlink=${hardStat.nlink}（fixture 有效性）`,
+          true,
+          `nlink=${hardStat.nlink}`,
+        )
+        const hardCheck = validateExtractedTree(hardOut)
+        check('含硬链接成员（nlink>1）的解压树被拒绝', !hardCheck.ok, JSON.stringify(hardCheck))
+      } else {
+        console.log(`SKIP: 该 fs 上硬链接未生效（nlink=${hardStat.nlink}），跳过硬链接断言`)
+      }
+    } catch (error) {
+      console.log(`SKIP: 硬链接 fixture 解压失败（${error instanceof Error ? error.message : String(error)}），该环境跳过`)
+    }
   } finally {
     try { rmSync(scratch, { recursive: true, force: true }) } catch { /* best effort */ }
   }

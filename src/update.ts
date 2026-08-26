@@ -493,7 +493,11 @@ export interface ExtractedTreeCheck {
  * strict) is in standalone/entry.mjs — this covers the system-tool paths
  * entry.mjs cannot. Symlinks are rejected outright (defense in depth: a
  * "harmless" in-tree link is still indistinguishable from a hostile one at
- * this layer), as are fifo/socket/device entries.
+ * this layer), as are fifo/socket/device entries — and hard links (red-team
+ * review): GNU tar refusing external linkname targets is extractor behavior,
+ * not a guarantee this code may lean on (busybox tar and friends land hard
+ * links verbatim), so any regular file with nlink > 1 is refused — a landed
+ * hard link aliases a file this walk never enumerated.
  * @param extractDir - Directory the archive was extracted into.
  * @returns ok plus the first offending entry's path.
  */
@@ -519,6 +523,16 @@ export function validateExtractedTree(extractDir: string): ExtractedTreeCheck {
         if (!sub.ok) return sub
       } else if (!entry.isFile()) {
         return { ok: false, reason: `non-regular entry in release archive: ${full}` }
+      } else {
+        // Hard-link guard (see header): a regular file with more than one
+        // name on disk aliases something this enumeration never saw.
+        try {
+          if (lstatSync(full).nlink > 1) {
+            return { ok: false, reason: `hard link in release archive (nlink=${lstatSync(full).nlink}): ${full}` }
+          }
+        } catch (error) {
+          return { ok: false, reason: `entry not statable: ${error instanceof Error ? error.message : String(error)}` }
+        }
       }
     }
     return { ok: true }
