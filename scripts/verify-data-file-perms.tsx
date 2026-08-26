@@ -45,23 +45,34 @@ try {
   // 动态 import：DATA_DIR 常量此刻才以重定向后的 home 解析
   const { appendHistory, loadHistory } = await import('../src/history.js')
   const { logMouseDebug } = await import('../src/utils/debug.js')
+  const { writeIndex } = await import('../src/dsh-adapter/sessions/store.js')
 
   appendHistory('secret user input / sk-test-123')
   logMouseDebug('mouse arrive', { x: 1 })
+  writeIndex(new Map([['s1', {
+    derived: {
+      revision: 'r1', title: 'secret title', titleSource: 'first-user-input' as never,
+      hasPrompt: true, model: undefined, label: undefined,
+    },
+    branch: 'feature/x',
+  }]]))
 
   const dataDir = join(fakeHome, '.dsh-tui')
   const historyFile = join(dataDir, 'history.jsonl')
   const mouseLog = join(dataDir, 'mouse-debug.log')
+  const indexFile = join(dataDir, 'session-index.json')
 
   check('history.jsonl written', readFileSync(historyFile, 'utf8').includes('secret user input'))
   check('mouse-debug.log written', readFileSync(mouseLog, 'utf8').includes('mouse arrive'))
   check('history round-trips after perms change', loadHistory().at(0)?.text === 'secret user input / sk-test-123')
+  check('session-index.json written', readFileSync(indexFile, 'utf8').includes('secret title'))
 
   // win32 上 statSync().mode 的 POSIX 位无意义，只验证存在与功能
   if (process.platform !== 'win32') {
     check('DATA_DIR is mode 0700', mode8(dataDir) === '700', `got ${mode8(dataDir)}`)
     check('history.jsonl is mode 0600', mode8(historyFile) === '600', `got ${mode8(historyFile)}`)
     check('mouse-debug.log is mode 0600', mode8(mouseLog) === '600', `got ${mode8(mouseLog)}`)
+    check('session-index.json is mode 0600', mode8(indexFile) === '600', `got ${mode8(indexFile)}`)
   }
 } finally {
   rmSync(fakeHome, { recursive: true, force: true })
