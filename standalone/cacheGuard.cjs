@@ -142,10 +142,13 @@ function runtimeReady({ runtimeRoot, bundleId, requiredPaths = [] }) {
 }
 
 /**
- * 幂等把 cacheBase 收紧到 0700（红队 P-7）：解压出的运行时含完整可执行
- * 代码，缓存目录按默认 umask 落成 0755/0775 时同机其他用户可读。每次
- * ensureRuntime 入口（含 ready 短路路径）chmod 一次——已存在与刚创建的
- * 目录一并覆盖；chmod 失败（只读文件系统等）静默忽略，权限收紧是纵深
+ * 把「本次调用新建」的缓存目录收紧到 0700（红队 P-7）：解压出的运行时
+ * 含完整可执行代码，按默认 umask 落成 0755/0775 时同机其他用户可读。
+ * 只作用于自建层级（CodeRabbit Moderate 收窄）：预存的 cacheBase 权限
+ * 属于用户决策——缓存指到共享目录（NFS/团队盘）时，无差别 chmod 0700
+ * 会破坏他人访问，ensureRuntime 不再对预存根目录调用本函数；版本子
+ * 目录（rename 前的 temporaryRoot → runtimeRoot）一定由本模块创建，
+ * 始终收紧。chmod 失败（只读文件系统等）静默忽略，权限收紧是纵深
  * 防御，不得阻断启动。
  */
 const tightenCacheBase = cacheBase => {
@@ -174,18 +177,22 @@ const tightenCacheBase = cacheBase => {
 async function ensureRuntime(options) {
   const { cacheBase, runtimeRoot, bundleId, archivePath, extract, requiredPaths = [], log } = options
   const ready = () => runtimeReady({ runtimeRoot, bundleId, requiredPaths })
-  // 每次启动幂等收紧缓存目录权限（P-7），ready 短路路径同样经过。
-  tightenCacheBase(cacheBase)
   if (ready()) return
-
+  // chmod 收紧限定自建层级（CodeRabbit Moderate）：预存 cacheBase 的权限
+  // 属于用户决策（共享缓存指向 NFS/团队盘时无差别 0700 会破坏他人访
+  // 问），ready 短路路径与下面的重建路径都不再触碰它——只有本次调用
+  // mkdir 新建的根目录才收紧。
+  const cacheBaseExisted = existsSync(cacheBase)
   mkdirSync(cacheBase, { recursive: true })
-  // mkdir 按当前 umask 建目录（常见 0755/0775），刚创建的同样收紧。
-  tightenCacheBase(cacheBase)
+  if (!cacheBaseExisted) tightenCacheBase(cacheBase)
   const temporaryRoot = join(cacheBase, `.extract-${bundleId}-${process.pid}`)
   const temporaryArchive = join(cacheBase, `.runtime-${bundleId}-${process.pid}.tar.gz`)
   rmSync(temporaryRoot, { recursive: true, force: true })
   rmSync(temporaryArchive, { force: true })
   mkdirSync(temporaryRoot, { recursive: true })
+  // 版本子目录（rename 后的 runtimeRoot）一定由本模块创建：解压树含完
+  // 整可执行代码，在临时目录阶段就收紧，rename 过去即为 0700。
+  tightenCacheBase(temporaryRoot)
 
   log?.(`[dsh-tui] 首次运行，正在释放内置 DSH/TUI 运行时到 ${runtimeRoot}\n`)
   try {

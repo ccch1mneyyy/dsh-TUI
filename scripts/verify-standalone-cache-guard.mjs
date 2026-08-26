@@ -11,8 +11,12 @@
  *    无需迁移代码）；
  *  - 清单外文件被篡改 → 仍 ready（「两级闭包、不求全树」的边界确认）。
  *
- * cacheBase 幂等收紧（红队 P-7）：预置 0755 的 cacheBase，ensureRuntime
- * （含 ready 短路路径）之后必须收回到 0700——旧实现从不收紧。
+ * cacheBase 收紧限定自建层级（CodeRabbit Moderate 修订）：无差别把
+ * cacheBase chmod 0700 会侵入用户指定的目录——缓存指到共享盘（NFS/
+ * 团队盘）时破坏他人访问。断言：预存 0755 的 cacheBase（ready 短路
+ * 与冷装两条路径）保持 0755（预存目录的权限属用户决策）；自建
+ * cacheBase（冷启动 mkdir）仍收紧 0700；版本子目录 tui-<v>-dsh-<v>
+ * （一定由守卫创建）同样 0700。
  *
  * Run: node scripts/verify-standalone-cache-guard.mjs
  */
@@ -145,24 +149,47 @@ await scenario('out-of-manifest', async env => {
   check('清单外文件被篡改不触发 not ready（边界确认）', readyOf(env))
 })
 
-// ═══════════════ P-7：cacheBase 幂等收紧 0700 ═══════════════
+// ═══════════════ P-7（修订）：chmod 收紧限定自建层级 ═══════════════
 
 await scenario('perm-ready-path', async env => {
-  // ready 短路路径也要收紧：预置 0755 + 已 ready 的缓存
+  // ready 短路路径：预置 0755 + 已 ready 的缓存 → 预存目录权限保持用户
+  // 决策（共享缓存指向 NFS/团队盘时，无差别 0700 会破坏他人访问）。
   await ensureRuntime(env)
   chmodSync(env.cacheBase, 0o755)
   check('预置 0755 后确实是非 0700（fixture 有效性）', (statSync(env.cacheBase).mode & 0o777) === 0o755)
   await ensureRuntime(env)
-  check('ready 短路路径的 ensureRuntime 把 cacheBase 收回 0700', (statSync(env.cacheBase).mode & 0o777) === 0o700,
-    `mode=${(statSync(env.cacheBase).mode & 0o777).toString(8)}`)
+  check(
+    'ready 短路路径的 ensureRuntime 不改写预存 cacheBase 权限（保持 0755）',
+    (statSync(env.cacheBase).mode & 0o777) === 0o755,
+    `mode=${(statSync(env.cacheBase).mode & 0o777).toString(8)}`,
+  )
 })
 
 {
-  // 冷路径（首次创建）：新目录也应收紧
+  // 预存 cacheBase + 首次冷装（not ready → 解压重建）：预存根目录同样
+  // 不改写；版本子目录 tui-<v>-dsh-<v> 一定由守卫创建，仍收紧 0700。
+  const env = makeEnv('perm-warm-install')
+  mkdirSync(env.cacheBase, { recursive: true })
+  chmodSync(env.cacheBase, 0o755)
+  await ensureRuntime(env)
+  check('预存 cacheBase 首次冷装后保持 0755', (statSync(env.cacheBase).mode & 0o777) === 0o755,
+    `mode=${(statSync(env.cacheBase).mode & 0o777).toString(8)}`)
+  check(
+    '预存 cacheBase 冷装后版本子目录 tui-<v>-dsh-<v> 收紧为 0700',
+    (statSync(env.runtimeRoot).mode & 0o777) === 0o700,
+    `mode=${(statSync(env.runtimeRoot).mode & 0o777).toString(8)}`,
+  )
+  try { rmSync(env.cacheBase, { recursive: true, force: true }) } catch { /* best effort */ }
+}
+
+{
+  // 冷路径（首次创建）：自建的根目录与版本子目录都收紧。
   const env = makeEnv('perm-cold')
   await ensureRuntime(env)
   check('冷路径创建的 cacheBase 同样是 0700', (statSync(env.cacheBase).mode & 0o777) === 0o700,
     `mode=${(statSync(env.cacheBase).mode & 0o777).toString(8)}`)
+  check('冷路径的版本子目录 tui-<v>-dsh-<v> 是 0700', (statSync(env.runtimeRoot).mode & 0o777) === 0o700,
+    `mode=${(statSync(env.runtimeRoot).mode & 0o777).toString(8)}`)
   try { rmSync(env.cacheBase, { recursive: true, force: true }) } catch { /* best effort */ }
 }
 

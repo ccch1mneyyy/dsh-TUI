@@ -274,9 +274,9 @@ const GROUPS = {
     ["verify-update-checksum", ['node', '--import', 'tsx/esm', 'scripts/verify-update-checksum.tsx']],
 // 便携包运行时缓存守卫回归：解压树启动链（bin→主模块两级闭包）的
 // 哈希清单——清单内 JS 篡改/删除 → not ready 自愈重建、旧格式 marker
-// （仅 bundleId）自愈升级、清单外文件不设防（边界确认）、cacheBase
-// 幂等收紧 0700（ready 短路与冷路径）。mini runtime fixture 由清单
-// 造树 + 系统 tar 打包，解压器注入。
+// （仅 bundleId）自愈升级、清单外文件不设防（边界确认）、chmod 收紧
+// 限定自建层级（预存 cacheBase 保持用户权限，自建根目录与版本子目录
+// 0700）。mini runtime fixture 由清单造树 + 系统 tar 打包，解压器注入。
     ["verify-standalone-cache-guard", ['node', 'scripts/verify-standalone-cache-guard.mjs']],
   ],
   'channel-ui': [
