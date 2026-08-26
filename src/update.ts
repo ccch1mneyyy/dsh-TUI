@@ -395,6 +395,17 @@ export async function fetchGithubLatestRelease(options: GithubReleaseQuery = {})
  * Both the GNU `hex␣␣name` and `hex␣*name` (binary-mode) line forms parse,
  * and a single bare `hex` line (a `<asset>.sha256` sidecar) applies to the
  * one asset it accompanies.
+ *
+ * Trust boundary (explicit scope note): the manifest is fetched from the
+ * SAME release as the asset, so what this check defends against is
+ * download-domain hijacking, cache poisoning, and asset/manifest mix-ups —
+ * any tampering that changes the asset without also controlling the
+ * release's published checksums. It does NOT defend against a fully
+ * compromised release source (attacker publishes matching checksums for
+ * malicious bytes): that requires a signature chain (minisign/cosign with
+ * the public key built into the binary) — a declared follow-up item, out
+ * of this change's scope.
+ *
  * @param buffer - The downloaded asset bytes.
  * @param manifestText - SHA256SUMS file content.
  * @param assetName - Asset file name to look up in the manifest.
