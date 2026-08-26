@@ -205,6 +205,16 @@ const dict = {
   'compact-failed': { zh: '压缩失败 · {{err}}', en: 'Compaction failed · {{err}}' },
   'turn-failed': { zh: '回合出错{{detail}}', en: 'Turn error{{detail}}' },
 
+  // ── dsh-adapter/promptDebug.ts（/debug-prompt 成功提示）─────────────
+  // 快照 0600 落在会话工作区根，与 export-saved 同一句清理提醒。
+  'prompt-debug-saved': {
+    zh: '已写入 {{count}} 条最终 LLM 请求快照到 {{file}}。快照含敏感会话与提示词数据；文件位于当前工作区，若工作区在同步/共享目录请注意清理。',
+    en: {
+      one: 'Wrote 1 final LLM request snapshot to {{file}}. It contains sensitive conversation and prompt data, and lives in the current workspace — clean it up promptly if the workspace is synced or shared.',
+      other: 'Wrote {{count}} final LLM request snapshots to {{file}}. It contains sensitive conversation and prompt data, and lives in the current workspace — clean it up promptly if the workspace is synced or shared.',
+    },
+  },
+
   // ── questions.ts ─────────────────────────────────────────────────────
   'questionnaire-answered': { zh: '📋 问卷已答 · {{total}} 题', en: '📋 Questionnaire answered · {{total}} questions' },
 
@@ -310,7 +320,9 @@ const dict = {
   'doctor-launch-hint': { zh: '启动方式  dsh-tui.cmd / dsh --profile dsh-tui', en: 'Launch      dsh-tui.cmd / dsh --profile dsh-tui' },
   'doctor-route-hint': { zh: '模型路由  由 cordis.yml 的 llm-deepseek 段决定（/model 仅提示重启生效）', en: 'Model route  set by the llm-deepseek block in cordis.yml (/model only hints at restart)' },
   'export-failed': { zh: '导出失败（无法写入工作目录）', en: 'Export failed (cannot write to working directory)' },
-  'export-saved': { zh: '已导出: {{target}}', en: 'Exported: {{target}}' },
+  // 导出/调试快照都落在会话工作区根：同步盘（Dropbox/网盘）或共享目录
+  // 会把含完整对话的文件带出本机，提示语提醒用户及时清理。
+  'export-saved': { zh: '已导出: {{target}}（文件位于当前工作区，若工作区在同步/共享目录请注意清理）', en: 'Exported: {{target}} (the file lives in the current workspace — clean it up promptly if the workspace is synced or shared)' },
   'agentsmd-create-failed': { zh: '创建 AGENTS.md 失败', en: 'Failed to create AGENTS.md' },
   'agentsmd-exists': { zh: 'AGENTS.md 已存在，未覆盖', en: 'AGENTS.md already exists, not overwritten' },
   'agentsmd-created': { zh: '已创建 {{result}}', en: 'Created {{result}}' },
