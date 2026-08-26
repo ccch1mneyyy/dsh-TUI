@@ -48,6 +48,12 @@ type Props = {
    * the row's own fold-toggle does not fire.
    */
   onOpenFile?: (path: string) => void
+  /**
+   * Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
+   * collapsed cards keep the command title's first source line plus a
+   * `+N lines` hint; verbose/expanded cards render the full title.
+   */
+  foldTerminalCommand?: boolean
 }
 
 /** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
@@ -250,10 +256,36 @@ function clipHeaderArgs(args: string): string {
   return `${args.slice(0, HEADER_ARGS_BUDGET)}…`
 }
 
-function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameColor, filePath, onOpenFile }: {
+/** Terminal-card header folding shape: the first source line plus how many
+ *  lines are hidden. */
+type FoldedTitle = { first: string; hidden: number }
+
+/** Fold a multi-line terminal command title to its first SOURCE line.
+ *  Counts '\n' separators in place instead of materializing a line array —
+ *  running cards re-render every second and a streamed command can reach
+ *  hundreds of KB, and the exact cost the HEADER_ARGS_BUDGET comment above
+ *  keeps out of the header must not sneak back in through folding. (Lone-\r
+ *  titles are not a thing presentCall produces; CRLF is normalized on the
+ *  first line only.) Single-line titles return undefined: nothing to fold,
+ *  rendering stays byte-identical to the unfolded card. */
+function foldTerminalTitle(title: string): FoldedTitle | undefined {
+  const firstEnd = title.indexOf('\n')
+  if (firstEnd === -1) return undefined
+  let separators = 1
+  for (let at = title.indexOf('\n', firstEnd + 1); at !== -1; at = title.indexOf('\n', at + 1)) separators++
+  // Same trailing-newline rule as sideLines: a terminator is not a line.
+  const hidden = separators - (title.endsWith('\n') ? 1 : 0)
+  if (hidden <= 0) return undefined
+  const first = title.slice(0, title.charCodeAt(firstEnd - 1) === 13 ? firstEnd - 1 : firstEnd)
+  return { first, hidden }
+}
+
+function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile }: {
   name: string
   title: string | undefined
   isTerminal: boolean
+  /** Terminal-card fold result (multi-line title, folding on, not verbose). */
+  folded: FoldedTitle | undefined
   displayArgs: string
   argsLanguage?: 'json'
   nameColor: keyof Theme
@@ -285,7 +317,14 @@ function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameC
           <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
         </Box>
         <Box flexWrap="nowrap">
-          <Text>({title})</Text>
+          {folded === undefined ? (
+            <Text>({title})</Text>
+          ) : (
+            <>
+              <Text>({folded.first})</Text>
+              <Text dimColor>{` … +${folded.hidden} lines (ctrl+o to expand)`}</Text>
+            </>
+          )}
         </Box>
       </>
     )
@@ -354,6 +393,7 @@ export function AssistantToolUseMessage({
   diffLayout = 'auto',
   toolBackground = 'none',
   onOpenFile,
+  foldTerminalCommand = false,
 }: Props): React.ReactNode {
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
@@ -372,6 +412,17 @@ export function AssistantToolUseMessage({
   // command) — then the call view's title stands.
   const headerTitle = tool.resultView?.title ?? tool.callView?.title
   const headerIsTerminal = view?.card === 'terminal'
+  // Fold only the terminal header: multi-line command script, folding on,
+  // and the card not verbose/expanded (Ctrl+O and row click both land in
+  // `verbose`, so expansion reuses the existing state machine). Memoized on
+  // the title reference: settled titles never change, so the 1s
+  // useAnimationFrame tick of a running card re-renders without rescanning.
+  const foldedHeader = React.useMemo(
+    () => headerIsTerminal && foldTerminalCommand && !verbose && headerTitle !== undefined
+      ? foldTerminalTitle(headerTitle)
+      : undefined,
+    [headerIsTerminal, foldTerminalCommand, verbose, headerTitle],
+  )
 
   // Live elapsed clock while the call runs (CC's bash elapsed timer): the
   // 1s tick re-renders the card; elapsed derives from wall-clock refs.
@@ -452,7 +503,7 @@ export function AssistantToolUseMessage({
             isError={isError}
             toolName={tool.name}
           />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} />
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} />
           {!isRunning && (
             <Box flexWrap="nowrap">
               <Text dimColor={!hovered}>{elapsedText}</Text>

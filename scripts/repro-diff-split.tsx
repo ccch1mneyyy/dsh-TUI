@@ -16,7 +16,7 @@ process.env.FORCE_COLOR = '3'
 // module import resolves the startup lang (env > persisted > locale).
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }] = await Promise.all([
+const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -24,9 +24,9 @@ const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseM
   import('../src/components/messages/AssistantToolUseMessage.js'),
   import('../src/cc/cliHighlight.js'),
   import('../src/components/SplitDiffView.js'),
+  import('./lib/term-test.mjs'),
 ])
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failures = 0
 const check = (name: string, ok: boolean, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${ok || extra === '' ? '' : `  (${extra})`}`)
@@ -66,7 +66,8 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // cli-highlight loads lazily on first use; give it room to land so the
-  // syntax-color assertions see the settled frame.
+  // syntax-color assertions see the settled frame.（懒加载后的补色重绘无
+  // 调用方无关的可观测条件，保留固定窗口。）
   await sleep(900)
   const buf = term.buffer.active
   const lines = []

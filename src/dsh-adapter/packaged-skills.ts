@@ -42,6 +42,21 @@ function parseSkillMarkdown(raw: string, fallbackName: string): { name: string; 
 }
 
 /**
+ * Resolve the package `skills/` root from a module directory. Mirrors
+ * packaged-presets.ts: from the source layout (`src/dsh-adapter/`) the package
+ * root is two levels up; from the built layout (`lib/types/dsh-adapter/`) it is
+ * three up. Returns the first candidate that exists, or `undefined`.
+ *
+ * @param moduleDir - directory of the module that owns packaged skills
+ */
+export function resolveSkillsRoot(moduleDir: string): string | undefined {
+  return [
+    join(moduleDir, '..', '..', 'skills'),
+    join(moduleDir, '..', '..', '..', 'skills'),
+  ].find(candidate => existsSync(candidate))
+}
+
+/**
  * Register every `skills/<name>/SKILL.md` shipped in this package. No-op when
  * the composition mounts no skill registry (bare standalone boots); duplicate
  * or invalid entries are skipped so a skill can never take down the TUI boot.
@@ -51,10 +66,11 @@ function parseSkillMarkdown(raw: string, fallbackName: string): { name: string; 
 export function registerPackagedSkills(ctx: Context): void {
   const registry = ctx.get('skills') as SkillRegistryLike | undefined
   if (!registry) return
-  // import.meta.url is lib/types/packaged-skills.js — two levels up is the
-  // package root, which is where `files` ships the skills/ directory.
-  const skillsRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills')
-  if (!existsSync(skillsRoot)) return
+  // Two-level candidates, mirroring packaged-presets.ts: from src/ the
+  // package root is two levels up; from the built lib/types/<dir>/ output it
+  // is three up. A single guess breaks after a directory reshuffle (#416).
+  const skillsRoot = resolveSkillsRoot(dirname(fileURLToPath(import.meta.url)))
+  if (skillsRoot === undefined) return
   for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
     const file = join(skillsRoot, entry.name, 'SKILL.md')

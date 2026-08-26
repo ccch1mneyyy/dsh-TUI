@@ -96,6 +96,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'thinking', description: 'Toggle extended thinking display' },
   { name: 'tokens', description: 'Show session token usage' },
   // Account / policy
+  { name: 'balance', description: 'Show DeepSeek account balance' },
   { name: 'provider', description: 'Add an LLM provider (catalog or custom API endpoint)' },
   { name: 'login', description: 'Show API credential status' },
   { name: 'logout', description: 'Clear the API credential' },
@@ -105,14 +106,12 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'skills', description: 'List available skills' },
   { name: 'plugins', description: 'Show plugin contract, grant, and ledger diagnostics' },
   { name: 'update', description: 'Update dsh-tui and restart' },
-  // Built-in skills (CC's skill commands, driven through DSH skills)
-  { name: 'audit', description: 'Run a comprehensive code audit on this project' },
-  { name: 'bug', description: 'Capture a bug report' },
-  { name: 'practice', description: 'Practice programming with dsh-tui' },
-  { name: 'review', description: 'Run a comprehensive code review on this project' },
-  { name: 'pr_comments', description: 'Review pull request comments' },
-  { name: 'release-notes', description: 'Generate release notes' },
-  { name: 'vuln-check', description: 'Run a security vulnerability check' },
+  // Built-in skills (audit/review/pr-comments/…) are NOT listed here: their
+  // packaged SKILL.md files register through the DSH skill registry, and
+  // refreshSkillCommands publishes each as a real command whose handler
+  // injects the body host-side (#86/#496). A local entry of the same name
+  // would win the collision filter and lock the skill onto the legacy
+  // "activation prompt" path forever.
   // Misc / not applicable on this leaf
   { name: 'vim', description: 'Toggle vim mode' },
   { name: 'terminal-setup', description: 'Show terminal setup instructions' },

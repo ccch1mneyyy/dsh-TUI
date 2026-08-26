@@ -115,11 +115,18 @@ const GROUPS = {
     ["verify-exit-resume-marker", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-resume-marker.tsx']],
 // 退出阶段 stderr/console 恢复回归（issue #42）：shutdown 解绑恢复物理流并注销监听器。
     ["verify-shutdown-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-stderr.tsx']],
+// 退出收尾运行时未命中回退：找不到 Ink runtime 时必须走完整 unmount 恢复终端。
+    ["verify-shutdown-fallback", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-fallback.tsx']],
 // 退出鼠标残留回归（issue #522）：detach 闩锁后自愈探针不再重写
 // ENABLE_MOUSE_TRACKING；unmount 在末帧渲染抛错时仍同步写完整清理
 // （帧在 EXIT_ALT_SCREEN 前、DISABLE 后 SHOW_CURSOR），handle 暴露
 // detach 方法供 finishExit 兜底闩锁。
     ["verify-exit-mouse-cleanup", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-cleanup.tsx']],
+// 退出查询泄漏回归（#507/#492）：退出清理（DISABLE）之后，健康探针/
+// 模式重断言/已 dispose 的 querier 都不得再写出任何 ENABLE 或查询
+// 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
+// 吞掉，不再落入 shell。
+    ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
@@ -273,6 +280,11 @@ const GROUPS = {
 // 菜单与 Tab 补全（skill 标记、与 locals/注册表撞名让位），
 // skills/change 实时增删，读取失败保留 last-good。
     ["verify-skill-commands", ['node', 'scripts/verify-skill-commands.mjs']],
+// 内置技能命令确定性直调回归（issue #496/#416）：本地名单不再截留打包
+// 技能名、注册名与 SKILL.md 对齐（kebab-case）、skillsRoot 双层候选路径、
+// 旧 SKILL_PROMPTS/i18n 键彻底移除。技能直调不在 CI 里就会随接口演进
+// 静默退化回"客套话提示词"路径。
+    ["verify-skill-direct-invocation", ['node', '--import', 'tsx/esm', 'scripts/verify-skill-direct-invocation.ts']],
 // 轨迹投影回归（issue #80 演进）：增量折叠与全量折叠在每个切分点终态
 // 等价（机械 oracle）、六类括号配对、增广事件守卫的全变异模糊测试、
 // 未知事件前向兼容、连发折叠边界、无 chunk 的步不伪造 TTFT。
@@ -289,6 +301,11 @@ const GROUPS = {
 // 模型路由原子解析回归（issue #67）：完整 config > pref > default 整对
 // 生效，provider-only pin 不得与另一半拼接出错配路由。
     ["verify-model-route", ['node', 'scripts/verify-model-route.mjs']],
+// /balance 余额查询与状态栏花费估算回归：fetchBalance 响应解析与失败
+// 分类（401/HTTP/网络/非法/空 key/超时/baseUrl）、官方单价表最长前缀
+// 匹配、北京时间高峰/空闲时段边界、缓存命中计价、未知模型与零 token
+// 不估算、官方 provider 判定。注入 fake fetch，不发真实请求。
+    ["verify-balance", ['node', '--import', 'tsx/esm', 'scripts/verify-balance.tsx']],
 // /model 二级选择器派生回归：provider 分组（首现排序、显示名回退、
 // 计数）与落焦规则（多 provider 聚焦当前组、单 provider 直达模型层、
 // 缺席当前 provider 落首行）。键盘与 overlay 归约由 verify-chat-overlay

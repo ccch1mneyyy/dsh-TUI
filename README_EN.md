@@ -39,8 +39,9 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Highlights
 
-- **Terminal-native interaction**: streaming Markdown, structured tool cards,
-  command and file completion, `@` file references (complete anywhere; text
+- **Terminal-native interaction**: streaming Markdown, structured tool cards
+  (terminal-card multi-line command headers fold to the first line plus a
+  count via `/settings`; Ctrl+O or a card click expands), command and file completion, `@` file references (complete anywhere; text
   files attach content, directories attach listings, and PNG/JPEG/WebP/GIF are
   sent as durable image blocks; `@path#L12-14` line ranges attach only the
   requested lines, clamping past-EOF ranges or falling back to the whole file
@@ -183,7 +184,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+Enter` (⌘Enter) | **Interrupt the current turn and send immediately** (interrupt) |
 | `Alt+Up` | Pull the last unhandled message back into the input for editing (without interrupting the turn) |
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
-| `Ctrl+C` | Interrupt the current turn; press twice while idle to exit |
+| `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit |
 | `Esc` | Close the command/file menu; double-press while idle clears the input; **double-press on empty input = time rewind** |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
 | `Ctrl+R` | History search |
@@ -244,7 +245,7 @@ so keep using `Ctrl`.
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
 | Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/planPrompt` enter plan mode and inject the plan prompt in Liangshen mode (`off` disables and exits) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` add a model provider (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
-| Skills | `/audit` code audit · `/bug` bug report · `/review` code review · `/practice` coding practice · `/pr_comments` PR comments · `/release-notes` release notes · `/vuln-check` vulnerability check |
+| Skills | `/audit` code audit · `/bug` bug report · `/review` code review · `/practice` coding practice · `/pr-comments` PR comments · `/release-notes` release notes · `/vuln-check` vulnerability check |
 | Other | `/agents` subagent list · `/skills` skills directory · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
 | Registry | `/plan` `/goal` `/feedback` `/permission` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
 

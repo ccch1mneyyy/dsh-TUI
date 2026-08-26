@@ -98,7 +98,7 @@ const dict = {
   'doctor-config-missing': { zh: '（不存在）', en: '(missing)' },
   'doctor-storage': { zh: '会话存储: {{dir}} {{state}}', en: 'Session storage: {{dir}} {{state}}' },
   'doctor-storage-uninit': { zh: '（未初始化）', en: '(not initialized)' },
-  'doctor-legacy-dir': { zh: '旧数据目录: ~/.dsh-tui 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）', en: 'Legacy data directory: ~/.dsh-tui still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)' },
+  'doctor-legacy-dir': { zh: '旧数据目录: ~/.dsh-cc 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）', en: 'Legacy data directory: ~/.dsh-cc still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)' },
   'subagent-not-mounted': { zh: '子代理服务未挂载（leaf 未启用 subagent）', en: 'Subagent service not mounted (leaf has no subagent)' },
   'subagent-none': { zh: '当前会话暂无子代理', en: 'No subagents in the current session' },
   'subagent-resumable': { zh: '可续', en: 'resumable' },
@@ -218,13 +218,6 @@ const dict = {
 
   // ── screens/Chat.tsx ────────────────────────────────────────────────
   'skill-unavailable': { zh: '技能 {{name}} 已不可用或未开放用户直调', en: 'Skill {{name}} is gone or not user-invocable' },
-  'skill-audit-prompt': { zh: '请使用 audit 技能对当前项目做一次全面的代码审计，找出安全、正确性与质量问题。', en: 'Use the audit skill to do a thorough code audit of the current project, finding security, correctness and quality issues.' },
-  'skill-bug-prompt': { zh: '请使用 bug 技能协助我记录一份完整的 bug 报告（现象、复现步骤、期望行为）。', en: 'Use the bug skill to help me write a complete bug report (symptoms, reproduction steps, expected behavior).' },
-  'skill-practice-prompt': { zh: '请使用 practice 技能陪我进行一轮编程练习。', en: 'Use the practice skill to run a round of programming practice with me.' },
-  'skill-review-prompt': { zh: '请使用 review 技能对当前项目做一次全面的代码评审。', en: 'Use the review skill to do a thorough code review of the current project.' },
-  'skill-pr-comments-prompt': { zh: '请使用 pr-comments 技能审查当前分支的拉取请求评论并给出改进建议。', en: 'Use the pr-comments skill to review pull request comments on the current branch and suggest improvements.' },
-  'skill-release-notes-prompt': { zh: '请使用 release-notes 技能为当前项目生成发布说明。', en: 'Use the release-notes skill to generate release notes for the current project.' },
-  'skill-vuln-check-prompt': { zh: '请使用 vuln-check 技能对当前项目做一次安全漏洞检查。', en: 'Use the vuln-check skill to run a security vulnerability check on the current project.' },
   'context-loaded': { zh: '已加载上下文', en: 'Context loaded' },
   'context-panel-expand': { zh: '展开', en: 'Expand' },
   'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
@@ -285,6 +278,33 @@ const dict = {
   'status-title': { zh: '标题   {{title}}', en: 'Title   {{title}}' },
   'cost-cache-hit-rate': { zh: '缓存命中率 {{rate}}% · 缓存 {{read}} 读 / {{write}} 写', en: 'Cache hit rate {{rate}}% · cache {{read}} read / {{write}} write' },
   'cost-note': { zh: '注：DSH 不提供 API 费用计量，以上为 token 用量（按 provider 账单计费）', en: 'Note: DSH provides no API cost metering; the above is token usage (billed by your provider)' },
+  'status-cost-label': { zh: '≈', en: '≈' },
+  'status-cost-note': { zh: '估算（官方单价，非账单）', en: 'estimate (official rates, not a bill)' },
+  // 高峰/空闲时段名（用户玩梗命名：高峰=梁文峰，低谷=梁文谷）
+  'cost-peak-name': { zh: '梁文峰', en: 'peak' },
+  'cost-idle-name': { zh: '梁文谷', en: 'idle' },
+  // 状态栏字段上的当前时段短标记（峰/谷）
+  'cost-now-peak': { zh: '峰', en: 'peak' },
+  'cost-now-idle': { zh: '谷', en: 'idle' },
+  // /balance：DeepSeek 官方余额查询（BalanceReportRow 组件）
+  'balance-summary-loading': { zh: 'DeepSeek 余额 · 查询中…', en: 'DeepSeek balance · querying…' },
+  'balance-summary-ok': { zh: 'DeepSeek 余额 ¥{{total}} · {{state}}', en: 'DeepSeek balance ¥{{total}} · {{state}}' },
+  'balance-summary-state-ok': { zh: '可用', en: 'available' },
+  'balance-summary-state-off': { zh: '不可用', en: 'unavailable' },
+  'balance-summary-fail': { zh: 'DeepSeek 余额 · 查询失败', en: 'DeepSeek balance · query failed' },
+  'balance-currency': { zh: '{{currency}} 总额 ¥{{total}} · 赠送 ¥{{granted}} · 充值 ¥{{toppedUp}}', en: '{{currency}} total ¥{{total}} · granted ¥{{granted}} · topped up ¥{{toppedUp}}' },
+  'balance-no-key': { zh: '未配置 DeepSeek API key（DEEPSEEK_API_KEY）', en: 'No DeepSeek API key configured (DEEPSEEK_API_KEY)' },
+  'balance-unauthorized': { zh: '认证失败——key 无效或已被撤销', en: 'Authentication failed — the key is invalid or revoked' },
+  'balance-network-error': { zh: '网络错误或请求超时', en: 'Network error or request timeout' },
+  'balance-http-error': { zh: '余额接口返回 HTTP {{status}}', en: 'Balance endpoint returned HTTP {{status}}' },
+  'balance-invalid': { zh: '余额接口响应格式异常', en: 'Unexpected balance endpoint response' },
+  'balance-fail-hint': { zh: '仅 DeepSeek 官方 API key 可查询；/login 可查看凭据状态', en: 'Only a DeepSeek official API key can be queried; /login shows credential status' },
+  'balance-hover-tokens': { zh: '本会话 tokens {{input}} in → {{output}} out · ≈¥{{cost}}（{{peakName}} ¥{{peak}} / {{idleName}} ¥{{idle}}）', en: 'Session tokens {{input}} in → {{output}} out · ≈¥{{cost}} ({{peakName}} ¥{{peak}} / {{idleName}} ¥{{idle}})' },
+  'balance-current-rate': { zh: '当前时段：{{name}} · 输入 ¥{{input}}/百万 · 输出 ¥{{output}}/百万', en: 'Current window: {{name}} · input ¥{{input}}/M · output ¥{{output}}/M' },
+  'balance-refresh': { zh: '点击刷新', en: 'click to refresh' },
+  'balance-retry': { zh: '点击重试', en: 'click to retry' },
+  'balance-close': { zh: '关闭', en: 'dismiss' },
+  'balance-hint': { zh: '余额查询免费 · 以 DeepSeek 平台为准', en: 'balance queries are free · authoritative on the DeepSeek platform' },
   'doctor-example-config': { zh: '示例配置  {{path}}', en: 'Example config  {{path}}' },
   'doctor-user-config': { zh: '用户配置  {{path}}', en: 'User config  {{path}}' },
   'doctor-launch-hint': { zh: '启动方式  dsh-tui.cmd / dsh --profile dsh-tui', en: 'Launch      dsh-tui.cmd / dsh --profile dsh-tui' },
@@ -399,7 +419,7 @@ const dict = {
   'tokens-usage-context': { zh: '{{usage}} · 上下文 {{percent}}%', en: '{{usage}} · {{percent}}% of context' },
 
   // ── plugin.ts — boot-time rename notices (issue #120) ───────────────
-  'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-tui 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）', en: 'Data directory copied from ~/.dsh-tui to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)' },
+  'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-cc 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）', en: 'Data directory copied from ~/.dsh-cc to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)' },
   'legacy-env-renamed': { zh: '环境变量 {{old}} 已更名为 {{new}}，旧名不再生效', en: 'Environment variable {{old}} was renamed to {{new}}; the old name no longer takes effect' },
 
   // ── plugin.ts — /update flow ───────────────────────────────────────
@@ -912,6 +932,7 @@ const dict = {
   'cmd-desc-context': { zh: '查看已加载的上下文明细' },
   'cmd-desc-status': { zh: '查看会话状态' },
   'cmd-desc-cost': { zh: '查看会话 token 用量' },
+  'cmd-desc-balance': { zh: '查看 DeepSeek 账户余额' },
   'cmd-desc-config': { zh: '查看 dsh-tui 配置来源' },
   'cmd-desc-reload': { zh: '重读偏好文件并立即生效' },
   'cmd-desc-settings': { zh: '查看和编辑插件设置' },
@@ -937,12 +958,13 @@ const dict = {
   'cmd-desc-skills': { zh: '列出所有可用技能' },
   'cmd-desc-plugins': { zh: '显示插件契约、授权与台账诊断' },
   'cmd-desc-update': { zh: '更新 dsh-tui 并重启' },
-  // Built-in skills
+  // Built-in skills（注册名与打包 SKILL.md 对齐；这些键经
+  // localizedDescription 的 cmd-desc-<name> 回退服务于直调命令条目）
   'cmd-desc-audit': { zh: '对当前项目做全面代码审计' },
   'cmd-desc-bug': { zh: '记录一份 bug 报告' },
   'cmd-desc-practice': { zh: '与 dsh-tui 进行编程练习' },
   'cmd-desc-review': { zh: '对当前项目做全面代码评审' },
-  'cmd-desc-pr_comments': { zh: '审查拉取请求评论' },
+  'cmd-desc-pr-comments': { zh: '审查拉取请求评论' },
   'cmd-desc-release-notes': { zh: '生成发布说明' },
   'cmd-desc-vuln-check': { zh: '运行安全漏洞检查' },
   // Misc

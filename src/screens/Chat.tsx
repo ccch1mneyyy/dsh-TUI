@@ -1,6 +1,6 @@
 import React from 'react'
 import { normalizeLocalCommandName } from '../commands.js'
-import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type I18nKey, type Lang } from '../i18n.js'
+import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type Lang } from '../i18n.js'
 import { readThemePref } from '../themePrefs.js'
 import { readPresetPref } from '../presetPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
@@ -50,6 +50,8 @@ import { OverlayAbove } from '../components/OverlayAbove.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
+import { BalanceReportRow } from '../components/BalanceReportRow.js'
+import type { BalanceResult } from '../deepseekBalance.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
@@ -130,23 +132,6 @@ const NO_ROWS: readonly ChatRow[] = []
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
-}
-
-/**
- * CC's built-in skill commands, driven through the DSH skill system: each
- * submits an activation prompt the model resolves via its skill catalog/load
- * tools (the corresponding SKILL.md ships under ~/.dsh/skills with dsh-tui).
- */
-// i18n keys, not resolved strings: module scope evaluates before apply()'s
-// setLang, so t() must run at the call site to follow the active language.
-const SKILL_PROMPTS: Readonly<Record<string, I18nKey>> = {
-  audit: 'skill-audit-prompt',
-  bug: 'skill-bug-prompt',
-  practice: 'skill-practice-prompt',
-  review: 'skill-review-prompt',
-  pr_comments: 'skill-pr-comments-prompt',
-  'release-notes': 'skill-release-notes-prompt',
-  'vuln-check': 'skill-vuln-check-prompt',
 }
 
 /** Terminal-title spinner frames (CC's TITLE_ANIMATION_FRAMES). */
@@ -455,6 +440,27 @@ export function Chat({
     recapAbortRef.current = null
     setRecap(null)
   }
+  /** /balance report (`BalanceReportRow`): pure UI state like /recap — the
+   *  result never enters the transcript or session log. Clicking the row
+   *  re-queries (refreshing keeps the stale summary visible); a session
+   *  switch retires the report. */
+  const [balance, setBalance] = React.useState<{
+    result: BalanceResult | null
+    refreshing: boolean
+  } | null>(null)
+  const balanceSeqRef = React.useRef(0)
+  const runBalance = React.useCallback(() => {
+    const seq = ++balanceSeqRef.current
+    setBalance(prev => ({ result: prev?.result ?? null, refreshing: true }))
+    void channel.balanceInfo().then(result => {
+      if (balanceSeqRef.current !== seq) return
+      setBalance({ result, refreshing: false })
+    })
+  }, [channel])
+  const balanceSessionId = channel.agentId
+  React.useEffect(() => {
+    setBalance(null)
+  }, [balanceSessionId])
   // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
   // (mount = open/resume, rewind/fork included), summarize its tail into
   // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
@@ -1512,6 +1518,15 @@ export function Chat({
         channel.pushLocal('/cost', lines)
         return true
       }
+      case 'balance': {
+        // DeepSeek official account balance (free read-only endpoint): the
+        // channel resolves DEEPSEEK_API_KEY through the credentials seam and
+        // queries api.deepseek.com/user/balance. The result renders as the
+        // interactive BalanceReportRow (hover for details, click to refresh).
+        setHelpOpen(false)
+        runBalance()
+        return true
+      }
       case 'settings': {
         // Plugin settings screen (issue #165): opens immediately; the screen
         // reads sections + namespaces from the channel itself.
@@ -1885,20 +1900,6 @@ export function Chat({
         setHelpOpen(false)
         channel.pushLocal('/connect', [t('connect-none')])
         return true
-      case 'audit':
-      case 'bug':
-      case 'practice':
-      case 'review':
-      case 'pr_comments':
-      case 'release-notes':
-      case 'vuln-check': {
-        // CC's skill commands: drive the DSH skill system by sending the
-        // activation prompt to the model (it loads the skill via its skill
-        // catalog/load tools when the SKILL.md ships in ~/.dsh/skills).
-        const key = SKILL_PROMPTS[commandName]
-        if (key) channel.submit(t(key))
-        return true
-      }
       default: {
         // Plugin-registered command (DSH command registry): dispatch through
         // the channel, whose execution logs command/run + command/done (the
@@ -2819,7 +2820,21 @@ export function Chat({
       // double-press exit when the input is empty; ctrl+d keeps the
       // time-based double-press exit regardless.
       if (channel.working) {
-        channel.cancel()
+        // First press while working only interrupts. If that abort is still
+        // converging (cancelPending) the next press is the user insisting on
+        // leaving: go straight to the exit funnel. Without this, a stuck turn
+        // (long tool call that never settles, silent stream) swallows every
+        // Ctrl+C forever — raw mode keeps the launcher's SIGINT escape
+        // unreachable until the TUI exits.
+        if (channel.cancelPending) {
+          onExit()
+        } else {
+          channel.cancel()
+          // Interrupt replaces any previously armed exit: the next press
+          // must re-confirm instead of exiting out from under the turn.
+          exitPendingRef.current = false
+          if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
+        }
       } else if (input === 'c' && promptControllerRef.current?.hasText()) {
         promptControllerRef.current.clear()
         // A pending exit arm no longer makes sense once the user is editing.
@@ -3133,6 +3148,7 @@ export function Chat({
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
           toolBackground={channel.toolBackground}
+          foldTerminalCommand={channel.foldTerminalCommand}
           activityFrames={channel.activityFrames}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
@@ -3234,6 +3250,16 @@ export function Chat({
             streaming={!recap.done}
             onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
             onDismiss={() => closeRecap()}
+          />
+        )}
+        {balance !== null && (
+          <BalanceReportRow
+            result={balance.result}
+            refreshing={balance.refreshing}
+            tokens={channel.tokens}
+            model={channel.model}
+            onRefresh={runBalance}
+            onDismiss={() => setBalance(null)}
           />
         )}
         {statusEntries.length > 0 && (

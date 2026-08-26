@@ -16,7 +16,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -28,7 +28,6 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
 ])
 
 const COLS = 100, ROWS = 40
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -96,12 +95,17 @@ const inst = await render(
   <AlternateScreen><Chat channel={channel} questionStore={new QuestionStore()} fullscreen /></AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
-await settle(() => {
-  const screen = screenLines().join('\n')
-  return screen.includes('Bash') && screen.includes('REALBODY-END') && screen.includes('REALBODY2-END')
-})
-
 {
+  // 正向条件各自 settled；负向（孤立 ●/⏵ 不出现）在正向全部落定后的
+  // 同帧同步判定——对空帧轮询「不存在」会立即真、等于没测。
+  check('工具卡正常渲染', await settled(() => screenLines().some(l => l.includes('Bash'))), '')
+  check('真实正文正常渲染', await settled(() => screenLines().join('\n').includes('REALBODY-END')), '')
+  check('⏵ 行 + 正文混合行保留正文', await settled(() => screenLines().join('\n').includes('REALBODY2-END')), '')
+  check('空文本 streaming 行保留（live dot）', await settled(() => {
+    const ls = screenLines()
+    const t = ls.findIndex(l => l.includes('Bash'))
+    return t >= 0 && ls.slice(t).some(l => l.includes('●'))
+  }), '')
   const lines = screenLines()
   const screen = lines.join('\n')
   // bug 形状：工具卡【上方】的孤立 ●（空 settled assistant）。streaming
@@ -110,12 +114,7 @@ await settle(() => {
   const dotAboveTool = toolRow >= 0 && lines.slice(0, toolRow).some(l => /^●\s*$/.test(l))
   check('空 settled assistant 行被过滤（工具卡上方无孤立 ●）', !dotAboveTool,
     `toolRow=${toolRow}`)
-  check('空文本 streaming 行保留（live dot）', lines.slice(toolRow).some(l => l.includes('●')),
-    '')
-  check('工具卡正常渲染', screen.includes('Bash'), '')
-  check('真实正文正常渲染', screen.includes('REALBODY-END'), '')
   check('叙述-only settled 行被过滤（⏵ 行不渲染、上方无孤立 ●）', !screen.includes('⏵') && !dotAboveTool, '')
-  check('⏵ 行 + 正文混合行保留正文', screen.includes('REALBODY2-END'), '')
 }
 
 // 落定翻转：streaming true → false 原地写（rows 身份/长度不变）。
@@ -123,12 +122,10 @@ await settle(() => {
 const streamRow = rows.find(r => r.id === 4)!
 streamRow.streaming = false
 channel.emit()
-await settle(() => loneDotLines(screenLines()).length === 0)
 {
-  const lines = screenLines()
-  check('落定翻转后空 assistant 行被过滤（缓存流位指纹生效）', loneDotLines(lines).length === 0,
-    `lone dots=${loneDotLines(lines).length}`)
-  check('翻转后真实正文仍在', lines.join('\n').includes('REALBODY-END'), '')
+  check('落定翻转后空 assistant 行被过滤（缓存流位指纹生效）', await settled(() => loneDotLines(screenLines()).length === 0),
+    `lone dots=${loneDotLines(screenLines()).length}`)
+  check('翻转后真实正文仍在', screenLines().join('\n').includes('REALBODY-END'), '')
 }
 // 用户空文本行不受影响（kind 限定）：一个空 user 行仍渲染其气泡形状
 rows.push({ id: 5, kind: 'user', text: '' })

@@ -90,6 +90,7 @@ function signatureParts(
   thinkingVisible: boolean,
   thinkingFold: string,
   diffLayout: string,
+  foldTerminalCommand: boolean,
   model: string,
   failureHintRowId: number | null | undefined,
   failureHint: string | undefined,
@@ -117,6 +118,10 @@ function signatureParts(
         expanded,
         expandedRows.has(row.id),
         diffLayout,
+        // Terminal header folding changes the header's height the same way
+        // diffLayout changes the body's — without it, a /settings toggle
+        // leaves already-mounted tool cards at their stale cached height.
+        foldTerminalCommand,
         tool?.status ?? '',
         tool?.resultText?.length ?? 0,
         tool?.resultFull?.length ?? 0,
@@ -160,6 +165,7 @@ export function MessageList({
   diffLayout = 'auto',
   thinkingFold = 'preview',
   toolBackground = 'none',
+  foldTerminalCommand = false,
   activityFrames,
   showAll,
   onToggleAll,
@@ -192,6 +198,8 @@ export function MessageList({
   thinkingFold?: 'preview' | 'full'
   /** Tool-card background treatment from the live channel settings. */
   toolBackground?: ToolBackground
+  /** Terminal-card header folding from the live channel settings. */
+  foldTerminalCommand?: boolean
   /** Working-activity preset name from the channel; drives the subagent
    *  card's running glyph so both indicators follow one setting. */
   activityFrames?: string
@@ -477,6 +485,7 @@ export function MessageList({
         thinkingVisible,
         thinkingFold,
         diffLayout,
+        foldTerminalCommand,
         model,
         failureHintRowId,
         failureHint,
@@ -1006,6 +1015,7 @@ export function MessageList({
               diffLayout={diffLayout}
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
+              foldTerminalCommand={foldTerminalCommand}
               activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
@@ -1062,6 +1072,8 @@ type MemoRowProps = {
   diffLayout: 'auto' | 'split' | 'unified'
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
+  /** Terminal-card header folding (forwarded to tool cards). */
+  foldTerminalCommand: boolean
   /** Working-activity preset name; drives the subagent card's running glyph. */
   activityFrames: string | undefined
   background: 'messageActionsBackground' | undefined
@@ -1129,6 +1141,7 @@ function TranscriptRow({
   diffLayout,
   thinkingFold,
   toolBackground,
+  foldTerminalCommand,
   activityFrames,
   background,
   toolCallId,
@@ -1295,6 +1308,7 @@ function TranscriptRow({
             footnote={toolFootnote}
             diffLayout={diffLayout}
             toolBackground={toolBackground}
+            foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
           />

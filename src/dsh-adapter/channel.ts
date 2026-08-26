@@ -15,6 +15,8 @@ import {
 import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
 import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
+import { fetchBalance, type BalanceResult } from '../deepseekBalance.js'
+import { isPeakHour } from '../deepseekPricing.js'
 /** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
 type SideQuestionLlm = {
   stream(options: object): AsyncIterable<StreamChunk>
@@ -358,10 +360,40 @@ export interface ChatRow {
  */
 const SKILL_COMMAND_RETRY_MS = 800
 
+/** One 计费时段（高峰/空闲）的 token 累计。 */
+export interface TokenBucket {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
 /** Running token totals across the session's assistant messages. */
 export interface TokenUsage {
   input: number
   output: number
+  /** Prompt-cache hit tokens across the session (priced at the hit rate). */
+  cacheRead: number
+  /** Prompt-cache write tokens across the session (priced with uncached input). */
+  cacheWrite: number
+  /** Peak-hour tokens (billed at peak rates) — each usage lands in a bucket
+   *  by its event time, so a session spanning both windows is priced per
+   *  window instead of all at the current rate. */
+  peak: TokenBucket
+  /** Off-peak-hour tokens (billed at idle rates). */
+  idle: TokenBucket
+}
+
+/** 全零 token 累计（新会话 / 复位用）。 */
+export function emptyTokenUsage(): TokenUsage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  }
 }
 
 /** In-process working-line snapshot derived from the base session stream. */
@@ -538,6 +570,10 @@ export interface Channel {
   readonly gitBranch: string | undefined
   /** True between turn/start and turn/end — drives the working spinner. */
   readonly working: boolean
+  /** True while a user-requested abort (Ctrl+C/Esc interrupt) has not yet
+   *  converged — no turn/start or turn/end has retired the aborted turn.
+   *  Chat uses it so a repeated Ctrl+C during a stuck abort force-exits. */
+  readonly cancelPending: boolean
   /** Which phase the spinner should present while working. */
   readonly spinnerMode: SpinnerMode
   /** Chars streamed as text this turn (feeds the spinner token counter). */
@@ -581,6 +617,9 @@ export interface Channel {
    *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
    *  nothing). */
   readonly scrollGutter: ScrollGutterMode
+  /** Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
+   *  collapse a multi-line command title to its first line + count hint. */
+  readonly foldTerminalCommand: boolean
   /** Whether the session-name chip shows on the prompt top border's right
    *  side (settings `dsh-tui.promptSessionLabel`; off by default). */
   readonly promptSessionLabel: boolean
@@ -685,7 +724,9 @@ export interface Channel {
   steer(text: string): void
   /** Pull a pending message back out of the inbox (Alt+Up) for re-editing. */
   removePending(id: string): boolean
-  /** Abort the in-flight turn (`Ctrl+C` while working). */
+  /** Abort the in-flight turn (`Ctrl+C` while working). While `cancelPending`
+   *  stays true the abort has not converged; Chat force-exits on the next
+   *  Ctrl+C press in that window. */
   cancel(): void
   /** Abort the in-flight turn and process `texts` right away (Esc/Ctrl+Enter
    *  with queued input): each text is re-queued as a followup once the abort
@@ -816,6 +857,11 @@ export interface Channel {
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login`; undefined without the service. */
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
+  /** DeepSeek official account balance for `/balance`: resolves
+   *  `DEEPSEEK_API_KEY` through the credentials seam (env fallback) and
+   *  queries the official balance endpoint. The key is used only for the
+   *  request header — never logged, printed or persisted. */
+  balanceInfo(): Promise<BalanceResult>
   /** Runtime capabilities for the `/provider` wizard, over the settings /
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */
@@ -957,6 +1003,8 @@ export interface ChannelState {
   displayCwd: string
   gitBranch: string | undefined
   working: boolean
+  /** Whether a requested abort is still converging (see the public Channel type). */
+  cancelPending: boolean
   spinnerMode: SpinnerMode
   responseChars: number
   activeToolCount: number
@@ -995,6 +1043,8 @@ export interface ChannelState {
   toolBackground: ToolBackground
   /** Transcript gutter mode (see the public Channel type). */
   scrollGutter: ScrollGutterMode
+  /** Terminal-card header folding (see the public Channel type). */
+  foldTerminalCommand: boolean
   /** Session-name chip on the prompt border (see the public Channel type). */
   promptSessionLabel: boolean
   /** Status-footer preferences (see the public Channel type). */
@@ -1007,6 +1057,8 @@ export interface ChannelState {
   setToolBackground(background: ToolBackground): void
   /** Apply a transcript gutter mode change. */
   setScrollGutter(mode: ScrollGutterMode): void
+  /** Apply a terminal-card header folding change. */
+  setFoldTerminalCommand(enabled: boolean): void
   /** Apply a prompt session-name chip change. */
   setPromptSessionLabel(enabled: boolean): void
   /** Apply status-footer preference changes. */
@@ -1135,6 +1187,8 @@ export interface ChannelState {
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login` (see the public Channel type). */
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
+  /** DeepSeek official balance for `/balance` (see the public Channel type). */
+  balanceInfo(): Promise<BalanceResult>
   /** `/provider` wizard capabilities (see the public Channel type). */
   providerSetup(): ProviderSetupHost | undefined
   /** OAuth sign-in states (see the public Channel type). */
@@ -1539,6 +1593,9 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
     scrollGutter?: ScrollGutterMode
+    /** Terminal-card header folding; default off (settings
+     *  `dsh-tui.foldTerminalCommand`). */
+    foldTerminalCommand?: boolean
     /** Session-name chip on the prompt top border; default off (settings
      *  `dsh-tui.promptSessionLabel`). */
     promptSessionLabel?: boolean
@@ -2015,11 +2072,12 @@ export function createChannel(
     state.goal = undefined
     state.sessionTitle = ''
     state.sessionColor = ''
-    state.tokens = { input: 0, output: 0 }
+    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
     state.responseChars = 0
     state.activeToolCount = 0
     state.lastUserText = ''
     state.working = false
+    state.cancelPending = false
     state.spinnerMode = 'requesting'
     state.status = handle.agent.status
     state.agentId = handle.agent.id
@@ -2694,11 +2752,12 @@ export function createChannel(
     agentId: agent.id,
     model: options.model,
     provider: options.provider,
-    tokens: { input: 0, output: 0 },
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd,
     displayCwd: workspaceService.describe(options.cwd).description ?? options.cwd,
     gitBranch: undefined,
     working: false,
+    cancelPending: false,
     spinnerMode: 'requesting',
     responseChars: 0,
     activeToolCount: 0,
@@ -2724,6 +2783,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
+    foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
@@ -2999,9 +3059,11 @@ export function createChannel(
       // Keep the staged queue: an interrupt aborts the running turn but the
       // queued/steered messages are delivered as the next turn (web parity).
       // Cancellation converges asynchronously; ignore a repeated Esc/Ctrl+C
-      // until the aborted turn has produced its terminal event.
+      // until the aborted turn has produced its terminal event. `cancelPending`
+      // mirrors that window for the UI, where a repeated press force-exits.
       if (cancelInFlight) return
       cancelInFlight = true
+      state.cancelPending = true
       agent.cancel({ kind: 'user' }, { keepInbox: true })
     },
     interruptAndDeliver(texts: readonly string[]): number {
@@ -3019,6 +3081,7 @@ export function createChannel(
         cancelInFlight = true
         agent.cancel({ kind: 'user' })
       }
+      state.cancelPending = true
       const token = ++interruptSeq
       const deliver = (): void => {
         // A second interrupt while the abort is still settling must not
@@ -3983,11 +4046,12 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.sessionColor = ''
-      state.tokens = { input: 0, output: 0 }
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
       state.working = false
+      state.cancelPending = false
       state.spinnerMode = 'requesting'
       state.status = handle.agent.status
       state.agentId = handle.agent.id
@@ -4162,11 +4226,12 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.sessionColor = ''
-      state.tokens = { input: 0, output: 0 }
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
       state.working = false
+      state.cancelPending = false
       state.spinnerMode = 'requesting'
       state.status = handle.agent.status
       state.agentId = handle.agent.id
@@ -4350,11 +4415,12 @@ export function createChannel(
       state.goal = undefined
       state.sessionTitle = ''
       state.sessionColor = ''
-      state.tokens = { input: 0, output: 0 }
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
       state.working = false
+      state.cancelPending = false
       state.spinnerMode = 'requesting'
       state.status = handle.agent.status
       state.agentId = handle.agent.id
@@ -4479,6 +4545,11 @@ export function createChannel(
       const normalized = normalizeScrollGutter(mode)
       if (normalized === state.scrollGutter) return
       state.scrollGutter = normalized
+      state.emit()
+    },
+    setFoldTerminalCommand(enabled) {
+      if (enabled === state.foldTerminalCommand) return
+      state.foldTerminalCommand = enabled
       state.emit()
     },
     setPromptSessionLabel(enabled) {
@@ -4664,6 +4735,25 @@ export function createChannel(
         | undefined
       if (!credentials) return undefined
       return credentials.describe(ref)
+    },
+    async balanceInfo() {
+      // Same key resolution order as the community balance plugins: the
+      // harness credentials seam first, the process environment as fallback
+      // (the /doctor check reads the env directly). The value rides only in
+      // the Authorization header — never logged, printed or persisted.
+      const credentials = ctx.get('credentials') as
+        | { resolve(ref: string): Promise<{ value: string } | undefined> }
+        | undefined
+      let apiKey = ''
+      if (credentials !== undefined) {
+        try {
+          apiKey = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value ?? ''
+        } catch {
+          apiKey = ''
+        }
+      }
+      if (apiKey === '') apiKey = process.env.DEEPSEEK_API_KEY ?? ''
+      return fetchBalance(apiKey)
     },
     settingsHost(): SettingsHost | undefined {
       if (settingsHostResolved) return settingsHostCache
@@ -5243,7 +5333,7 @@ export function createChannel(
       }
       // Session store candidates mirror the compat layer (sessionsRoots):
       // the active root depends on the composition (bare cordis.yml →
-      // legacy ~/.dsh-tui, profile → $DSH_HOME/sessions), so list every
+      // legacy ~/.dsh-tui/sessions, profile → $DSH_HOME/sessions), so list every
       // candidate with its own state instead of hardcoding one.
       for (const dir of sessionsRoots()) {
         lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
@@ -6291,6 +6381,23 @@ ${output}
           state.tokens.input += usage.inputTokens ?? 0
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
           state.tokens.output += usage.outputTokens ?? 0
+          // Cache split totals feed the session cost estimate (hit-priced
+          // input vs. uncached input) — the durable replay may lack them.
+          state.tokens.cacheRead += usage.cacheReadTokens ?? 0
+          state.tokens.cacheWrite += usage.cacheWriteTokens ?? 0
+          // Peak/idle bucketing by the request's own time (the durable replay
+          // replays historical events, so a resumed session prices each
+          // request at the rate window it actually ran in — the session cost
+          // estimate never prices the whole session at the current window).
+          {
+            const bucket = isPeakHour(new Date(event.time))
+              ? state.tokens.peak
+              : state.tokens.idle
+            bucket.input += usage.inputTokens ?? 0
+            bucket.output += usage.outputTokens ?? 0
+            bucket.cacheRead += usage.cacheReadTokens ?? 0
+            bucket.cacheWrite += usage.cacheWriteTokens ?? 0
+          }
           // The most recent request's usage describes the CURRENT context:
           // input (uncached) + cache hits all occupy the window. Cache hits
           // also drive the status-line `cache N` readout.
@@ -6438,6 +6545,7 @@ ${output}
       }
       case 'turn/start': {
         cancelInFlight = false
+        state.cancelPending = false
         state.working = true
         state.turnStart = Date.now()
         state.responseChars = 0
@@ -6454,6 +6562,7 @@ ${output}
       }
       case 'turn/end': {
         cancelInFlight = false
+        state.cancelPending = false
         settleStreaming()
         state.working = false
         state.activeToolCount = 0
@@ -6491,7 +6600,11 @@ ${output}
           nextRowId += 1
           break
         }
-        const detail = reason.kind === 'error' ? reason.error.message : ''
+        // The notice renders as a single-line Divider title: error.message
+        // can carry newlines/control chars, and an embedded \n splits the
+        // rule across rows. cleanRenderText is the render-path single-line
+        // contract (sessionTree's preview() folds likewise for the tree).
+        const detail = reason.kind === 'error' ? cleanRenderText(reason.error.message, NOTICE_CELLS) : ''
         state.rows.push({ id: nextRowId, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         nextRowId += 1
         state.notify(
@@ -6597,6 +6710,7 @@ ${output}
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.
   state.working = false
+  state.cancelPending = false
   state.status = agent.status
   state.emit()
 

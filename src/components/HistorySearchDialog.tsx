@@ -64,7 +64,7 @@ export function HistorySearchDialog({
             const absoluteIndex = start + index
             return (
               <ListItem
-                key={historyEntryId(entry)}
+                key={historyEntryId(entry, absoluteIndex)}
                 isFocused={absoluteIndex === focusIndex}
                 // The SearchBox owns the native-cursor declaration while this
                 // dialog is open — result rows must not park the cursor on

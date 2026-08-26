@@ -80,8 +80,8 @@ dsh-tui
 
 | 键 | 功能 |
 |---|---|
-| `Ctrl+C` | 工作中=中断；空闲有输入=清空输入；空闲空输入=双击退出（3s 窗口） |
-| `Ctrl+D` | 空闲时双击退出 |
+| `Ctrl+C` | 工作中=中断；中断未收敛时再按=强制退出；空闲有输入=清空输入；空闲空输入=双击退出（3s 窗口） |
+| `Ctrl+D` | 工作中=中断（中断未收敛时再按=强制退出）；空闲时双击退出 |
 | `Ctrl+L`（⌘L） | 清屏并强制重绘 |
 | `Ctrl+O`（⌘O） | 展开/收起详情（思考全文、工具参数与输出） |
 | `Ctrl+E` | 输入框=光标到行尾；转录中=展开/折叠隐藏的旧消息 |
@@ -216,6 +216,7 @@ dsh-tui
 | `/context` | 无 | 已加载上下文明细（指令/运行时上下文/技能/工具等） |
 | `/status` | 无 | 模型+effort、工作/空闲、会话 id、目录+git 分支、token、缓存命中率、上下文百分比、会话标题 |
 | `/cost` | 无 | token 用量 + 缓存命中率（DSH 不提供费用计量） |
+| `/balance` | 无 | DeepSeek 官方账户余额（免费只读接口）：摘要行 + hover 明细（各币种赠送/充值拆分、当前计费时段与单价、本会话 token 与花费估算），点击刷新、`×` 关闭。密钥经 DSH 凭据解析（`DEEPSEEK_API_KEY`，环境变量兜底），仅在请求头中使用 |
 | `/config` | 无 | 配置来源：`cordis.patch.yml` 路径、启动方式、模型路由 |
 | `/doctor` | 无 | 环境自检 |
 | `/init` | 无 | 在工作目录创建 `AGENTS.md`（created / exists / failed 三态提示） |
@@ -262,11 +263,12 @@ dsh-tui
 | `/bug` | Bug 报告 |
 | `/practice` | 编程练习 |
 | `/review` | 代码评审 |
-| `/pr_comments` | PR 评论（注：skill 注册名是 `pr-comments`，菜单中可能同时出现两个条目） |
+| `/pr-comments` | PR 评论 |
 | `/release-notes` | 发布说明 |
 | `/vuln-check` | 漏洞检查 |
 
-技能命令把激活提示发给模型，模型经 `skills/` 目录加载对应 `SKILL.md` 执行。
+技能命令由 host 注入对应 `SKILL.md` 的技能正文后执行，参数原样随行
+（详见 §4.8）；`/skills` 浏览技能目录。
 
 ### 3.6 占位命令
 
@@ -302,7 +304,7 @@ dsh-tui
 | 导出 | `/export` | 从完整 session log 导出 Markdown（含 thinking 与工具调用分节），文件 `dsh-tui-export-<时间戳>.md` 落在当前会话 cwd |
 | 清屏 | `/clear` | 只清视图，不动会话日志 |
 | 删除 | `/resume` 里 `Ctrl+D` | 删除日志目录与 MRU 条目（有确认） |
-| 退出 | `/exit`（或 `/quit` `/q`） | 空闲 `Ctrl+C` 双击或 `Ctrl+D` 双击也可退出 |
+| 退出 | `/exit`（或 `/quit` `/q`） | 空闲 `Ctrl+C` 双击或 `Ctrl+D` 双击也可退出；工作中中断迟迟不收敛时再按 `Ctrl+C`/`Ctrl+D` 强制退出 |
 
 命令行恢复：`dsh-tui --resume`（最近会话）/ `dsh-tui --resume <id>`（指定会话）；`-c` / `--continue` 等价。
 
@@ -368,8 +370,8 @@ dsh-tui
 ### 4.8 技能 / 注册表 / Goals-Todos
 
 - 打包技能（`/audit` 代码审计 · `/bug` bug 报告 · `/review` 评审 · `/practice` 练习 ·
-  `/pr_comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查）：
-  命令发送激活提示，模型加载 `SKILL.md` 执行；`/skills` 浏览技能目录。
+  `/pr-comments` PR 评论 · `/release-notes` 发布说明 · `/vuln-check` 漏洞检查）：
+  命令由 host 注入技能正文后执行，参数原样随行；`/skills` 浏览技能目录。
 - `/plan` `/goal` `/feedback` `/permission`：来自 DSH 命令注册表，随组合并入 `/` 菜单。
 - **Goals/Todos 面板自动出现**：模型写入 goal/todo 时在输入框上方实时渲染（🎯 目标 + phase 徽章 +
   树形 todo 最多 8 行），无需任何操作；agent 空闲时自动隐藏已完成项。
@@ -405,10 +407,10 @@ dsh-tui
 右缘读数如 `ctx 12.3k/1.0M 1.2% 988.9k`（窄屏自动缩短）。
 
 **Row 2 — 状态字段行**（每个字段独立开关，见 `/settings`）
-- 左组：模型 → TPS → thinking 推理等级 → mode 会话模式 → ctx 上下文占用 → cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）
+- 左组：模型 → TPS → thinking 推理等级 → mode 会话模式 → ctx 上下文占用 → cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→ cost 本会话花费估算（`≈¥0.05 谷`：`≈¥` + 当前计费时段短标记 峰/谷；仅 DeepSeek 官方 provider 且模型有已知单价时显示；hover 查看高峰/空闲拆分与输入/输出/缓存明细）。估算按每次请求的发生时刻分高峰/空闲桶、各按官方对应单价计（高峰期 = 梁文峰，低谷期 = 梁文谷），跨时段会话不会被整段按当前时段计价；估算非账单，以 DeepSeek 平台为准
 - 右组：git 分支 → 工作目录（紧凑模式仅 basename）→ 会话标题 → 短会话 ID（`#` + 前 8 位，与日志文件名对应，方便 `--resume` 定位）
 - `statusBar.compact` 时左右合并为单行。
-- 默认开：compact / model / thinking / cwd / contextUsage / cache；默认关：tokens / tps / gitBranch / sessionTitle / sessionId / mode / contextBar / activity / trajectory。
+- 默认开：compact / model / thinking / cwd / contextUsage / cache / cost；默认关：tokens / tps / gitBranch / sessionTitle / sessionId / mode / contextBar / activity / trajectory。
 
 **Row 3 — 提示 / 工作活动 + 迷你轨迹条**
 - 空闲显示 `? for shortcuts`，回合运行中显示 `esc to interrupt`，消息选择中显示 `esc to return to input`。
@@ -425,7 +427,7 @@ dsh-tui
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**编辑是暂存制**：`s` 保存 / `d` 放弃 / `Esc` 丢弃脏区退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 19 个字段：
+dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 20 个字段：
 
 | 字段 | 说明 |
 |---|---|
@@ -434,7 +436,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 19 �
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
-| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
+| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 `~/.dsh/settings.yaml`。
 provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / modes

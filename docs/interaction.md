@@ -16,8 +16,8 @@
 | `Ctrl+V` / `Alt+V` | 从系统剪贴板插入文本或文件；图片作为持久附件发送。终端拦截 `Ctrl+V` 时用 `Alt+V` |
 | `Ctrl+G` | 用外部编辑器（`$VISUAL` → `$EDITOR`）编辑当前输入，保存退出后回填；`:cq` 或非零退出保留原稿；未设置变量时提示配置，无 `vi` 兜底 |
 | `Esc` | 层级：关帮助 → 关命令菜单 → 关文件菜单（仅当前 `@` token）→ 中断回合并重投 pending 消息 → 有输入时清空 → 空输入连续两次 = 时间回溯 rewind；fullscreen 下有鼠标选区时优先取消选区（不复制） |
-| `Ctrl+C` | 工作时中断；空闲且有输入时清空；空输入时连续两次退出 |
-| `Ctrl+D` | 空闲时连续两次退出 |
+| `Ctrl+C` | 工作时中断；中断迟迟不收敛时再按一次强制退出；空闲且有输入时清空；空输入时连续两次退出 |
+| `Ctrl+D` | 与 `Ctrl+C` 同阶梯：工作中=中断（未收敛时再按=强制退出）；空闲时连续两次退出 |
 | `Ctrl+O` | 切换 transcript/verbose 详情，展开思考与完整工具参数/输出 |
 | `Ctrl+P` | 切换启动时加载的 loaded-context 面板（面板在屏时有效） |
 | `Ctrl+T` | 打开轨迹场景（等同 `/trace`）；场景内 `q`/`Esc` 返回对话 |
@@ -307,10 +307,10 @@ transcript。
 | 分组 | 命令 |
 | --- | --- |
 | 会话 | `/new`、`/resume`、`/rename`、`/recap`（最近活动摘要 + 建议标题一键应用；设置 `recapOnOpen` 开启时打开会话自动出分隔线 + `回顾：` 摘要行，发送新消息后消失，默认开）、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`）、`/rewind`（时间回溯，同空输入双击 `Esc`） |
-| 状态 | `/context`、`/status`、`/cost`、`/config`、`/doctor`、`/init`、`/agents`、`/settings` |
+| 状态 | `/context`、`/status`、`/cost`、`/balance`（DeepSeek 官方余额：摘要行 + hover 明细，点击刷新）、`/config`、`/doctor`、`/init`、`/agents`、`/settings` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/color`（会话强调色：无参打开调色板选择器，`<名>` 直接设置，`status`/`reset`；输入框边框 + 右上角会话名标签，按会话保存；标签默认关闭，`/settings` 可开）、`/lang` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/skills`、`/plugins`（`check <路径>` 校验插件清单） |
-| 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr_comments`、`/release-notes`、`/vuln-check` |
+| 打包 Skills | `/audit`、`/bug`、`/practice`、`/review`、`/pr-comments`、`/release-notes`、`/vuln-check` |
 | 其他 | `/update`、`/vim`、`/terminal-setup`、`/connect`、`/help`、`/exit`（别名 `/quit`、`/q`） |
 | 注册表 | `/plan`、`/goal`，以及当前 DSH 组合注册的其他命令 |
 
@@ -336,8 +336,8 @@ transcript。
   仅在 `dsh --profile <name>` 启动时可用（源码运行等场景会提示不可用）；
   已是最新版时直接提示，不会重启。
 - `/plan [off|message]` 与 `/goal ...` 由 DSH 命令插件处理并写入会话事件。
-- Skill 命令只发送激活提示；实际 skill 通过 DSH skill 注册表加载。包内
-  `skills/` 会在插件启动时自动注册，也可用项目或用户目录中的同名 skill 覆盖。
+- Skill 命令由 host 注入对应 `SKILL.md` 的技能正文后执行，参数原样随行；
+  包内 `skills/` 会在插件启动时自动注册，也可用项目或用户目录中的同名 skill 覆盖。
 
 `/vim`、`/connect`、`/hooks` 当前是兼容占位命令；当 DSH 组合没有
 对应能力时会给出明确说明，而不是静默执行。

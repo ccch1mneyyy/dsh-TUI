@@ -161,6 +161,15 @@ export class TerminalQuerier {
    */
   private queue: Pending[] = []
 
+  /**
+   * Set by dispose(). Post-dispose send()/flush() must not touch the
+   * terminal: they would re-enable raw mode (holdRawMode) and emit query
+   * bytes after the exit funnel's cleanup has already restored cooked
+   * mode — the replies then leak into the shell (#507). Resolving as
+   * "no answer" keeps callers' .then() chains inert instead of pending.
+   */
+  private disposed = false
+
   constructor(
     private stdout: NodeJS.WriteStream,
     private setRawMode?: (enabled: boolean) => void,
@@ -187,6 +196,7 @@ export class TerminalQuerier {
   send<T extends TerminalResponse>(
     query: TerminalQuery<T>,
   ): Promise<T | undefined> {
+    if (this.disposed) return Promise.resolve(undefined)
     return new Promise(resolve => {
       this.queue.push({
         kind: 'query',
@@ -208,6 +218,7 @@ export class TerminalQuerier {
    * Safe to call with no pending queries — still waits for a round-trip.
    */
   flush(): Promise<void> {
+    if (this.disposed) return Promise.resolve()
     return new Promise(resolve => {
       this.queue.push({
         kind: 'sentinel',
@@ -220,6 +231,7 @@ export class TerminalQuerier {
 
   /** Resolve and release all pending queries when their owning app unmounts. */
   dispose(): void {
+    this.disposed = true
     for (const pending of this.queue.splice(0)) {
       if (pending.kind === 'query') pending.resolve(undefined)
       else pending.resolve()

@@ -96,6 +96,9 @@ try {
 check('shutdown detach does not absorb unexpected stdin errors', unexpectedErrorEscaped)
 
 stdin.write('x')
+// Stability probe (state must NOT change): receivedInput is already '' and
+// must stay '' after the write drains — polling would return immediately,
+// so keep the fixed one-tick window.
 await new Promise(resolve => setImmediate(resolve))
 check('detached Ink does not consume input meant for the replacement process', receivedInput === '')
 

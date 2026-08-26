@@ -28,7 +28,7 @@ const { join: joinPath } = await import('node:path')
 process.env.HOME = mkdtempSync(joinPath(tmpdir(), 'dshtui-edge-'))
 process.env.USERPROFILE = process.env.HOME
 
-const [{ Terminal: XTerm }, React, { settle, viewportLines }] = await Promise.all([
+const [{ Terminal: XTerm }, React, { settle, sleep, viewportLines }] = await Promise.all([
   import('@xterm/headless'),
   import('react'),
   import('./lib/term-test.mjs'),
@@ -43,7 +43,6 @@ function check(name: string, ok: boolean, detail = ''): void {
 }
 
 const ROWS = 30
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 async function mountAt(cols: number) {
   // Name length lands the truncation ellipsis — and the focused+selected

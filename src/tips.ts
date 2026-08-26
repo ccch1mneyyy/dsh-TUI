@@ -579,8 +579,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-ctrl-c',
     group: 'pitfalls',
-    zh: 'Ctrl+C 有输入时先清空，连按两次才退出',
-    en: 'Ctrl+C clears input first; double-tap to exit',
+    zh: 'Ctrl+C 工作时先中断；中断卡住再按强制退出；空闲连按两次退出',
+    en: 'Ctrl+C interrupts while working; press again if the interrupt stalls to force-exit; double-tap when idle',
   },
   {
     id: 'pit-unknown-cmd',
