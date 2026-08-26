@@ -152,6 +152,29 @@ assert.equal(unknown!.command, undefined)
   assert.equal(await first, 'allowed-once')
   assert.equal(await second, 'cancelled')
 }
+{
+  // 时序 4（事件驱动主动刷新，CodeRabbit）：徽标翻转此前只发生在
+  // getSnapshot 被再次读取时——React 不知道会话日志变了。若渲染静默
+  // （无流式 spinner 等触发重读），已显示的面板不会补上徽标。store 必
+  // 须提供会话事件通知入口：tool/result 落地时主动重查 active 并通过
+  // emit 通知订阅者（useSyncExternalStore 重新读取快照）。
+  const store = new ApprovalStore()
+  const log = events('call-push') // 只有 tool/call，active 判 live
+  const ask = store.park(approvalRequest('call-push', log))
+  assert.equal(store.getSnapshot()!.external, undefined,
+    'the panel shows a genuinely live ask — no badge yet')
+  let notifies = 0
+  store.subscribe(() => { notifies += 1 }) // 探针：面板的 re-render 通道
+  log.push(toolResult('call-push')) // tool/result 落地——不再调用 getSnapshot
+  store.noteSessionEvent(toolResult('call-push')) // 会话事件回调直达 store
+  await sleep(30) // scheduleNotify 走微任务
+  assert.ok(notifies >= 1,
+    'P-4: a settled tool/result must emit so a silent render loop re-reads the flipped snapshot')
+  assert.equal(store.getSnapshot()!.external, true,
+    'P-4: the event-driven recheck must flip the badge without a prior getSnapshot')
+  store.settleAll('cancelled')
+  assert.equal(await ask, 'cancelled')
+}
 
 // ── 面板渲染：external 行可见，非 external 不出现 ─────────────────────
 setLang('zh')

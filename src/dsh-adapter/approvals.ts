@@ -209,10 +209,12 @@ export class ApprovalStore {
    * genuinely pending one — both look live at park time; once the first is
    * allowed and its tool/result lands, the twin surfaces with a callId that
    * no longer has an unresolved call and must not keep the unmarked panel
-   * data. Re-checked when an ask becomes active (promotion) and whenever the
-   * snapshot is read (the result usually lands AFTER the twin was promoted).
-   * The session log only appends, so the verdict can only flip live→
-   * external, never back — the badge may appear late but never falsely.
+   * data. Re-checked when an ask becomes active (promotion), whenever the
+   * snapshot is read (the result usually lands AFTER the twin was promoted),
+   * and on every session `tool/result` notification (see
+   * {@link noteSessionEvent}). The session log only appends, so the verdict
+   * can only flip live→external, never back — the badge may appear late but
+   * never falsely.
    */
   private refreshActiveExternal(): void {
     const pending = this.active
@@ -224,6 +226,25 @@ export class ApprovalStore {
     pending.snapshot.external = true
     this.rebuildSnapshot()
     this.scheduleNotify()
+  }
+
+  /**
+   * Session-event notification inlet (wired by plugin.ts to the
+   * `session/event` firehose). React does not know the session log
+   * appended: a badge flip that only happens inside getSnapshot() surfaces
+   * solely when something ELSE re-renders the panel (a streaming spinner,
+   * say) — a silent render loop leaves the unmarked panel on screen. A
+   * landed `tool/result` is the only event type that can flip the active
+   * verdict live→external, so everything else is dropped here; the internal
+   * length memo then skips the recheck whenever the event belongs to a
+   * different session than the active ask's. The notification the SDK
+   * fires arrives after the event is already in `session.events`, so the
+   * recheck sees the settled result.
+   * @param event - The appended session event.
+   */
+  noteSessionEvent(event: SessionEvent): void {
+    if (event.type !== 'tool/result') return
+    this.refreshActiveExternal()
   }
 
   /**

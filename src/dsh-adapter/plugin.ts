@@ -1104,6 +1104,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (ctx.get('approval') !== undefined) {
     ctx.on('approval/request', (req, next) =>
       String(req.agent.id) === channel.agentId ? approvalStore.park(req) : next())
+    // Badge-flip push (P-4): React does not know the session log appended —
+    // a source-badge verdict that only flips inside getSnapshot() surfaces
+    // solely when something else re-renders. Feed the session firehose to
+    // the store: it reacts only to tool/result (the sole verdict-flipping
+    // event type), and its internal log-length memo skips appends from any
+    // session other than the active ask's, so no agent filtering is needed
+    // here. The firehose fires post-commit, after the event entered
+    // session.events, so the recheck sees the settled result.
+    ctx.on('session/event', (_session, event) => approvalStore.noteSessionEvent(event))
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
   const herdr = attachHerdrIntegration({
