@@ -544,10 +544,23 @@ export function validateExtractedTree(extractDir: string): ExtractedTreeCheck {
  * Fetch and size-cap a release's SHA256SUMS manifest. Any failure throws —
  * a release that declares a manifest must actually be verifiable (fail
  * closed), so the update never silently falls back to unverified bytes.
+ *
+ * The cap is enforced the same two-part way as the main asset download
+ * (see {@link downloadAndReplaceStandaloneBinary}): the declared
+ * content-length rejects before a byte is buffered, and the body is read
+ * through a streaming loop that aborts the connection the moment the
+ * running total passes the cap — a chunked response with no (or a lying)
+ * content-length header is interrupted at the cap instead of buffered
+ * whole by response.text() before the check runs.
  * @param checksumUrl - Browser download URL of the manifest.
+ * @param maxManifestBytes - Size cap (default
+ *   {@link MAX_CHECKSUM_MANIFEST_BYTES}); tests inject a small value.
  * @returns The manifest text.
  */
-async function fetchChecksumManifest(checksumUrl: string): Promise<string> {
+async function fetchChecksumManifest(
+  checksumUrl: string,
+  maxManifestBytes: number = MAX_CHECKSUM_MANIFEST_BYTES,
+): Promise<string> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), STANDALONE_DOWNLOAD_TIMEOUT_MS)
   try {
@@ -560,14 +573,27 @@ async function fetchChecksumManifest(checksumUrl: string): Promise<string> {
       throw new Error(`checksum manifest fetch failed: HTTP ${response.status} ${response.statusText}`)
     }
     const declared = Number(response.headers.get('content-length') ?? Number.NaN)
-    if (Number.isFinite(declared) && declared > MAX_CHECKSUM_MANIFEST_BYTES) {
-      throw new Error(`checksum manifest declares ${declared} bytes, over the ${MAX_CHECKSUM_MANIFEST_BYTES} cap`)
+    if (Number.isFinite(declared) && declared > maxManifestBytes) {
+      throw new Error(`checksum manifest declares ${declared} bytes, over the ${maxManifestBytes} cap`)
     }
-    const text = await response.text()
-    if (text.length > MAX_CHECKSUM_MANIFEST_BYTES) {
-      throw new Error(`checksum manifest is ${text.length} bytes, over the ${MAX_CHECKSUM_MANIFEST_BYTES} cap`)
+    if (response.body === null) {
+      throw new Error('checksum manifest response has no body stream')
     }
-    return text
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let received = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done === true) break
+      received += value.byteLength
+      if (received > maxManifestBytes) {
+        controller.abort()
+        try { await reader.cancel() } catch { /* already aborted */ }
+        throw new Error(`checksum manifest streamed past ${received} bytes, over the ${maxManifestBytes} cap`)
+      }
+      chunks.push(value)
+    }
+    return Buffer.concat(chunks, received).toString('utf8')
   } finally {
     clearTimeout(timeout)
   }
@@ -580,6 +606,13 @@ export interface StandaloneDownloadOptions {
    * inject a small value so the mid-stream abort path runs in milliseconds.
    */
   maxAssetBytes?: number
+  /**
+   * Override the checksum-manifest size cap (default
+   * {@link MAX_CHECKSUM_MANIFEST_BYTES}). Tests inject a small value so the
+   * manifest's own mid-stream abort path runs against a local unbounded
+   * server stream.
+   */
+  maxChecksumManifestBytes?: number
 }
 
 /**
@@ -675,7 +708,10 @@ export async function downloadAndReplaceStandaloneBinary(
       onProgress?.('warning: release publishes no SHA256SUMS — asset integrity cannot be verified (this will become a hard failure in the next major version)')
     } else {
       onProgress?.('verifying checksum…')
-      const manifest = await fetchChecksumManifest(checksumUrl)
+      const manifest = await fetchChecksumManifest(
+        checksumUrl,
+        options.maxChecksumManifestBytes ?? MAX_CHECKSUM_MANIFEST_BYTES,
+      )
       if (!verifyAssetChecksum(buffer, manifest, assetName)) {
         // Fail closed: never leave a mismatching (potentially hostile) asset
         // on disk for a later retry to pick up, and never extract it.

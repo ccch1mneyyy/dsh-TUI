@@ -267,9 +267,10 @@ const GROUPS = {
 // 便携包更新下载 SHA256 校验回归：SHA256SUMS 清单解析（两空格/二进制
 // 星号/裸 digest 旁注）、篡改资产字节 fail-closed 拒绝且磁盘零残留、
 // 无 sums 走 transition 警告、content-length 超 512MB 读 body 前拒绝、
-// 无 content-length 无界流读到上限即刻断连（注入小上限）、镜像回退
-// （API 失败→registry→直链）同样探测固定命名清单并强校验。本地 http
-// server + mock fetch + 临时假二进制，不发真实请求。
+// 无 content-length 无界流读到上限即刻断连（注入小上限；主资产与清单
+// 两条流各测一遍）、镜像回退（API 失败→registry→直链）同样探测固定
+// 命名清单并强校验。本地 http server + mock fetch + 临时假二进制，
+// 不发真实请求。
     ["verify-update-checksum", ['node', '--import', 'tsx/esm', 'scripts/verify-update-checksum.tsx']],
 // 便携包运行时缓存守卫回归：解压树启动链（bin→主模块两级闭包）的
 // 哈希清单——清单内 JS 篡改/删除 → not ready 自愈重建、旧格式 marker

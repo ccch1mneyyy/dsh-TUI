@@ -15,7 +15,10 @@
  *  - 下载体积上限：content-length 声明超过 512MB 直接拒绝；
  *  - 流式中断（DoS，红队 P-5）：无 content-length 的无界流在「读到上限
  *    即刻」断连中止——server 侧只送出上限附近的字节而非全量，资产
- *    不落盘（注入 2MB 小上限测同一代码路径）。
+ *    不落盘（注入 2MB 小上限测同一代码路径）；
+ *  - 清单流式限额（CodeRabbit Moderate）：清单抓取同样流式中断——无
+ *    content-length 的无界清单流注入 64KB 小上限，server 只送出上限
+ *    附近字节而非全量（红态：response.text() 全量缓冲后才查上限）。
  *  - 镜像回退路径的清单校验（红队 P-2）：GitHub API 失败 → registry
  *    版本号 → 拼直链时 checksumUrl 丢失。断言回退路径按固定命名规则
  *    探测 SHA256SUMS：存在 → 强校验（篡改资产被拒）；404 → 保持
@@ -88,6 +91,11 @@ let streamWritten = 0
 let streamClosed = false
 const STREAM_CHUNK = 64 * 1024
 const STREAM_CHUNKS = 128 // 总量 8MB，注入上限 2MB → 中断应发生在约 1/4 处
+// 清单无界流统计（CodeRabbit Moderate：清单抓取同样要流式限额）。
+let manifestStreamWritten = 0
+let manifestStreamClosed = false
+const MANIFEST_STREAM_CHUNK = 16 * 1024
+const MANIFEST_STREAM_CHUNKS = 128 // 总量 2MB，注入上限 64KB → 中断应发生在约 1/32 处
 const realAssetBytes = makeAssetArchive('legit-new-binary\n')
 const evilAssetBytes = makeAssetArchive('evil-tampered-binary\n')
 const realDigest = createHash('sha256').update(realAssetBytes).digest('hex')
@@ -142,6 +150,22 @@ const server = http.createServer(async (req, res) => {
     res.end()
     return
   }
+  if (url === '/stream-manifest-unbounded') {
+    // 清单版无界流：主资产已流式限额，但清单抓取若仍是 response.text()
+    // 全量缓冲后才查上限（修复前形态），无声明/谎报头的 chunked 清单流
+    // 同样可以先吃满内存。同一 backpressure 节流模式。
+    res.writeHead(200)
+    res.on('close', () => { manifestStreamClosed = true })
+    const chunk = Buffer.alloc(MANIFEST_STREAM_CHUNK, 0x42)
+    for (let i = 0; i < MANIFEST_STREAM_CHUNKS && !manifestStreamClosed; i++) {
+      const writable = res.write(chunk)
+      manifestStreamWritten += chunk.length
+      if (!writable) await new Promise<void>(resolve => res.once('drain', resolve))
+      await new Promise<void>(resolve => setImmediate(resolve))
+    }
+    res.end()
+    return
+  }
   res.writeHead(404)
   res.end('not found')
 })
@@ -188,7 +212,7 @@ process.env.DSH_TUI_STANDALONE_CACHE = cacheDir
 
 const downloadFn = updateModule.downloadAndReplaceStandaloneBinary as
   | ((url: string, onProgress?: (text: string) => void, checksumUrl?: string,
-      options?: { maxAssetBytes?: number }) =>
+      options?: { maxAssetBytes?: number, maxChecksumManifestBytes?: number }) =>
       Promise<{ success: boolean; error?: string }>)
   | undefined
 
@@ -270,6 +294,33 @@ if (typeof downloadFn === 'function') {
     JSON.stringify(streamResult.error),
   )
   check('无界流拒绝后缓存目录无下载残留', cacheLeftovers().length === 0, cacheLeftovers().join(','))
+
+  // (f) 清单流无 content-length 超限（CodeRabbit Moderate）：主资产流式
+  // 限额修复后，清单抓取仍是 response.text() 全量缓冲后才查上限——无
+  // 声明头的 chunked 清单流可以先吃满内存。主资产正常下载（/asset 带
+  // 合法清单可校验的归档），清单换成 2MB 无界流，注入 64KB 小上限（同
+  // 一代码路径，默认 1MB）。断言「读中断点」——server 只送出上限附近
+  // （远小于全量）的字节、结果失败含上限字样、不落盘。红态（修复前
+  // text() 全量读）：2MB 全部送出。
+  const manifestCap = 64 * 1024
+  manifestStreamWritten = 0
+  manifestStreamClosed = false
+  const manifestStreamResult = await downloadFn(
+    `${base}/asset`, undefined, `${base}/stream-manifest-unbounded`, { maxChecksumManifestBytes: manifestCap },
+  )
+  const manifestTotal = MANIFEST_STREAM_CHUNK * MANIFEST_STREAM_CHUNKS
+  check(
+    '清单无界流在超出上限时中断（server 送出远小于全量的字节）',
+    manifestStreamWritten < manifestTotal * 0.9 && manifestStreamWritten <= manifestCap + MANIFEST_STREAM_CHUNK * 4,
+    `written=${manifestStreamWritten} total=${manifestTotal} cap=${manifestCap}`,
+  )
+  check('清单无界流超限被拒绝', !manifestStreamResult.success, JSON.stringify(manifestStreamResult))
+  check(
+    '清单无界流拒绝错误信息提及大小上限',
+    /over the .* cap|上限|超过/i.test(manifestStreamResult.error ?? ''),
+    JSON.stringify(manifestStreamResult.error),
+  )
+  check('清单无界流拒绝后缓存目录无下载残留', cacheLeftovers().length === 0, cacheLeftovers().join(','))
 } else {
   check('downloadAndReplaceStandaloneBinary 已导出', false)
 }
