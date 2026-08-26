@@ -407,9 +407,10 @@ const GROUPS = {
 // 且模型看到字面路径）、双 miss 报用户原文、无后缀行为不变、目录忽略
 // 后缀。内存 fs stub，expandMentions 纯扩展逻辑。
     ["verify-mention-lines", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-lines.ts']],
-// 问卷 provider 抢注守卫回归（issue #98 安全收尾）：DUPLICATE_PROVIDER
-// 只对宿主前端白名单（dsh-web-app / dsh-tui 自身的 symbol 标记）静默
-// 让位；第三方在位或无身份信息走告警路径。判定为纯函数 + 真实
+// 问卷 provider 抢注守卫回归（issue #98 安全收尾）：静默让位只授予宿主
+// 可验证的白名单在位者（本 TUI 的私有 symbol 标记）；在位者【自报】的
+// 白名单名（name/hostId/id 字段可被任意插件拷贝伪造）走 alert-unverified
+// 诚实告知；第三方在位或无身份信息走保守告警。判定为纯函数 + 真实
 // UserQuestionService 端到端。
     ["verify-question-provider-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-question-provider-guard.tsx']],
 // secret.ref 保留名单守卫回归：第三方设置区块的 DEEPSEEK_API_KEY /

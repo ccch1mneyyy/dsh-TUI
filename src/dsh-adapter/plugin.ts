@@ -267,12 +267,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // the boot with DUPLICATE_PROVIDER. The incumbent UI then owns questionnaire
   // rendering; this TUI's ask_user_question requests are answered there.
   //
-  // Security follow-up: silence must be reserved for known host front doors.
-  // A plugin that registers FIRST owns the seat just the same, and would then
-  // answer ask_user_question on the user's behalf without any signal. The
-  // DUPLICATE_PROVIDER error carries no incumbent identity, so the seat is
-  // probed structurally and only whitelisted hosts (dsh-web-app, this TUI
-  // itself) keep the silent yield; anything else stays unregistered (the
+  // Security follow-up: silence must be reserved for host-VERIFIED front
+  // doors. A plugin that registers FIRST owns the seat just the same, and
+  // would then answer ask_user_question on the user's behalf without any
+  // signal. The DUPLICATE_PROVIDER error carries no incumbent identity, so
+  // the seat is probed structurally: the silent yield now requires this
+  // TUI's private symbol tag (or any future host-verified marker) on a
+  // whitelisted incumbent; a whitelist name the incumbent merely
+  // SELF-REPORTED (name/hostId/id fields are trivially copyable) gets an
+  // honest "identity not host-verified" alert instead — forgeable silence
+  // is worse than a loud warning. Anything else stays unregistered (the
   // composition must not crash) but the user is told loudly.
   const tuiQuestionProvider: UserQuestionProvider = { ask: request => questionStore.ask(request) }
   tagTuiQuestionProvider(tuiQuestionProvider)
@@ -282,9 +286,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.effect(() => () => questionStore.rejectAll())
   } catch (error) {
     if ((error as { code?: string }).code !== 'DUPLICATE_PROVIDER') throw error
-    const incumbentId = incumbentQuestionProviderId(userQuestions)
-    if (decideQuestionProviderYield(incumbentId).action === 'alert') {
-      const displayId = incumbentId ?? t('question-provider-occupied-unknown')
+    const decision = decideQuestionProviderYield(incumbentQuestionProviderId(userQuestions))
+    if (decision.action === 'alert-unverified') {
+      ctx.logger.error(
+        `dsh-tui: user-questions provider seat is held by a component self-reporting as ${decision.incumbentId} ` +
+          '(identity not host-verified); this TUI will not register its questionnaire and model questions may be answered by it',
+      )
+      questionSeatNotice = t('question-provider-occupied-unverified', { id: decision.incumbentId ?? '' })
+    } else if (decision.action === 'alert') {
+      const displayId = decision.incumbentId ?? t('question-provider-occupied-unknown')
       ctx.logger.error(
         `dsh-tui: user-questions provider seat is held by a non-host component (${displayId}); ` +
           'this TUI will not register its questionnaire and model questions may be answered by it',

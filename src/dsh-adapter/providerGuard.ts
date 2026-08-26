@@ -11,9 +11,12 @@
  * The upstream error carries no incumbent identity (fixed message + code
  * only), and the public API offers no query — but the service stores the
  * incumbent provider object on its `provider` property, which is reachable
- * structurally. This module turns that probe into a whitelist decision:
- * known host front doors (dsh-web-app, this TUI itself) stay silent;
- * anything else — including "no identity available" — raises the alert path.
+ * structurally. This module turns that probe into a whitelist decision with
+ * PROVENANCE: silent yields are reserved for host-verified identities (this
+ * module's private symbol tag — the true host-coexistence scenario), while a
+ * whitelist hit that the incumbent merely self-reported (name/hostId/id
+ * fields any plugin can copy) gets an honest "identity not host-verified"
+ * alert: forgeable silence is worse than a loud warning.
  */
 
 /**
@@ -23,25 +26,47 @@
  */
 export const QUESTION_PROVIDER_HOST_WHITELIST: readonly string[] = ['dsh-web-app', 'dsh-tui']
 
+/**
+ * The incumbent provider's identity as probed off the service, plus whether
+ * that identity is host-verified. `verified: true` can only be minted by
+ * this module's private symbol tag; self-reported `name`/`hostId`/`id`
+ * fields are readable but forgeable by any plugin.
+ */
+export interface IncumbentQuestionProviderIdentity {
+  readonly id: string
+  readonly verified: boolean
+}
+
 /** What apply() should do after a DUPLICATE_PROVIDER registration attempt. */
 export interface QuestionProviderYieldDecision {
-  /** `silent` keeps the issue-#98 behavior; `alert` notifies the user. */
-  readonly action: 'silent' | 'alert'
+  /**
+   * `silent` keeps the issue-#98 behavior (host-verified whitelist only);
+   * `alert` notifies the user; `alert-unverified` is the honest variant for
+   * a self-reported whitelist hit — the name matches a host front door but
+   * nothing proves who wrote it.
+   */
+  readonly action: 'silent' | 'alert' | 'alert-unverified'
   /** The incumbent identity the decision was based on, when one was found. */
   readonly incumbentId: string | undefined
 }
 
 /**
- * Decide how to react to an incumbent user-questions provider. Anything not
- * provably a known host front door alerts — the conservative default for an
- * unidentifiable incumbent, because silence is exactly what an attacker
- * squatting the seat wants.
+ * Decide how to react to an incumbent user-questions provider. Only a
+ * HOST-VERIFIED whitelisted incumbent (the symbol tag) keeps the silent
+ * yield: a self-reported `name: 'dsh-web-app'` is exactly what a seat
+ * squatter would write, so whitelist hits without verification get the
+ * unverified alert instead of silence. Third-party ids and no identity at
+ * all alert — the conservative default, because silence is exactly what an
+ * attacker squatting the seat wants.
  */
-export function decideQuestionProviderYield(incumbentId: string | undefined): QuestionProviderYieldDecision {
-  if (incumbentId !== undefined && QUESTION_PROVIDER_HOST_WHITELIST.includes(incumbentId)) {
-    return { action: 'silent', incumbentId }
-  }
-  return { action: 'alert', incumbentId }
+export function decideQuestionProviderYield(
+  incumbent: IncumbentQuestionProviderIdentity | undefined,
+): QuestionProviderYieldDecision {
+  if (incumbent === undefined) return { action: 'alert', incumbentId: undefined }
+  const whitelisted = QUESTION_PROVIDER_HOST_WHITELIST.includes(incumbent.id)
+  if (incumbent.verified && whitelisted) return { action: 'silent', incumbentId: incumbent.id }
+  if (whitelisted) return { action: 'alert-unverified', incumbentId: incumbent.id }
+  return { action: 'alert', incumbentId: incumbent.id }
 }
 
 /**
@@ -71,12 +96,14 @@ export function tagTuiQuestionProvider(provider: object): void {
  * Probe the user-questions service for the incumbent provider's identity.
  *
  * Recognition order:
- *   1. this TUI's private symbol tag (unforgeable outside the module);
+ *   1. this TUI's private symbol tag (unforgeable outside the module) —
+ *      reported as verified;
  *   2. an explicit identity marker the incumbent attached (`name`, `hostId`,
- *      `id`) — honor host cooperation if upstream starts tagging providers;
+ *      `id`) — readable for the notice text but reported as unverified,
+ *      because those fields are trivially copyable by a squatter;
  *   3. nothing — return undefined, which the decision maps to the alert path.
  */
-export function incumbentQuestionProviderId(service: object): string | undefined {
+export function incumbentQuestionProviderId(service: object): IncumbentQuestionProviderIdentity | undefined {
   let provider: unknown
   try {
     provider = (service as { provider?: unknown }).provider
@@ -85,10 +112,12 @@ export function incumbentQuestionProviderId(service: object): string | undefined
   }
   if (provider === null || typeof provider !== 'object') return undefined
   try {
-    if ((provider as Record<symbol, unknown>)[TUI_PROVIDER_TAG] === 'dsh-tui') return 'dsh-tui'
+    if ((provider as Record<symbol, unknown>)[TUI_PROVIDER_TAG] === 'dsh-tui') {
+      return { id: 'dsh-tui', verified: true }
+    }
     for (const key of ['name', 'hostId', 'id'] as const) {
       const value = (provider as Record<string, unknown>)[key]
-      if (typeof value === 'string' && value.trim() !== '') return value.trim()
+      if (typeof value === 'string' && value.trim() !== '') return { id: value.trim(), verified: false }
     }
   } catch {
     // A getter that throws must not take the boot down with it.
