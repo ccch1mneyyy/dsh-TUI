@@ -62,16 +62,20 @@ export function createHyperlink(
 ): string {
   const hasSupport = options?.supportsHyperlinks ?? supportsHyperlinks()
   const safeUrl = sanitizeHyperlinkUrl(url)
+  // Sanitized up front so BOTH degrade paths emit clean text too: non-TTY
+  // and log destinations bypass the cell-layer escape stripping, so a raw
+  // url/content with control characters would escape there.
+  const safeContent = content?.replace(DISPLAY_TEXT_CONTROL_CHARS, '')
   if (!hasSupport || safeUrl === null) {
     // Degrade to the plain display text — for a rejected scheme that is
     // the content alone (never the raw url: `javascript:...` must not
-    // reach the screen either), for a supported terminal it is the url.
-    return safeUrl === null ? (content ?? '') : url
+    // reach the screen either), for a supported terminal it is the
+    // control-stripped url (safeUrl).
+    return safeUrl === null ? (safeContent ?? '') : safeUrl
   }
 
   // Apply basic ANSI blue color - wrap-ansi preserves this across line breaks
   // RGB colors (like theme colors) are NOT preserved by wrap-ansi with OSC 8
-  const safeContent = content?.replace(DISPLAY_TEXT_CONTROL_CHARS, '')
   const displayText = safeContent ?? safeUrl
   const style = options?.style ?? ((text: string) => chalk.blue(text))
   const coloredText = style(displayText)

@@ -272,6 +272,18 @@ if (isRelevant('scheme-gate')) {
     assert.ok(out.includes('two words'), `显示文本空格被误剥: ${JSON.stringify(out)}`)
   })
 
+  check('降级路径：不支持超链接分支返回净化后的 url', () => {
+    const out = createHyperlink('HTTPS://\x07', 'x', { supportsHyperlinks: false })
+    assert.ok(!out.includes('\x07'), `降级 url 未净化: ${JSON.stringify(out)}`)
+  })
+
+  check('降级路径：scheme 拒绝分支返回净化后的 content', () => {
+    const out = createHyperlink('javascript:a\x1b[b', 'click\x1b[c', {
+      supportsHyperlinks: true,
+    })
+    assert.ok(!out.includes('\x1b['), `降级 content 未净化: ${JSON.stringify(out)}`)
+  })
+
   check('classifyOpenTarget 拦截非白名单 scheme 的外开', () => {
     assert.equal(classifyOpenTarget('ssh://evil.example').kind, 'rejected')
     assert.equal(classifyOpenTarget('ftp://evil.example').kind, 'rejected')
