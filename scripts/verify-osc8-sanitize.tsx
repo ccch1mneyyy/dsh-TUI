@@ -14,9 +14,18 @@
 //      对注入 payload 的最终字节无逃逸。
 
 import assert from 'node:assert/strict'
-import { styledCharsFromTokens, tokenize } from '@alcalzone/ansi-tokenize'
+import {
+  type AnsiCode,
+  ansiCodesToString,
+  diffAnsiCodes,
+  styledCharsFromTokens,
+  tokenize,
+} from '@alcalzone/ansi-tokenize'
 import { link, osc, OSC_PREFIX } from '../src/ink/termio/osc.js'
-import { extractHyperlinkFromStyles } from '../src/ink/screen.js'
+import {
+  extractHyperlinkFromStyles,
+  filterOutHyperlinkStyles,
+} from '../src/ink/screen.js'
 import { ESC, BEL } from '../src/ink/termio/ansi.js'
 
 let failures = 0
@@ -110,6 +119,85 @@ if (isRelevant('end-to-end')) {
   check('端到端：合法链接回放仍完整', () => {
     const out = replayHyperlink(`\x1b]8;;http://ok.example${BEL}docs\x1b]8;;${BEL}`)
     assert.ok(out.includes('http://ok.example'), `合法链接损坏: ${JSON.stringify(out)}`)
+  })
+}
+
+if (isRelevant('replay-variant')) {
+  console.log('重放侧：OSC 8 变体序列不随 stylePool 走私')
+
+  // 模拟生产重放链路（红队 2026-08-27 缺口）：output.ts flushBuffer 把
+  // tokenize 后的样式栈提取链接、滤除 OSC 8 后 intern 进 stylePool，
+  // log-update.ts renderFullFrame（140-143 行）再用 diffAnsiCodes +
+  // ansiCodesToString 把样式栈序列化重放。OSC8_REGEX 只认「空参数 +
+  // BEL 终止」形式——带 id= 参数或 ST 终止（\x1b\\）的变体若被
+  // filterOutHyperlinkStyles 保留进 stylePool，重放就会把任意 scheme
+  // 的链接（ST 形式 kitty/WezTerm/iTerm2 都解析）乃至夹带的 OSC 52
+  // 原样发给终端，绕过 link() 出口的净化。
+  const replayThroughStylePool = (text: string): {
+    replay: string
+    plain: string
+    uris: string[]
+  } => {
+    const styled = styledCharsFromTokens(tokenize(text) as never)
+    let replay = ''
+    let plain = ''
+    const uris = new Set<string>()
+    let current: AnsiCode[] = []
+    for (const char of styled) {
+      const styles = (char.styles ?? []) as AnsiCode[]
+      const uri = extractHyperlinkFromStyles(styles)
+      if (uri !== null) uris.add(uri)
+      const filtered = filterOutHyperlinkStyles(styles)
+      // log-update.ts:140-143 同款序列化
+      const styleDiff = diffAnsiCodes(current, filtered)
+      if (styleDiff.length > 0) {
+        replay += ansiCodesToString(styleDiff)
+        current = filtered
+      }
+      plain += char.value
+    }
+    return { replay, plain, uris: [...uris] }
+  }
+
+  check('重放：ST 终止的 OSC 8 变体不走私 javascript: 链接', () => {
+    const { replay } = replayThroughStylePool(
+      `\x1b]8;;javascript:alert(1)${ESC}\\CLICK\x1b]8;;${ESC}\\`,
+    )
+    assert.ok(
+      !replay.includes('javascript:'),
+      `重放走私 payload: ${JSON.stringify(replay)}`,
+    )
+    assert.ok(
+      !replay.includes('\x1b]8;;'),
+      `重放走私 OSC 8 序列: ${JSON.stringify(replay)}`,
+    )
+  })
+
+  check('重放：带 id= 参数的 OSC 8 变体不走私 ssh: 链接', () => {
+    const { replay } = replayThroughStylePool(
+      `\x1b]8;id=1;ssh://evil.example${BEL}CLICK\x1b]8;;${BEL}`,
+    )
+    assert.ok(
+      !replay.includes('ssh://'),
+      `重放走私 payload: ${JSON.stringify(replay)}`,
+    )
+  })
+
+  check('重放：合法 BEL 形式链接仍被提取且正常文本不丢', () => {
+    const { replay, plain, uris } = replayThroughStylePool(
+      `\x1b]8;;http://ok.example${BEL}DOCS\x1b]8;;${BEL}`,
+    )
+    assert.ok(
+      uris.includes('http://ok.example'),
+      `合法链接未被提取: ${JSON.stringify(uris)}`,
+    )
+    assert.ok(plain.includes('DOCS'), `正常文本丢失: ${JSON.stringify(plain)}`)
+    // 链接的重建只允许走输出侧 link() 通道（那里有净化），样式栈重放
+    // 中不得残留任何 OSC 8 序列
+    assert.ok(
+      !replay.includes('\x1b]8;'),
+      `合法形式的 OSC 8 仍随重放发出: ${JSON.stringify(replay)}`,
+    )
   })
 }
 
