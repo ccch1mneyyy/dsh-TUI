@@ -42,6 +42,9 @@ if (process.platform === 'win32' && process.env.DSH_TUI_STANDALONE_BINARY) {
   }
 }
 
+const here = dirname(fileURLToPath(import.meta.url))
+const ownDir = dirname(here)
+
 /**
  * Read and parse a JSON file safely.
  *
