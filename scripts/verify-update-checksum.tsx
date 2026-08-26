@@ -86,6 +86,8 @@ if (typeof verifyAssetChecksum === 'function') {
 // 归档字节（tampered 标志切换内容），/SHA256SUMS 返回清单。
 let tamperAsset = false
 let omitSums = false
+/** 旁注资产模式：none=无 / exact=<assetName>.sha256 / foreign=其他资产名.sha256。 */
+let sidecarMode: 'none' | 'exact' | 'foreign' = 'none'
 // 无界流统计：server 侧实际写出的字节数（客户端断连即停止累计）。
 let streamWritten = 0
 let streamClosed = false
@@ -110,6 +112,15 @@ const server = http.createServer(async (req, res) => {
     ]
     if (!omitSums) {
       assets.push({ name: 'SHA256SUMS', browser_download_url: `http://127.0.0.1:${serverPort()}/SHA256SUMS` })
+    }
+    if (sidecarMode === 'exact') {
+      assets.push({ name: `${ASSET_NAME}.sha256`, browser_download_url: `http://127.0.0.1:${serverPort()}/${ASSET_NAME}.sha256` })
+    }
+    if (sidecarMode === 'foreign') {
+      // 外来旁注：另一平台资产（win zip）的 .sha256——它的 digest 登记
+      // 的是 win 资产，拿来校验 linux 资产必然 mismatch（fail-closed 误拒
+      // 无辜用户的更新）。
+      assets.push({ name: 'dsh-tui-standalone-win-x64.zip.sha256', browser_download_url: `http://127.0.0.1:${serverPort()}/dsh-tui-standalone-win-x64.zip.sha256` })
     }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ tag_name: 'v9.9.9', assets }))
@@ -194,6 +205,27 @@ const base = `http://127.0.0.1:${serverPort()}`
     (noSums as { checksumUrl?: string } | undefined)?.checksumUrl === undefined,
     JSON.stringify(noSums),
   )
+  // 精确旁注（<assetName>.sha256）：仍被认领——单资产 digest 旁注校验的
+  // 就是伴随的那一个资产，语义无歧义。
+  sidecarMode = 'exact'
+  const exactSidecar = await updateModule.fetchGithubLatestRelease({ apiBaseUrl: base })
+  check(
+    'release 只发布精确 <assetName>.sha256 旁注时解析为 checksumUrl',
+    (exactSidecar as { checksumUrl?: string } | undefined)?.checksumUrl === `${base}/${ASSET_NAME}.sha256`,
+    JSON.stringify(exactSidecar),
+  )
+  // 外来旁注（CodeRabbit Moderate）：release 无规范清单、只有其他资产名
+  // 的 .sha256（如 win 资产的旁注配在 linux 更新上）——不得认领。旧实现
+  // 的任意 endsWith('.sha256') 兜底会抓错清单，fail-closed 把无辜用户的
+  // 更新误拒成 checksum mismatch。
+  sidecarMode = 'foreign'
+  const foreignSidecar = await updateModule.fetchGithubLatestRelease({ apiBaseUrl: base })
+  check(
+    'release 只有其他资产名的 .sha256 旁注时 checksumUrl 缺省（不抓错清单）',
+    (foreignSidecar as { checksumUrl?: string } | undefined)?.checksumUrl === undefined,
+    JSON.stringify(foreignSidecar),
+  )
+  sidecarMode = 'none'
   omitSums = false
 }
 

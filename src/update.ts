@@ -284,9 +284,14 @@ export interface GithubReleaseQuery {
 
 /**
  * Locate the release's checksum manifest among its assets: the aggregator
- * `SHA256SUMS` file first, then a single-asset `<asset>.sha256` sidecar.
+ * `SHA256SUMS` file first, then a single-asset `<asset>.sha256` sidecar —
+ * and nothing else. A name-blind `endsWith('.sha256')` fallback (removed,
+ * external review) could claim ANOTHER asset's sidecar (e.g. the win zip's
+ * digest next to a linux update), whose mismatch then fail-closed innocent
+ * users' updates; an unrecognized layout resolves to undefined so the
+ * transition-period warning path applies instead.
  * @param assets - Parsed release asset objects.
- * @param assetName - The main asset the names must not shadow.
+ * @param assetName - The main asset whose sidecar, if any, is exact-named.
  * @returns The manifest's browser_download_url, or undefined when the release
  *   publishes none (the transition-period warning path).
  */
@@ -297,9 +302,7 @@ function findChecksumAssetUrl(assets: unknown[], assetName: string): string | un
   const sums = byName('SHA256SUMS')
   if (sums !== undefined) return (sums as Record<string, unknown>).browser_download_url as string
   const exact = byName(`${assetName}.sha256`)
-  if (exact !== undefined) return (exact as Record<string, unknown>).browser_download_url as string
-  const any = assets.find(a => urlOf(a) && (a.name as string).endsWith('.sha256'))
-  return any === undefined ? undefined : (any as Record<string, unknown>).browser_download_url as string
+  return exact === undefined ? undefined : (exact as Record<string, unknown>).browser_download_url as string
 }
 
 /**
