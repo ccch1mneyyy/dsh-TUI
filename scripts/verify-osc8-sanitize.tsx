@@ -1,17 +1,21 @@
-// 运行：node --import tsx/esm scripts/verify-osc8-sanitize.tsx
-// 安全回归：OSC 出口控制字符剥离（终端注入收口）。
-//
-// 背景（安全审查 2026-08-27）：模型输出/插件文本/本地命令输出中的裸
-// OSC 8 序列会被 tokenize 提取进 cell.hyperlink，序列化回放时由 link()
-// 原样重发——URL 内可携带任意转义序列（改标题、OSC 52 剪贴板劫持、
-// iTerm2 文件写入），绕过渲染管线全部 C0/ESC 剥离层。
-//
-// 本脚本钉住三层防线：
-//   1. osc() 出口：任何 OSC 构造（链接/标题/tab status）的 parts 不得
-//      携带 C0/C1/DEL/空格——注入原语在公共出口被剥除。
-//   2. link() 回放：携带转义 payload 的 URL 回放后不再有可执行序列。
-//   3. 端到端：tokenize 提取 → extractHyperlinkFromStyles → link() 链路
-//      对注入 payload 的最终字节无逃逸。
+/**
+ * 安全回归：OSC 出口控制字符剥离（终端注入收口）。
+ *
+ * 运行：node --import tsx/esm scripts/verify-osc8-sanitize.tsx
+ *
+ * 背景（安全审查 2026-08-27）：模型输出/插件文本/本地命令输出中的裸
+ * OSC 8 序列会被 tokenize 提取进 cell.hyperlink，序列化回放时由 link()
+ * 原样重发——URL 内可携带任意转义序列（改标题、OSC 52 剪贴板劫持、
+ * iTerm2 文件写入），绕过渲染管线全部 C0/ESC 剥离层。
+ *
+ * 本脚本钉住三层防线：
+ *   1. osc() 出口：任何 OSC 构造（链接/标题/tab status）的 parts 不得
+ *      携带 C0/C1/DEL——注入原语在公共出口被剥除（空格保留：标题与
+ *      通知文本合法包含；URI 形态的空格由 link() 单独剥）。
+ *   2. link() 回放：携带转义 payload 的 URL 回放后不再有可执行序列。
+ *   3. 端到端：tokenize 提取 → extractHyperlinkFromStyles → link() 链路
+ *      对注入 payload 的最终字节无逃逸。
+ */
 
 import assert from 'node:assert/strict'
 import {
@@ -40,10 +44,11 @@ function check(name: string, fn: () => void): void {
   }
 }
 
-// C0 (0x00-0x1F)、DEL (0x7F)、C1 (0x80-0x9F) 与空格在 OSC payload 中
-// 全部非法：BEL/ST 是定界符，ESC 开新序列，C1 在 8-bit 终端同义。
+// C0 (0x00-0x1F)、DEL (0x7F)、C1 (0x80-0x9F) 在 OSC payload 中非法：
+// BEL/ST 是定界符，ESC 开新序列，C1 在 8-bit 终端同义。空格不在此列
+// （标题/通知文本合法包含；link() 的 URI 路径单独剥空格）。
 // 不带 /g 标志——.test() 在全局正则上是状态化的，会交替真假。
-const OSC_UNSAFE = /[\x00-\x1f\x7f-\x9f\x20]/
+const OSC_UNSAFE = /[\x00-\x1f\x7f-\x9f]/
 
 const group = process.argv[2] ?? 'all'
 const isRelevant = (g: string): boolean => group === 'all' || group === g
@@ -78,13 +83,20 @@ if (isRelevant('osc-exit')) {
   })
 
   check('osc() 标题 payload 孤立 BEL 被剥除（sessionTitle 缝隙）', () => {
-    const out = osc('0', 'title\x07ring\x1b[2J')
+    const out = osc('0', 'ti tle\x07ring\x1b[2J')
     // 构造器自身的终止 BEL 之外不得再有 BEL/ESC 序列
     const stripped = out.slice(OSC_PREFIX.length, -1)
     assert.ok(!OSC_UNSAFE.test(stripped), `标题 payload 逃逸: ${JSON.stringify(out)}`)
   })
 
-  check('osc() 空格剥除不破坏合法 URL（无控制字符路径不变）', () => {
+  check('osc() 标题空格保留（通知/标题文本的功能面）', () => {
+    const out = osc('0', '✦ 🐋 会话标题')
+    assert.ok(out.includes('✦ 🐋 会话标题'), `标题空格被误剥: ${JSON.stringify(out)}`)
+  })
+
+  check('link() URI 空格剥离 + 合法 URL 不受影响', () => {
+    const spaced = link('http://a b.example/x y')
+    assert.ok(!spaced.includes(' '), `URI 空格未剥: ${JSON.stringify(spaced)}`)
     const out = link('http://ok.example/docs?a=1&b=2')
     assert.ok(out.includes('http://ok.example/docs?a=1&b=2'), `合法 URL 被误改: ${JSON.stringify(out)}`)
   })

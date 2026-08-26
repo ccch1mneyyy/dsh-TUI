@@ -18,12 +18,14 @@ export const ST = ESC + '\\'
  * Characters that must never appear inside an OSC payload: C0/C1 controls
  * terminate or smuggle sequences past the payload boundary (BEL and ST are
  * terminators, ESC starts a new sequence, C1 bytes mean the same on 8-bit
- * terminals), and a raw space breaks the 7-bit-clean OSC 8 URI form.
+ * terminals). Space is NOT stripped here — titles and notification texts
+ * legitimately contain it; the one payload where a raw space is unsafe
+ * (the OSC 8 URI) strips it at the hyperlink entry (sanitizeHyperlinkUrl).
  * Untrusted text (model output, plugin messages, session titles) reaches
  * OSC constructors; stripping here is the single choke point that keeps
  * injected sequences out of the terminal.
  */
-const OSC_PAYLOAD_UNSAFE = /[\x00-\x1f\x7f-\x9f\x20]/g
+const OSC_PAYLOAD_UNSAFE = /[\x00-\x1f\x7f-\x9f]/g
 
 function sanitizeOscPart(part: string | number): string | number {
   return typeof part === 'number' ? part : part.replace(OSC_PAYLOAD_UNSAFE, '')
@@ -447,11 +449,14 @@ function* splitTabStatusPairs(data: string): Generator<[string, string]> {
  */
 export function link(url: string, params?: Record<string, string>): string {
   if (!url) return LINK_END
-  const p = { id: osc8Id(url), ...params }
+  // A raw space is unsafe in the OSC 8 URI form specifically; titles and
+  // notification payloads keep theirs, so this lives here, not in osc().
+  const safeUrl = url.replaceAll(' ', '')
+  const p = { id: osc8Id(safeUrl), ...params }
   const paramStr = Object.entries(p)
-    .map(([k, v]) => `${k}=${v}`)
+    .map(([k, v]) => `${k}=${v.replaceAll(' ', '')}`)
     .join(':')
-  return osc(OSC.HYPERLINK, paramStr, url)
+  return osc(OSC.HYPERLINK, paramStr, safeUrl)
 }
 
 function osc8Id(url: string): string {
