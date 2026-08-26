@@ -52,6 +52,33 @@ above the prompt.
 | `Ctrl+K` | Delete after the caret |
 | `Ctrl+W` | Delete the preceding word |
 
+### vim editing mode (`/vim`)
+
+`/vim` toggles vim editing for the prompt (session-scoped, not persisted): the
+prompt shows an `INSERT` badge and typing works as usual; `Esc` switches to the
+`NORMAL` badge, where bare keys follow vim semantics.
+
+| NORMAL key | Behavior |
+| --- | --- |
+| `h` / `l` | Move left / right one character |
+| `j` / `k` | Move down / up one line (multi-line input) |
+| `0` / `^` / `$` | Line start / first non-blank / line end |
+| `w` / `b` | Next / previous word start (whitespace-split) |
+| `x` / `X` | Delete the character at / before the caret (`x` deletes the last char at line end) |
+| `d` + second key | `dd` delete whole line (newline included) · `d$` delete to line end · `d0`/`d^` delete to line start · `dw` delete to word end |
+| `u` | Undo the last vim edit (stack capped at 100) |
+| `i` / `I` / `a` / `A` | INSERT at caret / first non-blank of the line / after caret / line end |
+| `o` / `O` | New line below / above, then INSERT |
+| `/` | Inserts `/` and returns to INSERT (opens the command menu) |
+| `Esc` | Cancel a pending `d`; otherwise no-op (the usual clear / double-Esc rewind semantics stay off) |
+| `Enter` / `Tab` / arrows / `Ctrl+*` combos | Pass through unchanged (submit, completion, history, edit shortcuts…) |
+| Other bare keys | Ignored, never inserted |
+
+While vim mode is on, `Esc` belongs to vim — use `/rewind` or exit vim mode
+then double-Esc for time rewind; during a running turn, `Esc` in INSERT just
+returns to NORMAL (interrupt with `Ctrl+C` / `Ctrl+Enter`). Clear the draft in
+NORMAL with `Ctrl+C` or `dd`.
+
 Bracketed paste from right-click or the terminal's native paste command is
 inserted verbatim, including newlines, and is never mistaken for an Enter key.
 
@@ -340,7 +367,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/color` (session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`; input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`), `/lang` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permissions`, `/add-dir`, `/hooks`, `/mcp`, `/skills`, `/plugins` (`check <path>` validates a plugin manifest) |
 | Packaged skills | `/audit`, `/bug`, `/practice`, `/review`, `/pr-comments`, `/release-notes`, `/vuln-check` |
-| Other | `/update`, `/vim`, `/terminal-setup`, `/connect`, `/help`, `/exit` (aliases `/quit`, `/q`) |
+| Other | `/update`, `/vim` (vim editing mode toggle — see “Editing keys”), `/terminal-setup`, `/connect`, `/help`, `/exit` (aliases `/quit`, `/q`) |
 | Registry | `/plan`, `/goal`, and any other command registered by the DSH composition |
 
 Additional forms:
@@ -375,6 +402,6 @@ Additional forms:
   `SKILL.md` body, with arguments passed through unchanged. Packaged `skills/`
   register at startup and may be overridden by same-name project or user skills.
 
-`/vim`, `/connect`, and `/hooks` are currently compatibility
+`/connect` and `/hooks` are currently compatibility
 placeholders. When the DSH composition has no matching capability, each
 command explains that explicitly rather than silently doing nothing.
