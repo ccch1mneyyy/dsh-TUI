@@ -278,6 +278,16 @@ check('the count reflects only what is shown', await settled(() => /3 sessions/.
 check('metadata rides under each title', await settled(() => /2\.0 KB/.test(flat(screen())) && /deepseek-v4-pro/.test(flat(screen()))))
 check('focus starts on the MRU top row (gamma)', await settled(() => /❯\s*gamma/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
 
+// ── mouse wheel ─────────────────────────────────────────────────────────
+// Wheel events arrive as SGR mouse sequences over the list region, exactly
+// as a real fullscreen terminal delivers them. Rolling walks the cursor one
+// session per notch (the window is cursor-follow, so rolling IS scrolling).
+const wheelRow = screen().split('\n').findIndex(l => /❯\s*gamma/.test(l)) + 1 // SGR is 1-indexed
+stdin.write(`\x1b[<65;10;${wheelRow}M`) // wheel-down
+check('mouse wheel-down moves the focus one session', await settled(() => /❯\s*beta/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
+stdin.write(`\x1b[<64;10;${wheelRow}M`) // wheel-up
+check('mouse wheel-up moves it back', await settled(() => /❯\s*gamma/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
+
 // ── held arrow keys ─────────────────────────────────────────────────────
 // A held key (or a paste) arrives as several key events out of ONE stdin
 // chunk, all handled before React re-renders. Every one of them must move

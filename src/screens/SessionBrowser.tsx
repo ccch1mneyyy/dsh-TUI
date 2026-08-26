@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import type { WheelEvent } from '../ink/events/wheel-event.js'
 import { Divider } from '../components/design-system/Divider.js'
 import { HintLine } from '../components/design-system/HintLine.js'
 import { SearchBox } from '../components/SearchBox.js'
@@ -9,6 +10,7 @@ import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
 import { formatProject, spreadRow, tailWidth, truncateWidth } from '../sessions/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { TICK, MULTIPLICATION_X } from '../cc/figures.js'
 import {
   anchorTop,
   buildView,
@@ -27,20 +29,20 @@ import type { PreviewEntry, SessionSummary } from '../dsh-adapter/sessions/index
 type BrowserMode = 'list' | 'confirm-delete' | 'rename' | 'confirm-clean'
 
 /**
- * Rows the layout cannot do without: the header, the search box, the hints.
- * Everything else — the rules, the list itself — yields before these do.
+ * Rows the layout cannot do without: the header, the bordered search card
+ * (three rows: top border, input, bottom border), the notice slot, and the
+ * hints. Everything else — the rule, the list itself — yields before these do.
  */
-const MANDATORY_LINES = 3
+const MANDATORY_LINES = 6
 
 /**
- * The three horizontal rules, in the order they earn their row.
+ * The one remaining horizontal rule, above the hints.
  *
- * 0 frames the header, 2 lifts the hints off the content, 1 separates the
- * search box — and that last one is the least load-bearing, so on a terminal
- * too short for all three it is the one that goes. Rules are decoration; a
- * row of content, or the hint line telling the user which keys exist, is not.
+ * The search card's own border separates it from the header and the list, so
+ * the two rules that used to flank it are gone; what remains lifts the hints
+ * off the content — decoration, and the first thing a short terminal drops.
  */
-const RULE_PRIORITY = [0, 2, 1] as const
+const RULE_PRIORITY = [2] as const
 /** Terminal width below which the preview replaces the list instead of joining it. */
 const SPLIT_MIN_COLUMNS = 100
 
@@ -259,6 +261,16 @@ export function SessionBrowser({
     if (landed !== undefined) setFocusId(landed.id)
   }
 
+  /**
+   * Mouse wheel over the list walks the cursor (the window is cursor-follow,
+   * so rolling IS scrolling; the preview pane rides along). Confirm/rename
+   * seats keep the keyboard as sole owner.
+   */
+  const handleWheel = (event: WheelEvent): void => {
+    if (mode !== 'list') return
+    step(event.deltaY >= 0 ? 1 : -1)
+  }
+
   // Preview follows the cursor. Keyed on the id so arrowing past a row does
   // not refetch the one it came from, and guarded on unmount so a slow read
   // landing after the cursor moved cannot overwrite a newer preview.
@@ -288,14 +300,16 @@ export function SessionBrowser({
   const previewWidth = splitPreview ? Math.min(56, Math.floor(columns * 0.42)) : columns
   const listWidth = Math.max(20, columns - (splitPreview ? previewWidth : 0))
   // Height is distributed, never assumed. Mandatory rows first, then a row
-  // for each region the current state actually needs, then the rules while
+  // for each region the current state actually needs, then the rule while
   // rows remain, and the list gets what is left — which may be nothing.
   //
   // The arithmetic below is the whole vertical layout: the regions sum to
   // exactly `rows` at every height down to MANDATORY_LINES. Anything that
   // assumed a fixed chrome would overflow on a short terminal, and the row
   // that falls off the bottom is always the last one — the hints.
-  const extraLines = (mode === 'list' ? 0 : 1) + (notice === undefined ? 0 : 1)
+  // The notice slot is mandatory (permanent): a delete/rename report must
+  // never shift the list by arriving.
+  const extraLines = mode === 'list' ? 0 : 1
   const ruleBudget = Math.max(0, Math.min(RULE_PRIORITY.length, rows - MANDATORY_LINES - extraLines))
   const rules = new Set<number>(RULE_PRIORITY.slice(0, ruleBudget))
   const listHeight = Math.max(0, rows - MANDATORY_LINES - extraLines - rules.size)
@@ -512,23 +526,24 @@ export function SessionBrowser({
         <Text color="remember" bold>{header.left}</Text>
         <Text dimColor>{`${' '.repeat(header.gap)}${header.right}`}</Text>
       </Box>
-      {rules.has(0) && (<Box flexShrink={0}>
-        <Divider width={columns} />
-      </Box>)}
+      {/* The search card: its round border separates it from the header and
+          the list, so no divider rows flank it (their rows went to the card). */}
       <Box flexShrink={0}>
         <SearchBox
           query={tailWidth(filters.query, inputBudget)}
           isFocused={mode === 'list'}
           isTerminalFocused={isTerminalFocused}
           placeholder={truncateWidth(t('session-search-placeholder', { scope }), inputBudget)}
-          borderless
         />
       </Box>
-      {rules.has(1) && (<Box flexShrink={0}>
-        <Divider width={columns} />
-      </Box>)}
 
-      <Box flexGrow={1} flexShrink={1}>
+      {/* ink-box host for the wheel — Box flavors drop onWheel into the style
+          rest (SuggestionCard precedent); the row direction keeps the list
+          and the preview side by side. */}
+      <ink-box
+        style={{ flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}
+        onWheel={handleWheel}
+      >
         {!soloPreview && (
         <Box flexDirection="column" width={listWidth} height={listHeight} flexShrink={0}>
           {!loaded && (
@@ -574,15 +589,17 @@ export function SessionBrowser({
             now={now}
           />
         )}
-      </Box>
+      </ink-box>
 
-      {notice !== undefined && (
-        <Box flexShrink={0}>
-          <Text color={notice.tone === 'error' ? 'error' : 'success'}>
-            {` ${truncateWidth(notice.text, Math.max(0, columns - 2))}`}
-          </Text>
-        </Box>
-      )}
+      {/* Permanent notice slot (blank while quiet) with a toast glyph — a
+          delete/rename report must never shift the list by arriving. */}
+      <Box flexShrink={0}>
+        <Text color={notice?.tone === 'error' ? 'error' : 'success'}>
+          {notice === undefined
+            ? ' '
+            : ` ${notice.tone === 'error' ? MULTIPLICATION_X : TICK} ${truncateWidth(notice.text, Math.max(0, columns - 4))}`}
+        </Text>
+      </Box>
       {mode === 'confirm-delete' && focused !== undefined && (
         <Box
           flexShrink={0}
