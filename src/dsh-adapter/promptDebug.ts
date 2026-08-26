@@ -13,6 +13,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { isAgentLoopRequest, type GenerateOptions } from '@deepseek-ai/dsh-llm'
+import { t } from '../i18n.js'
 
 export const PROMPT_DEBUG_FILENAME = '.dsh-prompt-debug.json'
 
@@ -202,7 +203,9 @@ export function registerPromptDebug(ctx: Context): void {
 
       return {
         kind: 'success',
-        text: `Wrote ${capture.requests.length} final LLM request${capture.requests.length === 1 ? '' : 's'} to ${output}. The file contains sensitive conversation and prompt data.`,
+        // Localized copy carries the synced/shared-workspace cleanup reminder
+        // (the snapshot lands in the workspace root, 0600); see i18n.ts.
+        text: t('prompt-debug-saved', { count: capture.requests.length, file: output }),
       }
     },
   }))

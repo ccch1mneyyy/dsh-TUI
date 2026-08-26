@@ -130,7 +130,11 @@ try {
 
   const result = await definition.handler({ agent, rawInput: '', signal: new AbortController().signal })
   assert.equal(result.kind, 'success')
-  assert.match(result.text, /Wrote 2 final LLM requests/)
+  // Success copy is localized (i18n prompt-debug-saved) and t() resolves the
+  // language from env/locale, so accept either shipped language here.
+  assert.match(result.text, /Wrote 2 final LLM request snapshots|已写入 2 条最终 LLM 请求快照/)
+  // The reminder the security fix appends must survive in both languages.
+  assert.match(result.text, /workspace|工作区/)
   assert.equal(nextCalls, 3, 'the capture hook must always delegate to the next waterfall listener')
 
   const output = join(workspace, PROMPT_DEBUG_FILENAME)

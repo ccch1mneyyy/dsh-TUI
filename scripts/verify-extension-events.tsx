@@ -37,6 +37,14 @@
  *     picked text's return nor park tui/session-switched.
  * 10. D-8 — the parked indicator covers the WHOLE decision wait (sticky
  *     until the decision settles).
+ * 11. Agent-swap ownership — /new clears the old cancel latch and invalidates
+ *     an old interrupt redelivery callback before it can cross sessions.
+ * 12. Main-session priority — a retained subagent Session mapping cannot
+ *     swallow events after that exact Session becomes the bound main agent.
+ * 13. Activity sidecar containment — malformed optional activity input cannot
+ *     abort the authoritative tool/result projection.
+ * 14. Idle reconciliation — a missed terminal event cannot leave volatile
+ *     working/cancel gates latched after the driver reports quiescence.
  *
  * D-7 note: this battery mounts NO extensions row, so the decision guard
  * comes from createChannel itself (the P1 backstop for a stale patch /
@@ -184,22 +192,34 @@ function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { fo
   }
 }
 
-function makeServices(captured: { followupTexts: string[]; compactCalls: string[] }) {
+type FakeAgent = ReturnType<typeof makeAgent>
+
+function makeServices(
+  captured: { followupTexts: string[]; compactCalls: string[]; cancelCalls: number },
+  agentsById: Map<string, FakeAgent>,
+) {
+  const remember = (agent: FakeAgent): FakeAgent => {
+    agentsById.set(agent.id, agent)
+    return agent
+  }
   return {
     sessions: { fork(session: { events: readonly unknown[] }) { return { events: session.events } } },
     agents: {
+      get(id: string) { return agentsById.get(id) },
       // Unique ids per creation — state.agentId comparisons (stale-drop)
       // are meaningless if every fake agent shares one id.
       async create(options: { sessionId: string; seed?: readonly unknown[] }) {
         forkSeq += 1
-        return { agent: makeAgent(`fork-${forkSeq}`, options.seed ?? [], captured), dispose: async () => {} }
+        const agent = remember(makeAgent(`fork-${forkSeq}`, options.seed ?? [], captured))
+        return { agent, dispose: async () => {} }
       },
       // Real dsh derives the agent id from the session: resuming session A
       // yields a NEW agent object whose id equals the ORIGINAL agent's id
       // again (A → /new → /resume A). The compact stale-drop must therefore
       // compare agent REFERENCES, not ids — this fake reproduces the reuse.
       async resume(options: { resumeSessionId: string }) {
-        return { agent: makeAgent(options.resumeSessionId.replace(/^s-/u, ''), makeEvents(), captured), dispose: async () => {} }
+        const agent = remember(makeAgent(options.resumeSessionId.replace(/^s-/u, ''), makeEvents(), captured))
+        return { agent, dispose: async () => {} }
       },
     },
     llm: {
@@ -220,7 +240,8 @@ function makeServices(captured: { followupTexts: string[]; compactCalls: string[
 // ── harness: real cordis root + real channel + real Chat ────────────────
 const ctx = new Context()
 const captured = { followupTexts: [] as string[], compactCalls: [] as string[], cancelCalls: 0 }
-const services = makeServices(captured)
+const agentsById = new Map<string, FakeAgent>()
+const services = makeServices(captured, agentsById)
 for (const [key, value] of Object.entries(services)) {
   // Plain-data services: provide them on the root so channel's ctx.get
   // resolves them exactly as the real service rows would.
@@ -233,6 +254,7 @@ ctx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
 await settle(() => ctx.get('tuiPluginHost') !== undefined)
 
 const liveAgent = makeAgent('a1', makeEvents(), captured)
+agentsById.set(liveAgent.id, liveAgent)
 const channel = createChannel(ctx as never, liveAgent as never, {
   model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
 })
@@ -821,6 +843,132 @@ await sleep(800)
 }
 
 await instance.unmount()
+
+// ── 11. Agent-swap ownership: a delayed interrupt redelivery belongs to the
+// old agent. A real /new bind must clear that agent's cancel latch and retire
+// its token before either can affect the replacement. This is a defensive
+// ownership regression, not a claim that the healthy ESC path misses turn/end.
+{
+  const oldText = '旧代理延迟打断消息'
+  const drainText = '新代理排空栅栏'
+  const parked: Array<() => void> = []
+  const originalQueueMicrotask = globalThis.queueMicrotask
+  const cancelBeforeInterrupt = captured.cancelCalls
+  let queued = 0
+  try {
+    globalThis.queueMicrotask = callback => { parked.push(callback) }
+    queued = channel.interruptAndDeliver([oldText])
+  } finally {
+    globalThis.queueMicrotask = originalQueueMicrotask
+  }
+  check('agent swap setup: old interrupt owns one delayed redelivery',
+    queued === 1 && parked.length === 1 && captured.cancelCalls === cancelBeforeInterrupt + 1,
+    JSON.stringify({ queued, parked: parked.length, cancelCalls: captured.cancelCalls }))
+
+  const oldAgentId = channel.agentId
+  const switched = await channel.newSession()
+  check('agent swap setup: /new replaces the live agent',
+    switched && channel.agentId !== oldAgentId,
+    JSON.stringify({ switched, oldAgentId, newAgentId: channel.agentId }))
+  check('agent swap clears the old cancellation projection', channel.cancelPending === false)
+
+  const cancelBeforeReplacement = captured.cancelCalls
+  channel.cancel()
+  check('agent swap clears the old cancel latch before the replacement’s first cancel',
+    captured.cancelCalls === cancelBeforeReplacement + 1,
+    JSON.stringify({ before: cancelBeforeReplacement, after: captured.cancelCalls }))
+
+  let oldTextObserved = false
+  const dispose = decisionCtx.on('tui/input', event => {
+    if (event.text === oldText) oldTextObserved = true
+    return undefined
+  })
+  parked[0]?.()
+  const deliveredBeforeDrain = captured.followupTexts.length
+  channel.submit(drainText)
+  const drained = await settled(() => captured.followupTexts
+    .slice(deliveredBeforeDrain)
+    .some(text => text.includes(drainText)))
+  const deliveredAfterSwap = captured.followupTexts.slice(deliveredBeforeDrain)
+  check('agent swap invalidates old interrupt redelivery before it crosses sessions',
+    drained && !oldTextObserved && !deliveredAfterSwap.some(text => text.includes(oldText)),
+    JSON.stringify({ oldTextObserved, deliveredAfterSwap }))
+  dispose()
+}
+
+const emit = (event: string, ...args: unknown[]): void => {
+  ;(ctx as unknown as { emit(name: string, ...payload: unknown[]): void }).emit(event, ...args)
+}
+const activeAgent = agentsById.get(channel.agentId)
+check('projection backstop setup: replacement agent remains discoverable', activeAgent !== undefined)
+
+if (activeAgent !== undefined) {
+  // ── 12. Main-session priority: completed subagent cards deliberately retain
+  // their Session-object lookup. Even if that exact object is later the bound
+  // main session, its events must take the main path before the retained child
+  // lookup can consume them.
+  emit('session/event', activeAgent.session, {
+    seq: 900, time: NOW + 900, type: 'turn/start', data: { turn: 300 },
+  })
+  check('main-session priority setup: live turn is projected', channel.working)
+  emit('subagent/start', {
+    id: activeAgent.id, runId: 'retained-main-session', provider: 'spawn', local: true,
+  })
+  emit('session/event', activeAgent.session, {
+    seq: 901, time: NOW + 901, type: 'turn/end', data: { turn: 300, reason: { kind: 'completed' } },
+  })
+  check('main-session priority: retained subagent mapping cannot swallow turn/end',
+    channel.working === false && channel.cancelPending === false,
+    JSON.stringify({ working: channel.working, cancelPending: channel.cancelPending }))
+
+  // ── 13. Working Activity is optional. Durable data can be looser than its
+  // declared tuple (the core projector already guards an empty result block),
+  // so a sidecar exception must not skip the authoritative tool settlement.
+  emit('session/event', activeAgent.session, {
+    seq: 902, time: NOW + 902, type: 'turn/start', data: { turn: 301 },
+  })
+  emit('session/event', activeAgent.session, {
+    seq: 903, time: NOW + 903, type: 'tool/call',
+    data: { callId: 'malformed-result-call', name: 'read', arguments: '{}' },
+  })
+  check('activity containment setup: core tool card is running', channel.activeToolCount === 1)
+  emit('session/event', activeAgent.session, {
+    seq: 904, time: NOW + 904, type: 'tool/result',
+    data: {
+      message: { source: { callId: 'malformed-result-call' }, content: [] },
+      error: undefined,
+    },
+  })
+  check('activity containment: sidecar failure cannot skip core tool/result projection',
+    channel.activeToolCount === 0,
+    JSON.stringify({ activeToolCount: channel.activeToolCount }))
+  emit('session/event', activeAgent.session, {
+    seq: 905, time: NOW + 905, type: 'turn/end', data: { turn: 301, reason: { kind: 'completed' } },
+  })
+
+  // ── 14. Driver status is the authority for volatile liveness controls. If
+  // a terminal event is missed by any observer seam, idle releases UI gates
+  // without fabricating a turn/end or transcript row.
+  emit('session/event', activeAgent.session, {
+    seq: 906, time: NOW + 906, type: 'turn/start', data: { turn: 302 },
+  })
+  const rowsBeforeGap = channel.rows.length
+  const cancelBeforeGap = captured.cancelCalls
+  channel.cancel()
+  check('idle reconciliation setup: interrupt gates are latched',
+    channel.working && channel.cancelPending && captured.cancelCalls === cancelBeforeGap + 1)
+  emit('agent/status', { agent: activeAgent, status: 'idle' })
+  check('idle reconciliation: quiescent driver releases working and cancel gates',
+    !channel.working && !channel.cancelPending,
+    JSON.stringify({ working: channel.working, cancelPending: channel.cancelPending }))
+  check('idle reconciliation: no synthetic transcript fact is inserted',
+    channel.rows.length === rowsBeforeGap,
+    JSON.stringify({ before: rowsBeforeGap, after: channel.rows.length }))
+  channel.cancel()
+  check('idle reconciliation: cancellation latch is re-armed',
+    captured.cancelCalls === cancelBeforeGap + 2,
+    JSON.stringify({ before: cancelBeforeGap, after: captured.cancelCalls }))
+}
 
 if (failures > 0) {
   console.error(`${failures} check(s) failed`)
