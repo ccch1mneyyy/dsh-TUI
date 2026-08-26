@@ -134,6 +134,24 @@ assert.equal(unknown!.command, undefined)
   assert.equal(await first, 'allowed-once')
   assert.equal(await second, 'cancelled')
 }
+{
+  // 时序 3（review 竞态，队内去重）：真实审批（callId=X 无 result）挂起 →
+  // 恶意插件用同 callId=X 塞入孪生（入队时 X 未落定，两条都判 live）→
+  // 用户允许第一条 → decide 同步晋升孪生，而真实工具仍在执行、
+  // tool/result 尚未落盘——晋升时复查看不到 result，徽标必须来自
+  // 「一个 callId 只该有一次合法审批请求」的确定性判定，不依赖
+  // tool/result 落盘时序。
+  const store = new ApprovalStore()
+  const log = events('call-race') // 只有 tool/call，全程不写 result
+  const first = store.park(approvalRequest('call-race', log))
+  const second = store.park(approvalRequest('call-race', log)) // 同 callId 孪生
+  store.decide('allowed-once') // 允许第一条；真实工具还在执行，log 不动
+  assert.equal(store.getSnapshot()!.external, true,
+    'P-4: a twin whose callId is ALREADY in flight must carry the badge at promotion (in-flight dedup) — the result may not land for a while')
+  store.settleAll('cancelled')
+  assert.equal(await first, 'allowed-once')
+  assert.equal(await second, 'cancelled')
+}
 
 // ── 面板渲染：external 行可见，非 external 不出现 ─────────────────────
 setLang('zh')

@@ -28,12 +28,16 @@ export interface ApprovalSnapshot {
   readonly command?: string
   /**
    * The request is not anchored to a live tool call of this session (no or
-   * unknown callId, or the paired call already settled). The approval
-   * waterfall is an in-process event any plugin can dispatch, so the panel
-   * renders a loud warning instead of presenting the text as the agent's own
-   * pending command. The verdict is re-checked while the ask is queued or on
-   * the panel, so it may also appear late — once a same-callId sibling ask
-   * is allowed and its tool/result lands (P-4).
+   * unknown callId, the paired call already settled, or the callId is
+   * already in flight for another parked ask — a genuine approval is asked
+   * exactly once per call). The approval waterfall is an in-process event
+   * any plugin can dispatch, so the panel renders a loud warning instead of
+   * presenting the text as the agent's own pending command. Verdicts that
+   * depend on the session log are re-checked while the ask is queued or on
+   * the panel, so they may also appear late — once a same-callId sibling
+   * ask is allowed and its tool/result lands (P-4). The in-flight dedup
+   * verdict, by contrast, is determined at park() and needs no result to
+   * land.
    */
   readonly external?: true
 }
@@ -223,6 +227,26 @@ export class ApprovalStore {
   }
 
   /**
+   * Whether another ask with this callId is already parked (active or
+   * queued). A genuine approval is raised once per gated tool call — the
+   * permission layer asks, waits, and never re-asks for the same callId —
+   * so a second ask reusing an in-flight callId is a forged twin dispatched
+   * through the in-process waterfall. This is a DETERMINISTIC verdict: it
+   * needs no tool/result to land, unlike {@link isLiveToolApproval}, whose
+   * twin-reveal window (result lands only after the first ask is allowed
+   * and the tool runs) is exactly when promotion-time rechecks still see no
+   * result. Derived from the live active+queue set on each park(), so
+   * settled asks free their callId automatically.
+   */
+  private isCallIdInFlight(req: ApprovalRequest): boolean {
+    if (req.callId === undefined) return false
+    const key = String(req.callId)
+    const occupies = (pending: PendingApproval): boolean =>
+      pending.request.callId !== undefined && String(pending.request.callId) === key
+    return (this.active !== undefined && occupies(this.active)) || this.queue.some(occupies)
+  }
+
+  /**
    * Answerer entry point — called by the `approval/request` waterfall
    * listener when the ask concerns the agent this TUI owns.
    * @param req - The approval request (agent, tool, callId, reason, signal).
@@ -236,8 +260,10 @@ export class ApprovalStore {
       // waterfall, which any in-process plugin can dispatch — the agent-id
       // gate in plugin.ts says whose SESSION it names, not that a live tool
       // call actually raised it. Mark everything not anchored to an
-      // unresolved tool call so the panel can warn.
-      const external = !isLiveToolApproval(req)
+      // unresolved tool call, plus any ask reusing a callId that is already
+      // in flight (a legitimate call is asked about exactly once), so the
+      // panel can warn.
+      const external = !isLiveToolApproval(req) || this.isCallIdInFlight(req)
       const pending: PendingApproval = {
         key: String(++this.seq),
         request: req,
