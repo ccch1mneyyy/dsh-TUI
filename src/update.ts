@@ -303,6 +303,42 @@ function findChecksumAssetUrl(assets: unknown[], assetName: string): string | un
 }
 
 /**
+ * Fixed-name SHA256SUMS download URL for a release version — the
+ * mirror-fallback counterpart of {@link findChecksumAssetUrl}: when the
+ * GitHub API is unreachable and the version came from a registry, there is no
+ * asset list to parse, so the manifest is probed at its conventional name on
+ * the same direct-download host (release-bundle.yml publishes it as
+ * `SHA256SUMS` next to every asset).
+ */
+export function releaseChecksumUrl(version: string): string {
+  return `https://github.com/${GITHUB_REPO}/releases/download/v${version}/SHA256SUMS`
+}
+
+/**
+ * Probe whether a release publishes a checksum manifest at a URL. Only an OK
+ * response resolves to the URL — a 404 (the release predates the checksum
+ * workflow) or any network failure resolves to undefined so the update keeps
+ * the transition-period warning path instead of being blocked (new releases
+ * always ship the manifest; old ones must keep updating).
+ */
+async function probeChecksumManifestUrl(url: string): Promise<string | undefined> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS)
+  try {
+    const response = await fetch(url, {
+      headers: { 'user-agent': 'dsh-tui-updater' },
+      redirect: 'follow',
+      signal: controller.signal,
+    })
+    return response.ok ? url : undefined
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+/**
  * Fetch latest release info from GitHub Releases API for the standalone asset.
  *
  * @param options - Injectable API base / fetch for tests.
@@ -734,7 +770,16 @@ export async function resolveTuiUpdateTarget(): Promise<TuiUpdateTarget> {
     if (latest === undefined) return { kind: 'unknown' }
     if (!gt(latest, currentVersion)) return { kind: 'latest', current: currentVersion, isStandalone: true }
     const downloadUrl = ghRelease?.downloadUrl ?? `https://github.com/${GITHUB_REPO}/releases/download/v${latest}/${getStandaloneAssetName()}`
-    const checksumUrl = ghRelease?.checksumUrl
+    // Mirror fallback (GitHub API timed out, version came from a registry):
+    // the asset list — and with it the manifest URL — is lost, so probe the
+    // fixed-name SHA256SUMS on the same direct-download host. Found → the
+    // download verifies exactly like the primary path (a tampered asset is
+    // refused); 404/absent → the transition warning path stays for releases
+    // that predate the checksum workflow (every new release ships one —
+    // release-bundle.yml generates it alongside the assets).
+    const checksumUrl = ghRelease !== undefined
+      ? ghRelease.checksumUrl
+      : await probeChecksumManifestUrl(releaseChecksumUrl(latest))
     return checksumUrl === undefined
       ? { kind: 'update', current: currentVersion, latest, isStandalone: true, downloadUrl }
       : { kind: 'update', current: currentVersion, latest, isStandalone: true, downloadUrl, checksumUrl }

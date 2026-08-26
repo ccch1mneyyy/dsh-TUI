@@ -16,6 +16,10 @@
  *  - 流式中断（DoS，红队 P-5）：无 content-length 的无界流在「读到上限
  *    即刻」断连中止——server 侧只送出上限附近的字节而非全量，资产
  *    不落盘（注入 2MB 小上限测同一代码路径）。
+ *  - 镜像回退路径的清单校验（红队 P-2）：GitHub API 失败 → registry
+ *    版本号 → 拼直链时 checksumUrl 丢失。断言回退路径按固定命名规则
+ *    探测 SHA256SUMS：存在 → 强校验（篡改资产被拒）；404 → 保持
+ *    transition 警告放行（老 release 兼容）。
  *
  * Run: node --import tsx/esm scripts/verify-update-checksum.tsx
  */
@@ -268,6 +272,121 @@ if (typeof downloadFn === 'function') {
   check('无界流拒绝后缓存目录无下载残留', cacheLeftovers().length === 0, cacheLeftovers().join(','))
 } else {
   check('downloadAndReplaceStandaloneBinary 已导出', false)
+}
+
+
+// ═══════════════ Part 4：镜像回退路径的清单校验（红队 P-2） ═══════════════
+
+// 场景：GitHub API 失败（超时/不可达）→ registry 提供 latest 版本号 →
+// 更新器拼 GitHub 直链下载。旧实现在这条回退路径上丢失 checksumUrl，
+// 篡改资产无校验直接放行。mock 全局 fetch 按 URL 分流（registry /
+// api.github.com / github.com 直链）。
+{
+  const realFetch = globalThis.fetch
+  const realStandalone = process.env.DSH_TUI_STANDALONE
+  const realRegistry = process.env.NPM_CONFIG_REGISTRY
+  const resolveTarget = updateModule.resolveTuiUpdateTarget as
+    | (() => Promise<Record<string, unknown>>)
+    | undefined
+
+  if (typeof resolveTarget === 'function' && typeof downloadFn === 'function') {
+    process.env.DSH_TUI_STANDALONE = '1'
+    process.env.NPM_CONFIG_REGISTRY = 'https://registry.npmjs.org'
+    const FALLBACK_DOWNLOAD = `https://github.com/ccch1mneyyy/dsh-TUI/releases/download/v9.9.9/${ASSET_NAME}`
+    const FALLBACK_SUMS = 'https://github.com/ccch1mneyyy/dsh-TUI/releases/download/v9.9.9/SHA256SUMS'
+
+    let manifestStatus = 200
+    let fallbackAssetTampered = false
+    globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.includes('api.github.com')) {
+        // GitHub API 不可达 → 触发 registry 回退路径。
+        return new Response('', { status: 503 })
+      }
+      if (url.endsWith('/latest')) {
+        return Response.json({ version: '9.9.9' })
+      }
+      if (url.endsWith('/SHA256SUMS')) {
+        if (manifestStatus !== 200) return new Response('not found', { status: manifestStatus })
+        return new Response(`${realDigest}  ${ASSET_NAME}\n`)
+      }
+      if (url.endsWith(ASSET_NAME)) {
+        const bytes = fallbackAssetTampered ? evilAssetBytes : realAssetBytes
+        return new Response(bytes, { headers: { 'content-length': String(bytes.length) } })
+      }
+      return new Response('', { status: 404 })
+    }) as typeof fetch
+
+    // (a) 回退路径解析出固定命名清单 URL，且清单匹配的资产成功替换
+    writeFileSync(fakeCurrentBinary, 'old binary\n')
+    fallbackAssetTampered = false
+    manifestStatus = 200
+    const targetA = await resolveTarget()
+    check(
+      '镜像回退路径探测到固定命名 SHA256SUMS（checksumUrl 不再丢失）',
+      targetA.kind === 'update' && targetA.checksumUrl === FALLBACK_SUMS,
+      JSON.stringify(targetA),
+    )
+    check(
+      '回退路径拼出的直链下载地址正确',
+      targetA.downloadUrl === FALLBACK_DOWNLOAD,
+      JSON.stringify(targetA.downloadUrl),
+    )
+    const resultA = await downloadFn(
+      targetA.downloadUrl as string, undefined, targetA.checksumUrl as string,
+    )
+    check('回退路径 + 清单匹配 → 更新成功且经过校验', resultA.success, JSON.stringify(resultA))
+    check(
+      '回退路径 + 清单匹配 → 二进制被替换为新内容',
+      readFileSync(fakeCurrentBinary, 'utf8') === 'legit-new-binary\n',
+    )
+
+    // (b) 清单存在但资产被篡改 → 回退路径同样拒绝（红态：旧实现无校验
+    // 直接放行，篡改归档是合法 tar.gz、解压替换全部成功）
+    writeFileSync(fakeCurrentBinary, 'old binary\n')
+    fallbackAssetTampered = true
+    const targetB = await resolveTarget()
+    const resultB = await downloadFn(
+      targetB.downloadUrl as string, undefined, targetB.checksumUrl as string,
+    )
+    check('回退路径 + 清单存在但资产被篡改 → 拒绝替换', !resultB.success, JSON.stringify(resultB))
+    check(
+      '回退路径篡改拒绝时错误信息提及校验和',
+      /checksum|sha256/i.test(resultB.error ?? ''),
+      JSON.stringify(resultB.error),
+    )
+    check(
+      '回退路径篡改拒绝时当前二进制保持原内容',
+      readFileSync(fakeCurrentBinary, 'utf8') === 'old binary\n',
+    )
+
+    // (c) 清单 404（老 release）→ transition 警告放行（兼容不变）
+    writeFileSync(fakeCurrentBinary, 'old binary\n')
+    fallbackAssetTampered = false
+    manifestStatus = 404
+    const lines: string[] = []
+    const targetC = await resolveTarget()
+    check(
+      '回退路径清单 404 → checksumUrl 缺省（transition 警告路径）',
+      targetC.kind === 'update' && targetC.checksumUrl === undefined,
+      JSON.stringify(targetC),
+    )
+    const resultC = await downloadFn(targetC.downloadUrl as string, text => lines.push(text), undefined)
+    check('回退路径清单 404 → 更新继续成功（老 release 兼容）', resultC.success, JSON.stringify(resultC))
+    check(
+      '回退路径清单 404 → 进度输出携带「无校验和」警告',
+      lines.some(line => /no checksum|no sha256sums|无校验和/i.test(line)),
+      JSON.stringify(lines),
+    )
+
+    globalThis.fetch = realFetch
+    if (realStandalone === undefined) delete process.env.DSH_TUI_STANDALONE
+    else process.env.DSH_TUI_STANDALONE = realStandalone
+    if (realRegistry === undefined) delete process.env.NPM_CONFIG_REGISTRY
+    else process.env.NPM_CONFIG_REGISTRY = realRegistry
+  } else {
+    check('resolveTuiUpdateTarget 已导出', typeof resolveTarget === 'function')
+  }
 }
 
 server.close()
