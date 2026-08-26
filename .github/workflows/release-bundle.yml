@@ -3,6 +3,7 @@ name: Build release bundles
 # 发布新 Release 时自动构建"一键安装整合包"与各平台"便携包"并上传为该 Release 的资产：
 #   - dsh-tui-setup.zip（一键安装脚本整合包）
 #   - dsh-tui-standalone-linux-x64.tar.gz（Linux x64 便携版）
+#   - dsh-tui-standalone-linux-arm64.tar.gz（Linux arm64 便携版）
 #   - dsh-tui-standalone-win-x64.zip（Windows x64 便携版）
 #   - dsh-tui-standalone-darwin-arm64.tar.gz（macOS Apple Silicon 便携版）
 #   - dsh-tui-standalone-darwin-x64.tar.gz（macOS Intel 便携版）

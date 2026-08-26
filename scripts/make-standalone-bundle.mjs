@@ -7,6 +7,7 @@
  *
  * 产物：<out>/ 目录下各平台的压缩包：
  *   - dsh-tui-standalone-linux-x64.tar.gz  (内含 dsh-tui)
+ *   - dsh-tui-standalone-linux-arm64.tar.gz (内含 dsh-tui)
  *   - dsh-tui-standalone-win-x64.zip       (内含 dsh-tui.exe)
  *   - dsh-tui-standalone-darwin-arm64.tar.gz (内含 dsh-tui)
  *   - dsh-tui-standalone-darwin-x64.tar.gz (内含 dsh-tui)
@@ -35,7 +36,7 @@ const argOut = process.argv.indexOf('--out')
 const outDir = resolve(argOut >= 0 ? process.argv[argOut + 1] : join(root, 'dist-standalone'))
 
 const argTargets = process.argv.indexOf('--targets')
-const defaultTargets = 'node24-linux-x64,node24-win-x64,node24-macos-arm64,node24-macos-x64'
+const defaultTargets = 'node24-linux-x64,node24-linux-arm64,node24-win-x64,node24-macos-arm64,node24-macos-x64'
 const targets = argTargets >= 0 ? process.argv[argTargets + 1] : defaultTargets
 
 const standaloneDir = join(root, 'standalone')
@@ -115,10 +116,11 @@ console.log(`\n==> 打包压缩各平台便携包…`)
 const stagedFiles = readdirSync(stageDir)
 
 const targetMap = [
-  { match: /(?:entry-linux(?:-x64)?|^entry$)/i, platform: 'linux-x64', binary: 'dsh-tui', format: 'tar.gz' },
-  { match: /entry-win(?:-x64)?(?:\.exe)?/i, platform: 'win-x64', binary: 'dsh-tui.exe', format: 'zip' },
-  { match: /entry-macos-arm64|entry-darwin-arm64/i, platform: 'darwin-arm64', binary: 'dsh-tui', format: 'tar.gz' },
-  { match: /entry-macos(?:-x64)?|entry-darwin-x64/i, platform: 'darwin-x64', binary: 'dsh-tui', format: 'tar.gz' },
+  { match: /^entry-linux-arm64$/i, platform: 'linux-arm64', binary: 'dsh-tui', format: 'tar.gz' },
+  { match: /^(?:entry-linux(?:-x64)?|entry)$/i, platform: 'linux-x64', binary: 'dsh-tui', format: 'tar.gz' },
+  { match: /^entry-win(?:-x64)?(?:\.exe)?$/i, platform: 'win-x64', binary: 'dsh-tui.exe', format: 'zip' },
+  { match: /^entry-(?:macos|darwin)-arm64$/i, platform: 'darwin-arm64', binary: 'dsh-tui', format: 'tar.gz' },
+  { match: /^entry-(?:macos|darwin)(?:-x64)?$/i, platform: 'darwin-x64', binary: 'dsh-tui', format: 'tar.gz' },
 ]
 
 for (const stagedFile of stagedFiles) {
@@ -134,9 +136,12 @@ for (const stagedFile of stagedFiles) {
     }
   }
 
-  const platform = matched ? matched.platform : stagedFile
-  const binaryName = matched ? matched.binary : stagedFile
-  const format = matched ? matched.format : 'tar.gz'
+  if (!matched) {
+    console.warn(`    [WARN] 未知构建目标产物: ${stagedFile}，跳过打包`)
+    continue
+  }
+
+  const { platform, binary: binaryName, format } = matched
   const archiveName = `dsh-tui-standalone-${platform}.${format}`
   const archivePath = join(outDir, archiveName)
 
