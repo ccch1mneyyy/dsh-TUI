@@ -48,11 +48,14 @@ const {
   mkdirSync,
   readFileSync,
   readlinkSync,
-  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } = fs
+
+// 运行时缓存完整性守卫（哈希清单 + runtimeReady/ensureRuntime；逻辑唯一
+// 来源在 cacheGuard.cjs，scripts/verify-standalone-cache-guard.mjs 直测）。
+const { ensureRuntime } = require('./cacheGuard.cjs')
 
 const TUI_VERSION = '0.9.2'
 const DSH_VERSION = '0.1.1-rc.2'
@@ -65,66 +68,26 @@ const cacheBase = resolve(
     join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'dsh-tui-standalone'),
 )
 const runtimeRoot = join(cacheBase, BUNDLE_ID)
-const completeMarker = join(runtimeRoot, '.complete')
 const dshBin = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 const tuiRoot = join(runtimeRoot, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
 
 /**
- * Check if the standalone runtime cache directory is already extracted and ready.
- *
- * @returns `true` if the complete marker matches the bundle ID and entry files exist.
- */
-const runtimeReady = () => {
-  try {
-    return readFileSync(completeMarker, 'utf8').trim() === BUNDLE_ID && existsSync(dshBin) && existsSync(join(tuiRoot, 'cordis.patch.yml'))
-  } catch {
-    return false
-  }
-}
-
-/**
  * Ensure the bundled runtime archive is unpacked into the cache directory.
- *
- * @returns Promise that resolves once extraction is complete.
+ * Delegates to cacheGuard.cjs (hash-manifest guard + extraction flow).
  */
-async function ensureRuntime() {
-  if (runtimeReady()) return
-
-  mkdirSync(cacheBase, { recursive: true })
-  const temporaryRoot = join(cacheBase, `.extract-${BUNDLE_ID}-${process.pid}`)
-  const temporaryArchive = join(cacheBase, `.runtime-${BUNDLE_ID}-${process.pid}.tar.gz`)
-  rmSync(temporaryRoot, { recursive: true, force: true })
-  rmSync(temporaryArchive, { force: true })
-  mkdirSync(temporaryRoot, { recursive: true })
-
-  process.stderr.write(`[dsh-tui] 首次运行，正在释放内置 DSH/TUI 运行时到 ${runtimeRoot}\n`)
-  try {
-    writeFileSync(temporaryArchive, readFileSync(archivePath))
-    await extractTar({
-      cwd: temporaryRoot,
-      file: temporaryArchive,
-      preservePaths: false,
-      strict: true,
-    })
-    rmSync(temporaryArchive, { force: true })
-    writeFileSync(join(temporaryRoot, '.complete'), `${BUNDLE_ID}\n`)
-    if (runtimeReady()) {
-      // Another process installed the same bundle while we extracted.
-      rmSync(temporaryRoot, { recursive: true, force: true })
-      return
-    }
-    if (existsSync(runtimeRoot)) rmSync(runtimeRoot, { recursive: true, force: true })
-    try {
-      renameSync(temporaryRoot, runtimeRoot)
-    } catch (error) {
-      if (!runtimeReady()) throw error
-      rmSync(temporaryRoot, { recursive: true, force: true })
-    }
-  } catch (error) {
-    rmSync(temporaryArchive, { force: true })
-    rmSync(temporaryRoot, { recursive: true, force: true })
-    throw error
-  }
+async function ensureRuntimeReady() {
+  await ensureRuntime({
+    cacheBase,
+    runtimeRoot,
+    bundleId: BUNDLE_ID,
+    archivePath,
+    extract: extractTar,
+    requiredPaths: [
+      'node_modules/@deepseek-ai/dsh/lib/bin.js',
+      'node_modules/@deepseek-harness-tui/dsh-tui/cordis.patch.yml',
+    ],
+    log: text => process.stderr.write(text),
+  })
 }
 
 /**
@@ -186,7 +149,7 @@ if (process.platform === 'win32') {
   }
 }
 
-await ensureRuntime()
+await ensureRuntimeReady()
 ensureProfile()
 
 process.env.DSH_TUI_STANDALONE = '1'
