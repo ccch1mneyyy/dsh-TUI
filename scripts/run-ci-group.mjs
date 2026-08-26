@@ -252,7 +252,19 @@ const GROUPS = {
 // isWrapped 断言没有任何一行溢出终端宽度，并要求提示行始终是最后一行
 // （等价于「上方每个区域都放得下、没有多占行、没有被挤出屏幕」）。
 // 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
-    ["verify-session-browser-layout", ['node', 'scripts/verify-session-browser-layout.mjs']],
+    ["verify-session-browser-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-session-browser-layout.mjs']],
+// 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
+// Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
+// 自环境变量，不转义即可注入任意命令；解压与替换之间的提取树校验拒绝
+// 符号链接与逃逸条目（GNU tar 实测会落地 symlink 成员，zip-slip 落地
+// 形式）。恶意 zip/tar.gz fixture 由 python3 构造（../evil.txt 成员、
+// 指向 /etc/passwd 的链接成员）。
+    ["verify-update-extract", ['node', '--import', 'tsx/esm', 'scripts/verify-update-extract.tsx']],
+// 便携包更新下载 SHA256 校验回归：SHA256SUMS 清单解析（两空格/二进制
+// 星号/裸 digest 旁注）、篡改资产字节 fail-closed 拒绝且磁盘零残留、
+// 无 sums 走 transition 警告、content-length 超 512MB 读 body 前拒绝。
+// 本地 http server + 临时假二进制，不发真实请求。
+    ["verify-update-checksum", ['node', '--import', 'tsx/esm', 'scripts/verify-update-checksum.tsx']],
   ],
   'channel-ui': [
 // channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
