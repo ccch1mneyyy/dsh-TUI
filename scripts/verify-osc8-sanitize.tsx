@@ -94,11 +94,12 @@ if (isRelevant('osc-exit')) {
     assert.ok(out.includes('✦ 🐋 会话标题'), `标题空格被误剥: ${JSON.stringify(out)}`)
   })
 
-  check('link() URI 空格剥离 + 合法 URL 不受影响', () => {
-    const spaced = link('http://a b.example/x y')
-    assert.ok(!spaced.includes(' '), `URI 空格未剥: ${JSON.stringify(spaced)}`)
-    const out = link('http://ok.example/docs?a=1&b=2')
-    assert.ok(out.includes('http://ok.example/docs?a=1&b=2'), `合法 URL 被误改: ${JSON.stringify(out)}`)
+  check('link() URI 空格编码为 %20（不删除——目标语义不变）', () => {
+    const out = link('file:///C:/My Project/test.ts')
+    assert.ok(out.includes('file:///C:/My%20Project/test.ts'), `空格被删除而非编码: ${JSON.stringify(out)}`)
+    const plain = link('http://ok.example/docs?a=1&b=2')
+    assert.ok(plain.includes('http://ok.example/docs?a=1&b=2'), `合法 URL 被误改: ${JSON.stringify(plain)}`)
+    assert.ok(!plain.includes('%20'), `无空格 URL 被误编码: ${JSON.stringify(plain)}`)
   })
 }
 
@@ -308,6 +309,40 @@ if (isRelevant('scheme-gate')) {
     assert.equal(classifyOpenTarget('dsh-file:///a/b.ts#L1').kind, 'file-actions')
     assert.equal(classifyOpenTarget('file:///tmp/x').kind, 'file-actions')
   })
+}
+
+if (isRelevant('kitty-st')) {
+  console.log('Kitty ST 终止符路径（子进程：env 在模块导入前定型）')
+  const { spawnSync } = await import('node:child_process')
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'osc8-kitty-'))
+  try {
+    writeFileSync(join(dir, 'kitty-child.mts'), `process.env.TERM_PROGRAM = 'kitty'
+const { link, ST, OSC_PREFIX } = await import(${JSON.stringify(new URL('../src/ink/termio/osc.js', import.meta.url).pathname)})
+let bad = 0
+// kitty 的 TERM_PROGRAM 恰为 'kitty'（env.terminal 严格相等判定）
+const out = link('http://ok.example')
+if (!out.endsWith(ST)) { console.log('terminator not ST: ' + JSON.stringify(out)); bad++ }
+// 净化在 ST 路径同样成立：body 内不得残留任何控制字符（含 ESC/BEL）
+const evil = link('http://evil.com/\u001b]0;PWNED\u0007')
+const body = evil.slice(OSC_PREFIX.length, -ST.length)
+if (/[\u0000-\u001f\u007f-\u009f]/.test(body)) { console.log('unsafe chars in body: ' + JSON.stringify(evil)); bad++ }
+if (evil.includes('\u0007')) { console.log('BEL leaked on kitty path: ' + JSON.stringify(evil)); bad++ }
+process.exitCode = bad === 0 ? 0 : 1
+`)
+    const child = spawnSync(process.execPath, ['--import', 'tsx/esm', join(dir, 'kitty-child.mts')], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: { ...process.env },
+    })
+    check('kitty 终止符 = ST 且净化不变', () => {
+      assert.equal(child.status, 0, `子进程失败:\n${child.stderr ?? child.stdout}`)
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 console.log(failures === 0 ? 'ALL PASS' : `${failures} FAIL`)

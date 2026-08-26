@@ -451,7 +451,9 @@ export function link(url: string, params?: Record<string, string>): string {
   if (!url) return LINK_END
   // A raw space is unsafe in the OSC 8 URI form specifically; titles and
   // notification payloads keep theirs, so this lives here, not in osc().
-  const safeUrl = url.replaceAll(' ', '')
+  // Encoded, not deleted — `file:///C:/My Project/x` must keep pointing
+  // at the same path when round-tripped through the terminal.
+  const safeUrl = url.replaceAll(' ', '%20')
   const p = { id: osc8Id(safeUrl), ...params }
   const paramStr = Object.entries(p)
     .map(([k, v]) => `${k}=${v.replaceAll(' ', '')}`)

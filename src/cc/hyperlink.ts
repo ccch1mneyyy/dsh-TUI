@@ -27,8 +27,18 @@ const HYPERLINK_SCHEMES = new Set(['http:', 'https:', 'dsh-file:', 'file:', 'mai
 // Control characters never legitimately appear in a URL; stripping them
 // before the scheme check keeps `java\x00script:` from passing as a
 // relative reference and keeps the embedded URL 7-bit clean (the osc()
-// exit strips again — this is the entry side of the same defense).
-const URL_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f\x20]/g
+// exit strips again — this is the entry side of the same defense). Spaces
+// are stripped for the scheme check but preserved as %20 in the embedded
+// URL — deleting them would retarget `file:///C:/My Project/x`.
+const URL_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g
+
+function sanitizeHyperlinkUrl(raw: string): string | null {
+  const stripped = raw.replace(URL_CONTROL_CHARS, '')
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(stripped)
+  if (scheme === null) return null
+  if (!HYPERLINK_SCHEMES.has(`${scheme[1].toLowerCase()}:`)) return null
+  return stripped.replaceAll(' ', '%20')
+}
 
 // Display text keeps spaces (legitimate in link labels) but drops every
 // other control character: an OSC 8 sequence smuggled into `content` would
@@ -36,13 +46,6 @@ const URL_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f\x20]/g
 // tokenize, and repaint a phish link over the legitimate URL.
 // Same set minus the space.
 const DISPLAY_TEXT_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g
-
-function sanitizeHyperlinkUrl(raw: string): string | null {
-  const url = raw.replace(URL_CONTROL_CHARS, '')
-  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(url)
-  if (scheme === null) return null
-  return HYPERLINK_SCHEMES.has(`${scheme[1].toLowerCase()}:`) ? url : null
-}
 
 /**
  * Create a clickable hyperlink using OSC 8 escape sequences.
