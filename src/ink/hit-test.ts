@@ -52,6 +52,24 @@ export function hitTest(
   return node
 }
 
+// Full-tree hit-test call counter. Regression tests (verify-hover-coalesce)
+// reset it and assert the no-interest fast path actually skips work. Benign
+// in production — a monotonic counter, never read on hot paths.
+let hitTestWithOverlaysCount = 0
+
+/**
+ * Number of hitTestWithOverlays calls since the last reset (or module load).
+ * @returns the call count.
+ */
+export function getHitTestWithOverlaysCount(): number {
+  return hitTestWithOverlaysCount
+}
+
+/** Reset the hitTestWithOverlays call counter (test instrumentation). */
+export function resetHitTestWithOverlaysCount(): void {
+  hitTestWithOverlaysCount = 0
+}
+
 /**
  * hitTest, but overlay-aware: absolute-positioned nodes can paint OUTSIDE
  * every ancestor's rect (OverlayAbove's `bottom:'100%'` pickers float over
@@ -69,6 +87,7 @@ export function hitTestWithOverlays(
   col: number,
   row: number,
 ): DOMElement | null {
+  hitTestWithOverlaysCount++
   const overlays = getAbsoluteHitList()
   for (let i = overlays.length - 1; i >= 0; i--) {
     const { node, rect } = overlays[i]!
@@ -354,6 +373,74 @@ export function dispatchWheel(
   return true
 }
 
+// ── No-interest rect fast path (hover perf) ─────────────────────────
+// When a hover hit confirms that neither the hit node's ancestor chain nor
+// its subtree participates in hover semantics (no onMouseEnter/onMouseLeave
+// anywhere, no tooltip registration), the node's rect is cached here.
+// Subsequent motion events inside the rect skip the full-tree hit-test:
+// hover is a state diff and an inert region cannot produce enter/leave, so
+// the result is identical while the rect is valid. The cache is STRICTLY
+// per-frame: invalidateNoInterestRect() runs at every React commit
+// (ink.tsx onComputeLayout — handlers attach/detach during re-renders) and
+// at the top of every render pass (renderer.ts — scroll drains and other
+// geometry changes without commits). Pointer-state resets (resize,
+// alt-screen swap) invalidate it too. A point outside the rect re-enters
+// the normal hit-test immediately, so leaving the region can never miss a
+// handler.
+type NoInterestRect = { x: number; y: number; width: number; height: number }
+let noInterestRect: NoInterestRect | null = null
+
+/**
+ * Optional hover-interest probe consulted when deciding whether a region is
+ * hover-inert. A tooltip system registers a predicate here so tooltip-
+ * bearing nodes are never skipped by the no-interest fast path. Null (the
+ * default) means only React enter/leave handlers count.
+ */
+let hoverInterestProbe: ((node: DOMElement) => boolean) | null = null
+
+/**
+ * Install or clear the hover-interest probe.
+ * @param probe - the interest predicate, or null to clear it.
+ */
+export function setHoverInterestProbe(
+  probe: ((node: DOMElement) => boolean) | null,
+): void {
+  hoverInterestProbe = probe
+}
+
+/**
+ * Drop the cached no-interest rect. Call at every render commit and at the
+ * start of every render pass (see the cache doc above); also call from
+ * pointer-state resets. Idempotent and effectively free.
+ */
+export function invalidateNoInterestRect(): void {
+  noInterestRect = null
+}
+
+/** Whether a node participates in hover semantics (handler or tooltip probe). */
+function hasHoverInterest(node: DOMElement): boolean {
+  const h = node._eventHandlers as EventHandlerProps | undefined
+  if (h?.onMouseEnter || h?.onMouseLeave) return true
+  return hoverInterestProbe?.(node) === true
+}
+
+/**
+ * Fail-fast subtree scan: any hover-interest descendant disqualifies the
+ * node for the no-interest cache. The dispatch walk only sees the hit
+ * node's ANCESTOR chain; a descendant with a handler inside the cached
+ * rect would otherwise be silently skipped by the fast path, changing
+ * event sequences on handler-bearing paths (a hard compatibility
+ * requirement). Text children are skipped like hitTest does.
+ */
+function subtreeHasHoverInterest(node: DOMElement): boolean {
+  for (const childNode of node.childNodes) {
+    if (childNode.nodeName === '#text') continue
+    const child = childNode as DOMElement
+    if (hasHoverInterest(child) || subtreeHasHoverInterest(child)) return true
+  }
+  return false
+}
+
 /**
  * Fire onMouseEnter/onMouseLeave as the pointer moves. Like DOM
  * mouseenter/mouseleave: does NOT bubble — moving between children does
@@ -380,12 +467,52 @@ export function dispatchHover(
   hovered: Set<DOMElement>,
 ): void {
   const next = new Set<DOMElement>()
-  let node: DOMElement | undefined =
-    hitTestWithOverlays(root, col, row) ?? undefined
-  while (node) {
-    const h = node._eventHandlers as EventHandlerProps | undefined
-    if (h?.onMouseEnter || h?.onMouseLeave) next.add(node)
-    node = node.parentNode
+  const cached = noInterestRect
+  if (
+    cached &&
+    col >= cached.x &&
+    col < cached.x + cached.width &&
+    row >= cached.y &&
+    row < cached.y + cached.height
+  ) {
+    // Pointer still inside the last confirmed hover-inert rect: skip the
+    // full-tree hit-test. `next` stays empty — exactly what a real
+    // hit-test would produce while the rect is valid (the handler topology
+    // is frozen between commits and every commit/frame invalidates the
+    // cache). The diff below still runs, firing any pending leaves
+    // defensively (hovered is empty here by construction — the rect is
+    // only cached right after the diff emptied it).
+  } else {
+    let hit: DOMElement | undefined =
+      hitTestWithOverlays(root, col, row) ?? undefined
+    // Chain walk collects the enter/leave set AND decides cache
+    // eligibility: the rect is only trusted when no node in the hit chain
+    // has any hover interest.
+    let chainInert = true
+    for (let node = hit; node; node = node.parentNode) {
+      const h = node._eventHandlers as EventHandlerProps | undefined
+      if (h?.onMouseEnter || h?.onMouseLeave) {
+        next.add(node)
+        chainInert = false
+      } else if (hasHoverInterest(node)) {
+        // Tooltip interest without enter/leave handlers: keeps the region
+        // out of the no-interest cache without joining the hovered set.
+        chainInert = false
+      }
+    }
+    if (chainInert && hit) {
+      const rect = nodeCache.get(hit)
+      if (rect && rect.width > 0 && rect.height > 0 && !subtreeHasHoverInterest(hit)) {
+        // Copy the fields — nodeCache entries are replaced per frame and
+        // the cache dies at the frame boundary anyway, but never alias.
+        noInterestRect = {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        }
+      }
+    }
   }
   for (const old of hovered) {
     if (!next.has(old)) {

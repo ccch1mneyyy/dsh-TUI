@@ -180,6 +180,8 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 滚动/粘底行为 | `node scripts/verify-scroll.mjs`、`node scripts/verify-resticky.mjs` 及对应 `repro-*` 环境 |
 | 全屏复制即选区 | `node scripts/verify-copy-on-select.mjs` |
 | 组件级鼠标拖拽协议（目标捕获、事件冒泡、点击/选区兼容与中断收尾） | `node --import tsx/esm scripts/verify-drag-protocol.tsx` |
+| 鼠标指针事件管线（滚轮坐标/修饰位、点击/hover 派发、越界 clamp、指针态重置） | `node --import tsx/esm scripts/verify-pointer-events.ts` |
+| Hover 事件性能（批内 motion 合并、无兴趣矩形快路径、帧边界失效） | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭

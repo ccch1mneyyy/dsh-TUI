@@ -21,7 +21,7 @@ import { KeyboardEvent } from './events/keyboard-event.js';
 import type { DragEvent } from './events/drag-event.js';
 import { FocusManager } from './focus.js';
 import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
-import { dispatchClick, dispatchContextMenu, dispatchDragEvent as bubbleDragEvent, dispatchHover, dispatchWheel, findDragTarget, clearHovered } from './hit-test.js';
+import { dispatchClick, dispatchContextMenu, dispatchDragEvent as bubbleDragEvent, dispatchHover, dispatchWheel, findDragTarget, clearHovered, invalidateNoInterestRect } from './hit-test.js';
 import { logMouseDebug } from '../utils/debug.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
@@ -278,6 +278,13 @@ export default class Ink {
     this.rootNode.onRender = this.scheduleRender;
     this.rootNode.onImmediateRender = this.renderNow;
     this.rootNode.onComputeLayout = () => {
+      // Hover no-interest cache (hit-test.ts) is strictly per-frame: every
+      // React commit may attach or detach hover handlers, so drop the cache
+      // at the COMMIT boundary. The renderer also invalidates at the top of
+      // each render pass, but that runs up to a frame later (throttled
+      // scheduleRender) — invalidating here closes the gap so a motion
+      // event inside that window re-hit-tests against the fresh tree.
+      invalidateNoInterestRect();
       // Calculate layout during React's commit phase so useLayoutEffect hooks
       // have access to fresh layout data
       // Guard against accessing freed Yoga nodes after unmount
@@ -367,6 +374,9 @@ export default class Ink {
     // App boundary against the new dimensions.)
     clearHovered(this.hoveredNodes);
     this.app?.resetPointerState();
+    // Same geometry wholesale-change: the cached no-interest hover rect
+    // (hit-test.ts) was computed against pre-resize rects — drop it.
+    invalidateNoInterestRect();
 
     // Invalidate every render that was scheduled against the OLD size: a
     // queued microtask generation or a scroll-drain timer would otherwise
@@ -1121,6 +1131,9 @@ export default class Ink {
     // double-click; stale hovered nodes would suppress real onMouseEnter.
     clearHovered(this.hoveredNodes);
     this.app?.resetPointerState();
+    // The cached no-interest hover rect belongs to the old screen's
+    // geometry — drop it with the rest of the pointer state.
+    invalidateNoInterestRect();
     if (active) {
       this.mainScreenFrameState = {
         frontFrame: this.frontFrame,

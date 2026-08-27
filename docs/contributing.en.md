@@ -230,6 +230,8 @@ change, also run the closest focused script:
 | Scrolling/sticky-bottom behavior | `node scripts/verify-scroll.mjs`, `node scripts/verify-resticky.mjs`, and the matching `repro-*` harness |
 | Fullscreen copy-on-select | `node scripts/verify-copy-on-select.mjs` |
 | Component-level mouse drag protocol (target capture, bubbling, click/selection compatibility, interrupted-session cleanup) | `node --import tsx/esm scripts/verify-drag-protocol.tsx` |
+| Mouse pointer event pipeline (wheel coords/modifier bits, click/hover dispatch, out-of-bounds clamping, pointer-state reset) | `node --import tsx/esm scripts/verify-pointer-events.ts` |
+| Hover event performance (in-batch motion coalescing, no-interest rect fast path, frame-boundary invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the

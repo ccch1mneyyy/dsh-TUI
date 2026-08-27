@@ -729,7 +729,8 @@ function processKeysInBatch(
 	) {
 		updateLastInteractionTime();
 	}
-	for (const item of items) {
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i]!;
 		// Terminal responses (DECRPM, DA1, OSC replies, etc.) are not user
 		// input — route them to the querier to resolve pending promises.
 		if (item.kind === "response") {
@@ -741,6 +742,29 @@ function processKeysInBatch(
 		// Terminal sends 1-indexed col/row; convert to 0-indexed for the
 		// screen buffer. Button bit 0x20 = drag (motion while button held).
 		if (item.kind === "mouse") {
+			// Batch motion coalescing (hover perf): a run of consecutive
+			// no-button motions (SGR button 0x20 with low bits 3, press
+			// action) in one chunk collapses to the LAST position — hover
+			// is state semantics (an enter/leave set diff), so intermediate
+			// positions only matter for transient crossings and can be
+			// skipped the way a browser merges mousemove into rAF. Only the
+			// prefix of a PURE keyless run is skipped: drag motions (button
+			// held) and any interleaved key/click/release break the run and
+			// are processed individually. The tail event runs the normal
+			// path, so lost-release recovery and hover dedupe state stay
+			// consistent.
+			if (isKeylessMotion(item)) {
+				let last = i;
+				while (
+					last + 1 < items.length &&
+					isKeylessMotion(items[last + 1]!)
+				) {
+					last++;
+				}
+				handleMouseEvent(app, items[last] as ParsedMouse);
+				i = last;
+				continue;
+			}
 			handleMouseEvent(app, item);
 			continue;
 		}
@@ -836,6 +860,22 @@ function processKeysInBatch(
 		// Also dispatch through the DOM tree so onKeyDown handlers fire.
 		app.props.dispatchKeyboardEvent(item);
 	}
+}
+
+/**
+ * Mode-1003 no-button motion: the SGR motion bit (0x20) with low bits = 3
+ * ("no button") on a press action — the event handleMouseEvent routes to
+ * the hover path. Modifier bits (0x04/0x08/0x10) are ignored by the hover
+ * path, so shifted motions coalesce identically. Drag motions (low bits
+ * 0-2, button held) never match.
+ */
+function isKeylessMotion(item: ParsedInput): boolean {
+	return (
+		item.kind === "mouse" &&
+		item.action === "press" &&
+		(item.button & 0x20) !== 0 &&
+		(item.button & 0x03) === 3
+	);
 }
 
 /** Exported for testing. Mutates app.props.selection and click/hover state. */
