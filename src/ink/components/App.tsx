@@ -95,6 +95,13 @@ type Props = {
 	// gates on altScreenActive). The button byte is the raw SGR release
 	// code, carrying the modifier bits (shift/alt/ctrl) for ClickEvent.
 	readonly onClickAt: (col: number, row: number, button?: number) => boolean;
+	// Dispatch a context-menu event at (col, row) on RIGHT-button press —
+	// hit-tests the DOM tree and bubbles onContextMenu handlers, mirroring
+	// the DOM contextmenu event that shows on mousedown. Returns true if a
+	// DOM handler consumed it. No-op (returns false) outside fullscreen.
+	// The button byte is the raw SGR press code (low bits 2 = right button,
+	// modifier bits preserved) so handlers can read shift/alt/ctrl.
+	readonly onContextMenuAt: (col: number, row: number, button?: number) => boolean;
 	// Dispatch hover (onMouseEnter/onMouseLeave) as the pointer moves over
 	// DOM elements. Called for mode-1003 motion events with no button held.
 	// No-op outside fullscreen (Ink.dispatchHover gates on altScreenActive).
@@ -810,6 +817,15 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 		if (baseButton !== 0) {
 			// Non-left press breaks the multi-click chain.
 			app.clickCount = 0;
+			// Right-button press fires a contextmenu (DOM semantics: the
+			// menu shows on mousedown, not release). Dispatch BEFORE
+			// returning so the hit-test sees the frame the pointer is
+			// over; the row's own handler decides whether focus follows.
+			// Right-drag (motion bit) is a selection gesture, not a menu
+			// — skip it.
+			if (baseButton === 2 && (m.button & 0x20) === 0) {
+				app.props.onContextMenuAt(col, row, m.button);
+			}
 			return;
 		}
 		if ((m.button & 0x20) !== 0) {

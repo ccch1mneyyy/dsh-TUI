@@ -3,10 +3,12 @@
  *
  * Two windows, one at each end, and never anything in between:
  *
- * - The HEAD holds the session envelope, the boot policy events, and the
+ * - The HEAD normally holds the session envelope, boot policy events, and the
  *   opening prompt. Measured across a real corpus, the first user prompt lands
  *   within 8,107 bytes of the start (524 in its `agent/inbox/spliced` form),
- *   so a 64 KB window carries an eightfold margin.
+ *   so a 64 KB window is the cheap path. A larger modern context prefix can
+ *   exceed it; listSummaries detects that inconclusive fallback and invokes the
+ *   progressive opening scan below instead of caching a cwd basename forever.
  * - The TAIL holds whatever was appended most recently: the current title
  *   (titles are re-emitted, and the last one wins), the model of the last
  *   request, and the last exchanges for the preview.
@@ -19,8 +21,11 @@
  *
  * @module @deepseek-harness-tui/dsh-tui/sessions/digest
  */
+import { createHash } from 'node:crypto'
+import { open } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { decodeFrames, decodeTail, readWindow, walkFrames, type LogLine } from './frames.js'
+import { scheduler } from 'node:timers/promises'
+import { decodeFrame, decodeFrames, decodeTail, readWindow, resyncFrames, walkFrames, type FrameRange, type LogLine } from './frames.js'
 import type { PreviewEntry, SessionDigest, SessionTitle } from './types.js'
 
 /** Head window budget. Eight times the measured worst-case prompt offset. */
@@ -29,6 +34,12 @@ export const HEAD_WINDOW_BYTES = 64 * 1024
 export const HEAD_MAX_FRAMES = 128
 /** Tail window budget. Wider than the head: trailing frames carry payloads. */
 export const TAIL_WINDOW_BYTES = 128 * 1024
+/** Compressed bytes read per progressive title-scan page. */
+const TITLE_SCAN_PAGE_BYTES = 128 * 1024
+/** Largest compressed frame the fallback scanner will materialize. */
+const TITLE_SCAN_MAX_FRAME_BYTES = 16 * 1024 * 1024
+/** Prefix suffix hashed to verify append-only growth across revisions. */
+const TITLE_ANCHOR_BYTES = 256
 /** Longest preview excerpt kept per message, in characters. */
 const PREVIEW_CHARS = 400
 
@@ -176,6 +187,245 @@ export function digestSession(path: string, cwd: string): SessionDigest {
     hasPrompt,
     model,
     label,
+    ...(!head.whole && tailTitle === undefined ? {} : { titleComplete: true as const }),
+  }
+}
+
+type SessionLogHandle = Awaited<ReturnType<typeof open>>
+
+export interface SessionTitleRecovery {
+  readonly title: SessionTitle | undefined
+  /** False means a damaged/oversized frame prevented a conclusive answer. */
+  readonly complete: boolean
+  /** Known only when a full no-title scan then reached/ruled out the prompt. */
+  readonly hasPrompt?: boolean
+}
+
+/** Read exactly one stable range from an already-open snapshot. */
+async function readRange(
+  handle: SessionLogHandle,
+  start: number,
+  length: number,
+  signal?: AbortSignal,
+): Promise<Buffer | undefined> {
+  const buffer = Buffer.allocUnsafe(length)
+  let filled = 0
+  while (filled < length) {
+    signal?.throwIfAborted()
+    let bytesRead: number
+    try {
+      const result = await handle.read(buffer, filled, length - filled, start + filled)
+      bytesRead = result.bytesRead
+    } catch {
+      signal?.throwIfAborted()
+      return undefined
+    }
+    if (bytesRead === 0) return undefined
+    filled += bytesRead
+  }
+  return buffer
+}
+
+/** A forward page beginning on a known frame boundary. */
+async function forwardPage(
+  handle: SessionLogHandle,
+  start: number,
+  end: number,
+  signal?: AbortSignal,
+): Promise<{ buffer: Buffer; frames: readonly FrameRange[] } | undefined> {
+  const remaining = end - start
+  let length = Math.min(TITLE_SCAN_PAGE_BYTES, remaining)
+  while (length > 0) {
+    const buffer = await readRange(handle, start, length, signal)
+    if (buffer === undefined) return undefined
+    const frames = walkFrames(buffer)
+    if (frames.length > 0) return { buffer, frames }
+    if (length >= remaining || length >= TITLE_SCAN_MAX_FRAME_BYTES) return undefined
+    length = Math.min(remaining, TITLE_SCAN_MAX_FRAME_BYTES, length * 2)
+  }
+  return undefined
+}
+
+/** A reverse page ending on a known frame boundary. */
+async function reversePage(
+  handle: SessionLogHandle,
+  end: number,
+  signal?: AbortSignal,
+): Promise<{ start: number; buffer: Buffer; frames: readonly FrameRange[] } | undefined> {
+  let length = Math.min(TITLE_SCAN_PAGE_BYTES, end)
+  while (length > 0) {
+    const start = end - length
+    const buffer = await readRange(handle, start, length, signal)
+    if (buffer === undefined) return undefined
+    const frames = start === 0 ? walkFrames(buffer) : resyncFrames(buffer)
+    const last = frames[frames.length - 1]
+    if (last !== undefined && last.end === buffer.length) return { start, buffer, frames }
+    if (length >= end || length >= TITLE_SCAN_MAX_FRAME_BYTES) return undefined
+    length = Math.min(end, TITLE_SCAN_MAX_FRAME_BYTES, length * 2)
+  }
+  return undefined
+}
+
+/** Scan newest-to-oldest; the first title encountered is last-write-wins. */
+async function recoverLatestTitle(
+  path: string,
+  bytes: number,
+  signal?: AbortSignal,
+): Promise<{ title: SessionTitle | undefined; complete: boolean }> {
+  signal?.throwIfAborted()
+  let handle: SessionLogHandle
+  try {
+    handle = await open(path, 'r')
+  } catch {
+    signal?.throwIfAborted()
+    return { title: undefined, complete: false }
+  }
+  try {
+    let end = bytes
+    while (end > 0) {
+      signal?.throwIfAborted()
+      const page = await reversePage(handle, end, signal)
+      if (page === undefined) return { title: undefined, complete: false }
+      for (let frameIndex = page.frames.length - 1; frameIndex >= 0; frameIndex--) {
+        const frame = page.frames[frameIndex]!
+        const lines = decodeFrame(page.buffer, frame)
+        if (lines === undefined) return { title: undefined, complete: false }
+        for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex--) {
+          const title = titleOf(lines[lineIndex]!)
+          if (title !== undefined) return { title, complete: true }
+        }
+      }
+      const nextEnd = page.start + page.frames[0]!.start
+      if (nextEnd >= end) return { title: undefined, complete: false }
+      end = nextEnd
+      await scheduler.yield()
+    }
+    return { title: undefined, complete: true }
+  } finally {
+    await handle.close().catch(() => {})
+  }
+}
+
+/** Scan from a known frame boundary through an append-only suffix. */
+export async function recoverAppendedTitle(
+  path: string,
+  start: number,
+  end: number,
+  signal?: AbortSignal,
+): Promise<{ title: SessionTitle | undefined; complete: boolean }> {
+  signal?.throwIfAborted()
+  let handle: SessionLogHandle
+  try {
+    handle = await open(path, 'r')
+  } catch {
+    signal?.throwIfAborted()
+    return { title: undefined, complete: false }
+  }
+  let latest: SessionTitle | undefined
+  try {
+    let position = start
+    while (position < end) {
+      signal?.throwIfAborted()
+      const page = await forwardPage(handle, position, end, signal)
+      if (page === undefined) return { title: latest, complete: false }
+      for (const frame of page.frames) {
+        const lines = decodeFrame(page.buffer, frame)
+        if (lines === undefined) return { title: latest, complete: false }
+        for (const line of lines) {
+          latest = titleOf(line) ?? latest
+        }
+      }
+      const consumed = page.frames[page.frames.length - 1]!.end
+      if (consumed <= 0) return { title: latest, complete: false }
+      position += consumed
+      await scheduler.yield()
+    }
+    return { title: latest, complete: true }
+  } finally {
+    await handle.close().catch(() => {})
+  }
+}
+
+/** Find the first human prompt after a complete reverse scan proved no title. */
+async function recoverFirstPrompt(
+  path: string,
+  bytes: number,
+  signal?: AbortSignal,
+): Promise<{ prompt: string | undefined; complete: boolean }> {
+  signal?.throwIfAborted()
+  let handle: SessionLogHandle
+  try {
+    handle = await open(path, 'r')
+  } catch {
+    signal?.throwIfAborted()
+    return { prompt: undefined, complete: false }
+  }
+  try {
+    let position = 0
+    while (position < bytes) {
+      signal?.throwIfAborted()
+      const page = await forwardPage(handle, position, bytes, signal)
+      if (page === undefined) return { prompt: undefined, complete: false }
+      for (const frame of page.frames) {
+        const lines = decodeFrame(page.buffer, frame)
+        if (lines === undefined) return { prompt: undefined, complete: false }
+        for (const line of lines) {
+          const prompt = humanPrompt(line)
+          if (prompt !== undefined) return { prompt, complete: true }
+        }
+      }
+      const consumed = page.frames[page.frames.length - 1]!.end
+      if (consumed <= 0) return { prompt: undefined, complete: false }
+      position += consumed
+      await scheduler.yield()
+    }
+    return { prompt: undefined, complete: true }
+  } finally {
+    await handle.close().catch(() => {})
+  }
+}
+
+/**
+ * Recover the authoritative display title for one immutable file snapshot:
+ * reverse scan for the LAST title, then (only when none exists) forward scan
+ * for the FIRST human prompt. Both directions page on verified frame boundaries.
+ */
+export async function recoverSessionTitle(
+  path: string,
+  bytes: number,
+  signal?: AbortSignal,
+): Promise<SessionTitleRecovery> {
+  const latest = await recoverLatestTitle(path, bytes, signal)
+  if (latest.title !== undefined || !latest.complete) return latest
+  const opening = await recoverFirstPrompt(path, bytes, signal)
+  return {
+    title: opening.prompt === undefined ? undefined : { text: opening.prompt, source: 'prompt' },
+    complete: opening.complete,
+    ...(opening.complete ? { hasPrompt: opening.prompt !== undefined } : {}),
+  }
+}
+
+/** Hash the previous EOF neighborhood before carrying title evidence forward. */
+export async function sessionTitleAnchor(
+  path: string,
+  bytes: number,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  signal?.throwIfAborted()
+  let handle: SessionLogHandle
+  try {
+    handle = await open(path, 'r')
+  } catch {
+    signal?.throwIfAborted()
+    return undefined
+  }
+  try {
+    const length = Math.min(TITLE_ANCHOR_BYTES, bytes)
+    const buffer = length === 0 ? Buffer.alloc(0) : await readRange(handle, bytes - length, length, signal)
+    if (buffer === undefined) return undefined
+    return createHash('sha256').update(buffer).digest('hex')
+  } finally {
+    await handle.close().catch(() => {})
   }
 }
 

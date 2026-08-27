@@ -23,9 +23,10 @@
 import { Writable, PassThrough } from 'node:stream'
 import xtermPkg from '@xterm/headless'
 import React from 'react'
-import { render, ThemeProvider } from '../lib/types/ui.js'
+import { render, ThemeProvider, AlternateScreen } from '../lib/types/ui.js'
 import { SessionBrowser } from '../lib/types/screens/SessionBrowser.js'
 import { setLang } from '../lib/types/i18n.js'
+import { stringWidth } from '../lib/types/ink/stringWidth.js'
 import { sleep } from './lib/term-test.mjs'
 
 const { Terminal } = xtermPkg
@@ -123,13 +124,14 @@ function frame(term) {
 
 // Widths span the two-column split threshold (100) and the narrow tiers;
 // heights span "comfortable" down to "barely enough for the chrome".
-// 7 rows is the floor by construction: the chrome is six lines (header,
-// three-row search card, notice slot, hints) and a rename/confirm row can
-// add one more, so that is the shortest terminal where every region still
-// has somewhere to be.
-const SIZES = [[180, 44], [120, 30], [110, 34], [99, 24], [80, 20], [60, 14], [46, 10], [40, 8], [52, 7]]
+// 8 rows is the usable floor: below 10 rows the scope/search card drops its
+// two border lines (five chrome rows total), leaving two rows for one complete
+// selectable item even while a rename/confirm row is present.
+const SIZES = [[180, 44], [120, 30], [110, 34], [99, 24], [80, 20], [60, 14], [46, 10], [40, 8], [52, 8]]
 const KEYS = [
   ['\t', 'preview on'],
+  ['\x1b[D', 'directory menu'],
+  ['\x1b[C', 'directory chosen'],
   ['\x13', 'runs revealed'],
   ['\x01', 'all projects'],
   ['\x12', 'rename editor'],
@@ -147,12 +149,16 @@ for (const lang of ['zh', 'en']) {
       React.createElement(
         ThemeProvider,
         null,
-        React.createElement(SessionBrowser, {
-          channel: makeChannel(),
-          home: '/home/tester',
-          sameProject,
-          onClose: () => {},
-        }),
+        React.createElement(
+          AlternateScreen,
+          null,
+          React.createElement(SessionBrowser, {
+            channel: makeChannel(),
+            home: '/home/tester',
+            sameProject,
+            onClose: () => {},
+          }),
+        ),
       ),
       { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
     )
@@ -180,6 +186,13 @@ for (const lang of ['zh', 'en']) {
         /Esc/.test(last),
         /Esc/.test(last) ? '' : JSON.stringify(body.slice(-3)),
       )
+      if (label === 'initial' || label === 'directory menu') {
+        check(
+          `${lang} ${cols}x${rows} ${label}: a selectable focus row is visible`,
+          body.some(line => line.includes('❯')),
+          JSON.stringify(body),
+        )
+      }
     }
 
     // Fixed sleeps kept on purpose (settle would not help here): every
@@ -206,6 +219,72 @@ for (const lang of ['zh', 'en']) {
     // 固定窗口（同上）：resize 重绘前后不变量都成立，无可轮询的转变条件。
     await sleep(260)
     inspect(`resized to ${wide[0]}x${wide[1]}`)
+
+    // Right-click menu: a pointer-anchored popup clamped to the terminal.
+    // It is a TRANSIENT overlay and may legitimately cover in-flow rows, so
+    // the hint-last invariant does not apply here — this only asserts the
+    // popup itself fits: the focused row's right edge clamps the menu's
+    // right border to the last column, and all three items stay above the
+    // bottom edge. Runs in the mid-browse state left by the KEYS sweep.
+    {
+      // Runs after the resize above, so the click column comes from the
+      // CURRENT terminal width (term.cols), not the original SIZES entry.
+      const currentCols = term.cols
+      const firstRow = frame(term).findIndex(l => l.text.includes('❯'))
+      stdin.write(`\x1b[<2;${currentCols - 2};${firstRow + 1}M\x1b[<2;${currentCols - 2};${firstRow + 1}m`)
+      // Bounded poll, not a fixed sleep: unlike the layout invariants above
+      // (which hold on the stale frame too, which is why their sleeps are
+      // fine), the menu exists only on the NEW frame — a slow CI would
+      // assert on a pre-menu frame and fail spuriously.
+      let lines = frame(term)
+      let openIdx = lines.findIndex(l => l.text.includes('Open') || l.text.includes('打开'))
+      for (let attempt = 0; attempt < 40 && openIdx < 0; attempt++) {
+        await sleep(25)
+        lines = frame(term)
+        openIdx = lines.findIndex(l => l.text.includes('Open') || l.text.includes('打开'))
+      }
+      check(
+        `${lang} ${cols}x${rows} menu: right-click opens the popup at the pointer`,
+        openIdx >= 0,
+        openIdx >= 0 ? '' : JSON.stringify(lines.slice(firstRow, firstRow + 6)),
+      )
+      check(
+        `${lang} ${cols}x${rows} menu: the popup right edge clamps to the terminal width`,
+        // CJK labels make translateToString shorter than the cell count, so
+        // compare DISPLAY width (and the emulator's wrap flag, which flips
+        // when any content exceeds cols): a clamped menu ends exactly on the
+        // last column.
+        openIdx >= 0 && !lines[openIdx]?.wrapped && stringWidth(lines[openIdx]?.text ?? '') === currentCols,
+        openIdx >= 0 ? `width=${stringWidth(lines[openIdx]?.text ?? '')}, cols=${currentCols}` : 'menu missing',
+      )
+      check(
+        `${lang} ${cols}x${rows} menu: every item fits above the bottom edge`,
+        openIdx >= 0 && openIdx + 2 < lines.length && /Delete|删除/.test(lines[openIdx + 2]?.text ?? ''),
+        openIdx >= 0 ? JSON.stringify(lines.slice(openIdx, openIdx + 3)) : 'menu missing',
+      )
+      // Wide terminals (resized width ≥ 120) keep the directory rail. While
+      // the menu is open, clicking a DIFFERENT workspace row switches the
+      // scope — the menu's session leaves the view and the stale-menu guard
+      // must dismiss the popup by itself (no keystroke involved).
+      if (term.cols >= 120 && openIdx >= 0) {
+        const foreignRow = frame(term).findIndex(l => l.text.includes('other'))
+        if (foreignRow >= 0) {
+          stdin.write(`\x1b[<0;15;${foreignRow + 1}M\x1b[<0;15;${foreignRow + 1}m`)
+          let gone = false
+          for (let attempt = 0; attempt < 40 && !gone; attempt++) {
+            await sleep(25)
+            gone = !frame(term).some(l => l.text.includes('Open') || l.text.includes('打开'))
+          }
+          check(
+            `${lang} ${cols}x${rows} menu: switching directory dismisses a menu whose session left`,
+            gone,
+            frame(term).map(l => l.text).filter(t => t.includes('Open') || t.includes('打开')).slice(0, 2).join(' | '),
+          )
+        }
+      }
+      stdin.write('\x1b') // dismiss so the next geometry starts clean
+      await sleep(100)
+    }
 
     instance.unmount()
     term.dispose()

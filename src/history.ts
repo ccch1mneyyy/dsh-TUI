@@ -37,7 +37,10 @@ function removeStaleHistoryLock(): boolean {
 }
 
 function withHistoryLock(write: () => void): void {
-  mkdirSync(HISTORY_DIR, { recursive: true })
+  // 0700: history.jsonl holds the user's raw inputs (incl. pasted secrets),
+  // so the directory must not be group/world-readable. Mode applies to the
+  // creation only; pre-existing dirs are left as-is (no migration chmod).
+  mkdirSync(HISTORY_DIR, { recursive: true, mode: 0o700 })
   for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt += 1) {
     try {
       mkdirSync(HISTORY_LOCK)
@@ -102,7 +105,8 @@ export function appendHistory(text: string): void {
       writeFileSync(
         HISTORY_FILE,
         sliced.map(e => JSON.stringify(e)).join('\n') + '\n',
-        'utf8',
+        // 0600 on creation: entries carry the full user input text
+        { encoding: 'utf8', mode: 0o600 },
       )
     })
   } catch {

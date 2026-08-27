@@ -44,6 +44,9 @@ const GROUPS = {
     ["repro-settings", ['node', '--import', 'tsx/esm', 'scripts/repro-settings.tsx']],
     ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
+// 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查
+// 2026-08-27）——tokenize 提取→回放链路的注入 payload 必须被剥除。
+    ["verify-osc8-sanitize", ['node', '--import', 'tsx/esm', 'scripts/verify-osc8-sanitize.tsx']],
 // 全屏 resize 空白回归：宽度变化清空行高缓存 → scrollHeight 估算塌缩，
 // shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
 // 成"只剩输入框"（Orca pane 宽度抖动的现场取证复现）。
@@ -256,6 +259,33 @@ const GROUPS = {
 // （等价于「上方每个区域都放得下、没有多占行、没有被挤出屏幕」）。
 // 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
     ["verify-session-browser-layout", ['node', 'scripts/verify-session-browser-layout.mjs']],
+// 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
+// Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
+// 自环境变量，不转义即可注入任意命令；解压与替换之间的提取树校验拒绝
+// 符号链接、逃逸条目与硬链接成员（GNU tar 实测会落地 symlink 成员，
+// zip-slip 落地形式；LNKTYPE 指向树内目标时落地 nlink=2）。
+// 恶意 zip/tar.gz fixture 由 python3 构造（../evil.txt 成员、
+// 指向 /etc/passwd 的链接成员、指向树内目标的硬链接成员）。
+    ["verify-update-extract", ['node', '--import', 'tsx/esm', 'scripts/verify-update-extract.tsx']],
+// 便携包更新下载 SHA256 校验回归：SHA256SUMS 清单解析（两空格/二进制
+// 星号/裸 digest 旁注）、篡改资产字节 fail-closed 拒绝且磁盘零残留、
+// 无 sums 走 transition 警告、content-length 超 512MB 读 body 前拒绝、
+// 无 content-length 无界流读到上限即刻断连（注入小上限；主资产与清单
+// 两条流各测一遍）、镜像回退（API 失败→registry→直链）同样探测固定
+// 命名清单并强校验。本地 http server + mock fetch + 临时假二进制，
+// 不发真实请求。
+    ["verify-update-checksum", ['node', '--import', 'tsx/esm', 'scripts/verify-update-checksum.tsx']],
+// 便携包运行时缓存守卫回归：解压树启动链（bin→主模块两级闭包）的
+// 哈希清单——清单内 JS 篡改/删除 → not ready 自愈重建、旧格式 marker
+// （仅 bundleId）自愈升级、清单外文件不设防（边界确认）、chmod 收紧
+// 限定自建层级（预存 cacheBase 保持用户权限，自建根目录与版本子目录
+// 0700）。mini runtime fixture 由清单造树 + 系统 tar 打包，解压器注入。
+    ["verify-standalone-cache-guard", ['node', 'scripts/verify-standalone-cache-guard.mjs']],
+// ~/.dsh-tui 数据文件权限回归（安全修复）：history.jsonl（用户输入全文）、
+// mouse-debug.log 与 session-index.json（会话标题/分支名）落盘 0600、
+// DATA_DIR 建目录 0700；临时 HOME 重定向 + 固定 umask，修复前按 umask
+// 落 0644 必红。
+    ["verify-data-file-perms", ['node', '--import', 'tsx/esm', 'scripts/verify-data-file-perms.tsx']],
   ],
   'channel-ui': [
 // channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
@@ -271,6 +301,10 @@ const GROUPS = {
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
 // （渲染、Enter 菜单、字母直达执行、Esc）。
     ["verify-session-tree", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree.tsx']],
+// 压缩 × 会话切换生命周期：压缩进行中 /model、/resume、/rewind 等必须先
+// abort 并等压缩落定再 fork 快照（后台提交 checkpoint = "压缩失败后换模型
+// 丢上下文"事故根因）；persistence 类失败与通用失败分开提示。
+    ["verify-compact-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-compact-switch.tsx']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
 // ● 前缀、内容为空的行。

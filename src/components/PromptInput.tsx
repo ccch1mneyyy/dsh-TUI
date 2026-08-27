@@ -912,18 +912,18 @@ export function PromptInput({
         }
       }
       if (channel.working && value.trim() !== '') {
-        // CC's immediate-command semantics: /btw is exempt from steering —
-        // the side question never interrupts the running turn. Hidden
+        // CC's immediate-command semantics: /btw and /skills are exempt from
+        // steering — neither command interrupts the running turn. Hidden
         // UI-only easter eggs (e.g. /deepseek) are also safe to run while
         // streaming. Every other input keeps the steer behavior so /new
         // /model etc. stay idle-only.
         const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
         if (parsed !== undefined && (
-          (parsed.name === 'btw' && channel.commandList.some(c => c.name === 'btw'))
+          ((parsed.name === 'btw' || parsed.name === 'skills')
+            && channel.commandList.some(c => c.name === parsed.name))
           || isHiddenCommandName(parsed.name)
         )) {
-          tryRunCommand(value)
-          return
+          if (tryRunCommand(value)) return
         }
         steerSend(value)
         return

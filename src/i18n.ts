@@ -203,7 +203,25 @@ const dict = {
   'compact-done': { zh: '会话已压缩', en: 'Conversation compacted' },
   'compact-nothing': { zh: '没有可压缩的内容', en: 'Nothing to compact' },
   'compact-failed': { zh: '压缩失败 · {{err}}', en: 'Compaction failed · {{err}}' },
+  'compact-flush-failed': {
+    zh: '压缩已生效，但落盘检查失败——历史已由摘要替代，请留意会话状态',
+    en: 'Compaction took effect, but its durability flush failed — history is now the summary',
+  },
+  'compact-cancelled-switch': {
+    zh: '压缩进行中，已取消并切换会话',
+    en: 'In-flight compaction cancelled for the session switch',
+  },
   'turn-failed': { zh: '回合出错{{detail}}', en: 'Turn error{{detail}}' },
+
+  // ── dsh-adapter/promptDebug.ts（/debug-prompt 成功提示）─────────────
+  // 快照 0600 落在会话工作区根，与 export-saved 同一句清理提醒。
+  'prompt-debug-saved': {
+    zh: '已写入 {{count}} 条最终 LLM 请求快照到 {{file}}。快照含敏感会话与提示词数据；文件位于当前工作区，若工作区在同步/共享目录请注意清理。',
+    en: {
+      one: 'Wrote 1 final LLM request snapshot to {{file}}. It contains sensitive conversation and prompt data, and lives in the current workspace — clean it up promptly if the workspace is synced or shared.',
+      other: 'Wrote {{count}} final LLM request snapshots to {{file}}. It contains sensitive conversation and prompt data, and lives in the current workspace — clean it up promptly if the workspace is synced or shared.',
+    },
+  },
 
   // ── questions.ts ─────────────────────────────────────────────────────
   'questionnaire-answered': { zh: '📋 问卷已答 · {{total}} 题', en: '📋 Questionnaire answered · {{total}} questions' },
@@ -310,7 +328,9 @@ const dict = {
   'doctor-launch-hint': { zh: '启动方式  dsh-tui.cmd / dsh --profile dsh-tui', en: 'Launch      dsh-tui.cmd / dsh --profile dsh-tui' },
   'doctor-route-hint': { zh: '模型路由  由 cordis.yml 的 llm-deepseek 段决定（/model 仅提示重启生效）', en: 'Model route  set by the llm-deepseek block in cordis.yml (/model only hints at restart)' },
   'export-failed': { zh: '导出失败（无法写入工作目录）', en: 'Export failed (cannot write to working directory)' },
-  'export-saved': { zh: '已导出: {{target}}', en: 'Exported: {{target}}' },
+  // 导出/调试快照都落在会话工作区根：同步盘（Dropbox/网盘）或共享目录
+  // 会把含完整对话的文件带出本机，提示语提醒用户及时清理。
+  'export-saved': { zh: '已导出: {{target}}（文件位于当前工作区，若工作区在同步/共享目录请注意清理）', en: 'Exported: {{target}} (the file lives in the current workspace — clean it up promptly if the workspace is synced or shared)' },
   'agentsmd-create-failed': { zh: '创建 AGENTS.md 失败', en: 'Failed to create AGENTS.md' },
   'agentsmd-exists': { zh: 'AGENTS.md 已存在，未覆盖', en: 'AGENTS.md already exists, not overwritten' },
   'agentsmd-created': { zh: '已创建 {{result}}', en: 'Created {{result}}' },
@@ -361,6 +381,7 @@ const dict = {
   'update-refused-deadlock': { zh: '已取消更新：镜像 registry 目前只能装到 v{{latest}}，而该版本在旧全局启动器的 patch 下会启动死锁（#183/#307）；官方最新为 v{{authoritative}}，待镜像同步后再 /update。', en: 'Update cancelled: the mirror registry can only serve v{{latest}}, which deadlocks boot under older global-launcher patches (#183/#307); official latest is v{{authoritative}} — retry /update after the mirror syncs.' },
   'update-mirror-lag': { zh: '镜像 registry 滞后：本次安装 v{{latest}}；官方最新 v{{authoritative}}，镜像同步后可再 /update。', en: 'Mirror registry lag: installing v{{latest}} now; official latest is v{{authoritative}} — run /update again once the mirror syncs.' },
   'update-standalone-available': { zh: '发现便携包新版本：v{{latest}}（当前 v{{current}}）· 输入 /update 自动更新', en: 'New standalone version available: v{{latest}} (current v{{current}}) · type /update to update' },
+  'update-standalone-no-checksum': { zh: '该版本未发布 SHA256 校验和，更新包完整性无法验证', en: 'this release publishes no SHA256 checksums; the update payload cannot be integrity-verified' },
   'update-standalone-starting': { zh: '正在下载便携包新版本并自动替换，完成后会自动重启并恢复当前会话……', en: 'Downloading and replacing standalone binary. The TUI will restart and resume this session when finished…' },
   // ── /reload (pi-style soft reload) ────────────────────────────────────
   'reload-header': { zh: '已重读偏好文件：', en: 'Preferences reloaded:' },
@@ -616,8 +637,22 @@ const dict = {
   'session-kind-fork': { zh: '回溯分支', en: 'Rewound branch' },
   'session-kind-subagent': { zh: '子 agent 运行', en: 'Sub-agent run' },
   'session-project-unknown': { zh: '（未记录目录）', en: '(no directory recorded)' },
-  'session-scope-all': { zh: '全部项目', en: 'all projects' },
+  'session-scope-all': { zh: '全部工作目录', en: 'all working directories' },
   'session-search-placeholder': { zh: '输入以搜索 · {{scope}}', en: 'Type to search · {{scope}}' },
+  'session-workspace-scope': { zh: '工作目录', en: 'Working directory' },
+  'session-workspace-switch': { zh: '← 选择目录', en: '← choose directory' },
+  'session-workspace-select-title': { zh: '选择工作目录', en: 'Choose working directory' },
+  'session-workspace-search-placeholder': { zh: '输入以搜索工作目录', en: 'Type to search working directories' },
+  'session-workspace-all': { zh: '全部工作目录', en: 'All working directories' },
+  'session-workspace-current': { zh: '当前', en: 'current' },
+  'session-workspace-project-count': { zh: '{{n}} 个目录', en: '{{n}} directories' },
+  'session-workspace-all-detail': { zh: '跨目录浏览 · {{n}} 个会话', en: 'browse across directories · {{n}} sessions' },
+  'session-workspace-empty': { zh: '暂无历史会话', en: 'no history yet' },
+  'session-workspace-no-match': { zh: '没有匹配的工作目录', en: 'No matching working directory' },
+  // Right-click session menu items (SessionBrowser popup).
+  'resume-menu-open': { zh: '打开', en: 'Open' },
+  'resume-menu-rename': { zh: '重命名', en: 'Rename' },
+  'resume-menu-delete': { zh: '删除', en: 'Delete' },
   'session-count-shown': { zh: '{{n}} 个会话', en: '{{n}} sessions' },
   'session-count-subagents': { zh: '{{n}} 个子运行已折叠', en: '{{n}} runs folded' },
   'session-count-empty': { zh: '{{n}} 个空会话', en: '{{n}} empty' },
@@ -631,9 +666,11 @@ const dict = {
   // Three widths of the same hint. The browser picks the widest that fits the
   // terminal, because a hint that wraps costs the rows the list needs and can
   // push its own tail off the bottom of the screen.
-  'session-hint-list': { zh: '**Enter** 恢复 · Tab 预览 · {{mod}}a 全部项目（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · Tab preview · {{mod}}a all projects ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}d delete · {{mod}}x clean · Esc exit' },
-  'session-hint-list-mid': { zh: '**Enter** 恢复 · Tab 预览 · {{mod}}a 全部项目 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · Tab preview · {{mod}}a projects · {{mod}}s runs · {{mod}}r rename · {{mod}}d delete · Esc exit' },
-  'session-hint-list-short': { zh: '**Enter** 恢复 · Tab 预览 · Esc 退出', en: '**Enter** resume · Tab preview · Esc exit' },
+  'session-hint-list': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}d delete · {{mod}}x clean · Esc exit' },
+  'session-hint-list-mid': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories · {{mod}}s runs · {{mod}}r rename · {{mod}}d delete · Esc exit' },
+  'session-hint-list-short': { zh: '**Enter** 恢复 · ← 目录 · Esc', en: '**Enter** resume · ← dirs · Esc' },
+  'session-hint-workspaces': { zh: '**Enter/→** 查看会话 · ↑/↓ 选择 · {{mod}}a 全部目录 · Esc 返回', en: '**Enter/→** view sessions · ↑/↓ choose · {{mod}}a all directories · Esc back' },
+  'session-hint-workspaces-short': { zh: '**Enter/→** 查看 · Esc', en: '**Enter/→** view · Esc' },
 
   // ── picker 通用快捷键提示（整句本地化，zh 不用 "to" 结构；**段** 渲染为粗体主快捷键）─
   'hint-confirm-exit': { zh: '**Enter** 确认 · Esc 退出', en: '**Enter** to confirm · Esc to exit' },
@@ -1154,7 +1191,9 @@ export function readLangPref(dir: string = PREFS_DIR): Lang | undefined {
 /** Persist the chosen language (best effort). */
 export function writeLangPref(lang: Lang, dir: string = PREFS_DIR): boolean {
   try {
-    mkdirSync(dir, { recursive: true })
+    // 0700 on creation: DATA_DIR hosts private history/logs; match that mode
+    // whenever this happens to be the first writer.
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
     writeFileSync(join(dir, 'lang.json'), JSON.stringify({ lang }, null, 2))
     return true
   } catch {

@@ -20,7 +20,7 @@ import { beginGeometryFrame, endGeometryFrame, GEOMETRY_TRACE_ENABLED, noteFrame
 import { KeyboardEvent } from './events/keyboard-event.js';
 import { FocusManager } from './focus.js';
 import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
-import { dispatchClick, dispatchHover, dispatchWheel, clearHovered } from './hit-test.js';
+import { dispatchClick, dispatchContextMenu, dispatchHover, dispatchWheel, clearHovered } from './hit-test.js';
 import { logMouseDebug } from '../utils/debug.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
@@ -1703,6 +1703,24 @@ export default class Ink {
     return handled;
   }
   /**
+   * Hit-test the rendered DOM tree at (col, row) and bubble a
+   * ContextMenuEvent from the deepest hit node up through ancestors with
+   * onContextMenu handlers. Returns true if a DOM handler consumed it.
+   * Gated on altScreenActive like dispatchClick. The button byte is the
+   * raw SGR press code; its low bits are 2 for the right button and the
+   * modifier bits land on ContextMenuEvent.shift/alt/ctrl.
+   */
+  dispatchContextMenu(col: number, row: number, button = 0): boolean {
+    this.probeAltScreenHealth();
+    if (!this.altScreenActive) {
+      logMouseDebug('dispatchContextMenu skipped — alt screen inactive', { col, row });
+      return false;
+    }
+    const handled = dispatchContextMenu(this.rootNode, col, row, button);
+    logMouseDebug('dispatchContextMenu', { col, row, handled });
+    return handled;
+  }
+  /**
    * Route a wheel event to the ScrollBox (any onWheel handler) under the
    * pointer. Returns true when a handler consumed it, so App can skip the
    * legacy global wheel-key path and exactly one layer scrolls. Gated on
@@ -1926,7 +1944,7 @@ export default class Ink {
   }
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           {node}
         </TerminalWriteProvider>

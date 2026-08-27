@@ -225,6 +225,7 @@ change, also run the closest focused script:
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
 | Goal/todo projection and rendering | `node scripts/verify-channel-goal-todo.mjs` and `node scripts/verify-goal-todo.mjs` |
 | Compaction and folded transcript rows | `node scripts/verify-compact.mjs` |
+| Compaction × session-switch lifecycle (cancel before the fork snapshot, persistence-classified toast) | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | Theme loading and persistence | `node --import tsx/esm scripts/verify-themes.mjs` |
 | Scrolling/sticky-bottom behavior | `node scripts/verify-scroll.mjs`, `node scripts/verify-resticky.mjs`, and the matching `repro-*` harness |
 | Fullscreen copy-on-select | `node scripts/verify-copy-on-select.mjs` |

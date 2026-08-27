@@ -56,6 +56,102 @@ export interface BrowserView {
   readonly emptyIds: readonly string[]
 }
 
+/** Live-session facts shared by the directory index and session projection. */
+export interface BrowserContext {
+  readonly cwd: string
+  readonly branch: string | undefined
+  readonly currentId: string
+  readonly sameProject: (a: string, b: string) => boolean
+}
+
+/** One selectable working-directory bucket in the resume browser. */
+export interface WorkspaceGroup {
+  /** Stable within one listing; `current` is reserved for the live workspace. */
+  readonly id: string
+  /** Representative cwd shown in the directory list and used as session scope. */
+  readonly cwd: string
+  /** Resumable top-level conversations in this directory bucket. */
+  readonly count: number
+  /** Most recent resumable conversation activity, or 0 for an empty current bucket. */
+  readonly updatedAt: number
+  /** The compatibility bucket anchored at the live session's cwd. */
+  readonly current: boolean
+}
+
+/** Normalize an exact historical cwd key without treating ancestors as equal. */
+export function normalizeWorkspaceCwd(cwd: string): string {
+  const slashed = cwd.replace(/\\/g, '/')
+  const normalized = /^\/+$/u.test(slashed) ? '/' : slashed.replace(/\/+$/, '')
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+/** Current session plus the fork ancestors that continuing it superseded. */
+function hiddenLineageIds(sessions: readonly SessionSummary[], currentId: string): Set<string> {
+  const byId = new Map(sessions.map(session => [session.id, session]))
+  const hidden = new Set([currentId])
+  let cursor = byId.get(currentId)
+  while (cursor?.kind.kind === 'fork') {
+    const parent = cursor.kind.parent
+    if (hidden.has(parent)) break
+    hidden.add(parent)
+    cursor = byId.get(parent)
+  }
+  return hidden
+}
+
+/**
+ * Build the explicit working-directory menu.
+ *
+ * Only the live cwd gets the historical same-project compatibility rule: old
+ * versions recorded repository subdirectories, so those sessions still belong
+ * under the current workspace. Every remaining directory is grouped by its
+ * normalized exact cwd. Applying sameProject transitively to arbitrary history
+ * would merge sibling projects through a common ancestor and is deliberately
+ * avoided.
+ */
+export function buildWorkspaceGroups(
+  sessions: readonly SessionSummary[],
+  context: BrowserContext,
+): readonly WorkspaceGroup[] {
+  const hidden = hiddenLineageIds(sessions, context.currentId)
+  const conversations = sessions.filter(session =>
+    session.hasPrompt && session.kind.kind !== 'subagent' && !hidden.has(session.id))
+  const currentSessions = conversations.filter(session => context.sameProject(context.cwd, session.cwd))
+  const currentIds = new Set(currentSessions.map(session => session.id))
+  const current: WorkspaceGroup = {
+    id: 'current',
+    cwd: context.cwd,
+    count: currentSessions.length,
+    updatedAt: currentSessions.reduce((latest, session) => Math.max(latest, session.updatedAt), 0),
+    current: true,
+  }
+
+  const foreign = new Map<string, { cwd: string; count: number; updatedAt: number }>()
+  for (const session of conversations) {
+    if (currentIds.has(session.id)) continue
+    const key = normalizeWorkspaceCwd(session.cwd)
+    const existing = foreign.get(key)
+    if (existing === undefined) {
+      foreign.set(key, { cwd: session.cwd, count: 1, updatedAt: session.updatedAt })
+    } else {
+      existing.count += 1
+      existing.updatedAt = Math.max(existing.updatedAt, session.updatedAt)
+    }
+  }
+
+  const others = [...foreign.entries()]
+    .map(([key, group]): WorkspaceGroup => ({
+      id: `cwd:${key || '<unknown>'}`,
+      cwd: group.cwd,
+      count: group.count,
+      updatedAt: group.updatedAt,
+      current: false,
+    }))
+    .sort((left, right) =>
+      right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
+  return [current, ...others]
+}
+
 /** Case-insensitive substring test over the fields a reader would search by. */
 function matches(session: SessionSummary, needle: string): boolean {
   if (needle.length === 0) return true
@@ -84,7 +180,7 @@ function matches(session: SessionSummary, needle: string): boolean {
 export function buildView(
   sessions: readonly SessionSummary[],
   filters: BrowserFilters,
-  context: { cwd: string; branch: string | undefined; currentId: string; sameProject: (a: string, b: string) => boolean },
+  context: BrowserContext,
 ): BrowserView {
   const needle = filters.query.trim().toLowerCase()
 
@@ -93,21 +189,10 @@ export function buildView(
   // and selecting one silently jumps back before the fork. Only the live
   // lineage is excluded: unrelated forks remain recoverable. Treat malformed
   // cycles as a closed chain rather than looping forever over foreign data.
-  const byId = new Map(sessions.map(session => [session.id, session]))
-  const currentAncestors = new Set<string>()
-  const seen = new Set([context.currentId])
-  let cursor = byId.get(context.currentId)
-  while (cursor?.kind.kind === 'fork') {
-    const parent = cursor.kind.parent
-    if (seen.has(parent)) break
-    seen.add(parent)
-    currentAncestors.add(parent)
-    cursor = byId.get(parent)
-  }
+  const hiddenLineage = hiddenLineageIds(sessions, context.currentId)
 
   const inScope = (session: SessionSummary): boolean =>
-    session.id !== context.currentId &&
-    !currentAncestors.has(session.id) &&
+    !hiddenLineage.has(session.id) &&
     (filters.allProjects || context.sameProject(context.cwd, session.cwd))
 
   // Empty sessions never reach a view, but they are counted — and the count
@@ -162,28 +247,38 @@ export function buildView(
 
   const rows: BrowserRow[] = []
   let shown = 0
-  let lastProject: string | undefined
+  let lastProjectKey: string | undefined
   const ordered = visible.sort((left, right) => right.updatedAt - left.updatedAt)
+  const projectKey = (session: SessionSummary): string =>
+    context.sameProject(context.cwd, session.cwd)
+      ? 'current'
+      : `cwd:${normalizeWorkspaceCwd(session.cwd) || '<unknown>'}`
+  const projectDisplay = new Map<string, string>()
+  const projectCounts = new Map<string, number>()
   if (filters.allProjects) {
-    // Order project groups by their newest visible session, then keep every
-    // session from that project together in MRU order. A global MRU sort alone
-    // can interleave A/B/A and emit the same project header more than once.
+    // Use the SAME buckets as the directory menu: current-workspace legacy
+    // subdirectories coalesce, while foreign separator/case aliases share one
+    // exact normalized key. This keeps the rail and "all" view consistent.
     const projectOrder = new Map<string, number>()
     for (const session of ordered) {
-      if (!projectOrder.has(session.cwd)) projectOrder.set(session.cwd, projectOrder.size)
+      const key = projectKey(session)
+      if (!projectOrder.has(key)) projectOrder.set(key, projectOrder.size)
+      projectDisplay.set(key, key === 'current' ? context.cwd : projectDisplay.get(key) ?? session.cwd)
+      projectCounts.set(key, (projectCounts.get(key) ?? 0) + 1)
     }
     ordered.sort((left, right) =>
-      projectOrder.get(left.cwd)! - projectOrder.get(right.cwd)! || right.updatedAt - left.updatedAt)
+      projectOrder.get(projectKey(left))! - projectOrder.get(projectKey(right))! || right.updatedAt - left.updatedAt)
   }
   for (const session of ordered) {
     // Group headers only earn their line when more than one project is in
     // play; inside a single project they would repeat the same path forever.
-    if (filters.allProjects && session.cwd !== lastProject) {
-      lastProject = session.cwd
+    const key = projectKey(session)
+    if (filters.allProjects && key !== lastProjectKey) {
+      lastProjectKey = key
       rows.push({
         kind: 'project',
-        project: session.cwd,
-        count: visible.filter(other => other.cwd === session.cwd).length,
+        project: projectDisplay.get(key) ?? session.cwd,
+        count: projectCounts.get(key) ?? 0,
       })
     }
     rows.push({ kind: 'session', session, depth: 0 })

@@ -1419,14 +1419,18 @@ export function extractHyperlinkFromStyles(
 
 /**
  * Return the style stack with all OSC 8 hyperlink styles removed.
+ *
+ * Any code with the OSC 8 prefix is dropped, including variants the
+ * OSC8_REGEX does not recognize (an `id=` params field, or the ST `\e\\`
+ * terminator kitty/WezTerm/iTerm2 accept): keeping those interned in the
+ * style pool replays them verbatim on serialization (log-update's
+ * ansiCodesToString), smuggling arbitrary-scheme links — and anything else
+ * hiding in the raw sequence — past the sanitized link() rebuild channel.
  * @param styles - the ANSI code stack to filter.
  * @returns a new stack without hyperlink styles.
  */
 export function filterOutHyperlinkStyles(styles: AnsiCode[]): AnsiCode[] {
-  return styles.filter(
-    style =>
-      !style.code.startsWith(OSC8_PREFIX) || !OSC8_REGEX.test(style.code),
-  )
+  return styles.filter(style => !style.code.startsWith(OSC8_PREFIX))
 }
 
 // ---

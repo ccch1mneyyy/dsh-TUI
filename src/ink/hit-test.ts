@@ -1,5 +1,6 @@
 import type { DOMElement } from './dom.js'
 import { ClickEvent } from './events/click-event.js'
+import { ContextMenuEvent } from './events/context-menu-event.js'
 import type { EventHandlerProps } from './events/event-handlers.js'
 import { PointerEvent } from './events/pointer-event.js'
 import { WheelEvent } from './events/wheel-event.js'
@@ -149,6 +150,62 @@ export function dispatchClick(
       if (event.didStopImmediatePropagation()) return true
     }
     target = target.parentNode
+  }
+  return handled
+}
+
+/**
+ * Hit-test the root at (col, row) and bubble a ContextMenuEvent from the
+ * deepest containing node up through parentNode. Only nodes with an
+ * onContextMenu handler fire. Stops when a handler calls
+ * stopImmediatePropagation(). Returns true if at least one onContextMenu
+ * handler fired.
+ *
+ * Unlike dispatchClick this does NOT move focus: the menu is a press-time
+ * affordance and the target's own handler decides whether focus follows.
+ * Handler isolation matches dispatchClick — a throwing handler is logged
+ * and the bubbling continues.
+ *
+ * @param root - the tree root to hit-test.
+ * @param col - the screen column of the press.
+ * @param row - the screen row of the press.
+ * @param button - raw SGR press byte (low bits 2 = right button, carries
+ *   shift/alt/ctrl modifier bits).
+ * @returns true when at least one onContextMenu handler fired.
+ */
+export function dispatchContextMenu(
+  root: DOMElement,
+  col: number,
+  row: number,
+  button = 0,
+): boolean {
+  const target = hitTestWithOverlays(root, col, row)
+  if (!target) return false
+  const event = new ContextMenuEvent(col, row, { button })
+  let node: DOMElement | undefined = target
+  let handled = false
+  while (node) {
+    const handler = node._eventHandlers?.onContextMenu as
+      | ((event: ContextMenuEvent) => void)
+      | undefined
+    if (handler) {
+      handled = true
+      const rect = nodeCache.get(node)
+      if (rect) {
+        event.localCol = col - rect.x
+        event.localRow = row - rect.y
+      } else {
+        event.localCol = 0
+        event.localRow = 0
+      }
+      try {
+        handler(event)
+      } catch (error) {
+        logError(error)
+      }
+      if (event.didStopImmediatePropagation()) return true
+    }
+    node = node.parentNode
   }
   return handled
 }

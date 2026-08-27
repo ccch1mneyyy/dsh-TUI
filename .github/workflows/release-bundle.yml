@@ -50,12 +50,31 @@ jobs:
       - name: Generate standalone portable bundles
         run: node scripts/make-standalone-bundle.mjs --out dist-standalone
 
+      - name: Generate SHA256SUMS for release assets
+        run: |
+          # 每个 release 资产按资产名（不带目录前缀）登记 SHA256 摘要，
+          # 消费端（便携包自更新器 src/update.ts 的 verifyAssetChecksum）
+          # 按 `hex  name` 行匹配并校验下载字节。先写隐藏临时文件再改名，
+          # 避免 sha256sum 的 glob 把清单自己算进去。
+          cd dist-standalone
+          sha256sum * > .SHA256SUMS.tmp
+          mv .SHA256SUMS.tmp SHA256SUMS
+          cd ..
+          # 一键安装整合包同为 release 资产，一并登记。
+          (cd dist-bundle && sha256sum dsh-tui-setup.zip) >> dist-standalone/SHA256SUMS
+          cat dist-standalone/SHA256SUMS
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
+          # ${{ }} 表达式一律经 env 中转，绝不内插进 run 的 shell 文本：
+          # workflow_dispatch 的 inputs.tag 是用户输入，直接内插等于把
+          # `"$(curl …)"` 类 payload 拼进命令行（表达式注入）。
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          tag="${{ github.event.release.tag_name }}"
-          [ -z "$tag" ] && tag="${{ github.event.inputs.tag }}"
+          tag="$RELEASE_TAG"
+          [ -z "$tag" ] && tag="$INPUT_TAG"
           if [ -z "$tag" ]; then
             tag="$(gh release list --limit 1 --json tagName -q '.[0].tagName')"
           fi
