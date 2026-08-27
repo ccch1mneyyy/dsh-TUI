@@ -48,6 +48,7 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import { PromptEditorLayer } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -3660,6 +3661,10 @@ export function Chat({
         invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
+      {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后（树序最后），
+          才能盖住包括状态栏在内的全部后绘兄弟。内容由 PromptInput
+          经 module store 发布（见 PromptEditor.tsx）。 */}
+      <PromptEditorLayer />
     </Box>
   )
 }

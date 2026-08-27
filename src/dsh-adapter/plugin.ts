@@ -482,6 +482,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     scrollGutter: config.scrollGutter,
     foldTerminalCommand: config.foldTerminalCommand,
     promptSessionLabel: config.promptSessionLabel,
+    expandEditor: config.expandEditor,
     statusBar: config.statusBar,
     handle,
   })
@@ -527,6 +528,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // default and keeps cordis.yml decisive.
         foldTerminalCommand: Schema.boolean(),
         promptSessionLabel: Schema.boolean().default(false),
+        // No schema default (same rule as foldTerminalCommand): applyDisplay
+        // resolves `?? config.expandEditor ?? true` so cordis.yml stays
+        // decisive while the user layer is unset.
+        expandEditor: Schema.boolean(),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -577,6 +582,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       scrollGutter?: ScrollGutterMode
       foldTerminalCommand?: boolean
       promptSessionLabel?: boolean
+      expandEditor?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -617,6 +623,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
       channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
+      channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
@@ -743,6 +750,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       zh: '待办折叠快捷键',
       hintEn: d => `Fold/unfold the goal/todo panel. Default: ${d}.`,
       hintZh: d => `折叠/展开目标与待办面板。默认 ${d}。`,
+    },
+    expandEditor: {
+      label: 'Fullscreen editor shortcut',
+      zh: '全屏草稿编辑快捷键',
+      hintEn: d => `Toggle the fullscreen draft editor (Enter inserts a newline, Ctrl+Enter sends). Default: ${d}.`,
+      hintZh: d => `切换全屏草稿编辑器（Enter 换行、Ctrl+Enter 发送）。默认 ${d}。`,
     },
   }
   const shortcutFields: TuiSettingsField[] = SHORTCUT_ACTIONS.map(action => {
@@ -892,6 +905,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hint: 'Show the session name on the prompt top border, right corner. Off by default.',
           hintDescriptions: { zh: '在输入框顶边框右上角显示会话名。默认关闭。' },
           kind: 'boolean',
+        },
+        {
+          path: ['expandEditor'],
+          label: 'Fullscreen draft editor',
+          descriptions: { zh: '全屏草稿编辑' },
+          hint: 'On: the ⛶ affordance in the input row and the expand-editor shortcut (default Ctrl+Shift+E) expand the draft into a whole-screen editor (Enter = newline, Ctrl+Enter = send). Off: both entry points disappear. On by default.',
+          hintDescriptions: { zh: '开启：输入行尾 ⛶ 按钮与全屏编辑快捷键（默认 Ctrl+Shift+E）把草稿展开成整屏编辑器（Enter 换行、Ctrl+Enter 发送）。关闭：两个入口都不显示。默认开启。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: the effective default is on.
+            return String(typeof value === 'boolean' ? value : config.expandEditor !== false)
+          },
         },
         {
           path: ['recapOnOpen'],

@@ -8,6 +8,7 @@ import type { DragEvent } from '../events/drag-event.js';
 import type { FocusEvent } from '../events/focus-event.js';
 import type { KeyboardEvent } from '../events/keyboard-event.js';
 import type { PointerEvent } from '../events/pointer-event.js';
+import type { WheelEvent } from '../events/wheel-event.js';
 import type { Styles } from '../styles.js';
 import * as warn from '../warn.js';
 export type Props = Except<Styles, 'textWrap'> & {
@@ -70,13 +71,21 @@ export type Props = Except<Styles, 'textWrap'> & {
   onMouseEnter?: (event: PointerEvent) => void;
   /** Fired when the mouse moves out of this Box's rendered rect. */
   onMouseLeave?: (event: PointerEvent) => void;
+  /**
+   * Fired when a wheel event occurs over this Box's rendered rect (the
+   * position-routed path: dispatchWheel hit-tests the deepest node whose
+   * ancestor chain carries an onWheel handler — ScrollBox receives its
+   * scrolls this way). `deltaY`/`deltaX` are terminal rows/columns per
+   * wheel notch, positive = scroll down/right.
+   */
+  onWheel?: (event: WheelEvent) => void;
 };
 
 /**
  * `<Box>` is an essential Ink component to build your layout. It's like `<div style="display: flex">` in the browser.
  */
 function Box(t0) {
-  const $ = _c(50);
+  const $ = _c(51);
   let autoFocus;
   let children;
   let flexDirection;
@@ -96,6 +105,7 @@ function Box(t0) {
   let onKeyDownCapture;
   let onMouseEnter;
   let onMouseLeave;
+  let onWheel;
   let ref;
   let style;
   let tabIndex;
@@ -122,6 +132,7 @@ function Box(t0) {
       onDragStart: t20,
       onDragMove: t21,
       onDragEnd: t22,
+      onWheel: t24,
       ...t23
     } = t0;
     children = t1;
@@ -141,6 +152,7 @@ function Box(t0) {
     onDragStart = t20;
     onDragMove = t21;
     onDragEnd = t22;
+    onWheel = t24;
     style = t23;
     flexWrap = t2 === undefined ? "nowrap" : t2;
     flexDirection = t3 === undefined ? "row" : t3;
@@ -183,6 +195,7 @@ function Box(t0) {
     $[44] = onDragStart;
     $[45] = onDragMove;
     $[46] = onDragEnd;
+    $[50] = onWheel;
     $[17] = ref;
     $[18] = style;
     $[19] = tabIndex;
@@ -206,6 +219,7 @@ function Box(t0) {
     onDragStart = $[44];
     onDragMove = $[45];
     onDragEnd = $[46];
+    onWheel = $[50];
     ref = $[17];
     style = $[18];
     tabIndex = $[19];
@@ -235,8 +249,8 @@ function Box(t0) {
     t3 = $[27];
   }
   let t4;
-  if ($[28] !== autoFocus || $[29] !== children || $[30] !== onBlur || $[31] !== onBlurCapture || $[32] !== onClick || $[33] !== onContextMenu || $[47] !== onDragStart || $[48] !== onDragMove || $[49] !== onDragEnd || $[34] !== onFocus || $[35] !== onFocusCapture || $[36] !== onKeyDown || $[37] !== onKeyDownCapture || $[38] !== onMouseEnter || $[39] !== onMouseLeave || $[40] !== ref || $[41] !== t3 || $[42] !== tabIndex) {
-    t4 = <ink-box ref={ref} tabIndex={tabIndex} autoFocus={autoFocus} onClick={onClick} onContextMenu={onContextMenu} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onFocus={onFocus} onFocusCapture={onFocusCapture} onBlur={onBlur} onBlurCapture={onBlurCapture} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} onKeyDown={onKeyDown} onKeyDownCapture={onKeyDownCapture} style={t3}>{children}</ink-box>;
+  if ($[28] !== autoFocus || $[29] !== children || $[30] !== onBlur || $[31] !== onBlurCapture || $[32] !== onClick || $[33] !== onContextMenu || $[47] !== onDragStart || $[48] !== onDragMove || $[49] !== onDragEnd || $[34] !== onFocus || $[35] !== onFocusCapture || $[36] !== onKeyDown || $[37] !== onKeyDownCapture || $[38] !== onMouseEnter || $[39] !== onMouseLeave || $[40] !== ref || $[41] !== t3 || $[42] !== tabIndex || $[50] !== onWheel) {
+    t4 = <ink-box ref={ref} tabIndex={tabIndex} autoFocus={autoFocus} onClick={onClick} onContextMenu={onContextMenu} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onWheel={onWheel} onFocus={onFocus} onFocusCapture={onFocusCapture} onBlur={onBlur} onBlurCapture={onBlurCapture} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} onKeyDown={onKeyDown} onKeyDownCapture={onKeyDownCapture} style={t3}>{children}</ink-box>;
     $[28] = autoFocus;
     $[29] = children;
     $[30] = onBlur;

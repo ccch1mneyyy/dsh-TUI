@@ -236,6 +236,11 @@ const GROUPS = {
 // 双击选词自检测/Backspace/Delete 删选区/打字替换/Esc 分层/Ctrl+C 经
 // Chat→控制器复制选区、CJK 宽字符显示列与 fold block 侧钳制。
     ["verify-input-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-input-selection.tsx']],
+// 全屏草稿编辑回归（expandEditor）：Ctrl+Shift+E/⛶ 展开收起、Enter 换行
+// 不发送、Ctrl+Enter 发送并收起、Esc 分层（选区→收起）、点击定位/拖选、
+// 行号渲染、多行窗口跟随 + onWheel 滚轮自由滚动、折叠块互斥（展开清块/
+// 展开态粘贴纯文本）、设置开关（expandEditor=false 入口消失）。
+    ["verify-expand-editor", ['node', '--import', 'tsx/esm', 'scripts/verify-expand-editor.tsx']],
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],

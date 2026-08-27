@@ -7,6 +7,7 @@ import type { DragEvent } from '../../ink/events/drag-event.js'
 import type { FocusEvent } from '../../ink/events/focus-event.js'
 import type { KeyboardEvent } from '../../ink/events/keyboard-event.js'
 import type { PointerEvent } from '../../ink/events/pointer-event.js'
+import type { WheelEvent } from '../../ink/events/wheel-event.js'
 import type { Color, Styles } from '../../ink/styles.js'
 import { getTheme, type Theme } from '../../theme.js'
 import { useTheme } from './ThemeProvider.js'
@@ -59,6 +60,11 @@ export type Props = BaseStylesWithoutColors &
     onKeyDownCapture?: (event: KeyboardEvent) => void
     onMouseEnter?: (event: PointerEvent) => void
     onMouseLeave?: (event: PointerEvent) => void
+    /**
+     * Wheel events over this Box's rendered rect (position-routed; see the
+     * ink Box's onWheel JSDoc). Transparently forwarded.
+     */
+    onWheel?: (event: WheelEvent) => void
   }
 
 /** Resolves a color value that may be a theme key to a raw Color. */

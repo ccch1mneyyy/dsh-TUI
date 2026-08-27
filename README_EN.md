@@ -65,9 +65,13 @@ the interface, and removing it leaves no core modifications behind.
   in-row star or `Ctrl+P` toggles, pins persist in `~/.dsh-tui`), alongside
   `/new`, `/workspace`, `/compact`, `/export`,
   the `/btw` side question, model switching, double-`Esc` rewind through a
-  session fork, vim editing for the prompt (`/vim`), and mouse selection
+  session fork, vim editing for the prompt (`/vim`), mouse selection
   editing in the prompt (drag to select, Shift+click to extend,
-  double-click word select, `Ctrl+C` to copy the selection).
+  double-click word select, `Ctrl+C` to copy the selection), and a
+  fullscreen draft editor (`Ctrl+Shift+E` or the `⛶` row button: line
+  numbers, current-line highlight, `Enter` = newline, `Ctrl+Enter` = send,
+  wheel scrolling, click/drag selection — long drafts get the whole
+  screen; disable it in `/settings`).
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
   and registries. `/skills` shows skills discovered from the active profile,
@@ -196,6 +200,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit; **with an active mouse selection in the prompt, copies it to the clipboard and keeps it** |
 | `Esc` | Close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
+| `Ctrl+Shift+E` | Expand the fullscreen draft editor (Enter = newline, `Ctrl+Enter` = send, `Esc` = collapse keeping the draft; line numbers, wheel scrolling, click/drag selection) |
 | `Ctrl+R` | History search |
 | `/` | In-session full-text search (`n`/`N` to jump) |
 | `Ctrl+V` / `Alt+V` | Paste text or files from the file manager; images show as `[Image #N]` and are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |

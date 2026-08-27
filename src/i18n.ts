@@ -531,6 +531,15 @@ const dict = {
   'input-fold-hover': { zh: '悬停查看', en: 'hover to peek' },
   'input-fold-peek-footer': { zh: '… 共 {{lines}} 行 · 点击展开编辑', en: '… {{lines}} lines total · click to edit' },
 
+  // ── 全屏草稿编辑（PromptInput 展开态 + PromptEditor Layer）─────────
+  'input-expand-editor-title': { zh: '草稿编辑', en: 'Draft editor' },
+  'input-expand-editor-position': { zh: '行 {{line}} · 列 {{col}}', en: 'Ln {{line}}, Col {{col}}' },
+  'input-expand-editor-scroll': { zh: '滚轮翻动 · 光标行自动跟随', en: 'wheel scrolls · caret row follows' },
+  'input-expand-editor-send': { zh: '发送', en: 'Send' },
+  'input-expand-editor-collapse': { zh: '收起', en: 'Collapse' },
+  'input-expand-editor-hint-send': { zh: 'Ctrl+Enter 发送', en: 'Ctrl+Enter sends' },
+  'input-expand-editor-hint-collapse': { zh: 'Esc 收起', en: 'Esc collapses' },
+
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
   'sugg-files-title': { zh: '文件', en: 'files' },

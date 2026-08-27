@@ -21,6 +21,7 @@ import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
+import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 import { isHiddenCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
@@ -240,6 +241,13 @@ function normalizeCursorOffset(text: string, offset: number): number {
 const MAX_VISIBLE_LINES = 5
 
 /**
+ * Fixed chrome rows around the expanded editor's text area: round border
+ * (top+bottom), the title row, the status row, and the button row. The
+ * editor viewport gets `terminalRows - this` rows.
+ */
+const EDITOR_CHROME_ROWS = 5
+
+/**
  * Double-click self-detection window: two clicks within this many ms and
  * one cell (in either axis) of each other count as a double-click and
  * select the word under the pointer. The drag protocol resets the ink
@@ -386,6 +394,37 @@ export function PromptInput({
   const [foldBlock, setFoldBlock] = React.useState<{ start: number; end: number } | null>(null)
   /** Synchronous mirror used by batched keys, controller clear, and mouse drag. */
   const foldBlockRef = React.useRef<{ start: number; end: number } | null>(null)
+  /**
+   * Fullscreen draft editor (`expandEditor`, default Ctrl+Shift+E, or the
+   * ⛶ affordance at the end of the input row). While expanded the SAME
+   * editing state renders into the PromptEditorLayer cover (published via
+   * setPromptEditorNode each render): Enter inserts a newline, Ctrl+Enter
+   * submits, Esc collapses. The fold chip is bypassed (full text shown).
+   */
+  const [expanded, setExpanded] = React.useState(false)
+  const expandedRef = React.useRef(false)
+  /** First visible row of the expanded viewport (merged with caret-follow
+   *  during render; wheel events advance it and tick a re-render). */
+  const expandedScrollRef = React.useRef(0)
+  /**
+   * Free-scroll latch: wheel browsing parks the viewport anywhere; the
+   * caret-follow merge skips while it is set, and the next real caret move
+   * (typing, arrows, click) re-engages following (GUI-editor semantics).
+   */
+  const editorFreeScrollRef = React.useRef(false)
+  const prevCaretLineRef = React.useRef(-1)
+  const [, setExpandedTick] = React.useState(0)
+  const prevExpandedRef = React.useRef(false)
+  /**
+   * Feature gate (settings `dsh-tui.expandEditor`, on by default; a mock
+   * channel without the field also reads as on). Off hides the ⛶
+   * affordance and refuses the shortcut — the editor cannot open.
+   */
+  const expandEnabled = channel.expandEditor !== false
+  /** Latest expanded viewport metrics for the useInput wheel branch. */
+  const editorViewportRef = React.useRef<{ maxRows: number; total: number } | null>(null)
+  /** Hover state of the ⤢/⛶ expand affordance in the input row. */
+  const [expandHovered, setExpandHovered] = React.useState(false)
   /** Pointer over the input box (drives the hover peek card). */
   const [hovered, setHovered] = React.useState(false)
   /** 120ms grace so the pointer crossing the input border row from the
@@ -421,8 +460,12 @@ export function PromptInput({
         lastClickAtRef.current = 0
         lastClickColRef.current = -1
         lastClickRowRef.current = -1
+        // Chat's idle Ctrl+C clear also withdraws the fullscreen editor —
+        // the draft it was editing is gone, the cover must not linger.
+        expandedRef.current = false
         setSelection(null)
         setFoldBlock(null)
+        setExpanded(false)
         setValue('')
         setCursor(0)
       },
@@ -514,6 +557,7 @@ export function PromptInput({
   const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
   const overlayOpen =
     suggestions.length > 0 &&
+    !expanded &&
     !helpOpen &&
     !selectionActive &&
     !value.includes('\n')
@@ -554,6 +598,7 @@ export function PromptInput({
   }, [value])
   const fileOverlayOpen =
     fileMatches.length > 0 &&
+    !expanded &&
     !helpOpen &&
     !selectionActive &&
     fileEscRef.current !== mention?.start
@@ -805,6 +850,96 @@ export function PromptInput({
     return handled
   }
 
+  /**
+   * The Enter main path, shared by the inline prompt, the expanded
+   * editor's Ctrl+Enter, and its Send button:
+   * - command menu open → run the SELECTED command (never send `/mo`);
+   * - model working → STEER into the running turn (next step boundary,
+   *   agent continues — the "immediate" send; Codex/pi semantics);
+   * - otherwise → submit directly (or run a unique command).
+   * Reads valueRef so a key batch (typing + Enter in one stdin read)
+   * operates on the text the preceding keys produced.
+   */
+  const handleEnter = () => {
+    // A single Enter can arrive as two events in cmd pipelines (`\r`
+    // parsed as return + a raw `\n` line): collapse them so one keypress
+    // never sends the message twice.
+    const now = Date.now()
+    if (now - lastEnterAtRef.current < 80) return
+    lastEnterAtRef.current = now
+    const value = valueRef.current
+    if (overlayOpen) {
+      const command = suggestions[selectedCommand]
+      if (command) {
+        tryRunCommand(command.commandLine)
+        return
+      }
+    }
+    // File-completion overlay open → Enter accepts the selection (same
+    // contract as the command menu: the overlay owns Enter while open).
+    if (fileOverlayOpen) {
+      const file = fileMatches[fileSelected]
+      if (file) {
+        acceptFile(file)
+        return
+      }
+    }
+    if (channel.working && value.trim() !== '') {
+      // CC's immediate-command semantics: /btw and /skills are exempt from
+      // steering — neither command interrupts the running turn. Hidden
+      // UI-only easter eggs (e.g. /deepseek) are also safe to run while
+      // streaming. Every other input keeps the steer behavior so /new
+      // /model etc. stay idle-only.
+      const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
+      if (parsed !== undefined && (
+        ((parsed.name === 'btw' || parsed.name === 'skills')
+          && channel.commandList.some(c => c.name === parsed.name))
+        || isHiddenCommandName(parsed.name)
+      )) {
+        if (tryRunCommand(value)) return
+      }
+      steerSend(value)
+      return
+    }
+    if (!tryRunCommand(value)) submitText(value)
+  }
+
+  /** Expand/collapse the fullscreen editor (shortcut + ⛶ affordance).
+   *  Expanding also DROPS any fold block: the fullscreen view shows and
+   *  edits the full text, and the block's atomic-clamp semantics (caret
+   *  pushed to its edges, selection clamped to one side) would contradict
+   *  that — the chip's own click-to-expand already means "unfold". */
+  const toggleExpand = () => {
+    const next = !expandedRef.current
+    expandedRef.current = next
+    setExpanded(next)
+    if (next) {
+      expandedScrollRef.current = 0
+      if (foldBlockRef.current) updateFoldBlock(null)
+    }
+    // Geometry changed wholesale (a fullscreen cover): the double-click
+    // self-detection's screen-cell memory is void, same as on resize.
+    lastClickAtRef.current = 0
+    lastClickColRef.current = -1
+    lastClickRowRef.current = -1
+  }
+
+  /** Withdraw the fullscreen editor, keeping text/caret/selection intact. */
+  const collapseEditor = () => {
+    expandedRef.current = false
+    setExpanded(false)
+    lastClickAtRef.current = 0
+    lastClickColRef.current = -1
+    lastClickRowRef.current = -1
+  }
+
+  /** The editor's explicit send (Ctrl+Enter / Send button): the Enter main
+   *  path, then collapse — an empty draft just collapses. */
+  const submitFromEditor = () => {
+    handleEnter()
+    collapseEditor()
+  }
+
   /** Clipboard reads are asynchronous; insert against the latest render so
    * typing while PowerShell owns the clipboard never gets overwritten.
    * An active selection is replaced by the insert. Returns the resulting
@@ -842,6 +977,16 @@ export function PromptInput({
     // setValue can never overwrite fresh typing (and vice versa).
     if (editorBusyRef.current) return
 
+    // Ctrl+Shift+E (remappable via /settings): toggle the fullscreen draft
+    // editor. Matched before anything else so it works both while editing
+    // and from an idle prompt; selectionActive has already returned above.
+    // Refused while the feature is turned off in /settings.
+    if (expandEnabled && actionMatches('expandEditor', input, key)) {
+      event?.stopImmediatePropagation()
+      toggleExpand()
+      return
+    }
+
     // App deliberately dispatches every parsed key from one stdin read in a
     // single React update. Read the synchronous mirrors so each event sees
     // the text/caret produced by the preceding event in that batch.
@@ -864,6 +1009,17 @@ export function PromptInput({
       setInput(next, selection.start)
       setSelectedCommand(0)
       setFileSelected(0)
+      return
+    }
+
+    // ── 全屏草稿编辑（expandEditor，默认 Ctrl+Shift+E / 输入行 ⛶）─────
+    // 展开态拥有屏幕；Esc 收起（有选区时上面的 selection 分支已先行只清
+    // 选区）。滚轮不经此——编辑区的 onWheel 位置路由直接驱动滚动窗口。
+    if (key.escape && expandedRef.current) {
+      // Collapse runs AHEAD of the fold-block/vim Esc meanings: the
+      // fullscreen cover is the outermost modal layer.
+      event?.stopImmediatePropagation()
+      collapseEditor()
       return
     }
 
@@ -933,7 +1089,9 @@ export function PromptInput({
       const at = insertAtCaret(text)
       // A big paste becomes a CC-style fold block right away (hover peeks
       // at it); an existing block is replaced by the new paste's span.
-      if (isBigInput(text)) updateFoldBlock({ start: at, end: at + text.length })
+      // The EXPANDED editor never folds — pasting there is plain text
+      // (fold semantics would clamp the caret out of the pasted span).
+      if (!expandedRef.current && isBigInput(text)) updateFoldBlock({ start: at, end: at + text.length })
       return
     }
 
@@ -984,9 +1142,9 @@ export function PromptInput({
           // asynchronously and the user may have typed while waiting.
           const text = sanitizeEditableText(formatClipboardInsert(content))
           const { at } = insertClipboardAtCaret(text)
-          // Same fold as bracketed paste: big clipboard text becomes a
-          // fold block covering exactly the pasted span.
-          if (isBigInput(text)) updateFoldBlock({ start: at, end: at + text.length })
+          // Same fold as bracketed paste — but never inside the expanded
+          // editor (plain text there, see the isPasted branch).
+          if (!expandedRef.current && isBigInput(text)) updateFoldBlock({ start: at, end: at + text.length })
         })
         .catch(() => {
           channel.notify(t('input-clipboard-read-failed'), { color: 'warning' })
@@ -1045,56 +1203,6 @@ export function PromptInput({
       return
     }
 
-    /**
-     * CR/LF line from Windows cmd pipelines):
-     * - command menu open → run the SELECTED command (never send `/mo`);
-     * - model working → STEER into the running turn (next step boundary,
-     *   agent continues — the "immediate" send; Codex/pi semantics);
-     * - otherwise → submit directly (or run a unique command).
-     */
-    const handleEnter = () => {
-      // A single Enter can arrive as two events in cmd pipelines (`\r`
-      // parsed as return + a raw `\n` line): collapse them so one keypress
-      // never sends the message twice.
-      const now = Date.now()
-      if (now - lastEnterAtRef.current < 80) return
-      lastEnterAtRef.current = now
-      if (overlayOpen) {
-        const command = suggestions[selectedCommand]
-        if (command) {
-          tryRunCommand(command.commandLine)
-          return
-        }
-      }
-      // File-completion overlay open → Enter accepts the selection (same
-      // contract as the command menu: the overlay owns Enter while open).
-      if (fileOverlayOpen) {
-        const file = fileMatches[fileSelected]
-        if (file) {
-          acceptFile(file)
-          return
-        }
-      }
-      if (channel.working && value.trim() !== '') {
-        // CC's immediate-command semantics: /btw and /skills are exempt from
-        // steering — neither command interrupts the running turn. Hidden
-        // UI-only easter eggs (e.g. /deepseek) are also safe to run while
-        // streaming. Every other input keeps the steer behavior so /new
-        // /model etc. stay idle-only.
-        const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
-        if (parsed !== undefined && (
-          ((parsed.name === 'btw' || parsed.name === 'skills')
-            && channel.commandList.some(c => c.name === parsed.name))
-          || isHiddenCommandName(parsed.name)
-        )) {
-          if (tryRunCommand(value)) return
-        }
-        steerSend(value)
-        return
-      }
-      if (!tryRunCommand(value)) submitText(value)
-    }
-
     // Ctrl+J is the only portable multiline fallback when a terminal cannot
     // report modifiers on Enter. The parser names its bare LF `enter`, while
     // the physical Enter key arrives as CR (`return`).
@@ -1106,8 +1214,16 @@ export function PromptInput({
     // Whole-line input from Windows ConPTY pipelines (cmd batch -> node):
     // the trailing CR/LF marks a complete line to submit. A bare CR/CRLF is
     // Enter, while real multi-char piped lines keep the legacy direct-submit
-    // path.
+    // path. The expanded editor treats piped lines as DATA — CR/LF
+    // normalizes to '\n' and inserts (sending needs Ctrl+Enter there), so a
+    // fast batch never dumps raw '\r' into the draft.
     if (input.includes('\n') || input.includes('\r')) {
+      if (expandedRef.current) {
+        insertAtCaret(
+          sanitizeEditableText(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')),
+        )
+        return
+      }
       if (/^[\r\n]+$/.test(input)) {
         handleEnter()
         return
@@ -1124,9 +1240,15 @@ export function PromptInput({
       return
     }
     if (key.return && isMod(key)) {
-      // Ctrl+Enter / Cmd+Enter: interrupt the running turn and process this
-      // message immediately (Windows Terminal sends CSI 13;5u / 13;1;5u).
-      interruptSend()
+      // Ctrl+Enter / Cmd+Enter: in the EXPANDED editor this is the explicit
+      // send (Enter inserts newlines there, so sending needs its own key);
+      // inline it interrupts the running turn and processes this message
+      // immediately (Windows Terminal sends CSI 13;5u / 13;1;5u).
+      if (expandedRef.current) {
+        submitFromEditor()
+      } else {
+        interruptSend()
+      }
       return
     }
     if (key.return && (key.shift || key.meta)) {
@@ -1140,6 +1262,13 @@ export function PromptInput({
       setSelectedCommand(0)
       return
     }
+    if (key.return && expandedRef.current) {
+      // Expanded editor: plain Enter inserts a newline (text-editor
+      // semantics — long-draft editing must never misfire a send). The
+      // shift/meta variants above already newline; Ctrl+Enter sends.
+      insertAtCaret('\n')
+      return
+    }
     if (key.return) {
       handleEnter()
       return
@@ -1148,6 +1277,13 @@ export function PromptInput({
     // mode invisibly behind it, and plain Tab has no Help action.
     if (helpOpen && key.tab) {
       event.stopImmediatePropagation()
+      return
+    }
+    // Expanded editor: Tab is indentation, Shift+Tab a silent swallow —
+    // neither command completion nor session-mode cycling makes sense on
+    // the fullscreen editor, and both would fire invisibly behind it.
+    if (expandedRef.current && key.tab) {
+      if (!key.shift) insertAtCaret('    ')
       return
     }
     // Shift+Tab cycles the configured session modes (default: 默认 →
@@ -1749,7 +1885,7 @@ export function PromptInput({
       }, 3000)
       return
     }
-    if (input === '?' && value.length === 0) {
+    if (input === '?' && value.length === 0 && !expandedRef.current) {
       onToggleHelp()
       return
     }
@@ -1778,8 +1914,24 @@ export function PromptInput({
   // the same row, so the wrap budget must shrink by its width or long lines
   // would be clipped at the value box's right edge.
   const vimBadgeCols = vimEnabled ? 7 : 0
-  const inputWidth = Math.max(1, columns - 3 - vimBadgeCols)
-  const block = foldBlock
+  // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage
+  // 绿）。`/color` 会话强调色优先于主题 promptBorder（plan 模式仍整体走
+  // sage 绿）。`?? ''` 防御最小 mock channel（只声明用到的字段的回归脚
+  // 本）。声明在渲染派生区之前：展开编辑器的行号高亮与边框同用此色。
+  const sessionAccent = sessionColorHex(channel.sessionColor ?? '')
+  const promptAccent = channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'promptBorder')
+  // 展开态布局参数：编辑器独占整屏 —— 行号槽（宽度随逻辑行数伸缩）+
+  // 圆角边框 2 + 两侧 padding 各 1 占列，❯ 前缀 / vim 徽标 / ⛶ 按钮
+  // 全部让位；收起态额外扣掉行尾 ⛶ 按钮的 2 列。
+  const editorLogicalLines = expanded ? value.split('\n').length : 1
+  const editorNoWidth = Math.max(2, String(editorLogicalLines).length)
+  const editorGutterCols = editorNoWidth + 3
+  const inputWidth = expanded
+    ? Math.max(1, columns - 4 - editorGutterCols)
+    : Math.max(1, columns - 3 - vimBadgeCols - (expandEnabled ? 2 : 0))
+  // 展开态无视折叠块：全屏编辑就是为了看全文（foldBlock 状态保留，
+  // 收起后折叠显示恢复）。
+  const block = expanded ? null : foldBlock
   // Fold-block model: the value renders as [head rows][chip row][tail rows]
   // — the block is ONE atomic visual row regardless of its text size; text
   // before/after it stays fully editable and never unfolds it.
@@ -1808,17 +1960,46 @@ export function PromptInput({
     : ''
   const peekOpen = block !== null && hovered && !selectionActive
 
-  const windowStart = Math.max(
-    0,
-    Math.min(
-      caretVisualLine - MAX_VISIBLE_LINES + 1,
-      visualLines.length - MAX_VISIBLE_LINES,
-    ),
-  )
+  // 展开态的编辑区行高预算：圆角边框 2 + 标题行 1 + 状态行 1 + 按钮行 1。
+  const editorMaxRows = Math.max(1, terminalRows - EDITOR_CHROME_ROWS)
+  if (expanded && caretVisualLine !== prevCaretLineRef.current) {
+    // A real caret move re-engages following after wheel browsing.
+    editorFreeScrollRef.current = false
+    prevCaretLineRef.current = caretVisualLine
+  }
+  let windowStart: number
+  let visibleCount: number
+  if (expanded) {
+    // 滚轮推动的窗口与 caret 跟随合并：自由滚动（滚轮浏览）期间不强制
+    // caret 可见；caret 移动后恢复跟随。写回 ref，滚轮分支读到的就是
+    // 合并后的基线。
+    let win = expandedScrollRef.current
+    if (!editorFreeScrollRef.current) {
+      if (caretVisualLine < win) win = caretVisualLine
+      if (caretVisualLine >= win + editorMaxRows) win = caretVisualLine - editorMaxRows + 1
+    }
+    win = Math.max(0, Math.min(win, Math.max(0, visualLines.length - editorMaxRows)))
+    expandedScrollRef.current = win
+    windowStart = win
+    visibleCount = editorMaxRows
+  } else {
+    windowStart = Math.max(
+      0,
+      Math.min(
+        caretVisualLine - MAX_VISIBLE_LINES + 1,
+        visualLines.length - MAX_VISIBLE_LINES,
+      ),
+    )
+    visibleCount = MAX_VISIBLE_LINES
+  }
   const visibleLines = visualLines.slice(
     windowStart,
-    windowStart + MAX_VISIBLE_LINES,
+    windowStart + visibleCount,
   )
+  // useInput 的滚轮分支需要这份几何（它在这些派生之前注册）。
+  if (expanded) {
+    editorViewportRef.current = { maxRows: editorMaxRows, total: visualLines.length }
+  }
 
   // Caret position in the caret's visual row, in two units:
   // - char index (for slicing the row's characters in the render below)
@@ -1856,7 +2037,8 @@ export function PromptInput({
   // row (only while the window is at the top and no block exists); its
   // cells fold the whole input into a block again on click.
   const prefixLabel = `▾ ${stats} · `
-  const prefixCols = !block && big && windowStart === 0 ? stringWidth(prefixLabel) : 0
+  const prefixCols =
+    !block && !expanded && big && windowStart === 0 ? stringWidth(prefixLabel) : 0
 
   // Offset range [start, end) of every visual row — the SAME break rule as
   // wrapToWidth — so the selection highlight can intersect each row. With a
@@ -1871,6 +2053,55 @@ export function PromptInput({
         ),
       ]
     : visualLineRanges(value, inputWidth)
+
+  /**
+   * Inverse runs for one rendered row, shared by the inline prompt and the
+   * expanded editor: the selection's intersection (if any) and the caret
+   * cluster on the caret's row. Both render <Text inverse>; overlapping
+   * intervals merge so a caret inside the selection stays one continuous
+   * highlight. The caret row inverts the WHOLE cluster at the caret column
+   * (solid block) — [col, next boundary) covers a surrogate pair or ZWJ
+   * emoji as one glyph; at the text end it shows a blank inverse cell like
+   * the empty-input caret (appended after everything, so a selection
+   * ending there cannot swallow it).
+   */
+  const rowHighlightPieces = (
+    text: string,
+    absoluteLine: number,
+  ): Array<{ text: string; inverse: boolean }> => {
+    const intervals: Array<[number, number]> = []
+    const sel = selection
+    if (sel) {
+      const [rowStart, rowEnd] = lineRanges[absoluteLine] ?? [0, 0]
+      const lo = Math.min(Math.max(sel.start - rowStart, 0), text.length)
+      const hi = Math.min(Math.max(sel.end - rowStart, 0), text.length)
+      if (hi > lo) intervals.push([lo, hi])
+    }
+    let endBlankCaret = false
+    if (absoluteLine === caretVisualLine) {
+      const col = Math.min(caretCharCol(), text.length)
+      const clusterEnd = nextGraphemeBoundary(graphemeBoundaries(text), col)
+      if (clusterEnd > col) intervals.push([col, clusterEnd])
+      else endBlankCaret = col === text.length
+    }
+    intervals.sort((a, b) => a[0] - b[0])
+    const runs: Array<[number, number]> = []
+    for (const [s, e] of intervals) {
+      const last = runs[runs.length - 1]
+      if (last && s <= last[1]) last[1] = Math.max(last[1], e)
+      else runs.push([s, e])
+    }
+    const pieces: Array<{ text: string; inverse: boolean }> = []
+    let pos = 0
+    for (const [s, e] of runs) {
+      if (s > pos) pieces.push({ text: text.slice(pos, s), inverse: false })
+      pieces.push({ text: text.slice(s, e), inverse: true })
+      pos = Math.max(pos, e)
+    }
+    if (pos < text.length) pieces.push({ text: text.slice(pos), inverse: false })
+    if (endBlankCaret) pieces.push({ text: ' ', inverse: true })
+    return pieces
+  }
 
   const rendered = visibleLines.map((line, index) => {
     const absoluteLine = windowStart + index
@@ -1898,49 +2129,7 @@ export function PromptInput({
     const withPrefix = absoluteLine === 0 && prefixCols > 0
     const text = withPrefix ? truncateToWidth(line, inputWidth - prefixCols) : line
     const prefix = withPrefix ? <Text dimColor>{prefixLabel}</Text> : null
-    // Inverse runs on this row: the selection's intersection (if any) and
-    // the caret cluster on the caret's row. Both render <Text inverse>;
-    // overlapping intervals merge so a caret inside the selection stays one
-    // continuous highlight. The caret row inverts the WHOLE cluster at the
-    // caret column (solid block) — [col, next boundary) covers a surrogate
-    // pair or ZWJ emoji as one glyph; at the text end it shows a blank
-    // inverse cell like the empty-input caret.
-    const intervals: Array<[number, number]> = []
-    const sel = selection
-    if (sel) {
-      const [rowStart, rowEnd] = lineRanges[absoluteLine] ?? [0, 0]
-      const lo = Math.min(Math.max(sel.start - rowStart, 0), text.length)
-      const hi = Math.min(Math.max(sel.end - rowStart, 0), text.length)
-      if (hi > lo) intervals.push([lo, hi])
-    }
-    // Caret cluster: a REAL cluster joins the merge (visible inside the
-    // selection run); the end-of-text blank caret renders as its own cell
-    // AFTER everything — merging it into a selection that ends there would
-    // swallow the blank (slice beyond the text is empty) and the caret
-    // would vanish at the selection edge.
-    let endBlankCaret = false
-    if (absoluteLine === caretVisualLine) {
-      const col = Math.min(caretCharCol(), text.length)
-      const clusterEnd = nextGraphemeBoundary(graphemeBoundaries(text), col)
-      if (clusterEnd > col) intervals.push([col, clusterEnd])
-      else endBlankCaret = col === text.length
-    }
-    intervals.sort((a, b) => a[0] - b[0])
-    const runs: Array<[number, number]> = []
-    for (const [s, e] of intervals) {
-      const last = runs[runs.length - 1]
-      if (last && s <= last[1]) last[1] = Math.max(last[1], e)
-      else runs.push([s, e])
-    }
-    const pieces: Array<{ text: string; inverse: boolean }> = []
-    let pos = 0
-    for (const [s, e] of runs) {
-      if (s > pos) pieces.push({ text: text.slice(pos, s), inverse: false })
-      pieces.push({ text: text.slice(s, e), inverse: true })
-      pos = Math.max(pos, e)
-    }
-    if (pos < text.length) pieces.push({ text: text.slice(pos), inverse: false })
-    if (endBlankCaret) pieces.push({ text: ' ', inverse: true })
+    const pieces = rowHighlightPieces(text, absoluteLine)
     return (
       <Text key={absoluteLine} wrap="truncate-end">
         {prefix}
@@ -1956,6 +2145,56 @@ export function PromptInput({
       </Text>
     )
   })
+
+  // ── 展开态编辑行 ────────────────────────────────────────────────────
+  // Logical line number per visual row (a wrapped continuation keeps its
+  // line's number): the row's range end sitting on a '\n' starts a new
+  // logical line from the NEXT row.
+  const editorRowLogical: number[] = []
+  if (expanded) {
+    let count = 0
+    for (let i = 0; i < lineRanges.length; i++) {
+      editorRowLogical.push(count)
+      const rangeEnd = lineRanges[i]![1]
+      if (value[rangeEnd] === '\n') count++
+    }
+  }
+  const editorRows = expanded
+    ? visibleLines.map((line, index) => {
+        const absoluteLine = windowStart + index
+        const isCaretRow = absoluteLine === caretVisualLine
+        const logicalNo = editorRowLogical[absoluteLine]
+        const gutterLabel =
+          logicalNo === undefined
+            ? ' '.repeat(editorNoWidth)
+            : String(logicalNo + 1).padStart(editorNoWidth, ' ')
+        const pieces = rowHighlightPieces(line, absoluteLine)
+        return (
+          <Text
+            key={absoluteLine}
+            wrap="truncate-end"
+            backgroundColor={isCaretRow ? 'toolCardBackgroundDim' : undefined}
+          >
+            <Text
+              dimColor={!isCaretRow}
+              bold={isCaretRow}
+              color={isCaretRow ? promptAccent : undefined}
+            >
+              {`${gutterLabel} │ `}
+            </Text>
+            {pieces.map((piece, pieceIndex) =>
+              piece.inverse ? (
+                <Text key={pieceIndex} inverse>
+                  {piece.text}
+                </Text>
+              ) : (
+                piece.text
+              ),
+            )}
+          </Text>
+        )
+      })
+    : null
 
   // Peek card content: the BLOCK's text wrapped to the card's inner width,
   // capped at PEEK_MAX_ROWS visual rows (a preview — click to expand and
@@ -2006,9 +2245,17 @@ export function PromptInput({
     // Clamp the declared column to the wrap width: a grapheme wider than
     // the last remaining column (emoji at width 1) can push the visual
     // column past inputWidth, and the park must stay inside the value box.
+    // In the expanded editor the declared box starts at its outer edge
+    // (padding + gutter included), so those columns ride along and the
+    // clamp grows with them.
     column: Math.min(
-      caretVisualCol() + (caretVisualLine === 0 && prefixCols > 0 ? prefixCols : 0),
-      inputWidth,
+      caretVisualCol() +
+        (expanded
+          ? editorGutterCols + 1
+          : caretVisualLine === 0 && prefixCols > 0
+            ? prefixCols
+            : 0),
+      expanded ? editorGutterCols + 1 + inputWidth : inputWidth,
     ),
     active: !selectionActive,
   })
@@ -2022,7 +2269,7 @@ export function PromptInput({
    * not to text).
    */
   const localToOffset = (localCol: number, localRow: number): number | null => {
-    const lastVisible = Math.min(visualLines.length - 1, windowStart + MAX_VISIBLE_LINES - 1)
+    const lastVisible = Math.min(visualLines.length - 1, windowStart + visibleCount - 1)
     const clamped = Math.max(windowStart, Math.min(windowStart + localRow, lastVisible))
     // Fold prefix (▾) row: the rendered first row is truncated by prefixCols,
     // so both the column and the wrap budget shift — without the correction
@@ -2057,8 +2304,12 @@ export function PromptInput({
    * Shift+click extends the selection from its start edge (or the caret)
    * to the clicked offset; a plain click clears the selection and moves
    * the caret.
+   *
+   * `colOffset` shifts the local column origin: the expanded editor's
+   * value box starts at the line-number gutter, so its callers subtract
+   * the gutter width (0 for the inline prompt).
    */
-  const handleValueClick = (e: ClickEvent) => {
+  const handleValueClick = (e: ClickEvent, colOffset = 0) => {
     const now = Date.now()
     const modified = e.shift || e.alt || e.ctrl
     const isDouble =
@@ -2078,14 +2329,15 @@ export function PromptInput({
       lastClickColRef.current = e.col
       lastClickRowRef.current = e.row
     }
+    const localCol = e.localCol - colOffset
     const clickedVisual = windowStart + e.localRow
     const clamped = Math.max(0, Math.min(clickedVisual, visualLines.length - 1))
     if (block) {
       if (clamped === chipRow) return
       const offset =
         clamped < chipRow
-          ? clickToCursorOffset(head, inputWidth, clamped, e.localCol, isDouble ? 'grapheme-start' : 'nearest')
-          : block.end + clickToCursorOffset(tail, inputWidth, clamped - chipRow - 1, e.localCol, isDouble ? 'grapheme-start' : 'nearest')
+          ? clickToCursorOffset(head, inputWidth, clamped, localCol, isDouble ? 'grapheme-start' : 'nearest')
+          : block.end + clickToCursorOffset(tail, inputWidth, clamped - chipRow - 1, localCol, isDouble ? 'grapheme-start' : 'nearest')
       if (isDouble) {
         // Word select stays inside the clicked side: the block is atomic.
         const side = offset <= block.start
@@ -2106,7 +2358,7 @@ export function PromptInput({
       setCursor(offset)
       return
     }
-    if (clamped === 0 && prefixCols > 0 && e.localCol < prefixCols) {
+    if (clamped === 0 && prefixCols > 0 && localCol < prefixCols) {
       // Folding hides the entire editable projection, so no selection may
       // survive invisibly inside the chip and keep owning Ctrl+C/Delete.
       clearSelection()
@@ -2116,7 +2368,7 @@ export function PromptInput({
       return
     }
     const col =
-      clamped === 0 && prefixCols > 0 ? Math.max(0, e.localCol - prefixCols) : e.localCol
+      clamped === 0 && prefixCols > 0 ? Math.max(0, localCol - prefixCols) : localCol
     const offset = clickToCursorOffset(
       value,
       clamped === 0 && prefixCols > 0 ? inputWidth - prefixCols : inputWidth,
@@ -2147,10 +2399,10 @@ export function PromptInput({
    * derived from the event's start/current delta (dragstart fires on the
    * FIRST motion), the focus follows every dragmove. The caret rides the
    * focus edge; updateSelection clamps both ends into one fold side, so a
-   * drag can never cross the chip row.
+   * drag can never cross the chip row. `colOffset` as in handleValueClick.
    */
-  const handleDragStart = (e: DragEvent) => {
-    const anchorLocalCol = e.localCol - (e.col - e.startCol)
+  const handleDragStart = (e: DragEvent, colOffset = 0) => {
+    const anchorLocalCol = e.localCol - (e.col - e.startCol) - colOffset
     const anchorLocalRow = e.localRow - (e.row - e.startRow)
     const anchor = localToOffset(anchorLocalCol, anchorLocalRow)
     if (anchor === null) {
@@ -2160,10 +2412,10 @@ export function PromptInput({
     dragAnchorRef.current = anchor
     setCursor(anchor)
   }
-  const handleDragMove = (e: DragEvent) => {
+  const handleDragMove = (e: DragEvent, colOffset = 0) => {
     const anchor = dragAnchorRef.current
     if (anchor === null) return
-    const focus = localToOffset(e.localCol, e.localRow)
+    const focus = localToOffset(e.localCol - colOffset, e.localRow)
     if (focus === null) return
     // The caret rides the focus edge, clamped into the anchor's fold side
     // exactly like updateSelection clamps the range — the caret must never
@@ -2183,14 +2435,11 @@ export function PromptInput({
   // 浮层整体挂载条件：与内部面板可见条件精确同值。关闭时必须把整个
   // absolute 浮层移除——渲染器的 absolute-removed 检测只看被移除节点自身
   // 的 style.position，常驻浮层 + 移除普通子节点不会触发 blit 解毒，被
-  // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。
+  // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。展开态由
+  // 全屏编辑器接管，内联浮层全部撤下。
   const floatersOpen =
-    helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen || peekOpen
-  // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage 绿）。
-  // `/color` 会话强调色优先于主题 promptBorder（plan 模式仍整体走 sage 绿）。
-  // `?? ''` 防御最小 mock channel（只声明用到的字段的回归脚本）。
-  const sessionAccent = sessionColorHex(channel.sessionColor ?? '')
-  const promptAccent = channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'promptBorder')
+    !expanded &&
+    (helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen || peekOpen)
   // 顶边框右侧的会话名标签（CC 风格 chip）：色随强调色；超宽截断，宽度
   // 随终端列数伸缩但不超过 28 显示单元。默认关闭——`/settings` 的
   // 「会话名标签」开关（dsh-tui.promptSessionLabel）开启后显示。
@@ -2219,6 +2468,131 @@ export function PromptInput({
     ink?.invalidatePrevFrame()
     ink?.reanchorViewport()
   }, [floatersOpen])
+
+  // 展开态开关 = 全屏覆盖增删：与浮层开关同款的视口重锚（inline 模式的
+  // 虚屏↔scrollback 映射不漂移），并在展开首帧把滚动窗口归零。
+  React.useLayoutEffect(() => {
+    if (expanded === prevExpandedRef.current) return
+    prevExpandedRef.current = expanded
+    if (expanded) expandedScrollRef.current = 0
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    ink?.invalidatePrevFrame()
+    ink?.reanchorViewport()
+  }, [expanded])
+
+  // Feature turned off mid-session while the editor is up: withdraw the
+  // cover (the draft and every other editing state survive).
+  React.useEffect(() => {
+    if (expanded && !expandEnabled) collapseEditor()
+  }, [expanded, expandEnabled])
+
+  // ── 全屏草稿编辑节点 ────────────────────────────────────────────────
+  // 每次渲染构造新鲜闭包（value/caret/handlers），经 module store 发布给
+  // Chat 根部末尾的 PromptEditorLayer（树序最后 → 盖住全部后绘兄弟）。
+  // useInsertionEffect 发布：sink 的同步重渲染发生在 layout 阶段之前，
+  // useDeclaredCursor（layout effect）读到的新 ref 已指向编辑区 Box。
+  // 点击/拖拽坐标以内容区为原点（localCol 去掉行号槽宽度）。
+  const editorNode = expanded ? (
+    <Box
+      flexDirection="column"
+      width="100%"
+      height="100%"
+      borderStyle="round"
+      borderColor={promptAccent}
+      backgroundColor="toolCardBackground"
+    >
+      {/* 标题行：编辑图标 + 标题 · 右侧实时统计 */}
+      <Box flexDirection="row" flexShrink={0} paddingLeft={1} paddingRight={1}>
+        <Text bold color={promptAccent}>{`✎ ${t('input-expand-editor-title')}`}</Text>
+        <Box flexGrow={1} />
+        <Text dimColor>
+          {t('input-fold-stats', {
+            lines: value.split('\n').length,
+            chars: value.length,
+          })}
+        </Text>
+      </Box>
+      {/* 编辑区：行号槽 + 全套选区/caret 高亮，点击定位/拖选/双击选词。
+          坐标换算：localCol 相对 Box 外缘（含 paddingLeft），故偏移 =
+          padding 1 + 行号槽宽（见 handleValueClick 的 colOffset）。滚轮走
+          位置路由（onWheel），驱动展开态自己的滚动窗口。 */}
+      <Box
+        ref={valueBoxRef}
+        flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        paddingLeft={1}
+        paddingRight={1}
+        onClick={(event) => {
+          handleValueClick(event, editorGutterCols + 1)
+        }}
+        onDragStart={(event) => {
+          handleDragStart(event, editorGutterCols + 1)
+        }}
+        onDragMove={(event) => {
+          handleDragMove(event, editorGutterCols + 1)
+        }}
+        onDragEnd={handleDragEnd}
+        onWheel={(event) => {
+          const viewport = editorViewportRef.current
+          if (!viewport) return
+          editorFreeScrollRef.current = true
+          const max = Math.max(0, viewport.total - viewport.maxRows)
+          expandedScrollRef.current = Math.max(
+            0,
+            Math.min(expandedScrollRef.current + Math.round(event.deltaY), max),
+          )
+          setExpandedTick(tick => tick + 1)
+        }}
+      >
+        {editorRows}
+      </Box>
+      {/* 状态行：vim 徽标 · 行列 · 右侧键位提示 */}
+      <Box flexDirection="row" flexShrink={0} paddingLeft={1} paddingRight={1}>
+        {vimEnabled && (
+          <Text bold color={vimInsert ? 'success' : 'warning'}>
+            {vimInsert ? 'INSERT' : 'NORMAL'}{' '}
+          </Text>
+        )}
+        <Text dimColor>
+          {t('input-expand-editor-position', {
+            line: cursorLine(value, cursor) + 1,
+            col: cursorColumn(value, cursor) + 1,
+          })}
+        </Text>
+        <Box flexGrow={1} />
+        <Text dimColor>
+          {`${t('input-expand-editor-hint-send')} · ${t('input-expand-editor-hint-collapse')}`}
+        </Text>
+      </Box>
+      {/* 按钮行：主操作发送（accent 填充）+ 次操作收起，均可点击/hover */}
+      <Box flexDirection="row" flexShrink={0} paddingLeft={1} paddingRight={1} columnGap={1}>
+        <EditorButton
+          label={`⏎ ${t('input-expand-editor-send')}`}
+          hint="Ctrl+Enter"
+          primary
+          accent={promptAccent}
+          onClick={submitFromEditor}
+        />
+        <EditorButton
+          label={t('input-expand-editor-collapse')}
+          hint="Esc"
+          onClick={collapseEditor}
+        />
+        <Box flexGrow={1} />
+        <Text dimColor>{t('input-expand-editor-scroll')}</Text>
+      </Box>
+    </Box>
+  ) : null
+  React.useInsertionEffect(() => {
+    setPromptEditorNode(editorNode)
+  })
+  React.useEffect(() => {
+    // 卸载保险：PromptInput 被替换（问卷/面板接管）时撤下全屏浮层。
+    return () => {
+      setPromptEditorNode(null)
+    }
+  }, [])
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -2386,7 +2760,7 @@ export function PromptInput({
               {vimInsert ? 'INSERT' : 'NORMAL'} </Text>
           )}
           <Box
-            ref={valueBoxRef}
+            ref={expanded ? undefined : valueBoxRef}
             flexGrow={1}
             flexShrink={1}
             onClick={handleValueClick}
@@ -2415,6 +2789,32 @@ export function PromptInput({
               <Box flexDirection="column">{rendered}</Box>
             )}
           </Box>
+          {/* ⛶ 全屏草稿编辑入口：点击展开；hover 提亮为输入框强调色。
+              inputWidth 已为它预留 2 列（见渲染派生区）；设置关闭时
+              整体不渲染（宽度预算同步归还）。 */}
+          {expandEnabled && (
+            <Box
+              flexShrink={0}
+              onClick={(event) => {
+                event.stopImmediatePropagation()
+                toggleExpand()
+              }}
+              onMouseEnter={() => {
+                setExpandHovered(true)
+              }}
+              onMouseLeave={() => {
+                setExpandHovered(false)
+              }}
+            >
+              <Text
+                dimColor={!expandHovered}
+                bold={expandHovered}
+                color={expandHovered ? promptAccent : undefined}
+              >
+                ⛶
+              </Text>
+            </Box>
+          )}
         </Box>
       </EffortInputBorder>
     </Box>

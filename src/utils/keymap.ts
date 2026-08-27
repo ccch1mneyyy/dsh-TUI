@@ -182,6 +182,7 @@ export type ShortcutActionId =
   | 'showAll'
   | 'redraw'
   | 'todoFold'
+  | 'expandEditor'
 
 export interface ShortcutActionSpec {
   readonly id: ShortcutActionId
@@ -206,6 +207,7 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   { id: 'showAll', defaults: ['ctrl+e'] },
   { id: 'redraw', defaults: ['ctrl+l'] },
   { id: 'todoFold', defaults: ['ctrl+q'] },
+  { id: 'expandEditor', defaults: ['ctrl+shift+e'] },
 ]
 
 const DEFAULT_COMBO_MAP: ReadonlyMap<ShortcutActionId, readonly ParsedCombo[]> = new Map(
