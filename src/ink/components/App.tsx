@@ -841,6 +841,7 @@ function processKeysInBatch(
 				item.mouseRow,
 				deltaY,
 				deltaX,
+				item.mouseButton,
 			);
 			if (consumed) {
 				logMouseDebug("wheel routed by position", {
@@ -915,6 +916,13 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			app.lastHoverRow = row;
 			app.props.onHoverAt(col, row);
 			return;
+		}
+		// X10 cannot report releases. A fresh button press after a captured
+		// drag is therefore the first reliable evidence that the old gesture
+		// ended; settle it before this press can open a replacement session.
+		// The same fallback is harmless for malformed/duplicated SGR streams.
+		if ((m.button & 0x20) === 0 && app.dragSession) {
+			app.finishDragSession();
 		}
 		if (baseButton !== 0) {
 			// Non-left press breaks the multi-click chain.
@@ -1060,25 +1068,11 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 		return;
 	}
 
-	// Release: end the drag even for non-zero button codes. Some terminals
-	// encode release with the motion bit or button=3 "no button" (carried
-	// over from pre-SGR X10 encoding) — filtering those would orphan
-	// isDragging=true and leave drag-to-scroll's timer running until the
-	// scroll boundary. Only act on non-left releases when we ARE dragging
-	// (so an unrelated middle/right click-release doesn't touch selection).
-	if (baseButton !== 0) {
-		if (!sel.isDragging) return;
-		finishSelection(sel);
-		app.props.onSelectionChange();
-		return;
-	}
-	// A drag session that never started (press without movement) resolves
-	// to a plain click: replay the startSelection the press would have
-	// made so the release tail below behaves exactly like the baseline
-	// click path (anchor set, focus null → click dispatch + hyperlink
-	// check fire unchanged). A STARTED session ends with dragend instead
-	// and never clicks (DOM: a real drag is not a click) — and selection
-	// was never started for this press, so the selection tail is inert.
+	// Release: settle a captured component drag BEFORE filtering on the raw
+	// low button bits. Some terminals encode release as button=3 (legacy
+	// "no button") or retain the motion bit. A started session still needs
+	// dragend; a dormant press still needs its ordinary click replay.
+	let replayedDormantDrag = false;
 	if (app.dragSession) {
 		const session = app.dragSession;
 		app.dragSession = null;
@@ -1097,7 +1091,13 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			return;
 		}
 		startSelection(sel, col, row);
+		replayedDormantDrag = true;
 	}
+	// Classic X10 encodes every release as low bits 3. If a left selection is
+	// active, pair that generic release with it and continue through the normal
+	// click/selection tail; an unrelated middle/right release has no active
+	// selection and remains inert.
+	if (baseButton !== 0 && !replayedDormantDrag && !sel.isDragging) return;
 	finishSelection(sel);
 	// NOTE: unlike the old release-based detection we do NOT reset clickCount
 	// on release-after-drag. This aligns with NSEvent.clickCount semantics:

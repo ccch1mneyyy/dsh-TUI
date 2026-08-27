@@ -176,7 +176,11 @@ export function TooltipLayer(): React.ReactNode {
   }, [columns, rows])
 
   if (tooltip === null) return null
-  const maxWidth = Math.max(10, columns - 4)
+  // A bordered card needs at least one content cell plus two border cells.
+  // Below that, hiding is safer than creating geometry wider/taller than the
+  // terminal (Yoga would clip unpredictably on 1–2 column/row resize states).
+  if (columns < 3 || rows < 3) return null
+  const maxWidth = Math.max(3, columns - 4)
   // Grapheme-aware wrap (parity with PromptInput's wrapToWidth): code-point
   // iteration splits ZWJ emoji and combining sequences across rows, leaving
   // broken halves at the row edges. Newlines are honoured like wrapWidth.

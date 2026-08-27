@@ -3,6 +3,7 @@ import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
+import { useTooltip } from '../Tooltip.js'
 import {
   formatBytes,
   formatWhen,
@@ -58,6 +59,7 @@ export function SessionListRow({
   const body = Math.max(8, width - 2 - indent)
   const mark = kindMark(session.kind)
   const [hovered, setHovered] = useState(false)
+  const pinTooltip = useTooltip(t(pinned ? 'resume-menu-unpin' : 'resume-menu-pin'))
 
   const facts: string[] = [formatWhen(session.updatedAt, now)]
   if (session.branch !== undefined) facts.push(session.branch)
@@ -88,6 +90,7 @@ export function SessionListRow({
             Its width is charged to the title budget below, like the kind
             mark's. */}
         <Box
+          {...pinTooltip}
           onClick={onTogglePin === undefined ? undefined : (event: ClickEvent): void => {
             // The star is a control on the row, not the row: a click here
             // toggles the pin and must never fall through to resume.

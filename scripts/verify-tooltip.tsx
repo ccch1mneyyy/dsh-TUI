@@ -86,6 +86,16 @@ function Probe({ longContent }: { longContent?: boolean }): React.ReactNode {
   )
 }
 
+function TinyProbe(): React.ReactNode {
+  return (
+    <Box flexDirection="column">
+      <Target label="T" content="WIDE" delayMs={0} />
+      <KeySink />
+      <tooltip.TooltipLayer />
+    </Box>
+  )
+}
+
 function makeRig(cols: number, rows: number) {
   const term = new XTerm({ cols, rows, scrollback: 50, allowProposedApi: true })
   class FakeStdout extends Writable {
@@ -209,6 +219,28 @@ try {
   check('narrow terminal: card width is clamped (border ≤ columns)', border.length > 0 && border.length <= NARROW,
     `border=${JSON.stringify(border)}`)
   await instance2.unmount()
+
+  // 10. Ultra-narrow resize states used to keep a hard minimum width of 10,
+  // producing a card wider than the terminal. A 6-column terminal must still
+  // render a bounded card (1 content cell minimum + borders).
+  const TINY = 6
+  const rig3 = makeRig(TINY, 8)
+  const instance3 = await render(
+    <AlternateScreen><TinyProbe /></AlternateScreen>,
+    { stdout: rig3.stdout, stdin: rig3.stdin, stderr: new (class extends Writable {
+      isTTY = true
+      _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
+    })(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(300)
+  const tinyTarget = findText(rig3.term, 'T')
+  if (tinyTarget !== null) hover(rig3.stdin, tinyTarget.col + 1, tinyTarget.row + 1)
+  const tinyShown = await settled(() => viewportLines(rig3.term).some(line => line.includes('W')))
+  const tinyLines = viewportLines(rig3.term).filter(line => /[W╭╰]/u.test(line))
+  check('ultra-narrow terminal: tooltip remains on-screen',
+    tinyShown && tinyLines.every(line => line.length <= TINY),
+    JSON.stringify(tinyLines))
+  await instance3.unmount()
 } finally {
   rmSync(dataDir, { recursive: true, force: true })
 }

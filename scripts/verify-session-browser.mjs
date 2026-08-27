@@ -33,14 +33,16 @@
  * Run: `node scripts/verify-session-browser.mjs`
  * Exits 1 on any failed assertion (CI gate).
  */
-import './lib/fake-home.mjs'
+import fakeHome from './lib/fake-home.mjs'
+import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { Writable, PassThrough } from 'node:stream'
 import xtermPkg from '@xterm/headless'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { Chat } from '../lib/types/screens/Chat.js'
 import { setLang } from '../lib/types/i18n.js'
-import { readSessionPins, writeSessionPins } from '../lib/types/sessionPins.js'
+import { readSessionPins, setSessionPinned, writeSessionPins } from '../lib/types/sessionPins.js'
 import instances from '../lib/types/ink/instances.js'
 import { settle, settled, sleep } from './lib/term-test.mjs'
 
@@ -51,6 +53,33 @@ function check(name, ok, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
+
+// Pin-store contract: private atomic replacement, fresh read-modify-write,
+// corruption preservation, and lock contention failure without lost data.
+const pinDir = join(fakeHome, '.dsh-tui')
+const pinFile = join(pinDir, 'session-pins.json')
+const pinLock = join(pinDir, 'session-pins.lock')
+check('pin store initial write succeeds', writeSessionPins(['base']))
+const mergedPin = setSessionPinned('second', true)
+check('pin mutation re-reads and merges the persisted set',
+  mergedPin.ok && [...mergedPin.pins].sort().join(',') === 'base,second',
+  JSON.stringify([...mergedPin.pins]))
+check('pin file is mode 0600 on POSIX',
+  process.platform === 'win32' || (statSync(pinFile).mode & 0o777) === 0o600,
+  process.platform === 'win32' ? 'Windows mode bits skipped' : (statSync(pinFile).mode & 0o777).toString(8))
+writeFileSync(pinFile, '{truncated', 'utf8')
+const corruptBefore = readFileSync(pinFile, 'utf8')
+const corruptMutation = setSessionPinned('must-not-overwrite', true)
+check('malformed pin file is preserved instead of overwritten as empty',
+  !corruptMutation.ok && readFileSync(pinFile, 'utf8') === corruptBefore)
+check('pin store can atomically recover through an explicit full write', writeSessionPins(['base']))
+writeFileSync(pinLock, `${process.pid}\n`, { mode: 0o600 })
+const lockedMutation = setSessionPinned('contended', true)
+check('live pin lock fails cleanly without a lost update',
+  !lockedMutation.ok && [...readSessionPins()].join(',') === 'base')
+rmSync(pinLock, { force: true })
+check('pin store resets for browser scenario', writeSessionPins([]))
+
 const COLS = 110
 const ROWS = 34
 
@@ -450,6 +479,22 @@ s = screen()
 check('nothing is folded any more', /0 runs folded/.test(flat(s)) || !/runs folded/.test(flat(s)))
 const runLine = s.split('\n').find((l) => l.includes('audit run')) ?? ''
 check('a run is indented under its parent', /^\s{3,}/.test(runLine), JSON.stringify(runLine))
+// Attached child pins used to paint ★ but remain buried under the parent.
+// Clicking its star must promote it exactly once into the Pinned group.
+{
+  const runRow = s.split('\n').findIndex(line => line.includes('audit run')) + 1
+  const runStarCol = runLine.indexOf('☆') + 1
+  stdin.write(`\x1b[<0;${runStarCol};${runRow}M\x1b[<0;${runStarCol};${runRow}m`)
+  check('an attached sub-agent pin is promoted into the Pinned group',
+    await settled(() => /★\s*Pinned/.test(flat(screen())) && /^❯\s*★\s*⑂\s*audit run/m.test(screen())),
+    screen().split('\n').filter(line => /Pinned|audit run/.test(line)).join(' | '))
+  stdin.write('\x10') // focused promoted run → unpin
+  check('unpinning the child returns it under its parent without duplication',
+    await settled(() => !/Pinned/.test(flat(screen())) &&
+      screen().split('\n').filter(line => line.includes('audit run')).length === 1 &&
+      /^\s{2}(?:❯|\s{2})/.test(screen().split('\n').find(line => line.includes('audit run')) ?? '')),
+    screen().split('\n').filter(line => /Pinned|audit run/.test(line)).join(' | '))
+}
 stdin.write('\x13') // fold them back
 check('ctrl+s folds them away again', await settled(() => !/audit run/.test(screen())))
 
@@ -546,13 +591,30 @@ check('ctrl+p pins the focused session',
     JSON.stringify({ headerIdx, gammaIdx, alphaIdx }))
 }
 check('the pin is persisted', [...readSessionPins()].join(',') === 's-new', [...readSessionPins()].join(','))
-// Clicking the star of ANOTHER row pins it and must never resume: the star
+// Two toggles in one stdin chunk must observe each other and cancel out.
+stdin.write('\x10\x10')
+check('same-chunk ctrl+p twice cancels out',
+  await settled(() => readSessionPins().has('s-new') && /★\s*gamma/.test(screen())),
+  JSON.stringify([...readSessionPins()]))
+// Down + Ctrl+P in one chunk pins the row the cursor MOVED to, not the stale
+// render-closure target.
+stdin.write('\x1b[B\x10')
+check('same-chunk Down + ctrl+p follows the moved focus',
+  await settled(() => readSessionPins().has('s-old') && /❯\s*★\s*alpha/.test(screen())),
+  JSON.stringify([...readSessionPins()]))
+// Clicking the star of ANOTHER row toggles it and must never resume: the star
 // is a control on the row, not the row. The ☆ sits two columns in (focus
 // marker + star), so the SGR click lands on column 3.
 {
-  const alphaStarRow = screen().split('\n').findIndex(l => /☆\s*alpha/.test(l)) + 1
+  const alphaStarRow = screen().split('\n').findIndex(l => /★\s*alpha/.test(l)) + 1
   stdin.write(`\x1b[<0;3;${alphaStarRow}M\x1b[<0;3;${alphaStarRow}m`)
-  check('clicking the star pins without resuming',
+  check('clicking the star unpins without resuming',
+    await settled(() => /☆\s*alpha/.test(screen()) && channel.calls.resume.length === 0),
+    JSON.stringify({ resume: channel.calls.resume }))
+  await sleep(550)
+  const alphaRowAgain = screen().split('\n').findIndex(l => /☆\s*alpha/.test(l)) + 1
+  stdin.write(`\x1b[<0;3;${alphaRowAgain}M\x1b[<0;3;${alphaRowAgain}m`)
+  check('clicking the star can pin again',
     await settled(() => /★\s*alpha/.test(screen()) && channel.calls.resume.length === 0),
     JSON.stringify({ resume: channel.calls.resume }))
 }

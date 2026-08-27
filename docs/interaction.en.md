@@ -81,8 +81,10 @@ then double-Esc for time rewind; during a running turn, `Esc` in INSERT just
 returns to NORMAL (interrupt with `Ctrl+C` / `Ctrl+Enter`). Clear the draft in
 NORMAL with `Ctrl+C` or `dd`.
 
-Bracketed paste from right-click or the terminal's native paste command is
-inserted verbatim, including newlines, and is never mistaken for an Enter key.
+Bracketed paste from right-click or the terminal's native paste command keeps
+ordinary text and newlines and is never mistaken for an Enter key. To keep
+rendering, click mapping, and selection geometry identical, terminal ANSI
+controls are stripped and tabs are expanded to spaces on entry.
 
 ## @ file references
 
@@ -152,9 +154,15 @@ projects).
 | `ctrl+a` | Toggle this project / all projects (grouped by directory) |
 | `ctrl+b` | Only sessions last used on the current branch |
 | `ctrl+s` | Expand / fold sub-agent runs |
+| `ctrl+p` | Pin / unpin the selected session (to the top of the current filtered view) |
 | `ctrl+r` / `ctrl+d` | Rename / delete the selected session |
 | `ctrl+x` | Remove sessions that hold no conversation |
 | `Esc` | Clear the search first, leave second |
+
+Clicking a row resumes it. Click ★/☆ or press `ctrl+p` to toggle its pin;
+pins are atomically persisted in `~/.dsh-tui/session-pins.json`. The right-click
+menu offers Open, Pin/Unpin, Rename, and Delete. Revealed sub-agent runs can be
+pinned too and are promoted into the Pinned group as independent rows.
 
 Each row carries the title, last activity, the git branch this install was on
 when it last used the session, the log size, and the model. Titles are graded

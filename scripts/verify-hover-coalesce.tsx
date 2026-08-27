@@ -82,13 +82,13 @@ function makeInertTree() {
   const hovered = new Set<import('../src/ink/dom.js').DOMElement>()
   invalidateNoInterestRect()
   resetHitTestWithOverlaysCount()
-  dispatchHover(root, 4, 3, hovered)
+  dispatchHover(root, 4, 2, hovered)
   const c1 = getHitTestWithOverlaysCount()
   check('U1 首次 motion 完整 hit-test 并缓存 rect', c1 === 1, `count=${c1}`)
-  dispatchHover(root, 6, 3, hovered)
+  dispatchHover(root, 6, 2, hovered)
   check('U1 rect 内 motion 跳过 hit-test', getHitTestWithOverlaysCount() === 1,
     `count=${getHitTestWithOverlaysCount()}`)
-  dispatchHover(root, 10, 4, hovered)
+  dispatchHover(root, 10, 2, hovered)
   check('U1 rect 内再 motion 仍跳过', getHitTestWithOverlaysCount() === 1)
   dispatchHover(root, 30, 10, hovered)
   check('U1 离开 rect 立即重新 hit-test', getHitTestWithOverlaysCount() === 2,
@@ -127,6 +127,47 @@ function makeInertTree() {
     getHitTestWithOverlaysCount() === 2)
   check('U2 inner enter 正常触发', enters.length === 1 && enters[0] === 'inner',
     enters.join(','))
+}
+
+{
+  // U2b: overlapping sibling with hover interest can become topmost inside
+  // only part of an inert leaf rect; the cache must not hide its enter.
+  const root = createNode('ink-root')
+  const inert = createNode('ink-box')
+  const floating = createNode('ink-box')
+  root.childNodes.push(inert, floating)
+  inert.parentNode = root
+  floating.parentNode = root
+  nodeCache.set(root, { x: 0, y: 0, width: 40, height: 12 })
+  nodeCache.set(inert, { x: 2, y: 2, width: 20, height: 2 })
+  nodeCache.set(floating, { x: 12, y: 2, width: 8, height: 2 })
+  let entered = 0
+  floating._eventHandlers = { onMouseEnter: () => { entered++ } }
+  const hovered = new Set<import('../src/ink/dom.js').DOMElement>()
+  invalidateNoInterestRect()
+  resetHitTestWithOverlaysCount()
+  dispatchHover(root, 4, 2, hovered)
+  dispatchHover(root, 14, 2, hovered)
+  check('U2b 重叠 sibling 不被 inert rect 快路遮蔽',
+    entered === 1 && getHitTestWithOverlaysCount() === 2,
+    `enter=${entered} count=${getHitTestWithOverlaysCount()}`)
+}
+
+{
+  // U2c: cache geometry is per root; one Ink tree must not skip another.
+  const first = makeInertTree()
+  const second = makeInertTree()
+  let entered = 0
+  second.pad._eventHandlers = { onMouseEnter: () => { entered++ } }
+  const hoveredA = new Set<import('../src/ink/dom.js').DOMElement>()
+  const hoveredB = new Set<import('../src/ink/dom.js').DOMElement>()
+  invalidateNoInterestRect()
+  resetHitTestWithOverlaysCount()
+  dispatchHover(first.root, 4, 3, hoveredA)
+  dispatchHover(second.root, 4, 3, hoveredB)
+  check('U2c no-interest cache 不跨 Ink root 串用',
+    entered === 1 && getHitTestWithOverlaysCount() === 2,
+    `enter=${entered} count=${getHitTestWithOverlaysCount()}`)
 }
 
 {
@@ -429,7 +470,58 @@ const slider = pos.slider
   )
 }
 
-inst.unmount()
+await inst.unmount()
+
+// I6: an absolute sibling may overlap only part of an otherwise inert rect.
+// Starting on the uncovered part must not cache through the floating target.
+const overlayHoverLog: string[] = []
+function OverlayScene() {
+  useInput(() => {})
+  return (
+    <AlternateScreen>
+      <Box width={50} height={6}>
+        <Box width={40} height={2}>
+          <Text>INERT-BASE-abcdefghijklmnopqrstuv</Text>
+        </Box>
+        <Box
+          position="absolute"
+          left={20}
+          top={0}
+          width={10}
+          height={1}
+          onMouseEnter={() => overlayHoverLog.push('enter:float')}
+          onMouseLeave={() => overlayHoverLog.push('leave:float')}
+        >
+          <Text>FLOAT-HIT</Text>
+        </Box>
+      </Box>
+    </AlternateScreen>
+  )
+}
+const overlayInst = await render(<OverlayScene />, {
+  stdout: stdout as never,
+  stdin: stdin as never,
+  stderr: stderr as never,
+  exitOnCtrlC: false,
+  patchConsole: false,
+})
+await settle(() => screenHas(term, 'FLOAT-HIT'))
+const floatPos = findText(term, 'FLOAT-HIT')
+invalidateNoInterestRect()
+resetHitTestWithOverlaysCount()
+if (floatPos !== null) {
+  motion(2, floatPos.row)
+  await settle(() => getHitTestWithOverlaysCount() === 1)
+  motion(floatPos.col + 2, floatPos.row)
+}
+check(
+  'I6 absolute sibling 覆盖 inert rect 时不走错误快路径',
+  floatPos !== null &&
+    await settled(() => overlayHoverLog.includes('enter:float')) &&
+    getHitTestWithOverlaysCount() >= 2,
+  `pos=${JSON.stringify(floatPos)} count=${getHitTestWithOverlaysCount()} log=${overlayHoverLog.join(',')}`,
+)
+await overlayInst.unmount()
 
 if (failures > 0) {
   console.error(`\nverify-hover-coalesce: ${failures} check(s) FAILED`)

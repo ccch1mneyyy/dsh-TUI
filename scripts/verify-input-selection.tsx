@@ -356,6 +356,30 @@ function makeHarness(cols: number, rows: number): Harness {
       await settled(() => !screenHas('hello world')),
     )
 
+    // A5b: two quick Shift+clicks are range extensions, not a local
+    // double-click word selection. They must also read the latest selection.
+    stdin.write('alpha beta')
+    await settle(() => screenHas('alpha beta'))
+    const shiftRow = findText('alpha beta')!
+    click(shiftRow.col, shiftRow.row)
+    await sleep(550)
+    shiftPress(shiftRow.col + 5, shiftRow.row)
+    shiftRelease(shiftRow.col + 5, shiftRow.row)
+    await sleep(50)
+    shiftPress(shiftRow.col + 6, shiftRow.row)
+    shiftRelease(shiftRow.col + 6, shiftRow.row)
+    await settle(() => inverseAt(shiftRow.col + 6, shiftRow.row))
+    const shiftCopies = oscPayloads().length
+    check(
+      'A5b 连续 Shift+click 不误判双击选词',
+      controllerBox.current?.consumeSelectionCopy() === true &&
+        (await settled(() => oscPayloads().length === shiftCopies + 1)) &&
+        oscPayloads().at(-1) === 'alpha ',
+      oscPayloads().at(-1) ?? 'no osc52',
+    )
+    controllerBox.current?.clear()
+    await settle(() => !screenHas('alpha beta'))
+
     // A6: 双击选词（自检测 500ms/1 格）：'foo-bar' 整词
     stdin.write('foo-bar baz')
     await settle(() => screenHas('foo-bar baz'))
@@ -424,9 +448,49 @@ function makeHarness(cols: number, rows: number): Harness {
       await settled(() => screenHas('你好') && !screenHas('世界')),
     )
 
+    // A8b: the second cell of the final wide glyph still belongs to that
+    // grapheme. Nearest-caret geometry used to point past EOF and select none.
+    controllerBox.current?.clear()
+    stdin.write('甲乙')
+    await settle(() => screenHas('甲乙'))
+    const wide = findText('甲乙')!
+    await sleep(550)
+    click(wide.col + 3, wide.row)
+    await sleep(80)
+    click(wide.col + 3, wide.row)
+    await settle(() => inverseAt(wide.col, wide.row) && inverseAt(wide.col + 3, wide.row))
+    const wideCopies = oscPayloads().length
+    check(
+      'A8b 双击末尾 CJK 的第二格仍选中词',
+      controllerBox.current?.consumeSelectionCopy() === true &&
+        (await settled(() => oscPayloads().length === wideCopies + 1)) &&
+        oscPayloads().at(-1) === '甲乙',
+      oscPayloads().at(-1) ?? 'no osc52',
+    )
+
+    // A8c: pasted ANSI controls and tabs cannot create source/screen geometry
+    // divergence. SGR is stripped; tabs expand deterministically before edit.
+    controllerBox.current?.clear()
+    stdin.write('\x1b[200~A\x1b[31mB\x1b[0m\tC\x1b[201~')
+    check(
+      'A8c ANSI 被剥离且 Tab 展开为可编辑空格',
+      await settled(() => screenHas('AB        C') && !screenHas('[31m')),
+    )
+    const safe = findText('AB        C')!
+    dragRange(safe.col, safe.col + 11, safe.row)
+    await settle(() => inverseAt(safe.col, safe.row) && inverseAt(safe.col + 10, safe.row))
+    const safeCopies = oscPayloads().length
+    check(
+      'A8c 控制序列不会被选区拆断',
+      controllerBox.current?.consumeSelectionCopy() === true &&
+        (await settled(() => oscPayloads().length === safeCopies + 1)) &&
+        oscPayloads().at(-1) === 'AB        C',
+      oscPayloads().at(-1) ?? 'no osc52',
+    )
+
     // A9: fold block 存在时选区钳制在 head 侧、禁止跨 chip 行
-    stdin.write('\x1b')
-    await settle(() => !screenHas('你好'))
+    controllerBox.current?.clear()
+    await settle(() => !screenHas('AB        C'))
     stdin.write('PRE')
     const foldLines = Array.from({ length: 12 }, (_, i) => `fold-line-${i}`)
     stdin.write(`\x1b[200~${foldLines.join('\n')}\x1b[201~`)

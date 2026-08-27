@@ -33,7 +33,7 @@ const [
   { render, AlternateScreen, useInput },
   BoxMod,
   TextMod,
-  { handleMouseEvent },
+  { default: AppCtor, handleMouseEvent },
   { createNode },
   { nodeCache },
   { createSelectionState, hasSelection, updateSelection },
@@ -153,6 +153,7 @@ function makeFakeApp(dragTarget?: unknown): {
     lastHoverRow: -1,
     pendingHyperlinkTimer: null,
     dragSession: null,
+    finishDragSession: AppCtor.prototype.finishDragSession,
   } as unknown as FakeApp
   return { app, events, clicks, selectionDrags }
 }
@@ -250,6 +251,30 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
       events[2]!.type === 'dragend' &&
       clicks.length === 0,
     events.map((e) => e.type).join(','),
+  )
+}
+
+{
+  // U5b: legacy/noncanonical release may carry low bits 3. Captured drag
+  // sessions must still end, while a dormant one must still click.
+  const { pad } = makeTree()
+  const started = makeFakeApp(pad)
+  handleMouseEvent(started.app, mouse(0, 'press', 4, 3))
+  handleMouseEvent(started.app, mouse(0x20, 'press', 8, 3))
+  handleMouseEvent(started.app, mouse(3, 'release', 8, 3))
+  check(
+    'U5b button=3 release 收尾已启动 drag',
+    started.events.at(-1)?.type === 'dragend' &&
+      (started.app as unknown as { dragSession: unknown }).dragSession === null,
+    started.events.map(event => event.type).join(','),
+  )
+  const dormant = makeFakeApp(pad)
+  handleMouseEvent(dormant.app, mouse(0, 'press', 6, 3))
+  handleMouseEvent(dormant.app, mouse(3, 'release', 6, 3))
+  check(
+    'U5b button=3 release 仍回放 dormant click',
+    dormant.events.length === 0 && dormant.clicks.join(',') === '6,3',
+    JSON.stringify({ events: dormant.events, clicks: dormant.clicks }),
   )
 }
 
@@ -353,6 +378,27 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
 }
 
 {
+  // U8b: X10 has no release sequence. The next fresh press must settle the
+  // captured drag before replacing it with a new dormant session.
+  const { pad } = makeTree()
+  const { app, events } = makeFakeApp(pad)
+  handleMouseEvent(app, mouse(0, 'press', 4, 3))
+  handleMouseEvent(app, mouse(0x20, 'press', 8, 3))
+  handleMouseEvent(app, mouse(0, 'press', 12, 3))
+  const session = (app as unknown as {
+    dragSession: { startCol: number; started: boolean } | null
+  }).dragSession
+  check(
+    'U8b X10 下一次 press 先发旧 dragend 再开新会话',
+    events.at(-1)?.type === 'dragend' && session?.startCol === 12 && session.started === false,
+    JSON.stringify({
+      events: events.map(event => event.type),
+      session: session === null ? null : { startCol: session.startCol, started: session.started },
+    }),
+  )
+}
+
+{
   // U9: dispatchDragEvent 冒泡 + 异常隔离 + localCol + stopImmediatePropagation
   const { root, pad } = makeTree()
   const calls: string[] = []
@@ -366,35 +412,35 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
       calls.push(`pad ${e.localCol},${e.localRow}`)
     },
   }
+  let childMetadata = ''
   child._eventHandlers = {
-    onDragMove: () => {
+    onDragMove: (e: InstanceType<typeof import('../src/ink/events/drag-event.js').DragEvent>) => {
+      childMetadata = `${e.target === child}/${e.currentTarget === child}/${e.eventPhase}/${e.localCol},${e.localRow}`
       throw new Error('boom')
     },
   }
   check('U9 findDragTarget 可从子节点向上找到 pad', findDragTarget(root, 4, 3) === pad)
   const { DragEvent } = await import('../src/ink/events/drag-event.js')
   const ev = new DragEvent('dragmove', 10, 4, 2, 2)
-  dispatchDragEvent(pad, ev)
+  dispatchDragEvent(child, ev)
   check(
-    'U9 冒泡抵达 pad、子节点异常被隔离、localCol 相对 pad',
-    calls.length === 1 && calls[0] === 'pad 8,2',
-    calls.join(' | '),
+    'U9 子节点异常隔离后继续冒泡、localCol 按当前 target 更新',
+    calls.length === 1 && calls[0] === 'pad 8,2' && childMetadata === 'true/true/at_target/8,1',
+    `${childMetadata} | ${calls.join(' | ')}`,
   )
-  // stopImmediatePropagation 停冒泡
+  check('U9 派发后保留 target、清 currentTarget/eventPhase',
+    ev.target === child && ev.currentTarget === null && ev.eventPhase === 'none')
+  // stopPropagation stops the next node in the real ancestor chain.
   const calls2: string[] = []
-  const outer = createNode('ink-box')
-  root.childNodes.push(outer)
-  outer.parentNode = root
-  nodeCache.set(outer, { x: 0, y: 0, width: 40, height: 12 })
   pad._eventHandlers = {
-    onDragEnd: (e: { stopImmediatePropagation: () => void }) => {
+    onDragEnd: (e: { stopPropagation: () => void }) => {
       calls2.push('pad')
-      e.stopImmediatePropagation()
+      e.stopPropagation()
     },
   }
-  outer._eventHandlers = { onDragEnd: () => calls2.push('outer') }
+  root._eventHandlers = { onDragEnd: () => calls2.push('root') }
   dispatchDragEvent(pad, new DragEvent('dragend', 5, 4, 2, 2))
-  check('U9 stopImmediatePropagation 停冒泡', calls2.length === 1 && calls2[0] === 'pad')
+  check('U9 stopPropagation 停止向 root 冒泡', calls2.length === 1 && calls2[0] === 'pad')
 }
 
 // ── 集成层：真实 Ink 管线 + headless xterm + SGR 逐字节 stdin ──
@@ -470,6 +516,11 @@ function clamp10(n: number) {
   return Math.max(0, Math.min(10, n))
 }
 
+function PlainScene() {
+  useInput(() => {})
+  return <Text>MAINSCREENMARKER</Text>
+}
+
 function Scene() {
   // 常驻 raw-mode 持有者：没有 useInput 消费者时 App 不会挂 stdin
   // readable 处理器，写进 FakeStdin 的 SGR 字节无人读取（XTVERSION 探测
@@ -526,6 +577,9 @@ const motion = (c: number, r: number) => stdin.write(`\x1b[<32;${c + 1};${r + 1}
 const release = (c: number, r: number) => stdin.write(`\x1b[<0;${c + 1};${r + 1}m`)
 const shiftPress = (c: number, r: number) => stdin.write(`\x1b[<4;${c + 1};${r + 1}M`)
 const shiftMotion = (c: number, r: number) => stdin.write(`\x1b[<36;${c + 1};${r + 1}M`)
+const x10 = (button: number, c: number, r: number) => stdin.write(
+  `\x1b[M${String.fromCharCode(button + 32)}${String.fromCharCode(c + 1 + 32)}${String.fromCharCode(r + 1 + 32)}`,
+)
 
 const padPos = { col: -1, row: -1 }
 const plainPos = { col: -1, row: -1 }
@@ -586,6 +640,24 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 }
 
 {
+  // I2b: classic X10 uses low bits 3 as a generic release. Both a dormant
+  // component click and a started drag must complete through the real parser.
+  dragEvents.length = 0
+  x10(0, padPos.col + 3, padPos.row)
+  x10(3, padPos.col + 3, padPos.row)
+  check('I2b X10 press→release 触发 click',
+    await settled(() => dragEvents.length === 1 && dragEvents[0]?.type === 'click'),
+    dragEvents.map(event => event.type).join(','))
+  dragEvents.length = 0
+  x10(0, padPos.col + 2, padPos.row)
+  x10(0x20, padPos.col + 6, padPos.row)
+  x10(3, padPos.col + 6, padPos.row)
+  check('I2b X10 press→motion→release 收尾 dragend',
+    await settled(() => dragEvents.map(event => event.type).join(',') === 'dragstart,dragmove,dragend'),
+    dragEvents.map(event => event.type).join(','))
+}
+
+{
   // I3: drag 中 FOCUS_OUT → 收到 dragend
   dragEvents.length = 0
   press(padPos.col + 2, padPos.row)
@@ -636,7 +708,22 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   check('I5 前后值确有变化（拖拽生效）', before !== 10 || sliderValue === 0, `before=${before}`)
 }
 
-inst.unmount()
+{
+  // I6: leaving AlternateScreen settles dragend before the active-screen gate
+  // closes. The consumer must not be left with a captured gesture.
+  dragEvents.length = 0
+  press(padPos.col + 2, padPos.row)
+  motion(padPos.col + 7, padPos.row)
+  await settled(() => dragEvents.some(event => event.type === 'dragmove'))
+  inst.rerender(<PlainScene />)
+  check(
+    'I6 AlternateScreen 退出仍派发 cleanup dragend',
+    await settled(() => dragEvents.at(-1)?.type === 'dragend'),
+    dragEvents.map(event => event.type).join(','),
+  )
+}
+
+await inst.unmount()
 
 if (failures > 0) {
   console.error(`\nverify-drag-protocol: ${failures} check(s) FAILED`)

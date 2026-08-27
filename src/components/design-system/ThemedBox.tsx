@@ -6,6 +6,7 @@ import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
 import type { DragEvent } from '../../ink/events/drag-event.js'
 import type { FocusEvent } from '../../ink/events/focus-event.js'
 import type { KeyboardEvent } from '../../ink/events/keyboard-event.js'
+import type { PointerEvent } from '../../ink/events/pointer-event.js'
 import type { Color, Styles } from '../../ink/styles.js'
 import { getTheme, type Theme } from '../../theme.js'
 import { useTheme } from './ThemeProvider.js'
@@ -56,8 +57,8 @@ export type Props = BaseStylesWithoutColors &
     onBlurCapture?: (event: FocusEvent) => void
     onKeyDown?: (event: KeyboardEvent) => void
     onKeyDownCapture?: (event: KeyboardEvent) => void
-    onMouseEnter?: () => void
-    onMouseLeave?: () => void
+    onMouseEnter?: (event: PointerEvent) => void
+    onMouseLeave?: (event: PointerEvent) => void
   }
 
 /** Resolves a color value that may be a theme key to a raw Color. */

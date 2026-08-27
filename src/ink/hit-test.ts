@@ -3,7 +3,6 @@ import { ClickEvent } from './events/click-event.js'
 import { ContextMenuEvent } from './events/context-menu-event.js'
 import type { DragEvent } from './events/drag-event.js'
 import type { EventHandlerProps } from './events/event-handlers.js'
-import { HANDLER_FOR_EVENT } from './events/event-handlers.js'
 import { PointerEvent } from './events/pointer-event.js'
 import { WheelEvent } from './events/wheel-event.js'
 import { logError } from '../utils/log.js'
@@ -277,24 +276,12 @@ export function dispatchDragEvent(
   target: DOMElement,
   event: DragEvent,
 ): void {
-  const handlerKey = HANDLER_FOR_EVENT[event.type]?.bubble
-  if (!handlerKey) return
-  let node: DOMElement | undefined = target
-  while (node) {
-    const handler = node._eventHandlers?.[handlerKey] as
-      | ((event: DragEvent) => void)
-      | undefined
-    if (handler) {
-      event._prepareForTarget(node)
-      try {
-        handler(event)
-      } catch (error) {
-        logError(error)
-      }
-      if (event.didStopImmediatePropagation()) return
-    }
-    node = node.parentNode
-  }
+  // Use the shared dispatcher so target/currentTarget/eventPhase,
+  // stopPropagation, exception isolation, and React update priority match the
+  // rest of the terminal event model. Motion is continuous; lifecycle edges
+  // are discrete user actions.
+  if (event.type === 'dragmove') dispatcher.dispatchContinuous(target, event)
+  else dispatcher.dispatchDiscrete(target, event)
 }
 
 /**
@@ -374,9 +361,9 @@ export function dispatchWheel(
 }
 
 // ── No-interest rect fast path (hover perf) ─────────────────────────
-// When a hover hit confirms that neither the hit node's ancestor chain nor
-// its subtree participates in hover semantics (no onMouseEnter/onMouseLeave
-// anywhere, no tooltip registration), the node's rect is cached here.
+// When a hover hit confirms that its ancestor chain is inert and the hit is
+// a leaf region with no overlapping interested sibling/absolute layer, that
+// node's rect is cached here.
 // Subsequent motion events inside the rect skip the full-tree hit-test:
 // hover is a state diff and an inert region cannot produce enter/leave, so
 // the result is identical while the rect is valid. The cache is STRICTLY
@@ -388,7 +375,9 @@ export function dispatchWheel(
 // the normal hit-test immediately, so leaving the region can never miss a
 // handler.
 type NoInterestRect = { x: number; y: number; width: number; height: number }
-let noInterestRect: NoInterestRect | null = null
+// Per-root: multiple Ink instances can coexist in tests/embedders and must
+// never reuse geometry from another tree.
+let noInterestRects = new WeakMap<DOMElement, NoInterestRect>()
 
 /**
  * Optional hover-interest probe consulted when deciding whether a region is
@@ -414,7 +403,7 @@ export function setHoverInterestProbe(
  * pointer-state resets. Idempotent and effectively free.
  */
 export function invalidateNoInterestRect(): void {
-  noInterestRect = null
+  noInterestRects = new WeakMap()
 }
 
 /** Whether a node participates in hover semantics (handler or tooltip probe). */
@@ -425,18 +414,61 @@ function hasHoverInterest(node: DOMElement): boolean {
 }
 
 /**
- * Fail-fast subtree scan: any hover-interest descendant disqualifies the
- * node for the no-interest cache. The dispatch walk only sees the hit
- * node's ANCESTOR chain; a descendant with a handler inside the cached
- * rect would otherwise be silently skipped by the fast path, changing
- * event sequences on handler-bearing paths (a hard compatibility
- * requirement). Text children are skipped like hitTest does.
+ * Fail-fast subtree scan for an overlapping sibling/absolute candidate.
+ * Text children are skipped like hitTest does.
  */
 function subtreeHasHoverInterest(node: DOMElement): boolean {
   for (const childNode of node.childNodes) {
     if (childNode.nodeName === '#text') continue
     const child = childNode as DOMElement
     if (hasHoverInterest(child) || subtreeHasHoverInterest(child)) return true
+  }
+  return false
+}
+
+function hasElementChildren(node: DOMElement): boolean {
+  return node.childNodes.some(child => child.nodeName !== '#text')
+}
+
+function rectsOverlap(left: NoInterestRect, right: NoInterestRect): boolean {
+  return !(
+    right.x >= left.x + left.width ||
+    right.x + right.width <= left.x ||
+    right.y >= left.y + left.height ||
+    right.y + right.height <= left.y
+  )
+}
+
+/** Whether a hover-interested in-flow sibling can win inside the candidate. */
+function overlappingSiblingHasHoverInterest(hit: DOMElement, rect: NoInterestRect): boolean {
+  let branch: DOMElement = hit
+  for (let parent = hit.parentNode; parent; parent = parent.parentNode) {
+    for (const siblingNode of parent.childNodes) {
+      if (siblingNode === branch || siblingNode.nodeName === '#text') continue
+      const sibling = siblingNode as DOMElement
+      const siblingRect = nodeCache.get(sibling)
+      if (
+        siblingRect &&
+        rectsOverlap(rect, siblingRect) &&
+        (hasHoverInterest(sibling) || subtreeHasHoverInterest(sibling))
+      ) {
+        return true
+      }
+    }
+    branch = parent
+  }
+  return false
+}
+
+/** Whether a hover-interested absolute layer overlaps a candidate inert rect. */
+function overlappingAbsoluteHasHoverInterest(rect: NoInterestRect): boolean {
+  for (const entry of getAbsoluteHitList()) {
+    const overlay = entry.rect
+    if (!rectsOverlap(rect, overlay)) continue
+    if (subtreeHasHoverInterest(entry.node)) return true
+    for (let node: DOMElement | undefined = entry.node; node; node = node.parentNode) {
+      if (hasHoverInterest(node)) return true
+    }
   }
   return false
 }
@@ -467,7 +499,7 @@ export function dispatchHover(
   hovered: Set<DOMElement>,
 ): void {
   const next = new Set<DOMElement>()
-  const cached = noInterestRect
+  const cached = noInterestRects.get(root)
   if (
     cached &&
     col >= cached.x &&
@@ -502,15 +534,27 @@ export function dispatchHover(
     }
     if (chainInert && hit) {
       const rect = nodeCache.get(hit)
-      if (rect && rect.width > 0 && rect.height > 0 && !subtreeHasHoverInterest(hit)) {
+      // Cache only a leaf hit region. An empty container with element
+      // descendants may cover a huge area; recursively scanning that subtree
+      // on every motion is O(tree), while caching it can hide a descendant.
+      // Overlapping interested siblings/absolute layers also disqualify the
+      // rect because they can become the topmost hit elsewhere inside it.
+      if (
+        rect &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        !hasElementChildren(hit) &&
+        !overlappingSiblingHasHoverInterest(hit, rect) &&
+        !overlappingAbsoluteHasHoverInterest(rect)
+      ) {
         // Copy the fields — nodeCache entries are replaced per frame and
         // the cache dies at the frame boundary anyway, but never alias.
-        noInterestRect = {
+        noInterestRects.set(root, {
           x: rect.x,
           y: rect.y,
           width: rect.width,
           height: rect.height,
-        }
+        })
       }
     }
   }

@@ -1,4 +1,5 @@
 import React from 'react'
+import stripAnsi from 'strip-ansi'
 import { readFile, unlink } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { t } from '../i18n.js'
@@ -48,6 +49,24 @@ const FOLD_MIN_LINES = 6
 const FOLD_MIN_CHARS = 600
 const isBigInput = (text: string): boolean =>
   text.split('\n').length >= FOLD_MIN_LINES || text.length >= FOLD_MIN_CHARS
+
+/**
+ * Editable prompt text must have one stable source-to-screen geometry. The
+ * renderer interprets ANSI as zero-width styling and expands tabs relative to
+ * global tab stops; keeping either in `value` would let wrapping/click mapping
+ * count different cells and could split an escape sequence during selection.
+ * Strip terminal controls and expand tabs at ingress while preserving newlines.
+ */
+const EDITABLE_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f]/u
+
+function sanitizeEditableText(text: string): string {
+  // Fast path for ordinary and multi-line drafts: newline is intentionally
+  // absent from the probe, so a large clean paste returns without regex work.
+  if (!EDITABLE_CONTROL.test(text)) return text
+  return stripAnsi(text)
+    .replace(/\t/gu, '        ')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
+}
 
 function clipboardImageMediaType(path: string): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | undefined {
   if (/\.png$/iu.test(path)) return 'image/png'
@@ -540,6 +559,12 @@ export function PromptInput({
   }
 
   const setInput = (next: string, cursorOffset = next.length) => {
+    // Apply the same ingress normalization to fills/history/editor results as
+    // to paste. Map the requested caret through the sanitized prefix so an
+    // ANSI sequence removed before it cannot leave the caret past the text.
+    const sanitizedCursor = sanitizeEditableText(next.slice(0, cursorOffset)).length
+    next = sanitizeEditableText(next)
+    cursorOffset = sanitizedCursor
     const prev = valueRef.current
     const prevCursor = cursorRef.current
     const block = foldBlockRef.current
@@ -765,6 +790,7 @@ export function PromptInput({
    * An active selection is replaced by the insert. Returns the resulting
    * value and the insertion offset so callers can apply the paste fold. */
   const insertClipboardAtCaret = (text: string): { next: string; at: number } => {
+    text = sanitizeEditableText(text)
     const current = valueRef.current
     const sel = selectionRef.current
     const position = sel ? sel.start : cursorRef.current
@@ -879,10 +905,11 @@ export function PromptInput({
     }
 
     // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click): insert
-    // verbatim at the caret. Paste content may contain newlines — that is
-    // NOT Enter — so this branch runs before the whole-line submit rule.
+    // at the caret after removing terminal controls and expanding tabs.
+    // Newlines remain data — they are NOT Enter — so this branch runs before
+    // the whole-line submit rule.
     if (event?.isPasted && input.length > 0) {
-      const text = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      const text = sanitizeEditableText(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
       const at = insertAtCaret(text)
       // A big paste becomes a CC-style fold block right away (hover peeks
       // at it); an existing block is replaced by the new paste's span.
@@ -935,7 +962,7 @@ export function PromptInput({
           }
           // Insert against the LIVE input state: the read above resolved
           // asynchronously and the user may have typed while waiting.
-          const text = formatClipboardInsert(content)
+          const text = sanitizeEditableText(formatClipboardInsert(content))
           const { at } = insertClipboardAtCaret(text)
           // Same fold as bracketed paste: big clipboard text becomes a
           // fold block covering exactly the pasted span.
@@ -2013,21 +2040,32 @@ export function PromptInput({
    */
   const handleValueClick = (e: ClickEvent) => {
     const now = Date.now()
+    const modified = e.shift || e.alt || e.ctrl
     const isDouble =
+      !modified &&
       now - lastClickAtRef.current < DOUBLE_CLICK_MS &&
       Math.abs(e.col - lastClickColRef.current) <= 1 &&
       Math.abs(e.row - lastClickRowRef.current) <= 1
-    lastClickAtRef.current = now
-    lastClickColRef.current = e.col
-    lastClickRowRef.current = e.row
+    if (modified) {
+      // Shift+click is range extension, never a word-select click. It also
+      // breaks the local chain so a following plain click cannot complete a
+      // double-click that started under a modifier.
+      lastClickAtRef.current = 0
+      lastClickColRef.current = -1
+      lastClickRowRef.current = -1
+    } else {
+      lastClickAtRef.current = now
+      lastClickColRef.current = e.col
+      lastClickRowRef.current = e.row
+    }
     const clickedVisual = windowStart + e.localRow
     const clamped = Math.max(0, Math.min(clickedVisual, visualLines.length - 1))
     if (block) {
       if (clamped === chipRow) return
       const offset =
         clamped < chipRow
-          ? clickToCursorOffset(head, inputWidth, clamped, e.localCol)
-          : block.end + clickToCursorOffset(tail, inputWidth, clamped - chipRow - 1, e.localCol)
+          ? clickToCursorOffset(head, inputWidth, clamped, e.localCol, isDouble ? 'grapheme-start' : 'nearest')
+          : block.end + clickToCursorOffset(tail, inputWidth, clamped - chipRow - 1, e.localCol, isDouble ? 'grapheme-start' : 'nearest')
       if (isDouble) {
         // Word select stays inside the clicked side: the block is atomic.
         const side = offset <= block.start
@@ -2059,6 +2097,7 @@ export function PromptInput({
       clamped === 0 && prefixCols > 0 ? inputWidth - prefixCols : inputWidth,
       clamped,
       col,
+      isDouble ? 'grapheme-start' : 'nearest',
     )
     if (isDouble) {
       const w = wordSelectionAt(value, offset, 0, value.length)
@@ -2405,6 +2444,7 @@ function clickToCursorOffset(
   width: number,
   visualLine: number,
   visualCol: number,
+  snapWithin: 'nearest' | 'grapheme-start' = 'nearest',
 ): number {
   const segmenter = getGraphemeSegmenter()
   let row = 0
@@ -2425,6 +2465,11 @@ function clickToCursorOffset(
         currentWidth = 0
       }
       if (row === visualLine) {
+        // Caret positioning uses the nearest edge. Double-click selection
+        // instead needs the grapheme UNDER the cell: on the second cell of a
+        // CJK/emoji glyph, nearest-edge would point after the glyph (and the
+        // final glyph would select nothing).
+        if (snapWithin === 'grapheme-start' && currentWidth + w > visualCol) return offset
         if (currentWidth + w / 2 > visualCol) return offset
         if (currentWidth + w > visualCol) return offset + segment.length
       }
@@ -2508,10 +2553,11 @@ function wordSelectionAt(
   const bounds = graphemeBoundaries(text.slice(lo, hi)).map(b => b + lo)
   let i = 0
   while (i < bounds.length - 1 && bounds[i + 1]! <= offset) i++
-  const cls = selectionCharClass(text.charAt(bounds[i]!))
+  const clusterAt = (index: number): string => text.slice(bounds[index]!, bounds[index + 1]!)
+  const cls = selectionCharClass(clusterAt(i))
   let a = i
-  while (a > 0 && selectionCharClass(text.charAt(bounds[a - 1]!)) === cls) a--
+  while (a > 0 && selectionCharClass(clusterAt(a - 1)) === cls) a--
   let b = i
-  while (b < bounds.length - 2 && selectionCharClass(text.charAt(bounds[b + 1]!)) === cls) b++
+  while (b < bounds.length - 2 && selectionCharClass(clusterAt(b + 1)) === cls) b++
   return { start: bounds[a]!, end: bounds[b + 1]! }
 }

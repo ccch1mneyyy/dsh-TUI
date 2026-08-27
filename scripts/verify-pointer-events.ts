@@ -53,7 +53,8 @@ function parse(seq: string) {
 
   // Modifier bits: Shift(0x04) Ctrl(0x10) on wheel-up → button 64+4+16=84
   const [km] = parse('\x1b[<84;10;10M')
-  check('SGR wheel modifiers decoded', km.kind === 'key' && km.shift === true && km.ctrl === true && km.meta === false)
+  check('SGR wheel modifiers decoded + raw button kept',
+    km.kind === 'key' && km.shift === true && km.ctrl === true && km.meta === false && km.mouseButton === 84)
 
   // Horizontal wheel: 66=left, 67=right
   const [kl] = parse('\x1b[<66;3;4M')
@@ -83,10 +84,11 @@ function parse(seq: string) {
   const [xw] = parse(x10Wheel)
   check('X10 wheel → key with coords', xw.kind === 'key' && xw.name === 'wheelup' && xw.mouseCol === 2 && xw.mouseRow === 3)
 
-  // X10 no-button motion without drag bit (unsupported hover) → swallowed as inert key
-  const x10Hover = `\x1b[M${String.fromCharCode(3 + 32)}${String.fromCharCode(3 + 32)}${String.fromCharCode(4 + 32)}`
-  const [xh] = parse(x10Hover)
-  check('X10 no-button motion swallowed', xh.kind === 'key' && xh.name === 'mouse')
+  // Classic X10 release: low bits 3 with M framing (button identity unknown).
+  const x10Release = `\x1b[M${String.fromCharCode(3 + 32)}${String.fromCharCode(3 + 32)}${String.fromCharCode(4 + 32)}`
+  const [xh] = parse(x10Release)
+  check('X10 generic release parsed',
+    xh.kind === 'mouse' && xh.action === 'release' && xh.button === 3 && xh.col === 3 && xh.row === 4)
 
   // Orphan SGR tail (ESC flushed separately) resynthesized — wheel survives
   const [o] = parse('[<64;74;16M')
@@ -159,10 +161,11 @@ function makeTree(): { root: DOMElement; parent: DOMElement; child: DOMElement }
       wheelEvent = e
     },
   }
-  const consumed = dispatchWheel(root, 4, 2, -3, 0)
+  const consumed = dispatchWheel(root, 4, 2, -3, 0, 84)
   check('dispatchWheel routes to onWheel under pointer', consumed && wheelEvent !== undefined)
-  check('WheelEvent carries deltas + coords',
-    wheelEvent !== undefined && wheelEvent.deltaY === -3 && wheelEvent.col === 4 && wheelEvent.row === 2)
+  check('WheelEvent carries deltas + coords + modifiers',
+    wheelEvent !== undefined && wheelEvent.deltaY === -3 && wheelEvent.col === 4 && wheelEvent.row === 2 &&
+      wheelEvent.shift && wheelEvent.ctrl && !wheelEvent.alt)
 
   const missRoot = createNode('ink-root')
   nodeCache.set(missRoot, { x: 0, y: 0, width: 40, height: 12 })

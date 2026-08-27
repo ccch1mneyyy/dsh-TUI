@@ -257,24 +257,37 @@ export function buildView(
   const rows: BrowserRow[] = []
   let shown = 0
   let lastProjectKey: string | undefined
+  const visibleChildren = (session: SessionSummary): readonly SessionSummary[] =>
+    filters.showSubagents
+      ? (byParent.get(session.id) ?? []).filter(child => matches(child, needle) || matches(session, needle))
+      : []
+
+  // Pinned sessions leave the ordinary flow entirely and form one group above
+  // every other row. Attached sub-agent rows participate too when the runs
+  // filter is on: pinning a visible child must not paint a star that stays
+  // buried under its parent. The child is promoted once and removed from the
+  // parent's ordinary children; orphan runs already live in `visible`.
+  const pinnedChildren = pinned.size > 0 && filters.showSubagents
+    ? visible.flatMap(session => visibleChildren(session).filter(child => pinned.has(child.id)))
+    : []
+  const pinnedRows = pinned.size > 0
+    ? [
+        ...visible.filter(session => pinned.has(session.id)),
+        ...pinnedChildren,
+      ].sort((left, right) => right.updatedAt - left.updatedAt)
+    : []
+  const pinnedRowIds = new Set(pinnedRows.map(session => session.id))
   const emit = (session: SessionSummary): void => {
     rows.push({ kind: 'session', session, depth: 0 })
     shown += 1
-    if (!filters.showSubagents) return
-    for (const run of (byParent.get(session.id) ?? []).filter(child => matches(child, needle) || matches(session, needle))) {
+    for (const run of visibleChildren(session)) {
+      if (pinnedRowIds.has(run.id)) continue
       rows.push({ kind: 'session', session: run, depth: 1 })
       shown += 1
     }
   }
-  // Pinned sessions leave the ordinary flow entirely and form one group above
-  // every other row — above the directory headers in the all-projects view
-  // too. Only pins the current filters already admit are pulled up, so the
-  // group is "the top of this view", never a hole punched through the scope.
-  const pinnedRows = pinned.size > 0
-    ? visible.filter(session => pinned.has(session.id)).sort((left, right) => right.updatedAt - left.updatedAt)
-    : []
   const ordered = pinnedRows.length > 0
-    ? visible.filter(session => !pinned.has(session.id))
+    ? visible.filter(session => !pinnedRowIds.has(session.id))
     : visible
   if (pinnedRows.length > 0) {
     rows.push({ kind: 'pin', count: pinnedRows.length })

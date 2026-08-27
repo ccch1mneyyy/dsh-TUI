@@ -1121,19 +1121,22 @@ export default class Ink {
    */
   setAltScreenActive(active: boolean, mouseTracking = false): void {
     if (this.altScreenActive === active) return;
+    const resetOldPointerContext = (): void => {
+      // Fire leave handlers before dropping the set — a bare clear strands
+      // old rows with hovered=true. resetPointerState also emits dragend for
+      // a captured drag before its geometry disappears.
+      clearHovered(this.hoveredNodes);
+      this.app?.resetPointerState();
+      invalidateNoInterestRect();
+    };
+    // Leaving must settle dragend WHILE the dispatch gate is still active;
+    // flipping altScreenActive first would silently drop the cleanup event.
+    if (!active) resetOldPointerContext();
     this.altScreenActive = active;
     this.altScreenMouseTracking = active && mouseTracking;
-    // Screen geometry/context just changed wholesale: hover sets, the
-    // multi-click chain, and any pending hyperlink open belong to the old
-    // screen. Fire leave handlers before dropping the set — a bare clear()
-    // strands the old screen's rows with hovered=true forever (stuck
-    // highlights). Stale clickCount would turn the first click into a
-    // double-click; stale hovered nodes would suppress real onMouseEnter.
-    clearHovered(this.hoveredNodes);
-    this.app?.resetPointerState();
-    // The cached no-interest hover rect belongs to the old screen's
-    // geometry — drop it with the rest of the pointer state.
-    invalidateNoInterestRect();
+    // Entering has no old alt-screen drag to notify, but the main-screen
+    // hover/click geometry still needs to be cleared after the gate flips.
+    if (active) resetOldPointerContext();
     if (active) {
       this.mainScreenFrameState = {
         frontFrame: this.frontFrame,

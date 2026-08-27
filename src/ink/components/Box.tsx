@@ -7,6 +7,7 @@ import type { ContextMenuEvent } from '../events/context-menu-event.js';
 import type { DragEvent } from '../events/drag-event.js';
 import type { FocusEvent } from '../events/focus-event.js';
 import type { KeyboardEvent } from '../events/keyboard-event.js';
+import type { PointerEvent } from '../events/pointer-event.js';
 import type { Styles } from '../styles.js';
 import * as warn from '../warn.js';
 export type Props = Except<Styles, 'textWrap'> & {
@@ -66,9 +67,9 @@ export type Props = Except<Styles, 'textWrap'> & {
    * re-fire on the parent. Only works inside `<AlternateScreen>` where
    * mode-1003 mouse tracking is enabled.
    */
-  onMouseEnter?: () => void;
+  onMouseEnter?: (event: PointerEvent) => void;
   /** Fired when the mouse moves out of this Box's rendered rect. */
-  onMouseLeave?: () => void;
+  onMouseLeave?: (event: PointerEvent) => void;
 };
 
 /**
