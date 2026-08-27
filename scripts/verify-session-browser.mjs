@@ -16,6 +16,10 @@
  *   6. delete: the confirmation names the focused session, Ctrl+Enter must
  *      NOT confirm an irreversible action, Esc cancels, and repeated Enter
  *      commits the action only once.
+ *   7. right-click: a session row opens a pointer-anchored action menu
+ *      (open/rename/delete); keyboard and mouse both drive it, modal
+ *      screens keep it inert, outside clicks dismiss it, and it clamps
+ *      inside the terminal.
  *
  * Assertion discipline: ink repaints only changed lines, so each step opens a
  * FRESH output window and asserts on what that window painted; checks that
@@ -89,8 +93,8 @@ const summary = (over) => ({
 function makeChannel() {
   // The live session is a model-switch fork. Its current lineage must not be
   // offered as a separate resumable conversation; the remaining MRU order is
-  // gamma (newest) → beta → alpha, plus two delegated runs under beta and one
-  // boot artifact holding no conversation.
+  // gamma (newest) → beta → alpha, plus one foreign-directory conversation,
+  // two delegated runs under beta and one boot artifact holding no conversation.
   let sessions = [
     summary({
       id: 'live-session',
@@ -102,11 +106,12 @@ function makeChannel() {
     summary({ id: 's-new', title: { text: 'gamma', source: 'auto' }, updatedAt: 5 }),
     summary({ id: 's-mid', title: { text: 'beta', source: 'auto' }, updatedAt: 4, childCount: 2 }),
     summary({ id: 's-old', title: { text: 'alpha', source: 'auto' }, updatedAt: 3 }),
+    summary({ id: 's-foreign', cwd: '/other/project', title: { text: 'delta other workspace', source: 'auto' }, updatedAt: 6 }),
     summary({ id: 's-run1', title: { text: 'delegated one', source: 'prompt' }, updatedAt: 2, label: 'audit run', kind: { kind: 'subagent', parent: 's-mid', depth: 1 } }),
     summary({ id: 's-run2', title: { text: 'delegated two', source: 'prompt' }, updatedAt: 1, kind: { kind: 'subagent', parent: 's-mid', depth: 1 } }),
     summary({ id: 's-boot', title: { text: 'tmp', source: 'fallback' }, updatedAt: 6, hasPrompt: false }),
   ]
-  const calls = { rename: [], delete: [], preview: [] }
+  const calls = { rename: [], delete: [], preview: [], resume: [] }
   const listeners = new Set()
   const rows = []
   const channel = {
@@ -202,11 +207,14 @@ function makeChannel() {
     switchPreset: async () => false,
     switchModel: async () => false,
     rewindTo: async () => null,
-    resumeTo: async () => ({
-      ok: false,
-      reason: 'failed',
-      error: 'corrupt session log: seq gap in committed region',
-    }),
+    resumeTo: async (id) => {
+      calls.resume.push(id)
+      return {
+        ok: false,
+        reason: 'failed',
+        error: 'corrupt session log: seq gap in committed region',
+      }
+    },
     newSession: async () => false,
     compact() {},
     calls,
@@ -277,6 +285,29 @@ check('and it is counted too', await settled(() => /1 empty/.test(flat(screen())
 check('the count reflects only what is shown', await settled(() => /3 sessions/.test(flat(screen()))), flat(screen()).slice(0, 200))
 check('metadata rides under each title', await settled(() => /2\.0 KB/.test(flat(screen())) && /deepseek-v4-pro/.test(flat(screen()))))
 check('focus starts on the MRU top row (gamma)', await settled(() => /❯\s*gamma/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
+check('a foreign directory is hidden until its scope is selected', !/delta other workspace/.test(screen()))
+
+// ── explicit working-directory menu ─────────────────────────────────────
+stdin.write('\x1b[D') // ← opens the directory layer
+check('left opens the visible working-directory menu',
+  await settled(() => /Choose working directory/.test(flat(screen())) && /All working directories/.test(flat(screen()))),
+  flat(screen()).slice(0, 260))
+check('the directory menu exposes the foreign path', /\/other\/project/.test(screen()), flat(screen()).slice(0, 300))
+stdin.write('\x1b[B') // current → foreign (all is above current)
+check('directory focus moves independently from session focus',
+  await settled(() => /❯\s*▣\s*project/.test(screen())),
+  screen().split('\n').filter(line => line.includes('❯')).join('|'))
+stdin.write('\r')
+check('choosing a directory scopes the session list',
+  await settled(() => /delta other workspace/.test(screen()) && !/gamma/.test(screen())),
+  flat(screen()).slice(0, 280))
+stdin.write('\x01') // ctrl+a = all directories quick toggle
+check('ctrl+a still provides the all-directories fast path',
+  await settled(() => /delta other workspace/.test(screen()) && /gamma/.test(screen()) && /all working directories/i.test(flat(screen()))))
+stdin.write('\x01') // all → current
+check('ctrl+a toggles back to the current directory',
+  await settled(() => /gamma/.test(screen()) && !/delta other workspace/.test(screen()) && /Working directory\s+\/tmp/.test(flat(screen()))))
+check('returning to current scope restores the MRU focus', await settled(() => /❯\s*gamma/.test(screen())))
 
 // ── mouse wheel ─────────────────────────────────────────────────────────
 // Wheel events arrive as SGR mouse sequences over the list region, exactly
@@ -325,6 +356,85 @@ stdin.write('\x1b') // Esc clears the query first
 check('Esc clears the query rather than leaving',
   await settled(() => /gamma/.test(screen()) && /Resume session/.test(flat(screen()))))
 
+// ── right-click context menu ───────────────────────────────────────────
+// SGR button 2 = right press. The menu must appear on press, anchored at
+// the pointer, and must NOT trigger the row's left-click resume path.
+const gammaLine = screen().split('\n').findIndex(l => /❯\s*gamma/.test(l))
+const menuSgr = (col, row) => `\x1b[<2;${col};${row}M\x1b[<2;${col};${row}m`
+stdin.write(menuSgr(30, gammaLine + 1))
+check('right-click on a session row opens the action menu',
+  await settled(() => /Open/.test(screen()) && /Rename/.test(screen()) && /Delete/.test(screen())),
+  flat(screen()).slice(0, 260))
+check('a right-click does not resume the session',
+  channel.calls.resume.length === 0, JSON.stringify(channel.calls.resume))
+{
+  const lines = screen().split('\n')
+  check('the menu is anchored just past the pointer, not at the screen top',
+    /Open/.test(lines[gammaLine + 2] ?? ''),
+    JSON.stringify(lines.slice(gammaLine, gammaLine + 4)))
+}
+// ↑/↓ move the keyboard cursor; Enter runs the highlighted action. Both
+// keys go in ONE write so they land in the same stdin chunk — the exact
+// path the menuRef exists for (↓ must move the item before Enter reads it).
+stdin.write('\x1b[B\r')
+check('menu Enter runs the highlighted action (rename)',
+  await settled(() => /✎ gamma/.test(flat(screen()))), flat(screen()).slice(-200))
+stdin.write('\x1b') // leave the rename editor
+await settle(() => !/✎ gamma/.test(flat(screen())))
+// Mouse activation: reopen, then left-click the Delete item. The popup is
+// anchored at the pointer (menuCol → screen col 30), so the click must land
+// INSIDE the popup's span — a click outside it would dismiss the menu by
+// design.
+stdin.write(menuSgr(30, gammaLine + 1))
+await settle(() => /Open/.test(screen()))
+const deleteItemLine = screen().split('\n').findIndex(l => /Delete/.test(l))
+stdin.write(`\x1b[<0;34;${deleteItemLine + 1}M\x1b[<0;34;${deleteItemLine + 1}m`)
+check('left-clicking a menu item runs it (delete → confirmation)',
+  await settled(() => /Delete "gamma"/.test(flat(screen()))), flat(screen()).slice(-220))
+// While a confirmation is up, right-click must not open a menu.
+stdin.write(menuSgr(30, gammaLine + 1))
+await sleep(250)
+check('a right-click during the delete confirmation opens no menu',
+  !/Open/.test(screen()) && /Delete "gamma"/.test(flat(screen())), flat(screen()).slice(-220))
+stdin.write('\x1b') // cancel the confirmation
+await settle(() => !/Delete "gamma"/.test(flat(screen())))
+// Outside click dismisses the menu without acting on the row beneath.
+stdin.write(menuSgr(30, gammaLine + 1))
+await settle(() => /Open/.test(screen()))
+stdin.write(`\x1b[<0;5;${ROWS}M\x1b[<0;5;${ROWS}m`) // hint row: no handler
+await sleep(250)
+check('a left-click outside the menu dismisses it and resumes nothing',
+  !/Open/.test(screen()) && channel.calls.resume.length === 0 && /❯\s*gamma/.test(screen()),
+  flat(screen()).slice(0, 240))
+// Left-clicking ANOTHER session row while the menu is open must be inert
+// (rows carry onClick but the menu gates them): the menu closes, nothing
+// resumes, and the cursor stays where it was.
+stdin.write(menuSgr(30, gammaLine + 1))
+await settle(() => /Open/.test(screen()))
+const betaLine = screen().split('\n').findIndex(l => /^\s*beta\b/.test(l))
+stdin.write(`\x1b[<0;6;${betaLine + 1}M\x1b[<0;6;${betaLine + 1}m`)
+await sleep(250)
+check('left-clicking another row while the menu is open only dismisses it',
+  !/Open/.test(screen()) && channel.calls.resume.length === 0 && /❯\s*gamma/.test(screen()),
+  flat(screen()).slice(0, 240))
+// Right-click near the right edge: the popup clamps inside the terminal.
+stdin.write(menuSgr(COLS - 2, gammaLine + 1))
+await settle(() => /Open/.test(screen()))
+{
+  const lines = screen().split('\n')
+  const openLine = lines.findIndex(l => /Open/.test(l))
+  check('a menu near the right edge clamps to the terminal width',
+    openLine >= 0 && (lines[openLine]?.length ?? 0) === COLS,
+    openLine >= 0 ? `line=${JSON.stringify(lines[openLine])}` : 'menu missing')
+}
+stdin.write('\x1b') // dismiss
+await settle(() => !/Open/.test(screen()))
+// Right-click on chrome with no handler opens nothing.
+stdin.write(menuSgr(5, ROWS))
+await sleep(250)
+check('a right-click on empty chrome opens no menu',
+  !/Open/.test(screen()) && !/Rename/.test(screen()), flat(screen()).slice(0, 200))
+
 // ── reveal the delegated runs ───────────────────────────────────────────
 stdin.write('\x13') // ctrl+s
 check('ctrl+s reveals the delegated runs', await settled(() => /audit run/.test(screen())), flat(screen()).slice(0, 300))
@@ -345,6 +455,14 @@ stdin.write('\x12') // ctrl+r → rename
 check('rename prefills the editor with the focused title',
   await settled(() => /✎ beta/.test(flat(toPlain(stdout.frames.join(''))))),
   flat(toPlain(stdout.frames.join(''))).slice(-160))
+const renameForeignRow = screen().split('\n').findIndex(line => line.includes('gamma')) + 1
+stdin.write(`\x1b[<0;6;${renameForeignRow}M\x1b[<0;6;${renameForeignRow}m`)
+await sleep(250)
+check(
+  'rename mode makes other session rows inert to mouse clicks',
+  channel.calls.resume.length === 0 && /✎\s*beta/.test(flat(screen())) && /❯\s*beta/.test(screen()),
+  JSON.stringify({ resume: channel.calls.resume, focus: screen().split('\n').find(line => line.includes('❯')) }),
+)
 stdin.write('renamed')
 await settle(() => /betarenamed/.test(screen()))
 stdin.write('\r')
@@ -369,6 +487,14 @@ check(
 stdin.write('\x04') // ctrl+d
 check('the confirmation names the focused session',
   await settled(() => /Delete "betarenamed"/.test(flat(screen()))), flat(screen()).slice(-220))
+const deleteForeignRow = screen().split('\n').findIndex(line => line.includes('alpha')) + 1
+stdin.write(`\x1b[<0;6;${deleteForeignRow}M\x1b[<0;6;${deleteForeignRow}m`)
+await sleep(250)
+check(
+  'delete confirmation makes other session rows inert to mouse clicks',
+  channel.calls.resume.length === 0 && /Delete "betarenamed"/.test(flat(screen())) && /❯\s*betarenamed/.test(screen()),
+  JSON.stringify({ resume: channel.calls.resume, confirmation: flat(screen()).slice(-180) }),
+)
 // Negative probe (Ctrl+Enter must NOT confirm): nothing is supposed to
 // change, so a settle would return immediately — keep the fixed window.
 await windowed(() => stdin.write('\x1b[13;5u'), 400) // Ctrl+Enter must not confirm

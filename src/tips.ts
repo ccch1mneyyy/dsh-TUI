@@ -183,8 +183,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-resume-search',
     group: 'commands',
-    zh: '/resume 里直接打字即可搜索会话',
-    en: 'In /resume, just type to search sessions',
+    zh: '/resume 顶部可选工作目录，← 切目录，打字搜索当前层',
+    en: '/resume has a directory selector; ← switches scope, typing searches the active list',
   },
   {
     id: 'cmd-rename',

@@ -628,8 +628,22 @@ const dict = {
   'session-kind-fork': { zh: '回溯分支', en: 'Rewound branch' },
   'session-kind-subagent': { zh: '子 agent 运行', en: 'Sub-agent run' },
   'session-project-unknown': { zh: '（未记录目录）', en: '(no directory recorded)' },
-  'session-scope-all': { zh: '全部项目', en: 'all projects' },
+  'session-scope-all': { zh: '全部工作目录', en: 'all working directories' },
   'session-search-placeholder': { zh: '输入以搜索 · {{scope}}', en: 'Type to search · {{scope}}' },
+  'session-workspace-scope': { zh: '工作目录', en: 'Working directory' },
+  'session-workspace-switch': { zh: '← 选择目录', en: '← choose directory' },
+  'session-workspace-select-title': { zh: '选择工作目录', en: 'Choose working directory' },
+  'session-workspace-search-placeholder': { zh: '输入以搜索工作目录', en: 'Type to search working directories' },
+  'session-workspace-all': { zh: '全部工作目录', en: 'All working directories' },
+  'session-workspace-current': { zh: '当前', en: 'current' },
+  'session-workspace-project-count': { zh: '{{n}} 个目录', en: '{{n}} directories' },
+  'session-workspace-all-detail': { zh: '跨目录浏览 · {{n}} 个会话', en: 'browse across directories · {{n}} sessions' },
+  'session-workspace-empty': { zh: '暂无历史会话', en: 'no history yet' },
+  'session-workspace-no-match': { zh: '没有匹配的工作目录', en: 'No matching working directory' },
+  // Right-click session menu items (SessionBrowser popup).
+  'resume-menu-open': { zh: '打开', en: 'Open' },
+  'resume-menu-rename': { zh: '重命名', en: 'Rename' },
+  'resume-menu-delete': { zh: '删除', en: 'Delete' },
   'session-count-shown': { zh: '{{n}} 个会话', en: '{{n}} sessions' },
   'session-count-subagents': { zh: '{{n}} 个子运行已折叠', en: '{{n}} runs folded' },
   'session-count-empty': { zh: '{{n}} 个空会话', en: '{{n}} empty' },
@@ -643,9 +657,11 @@ const dict = {
   // Three widths of the same hint. The browser picks the widest that fits the
   // terminal, because a hint that wraps costs the rows the list needs and can
   // push its own tail off the bottom of the screen.
-  'session-hint-list': { zh: '**Enter** 恢复 · Tab 预览 · {{mod}}a 全部项目（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · Tab preview · {{mod}}a all projects ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}d delete · {{mod}}x clean · Esc exit' },
-  'session-hint-list-mid': { zh: '**Enter** 恢复 · Tab 预览 · {{mod}}a 全部项目 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · Tab preview · {{mod}}a projects · {{mod}}s runs · {{mod}}r rename · {{mod}}d delete · Esc exit' },
-  'session-hint-list-short': { zh: '**Enter** 恢复 · Tab 预览 · Esc 退出', en: '**Enter** resume · Tab preview · Esc exit' },
+  'session-hint-list': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}d delete · {{mod}}x clean · Esc exit' },
+  'session-hint-list-mid': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories · {{mod}}s runs · {{mod}}r rename · {{mod}}d delete · Esc exit' },
+  'session-hint-list-short': { zh: '**Enter** 恢复 · ← 目录 · Esc', en: '**Enter** resume · ← dirs · Esc' },
+  'session-hint-workspaces': { zh: '**Enter/→** 查看会话 · ↑/↓ 选择 · {{mod}}a 全部目录 · Esc 返回', en: '**Enter/→** view sessions · ↑/↓ choose · {{mod}}a all directories · Esc back' },
+  'session-hint-workspaces-short': { zh: '**Enter/→** 查看 · Esc', en: '**Enter/→** view · Esc' },
 
   // ── picker 通用快捷键提示（整句本地化，zh 不用 "to" 结构；**段** 渲染为粗体主快捷键）─
   'hint-confirm-exit': { zh: '**Enter** 确认 · Esc 退出', en: '**Enter** to confirm · Esc to exit' },

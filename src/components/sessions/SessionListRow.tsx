@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
+import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
 import {
   formatBytes,
   formatWhen,
@@ -31,6 +32,7 @@ export function SessionListRow({
   focused,
   now,
   onClick,
+  onContextMenu,
 }: {
   session: SessionSummary
   /** Columns available to the row, indentation included. */
@@ -42,6 +44,8 @@ export function SessionListRow({
   now: number
   /** 鼠标点击行（fullscreen）：恢复该会话（与 Enter 同路径）。 */
   onClick?(event: ClickEvent): void
+  /** 鼠标右键（fullscreen）：在该行弹出操作菜单（打开/重命名/删除）。 */
+  onContextMenu?(event: ContextMenuEvent): void
 }): React.ReactNode {
   const indent = depth * 2
   // Two cells for the focus marker, plus the indent for a nested run.
@@ -63,9 +67,10 @@ export function SessionListRow({
       flexDirection="column"
       flexShrink={0}
       onClick={onClick}
-      onMouseEnter={onClick !== undefined ? () => setHovered(true) : undefined}
-      onMouseLeave={onClick !== undefined ? () => setHovered(false) : undefined}
-      backgroundColor={hovered && !focused ? 'userMessageBackgroundHover' : undefined}
+      onContextMenu={onContextMenu}
+      onMouseEnter={onClick !== undefined || onContextMenu !== undefined ? () => setHovered(true) : undefined}
+      onMouseLeave={onClick !== undefined || onContextMenu !== undefined ? () => setHovered(false) : undefined}
+      backgroundColor={focused || hovered ? 'userMessageBackgroundHover' : undefined}
     >
       <Box>
         <Text color={focused ? 'suggestion' : 'subtle'}>
