@@ -1,7 +1,9 @@
 import type { DOMElement } from './dom.js'
 import { ClickEvent } from './events/click-event.js'
 import { ContextMenuEvent } from './events/context-menu-event.js'
+import type { DragEvent } from './events/drag-event.js'
 import type { EventHandlerProps } from './events/event-handlers.js'
+import { HANDLER_FOR_EVENT } from './events/event-handlers.js'
 import { PointerEvent } from './events/pointer-event.js'
 import { WheelEvent } from './events/wheel-event.js'
 import { logError } from '../utils/log.js'
@@ -208,6 +210,72 @@ export function dispatchContextMenu(
     node = node.parentNode
   }
   return handled
+}
+
+/**
+ * Find the drag target at (col, row): hit-test the root (overlay-aware,
+ * like dispatchClick), then walk the ancestor chain from the deepest hit
+ * node and return the FIRST node carrying an onDragStart handler. That
+ * node is captured as the drag session target — subsequent dragmove/
+ * dragend events bubble from it even when the pointer leaves its rect.
+ *
+ * @param root - the tree root to hit-test.
+ * @param col - the screen column of the press.
+ * @param row - the screen row of the press.
+ * @returns the deepest node with an onDragStart handler, or null when no
+ *   ancestor of the hit node is a drag target.
+ */
+export function findDragTarget(
+  root: DOMElement,
+  col: number,
+  row: number,
+): DOMElement | null {
+  let node: DOMElement | undefined =
+    hitTestWithOverlays(root, col, row) ?? undefined
+  while (node) {
+    if (node._eventHandlers?.onDragStart) return node
+    node = node.parentNode
+  }
+  return null
+}
+
+/**
+ * Bubble a drag event (dragstart/dragmove/dragend) from the captured
+ * drag session target up through parentNode. The handler prop is looked
+ * up per event type (onDragStart/onDragMove/onDragEnd). Stops when a
+ * handler calls stopImmediatePropagation(). Handler isolation matches
+ * dispatchClick — a throwing handler is logged and the bubbling
+ * continues.
+ *
+ * Unlike dispatchClick the target comes from the drag session captured
+ * at press time, NOT a fresh hit-test: like DOM element capture, the
+ * drag source keeps receiving events for the whole gesture.
+ *
+ * @param target - the captured drag session target node.
+ * @param event - the drag event to dispatch.
+ */
+export function dispatchDragEvent(
+  target: DOMElement,
+  event: DragEvent,
+): void {
+  const handlerKey = HANDLER_FOR_EVENT[event.type]?.bubble
+  if (!handlerKey) return
+  let node: DOMElement | undefined = target
+  while (node) {
+    const handler = node._eventHandlers?.[handlerKey] as
+      | ((event: DragEvent) => void)
+      | undefined
+    if (handler) {
+      event._prepareForTarget(node)
+      try {
+        handler(event)
+      } catch (error) {
+        logError(error)
+      }
+      if (event.didStopImmediatePropagation()) return
+    }
+    node = node.parentNode
+  }
 }
 
 /**

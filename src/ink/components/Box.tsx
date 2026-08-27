@@ -4,6 +4,7 @@ import type { Except } from 'type-fest';
 import type { DOMElement } from '../dom.js';
 import type { ClickEvent } from '../events/click-event.js';
 import type { ContextMenuEvent } from '../events/context-menu-event.js';
+import type { DragEvent } from '../events/drag-event.js';
 import type { FocusEvent } from '../events/focus-event.js';
 import type { KeyboardEvent } from '../events/keyboard-event.js';
 import type { Styles } from '../styles.js';
@@ -37,6 +38,22 @@ export type Props = Except<Styles, 'textWrap'> & {
    * the pointer.
    */
   onContextMenu?: (event: ContextMenuEvent) => void;
+  /**
+   * Drag protocol (DOM HTML5 drag semantics subset). Fired when the
+   * pointer FIRST MOVES after an unmodified left-button press inside
+   * this Box (DOM fires dragstart on first move, not on press) — only
+   * inside `<AlternateScreen>` with mouse tracking enabled, and only
+   * when no modifier (shift/alt/ctrl) was held at press. `onDragMove`
+   * fires on every further motion (bubbles from this Box up through
+   * ancestors), `onDragEnd` on release or when the session is
+   * interrupted (focus loss / screen swap). A press+release without
+   * movement fires NO drag events and still triggers `onClick`.
+   */
+  onDragStart?: (event: DragEvent) => void;
+  /** Fired on each pointer motion after dragstart. See onDragStart. */
+  onDragMove?: (event: DragEvent) => void;
+  /** Fired on release after dragstart. See onDragStart. */
+  onDragEnd?: (event: DragEvent) => void;
   onFocus?: (event: FocusEvent) => void;
   onFocusCapture?: (event: FocusEvent) => void;
   onBlur?: (event: FocusEvent) => void;
@@ -58,7 +75,7 @@ export type Props = Except<Styles, 'textWrap'> & {
  * `<Box>` is an essential Ink component to build your layout. It's like `<div style="display: flex">` in the browser.
  */
 function Box(t0) {
-  const $ = _c(44);
+  const $ = _c(50);
   let autoFocus;
   let children;
   let flexDirection;
@@ -69,6 +86,9 @@ function Box(t0) {
   let onBlurCapture;
   let onClick;
   let onContextMenu;
+  let onDragStart;
+  let onDragMove;
+  let onDragEnd;
   let onFocus;
   let onFocusCapture;
   let onKeyDown;
@@ -98,7 +118,10 @@ function Box(t0) {
       onKeyDown: t16,
       onKeyDownCapture: t17,
       onContextMenu: t18,
-      ...t19
+      onDragStart: t20,
+      onDragMove: t21,
+      onDragEnd: t22,
+      ...t23
     } = t0;
     children = t1;
     ref = t6;
@@ -114,7 +137,10 @@ function Box(t0) {
     onKeyDown = t16;
     onKeyDownCapture = t17;
     onContextMenu = t18;
-    style = t19;
+    onDragStart = t20;
+    onDragMove = t21;
+    onDragEnd = t22;
+    style = t23;
     flexWrap = t2 === undefined ? "nowrap" : t2;
     flexDirection = t3 === undefined ? "row" : t3;
     flexGrow = t4 === undefined ? 0 : t4;
@@ -153,6 +179,9 @@ function Box(t0) {
     $[14] = onMouseEnter;
     $[15] = onMouseLeave;
     $[16] = onContextMenu;
+    $[44] = onDragStart;
+    $[45] = onDragMove;
+    $[46] = onDragEnd;
     $[17] = ref;
     $[18] = style;
     $[19] = tabIndex;
@@ -173,6 +202,9 @@ function Box(t0) {
     onMouseEnter = $[14];
     onMouseLeave = $[15];
     onContextMenu = $[16];
+    onDragStart = $[44];
+    onDragMove = $[45];
+    onDragEnd = $[46];
     ref = $[17];
     style = $[18];
     tabIndex = $[19];
@@ -202,14 +234,17 @@ function Box(t0) {
     t3 = $[27];
   }
   let t4;
-  if ($[28] !== autoFocus || $[29] !== children || $[30] !== onBlur || $[31] !== onBlurCapture || $[32] !== onClick || $[33] !== onContextMenu || $[34] !== onFocus || $[35] !== onFocusCapture || $[36] !== onKeyDown || $[37] !== onKeyDownCapture || $[38] !== onMouseEnter || $[39] !== onMouseLeave || $[40] !== ref || $[41] !== t3 || $[42] !== tabIndex) {
-    t4 = <ink-box ref={ref} tabIndex={tabIndex} autoFocus={autoFocus} onClick={onClick} onContextMenu={onContextMenu} onFocus={onFocus} onFocusCapture={onFocusCapture} onBlur={onBlur} onBlurCapture={onBlurCapture} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} onKeyDown={onKeyDown} onKeyDownCapture={onKeyDownCapture} style={t3}>{children}</ink-box>;
+  if ($[28] !== autoFocus || $[29] !== children || $[30] !== onBlur || $[31] !== onBlurCapture || $[32] !== onClick || $[33] !== onContextMenu || $[47] !== onDragStart || $[48] !== onDragMove || $[49] !== onDragEnd || $[34] !== onFocus || $[35] !== onFocusCapture || $[36] !== onKeyDown || $[37] !== onKeyDownCapture || $[38] !== onMouseEnter || $[39] !== onMouseLeave || $[40] !== ref || $[41] !== t3 || $[42] !== tabIndex) {
+    t4 = <ink-box ref={ref} tabIndex={tabIndex} autoFocus={autoFocus} onClick={onClick} onContextMenu={onContextMenu} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onFocus={onFocus} onFocusCapture={onFocusCapture} onBlur={onBlur} onBlurCapture={onBlurCapture} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} onKeyDown={onKeyDown} onKeyDownCapture={onKeyDownCapture} style={t3}>{children}</ink-box>;
     $[28] = autoFocus;
     $[29] = children;
     $[30] = onBlur;
     $[31] = onBlurCapture;
     $[32] = onClick;
     $[33] = onContextMenu;
+    $[47] = onDragStart;
+    $[48] = onDragMove;
+    $[49] = onDragEnd;
     $[34] = onFocus;
     $[35] = onFocusCapture;
     $[36] = onKeyDown;

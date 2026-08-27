@@ -24,7 +24,7 @@ import { dispatchClick, dispatchHover, dispatchWheel, clearHovered, hitTest } fr
 import { nodeCache } from '../src/ink/node-cache.js'
 import type { DOMElement } from '../src/ink/dom.js'
 import { createNode } from '../src/ink/dom.js'
-import { handleMouseEvent } from '../src/ink/components/App.js'
+import { handleMouseEvent, default as AppComponent } from '../src/ink/components/App.js'
 import { createSelectionState, hasSelection } from '../src/ink/selection.js'
 import React from 'react'
 
@@ -244,6 +244,11 @@ function makeFakeApp(): FakeApp {
     lastHoverCol: -1,
     lastHoverRow: -1,
     pendingHyperlinkTimer: null,
+    // drag 协议新增的实例面：mock 镜像真实 App（resetPointerState 会调
+    // finishDragSession 收尾 drag 会话；本脚本的 press 无 onDragTargetAt，
+    // 会话恒为 null，真实原型方法自然 no-op）。
+    dragSession: null,
+    finishDragSession: AppComponent.prototype.finishDragSession,
   } as unknown as FakeApp
   return app
 }

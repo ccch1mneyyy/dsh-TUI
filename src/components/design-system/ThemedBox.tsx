@@ -3,6 +3,7 @@ import Box from '../../ink/components/Box.js'
 import type { DOMElement } from '../../ink/dom.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
+import type { DragEvent } from '../../ink/events/drag-event.js'
 import type { FocusEvent } from '../../ink/events/focus-event.js'
 import type { KeyboardEvent } from '../../ink/events/keyboard-event.js'
 import type { Color, Styles } from '../../ink/styles.js'
@@ -38,6 +39,17 @@ export type Props = BaseStylesWithoutColors &
     autoFocus?: boolean
     onClick?: (event: ClickEvent) => void
     onContextMenu?: (event: ContextMenuEvent) => void
+    /**
+     * Drag protocol handlers, transparently forwarded to the inner Box.
+     * Only inside `<AlternateScreen>`, left button, no modifier at press;
+     * `dragstart` fires on FIRST movement (not press); a press+release
+     * without movement still triggers `onClick`. See Box's JSDoc.
+     */
+    onDragStart?: (event: DragEvent) => void
+    /** Fired on each pointer motion after dragstart. See onDragStart. */
+    onDragMove?: (event: DragEvent) => void
+    /** Fired on release after dragstart. See onDragStart. */
+    onDragEnd?: (event: DragEvent) => void
     onFocus?: (event: FocusEvent) => void
     onFocusCapture?: (event: FocusEvent) => void
     onBlur?: (event: FocusEvent) => void

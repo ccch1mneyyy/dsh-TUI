@@ -179,6 +179,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 主题加载与持久化 | `node --import tsx/esm scripts/verify-themes.mjs` |
 | 滚动/粘底行为 | `node scripts/verify-scroll.mjs`、`node scripts/verify-resticky.mjs` 及对应 `repro-*` 环境 |
 | 全屏复制即选区 | `node scripts/verify-copy-on-select.mjs` |
+| 组件级鼠标拖拽协议（目标捕获、事件冒泡、点击/选区兼容与中断收尾） | `node --import tsx/esm scripts/verify-drag-protocol.tsx` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭

@@ -130,6 +130,10 @@ const GROUPS = {
 // 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
 // 吞掉，不再落入 shell。
     ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
+// 组件级拖拽协议回归：无修饰左键 press 捕获 drag target，首动 dragstart、
+// 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
+// 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
+    ["verify-drag-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-drag-protocol.tsx']],
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],

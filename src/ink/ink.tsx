@@ -18,9 +18,10 @@ import { FRAME_INTERVAL_MS, PTY_BACKLOG_BYTES } from './constants.js';
 import * as dom from './dom.js';
 import { beginGeometryFrame, endGeometryFrame, GEOMETRY_TRACE_ENABLED, noteFrameCause } from './geometry-trace.js';
 import { KeyboardEvent } from './events/keyboard-event.js';
+import type { DragEvent } from './events/drag-event.js';
 import { FocusManager } from './focus.js';
 import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
-import { dispatchClick, dispatchContextMenu, dispatchHover, dispatchWheel, clearHovered } from './hit-test.js';
+import { dispatchClick, dispatchContextMenu, dispatchDragEvent as bubbleDragEvent, dispatchHover, dispatchWheel, findDragTarget, clearHovered } from './hit-test.js';
 import { logMouseDebug } from '../utils/debug.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
@@ -1747,6 +1748,32 @@ export default class Ink {
     if (!this.altScreenActive) return;
     dispatchHover(this.rootNode, col, row, this.hoveredNodes);
   }
+  /**
+   * Drag protocol entry: find the drag target at an unmodified left
+   * press — the deepest node at (col, row) whose ancestor chain carries
+   * an onDragStart handler. Gated on altScreenActive like dispatchClick
+   * (drag needs mouse tracking + a fixed viewport). Returns null when no
+   * drag target is under the pointer, in which case App keeps the
+   * baseline selection/click path untouched.
+   */
+  findDragTargetAt(col: number, row: number): dom.DOMElement | null {
+    this.probeAltScreenHealth();
+    if (!this.altScreenActive) return null;
+    const target = findDragTarget(this.rootNode, col, row);
+    logMouseDebug('findDragTargetAt', { col, row, found: Boolean(target) });
+    return target;
+  }
+  /**
+   * Dispatch a drag event to the drag session target captured at press
+   * time (bubbles through its ancestors). Gated on altScreenActive like
+   * dispatchClick.
+   */
+  dispatchDrag(target: dom.DOMElement, event: DragEvent): void {
+    this.probeAltScreenHealth();
+    if (!this.altScreenActive) return;
+    logMouseDebug('dispatchDrag', { type: event.type, col: event.col, row: event.row });
+    bubbleDragEvent(target, event);
+  }
   dispatchKeyboardEvent(parsedKey: ParsedKey): void {
     this.probeAltScreenHealth();
     const target = this.focusManager.activeElement ?? this.rootNode;
@@ -1944,7 +1971,7 @@ export default class Ink {
   }
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           {node}
         </TerminalWriteProvider>
