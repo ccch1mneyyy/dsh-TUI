@@ -2561,6 +2561,41 @@ export function createChannel(
     }).catch(() => {})
   }
 
+  // --- Manual-compaction lifecycle ---------------------------------------
+  // The in-flight /compact transaction: its abort hook plus the settled
+  // promise. Every path that replaces `agent` (rewind / rewind-node /
+  // resume / new / model switch) must cancel and await it BEFORE snapshot-
+  // ting the session. Without this, a slow summarizer keeps running against
+  // the OLD session across the switch and can commit its replacement
+  // checkpoint AFTER the fork snapshot — silently swapping the history the
+  // user believed intact ("compaction failed → /model → context lost").
+  let manualCompaction:
+    | { controller: AbortController; settled: Promise<void> }
+    | undefined
+  /** Compactions cancelled by settleManualCompaction: their rejection is expected. */
+  const cancelledCompactions = new WeakSet<AbortController>()
+
+  /**
+   * Cancel an in-flight manual compaction and wait for it to settle.
+   * Aborting tears the summarizer stream down; dsh-compaction then closes
+   * the transaction with an error end marker and rejects compactNow with
+   * the `cancelled` class — no checkpoint is committed, the surface stays
+   * whole. The settle race is capped so a stuck stream can never wedge the
+   * session switch itself.
+   */
+  const settleManualCompaction = async (): Promise<void> => {
+    const active = manualCompaction
+    if (active === undefined) return
+    manualCompaction = undefined
+    cancelledCompactions.add(active.controller)
+    active.controller.abort(new Error('session switch'))
+    state.notify(t('compact-cancelled-switch'), { color: 'warning', timeoutMs: 4000 })
+    await Promise.race([
+      active.settled,
+      new Promise<void>(resolve => { setTimeout(resolve, 3000) }),
+    ])
+  }
+
   const state: ChannelState = {
     effortLevels: undefined,
     version: 0,
@@ -2990,6 +3025,10 @@ export function createChannel(
           return null
         }
       }
+      // An in-flight manual compaction must not straddle the fork: cancel it
+      // and wait, or its checkpoint could commit right after the seed snapshot
+      // below and quietly replace history the rewind was meant to preserve.
+      await settleManualCompaction()
       const childId = SessionId(randomUUID())
       // DSH event order is `turn/start → user/message → … → turn/end`, so a
       // message's own seq always sits inside its turn — forking there would
@@ -3508,6 +3547,10 @@ export function createChannel(
         state.notify(t('rewind-unavailable'), { color: 'error' })
         return null
       }
+      // An in-flight manual compaction must not straddle the snapshot below
+      // (live branch) nor keep summarizing the current session while the
+      // rewind targets another — cancel and await it first.
+      await settleManualCompaction()
       // Pin the entry-time session: the awaits below (log load, preset
       // compose, agent create) are windows in which a queued switch
       // (/new, /resume, /model) can swap `agent` — the mutation queue only
@@ -3695,6 +3738,10 @@ export function createChannel(
         state.notify(t('fork-while-working'), { color: 'warning' })
         return false
       }
+      // An in-flight manual compaction must not straddle the fork snapshot:
+      // cancel and await it, or its checkpoint could commit right after the
+      // seed copy below and quietly replace history the fork preserved.
+      await settleManualCompaction()
       const source = agent.session
       const childId = SessionId(randomUUID())
       // No boundary: the whole (turn-closed) log. Slice via sessions.fork for
@@ -3799,6 +3846,10 @@ export function createChannel(
       // target — a veto leaves the live session and its transcript
       // untouched.
       if (await sessionSwitchVetoed('resume', sessionId)) return { ok: false, reason: 'cancelled' }
+      // The live session's in-flight manual compaction must not keep running
+      // (and commit its checkpoint) once we leave it for the target — cancel
+      // and await it before any target read.
+      await settleManualCompaction()
       let handle: AgentHandle
       // Compat boundary: register vouched-for legacy event types (e.g.
       // activity/status from pre-#143 logs) in every reachable dsh-session
@@ -3968,6 +4019,10 @@ export function createChannel(
       // Plugin veto point (tui/session-switch): no side effects have
       // happened yet — the session id below is not even allocated.
       if (await sessionSwitchVetoed('new')) return false
+      // Leaving the live session: its in-flight manual compaction must not
+      // keep summarizing (and later commit a checkpoint the user believes
+      // cancelled) — cancel and await it first.
+      await settleManualCompaction()
       const sessionId = SessionId(randomUUID())
       let handle: AgentHandle
       // A fresh session composes the caller's DEFAULT preset: the cordis.yml
@@ -4185,6 +4240,11 @@ export function createChannel(
       }
       let seed: readonly SessionEvent[]
       try {
+        // An in-flight manual compaction must not straddle the fork: cancel
+        // it first, or its checkpoint can commit right after this snapshot —
+        // the model-switched child would start from the summary alone while
+        // the user believes the full history carried over ("context lost").
+        await settleManualCompaction()
         // No boundary = fork the whole log (continue the conversation).
         seed = sessions.fork(agent.session).events
       } catch (error) {
@@ -4977,21 +5037,43 @@ export function createChannel(
           state.notify(t('compact-while-working'), { color: 'warning' })
           return
         }
-        const signal = new AbortController().signal
+        const controller = new AbortController()
         state.notify(t('compact-working'))
-        void compactService
-          .compactNow(agent, signal)
-          .then((result) => {
+        // Register the in-flight transaction so any agent-replacing path
+        // (rewind/resume/new/model switch) can cancel it before snapshotting
+        // the session — see settleManualCompaction. `settled` never rejects:
+        // every branch lands in a notification.
+        const settled = (async () => {
+          try {
+            const result = await compactService.compactNow(agent, controller.signal)
             state.notify(result ? t('compact-done') : t('compact-nothing'))
             // Compaction quip rides the next thinking rotation (pi parity).
             if (result) updateWorkingActivity('compaction', () => activityTracker.onCompact('done'))
-          })
-          .catch((error: unknown) => {
+          } catch (error: unknown) {
+            // ManualCompactionError('persistence'): the replacement checkpoint
+            // is ALREADY committed — only the durability flush failed. The
+            // surface is now the summary, so a plain "failed" toast here sent
+            // users to /model expecting full history and finding only the
+            // summary ("context lost"). Distinguish it, structurally — the
+            // TUI must not import the error class across the adapter seam.
+            if ((error as { code?: unknown }).code === 'persistence') {
+              state.notify(t('compact-flush-failed'), { color: 'warning', timeoutMs: 12000 })
+              return
+            }
+            // A switch-initiated abort rejects compactNow with the abort reason;
+            // the cancellation was already toasted above — a second generic
+            // "failed" toast for the same, expected rejection would mislead.
+            if (cancelledCompactions.has(controller)) return
             state.notify(
               t('compact-failed', { err: error instanceof Error ? error.message : String(error) }),
               { color: 'error', timeoutMs: 8000 },
             )
-          })
+          }
+        })()
+        manualCompaction = { controller, settled }
+        void settled.finally(() => {
+          if (manualCompaction?.controller === controller) manualCompaction = undefined
+        })
       })().catch((error: unknown) => {
         // Sync throws from compactNow (e.g. runMaintenance rejecting a
         // non-idle agent right after /resume) reject this IIFE itself;

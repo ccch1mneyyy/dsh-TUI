@@ -301,6 +301,10 @@ const GROUPS = {
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
 // （渲染、Enter 菜单、字母直达执行、Esc）。
     ["verify-session-tree", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree.tsx']],
+// 压缩 × 会话切换生命周期：压缩进行中 /model、/resume、/rewind 等必须先
+// abort 并等压缩落定再 fork 快照（后台提交 checkpoint = "压缩失败后换模型
+// 丢上下文"事故根因）；persistence 类失败与通用失败分开提示。
+    ["verify-compact-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-compact-switch.tsx']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
 // ● 前缀、内容为空的行。

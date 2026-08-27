@@ -302,7 +302,7 @@ dsh-tui
 | 新建 | `/new` | 无二次确认——旧会话已持久化，随时可 `/resume` 找回；顺带清空 resume 标记 |
 | 恢复 | `/resume` | 全屏工作目录 / 会话浏览器：顶部目录范围可点击，`←` 进入目录选择、`Enter/→` 查看；宽屏目录栏常驻；打字搜索当前层，`Enter` 恢复、`Tab` 预览、`⌘A` 当前/全部目录快切、`Ctrl+B` 本分支、`Ctrl+S` 子 agent、`Ctrl+R` 重命名、`Ctrl+D` 删除、`Ctrl+X` 清理空壳；右键会话行弹出打开/重命名/删除菜单。长前置上下文的旧会话会渐进恢复真实标题，不再固定显示目录名 |
 | 重命名 | `/rename <标题>` | 立即改名并持久化（写入 session/title 事件，浏览器可读回） |
-| 压缩 | `/compact` | 手动触发 DSH compaction；**回合运行中拒绝**；minimal preset 下不可用；压缩点以 Divider 摘要行呈现 |
+| 压缩 | `/compact` | 手动触发 DSH compaction；**回合运行中拒绝**；minimal preset 下不可用；压缩点以 Divider 摘要行呈现。压缩进行中切换会话（`/model`、`/resume`、`/rewind`、`/fork`、`/new`）会**先取消压缩再快照**——后台不再有静默提交的压缩；摘要默认用当前路由模型（换模型后即用新模型压缩）。"压缩已生效但落盘失败"会明确提示，不再误报为压缩失败 |
 | 导出 | `/export` | 从完整 session log 导出 Markdown（含 thinking 与工具调用分节），文件 `dsh-tui-export-<时间戳>.md` 落在当前会话 cwd |
 | 清屏 | `/clear` | 只清视图，不动会话日志 |
 | 删除 | `/resume` 里 `Ctrl+D` | 删除日志目录与 MRU 条目（有确认） |

@@ -203,6 +203,14 @@ const dict = {
   'compact-done': { zh: '会话已压缩', en: 'Conversation compacted' },
   'compact-nothing': { zh: '没有可压缩的内容', en: 'Nothing to compact' },
   'compact-failed': { zh: '压缩失败 · {{err}}', en: 'Compaction failed · {{err}}' },
+  'compact-flush-failed': {
+    zh: '压缩已生效，但落盘检查失败——历史已由摘要替代，请留意会话状态',
+    en: 'Compaction took effect, but its durability flush failed — history is now the summary',
+  },
+  'compact-cancelled-switch': {
+    zh: '压缩进行中，已取消并切换会话',
+    en: 'In-flight compaction cancelled for the session switch',
+  },
   'turn-failed': { zh: '回合出错{{detail}}', en: 'Turn error{{detail}}' },
 
   // ── dsh-adapter/promptDebug.ts（/debug-prompt 成功提示）─────────────

@@ -175,6 +175,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
 | Goal/todo 投影与渲染 | `node scripts/verify-channel-goal-todo.mjs` + `node scripts/verify-goal-todo.mjs` |
 | Compaction 与折叠 transcript 行 | `node scripts/verify-compact.mjs` |
+| 压缩 × 会话切换生命周期（取消先于 fork 快照、persistence 分类提示） | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | 主题加载与持久化 | `node --import tsx/esm scripts/verify-themes.mjs` |
 | 滚动/粘底行为 | `node scripts/verify-scroll.mjs`、`node scripts/verify-resticky.mjs` 及对应 `repro-*` 环境 |
 | 全屏复制即选区 | `node scripts/verify-copy-on-select.mjs` |
