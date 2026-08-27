@@ -566,6 +566,13 @@ function makeHarness(cols: number, rows: number): Harness {
     )
     await sleep(200)
     check('A10 无选区不写剪贴板', oscPayloads().length === idleCopies)
+
+    // A11: controller clear (idle Ctrl+C path) must clear the fold model too,
+    // not only text/caret, or the next Esc is swallowed by a ghost block.
+    controllerBox.current?.clear()
+    check('A11 controller clear 同步清除折叠 chip 与选区',
+      await settled(() => !screenHas('▸ 12 lines') && !screenHas('TAIL')) &&
+        controllerBox.current?.consumeSelectionCopy() === false)
   } finally {
     app.unmount()
   }

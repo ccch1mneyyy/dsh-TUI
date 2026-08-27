@@ -384,6 +384,8 @@ export function PromptInput({
    * delete removes it — typing NEVER unfolds the block.
    */
   const [foldBlock, setFoldBlock] = React.useState<{ start: number; end: number } | null>(null)
+  /** Synchronous mirror used by batched keys, controller clear, and mouse drag. */
+  const foldBlockRef = React.useRef<{ start: number; end: number } | null>(null)
   /** Pointer over the input box (drives the hover peek card). */
   const [hovered, setHovered] = React.useState(false)
   /** 120ms grace so the pointer crossing the input border row from the
@@ -414,7 +416,13 @@ export function PromptInput({
         valueRef.current = ''
         cursorRef.current = 0
         selectionRef.current = null
+        foldBlockRef.current = null
+        dragAnchorRef.current = null
+        lastClickAtRef.current = 0
+        lastClickColRef.current = -1
+        lastClickRowRef.current = -1
         setSelection(null)
+        setFoldBlock(null)
         setValue('')
         setCursor(0)
       },
@@ -553,7 +561,6 @@ export function PromptInput({
   /** Fold-block state + a synchronous mirror (setInput reads the ref).
    *  Creating a block also drags a caret that sits inside it out to the
    *  block's end (the block is atomic; typing continues after it). */
-  const foldBlockRef = React.useRef<{ start: number; end: number } | null>(null)
   const updateFoldBlock = (block: { start: number; end: number } | null) => {
     foldBlockRef.current = block
     setFoldBlock(block)
@@ -2100,6 +2107,11 @@ export function PromptInput({
       return
     }
     if (clamped === 0 && prefixCols > 0 && e.localCol < prefixCols) {
+      // Folding hides the entire editable projection, so no selection may
+      // survive invisibly inside the chip and keep owning Ctrl+C/Delete.
+      clearSelection()
+      dragAnchorRef.current = null
+      setCursor(value.length)
       updateFoldBlock({ start: 0, end: value.length })
       return
     }
