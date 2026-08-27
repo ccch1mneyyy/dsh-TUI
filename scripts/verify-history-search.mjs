@@ -21,9 +21,9 @@ try {
     'duplicate history text needs distinct React keys',
   )
 
-  appendHistory('你好')
-  appendHistory('知道')
-  appendHistory('你好')
+  await appendHistory('你好')
+  await appendHistory('知道')
+  await appendHistory('你好')
   assert.deepEqual(
     loadHistory().map(entry => entry.text),
     ['你好', '知道', '你好'],
@@ -31,7 +31,7 @@ try {
   )
 
   for (let index = 0; index < 250; index += 1) {
-    appendHistory(`cmd ${index}`)
+    await appendHistory(`cmd ${index}`)
   }
   const capped = loadHistory()
   assert.equal(capped.length, 200, 'persisted history stays capped')
@@ -42,9 +42,31 @@ try {
   mkdirSync(staleLock, { recursive: true })
   const old = new Date(Date.now() - 60_000)
   utimesSync(staleLock, old, old)
-  appendHistory('after stale lock')
+  await appendHistory('after stale lock')
   assert.equal(existsSync(staleLock), false, 'stale history lock is removed')
   assert.equal(loadHistory()[0]?.text, 'after stale lock', 'append recovers after stale lock')
+
+  const liveLock = join(fakeHome, '.dsh-tui', 'history.jsonl.lock')
+  mkdirSync(liveLock)
+  let eventLoopResponsive = false
+  const releaseLiveLock = setTimeout(() => {
+    eventLoopResponsive = true
+    rmSync(liveLock, { recursive: true, force: true })
+  }, 25)
+  try {
+    const started = performance.now()
+    const pendingAppend = appendHistory('after live lock')
+    assert.ok(
+      performance.now() - started < 50,
+      'a live history lock must not block the caller before channel dispatch',
+    )
+    await pendingAppend
+    assert.equal(eventLoopResponsive, true, 'history retries yield to the TUI event loop')
+    assert.equal(loadHistory()[0]?.text, 'after live lock', 'append completes after lock release')
+  } finally {
+    clearTimeout(releaseLiveLock)
+    rmSync(liveLock, { recursive: true, force: true })
+  }
 
   const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { HistorySearchDialog }] =
     await Promise.all([
@@ -115,7 +137,7 @@ try {
         '--import',
         'tsx/esm',
         '--eval',
-        "const { appendHistory } = await import('./src/history.ts'); appendHistory(process.argv[1])",
+        "const { appendHistory } = await import('./src/history.ts'); await appendHistory(process.argv[1])",
         `parallel ${index}`,
       ], {
         cwd: workspace,
@@ -149,4 +171,4 @@ try {
   rmSync(fakeHome, { recursive: true, force: true })
 }
 
-console.log('history search OK (keys, stale lock recovery, empty render, capped persistence)')
+console.log('history search OK (keys, nonblocking locks, empty render, capped persistence)')

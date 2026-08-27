@@ -761,7 +761,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.submit(trimmed)
     if (notice) {
       channel.notify(notice, { timeoutMs: 2500 })
@@ -785,7 +785,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.steer(trimmed)
     channel.notify(t('input-interrupted-next'), { timeoutMs: 2500 })
   }
@@ -802,7 +802,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.submit(trimmed)
     channel.notify(t('input-queued-after-turn'), { timeoutMs: 2500 })
   }
@@ -847,7 +847,7 @@ export function PromptInput({
     setInput('', 0)
     setSelectedCommand(0)
     setFileSelected(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.notify(t('input-interrupt-immediate'), { timeoutMs: 2500 })
   }
 
@@ -873,7 +873,7 @@ export function PromptInput({
       historyIndex.current = -1
       setInput('', 0)
       setSelectedCommand(0)
-      appendHistory(text.trim())
+      void appendHistory(text.trim())
     }
     return handled
   }
