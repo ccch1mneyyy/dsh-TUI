@@ -813,6 +813,11 @@ export interface Channel {
   listModels(): Promise<readonly LlmModelInfo[]>
   /** Provider display identities for the same routes (picker group labels). */
   listProviders(): Promise<readonly LlmProviderInfo[]>
+  /** Drop the `/model <provider/id>` completion cache so the next `/model `
+   *  refetch reflects a provider-catalog change (`/provider` add/edit/delete,
+   *  OAuth sign-in/out) — the same consistency the picker's per-open refetch
+   *  already provides. */
+  invalidateModelCompletion(): void
   /** The live agent's full skill catalog for `/skills` (issue #204) — name,
    *  description, invocation flags and source bucket. Undefined on a failed
    *  or incomplete registry read (the picker shows an error); empty only
@@ -1140,6 +1145,8 @@ export interface ChannelState {
   listModels(): Promise<readonly LlmModelInfo[]>
   /** Provider display identities (see the public Channel type). */
   listProviders(): Promise<readonly LlmProviderInfo[]>
+  /** Drop the `/model` completion cache (see the public Channel type). */
+  invalidateModelCompletion(): void
   /** The live agent's skill catalog for `/skills` (see the public Channel type). */
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login` (see the public Channel type). */
@@ -2527,6 +2534,16 @@ export function createChannel(
       // menu rather than retrying on every keystroke.
       modelNodeCache.nodes = []
     })
+  }
+
+  /** Drop the `/model <provider/id>` completion cache so the next `/model `
+   *  keystroke refetches a fresh catalog. Model switches (the [current] tag
+   *  re-resolves against the new route) and every `/provider` catalog change
+   *  (add / edit / delete / OAuth sign-in-out) invalidate it, so completion
+   *  always matches what the picker would list. */
+  const dropModelNodeCache = (): void => {
+    modelNodeCache.nodes = undefined
+    modelNodeCache.load = undefined
   }
 
   // `/preset <id>` completion: same warm-cache pattern as models. The
@@ -4320,8 +4337,7 @@ export function createChannel(
       // /model completion cache: the [current] tag was resolved at fetch
       // time — drop the cache so the next `/model ` refetches for the new
       // route.
-      modelNodeCache.nodes = undefined
-      modelNodeCache.load = undefined
+      dropModelNodeCache()
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
@@ -4589,6 +4605,11 @@ export function createChannel(
         | { listProviders(): readonly { id: string; name: string }[] }
         | undefined
       return Promise.resolve(llm === undefined ? [] : llm.listProviders().map(info => ({ ...info })))
+    },
+    invalidateModelCompletion() {
+      // `/provider` changed the catalog (add/edit/delete/OAuth): the next
+      // `/model <provider/id>` keystroke must not serve the stale snapshot.
+      dropModelNodeCache()
     },
     async listSkills() {
       // snapshot() over list(): only a COMPLETE observation is authoritative

@@ -1325,6 +1325,19 @@ export function Chat({
           pushLocal: (title, lines) => channel.pushLocal(title, lines),
           working: () => channel.working,
           switchModel: (provider, model) => switchModelRecorded(provider, model),
+        }).then((outcome) => {
+          // A catalog-changing outcome invalidates every cached model surface
+          // so `/model` (picker + completion) reflects it immediately — the
+          // same consistency the picker's per-open refetch provides, minus
+          // the stale flash on the next open. The wizard's live-switch branch
+          // already dropped the completion cache via switchModelRecorded;
+          // this covers keep-current, add, edit, delete and OAuth login/logout.
+          if (outcome === 'added' || outcome === 'updated'
+            || outcome === 'deleted' || outcome === 'signed-out') {
+            channel.invalidateModelCompletion()
+            void channel.listModels().then(setModels)
+            void channel.listProviders().then(setProviderInfos).catch(() => setProviderInfos([]))
+          }
         }).catch(() => {
           // The wizard notifies on every handled failure; this only swallows
           // an unexpected reject so it never surfaces as an unhandled promise.
