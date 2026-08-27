@@ -132,6 +132,12 @@ function isLiveToolApproval(req: ApprovalRequest): boolean {
   return true
 }
 
+/** Composite consumed-set key: one agent domain per entry (see
+ * ApprovalStore.consumedCallIds). */
+function consumedKey(agentId: unknown, callId: unknown): string {
+  return `${String(agentId)}::${String(callId)}`
+}
+
 /**
  * Approval store: parks asks from the harness's approval seam, surfaces
  * one at a time to the TUI, and settles each ask when the user decides or
@@ -166,6 +172,10 @@ export class ApprovalStore {
    * shows the warning, never the reverse. Evicted when the paired
    * tool/result lands (after that the liveness check marks the twin
    * anyway), keeping the set bounded to in-flight tool executions.
+   * Keys are agent-scoped (`agentId::callId`): the store outlives agent
+   * switches (/resume, /new) and low-entropy callIds (provider fallback
+   * `call-<index>`) repeat across sessions — a bare-callId key would badge
+   * the next session's genuine ask with the previous session's residue.
    */
   private readonly consumedCallIds = new Set<string>()
 
@@ -263,7 +273,14 @@ export class ApprovalStore {
     // the liveness check marks any future twin on its own, so the consumed
     // entry can go.
     const resultCallId = (event.data.message as { source?: { callId?: unknown } } | undefined)?.source?.callId
-    if (resultCallId !== undefined) this.consumedCallIds.delete(String(resultCallId))
+    if (resultCallId !== undefined) {
+      // Composite keys carry an agent prefix; a landed result retires the
+      // callId in every agent domain (suffix match — only ever removes).
+      const suffix = `::${String(resultCallId)}`
+      for (const entry of this.consumedCallIds) {
+        if (entry.endsWith(suffix)) this.consumedCallIds.delete(entry)
+      }
+    }
     this.refreshActiveExternal()
   }
 
@@ -309,7 +326,7 @@ export class ApprovalStore {
       const duplicate = this.isCallIdInFlight(req)
       if (duplicate) this.markCallIdAmbiguous(req.callId)
       const external = !isLiveToolApproval(req) || duplicate
-        || (req.callId !== undefined && this.consumedCallIds.has(String(req.callId)))
+        || (req.callId !== undefined && this.consumedCallIds.has(consumedKey(req.agent.id, req.callId)))
       const pending: PendingApproval = {
         key: String(++this.seq),
         request: req,
@@ -321,6 +338,18 @@ export class ApprovalStore {
         },
         resolve,
         onAbort: () => {
+          // A REAL controller.abort() sets `aborted` BEFORE dispatching the
+          // event; a forged signal.dispatchEvent(new Event('abort')) fires
+          // the listener with `aborted` still false. A forged abort must
+          // not dequeue the genuine panel (abort-then-spoof: the attacker
+          // empties the real ask in the same synchronous stack it parks a
+          // same-callId twin, which then looks live) — badge it instead.
+          if (req.signal !== undefined && !req.signal.aborted) {
+            pending.snapshot.external = true
+            this.rebuildSnapshot()
+            this.scheduleNotify()
+            return
+          }
           if (this.active === pending) {
             this.active = undefined
             this.rebuildSnapshot()
@@ -393,7 +422,7 @@ export class ApprovalStore {
    */
   private noteConsumed(pending: PendingApproval): void {
     const { callId } = pending.request
-    if (callId !== undefined) this.consumedCallIds.add(String(callId))
+    if (callId !== undefined) this.consumedCallIds.add(consumedKey(pending.request.agent.id, callId))
   }
 
   /**

@@ -218,6 +218,55 @@ assert.equal(unknown!.command, undefined)
   assert.equal(await forged, 'rejected')
   assert.equal(await genuine, 'cancelled')
 }
+{
+  // 时序 7（abort 伪造，红队攻击 5）：signal.dispatchEvent(new Event('abort'))
+  // 在 Node 24 同步触发监听器但 signal.aborted 保持 false（规范：只有
+  // controller.abort() 先置位再派发）。onAbort 若不校验 aborted，伪造事
+  // 件即可静默腾空真审批面板 + resolve cancelled，攻击者随即同栈注入同
+  // callId 假审批（abort 路径不记 consumed）——无徽标钓鱼面板。
+  const store = new ApprovalStore()
+  const log = events('call-abort')
+  const controller = new AbortController()
+  const ask = store.park({ ...approvalRequest('call-abort', log), signal: controller.signal } as never)
+  assert.equal(store.getSnapshot()!.external, undefined, 'genuine ask on panel, no badge')
+  // 伪造 abort：dispatchEvent 直发，aborted 不置位
+  controller.signal.dispatchEvent(new Event('abort'))
+  assert.notEqual(store.getSnapshot(), null,
+    'a FORGED abort event (signal.aborted === false) must NOT dequeue the panel')
+  assert.equal(store.getSnapshot()!.external, true,
+    'a forged abort must badge the ask instead of silently emptying the panel')
+  store.settleAll('cancelled')
+  assert.equal(await ask, 'cancelled')
+  // 真 abort（controller 路径）行为不变：置位后正常出队
+  const controller2 = new AbortController()
+  const ask2 = store.park({ ...approvalRequest('call-abort', log), signal: controller2.signal } as never)
+  controller2.abort()
+  assert.equal(store.getSnapshot(), null,
+    'a REAL abort (signal.aborted === true) must still dequeue normally')
+  assert.equal(await ask2, 'cancelled')
+}
+{
+  // 时序 8（跨会话 consumed 残留，红队攻击 3 / 蓝队 3c'）：store 不随
+  // agent 切换重建，consumed 只按裸 callId 匹配——低熵 callId（provider
+  // fallback call-<index>）跨会话复用时，A 会话的 consumed 残留会把 B
+  // 会话的真审批误标 external。修法：consumed 键加 agent 域。
+  const store = new ApprovalStore()
+  const logA = events('call-0')
+  const askA = store.park(approvalRequest('call-0', logA))
+  store.decide('allowed-once') // A 会话消费 call-0；其 result 永不落地（执行中断）
+  const logB = events('call-0') // B 会话（不同 agent）自己的 call-0 真审批
+  const askB = store.park({
+    agent: { id: 'agent-2', session: { id: 's2', seq: 2, events: logB } },
+    toolName: 'Bash',
+    callId: 'call-0',
+    reason: 'x',
+  } as never)
+  assert.equal(store.getSnapshot()!.external, undefined,
+    'a genuine ask in ANOTHER session must not inherit session-A consumed residue (composite agent-scoped key)')
+  store.settleAll('cancelled')
+  assert.equal(await askA, 'allowed-once')
+  assert.equal(await askB, 'cancelled')
+}
 
 // ── 面板渲染：external 行可见，非 external 不出现 ─────────────────────
 setLang('zh')
