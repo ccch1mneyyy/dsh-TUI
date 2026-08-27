@@ -232,6 +232,8 @@ check(
 // and its auto title beyond the cheap head window; later activity can also push
 // them outside the tail. The initial digest is honestly inconclusive, then the
 // exceptional progressive scan in listSummaries recovers and caches the title.
+// The cwd is a path whose basename is identical on every platform (a backslash
+// path would collapse to the whole string as basename on POSIX and break CI).
 const delayedOpening = []
 for (let i = 0; i < 180; i++) {
   delayedOpening.push([{ type: 'plugin/noise', seq: i, time: i, data: { text: filler(700) } }])
@@ -241,8 +243,8 @@ delayedOpening.push([autoTitle('跨目录会话标题', 181)])
 for (let i = 182; i < 560; i++) {
   delayedOpening.push([{ type: 'plugin/noise', seq: i, time: i, data: { text: filler(700) } }])
 }
-const delayedFile = seed('delayed-opening', delayedOpening, { cwd: 'D:\\code\\projects\\dsh-tui' })
-const cheapDelayed = digestSession(delayedFile, 'D:\\code\\projects\\dsh-tui')
+const delayedFile = seed('delayed-opening', delayedOpening, { cwd: '/data/proj/dsh-tui' })
+const cheapDelayed = digestSession(delayedFile, '/data/proj/dsh-tui')
 check('cheap windows reproduce the cwd-basename fallback', cheapDelayed.title, {
   text: 'dsh-tui',
   source: 'fallback',
@@ -250,7 +252,7 @@ check('cheap windows reproduce the cwd-basename fallback', cheapDelayed.title, {
 check('the inconclusive cheap digest keeps the real conversation visible', cheapDelayed.hasPrompt, true)
 const delayedHeader = {
   id: 'delayed-opening',
-  cwd: 'D:\\code\\projects\\dsh-tui',
+  cwd: '/data/proj/dsh-tui',
   createdAt: 1,
   delegationDepth: 0,
 }
