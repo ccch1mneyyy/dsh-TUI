@@ -296,7 +296,7 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
   // Shift+click 是选区扩展手势，不是双击选词；误判会让 onMultiClick 的
   // 屏幕词选压制 click 派发并覆盖剪贴板。修复 I-2（复审发现）。
   const { pad } = makeTree()
-  const { app } = makeFakeApp(pad)
+  const { app, clicks } = makeFakeApp(pad)
   let multiClicks = 0
   ;(app.props as { onMultiClick: () => void }).onMultiClick = () => {
     multiClicks++
@@ -309,9 +309,34 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
   check('U6b 双 Shift+click 不触发 onMultiClick', multiClicks === 0, `multi=${multiClicks}`)
   check('U6b 第二次 Shift press 走选择', sel.anchor !== null && sel.isDragging)
   check(
-    'U6b 多击链未累计',
-    (app as unknown as { clickCount: number }).clickCount <= 1,
+    'U6b 修饰点击完全不写入多击链',
+    (app as unknown as { clickCount: number }).clickCount === 0,
     `clickCount=${(app as unknown as { clickCount: number }).clickCount}`,
+  )
+  handleMouseEvent(app, mouse(0x04, 'release', 5, 3))
+  handleMouseEvent(app, mouse(0, 'press', 5, 3))
+  handleMouseEvent(app, mouse(0, 'release', 5, 3))
+  check(
+    'U6b drag target 上 Shift+click 后普通 click 仍分发',
+    multiClicks === 0 && clicks.length >= 2,
+    `multi=${multiClicks} clickCount=${(app as unknown as { clickCount: number }).clickCount} clicks=${clicks.length / 2}`,
+  )
+}
+
+{
+  // U6c: on a non-drag region, a modified click must not seed App's global
+  // click chain and turn the following plain click into a double-click.
+  const { app, clicks } = makeFakeApp()
+  let multiClicks = 0
+  ;(app.props as { onMultiClick: () => void }).onMultiClick = () => { multiClicks++ }
+  handleMouseEvent(app, mouse(0x04, 'press', 5, 3))
+  handleMouseEvent(app, mouse(0x04, 'release', 5, 3))
+  handleMouseEvent(app, mouse(0, 'press', 5, 3))
+  handleMouseEvent(app, mouse(0, 'release', 5, 3))
+  check(
+    'U6c 非 drag 区 Shift+click 后普通 click 不误判双击',
+    multiClicks === 0 && (app as unknown as { clickCount: number }).clickCount === 1 && clicks.length === 4,
+    `multi=${multiClicks} clickCount=${(app as unknown as { clickCount: number }).clickCount} clicks=${clicks.length / 2}`,
   )
 }
 

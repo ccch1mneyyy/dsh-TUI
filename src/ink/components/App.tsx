@@ -996,6 +996,12 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			app.lastClickTime = 0;
 			app.lastClickCol = -1;
 			app.lastClickRow = -1;
+			// Do not immediately seed the chain again: a Shift+click followed by
+			// a plain click in the same cell must remain two single clicks.
+			startSelection(sel, col, row);
+			sel.lastPressHadAlt = (m.button & 0x08) !== 0;
+			app.props.onSelectionChange();
+			return;
 		}
 		// Fresh left press. Detect multi-click HERE (not on release) so the
 		// word/line highlight appears immediately and a subsequent drag can

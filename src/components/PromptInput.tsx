@@ -479,6 +479,14 @@ export function PromptInput({
     }
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
+  React.useEffect(() => {
+    // PromptInput self-detects double-clicks because its drag target resets
+    // App's global chain. Geometry changed across resize, so the same screen
+    // cell no longer identifies the same grapheme.
+    lastClickAtRef.current = 0
+    lastClickColRef.current = -1
+    lastClickRowRef.current = -1
+  }, [columns, terminalRows])
   const helpScrollRef = React.useRef<ScrollBoxHandle | null>(null)
   // Help viewport budget: the overlay anchors at the composer's top edge
   // (OverlayAbove bottom:'100%') and grows UP, so its budget is the space
