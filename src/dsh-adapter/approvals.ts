@@ -153,6 +153,19 @@ export class ApprovalStore {
    */
   private externalCheckedAtEvents = -1
   private notifyQueued = false
+  /**
+   * CallIds whose approval ask already settled (decided or cancelled).
+   * Together with the in-flight set this closes the park-after-decide gap:
+   * the first ask leaves the queue while its tool is still executing (the
+   * callId still reads live), so a twin parked in that window would dodge
+   * both the in-flight dedup and the liveness check. A consumed callId
+   * never legitimately comes back: the permission layer asks once per call.
+   * Fails toward the badge — a hypothetical genuine re-ask after a cancel
+   * shows the warning, never the reverse. Evicted when the paired
+   * tool/result lands (after that the liveness check marks the twin
+   * anyway), keeping the set bounded to in-flight tool executions.
+   */
+  private readonly consumedCallIds = new Set<string>()
 
   /**
    * Subscribe to store changes (useSyncExternalStore contract).
@@ -244,6 +257,11 @@ export class ApprovalStore {
    */
   noteSessionEvent(event: SessionEvent): void {
     if (event.type !== 'tool/result') return
+    // Hygiene for {@link consumedCallIds}: once the paired result landed,
+    // the liveness check marks any future twin on its own, so the consumed
+    // entry can go.
+    const resultCallId = (event.data.message as { source?: { callId?: unknown } } | undefined)?.source?.callId
+    if (resultCallId !== undefined) this.consumedCallIds.delete(String(resultCallId))
     this.refreshActiveExternal()
   }
 
@@ -285,6 +303,7 @@ export class ApprovalStore {
       // in flight (a legitimate call is asked about exactly once), so the
       // panel can warn.
       const external = !isLiveToolApproval(req) || this.isCallIdInFlight(req)
+        || (req.callId !== undefined && this.consumedCallIds.has(String(req.callId)))
       const pending: PendingApproval = {
         key: String(++this.seq),
         request: req,
@@ -336,6 +355,7 @@ export class ApprovalStore {
   decide(outcome: 'allowed-once' | 'rejected'): void {
     const pending = this.active
     if (pending === undefined) return
+    this.noteConsumed(pending)
     this.active = undefined
     this.rebuildSnapshot()
     pending.resolve(outcome)
@@ -351,9 +371,22 @@ export class ApprovalStore {
   settleAll(outcome: ApprovalOutcome): void {
     const active = this.active
     this.active = undefined
+    if (active !== undefined) this.noteConsumed(active)
     this.rebuildSnapshot()
     active?.resolve(outcome)
-    for (const pending of this.queue.splice(0)) pending.resolve(outcome)
+    for (const pending of this.queue.splice(0)) {
+      this.noteConsumed(pending)
+      pending.resolve(outcome)
+    }
     this.emit()
+  }
+
+  /**
+   * Record a settling ask's callId as consumed (see {@link consumedCallIds}).
+   * @param pending - The ask leaving the active/queue set.
+   */
+  private noteConsumed(pending: PendingApproval): void {
+    const { callId } = pending.request
+    if (callId !== undefined) this.consumedCallIds.add(String(callId))
   }
 }

@@ -175,6 +175,23 @@ assert.equal(unknown!.command, undefined)
   store.settleAll('cancelled')
   assert.equal(await ask, 'cancelled')
 }
+{
+  // 时序 5（消费后间隙孪生，残留窗口）：第一条已被 decide（ask 出队，
+  // in-flight 集合释放）、真实工具仍在执行（result 未落地，call 仍算
+  // live）——这个间隙塞入的同 callId 孪生既躲过队内去重又躲过 live 判
+  // 定。一个 callId 的审批已被消费过，第二次出现必须直接标 external，
+  // 不等 result 落地补翻。
+  const store = new ApprovalStore()
+  const log = events('call-gap') // 只有 tool/call，全程不写 result
+  const first = store.park(approvalRequest('call-gap', log))
+  store.decide('allowed-once') // 第一条出队；工具执行中，log 不动
+  const twin = store.park(approvalRequest('call-gap', log)) // 间隙孪生
+  assert.equal(store.getSnapshot()!.external, true,
+    'P-4: a twin parked AFTER the first ask was decided but BEFORE its tool/result landed must carry the badge at park (consumed callId) — not rely on a later result to flip it')
+  store.settleAll('cancelled')
+  assert.equal(await first, 'allowed-once')
+  assert.equal(await twin, 'cancelled')
+}
 
 // ── 面板渲染：external 行可见，非 external 不出现 ─────────────────────
 setLang('zh')
