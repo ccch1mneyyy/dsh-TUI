@@ -246,7 +246,7 @@ dsh-tui
 
 | 命令 | 参数 | 作用 |
 |---|---|---|
-| `/provider` | 无 | 交互式添加模型提供方向导（持久化 profile + key） |
+| `/provider` | 无 | 交互式管理模型提供方向导（添加 / 编辑 / 删除，持久化 profile + key） |
 | `/login` | 无 | 凭证状态（来源、存储可写性、base URL） |
 | `/logout` | 无 | 登出说明（env 来源需删环境变量并重启） |
 | `/permissions` | 无 | 权限策略与审批通道说明 |
@@ -384,7 +384,7 @@ dsh-tui
 - `/workspace`：`resume` / `rename <名>` / `open <路径|file:// URI>`（打开并新建会话）；
   `dsh-tui <路径>` 启动器同样接受工作区目标。相对路径由当前工作区插件解析。
 - `/doctor` 自检：Node/平台、API key、模型路由、cwd、上下文窗口、会话存储、插件宿主。
-- `/provider` 交互向导添加模型提供方（密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`）。
+- `/provider` 交互向导管理模型提供方（添加 / 编辑 / 删除；密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`）。
 - `/init` 创建 AGENTS.md；`/agents` 子代理列表；`/login` `/logout` 凭证管理；
   `/permissions` `/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
 

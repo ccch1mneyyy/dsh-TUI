@@ -4730,7 +4730,10 @@ export function createChannel(
           get(ns: string): unknown
           mutate(
             ns: string,
-            ops: readonly { op: 'set'; path: readonly string[]; value: unknown }[],
+            ops: readonly (
+              | { op: 'set'; path: readonly string[]; value: unknown }
+              | { op: 'unset'; path: readonly string[] }
+            )[],
             expectedRevision?: number,
           ): Promise<void>
         }
@@ -4773,6 +4776,41 @@ export function createChannel(
             | undefined
           return section?.providers !== undefined && route in section.providers
         },
+        listConfiguredProviders() {
+          // The settings section is the source of truth for user-added routes
+          // (the adapter's `declared` list lags a broken/removed profile, but
+          // delete must still be able to reach it). ref/models parsed from the
+          // stored profile; shadowed mirrors the envShadows contract.
+          const section = settings.get('llm-pi-ai') as
+            | { providers?: Record<string, Record<string, unknown>> }
+            | undefined
+          const providers = section?.providers
+          if (providers === undefined) return []
+          return Object.entries(providers).map(([route, profile]) => {
+            const ref = typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : ''
+            const baseURL = typeof profile.baseURL === 'string' && profile.baseURL !== ''
+              ? profile.baseURL
+              : undefined
+            const api = typeof profile.api === 'string' && profile.api !== ''
+              ? profile.api
+              : undefined
+            const models = Array.isArray(profile.models)
+              ? profile.models.flatMap(model => {
+                if (typeof model !== 'object' || model === null) return []
+                const id = (model as { id?: unknown }).id
+                return typeof id === 'string' ? [id] : []
+              })
+              : undefined
+            return {
+              route,
+              ref,
+              shadowed: ref !== '' && process.env[ref] !== undefined,
+              ...(baseURL !== undefined ? { baseURL } : {}),
+              ...(api !== undefined ? { api } : {}),
+              ...(models !== undefined ? { models } : {}),
+            }
+          })
+        },
         discoverModels(request) {
           return llm.discoverModels('llm-pi-ai', request)
         },
@@ -4797,6 +4835,18 @@ export function createChannel(
             // One retry on a stale-revision conflict (a concurrent write
             // landed between describe and mutate); anything else propagates
             // so the wizard can report and roll back the credential.
+            const code = (error as { code?: unknown })?.code
+            if (code !== 'SETTINGS_CONFLICT') throw error
+            await settings.mutate('llm-pi-ai', ops, revision())
+          }
+        },
+        async removeProfile(route) {
+          const ops = [{ op: 'unset' as const, path: ['providers', route] }]
+          try {
+            await settings.mutate('llm-pi-ai', ops, revision())
+          } catch (error) {
+            // Same stale-revision retry as writeProfile: the wizard reports
+            // any real failure so the credential deletion can be skipped.
             const code = (error as { code?: unknown })?.code
             if (code !== 'SETTINGS_CONFLICT') throw error
             await settings.mutate('llm-pi-ai', ops, revision())

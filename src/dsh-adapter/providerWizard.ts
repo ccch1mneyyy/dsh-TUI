@@ -49,6 +49,25 @@ export interface CatalogProviderCandidate {
   readonly displayName: string
 }
 
+/**
+ * One user-added provider route read from the settings section. The parsed
+ * fields drive the edit/delete picker rows, the catalog/custom split (`api`
+ * presence) and the key-keep question (`ref` + `shadowed`).
+ */
+export interface ConfiguredProvider {
+  readonly route: string
+  /** Credential ref (profile.apiKeyEnv) when the profile names one. */
+  readonly ref: string
+  /** Whether the process environment shadows the ref (env-provided key). */
+  readonly shadowed: boolean
+  /** baseURL when the profile sets one. */
+  readonly baseURL?: string
+  /** Wire protocol; present exactly for custom (non-catalog) routes. */
+  readonly api?: string
+  /** Enabled model ids; undefined means the whole catalog stays served. */
+  readonly models?: readonly string[]
+}
+
 /** One OAuth-capable provider a dsh-auth-style plugin mounts (masked state only). */
 export interface OAuthProviderStatus {
   readonly provider: string
@@ -87,6 +106,8 @@ export interface OAuthSetupHost {
 export interface ProviderSetupHost {
   /** Catalog routes activatable via the `llm-pi-ai` settings section. */
   listCatalogProviders(): readonly CatalogProviderCandidate[]
+  /** User-added (declared) routes read from the settings section. */
+  listConfiguredProviders(): readonly ConfiguredProvider[]
   /** Whether a profile (any layer) already exists for the route. */
   routeExists(route: string): boolean
   /** Interrogate a draft endpoint; the draft key is never persisted. */
@@ -113,6 +134,8 @@ export interface ProviderSetupHost {
    * rejects when the adapter's validation deems it unserviceable.
    */
   writeProfile(route: string, profile: Record<string, unknown>): Promise<void>
+  /** Unset the profile under `llm-pi-ai.providers.<route>`. */
+  removeProfile(route: string): Promise<void>
   /** The OAuth sign-in surface; absent when no dsh-auth-style plugin is mounted. */
   readonly oauth?: OAuthSetupHost
 }
@@ -133,7 +156,7 @@ export interface ProviderWizardDeps {
   readonly switchModel: (provider: string, model: string) => Promise<boolean>
 }
 
-export type ProviderWizardOutcome = 'added' | 'signed-out' | 'cancelled' | 'failed'
+export type ProviderWizardOutcome = 'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'
 
 /** Max attempts for validated free-text prompts before giving up. */
 const MAX_RETRY = 3
@@ -182,16 +205,83 @@ function textQuestion(id: string, question: string, detail?: string): AskUserQue
 }
 
 /**
- * Run the add-provider wizard. Resolves 'cancelled' when the user dismisses
- * any question (Esc) — nothing has been written at that point by design:
- * all asks complete before the first side effect.
+ * Run the provider wizard. Opens with an action choice (add / edit /
+ * delete); the add and edit paths share the guided config flow, with edit
+ * locking the route and driving the catalog/custom split and the key-keep
+ * question from the stored profile. Resolves 'cancelled' when the user
+ * dismisses any question (Esc) — nothing has been written at that point by
+ * design: all asks complete before the first side effect.
  */
 export async function runProviderWizard(
   deps: ProviderWizardDeps,
 ): Promise<ProviderWizardOutcome> {
-  const { host, ask, notify, pushLocal } = deps
+  const { ask, notify } = deps
+  let action: 'add' | 'edit' | 'delete' = 'add'
   try {
-    // ── 1. mode ────────────────────────────────────────────────────────
+    const actionAnswer = await ask({
+      questions: [optionQuestion('action', t('provider-q-action'), [
+        { label: t('provider-opt-action-add'), description: t('provider-opt-action-add-desc') },
+        { label: t('provider-opt-action-edit'), description: t('provider-opt-action-edit-desc') },
+        { label: t('provider-opt-action-delete'), description: t('provider-opt-action-delete-desc') },
+      ], { hideCustomInput: true })],
+    })
+    const pickedAction = answerSelected(actionAnswer, 'action')[0]
+    if (pickedAction === t('provider-opt-action-delete')) {
+      action = 'delete'
+      // `await` before returning keeps the sub-wizard's rejection inside the
+      // try so its UserQuestionError maps to the action-specific outcome —
+      // a bare `return promise` would bypass the catch below.
+      return await runDeleteWizard(deps)
+    }
+    if (pickedAction === t('provider-opt-action-edit')) {
+      action = 'edit'
+      return await runEditWizard(deps)
+    }
+    return await runAddFlow(deps, {})
+  } catch (error) {
+    if (error instanceof UserQuestionError) {
+      notify(action === 'delete'
+        ? t('provider-delete-cancelled')
+        : action === 'edit'
+          ? t('provider-edit-cancelled')
+          : t('provider-cancelled'))
+      return 'cancelled'
+    }
+    const err = error instanceof Error ? error.message : String(error)
+    notify(action === 'delete'
+      ? t('provider-delete-failed', { err })
+      : t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
+    return 'failed'
+  }
+}
+
+/** Edit-mode context: the route is locked and the stored profile drives the
+ *  catalog/custom split and the key-keep question. */
+interface AddFlowContext {
+  /** Pre-selected route (edit): route selection is skipped. */
+  route?: string
+  /** The stored profile (edit); its `api` field decides the route kind. */
+  existing?: ConfiguredProvider
+}
+
+/**
+ * The shared guided config flow behind add and edit. With `existing` set the
+ * route is locked, the mode question is skipped and the API key is kept or
+ * replaced by choice; otherwise this is the classic add flow.
+ */
+async function runAddFlow(
+  deps: ProviderWizardDeps,
+  ctx: AddFlowContext,
+): Promise<ProviderWizardOutcome> {
+  const { host, ask, notify, pushLocal } = deps
+  const editing = ctx.existing !== undefined
+
+  // ── 1. mode ────────────────────────────────────────────────────────
+  let isCatalog: boolean
+  if (editing) {
+    // A custom route stores an explicit `api`; catalog routes inherit theirs.
+    isCatalog = ctx.existing!.api === undefined
+  } else {
     const modeOptions = [
       { label: t('provider-opt-catalog'), description: t('provider-opt-catalog-desc') },
       { label: t('provider-opt-custom'), description: t('provider-opt-custom-desc') },
@@ -208,10 +298,12 @@ export async function runProviderWizard(
     if (host.oauth !== undefined && pickedMode === t('provider-opt-oauth')) {
       return runOAuthWizard(deps, host.oauth)
     }
-    const isCatalog = pickedMode === t('provider-opt-catalog')
+    isCatalog = pickedMode === t('provider-opt-catalog')
+  }
 
-    // ── 2. route ───────────────────────────────────────────────────────
-    let route = ''
+  // ── 2. route ───────────────────────────────────────────────────────
+  let route = ctx.route ?? ''
+  if (route === '') {
     if (isCatalog) {
       const candidates = host.listCatalogProviders()
       if (candidates.length > 0) {
@@ -235,175 +327,335 @@ export async function runProviderWizard(
       route = await promptRouteId(ask, notify)
       if (route === '') return 'cancelled'
     }
+  }
 
-    // ── 3. API key (own batch so redact covers exactly the secret) ─────
+  // ── 3. API key (own batch so redact covers exactly the secret) ─────
+  const ref = deriveKeyRef(route)
+  const shadowed = host.envShadows(ref)
+  let apiKey: string | undefined
+  let replaceKey = false
+  let keyLine: string
+  if (editing) {
+    if (shadowed) {
+      // The environment provides the key: it cannot be edited from here and
+      // a store write would never be read at request time anyway.
+      keyLine = t('provider-line-keyref-env', { ref })
+    } else {
+      const keyActionAnswer = await ask({
+        questions: [optionQuestion('key-action', t('provider-q-key-action', { route }), [
+          { label: t('provider-opt-key-keep'), description: t('provider-opt-key-keep-desc') },
+          { label: t('provider-opt-key-replace'), description: t('provider-opt-key-replace-desc') },
+        ], { hideCustomInput: true })],
+      })
+      if (answerSelected(keyActionAnswer, 'key-action')[0] === t('provider-opt-key-replace')) {
+        const keyAnswer = await ask({
+          questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
+        }, { redact: true })
+        apiKey = answerText(keyAnswer, 'apikey')
+        replaceKey = true
+        keyLine = t('provider-line-key-updated', { ref })
+      } else {
+        keyLine = t('provider-line-key-kept', { ref })
+      }
+    }
+  } else {
     const keyAnswer = await ask({
       questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
     }, { redact: true })
-    const apiKey = answerText(keyAnswer, 'apikey')
+    apiKey = answerText(keyAnswer, 'apikey')
+    replaceKey = true
+    keyLine = shadowed
+      ? t('provider-line-keyref-env', { ref })
+      : t('provider-line-keyref', { ref })
+  }
 
-    // ── 4. endpoint / protocol ─────────────────────────────────────────
-    let baseURL: string | undefined
-    let api: string | undefined
-    if (isCatalog) {
-      const choiceAnswer = await ask({
-        questions: [optionQuestion('baseurl-choice', t('provider-q-baseurl-choice'), [
-          { label: t('provider-opt-baseurl-skip') },
-          { label: t('provider-opt-baseurl-input') },
-        ], { hideCustomInput: true })],
-      })
-      if (answerSelected(choiceAnswer, 'baseurl-choice')[0] === t('provider-opt-baseurl-input')) {
-        const urlAnswer = await ask({
-          questions: [textQuestion('baseurl', t('provider-q-baseurl'))],
-        })
-        baseURL = answerText(urlAnswer, 'baseurl')
-      }
-    } else {
-      const endpointAnswer = await ask({
-        questions: [
-          textQuestion('baseurl', t('provider-q-baseurl')),
-          optionQuestion('protocol', t('provider-q-protocol'), [
-            { label: 'openai-completions', description: t('provider-protocol-completions-desc') },
-            { label: 'openai-responses', description: t('provider-protocol-responses-desc') },
-            { label: 'anthropic-messages', description: t('provider-protocol-anthropic-desc') },
-          ], { hideCustomInput: true }),
-        ],
-      })
-      baseURL = answerText(endpointAnswer, 'baseurl')
-      api = answerSelected(endpointAnswer, 'protocol')[0]
-    }
-
-    // ── 5. model discovery (draft credential, nothing persisted) ───────
-    notify(t('provider-discovery-running'))
-    const discovered = await host.discoverModels({
-      ...(isCatalog ? { provider: route } : {}),
-      ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
-      ...(api !== undefined ? { api } : {}),
-      apiKey,
-    }).catch(() => [])
-
-    // ── 6. model selection ─────────────────────────────────────────────
-    let models: string[] = []
-    let discoveredById = new Map<string, LlmDiscoveredModel>()
-    if (discovered.length > 0) {
-      discoveredById = new Map(discovered.map(model => [model.id, model] as const))
-      const modelsAnswer = await ask({
-        questions: [optionQuestion('models', t('provider-q-models'),
-          discovered.map(model => ({
-            label: model.id,
-            description: [
-              model.name ?? '',
-              model.contextWindow !== undefined ? `${model.contextWindow}` : '',
-            ].filter(part => part !== '').join(' · ') || undefined,
-          })),
-          { multiSelect: true },
-        )],
-      })
-      models = mergeModelIds(
-        answerSelected(modelsAnswer, 'models'),
-        answerText(modelsAnswer, 'models'),
-      )
-    } else {
-      notify(t('provider-discovery-failed'), { color: 'warning' })
-      for (let attempt = 0; attempt < MAX_RETRY && models.length === 0; attempt += 1) {
-        const fallbackAnswer = await ask({
-          questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
-        })
-        models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
-        if (models.length === 0) notify(t('provider-models-required'), { color: 'warning' })
-      }
-      if (models.length === 0) return 'cancelled'
-    }
-    if (!isCatalog && models.length === 0) {
-      // A manual route without models fails the adapter validation; the
-      // loops above should prevent this, but guard before writing.
-      notify(t('provider-models-required'), { color: 'error' })
-      return 'cancelled'
-    }
-
-    // ── 7. confirm ─────────────────────────────────────────────────────
-    const ref = deriveKeyRef(route)
-    const shadowed = host.envShadows(ref)
-    const summaryLines = buildSummaryLines({
-      route, ref, shadowed, baseURL, api, models, isCatalog,
+  // ── 4. endpoint / protocol ─────────────────────────────────────────
+  let baseURL: string | undefined
+  let api: string | undefined
+  if (isCatalog) {
+    const choiceAnswer = await ask({
+      questions: [optionQuestion('baseurl-choice', t('provider-q-baseurl-choice'), [
+        { label: t('provider-opt-baseurl-skip') },
+        { label: t('provider-opt-baseurl-input') },
+      ], {
+        hideCustomInput: true,
+        ...(editing && ctx.existing?.baseURL !== undefined
+          ? { detail: t('provider-edit-current', { value: ctx.existing.baseURL }) }
+          : {}),
+      })],
     })
-    const detail = host.routeExists(route)
+    if (answerSelected(choiceAnswer, 'baseurl-choice')[0] === t('provider-opt-baseurl-input')) {
+      const urlAnswer = await ask({
+        questions: [textQuestion('baseurl', t('provider-q-baseurl'),
+          editing && ctx.existing?.baseURL !== undefined
+            ? t('provider-edit-current', { value: ctx.existing.baseURL })
+            : undefined)],
+      })
+      baseURL = answerText(urlAnswer, 'baseurl')
+    }
+  } else {
+    const endpointAnswer = await ask({
+      questions: [
+        textQuestion('baseurl', t('provider-q-baseurl'),
+          editing && ctx.existing?.baseURL !== undefined
+            ? t('provider-edit-current', { value: ctx.existing.baseURL })
+            : undefined),
+        optionQuestion('protocol', t('provider-q-protocol'), [
+          { label: 'openai-completions', description: t('provider-protocol-completions-desc') },
+          { label: 'openai-responses', description: t('provider-protocol-responses-desc') },
+          { label: 'anthropic-messages', description: t('provider-protocol-anthropic-desc') },
+        ], {
+          hideCustomInput: true,
+          ...(editing && ctx.existing?.api !== undefined
+            ? { detail: t('provider-edit-current', { value: ctx.existing.api }) }
+            : {}),
+        }),
+      ],
+    })
+    baseURL = answerText(endpointAnswer, 'baseurl')
+    api = answerSelected(endpointAnswer, 'protocol')[0]
+  }
+
+  // ── 5. model discovery (draft credential, nothing persisted) ───────
+  // Edit-keep reuses the stored credential (or the env value when shadowed)
+  // so discovery still works without re-entering the key.
+  let draftKey = apiKey
+  if (draftKey === undefined && editing) {
+    draftKey = shadowed ? process.env[ref] : await host.readCredential(ref)
+  }
+  notify(t('provider-discovery-running'))
+  const discovered = await host.discoverModels({
+    ...(isCatalog ? { provider: route } : {}),
+    ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
+    ...(api !== undefined ? { api } : {}),
+    apiKey: draftKey ?? '',
+  }).catch(() => [])
+
+  // ── 6. model selection ─────────────────────────────────────────────
+  let models: string[] = []
+  let discoveredById = new Map<string, LlmDiscoveredModel>()
+  if (discovered.length > 0) {
+    discoveredById = new Map(discovered.map(model => [model.id, model] as const))
+    const modelsAnswer = await ask({
+      questions: [optionQuestion('models', t('provider-q-models'),
+        discovered.map(model => ({
+          label: model.id,
+          description: [
+            model.name ?? '',
+            model.contextWindow !== undefined ? `${model.contextWindow}` : '',
+          ].filter(part => part !== '').join(' · ') || undefined,
+        })),
+        { multiSelect: true },
+      )],
+    })
+    models = mergeModelIds(
+      answerSelected(modelsAnswer, 'models'),
+      answerText(modelsAnswer, 'models'),
+    )
+  } else {
+    notify(t('provider-discovery-failed'), { color: 'warning' })
+    for (let attempt = 0; attempt < MAX_RETRY && models.length === 0; attempt += 1) {
+      const fallbackAnswer = await ask({
+        questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
+      })
+      models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
+      if (models.length === 0) notify(t('provider-models-required'), { color: 'warning' })
+    }
+    if (models.length === 0) return 'cancelled'
+  }
+  if (!isCatalog && models.length === 0) {
+    // A manual route without models fails the adapter validation; the
+    // loops above should prevent this, but guard before writing.
+    notify(t('provider-models-required'), { color: 'error' })
+    return 'cancelled'
+  }
+
+  // ── 7. confirm ─────────────────────────────────────────────────────
+  const summaryLines = buildSummaryLines({
+    route, ref, shadowed, baseURL, api, models, isCatalog, keyLine,
+  })
+  const detail = editing
+    ? `${summaryLines.join('\n')}\n${t('provider-edit-note', { route })}`
+    : host.routeExists(route)
       ? `${summaryLines.join('\n')}\n${t('provider-route-exists-warning')}`
       : summaryLines.join('\n')
-    const confirmAnswer = await ask({
-      questions: [optionQuestion('confirm', t('provider-q-confirm'), [
-        { label: t('provider-opt-confirm-write') },
-        { label: t('provider-opt-confirm-cancel') },
-      ], { detail, hideCustomInput: true })],
-    })
-    if (answerSelected(confirmAnswer, 'confirm')[0] !== t('provider-opt-confirm-write')) {
-      notify(t('provider-cancelled'))
-      return 'cancelled'
-    }
+  const confirmAnswer = await ask({
+    questions: [optionQuestion('confirm', t('provider-q-confirm'), [
+      { label: t('provider-opt-confirm-write') },
+      { label: t('provider-opt-confirm-cancel') },
+    ], { detail, hideCustomInput: true })],
+  })
+  if (answerSelected(confirmAnswer, 'confirm')[0] !== t('provider-opt-confirm-write')) {
+    notify(editing ? t('provider-edit-cancelled') : t('provider-cancelled'))
+    return 'cancelled'
+  }
 
-    // ── 8. persist: credential first (rollbackable), then the profile ──
-    let wroteCredential = false
-    let previousCredential: string | undefined
-    if (!shadowed) {
-      // Capture any pre-existing value BEFORE overwriting: when the profile
-      // write below fails, rollback must restore it — an unconditional unset
-      // would destroy the old key of the route being overwritten.
-      previousCredential = await host.readCredential(ref)
-      await host.writeCredential(ref, apiKey)
-      wroteCredential = true
-    }
-    const profile = buildProfile({ isCatalog, ref, baseURL, api, models, discoveredById })
-    try {
-      await host.writeProfile(route, profile)
-    } catch (error) {
-      if (wroteCredential) {
-        try {
-          if (previousCredential !== undefined) {
-            await host.writeCredential(ref, previousCredential)
-          } else {
-            await host.removeCredential(ref)
-          }
-          notify(t('provider-rollback-ok'))
-        } catch {
-          notify(t('provider-rollback-failed'), { color: 'warning' })
-        }
-      }
-      const err = error instanceof Error ? error.message : String(error)
-      notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
-      return 'failed'
-    }
-
-    // ── 9. success: transcript summary + optional live switch ──────────
-    pushLocal('/provider', [
-      ...summaryLines,
-      ...(deps.working() || models.length === 0
-        ? [t('provider-switch-hint')]
-        : []),
-    ])
-    notify(t('provider-success', { route }), { color: 'success' })
-
-    if (!deps.working() && models.length > 0) {
-      const target = models[0]!
-      const switchAnswer = await ask({
-        questions: [optionQuestion('switch', t('provider-q-switch'), [
-          { label: t('provider-opt-switch-now', { model: target }) },
-          { label: t('provider-opt-switch-keep') },
-        ], { hideCustomInput: true })],
-      })
-      if (answerSelected(switchAnswer, 'switch')[0] === t('provider-opt-switch-now', { model: target })) {
-        await deps.switchModel(route, target)
-      }
-    }
-    return 'added'
+  // ── 8. persist: credential first (rollbackable), then the profile ──
+  let wroteCredential = false
+  let previousCredential: string | undefined
+  if (!shadowed && replaceKey && apiKey !== undefined) {
+    // Capture any pre-existing value BEFORE overwriting: when the profile
+    // write below fails, rollback must restore it — an unconditional unset
+    // would destroy the old key of the route being overwritten.
+    previousCredential = await host.readCredential(ref)
+    await host.writeCredential(ref, apiKey)
+    wroteCredential = true
+  }
+  const profile = buildProfile({ isCatalog, ref, baseURL, api, models, discoveredById })
+  try {
+    await host.writeProfile(route, profile)
   } catch (error) {
-    if (error instanceof UserQuestionError) {
-      notify(t('provider-cancelled'))
-      return 'cancelled'
+    if (wroteCredential) {
+      try {
+        if (previousCredential !== undefined) {
+          await host.writeCredential(ref, previousCredential)
+        } else {
+          await host.removeCredential(ref)
+        }
+        notify(t('provider-rollback-ok'))
+      } catch {
+        notify(t('provider-rollback-failed'), { color: 'warning' })
+      }
     }
     const err = error instanceof Error ? error.message : String(error)
     notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
   }
+
+  // ── 9. success: transcript summary + optional live switch ──────────
+  pushLocal('/provider', [
+    ...summaryLines,
+    ...(deps.working() || models.length === 0
+      ? [t('provider-switch-hint')]
+      : []),
+  ])
+  notify(t(editing ? 'provider-edit-success' : 'provider-success', { route }), { color: 'success' })
+
+  if (!deps.working() && models.length > 0) {
+    const target = models[0]!
+    const switchAnswer = await ask({
+      questions: [optionQuestion('switch', t('provider-q-switch'), [
+        { label: t('provider-opt-switch-now', { model: target }) },
+        { label: t('provider-opt-switch-keep') },
+      ], { hideCustomInput: true })],
+    })
+    if (answerSelected(switchAnswer, 'switch')[0] === t('provider-opt-switch-now', { model: target })) {
+      await deps.switchModel(route, target)
+    }
+  }
+  return editing ? 'updated' : 'added'
+}
+
+/**
+ * The edit branch of `/provider`: pick a configured route, then run the
+ * shared add flow with the route locked and the stored profile driving the
+ * catalog/custom split and the key-keep question.
+ */
+async function runEditWizard(
+  deps: ProviderWizardDeps,
+): Promise<ProviderWizardOutcome> {
+  const { host, ask, notify } = deps
+  const configured = host.listConfiguredProviders()
+  if (configured.length === 0) {
+    notify(t('provider-none-configured'), { color: 'warning' })
+    return 'cancelled'
+  }
+  const pickAnswer = await ask({
+    questions: [optionQuestion('edit-provider', t('provider-q-edit'), configured.map(provider => ({
+      label: provider.route,
+      description: providerRowDescription(provider),
+    })), { hideCustomInput: true })],
+  })
+  const route = answerSelected(pickAnswer, 'edit-provider')[0]
+  const existing = configured.find(row => row.route === route)
+  if (existing === undefined) return 'cancelled'
+  return runAddFlow(deps, { route, existing })
+}
+
+/**
+ * The delete branch of `/provider`: pick a configured route, confirm against
+ * a summary, then unset the profile and (unless the environment provides the
+ * key) remove the credential. The profile goes first so a failure never
+ * leaves a profile pointing at a removed key; an orphaned key is harmless.
+ */
+async function runDeleteWizard(
+  deps: ProviderWizardDeps,
+): Promise<ProviderWizardOutcome> {
+  const { host, ask, notify, pushLocal } = deps
+  const configured = host.listConfiguredProviders()
+  if (configured.length === 0) {
+    notify(t('provider-none-configured'), { color: 'warning' })
+    return 'cancelled'
+  }
+  const pickAnswer = await ask({
+    questions: [optionQuestion('delete-provider', t('provider-q-delete'), configured.map(provider => ({
+      label: provider.route,
+      description: providerRowDescription(provider),
+    })), { hideCustomInput: true })],
+  })
+  const route = answerSelected(pickAnswer, 'delete-provider')[0]
+  const provider = configured.find(row => row.route === route)
+  if (provider === undefined) return 'cancelled'
+
+  const lines = buildDeleteSummary(provider)
+  const confirmAnswer = await ask({
+    questions: [optionQuestion('delete-confirm', t('provider-q-delete-confirm', { route }), [
+      { label: t('provider-opt-delete-yes') },
+      { label: t('provider-opt-confirm-cancel') },
+    ], { detail: lines.join('\n'), hideCustomInput: true })],
+  })
+  if (answerSelected(confirmAnswer, 'delete-confirm')[0] !== t('provider-opt-delete-yes')) {
+    notify(t('provider-delete-cancelled'))
+    return 'cancelled'
+  }
+
+  try {
+    await host.removeProfile(route)
+    const pushedLines = [...lines]
+    if (provider.ref !== '') {
+      if (provider.shadowed) {
+        pushedLines.push(t('provider-line-deleted-key-shadowed', { ref: provider.ref }))
+      } else {
+        await host.removeCredential(provider.ref)
+        pushedLines.push(t('provider-line-deleted-key', { ref: provider.ref }))
+      }
+    }
+    pushLocal('/provider', pushedLines)
+    notify(t('provider-delete-success', { route }), { color: 'success' })
+    return 'deleted'
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error)
+    notify(t('provider-delete-failed', { err }), { color: 'error', timeoutMs: 8000 })
+    return 'failed'
+  }
+}
+
+/** Short picker-row description for one configured provider. */
+function providerRowDescription(provider: ConfiguredProvider): string {
+  const parts: string[] = []
+  if (provider.baseURL !== undefined) parts.push(provider.baseURL)
+  parts.push(provider.models !== undefined && provider.models.length > 0
+    ? t('provider-row-models', { n: provider.models.length })
+    : t('provider-row-catalog'))
+  if (provider.shadowed) parts.push(t('provider-row-key-shadowed'))
+  return parts.join(' · ')
+}
+
+/** Confirm-summary lines for the delete branch (reuses the shared keyref
+ *  and models lines; no credential values are ever rendered). */
+function buildDeleteSummary(provider: ConfiguredProvider): string[] {
+  const lines = [t('provider-line-route', { route: provider.route })]
+  if (provider.baseURL !== undefined) lines.push(t('provider-line-baseurl', { url: provider.baseURL }))
+  if (provider.api !== undefined) lines.push(t('provider-line-protocol', { api: provider.api }))
+  lines.push(provider.models !== undefined && provider.models.length > 0
+    ? t('provider-line-models', { models: provider.models.join(', ') })
+    : t('provider-line-models-catalog'))
+  if (provider.ref !== '') {
+    lines.push(provider.shadowed
+      ? t('provider-line-keyref-env', { ref: provider.ref })
+      : t('provider-line-keyref', { ref: provider.ref }))
+  }
+  return lines
 }
 
 /** Masked state line for one provider row in the OAuth pick question. */
@@ -518,11 +770,13 @@ function buildSummaryLines(input: {
   api: string | undefined
   models: readonly string[]
   isCatalog: boolean
+  /** Edit-mode key line override (kept / updated / env); add mode derives it. */
+  keyLine?: string
 }): string[] {
   const lines = [t('provider-line-route', { route: input.route })]
-  lines.push(input.shadowed
+  lines.push(input.keyLine ?? (input.shadowed
     ? t('provider-line-keyref-env', { ref: input.ref })
-    : t('provider-line-keyref', { ref: input.ref }))
+    : t('provider-line-keyref', { ref: input.ref })))
   if (input.baseURL !== undefined && input.baseURL !== '') {
     lines.push(t('provider-line-baseurl', { url: input.baseURL }))
   }

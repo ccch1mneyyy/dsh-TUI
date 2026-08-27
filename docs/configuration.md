@@ -165,9 +165,18 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 `DSH_TUI_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
 公开 issue，除非已经检查并脱敏。
 
-## `/provider`：运行时添加模型提供方
+## `/provider`：运行时管理模型提供方
 
-`/provider` 打开交互向导，无需重启即可添加模型提供方：
+`/provider` 打开交互向导，无需重启即可管理模型提供方。向导第一步选择动作：
+
+- **添加新 provider**：内置目录或自定义 API 端点（见下）。
+- **编辑已有 provider**：从已配置的路由中选择，锁定路由重填配置；API key 可
+  保留或更换（密钥来自环境变量时不可在此修改），端点与协议可改，模型列表会
+  重新探测。
+- **删除已有 provider**：从已配置的路由中选择，确认后移除 profile 与 API key
+  （密钥来自环境变量时只删配置、不触碰环境变量）。
+
+**添加**分支支持两种来源：
 
 - **内置 provider**：从 `llm.listConfigurableProviders()` 列出的 catalog
   路由（openai、anthropic、deepseek 等）中选择，只需输入 API key；baseURL
@@ -176,17 +185,18 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
   （`openai-completions` / `openai-responses` / `anthropic-messages`），
   向导会用草稿凭据探测端点公布的模型供勾选（探测失败则手输模型 id）。
 
-写入产物（profile 启动时，dsh-base 提供 settings/credentials 服务）：
+写入/删除产物（profile 启动时，dsh-base 提供 settings/credentials 服务）：
 
 | 产物 | 位置 |
 | --- | --- |
-| provider profile | `~/.dsh/settings.yaml` 的 `llm-pi-ai.providers.<路由名>`，写入即注册路由 |
+| provider profile | `~/.dsh/settings.yaml` 的 `llm-pi-ai.providers.<路由名>`，写入即注册路由，删除即注销 |
 | API key | `~/.dsh/.credentials.yaml`（0600），引用名为 `<路由名大写>_API_KEY` |
 
 密钥答案在会话记录中只显示 `••••••`；若进程环境已有同名变量，则跳过写入、
-运行时直接从环境解析。配置与 dsh web 端的 Models 设置页互通（同一 settings
-section）。裸 `dsh --config cordis.yml` 启动没有这些服务，`/provider` 会提示
-不可用。添加完成后运行 `/model` 即可切换到新路由的模型。
+运行时直接从环境解析，删除时也不会触碰环境变量。配置与 dsh web 端的 Models
+设置页互通（同一 settings section）。裸 `dsh --config cordis.yml` 启动没有
+这些服务，`/provider` 会提示不可用。添加/编辑完成后运行 `/model` 即可切换
+到新路由的模型。
 
 ## 组合约束
 
