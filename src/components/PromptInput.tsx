@@ -10,6 +10,9 @@ import { isLightThemeActive } from '../theme.js'
 import { sessionColorHex } from '../cc/sessionColors.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
+import type { DragEvent } from '../ink/events/drag-event.js'
+import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
+import { setClipboard } from '../ink/termio/osc.js'
 import { noteAuxNumber } from '../ink/geometry-trace.js'
 import instances from '../ink/instances.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -218,6 +221,15 @@ function normalizeCursorOffset(text: string, offset: number): number {
 const MAX_VISIBLE_LINES = 5
 
 /**
+ * Double-click self-detection window: two clicks within this many ms and
+ * one cell (in either axis) of each other count as a double-click and
+ * select the word under the pointer. The drag protocol resets the ink
+ * multi-click chain on every press inside a drag target (the value box
+ * carries onDragStart), so the prompt detects the double-click itself.
+ */
+const DOUBLE_CLICK_MS = 500
+
+/**
  * Imperative handle for the Chat-level Ctrl+C rule: Chat's useInput listener
  * runs BEFORE this component's (EventEmitter registration order), so Chat
  * asks the prompt whether it holds text (→ clear it) or not (→ arm the
@@ -226,6 +238,13 @@ const MAX_VISIBLE_LINES = 5
 export interface PromptController {
   hasText(): boolean
   clear(): void
+  /**
+   * Copy the active mouse selection to the system clipboard (OSC 52 + the
+   * native fallback) and KEEP the selection for further editing. Returns
+   * true when a selection existed and consumed the key; Chat's Ctrl+C
+   * branch calls this first, before its clear/exit semantics.
+   */
+  consumeSelectionCopy(): boolean
   /** Toggle vim editing mode (`/vim`); returns the new state (true = on). */
   toggleVim(): boolean
   /** True while vim mode is on (either submode). Esc belongs to vim then —
@@ -301,8 +320,27 @@ export function PromptInput({
   controllerRef,
 }: PromptInputProps) {
   const [themeName] = useTheme()
+  // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
+  // bypass the frame pipeline; null outside a mounted Ink App.
+  const writeRaw = React.useContext(TerminalWriteContext)
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
+  /**
+   * Mouse text selection: UTF-16 offsets [start, end) in `value`, snapped
+   * to grapheme boundaries, start ≤ end. Null = no selection. Created by
+   * drag, Shift+click extension and double-click word select; consumed by
+   * Backspace/Delete/typing; Esc clears it without touching the text.
+   * With a fold block the range always stays inside the head or the tail
+   * (it never crosses the chip row — clamped on every write).
+   */
+  const [selection, setSelection] = React.useState<{ start: number; end: number } | null>(null)
+  const selectionRef = React.useRef<{ start: number; end: number } | null>(null)
+  /** Anchor offset of the in-flight drag gesture (set by dragstart). */
+  const dragAnchorRef = React.useRef<number | null>(null)
+  /** Double-click self-detection: last click's timestamp/screen cell. */
+  const lastClickAtRef = React.useRef(0)
+  const lastClickColRef = React.useRef(-1)
+  const lastClickRowRef = React.useRef(-1)
   /**
    * vim editing mode (`/vim` toggle): when on, Esc switches the prompt to
    * its NORMAL submode where bare keys are vim keys instead of text, and
@@ -356,8 +394,20 @@ export function PromptInput({
       clear: () => {
         valueRef.current = ''
         cursorRef.current = 0
+        selectionRef.current = null
+        setSelection(null)
         setValue('')
         setCursor(0)
+      },
+      consumeSelectionCopy: () => {
+        const sel = selectionRef.current
+        if (!sel) return false
+        const text = valueRef.current.slice(sel.start, sel.end)
+        void setClipboard(text).then(raw => {
+          if (raw) writeRaw?.(raw)
+        })
+        // The selection stays: copy never clears it (Esc/typing/delete do).
+        return true
       },
       toggleVim: () => {
         const next = !vimEnabledRef.current
@@ -523,8 +573,45 @@ export function PromptInput({
     // read → several keys, no render in between) read on their next turn.
     valueRef.current = next
     cursorRef.current = offset
+    // Every real edit drops the selection: its offsets describe the OLD
+    // text. Selection-consuming callers (delete/replace) read it first.
+    selectionRef.current = null
+    setSelection(null)
     setValue(next)
     setCursor(offset)
+  }
+
+  /**
+   * Write the selection [start, end) (snapped to grapheme boundaries,
+   * start ≤ end); a degenerate range clears it. With a fold block the
+   * range is clamped into the side that holds `start` — the block is
+   * atomic and a selection may never cross the chip row.
+   */
+  const updateSelection = (start: number, end: number) => {
+    const text = valueRef.current
+    let lo = normalizeCursorOffset(text, Math.min(start, end))
+    let hi = normalizeCursorOffset(text, Math.max(start, end))
+    const block = foldBlockRef.current
+    if (block) {
+      // The block is atomic: clamp BOTH ends into the side that holds `lo`
+      // (which is always on a side — clicks/carets never land inside it),
+      // so the selection can never cross the chip row.
+      if (lo <= block.start) hi = Math.min(hi, block.start)
+      else hi = Math.max(hi, block.end)
+    }
+    if (lo >= hi) {
+      selectionRef.current = null
+      setSelection(null)
+    } else {
+      selectionRef.current = { start: lo, end: hi }
+      setSelection({ start: lo, end: hi })
+    }
+  }
+
+  /** Drop the selection without touching text or caret. */
+  const clearSelection = () => {
+    selectionRef.current = null
+    setSelection(null)
   }
 
   /**
@@ -675,12 +762,15 @@ export function PromptInput({
 
   /** Clipboard reads are asynchronous; insert against the latest render so
    * typing while PowerShell owns the clipboard never gets overwritten.
-   * Returns the resulting value and the insertion offset so callers can
-   * apply the paste fold. */
+   * An active selection is replaced by the insert. Returns the resulting
+   * value and the insertion offset so callers can apply the paste fold. */
   const insertClipboardAtCaret = (text: string): { next: string; at: number } => {
     const current = valueRef.current
-    const position = cursorRef.current
-    const next = current.slice(0, position) + text + current.slice(position)
+    const sel = selectionRef.current
+    const position = sel ? sel.start : cursorRef.current
+    const next = sel
+      ? current.slice(0, sel.start) + text + current.slice(sel.end)
+      : current.slice(0, position) + text + current.slice(position)
     setInput(next, position + text.length)
     setSelectedCommand(0)
     setFileSelected(0)
@@ -711,6 +801,25 @@ export function PromptInput({
     // the text/caret produced by the preceding event in that batch.
     const value = valueRef.current
     const cursor = cursorRef.current
+    const selection = selectionRef.current
+
+    // ── mouse selection (drag / Shift+click / double-click) ─────────────
+    // Layered ahead of the fold-block rules: with an active selection, Esc
+    // ONLY drops the highlight (text untouched), and Backspace/Delete
+    // delete the selected span. Arrows/typing handle the selection at their
+    // own arms below.
+    if (key.escape && selection && !helpOpen && !overlayOpen && !fileOverlayOpen) {
+      event.stopImmediatePropagation()
+      clearSelection()
+      return
+    }
+    if ((key.backspace || key.delete) && selection) {
+      const next = value.slice(0, selection.start) + value.slice(selection.end)
+      setInput(next, selection.start)
+      setSelectedCommand(0)
+      setFileSelected(0)
+      return
+    }
 
     // Fold block (CC-style): Esc expands it — it must NEVER clear text
     // that LOOKS like one line; Backspace at the block's tail / Delete at
@@ -752,13 +861,21 @@ export function PromptInput({
     // below snaps onto one of these offsets (never mid-cluster).
     const bounds = graphemeBoundaries(value)
 
-    /** Insert text at the caret (typing, paste) and dismiss overlays. */
-    const insertAtCaret = (text: string) => {
+    /** Insert text at the caret (typing, paste) and dismiss overlays. An
+     *  active selection is REPLACED by the insert (standard editor
+     *  semantics). Returns the insertion offset so callers can derive the
+     *  inserted span (paste fold). */
+    const insertAtCaret = (text: string): number => {
       if (helpOpen) onToggleHelp()
-      const next = value.slice(0, cursor) + text + value.slice(cursor)
-      setInput(next, cursor + text.length)
+      const sel = selectionRef.current
+      const at = sel ? sel.start : cursor
+      const next = sel
+        ? value.slice(0, sel.start) + text + value.slice(sel.end)
+        : value.slice(0, cursor) + text + value.slice(cursor)
+      setInput(next, at + text.length)
       setSelectedCommand(0)
       setFileSelected(0)
+      return at
     }
 
     // Bracketed paste (terminal paste — Ctrl+Shift+V / right-click): insert
@@ -766,10 +883,10 @@ export function PromptInput({
     // NOT Enter — so this branch runs before the whole-line submit rule.
     if (event?.isPasted && input.length > 0) {
       const text = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-      insertAtCaret(text)
+      const at = insertAtCaret(text)
       // A big paste becomes a CC-style fold block right away (hover peeks
       // at it); an existing block is replaced by the new paste's span.
-      if (isBigInput(text)) updateFoldBlock({ start: cursor, end: cursor + text.length })
+      if (isBigInput(text)) updateFoldBlock({ start: at, end: at + text.length })
       return
     }
 
@@ -1187,23 +1304,29 @@ export function PromptInput({
     }
     if (isMod(key) && key.leftArrow) {
       // Jump to the previous word boundary (readline alt+b). Must precede the
-      // bare-arrow arms: Ctrl+Left arrives as leftArrow + ctrl.
-      setInput(value, wordBoundaryLeft(value, cursor))
+      // bare-arrow arms: Ctrl+Left arrives as leftArrow + ctrl. An active
+      // selection collapses to its START edge first (editor semantics).
+      const sel = selectionRef.current
+      setInput(value, sel ? sel.start : wordBoundaryLeft(value, cursor))
       return
     }
     if (isMod(key) && key.rightArrow) {
       // Jump to the next word boundary (readline alt+f).
-      setInput(value, wordBoundaryRight(value, cursor))
+      const sel = selectionRef.current
+      setInput(value, sel ? sel.end : wordBoundaryRight(value, cursor))
       return
     }
     if (key.leftArrow) {
       // Grapheme-step: skip the whole cluster (surrogate pair, ZWJ emoji,
-      // combining mark) so the caret never sits inside one.
-      setInput(value, previousGraphemeBoundary(bounds, cursor))
+      // combining mark) so the caret never sits inside one. With a
+      // selection, collapse to its start edge instead.
+      const sel = selectionRef.current
+      setInput(value, sel ? sel.start : previousGraphemeBoundary(bounds, cursor))
       return
     }
     if (key.rightArrow) {
-      setInput(value, nextGraphemeBoundary(bounds, cursor))
+      const sel = selectionRef.current
+      setInput(value, sel ? sel.end : nextGraphemeBoundary(bounds, cursor))
       return
     }
     if (key.backspace) {
@@ -1586,8 +1709,13 @@ export function PromptInput({
     if (input && !key.ctrl && !key.meta && !key.super && !key.tab && !key.escape) {
       // Typing anything else dismisses the help menu (CC behavior).
       if (helpOpen) onToggleHelp()
-      const next = value.slice(0, cursor) + input + value.slice(cursor)
-      setInput(next, cursor + input.length)
+      // An active selection is REPLACED by the typed text, caret after it.
+      const sel = selectionRef.current
+      const at = sel ? sel.start : cursor
+      const next = sel
+        ? value.slice(0, sel.start) + input + value.slice(sel.end)
+        : value.slice(0, cursor) + input + value.slice(cursor)
+      setInput(next, at + input.length)
       setSelectedCommand(0)
       setFileSelected(0)
     }
@@ -1683,6 +1811,20 @@ export function PromptInput({
   const prefixLabel = `▾ ${stats} · `
   const prefixCols = !block && big && windowStart === 0 ? stringWidth(prefixLabel) : 0
 
+  // Offset range [start, end) of every visual row — the SAME break rule as
+  // wrapToWidth — so the selection highlight can intersect each row. With a
+  // fold block, the chip row maps to the block's own span (never selected:
+  // updateSelection clamps the selection into the head or the tail side).
+  const lineRanges: Array<[number, number]> = block
+    ? [
+        ...visualLineRanges(head, inputWidth),
+        [block.start, block.end],
+        ...visualLineRanges(tail, inputWidth).map(
+          ([s, e]): [number, number] => [s + block.end, e + block.end],
+        ),
+      ]
+    : visualLineRanges(value, inputWidth)
+
   const rendered = visibleLines.map((line, index) => {
     const absoluteLine = windowStart + index
     if (block && absoluteLine === chipRow) {
@@ -1709,32 +1851,61 @@ export function PromptInput({
     const withPrefix = absoluteLine === 0 && prefixCols > 0
     const text = withPrefix ? truncateToWidth(line, inputWidth - prefixCols) : line
     const prefix = withPrefix ? <Text dimColor>{prefixLabel}</Text> : null
-    if (absoluteLine !== caretVisualLine) {
-      return (
-        <Text key={absoluteLine} wrap="truncate-end">
-          {prefix}
-          {text}
-        </Text>
-      )
+    // Inverse runs on this row: the selection's intersection (if any) and
+    // the caret cluster on the caret's row. Both render <Text inverse>;
+    // overlapping intervals merge so a caret inside the selection stays one
+    // continuous highlight. The caret row inverts the WHOLE cluster at the
+    // caret column (solid block) — [col, next boundary) covers a surrogate
+    // pair or ZWJ emoji as one glyph; at the text end it shows a blank
+    // inverse cell like the empty-input caret.
+    const intervals: Array<[number, number]> = []
+    const sel = selection
+    if (sel) {
+      const [rowStart, rowEnd] = lineRanges[absoluteLine] ?? [0, 0]
+      const lo = Math.min(Math.max(sel.start - rowStart, 0), text.length)
+      const hi = Math.min(Math.max(sel.end - rowStart, 0), text.length)
+      if (hi > lo) intervals.push([lo, hi])
     }
-    // Caret row: invert the grapheme cluster at the caret column (solid
-    // block). `col` is a cluster boundary by construction (the cursor is
-    // normalized onto boundaries and wrapping only breaks between
-    // graphemes), so [col, next boundary) covers the WHOLE cluster — a
-    // surrogate pair or ZWJ emoji inverts as one glyph, never two broken
-    // halves. Clamped into the prefix-shortened row text so the block
-    // caret never renders under the fold prefix.
-    const col = Math.min(caretCharCol(), text.length)
-    const clusterEnd = nextGraphemeBoundary(graphemeBoundaries(text), col)
-    const before = text.slice(0, col)
-    const at = clusterEnd > col ? text.slice(col, clusterEnd) : ' '
-    const after = text.slice(clusterEnd)
+    // Caret cluster: a REAL cluster joins the merge (visible inside the
+    // selection run); the end-of-text blank caret renders as its own cell
+    // AFTER everything — merging it into a selection that ends there would
+    // swallow the blank (slice beyond the text is empty) and the caret
+    // would vanish at the selection edge.
+    let endBlankCaret = false
+    if (absoluteLine === caretVisualLine) {
+      const col = Math.min(caretCharCol(), text.length)
+      const clusterEnd = nextGraphemeBoundary(graphemeBoundaries(text), col)
+      if (clusterEnd > col) intervals.push([col, clusterEnd])
+      else endBlankCaret = col === text.length
+    }
+    intervals.sort((a, b) => a[0] - b[0])
+    const runs: Array<[number, number]> = []
+    for (const [s, e] of intervals) {
+      const last = runs[runs.length - 1]
+      if (last && s <= last[1]) last[1] = Math.max(last[1], e)
+      else runs.push([s, e])
+    }
+    const pieces: Array<{ text: string; inverse: boolean }> = []
+    let pos = 0
+    for (const [s, e] of runs) {
+      if (s > pos) pieces.push({ text: text.slice(pos, s), inverse: false })
+      pieces.push({ text: text.slice(s, e), inverse: true })
+      pos = Math.max(pos, e)
+    }
+    if (pos < text.length) pieces.push({ text: text.slice(pos), inverse: false })
+    if (endBlankCaret) pieces.push({ text: ' ', inverse: true })
     return (
       <Text key={absoluteLine} wrap="truncate-end">
         {prefix}
-        {before}
-        <Text inverse>{at}</Text>
-        {after}
+        {pieces.map((piece, pieceIndex) =>
+          piece.inverse ? (
+            <Text key={pieceIndex} inverse>
+              {piece.text}
+            </Text>
+          ) : (
+            piece.text
+          ),
+        )}
       </Text>
     )
   })
@@ -1796,6 +1967,26 @@ export function PromptInput({
   })
 
   /**
+   * Map a pointer position relative to the value box to a UTF-16 offset
+   * via the same grapheme walk the renderer wraps with — exact under CJK
+   * widths, wrapped rows and multi-codepoint clusters. Rows are clamped to
+   * the VISIBLE window (drag moves never auto-scroll past it in v1); the
+   * fold chip row maps to null (its cells belong to the expand affordance,
+   * not to text).
+   */
+  const localToOffset = (localCol: number, localRow: number): number | null => {
+    const lastVisible = Math.min(visualLines.length - 1, windowStart + MAX_VISIBLE_LINES - 1)
+    const clamped = Math.max(windowStart, Math.min(windowStart + localRow, lastVisible))
+    if (block) {
+      if (clamped === chipRow) return null
+      return clamped < chipRow
+        ? clickToCursorOffset(head, inputWidth, clamped, localCol)
+        : block.end + clickToCursorOffset(tail, inputWidth, clamped - chipRow - 1, localCol)
+    }
+    return clickToCursorOffset(value, inputWidth, clamped, localCol)
+  }
+
+  /**
    * Click-to-position the caret: map a click inside the value box (local
    * row/column relative to the box) to a UTF-16 cursor offset via the same
    * grapheme walk the renderer wraps with — exact under CJK widths, wrapped
@@ -1803,39 +1994,118 @@ export function PromptInput({
    * the clicked cell (mid-grapheme snaps to its start). With a fold block,
    * clicks map into the head/tail text (the chip row has its own expand
    * onClick); without one, the fold prefix's cells fold the whole input.
+   *
+   * The drag protocol resets ink's multi-click chain on every press inside
+   * the value box (it carries onDragStart), so double-click word selection
+   * is self-detected here: two clicks within DOUBLE_CLICK_MS and one cell.
+   * Shift+click extends the selection from its start edge (or the caret)
+   * to the clicked offset; a plain click clears the selection and moves
+   * the caret.
    */
-  const handleValueClick = React.useCallback(
-    (e: ClickEvent) => {
-      const clickedVisual = windowStart + e.localRow
-      const clamped = Math.max(0, Math.min(clickedVisual, visualLines.length - 1))
-      if (block) {
-        if (clamped === chipRow) return
-        if (clamped < chipRow) {
-          setCursor(clickToCursorOffset(head, inputWidth, clamped, e.localCol))
-        } else {
-          setCursor(
-            block.end + clickToCursorOffset(tail, inputWidth, clamped - chipRow - 1, e.localCol),
-          )
+  const handleValueClick = (e: ClickEvent) => {
+    const now = Date.now()
+    const isDouble =
+      now - lastClickAtRef.current < DOUBLE_CLICK_MS &&
+      Math.abs(e.col - lastClickColRef.current) <= 1 &&
+      Math.abs(e.row - lastClickRowRef.current) <= 1
+    lastClickAtRef.current = now
+    lastClickColRef.current = e.col
+    lastClickRowRef.current = e.row
+    const clickedVisual = windowStart + e.localRow
+    const clamped = Math.max(0, Math.min(clickedVisual, visualLines.length - 1))
+    if (block) {
+      if (clamped === chipRow) return
+      const offset =
+        clamped < chipRow
+          ? clickToCursorOffset(head, inputWidth, clamped, e.localCol)
+          : block.end + clickToCursorOffset(tail, inputWidth, clamped - chipRow - 1, e.localCol)
+      if (isDouble) {
+        // Word select stays inside the clicked side: the block is atomic.
+        const side = offset <= block.start
+        const w = wordSelectionAt(value, offset, side ? 0 : block.end, side ? block.start : value.length)
+        if (w) {
+          updateSelection(w.start, w.end)
+          setCursor(w.end)
         }
         return
       }
-      if (clamped === 0 && prefixCols > 0 && e.localCol < prefixCols) {
-        updateFoldBlock({ start: 0, end: value.length })
+      if (e.shift) {
+        const base = selectionRef.current ? selectionRef.current.start : cursorRef.current
+        updateSelection(base, offset)
+        setCursor(offset)
         return
       }
-      const col =
-        clamped === 0 && prefixCols > 0 ? Math.max(0, e.localCol - prefixCols) : e.localCol
-      setCursor(
-        clickToCursorOffset(
-          value,
-          clamped === 0 && prefixCols > 0 ? inputWidth - prefixCols : inputWidth,
-          clamped,
-          col,
-        ),
-      )
-    },
-    [windowStart, visualLines.length, value, inputWidth, prefixCols, block, chipRow, head, tail],
-  )
+      clearSelection()
+      setCursor(offset)
+      return
+    }
+    if (clamped === 0 && prefixCols > 0 && e.localCol < prefixCols) {
+      updateFoldBlock({ start: 0, end: value.length })
+      return
+    }
+    const col =
+      clamped === 0 && prefixCols > 0 ? Math.max(0, e.localCol - prefixCols) : e.localCol
+    const offset = clickToCursorOffset(
+      value,
+      clamped === 0 && prefixCols > 0 ? inputWidth - prefixCols : inputWidth,
+      clamped,
+      col,
+    )
+    if (isDouble) {
+      const w = wordSelectionAt(value, offset, 0, value.length)
+      if (w) {
+        updateSelection(w.start, w.end)
+        setCursor(w.end)
+      }
+      return
+    }
+    if (e.shift) {
+      const base = selectionRef.current ? selectionRef.current.start : cursorRef.current
+      updateSelection(base, offset)
+      setCursor(offset)
+      return
+    }
+    clearSelection()
+    setCursor(offset)
+  }
+
+  /**
+   * Drag selection (component-level drag protocol): the press origin is
+   * derived from the event's start/current delta (dragstart fires on the
+   * FIRST motion), the focus follows every dragmove. The caret rides the
+   * focus edge; updateSelection clamps both ends into one fold side, so a
+   * drag can never cross the chip row.
+   */
+  const handleDragStart = (e: DragEvent) => {
+    const anchorLocalCol = e.localCol - (e.col - e.startCol)
+    const anchorLocalRow = e.localRow - (e.row - e.startRow)
+    const anchor = localToOffset(anchorLocalCol, anchorLocalRow)
+    if (anchor === null) {
+      dragAnchorRef.current = null
+      return
+    }
+    dragAnchorRef.current = anchor
+    setCursor(anchor)
+  }
+  const handleDragMove = (e: DragEvent) => {
+    const anchor = dragAnchorRef.current
+    if (anchor === null) return
+    const focus = localToOffset(e.localCol, e.localRow)
+    if (focus === null) return
+    // The caret rides the focus edge, clamped into the anchor's fold side
+    // exactly like updateSelection clamps the range — the caret must never
+    // jump across the chip row while the selection stays behind.
+    let caret = focus
+    const block = foldBlockRef.current
+    if (block) {
+      caret = anchor <= block.start ? Math.min(focus, block.start) : Math.max(focus, block.end)
+    }
+    updateSelection(anchor, focus)
+    setCursor(normalizeCursorOffset(valueRef.current, caret))
+  }
+  const handleDragEnd = () => {
+    dragAnchorRef.current = null
+  }
 
   // 浮层整体挂载条件：与内部面板可见条件精确同值。关闭时必须把整个
   // absolute 浮层移除——渲染器的 absolute-removed 检测只看被移除节点自身
@@ -2047,6 +2317,9 @@ export function PromptInput({
             flexGrow={1}
             flexShrink={1}
             onClick={handleValueClick}
+            onDragStart={handleDragStart}
+            onDragMove={handleDragMove}
+            onDragEnd={handleDragEnd}
           >
             {value.length === 0 ? (
               // Solid block caret on a BLANK cell: the terminal paints the
@@ -2154,4 +2427,82 @@ function clickToCursorOffset(
     offset++ // the '\n'
   }
   return offset
+}
+
+/**
+ * Offset range [start, end) of every visual row, mirroring
+ * {@link wrapToWidth}'s break rule exactly (breaks BETWEEN grapheme
+ * clusters at `width` display columns, hard '\n' rows included). The
+ * selection highlight intersects each row with these ranges so offsets
+ * map 1:1 onto the rendered row strings.
+ */
+function visualLineRanges(text: string, width: number): Array<[number, number]> {
+  const ranges: Array<[number, number]> = []
+  const segmenter = getGraphemeSegmenter()
+  let offset = 0
+  for (const line of text.split('\n')) {
+    if (line === '') {
+      ranges.push([offset, offset])
+      offset++ // the '\n'
+      continue
+    }
+    let start = offset
+    let currentWidth = 0
+    let currentLength = 0
+    for (const { segment } of segmenter.segment(line)) {
+      const w = stringWidth(segment)
+      // `currentLength > 0` is wrapToWidth's `current !== ''` — a row
+      // starting with a zero-width cluster must never break on it.
+      if (currentWidth + w > width && currentLength > 0) {
+        ranges.push([start, offset])
+        start = offset
+        currentWidth = 0
+        currentLength = 0
+      }
+      currentWidth += w
+      currentLength += segment.length
+      offset += segment.length
+    }
+    ranges.push([start, offset])
+    offset++ // the '\n'
+  }
+  return ranges
+}
+
+/** Word characters for double-click selection: letters (any script),
+ *  digits and the punctuation set terminal emulators treat as word-part by
+ *  default (`/usr/bin/bash` selects whole — iTerm2 defaults). */
+const WORD_CHAR = /[\p{L}\p{N}_/.\-+~\\]/u
+
+/** Character class for double-click word expansion: whitespace, word
+ *  char, everything else (punctuation/symbols). A same-class grapheme
+ *  run is one word. */
+function selectionCharClass(c: string): 0 | 1 | 2 {
+  if (c === '' || /\s/.test(c)) return 0
+  if (WORD_CHAR.test(c)) return 1
+  return 2
+}
+
+/**
+ * Word selection around `offset` within [lo, hi): expand left/right over
+ * grapheme clusters of the same class as the clicked one (terminal
+ * double-click semantics — punctuation runs select as one). Returns null
+ * when the offset sits at the range's end (nothing to select).
+ */
+function wordSelectionAt(
+  text: string,
+  offset: number,
+  lo: number,
+  hi: number,
+): { start: number; end: number } | null {
+  if (offset < lo || offset >= hi) return null
+  const bounds = graphemeBoundaries(text.slice(lo, hi)).map(b => b + lo)
+  let i = 0
+  while (i < bounds.length - 1 && bounds[i + 1]! <= offset) i++
+  const cls = selectionCharClass(text.charAt(bounds[i]!))
+  let a = i
+  while (a > 0 && selectionCharClass(text.charAt(bounds[a - 1]!)) === cls) a--
+  let b = i
+  while (b < bounds.length - 2 && selectionCharClass(text.charAt(bounds[b + 1]!)) === cls) b++
+  return { start: bounds[a]!, end: bounds[b + 1]! }
 }
