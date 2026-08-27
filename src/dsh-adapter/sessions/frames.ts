@@ -36,6 +36,8 @@ import { zstdDecompressSync } from 'node:zlib'
 
 /** Zstandard frame magic, little-endian (RFC 8878 §3.1.1.1). */
 const ZSTD_MAGIC = 0xfd2fb528
+/** A tiny compressed frame must not expand without a hard memory ceiling. */
+const MAX_DECODED_FRAME_BYTES = 64 * 1024 * 1024
 
 /** Byte range of one structurally complete frame; `end` is exclusive. */
 export interface FrameRange {
@@ -163,26 +165,35 @@ export type LogLine = Record<string, unknown>
  * @param frames - Complete frame ranges within `buffer`.
  * @returns Parsed envelopes in log order.
  */
+export function decodeFrame(buffer: Buffer, frame: FrameRange): LogLine[] | undefined {
+  let text: string
+  try {
+    text = zstdDecompressSync(buffer.subarray(frame.start, frame.end), {
+      maxOutputLength: MAX_DECODED_FRAME_BYTES,
+    }).toString('utf8')
+  } catch {
+    return undefined
+  }
+  const lines: LogLine[] = []
+  for (const line of text.split('\n')) {
+    if (line.length === 0) continue
+    try {
+      const parsed: unknown = JSON.parse(line)
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        lines.push(parsed as LogLine)
+      }
+    } catch {
+      return undefined
+    }
+  }
+  return lines
+}
+
 export function decodeFrames(buffer: Buffer, frames: readonly FrameRange[]): LogLine[] {
   const lines: LogLine[] = []
   for (const frame of frames) {
-    let text: string
-    try {
-      text = zstdDecompressSync(buffer.subarray(frame.start, frame.end)).toString('utf8')
-    } catch {
-      continue // incomplete flush or torn frame — the rest of the log stands
-    }
-    for (const line of text.split('\n')) {
-      if (line.length === 0) continue
-      try {
-        const parsed: unknown = JSON.parse(line)
-        if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          lines.push(parsed as LogLine)
-        }
-      } catch {
-        // A half-written line at the tail; earlier lines remain valid.
-      }
-    }
+    const decoded = decodeFrame(buffer, frame)
+    if (decoded !== undefined) lines.push(...decoded)
   }
   return lines
 }
@@ -191,6 +202,8 @@ export function decodeFrames(buffer: Buffer, frames: readonly FrameRange[]): Log
 export interface FileFacts {
   readonly bytes: number
   readonly modifiedAt: number
+  /** Physical file identity; replacement must not inherit append-only evidence. */
+  readonly identity: string
 }
 
 /**
@@ -200,7 +213,11 @@ export interface FileFacts {
 export function fileFacts(path: string): FileFacts | undefined {
   try {
     const stats = statSync(path)
-    return { bytes: stats.size, modifiedAt: stats.mtimeMs }
+    return {
+      bytes: stats.size,
+      modifiedAt: stats.mtimeMs,
+      identity: `${stats.dev}:${stats.ino}:${stats.birthtimeMs}`,
+    }
   } catch {
     return undefined
   }

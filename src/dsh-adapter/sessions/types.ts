@@ -132,6 +132,9 @@ export interface SessionDigest {
   readonly hasPrompt: boolean
   readonly model: string | undefined
   readonly label: string | undefined
+  /** The whole log was covered, or the winning title was observed in the
+   * trailing window; no unseen middle event can supersede it. */
+  readonly titleComplete?: true
 }
 
 /** One exchange in the preview pane, newest last. */
