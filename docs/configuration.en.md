@@ -185,13 +185,14 @@ Do not attach it to a public issue without reviewing and redacting it.
 restart. The first step picks an action:
 
 - **Add a new provider**: built-in catalog or custom API endpoint (below).
-- **Edit an existing provider**: pick one of the configured routes, then
-  re-configure it with the route locked. The API key can be kept or replaced
-  (not editable here when it comes from the environment), the endpoint and
-  protocol can change, and the model list is re-discovered.
-- **Delete an existing provider**: pick one of the configured routes, confirm,
-  and the profile plus the API key are removed (an environment-provided key is
-  left untouched — only the configuration is deleted).
+- **Edit an existing provider**: pick one of the configured routes, then edit
+  it through a menu. Built-in routes offer **Edit API Key**, **Edit model
+  list**, and **Delete this provider**; custom endpoints additionally get
+  **Edit Base URL** and **Edit wire protocol**. Picking any item applies it
+  immediately and exits — no further confirmation. "Edit model list"
+  pre-checks the models you already enabled; "Delete this provider" removes
+  the profile and the API key after a confirmation (an environment-provided
+  key is left untouched — only the configuration is deleted).
 
 The **add** branch offers two sources:
 

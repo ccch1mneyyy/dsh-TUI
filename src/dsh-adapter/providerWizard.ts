@@ -1,5 +1,6 @@
 /**
- * `/provider` wizard — interactively adds an LLM provider route at runtime.
+ * `/provider` wizard — interactively adds, edits, or deletes an LLM
+ * provider route at runtime.
  *
  * The wizard is a sequence of `QuestionStore` asks (the same panel the
  * model-facing `ask_user_question` tool uses), so it needs no UI state of
@@ -171,17 +172,28 @@ function answerSelected(answer: AskUserQuestionAnswer, id: string): readonly str
 
 /**
  * Local presentation extension carried through to AskUserQuestionPanel:
- * pure option questions hide the trailing free-text input row. Structurally
- * assigned into the dsh request type; the harness side never sets it, so
- * model-facing asks keep the input row.
+ * pure option questions hide the trailing free-text input row, and
+ * `defaultSelected` pre-checks (multi-select) or default-focuses
+ * (single-select) the listed option labels — e.g. the models already
+ * enabled on a route being edited. Structurally assigned into the dsh
+ * request type; the harness side never sets it, so model-facing asks keep
+ * the input row and no pre-selection.
  */
-type WizardQuestionItem = AskUserQuestionItem & { hideCustomInput?: boolean }
+type WizardQuestionItem = AskUserQuestionItem & {
+  hideCustomInput?: boolean
+  defaultSelected?: readonly string[]
+}
 
 function optionQuestion(
   id: string,
   question: string,
   options: readonly { label: string; description?: string }[],
-  extra?: { detail?: string; multiSelect?: boolean; hideCustomInput?: boolean },
+  extra?: {
+    detail?: string
+    multiSelect?: boolean
+    hideCustomInput?: boolean
+    defaultSelected?: readonly string[]
+  },
 ): AskUserQuestionItem {
   const item: WizardQuestionItem = {
     id,
@@ -191,6 +203,7 @@ function optionQuestion(
     ...(extra?.detail !== undefined ? { detail: extra.detail } : {}),
     ...(extra?.multiSelect ? { multiSelect: true } : {}),
     ...(extra?.hideCustomInput ? { hideCustomInput: true } : {}),
+    ...(extra?.defaultSelected !== undefined ? { defaultSelected: extra.defaultSelected } : {}),
   }
   return item
 }
@@ -205,169 +218,116 @@ function textQuestion(id: string, question: string, detail?: string): AskUserQue
 }
 
 /**
- * Run the provider wizard. Opens with an action choice (add / edit /
- * delete); the add and edit paths share the guided config flow, with edit
- * locking the route and driving the catalog/custom split and the key-keep
- * question from the stored profile. Resolves 'cancelled' when the user
- * dismisses any question (Esc) — nothing has been written at that point by
- * design: all asks complete before the first side effect.
+ * Run the provider wizard. Opens with an action choice (add / edit); the
+ * add path runs the guided config flow, and edit picks a configured route
+ * then opens a menu of targeted edits (API key, base URL, wire protocol,
+ * model list, delete this provider) with the route locked. Each menu item
+ * applies immediately and exits — no confirmation between picking an edit
+ * and writing it. For built-in (catalog) routes the menu is limited to API
+ * key, model list, and delete; base URL and wire protocol are only
+ * meaningful for custom endpoints. Resolves 'cancelled' when the user
+ * dismisses any question (Esc) — nothing has been written at that point.
  */
 export async function runProviderWizard(
   deps: ProviderWizardDeps,
 ): Promise<ProviderWizardOutcome> {
   const { ask, notify } = deps
-  let action: 'add' | 'edit' | 'delete' = 'add'
+  let action: 'add' | 'edit' = 'add'
   try {
     const actionAnswer = await ask({
       questions: [optionQuestion('action', t('provider-q-action'), [
         { label: t('provider-opt-action-add'), description: t('provider-opt-action-add-desc') },
         { label: t('provider-opt-action-edit'), description: t('provider-opt-action-edit-desc') },
-        { label: t('provider-opt-action-delete'), description: t('provider-opt-action-delete-desc') },
       ], { hideCustomInput: true })],
     })
     const pickedAction = answerSelected(actionAnswer, 'action')[0]
-    if (pickedAction === t('provider-opt-action-delete')) {
-      action = 'delete'
+    if (pickedAction === t('provider-opt-action-edit')) {
+      action = 'edit'
       // `await` before returning keeps the sub-wizard's rejection inside the
       // try so its UserQuestionError maps to the action-specific outcome —
       // a bare `return promise` would bypass the catch below.
-      return await runDeleteWizard(deps)
-    }
-    if (pickedAction === t('provider-opt-action-edit')) {
-      action = 'edit'
       return await runEditWizard(deps)
     }
-    return await runAddFlow(deps, {})
+    return await runAddFlow(deps)
   } catch (error) {
     if (error instanceof UserQuestionError) {
-      notify(action === 'delete'
-        ? t('provider-delete-cancelled')
-        : action === 'edit'
-          ? t('provider-edit-cancelled')
-          : t('provider-cancelled'))
+      notify(action === 'edit'
+        ? t('provider-edit-cancelled')
+        : t('provider-cancelled'))
       return 'cancelled'
     }
     const err = error instanceof Error ? error.message : String(error)
-    notify(action === 'delete'
-      ? t('provider-delete-failed', { err })
-      : t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
+    notify(t('provider-write-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
   }
 }
 
-/** Edit-mode context: the route is locked and the stored profile drives the
- *  catalog/custom split and the key-keep question. */
-interface AddFlowContext {
-  /** Pre-selected route (edit): route selection is skipped. */
-  route?: string
-  /** The stored profile (edit); its `api` field decides the route kind. */
-  existing?: ConfiguredProvider
-}
-
 /**
- * The shared guided config flow behind add and edit. With `existing` set the
- * route is locked, the mode question is skipped and the API key is kept or
- * replaced by choice; otherwise this is the classic add flow.
+ * The guided add flow behind `/provider`'s "Add a new provider" branch:
+ * mode (catalog / custom / optional OAuth), route, API key, endpoint /
+ * protocol, model discovery + selection, confirm, then persist with
+ * credential rollback. Esc anywhere cancels with nothing written.
  */
 async function runAddFlow(
   deps: ProviderWizardDeps,
-  ctx: AddFlowContext,
 ): Promise<ProviderWizardOutcome> {
   const { host, ask, notify, pushLocal } = deps
-  const editing = ctx.existing !== undefined
 
   // ── 1. mode ────────────────────────────────────────────────────────
-  let isCatalog: boolean
-  if (editing) {
-    // A custom route stores an explicit `api`; catalog routes inherit theirs.
-    isCatalog = ctx.existing!.api === undefined
-  } else {
-    const modeOptions = [
-      { label: t('provider-opt-catalog'), description: t('provider-opt-catalog-desc') },
-      { label: t('provider-opt-custom'), description: t('provider-opt-custom-desc') },
-    ]
-    // The OAuth branch exists only while a dsh-auth-style plugin is mounted;
-    // without the service the mode question stays exactly two options.
-    if (host.oauth !== undefined) {
-      modeOptions.push({ label: t('provider-opt-oauth'), description: t('provider-opt-oauth-desc') })
-    }
-    const modeAnswer = await ask({
-      questions: [optionQuestion('mode', t('provider-q-mode'), modeOptions, { hideCustomInput: true })],
-    })
-    const pickedMode = answerSelected(modeAnswer, 'mode')[0]
-    if (host.oauth !== undefined && pickedMode === t('provider-opt-oauth')) {
-      return runOAuthWizard(deps, host.oauth)
-    }
-    isCatalog = pickedMode === t('provider-opt-catalog')
+  const modeOptions = [
+    { label: t('provider-opt-catalog'), description: t('provider-opt-catalog-desc') },
+    { label: t('provider-opt-custom'), description: t('provider-opt-custom-desc') },
+  ]
+  // The OAuth branch exists only while a dsh-auth-style plugin is mounted;
+  // without the service the mode question stays exactly two options.
+  if (host.oauth !== undefined) {
+    modeOptions.push({ label: t('provider-opt-oauth'), description: t('provider-opt-oauth-desc') })
   }
+  const modeAnswer = await ask({
+    questions: [optionQuestion('mode', t('provider-q-mode'), modeOptions, { hideCustomInput: true })],
+  })
+  const pickedMode = answerSelected(modeAnswer, 'mode')[0]
+  if (host.oauth !== undefined && pickedMode === t('provider-opt-oauth')) {
+    return runOAuthWizard(deps, host.oauth)
+  }
+  const isCatalog = pickedMode === t('provider-opt-catalog')
 
   // ── 2. route ───────────────────────────────────────────────────────
-  let route = ctx.route ?? ''
+  let route = ''
+  if (isCatalog) {
+    const candidates = host.listCatalogProviders()
+    if (candidates.length > 0) {
+      const otherLabel = t('provider-opt-other-route')
+      const catalogAnswer = await ask({
+        questions: [optionQuestion('catalog', t('provider-q-catalog'), [
+          ...candidates.map(candidate => ({
+            label: candidate.provider,
+            description: candidate.displayName === candidate.provider
+              ? undefined
+              : candidate.displayName,
+          })),
+          { label: otherLabel, description: t('provider-opt-other-route-desc') },
+        ], { hideCustomInput: true })],
+      })
+      const pick = answerSelected(catalogAnswer, 'catalog')[0]
+      if (pick !== undefined && pick !== otherLabel) route = pick
+    }
+  }
   if (route === '') {
-    if (isCatalog) {
-      const candidates = host.listCatalogProviders()
-      if (candidates.length > 0) {
-        const otherLabel = t('provider-opt-other-route')
-        const catalogAnswer = await ask({
-          questions: [optionQuestion('catalog', t('provider-q-catalog'), [
-            ...candidates.map(candidate => ({
-              label: candidate.provider,
-              description: candidate.displayName === candidate.provider
-                ? undefined
-                : candidate.displayName,
-            })),
-            { label: otherLabel, description: t('provider-opt-other-route-desc') },
-          ], { hideCustomInput: true })],
-        })
-        const pick = answerSelected(catalogAnswer, 'catalog')[0]
-        if (pick !== undefined && pick !== otherLabel) route = pick
-      }
-    }
-    if (route === '') {
-      route = await promptRouteId(ask, notify)
-      if (route === '') return 'cancelled'
-    }
+    route = await promptRouteId(ask, notify)
+    if (route === '') return 'cancelled'
   }
 
   // ── 3. API key (own batch so redact covers exactly the secret) ─────
   const ref = deriveKeyRef(route)
   const shadowed = host.envShadows(ref)
-  let apiKey: string | undefined
-  let replaceKey = false
-  let keyLine: string
-  if (editing) {
-    if (shadowed) {
-      // The environment provides the key: it cannot be edited from here and
-      // a store write would never be read at request time anyway.
-      keyLine = t('provider-line-keyref-env', { ref })
-    } else {
-      const keyActionAnswer = await ask({
-        questions: [optionQuestion('key-action', t('provider-q-key-action', { route }), [
-          { label: t('provider-opt-key-keep'), description: t('provider-opt-key-keep-desc') },
-          { label: t('provider-opt-key-replace'), description: t('provider-opt-key-replace-desc') },
-        ], { hideCustomInput: true })],
-      })
-      if (answerSelected(keyActionAnswer, 'key-action')[0] === t('provider-opt-key-replace')) {
-        const keyAnswer = await ask({
-          questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
-        }, { redact: true })
-        apiKey = answerText(keyAnswer, 'apikey')
-        replaceKey = true
-        keyLine = t('provider-line-key-updated', { ref })
-      } else {
-        keyLine = t('provider-line-key-kept', { ref })
-      }
-    }
-  } else {
-    const keyAnswer = await ask({
-      questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
-    }, { redact: true })
-    apiKey = answerText(keyAnswer, 'apikey')
-    replaceKey = true
-    keyLine = shadowed
-      ? t('provider-line-keyref-env', { ref })
-      : t('provider-line-keyref', { ref })
-  }
+  const keyAnswer = await ask({
+    questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
+  }, { redact: true })
+  const apiKey = answerText(keyAnswer, 'apikey')
+  const keyLine = shadowed
+    ? t('provider-line-keyref-env', { ref })
+    : t('provider-line-keyref', { ref })
 
   // ── 4. endpoint / protocol ─────────────────────────────────────────
   let baseURL: string | undefined
@@ -377,39 +337,23 @@ async function runAddFlow(
       questions: [optionQuestion('baseurl-choice', t('provider-q-baseurl-choice'), [
         { label: t('provider-opt-baseurl-skip') },
         { label: t('provider-opt-baseurl-input') },
-      ], {
-        hideCustomInput: true,
-        ...(editing && ctx.existing?.baseURL !== undefined
-          ? { detail: t('provider-edit-current', { value: ctx.existing.baseURL }) }
-          : {}),
-      })],
+      ], { hideCustomInput: true })],
     })
     if (answerSelected(choiceAnswer, 'baseurl-choice')[0] === t('provider-opt-baseurl-input')) {
       const urlAnswer = await ask({
-        questions: [textQuestion('baseurl', t('provider-q-baseurl'),
-          editing && ctx.existing?.baseURL !== undefined
-            ? t('provider-edit-current', { value: ctx.existing.baseURL })
-            : undefined)],
+        questions: [textQuestion('baseurl', t('provider-q-baseurl'))],
       })
       baseURL = answerText(urlAnswer, 'baseurl')
     }
   } else {
     const endpointAnswer = await ask({
       questions: [
-        textQuestion('baseurl', t('provider-q-baseurl'),
-          editing && ctx.existing?.baseURL !== undefined
-            ? t('provider-edit-current', { value: ctx.existing.baseURL })
-            : undefined),
+        textQuestion('baseurl', t('provider-q-baseurl')),
         optionQuestion('protocol', t('provider-q-protocol'), [
           { label: 'openai-completions', description: t('provider-protocol-completions-desc') },
           { label: 'openai-responses', description: t('provider-protocol-responses-desc') },
           { label: 'anthropic-messages', description: t('provider-protocol-anthropic-desc') },
-        ], {
-          hideCustomInput: true,
-          ...(editing && ctx.existing?.api !== undefined
-            ? { detail: t('provider-edit-current', { value: ctx.existing.api }) }
-            : {}),
-        }),
+        ], { hideCustomInput: true }),
       ],
     })
     baseURL = answerText(endpointAnswer, 'baseurl')
@@ -417,18 +361,12 @@ async function runAddFlow(
   }
 
   // ── 5. model discovery (draft credential, nothing persisted) ───────
-  // Edit-keep reuses the stored credential (or the env value when shadowed)
-  // so discovery still works without re-entering the key.
-  let draftKey = apiKey
-  if (draftKey === undefined && editing) {
-    draftKey = shadowed ? process.env[ref] : await host.readCredential(ref)
-  }
   notify(t('provider-discovery-running'))
   const discovered = await host.discoverModels({
     ...(isCatalog ? { provider: route } : {}),
     ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
     ...(api !== undefined ? { api } : {}),
-    apiKey: draftKey ?? '',
+    apiKey: apiKey ?? '',
   }).catch(() => [])
 
   // ── 6. model selection ─────────────────────────────────────────────
@@ -474,11 +412,9 @@ async function runAddFlow(
   const summaryLines = buildSummaryLines({
     route, ref, shadowed, baseURL, api, models, isCatalog, keyLine,
   })
-  const detail = editing
-    ? `${summaryLines.join('\n')}\n${t('provider-edit-note', { route })}`
-    : host.routeExists(route)
-      ? `${summaryLines.join('\n')}\n${t('provider-route-exists-warning')}`
-      : summaryLines.join('\n')
+  const detail = host.routeExists(route)
+    ? `${summaryLines.join('\n')}\n${t('provider-route-exists-warning')}`
+    : summaryLines.join('\n')
   const confirmAnswer = await ask({
     questions: [optionQuestion('confirm', t('provider-q-confirm'), [
       { label: t('provider-opt-confirm-write') },
@@ -486,14 +422,14 @@ async function runAddFlow(
     ], { detail, hideCustomInput: true })],
   })
   if (answerSelected(confirmAnswer, 'confirm')[0] !== t('provider-opt-confirm-write')) {
-    notify(editing ? t('provider-edit-cancelled') : t('provider-cancelled'))
+    notify(t('provider-cancelled'))
     return 'cancelled'
   }
 
   // ── 8. persist: credential first (rollbackable), then the profile ──
   let wroteCredential = false
   let previousCredential: string | undefined
-  if (!shadowed && replaceKey && apiKey !== undefined) {
+  if (!shadowed && apiKey !== undefined) {
     // Capture any pre-existing value BEFORE overwriting: when the profile
     // write below fails, rollback must restore it — an unconditional unset
     // would destroy the old key of the route being overwritten.
@@ -529,7 +465,7 @@ async function runAddFlow(
       ? [t('provider-switch-hint')]
       : []),
   ])
-  notify(t(editing ? 'provider-edit-success' : 'provider-success', { route }), { color: 'success' })
+  notify(t('provider-success', { route }), { color: 'success' })
 
   if (!deps.working() && models.length > 0) {
     const target = models[0]!
@@ -543,13 +479,12 @@ async function runAddFlow(
       await deps.switchModel(route, target)
     }
   }
-  return editing ? 'updated' : 'added'
+  return 'added'
 }
 
 /**
- * The edit branch of `/provider`: pick a configured route, then run the
- * shared add flow with the route locked and the stored profile driving the
- * catalog/custom split and the key-keep question.
+ * The edit branch of `/provider`: pick a configured route, then open the
+ * one-shot targeted-edit menu ({@link runEditMenu}) with the route locked.
  */
 async function runEditWizard(
   deps: ProviderWizardDeps,
@@ -569,48 +504,303 @@ async function runEditWizard(
   const route = answerSelected(pickAnswer, 'edit-provider')[0]
   const existing = configured.find(row => row.route === route)
   if (existing === undefined) return 'cancelled'
-  return runAddFlow(deps, { route, existing })
+  return runEditMenu(deps, existing)
 }
 
 /**
- * The delete branch of `/provider`: pick a configured route, confirm against
- * a summary, then unset the profile and (unless the environment provides the
+ * The edit menu for one configured route: pick exactly one targeted edit and
+ * apply it immediately. Base URL and wire protocol only make sense for
+ * custom (non-catalog) routes, so built-in routes get a three-item menu —
+ * API key / model list / delete.
+ */
+async function runEditMenu(
+  deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
+): Promise<ProviderWizardOutcome> {
+  const { ask, notify } = deps
+  const menuAnswer = await ask({
+    questions: [optionQuestion('edit-menu', t('provider-q-edit-menu', { route: provider.route }),
+      buildEditMenuOptions(provider),
+      { hideCustomInput: true })],
+  })
+  const picked = answerSelected(menuAnswer, 'edit-menu')[0]
+  if (picked === t('provider-opt-edit-delete')) return deleteConfiguredProvider(deps, provider)
+  if (picked === t('provider-opt-edit-key')) return editApiKey(deps, provider)
+  if (picked === t('provider-opt-edit-baseurl')) return editBaseUrl(deps, provider)
+  if (picked === t('provider-opt-edit-protocol')) return editWireProtocol(deps, provider)
+  if (picked === t('provider-opt-edit-models')) return editModelList(deps, provider)
+  notify(t('provider-edit-cancelled'))
+  return 'cancelled'
+}
+
+/** Menu rows for one edit session; base URL / protocol are custom-only. */
+function buildEditMenuOptions(provider: ConfiguredProvider): { label: string; description?: string }[] {
+  const isCatalog = provider.api === undefined
+  const options: { label: string; description?: string }[] = [
+    { label: t('provider-opt-edit-key'),
+      ...(provider.shadowed ? { description: t('provider-row-key-shadowed') } : {}) },
+  ]
+  if (!isCatalog) {
+    options.push(
+      { label: t('provider-opt-edit-baseurl'), description: provider.baseURL },
+      { label: t('provider-opt-edit-protocol'), description: provider.api },
+    )
+  }
+  options.push(
+    { label: t('provider-opt-edit-models'),
+      description: provider.models !== undefined && provider.models.length > 0
+        ? t('provider-row-models', { n: provider.models.length })
+        : t('provider-row-catalog') },
+    { label: t('provider-opt-edit-delete'), description: t('provider-opt-edit-delete-desc') },
+  )
+  return options
+}
+
+/** Replace the route's API key: prompt, then write the credential at once.
+ *  An env-shadowed key cannot be edited from here; an empty answer is a
+ *  no-op. The profile already points at the ref, so no profile write. */
+async function editApiKey(
+  deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
+): Promise<ProviderWizardOutcome> {
+  const { ask, notify, pushLocal, host } = deps
+  if (provider.shadowed) {
+    // The environment provides the key: it cannot be edited from here and
+    // a store write would never be read at request time anyway.
+    notify(t('provider-key-env-not-editable', { route: provider.route, ref: provider.ref }),
+      { color: 'warning' })
+    return 'cancelled'
+  }
+  const keyAnswer = await ask({
+    questions: [textQuestion('apikey', t('provider-q-apikey'), t('provider-q-apikey-detail'))],
+  }, { redact: true })
+  const value = answerText(keyAnswer, 'apikey')
+  if (value === '') {
+    notify(t('provider-key-empty'), { color: 'warning' })
+    return 'cancelled'
+  }
+  await host.writeCredential(provider.ref, value)
+  pushLocal('/provider', buildSummaryLines({
+    route: provider.route,
+    ref: provider.ref,
+    shadowed: provider.shadowed,
+    baseURL: provider.baseURL,
+    api: provider.api,
+    models: provider.models ?? [],
+    isCatalog: provider.api === undefined,
+    keyLine: t('provider-line-key-updated', { ref: provider.ref }),
+  }))
+  notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
+  return 'updated'
+}
+
+/** Rewrite the route's profile after a targeted custom-route edit, keeping
+ *  the enabled models. Capacities are refreshed by a discovery against the
+ *  stored/env key; on failure plain `{id}` models still write. */
+async function rewriteProfile(
+  deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
+  change: { baseURL?: string; api?: string },
+): Promise<ProviderWizardOutcome> {
+  const { host, notify, pushLocal } = deps
+  const keyLine = t('provider-line-key-kept', { ref: provider.ref })
+  const baseURL = change.baseURL ?? provider.baseURL
+  const api = change.api ?? provider.api ?? 'openai-completions'
+  notify(t('provider-discovery-running'))
+  const discoveredById = await (async () => {
+    const key = provider.shadowed ? process.env[provider.ref] : await host.readCredential(provider.ref)
+    const discovered = await host.discoverModels({
+      ...(provider.api === undefined ? { provider: provider.route } : {}),
+      ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
+      ...(api !== undefined ? { api } : {}),
+      apiKey: key ?? '',
+    }).catch(() => [])
+    return new Map(discovered.map(model => [model.id, model] as const))
+  })()
+
+  await host.writeProfile(provider.route, buildProfile({
+    isCatalog: provider.api === undefined,
+    ref: provider.ref,
+    baseURL,
+    api,
+    models: provider.models ?? [],
+    discoveredById,
+  }))
+  pushLocal('/provider', buildSummaryLines({
+    route: provider.route,
+    ref: provider.ref,
+    shadowed: provider.shadowed,
+    baseURL,
+    api,
+    models: provider.models ?? [],
+    isCatalog: provider.api === undefined,
+    keyLine,
+  }))
+  notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
+  return 'updated'
+}
+
+/** Edit the base URL (custom routes only): prompt the new endpoint, then
+ *  rewrite the profile immediately. An empty answer is a no-op. */
+async function editBaseUrl(
+  deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
+): Promise<ProviderWizardOutcome> {
+  const { ask, notify } = deps
+  const urlAnswer = await ask({
+    questions: [textQuestion('baseurl', t('provider-q-baseurl'),
+      provider.baseURL !== undefined
+        ? t('provider-edit-current', { value: provider.baseURL })
+        : undefined)],
+  })
+  const value = answerText(urlAnswer, 'baseurl')
+  if (value === '') {
+    notify(t('provider-edit-no-changes'))
+    return 'cancelled'
+  }
+  return rewriteProfile(deps, provider, { baseURL: value })
+}
+
+/** Edit the wire protocol (custom routes only): pick from the three wire
+ *  protocols (the current one is default-focused), then rewrite the profile
+ *  immediately. Picking the current protocol is a no-op. */
+async function editWireProtocol(
+  deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
+): Promise<ProviderWizardOutcome> {
+  const { ask, notify } = deps
+  const current = provider.api ?? 'openai-completions'
+  const protocolAnswer = await ask({
+    questions: [optionQuestion('protocol', t('provider-q-protocol'), [
+      { label: 'openai-completions', description: t('provider-protocol-completions-desc') },
+      { label: 'openai-responses', description: t('provider-protocol-responses-desc') },
+      { label: 'anthropic-messages', description: t('provider-protocol-anthropic-desc') },
+    ], { hideCustomInput: true, defaultSelected: [current] })],
+  })
+  const picked = answerSelected(protocolAnswer, 'protocol')[0]
+  if (picked === undefined || picked === current) {
+    notify(t('provider-edit-no-changes'))
+    return 'cancelled'
+  }
+  return rewriteProfile(deps, provider, { api: picked })
+}
+
+/**
+ * Re-discover the endpoint's models and pick the enabled set (the current
+ * ones pre-checked), then rewrite the profile immediately. On discovery
+ * failure a manual id question is the fallback; an empty result is a no-op
+ * for whole-catalog routes and rejected for custom routes.
+ */
+async function editModelList(
+  deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
+): Promise<ProviderWizardOutcome> {
+  const { host, ask, notify, pushLocal } = deps
+  const isCatalog = provider.api === undefined
+  const previous = provider.models ?? []
+  const key = provider.shadowed ? process.env[provider.ref] : await host.readCredential(provider.ref)
+  notify(t('provider-discovery-running'))
+  const discovered = await host.discoverModels({
+    ...(isCatalog ? { provider: provider.route } : {}),
+    ...(provider.baseURL !== undefined && provider.baseURL !== '' ? { baseURL: provider.baseURL } : {}),
+    ...(provider.api !== undefined ? { api: provider.api } : {}),
+    apiKey: key ?? '',
+  }).catch(() => [])
+
+  let models: string[]
+  let discoveredById = new Map<string, LlmDiscoveredModel>()
+  if (discovered.length === 0) {
+    notify(t('provider-discovery-failed'), { color: 'warning' })
+    const fallbackAnswer = await ask({
+      questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
+    })
+    models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
+    if (models.length === 0) {
+      notify(t('provider-edit-no-changes'))
+      return 'cancelled'
+    }
+  } else {
+    discoveredById = new Map(discovered.map(model => [model.id, model] as const))
+    const modelsAnswer = await ask({
+      questions: [optionQuestion('models', t('provider-q-models'),
+        discovered.map(model => ({
+          label: model.id,
+          description: [
+            model.name ?? '',
+            model.contextWindow !== undefined ? `${model.contextWindow}` : '',
+          ].filter(part => part !== '').join(' · ') || undefined,
+        })),
+        { multiSelect: true, defaultSelected: previous },
+      )],
+    })
+    models = mergeModelIds(
+      answerSelected(modelsAnswer, 'models'),
+      answerText(modelsAnswer, 'models'),
+    )
+  }
+
+  if (!isCatalog && models.length === 0) {
+    // A manual route without models fails the adapter validation.
+    notify(t('provider-models-required'), { color: 'error' })
+    return 'cancelled'
+  }
+  if (sameModels(models, previous)) {
+    notify(t('provider-edit-no-changes'))
+    return 'cancelled'
+  }
+  await host.writeProfile(provider.route, buildProfile({
+    isCatalog,
+    ref: provider.ref,
+    baseURL: provider.baseURL,
+    api: provider.api,
+    models,
+    discoveredById,
+  }))
+  pushLocal('/provider', buildSummaryLines({
+    route: provider.route,
+    ref: provider.ref,
+    shadowed: provider.shadowed,
+    baseURL: provider.baseURL,
+    api: provider.api,
+    models,
+    isCatalog,
+    keyLine: t('provider-line-key-kept', { ref: provider.ref }),
+  }))
+  notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
+  return 'updated'
+}
+
+/** Whether two model lists are equal (undefined = the whole catalog = []). */
+function sameModels(a: readonly string[], b: readonly string[] | undefined): boolean {
+  if (b === undefined) return a.length === 0
+  return a.length === b.length && b.every(id => a.includes(id))
+}
+
+/**
+ * Delete one configured route from inside the edit menu: confirm against a
+ * summary, then unset the profile and (unless the environment provides the
  * key) remove the credential. The profile goes first so a failure never
  * leaves a profile pointing at a removed key; an orphaned key is harmless.
  */
-async function runDeleteWizard(
+async function deleteConfiguredProvider(
   deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
 ): Promise<ProviderWizardOutcome> {
   const { host, ask, notify, pushLocal } = deps
-  const configured = host.listConfiguredProviders()
-  if (configured.length === 0) {
-    notify(t('provider-none-configured'), { color: 'warning' })
-    return 'cancelled'
-  }
-  const pickAnswer = await ask({
-    questions: [optionQuestion('delete-provider', t('provider-q-delete'), configured.map(provider => ({
-      label: provider.route,
-      description: providerRowDescription(provider),
-    })), { hideCustomInput: true })],
-  })
-  const route = answerSelected(pickAnswer, 'delete-provider')[0]
-  const provider = configured.find(row => row.route === route)
-  if (provider === undefined) return 'cancelled'
-
-  const lines = buildDeleteSummary(provider)
-  const confirmAnswer = await ask({
-    questions: [optionQuestion('delete-confirm', t('provider-q-delete-confirm', { route }), [
-      { label: t('provider-opt-delete-yes') },
-      { label: t('provider-opt-confirm-cancel') },
-    ], { detail: lines.join('\n'), hideCustomInput: true })],
-  })
-  if (answerSelected(confirmAnswer, 'delete-confirm')[0] !== t('provider-opt-delete-yes')) {
-    notify(t('provider-delete-cancelled'))
-    return 'cancelled'
-  }
-
   try {
-    await host.removeProfile(route)
+    const lines = buildDeleteSummary(provider)
+    const confirmAnswer = await ask({
+      questions: [optionQuestion('delete-confirm', t('provider-q-delete-confirm', { route: provider.route }), [
+        { label: t('provider-opt-delete-yes') },
+        { label: t('provider-opt-confirm-cancel') },
+      ], { detail: lines.join('\n'), hideCustomInput: true })],
+    })
+    if (answerSelected(confirmAnswer, 'delete-confirm')[0] !== t('provider-opt-delete-yes')) {
+      notify(t('provider-delete-cancelled'))
+      return 'cancelled'
+    }
+
+    await host.removeProfile(provider.route)
     const pushedLines = [...lines]
     if (provider.ref !== '') {
       if (provider.shadowed) {
@@ -621,9 +811,13 @@ async function runDeleteWizard(
       }
     }
     pushLocal('/provider', pushedLines)
-    notify(t('provider-delete-success', { route }), { color: 'success' })
+    notify(t('provider-delete-success', { route: provider.route }), { color: 'success' })
     return 'deleted'
   } catch (error) {
+    if (error instanceof UserQuestionError) {
+      notify(t('provider-delete-cancelled'))
+      return 'cancelled'
+    }
     const err = error instanceof Error ? error.message : String(error)
     notify(t('provider-delete-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
@@ -770,7 +964,7 @@ function buildSummaryLines(input: {
   api: string | undefined
   models: readonly string[]
   isCatalog: boolean
-  /** Edit-mode key line override (kept / updated / env); add mode derives it. */
+  /** Key line override (kept / updated / env); add mode derives it. */
   keyLine?: string
 }): string[] {
   const lines = [t('provider-line-route', { route: input.route })]

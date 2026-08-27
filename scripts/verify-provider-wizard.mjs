@@ -28,17 +28,30 @@
  *    login attempt, outcome 'signed-out'.
  * 15. OAuth branch, login failure: error surfaced with the cause.
  * 16. without host.oauth the mode question stays two options (optional-plugin
- *    contract); the new action layer always offers add/edit/delete.
- * 17. edit a catalog route keeping the key: route/mode locked, no credential
- *    write, profile overwritten, summary notes the unchanged key.
- * 18. edit a custom route replacing the key: credential overwritten, confirm
- *    framed as an edit.
- * 19. edit a route whose key is env-shadowed: no key-action question.
- * 20. edit with no configured providers: warning, cancelled.
- * 21. delete happy path: profile then credential removed, both in transcript.
- * 22. delete with env-shadowed key: credential left alone, env line pushed.
- * 23. delete cancelled at the confirm: nothing removed.
- * 24. delete with no configured providers: warning, cancelled.
+ *    contract); the action layer offers add/edit — delete is gone from the
+ *    top level (it now lives inside the edit menu).
+ * 17. edit a catalog route: the menu offers only key/models/delete; editing
+ *    the model list pre-checks the enabled models (defaultSelected), writes
+ *    the profile immediately (no confirm/switch), outcome updated.
+ * 18. edit a custom route, API key only: credential overwritten, profile
+ *    untouched, transcript notes the updated key.
+ * 19. edit a custom route, base URL: profile rewritten with the new endpoint,
+ *    capacities refreshed by a discovery, key kept.
+ * 20. edit a custom route, wire protocol: the current protocol is
+ *    default-focused (defaultSelected), profile rewritten on a new pick.
+ * 21. edit a shadowed-key route: "Edit API Key" refuses (env) → cancelled,
+ *    nothing written.
+ * 22. edit with no configured providers: warning, cancelled.
+ * 23. delete via the edit menu (stored key): profile then credential removed,
+ *    both in transcript.
+ * 24. delete via the edit menu with an env-shadowed key: credential left
+ *    alone, env line pushed.
+ * 25. delete cancelled at the confirm: nothing removed.
+ * 26. a no-op base URL edit (empty input): nothing written, 'cancelled'.
+ * 27. custom-route model-list edit that ends up empty: rejected with the
+ *    required-models error, nothing written.
+ * 28. menu shape: built-in routes get key/models/delete only; custom routes
+ *    also get base URL and wire protocol.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -64,6 +77,9 @@ const CANCEL = new UserQuestionError('the user cancelled ask_user_question', 'AS
  *   { selected: [...] }        option answer
  *   { custom: '...' }          free-text answer
  *   'cancel'                   throw the panel's cancel error
+ *   [spec, spec, ...]          successive answers for a question asked more
+ *                              than once in a run; the last spec repeats if
+ *                              the list runs out
  * Discovery is stubbed via `options.discovered` (array) or
  * `options.discoverThrows`; env shadow via `options.shadow`.
  */
@@ -83,6 +99,16 @@ function makeDeps(script, options = {}) {
     optionDescriptions: {},
     /** question id → detail string, for confirm-summary regressions. */
     details: {},
+    /** question id → defaultSelected labels, for pre-check regressions. */
+    defaults: {},
+  }
+  const specCounters = {}
+  const specFor = id => {
+    const raw = script[id]
+    if (!Array.isArray(raw)) return raw
+    const index = Math.min(specCounters[id] ?? 0, raw.length - 1)
+    specCounters[id] = (specCounters[id] ?? 0) + 1
+    return raw[index]
   }
   const host = {
     listCatalogProviders: () => [
@@ -121,9 +147,10 @@ function makeDeps(script, options = {}) {
           (question.options ?? []).map(option => [option.label, option.description]),
         )
         calls.details[question.id] = question.detail
+        calls.defaults[question.id] = question.defaultSelected ?? []
         const spec = question.id === 'action' && script['action'] === undefined
           ? ACTION_ADD
-          : script[question.id]
+          : specFor(question.id)
         if (spec === undefined) throw new Error(`unscripted question: ${question.id}`)
         if (spec === 'cancel') throw CANCEL
         answers.push({
@@ -152,7 +179,12 @@ const CONFIRM_WRITE = { selected: [t('provider-opt-confirm-write')] }
 const KEEP_MODEL = { selected: [t('provider-opt-switch-keep')] }
 const ACTION_ADD = { selected: [t('provider-opt-action-add')] }
 const ACTION_EDIT = { selected: [t('provider-opt-action-edit')] }
-const ACTION_DELETE = { selected: [t('provider-opt-action-delete')] }
+// Edit-menu picks (asked exactly once per edit session).
+const MENU_KEY = { selected: [t('provider-opt-edit-key')] }
+const MENU_BASEURL = { selected: [t('provider-opt-edit-baseurl')] }
+const MENU_PROTOCOL = { selected: [t('provider-opt-edit-protocol')] }
+const MENU_MODELS = { selected: [t('provider-opt-edit-models')] }
+const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
 
 // 1. catalog happy path: discovery + narrowed models + switch declined.
 {
@@ -524,187 +556,309 @@ function oauthStub(behavior = {}) {
 }
 
 // 16. without host.oauth the mode question stays exactly two options and the
-// OAuth branch is unreachable (regression for the optional-plugin contract).
+// OAuth branch is unreachable (regression for the optional-plugin contract);
+// the action layer now offers exactly add / edit — delete moved into the
+// edit menu, so the delete option is absent at the top level.
 {
   const { deps, calls } = makeDeps({
     'mode': MODE_CATALOG,
     'catalog': 'cancel',
   })
   const outcome = await runProviderWizard(deps)
-  check('16 no oauth service: action offered all three choices',
-    Object.keys(calls.optionDescriptions.action ?? {}).length === 3,
-    JSON.stringify(Object.keys(calls.optionDescriptions.action ?? {})))
+  const actionLabels = Object.keys(calls.optionDescriptions.action ?? {})
+  check('16 no oauth service: action offers add/edit (delete gone)',
+    actionLabels.length === 2
+      && actionLabels.includes(t('provider-opt-action-add'))
+      && actionLabels.includes(t('provider-opt-action-edit')),
+    JSON.stringify(actionLabels))
   check('16 no oauth service: mode stayed two options',
     Object.keys(calls.optionDescriptions.mode ?? {}).length === 2,
     JSON.stringify(Object.keys(calls.optionDescriptions.mode ?? {})))
   check('16 no oauth service: catalog cancel still cancels', outcome === 'cancelled', outcome)
 }
 
-// 17. edit a catalog route, keeping the key: route/mode locked, no credential
-// write, profile overwritten, summary notes the unchanged key, outcome updated.
+// 17. edit a catalog route: only the model list changed. The models question
+// pre-checks the enabled models (defaultSelected), the profile is written
+// immediately (no confirm/switch), the key stays untouched.
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_EDIT,
     'edit-provider': { selected: ['deepseek'] },
-    'key-action': { selected: [t('provider-opt-key-keep')] },
-    'baseurl-choice': SKIP_BASEURL,
+    'edit-menu': MENU_MODELS,
     'models': { selected: ['deepseek-reasoner'] },
-    'confirm': CONFIRM_WRITE,
-    'switch': KEEP_MODEL,
   }, {
     configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, models: ['deepseek-chat'] }],
     discovered: [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }],
   })
   const outcome = await runProviderWizard(deps)
-  check('17 edit keep: outcome updated', outcome === 'updated', outcome)
-  check('17 edit keep: no credential write', eq(calls.credentials, []))
-  check('17 edit keep: profile overwritten',
+  check('17 edit models: outcome updated', outcome === 'updated', outcome)
+  check('17 edit models: no credential write', eq(calls.credentials, []))
+  check('17 edit models: profile overwritten with the new model list',
     eq(calls.profiles, [['deepseek', { apiKeyEnv: 'DEEPSEEK_API_KEY', models: [{ id: 'deepseek-reasoner' }] }]]),
     JSON.stringify(calls.profiles))
-  check('17 edit keep: mode/route questions never asked',
-    !calls.asks.includes('mode') && !calls.asks.includes('catalog') && !calls.asks.includes('route-id'))
-  check('17 edit keep: summary notes the kept key',
+  check('17 edit models: mode/route/key questions never asked',
+    !calls.asks.includes('mode') && !calls.asks.includes('catalog')
+      && !calls.asks.includes('route-id') && !calls.asks.includes('apikey'))
+  check('17 edit models: no confirm or switch after the targeted edit',
+    !calls.asks.includes('confirm') && !calls.asks.includes('switch'))
+  check('17 edit models: models question pre-checks the enabled models',
+    eq(calls.defaults.models, ['deepseek-chat']), JSON.stringify(calls.defaults.models))
+  check('17 edit models: menu asked exactly once',
+    calls.asks.filter(id => id === 'edit-menu').length === 1, JSON.stringify(calls.asks))
+  check('17 edit models: summary notes the kept key',
     calls.pushed[0]?.lines.includes(t('provider-line-key-kept', { ref: 'DEEPSEEK_API_KEY' })) === true,
     JSON.stringify(calls.pushed[0]?.lines))
 }
 
-// 18. edit a custom route, replacing the key: credential overwritten (with
-// rollback capture), edit framing on the confirm, outcome updated.
+// 18. edit a custom route, API key only: the credential is overwritten and
+// the profile is left untouched; the transcript notes the updated key.
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_EDIT,
     'edit-provider': { selected: ['acme-gateway'] },
-    'key-action': { selected: [t('provider-opt-key-replace')] },
+    'edit-menu': MENU_KEY,
     'apikey': { custom: 'sk-new' },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+    storedCredentials: { ACME_GATEWAY_API_KEY: 'sk-old' },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('18 edit key: outcome updated', outcome === 'updated', outcome)
+  check('18 edit key: credential overwritten',
+    eq(calls.credentials, [['ACME_GATEWAY_API_KEY', 'sk-new']]),
+    JSON.stringify(calls.credentials))
+  check('18 edit key: profile untouched', eq(calls.profiles, []), JSON.stringify(calls.profiles))
+  check('18 edit key: transcript notes the updated key',
+    calls.pushed[0]?.lines.includes(t('provider-line-key-updated', { ref: 'ACME_GATEWAY_API_KEY' })) === true,
+    JSON.stringify(calls.pushed[0]?.lines))
+}
+
+// 19. edit a custom route, base URL: the profile is rewritten with the new
+// endpoint, model capacities refreshed by a discovery, key kept.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_BASEURL,
     'baseurl': { custom: 'https://gw.example/v2' },
-    'protocol': { selected: ['openai-completions'] },
-    'models': { selected: ['acme-large'] },
-    'confirm': CONFIRM_WRITE,
-    'switch': KEEP_MODEL,
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+    discovered: [{ id: 'acme-large', contextWindow: 131072, maxTokens: 8192 }],
+    storedCredentials: { ACME_GATEWAY_API_KEY: 'sk-old' },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('19 edit baseURL: outcome updated', outcome === 'updated', outcome)
+  check('19 edit baseURL: profile rewritten with the new endpoint + capacities',
+    eq(calls.profiles, [['acme-gateway', {
+      apiKeyEnv: 'ACME_GATEWAY_API_KEY',
+      baseURL: 'https://gw.example/v2',
+      api: 'openai-completions',
+      models: [{ id: 'acme-large', contextWindow: 131072, maxTokens: 8192 }],
+    }]]),
+    JSON.stringify(calls.profiles))
+  check('19 edit baseURL: no credential write', eq(calls.credentials, []))
+}
+
+// 20. edit a custom route, wire protocol: the current protocol is
+// default-focused (defaultSelected) and the profile is rewritten on a new pick.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_PROTOCOL,
+    'protocol': { selected: ['anthropic-messages'] },
   }, {
     configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
     discovered: [{ id: 'acme-large' }],
     storedCredentials: { ACME_GATEWAY_API_KEY: 'sk-old' },
   })
   const outcome = await runProviderWizard(deps)
-  check('18 edit replace: outcome updated', outcome === 'updated', outcome)
-  check('18 edit replace: credential overwritten',
-    eq(calls.credentials, [['ACME_GATEWAY_API_KEY', 'sk-new']]),
-    JSON.stringify(calls.credentials))
-  check('18 edit replace: custom profile rewritten with new values',
+  check('20 edit protocol: outcome updated', outcome === 'updated', outcome)
+  check('20 edit protocol: current protocol is the default selection',
+    eq(calls.defaults.protocol, ['openai-completions']), JSON.stringify(calls.defaults.protocol))
+  check('20 edit protocol: profile rewritten with the new protocol',
     eq(calls.profiles, [['acme-gateway', {
       apiKeyEnv: 'ACME_GATEWAY_API_KEY',
-      baseURL: 'https://gw.example/v2',
-      api: 'openai-completions',
+      baseURL: 'https://gw.example/v1',
+      api: 'anthropic-messages',
       models: [{ id: 'acme-large' }],
     }]]),
     JSON.stringify(calls.profiles))
-  check('18 edit replace: confirm detail framed as an edit',
-    calls.details.confirm?.includes(t('provider-edit-note', { route: 'acme-gateway' })) === true,
-    JSON.stringify(calls.details.confirm))
 }
 
-// 19. edit a route whose key is env-shadowed: no key-action question, no
-// credential write, summary shows the env line.
+// 21. edit a shadowed-key route: "Edit API Key" refuses (the env provides
+// the key) → cancelled, nothing written.
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_EDIT,
     'edit-provider': { selected: ['deepseek'] },
-    'baseurl-choice': SKIP_BASEURL,
-    'models': { selected: ['deepseek-chat'] },
-    'confirm': CONFIRM_WRITE,
-    'switch': KEEP_MODEL,
+    'edit-menu': MENU_KEY,
   }, {
     configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: true, models: ['deepseek-chat'] }],
-    discovered: [{ id: 'deepseek-chat' }],
     shadow: 'DEEPSEEK_API_KEY',
   })
   const outcome = await runProviderWizard(deps)
-  check('19 edit shadow: outcome updated', outcome === 'updated', outcome)
-  check('19 edit shadow: key-action never asked', !calls.asks.includes('key-action'))
-  check('19 edit shadow: no credential write', eq(calls.credentials, []))
-  check('19 edit shadow: summary shows the env keyref line',
-    calls.pushed[0]?.lines.includes(t('provider-line-keyref-env', { ref: 'DEEPSEEK_API_KEY' })) === true,
-    JSON.stringify(calls.pushed[0]?.lines))
+  check('21 edit shadow: outcome cancelled', outcome === 'cancelled', outcome)
+  check('21 edit shadow: Edit API Key refused without asking for a key',
+    !calls.asks.includes('apikey')
+      && calls.notifications.some(n => n.color === 'warning' && n.text.includes('DEEPSEEK_API_KEY')),
+    JSON.stringify(calls.notifications))
+  check('21 edit shadow: nothing written',
+    eq(calls.credentials, []) && eq(calls.profiles, []))
 }
 
-// 20. edit with no configured providers: warning, nothing asked, cancelled.
+// 22. edit with no configured providers: warning, nothing asked, cancelled.
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_EDIT,
   }, { configured: [] })
   const outcome = await runProviderWizard(deps)
-  check('20 edit none: outcome cancelled', outcome === 'cancelled', outcome)
-  check('20 edit none: warning notified',
+  check('22 edit none: outcome cancelled', outcome === 'cancelled', outcome)
+  check('22 edit none: warning notified',
     calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-none-configured')),
     JSON.stringify(calls.notifications))
 }
 
-// 21. delete a catalog route: profile removed, then the credential removed,
-// transcript notes both, outcome deleted.
+// 23. delete via the edit menu, stored key: profile removed, then the
+// credential removed, transcript notes both, outcome deleted.
 {
   const { deps, calls } = makeDeps({
-    'action': ACTION_DELETE,
-    'delete-provider': { selected: ['deepseek'] },
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_DELETE,
     'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
   }, {
     configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, models: ['deepseek-chat'] }],
   })
   const outcome = await runProviderWizard(deps)
-  check('21 delete: outcome deleted', outcome === 'deleted', outcome)
-  check('21 delete: profile removed', eq(calls.removedProfiles, ['deepseek']), JSON.stringify(calls.removedProfiles))
-  check('21 delete: credential removed', eq(calls.removed, ['DEEPSEEK_API_KEY']), JSON.stringify(calls.removed))
-  check('21 delete: nothing written', eq(calls.profiles, []) && eq(calls.credentials, []))
-  check('21 delete: success notified', calls.notifications.some(n => n.color === 'success'))
-  check('21 delete: transcript notes the removed key',
+  check('23 delete: outcome deleted', outcome === 'deleted', outcome)
+  check('23 delete: profile removed', eq(calls.removedProfiles, ['deepseek']), JSON.stringify(calls.removedProfiles))
+  check('23 delete: credential removed', eq(calls.removed, ['DEEPSEEK_API_KEY']), JSON.stringify(calls.removed))
+  check('23 delete: nothing written', eq(calls.profiles, []) && eq(calls.credentials, []))
+  check('23 delete: success notified', calls.notifications.some(n => n.color === 'success'))
+  check('23 delete: transcript notes the removed key',
     calls.pushed[0]?.lines.includes(t('provider-line-deleted-key', { ref: 'DEEPSEEK_API_KEY' })) === true,
     JSON.stringify(calls.pushed[0]?.lines))
 }
 
-// 22. delete a route whose key is env-shadowed: profile removed, credential
+// 24. delete via the edit menu, env-shadowed key: profile removed, credential
 // left alone, transcript says the key came from the environment.
 {
   const { deps, calls } = makeDeps({
-    'action': ACTION_DELETE,
-    'delete-provider': { selected: ['deepseek'] },
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_DELETE,
     'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
   }, {
     configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: true, models: ['deepseek-chat'] }],
+    shadow: 'DEEPSEEK_API_KEY',
   })
   const outcome = await runProviderWizard(deps)
-  check('22 delete shadow: outcome deleted', outcome === 'deleted', outcome)
-  check('22 delete shadow: profile removed', eq(calls.removedProfiles, ['deepseek']), JSON.stringify(calls.removedProfiles))
-  check('22 delete shadow: credential NOT removed', eq(calls.removed, []), JSON.stringify(calls.removed))
-  check('22 delete shadow: transcript notes the env keyref',
+  check('24 delete shadow: outcome deleted', outcome === 'deleted', outcome)
+  check('24 delete shadow: profile removed', eq(calls.removedProfiles, ['deepseek']), JSON.stringify(calls.removedProfiles))
+  check('24 delete shadow: credential NOT removed', eq(calls.removed, []), JSON.stringify(calls.removed))
+  check('24 delete shadow: transcript notes the env keyref',
     calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-shadowed', { ref: 'DEEPSEEK_API_KEY' })) === true,
     JSON.stringify(calls.pushed[0]?.lines))
 }
 
-// 23. delete cancelled at the confirm: nothing removed.
+// 25. delete cancelled at the confirm: nothing removed.
 {
   const { deps, calls } = makeDeps({
-    'action': ACTION_DELETE,
-    'delete-provider': { selected: ['deepseek'] },
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_DELETE,
     'delete-confirm': { selected: [t('provider-opt-confirm-cancel')] },
   }, {
     configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, models: ['deepseek-chat'] }],
   })
   const outcome = await runProviderWizard(deps)
-  check('23 delete cancel: outcome cancelled', outcome === 'cancelled', outcome)
-  check('23 delete cancel: nothing removed',
+  check('25 delete cancel: outcome cancelled', outcome === 'cancelled', outcome)
+  check('25 delete cancel: nothing removed',
     eq(calls.removedProfiles, []) && eq(calls.removed, []))
 }
 
-// 24. delete with no configured providers: warning, outcome cancelled.
+// 26. a no-op base URL edit (empty input): nothing written, 'cancelled'.
 {
   const { deps, calls } = makeDeps({
-    'action': ACTION_DELETE,
-  }, { configured: [] })
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_BASEURL,
+    'baseurl': { custom: '' },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+  })
   const outcome = await runProviderWizard(deps)
-  check('24 delete none: outcome cancelled', outcome === 'cancelled', outcome)
-  check('24 delete none: warning notified',
-    calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-none-configured')),
+  check('26 no-op baseURL: outcome cancelled', outcome === 'cancelled', outcome)
+  check('26 no-op baseURL: no-changes notice notified',
+    calls.notifications.some(n => n.text === t('provider-edit-no-changes')),
     JSON.stringify(calls.notifications))
+  check('26 no-op baseURL: nothing written', eq(calls.profiles, []))
+}
+
+// 27. custom-route model-list edit that ends up empty is rejected — a manual
+// route needs at least one model, nothing written.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: [] },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+    discovered: [{ id: 'acme-large' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('27 custom empty models: outcome cancelled', outcome === 'cancelled', outcome)
+  check('27 custom empty models: required-models error notified',
+    calls.notifications.some(n => n.color === 'error' && n.text === t('provider-models-required')),
+    JSON.stringify(calls.notifications))
+  check('27 custom empty models: nothing written',
+    eq(calls.profiles, []) && eq(calls.credentials, []))
+}
+
+// 28. menu shape: built-in routes offer key/models/delete only; custom routes
+// also offer base URL and wire protocol.
+{
+  const { deps: depsCatalog, calls: callsCatalog } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_KEY,
+    'apikey': { custom: 'sk-x' },
+  }, {
+    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, models: ['deepseek-chat'] }],
+  })
+  const outcomeCatalog = await runProviderWizard(depsCatalog)
+  const catalogLabels = Object.keys(callsCatalog.optionDescriptions['edit-menu'] ?? {})
+  check('28 menu shape: built-in route offers key/models/delete only',
+    outcomeCatalog === 'updated'
+      && eq(catalogLabels, [
+        t('provider-opt-edit-key'),
+        t('provider-opt-edit-models'),
+        t('provider-opt-edit-delete'),
+      ]),
+    JSON.stringify(catalogLabels))
+
+  const { deps: depsCustom, calls: callsCustom } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_KEY,
+    'apikey': { custom: 'sk-x' },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+  })
+  const outcomeCustom = await runProviderWizard(depsCustom)
+  const customLabels = Object.keys(callsCustom.optionDescriptions['edit-menu'] ?? {})
+  check('28 menu shape: custom route also offers base URL + wire protocol',
+    outcomeCustom === 'updated'
+      && eq(customLabels, [
+        t('provider-opt-edit-key'),
+        t('provider-opt-edit-baseurl'),
+        t('provider-opt-edit-protocol'),
+        t('provider-opt-edit-models'),
+        t('provider-opt-edit-delete'),
+      ]),
+    JSON.stringify(customLabels))
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)
