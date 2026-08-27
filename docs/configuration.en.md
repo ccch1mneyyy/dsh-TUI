@@ -188,11 +188,12 @@ restart. The first step picks an action:
 - **Edit an existing provider**: pick one of the configured routes, then edit
   it through a menu. Built-in routes offer **Edit API Key**, **Edit model
   list**, and **Delete this provider**; custom endpoints additionally get
-  **Edit Base URL** and **Edit wire protocol**. Picking any item applies it
-  immediately and exits — no further confirmation. "Edit model list"
-  pre-checks the models you already enabled; "Delete this provider" removes
-  the profile and the API key after a confirmation (an environment-provided
-  key is left untouched — only the configuration is deleted).
+  **Edit Base URL** and **Edit wire protocol**. Any edit applies immediately
+  and exits — no further confirmation. "Edit model list" pre-checks the
+  models you already enabled. "Delete this provider" is the one exception and
+  asks for confirmation before removing the profile and the API key (an
+  environment-provided key is left untouched — only the configuration is
+  deleted).
 
 The **add** branch offers two sources:
 

@@ -564,6 +564,13 @@ async function editApiKey(
   provider: ConfiguredProvider,
 ): Promise<ProviderWizardOutcome> {
   const { ask, notify, pushLocal, host } = deps
+  if (provider.ref === '') {
+    // No apiKeyEnv in the stored profile (externally-edited / legacy route):
+    // there is no persisted credential to replace, so a store write under an
+    // empty ref would never be read at request time.
+    notify(t('provider-key-no-ref', { route: provider.route }), { color: 'warning' })
+    return 'cancelled'
+  }
   if (provider.shadowed) {
     // The environment provides the key: it cannot be edited from here and
     // a store write would never be read at request time anyway.
@@ -603,12 +610,16 @@ async function rewriteProfile(
   change: { baseURL?: string; api?: string },
 ): Promise<ProviderWizardOutcome> {
   const { host, notify, pushLocal } = deps
-  const keyLine = t('provider-line-key-kept', { ref: provider.ref })
+  const keyLine = provider.ref !== ''
+    ? t('provider-line-key-kept', { ref: provider.ref })
+    : t('provider-line-key-none')
   const baseURL = change.baseURL ?? provider.baseURL
   const api = change.api ?? provider.api ?? 'openai-completions'
   notify(t('provider-discovery-running'))
   const discoveredById = await (async () => {
-    const key = provider.shadowed ? process.env[provider.ref] : await host.readCredential(provider.ref)
+    const key = provider.ref !== ''
+      ? (provider.shadowed ? process.env[provider.ref] : await host.readCredential(provider.ref))
+      : undefined
     const discovered = await host.discoverModels({
       ...(provider.api === undefined ? { provider: provider.route } : {}),
       ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
@@ -698,7 +709,9 @@ async function editModelList(
   const { host, ask, notify, pushLocal } = deps
   const isCatalog = provider.api === undefined
   const previous = provider.models ?? []
-  const key = provider.shadowed ? process.env[provider.ref] : await host.readCredential(provider.ref)
+  const key = provider.ref !== ''
+    ? (provider.shadowed ? process.env[provider.ref] : await host.readCredential(provider.ref))
+    : undefined
   notify(t('provider-discovery-running'))
   const discovered = await host.discoverModels({
     ...(isCatalog ? { provider: provider.route } : {}),
@@ -764,7 +777,9 @@ async function editModelList(
     api: provider.api,
     models,
     isCatalog,
-    keyLine: t('provider-line-key-kept', { ref: provider.ref }),
+    keyLine: provider.ref !== ''
+      ? t('provider-line-key-kept', { ref: provider.ref })
+      : t('provider-line-key-none'),
   }))
   notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
   return 'updated'
@@ -989,7 +1004,10 @@ function buildProfile(input: {
   models: readonly string[]
   discoveredById: ReadonlyMap<string, LlmDiscoveredModel>
 }): Record<string, unknown> {
-  const profile: Record<string, unknown> = { apiKeyEnv: input.ref }
+  const profile: Record<string, unknown> = {}
+  // Preserve the profile's credential shape: an empty ref (no apiKeyEnv)
+  // must not be rewritten as `apiKeyEnv: ''`.
+  if (input.ref !== '') profile['apiKeyEnv'] = input.ref
   if (input.baseURL !== undefined && input.baseURL !== '') profile['baseURL'] = input.baseURL
   if (input.isCatalog) {
     // `models` replaces the catalog when present; omit it to keep the whole

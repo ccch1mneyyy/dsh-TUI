@@ -961,6 +961,8 @@ const dict = {
   'provider-opt-edit-delete': { zh: '删除该 provider', en: 'Delete this provider' },
   'provider-opt-edit-delete-desc': { zh: '移除配置与 API key', en: 'Remove the configuration and the API key' },
   'provider-key-env-not-editable': { zh: '{{route}} 的 API key 来自环境变量（{{ref}}），无法在此修改', en: '{{route}}’s API key comes from the environment ({{ref}}) and cannot be edited here' },
+  'provider-key-no-ref': { zh: '{{route}} 未配置密钥引用（没有可持久化的 API key），无法在此修改', en: '{{route}} has no credential ref (no persisted API key) and cannot be edited here' },
+  'provider-line-key-none': { zh: '密钥：未配置（无密钥引用，环境提供时按需读取）', en: 'Key: none configured (no credential ref; resolved from environment when present)' },
   'provider-key-empty': { zh: 'API key 不能为空，未作修改', en: 'API key cannot be empty — no change made' },
   'provider-edit-no-changes': { zh: '没有做任何修改', en: 'No changes made' },
   'provider-line-key-kept': { zh: '密钥：保持不变（{{ref}}）', en: 'Key: unchanged ({{ref}})' },

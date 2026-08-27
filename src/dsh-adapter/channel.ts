@@ -2516,10 +2516,16 @@ export function createChannel(
   const modelNodeCache = {
     nodes: undefined as readonly CommandCompletionNode[] | undefined,
     load: undefined as Promise<void> | undefined,
+    // Monotonic load generation. dropModelNodeCache bumps it so a warm that
+    // was already in flight when the cache was dropped cannot publish its
+    // stale catalog on resolve — only the newest load may write nodes.
+    generation: 0,
   }
   const warmModelNodes = (): void => {
     if (modelNodeCache.load !== undefined) return
+    const generation = modelNodeCache.generation
     modelNodeCache.load = state.listModels().then((list) => {
+      if (generation !== modelNodeCache.generation) return
       modelNodeCache.nodes = list.map((model) => ({
         name: `${model.provider}/${model.id}`,
         description: model.name,
@@ -2529,6 +2535,7 @@ export function createChannel(
       }))
       state.emit()
     }).catch(() => {
+      if (generation !== modelNodeCache.generation) return
       // listModels already swallows per-provider failures; this only fires
       // when the llm service shape itself is missing — settle on an empty
       // menu rather than retrying on every keystroke.
@@ -2542,6 +2549,7 @@ export function createChannel(
    *  (add / edit / delete / OAuth sign-in-out) invalidate it, so completion
    *  always matches what the picker would list. */
   const dropModelNodeCache = (): void => {
+    modelNodeCache.generation += 1
     modelNodeCache.nodes = undefined
     modelNodeCache.load = undefined
   }
@@ -4807,7 +4815,12 @@ export function createChannel(
             | undefined
           const providers = section?.providers
           if (providers === undefined) return []
-          return Object.entries(providers).map(([route, profile]) => {
+          return Object.entries(providers).flatMap(([route, profile]) => {
+            // The settings section is user-editable, so a `providers.<route>`
+            // entry may be null or a scalar; skip anything that is not a plain
+            // object instead of dereferencing it and throwing (which would
+            // block the edit/delete menu for every route).
+            if (typeof profile !== 'object' || profile === null) return []
             const ref = typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : ''
             const baseURL = typeof profile.baseURL === 'string' && profile.baseURL !== ''
               ? profile.baseURL
@@ -4822,14 +4835,14 @@ export function createChannel(
                 return typeof id === 'string' ? [id] : []
               })
               : undefined
-            return {
+            return [{
               route,
               ref,
               shadowed: ref !== '' && process.env[ref] !== undefined,
               ...(baseURL !== undefined ? { baseURL } : {}),
               ...(api !== undefined ? { api } : {}),
               ...(models !== undefined ? { models } : {}),
-            }
+            }]
           })
         },
         discoverModels(request) {
