@@ -228,6 +228,10 @@ const GROUPS = {
 // vim 编辑模式回归（/vim 命令 + normal/insert 键位 + 徽标 + 撤销栈 +
 // insert Esc 让位回合打断）。
     ["verify-vim-mode", ['node', 'scripts/verify-vim-mode.mjs']],
+// 输入框鼠标选区编辑回归（drag 协议消费者）：SGR 拖选/Shift+click 扩展/
+// 双击选词自检测/Backspace/Delete 删选区/打字替换/Esc 分层/Ctrl+C 经
+// Chat→控制器复制选区、CJK 宽字符显示列与 fold block 侧钳制。
+    ["verify-input-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-input-selection.tsx']],
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],

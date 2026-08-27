@@ -2798,6 +2798,12 @@ export function Chat({
           exitPendingRef.current = false
           if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
         }
+      } else if (input === 'c' && promptControllerRef.current?.consumeSelectionCopy()) {
+        // A mouse selection is active: Ctrl+C copies it to the clipboard
+        // (via the prompt controller — Chat's listener registers first) and
+        // KEEPS the selection for further editing. The key is consumed.
+        exitPendingRef.current = false
+        if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
       } else if (input === 'c' && promptControllerRef.current?.hasText()) {
         promptControllerRef.current.clear()
         // A pending exit arm no longer makes sense once the user is editing.
