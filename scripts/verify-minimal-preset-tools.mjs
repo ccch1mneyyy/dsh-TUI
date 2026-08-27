@@ -32,17 +32,26 @@ const bundledSkills = [{
   description: 'Audit code',
   invocation: { modelInvocable: true, userInvocable: true },
   source: 'bundled',
+}, {
+  name: 'manual-only',
+  description: 'Manual only',
+  invocation: { modelInvocable: false, userInvocable: true },
+  source: 'bundled',
 }]
 
-async function loadedContextWith(tools) {
+async function loadedContextWith(tools, complete = true) {
   let unscopedReads = 0
   const skills = {
     async list() {
       unscopedReads += 1
       return bundledSkills
     },
-    async snapshot() {
-      return { skills: bundledSkills, complete: true }
+    async snapshot(options) {
+      if (options?.scope !== agent || options.cwd !== '/tmp') {
+        unscopedReads += 1
+        return { skills: [], complete: true }
+      }
+      return { skills: bundledSkills, complete }
     },
   }
   const ctx = {
@@ -76,7 +85,12 @@ assert.deepEqual(minimalContext.context.skills, [])
 assert.equal(minimalContext.unscopedReads, 0)
 
 const standardContext = await loadedContextWith([bash, editor, { name: 'skill' }])
-assert.deepEqual(standardContext.context.skills, bundledSkills.map(({ name, description }) => ({ name, description })))
+assert.deepEqual(standardContext.context.skills, [{ name: 'audit', description: 'Audit code' }])
 assert.equal(standardContext.unscopedReads, 0)
+
+const incompleteContext = await loadedContextWith([bash, editor, { name: 'skill' }], false)
+assert.deepEqual(incompleteContext.context.skills, [])
+assert.deepEqual(incompleteContext.context.tools.map(tool => tool.name), ['bash', 'str_replace_editor', 'skill'])
+assert.equal(incompleteContext.unscopedReads, 0)
 
 console.log('minimal preset tool filtering verified')

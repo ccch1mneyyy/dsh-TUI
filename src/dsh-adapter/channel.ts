@@ -5375,11 +5375,12 @@ export function createChannel(
       if (skillsRegistry !== undefined) {
         const observation = await skillsRegistry.snapshot(skillViewOptions(target))
         if (target !== agent) return
-        if (!observation.complete) return
-        skills.push(...observation.skills.filter(isModelInvocable).map(skill => ({
-          name: skill.name,
-          description: skill.description,
-        })))
+        if (observation.complete) {
+          skills.push(...observation.skills.filter(isModelInvocable).map(skill => ({
+            name: skill.name,
+            description: skill.description,
+          })))
+        }
       }
     } catch (error) {
       ctx.logger.warn('loaded-context snapshot failed: %o', error)
