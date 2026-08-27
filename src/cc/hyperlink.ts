@@ -19,6 +19,34 @@ type HyperlinkOptions = {
   style?: (text: string) => string
 }
 
+/** Schemes a rendered hyperlink may point at. Anything else degrades to
+ * plain display text: link targets come from model output and file
+ * contents, and an arbitrary scheme would reach the OS handler on click. */
+const HYPERLINK_SCHEMES = new Set(['http:', 'https:', 'dsh-file:', 'file:', 'mailto:'])
+
+// Control characters never legitimately appear in a URL; stripping them
+// before the scheme check keeps `java\x00script:` from passing as a
+// relative reference and keeps the embedded URL 7-bit clean (the osc()
+// exit strips again — this is the entry side of the same defense). Spaces
+// are stripped for the scheme check but preserved as %20 in the embedded
+// URL — deleting them would retarget `file:///C:/My Project/x`.
+const URL_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g
+
+function sanitizeHyperlinkUrl(raw: string): string | null {
+  const stripped = raw.replace(URL_CONTROL_CHARS, '')
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(stripped)
+  if (scheme === null) return null
+  if (!HYPERLINK_SCHEMES.has(`${scheme[1].toLowerCase()}:`)) return null
+  return stripped.replaceAll(' ', '%20')
+}
+
+// Display text keeps spaces (legitimate in link labels) but drops every
+// other control character: an OSC 8 sequence smuggled into `content` would
+// survive the plain-text wrap verbatim, hijack cell.hyperlink after
+// tokenize, and repaint a phish link over the legitimate URL.
+// Same set minus the space.
+const DISPLAY_TEXT_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g
+
 /**
  * Create a clickable hyperlink using OSC 8 escape sequences.
  * Falls back to plain text if the terminal doesn't support hyperlinks.
@@ -36,14 +64,23 @@ export function createHyperlink(
   options?: HyperlinkOptions,
 ): string {
   const hasSupport = options?.supportsHyperlinks ?? supportsHyperlinks()
-  if (!hasSupport) {
-    return url
+  const safeUrl = sanitizeHyperlinkUrl(url)
+  // Sanitized up front so BOTH degrade paths emit clean text too: non-TTY
+  // and log destinations bypass the cell-layer escape stripping, so a raw
+  // url/content with control characters would escape there.
+  const safeContent = content?.replace(DISPLAY_TEXT_CONTROL_CHARS, '')
+  if (!hasSupport || safeUrl === null) {
+    // Degrade to the plain display text — for a rejected scheme that is
+    // the content alone (never the raw url: `javascript:...` must not
+    // reach the screen either), for a supported terminal it is the
+    // control-stripped url (safeUrl).
+    return safeUrl === null ? (safeContent ?? '') : safeUrl
   }
 
   // Apply basic ANSI blue color - wrap-ansi preserves this across line breaks
   // RGB colors (like theme colors) are NOT preserved by wrap-ansi with OSC 8
-  const displayText = content ?? url
+  const displayText = safeContent ?? safeUrl
   const style = options?.style ?? ((text: string) => chalk.blue(text))
   const coloredText = style(displayText)
-  return `${OSC8_START}${url}${OSC8_END}${coloredText}${OSC8_START}${OSC8_END}`
+  return `${OSC8_START}${safeUrl}${OSC8_END}${coloredText}${OSC8_START}${OSC8_END}`
 }

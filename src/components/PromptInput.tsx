@@ -71,6 +71,59 @@ function wordBoundaryRight(text: string, cursor: number): number {
   return index
 }
 
+// --- vim normal-mode helpers -----------------------------------------------
+// `/vim` 编辑模式的 normal 键位几何：行/词移动与删除目标。空白分词
+// （不区分 vim 的 word/WORD），对输入框场景足够且行为直观。
+
+/** Offset of the current line's first character. */
+function vimLineStart(text: string, cursor: number): number {
+  return text.lastIndexOf('\n', cursor - 1) + 1
+}
+
+/** Offset of the current line's last character (exclusive, no '\n'). */
+function vimLineEnd(text: string, cursor: number): number {
+  const next = text.indexOf('\n', cursor)
+  return next === -1 ? text.length : next
+}
+
+/** Offset of the line's first non-whitespace character (`^`). */
+function vimLineFirstNonBlank(text: string, cursor: number): number {
+  const start = vimLineStart(text, cursor)
+  const end = vimLineEnd(text, cursor)
+  let i = start
+  while (i < end && /\s/.test(text[i]!)) i++
+  return i
+}
+
+/** Next word start (`w`): skip the rest of the current word, then leading
+ *  whitespace. Whitespace-delimited, vim-style. */
+function vimWordForward(text: string, cursor: number): number {
+  const len = text.length
+  let i = cursor
+  if (i < len && !/\s/.test(text[i]!)) {
+    while (i < len && !/\s/.test(text[i]!)) i++
+  }
+  while (i < len && /\s/.test(text[i]!)) i++
+  return i
+}
+
+/** Previous word start (`b`): from inside a word, its own start; from
+ *  whitespace, the preceding word's start. */
+function vimWordBackward(text: string, cursor: number): number {
+  let i = cursor
+  while (i > 0 && /\s/.test(text[i - 1]!)) i--
+  while (i > 0 && !/\s/.test(text[i - 1]!)) i--
+  return i
+}
+
+/** End of the current word (`dw`): the whitespace boundary after `cursor`. */
+function vimWordEnd(text: string, cursor: number): number {
+  const len = text.length
+  let i = cursor
+  while (i < len && !/\s/.test(text[i]!)) i++
+  return i
+}
+
 // --- grapheme-cluster geometry ---------------------------------------------
 // The caret, editing keys, and wrapping MUST agree on one text unit. Mixing
 // UTF-16 code units (arrows/backspace), code points (wrap), and display
@@ -173,6 +226,11 @@ const MAX_VISIBLE_LINES = 5
 export interface PromptController {
   hasText(): boolean
   clear(): void
+  /** Toggle vim editing mode (`/vim`); returns the new state (true = on). */
+  toggleVim(): boolean
+  /** True while vim mode is on (either submode). Esc belongs to vim then —
+   *  Chat's working-turn Esc interrupt must yield in BOTH submodes. */
+  vimActive(): boolean
 }
 
 export interface PromptInputProps {
@@ -246,6 +304,23 @@ export function PromptInput({
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
   /**
+   * vim editing mode (`/vim` toggle): when on, Esc switches the prompt to
+   * its NORMAL submode where bare keys are vim keys instead of text, and
+   * i/a/o (…) return to INSERT. Enabled in insert mode so the transition
+   * is seamless; the mode is session-scoped (not persisted).
+   */
+  const [vimEnabled, setVimEnabled] = React.useState(false)
+  /** Insert submode (false = vim NORMAL). */
+  const [vimInsert, setVimInsert] = React.useState(true)
+  const vimEnabledRef = React.useRef(false)
+  const vimInsertRef = React.useRef(true)
+  vimEnabledRef.current = vimEnabled
+  vimInsertRef.current = vimInsert
+  /** Undo stack: vim editing ops push {value, cursor}; `u` pops. */
+  const vimUndoRef = React.useRef<Array<{ value: string; cursor: number }>>([])
+  /** Pending vim operator: `d` pressed, awaiting its second key. */
+  const vimPendingRef = React.useRef<'' | 'd'>('')
+  /**
    * CC-style fold block: the [start, end) span of `value` that renders as
    * a one-line chip while the text around it stays fully editable. Created
    * by a big paste; only an EXPLICIT expand (chip/card click, Esc) or
@@ -284,6 +359,21 @@ export function PromptInput({
         setValue('')
         setCursor(0)
       },
+      toggleVim: () => {
+        const next = !vimEnabledRef.current
+        vimEnabledRef.current = next
+        setVimEnabled(next)
+        // Every toggle lands in INSERT: a fresh vim user keeps typing
+        // normally until they press Esc for the first time. Turning the
+        // mode off also clears the undo stack — a later re-enable must
+        // never `u` its way back past edits made while vim was off.
+        vimInsertRef.current = true
+        setVimInsert(true)
+        vimPendingRef.current = ''
+        vimUndoRef.current = []
+        return next
+      },
+      vimActive: () => vimEnabledRef.current,
     }
     return () => {
       controllerRef.current = null
@@ -821,8 +911,8 @@ export function PromptInput({
         }
       }
       if (channel.working && value.trim() !== '') {
-        // CC's immediate-command semantics: /btw is exempt from steering —
-        // the side question never interrupts the running turn. Hidden
+        // CC's immediate-command semantics: /btw and /skills are exempt from
+        // steering — neither command interrupts the running turn. Hidden
         // UI-only easter eggs (e.g. /deepseek) are also safe to run while
         // streaming. Every other input keeps the steer behavior so /new
         // /model etc. stay idle-only.
@@ -830,9 +920,8 @@ export function PromptInput({
         const name = parsed === undefined
           ? undefined
           : normalizeLocalCommandName(parsed.name, channel.commandList)
-        if (name === 'btw' || (name !== undefined && isHiddenCommandName(name))) {
-          tryRunCommand(value)
-          return
+        if (name === 'btw' || name === 'skills' || (name !== undefined && isHiddenCommandName(name))) {
+          if (tryRunCommand(value)) return
         }
         steerSend(value)
         return
@@ -1175,6 +1264,251 @@ export function PromptInput({
       setInput(value.slice(0, clipped) + value.slice(cursor), clipped)
       return
     }
+    // ── vim mode (`/vim`) ──────────────────────────────────────────────
+    // INSERT submode: only Esc is intercepted (back to NORMAL — the usual
+    // clear/rewind Esc semantics stay disabled while vim is on).
+    // NORMAL submode: bare characters and Esc are vim keys; help/command/
+    // file overlays, modified combos, Tab, Enter, arrows and other
+    // structured keys keep their existing handlers.
+    const vimNormalEdit = (next: string, cursorOffset: number) => {
+      updateFoldBlock(null)
+      setInput(next, cursorOffset)
+      setSelectedCommand(0)
+      setFileSelected(0)
+    }
+    const vimPushUndo = () => {
+      if (vimUndoRef.current.length >= 100) vimUndoRef.current.shift()
+      vimUndoRef.current.push({ value: valueRef.current, cursor: cursorRef.current })
+    }
+    const handleVimNormal = (input: string) => {
+      // One stdin batch can merge several bare keys into a single event
+      // (fast typing), so re-read the synchronous mirrors and recompute
+      // the grapheme boundaries: every key in the batch operates on the
+      // text/caret its predecessor produced (the outer `value`/`cursor`/
+      // `bounds` reflect only the batch's first key).
+      const value = valueRef.current
+      const cursor = cursorRef.current
+      const bounds = graphemeBoundaries(value)
+      const pending = vimPendingRef.current
+      vimPendingRef.current = ''
+      // Operator pending (`d`): the second key picks the target.
+      if (pending === 'd') {
+        switch (input) {
+          case 'd': { // delete the whole line, newline included (vim `dd`);
+            // the last line has no newline — its content is cleared
+            vimPushUndo()
+            const lineStart = vimLineStart(value, cursor)
+            const lineEnd = vimLineEnd(value, cursor)
+            const end = lineEnd < value.length ? lineEnd + 1 : lineEnd
+            vimNormalEdit(value.slice(0, lineStart) + value.slice(end), lineStart)
+            return
+          }
+          case '$': { // delete to end of line
+            vimPushUndo()
+            const end = vimLineEnd(value, cursor)
+            vimNormalEdit(value.slice(0, cursor) + value.slice(end), cursor)
+            return
+          }
+          case '0':
+          case '^': { // delete to start of line
+            vimPushUndo()
+            const start =
+              input === '^' ? vimLineFirstNonBlank(value, cursor) : vimLineStart(value, cursor)
+            vimNormalEdit(value.slice(0, start) + value.slice(cursor), start)
+            return
+          }
+          case 'w': { // delete to end of word
+            vimPushUndo()
+            const end = vimWordEnd(value, cursor)
+            vimNormalEdit(value.slice(0, cursor) + value.slice(end), cursor)
+            return
+          }
+          default:
+            return // unrecognized second key: cancel the operator, drop it
+        }
+      }
+      switch (input) {
+        case 'h':
+          setInput(value, previousGraphemeBoundary(bounds, cursor))
+          return
+        case 'l':
+          setInput(value, nextGraphemeBoundary(bounds, cursor))
+          return
+        case 'j': { // down one line (single-line input: no-op)
+          const line = cursorLine(value, cursor)
+          const lines = value.split('\n')
+          if (line >= lines.length - 1) return
+          const col = Math.min(cursorColumn(value, cursor), (lines[line + 1] ?? '').length)
+          setInput(value, vimLineEnd(value, cursor) + 1 + col)
+          return
+        }
+        case 'k': { // up one line
+          const line = cursorLine(value, cursor)
+          if (line <= 0) return
+          const lines = value.split('\n')
+          const col = Math.min(cursorColumn(value, cursor), (lines[line - 1] ?? '').length)
+          const prevStart = vimLineStart(value, vimLineStart(value, cursor) - 1)
+          setInput(value, prevStart + col)
+          return
+        }
+        case '0': {
+          setInput(value, vimLineStart(value, cursor))
+          return
+        }
+        case '^': {
+          setInput(value, vimLineFirstNonBlank(value, cursor))
+          return
+        }
+        case '$': {
+          setInput(value, vimLineEnd(value, cursor))
+          return
+        }
+        case 'w':
+          setInput(value, vimWordForward(value, cursor))
+          return
+        case 'b':
+          setInput(value, vimWordBackward(value, cursor))
+          return
+        case 'x': { // delete the character at the caret; at the very end of
+          // the text delete the last character (vim: the caret sits ON the
+          // last char after `$`, so `x` must still delete it). Same rule
+          // when the caret sits right before a '\n' mid-draft — after `$`
+          // the caret is on the line's last char, `x` must delete THAT
+          // char, not the newline (which would join the lines).
+          if (cursor > 0 && (cursor === value.length || value[cursor] === '\n')) {
+            const start = previousGraphemeBoundary(bounds, cursor)
+            vimPushUndo()
+            vimNormalEdit(value.slice(0, start) + value.slice(cursor), start)
+            return
+          }
+          const end = nextGraphemeBoundary(bounds, cursor)
+          if (end === cursor) return
+          vimPushUndo()
+          vimNormalEdit(value.slice(0, cursor) + value.slice(end), cursor)
+          return
+        }
+        case 'X': { // delete the character before the caret
+          if (cursor === 0) return
+          const start = previousGraphemeBoundary(bounds, cursor)
+          vimPushUndo()
+          vimNormalEdit(value.slice(0, start) + value.slice(cursor), start)
+          return
+        }
+        case 'd':
+          vimPendingRef.current = 'd'
+          return
+        case 'u': { // undo the last vim edit
+          const prev = vimUndoRef.current.pop()
+          if (prev === undefined) return
+          updateFoldBlock(null)
+          setInput(prev.value, prev.cursor)
+          setSelectedCommand(0)
+          setFileSelected(0)
+          return
+        }
+        case 'i': // insert at the caret
+          vimInsertRef.current = true
+          setVimInsert(true)
+          return
+        case 'I': { // insert at the line's first non-blank (vim `I`)
+          setInput(value, vimLineFirstNonBlank(value, cursor))
+          vimInsertRef.current = true
+          setVimInsert(true)
+          return
+        }
+        case 'a': { // insert after the caret
+          setInput(value, nextGraphemeBoundary(bounds, cursor))
+          vimInsertRef.current = true
+          setVimInsert(true)
+          return
+        }
+        case 'A': { // insert at the line end
+          setInput(value, vimLineEnd(value, cursor))
+          vimInsertRef.current = true
+          setVimInsert(true)
+          return
+        }
+        case 'o': { // new line below, then insert
+          vimPushUndo()
+          const end = vimLineEnd(value, cursor)
+          vimNormalEdit(value.slice(0, end) + '\n' + value.slice(end), end + 1)
+          vimInsertRef.current = true
+          setVimInsert(true)
+          return
+        }
+        case 'O': { // new line above, then insert
+          vimPushUndo()
+          const start = vimLineStart(value, cursor)
+          vimNormalEdit(value.slice(0, start) + '\n' + value.slice(start), start)
+          vimInsertRef.current = true
+          setVimInsert(true)
+          return
+        }
+        default:
+          return // unrecognized key: ignored (never inserts in NORMAL)
+      }
+    }
+    if (vimEnabledRef.current) {
+      if (vimInsertRef.current) {
+        // INSERT: Esc returns to NORMAL instead of the clear/rewind path.
+        if (key.escape && !helpOpen && !overlayOpen && !fileOverlayOpen) {
+          event.stopImmediatePropagation()
+          vimInsertRef.current = false
+          setVimInsert(false)
+          return
+        }
+      } else if (!helpOpen && !overlayOpen && !fileOverlayOpen) {
+        if (key.escape) {
+          // NORMAL: Esc cancels a pending operator and otherwise no-ops
+          // (the clear/rewind double-Esc semantics belong to non-vim mode).
+          vimPendingRef.current = ''
+          event.stopImmediatePropagation()
+          return
+        }
+        const plainChar =
+          input.length > 0 &&
+          !key.ctrl && !key.meta && !key.super && !key.tab && !key.return
+        if (plainChar) {
+          // `?` on an empty input falls through to the help shortcut below.
+          if (input === '?' && value.length === 0) return
+          // `/` opens the slash-command menu even in NORMAL: insert it and
+          // switch to INSERT so the rest of the command types normally
+          // (the menu then owns the keys while it is open).
+          if (input === '/') {
+            const text = valueRef.current
+            const pos = cursorRef.current
+            const next = text.slice(0, pos) + '/' + text.slice(pos)
+            setInput(next, pos + 1)
+            setSelectedCommand(0)
+            setFileSelected(0)
+            vimInsertRef.current = true
+            setVimInsert(true)
+            return
+          }
+          event.stopImmediatePropagation()
+          // A merged multi-char event (fast typing) is one vim key per
+          // character — handleVimNormal re-reads the refs each call, so a
+          // batch like `dd` works exactly like two separate keypresses.
+          // Once a key switches back to INSERT (i/a/o/…), the remaining
+          // characters of the batch are ordinary typing and insert as text.
+          for (let i = 0; i < input.length; i++) {
+            if (vimInsertRef.current) {
+              const rest = input.slice(i)
+              const text = valueRef.current
+              const pos = cursorRef.current
+              const next = text.slice(0, pos) + rest + text.slice(pos)
+              setInput(next, pos + rest.length)
+              setSelectedCommand(0)
+              setFileSelected(0)
+              break
+            }
+            handleVimNormal(input[i]!)
+          }
+          return
+        }
+      }
+    }
+
     if (key.escape) {
       if (helpOpen) {
         onToggleHelp()
@@ -1263,7 +1597,11 @@ export function PromptInput({
   // Narrow terminals: the usable width follows the real terminal down to a
   // single column — a fixed floor of 10 would wrap far too early and park
   // the declared cursor past the value box's actual width.
-  const inputWidth = Math.max(1, columns - 3)
+  // The vim badge ('INSERT '/'NORMAL ', 7 cols) sits BEFORE the value box in
+  // the same row, so the wrap budget must shrink by its width or long lines
+  // would be clipped at the value box's right edge.
+  const vimBadgeCols = vimEnabled ? 7 : 0
+  const inputWidth = Math.max(1, columns - 3 - vimBadgeCols)
   const block = foldBlock
   // Fold-block model: the value renders as [head rows][chip row][tail rows]
   // — the block is ONE atomic visual row regardless of its text size; text
@@ -1698,6 +2036,10 @@ export function PromptInput({
             levels={channel.effortLevels}
             working={channel.working}
           />
+          {vimEnabled && (
+            <Text bold color={vimInsert ? 'success' : 'warning'}>
+              {vimInsert ? 'INSERT' : 'NORMAL'} </Text>
+          )}
           <Box
             ref={valueBoxRef}
             flexGrow={1}

@@ -108,6 +108,7 @@ dsh-tui
 | `↑` / `↓` | 多行时行间移动；单行时浏览输入历史（50 条） |
 | `Ctrl+V`（⌘V）/ `Alt+V` | 粘贴：文本 / 文件路径（图片自动 `@` 引用）/ 剪贴板位图（`[Image #N]` 附件）；终端拦截 `Ctrl+V` 时用 `Alt+V` |
 | `Ctrl+G` | 用 `$VISUAL`/`$EDITOR` 外部编辑器编辑输入（`:cq` 保留原稿；未设置变量时提示配置） |
+| `/vim` | **vim 编辑模式开关**（会话级、不持久化）：开启后输入框显示 `INSERT` 徽标，`Esc` 切 `NORMAL`，`i/I/a/A/o/O` 回 INSERT。NORMAL 下：`h/l` 左右、`j/k` 上下行、`0/^/$` 行首/首个非空/行尾、`w/b` 词间移动、`x/X` 删字符、`d` 待第二键（`dd` 删整行含换行 / `d$` 删至行尾 / `d0`、`d^` 删至行首 / `dw` 删至词尾）、`u` 撤销、`/` 打开命令菜单、`?` 空输入开帮助、`Enter` 发送照常；未识别键忽略（不插入）。normal 下 `Esc` 无操作，清空用 `Ctrl+C` 或 `dd` |
 | 右键 / `Ctrl+Shift+V` | 终端原生粘贴（含换行原样插入） |
 | `Esc`（输入框） | 层级：关帮助 → 关命令菜单 → 关文件菜单（仅当前 `@` token）→ 中断重投 → 有输入清空 → 双击=时间回溯 |
 | 双击 `Esc`（空输入） | **时间回溯 rewind**（3s 窗口内按两次） |
@@ -238,6 +239,7 @@ dsh-tui
 | `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
 | `/color` | 无参 / `<名>` / `status` / `reset` | 会话强调色：**无参打开调色板选择器**（8 色 + 色点预览，`↑/↓` 选择、`Enter` 应用）；`<名>` 直接设置；`status` 当前；`reset` 恢复主题默认。输入框边框 + 会话名标签变色（标签显示在输入框顶边框**右上角**，**默认关闭**，`/settings` 的「会话名标签」可开启；`red/orange/yellow/green/blue/purple/pink/cyan`）。按会话经 `session/color` 事件保存，resume/rewind 后仍在 |
 | `/lang` | `en` / `zh` / `status` | 界面语言热切换。优先级：`DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |
+| `/vim` | 无 | **vim 编辑模式开关**（见 §2.4）：输入框切到 vim 键位编辑，会话级、不持久化 |
 
 ### 3.4 账号 / 策略 / 扩展
 
@@ -274,7 +276,6 @@ dsh-tui
 
 | 命令 | 说明 |
 |---|---|
-| `/vim` | 占位：DSH 侧无等价机制，提示未实现 |
 | `/connect` | 占位：DSH 暂无远程连接机制 |
 
 ### 3.7 注册表命令（来自 DSH 生态，随组合动态并入 `/` 菜单）
@@ -494,36 +495,56 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 8. 长输入用 `Ctrl+G` 拉起 `$VISUAL` 编辑器写，保存即回填。
 9. `@` 在消息任意位置补全文件：普通片段**模糊匹配**（`@ink` 也能命中 `src/ink/Box.js`），
    路径形输入（`@src/` `@./` `@~/`）**直达该目录**；目录可继续深入；图片自动变 `[Image #N]` 附件。
-10. 想盯着子代理干活：**`Ctrl+A` 打开子代理面板**，`Enter` 看详情、`X` 中断运行中的子代理。
+10. 只想引用文件的某几行：`@src/a.ts#L12` 或 `@src/a.ts#L12-14` 精确带上行区间。
+11. 想盯着子代理干活：**`Ctrl+A` 打开子代理面板**，`Enter` 看详情、`X` 中断运行中的子代理；
+   同款命令 `/agents`。
+12. **全屏模式下点击转录里的文件路径**（工具卡、代码、`file://` 链接）会弹出操作菜单：
+   打开 / 在文件管理器中定位 / 复制绝对路径。
 
 **查看与诊断**
-11. `Ctrl+O` 展开/收起工具卡详情（思考全文、参数与输出）；`Ctrl+E` 展开隐藏的旧消息。
-12. `Ctrl+R` 搜输入历史（重复按跳下一匹配）；转录态 `/` 全文搜索 + `n`/`N` 跳转。
-13. `Ctrl+T` 看轨迹：`[`/`]` 跳失败点、`/` 字段查询（`tool:` `kind:` `err:` `>10s` `tok>1k`）。
-14. 状态栏上下文条、TPS、轨迹条、git 分支等都是 `/settings → statusBar.*` 开关——默认关的
+13. `Ctrl+O` 展开/收起工具卡详情（思考全文、参数与输出）；`Ctrl+E` 展开隐藏的旧消息。
+14. `Ctrl+R` 搜输入历史（重复按跳下一匹配）；转录态 `/` 全文搜索 + `n`/`N` 跳转。
+15. `Ctrl+T` 看轨迹：`[`/`]` 跳失败点、`/` 字段查询（`tool:` `kind:` `err:` `>10s` `tok>1k`）。
+16. 状态栏上下文条、TPS、轨迹条、git 分支等都是 `/settings → statusBar.*` 开关——默认关的
     `tps`/`trajectory`/`contextBar` 值得打开试试。
-15. 上下文压力 ≥80% 时工作摘要行会变琥珀色预警，≥95% 转红——该 `/compact` 了。
+17. 上下文压力 ≥80% 时工作摘要行会变琥珀色预警，≥95% 转红——该 `/compact` 了。
     （minimal preset 下 /compact 不可用。）
+18. `/balance` 查 DeepSeek 官方余额（免费只读接口，点击行刷新）；状态栏
+    `statusBar.cost` 还会按单价估算花费 `≈¥ 峰/谷`（仅官方 DeepSeek 模型显示，悬停看明细）。
+    估算仅供自省，账单以 DeepSeek 平台为准。
+19. 打开/恢复会话自动出**回顾摘要**（`/settings → Session → recapOnOpen`，默认开）：
+    `Enter` 或点击展开详情；手动总结用 `/recap`，面板里 `a` 键应用建议标题。
 
 **个性化**
-16. `/theme` 换主题，`auto` 跟随终端背景；想要专属配色就写
+20. `/theme` 换主题，`auto` 跟随终端背景；想要专属配色就写
     `~/.dsh-tui/themes/<名>.json`（`{base, colors}`），选中即热切换。
-17. `/preset liangshen` 梁神模式：首轮最小工具集、首次工具调用后开放全目录（**新会话才生效**）。
-18. `/effort` 滑杆 `←/→` 实时调推理强度；`/activity frames comet` 换状态行动画
+21. `/preset liangshen` 梁神模式：首轮最小工具集、首次工具调用后开放全目录（**新会话才生效**）。
+22. `/effort` 滑杆 `←/→` 实时调推理强度；`/activity frames comet` 换状态行动画
     （帧名 30 个，`random` 随机）。
-19. `/model` 切换会 fork 续聊（历史保留），持久化后重启与 `/new` 沿用——放心换模型。
-20. 会话太多？`/resume` 里 `Ctrl+S` 折叠子 agent 运行、`Ctrl+X` 清理空壳会话。
-21. 有文本选区时滚轮是**平移选区**不是滚动列表——想滚屏先 `Esc` 取消选区。
+23. `/model` 切换会 fork 续聊（历史保留），持久化后重启与 `/new` 沿用——放心换模型。
+24. 会话太多？`/resume` 里 `Ctrl+S` 折叠子 agent 运行、`Ctrl+X` 清理空壳会话。
+25. 有文本选区时滚轮是**平移选区**不是滚动列表——想滚屏先 `Esc` 取消选区。
+26. `/color` 给当前会话设强调色：无参打开调色板、`/color <名>` 直设、`/color reset` 清除；
+    按会话保存，`resume` 后仍在。
+27. `/settings` 改动**自动保存**（Esc 直接退出）；`shortcuts` 分组可逐动作自定义快捷键，
+    保存即生效，下次按键就用新组合。
+28. 输入框是 vim 党的主场：`/vim` 开启后 `Esc` 切 NORMAL（`h/l/j/k`、`0/^/$`、`w/b` 移动，
+    `x/X/dd/d$/d0/dw` 删除、`u` 撤销），`i/a/o` 回 INSERT；不想要 vim 再按 `/vim` 关掉。
 
 **避坑**
-22. `/compact`、`/model` 在回合运行中会被拒绝——先 `Ctrl+C` 或等回合结束。
-23. 审批条 `Esc` = 拒绝（fail closed）；问卷第 2 题起 `Esc` = 返回上一题，第 1 题 `Esc` 或任意题 `Ctrl+C` = 取消整批（模型会收到取消信号）。
-24. `/update` 只更新 profile runtime 不动全局安装；提示版本错位时按提示执行
+29. `/compact`、`/model` 在回合运行中会被拒绝——先 `Ctrl+C` 或等回合结束。
+30. 审批条 `Esc` = 拒绝（fail closed）；问卷第 2 题起 `Esc` = 返回上一题，第 1 题 `Esc` 或任意题 `Ctrl+C` = 取消整批（模型会收到取消信号）。
+31. `/update` 只更新 profile runtime 不动全局安装；提示版本错位时按提示执行
     `npm install -g @deepseek-harness-tui/dsh-tui@<版本>` 对齐启动器。
-25. macOS 的 ⌘ 键需要 iTerm2/kitty/WezTerm/ghostty/tmux；Terminal.app 用 Ctrl 即可。
-26. 鼠标拖选即复制（fullscreen 模式）；`DSH_TUI_DISABLE_MOUSE=1` 可临时关闭鼠标。
-27. logo 页出现 **⚠ 版本漂移警告**时按提示对齐 dsh 引擎：
+32. `/reload` 重读偏好文件（主题/语言/预设/模型/动画），但**不重读** `cordis.yml` 根配置与
+    全屏布局，也不加载新构建的代码——改这些用 `/restart`（回合运行中 `/restart` 会被拒绝，先 `Ctrl+C`）。
+33. macOS 的 ⌘ 键需要 iTerm2/kitty/WezTerm/ghostty/tmux；Terminal.app 用 Ctrl 即可。
+34. 鼠标拖选即复制（fullscreen 模式）；`DSH_TUI_DISABLE_MOUSE=1` 可临时关闭鼠标。
+35. logo 页出现 **⚠ 版本漂移警告**时按提示对齐 dsh 引擎：
     `npm i -g @deepseek-ai/dsh@<版本>`（支持范围见 §1.1）。
+36. vim 模式开启时 `Esc` 归 vim 管（insert 回 normal、normal 无操作）——时间回溯请退出
+    vim 模式后双击 `Esc`，或用 `/rewind`；回合运行中在 vim insert 模式按 `Esc` 也只是回
+    normal，打断回合用 `Ctrl+C` / `Ctrl+Enter`。
 
 ---
 
