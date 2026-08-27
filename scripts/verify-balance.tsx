@@ -173,6 +173,8 @@ check('isPeakHour 周一北京 08:00 → 空闲', !isPeakHour(new Date('2026-08-
 check('isPeakHour 周一北京 15:00 → 高峰', isPeakHour(new Date('2026-08-17T07:00:00Z')))
 check('isPeakHour 周五北京 17:59 → 高峰', isPeakHour(new Date('2026-08-21T09:59:00Z')))
 check('isPeakHour 周五北京 18:00 → 空闲', !isPeakHour(new Date('2026-08-21T10:00:00Z')))
+check('isPeakHour 周六北京 10:00 → 空闲', !isPeakHour(new Date('2026-08-22T02:00:00Z')))
+check('isPeakHour 周六北京 15:00 → 空闲', !isPeakHour(new Date('2026-08-22T07:00:00Z')))
 check('isPeakHour 周日北京 10:00 → 空闲', !isPeakHour(new Date('2026-08-23T02:00:00Z')))
 
 // --- deepseekPricing：单价匹配 ---

@@ -86,7 +86,8 @@ import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { SubagentDetailScene } from '../components/SubagentDetailScene.js'
 import { FileActionsPanel, FILE_ACTION_COUNT } from '../components/FileActionsPanel.js'
 import { openExternal, openFile, revealInFileManager } from '../utils/openExternal.js'
-import { fileUrlToPath, parseFileLinkUrl, resolveTargetPath } from '../utils/fileTarget.js'
+import { resolveTargetPath } from '../utils/fileTarget.js'
+import { classifyOpenTarget } from '../utils/urlGuard.js'
 import { statSync } from 'node:fs'
 import { setClipboard } from '../ink/termio/osc.js'
 import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
@@ -596,17 +597,18 @@ export function Chat({
   }, [])
 
   const handleOpenTarget = React.useCallback((url: string): void => {
-    const rawPath = parseFileLinkUrl(url)
-    if (rawPath !== undefined) {
-      openFileActions(rawPath)
+    const classification = classifyOpenTarget(url)
+    if (classification.kind === 'file-actions') {
+      openFileActions(classification.path)
       return
     }
-    const filePath = fileUrlToPath(url)
-    if (filePath !== undefined) {
-      openFileActions(filePath)
+    if (classification.kind === 'external') {
+      openExternal(url)
       return
     }
-    openExternal(url)
+    // Non-http(s) schemes from model/plugin-shaped links are not handed to
+    // the OS handler — see urlGuard.ts. Silently ignored: a toast needs
+    // channel state the Ink click path does not carry.
   }, [openFileActions])
 
   // Wire the click-to-open callback into the Ink instance (the field is
@@ -1774,9 +1776,15 @@ export function Chat({
           onRestart()
         }
         return true
-      case 'vim':
-        channel.notify(t('vim-not-implemented'))
+      case 'vim': {
+        // `/vim`（CC vim 编辑模式）：切换输入框的 vim 编辑开关。状态在
+        // PromptInput 内部（controllerRef.toggleVim），每次切换落回 insert
+        // 子模式；Esc 进 normal、i/a/o 回 insert。会话级、不持久化。
+        setHelpOpen(false)
+        const on = promptControllerRef.current?.toggleVim() ?? false
+        channel.notify(t(on ? 'vim-on' : 'vim-off'))
         return true
+      }
       case 'terminal-setup':
         setHelpOpen(false)
         channel.pushLocal('/terminal-setup', [
@@ -2723,11 +2731,14 @@ export function Chat({
         setSelectionActive(false)
         setSelectedId(null)
       }
-    } else if (key.escape && channel.working && !helpOpen) {
+    } else if (key.escape && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
       // CC's chat:cancel — esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
       // With messages queued for delivery, interrupt-and-deliver them right
       // away (Codex behavior); otherwise a plain interrupt parks the queue.
+      // vim mode (either submode) yields: there Esc is a MODE key (INSERT→
+      // NORMAL, NORMAL = no-op/cancel pending d) and the prompt owns it;
+      // interrupting still works via Ctrl+C / Ctrl+Enter.
       if (channel.pending.length > 0) {
         const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
         if (count > 0) {

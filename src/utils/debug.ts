@@ -28,7 +28,8 @@ export function logMouseDebug(message: string, fields?: Record<string, unknown>)
   const suffix = fields === undefined ? '' : ` ${JSON.stringify(fields)}`
   try {
     const line = `${new Date().toISOString()} ${message}${suffix}\n`
-    appendFileSync(join(DATA_DIR, 'mouse-debug.log'), line)
+    // 0600 on creation: the log mirrors UI activity, incl. message content
+    appendFileSync(join(DATA_DIR, 'mouse-debug.log'), line, { mode: 0o600 })
   } catch {
     // ignore — see doc comment
   }

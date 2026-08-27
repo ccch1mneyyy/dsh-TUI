@@ -140,8 +140,12 @@ export function writeIndex(index: SessionIndex): void {
   }
   const temporary = `${INDEX_FILE}.${process.pid}.tmp`
   try {
-    mkdirSync(DATA_DIR, { recursive: true })
-    writeFileSync(temporary, JSON.stringify({ version: SCHEMA_VERSION, entries }))
+    // 0700/0600: DATA_DIR also hosts history.jsonl / mouse-debug.log (0600
+    // files), so directory creation and the index itself (session titles
+    // quote the user's first input; branch names) must match that privacy
+    // posture. Creation only — pre-existing paths keep their current mode.
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
+    writeFileSync(temporary, JSON.stringify({ version: SCHEMA_VERSION, entries }), { mode: 0o600 })
     renameSync(temporary, INDEX_FILE)
   } catch {
     try {

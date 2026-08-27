@@ -75,7 +75,12 @@ if (existsSync(entryFile)) {
 console.log('==> 构建 runtime.tar.gz 运行时资源包…')
 rmSync(runtimeTar, { force: true })
 console.log('    正在执行 pnpm install…')
-execSync('pnpm install --no-frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
+// --frozen-lockfile：便携包供应链锁死——install 只按 pnpm-lock.yaml 的
+// 已解析版本装包，绝不隐式改 lock 拉新（--no-frozen-lockfile 会让每次
+// 构建重新解析依赖，被投毒的镜像/registry 能在构建机无感知换入恶意
+// 版本并打进发布产物）。lock 失配会直接失败，提示提交新的 lock 而非
+// 构建期静默重解析。
+execSync('pnpm install --frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
 console.log('    正在打包 node_modules 到 runtime.tar.gz…')
 execFileSync('tar', ['-czf', runtimeTar, 'node_modules'], { cwd: standaloneDir, stdio: 'inherit' })
 const tarStat = statSync(runtimeTar)
@@ -161,10 +166,25 @@ for (const stagedFile of stagedFiles) {
   if (existsSync(archivePath)) rmSync(archivePath, { force: true })
   if (format === 'zip') {
     if (process.platform === 'win32') {
-      execFileSync('powershell', [
-        '-NoProfile', '-Command',
-        `Compress-Archive -Path '${targetBinPath}' -DestinationPath '${archivePath}' -Force`,
-      ], { stdio: 'inherit' })
+      // 优先 Windows 10+ 自带 bsdtar（-a 按后缀写 zip），数组参数不经
+      // shell、无注入面；tar 缺失才回退 Compress-Archive——路径含 `'`
+      // 会闭合单引号字面量注入命令，必须按 PowerShell 约定把 ' 双写为 ''
+      // （与 src/update.ts 的 escapePsSingleQuoted 同款）。
+      let tarOk = true
+      try {
+        execFileSync('tar', ['--version'], { stdio: 'ignore' })
+      } catch {
+        tarOk = false
+      }
+      if (tarOk) {
+        execFileSync('tar', ['-a', '-cf', archivePath, '-C', binDir, binaryName], { stdio: 'inherit' })
+      } else {
+        const psQuote = (s) => `'${s.replace(/'/g, "''")}'`
+        execFileSync('powershell', [
+          '-NoProfile', '-Command',
+          `Compress-Archive -Path ${psQuote(targetBinPath)} -DestinationPath ${psQuote(archivePath)} -Force`,
+        ], { stdio: 'inherit' })
+      }
     } else {
       execFileSync('zip', ['-j', archivePath, targetBinPath], { stdio: 'inherit' })
     }

@@ -4288,7 +4288,7 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       // Model-switch quip rides the fresh tracker (pi parity).
-      activityTracker.onModelSwitch(model)
+      updateWorkingActivity('model switch', () => activityTracker.onModelSwitch(model))
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -4984,7 +4984,7 @@ export function createChannel(
           .then((result) => {
             state.notify(result ? t('compact-done') : t('compact-nothing'))
             // Compaction quip rides the next thinking rotation (pi parity).
-            if (result) activityTracker.onCompact('done')
+            if (result) updateWorkingActivity('compaction', () => activityTracker.onCompact('done'))
           })
           .catch((error: unknown) => {
             state.notify(
@@ -6575,16 +6575,62 @@ ${output}
     return rendered
   }
 
+  // Working Activity is an optional presentation sidecar. A malformed durable
+  // event must never let it abort the authoritative channel projection (Cordis
+  // contains the listener throw, but the rest of THIS callback would otherwise
+  // be skipped — including turn/end and inbox retirement).
+  let activityFailureReported = false
+  const updateWorkingActivity = (
+    source: string,
+    update?: () => void,
+  ): ActivityStatus | undefined => {
+    try {
+      update?.()
+      return renderWorkingActivity()
+    } catch (error: unknown) {
+      if (!activityFailureReported) {
+        activityFailureReported = true
+        const detail = error instanceof Error ? error.message : String(error)
+        ctx.logger.warn(`dsh-tui: working-activity ignored ${source} after a projection error: ${detail}`)
+      }
+      return undefined
+    }
+  }
+
+  /**
+   * Release volatile UI gates when the bound driver is definitively quiescent
+   * but its terminal session event did not reach this projection. This does not
+   * invent a turn/end or any transcript fact; it only reconciles live controls
+   * to the authoritative Agent status so Enter/Esc cannot remain latched.
+   */
+  const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
+    if (!state.working) return
+    ctx.logger.warn(
+      `dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`,
+    )
+    cancelInFlight = false
+    state.cancelPending = false
+    state.working = false
+    state.activeToolCount = 0
+    settleStreaming()
+    updateSpinnerMode()
+  }
+
   const bindAgent = (): void => {
     for (const dispose of agentSubscriptions) dispose()
     stopActivityTick()
+    // Cancel state and deferred interrupt delivery belong to one bound agent.
+    // A replacement must neither inherit the old latch nor receive its queued
+    // microtask after the session identity changes.
+    cancelInFlight = false
+    interruptSeq += 1
     const prefs = activityPrefsSnapshot()
     activityTracker = new ActivityTracker(prefs.config, Date.now, prefs.customActions)
-    activityTracker.onAgentStatus(agent.status)
-    renderWorkingActivity()
+    activityFailureReported = false
+    updateWorkingActivity('agent bind', () => activityTracker.onAgentStatus(agent.status))
     activityTickTimer = setInterval(() => {
       const previous = state.workingActivity
-      const rendered = renderWorkingActivity()
+      const rendered = updateWorkingActivity('activity tick')
       if (rendered === undefined) return
       // Live phases deliberately wake at 500 ms even when the formatted line
       // has not crossed its next whole-second boundary: turnElapsedMs remains
@@ -6628,14 +6674,15 @@ ${output}
       ctx.on('agent/status', ({ agent: subject, status }) => {
         if (subject !== agent) return
         state.status = status
-        activityTracker.onAgentStatus(status)
-        renderWorkingActivity()
+        updateWorkingActivity(`agent/status:${status}`, () => activityTracker.onAgentStatus(status))
+        if (status === 'idle') reconcileRetiredProjection('idle')
         state.emit()
       }),
       ctx.on('agent/disposed', ({ agent: subject }) => {
         if (subject !== agent) return
         state.status = 'disposed'
         stopActivityTick()
+        reconcileRetiredProjection('disposed')
         state.emit()
       }),
       // Pending delivery is driven by the agent inbox: a claimed message
@@ -6663,9 +6710,16 @@ ${output}
         }
       })(),
       ctx.on('session/event', (session, event) => {
-        // First check if this is a subagent session
-        const subagentId = subagentStore.getSubagentIdBySession(session)
-        if (subagentId) {
+        // The currently bound main session always wins. SubagentActivityStore
+        // intentionally retains Session-object mappings for completed cards;
+        // if one of those sessions is later adopted/resumed as the main agent,
+        // checking the stale child mapping first would swallow every main event
+        // (including turn/end) and leave working/cancelPending latched forever.
+        const isMainSession = session === agent.session
+        const subagentId = isMainSession
+          ? undefined
+          : subagentStore.getSubagentIdBySession(session)
+        if (subagentId !== undefined) {
           subagentStore.onSessionEvent(subagentId, event)
           if (event.type === 'assistant/chunk') {
             // Token-rate path (100-300 events/s): the store append stays
@@ -6680,22 +6734,23 @@ ${output}
           }
           return
         }
-        // Otherwise handle main agent session
-        if (session !== agent.session) return
+        // Otherwise handle the bound main-agent session.
+        if (!isMainSession) return
         // Observation broker (C-042): maps user/message + assistant/message
         // into grant-gated envelopes; every other event type is a no-op, and
         // publish never throws into this arm.
         messageObserver?.publish(session, event)
-        activityTracker.onSessionEvent(event)
-        // Interrupt quip: an aborted/interrupted turn ends the round; the
-        // comeback copy shows on the next thinking rotation (pi parity).
-        if ((event as { type: string }).type === 'turn/end') {
-          const reason = (event.data as { reason?: { kind?: string } }).reason
-          if (reason?.kind === 'aborted' || reason?.kind === 'interrupted') {
-            activityTracker.onInterrupted()
+        updateWorkingActivity(`session/event:${event.type}`, () => {
+          activityTracker.onSessionEvent(event)
+          // Interrupt quip: an aborted/interrupted turn ends the round; the
+          // comeback copy shows on the next thinking rotation (pi parity).
+          if ((event as { type: string }).type === 'turn/end') {
+            const reason = (event.data as { reason?: { kind?: string } }).reason
+            if (reason?.kind === 'aborted' || reason?.kind === 'interrupted') {
+              activityTracker.onInterrupted()
+            }
           }
-        }
-        renderWorkingActivity()
+        })
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
         // moment they land (whether appended by cycleMode or by hand).
         const eventType = (event as { type: string }).type
@@ -6819,7 +6874,7 @@ ${output}
           // is exactly what the column claims.
           noteBranch(agent.session.id, branch)
           // Feed the working line so git tools can show ` · git <branch>`.
-          activityTracker.onGitBranch(branch)
+          updateWorkingActivity('git branch', () => activityTracker.onGitBranch(branch))
           state.emit()
         }
       })
