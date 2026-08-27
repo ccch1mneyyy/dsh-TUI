@@ -217,6 +217,9 @@ const GROUPS = {
 // stdin 批量按键回归：同一读取内的文本、方向键、文本必须依次基于
 // 前一事件的输入状态执行，不能因 React 批处理读取旧闭包而丢字符。
     ["verify-batched-prompt-input", ['node', 'scripts/verify-batched-prompt-input.mjs']],
+// 连续 Shift/Option+Enter 的空逻辑行必须占真实布局高度（issue #599）；
+// 空 Text 节点不能把 alpha\n\nomega 画成相邻两行。
+    ["verify-prompt-empty-lines", ['node', 'scripts/verify-prompt-empty-lines.mjs']],
 // 快捷键 keymap 回归：共享组合语法、动作注册表与 /settings 改键
 // （Alt+V 粘贴别名、覆盖热更新、保留位集合、草稿冲突校验），以及
 // 真 Chat 里 Alt+V / 改键后的外部编辑器路径。

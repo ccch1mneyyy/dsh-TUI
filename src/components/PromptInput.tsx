@@ -1713,7 +1713,10 @@ export function PromptInput({
       return (
         <Text key={absoluteLine} wrap="truncate-end">
           {prefix}
-          {text}
+          {/* An empty Text node has zero Yoga height. Paint one blank cell so
+              every logical empty line keeps its row (#599); the cell remains
+              visually blank and does not change the stored draft. */}
+          {text === '' ? ' ' : text}
         </Text>
       )
     }
