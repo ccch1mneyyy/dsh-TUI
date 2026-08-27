@@ -29,8 +29,10 @@ export interface ApprovalSnapshot {
   /**
    * The request is not anchored to a live tool call of this session (no or
    * unknown callId, the paired call already settled, or the callId is
-   * already in flight for another parked ask — a genuine approval is asked
-   * exactly once per call). The approval waterfall is an in-process event
+   * already in flight or consumed by another ask — a genuine approval is
+   * asked exactly once per call). A duplicate callId marks EVERY ask on it
+   * (the pre-existing one included — attacker-first order) so the verdict
+   * can never invert onto the genuine ask). The approval waterfall is an in-process event
    * any plugin can dispatch, so the panel renders a loud warning instead of
    * presenting the text as the agent's own pending command. Verdicts that
    * depend on the session log are re-checked while the ask is queued or on
@@ -300,9 +302,13 @@ export class ApprovalStore {
       // gate in plugin.ts says whose SESSION it names, not that a live tool
       // call actually raised it. Mark everything not anchored to an
       // unresolved tool call, plus any ask reusing a callId that is already
-      // in flight (a legitimate call is asked about exactly once), so the
-      // panel can warn.
-      const external = !isLiveToolApproval(req) || this.isCallIdInFlight(req)
+      // in flight or already consumed (a legitimate call is asked about
+      // exactly once). A duplicate callId marks EVERY ask on it ambiguous
+      // (attacker-first: a forged ask parked before the genuine one looks
+      // clean on its own — see markCallIdAmbiguous), so the panel can warn.
+      const duplicate = this.isCallIdInFlight(req)
+      if (duplicate) this.markCallIdAmbiguous(req.callId)
+      const external = !isLiveToolApproval(req) || duplicate
         || (req.callId !== undefined && this.consumedCallIds.has(String(req.callId)))
       const pending: PendingApproval = {
         key: String(++this.seq),
@@ -388,5 +394,38 @@ export class ApprovalStore {
   private noteConsumed(pending: PendingApproval): void {
     const { callId } = pending.request
     if (callId !== undefined) this.consumedCallIds.add(String(callId))
+  }
+
+  /**
+   * A same-callId duplicate just parked: every pending ask on that callId is
+   * now source-ambiguous. The forged-first order parks the fake ask clean
+   * (isLive true, no duplicate visible yet) and the genuine follow-up would
+   * carry the only badge — an inverted verdict. Flip them all, then rebuild
+   * + notify so an on-screen panel updates immediately. refreshActiveExternal
+   * early-returns on an existing external verdict, so the marking is
+   * monotonic and never erased. Deliberately badges instead of cancelling:
+   * cancelling both would hand the attacker a force-cancel primitive
+   * against genuine approvals.
+   * @param callId - The duplicated call id (non-undefined by construction).
+   */
+  private markCallIdAmbiguous(callId: unknown): void {
+    const key = String(callId)
+    const same = (pending: PendingApproval): boolean =>
+      pending.request.callId !== undefined && String(pending.request.callId) === key
+    let flipped = false
+    if (this.active !== undefined && same(this.active) && this.active.snapshot.external !== true) {
+      this.active.snapshot.external = true
+      flipped = true
+    }
+    for (const pending of this.queue) {
+      if (same(pending) && pending.snapshot.external !== true) {
+        pending.snapshot.external = true
+        flipped = true
+      }
+    }
+    if (flipped) {
+      this.rebuildSnapshot()
+      this.scheduleNotify()
+    }
   }
 }

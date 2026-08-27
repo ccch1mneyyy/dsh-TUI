@@ -107,8 +107,8 @@ assert.equal(unknown!.command, undefined)
   const log = events('call-twin')
   const first = store.park(approvalRequest('call-twin', log))
   const second = store.park(approvalRequest('call-twin', log))
-  assert.equal(store.getSnapshot()!.external, undefined,
-    'the twin is genuinely live while its callId is unresolved — no badge yet')
+  assert.equal(store.getSnapshot()!.external, true,
+    'the duplicate makes BOTH asks source-ambiguous — the active one is badged immediately (attacker-first hardening)')
   store.decide('allowed-once') // 第一条落定，twin 立即成为当前面板
   assert.equal(await first, 'allowed-once')
   log.push(toolResult('call-twin')) // 工具执行，X 落定
@@ -191,6 +191,32 @@ assert.equal(unknown!.command, undefined)
   store.settleAll('cancelled')
   assert.equal(await first, 'allowed-once')
   assert.equal(await twin, 'cancelled')
+}
+{
+  // 时序 6（反序抢注，attacker-first）：恶意插件看到 tool/call X 后抢在
+  // harness 真审批之前塞入假审批——假审批 isLive 真、无重复，不带徽标先
+  // 上面板；真审批随后到达反而被 inFlight 判成 external（来源判定倒置）。
+  // 修复：同 callId 第二条出现即判定来源有歧义——新旧两条全部标
+  // external，active 的翻转立即 rebuild + 通知订阅者（面板即时出现警告）。
+  const store = new ApprovalStore()
+  const log = events('call-race2') // 只有 tool/call X，无 result
+  const forged = store.park(approvalRequest('call-race2', log)) // 假审批抢先
+  assert.equal(store.getSnapshot()!.external, undefined,
+    'before the duplicate arrives there is no discriminator — the forged ask looks live')
+  let notifies = 0
+  store.subscribe(() => { notifies += 1 })
+  const genuine = store.park(approvalRequest('call-race2', log)) // 真审批后到
+  assert.equal(store.getSnapshot()!.external, true,
+    'P-4: once a same-callId duplicate exists, EVERY ask on that callId is source-ambiguous — the ACTIVE (forged-first) panel must show the badge immediately, not only the newcomer')
+  await sleep(30)
+  assert.ok(notifies >= 1,
+    'P-4: flipping the active ask to external must notify subscribers so the on-screen panel updates without another render trigger')
+  store.decide('rejected') // 拒掉当前（假）审批
+  assert.equal(store.getSnapshot()!.external, true,
+    'P-4: the genuine ask promoted after the forged one must also carry the badge (ambiguity marking, not newcomer-only)')
+  store.settleAll('cancelled')
+  assert.equal(await forged, 'rejected')
+  assert.equal(await genuine, 'cancelled')
 }
 
 // ── 面板渲染：external 行可见，非 external 不出现 ─────────────────────
