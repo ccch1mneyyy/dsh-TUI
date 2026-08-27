@@ -61,7 +61,9 @@ the interface, and removing it leaves no core modifications behind.
   session title for ~600ms opens a tooltip with the full content.
 - **Complete session workflow**: `/resume` groups history by working directory
   with search and preview (left-click resumes, right-click opens an action
-  menu), alongside `/new`, `/workspace`, `/compact`, `/export`,
+  menu; pin frequent sessions — a `Pinned` group floats them to the top, the
+  in-row star or `Ctrl+P` toggles, pins persist in `~/.dsh-tui`), alongside
+  `/new`, `/workspace`, `/compact`, `/export`,
   the `/btw` side question, model switching, double-`Esc` rewind through a
   session fork, vim editing for the prompt (`/vim`), and mouse selection
   editing in the prompt (drag to select, Shift+click to extend,
