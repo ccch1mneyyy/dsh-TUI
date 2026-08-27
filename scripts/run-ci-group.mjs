@@ -271,6 +271,10 @@ const GROUPS = {
 // （等价于「上方每个区域都放得下、没有多占行、没有被挤出屏幕」）。
 // 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
     ["verify-session-browser-layout", ['node', 'scripts/verify-session-browser-layout.mjs']],
+// Tooltip 悬停提示回归：悬停截断元素 ~600ms 后弹完整内容浮层——延迟未到
+// 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
+// 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制。
+    ["verify-tooltip", ['node', '--import', 'tsx/esm', 'scripts/verify-tooltip.tsx']],
 // 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
 // Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
 // 自环境变量，不转义即可注入任意命令；解压与替换之间的提取树校验拒绝
