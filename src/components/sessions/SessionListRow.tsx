@@ -30,9 +30,11 @@ export function SessionListRow({
   width,
   depth,
   focused,
+  pinned,
   now,
   onClick,
   onContextMenu,
+  onTogglePin,
 }: {
   session: SessionSummary
   /** Columns available to the row, indentation included. */
@@ -40,12 +42,16 @@ export function SessionListRow({
   /** 0 for a conversation, 1 for a sub-agent run under its parent. */
   depth: number
   focused: boolean
+  /** Whether the user pinned this session to the top of the browser. */
+  pinned: boolean
   /** Epoch ms used for every relative time in this render pass. */
   now: number
   /** 鼠标点击行（fullscreen）：恢复该会话（与 Enter 同路径）。 */
   onClick?(event: ClickEvent): void
-  /** 鼠标右键（fullscreen）：在该行弹出操作菜单（打开/重命名/删除）。 */
+  /** 鼠标右键（fullscreen）：在该行弹出操作菜单（打开/固定/重命名/删除）。 */
   onContextMenu?(event: ContextMenuEvent): void
+  /** 点击行内 ★/☆（fullscreen）：切换固定状态，不冒泡成"打开会话"。 */
+  onTogglePin?(): void
 }): React.ReactNode {
   const indent = depth * 2
   // Two cells for the focus marker, plus the indent for a nested run.
@@ -76,11 +82,26 @@ export function SessionListRow({
         <Text color={focused ? 'suggestion' : 'subtle'}>
           {`${' '.repeat(indent)}${focused ? '❯ ' : '  '}`}
         </Text>
+        {/* The pin slot is a FIXED two-column cell on every row — ★ for a
+            pinned session, ☆ otherwise — so the star is always visible and
+            clickable and the title column never shifts when a pin toggles.
+            Its width is charged to the title budget below, like the kind
+            mark's. */}
+        <Box
+          onClick={onTogglePin === undefined ? undefined : (event: ClickEvent): void => {
+            // The star is a control on the row, not the row: a click here
+            // toggles the pin and must never fall through to resume.
+            event.stopImmediatePropagation()
+            onTogglePin()
+          }}
+        >
+          <Text color={pinned ? 'remember' : undefined} dimColor={!pinned}>{pinned ? '★ ' : '☆ '}</Text>
+        </Box>
         {mark !== undefined && <Text color={mark.color}>{`${mark.glyph} `}</Text>}
         <Text color={titleColor(session.title.source, focused)} bold={focused}>
           {truncateWidth(
             session.label ?? session.title.text,
-            body - (mark === undefined ? 0 : 2),
+            body - 2 - (mark === undefined ? 0 : 2),
           )}
         </Text>
       </Box>

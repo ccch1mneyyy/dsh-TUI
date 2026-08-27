@@ -41,6 +41,8 @@ export const DEFAULT_FILTERS: BrowserFilters = {
 /** One line in the browser's list. */
 export type BrowserRow =
   | { readonly kind: 'project'; readonly project: string; readonly count: number }
+  /** Header of the pinned group; always the first rows in the view. */
+  | { readonly kind: 'pin'; readonly count: number }
   | { readonly kind: 'session'; readonly session: SessionSummary; readonly depth: number }
 
 /** The rendered list plus what it left out and why. */
@@ -98,6 +100,9 @@ function hiddenLineageIds(sessions: readonly SessionSummary[], currentId: string
   }
   return hidden
 }
+
+/** Shared empty pin set: `buildView` without pins allocates nothing. */
+const EMPTY_PINS: ReadonlySet<string> = new Set()
 
 /**
  * Build the explicit working-directory menu.
@@ -175,12 +180,16 @@ function matches(session: SessionSummary, needle: string): boolean {
  * @param context - The session doing the browsing: its working directory
  *   anchors the default project filter, its branch the branch filter, and its
  *   own id is never offered (a live session cannot be resumed into itself).
+ * @param pinned - Pinned session ids (from the persisted preference). A pin
+ *   on a session the current filters already exclude is invisible here — pins
+ *   float to the top OF the view, they do not widen it.
  * @returns The flat row list and the counts behind what it hides.
  */
 export function buildView(
   sessions: readonly SessionSummary[],
   filters: BrowserFilters,
   context: BrowserContext,
+  pinned: ReadonlySet<string> = EMPTY_PINS,
 ): BrowserView {
   const needle = filters.query.trim().toLowerCase()
 
@@ -248,7 +257,30 @@ export function buildView(
   const rows: BrowserRow[] = []
   let shown = 0
   let lastProjectKey: string | undefined
-  const ordered = visible.sort((left, right) => right.updatedAt - left.updatedAt)
+  const emit = (session: SessionSummary): void => {
+    rows.push({ kind: 'session', session, depth: 0 })
+    shown += 1
+    if (!filters.showSubagents) return
+    for (const run of (byParent.get(session.id) ?? []).filter(child => matches(child, needle) || matches(session, needle))) {
+      rows.push({ kind: 'session', session: run, depth: 1 })
+      shown += 1
+    }
+  }
+  // Pinned sessions leave the ordinary flow entirely and form one group above
+  // every other row — above the directory headers in the all-projects view
+  // too. Only pins the current filters already admit are pulled up, so the
+  // group is "the top of this view", never a hole punched through the scope.
+  const pinnedRows = pinned.size > 0
+    ? visible.filter(session => pinned.has(session.id)).sort((left, right) => right.updatedAt - left.updatedAt)
+    : []
+  const ordered = pinnedRows.length > 0
+    ? visible.filter(session => !pinned.has(session.id))
+    : visible
+  if (pinnedRows.length > 0) {
+    rows.push({ kind: 'pin', count: pinnedRows.length })
+    for (const session of pinnedRows) emit(session)
+  }
+  ordered.sort((left, right) => right.updatedAt - left.updatedAt)
   const projectKey = (session: SessionSummary): string =>
     context.sameProject(context.cwd, session.cwd)
       ? 'current'
@@ -281,13 +313,7 @@ export function buildView(
         count: projectCounts.get(key) ?? 0,
       })
     }
-    rows.push({ kind: 'session', session, depth: 0 })
-    shown += 1
-    if (!filters.showSubagents) continue
-    for (const run of (byParent.get(session.id) ?? []).filter(child => matches(child, needle) || matches(session, needle))) {
-      rows.push({ kind: 'session', session: run, depth: 1 })
-      shown += 1
-    }
+    emit(session)
   }
 
   return {

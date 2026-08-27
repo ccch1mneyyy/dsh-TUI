@@ -59,7 +59,9 @@ the interface, and removing it leaves no core modifications behind.
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
 - **Complete session workflow**: `/resume` groups history by working directory
   with search and preview (left-click resumes, right-click opens an action
-  menu), alongside `/new`, `/workspace`, `/compact`, `/export`,
+  menu; pin frequent sessions — a `Pinned` group floats them to the top, the
+  in-row star or `Ctrl+P` toggles, pins persist in `~/.dsh-tui`), alongside
+  `/new`, `/workspace`, `/compact`, `/export`,
   the `/btw` side question, model switching, double-`Esc` rewind through a
   session fork, and vim editing for the prompt (`/vim`).
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
