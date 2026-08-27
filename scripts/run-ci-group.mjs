@@ -134,9 +134,9 @@ const GROUPS = {
 // 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
 // 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
     ["verify-drag-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-drag-protocol.tsx']],
-// hover 事件性能与健壮性回归：批内连续无键 motion 合并（只处理序列尾
-// 事件，拖拽 motion 绝不合并）、无兴趣矩形快路径跳过全树 hit-test 且
-// 渲染提交/帧边界失效、有 handler 路径与基线事件序列一致。
+// hover 事件性能与健壮性回归：同批 motion 保留兴趣边界（tooltip dwell
+// 不提前）、无兴趣矩形快路径跳过全树 hit-test，且渲染提交/帧边界/
+// 多 root 失效；拖拽 motion 逐事件到达。
     ["verify-hover-coalesce", ['node', '--import', 'tsx/esm', 'scripts/verify-hover-coalesce.tsx']],
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。

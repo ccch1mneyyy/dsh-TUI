@@ -1,23 +1,20 @@
 /**
- * verify-hover-coalesce — hover 事件性能与健壮性回归（批内 motion 合并 +
+ * verify-hover-coalesce — hover 事件性能与健壮性回归（兴趣边界完整 +
  * 无兴趣矩形快路径）。
  *
  * 单元层（合成 DOM 树 + 直调 dispatchHover，计数器断言 hit-test 次数）：
  *   U1 无兴趣 rect 快路径：首次 motion 完整 hit-test 并缓存，rect 内
  *      motion 跳过（计数器不变），离开 rect 立即重新 hit-test；
- *   U2 子树含 hover handler 的 hit 节点不缓存（有 handler 路径事件序列
- *      与基线一致的保守保证——descendant 的 enter 必须正常触发）；
+ *   U2 容器子树、重叠 sibling 与多 root 不误用缓存；
  *   U3 invalidateNoInterestRect（帧边界钩子语义）后 rect 内 motion 重新
  *      hit-test；
  *   U4 注册 hover interest probe（tooltip 预留口）的节点不缓存。
  *
  * 集成层（headless xterm + 逐字节 SGR 写 stdin，真实 Ink 管线）：
- *   I1 同一 chunk 内 A→B→C 三点无键 motion：终态 = C 的 enter 集合，
- *      无中间 enter/leave；
- *   I2 有 handler 路径逐 chunk motion 与基线事件序列一致（enter/leave
- *      逐对出现）；
+ *   I1 同一 chunk 内 A→B→C、A→outside→A 保留全部 enter/leave 边界；
+ *   I2 有 handler 路径逐 chunk motion 与基线事件序列一致；
  *   I3 拖拽 motion 批内不合并：dragstart/dragmove 逐事件到达；
- *   I4 混批：无键 motion 前缀跳过、按键打断后新 run 单独处理；
+ *   I4 按键混批前后的 hover 边界顺序不变；
  *   I5 无兴趣矩形：无 handler 区域 3 次 motion 只 1 次全树 hit-test，
  *      重渲染挂上 handler（缓存失效）后 motion 正常 enter/leave。
  *
@@ -363,24 +360,37 @@ const slider = pos.slider
 }
 
 {
-  // I1（①）：同一 chunk 内 A→B→C 三点无键 motion —— 终态=C，无中间事件
+  // I1: every interest-boundary crossing in one stdin chunk is preserved.
+  // Tooltip dwell depends on leave/re-enter, so rAF-style tail coalescing is
+  // not semantically safe for A→outside→A.
   stdin.write(
     motionSeq(cellA.col + 3, cellA.row) +
     motionSeq(cellB.col + 3, cellB.row) +
     motionSeq(cellC.col + 3, cellC.row),
   )
   check(
-    'I1 批内三点 motion 只处理末点：终态 enter:C、无中间 enter/leave',
-    await settled(() => hoverLog.length === 1 && hoverLog[0] === 'enter:C'),
+    'I1 批内 A→B→C 保留全部 hover 边界',
+    await settled(() => hoverLog.join(',') === 'enter:A,leave:A,enter:B,leave:B,enter:C'),
     hoverLog.join(','),
   )
-  // 终态验证：移到 OUT → 恰好 leave:C（hovered 集合 = {C}）
   motion(out.col + 1, out.row)
+  await settle(() => hoverLog.at(-1) === 'leave:C')
+  hoverLog.length = 0
+
+  motion(cellA.col + 2, cellA.row)
+  await settle(() => hoverLog.join(',') === 'enter:A')
+  hoverLog.length = 0
+  stdin.write(
+    motionSeq(out.col + 1, out.row) +
+    motionSeq(cellA.col + 2, cellA.row),
+  )
   check(
-    'I1 终态 = C 的 enter 集合（移出仅 leave:C）',
-    await settled(() => hoverLog.join(',') === 'enter:C,leave:C'),
+    'I1 同批 A→outside→A 会 leave/re-enter（dwell 重新计时）',
+    await settled(() => hoverLog.join(',') === 'leave:A,enter:A'),
     hoverLog.join(','),
   )
+  motion(out.col + 1, out.row)
+  await settle(() => hoverLog.at(-1) === 'leave:A')
   hoverLog.length = 0
 }
 
@@ -420,7 +430,7 @@ const slider = pos.slider
 }
 
 {
-  // I4（混批）：无键 motion 前缀跳过、按键打断后新 run 单独处理
+  // I4（混批）：按键打断不改变前后 hover 边界顺序。
   stdin.write(
     motionSeq(cellA.col + 2, cellA.row) +
     motionSeq(cellB.col + 2, cellB.row) +
@@ -428,12 +438,12 @@ const slider = pos.slider
     motionSeq(cellC.col + 2, cellC.row),
   )
   check(
-    'I4 混批：run1 前缀跳过（只 enter:B）、按键打断、run2 单独处理（leave:B+enter:C）',
-    await settled(() => hoverLog.join(',') === 'enter:B,leave:B,enter:C'),
+    'I4 混批保留 A→B、按键、B→C 的完整边界',
+    await settled(() => hoverLog.join(',') === 'enter:A,leave:A,enter:B,leave:B,enter:C'),
     hoverLog.join(','),
   )
   motion(out.col + 1, out.row)
-  await settle(() => hoverLog.length === 4)
+  await settle(() => hoverLog.length === 6)
   hoverLog.length = 0
 }
 
