@@ -151,10 +151,11 @@ const screen = () => viewportLines(term).join('\n')
 
 const promptText = () => {
   // The prompt row begins with the '❯' glyph; the vim badge (INSERT/NORMAL)
-  // sits right after it, then the draft. Strip border decoration.
+  // sits right after it, then the draft. Strip border decoration and the
+  // ⛶ expand-editor affordance now ending the row.
   const match = screen().match(/^[❯]\s*(.*)$/m)
   const raw = match === null ? '' : (match[1] ?? '')
-  return raw.replace(/[╭╮╰╯─│═║]+/g, '').trim()
+  return raw.replace(/[╭╮╰╯─│═║⛶]+/g, '').trim()
 }
 // NOTE: the prompt can span multiple visual rows (multi-line drafts); the
 // '❯' row only carries the FIRST line, so multi-line assertions check the
