@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandExecution, CommandRuntime } from '@deepseek-ai/dsh-commands'
-import { isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
+import { isModelInvocable, isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
@@ -5367,17 +5367,16 @@ export function createChannel(
         ...(renderedInstructions?.truncated ?? []).map(file => file.displayPath),
       ])
       files.push(...[...instructionPaths].map(displayPath => ({ displayPath })))
-      // The skills registry is host-plane but scope-layered: preset rows
-      // (skill-filesystem) register into the preset's layer, so the catalog
-      // must be read through the agent's scope chain (serviceForAgent falls
-      // back to the host context when no roster is mounted).
-      const skillsService = serviceForAgent<{
-        list(options?: unknown): Promise<readonly { name: string; description: string }[]>
-      }>(ctx, target, 'skills')
-      if (skillsService !== undefined) {
-        const catalog = await skillsService.list({})
+      // A registry entry reaches the model only through dsh-tool-skill's
+      // catalog, which is gated on that exact tool being visible to the agent.
+      const skillsRegistry = tools.some(tool => tool.name === 'skill')
+        ? skillRegistryFor(target)
+        : undefined
+      if (skillsRegistry !== undefined) {
+        const observation = await skillsRegistry.snapshot(skillViewOptions(target))
         if (target !== agent) return
-        skills.push(...catalog.map(skill => ({
+        if (!observation.complete) return
+        skills.push(...observation.skills.filter(isModelInvocable).map(skill => ({
           name: skill.name,
           description: skill.description,
         })))
