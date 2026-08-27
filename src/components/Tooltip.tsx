@@ -1,7 +1,7 @@
 import React from 'react'
 import { Box, Text, useTerminalSize } from '../ui.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { wrapWidth } from '../sessions/format.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
 import type { PointerEvent } from '../ink/events/pointer-event.js'
 
 /**
@@ -177,7 +177,10 @@ export function TooltipLayer(): React.ReactNode {
 
   if (tooltip === null) return null
   const maxWidth = Math.max(10, columns - 4)
-  let lines = wrapWidth(tooltip.content, maxWidth - 2)
+  // Grapheme-aware wrap (parity with PromptInput's wrapToWidth): code-point
+  // iteration splits ZWJ emoji and combining sequences across rows, leaving
+  // broken halves at the row edges. Newlines are honoured like wrapWidth.
+  let lines = wrapTooltipContent(tooltip.content, maxWidth - 2)
   // A tooltip taller than the terminal is useless; keep the head.
   const maxLines = Math.max(1, rows - 2)
   if (lines.length > maxLines) lines = lines.slice(0, maxLines)
@@ -209,4 +212,37 @@ export function TooltipLayer(): React.ReactNode {
       ))}
     </Box>
   )
+}
+
+/**
+ * Wrap tooltip content to display width, breaking only BETWEEN grapheme
+ * clusters (ZWJ emoji, combining sequences and CJK wide cells stay whole).
+ * Newlines in the input are honoured. Mirrors PromptInput.wrapToWidth's
+ * break rule so the tooltip shows exactly the text the input would wrap.
+ */
+function wrapTooltipContent(text: string, width: number): string[] {
+  const rows: string[] = []
+  if (width <= 0) return rows
+  const segmenter = getGraphemeSegmenter()
+  for (const line of text.split('\n')) {
+    if (line === '') {
+      rows.push('')
+      continue
+    }
+    let current = ''
+    let used = 0
+    for (const { segment } of segmenter.segment(line)) {
+      const w = stringWidth(segment)
+      if (used + w > width && current !== '') {
+        rows.push(current)
+        current = segment
+        used = w
+      } else {
+        current += segment
+        used += w
+      }
+    }
+    rows.push(current)
+  }
+  return rows
 }

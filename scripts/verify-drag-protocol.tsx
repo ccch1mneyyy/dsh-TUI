@@ -224,6 +224,20 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
 }
 
 {
+  // U4b: 锚点格豁免 —— press 后同格 motion（手抖/触控板）不是拖拽：
+  // 会话保持 dormant，release 照常走 click 路径（输入框双击自检测的
+  // 第一击依赖这次 click 派发）。修复 I-1（复审发现）。
+  const { pad } = makeTree()
+  const { app, events, clicks } = makeFakeApp(pad)
+  handleMouseEvent(app, mouse(0, 'press', 6, 3))
+  handleMouseEvent(app, mouse(0x20, 'press', 6, 3)) // 同格 motion
+  handleMouseEvent(app, mouse(0, 'release', 6, 3))
+  check('U4b 同格 motion 不触发 drag 事件', events.length === 0)
+  check('U4b click 照常分发', clicks.length === 2 && clicks[0] === 6 && clicks[1] === 3)
+  check('U4b 会话已清理', (app as unknown as { dragSession: unknown }).dragSession === null)
+}
+
+{
   // U5: 已启动 release —— dragend、绝不 click
   const { pad } = makeTree()
   const { app, events, clicks } = makeFakeApp(pad)
@@ -250,6 +264,30 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
   check('U6 无 drag 会话', (app as unknown as { dragSession: unknown }).dragSession === null)
   handleMouseEvent(app, mouse(0x24, 'press', 9, 4))
   check('U6 shift drag 走 onSelectionDrag', events.length === 0)
+}
+
+{
+  // U6b: 连续两次 Shift+click（500ms/1 格窗口内）不得触发多击链——
+  // Shift+click 是选区扩展手势，不是双击选词；误判会让 onMultiClick 的
+  // 屏幕词选压制 click 派发并覆盖剪贴板。修复 I-2（复审发现）。
+  const { pad } = makeTree()
+  const { app } = makeFakeApp(pad)
+  let multiClicks = 0
+  ;(app.props as { onMultiClick: () => void }).onMultiClick = () => {
+    multiClicks++
+  }
+  handleMouseEvent(app, mouse(0x04, 'press', 5, 3))
+  handleMouseEvent(app, mouse(0x04, 'release', 5, 3))
+  handleMouseEvent(app, mouse(0x04, 'press', 5, 3))
+  const sel = (app.props as { selection: import('../src/ink/selection.js').SelectionState })
+    .selection
+  check('U6b 双 Shift+click 不触发 onMultiClick', multiClicks === 0, `multi=${multiClicks}`)
+  check('U6b 第二次 Shift press 走选择', sel.anchor !== null && sel.isDragging)
+  check(
+    'U6b 多击链未累计',
+    (app as unknown as { clickCount: number }).clickCount <= 1,
+    `clickCount=${(app as unknown as { clickCount: number }).clickCount}`,
+  )
 }
 
 {

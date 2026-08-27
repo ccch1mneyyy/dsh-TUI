@@ -1977,13 +1977,22 @@ export function PromptInput({
   const localToOffset = (localCol: number, localRow: number): number | null => {
     const lastVisible = Math.min(visualLines.length - 1, windowStart + MAX_VISIBLE_LINES - 1)
     const clamped = Math.max(windowStart, Math.min(windowStart + localRow, lastVisible))
+    // Fold prefix (▾) row: the rendered first row is truncated by prefixCols,
+    // so both the column and the wrap budget shift — without the correction
+    // a drag starting on the first row lands prefixCols to the right of the
+    // pointer (parity with handleValueClick's click mapping). Presses ON the
+    // prefix cells clamp to the row start (drag-from-0, like selecting the
+    // whole first row backwards).
+    const isPrefixRow = !block && clamped === 0 && prefixCols > 0
+    const col = isPrefixRow ? Math.max(0, localCol - prefixCols) : localCol
+    const width = isPrefixRow ? inputWidth - prefixCols : inputWidth
     if (block) {
       if (clamped === chipRow) return null
       return clamped < chipRow
-        ? clickToCursorOffset(head, inputWidth, clamped, localCol)
-        : block.end + clickToCursorOffset(tail, inputWidth, clamped - chipRow - 1, localCol)
+        ? clickToCursorOffset(head, width, clamped, col)
+        : block.end + clickToCursorOffset(tail, width, clamped - chipRow - 1, col)
     }
-    return clickToCursorOffset(value, inputWidth, clamped, localCol)
+    return clickToCursorOffset(value, width, clamped, col)
   }
 
   /**

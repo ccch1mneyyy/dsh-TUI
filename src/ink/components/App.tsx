@@ -937,6 +937,15 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			// entirely (startSelection never ran for this press).
 			const session = app.dragSession;
 			if (session) {
+				// Anchor-cell exemption (parity with selection.ts): motion
+				// landing on the press cell is hand jitter, not a drag —
+				// keep the session dormant so release resolves to the plain
+				// click path (and the input's double-click detector sees
+				// the press). Without it, trackpads/1002 terminals turn a
+				// wobbly click into a 1-cell drag selection.
+				if (col === session.startCol && row === session.startRow) {
+					return;
+				}
 				session.lastCol = col;
 				session.lastRow = row;
 				if (!session.started) {
@@ -1002,6 +1011,18 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 				app.clickCount = 0;
 				return;
 			}
+		}
+		// Modifier presses (shift/alt/ctrl) are selection-extension
+		// gestures — Shift+click extends the input selection via the click
+		// path, never a double-click word selection. Break the multi-click
+		// chain here: two Shift+clicks inside the 500ms/1-cell window must
+		// not fire onMultiClick (screen word select would swallow the click
+		// dispatch and overwrite the clipboard).
+		if ((m.button & 0x1c) !== 0) {
+			app.clickCount = 0;
+			app.lastClickTime = 0;
+			app.lastClickCol = -1;
+			app.lastClickRow = -1;
 		}
 		// Fresh left press. Detect multi-click HERE (not on release) so the
 		// word/line highlight appears immediately and a subsequent drag can
