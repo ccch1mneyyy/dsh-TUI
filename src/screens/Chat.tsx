@@ -46,6 +46,7 @@ import { ScrollbarGutter } from '../components/ScrollbarGutter.js'
 import type { TimelineSnapshot } from '../ink/timeline-rail.js'
 import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
+import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
@@ -3640,6 +3641,12 @@ export function Chat({
         </OverlayAbove>
         )}
       </Box>
+      {/* Tooltip 悬停浮层：absolute 零布局高度，挂在根 Box 最后确保盖在
+          其余内容之上（yoga 的 absolute 相对父级，根 Box 原点即屏原点，
+          指针 anchor 的屏幕坐标可直接使用）。订阅模块级 store，锚点/
+          内容由各处的 useTooltip hover props 写入；resize 时自行隐藏
+          （几何失效）。 */}
+      <TooltipLayer />
     </Box>
   )
 }

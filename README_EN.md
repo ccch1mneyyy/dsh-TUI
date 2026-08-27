@@ -57,6 +57,8 @@ the interface, and removing it leaves no core modifications behind.
   timeline / scrollbar / hidden modes.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
+  In fullscreen, hovering a truncated tool header, wrapped user prompt, or
+  session title for ~600ms opens a tooltip with the full content.
 - **Complete session workflow**: `/resume` groups history by working directory
   with search and preview (left-click resumes, right-click opens an action
   menu), alongside `/new`, `/workspace`, `/compact`, `/export`,

@@ -7,6 +7,7 @@ import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../
 import { ToolUseLoader } from '../ToolUseLoader.js'
 import { SplitDiffView } from '../SplitDiffView.js'
 import { SyntaxText } from '../SyntaxText.js'
+import { useTooltip } from '../Tooltip.js'
 import { formatDuration } from '../../cc/format.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
@@ -294,6 +295,14 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
   filePath?: string
   onOpenFile?: (path: string) => void
 }): React.ReactNode {
+  // Hover tooltip: the header line truncates long paths/commands, so the
+  // full string (or the unfolded terminal script) pops up after a dwell.
+  // Empty content is a no-op inside the hook.
+  const headerTooltip = useTooltip(() => {
+    if (title === undefined) return displayArgs
+    if (isTerminal) return title
+    return title.trim()
+  })
   if (title === undefined) {
     return (
       <>
@@ -301,7 +310,7 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
           <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
         </Box>
         {displayArgs !== '' && (
-          <Box flexWrap="nowrap">
+          <Box flexWrap="nowrap" {...headerTooltip}>
             <Text>(</Text>
             <SyntaxText text={clipHeaderArgs(displayArgs)} sourceText={displayArgs} language={argsLanguage} />
             <Text>)</Text>
@@ -316,7 +325,7 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
         <Box flexShrink={0}>
           <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
         </Box>
-        <Box flexWrap="nowrap">
+        <Box flexWrap="nowrap" {...headerTooltip}>
           {folded === undefined ? (
             <Text>({title})</Text>
           ) : (
@@ -347,7 +356,7 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
     const before = trimmed.slice(0, at)
     const after = trimmed.slice(at + filePath.length)
     return (
-      <Box flexWrap="nowrap">
+      <Box flexWrap="nowrap" {...headerTooltip}>
         <Text bold color={nameColor} wrap="truncate-end">{before}</Text>
         <Box
           onClick={(event: ClickEvent) => {
@@ -367,7 +376,7 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
   const head = space === -1 ? trimmed : trimmed.slice(0, space)
   const tail = space === -1 ? '' : trimmed.slice(space)
   return (
-    <Box flexWrap="nowrap">
+    <Box flexWrap="nowrap" {...headerTooltip}>
       <Text bold color={nameColor} wrap="truncate-end">
         {head}
         <Text bold={false} color="text">{tail}</Text>
