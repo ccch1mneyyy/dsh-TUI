@@ -614,15 +614,20 @@ export function PromptInput({
    */
   const updateSelection = (start: number, end: number) => {
     const text = valueRef.current
+    const anchor = normalizeCursorOffset(text, start)
     let lo = normalizeCursorOffset(text, Math.min(start, end))
     let hi = normalizeCursorOffset(text, Math.max(start, end))
     const block = foldBlockRef.current
     if (block) {
-      // The block is atomic: clamp BOTH ends into the side that holds `lo`
-      // (which is always on a side — clicks/carets never land inside it),
-      // so the selection can never cross the chip row.
-      if (lo <= block.start) hi = Math.min(hi, block.start)
-      else hi = Math.max(hi, block.end)
+      // Clamp by the ORIGINAL anchor side, not sorted `lo`: for a reverse
+      // tail→head drag, `lo` is in the head even though the gesture belongs
+      // to the tail. Both selection and caret must stay on the anchor side.
+      if (anchor <= block.start) {
+        hi = Math.min(hi, block.start)
+      } else {
+        lo = Math.max(lo, block.end)
+        hi = Math.max(hi, block.end)
+      }
     }
     if (lo >= hi) {
       selectionRef.current = null

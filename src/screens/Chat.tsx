@@ -641,6 +641,10 @@ export function Chat({
     cb => (handle ? handle.subscribe(cb) : () => {}),
     () => (handle ? handle.isSticky() : true),
   )
+  const subscribeTooltipInvalidation = React.useCallback(
+    (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
+    [handle],
+  )
 
   // "N new messages" pill: new rows whose top edge is still BELOW the
   // viewport bottom. The count decrements as the user scrolls down through
@@ -3652,7 +3656,10 @@ export function Chat({
           指针 anchor 的屏幕坐标可直接使用）。订阅模块级 store，锚点/
           内容由各处的 useTooltip hover props 写入；resize 时自行隐藏
           （几何失效）。 */}
-      <TooltipLayer />
+      <TooltipLayer
+        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
+        subscribeInvalidation={subscribeTooltipInvalidation}
+      />
     </Box>
   )
 }

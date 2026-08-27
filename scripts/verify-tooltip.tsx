@@ -89,7 +89,7 @@ function Probe({ longContent }: { longContent?: boolean }): React.ReactNode {
 function TinyProbe(): React.ReactNode {
   return (
     <Box flexDirection="column">
-      <Target label="T" content="WIDE" delayMs={0} />
+      <Target label="T" content={'\x1b[31mWIDE\x1b[0m'} delayMs={0} />
       <KeySink />
       <tooltip.TooltipLayer />
     </Box>
@@ -167,6 +167,15 @@ try {
   await sleep(800)
   check('leaving before the dwell cancels the tooltip', !screenHas(term, 'TIP-ONE-FULL-MARKER'))
 
+  // Global geometry invalidation (scroll/modal/focus-out) must cancel a
+  // PENDING dwell too, not only an already shown tooltip.
+  hover(stdin, 3, oneRow + 1)
+  await sleep(300)
+  tooltip.clearTooltip()
+  await sleep(500)
+  check('geometry invalidation cancels a pending tooltip', !screenHas(term, 'TIP-ONE-FULL-MARKER'))
+  hover(stdin, COLS - 1, ROWS - 1)
+
   // 5. Custom delayMs shortens the dwell.
   hover(stdin, 3, fastRow + 1)
   await sleep(350)
@@ -237,8 +246,9 @@ try {
   if (tinyTarget !== null) hover(rig3.stdin, tinyTarget.col + 1, tinyTarget.row + 1)
   const tinyShown = await settled(() => viewportLines(rig3.term).some(line => line.includes('W')))
   const tinyLines = viewportLines(rig3.term).filter(line => /[W╭╰]/u.test(line))
-  check('ultra-narrow terminal: tooltip remains on-screen',
-    tinyShown && tinyLines.every(line => line.length <= TINY),
+  check('ultra-narrow terminal: tooltip remains on-screen and strips ANSI geometry',
+    tinyShown && tinyLines.every(line => line.length <= TINY) &&
+      !viewportLines(rig3.term).some(line => /\[(?:31|0)m/u.test(line)),
     JSON.stringify(tinyLines))
   await instance3.unmount()
 } finally {

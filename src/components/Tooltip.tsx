@@ -1,5 +1,7 @@
 import React from 'react'
+import stripAnsi from 'strip-ansi'
 import { Box, Text, useTerminalSize } from '../ui.js'
+import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import type { PointerEvent } from '../ink/events/pointer-event.js'
@@ -50,6 +52,7 @@ type TooltipState = {
 // Module-level store (the `src/ink/instances.ts` single-instance pattern):
 // writers are the hover handlers, the single reader is TooltipLayer.
 let state: TooltipState | null = null
+let invalidationGeneration = 0
 const listeners = new Set<() => void>()
 
 function notify(): void {
@@ -81,8 +84,9 @@ function hideTooltip(owner: TooltipOwner): void {
   }
 }
 
-/** Hide any shown tooltip (resize geometry invalidation, layer remount). */
+/** Hide shown content and invalidate every pending dwell timer. */
 export function clearTooltip(): void {
+  invalidationGeneration++
   if (state !== null) {
     state = null
     notify()
@@ -118,8 +122,10 @@ export function useTooltip(content: TooltipContent, opts?: TooltipOptions): Tool
       const col = event?.col ?? 0
       const row = event?.row ?? 0
       if (owner.timer !== null) clearTimeout(owner.timer)
+      const generationAtEnter = invalidationGeneration
       owner.timer = setTimeout(() => {
         owner.timer = null
+        if (generationAtEnter !== invalidationGeneration) return
         const resolved = typeof contentRef.current === 'function'
           ? contentRef.current()
           : contentRef.current
@@ -160,13 +166,29 @@ export function TooltipTarget({
  * it paints over everything else. Terminal resize hides the tooltip — its
  * anchor is screen geometry that just went stale.
  */
-export function TooltipLayer(): React.ReactNode {
+export function TooltipLayer({
+  invalidationKey,
+  subscribeInvalidation,
+}: {
+  /** Changes when a modal/screen geometry transition makes the anchor stale. */
+  invalidationKey?: unknown
+  /** Scroll/viewport subscription; every notification invalidates the anchor. */
+  subscribeInvalidation?: (listener: () => void) => () => void
+} = {}): React.ReactNode {
   const { columns, rows } = useTerminalSize()
+  const terminalFocused = useTerminalFocus()
   const tooltip = React.useSyncExternalStore(subscribeTooltip, getTooltipSnapshot)
-  // A remount (screen swap inside the app) starts from a clean slate.
+  // Remounts and modal/screen transitions invalidate shown AND pending tips.
   React.useEffect(() => {
     clearTooltip()
-  }, [])
+  }, [invalidationKey])
+  React.useEffect(() => {
+    if (!terminalFocused) clearTooltip()
+  }, [terminalFocused])
+  React.useEffect(() => {
+    if (subscribeInvalidation === undefined) return
+    return subscribeInvalidation(clearTooltip)
+  }, [subscribeInvalidation])
   const prevSize = React.useRef({ columns, rows })
   React.useEffect(() => {
     if (prevSize.current.columns !== columns || prevSize.current.rows !== rows) {
@@ -227,6 +249,12 @@ export function TooltipLayer(): React.ReactNode {
 function wrapTooltipContent(text: string, width: number): string[] {
   const rows: string[] = []
   if (width <= 0) return rows
+  // Tooltip content is display-only: remove ANSI/C0 controls before grapheme
+  // segmentation so a CSI sequence cannot be split and counted as visible
+  // columns. Newlines remain structural; tabs become deterministic spaces.
+  text = stripAnsi(text)
+    .replace(/\t/gu, '        ')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
   const segmenter = getGraphemeSegmenter()
   for (const line of text.split('\n')) {
     if (line === '') {

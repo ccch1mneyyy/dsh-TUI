@@ -494,7 +494,8 @@ function makeHarness(cols: number, rows: number): Harness {
     stdin.write('PRE')
     const foldLines = Array.from({ length: 12 }, (_, i) => `fold-line-${i}`)
     stdin.write(`\x1b[200~${foldLines.join('\n')}\x1b[201~`)
-    check('A9 大段粘贴折叠成 chip', await settled(() => screenHas('▸ 12 lines')))
+    stdin.write('TAIL')
+    check('A9 大段粘贴折叠成 chip', await settled(() => screenHas('▸ 12 lines') && screenHas('TAIL')))
     // 奇数（13）次 ↑ 停在 block.start（偶数次回到 block.end），窗口回顶且
     // caret 行稳定在 head——空 tail 行的 caret 消失后该行塌缩、布局下移一行；
     // 塌缩前/后布局里 chip 都紧贴 PRE，必须等到底边框紧贴 chip（塌缩后布局）
@@ -534,10 +535,28 @@ function makeHarness(cols: number, rows: number): Harness {
     check(
       'A9 Backspace 删 head 选区后 chip 仍在',
       await settled(
-        () => screenHas('▸ 12 lines') && screenHas('fold-line-0') && !screenHas('PRE'),
+        () => screenHas('▸ 12 lines') && screenHas('fold-line-0') && screenHas('TAIL') && !screenHas('PRE'),
       ),
       `chip=${screenHas('▸ 12 lines')} preview=${screenHas('fold-line-0')} PRE=${screenHas('PRE')}`,
     )
+    // Reverse tail→head drag: sorted lo lies in head, but the anchor belongs
+    // to tail. Selection and caret must remain on the tail side.
+    const tailPos = findText('TAIL')!
+    press(tailPos.col + 4, tailPos.row)
+    motion(tailPos.col, tailPos.row - 1) // chip: ignored
+    motion(tailPos.col, tailPos.row - 2) // head side: clamp back to block.end
+    release(tailPos.col, tailPos.row - 2)
+    const reverseCopies = oscPayloads().length
+    check(
+      'A9 反向跨 chip 拖选仍钳制在 tail 侧',
+      await settled(() => inverseAt(tailPos.col, tailPos.row)) &&
+        controllerBox.current?.consumeSelectionCopy() === true &&
+        (await settled(() => oscPayloads().length === reverseCopies + 1)) &&
+        oscPayloads().at(-1) === 'TAIL',
+      oscPayloads().at(-1) ?? 'no osc52',
+    )
+    stdin.write('\x1b') // clear the reverse selection
+    await sleep(200)
 
     // A10: 无选区 consumeSelectionCopy=false 且不写剪贴板
     const idleCopies = oscPayloads().length
