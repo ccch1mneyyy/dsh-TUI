@@ -5396,7 +5396,10 @@ export function createChannel(
       const pendingIds = new Set(approvalStore?.pendingAgentIds() ?? [])
       const live: AgentViewRow[] = []
       if (agentsService !== undefined) {
-        for (const liveAgent of agentsService.list()) {
+        // Minimal test fixtures mount an agents service without enumeration
+        // (create-only); an empty roster is the honest projection there.
+        const roster = typeof agentsService.list === 'function' ? agentsService.list() : []
+        for (const liveAgent of roster) {
           // Subagent children are not agent-view rows (CC parity): they
           // belong to their parent's conversation.
           if (liveAgent.session.header.origin === 'subagent') continue
