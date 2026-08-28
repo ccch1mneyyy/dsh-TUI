@@ -3456,8 +3456,15 @@ export function Chat({
             backgroundAgentsNeedingInput={
               // Only the real channel supplies the seam; pre-agent-view test
               // stubs must not grow the footer row (layout-dependent
-              // regressions pin the visible row count).
-              channel.agentViewRows !== undefined ? backgroundAgentsNeedingInput : undefined
+              // regressions pin the visible row count). The footer only
+              // renders while some session actually waits (N > 0): a
+              // permanent idle row would steal a transcript row on every
+              // real channel — one row is enough to scroll the startup
+              // header fully off a short terminal, pausing its viewport
+              // clock and shifting every row-count layout invariant.
+              channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
+                ? backgroundAgentsNeedingInput
+                : undefined
             }
             controllerRef={promptControllerRef}
           />
