@@ -259,8 +259,10 @@ for (const lang of ['zh', 'en']) {
       )
       check(
         `${lang} ${cols}x${rows} menu: every item fits above the bottom edge`,
-        openIdx >= 0 && openIdx + 2 < lines.length && /Delete|删除/.test(lines[openIdx + 2]?.text ?? ''),
-        openIdx >= 0 ? JSON.stringify(lines.slice(openIdx, openIdx + 3)) : 'menu missing',
+        // Four items now (open/pin/rename/delete): the last one, Delete, must
+        // still sit above the bottom edge of the clamped popup.
+        openIdx >= 0 && openIdx + 3 < lines.length && /Delete|删除/.test(lines[openIdx + 3]?.text ?? ''),
+        openIdx >= 0 ? JSON.stringify(lines.slice(openIdx, openIdx + 4)) : 'menu missing',
       )
       // Wide terminals (resized width ≥ 120) keep the directory rail. While
       // the menu is open, clicking a DIFFERENT workspace row switches the

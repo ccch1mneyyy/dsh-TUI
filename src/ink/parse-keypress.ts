@@ -1096,6 +1096,8 @@ export type ParsedKey = {
   mouseCol?: number
   /** Pointer row (0-indexed) for wheel keys. See mouseCol. */
   mouseRow?: number
+  /** Raw SGR/X10 button byte for wheel modifiers and direction. */
+  mouseButton?: number
 }
 
 /** A terminal response sequence (DECRPM, DA1, OSC reply, etc.) parsed
@@ -1157,24 +1159,23 @@ function parseMouseEvent(s: string): ParsedMouse | null {
  * DECSET 1000/1002 but ignore 1006 (SGR): clicks and button-drags become
  * real ParsedMouse events so text selection works there too.
  *
- * Protocol limits (documented, accepted): X10 has no release events — a
- * started selection finishes via App's lost-release recovery (next press /
- * focus-out / no-button motion), and click dispatch (release-based) stays
- * SGR-only. No-button motion (hover) is unrepresentable without the drag
- * bit, so hover stays SGR-only. Wheel returns null (parseKeypress's wheel
- * branch turns it into a key with coordinates).
+ * Classic X10 reports release as Cb low bits 3 with the same `M` framing;
+ * it cannot identify WHICH button was released, but App can pair it with its
+ * active left selection/drag session. No-button hover is not representable,
+ * so hover stays SGR-only. Wheel returns null (parseKeypress's wheel branch
+ * turns it into a key with coordinates).
  */
 function parseX10MouseEvent(s: string): ParsedMouse | null {
   if (s.length !== 6 || !s.startsWith('\x1b[M')) return null
   const button = s.charCodeAt(3) - 32
-  // Wheel (bit 6) → key path; no-button without drag bit → unsupported
-  // hover encoding, swallow upstream.
+  // Wheel (bit 6) → key path. Low bits 3 without motion is the classic
+  // X10 release code (button identity is unavailable, pairing happens in App).
   if ((button & 0x40) !== 0) return null
-  if ((button & 0x03) === 3 && (button & 0x20) === 0) return null
+  const release = (button & 0x03) === 3 && (button & 0x20) === 0
   return {
     kind: 'mouse',
     button,
-    action: 'press',
+    action: release ? 'release' : 'press',
     // X10 coords are 1-indexed like SGR (charCode - 32).
     col: s.charCodeAt(4) - 32,
     row: s.charCodeAt(5) - 32,
@@ -1275,10 +1276,8 @@ function parseKeypress(s: string = ''): ParsedKey {
   // ignore DECSET 1006 (SGR) but honor 1000/1002 emit this legacy encoding.
   // Button bits match SGR: 0x40 = wheel, low bit = direction, 0x20 = drag.
   // Wheel events become wheel keys (with coordinates, like SGR); clicks and
-  // drags become ParsedMouse so X10-only terminals get selection support.
-  // X10 cannot report button release — click dispatch (release-based) stays
-  // SGR-only; a started selection finishes via the lost-release recovery
-  // paths (next press / focus-out / no-button motion).
+  // drags and the generic low-bits-3 release become ParsedMouse so X10-only
+  // terminals get selection and click/drag completion support.
   if (s.length === 6 && s.startsWith('\x1b[M')) {
     const button = s.charCodeAt(3) - 32
     const col = s.charCodeAt(4) - 32 - 1
@@ -1431,5 +1430,6 @@ function createWheelKey(
     isPasted: false,
     mouseCol: col,
     mouseRow: row,
+    mouseButton: button,
   }
 }

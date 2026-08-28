@@ -11,6 +11,7 @@ import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
 import { ContextBarView } from '../components/ContextBarView.js'
+import { TooltipTarget } from '../components/Tooltip.js'
 import { formatProject } from '../sessions/format.js'
 import { homeDir } from '../utils/paths.js'
 import {
@@ -60,6 +61,10 @@ type FieldPart = {
   node: React.ReactNode
   /** Present when the field shows a detail readout on hover. */
   id?: HoverTarget
+  /** Present when the field's own text may be truncated: hovering pops a
+   *  tooltip with the full string (e.g. the session title, cut mid-word
+   *  when the right-aligned group runs out of columns). */
+  tooltip?: string
 }
 
 /**
@@ -91,7 +96,13 @@ function FieldLine({
             flexShrink={1}
             {...(part.id === undefined ? {} : hoverProps(part.id))}
           >
-            <Text wrap="truncate">{part.node}</Text>
+            {part.tooltip === undefined || part.tooltip === '' ? (
+              <Text wrap="truncate">{part.node}</Text>
+            ) : (
+              <TooltipTarget content={part.tooltip}>
+                <Text wrap="truncate">{part.node}</Text>
+              </TooltipTarget>
+            )}
           </Box>
         </React.Fragment>
       ))}
@@ -329,6 +340,9 @@ export function StatusLine({
       ? [{
           key: 'title',
           id: 'title' as const,
+          // The title truncates mid-word when the right-aligned group
+          // overflows; the tooltip carries the full string.
+          tooltip: channel.sessionTitle,
           node: <Text dimColor>{channel.sessionTitle}</Text>,
         }]
       : []),

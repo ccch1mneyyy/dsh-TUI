@@ -26,7 +26,8 @@ import {
   type BrowserFilters,
   type WorkspaceGroup,
 } from '../sessions/view.js'
-import { t } from '../i18n.js'
+import { t, type I18nKey } from '../i18n.js'
+import { readSessionPins, setSessionPinned } from '../sessionPins.js'
 import type { Channel } from '../dsh-adapter/channel.js'
 import type { PreviewEntry, SessionSummary } from '../dsh-adapter/sessions/index.js'
 
@@ -62,7 +63,7 @@ const WORKSPACE_ROW_HEIGHT = 2
  * The right-click session menu, top to bottom. Index doubles as the
  * keyboard cursor: ↑/↓ move it, Enter activates the highlighted action.
  */
-const MENU_ACTIONS = ['open', 'rename', 'delete'] as const
+const MENU_ACTIONS = ['open', 'pin', 'rename', 'delete'] as const
 type MenuAction = (typeof MENU_ACTIONS)[number]
 /** Popup size, border included; clamped to the terminal so it never clips. */
 const MENU_WIDTH = 22
@@ -72,6 +73,11 @@ const MENU_LABEL_KEYS = {
   rename: 'resume-menu-rename',
   delete: 'resume-menu-delete',
 } as const
+/** The pin item's label depends on the target's current pin state. */
+const menuLabelKey = (action: MenuAction, pinned: boolean): I18nKey =>
+  action === 'pin'
+    ? (pinned ? 'resume-menu-unpin' : 'resume-menu-pin')
+    : MENU_LABEL_KEYS[action]
 
 /** A thrown value's message, for a notification that has to say something. */
 function message(error: unknown): string {
@@ -185,6 +191,18 @@ export function SessionBrowser({
   const [previewOpen, setPreviewOpen] = React.useState(false)
   const [preview, setPreview] = React.useState<readonly PreviewEntry[]>([])
   const [previewLoading, setPreviewLoading] = React.useState(false)
+  /**
+   * Pinned session ids, from `~/.dsh-tui/session-pins.json`. Pins whose
+   * sessions no longer exist are inert: the view filters them against the
+   * live listing, and the file is left alone (lazy tolerance — a preference
+   * file is not an index and rewrites cost more than stale entries).
+   */
+  const [pins, setPins] = React.useState<ReadonlySet<string>>(() => readSessionPins())
+  // Keep pin toggles synchronous across several keys delivered in one stdin
+  // chunk. The state render may lag, but the next command must see the set the
+  // previous command successfully persisted.
+  const pinsRef = React.useRef(pins)
+  pinsRef.current = pins
   /**
    * The right-click session menu: which session it belongs to, where the
    * pointer was (0-indexed screen coords, for anchoring), and which item
@@ -302,8 +320,8 @@ export function SessionBrowser({
         branch: channel.gitBranch,
         currentId: channel.agentId,
         sameProject: scopeSameProject,
-      }),
-    [sessions, filters, scopeCwd, channel.gitBranch, channel.agentId, scopeSameProject],
+      }, pins),
+    [sessions, filters, scopeCwd, channel.gitBranch, channel.agentId, scopeSameProject, pins],
   )
 
   // Resolve identity to a position once per render. A cursor whose session is
@@ -575,9 +593,44 @@ export function SessionBrowser({
     })
   }
 
+  /** Persist one pin mutation and synchronously adopt the returned full set. */
+  const persistPin = (id: string, pinned: boolean): boolean => {
+    const result = setSessionPinned(id, pinned)
+    if (!result.ok) return false
+    pinsRef.current = result.pins
+    setPins(result.pins)
+    return true
+  }
+
+  /**
+   * Pin or unpin one session. A pure view preference: no reload needed, the
+   * pinned group is derived from the listing already on screen. Persistence
+   * failure is visible and never paints a star that will disappear on restart.
+   */
+  const togglePin = (target: SessionSummary): void => {
+    if (mode !== 'list' || actionPendingRef.current) return
+    closeMenu()
+    const pinning = !pinsRef.current.has(target.id)
+    if (!persistPin(target.id, pinning)) {
+      report(t('resume-pin-save-failed'), 'error')
+      return
+    }
+    report(t(pinning ? 'resume-pinned' : 'resume-unpinned', { name: target.title.text }), 'info')
+  }
+
   const runDelete = (target: SessionSummary): void =>
     mutate(
-      () => channel.deleteSession(target.id),
+      async (): Promise<boolean> => {
+        const ok = await channel.deleteSession(target.id)
+        // A deleted session's pin must not linger into the next launch's
+        // pinned group (where its row would then be silently missing).
+        if (ok && pinsRef.current.has(target.id)) {
+          // Failure is harmless here: the deleted id is lazily invisible, and
+          // a later pin mutation retries from the persisted set.
+          persistPin(target.id, false)
+        }
+        return ok
+      },
       t('resume-deleted', { name: target.title.text }),
       t('resume-delete-failed', { name: target.title.text }),
     )
@@ -617,6 +670,8 @@ export function SessionBrowser({
     const action: MenuAction = MENU_ACTIONS[item]
     if (action === 'open') {
       resumeSession(target)
+    } else if (action === 'pin') {
+      togglePin(target)
     } else if (action === 'rename') {
       setRenameText(target.title.text)
       setMode('rename')
@@ -754,6 +809,12 @@ export function SessionBrowser({
     } else if (isMod(key) && input === 'r' && focused !== undefined) {
       setRenameText(focused.title.text)
       setMode('rename')
+    } else if (isMod(key) && input === 'p') {
+      // Resolve through focusRef, not the render closure: Down + Ctrl+P may
+      // arrive in one stdin chunk, and the pin must follow the moved cursor.
+      // Plain `p` remains search text like every unbound character.
+      const target = sessionAt(view.rows, focusRef.current)
+      if (target !== undefined) togglePin(target)
     } else if (isMod(key) && input === 'd' && focused !== undefined) {
       setMode('confirm-delete')
     } else if (isMod(key) && input === 'x' && view.emptyCount > 0) {
@@ -823,7 +884,7 @@ export function SessionBrowser({
                 runs: filters.showSubagents ? t('session-toggle-on') : t('session-toggle-off'),
               }),
               t('session-hint-list-mid', { mod: modLabel }),
-              t('session-hint-list-short'),
+              t('session-hint-list-short', { mod: modLabel }),
             ],
             inputBudget,
           )
@@ -934,6 +995,13 @@ export function SessionBrowser({
                       </Text>
                       <Text dimColor>{`  ${row.count}`}</Text>
                     </Box>
+                  ) : row.kind === 'pin' ? (
+                    <Box key="pin-header" flexShrink={0}>
+                      <Text color="remember" bold>
+                        {truncateWidth(` ★ ${t('session-pinned-group')}`, listWidth - 8)}
+                      </Text>
+                      <Text dimColor>{`  ${row.count}`}</Text>
+                    </Box>
                   ) : (
                     <SessionListRow
                       key={row.session.id}
@@ -941,6 +1009,7 @@ export function SessionBrowser({
                       width={listWidth}
                       depth={row.depth}
                       focused={windowTop + index === focus && level === 'sessions'}
+                      pinned={pins.has(row.session.id)}
                       now={now}
                       onClick={mode === 'list' && menu === undefined ? () => {
                         if (actionPendingRef.current) return
@@ -948,6 +1017,14 @@ export function SessionBrowser({
                         setFocusId(row.session.id)
                         resumeSession(row.session)
                       } : undefined}
+                      onTogglePin={
+                        mode === 'list' && menu === undefined && !actionPendingRef.current
+                          ? () => {
+                              setFocusId(row.session.id)
+                              togglePin(row.session)
+                            }
+                          : undefined
+                      }
                       onContextMenu={mode === 'list' ? (event: ContextMenuEvent) => {
                         if (actionPendingRef.current) return
                         setLevel('sessions')
@@ -1075,7 +1152,7 @@ export function SessionBrowser({
               }}
             >
               <Text color={action === 'delete' ? 'error' : undefined}>
-                {` ${index === menu.item ? '❯' : ' '} ${t(MENU_LABEL_KEYS[action])}`}
+                {` ${index === menu.item ? '❯' : ' '} ${t(menuLabelKey(action, pins.has(menuTarget.id)))}`}
               </Text>
             </Box>
           ))}

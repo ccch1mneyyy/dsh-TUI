@@ -14,7 +14,7 @@ session log and live `session/event` records, and submits user turns through
 `Agent.followup`"（`src/plugin.ts:29-33`），与 `dsh-jsonrpc` 属于同一类
 client-driver 前门。
 
-插件自带 TUI、本地命令面、打包技能以及移植的 Ink/Yoga 渲染器；渲染内核
+插件自带 TUI、本地命令面以及移植的 Ink/Yoga 渲染器；渲染内核
 `src/ink/` 是 Claude Code 内部 ink fork 的移植（归属证据见
 [origin.md](origin.md)，结构地图见 [ink-core.md](ink-core.md)）。
 
@@ -55,7 +55,7 @@ cordis.yml / cordis.patch.yml（组合层）
 | `src/cc/` | 为 Claude Code 风格 UI 适配的终端格式化与呈现辅助 |
 | `src/*Prefs.ts`、`src/customTheme.ts`、`src/sessionHistory.ts` | 持久化用户偏好与 `~/.dsh-cc` 下的本地元数据 |
 | `src/commands.ts` | 本地 slash 命令声明（39 条内置）与解析辅助 |
-| `skills/*/SKILL.md` | 随 npm 包分发的打包技能，由 `src/packaged-skills.ts` 注册 |
+| `.agents/skills/*/SKILL.md` | 仅供仓库维护者使用的项目技能，由 DSH 发现，不随 npm 分发 |
 | `cordis.patch.yml` | profile bundle 覆盖层（29 个顶层覆盖 + 4 行 insert）；行的顺序、行 ID、insert/override 语义都很关键 |
 | `cordis.yml` | 直接 `dsh --config` 启动的裸组合示例（24 个服务行） |
 | `scripts/` | 无头回归、复现环境、探针与诊断（repro 10 个 / verify 18 个，glob 前缀计数） |

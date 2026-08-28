@@ -397,7 +397,11 @@ export function Settings({
         refresh()
         setSecretProbe(count => count + 1)
       } else {
-        setNotice({ text: t('settings-save-failed', { ns }), tone: 'error' })
+        // A guarded rejection (e.g. a reserved credential ref) carries its
+        // own explanation; only unexplained failures fall back to the
+        // generic message.
+        const failureMessage = form.shell().failureMessage
+        setNotice({ text: failureMessage ?? t('settings-save-failed', { ns }), tone: 'error' })
       }
       if (pendingSaveRef.current.delete(ns)) {
         const next = formsRef.current.get(ns)

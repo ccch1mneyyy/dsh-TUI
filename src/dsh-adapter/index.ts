@@ -101,6 +101,11 @@ export interface Config {
   /** Show the session name as a chip on the prompt top border's right side
    *  (settings `dsh-tui.promptSessionLabel`); off by default. */
   promptSessionLabel?: boolean
+  /** Fullscreen draft editor (settings `dsh-tui.expandEditor`): the ⛶
+   *  affordance in the input row and the expandEditor shortcut (default
+   *  Ctrl+Shift+E) expand the draft into a whole-screen editor. On by
+   *  default; off removes both entry points. */
+  expandEditor?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
@@ -139,6 +144,7 @@ export const Config: Schema<Config> = Schema.object({
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   foldTerminalCommand: Schema.boolean().default(false),
   promptSessionLabel: Schema.boolean().default(false),
+  expandEditor: Schema.boolean().default(true),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),

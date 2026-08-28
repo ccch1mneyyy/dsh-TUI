@@ -57,14 +57,25 @@ the interface, and removing it leaves no core modifications behind.
   timeline / scrollbar / hidden modes.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
+  In fullscreen, hovering a truncated tool header, wrapped user prompt, or
+  session title for ~600ms opens a tooltip with the full content.
 - **Complete session workflow**: `/resume` groups history by working directory
   with search and preview (left-click resumes, right-click opens an action
-  menu), alongside `/new`, `/workspace`, `/compact`, `/export`,
+  menu; pin frequent sessions — a `Pinned` group floats them to the top, the
+  in-row star or `Ctrl+P` toggles, pins persist in `~/.dsh-tui`), alongside
+  `/new`, `/workspace`, `/compact`, `/export`,
   the `/btw` side question, model switching, double-`Esc` rewind through a
-  session fork, and vim editing for the prompt (`/vim`).
+  session fork, vim editing for the prompt (`/vim`), mouse selection
+  editing in the prompt (drag to select, Shift+click to extend,
+  double-click word select, `Ctrl+C` to copy the selection), and a
+  fullscreen draft editor (`Ctrl+Shift+E` or the `⛶` row button: line
+  numbers, current-line highlight, `Enter` = newline, `Ctrl+Enter` = send,
+  wheel scrolling, click/drag selection — long drafts get the whole
+  screen; disable it in `/settings`).
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
-  and registries.
+  and registries. `/skills` shows skills discovered from the active profile,
+  user, and project; dsh-TUI does not preinstall general-purpose skills.
 - **Designed for long sessions**: event-driven projection, differential output,
   message virtualization, replay coalescing, and bounded caches prevent render
   cost and memory from growing without limit; fingerprint-memoized hot paths
@@ -186,9 +197,10 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+Enter` (⌘Enter) | **Interrupt the current turn and send immediately** (interrupt) |
 | `Alt+Up` | Pull the last unhandled message back into the input for editing (without interrupting the turn) |
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
-| `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit |
-| `Esc` | Close the command/file menu; double-press while idle clears the input; **double-press on empty input = time rewind** |
+| `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit; **with an active mouse selection in the prompt, copies it to the clipboard and keeps it** |
+| `Esc` | Close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
+| `Ctrl+Shift+E` | Expand the fullscreen draft editor (Enter = newline, `Ctrl+Enter` = send, `Esc` = collapse keeping the draft; line numbers, wheel scrolling, click/drag selection) |
 | `Ctrl+R` | History search |
 | `/` | In-session full-text search (`n`/`N` to jump) |
 | `Ctrl+V` / `Alt+V` | Paste text or files from the file manager; images show as `[Image #N]` and are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |
@@ -196,7 +208,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `/vim` | Toggle vim editing for the prompt (session-scoped): `Esc` switches to NORMAL (`h/l/j/k`, `0/^/$`, `w/b`, `x/X`, `dd`/`d$`/`d0`/`dw`, `u` undo), `i/a/o` back to INSERT |
 | `?` | Keybinding menu (responds only when the input is empty) |
 | `Shift+↑` | Message selection mode (`Enter` expands a single message) |
-| `Ctrl+P` | Toggle the startup loaded-context panel (effective while the panel is on screen) |
+| `Ctrl+P` | Toggle the startup loaded-context panel while it is on screen; inside `/resume`, pin/unpin the selected session |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Logical line start / end; `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
 | `Ctrl+←` / `Ctrl+→` (⌘←/→) | Jump by word |
 | `Ctrl+U` / `Ctrl+K` | Delete before the cursor (to line start) / after the cursor (to line end) |
@@ -220,6 +232,10 @@ so keep using `Ctrl`.
 |---|---|
 | Drag to select | In-app text selection, **copied on release** (OSC 52 with native `wl-copy`/`xclip`/`xsel` fallback; `load-buffer -w` inside tmux); the selection is cleared after copying and a "Copied N characters" notice pops up |
 | Double / triple click | Select word / line, copied on selection just the same |
+| Drag inside the prompt input | Build an in-input selection (rendered highlight): `Backspace`/`Delete` delete it, typing replaces it, `←/→` collapse it to the corresponding edge, `Esc` only clears it; a folded paste block keeps the selection on the clicked side |
+| `Shift+click` in the prompt input | Extend the selection from its start edge (or the caret) to the clicked position |
+| Double-click a word in the prompt input | Select the whole word (paths and punctuation runs select as one; detected in the component, 500 ms / 1 cell) |
+| `Ctrl+C` with a prompt selection | Copy the selection to the clipboard (OSC 52 + native fallback) and keep it for editing |
 | Scroll wheel | Only with fullscreen mouse tracking: scroll Help while it is open, otherwise scroll messages (±3 lines per notch); default inline mode does not deliver wheel events to the TUI |
 | Click a timeline-rail tick | Jump to that turn — the rail covers every turn (folded ones included); a folded tick reveals its turn first, then scrolls it into place |
 | `Esc` | Cancel an in-progress drag selection (no copy) |
@@ -248,8 +264,8 @@ so keep using `Ctrl`.
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
 | Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` manage model providers — add a provider, or edit an existing one via a menu (API key · base URL · wire protocol · model list, or delete the provider; the model list pre-checks what you already enabled) (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
-| Skills | `/audit` code audit · `/bug` bug report · `/review` code review · `/practice` coding practice · `/pr-comments` PR comments · `/release-notes` release notes · `/vuln-check` vulnerability check |
-| Other | `/agents` subagent list · `/skills` skills directory · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` vim editing mode toggle · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
+| Skills | `/skills` lists skills discovered by DSH; user-invocable skills join the `/` menu as `/name` |
+| Other | `/agents` subagent list · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` vim editing mode toggle · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
 | Registry | `/plan` `/goal` `/feedback` `/permission` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
 
 > Unknown commands are sent to the model as ordinary messages (e.g. in a composition where `/permission` is not mounted).

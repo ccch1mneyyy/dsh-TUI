@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandExecution, CommandRuntime } from '@deepseek-ai/dsh-commands'
-import { isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
+import { isModelInvocable, isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
@@ -13,6 +13,7 @@ import {
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
+import { isReservedCredentialRef } from './credentialRefGuard.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
 import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 import { fetchBalance, type BalanceResult } from '../deepseekBalance.js'
@@ -606,6 +607,10 @@ export interface Channel {
   /** Whether the session-name chip shows on the prompt top border's right
    *  side (settings `dsh-tui.promptSessionLabel`; off by default). */
   readonly promptSessionLabel: boolean
+  /** Whether the fullscreen draft editor is enabled (settings
+   *  `dsh-tui.expandEditor`; on by default) — gates the ⛶ affordance and
+   *  the expandEditor shortcut. */
+  readonly expandEditor: boolean
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
@@ -1015,6 +1020,8 @@ export interface ChannelState {
   foldTerminalCommand: boolean
   /** Session-name chip on the prompt border (see the public Channel type). */
   promptSessionLabel: boolean
+  /** Fullscreen draft editor gate (see the public Channel type). */
+  expandEditor: boolean
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
@@ -1029,6 +1036,8 @@ export interface ChannelState {
   setFoldTerminalCommand(enabled: boolean): void
   /** Apply a prompt session-name chip change. */
   setPromptSessionLabel(enabled: boolean): void
+  /** Apply a fullscreen-editor gate change. */
+  setExpandEditor(enabled: boolean): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -1563,6 +1572,9 @@ export function createChannel(
     /** Session-name chip on the prompt top border; default off (settings
      *  `dsh-tui.promptSessionLabel`). */
     promptSessionLabel?: boolean
+    /** Fullscreen draft editor entry points; default on (settings
+     *  `dsh-tui.expandEditor`). */
+    expandEditor?: boolean
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -2675,6 +2687,7 @@ export function createChannel(
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
     foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true,
+    expandEditor: options.expandEditor !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,
@@ -4468,6 +4481,11 @@ export function createChannel(
       state.promptSessionLabel = enabled
       state.emit()
     },
+    setExpandEditor(enabled) {
+      if (enabled === state.expandEditor) return
+      state.expandEditor = enabled
+      state.emit()
+    },
     setStatusBar(config) {
       const next = normalizeStatusBar({ ...state.statusBar, ...config })
       const changed = Object.keys(next).some(key =>
@@ -4723,6 +4741,13 @@ export function createChannel(
         },
         async writeCredential(ref, value) {
           if (!credentials) throw new Error('credentials service unavailable')
+          // Second layer of the secret-ref reservation guard: the
+          // registration layer already rejects plugin sections with
+          // host-owned refs, but this seam must not trust it — a stale
+          // section (registered before the guard) or a direct call must not
+          // reach the shared credentials. The host's own main-credential
+          // writes go through providerSetup().writeCredential instead.
+          if (isReservedCredentialRef(ref)) throw new Error(t('settings-secret-ref-reserved', { ref }))
           await credentials.set(ref, value)
         },
       }
@@ -5443,20 +5468,20 @@ export function createChannel(
         ...(renderedInstructions?.truncated ?? []).map(file => file.displayPath),
       ])
       files.push(...[...instructionPaths].map(displayPath => ({ displayPath })))
-      // The skills registry is host-plane but scope-layered: preset rows
-      // (skill-filesystem) register into the preset's layer, so the catalog
-      // must be read through the agent's scope chain (serviceForAgent falls
-      // back to the host context when no roster is mounted).
-      const skillsService = serviceForAgent<{
-        list(options?: unknown): Promise<readonly { name: string; description: string }[]>
-      }>(ctx, target, 'skills')
-      if (skillsService !== undefined) {
-        const catalog = await skillsService.list({})
+      // A registry entry reaches the model only through dsh-tool-skill's
+      // catalog, which is gated on that exact tool being visible to the agent.
+      const skillsRegistry = tools.some(tool => tool.name === 'skill')
+        ? skillRegistryFor(target)
+        : undefined
+      if (skillsRegistry !== undefined) {
+        const observation = await skillsRegistry.snapshot(skillViewOptions(target))
         if (target !== agent) return
-        skills.push(...catalog.map(skill => ({
-          name: skill.name,
-          description: skill.description,
-        })))
+        if (observation.complete) {
+          skills.push(...observation.skills.filter(isModelInvocable).map(skill => ({
+            name: skill.name,
+            description: skill.description,
+          })))
+        }
       }
     } catch (error) {
       ctx.logger.warn('loaded-context snapshot failed: %o', error)
@@ -5470,7 +5495,7 @@ export function createChannel(
    * Rebuild the merged slash-command list: built-in locals, then registry
    * commands (plan/goal/…), then user-invocable skills from the DSH skill
    * registry (issue #86 — filesystem-discovered skills must appear in the
-   * `/` menu and Tab completion, like /audit and /review). Skill entries
+   * `/` menu and Tab completion, like /my-skill). Skill entries
    * are completion-only: dispatch falls through to the model as plain text,
    * where dsh-tool-skill's pre-step hook injects the skill body — the same
    * path a hand-typed `/skill-name` takes. Registry and skill reads are

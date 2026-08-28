@@ -18,9 +18,10 @@ import { FRAME_INTERVAL_MS, PTY_BACKLOG_BYTES } from './constants.js';
 import * as dom from './dom.js';
 import { beginGeometryFrame, endGeometryFrame, GEOMETRY_TRACE_ENABLED, noteFrameCause } from './geometry-trace.js';
 import { KeyboardEvent } from './events/keyboard-event.js';
+import type { DragEvent } from './events/drag-event.js';
 import { FocusManager } from './focus.js';
 import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
-import { dispatchClick, dispatchContextMenu, dispatchHover, dispatchWheel, clearHovered } from './hit-test.js';
+import { dispatchClick, dispatchContextMenu, dispatchDragEvent as bubbleDragEvent, dispatchHover, dispatchWheel, findDragTarget, clearHovered, invalidateNoInterestRect } from './hit-test.js';
 import { logMouseDebug } from '../utils/debug.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
@@ -277,6 +278,13 @@ export default class Ink {
     this.rootNode.onRender = this.scheduleRender;
     this.rootNode.onImmediateRender = this.renderNow;
     this.rootNode.onComputeLayout = () => {
+      // Hover no-interest cache (hit-test.ts) is strictly per-frame: every
+      // React commit may attach or detach hover handlers, so drop the cache
+      // at the COMMIT boundary. The renderer also invalidates at the top of
+      // each render pass, but that runs up to a frame later (throttled
+      // scheduleRender) — invalidating here closes the gap so a motion
+      // event inside that window re-hit-tests against the fresh tree.
+      invalidateNoInterestRect();
       // Calculate layout during React's commit phase so useLayoutEffect hooks
       // have access to fresh layout data
       // Guard against accessing freed Yoga nodes after unmount
@@ -366,6 +374,9 @@ export default class Ink {
     // App boundary against the new dimensions.)
     clearHovered(this.hoveredNodes);
     this.app?.resetPointerState();
+    // Same geometry wholesale-change: the cached no-interest hover rect
+    // (hit-test.ts) was computed against pre-resize rects — drop it.
+    invalidateNoInterestRect();
 
     // Invalidate every render that was scheduled against the OLD size: a
     // queued microtask generation or a scroll-drain timer would otherwise
@@ -1110,16 +1121,22 @@ export default class Ink {
    */
   setAltScreenActive(active: boolean, mouseTracking = false): void {
     if (this.altScreenActive === active) return;
+    const resetOldPointerContext = (): void => {
+      // Fire leave handlers before dropping the set — a bare clear strands
+      // old rows with hovered=true. resetPointerState also emits dragend for
+      // a captured drag before its geometry disappears.
+      clearHovered(this.hoveredNodes);
+      this.app?.resetPointerState();
+      invalidateNoInterestRect();
+    };
+    // Leaving must settle dragend WHILE the dispatch gate is still active;
+    // flipping altScreenActive first would silently drop the cleanup event.
+    if (!active) resetOldPointerContext();
     this.altScreenActive = active;
     this.altScreenMouseTracking = active && mouseTracking;
-    // Screen geometry/context just changed wholesale: hover sets, the
-    // multi-click chain, and any pending hyperlink open belong to the old
-    // screen. Fire leave handlers before dropping the set — a bare clear()
-    // strands the old screen's rows with hovered=true forever (stuck
-    // highlights). Stale clickCount would turn the first click into a
-    // double-click; stale hovered nodes would suppress real onMouseEnter.
-    clearHovered(this.hoveredNodes);
-    this.app?.resetPointerState();
+    // Entering has no old alt-screen drag to notify, but the main-screen
+    // hover/click geometry still needs to be cleared after the gate flips.
+    if (active) resetOldPointerContext();
     if (active) {
       this.mainScreenFrameState = {
         frontFrame: this.frontFrame,
@@ -1747,6 +1764,32 @@ export default class Ink {
     if (!this.altScreenActive) return;
     dispatchHover(this.rootNode, col, row, this.hoveredNodes);
   }
+  /**
+   * Drag protocol entry: find the drag target at an unmodified left
+   * press — the deepest node at (col, row) whose ancestor chain carries
+   * an onDragStart handler. Gated on altScreenActive like dispatchClick
+   * (drag needs mouse tracking + a fixed viewport). Returns null when no
+   * drag target is under the pointer, in which case App keeps the
+   * baseline selection/click path untouched.
+   */
+  findDragTargetAt(col: number, row: number): dom.DOMElement | null {
+    this.probeAltScreenHealth();
+    if (!this.altScreenActive) return null;
+    const target = findDragTarget(this.rootNode, col, row);
+    logMouseDebug('findDragTargetAt', { col, row, found: Boolean(target) });
+    return target;
+  }
+  /**
+   * Dispatch a drag event to the drag session target captured at press
+   * time (bubbles through its ancestors). Gated on altScreenActive like
+   * dispatchClick.
+   */
+  dispatchDrag(target: dom.DOMElement, event: DragEvent): void {
+    this.probeAltScreenHealth();
+    if (!this.altScreenActive) return;
+    logMouseDebug('dispatchDrag', { type: event.type, col: event.col, row: event.row });
+    bubbleDragEvent(target, event);
+  }
   dispatchKeyboardEvent(parsedKey: ParsedKey): void {
     this.probeAltScreenHealth();
     const target = this.focusManager.activeElement ?? this.rootNode;
@@ -1944,7 +1987,7 @@ export default class Ink {
   }
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           {node}
         </TerminalWriteProvider>

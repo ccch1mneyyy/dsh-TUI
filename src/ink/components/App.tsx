@@ -10,6 +10,8 @@ import { logError } from "../../utils/log.js";
 import { EventEmitter } from "../events/emitter.js";
 import { InputEvent } from "../events/input-event.js";
 import { TerminalFocusEvent } from "../events/terminal-focus-event.js";
+import { DragEvent } from "../events/drag-event.js";
+import type { DOMElement } from "../dom.js";
 import {
 	INITIAL_STATE,
 	type ParsedInput,
@@ -133,6 +135,16 @@ type Props = {
 	// exact cell; word/line mode snaps to word/line boundaries. Needs
 	// screen-buffer access (word boundaries) so lives on Ink, not here.
 	readonly onSelectionDrag: (col: number, row: number) => void;
+	// Drag protocol (DOM HTML5 drag subset). Find the drag target at an
+	// unmodified left-button press: the deepest node at (col, row) whose
+	// ancestor chain (inclusive) carries an onDragStart handler, or null.
+	// When non-null, App opens a drag session INSTEAD of text selection /
+	// multi-click. Optional so testing.tsx doesn't need to stub it.
+	readonly onDragTargetAt?: (col: number, row: number) => DOMElement | null;
+	// Dispatch a dragstart/dragmove/dragend DragEvent to the captured drag
+	// session target (bubbles through its ancestors). No-op outside
+	// fullscreen (Ink gates on altScreenActive). Optional like above.
+	readonly onDragDispatch?: (target: DOMElement, event: DragEvent) => void;
 	// Called when stdin data arrives after a >STDIN_RESUME_GAP_MS gap.
 	// Ink re-asserts terminal modes: extended key reporting, and (when in
 	// fullscreen) re-enters alt-screen + mouse tracking. Idempotent on the
@@ -211,6 +223,44 @@ export default class App extends PureComponent<Props, State> {
 	// repeat events (drag-then-release at same cell, etc.).
 	lastHoverCol = -1;
 	lastHoverRow = -1;
+	// Active drag session (DOM HTML5 drag subset). Opened on an unmodified
+	// left press over a node whose ancestor chain carries an onDragStart
+	// handler; `started` flips on the FIRST drag motion — DOM dragstart
+	// fires on first move, not on press. lastCol/lastRow track the most
+	// recent pointer position so an interrupted session (focus loss,
+	// screen swap) can still fire dragend near where the pointer was.
+	dragSession: {
+		target: DOMElement;
+		startCol: number;
+		startRow: number;
+		lastCol: number;
+		lastRow: number;
+		started: boolean;
+	} | null = null;
+
+	/**
+	 * End an in-flight drag session without a release event (focus lost,
+	 * screen swap, pointer-state reset): fire dragend at the last known
+	 * pointer position so consumers aren't left with an orphan session.
+	 * A session that never started (press without movement) ends silently.
+	 */
+	finishDragSession(): void {
+		const session = this.dragSession;
+		if (!session) return;
+		this.dragSession = null;
+		if (session.started) {
+			this.props.onDragDispatch?.(
+				session.target,
+				new DragEvent(
+					"dragend",
+					session.lastCol,
+					session.lastRow,
+					session.startCol,
+					session.startRow,
+				),
+			);
+		}
+	}
 
 	/**
 	 * Reset all transient pointer state. Called by Ink when the alt screen
@@ -227,6 +277,10 @@ export default class App extends PureComponent<Props, State> {
 		this.lastClickRow = -1;
 		this.lastHoverCol = -1;
 		this.lastHoverRow = -1;
+		// A drag session spanning a screen swap has no release coming —
+		// settle it (dragend if started) before the geometry it was
+		// captured against is gone.
+		this.finishDragSession();
 		if (this.pendingHyperlinkTimer) {
 			clearTimeout(this.pendingHyperlinkTimer);
 			this.pendingHyperlinkTimer = null;
@@ -675,7 +729,8 @@ function processKeysInBatch(
 	) {
 		updateLastInteractionTime();
 	}
-	for (const item of items) {
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i]!;
 		// Terminal responses (DECRPM, DA1, OSC replies, etc.) are not user
 		// input — route them to the querier to resolve pending promises.
 		if (item.kind === "response") {
@@ -686,6 +741,10 @@ function processKeysInBatch(
 		// Mouse click/drag events update selection state (fullscreen only).
 		// Terminal sends 1-indexed col/row; convert to 0-indexed for the
 		// screen buffer. Button bit 0x20 = drag (motion while button held).
+		// Process EVERY no-button motion boundary: A→outside→A in one stdin
+		// chunk must emit leave/re-enter so tooltip dwell restarts. Inert motion
+		// remains cheap through dispatchHover's per-root no-interest rect, and
+		// exact same-cell repeats are dropped by handleMouseEvent's coordinates.
 		if (item.kind === "mouse") {
 			handleMouseEvent(app, item);
 			continue;
@@ -705,6 +764,10 @@ function processKeysInBatch(
 		}
 		if (sequence === FOCUS_OUT) {
 			app.handleTerminalFocus(false);
+			// Drag protocol: focus loss also orphans an in-flight drag
+			// session — settle it with a dragend (if started) like the
+			// selection recovery below.
+			app.finishDragSession();
 			// Defensive: if we lost the release event (mouse released outside
 			// terminal window — some emulators drop it rather than capturing the
 			// pointer), focus-out is the next observable signal that the drag is
@@ -759,6 +822,7 @@ function processKeysInBatch(
 				item.mouseRow,
 				deltaY,
 				deltaX,
+				item.mouseButton,
 			);
 			if (consumed) {
 				logMouseDebug("wheel routed by position", {
@@ -808,11 +872,22 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 				finishSelection(sel);
 				app.props.onSelectionChange();
 			}
+			// Drag protocol: no-button motion during a drag session means
+			// the release was dropped (pointer left the window) — settle
+			// the session before the hover path takes over.
+			app.finishDragSession();
 			if (col === app.lastHoverCol && row === app.lastHoverRow) return;
 			app.lastHoverCol = col;
 			app.lastHoverRow = row;
 			app.props.onHoverAt(col, row);
 			return;
+		}
+		// X10 cannot report releases. A fresh button press after a captured
+		// drag is therefore the first reliable evidence that the old gesture
+		// ended; settle it before this press can open a replacement session.
+		// The same fallback is harmless for malformed/duplicated SGR streams.
+		if ((m.button & 0x20) === 0 && app.dragSession) {
+			app.finishDragSession();
 		}
 		if (baseButton !== 0) {
 			// Non-left press breaks the multi-click chain.
@@ -829,6 +904,50 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			return;
 		}
 		if ((m.button & 0x20) !== 0) {
+			// Drag protocol motion: a live drag session owns the gesture —
+			// first motion fires dragstart (DOM: dragstart fires on first
+			// move, not press), then dragmove. Selection drag is skipped
+			// entirely (startSelection never ran for this press).
+			const session = app.dragSession;
+			if (session) {
+				// Anchor-cell exemption (parity with selection.ts): motion
+				// landing on the press cell is hand jitter, not a drag —
+				// keep the session dormant so release resolves to the plain
+				// click path (and the input's double-click detector sees
+				// the press). Without it, trackpads/1002 terminals turn a
+				// wobbly click into a 1-cell drag selection.
+				if (col === session.startCol && row === session.startRow) {
+					return;
+				}
+				session.lastCol = col;
+				session.lastRow = row;
+				if (!session.started) {
+					session.started = true;
+					app.props.onDragDispatch?.(
+						session.target,
+						new DragEvent(
+							"dragstart",
+							col,
+							row,
+							session.startCol,
+							session.startRow,
+							{ button: m.button },
+						),
+					);
+				}
+				app.props.onDragDispatch?.(
+					session.target,
+					new DragEvent(
+						"dragmove",
+						col,
+						row,
+						session.startCol,
+						session.startRow,
+						{ button: m.button },
+					),
+				);
+				return;
+			}
 			// Drag motion: mode-aware extension (char/word/line). onSelectionDrag
 			// calls notifySelectionChange internally — no extra onSelectionChange.
 			app.props.onSelectionDrag(col, row);
@@ -842,6 +961,47 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 		if (sel.isDragging) {
 			finishSelection(sel);
 			app.props.onSelectionChange();
+		}
+		// Drag protocol: an UNMODIFIED left press over a node whose
+		// ancestor chain carries an onDragStart handler opens a drag
+		// session INSTEAD of text selection / multi-click. Modifier bits
+		// (0x04 shift / 0x08 alt / 0x10 ctrl) keep the baseline selection
+		// gesture — they never hijack. The session stays dormant until the
+		// first drag motion; a press+release without movement resolves to
+		// a normal click on release (see the release branch).
+		if (app.props.onDragTargetAt && (m.button & 0x1c) === 0) {
+			const dragTarget = app.props.onDragTargetAt(col, row);
+			if (dragTarget) {
+				app.dragSession = {
+					target: dragTarget,
+					startCol: col,
+					startRow: row,
+					lastCol: col,
+					lastRow: row,
+					started: false,
+				};
+				// A drag press must not feed the multi-click chain.
+				app.clickCount = 0;
+				return;
+			}
+		}
+		// Modifier presses (shift/alt/ctrl) are selection-extension
+		// gestures — Shift+click extends the input selection via the click
+		// path, never a double-click word selection. Break the multi-click
+		// chain here: two Shift+clicks inside the 500ms/1-cell window must
+		// not fire onMultiClick (screen word select would swallow the click
+		// dispatch and overwrite the clipboard).
+		if ((m.button & 0x1c) !== 0) {
+			app.clickCount = 0;
+			app.lastClickTime = 0;
+			app.lastClickCol = -1;
+			app.lastClickRow = -1;
+			// Do not immediately seed the chain again: a Shift+click followed by
+			// a plain click in the same cell must remain two single clicks.
+			startSelection(sel, col, row);
+			sel.lastPressHadAlt = (m.button & 0x08) !== 0;
+			app.props.onSelectionChange();
+			return;
 		}
 		// Fresh left press. Detect multi-click HERE (not on release) so the
 		// word/line highlight appears immediately and a subsequent drag can
@@ -879,18 +1039,36 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 		return;
 	}
 
-	// Release: end the drag even for non-zero button codes. Some terminals
-	// encode release with the motion bit or button=3 "no button" (carried
-	// over from pre-SGR X10 encoding) — filtering those would orphan
-	// isDragging=true and leave drag-to-scroll's timer running until the
-	// scroll boundary. Only act on non-left releases when we ARE dragging
-	// (so an unrelated middle/right click-release doesn't touch selection).
-	if (baseButton !== 0) {
-		if (!sel.isDragging) return;
-		finishSelection(sel);
-		app.props.onSelectionChange();
-		return;
+	// Release: settle a captured component drag BEFORE filtering on the raw
+	// low button bits. Some terminals encode release as button=3 (legacy
+	// "no button") or retain the motion bit. A started session still needs
+	// dragend; a dormant press still needs its ordinary click replay.
+	let replayedDormantDrag = false;
+	if (app.dragSession) {
+		const session = app.dragSession;
+		app.dragSession = null;
+		if (session.started) {
+			app.props.onDragDispatch?.(
+				session.target,
+				new DragEvent(
+					"dragend",
+					col,
+					row,
+					session.startCol,
+					session.startRow,
+					{ button: m.button },
+				),
+			);
+			return;
+		}
+		startSelection(sel, col, row);
+		replayedDormantDrag = true;
 	}
+	// Classic X10 encodes every release as low bits 3. If a left selection is
+	// active, pair that generic release with it and continue through the normal
+	// click/selection tail; an unrelated middle/right release has no active
+	// selection and remains inert.
+	if (baseButton !== 0 && !replayedDormantDrag && !sel.isDragging) return;
 	finishSelection(sel);
 	// NOTE: unlike the old release-based detection we do NOT reset clickCount
 	// on release-after-drag. This aligns with NSEvent.clickCount semantics:

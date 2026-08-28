@@ -531,6 +531,15 @@ const dict = {
   'input-fold-hover': { zh: '悬停查看', en: 'hover to peek' },
   'input-fold-peek-footer': { zh: '… 共 {{lines}} 行 · 点击展开编辑', en: '… {{lines}} lines total · click to edit' },
 
+  // ── 全屏草稿编辑（PromptInput 展开态 + PromptEditor Layer）─────────
+  'input-expand-editor-title': { zh: '草稿编辑', en: 'Draft editor' },
+  'input-expand-editor-position': { zh: '行 {{line}} · 列 {{col}}', en: 'Ln {{line}}, Col {{col}}' },
+  'input-expand-editor-scroll': { zh: '滚轮翻动 · 光标行自动跟随', en: 'wheel scrolls · caret row follows' },
+  'input-expand-editor-send': { zh: '发送', en: 'Send' },
+  'input-expand-editor-collapse': { zh: '收起', en: 'Collapse' },
+  'input-expand-editor-hint-send': { zh: 'Ctrl+Enter 发送', en: 'Ctrl+Enter sends' },
+  'input-expand-editor-hint-collapse': { zh: 'Esc 收起', en: 'Esc collapses' },
+
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
   'sugg-files-title': { zh: '文件', en: 'files' },
@@ -618,6 +627,7 @@ const dict = {
   'settings-secret-staged': { zh: '（待保存）', en: '(pending save)' },
   'settings-saved': { zh: '已保存 {{ns}}', en: 'Saved {{ns}}' },
   'settings-save-failed': { zh: '保存 {{ns}} 失败——请重试', en: 'Saving {{ns}} failed — please retry' },
+  'settings-secret-ref-reserved': { zh: '凭据 {{ref}} 由宿主保留，写入被拒绝：第三方设置区块不能覆盖宿主共享凭据', en: 'Credential {{ref}} is reserved by the host; write rejected: third-party settings sections cannot overwrite host-shared credentials' },
   'settings-hint-list': { zh: '**Enter** 进入/编辑/切换（改动即保存） · Esc 退出', en: '**Enter** open/edit/toggle (auto-saves) · Esc exit' },
   'settings-hint-group': { zh: '**Enter** 编辑/切换（改动即保存） · Esc 返回', en: '**Enter** edit/toggle (auto-saves) · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认并保存 · Esc 取消', en: '**Enter** to confirm & save · Esc to cancel' },
@@ -650,8 +660,15 @@ const dict = {
   'session-workspace-no-match': { zh: '没有匹配的工作目录', en: 'No matching working directory' },
   // Right-click session menu items (SessionBrowser popup).
   'resume-menu-open': { zh: '打开', en: 'Open' },
+  'resume-menu-pin': { zh: '固定到顶部', en: 'Pin to top' },
+  'resume-menu-unpin': { zh: '取消固定', en: 'Unpin' },
   'resume-menu-rename': { zh: '重命名', en: 'Rename' },
   'resume-menu-delete': { zh: '删除', en: 'Delete' },
+  // Session pinning (SessionBrowser pinned group + toasts).
+  'session-pinned-group': { zh: '已固定', en: 'Pinned' },
+  'resume-pinned': { zh: '已固定 {{name}}', en: 'Pinned {{name}}' },
+  'resume-unpinned': { zh: '已取消固定 {{name}}', en: 'Unpinned {{name}}' },
+  'resume-pin-save-failed': { zh: '固定状态保存失败，未应用更改', en: 'Could not save pin; no change was applied' },
   'session-count-shown': { zh: '{{n}} 个会话', en: '{{n}} sessions' },
   'session-count-subagents': { zh: '{{n}} 个子运行已折叠', en: '{{n}} runs folded' },
   'session-count-empty': { zh: '{{n}} 个空会话', en: '{{n}} empty' },
@@ -665,9 +682,9 @@ const dict = {
   // Three widths of the same hint. The browser picks the widest that fits the
   // terminal, because a hint that wraps costs the rows the list needs and can
   // push its own tail off the bottom of the screen.
-  'session-hint-list': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}d delete · {{mod}}x clean · Esc exit' },
-  'session-hint-list-mid': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories · {{mod}}s runs · {{mod}}r rename · {{mod}}d delete · Esc exit' },
-  'session-hint-list-short': { zh: '**Enter** 恢复 · ← 目录 · Esc', en: '**Enter** resume · ← dirs · Esc' },
+  'session-hint-list': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}p 固定 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}p pin · {{mod}}d delete · {{mod}}x clean · Esc exit' },
+  'session-hint-list-mid': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}p 固定 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories · {{mod}}s runs · {{mod}}r rename · {{mod}}p pin · {{mod}}d delete · Esc exit' },
+  'session-hint-list-short': { zh: '**Enter** 恢复 · {{mod}}p ★ · ← 目录 · Esc', en: '**Enter** resume · {{mod}}p ★ · ← dirs · Esc' },
   'session-hint-workspaces': { zh: '**Enter/→** 查看会话 · ↑/↓ 选择 · {{mod}}a 全部目录 · Esc 返回', en: '**Enter/→** view sessions · ↑/↓ choose · {{mod}}a all directories · Esc back' },
   'session-hint-workspaces-short': { zh: '**Enter/→** 查看 · Esc', en: '**Enter/→** view · Esc' },
 
@@ -817,6 +834,9 @@ const dict = {
   'context-panel-tools': { zh: '工具 · {{n}}', en: 'Tools · {{n}}' },
 
   // ── components/questions/AskUserQuestionPanel.tsx ───────────────────
+  'question-provider-occupied': { zh: '⚠️ 问卷通道已被非宿主组件 {{id}} 占用，模型提问可能被代答（本界面未接入问卷）', en: '⚠️ The questionnaire channel is held by a non-host component ({{id}}); model questions may be answered by it (this UI did not take the seat)' },
+  'question-provider-occupied-unverified': { zh: '⚠️ 问卷通道被一个自报为 {{id}} 的组件占用——身份未经宿主验证，模型提问可能被代答（本界面未接入问卷）', en: '⚠️ The questionnaire channel is held by a component self-reporting as {{id}} — identity not host-verified; model questions may be answered by it (this UI did not take the seat)' },
+  'question-provider-occupied-unknown': { zh: '身份未知', en: 'identity unknown' },
   'question-select-or-answer': { zh: '至少选择一个选项，或在最后一行输入回答', en: 'Select at least one option, or type an answer on the last line' },
   'question-answer-or-check': { zh: '输入回答或勾选选项后再提交', en: 'Type an answer or check options before submitting' },
   'question-type-answer-first': { zh: '先输入回答内容再提交', en: 'Type your answer before submitting' },
@@ -838,6 +858,7 @@ const dict = {
 
   // ── components/approvals/ApprovalPanel.tsx ──────────────────────────
   'approval-waiting': { zh: ' ⏳ 等待审批 · {{tool}} ', en: ' Awaiting approval · {{tool}} ' },
+  'approval-external-hint': { zh: '外部来源：该审批未关联当前会话的活跃工具调用，命令文本可能被伪造，请核实后再决定', en: 'External origin: this approval is not tied to a live tool call of this session — the command text may be forged; verify before deciding' },
   'approval-proceed': { zh: '要允许这次操作吗？', en: 'Do you want to proceed?' },
   'approval-yes': { zh: '允许（仅本次）', en: 'Yes, allow once' },
   'approval-no': { zh: '拒绝', en: 'No' },
@@ -1028,15 +1049,6 @@ const dict = {
   'cmd-desc-skills': { zh: '列出所有可用技能' },
   'cmd-desc-plugins': { zh: '显示插件契约、授权与台账诊断' },
   'cmd-desc-update': { zh: '更新 dsh-tui 并重启' },
-  // Built-in skills（注册名与打包 SKILL.md 对齐；这些键经
-  // localizedDescription 的 cmd-desc-<name> 回退服务于直调命令条目）
-  'cmd-desc-audit': { zh: '对当前项目做全面代码审计' },
-  'cmd-desc-bug': { zh: '记录一份 bug 报告' },
-  'cmd-desc-practice': { zh: '与 dsh-tui 进行编程练习' },
-  'cmd-desc-review': { zh: '对当前项目做全面代码评审' },
-  'cmd-desc-pr-comments': { zh: '审查拉取请求评论' },
-  'cmd-desc-release-notes': { zh: '生成发布说明' },
-  'cmd-desc-vuln-check': { zh: '运行安全漏洞检查' },
   // Misc
   'cmd-desc-vim': { zh: '切换 vim 模式' },
   'cmd-desc-terminal-setup': { zh: '查看终端配置建议' },

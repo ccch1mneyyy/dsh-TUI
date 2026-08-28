@@ -331,18 +331,6 @@ export const TIPS: readonly Tip[] = [
     en: '/agents lists subagents; Enter for details, X to interrupt',
   },
   {
-    id: 'cmd-audit',
-    group: 'commands',
-    zh: '/audit 全面代码审计；/review 代码评审',
-    en: '/audit runs a code audit; /review reviews the code',
-  },
-  {
-    id: 'cmd-vuln',
-    group: 'commands',
-    zh: '/vuln-check 扫依赖漏洞；/bug 生成结构化 bug 报告',
-    en: '/vuln-check scans dependencies; /bug drafts a bug report',
-  },
-  {
     id: 'cmd-init',
     group: 'commands',
     zh: '/init 一键创建 AGENTS.md 项目规则',

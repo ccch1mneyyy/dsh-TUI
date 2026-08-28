@@ -46,7 +46,9 @@ import { ScrollbarGutter } from '../components/ScrollbarGutter.js'
 import type { TimelineSnapshot } from '../ink/timeline-rail.js'
 import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
+import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import { PromptEditorLayer } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -639,6 +641,10 @@ export function Chat({
   const isSticky = React.useSyncExternalStore(
     cb => (handle ? handle.subscribe(cb) : () => {}),
     () => (handle ? handle.isSticky() : true),
+  )
+  const subscribeTooltipInvalidation = React.useCallback(
+    (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
+    [handle],
   )
 
   // "N new messages" pill: new rows whose top edge is still BELOW the
@@ -2811,6 +2817,12 @@ export function Chat({
           exitPendingRef.current = false
           if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
         }
+      } else if (input === 'c' && promptControllerRef.current?.consumeSelectionCopy()) {
+        // A mouse selection is active: Ctrl+C copies it to the clipboard
+        // (via the prompt controller — Chat's listener registers first) and
+        // KEEPS the selection for further editing. The key is consumed.
+        exitPendingRef.current = false
+        if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
       } else if (input === 'c' && promptControllerRef.current?.hasText()) {
         promptControllerRef.current.clear()
         // A pending exit arm no longer makes sense once the user is editing.
@@ -3653,6 +3665,19 @@ export function Chat({
         </OverlayAbove>
         )}
       </Box>
+      {/* Tooltip 悬停浮层：absolute 零布局高度，挂在根 Box 最后确保盖在
+          其余内容之上（yoga 的 absolute 相对父级，根 Box 原点即屏原点，
+          指针 anchor 的屏幕坐标可直接使用）。订阅模块级 store，锚点/
+          内容由各处的 useTooltip hover props 写入；resize 时自行隐藏
+          （几何失效）。 */}
+      <TooltipLayer
+        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
+        subscribeInvalidation={subscribeTooltipInvalidation}
+      />
+      {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后（树序最后），
+          才能盖住包括状态栏在内的全部后绘兄弟。内容由 PromptInput
+          经 module store 发布（见 PromptEditor.tsx）。 */}
+      <PromptEditorLayer />
     </Box>
   )
 }
