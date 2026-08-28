@@ -80,8 +80,7 @@
     "dsh-ecosystem-spec/registry",
     "dsh-ecosystem-spec/protocols",
     "dsh-ecosystem-spec/schemas",
-    "presets",
-    "skills"
+    "presets"
   ],
   "engines": {
     "node": "^22.19 || >=24"
@@ -99,7 +98,7 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:history-search && npm run verify:skill-direct-invocation && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:liangshen-instruction-hint && npm run verify:liangshen-plan-persona && npm run verify:plan-prompt-command && npm run verify:plan-review-exit && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:packaged-presets && npm run verify:history-search && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:liangshen-instruction-hint && npm run verify:liangshen-plan-persona && npm run verify:plan-prompt-command && npm run verify:plan-review-exit && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
@@ -134,7 +133,6 @@
     "verify:pointer-events": "node --import tsx/esm scripts/verify-pointer-events.ts",
     "verify:chat-overlay": "node --import tsx/esm scripts/verify-chat-overlay.ts",
     "verify:approval-visibility": "node --import tsx/esm scripts/verify-approval-visibility.tsx",
-    "verify:skill-direct-invocation": "node --import tsx/esm scripts/verify-skill-direct-invocation.ts",
     "sync:profile": "node scripts/sync-profile.mjs",
     "sync:profile:check": "node scripts/sync-profile.mjs --check",
     "bundle:installer": "node scripts/make-installer-bundle.mjs",

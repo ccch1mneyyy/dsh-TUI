@@ -24,7 +24,7 @@
 import assert from 'node:assert/strict'
 
 const { classify, readHeader } = await import('../lib/types/dsh-adapter/sessions/header.js')
-const { buildView, anchorTop, windowEnd, moveSelection, seekSelectable, sessionAt, DEFAULT_FILTERS } =
+const { buildView, buildWorkspaceGroups, normalizeWorkspaceCwd, anchorTop, windowEnd, moveSelection, seekSelectable, sessionAt, DEFAULT_FILTERS } =
   await import('../lib/types/sessions/view.js')
 const { formatWhen, formatBytes, truncateWidth, wrapWidth, formatProject, kindMark, titleColor, spreadRow, tailWidth } =
   await import('../lib/types/sessions/format.js')
@@ -201,6 +201,61 @@ check(
   'all projects: interleaved MRU entries stay in one group per project',
   interleavedProjects.rows.map(r => (r.kind === 'project' ? `#${r.project}:${r.count}` : r.session.id)),
   ['#/a:2', 'a-new', 'a-old', '#/b:1', 'b-mid'],
+)
+
+// The explicit directory menu has one compatibility bucket for the LIVE cwd;
+// every other historical cwd stays exact instead of being transitively merged.
+const ancestorCompatible = (left, right) =>
+  left !== '' && right !== '' &&
+  (left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`))
+const workspacePopulation = [
+  summary({ id: 'current-live', cwd: '/current', updatedAt: 100 }),
+  summary({ id: 'current-old-root', cwd: '/current', updatedAt: 90 }),
+  summary({ id: 'current-old-subdir', cwd: '/current/pkg', updatedAt: 80 }),
+  summary({ id: 'foreign-root', cwd: '/repo', updatedAt: 70 }),
+  summary({ id: 'foreign-a', cwd: '/repo/a', updatedAt: 60 }),
+  summary({ id: 'foreign-b', cwd: '/repo/b', updatedAt: 50 }),
+  summary({ id: 'unknown', cwd: '', updatedAt: 40 }),
+  summary({ id: 'foreign-run', cwd: '/repo', updatedAt: 75, kind: { kind: 'subagent', parent: 'foreign-root', depth: 1 } }),
+  summary({ id: 'foreign-empty', cwd: '/empty', updatedAt: 30, hasPrompt: false }),
+]
+check('directory keys keep filesystem root distinct from unknown cwd',
+  [normalizeWorkspaceCwd('/'), normalizeWorkspaceCwd('')], ['/', ''])
+const workspaces = buildWorkspaceGroups(workspacePopulation, {
+  cwd: '/current',
+  branch: 'main',
+  currentId: 'current-live',
+  sameProject: ancestorCompatible,
+})
+check(
+  'directory menu: live root and legacy subdirectory share the current bucket',
+  workspaces[0],
+  { id: 'current', cwd: '/current', count: 2, updatedAt: 90, current: true },
+)
+check(
+  'directory menu: foreign paths stay exact (no transitive ancestor merge)',
+  workspaces.slice(1).map(group => [group.cwd, group.count]),
+  [['/repo', 1], ['/repo/a', 1], ['/repo/b', 1], ['', 1]],
+)
+check(
+  'directory menu: delegated runs and empty artifacts do not inflate resumable counts',
+  workspaces.reduce((sum, group) => sum + group.count, 0),
+  6,
+)
+const consistentAll = buildView(
+  [
+    summary({ id: 'current-root', cwd: '/current', updatedAt: 40 }),
+    summary({ id: 'current-sub', cwd: '/current/pkg', updatedAt: 30 }),
+    summary({ id: 'alias-a', cwd: '/foreign/path', updatedAt: 20 }),
+    summary({ id: 'alias-b', cwd: '/foreign/path/', updatedAt: 10 }),
+  ],
+  { ...DEFAULT_FILTERS, allProjects: true },
+  { cwd: '/current', branch: 'main', currentId: 'none', sameProject: ancestorCompatible },
+)
+check(
+  'all-directories headers reuse current compatibility and normalized foreign keys',
+  consistentAll.rows.filter(row => row.kind === 'project').map(row => [row.project, row.count]),
+  [['/current', 2], ['/foreign/path', 2]],
 )
 
 const runs = buildView(population, { ...DEFAULT_FILTERS, showSubagents: true }, context)

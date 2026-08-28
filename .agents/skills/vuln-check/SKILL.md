@@ -13,7 +13,7 @@ Check the current project for security vulnerabilities: dependency advisories an
 2. **代码检查**: scan for security anti-patterns with file/line evidence:
    - shell command injection (string interpolation into exec/spawn with shell:true)
    - path traversal (user input joined into paths without normalization)
-   - secrets committed (API keys, tokens, private keys in the tree)
+   - secrets committed (API keys, tokens, private keys in the tree); report only the file path, line, and secret type, never the value or source excerpt
    - unsafe eval / dynamic import of user input
    - missing input validation at trust boundaries
 3. Report findings ordered by severity, each with: location, CVE/advisory id when applicable, impact, and remediation (upgrade to which version, or the code change needed).
@@ -21,5 +21,6 @@ Check the current project for security vulnerabilities: dependency advisories an
 
 ## Constraints
 
+- Never disclose a complete secret; diagnostics may report only whether it is set.
 - Distinguish "verified vulnerable" from "needs verification" — never overstate.
 - Do not modify code during the check.

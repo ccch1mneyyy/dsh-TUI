@@ -130,6 +130,14 @@ const GROUPS = {
 // 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
 // 吞掉，不再落入 shell。
     ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
+// 组件级拖拽协议回归：无修饰左键 press 捕获 drag target，首动 dragstart、
+// 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
+// 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
+    ["verify-drag-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-drag-protocol.tsx']],
+// hover 事件性能与健壮性回归：同批 motion 保留兴趣边界（tooltip dwell
+// 不提前）、无兴趣矩形快路径跳过全树 hit-test，且渲染提交/帧边界/
+// 多 root 失效；拖拽 motion 逐事件到达。
+    ["verify-hover-coalesce", ['node', '--import', 'tsx/esm', 'scripts/verify-hover-coalesce.tsx']],
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
@@ -224,6 +232,15 @@ const GROUPS = {
 // vim 编辑模式回归（/vim 命令 + normal/insert 键位 + 徽标 + 撤销栈 +
 // insert Esc 让位回合打断）。
     ["verify-vim-mode", ['node', 'scripts/verify-vim-mode.mjs']],
+// 输入框鼠标选区编辑回归（drag 协议消费者）：SGR 拖选/Shift+click 扩展/
+// 双击选词自检测/Backspace/Delete 删选区/打字替换/Esc 分层/Ctrl+C 经
+// Chat→控制器复制选区、CJK 宽字符显示列与 fold block 侧钳制。
+    ["verify-input-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-input-selection.tsx']],
+// 全屏草稿编辑回归（expandEditor）：Ctrl+Shift+E/⛶ 展开收起、Enter 换行
+// 不发送、Ctrl+Enter 发送并收起、Esc 分层（选区→收起）、点击定位/拖选、
+// 行号渲染、多行窗口跟随 + onWheel 滚轮自由滚动、折叠块互斥（展开清块/
+// 展开态粘贴纯文本）、设置开关（expandEditor=false 入口消失）。
+    ["verify-expand-editor", ['node', '--import', 'tsx/esm', 'scripts/verify-expand-editor.tsx']],
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],
@@ -259,6 +276,10 @@ const GROUPS = {
 // （等价于「上方每个区域都放得下、没有多占行、没有被挤出屏幕」）。
 // 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
     ["verify-session-browser-layout", ['node', 'scripts/verify-session-browser-layout.mjs']],
+// Tooltip 悬停提示回归：悬停截断元素 ~600ms 后弹完整内容浮层——延迟未到
+// 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
+// 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制。
+    ["verify-tooltip", ['node', '--import', 'tsx/esm', 'scripts/verify-tooltip.tsx']],
 // 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
 // Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
 // 自环境变量，不转义即可注入任意命令；解压与替换之间的提取树校验拒绝
@@ -301,6 +322,10 @@ const GROUPS = {
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
 // （渲染、Enter 菜单、字母直达执行、Esc）。
     ["verify-session-tree", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree.tsx']],
+// 压缩 × 会话切换生命周期：压缩进行中 /model、/resume、/rewind 等必须先
+// abort 并等压缩落定再 fork 快照（后台提交 checkpoint = "压缩失败后换模型
+// 丢上下文"事故根因）；persistence 类失败与通用失败分开提示。
+    ["verify-compact-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-compact-switch.tsx']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
 // ● 前缀、内容为空的行。
@@ -313,11 +338,6 @@ const GROUPS = {
 // 菜单与 Tab 补全（skill 标记、与 locals/注册表撞名让位），
 // skills/change 实时增删，读取失败保留 last-good。
     ["verify-skill-commands", ['node', 'scripts/verify-skill-commands.mjs']],
-// 内置技能命令确定性直调回归（issue #496/#416）：本地名单不再截留打包
-// 技能名、注册名与 SKILL.md 对齐（kebab-case）、skillsRoot 双层候选路径、
-// 旧 SKILL_PROMPTS/i18n 键彻底移除。技能直调不在 CI 里就会随接口演进
-// 静默退化回"客套话提示词"路径。
-    ["verify-skill-direct-invocation", ['node', '--import', 'tsx/esm', 'scripts/verify-skill-direct-invocation.ts']],
 // 轨迹投影回归（issue #80 演进）：增量折叠与全量折叠在每个切分点终态
 // 等价（机械 oracle）、六类括号配对、增广事件守卫的全变异模糊测试、
 // 未知事件前向兼容、连发折叠边界、无 chunk 的步不伪造 TTFT。
@@ -440,6 +460,24 @@ const GROUPS = {
 // 且模型看到字面路径）、双 miss 报用户原文、无后缀行为不变、目录忽略
 // 后缀。内存 fs stub，expandMentions 纯扩展逻辑。
     ["verify-mention-lines", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-lines.ts']],
+// 问卷 provider 抢注守卫回归（issue #98 安全收尾）：静默让位只授予宿主
+// 可验证的白名单在位者（本 TUI 的私有 symbol 标记）；在位者【自报】的
+// 白名单名（name/hostId/id 字段可被任意插件拷贝伪造）走 alert-unverified
+// 诚实告知；第三方在位或无身份信息走保守告警。判定为纯函数 + 真实
+// UserQuestionService 端到端。
+    ["verify-question-provider-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-question-provider-guard.tsx']],
+// secret.ref 保留名单守卫回归：第三方设置区块的 DEEPSEEK_API_KEY /
+// DEEPSEEK_、DSH_ 前缀 ref 在注册层被摘除（其余字段照常）、宿主身份
+// 放行、channel.settingsHost().writeCredential 对保留 ref 抛 i18n 文案
+// ——防"给插件配 key"假象下覆盖主凭据。
+    ["verify-secret-ref-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-secret-ref-guard.tsx']],
+// 审批面板外部来源徽标回归：无 callId / 配对不到 tool/call / call 已有
+// tool/result（重放真实命令文本）的审批请求在面板数据带 external 标记
+// 并醒目渲染 [external] 提示；活跃（未落定）调用不带标记、命令照常恢复。
+// P-4 复查窗口：同 callId 的第二条（伪造孪生）入队时判 live，第一条被
+// 允许、tool/result 落定后孪生弹出/渲染时徽标必须补上（弹出时 + 读取
+// 当前条时重跑活跃判定）。
+    ["verify-approval-source-badge", ['node', '--import', 'tsx/esm', 'scripts/verify-approval-source-badge.tsx']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得

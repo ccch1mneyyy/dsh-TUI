@@ -41,6 +41,8 @@ export const DEFAULT_FILTERS: BrowserFilters = {
 /** One line in the browser's list. */
 export type BrowserRow =
   | { readonly kind: 'project'; readonly project: string; readonly count: number }
+  /** Header of the pinned group; always the first rows in the view. */
+  | { readonly kind: 'pin'; readonly count: number }
   | { readonly kind: 'session'; readonly session: SessionSummary; readonly depth: number }
 
 /** The rendered list plus what it left out and why. */
@@ -54,6 +56,105 @@ export interface BrowserView {
   readonly emptyCount: number
   /** Ids of those empty sessions, for the cleanup action. */
   readonly emptyIds: readonly string[]
+}
+
+/** Live-session facts shared by the directory index and session projection. */
+export interface BrowserContext {
+  readonly cwd: string
+  readonly branch: string | undefined
+  readonly currentId: string
+  readonly sameProject: (a: string, b: string) => boolean
+}
+
+/** One selectable working-directory bucket in the resume browser. */
+export interface WorkspaceGroup {
+  /** Stable within one listing; `current` is reserved for the live workspace. */
+  readonly id: string
+  /** Representative cwd shown in the directory list and used as session scope. */
+  readonly cwd: string
+  /** Resumable top-level conversations in this directory bucket. */
+  readonly count: number
+  /** Most recent resumable conversation activity, or 0 for an empty current bucket. */
+  readonly updatedAt: number
+  /** The compatibility bucket anchored at the live session's cwd. */
+  readonly current: boolean
+}
+
+/** Normalize an exact historical cwd key without treating ancestors as equal. */
+export function normalizeWorkspaceCwd(cwd: string): string {
+  const slashed = cwd.replace(/\\/g, '/')
+  const normalized = /^\/+$/u.test(slashed) ? '/' : slashed.replace(/\/+$/, '')
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+/** Current session plus the fork ancestors that continuing it superseded. */
+function hiddenLineageIds(sessions: readonly SessionSummary[], currentId: string): Set<string> {
+  const byId = new Map(sessions.map(session => [session.id, session]))
+  const hidden = new Set([currentId])
+  let cursor = byId.get(currentId)
+  while (cursor?.kind.kind === 'fork') {
+    const parent = cursor.kind.parent
+    if (hidden.has(parent)) break
+    hidden.add(parent)
+    cursor = byId.get(parent)
+  }
+  return hidden
+}
+
+/** Shared empty pin set: `buildView` without pins allocates nothing. */
+const EMPTY_PINS: ReadonlySet<string> = new Set()
+
+/**
+ * Build the explicit working-directory menu.
+ *
+ * Only the live cwd gets the historical same-project compatibility rule: old
+ * versions recorded repository subdirectories, so those sessions still belong
+ * under the current workspace. Every remaining directory is grouped by its
+ * normalized exact cwd. Applying sameProject transitively to arbitrary history
+ * would merge sibling projects through a common ancestor and is deliberately
+ * avoided.
+ */
+export function buildWorkspaceGroups(
+  sessions: readonly SessionSummary[],
+  context: BrowserContext,
+): readonly WorkspaceGroup[] {
+  const hidden = hiddenLineageIds(sessions, context.currentId)
+  const conversations = sessions.filter(session =>
+    session.hasPrompt && session.kind.kind !== 'subagent' && !hidden.has(session.id))
+  const currentSessions = conversations.filter(session => context.sameProject(context.cwd, session.cwd))
+  const currentIds = new Set(currentSessions.map(session => session.id))
+  const current: WorkspaceGroup = {
+    id: 'current',
+    cwd: context.cwd,
+    count: currentSessions.length,
+    updatedAt: currentSessions.reduce((latest, session) => Math.max(latest, session.updatedAt), 0),
+    current: true,
+  }
+
+  const foreign = new Map<string, { cwd: string; count: number; updatedAt: number }>()
+  for (const session of conversations) {
+    if (currentIds.has(session.id)) continue
+    const key = normalizeWorkspaceCwd(session.cwd)
+    const existing = foreign.get(key)
+    if (existing === undefined) {
+      foreign.set(key, { cwd: session.cwd, count: 1, updatedAt: session.updatedAt })
+    } else {
+      existing.count += 1
+      existing.updatedAt = Math.max(existing.updatedAt, session.updatedAt)
+    }
+  }
+
+  const others = [...foreign.entries()]
+    .map(([key, group]): WorkspaceGroup => ({
+      id: `cwd:${key || '<unknown>'}`,
+      cwd: group.cwd,
+      count: group.count,
+      updatedAt: group.updatedAt,
+      current: false,
+    }))
+    .sort((left, right) =>
+      right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
+  return [current, ...others]
 }
 
 /** Case-insensitive substring test over the fields a reader would search by. */
@@ -79,12 +180,16 @@ function matches(session: SessionSummary, needle: string): boolean {
  * @param context - The session doing the browsing: its working directory
  *   anchors the default project filter, its branch the branch filter, and its
  *   own id is never offered (a live session cannot be resumed into itself).
+ * @param pinned - Pinned session ids (from the persisted preference). A pin
+ *   on a session the current filters already exclude is invisible here — pins
+ *   float to the top OF the view, they do not widen it.
  * @returns The flat row list and the counts behind what it hides.
  */
 export function buildView(
   sessions: readonly SessionSummary[],
   filters: BrowserFilters,
-  context: { cwd: string; branch: string | undefined; currentId: string; sameProject: (a: string, b: string) => boolean },
+  context: BrowserContext,
+  pinned: ReadonlySet<string> = EMPTY_PINS,
 ): BrowserView {
   const needle = filters.query.trim().toLowerCase()
 
@@ -93,21 +198,10 @@ export function buildView(
   // and selecting one silently jumps back before the fork. Only the live
   // lineage is excluded: unrelated forks remain recoverable. Treat malformed
   // cycles as a closed chain rather than looping forever over foreign data.
-  const byId = new Map(sessions.map(session => [session.id, session]))
-  const currentAncestors = new Set<string>()
-  const seen = new Set([context.currentId])
-  let cursor = byId.get(context.currentId)
-  while (cursor?.kind.kind === 'fork') {
-    const parent = cursor.kind.parent
-    if (seen.has(parent)) break
-    seen.add(parent)
-    currentAncestors.add(parent)
-    cursor = byId.get(parent)
-  }
+  const hiddenLineage = hiddenLineageIds(sessions, context.currentId)
 
   const inScope = (session: SessionSummary): boolean =>
-    session.id !== context.currentId &&
-    !currentAncestors.has(session.id) &&
+    !hiddenLineage.has(session.id) &&
     (filters.allProjects || context.sameProject(context.cwd, session.cwd))
 
   // Empty sessions never reach a view, but they are counted — and the count
@@ -162,37 +256,77 @@ export function buildView(
 
   const rows: BrowserRow[] = []
   let shown = 0
-  let lastProject: string | undefined
-  const ordered = visible.sort((left, right) => right.updatedAt - left.updatedAt)
+  let lastProjectKey: string | undefined
+  const visibleChildren = (session: SessionSummary): readonly SessionSummary[] =>
+    filters.showSubagents
+      ? (byParent.get(session.id) ?? []).filter(child => matches(child, needle) || matches(session, needle))
+      : []
+
+  // Pinned sessions leave the ordinary flow entirely and form one group above
+  // every other row. Attached sub-agent rows participate too when the runs
+  // filter is on: pinning a visible child must not paint a star that stays
+  // buried under its parent. The child is promoted once and removed from the
+  // parent's ordinary children; orphan runs already live in `visible`.
+  const pinnedChildren = pinned.size > 0 && filters.showSubagents
+    ? visible.flatMap(session => visibleChildren(session).filter(child => pinned.has(child.id)))
+    : []
+  const pinnedRows = pinned.size > 0
+    ? [
+        ...visible.filter(session => pinned.has(session.id)),
+        ...pinnedChildren,
+      ].sort((left, right) => right.updatedAt - left.updatedAt)
+    : []
+  const pinnedRowIds = new Set(pinnedRows.map(session => session.id))
+  const emit = (session: SessionSummary): void => {
+    rows.push({ kind: 'session', session, depth: 0 })
+    shown += 1
+    for (const run of visibleChildren(session)) {
+      if (pinnedRowIds.has(run.id)) continue
+      rows.push({ kind: 'session', session: run, depth: 1 })
+      shown += 1
+    }
+  }
+  const ordered = pinnedRows.length > 0
+    ? visible.filter(session => !pinnedRowIds.has(session.id))
+    : visible
+  if (pinnedRows.length > 0) {
+    rows.push({ kind: 'pin', count: pinnedRows.length })
+    for (const session of pinnedRows) emit(session)
+  }
+  ordered.sort((left, right) => right.updatedAt - left.updatedAt)
+  const projectKey = (session: SessionSummary): string =>
+    context.sameProject(context.cwd, session.cwd)
+      ? 'current'
+      : `cwd:${normalizeWorkspaceCwd(session.cwd) || '<unknown>'}`
+  const projectDisplay = new Map<string, string>()
+  const projectCounts = new Map<string, number>()
   if (filters.allProjects) {
-    // Order project groups by their newest visible session, then keep every
-    // session from that project together in MRU order. A global MRU sort alone
-    // can interleave A/B/A and emit the same project header more than once.
+    // Use the SAME buckets as the directory menu: current-workspace legacy
+    // subdirectories coalesce, while foreign separator/case aliases share one
+    // exact normalized key. This keeps the rail and "all" view consistent.
     const projectOrder = new Map<string, number>()
     for (const session of ordered) {
-      if (!projectOrder.has(session.cwd)) projectOrder.set(session.cwd, projectOrder.size)
+      const key = projectKey(session)
+      if (!projectOrder.has(key)) projectOrder.set(key, projectOrder.size)
+      projectDisplay.set(key, key === 'current' ? context.cwd : projectDisplay.get(key) ?? session.cwd)
+      projectCounts.set(key, (projectCounts.get(key) ?? 0) + 1)
     }
     ordered.sort((left, right) =>
-      projectOrder.get(left.cwd)! - projectOrder.get(right.cwd)! || right.updatedAt - left.updatedAt)
+      projectOrder.get(projectKey(left))! - projectOrder.get(projectKey(right))! || right.updatedAt - left.updatedAt)
   }
   for (const session of ordered) {
     // Group headers only earn their line when more than one project is in
     // play; inside a single project they would repeat the same path forever.
-    if (filters.allProjects && session.cwd !== lastProject) {
-      lastProject = session.cwd
+    const key = projectKey(session)
+    if (filters.allProjects && key !== lastProjectKey) {
+      lastProjectKey = key
       rows.push({
         kind: 'project',
-        project: session.cwd,
-        count: visible.filter(other => other.cwd === session.cwd).length,
+        project: projectDisplay.get(key) ?? session.cwd,
+        count: projectCounts.get(key) ?? 0,
       })
     }
-    rows.push({ kind: 'session', session, depth: 0 })
-    shown += 1
-    if (!filters.showSubagents) continue
-    for (const run of (byParent.get(session.id) ?? []).filter(child => matches(child, needle) || matches(session, needle))) {
-      rows.push({ kind: 'session', session: run, depth: 1 })
-      shown += 1
-    }
+    emit(session)
   }
 
   return {

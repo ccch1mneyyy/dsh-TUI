@@ -38,8 +38,8 @@ contract for humans and coding agents working on `@deepseek-harness-tui/dsh-tui`
 
 `@deepseek-harness-tui/dsh-tui` is a single-package, ESM-only TypeScript project. It provides a
 React terminal UI front door for DeepSeek Harness through Cordis. The package
-owns the TUI, its local command surface, packaged skills, and a ported Ink/Yoga
-renderer. DeepSeek Harness owns the agent, session, model, tool, persistence,
+owns the TUI, its local command surface, and a ported Ink/Yoga renderer.
+DeepSeek Harness owns the agent, session, model, tool, skill, persistence,
 and policy domains that the TUI consumes.
 
 Before making a broad change, read `package.json`, the relevant README section,
@@ -74,8 +74,8 @@ boundaries and helpers over introducing parallel abstractions.
   Claude Code-style UI.
 - `src/*Prefs.ts`, `src/customTheme.ts`, and `src/sessionHistory.ts`: persisted
   user preferences and local session metadata under `~/.dsh-tui`.
-- `skills/*/SKILL.md`: skills shipped in the npm package and registered by
-  `src/dsh-adapter/packaged-skills.ts`.
+- `.agents/skills/*/SKILL.md`: project skills for repository maintainers,
+  discovered by the DSH filesystem provider and excluded from the npm package.
 - `cordis.patch.yml`: package bundle overlay used by profile installation.
   Ordering, row IDs, disabled host rows, and insert/override semantics matter.
 - `cordis.yml`: full bare-composition example for direct Cordis/DSH startup.
@@ -225,9 +225,14 @@ change, also run the closest focused script:
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
 | Goal/todo projection and rendering | `node scripts/verify-channel-goal-todo.mjs` and `node scripts/verify-goal-todo.mjs` |
 | Compaction and folded transcript rows | `node scripts/verify-compact.mjs` |
+| Compaction × session-switch lifecycle (cancel before the fork snapshot, persistence-classified toast) | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | Theme loading and persistence | `node --import tsx/esm scripts/verify-themes.mjs` |
 | Scrolling/sticky-bottom behavior | `node scripts/verify-scroll.mjs`, `node scripts/verify-resticky.mjs`, and the matching `repro-*` harness |
 | Fullscreen copy-on-select | `node scripts/verify-copy-on-select.mjs` |
+| Component-level mouse drag protocol (target capture, bubbling, click/selection compatibility, interrupted-session cleanup) | `node --import tsx/esm scripts/verify-drag-protocol.tsx` |
+| Mouse pointer event pipeline (wheel coords/modifier bits, click/hover dispatch, out-of-bounds clamping, pointer-state reset) | `node --import tsx/esm scripts/verify-pointer-events.ts` |
+| Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
+| Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
@@ -329,11 +334,10 @@ the required credentials.
   `Chat.tsx`; registry commands are merged at runtime. When adding a command,
   update declaration, dispatch, help/documentation, the i18n description
   (`cmd-desc-<name>` in `src/i18n.ts`, zh only — en falls back to the
-  declaration), and any packaged skill mapping together.
-- Built-in skill commands stay out of LOCAL_COMMANDS: packaged skills register
-  through the registry as deterministically dispatched commands (#496), and the
-  command name must equal the SKILL.md registration name (kebab-case) or the
-  collision filter drops it.
+  declaration), and any related skill mapping together.
+- Skill commands stay out of LOCAL_COMMANDS: user-invocable skills discovered by
+  DSH are merged from the registry as dispatch commands. Names must be parseable
+  kebab-case and must not collide with a local command.
 - Keep `ask_user_question` serialized through `QuestionStore`; concurrent
   questions are intentionally presented FIFO and summarized after completion.
 
@@ -382,7 +386,7 @@ the required credentials.
 | Theme contract or persisted theme behavior | `src/theme.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs |
 | Session/channel behavior | `src/dsh-adapter/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
-| Packaged skill | `skills/<name>/SKILL.md`, `src/dsh-adapter/packaged-skills.ts` assumptions, command prompt/mapping if exposed as a slash command |
+| Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
 

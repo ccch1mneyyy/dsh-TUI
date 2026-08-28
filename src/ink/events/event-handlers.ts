@@ -1,4 +1,6 @@
 import type { ClickEvent } from './click-event.js'
+import type { ContextMenuEvent } from './context-menu-event.js'
+import type { DragEvent } from './drag-event.js'
 import type { FocusEvent } from './focus-event.js'
 import type { KeyboardEvent } from './keyboard-event.js'
 import type { PasteEvent } from './paste-event.js'
@@ -11,6 +13,8 @@ type FocusEventHandler = (event: FocusEvent) => void
 type PasteEventHandler = (event: PasteEvent) => void
 type ResizeEventHandler = (event: ResizeEvent) => void
 type ClickEventHandler = (event: ClickEvent) => void
+type ContextMenuEventHandler = (event: ContextMenuEvent) => void
+type DragEventHandler = (event: DragEvent) => void
 /**
  * Hover handlers receive the pointer position. Existing `() => void`
  * handlers remain assignable (a function taking fewer parameters is
@@ -42,6 +46,10 @@ export type EventHandlerProps = {
   onResize?: ResizeEventHandler
 
   onClick?: ClickEventHandler
+  onContextMenu?: ContextMenuEventHandler
+  onDragStart?: DragEventHandler
+  onDragMove?: DragEventHandler
+  onDragEnd?: DragEventHandler
   onMouseEnter?: HoverEventHandler
   onMouseLeave?: HoverEventHandler
   onWheel?: WheelEventHandler
@@ -61,6 +69,10 @@ export const HANDLER_FOR_EVENT: Record<
   paste: { bubble: 'onPaste', capture: 'onPasteCapture' },
   resize: { bubble: 'onResize' },
   click: { bubble: 'onClick' },
+  contextmenu: { bubble: 'onContextMenu' },
+  dragstart: { bubble: 'onDragStart' },
+  dragmove: { bubble: 'onDragMove' },
+  dragend: { bubble: 'onDragEnd' },
   wheel: { bubble: 'onWheel' },
 }
 
@@ -79,6 +91,10 @@ export const EVENT_HANDLER_PROPS = new Set<string>([
   'onPasteCapture',
   'onResize',
   'onClick',
+  'onContextMenu',
+  'onDragStart',
+  'onDragMove',
+  'onDragEnd',
   'onMouseEnter',
   'onMouseLeave',
   'onWheel',

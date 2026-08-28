@@ -1,5 +1,7 @@
 import type { DOMElement } from './dom.js'
 import { ClickEvent } from './events/click-event.js'
+import { ContextMenuEvent } from './events/context-menu-event.js'
+import type { DragEvent } from './events/drag-event.js'
 import type { EventHandlerProps } from './events/event-handlers.js'
 import { PointerEvent } from './events/pointer-event.js'
 import { WheelEvent } from './events/wheel-event.js'
@@ -49,6 +51,24 @@ export function hitTest(
   return node
 }
 
+// Full-tree hit-test call counter. Regression tests (verify-hover-coalesce)
+// reset it and assert the no-interest fast path actually skips work. Benign
+// in production — a monotonic counter, never read on hot paths.
+let hitTestWithOverlaysCount = 0
+
+/**
+ * Number of hitTestWithOverlays calls since the last reset (or module load).
+ * @returns the call count.
+ */
+export function getHitTestWithOverlaysCount(): number {
+  return hitTestWithOverlaysCount
+}
+
+/** Reset the hitTestWithOverlays call counter (test instrumentation). */
+export function resetHitTestWithOverlaysCount(): void {
+  hitTestWithOverlaysCount = 0
+}
+
 /**
  * hitTest, but overlay-aware: absolute-positioned nodes can paint OUTSIDE
  * every ancestor's rect (OverlayAbove's `bottom:'100%'` pickers float over
@@ -66,6 +86,7 @@ export function hitTestWithOverlays(
   col: number,
   row: number,
 ): DOMElement | null {
+  hitTestWithOverlaysCount++
   const overlays = getAbsoluteHitList()
   for (let i = overlays.length - 1; i >= 0; i--) {
     const { node, rect } = overlays[i]!
@@ -154,6 +175,116 @@ export function dispatchClick(
 }
 
 /**
+ * Hit-test the root at (col, row) and bubble a ContextMenuEvent from the
+ * deepest containing node up through parentNode. Only nodes with an
+ * onContextMenu handler fire. Stops when a handler calls
+ * stopImmediatePropagation(). Returns true if at least one onContextMenu
+ * handler fired.
+ *
+ * Unlike dispatchClick this does NOT move focus: the menu is a press-time
+ * affordance and the target's own handler decides whether focus follows.
+ * Handler isolation matches dispatchClick — a throwing handler is logged
+ * and the bubbling continues.
+ *
+ * @param root - the tree root to hit-test.
+ * @param col - the screen column of the press.
+ * @param row - the screen row of the press.
+ * @param button - raw SGR press byte (low bits 2 = right button, carries
+ *   shift/alt/ctrl modifier bits).
+ * @returns true when at least one onContextMenu handler fired.
+ */
+export function dispatchContextMenu(
+  root: DOMElement,
+  col: number,
+  row: number,
+  button = 0,
+): boolean {
+  const target = hitTestWithOverlays(root, col, row)
+  if (!target) return false
+  const event = new ContextMenuEvent(col, row, { button })
+  let node: DOMElement | undefined = target
+  let handled = false
+  while (node) {
+    const handler = node._eventHandlers?.onContextMenu as
+      | ((event: ContextMenuEvent) => void)
+      | undefined
+    if (handler) {
+      handled = true
+      const rect = nodeCache.get(node)
+      if (rect) {
+        event.localCol = col - rect.x
+        event.localRow = row - rect.y
+      } else {
+        event.localCol = 0
+        event.localRow = 0
+      }
+      try {
+        handler(event)
+      } catch (error) {
+        logError(error)
+      }
+      if (event.didStopImmediatePropagation()) return true
+    }
+    node = node.parentNode
+  }
+  return handled
+}
+
+/**
+ * Find the drag target at (col, row): hit-test the root (overlay-aware,
+ * like dispatchClick), then walk the ancestor chain from the deepest hit
+ * node and return the FIRST node carrying an onDragStart handler. That
+ * node is captured as the drag session target — subsequent dragmove/
+ * dragend events bubble from it even when the pointer leaves its rect.
+ *
+ * @param root - the tree root to hit-test.
+ * @param col - the screen column of the press.
+ * @param row - the screen row of the press.
+ * @returns the deepest node with an onDragStart handler, or null when no
+ *   ancestor of the hit node is a drag target.
+ */
+export function findDragTarget(
+  root: DOMElement,
+  col: number,
+  row: number,
+): DOMElement | null {
+  let node: DOMElement | undefined =
+    hitTestWithOverlays(root, col, row) ?? undefined
+  while (node) {
+    if (node._eventHandlers?.onDragStart) return node
+    node = node.parentNode
+  }
+  return null
+}
+
+/**
+ * Bubble a drag event (dragstart/dragmove/dragend) from the captured
+ * drag session target up through parentNode. The handler prop is looked
+ * up per event type (onDragStart/onDragMove/onDragEnd). Stops when a
+ * handler calls stopImmediatePropagation(). Handler isolation matches
+ * dispatchClick — a throwing handler is logged and the bubbling
+ * continues.
+ *
+ * Unlike dispatchClick the target comes from the drag session captured
+ * at press time, NOT a fresh hit-test: like DOM element capture, the
+ * drag source keeps receiving events for the whole gesture.
+ *
+ * @param target - the captured drag session target node.
+ * @param event - the drag event to dispatch.
+ */
+export function dispatchDragEvent(
+  target: DOMElement,
+  event: DragEvent,
+): void {
+  // Use the shared dispatcher so target/currentTarget/eventPhase,
+  // stopPropagation, exception isolation, and React update priority match the
+  // rest of the terminal event model. Motion is continuous; lifecycle edges
+  // are discrete user actions.
+  if (event.type === 'dragmove') dispatcher.dispatchContinuous(target, event)
+  else dispatcher.dispatchDiscrete(target, event)
+}
+
+/**
  * Fire onMouseLeave on every tracked hover node, then empty the set.
  *
  * The pointer-state resets (alt-screen swap, terminal resize) drop the hover
@@ -229,6 +360,119 @@ export function dispatchWheel(
   return true
 }
 
+// ── No-interest rect fast path (hover perf) ─────────────────────────
+// When a hover hit confirms that its ancestor chain is inert and the hit is
+// a leaf region with no overlapping interested sibling/absolute layer, that
+// node's rect is cached here.
+// Subsequent motion events inside the rect skip the full-tree hit-test:
+// hover is a state diff and an inert region cannot produce enter/leave, so
+// the result is identical while the rect is valid. The cache is STRICTLY
+// per-frame: invalidateNoInterestRect() runs at every React commit
+// (ink.tsx onComputeLayout — handlers attach/detach during re-renders) and
+// at the top of every render pass (renderer.ts — scroll drains and other
+// geometry changes without commits). Pointer-state resets (resize,
+// alt-screen swap) invalidate it too. A point outside the rect re-enters
+// the normal hit-test immediately, so leaving the region can never miss a
+// handler.
+type NoInterestRect = { x: number; y: number; width: number; height: number }
+// Per-root: multiple Ink instances can coexist in tests/embedders and must
+// never reuse geometry from another tree.
+let noInterestRects = new WeakMap<DOMElement, NoInterestRect>()
+
+/**
+ * Optional hover-interest probe consulted when deciding whether a region is
+ * hover-inert. A tooltip system registers a predicate here so tooltip-
+ * bearing nodes are never skipped by the no-interest fast path. Null (the
+ * default) means only React enter/leave handlers count.
+ */
+let hoverInterestProbe: ((node: DOMElement) => boolean) | null = null
+
+/**
+ * Install or clear the hover-interest probe.
+ * @param probe - the interest predicate, or null to clear it.
+ */
+export function setHoverInterestProbe(
+  probe: ((node: DOMElement) => boolean) | null,
+): void {
+  hoverInterestProbe = probe
+}
+
+/**
+ * Drop the cached no-interest rect. Call at every render commit and at the
+ * start of every render pass (see the cache doc above); also call from
+ * pointer-state resets. Idempotent and effectively free.
+ */
+export function invalidateNoInterestRect(): void {
+  noInterestRects = new WeakMap()
+}
+
+/** Whether a node participates in hover semantics (handler or tooltip probe). */
+function hasHoverInterest(node: DOMElement): boolean {
+  const h = node._eventHandlers as EventHandlerProps | undefined
+  if (h?.onMouseEnter || h?.onMouseLeave) return true
+  return hoverInterestProbe?.(node) === true
+}
+
+/**
+ * Fail-fast subtree scan for an overlapping sibling/absolute candidate.
+ * Text children are skipped like hitTest does.
+ */
+function subtreeHasHoverInterest(node: DOMElement): boolean {
+  for (const childNode of node.childNodes) {
+    if (childNode.nodeName === '#text') continue
+    const child = childNode as DOMElement
+    if (hasHoverInterest(child) || subtreeHasHoverInterest(child)) return true
+  }
+  return false
+}
+
+function hasElementChildren(node: DOMElement): boolean {
+  return node.childNodes.some(child => child.nodeName !== '#text')
+}
+
+function rectsOverlap(left: NoInterestRect, right: NoInterestRect): boolean {
+  return !(
+    right.x >= left.x + left.width ||
+    right.x + right.width <= left.x ||
+    right.y >= left.y + left.height ||
+    right.y + right.height <= left.y
+  )
+}
+
+/** Whether a hover-interested in-flow sibling can win inside the candidate. */
+function overlappingSiblingHasHoverInterest(hit: DOMElement, rect: NoInterestRect): boolean {
+  let branch: DOMElement = hit
+  for (let parent = hit.parentNode; parent; parent = parent.parentNode) {
+    for (const siblingNode of parent.childNodes) {
+      if (siblingNode === branch || siblingNode.nodeName === '#text') continue
+      const sibling = siblingNode as DOMElement
+      const siblingRect = nodeCache.get(sibling)
+      if (
+        siblingRect &&
+        rectsOverlap(rect, siblingRect) &&
+        (hasHoverInterest(sibling) || subtreeHasHoverInterest(sibling))
+      ) {
+        return true
+      }
+    }
+    branch = parent
+  }
+  return false
+}
+
+/** Whether a hover-interested absolute layer overlaps a candidate inert rect. */
+function overlappingAbsoluteHasHoverInterest(rect: NoInterestRect): boolean {
+  for (const entry of getAbsoluteHitList()) {
+    const overlay = entry.rect
+    if (!rectsOverlap(rect, overlay)) continue
+    if (subtreeHasHoverInterest(entry.node)) return true
+    for (let node: DOMElement | undefined = entry.node; node; node = node.parentNode) {
+      if (hasHoverInterest(node)) return true
+    }
+  }
+  return false
+}
+
 /**
  * Fire onMouseEnter/onMouseLeave as the pointer moves. Like DOM
  * mouseenter/mouseleave: does NOT bubble — moving between children does
@@ -255,12 +499,64 @@ export function dispatchHover(
   hovered: Set<DOMElement>,
 ): void {
   const next = new Set<DOMElement>()
-  let node: DOMElement | undefined =
-    hitTestWithOverlays(root, col, row) ?? undefined
-  while (node) {
-    const h = node._eventHandlers as EventHandlerProps | undefined
-    if (h?.onMouseEnter || h?.onMouseLeave) next.add(node)
-    node = node.parentNode
+  const cached = noInterestRects.get(root)
+  if (
+    cached &&
+    col >= cached.x &&
+    col < cached.x + cached.width &&
+    row >= cached.y &&
+    row < cached.y + cached.height
+  ) {
+    // Pointer still inside the last confirmed hover-inert rect: skip the
+    // full-tree hit-test. `next` stays empty — exactly what a real
+    // hit-test would produce while the rect is valid (the handler topology
+    // is frozen between commits and every commit/frame invalidates the
+    // cache). The diff below still runs, firing any pending leaves
+    // defensively (hovered is empty here by construction — the rect is
+    // only cached right after the diff emptied it).
+  } else {
+    let hit: DOMElement | undefined =
+      hitTestWithOverlays(root, col, row) ?? undefined
+    // Chain walk collects the enter/leave set AND decides cache
+    // eligibility: the rect is only trusted when no node in the hit chain
+    // has any hover interest.
+    let chainInert = true
+    for (let node = hit; node; node = node.parentNode) {
+      const h = node._eventHandlers as EventHandlerProps | undefined
+      if (h?.onMouseEnter || h?.onMouseLeave) {
+        next.add(node)
+        chainInert = false
+      } else if (hasHoverInterest(node)) {
+        // Tooltip interest without enter/leave handlers: keeps the region
+        // out of the no-interest cache without joining the hovered set.
+        chainInert = false
+      }
+    }
+    if (chainInert && hit) {
+      const rect = nodeCache.get(hit)
+      // Cache only a leaf hit region. An empty container with element
+      // descendants may cover a huge area; recursively scanning that subtree
+      // on every motion is O(tree), while caching it can hide a descendant.
+      // Overlapping interested siblings/absolute layers also disqualify the
+      // rect because they can become the topmost hit elsewhere inside it.
+      if (
+        rect &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        !hasElementChildren(hit) &&
+        !overlappingSiblingHasHoverInterest(hit, rect) &&
+        !overlappingAbsoluteHasHoverInterest(rect)
+      ) {
+        // Copy the fields — nodeCache entries are replaced per frame and
+        // the cache dies at the frame boundary anyway, but never alias.
+        noInterestRects.set(root, {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        })
+      }
+    }
   }
   for (const old of hovered) {
     if (!next.has(old)) {

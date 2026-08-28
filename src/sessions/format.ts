@@ -250,3 +250,12 @@ export function formatProject(cwd: string, home: string): string {
   }
   return normalized
 }
+
+/** Compact final path segment for the working-directory menu. */
+export function projectName(cwd: string): string {
+  if (cwd.length === 0) return t('session-project-unknown')
+  const slashed = cwd.replace(/\\/g, '/')
+  const normalized = /^\/+$/u.test(slashed) ? '/' : slashed.replace(/\/+$/, '')
+  const name = normalized.split('/').filter(Boolean).at(-1)
+  return name ?? normalized
+}

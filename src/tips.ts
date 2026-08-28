@@ -183,8 +183,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-resume-search',
     group: 'commands',
-    zh: '/resume 里直接打字即可搜索会话',
-    en: 'In /resume, just type to search sessions',
+    zh: '/resume 顶部可选工作目录，← 切目录，打字搜索当前层',
+    en: '/resume has a directory selector; ← switches scope, typing searches the active list',
   },
   {
     id: 'cmd-rename',
@@ -335,18 +335,6 @@ export const TIPS: readonly Tip[] = [
     group: 'commands',
     zh: '/agents 列出子代理，Enter 看详情 / X 中断',
     en: '/agents lists subagents; Enter for details, X to interrupt',
-  },
-  {
-    id: 'cmd-audit',
-    group: 'commands',
-    zh: '/audit 全面代码审计；/review 代码评审',
-    en: '/audit runs a code audit; /review reviews the code',
-  },
-  {
-    id: 'cmd-vuln',
-    group: 'commands',
-    zh: '/vuln-check 扫依赖漏洞；/bug 生成结构化 bug 报告',
-    en: '/vuln-check scans dependencies; /bug drafts a bug report',
   },
   {
     id: 'cmd-init',

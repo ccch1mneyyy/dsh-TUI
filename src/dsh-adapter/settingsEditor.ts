@@ -75,6 +75,9 @@ export interface SettingsSectionShell {
   saving: boolean
   /** Whether the last save failed; cleared by the next edit or save. */
   failed: boolean
+  /** Why the last save failed, when the writer said so (e.g. a reserved
+   * credential ref); shown verbatim so refusals are not just "failed". */
+  failureMessage?: string
 }
 
 /** Read a nested value by path (array indexes as strings). */
@@ -160,6 +163,7 @@ export class SettingsForm {
   private readonly edits = new Map<string, StagedEdit>()
   saving = false
   failed = false
+  failureMessage: string | undefined = undefined
 
   constructor(
     private readonly host: SettingsHost,
@@ -210,6 +214,7 @@ export class SettingsForm {
       invalid,
       saving: this.saving,
       failed: this.failed,
+      failureMessage: this.failed ? this.failureMessage : undefined,
     }
   }
 
@@ -221,19 +226,25 @@ export class SettingsForm {
   /** Stage draft text for one field. */
   edit(field: TuiSettingsField, text: string): void {
     this.edits.set(fieldKey(field), { text, clear: false })
-    this.failed = false
+    this.clearFailure()
   }
 
   /** Stage a clear, so saving lets the field re-inherit the composition layer. */
   resetField(field: TuiSettingsField): void {
     this.edits.set(fieldKey(field), { text: '', clear: true })
-    this.failed = false
+    this.clearFailure()
   }
 
   /** Drop every staged edit. */
   discard(): void {
     this.edits.clear()
+    this.clearFailure()
+  }
+
+  /** A new edit or save cycle retires the last failure's explanation. */
+  private clearFailure(): void {
     this.failed = false
+    this.failureMessage = undefined
   }
 
   /** Whether any staged draft is invalid, which blocks the save. */
@@ -273,6 +284,7 @@ export class SettingsForm {
         : { op: 'set', path: field.path, value: write.value })
     }
     this.saving = true
+    this.clearFailure()
     try {
       if (ops.length > 0) {
         try {
@@ -293,8 +305,12 @@ export class SettingsForm {
       }
       this.failed = false
       return true
-    } catch {
+    } catch (error) {
       this.failed = true
+      // Guarded rejections (reserved credential refs, …) carry their own
+      // localized explanation — keep it for the screen to show verbatim
+      // instead of a generic "save failed".
+      this.failureMessage = error instanceof Error && error.message !== '' ? error.message : undefined
       return false
     } finally {
       this.saving = false

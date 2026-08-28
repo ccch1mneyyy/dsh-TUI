@@ -106,12 +106,8 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'skills', description: 'List available skills' },
   { name: 'plugins', description: 'Show plugin contract, grant, and ledger diagnostics' },
   { name: 'update', description: 'Update dsh-tui and restart' },
-  // Built-in skills (audit/review/pr-comments/…) are NOT listed here: their
-  // packaged SKILL.md files register through the DSH skill registry, and
-  // refreshSkillCommands publishes each as a real command whose handler
-  // injects the body host-side (#86/#496). A local entry of the same name
-  // would win the collision filter and lock the skill onto the legacy
-  // "activation prompt" path forever.
+  // Skills are discovered through the DSH registry and added at runtime.
+  // A local entry of the same name would win the collision filter.
   // Misc / not applicable on this leaf
   { name: 'vim', description: 'Toggle vim mode' },
   { name: 'terminal-setup', description: 'Show terminal setup instructions' },
