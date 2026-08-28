@@ -1116,15 +1116,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // DSH approval seam: the permission layer asks ApprovalService.request(),
   // which dispatches an `approval/request` waterfall. With no answerer the
   // chain falls through to the fail-closed 'unavailable', so register this
-  // TUI as the interactive answerer for the agent it owns; requests for
-  // other agents delegate down the chain (next()). Guarded on the service
-  // being mounted — a bare composition without the dsh-base approval row
-  // has nothing to answer into. channel.agentId tracks agent swaps
-  // (/new, /resume, rewind), so ownership is re-evaluated per request.
+  // TUI as the interactive answerer for EVERY agent in this process — the
+  // attached session's asks and any background (agent view) session's asks
+  // alike, so an unattended session surfaces as "needs input" instead of
+  // failing closed. One ask is shown at a time, whichever agent asked.
+  // Guarded on the service being mounted — a bare composition without the
+  // dsh-base approval row has nothing to answer into.
   const approvalStore = new ApprovalStore()
   if (ctx.get('approval') !== undefined) {
     ctx.on('approval/request', (req, next) =>
-      String(req.agent.id) === channel.agentId ? approvalStore.park(req) : next())
+      approvalStore.park(req).catch(() => next()))
     // Badge-flip push (P-4): React does not know the session log appended —
     // a source-badge verdict that only flips inside getSnapshot() surfaces
     // solely when something else re-renders. Feed the session firehose to
@@ -1136,6 +1137,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.on('session/event', (_session, event) => approvalStore.noteSessionEvent(event))
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
+  // The agent view reads parked ask ids for its "needs input" state.
+  channel.bindApprovalStore(approvalStore)
   const herdr = attachHerdrIntegration({
     channel,
     questions: questionStore,

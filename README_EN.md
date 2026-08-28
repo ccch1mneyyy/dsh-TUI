@@ -199,6 +199,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
 | `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit; **with an active mouse selection in the prompt, copies it to the clipboard and keeps it** |
 | `Esc` | Close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |
+| `←` (empty input) | **Background this session and open the agent view** (CC agent view; with text, ← moves the caret as usual) |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (Enter = newline, `Ctrl+Enter` = send, `Esc` = collapse keeping the draft; line numbers, wheel scrolling, click/drag selection) |
 | `Ctrl+R` | History search |
@@ -260,7 +261,7 @@ so keep using `Ctrl`.
 
 | Group | Commands |
 |---|---|
-| Session | `/new` new session · `/resume` working-directory/session browser (visible directory scope, search, preview, cross-project, sub-agent runs folded) · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
+| Session | `/new` new session · `/resume` working-directory/session browser (visible directory scope, search, preview, cross-project, sub-agent runs folded) · `/agentview` agent view (all sessions) · `/bg` (alias `/background`) background this session and open the view · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
 | Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` add a model provider (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
@@ -269,6 +270,29 @@ so keep using `Ctrl`.
 | Registry | `/plan` `/goal` `/feedback` `/permission` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
 
 > Unknown commands are sent to the model as ordinary messages (e.g. in a composition where `/permission` is not mounted).
+
+**Agent view** (`/agentview`)
+
+One full-screen surface for every session in this process: the attached conversation, the background sessions dispatched here, and the stopped TUI sessions persisted on disk. The header shows CC-style "model · directory" plus state counts (awaiting input · working · completed); rows are grouped by state (needs input > working > failed > completed > idle > stopped), **working rows animate their glyph with CC's `·✢*✶✻✽` frame cycle**, each with a one-line activity summary derived from the session's own output (no extra model calls) — a row waiting on input shows the question it is blocked on. **Only sessions this TUI dispatched, backgrounded, or attached to from the view are listed** — the ordinary `/resume` history and sessions created by other front doors (e.g. web) never appear.
+
+| Key | Action |
+|---|---|
+| `↑/↓`, `PgUp/PgDn` | Move between rows |
+| `Enter` / `→` | Attach to the selected session (with input text: dispatch it) |
+| `Shift+Enter` | Dispatch and attach immediately |
+| `Space` | Toggle the peek panel (when the input is empty); type a reply inside and `Enter` to send |
+| `Ctrl+X` | Stop a background session; press again within 2s to delete it (log removed) |
+| `Ctrl+R` | Rename the selected session |
+| `Esc` | Close peek → clear input → exit; **when opened via ← `/bg`, the final Esc returns to the backgrounded session** |
+| `Ctrl+C` | Clear input; press again to exit |
+| `?` | Show all shortcuts |
+
+- Type a task in the input at the bottom and press `Enter` to dispatch a **background session**: it runs independently inside this process (turns, tools, approvals all work) without you watching it.
+- **Press `←` on an empty prompt** to jump straight into the view: the attached session moves to the background — it keeps running — the terminal lands on a fresh session, and the view opens (same as `/bg`), with a "Your conversation moved to the background — Enter opens it · Esc returns to it · Ctrl+C twice quits" notice on top. The prompt footer keeps a live "← N agents" count whenever background sessions are waiting on you.
+- A background session that needs approval shows as **needs input**; the approval panel pops up right inside the view and is answered there (labelled with its session).
+- `/bg` (alias `/background`) moves the attached session to the background — it keeps running — switches the terminal to a fresh session, and opens the view. `Enter` on any row switches back.
+- Peek and reply work live for running sessions; a stopped session needs an `Enter` attach before you can talk to it.
+- **Background sessions live inside this process**: they stop when the TUI exits (logs survive; `/resume` or `Enter` in the view brings them back). There is no supervisor process.
 
 ## Documentation
 
@@ -380,6 +404,11 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   temporary file reference as a degraded fallback.
 - Exit finishes with a process exit and does not wait for the agent's async disk writes
   (persistence is covered by the persistence plugin as a backstop).
+- **Agent view background sessions live inside this process**: they all stop when the
+  TUI exits (CC's supervisor process and survival across restarts are out of v1 scope);
+  row summaries come from the session's own output with no extra summary-model calls;
+  worktree isolation, pinning, directory grouping, and shell background jobs are not
+  shipped yet.
 - Tool-level approval is implemented: the approval service + TUI answerer (CC-style
   approval panel) consumes the approval stream, and privilege-escalation commands pop
   an approval bar. `/permission` preset switching comes from dsh-base's

@@ -300,6 +300,17 @@ export interface PromptInputProps {
   onFillConsumed?(): void
   /** Double-tap Esc with an empty input: open the rewind picker (CC rewind). */
   onRewindRequest?(): void
+  /**
+   * CC agent-view parity: ← on an EMPTY prompt backgrounds this session and
+   * opens the agent view (with text, ← moves the caret as usual).
+   */
+  onBackgroundRequest?(): void
+  /**
+   * Background sessions waiting on the user (agent view "needs input" rows
+   * excluding this session); the prompt footer shows the CC-style
+   * "← N agents" hint when provided (hidden when undefined).
+   */
+  backgroundAgentsNeedingInput?: number
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
 }
@@ -344,6 +355,8 @@ export function PromptInput({
   fillText,
   onFillConsumed,
   onRewindRequest,
+  onBackgroundRequest,
+  backgroundAgentsNeedingInput,
   controllerRef,
 }: PromptInputProps) {
   const [themeName] = useTheme()
@@ -1500,6 +1513,14 @@ export function PromptInput({
       return
     }
     if (key.leftArrow) {
+      // CC agent-view parity: ← on an EMPTY prompt backgrounds this session
+      // and opens the agent view; with text it moves the caret as usual.
+      // (The command/file overlays both imply non-empty text, so no extra
+      // gate beyond the help menu is needed.)
+      if (value.length === 0 && !helpOpen) {
+        onBackgroundRequest?.()
+        return
+      }
       // Grapheme-step: skip the whole cluster (surrogate pair, ZWJ emoji,
       // combining mark) so the caret never sits inside one. With a
       // selection, collapse to its start edge instead.
@@ -2817,6 +2838,19 @@ export function PromptInput({
           )}
         </Box>
       </EffortInputBorder>
+      {/* CC agent-view footer: "← N agents" when background sessions are
+          waiting on the user, "← for agents" otherwise — the ← affordance's
+          discoverability hint. Only rendered when the Chat screen supplies
+          the count. */}
+      {backgroundAgentsNeedingInput !== undefined && (
+        <Box flexDirection="row" justifyContent="flex-end" paddingRight={2}>
+          <Text dimColor>
+            {backgroundAgentsNeedingInput > 0
+              ? t('input-background-hint-count', { n: backgroundAgentsNeedingInput })
+              : t('input-background-hint-idle')}
+          </Text>
+        </Box>
+      )}
     </Box>
   )
 }

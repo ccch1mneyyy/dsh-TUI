@@ -74,6 +74,9 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'export', description: 'Export the conversation to a markdown file' },
   { name: 'btw', description: 'Ask a quick side question without interrupting the conversation' },
   { name: 'trace', description: 'Show the session event trace timeline' },
+  { name: 'agentview', description: 'Open the agent view (all sessions)' },
+  { name: 'bg', description: 'Background this session and open agent view' },
+  { name: 'background', description: 'Background this session and open agent view', tag: 'alias of /bg' },
   // Session / environment
   { name: 'context', description: 'Show loaded context details' },
   { name: 'status', description: 'Show session status' },

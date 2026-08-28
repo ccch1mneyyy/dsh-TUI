@@ -96,6 +96,7 @@ import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
+import { AgentView } from './AgentView.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
@@ -385,6 +386,37 @@ export function Chat({
    *  fork stitched back onto the message it diverged from, hover previews,
    *  and per-node rewind/fork/adopt actions. Like the browser, a screen. */
   const [treeOpen, setTreeOpen] = React.useState(false)
+  /** `/agentview` and `/bg` open the agent view — a screen like the browser:
+   *  it owns selection, the dispatch input and every key while up. */
+  const [agentViewOpen, setAgentViewOpen] = React.useState(false)
+  /** The session backgrounded when the view opened via ←/`/bg` (CC's "Esc
+   *  returns to that conversation" return target), cleared on close. */
+  const [agentViewReturnId, setAgentViewReturnId] = React.useState<string | undefined>(undefined)
+  /** Live agent-view rows: the prompt footer's "← N agents" hint reads the
+   *  needs-input count from here (cached snapshot in the channel). The
+   *  `?.()` fallbacks keep pre-agent-view test stubs (channel facades in
+   *  scripts/*) rendering — the real channel always provides the seams. */
+  const EMPTY_AGENT_VIEW_ROWS: readonly never[] = []
+  const agentViewRows = React.useSyncExternalStore(
+    listener => channel.subscribeAgentView?.(listener) ?? (() => {}),
+    () => channel.agentViewRows?.() ?? EMPTY_AGENT_VIEW_ROWS,
+  )
+  const backgroundAgentsNeedingInput = agentViewRows.filter(
+    row => row.status === 'needs-input' && !row.current,
+  ).length
+  /** CC parity: background the attached session and open the agent view
+   *  (`/bg`, `/background`, and ← on an empty prompt all land here). The
+   *  backgrounded session becomes the view's return target (final Esc
+   *  attaches back to it). */
+  const backgroundToAgentView = React.useCallback((): void => {
+    void channel.backgroundCurrent().then((result) => {
+      if (result.ok) {
+        setAgentViewReturnId(result.backgroundedSessionId)
+        agentViewOpenSessionRef.current = channel.agentId
+        setAgentViewOpen(true)
+      }
+    })
+  }, [channel])
   /** `/settings` opens the plugin settings screen (issue #165) — like the
    *  browser, a screen rather than a panel: it owns its own focus, staged
    *  drafts and keyboard; Chat only opens it. */
@@ -508,6 +540,59 @@ export function Chat({
       closeRecap()
     }
   }, [lastUserRowId, recap])
+  /**
+   * Session switches that do not go through `/new` (agent-view attach,
+   * backgrounding, `/resume`) remount the transcript tree without resetting
+   * view-local state. Row-id-based UI would keep pointing at rows of the
+   * PREVIOUS session (ids restart at 0 after an adopt), so the new session
+   * renders with stale folds/expansion/selection — the "entered a freshly
+   * dispatched session and it renders wrong" bug. Reset the same set `/new`
+   * resets, plus the search overlay and the side question, and repaint the
+   * transcript from the top.
+   */
+  const repaintTranscript = (): void => {
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    // Wait one task so React commits the new session's tree before the
+    // scrollback clear repaints (same pattern as `/new`).
+    setTimeout(() => {
+      handle?.scrollTo(0)
+      ink?.clearScrollbackAndRedraw()
+    }, 0)
+  }
+  const lastAgentIdRef = React.useRef<string | undefined>(undefined)
+  React.useEffect(() => {
+    const id = channel.agentId
+    if (lastAgentIdRef.current === undefined) {
+      lastAgentIdRef.current = id
+      return
+    }
+    if (lastAgentIdRef.current === id) return
+    lastAgentIdRef.current = id
+    setExpanded(false)
+    setExpandedRows(new Set())
+    setStreamFoldedRows(new Set())
+    setSelectedId(null)
+    setSelectionActive(false)
+    setShowAllMessages(false)
+    setLoadedContextOpen(false)
+    setSearchQuery('')
+    setSearchCursor(0)
+    setSearchCount(0)
+    setSearchCurrent(0)
+    closeBtw()
+    repaintTranscript()
+  }, [channel.agentId]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** The session attached when the agent view opened; a close on a
+   *  DIFFERENT session means a switch happened inside the view, and the
+   *  transcript repaint cannot be skipped. */
+  const agentViewOpenSessionRef = React.useRef<string | undefined>(undefined)
+  /**
+   * Leaving a whole screen (agent view, browser) remounts the transcript
+   * tree, which would replay the ~3.4s whale opening animation on every
+   * close — competing with resumed or streaming rows for frame budget.
+   * Suppress the intro on those remounts; `/deepseek` re-enables it.
+   */
+  const suppressLogoIntroRef = React.useRef(false)
   /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
   /** Detail view for a specific subagent (opened from dashboard). */
@@ -1365,6 +1450,23 @@ export function Chat({
         setBrowserOpen(true)
         return true
       }
+      case 'agentview': {
+        // CC's `claude agents`: one screen for every session. Opens
+        // immediately; the view reads its own rows (live + persisted).
+        setHelpOpen(false)
+        agentViewOpenSessionRef.current = channel.agentId
+        setAgentViewOpen(true)
+        return true
+      }
+      case 'bg':
+      case 'background': {
+        // CC's `/background`: the attached session moves to the background
+        // (it keeps running in this process), the terminal lands on a fresh
+        // session, and the agent view opens on top.
+        setHelpOpen(false)
+        backgroundToAgentView()
+        return true
+      }
       case 'workspace': {
         setHelpOpen(false)
         const trimmed = rawInput.trim()
@@ -1851,6 +1953,7 @@ export function Chat({
         // shimmer. The command is intentionally not in the suggestion/help
         // catalogs; PromptInput recognizes it through HIDDEN_COMMAND_NAMES.
         setHelpOpen(false)
+        suppressLogoIntroRef.current = false
         setLogoNonce(n => n + 1)
         // Bring the logo back into view if the transcript has scrolled.
         setTimeout(() => {
@@ -2160,6 +2263,9 @@ export function Chat({
     // Same for the session tree: plain letters drive its search, clicks and
     // Enter drive its action menu.
     if (treeOpen) return
+    // The agent view (CC `claude agents`) is another whole-screen surface:
+    // its dispatch input owns every printable key.
+    if (agentViewOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
     // the field draft editor belong to it alone.
     if (settingsOpen) return
@@ -2872,6 +2978,7 @@ export function Chat({
     <ApprovalPanel
       key={approvalSnapshot.key}
       approval={approvalSnapshot}
+      background={approvalSnapshot.agentId !== channel.agentId}
       onDecide={outcome => approvals.decide(outcome)}
     />
   ) : null
@@ -2936,6 +3043,35 @@ export function Chat({
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }
 
+  // The agent view is a screen like the browser: it REPLACES the
+  // conversation. Every session keeps running behind it — including the
+  // attached one mid-turn.
+  if (agentViewOpen) {
+    const view = (
+      <AgentView
+        channel={channel}
+        home={homeDir()}
+        approval={approvalSnapshot}
+        onApprove={outcome => approvals.decide(outcome)}
+        returnSessionId={agentViewReturnId}
+        onClose={() => {
+          // The transcript tree remounts on close: never replay the whale
+          // intro there, and when the session changed INSIDE the view
+          // (attach / backgrounded dispatch), repaint the fresh transcript
+          // from the top like `/new` does.
+          suppressLogoIntroRef.current = true
+          const switched =
+            agentViewOpenSessionRef.current !== undefined &&
+            agentViewOpenSessionRef.current !== channel.agentId
+          if (switched) repaintTranscript()
+          setAgentViewReturnId(undefined)
+          setAgentViewOpen(false)
+        }}
+      />
+    )
+    return fullscreen ? view : <AlternateScreen>{view}</AlternateScreen>
+  }
+
   // The browser is a screen, not an overlay: it REPLACES the conversation
   // rather than floating above it. Rendering it as an early return (after
   // every hook above has run) is what makes that literal — there is no
@@ -2946,7 +3082,10 @@ export function Chat({
         channel={channel}
         home={homeDir()}
         sameProject={sessionCwdMatches}
-        onClose={() => setBrowserOpen(false)}
+        onClose={() => {
+          suppressLogoIntroRef.current = true
+          setBrowserOpen(false)
+        }}
       />
     )
     // Inline hosts enter the alternate screen for the duration; full-screen
@@ -3093,7 +3232,9 @@ export function Chat({
           // transcript mount batches (and the first wheel events) for the
           // frame budget right when the user wants to read history. Fresh
           // sessions keep the full intro; restored ones settle instantly.
-          skipIntro={channel.rows.length > 30}
+          // A remount after a whole screen closed also settles instantly
+          // (see suppressLogoIntroRef).
+          skipIntro={suppressLogoIntroRef.current || channel.rows.length > 30}
         />
         {/* The startup loaded-context panel: before the first message the
             transcript is empty, so the inventory of what this conversation
@@ -3311,6 +3452,8 @@ export function Chat({
             fillText={historyFill}
             onFillConsumed={() =>{  setHistoryFill(null) }}
             onRewindRequest={openRewind}
+            onBackgroundRequest={backgroundToAgentView}
+            backgroundAgentsNeedingInput={backgroundAgentsNeedingInput}
             controllerRef={promptControllerRef}
           />
         )}

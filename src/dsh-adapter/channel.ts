@@ -28,7 +28,7 @@ import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
 import { completeCommands, HIDDEN_COMMAND_NAMES, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
-import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../sessionHistory.js'
+import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
 import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
 import {
   buildSessionTree,
@@ -51,6 +51,16 @@ import {
   type SessionSource,
   type SessionSummary,
 } from './sessions/index.js'
+import {
+  AGENT_VIEW_STATUS_ORDER,
+  agentViewHasTurns,
+  agentViewLivePreview,
+  agentViewStatusOf,
+  foldAgentViewEvents,
+  oneLine,
+  sessionTitleFallback,
+  type AgentViewFold,
+} from './agent-view.js'
 import { writeActivityFrames } from '../activityPrefs.js'
 import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
@@ -434,6 +444,55 @@ export type ResumeResult =
   | { readonly ok: false; readonly reason: 'unavailable' }
   | { readonly ok: false; readonly reason: 'cancelled' }
   | { readonly ok: false; readonly reason: 'failed'; readonly error: string }
+
+/**
+ * One session's state in the agent view (CC's `claude agents` screen).
+ * States mirror Claude Code's vocabulary:
+ * `working` — a turn is running; `needs-input` — an approval request is
+ * parked for this agent; `idle` — live and waiting for the next prompt;
+ * `completed` — a live agent whose last turn ended (task finished, waiting);
+ * `failed` — the last turn ended with an error; `stopped` — the session's
+ * process is gone (persisted only).
+ */
+export type AgentViewStatus =
+  | 'working'
+  | 'needs-input'
+  | 'idle'
+  | 'completed'
+  | 'failed'
+  | 'stopped'
+
+/** One row in the agent view list. */
+export interface AgentViewRow {
+  /** Session id — the attach/dispatch target. */
+  readonly id: string
+  /** Display title (session title, or a fallback from the prompt/cwd). */
+  readonly title: string
+  /** Absolute working directory the session runs in. */
+  readonly cwd: string
+  /** One-line activity summary derived from the session's recent output. */
+  readonly summary: string
+  readonly status: AgentViewStatus
+  /** True when an agent for this session is alive in THIS process (✻ vs ∙). */
+  readonly live: boolean
+  /** True when this is the session the TUI terminal is attached to. */
+  readonly current: boolean
+  /** Unix epoch milliseconds when the session was created. */
+  readonly createdAt: number
+  /** Unix epoch milliseconds of the session's latest activity. */
+  readonly updatedAt: number
+}
+
+/** The observable outcome of dispatching a new background session. */
+export type AgentViewDispatchResult =
+  | { readonly ok: true; readonly sessionId: string }
+  | { readonly ok: false; readonly reason: 'unavailable' }
+  | { readonly ok: false; readonly reason: 'failed'; readonly error: string }
+
+/** The observable outcome of backgrounding the attached session. */
+export type BackgroundResult =
+  | { readonly ok: true; readonly backgroundedSessionId: string }
+  | { readonly ok: false }
 
 /** Secret-free credential metadata for configuration and status surfaces. */
 export interface CredentialStatus {
@@ -901,6 +960,48 @@ export interface Channel {
    *  the service is absent). */
   listSubagents(): Promise<string[]>
   /**
+   * The agent view (CC's `claude agents`) row snapshot: every live agent in
+   * this process plus every persisted session that no live agent owns,
+   * ordered needs-input/working first, then most recently active. Reading it
+   * is cheap; subscribe for changes.
+   */
+  agentViewRows(): readonly AgentViewRow[]
+  /** Change feed for {@link agentViewRows}: fired on agent lifecycle/status
+   *  changes and — throttled — on session events of background agents. */
+  subscribeAgentView(listener: () => void): () => void
+  /**
+   * Dispatch a new background session (`agent view` input): creates an agent
+   * in this process, delivers the prompt as a user message, and keeps the
+   * TUI attached to its current session. The new session keeps running until
+   * it finishes its turn or is stopped — it lives only while this process
+   * does.
+   */
+  dispatchBackgroundAgent(prompt: string): Promise<AgentViewDispatchResult>
+  /** Stop a background session (Ctrl+X): abort its turn and dispose its
+   *  agent; the persisted log survives for resume. False for the attached
+   *  session or one this TUI does not own. */
+  stopBackgroundAgent(sessionId: string): Promise<boolean>
+  /**
+   * Attach the TUI terminal to a session (`agent view` Enter/→): a live
+   * agent is adopted in place (its handle becomes the channel's), a
+   * persisted one resumes through the persistence seam. The previously
+   * attached agent is NOT disposed — it keeps running as a background
+   * session unless it was already idle with no history.
+   */
+  attachToAgent(sessionId: string): Promise<ResumeResult>
+  /** Trailing exchanges of any session — the live agent's in-memory log when
+   *  it is alive in this process, the persisted artifact otherwise. */
+  peekAgentSession(sessionId: string): Promise<readonly PreviewEntry[]>
+  /** `/bg` — background the attached session: swap the TUI to a fresh agent
+   *  while the current one keeps running. The agent view lists it as a
+   *  background session; `backgroundedSessionId` is the move's return target
+   *  (CC's "Esc returns to that conversation"). */
+  backgroundCurrent(): Promise<BackgroundResult>
+  /** Send a follow-up user message to a session from the agent view's peek
+   *  panel. Live sessions receive it directly; a session no live agent owns
+   *  cannot take a reply (false + a notify to attach instead). */
+  replyToAgent(sessionId: string, text: string): Promise<boolean>
+  /**
    * Dispose the host-registry entries this channel registered (skill slash
    * commands).
    *
@@ -1193,6 +1294,32 @@ export interface ChannelState {
   pluginsInfo(args: string): string[]
   /** Subagent rows (CC's /agents). */
   listSubagents(): Promise<string[]>
+  /** See {@link Channel.agentViewRows}. */
+  agentViewRows(): readonly AgentViewRow[]
+  /** See {@link Channel.subscribeAgentView}. */
+  subscribeAgentView(listener: () => void): () => void
+  /** See {@link Channel.dispatchBackgroundAgent}. */
+  dispatchBackgroundAgent(prompt: string): Promise<AgentViewDispatchResult>
+  /** See {@link Channel.stopBackgroundAgent}. */
+  stopBackgroundAgent(sessionId: string): Promise<boolean>
+  /** See {@link Channel.attachToAgent}. */
+  attachToAgent(sessionId: string): Promise<ResumeResult>
+  /** See {@link Channel.peekAgentSession}. */
+  peekAgentSession(sessionId: string): Promise<readonly PreviewEntry[]>
+  /** See {@link Channel.backgroundCurrent}. */
+  backgroundCurrent(): Promise<BackgroundResult>
+  /** See {@link Channel.replyToAgent}. */
+  replyToAgent(sessionId: string, text: string): Promise<boolean>
+  /**
+   * Bind the plugin's approval store (post-construction): row derivation
+   * reads its parked ask ids for the "needs input" state, and its emits
+   * re-publish as agent-view changes.
+   */
+  bindApprovalStore(store: {
+    pendingAgentIds(): readonly string[]
+    pendingAgentDetail(agentId: string): { toolName: string; reason?: string; command?: string } | undefined
+    subscribe(listener: () => void): () => void
+  }): void
   /** See {@link Channel.releaseContributions}. */
   releaseContributions(): void
   /** Live session event log (see the public Channel type, `/trace`). */
@@ -1522,6 +1649,18 @@ async function waitForTurnEnd(
 }
 
 /**
+ * Read the persistence backend's full session list (empty without one) —
+ * the agent view's "stopped" rows come from this snapshot.
+ * @param ctx - The channel's context.
+ * @returns Classified summaries, most recently active first.
+ */
+async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSummary[]> {
+  const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
+  if (!persistence) return []
+  return listSummaries(persistence)
+}
+
+/**
  * Create the live channel state for one agent session: replay the durable
  * transcript, subscribe to the agent's events, and expose every TUI action.
  * @internal
@@ -1603,6 +1742,83 @@ export function createChannel(
 ): ChannelState {
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
+  // ── agent view (CC's `claude agents`) internal state ──────────────────────
+  // Handles of background sessions this channel dispatched or backgrounded.
+  // The agents themselves live in the host registry (ctx.agents) and die with
+  // this process's tree; the handles are what stopping one needs to dispose.
+  const backgroundHandles = new Map<string, AgentHandle>()
+  // The plugin's approval store, bound post-construction (bindApprovalStore):
+  // row derivation reads the agent ids it has parked requests for, and its
+  // emit re-publishes as an agent-view change so "needs input" appears live.
+  let approvalStore: {
+    pendingAgentIds(): readonly string[]
+    pendingAgentDetail(agentId: string): { toolName: string; reason?: string; command?: string } | undefined
+    subscribe(listener: () => void): () => void
+  } | undefined
+  const agentViewListeners = new Set<() => void>()
+  // The row snapshot is a cached array rebuilt on the next read after a
+  // notify — useSyncExternalStore demands a stable reference between changes.
+  let agentViewRowsCache: readonly AgentViewRow[] | undefined
+  const notifyAgentView = (): void => {
+    agentViewRowsCache = undefined
+    for (const listener of agentViewListeners) listener()
+  }
+  // Background-agent activity (status flips, session events) refreshes the
+  // rows at most every 300 ms — token-level streaming must not rebuild the
+  // snapshot per token.
+  let agentViewRefreshTimer: NodeJS.Timeout | undefined
+  const scheduleAgentViewRefresh = (): void => {
+    if (agentViewRefreshTimer !== undefined) return
+    agentViewRefreshTimer = setTimeout(() => {
+      agentViewRefreshTimer = undefined
+      notifyAgentView()
+    }, 300)
+  }
+  // Persisted sessions without a live agent, cached so the synchronous row
+  // snapshot can merge them; refreshed by listSessions() and attachToAgent.
+  let persistedRowsCache: readonly SessionSummary[] = []
+  void listSessionsSnapshot(ctx).then((rows) => {
+    persistedRowsCache = rows
+    notifyAgentView()
+  })
+  // Incremental fold cache per live agent: re-folded only over events
+  // appended since the last call, so agentViewRows() stays cheap during
+  // token-level streaming (a fresh frozen events array per append).
+  const agentViewFolds = new Map<string, { events: readonly SessionEvent[]; fold: AgentViewFold }>()
+  const foldOf = (liveAgent: Agent): AgentViewFold => {
+    const events = liveAgent.session.events
+    const cached = agentViewFolds.get(String(liveAgent.id))
+    const base: AgentViewFold = {
+      hasTurns: false,
+      firstPrompt: '',
+      summary: '',
+      summaryKind: 'none',
+      title: '',
+      updatedAt: liveAgent.session.header.createdAt,
+      lastTurnFailed: false,
+    }
+    if (cached === undefined) {
+      const fold = foldAgentViewEvents(events, 0, base)
+      agentViewFolds.set(String(liveAgent.id), { events, fold })
+      return fold
+    }
+    if (cached.events === events) return cached.fold
+    const fold = foldAgentViewEvents(events, cached.events.length, cached.fold)
+    agentViewFolds.set(String(liveAgent.id), { events, fold })
+    return fold
+  }
+  const dropFold = (sessionId: string): void => {
+    agentViewFolds.delete(sessionId)
+  }
+  // One process-lifetime set of agent-lifecycle listeners (the TUI and the
+  // channel share the process): any agent's status/creation/disposal moves
+  // rows in the view, not only the attached session's.
+  ctx.on('agent/status', () => scheduleAgentViewRefresh())
+  ctx.on('agent/created', () => notifyAgentView())
+  ctx.on('agent/disposed', ({ agent: subject }: { agent: { id?: unknown } }) => {
+    dropFold(String(subject.id ?? ''))
+    notifyAgentView()
+  })
   const subagentControl: SubagentControl = {
     interrupt(agentId) {
       const child = subagentStore.get(agentId)
@@ -1959,7 +2175,7 @@ export function createChannel(
    * its own prompt event). The first answering plugin may veto the switch;
    * the reason is toasted here so the fallback string stays host-localized.
    */
-  const sessionSwitchVetoed = async (kind: 'new' | 'resume', targetSessionId?: string): Promise<boolean> => {
+  const sessionSwitchVetoed = async (kind: 'new' | 'resume' | 'agent-view', targetSessionId?: string): Promise<boolean> => {
     // D-6 stale detection captures the AGENT REFERENCE (session ids are
     // reusable — ABA): a slow decision must not let an older /resume roll
     // over a newer session the user already switched to mid-await.
@@ -1985,7 +2201,7 @@ export function createChannel(
   /** Fire-and-forget `tui/session-switched` (parallel): per-session plugin
    *  state rebinds here. Listener failures are logged, never propagated —
    *  the switch itself already succeeded. */
-  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind' | 'fork', sessionId: string, previousSessionId: string): void => {
+  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind' | 'fork' | 'agent-view' | 'background', sessionId: string, previousSessionId: string): void => {
       try {
         void dispatchTuiNotification(ctx, 'tui/session-switched', { kind, sessionId, previousSessionId, cwd: state.cwd }).catch((error: unknown) => {
           ctx.logger.warn('dsh-tui: tui/session-switched listener failed: %o', error)
@@ -2606,6 +2822,257 @@ export function createChannel(
       active.settled,
       new Promise<void>(resolve => { setTimeout(resolve, 3000) }),
     ])
+  }
+
+  /**
+   * Adopt a live agent in this process — the agent view's attach path for a
+   * background session. The target is already composed (preset, route,
+   * tools), so no persistence resolution runs; the projection resets and
+   * replays the target's in-memory log. The previously attached agent is
+   * NOT disposed when it still has something to run or say: it keeps living
+   * as a background session (backgroundHandles), and an empty one is freed.
+   */
+  const adoptLiveAgent = async (target: Agent): Promise<ResumeResult> => {
+    const previousHandle = currentHandle
+    const previousSessionId = String(agent.session.id)
+    // Same reset shape as resumeTo (no history replay sources differ — the
+    // target's own events are replayed below).
+    streaming = undefined
+    reasoning = undefined
+    sealedReasoning.length = 0
+    lastReasoningRow = undefined
+    toolCards.clear()
+    nextRowId = 0
+    state.rows.length = 0
+    state.todos = []
+    state.pending = []
+    state.goal = undefined
+    state.sessionTitle = ''
+    state.sessionColor = ''
+    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+    state.responseChars = 0
+    state.activeToolCount = 0
+    state.lastUserText = ''
+    state.working = false
+    state.cancelPending = false
+    state.spinnerMode = 'requesting'
+    state.status = target.status
+    state.agentId = target.id
+    state.cwd = target.session.header.cwd ?? state.cwd
+    state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
+    refreshGitBranch()
+    state.agentPreset = runningPresetOf(target.session)
+    const adoptedRoute = recordedModelRoute(target.session.events)
+    if (adoptedRoute !== undefined) {
+      state.provider = adoptedRoute.provider
+      state.model = adoptedRoute.model
+    }
+    state.tps = undefined
+    state.tpsSamples = []
+    state.lastUsage = undefined
+    state.workingActivity = undefined
+    state.loadedContext = undefined
+    state.contextWindow = undefined
+    state.effortLevels = undefined
+    state.reasoningEffort = undefined
+    refreshEffortLevels()
+    state.contextSegments = {
+      system: 0,
+      prompt: 0,
+      assistant: 0,
+      thinking: 0,
+      tools: 0,
+    }
+    replayEvents(target.session.events)
+    settleStreaming()
+    state.working = target.status === 'running'
+    agent = target
+    // The dispatch kept this agent's handle for stopping; adoption takes
+    // ownership of it (the agent stays registered either way).
+    currentHandle = backgroundHandles.get(String(target.id))
+    backgroundHandles.delete(String(target.id))
+    bindAgent()
+    refreshCommandList()
+    void refreshLoadedContext()
+    void refreshSkillCommands()
+    writeResumeTarget(String(target.id))
+    touchSession(target.id)
+    state.emit()
+    const keepPrevious =
+      previousHandle !== undefined
+      && previousHandle.agent !== target
+      && (previousHandle.agent.status === 'running' || agentViewHasTurns(previousHandle.agent.session.events))
+    if (previousHandle !== undefined && previousHandle.agent !== target) {
+      if (keepPrevious) backgroundHandles.set(previousSessionId, previousHandle)
+      else void previousHandle.dispose().catch(() => {})
+    }
+    // Both sessions are now part of the view's working set: the adopted one
+    // and the one the terminal detached from.
+    touchAgentViewSession(String(target.id))
+    touchAgentViewSession(previousSessionId)
+    clearStagedImages()
+    notifySessionSwitched('agent-view', String(target.id), previousSessionId)
+    notifyAgentView()
+    return { ok: true }
+  }
+
+  /**
+   * Resume a persisted session — the shared core of `/resume` and the agent
+   * view's attach path for a session no live agent owns. `keepCurrent`
+   * moves the previously attached agent into the background instead of
+   * disposing it (the agent view never kills what it is not told to stop).
+   */
+  const resumeInto = async (
+    sessionId: string,
+    kind: 'resume' | 'agent-view',
+    keepCurrent: boolean,
+  ): Promise<ResumeResult> => {
+    const agents = ctx.get('agents') as
+      | {
+        resume(options: {
+          resumeSessionId: SessionId
+          agentOptions?: { provider?: string; model?: string }
+          setup?: CreateAgentOptions['setup']
+        }): Promise<AgentHandle>
+      }
+      | undefined
+    if (!agents) {
+      state.notify(t('resume-unavailable'), { color: 'error' })
+      return { ok: false, reason: 'unavailable' }
+    }
+    // Compat boundary: register vouched-for legacy event types (e.g.
+    // activity/status from pre-#143 logs) in every reachable dsh-session
+    // copy before ANY strict read path (preset lookup below, then the
+    // harness seed validation) loads the target — the plugin's #119
+    // registration never ran in processes where it is unmounted (issue
+    // #153). In-process only: the shared log is never rewritten.
+    ensureLegacySessionEventTypes()
+    // The target session's own preset (from its persisted log) — never the
+    // current preference: a resume re-enters the composition its history
+    // was produced under. Same rule for the route: only an explicit
+    // cordis.yml provider/model overrides the route the target's own
+    // request/header records (issue #30) — and only as a COMPLETE pair
+    // (issue #67): a provider-only pin must not merge with the recorded
+    // model half into a route no adapter recognizes.
+    const resumeComposed = await composePreset(
+      ctx,
+      await resolvePersistedPreset(ctx, SessionId(sessionId)),
+    )
+    const resumeRoute = explicitModelRoute({
+      provider: options.configuredProvider,
+      model: options.configuredModel,
+    })
+    // The recorded route feeds back into agentOptions too — not just the
+    // status line below: a provider-only cordis.yml pin (issue #67) leaves
+    // agentOptions.model undefined on resume, which breaks the `{{model}}`
+    // persona variable for the resumed agent's own assembly AND for every
+    // subagent it spawns (dsh-subagent's resolveChildAgentOptions inherits
+    // `parent.options.model`).
+    const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
+    let handle: AgentHandle
+    try {
+      handle = await agents.resume({
+        resumeSessionId: SessionId(sessionId),
+        agentOptions: {
+          provider: resumeRoute?.provider ?? recordedRoute?.provider,
+          model: resumeRoute?.model ?? recordedRoute?.model,
+        },
+        ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      state.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+      return { ok: false, reason: 'failed', error: message }
+    }
+    try {
+      // Adopting this persisted conversation; this also repairs sessions
+      // created by TUI versions that predate the workspace ownership ledger.
+      await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
+    } catch (error) {
+      state.notify(
+        t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+        { color: 'warning', timeoutMs: 8000 },
+      )
+    }
+    // Replay the persisted history into a fresh transcript (same reset as
+    // rewindTo, plus the context window which the replay re-derives).
+    streaming = undefined
+    reasoning = undefined
+    sealedReasoning.length = 0
+    lastReasoningRow = undefined
+    toolCards.clear()
+    nextRowId = 0
+    state.rows.length = 0
+    state.todos = []
+    state.pending = []
+    state.goal = undefined
+    state.sessionTitle = ''
+    state.sessionColor = ''
+    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+    state.responseChars = 0
+    state.activeToolCount = 0
+    state.lastUserText = ''
+    state.working = false
+    state.cancelPending = false
+    state.spinnerMode = 'requesting'
+    state.status = handle.agent.status
+    state.agentId = handle.agent.id
+    state.cwd = handle.agent.session.header.cwd ?? state.cwd
+    state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
+    refreshGitBranch()
+    state.agentPreset = resumeComposed.agentPreset
+    const resumedRoute = resumeRoute ?? recordedModelRoute(handle.agent.session.events)
+    if (resumedRoute !== undefined) {
+      state.provider = resumedRoute.provider
+      state.model = resumedRoute.model
+    }
+    state.tps = undefined
+    state.tpsSamples = []
+    state.lastUsage = undefined
+    state.workingActivity = undefined
+    state.loadedContext = undefined
+    state.contextWindow = undefined
+    state.effortLevels = undefined
+    state.reasoningEffort = undefined
+    refreshEffortLevels()
+    state.contextSegments = {
+      system: 0,
+      prompt: 0,
+      assistant: 0,
+      thinking: 0,
+      tools: 0,
+    }
+    replayEvents(handle.agent.session.events)
+    settleStreaming()
+    state.working = handle.agent.status === 'running'
+    const oldHandle = currentHandle
+    const previousSessionId = String(agent.session.id)
+    agent = handle.agent
+    currentHandle = handle
+    bindAgent()
+    refreshCommandList()
+    void refreshLoadedContext()
+    void refreshSkillCommands()
+    writeResumeTarget(sessionId)
+    touchSession(sessionId)
+    state.emit()
+    const keepPrevious =
+      keepCurrent
+      && oldHandle !== undefined
+      && (oldHandle.agent.status === 'running' || agentViewHasTurns(oldHandle.agent.session.events))
+    if (oldHandle !== undefined) {
+      if (keepPrevious) backgroundHandles.set(previousSessionId, oldHandle)
+      else void oldHandle.dispose().catch(() => {})
+    }
+    // Attaching FROM the agent view makes both sides view sessions; the
+    // plain /resume path keeps its history out of the view's ledger.
+    if (kind === 'agent-view') {
+      touchAgentViewSession(sessionId)
+      touchAgentViewSession(previousSessionId)
+    }
+    clearStagedImages()
+    notifySessionSwitched(kind, sessionId, previousSessionId)
+    return { ok: true }
   }
 
   const state: ChannelState = {
@@ -4902,15 +5369,357 @@ export function createChannel(
       // surface shows — this project only, conversations only, sub-agent runs
       // folded away — is a view decision, and keeping it out of here is what
       // lets the browser toggle those views without re-reading a single log.
-      const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
-      if (!persistence) return []
-      return listSummaries(persistence)
+      const rows = await listSessionsSnapshot(ctx)
+      persistedRowsCache = rows
+      notifyAgentView()
+      return rows
     },
     async previewSession(sessionId) {
       const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
       if (!persistence) return []
       const path = await locateSession(persistence, sessionId)
       return path === undefined ? [] : previewSession(path, PREVIEW_ENTRIES)
+    },
+    // ── agent view (CC's `claude agents`) ───────────────────────────────────
+    bindApprovalStore(store) {
+      approvalStore = store
+      ctx.effect(() => store.subscribe(notifyAgentView))
+      notifyAgentView()
+    },
+    agentViewRows() {
+      // Cached snapshot (see notifyAgentView): the array identity is stable
+      // between changes, which useSyncExternalStore requires.
+      if (agentViewRowsCache !== undefined) return agentViewRowsCache
+      const agentsService = ctx.get('agents') as
+        | { list(): readonly Agent[] }
+        | undefined
+      const pendingIds = new Set(approvalStore?.pendingAgentIds() ?? [])
+      const live: AgentViewRow[] = []
+      if (agentsService !== undefined) {
+        for (const liveAgent of agentsService.list()) {
+          // Subagent children are not agent-view rows (CC parity): they
+          // belong to their parent's conversation.
+          if (liveAgent.session.header.origin === 'subagent') continue
+          const fold = foldOf(liveAgent)
+          const id = String(liveAgent.id)
+          const isCurrent = id === String(agent.session.id)
+          // A session that never held a conversation is not a row (the
+          // session browser's rule): the fresh terminal session a `/bg`
+          // creates stays visible only while it IS the attached one.
+          if (!fold.hasTurns && !isCurrent) continue
+          const needsInput = pendingIds.has(id)
+          const status = agentViewStatusOf(liveAgent.status, fold, needsInput)
+          // CC parity: a blocked row's summary is the question it is
+          // waiting on (the parked approval's reason/gated command).
+          const ask = needsInput ? approvalStore?.pendingAgentDetail(id) : undefined
+          // A prompt-kind summary is the session's own prompt echoed back —
+          // the name column already says it, so the row stays clean.
+          const summary = ask !== undefined
+            ? oneLine(ask.reason ?? ask.command ?? ask.toolName ?? '')
+            : fold.summaryKind === 'prompt' ? '' : fold.summary
+          live.push({
+            id,
+            title: fold.title.length > 0 ? fold.title : sessionTitleFallback(fold, liveAgent.session.header.cwd),
+            cwd: liveAgent.session.header.cwd ?? state.cwd,
+            summary,
+            status,
+            live: true,
+            current: isCurrent,
+            createdAt: liveAgent.session.header.createdAt,
+            updatedAt: fold.updatedAt,
+          })
+        }
+      }
+      const liveIds = new Set(live.map(row => row.id))
+      // Stopped rows come from the shared persistence store, which also
+      // holds sessions other front doors (web, other profiles) created and
+      // the ordinary /resume history. The agent-view ledger is the exact
+      // ownership record: only sessions this TUI dispatched, backgrounded,
+      // or attached to FROM the view appear here (CC `claude agents`
+      // semantics — background sessions, not the whole history).
+      const agentViewSessions = readAgentViewSessions()
+      const persisted: AgentViewRow[] = persistedRowsCache
+        .filter(summary =>
+          !liveIds.has(summary.id)
+          && summary.kind.kind !== 'subagent'
+          && agentViewSessions[summary.id] !== undefined
+          // Never list a session that holds no conversation (the session
+          // browser's rule): a `/bg` fresh session the user never typed
+          // into is not an agent-view row once it stops.
+          && summary.hasPrompt)
+        .map(summary => ({
+          id: summary.id,
+          title: summary.title.text,
+          cwd: summary.cwd,
+          summary: summary.label === undefined ? '' : oneLine(summary.label),
+          status: 'stopped',
+          live: false,
+          current: false,
+          createdAt: summary.createdAt,
+          updatedAt: summary.updatedAt,
+        }))
+      const rows = [...live, ...persisted]
+      const rank = (row: AgentViewRow): number => {
+        const index = AGENT_VIEW_STATUS_ORDER.indexOf(row.status)
+        return index < 0 ? AGENT_VIEW_STATUS_ORDER.length : index
+      }
+      rows.sort((left, right) =>
+        rank(left) - rank(right)
+        || right.updatedAt - left.updatedAt
+        || right.createdAt - left.createdAt
+        || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+      agentViewRowsCache = rows
+      return rows
+    },
+    subscribeAgentView(listener) {
+      agentViewListeners.add(listener)
+      return () => {
+        agentViewListeners.delete(listener)
+      }
+    },
+    async dispatchBackgroundAgent(prompt) {
+      const text = prompt.trim()
+      if (text.length === 0) {
+        return { ok: false, reason: 'failed', error: t('agentview-empty-prompt') }
+      }
+      const agentsService = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!agentsService) {
+        state.notify(t('agentview-dispatch-unavailable'), { color: 'error' })
+        return { ok: false, reason: 'unavailable' }
+      }
+      const sessionId = SessionId(randomUUID())
+      // Same composition as /new: the caller's default preset + model route.
+      // Every failure path below must return a result (never reject): the
+      // screen shows the error, and a silent rejection would look like a
+      // "missing" session.
+      let handle: AgentHandle
+      try {
+        const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+        const resolved = resolveModelRoute(
+          { provider: options.configuredProvider, model: options.configuredModel },
+          readModelPref(),
+          { provider: options.provider, model: options.model },
+        )
+        const llm = ctx.get('llm') as
+          | { listModels(provider: string): Promise<readonly { id: string }[]> }
+          | undefined
+        const { route } = await validateModelRoute(llm, resolved, {
+          provider: options.provider,
+          model: options.model,
+        })
+        handle = await agentsService.create({
+          sessionId,
+          meta: {
+            cwd: state.cwd,
+            ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
+          },
+          agentOptions: route,
+          ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false, reason: 'failed', error: message }
+      }
+      backgroundHandles.set(String(sessionId), handle)
+      // Record ownership BEFORE delivery: even a delivery failure must not
+      // silently drop the session from the view.
+      touchAgentViewSession(String(sessionId))
+      touchSession(sessionId)
+      try {
+        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
+      } catch {
+        // The workspace ledger is optional bookkeeping; the session runs
+        // without it and the next resume repairs the entry.
+      }
+      // Deliver the prompt as a user message; the agent loop picks it up and
+      // the session keeps running unattended until its turn ends. A failure
+      // here must be loud — a silent rejection would leave an empty row and
+      // a "missing" session with no explanation.
+      try {
+        handle.agent.followup(createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'user' },
+        }))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false, reason: 'failed', error: message }
+      }
+      notifyAgentView()
+      return { ok: true, sessionId: String(sessionId) }
+    },
+    async stopBackgroundAgent(sessionId) {
+      // The attached session cannot be stopped from the view: the channel
+      // drives it, and disposing it out from under the UI would strand the
+      // terminal on a dead agent.
+      if (sessionId === String(agent.session.id)) return false
+      const handle = backgroundHandles.get(sessionId)
+      if (handle === undefined) return false
+      backgroundHandles.delete(sessionId)
+      try {
+        handle.agent.cancel({ kind: 'user' })
+        await handle.dispose()
+      } catch (error) {
+        logForDebugging(`agent view: stop of "${sessionId}" failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      dropFold(sessionId)
+      void listSessionsSnapshot(ctx).then((rows) => {
+        persistedRowsCache = rows
+      })
+      notifyAgentView()
+      return true
+    },
+    async attachToAgent(sessionId) {
+      if (sessionId === String(agent.session.id)) return { ok: true }
+      const agentsService = ctx.get('agents') as
+        | { get(id: SessionId): Agent | undefined }
+        | undefined
+      const liveTarget = agentsService?.get(SessionId(sessionId))
+      if (liveTarget !== undefined) {
+        if (await sessionSwitchVetoed('agent-view', sessionId)) return { ok: false, reason: 'cancelled' }
+        return adoptLiveAgent(liveTarget)
+      }
+      // Not alive in this process: resume it through the persistence seam,
+      // keeping the current agent running in the background.
+      if (await sessionSwitchVetoed('agent-view', sessionId)) return { ok: false, reason: 'cancelled' }
+      return resumeInto(sessionId, 'agent-view', true)
+    },
+    async peekAgentSession(sessionId) {
+      const live = (ctx.get('agents') as { get(id: SessionId): Agent | undefined } | undefined)?.get(SessionId(sessionId))
+      if (live !== undefined) return agentViewLivePreview(live.session.events, PREVIEW_ENTRIES)
+      const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
+      if (!persistence) return []
+      const path = await locateSession(persistence, sessionId)
+      return path === undefined ? [] : previewSession(path, PREVIEW_ENTRIES)
+    },
+    async replyToAgent(sessionId, text) {
+      const trimmed = text.trim()
+      if (trimmed.length === 0) {
+        state.notify(t('agentview-reply-empty'), { color: 'warning' })
+        return false
+      }
+      const live = (ctx.get('agents') as { get(id: SessionId): Agent | undefined } | undefined)?.get(SessionId(sessionId))
+      if (live === undefined) {
+        // A stopped session takes a reply only through a restarted agent:
+        // attach into it and send from the conversation instead.
+        state.notify(t('agentview-reply-stopped'), { color: 'warning' })
+        return false
+      }
+      live.followup(createUserMessage({
+        content: [{ type: 'text', text: trimmed }],
+        source: { kind: 'user' },
+      }))
+      notifyAgentView()
+      return true
+    },
+    async backgroundCurrent() {
+      // `/bg` — the attached session moves to the background (it keeps
+      // running in this process) and the terminal lands on a fresh one.
+      const agentsService = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!agentsService) {
+        state.notify(t('agentview-dispatch-unavailable'), { color: 'error' })
+        return { ok: false }
+      }
+      const sessionId = SessionId(randomUUID())
+      const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+      const resolved = resolveModelRoute(
+        { provider: options.configuredProvider, model: options.configuredModel },
+        readModelPref(),
+        { provider: options.provider, model: options.model },
+      )
+      const llm = ctx.get('llm') as
+        | { listModels(provider: string): Promise<readonly { id: string }[]> }
+        | undefined
+      const { route } = await validateModelRoute(llm, resolved, {
+        provider: options.provider,
+        model: options.model,
+      })
+      let handle: AgentHandle
+      try {
+        handle = await agentsService.create({
+          sessionId,
+          meta: {
+            cwd: state.cwd,
+            ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
+          },
+          agentOptions: route,
+          ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false }
+      }
+      try {
+        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
+      } catch {
+        // Optional ledger, same as dispatch.
+      }
+      const previousHandle = currentHandle
+      const previousSessionId = String(agent.session.id)
+      // CC parity: even an EMPTY session is backgrounded (it shows as a
+      // "send a prompt to start" row; Esc in the view returns to it), so the
+      // handle is always kept for stopping/adopting — never disposed here.
+      if (previousHandle !== undefined) backgroundHandles.set(previousSessionId, previousHandle)
+      // Fresh-session reset shape (mirrors /new; nothing to replay).
+      streaming = undefined
+      reasoning = undefined
+      sealedReasoning.length = 0
+      lastReasoningRow = undefined
+      toolCards.clear()
+      nextRowId = 0
+      state.rows.length = 0
+      state.todos = []
+      state.pending = []
+      state.goal = undefined
+      state.sessionTitle = ''
+      state.sessionColor = ''
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+      state.responseChars = 0
+      state.activeToolCount = 0
+      state.lastUserText = ''
+      state.working = false
+      state.cancelPending = false
+      state.spinnerMode = 'requesting'
+      state.status = handle.agent.status
+      state.agentId = handle.agent.id
+      state.tps = undefined
+      state.tpsSamples = []
+      state.lastUsage = undefined
+      state.workingActivity = undefined
+      state.loadedContext = undefined
+      state.contextWindow = undefined
+      state.effortLevels = undefined
+      state.reasoningEffort = undefined
+      refreshEffortLevels()
+      state.contextSegments = {
+        system: 0,
+        prompt: 0,
+        assistant: 0,
+        thinking: 0,
+        tools: 0,
+      }
+      agent = handle.agent
+      currentHandle = handle
+      bindAgent()
+      refreshCommandList()
+      void refreshLoadedContext()
+      void refreshSkillCommands()
+      clearResumeTarget()
+      touchSession(handle.agent.id)
+      // Both sides of a backgrounding belong to the agent view: the session
+      // left running and the fresh one the terminal lands on.
+      touchAgentViewSession(previousSessionId)
+      touchAgentViewSession(String(handle.agent.id))
+      clearStagedImages()
+      notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
+      notifyAgentView()
+      return { ok: true, backgroundedSessionId: previousSessionId }
     },
     setResumeTarget(sessionId) {
       writeResumeTarget(sessionId)
@@ -4982,6 +5791,7 @@ export function createChannel(
       if (sessionId === agent.session.id) return false
       if (deleteSessionLog(sessionId) !== 'deleted') return false
       forgetSession(sessionId)
+      forgetAgentViewSession(sessionId)
       // A resume marker naming the deleted session would make the next
       // `dsh-tui --resume` launch target a log that no longer exists.
       if (readResumeTarget() === sessionId) clearResumeTarget()
@@ -6843,6 +7653,12 @@ ${output}
         }
         // Otherwise handle the bound main-agent session.
         if (!isMainSession) return
+        if (session !== agent.session) {
+          // A background (agent view) session is active: refresh the rows
+          // so its summary/status follows the live output, throttled.
+          scheduleAgentViewRefresh()
+          return
+        }
         // Observation broker (C-042): maps user/message + assistant/message
         // into grant-gated envelopes; every other event type is a no-op, and
         // publish never throws into this arm.
