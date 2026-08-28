@@ -3453,7 +3453,12 @@ export function Chat({
             onFillConsumed={() =>{  setHistoryFill(null) }}
             onRewindRequest={openRewind}
             onBackgroundRequest={backgroundToAgentView}
-            backgroundAgentsNeedingInput={backgroundAgentsNeedingInput}
+            backgroundAgentsNeedingInput={
+              // Only the real channel supplies the seam; pre-agent-view test
+              // stubs must not grow the footer row (layout-dependent
+              // regressions pin the visible row count).
+              channel.agentViewRows !== undefined ? backgroundAgentsNeedingInput : undefined
+            }
             controllerRef={promptControllerRef}
           />
         )}
