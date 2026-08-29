@@ -236,6 +236,13 @@ the same profile installation path as an end-user install.
 stdout is not a TTY. Start the process directly in a terminal rather than
 redirecting its main output to another command or file.
 
+When dsh-tui is only installed in a profile and the DSH composition is started
+by a non-terminal host (Web / Tauri / GUI, stdout piped or null), dsh-tui
+detects that stdout is not a TTY and that the process was not started by the
+`dsh-tui` launcher, and silently skips the TUI frontend (no error, the host
+keeps booting). The error above only appears when `dsh-tui` (or the standalone
+portable build) was explicitly launched without a TTY.
+
 ### `dsh` or `pnpm` cannot be found
 
 Make sure the global npm bin directory is on `PATH`, then open a new terminal.

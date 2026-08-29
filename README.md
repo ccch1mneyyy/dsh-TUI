@@ -130,6 +130,20 @@ sh install.sh
 - **模板仓库**：[plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)（从模板起步，5 分钟出一个插件）
 - **参考实现**：`dsh-working-activity`（实时工作状态行：TUI 槽位 + `activity/status` 会话事件双出口）
 
+### 接缝稳定性参考
+
+按当前实现成熟度给出的**非正式**分级，帮助插件作者评估投入；正式状态与兼容性协定以
+[准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)为准：
+
+| 分级 | 接缝 |
+| --- | --- |
+| 稳定候选（形态冻结；如有破坏性变更，先在次版本弃用告警再移除） | 六 设置区块 · 八 全屏场景 · 十 托管对话框 · 十一 状态行 · 十二 键盘快捷键 · 十三 条目渲染器 |
+| 实验性（仍可能随 dsh-std / 准入规范演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） |
+| 跟随上游（稳定性由 cordis / dsh 官方机制决定） | 一 会话事件 · 二 官方 prompt 槽位 · 三 技能打包 · 四 主题 · 五 system prompt 段 · 七 profile 组合 |
+
+另：`@deepseek-harness-tui/dsh-tui/test-utils`（headless 准入/挂载测试助手）与
+`@deepseek-harness-tui/dsh-tui/api`（纯类型入口）为实验性公开面。
+
 
 
 ## 文档索引
@@ -138,7 +152,7 @@ sh install.sh
 | --- | --- |
 | [安装与快速开始](docs/getting-started.md) | 前置条件、安装、启动、profile 生命周期、源码开发 |
 | [配置参考](docs/configuration.md) | Cordis 覆盖、配置字段、Agent preset、MCP、环境变量 |
-| [主题系统](docs/themes.md) | 内置主题、自动检测、自定义 JSON 主题与校验规则 |
+| [主题系统](docs/themes.md) | 内置主题、自动检测、静态 JSON 与 npm 插件主题、校验规则 |
 | [交互与命令](docs/interaction.md) | 快捷键、鼠标、问卷、slash command 与会话工作流 |
 | [架构与限制](docs/architecture.md) | 运行链路、渲染与持久化设计、安全边界、已知限制 |
 | [VS Code 使用指南](docs/vscode.md) | 在 VS Code 集成终端运行 dsh-tui；companion 扩展 `dsh-tui-vscode` 提供与 Claude Code 官方扩展几乎一致的体验（已上架 Marketplace） |
@@ -154,15 +168,17 @@ sh install.sh
 - **生态组织**：[dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem) —— 社区插件、模板与收录列表的家。欢迎来发插件、提创意、互相取暖 🐋
 - **社区交流群**：使用问题、插件创意、功能许愿，都欢迎进来聊。
 
-| 微信群 | QQ 群（群号 572549239） | 微信三群 |
+| 微信群 | QQ 群（群号 572549239） | 微信四群 |
 | :---: | :---: | :---: |
-| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI 社区交流群微信群二维码" width="200"> | <img src="screenshots/qq-group.png" alt="dsh-TUI 社区交流群 QQ 群二维码" width="200"> | <img src="screenshots/wechat-group3.jpg" alt="dsh-TUI 社区交流群微信三群二维码" width="200"> |
+| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI 社区交流群微信群二维码" width="200"> | <img src="screenshots/qq-group.png" alt="dsh-TUI 社区交流群 QQ 群二维码" width="200"> | <img src="screenshots/wechat-group4.jpg" alt="dsh-TUI 社区交流四群微信群二维码" width="200"> |
 
 > 微信群二维码约 7 天过期一次，如遇失效请走 QQ 群（572549239），或开个 issue 提醒我们更新。
 
 ## 权限与安全边界
 
-`dsh-TUI` 不实现独立沙箱，而是使用当前 DSH profile 的文件、Shell、sandbox 与 approval 策略。仓库提供的 profile 在非 Windows 平台默认采用工作区约束与审批；Windows 当前没有对应的沙箱后端，组合会退回到 `danger-full-access` 且不弹审批。在包含敏感凭证或不可信仓库的环境中启动前，请先检查 profile 配置。
+> **Windows 安全警告：** Windows profile 默认使用 `danger-full-access`，且 approval 默认是 `never`。这会授予工具不受限制的访问权限；在敏感凭证或不可信仓库环境中启动前，务必先检查并收紧 profile 配置。
+
+`dsh-TUI` 不实现独立沙箱，而是使用当前 DSH profile 的文件、Shell、sandbox 与 approval 策略。权限预设来自 DSH `permissionPresets` registry：服务缺失时使用 legacy 三项兼容名册；服务已挂载但为空、损坏或不一致时标记为 unavailable，TUI fail closed，不伪造名册。可用 registry 按声明顺序提供第三方预设，只有符合既有 command-token 语法的 ID 才进入补全，`custom` 只显示为当前态，不是可选择目标；切换始终走官方 `/permission <preset>` 命令。若外部 `/permission` 命令本身未注册，输入沿用现有默认命令/model dispatch。在包含敏感凭证或不可信仓库的环境中启动前，请先检查 profile 配置。
 
 详见[权限边界与已知限制](docs/architecture.md#权限与安全边界)。
 

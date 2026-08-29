@@ -281,10 +281,11 @@
       name: '@deepseek-harness-tui/dsh-tui'
       # The entry-level dependency augments the plugin's `agents` inject and
       # prevents startup Session creation from racing WorkspaceRegistry init.
-      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers]
-      # `tuiWorkspaces`/`tuiScenes` (and the dsh-tui-extensions services)
-      # live in the entry-level inject ONLY as an
-      # ordering (and reload-rebind) guarantee alongside their service rows
+      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers, tuiThemes]
+      # `tuiWorkspaces`/`tuiScenes` (and the dsh-tui-extensions services,
+      # including `tuiThemes`)
+      # live in the entry-level inject ONLY as an ordering (and reload-rebind)
+      # guarantee alongside their service rows
       # above — they are deliberately absent from the plugin's code-level
       # inject (issue #183): the dsh CLI may read this patch from an older
       # copy of the package than the plugin module it loads, and a hard

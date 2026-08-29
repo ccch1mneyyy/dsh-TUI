@@ -92,11 +92,15 @@ function paintInlineCode(text: string): string {
  * without OSC 8 support keep the plain painted code span.
  */
 function renderCodeSpan(token: Tokens.Codespan): string {
-  const painted = paintInlineCode(token.text)
-  if (!looksLikeFilePath(token.text)) return painted
-  if (!supportsHyperlinks()) return painted
-  return createHyperlink(fileLinkUrl(token.text), painted, {
-    style: (text: string) => text,
+  // Paint via the style callback so the permission color is applied AFTER
+  // createHyperlink's anti-smuggle content scrub: passing the painted
+  // string as content would have its ESC bytes stripped, leaving
+  // `[38;2;…m` parameter text on screen.
+  const paint = (text: string): string => paintInlineCode(text)
+  if (!looksLikeFilePath(token.text)) return paint(token.text)
+  if (!supportsHyperlinks()) return paint(token.text)
+  return createHyperlink(fileLinkUrl(token.text), token.text, {
+    style: paint,
   })
 }
 

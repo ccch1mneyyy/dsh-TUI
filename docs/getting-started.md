@@ -249,6 +249,11 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 
 stdout 不是 TTY。请直接在终端中启动，不要把主进程输出管道到文件或其他命令。
 
+如果 dsh-tui 只是装在某个 profile 里、而实际由 Web / Tauri / GUI 等非终端宿主
+启动 DSH，dsh-tui 会检测到 stdout 不是 TTY 且并非由 `dsh-tui` launcher 启动，
+自动跳过 TUI 前端（不报错、不影响宿主启动）；只有显式执行 `dsh-tui`（含
+standalone 便携版）却没有 TTY 时才会报上面的错误。
+
 ### 找不到 `dsh` 或 `pnpm`
 
 确认全局 npm bin 目录在 `PATH` 中，并重新打开终端。`install.sh` 会在安装前检查

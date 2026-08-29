@@ -45,7 +45,7 @@ const {
 const { loadSpecData } = await import('../src/plugin-spec/registry.js')
 const { check } = await import('../src/plugin-spec/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, MESSAGE_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, MESSAGE_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 const { validateMessageEvent } = await import('@dsh-std/messages')
 import type { MessagesObserveEnvelope } from '../src/dsh-adapter/message-observer.js'
 

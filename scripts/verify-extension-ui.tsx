@@ -61,7 +61,7 @@ const [
   import('@deepseek-ai/dsh-session'),
   import('./lib/term-test.mjs'),
 ])
-const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 
@@ -342,7 +342,7 @@ const plugin = pluginCtx
   }
   plugin.tuiStatus.set('demo', '构建\x1b[31m中')
   check('tuiStatus: control chars stripped',
-    statusStore.getSnapshot()[0]?.text === '构建 [31m中', JSON.stringify(statusStore.getSnapshot()[0]?.text))
+    statusStore.getSnapshot()[0]?.text === '构建中', JSON.stringify(statusStore.getSnapshot()[0]?.text))
   // Scalar-only coercion: a non-scalar text is refused with a warn — never
   // rendered as "[object Object]", and NOT treated as a clear either.
   plugin.tuiStatus.set('scalar', { nope: true } as unknown as string)

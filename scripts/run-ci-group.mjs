@@ -47,6 +47,10 @@ const GROUPS = {
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查
 // 2026-08-27）——tokenize 提取→回放链路的注入 payload 必须被剥除。
     ["verify-osc8-sanitize", ['node', '--import', 'tsx/esm', 'scripts/verify-osc8-sanitize.tsx']],
+// 文件链接 ANSI 完整性回归：renderCodeSpan 把已上色的路径代码段传入
+// createHyperlink 时，防注入消毒会剥掉合法 \x1b、SGR 参数文本上屏
+// （[38;2;…m 残片）；链接标签的样式序列同样不得残留裸参数。
+    ["verify-markdown-filelink-ansi", ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-filelink-ansi.ts']],
 // 全屏 resize 空白回归：宽度变化清空行高缓存 → scrollHeight 估算塌缩，
 // shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
 // 成"只剩输入框"（Orca pane 宽度抖动的现场取证复现）。
@@ -201,6 +205,14 @@ const GROUPS = {
 //    与粘性报错、真 Chat 驱动的对话框/状态行/快捷键端到端。
     ["verify-extension-events", ['node', '--import', 'tsx/esm', 'scripts/verify-extension-events.tsx']],
     ["verify-extension-ui", ['node', '--import', 'tsx/esm', 'scripts/verify-extension-ui.tsx']],
+// 非 TTY 宿主门禁回归（Web/Tauri 共存）：profile 装有 dsh-tui 的非终端
+// 宿主（stdout 为 pipe/null）必须静默跳过插件、不 throw、不影响宿主启动；
+// 显式 dsh-tui launcher/standalone 启动无 TTY 仍保留原报错。
+    ["verify-tui-host-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-tui-host-mode.ts']],
+// 插件 toast 接缝回归（ctx.tuiToast）：消毒/标量强制、timeout 钳制
+// （插件不可 sticky）、未知颜色拒绝、每激活 20/min 限速 + 粘性告警、
+// host-only 面不泄漏到插件服务对象、公开 shim 导出。
+    ["verify-plugin-toast", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-toast.tsx']],
 // 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
 // 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
     ["verify-session-titles", ['node', 'scripts/verify-session-titles.mjs']],
@@ -307,6 +319,12 @@ const GROUPS = {
 // DATA_DIR 建目录 0700；临时 HOME 重定向 + 固定 umask，修复前按 umask
 // 落 0644 必红。
     ["verify-data-file-perms", ['node', '--import', 'tsx/esm', 'scripts/verify-data-file-perms.tsx']],
+// /resume・/tree 搜索框显示塌缩回归：SearchBox 的单行窗口化预算取自实测
+// 自身宽度，自适应宽度（默认 row 包裹、无 width prop）会让预算跟随内容
+// 收缩，收敛到「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。
+// 断言逐键英文、IME 整段上屏、退格、rename 预填+追加与 /tree 搜索的查询
+// 始终完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
+    ["verify-session-browser-searchbox", ['node', '--import', 'tsx/esm', 'scripts/verify-session-browser-searchbox.tsx']],
   ],
   'channel-ui': [
 // channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
@@ -404,6 +422,9 @@ const GROUPS = {
 // displayName 内嵌换行入口压平（#160 窗口化列表单行契约的第一道防
 // 线）。注意必须走 tsx——脚本直接 import src/customTheme.ts。
     ["verify-themes", ['node', '--import', 'tsx/esm', 'scripts/verify-themes.mjs']],
+// 运行时主题插件接缝回归：Cordis activation 归属与自动清理、host-only
+// facade、静态主题优先级、resolver token 清理及无服务降级。
+    ["verify-runtime-themes", ['node', '--import', 'tsx/esm', 'scripts/verify-runtime-themes.ts']],
 // Text 背景色回归（issue #166）：公开 themed Text 与 Box 一致支持
 // 原始颜色值，且必须把对应 ANSI 背景色写入终端。
     ["verify-text-background", ['node', '--import', 'tsx/esm', 'scripts/verify-text-background.tsx']],

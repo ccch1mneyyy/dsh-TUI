@@ -45,7 +45,7 @@ const { buildHostDescriptor } = await import('../src/dsh-adapter/host-descriptor
 const { readGrantStore } = await import('../src/dsh-adapter/grants.js')
 const { TuiPluginStorageRuntime } = await import('../src/dsh-adapter/plugin-storage.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 import type { TuiPluginStorage } from '../src/dsh-adapter/plugin-storage.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')

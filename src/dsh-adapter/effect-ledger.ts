@@ -54,6 +54,7 @@ export const LEDGER_RESOURCE_KINDS = [
   'shortcut',
   'status',
   'renderer',
+  'theme',
   'storage-namespace',
   'subscription',
   'permission',
