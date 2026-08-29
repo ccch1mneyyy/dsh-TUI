@@ -50,6 +50,19 @@ const WIN32_INPUT_RE = /^\x1b\[([\d;]*)_$/
 const WIN32_INPUT_TAIL_RE = /\[\d*;\d*;\d*;[01](?:;\d*){0,2}_/g
 const WIN32_INPUT_TAILS_RE = /^(?:\[\d*;\d*;\d*;[01](?:;\d*){0,2}_)+$/
 
+// Prefix of a fragmenting SGR mouse report (`[<btn;col;rowM/m`). ConPTY can
+// split one report across multiple stdin reads; when App's 50ms escape timer
+// fires between the fragments, the pieces stop being part of one buffered
+// sequence and would leak into the prompt as visible `[<0;32;5M` garbage
+// (the orphan-tail branch below only matches COMPLETE tails). A prefix that
+// matches this regex (and is not plain `[`-typed text — see the hold logic)
+// is mouse-protocol-shaped and safe to hold for the 50ms grace window.
+// eslint-disable-next-line no-control-regex
+const SGR_MOUSE_PREFIX_RE = /^\[<\d+(?:;\d*){0,2}$/
+// Complete SGR tail exactly as the orphan branch expects it.
+// eslint-disable-next-line no-control-regex
+const SGR_MOUSE_TAIL_RE = /^\[<\d+;\d+;\d+[Mm]$/
+
 // dwControlKeyState modifier bits (others — NUMLOCK_ON 0x20, CAPSLOCK_ON
 // 0x80, ENHANCED_KEY 0x100 — are state indicators, not pressed modifiers)
 const WIN32_CS_ALT = 0x01 | 0x02
@@ -619,6 +632,14 @@ export type KeyParseState = {
    * arrive as ordinary key records and must be reassembled here (issue #147).
    */
   win32Paste?: Win32PasteState
+  /**
+   * Pending prefix of an SGR mouse report that fragmented mid-sequence
+   * (ConPTY split a report across reads and App's escape timer flushed the
+   * buffered ESC prefix). Holds at most one incomplete `[<btn;col;row` tail;
+   * the next chunk completes it (resynthesis) or a flush discards it —
+   * typed `[`-led text never matches the guard pattern and passes through.
+   */
+  mouseTailHold?: string
   // Internal tokenizer instance
   _tokenizer?: Tokenizer
 }
@@ -691,6 +712,14 @@ export function parseMultipleKeypresses(
     held: [],
     buffer: '',
   }
+  // Pending fragmented SGR mouse prefix (see KeyParseState.mouseTailHold).
+  let mouseTailHold: string | undefined = prevState.mouseTailHold
+  // Set when THIS call captured (or extended) the hold — a flush that fires
+  // in the same call the fragments arrived must not discard them: the
+  // terminal's continuation bytes can still be in flight (ConPTY delivered
+  // the first read's tail after the 50ms timer armed). Only a hold that
+  // survived a full parse call without completing is stale (below).
+  let holdTouchedThisCall = false
 
   for (const token of tokens) {
     if (token.type === 'sequence') {
@@ -735,6 +764,15 @@ export function parseMultipleKeypresses(
               parseX10MouseEvent(token.value)
             if (mouse) {
               keys.push(mouse)
+            } else if (SGR_MOUSE_PREFIX_RE.test(token.value.replace(/^\x1b/, ''))) {
+              // Flush-truncated SGR mouse report: the tokenizer's flush
+              // emitted the buffered prefix (ESC still attached) as a
+              // sequence token. It is protocol bytes mid-report, not a key —
+              // strip the ESC, hold for the continuation (the text-token
+              // branch above completes it), and never let it fall through
+              // to parseKeypress, where it would leak into the prompt.
+              mouseTailHold = (mouseTailHold ?? '') + token.value.replace(/^\x1b/, '')
+              holdTouchedThisCall = true
             } else {
               keys.push(parseKeypress(token.value))
             }
@@ -757,7 +795,9 @@ export function parseMultipleKeypresses(
           }
         }
       } else if (
-        /^\[<\d+;\d+;\d+[Mm]$/.test(token.value) ||
+        SGR_MOUSE_TAIL_RE.test(token.value) ||
+        (mouseTailHold !== undefined &&
+          SGR_MOUSE_TAIL_RE.test(mouseTailHold + token.value)) ||
         /^\[M[\x60-\x7f][\x20-\uffff]{2}$/.test(token.value)
       ) {
         // Orphaned SGR/X10 mouse tail (fullscreen only — mouse tracking is off
@@ -769,11 +809,29 @@ export function parseMultipleKeypresses(
         // readableLength check prevents it. The X10 Cb slot is narrowed to
         // the wheel range [\x60-\x7f] (0x40|modifiers + 32) — a full [\x20-]
         // range would match typed input like `[MAX]` batched into one read
-        // and silently drop it as a phantom click. Click/drag orphans leak
-        // as visible garbage instead; deletable garbage beats silent loss.
-        const resynthesized = '\x1b' + token.value
+        // and silently drop it as a phantom click.
+        const resynthesized = '\x1b' + (mouseTailHold ?? '') + token.value
+        mouseTailHold = undefined
         const mouse = parseMouseEvent(resynthesized)
         keys.push(mouse ?? parseKeypress(resynthesized))
+      } else if (
+        SGR_MOUSE_PREFIX_RE.test(token.value) ||
+        // Continuation of an active hold: with the prefix already captured,
+        // the next fragment (`32;5M`'s leading digits, more params) is
+        // digits/semicolons — meaningless as typing on its own and part of
+        // the in-flight report. Any completion is caught by the tail branch
+        // above first, so reaching here with a hold means still incomplete.
+        (mouseTailHold !== undefined && /^[\d;]*$/.test(token.value) && token.value !== '')
+      ) {
+        // Incomplete SGR mouse prefix: ConPTY split the report mid-sequence
+        // and the flush timer already released the buffered ESC prefix, so
+        // this text token carries protocol bytes, not typing. Hold it for the
+        // next chunk (which completes the tail — handled by the branch above
+        // via the combined `hold + value` check) instead of leaking into the
+        // prompt; a flush discards the hold. The regex demands `<` + digits,
+        // which no realistic typed text produces as a single text token.
+        mouseTailHold = (mouseTailHold ?? '') + token.value
+        holdTouchedThisCall = true
       } else {
         keys.push(parseKeypress(token.value))
       }
@@ -806,6 +864,20 @@ export function parseMultipleKeypresses(
     win32Paste.matched = 0
   }
 
+  // A held SGR mouse prefix that never completed: a flush that fires on a
+  // call which did NOT capture/extend the hold means the 50ms grace expired
+  // without continuation bytes — the fragments are a dead report (terminal
+  // dropped the tail of the sequence). Discard rather than emit: protocol
+  // bytes that reach the prompt as text are exactly the leak this hold
+  // exists to prevent. Partial recovery of the coords is not worth one more
+  // branch — a mouse event with guessed terminators would dispatch phantom
+  // clicks. A hold captured in THIS call survives its own flush: ConPTY can
+  // deliver the first read's remainder after the timer armed (the very D-
+  // scenario the hold exists for), and the next call completes it.
+  if (isFlush && mouseTailHold !== undefined && !holdTouchedThisCall) {
+    mouseTailHold = undefined
+  }
+
   // Build new state
   const newState: KeyParseState = {
     mode: inPaste ? 'IN_PASTE' : 'NORMAL',
@@ -813,13 +885,18 @@ export function parseMultipleKeypresses(
     // tokenizer only reports raw bytes there, so paste-matcher holds (a
     // marker prefix in flight, or an active paste) set a sentinel to get the
     // same 50ms release — a lone Escape stays as responsive as in VT mode.
+    // A held mouse prefix rides the same mechanism so its grace window
+    // actually opens.
     incomplete:
       tokenizer.buffer() ||
-      (win32Paste.held.length > 0 || win32Paste.active ? '\x1b' : ''),
+      (win32Paste.held.length > 0 || win32Paste.active || mouseTailHold !== undefined
+        ? '\x1b'
+        : ''),
     pasteBuffer,
     win32HighSurrogate: win32Ctx.high,
     win32AltHighSurrogate: win32Ctx.altHigh,
     win32Paste,
+    mouseTailHold,
     _tokenizer: tokenizer,
   }
 
