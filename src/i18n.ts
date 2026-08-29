@@ -999,6 +999,10 @@ const dict = {
   'provider-delete-failed': { zh: '删除失败 · {{{err}}}', en: 'Failed to delete · {{{err}}}' },
   'provider-line-deleted-key': { zh: '已删除密钥引用 {{ref}}', en: 'Removed key ref {{ref}}' },
   'provider-line-deleted-key-shadowed': { zh: '密钥引用 {{ref}} 来自环境变量，未删除', en: 'Key ref {{ref}} comes from the environment; not removed' },
+  'provider-delete-shared-warning': { zh: '⚠ 密钥 {{ref}} 与 {{routes}} 共用，删除本 provider 不会移除该密钥', en: '⚠ Key ref {{ref}} is shared with {{routes}}; deleting this provider keeps the key' },
+  'provider-line-deleted-key-shared': { zh: '密钥引用 {{ref}} 仍被 {{routes}} 使用，未删除', en: 'Key ref {{ref}} is still used by {{routes}}; not removed' },
+  'provider-line-deleted-key-cleanup-failed': { zh: '密钥引用 {{ref}} 清理失败，请手动检查 ~/.dsh/.credentials.yaml', en: 'Failed to remove key ref {{ref}} — check ~/.dsh/.credentials.yaml manually' },
+  'provider-delete-key-cleanup-failed': { zh: 'provider {{route}} 已删除，但密钥 {{ref}} 清理失败，请手动处理', en: 'Provider {{route}} deleted, but removing key {{ref}} failed — clean it up manually' },
 
   // ── commands.ts — slash-command descriptions ─────────────────────────
   // zh-only on purpose: the English text stays in `LOCAL_COMMANDS` (and in
@@ -1040,7 +1044,7 @@ const dict = {
   'cmd-desc-thinking': { zh: '显示或隐藏思考过程' },
   'cmd-desc-tokens': { zh: '查看会话 token 用量' },
   // Account / policy
-  'cmd-desc-provider': { zh: '添加模型提供方（内置目录或自定义 API 端点）' },
+  'cmd-desc-provider': { zh: '添加、编辑或删除模型提供方（内置目录或自定义 API 端点）' },
   'cmd-desc-login': { zh: '查看 API 凭证状态' },
   'cmd-desc-logout': { zh: '清除 API 凭证' },
   'cmd-desc-add-dir': { zh: '查看文件系统策略范围' },

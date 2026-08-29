@@ -185,15 +185,24 @@ Do not attach it to a public issue without reviewing and redacting it.
 restart. The first step picks an action:
 
 - **Add a new provider**: built-in catalog or custom API endpoint (below).
-- **Edit an existing provider**: pick one of the configured routes, then edit
-  it through a menu. Built-in routes offer **Edit API Key**, **Edit model
-  list**, and **Delete this provider**; custom endpoints additionally get
-  **Edit Base URL** and **Edit wire protocol**. Any edit applies immediately
-  and exits — no further confirmation. "Edit model list" pre-checks the
-  models you already enabled. "Delete this provider" is the one exception and
-  asks for confirmation before removing the profile and the API key (an
-  environment-provided key is left untouched — only the configuration is
-  deleted).
+- **Edit an existing provider**: pick one of the routes your **user settings
+  layer** carries (providers inherited from the composition base cannot be
+  removed from the user layer, so they stay out of the edit/delete menu),
+  then edit through a menu. Built-in routes offer **Edit API Key**, **Edit
+  model list**, and **Delete this provider**; custom endpoints additionally
+  get **Edit Base URL** and **Edit wire protocol** (a built-in route stays
+  built-in even when its profile carries an explicit `api` override). Any
+  edit patches only the picked field in place and exits immediately — no
+  further confirmation; every other profile field (including keys the TUI
+  does not model, like `headers`, `timeoutMs`, `retryPolicy`) never enters
+  the write and survives untouched. "Edit model list" pre-checks the models
+  you already enabled, and the stored entries of kept models are preserved
+  verbatim too. "Delete this provider" is the one exception: it asks for
+  confirmation, then removes the profile and the API key — an
+  environment-provided key, or one shared with another provider, is kept
+  (only the configuration is deleted); if the profile was removed but the
+  key cleanup failed, the wizard says so and points you at the store
+  (the provider itself is gone).
 
 The **add** branch offers two sources:
 

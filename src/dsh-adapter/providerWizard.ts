@@ -52,8 +52,8 @@ export interface CatalogProviderCandidate {
 
 /**
  * One user-added provider route read from the settings section. The parsed
- * fields drive the edit/delete picker rows, the catalog/custom split (`api`
- * presence) and the key-keep question (`ref` + `shadowed`).
+ * fields drive the edit/delete picker rows, the catalog/custom split
+ * (`isCatalog`) and the key-keep question (`ref` + `shadowed`).
  */
 export interface ConfiguredProvider {
   readonly route: string
@@ -61,13 +61,32 @@ export interface ConfiguredProvider {
   readonly ref: string
   /** Whether the process environment shadows the ref (env-provided key). */
   readonly shadowed: boolean
+  /**
+   * Whether the route belongs to the installed catalog — real membership
+   * as the llm adapter reports it, never inferred from the profile shape:
+   * a catalog profile may carry an explicit `api` override and still be a
+   * catalog route.
+   */
+  readonly isCatalog: boolean
   /** baseURL when the profile sets one. */
   readonly baseURL?: string
-  /** Wire protocol; present exactly for custom (non-catalog) routes. */
+  /** Explicit `api` override in the stored profile; catalog routes can
+   *  carry one too, so this alone does not classify the route. */
   readonly api?: string
   /** Enabled model ids; undefined means the whole catalog stays served. */
   readonly models?: readonly string[]
+  /**
+   * Raw `profile.models` entries (plain objects, in order) as stored. A
+   * targeted model-list rewrite reuses these for kept ids so fields the
+   * wizard never learned about (`input`, `compat`, …) survive the edit.
+   */
+  readonly modelEntries?: readonly Record<string, unknown>[]
 }
+
+/** One path op inside a provider profile, relative to the profile object. */
+export type ProfilePathOp =
+  | { op: 'set'; path: readonly string[]; value: unknown }
+  | { op: 'unset'; path: readonly string[] }
 
 /** One OAuth-capable provider a dsh-auth-style plugin mounts (masked state only). */
 export interface OAuthProviderStatus {
@@ -107,7 +126,12 @@ export interface OAuthSetupHost {
 export interface ProviderSetupHost {
   /** Catalog routes activatable via the `llm-pi-ai` settings section. */
   listCatalogProviders(): readonly CatalogProviderCandidate[]
-  /** User-added (declared) routes read from the settings section. */
+  /**
+   * The editable/deletable set: provider profiles the user layer itself
+   * carries. Profiles inherited from the composition base are deliberately
+   * absent — an unset only clears the user layer, so listing an inherited
+   * route would promise a delete that silently reverts to the base value.
+   */
   listConfiguredProviders(): readonly ConfiguredProvider[]
   /** Whether a profile (any layer) already exists for the route. */
   routeExists(route: string): boolean
@@ -120,6 +144,8 @@ export interface ProviderSetupHost {
   }): Promise<readonly LlmDiscoveredModel[]>
   /** Whether the process environment already provides this ref (shadow). */
   envShadows(ref: string): boolean
+  /** The process-environment value for a shadowed ref; undefined when absent. */
+  envValue(ref: string): string | undefined
   /**
    * Read the currently stored value for rollback purposes; undefined when no
    * credential exists under the ref. Only called when {@link envShadows} is
@@ -132,9 +158,19 @@ export interface ProviderSetupHost {
   removeCredential(ref: string): void | Promise<void>
   /**
    * Persist the provider profile under `llm-pi-ai.providers.<route>`;
-   * rejects when the adapter's validation deems it unserviceable.
+   * rejects when the adapter's validation deems it unserviceable. Used by
+   * the add flow, where a whole-profile write is the intent.
    */
   writeProfile(route: string, profile: Record<string, unknown>): Promise<void>
+  /**
+   * Apply targeted path ops inside `llm-pi-ai.providers.<route>`. Edits go
+   * through here, never through {@link writeProfile}: replacing the whole
+   * object would silently drop every field the wizard does not model
+   * (`headers`, `timeoutMs`, `retryPolicy`, `displayName`, …). Paths are
+   * relative to the profile object, so `['baseURL']` patches exactly the
+   * one item the user picked; unknown fields stay untouched by omission.
+   */
+  mutateProfile(route: string, ops: readonly ProfilePathOp[]): Promise<void>
   /** Unset the profile under `llm-pi-ai.providers.<route>`. */
   removeProfile(route: string): Promise<void>
   /** The OAuth sign-in surface; absent when no dsh-auth-style plugin is mounted. */
@@ -223,7 +259,9 @@ function textQuestion(id: string, question: string, detail?: string): AskUserQue
  * then opens a menu of targeted edits (API key, base URL, wire protocol,
  * model list, delete this provider) with the route locked. Each menu item
  * applies immediately and exits — no confirmation between picking an edit
- * and writing it. For built-in (catalog) routes the menu is limited to API
+ * and writing it — and patches only the picked field, leaving every other
+ * stored setting (including fields the wizard does not model) in place.
+ * For built-in (catalog) routes the menu is limited to API
  * key, model list, and delete; base URL and wire protocol are only
  * meaningful for custom endpoints. Resolves 'cancelled' when the user
  * dismisses any question (Esc) — nothing has been written at that point.
@@ -533,9 +571,11 @@ async function runEditMenu(
   return 'cancelled'
 }
 
-/** Menu rows for one edit session; base URL / protocol are custom-only. */
+/** Menu rows for one edit session; base URL / protocol are custom-only.
+ *  The catalog split reads the route's real catalog membership — an
+ *  explicit `api` override on a built-in route does not make it custom. */
 function buildEditMenuOptions(provider: ConfiguredProvider): { label: string; description?: string }[] {
-  const isCatalog = provider.api === undefined
+  const isCatalog = provider.isCatalog
   const options: { label: string; description?: string }[] = [
     { label: t('provider-opt-edit-key'),
       ...(provider.shadowed ? { description: t('provider-row-key-shadowed') } : {}) },
@@ -594,65 +634,45 @@ async function editApiKey(
     baseURL: provider.baseURL,
     api: provider.api,
     models: provider.models ?? [],
-    isCatalog: provider.api === undefined,
+    isCatalog: provider.isCatalog,
     keyLine: t('provider-line-key-updated', { ref: provider.ref }),
   }))
   notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
   return 'updated'
 }
 
-/** Rewrite the route's profile after a targeted custom-route edit, keeping
- *  the enabled models. Capacities are refreshed by a discovery against the
- *  stored/env key; on failure plain `{id}` models still write. */
-async function rewriteProfile(
+/** Apply a targeted single-field edit as one path patch under the stored
+ *  profile: the picked field is set, everything else — modeled or not —
+ *  stays exactly as stored. No discovery rewrite: capacity refresh belongs
+ *  to the model-list edit, not to a key/endpoint/protocol change. */
+async function patchProfileField(
   deps: ProviderWizardDeps,
   provider: ConfiguredProvider,
+  path: readonly string[],
+  value: unknown,
+  /** Summary override for the field that changed; the others as stored. */
   change: { baseURL?: string; api?: string },
 ): Promise<ProviderWizardOutcome> {
   const { host, notify, pushLocal } = deps
-  const keyLine = provider.ref !== ''
-    ? t('provider-line-key-kept', { ref: provider.ref })
-    : t('provider-line-key-none')
-  const baseURL = change.baseURL ?? provider.baseURL
-  const api = change.api ?? provider.api ?? 'openai-completions'
-  notify(t('provider-discovery-running'))
-  const discoveredById = await (async () => {
-    const key = provider.ref !== ''
-      ? (provider.shadowed ? process.env[provider.ref] : await host.readCredential(provider.ref))
-      : undefined
-    const discovered = await host.discoverModels({
-      ...(provider.api === undefined ? { provider: provider.route } : {}),
-      ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
-      ...(api !== undefined ? { api } : {}),
-      apiKey: key ?? '',
-    }).catch(() => [])
-    return new Map(discovered.map(model => [model.id, model] as const))
-  })()
-
-  await host.writeProfile(provider.route, buildProfile({
-    isCatalog: provider.api === undefined,
-    ref: provider.ref,
-    baseURL,
-    api,
-    models: provider.models ?? [],
-    discoveredById,
-  }))
+  await host.mutateProfile(provider.route, [{ op: 'set', path, value }])
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
     ref: provider.ref,
     shadowed: provider.shadowed,
-    baseURL,
-    api,
+    baseURL: change.baseURL ?? provider.baseURL,
+    api: change.api ?? provider.api,
     models: provider.models ?? [],
-    isCatalog: provider.api === undefined,
-    keyLine,
+    isCatalog: provider.isCatalog,
+    keyLine: provider.ref !== ''
+      ? t('provider-line-key-kept', { ref: provider.ref })
+      : t('provider-line-key-none'),
   }))
   notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
   return 'updated'
 }
 
 /** Edit the base URL (custom routes only): prompt the new endpoint, then
- *  rewrite the profile immediately. An empty answer is a no-op. */
+ *  patch just that field. An empty answer is a no-op. */
 async function editBaseUrl(
   deps: ProviderWizardDeps,
   provider: ConfiguredProvider,
@@ -669,12 +689,12 @@ async function editBaseUrl(
     notify(t('provider-edit-no-changes'))
     return 'cancelled'
   }
-  return rewriteProfile(deps, provider, { baseURL: value })
+  return patchProfileField(deps, provider, ['baseURL'], value, { baseURL: value })
 }
 
 /** Edit the wire protocol (custom routes only): pick from the three wire
- *  protocols (the current one is default-focused), then rewrite the profile
- *  immediately. Picking the current protocol is a no-op. */
+ *  protocols (the current one is default-focused), then patch just that
+ *  field. Picking the current protocol is a no-op. */
 async function editWireProtocol(
   deps: ProviderWizardDeps,
   provider: ConfiguredProvider,
@@ -693,12 +713,14 @@ async function editWireProtocol(
     notify(t('provider-edit-no-changes'))
     return 'cancelled'
   }
-  return rewriteProfile(deps, provider, { api: picked })
+  return patchProfileField(deps, provider, ['api'], picked, { api: picked })
 }
 
 /**
  * Re-discover the endpoint's models and pick the enabled set (the current
- * ones pre-checked), then rewrite the profile immediately. On discovery
+ * ones pre-checked), then patch just the profile's `models`. Kept models
+ * reuse their stored entries, so per-model fields the wizard does not
+ * model (`input`, `compat`, …) survive the re-selection. On discovery
  * failure a manual id question is the fallback; an empty result is a no-op
  * for whole-catalog routes and rejected for custom routes.
  */
@@ -707,10 +729,10 @@ async function editModelList(
   provider: ConfiguredProvider,
 ): Promise<ProviderWizardOutcome> {
   const { host, ask, notify, pushLocal } = deps
-  const isCatalog = provider.api === undefined
+  const isCatalog = provider.isCatalog
   const previous = provider.models ?? []
   const key = provider.ref !== ''
-    ? (provider.shadowed ? process.env[provider.ref] : await host.readCredential(provider.ref))
+    ? (provider.shadowed ? host.envValue(provider.ref) : await host.readCredential(provider.ref))
     : undefined
   notify(t('provider-discovery-running'))
   const discovered = await host.discoverModels({
@@ -761,14 +783,30 @@ async function editModelList(
     notify(t('provider-edit-no-changes'))
     return 'cancelled'
   }
-  await host.writeProfile(provider.route, buildProfile({
-    isCatalog,
-    ref: provider.ref,
-    baseURL: provider.baseURL,
-    api: provider.api,
-    models,
-    discoveredById,
-  }))
+  // The new `models` value: a kept id re-enters its stored entry verbatim;
+  // a newly enabled one is built from the discovery row (plain `{id}` on a
+  // catalog route, where the catalog itself carries the capabilities).
+  const storedById = new Map((provider.modelEntries ?? [])
+    .flatMap(entry => typeof entry['id'] === 'string' ? [[entry['id'], entry] as const] : []))
+  const modelsValue = models.map(id => {
+    const stored = storedById.get(id)
+    if (stored !== undefined) return stored
+    const discovered = discoveredById.get(id)
+    return {
+      id,
+      ...(isCatalog || discovered === undefined ? {} : {
+        ...(discovered.contextWindow !== undefined
+          ? { contextWindow: discovered.contextWindow }
+          : {}),
+        ...(discovered.maxTokens !== undefined
+          ? { maxTokens: discovered.maxTokens }
+          : {}),
+      }),
+    }
+  })
+  await host.mutateProfile(provider.route, [
+    { op: 'set', path: ['models'], value: modelsValue },
+  ])
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
     ref: provider.ref,
@@ -793,50 +831,90 @@ function sameModels(a: readonly string[], b: readonly string[] | undefined): boo
 
 /**
  * Delete one configured route from inside the edit menu: confirm against a
- * summary, then unset the profile and (unless the environment provides the
- * key) remove the credential. The profile goes first so a failure never
- * leaves a profile pointing at a removed key; an orphaned key is harmless.
+ * summary, then unset the profile. The credential goes afterwards, as pure
+ * best-effort cleanup — only when it is this route's own (not env-provided,
+ * not shared with another profile). Unsetting the profile is the catalog
+ * change: once it landed, every cleanup path still reports 'deleted' (with
+ * an honest transcript line for what survived), so a failed key removal
+ * never leaves the UI serving a stale model completion for a route that is
+ * already gone. `failed` is reserved for the profile unset itself failing,
+ * which really did change nothing.
  */
 async function deleteConfiguredProvider(
   deps: ProviderWizardDeps,
   provider: ConfiguredProvider,
 ): Promise<ProviderWizardOutcome> {
   const { host, ask, notify, pushLocal } = deps
+  // A credential ref is only a name — several routes may share it. Removing
+  // the key together with this route would silently break every other
+  // profile pointing at the same ref, so a shared key is kept: the confirm
+  // detail says so up front and the transcript repeats it.
+  const sharers = provider.ref === ''
+    ? []
+    : host.listConfiguredProviders()
+      .filter(other => other.route !== provider.route && other.ref === provider.ref)
+      .map(other => other.route)
+  const lines = buildDeleteSummary(provider)
+  let confirmAnswer: AskUserQuestionAnswer
   try {
-    const lines = buildDeleteSummary(provider)
-    const confirmAnswer = await ask({
+    confirmAnswer = await ask({
       questions: [optionQuestion('delete-confirm', t('provider-q-delete-confirm', { route: provider.route }), [
         { label: t('provider-opt-delete-yes') },
         { label: t('provider-opt-confirm-cancel') },
-      ], { detail: lines.join('\n'), hideCustomInput: true })],
+      ], {
+        detail: sharers.length > 0
+          ? `${lines.join('\n')}\n${t('provider-delete-shared-warning', { ref: provider.ref, routes: sharers.join(', ') })}`
+          : lines.join('\n'),
+        hideCustomInput: true,
+      })],
     })
-    if (answerSelected(confirmAnswer, 'delete-confirm')[0] !== t('provider-opt-delete-yes')) {
-      notify(t('provider-delete-cancelled'))
-      return 'cancelled'
-    }
-
-    await host.removeProfile(provider.route)
-    const pushedLines = [...lines]
-    if (provider.ref !== '') {
-      if (provider.shadowed) {
-        pushedLines.push(t('provider-line-deleted-key-shadowed', { ref: provider.ref }))
-      } else {
-        await host.removeCredential(provider.ref)
-        pushedLines.push(t('provider-line-deleted-key', { ref: provider.ref }))
-      }
-    }
-    pushLocal('/provider', pushedLines)
-    notify(t('provider-delete-success', { route: provider.route }), { color: 'success' })
-    return 'deleted'
   } catch (error) {
     if (error instanceof UserQuestionError) {
       notify(t('provider-delete-cancelled'))
       return 'cancelled'
     }
+    throw error
+  }
+  if (answerSelected(confirmAnswer, 'delete-confirm')[0] !== t('provider-opt-delete-yes')) {
+    notify(t('provider-delete-cancelled'))
+    return 'cancelled'
+  }
+
+  try {
+    await host.removeProfile(provider.route)
+  } catch (error) {
     const err = error instanceof Error ? error.message : String(error)
     notify(t('provider-delete-failed', { err }), { color: 'error', timeoutMs: 8000 })
     return 'failed'
   }
+
+  // The catalog changed from here on: report 'deleted' whatever the
+  // credential cleanup below does, so the caller invalidates completions.
+  const pushedLines = [...lines]
+  let keyCleanupFailed = false
+  if (provider.ref !== '') {
+    if (provider.shadowed) {
+      pushedLines.push(t('provider-line-deleted-key-shadowed', { ref: provider.ref }))
+    } else if (sharers.length > 0) {
+      pushedLines.push(t('provider-line-deleted-key-shared', { ref: provider.ref, routes: sharers.join(', ') }))
+    } else {
+      try {
+        await host.removeCredential(provider.ref)
+        pushedLines.push(t('provider-line-deleted-key', { ref: provider.ref }))
+      } catch {
+        keyCleanupFailed = true
+        pushedLines.push(t('provider-line-deleted-key-cleanup-failed', { ref: provider.ref }))
+      }
+    }
+  }
+  pushLocal('/provider', pushedLines)
+  if (keyCleanupFailed) {
+    notify(t('provider-delete-key-cleanup-failed', { route: provider.route, ref: provider.ref }),
+      { color: 'warning', timeoutMs: 8000 })
+  } else {
+    notify(t('provider-delete-success', { route: provider.route }), { color: 'success' })
+  }
+  return 'deleted'
 }
 
 /** Short picker-row description for one configured provider. */

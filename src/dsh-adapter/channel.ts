@@ -56,7 +56,7 @@ import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../util
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
-import type { OAuthProviderStatus, OAuthSetupHost, ProviderSetupHost } from './providerWizard.js'
+import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from './providerWizard.js'
 import { readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
 import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
@@ -4780,7 +4780,7 @@ export function createChannel(
         | undefined
       const settings = ctx.get('settings') as
         | {
-          describe(): readonly { ns: string; revision: number }[]
+          describe(): readonly { ns: string; revision: number; user?: unknown }[]
           get(ns: string): unknown
           mutate(
             ns: string,
@@ -4814,6 +4814,17 @@ export function createChannel(
       // optional: mounting the plugin lights up the wizard's OAuth branch,
       // and without it the wizard is exactly what it was before.
       const oauthApi = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
+      // Real catalog membership on this mount: routes the adapter knows from
+      // its installed catalog (`declared !== true`). A stored profile naming
+      // such a route is an activation/override of the catalog route — even
+      // when it carries an explicit `api` field — while routes the adapter
+      // only knows because a profile names them are custom. Classifying by
+      // anything less (a profile-shape guess) misroutes the edit semantics.
+      const catalogMembers = (): Set<string> => new Set(
+        llm.listConfigurableProviders()
+          .filter(entry => entry.settingsNs === 'llm-pi-ai' && entry.declared !== true)
+          .map(entry => entry.provider),
+      )
       return {
         ...(oauthApi === undefined ? {} : { oauth: oauthApi }),
         listCatalogProviders() {
@@ -4831,42 +4842,63 @@ export function createChannel(
           return section?.providers !== undefined && route in section.providers
         },
         listConfiguredProviders() {
-          // The settings section is the source of truth for user-added routes
-          // (the adapter's `declared` list lags a broken/removed profile, but
-          // delete must still be able to reach it). ref/models parsed from the
-          // stored profile; shadowed mirrors the envShadows contract.
-          const section = settings.get('llm-pi-ai') as
-            | { providers?: Record<string, Record<string, unknown>> }
+          // The editable/deletable set is the USER layer only: `describe()`'s
+          // `user` is the raw user section — the same source the /settings
+          // screen treats as overrides. `settings.get()` is the resolved
+          // merge; listing a route inherited from a composition base would
+          // promise a delete that cannot land (the unset only clears the
+          // user layer, so the base value re-inherits) while the credential
+          // is really gone. When the running base exposes no `user` layer,
+          // fall back to the resolved section: such builds (the official
+          // dsh-base) carry zero base routes anyway, so the layers coincide.
+          const descriptor = settings.describe().find(row => row.ns === 'llm-pi-ai')
+          // Only an absent `user` (older base) falls back; a present-but-empty
+          // user layer legitimately exposes nothing to edit.
+          const section = (descriptor?.user !== undefined
+            ? descriptor.user
+            : settings.get('llm-pi-ai')) as
+            | { providers?: Record<string, unknown> }
             | undefined
           const providers = section?.providers
-          if (providers === undefined) return []
+          if (providers === undefined || typeof providers !== 'object' || providers === null) return []
+          const catalog = catalogMembers()
           return Object.entries(providers).flatMap(([route, profile]) => {
             // The settings section is user-editable, so a `providers.<route>`
             // entry may be null or a scalar; skip anything that is not a plain
             // object instead of dereferencing it and throwing (which would
             // block the edit/delete menu for every route).
             if (typeof profile !== 'object' || profile === null) return []
-            const ref = typeof profile.apiKeyEnv === 'string' ? profile.apiKeyEnv : ''
-            const baseURL = typeof profile.baseURL === 'string' && profile.baseURL !== ''
-              ? profile.baseURL
+            const stored = profile as Record<string, unknown>
+            const ref = typeof stored.apiKeyEnv === 'string' ? stored.apiKeyEnv : ''
+            const baseURL = typeof stored.baseURL === 'string' && stored.baseURL !== ''
+              ? stored.baseURL
               : undefined
-            const api = typeof profile.api === 'string' && profile.api !== ''
-              ? profile.api
+            const api = typeof stored.api === 'string' && stored.api !== ''
+              ? stored.api
               : undefined
-            const models = Array.isArray(profile.models)
-              ? profile.models.flatMap(model => {
-                if (typeof model !== 'object' || model === null) return []
-                const id = (model as { id?: unknown }).id
-                return typeof id === 'string' ? [id] : []
-              })
+            // Keep the raw model entries: a model-list re-selection must
+            // rewrite kept ids with their stored objects, so per-model fields
+            // this wizard never learned about survive the edit.
+            const modelEntries = Array.isArray(stored.models)
+              ? stored.models.filter(
+                (model): model is Record<string, unknown> =>
+                  typeof model === 'object' && model !== null,
+              )
               : undefined
+            const models = modelEntries?.flatMap(
+              entry => typeof entry.id === 'string' ? [entry.id] : [],
+            )
             return [{
               route,
               ref,
+              isCatalog: catalog.has(route),
               shadowed: ref !== '' && process.env[ref] !== undefined,
               ...(baseURL !== undefined ? { baseURL } : {}),
               ...(api !== undefined ? { api } : {}),
               ...(models !== undefined ? { models } : {}),
+              ...(modelEntries !== undefined && modelEntries.length > 0
+                ? { modelEntries }
+                : {}),
             }]
           })
         },
@@ -4875,6 +4907,9 @@ export function createChannel(
         },
         envShadows(ref) {
           return process.env[ref] !== undefined
+        },
+        envValue(ref) {
+          return process.env[ref]
         },
         async readCredential(ref) {
           const resolved = await credentials.resolve(ref)
@@ -4897,6 +4932,22 @@ export function createChannel(
             const code = (error as { code?: unknown })?.code
             if (code !== 'SETTINGS_CONFLICT') throw error
             await settings.mutate('llm-pi-ai', ops, revision())
+          }
+        },
+        async mutateProfile(route, ops) {
+          // Route-relative path patch: only the addressed fields inside
+          // `providers.<route>` enter the write, so stored fields the TUI
+          // does not model never pass through here and cannot be dropped.
+          const full: readonly ProfilePathOp[] = ops.map(op => op.op === 'set'
+            ? { op: 'set', path: ['providers', route, ...op.path], value: op.value }
+            : { op: 'unset', path: ['providers', route, ...op.path] })
+          try {
+            await settings.mutate('llm-pi-ai', full, revision())
+          } catch (error) {
+            // Same stale-revision retry as writeProfile.
+            const code = (error as { code?: unknown })?.code
+            if (code !== 'SETTINGS_CONFLICT') throw error
+            await settings.mutate('llm-pi-ai', full, revision())
           }
         },
         async removeProfile(route) {

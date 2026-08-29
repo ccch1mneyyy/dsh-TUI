@@ -96,7 +96,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'tokens', description: 'Show session token usage' },
   // Account / policy
   { name: 'balance', description: 'Show DeepSeek account balance' },
-  { name: 'provider', description: 'Add an LLM provider (catalog or custom API endpoint)' },
+  { name: 'provider', description: 'Add, edit or delete an LLM provider (catalog or custom API endpoint)' },
   { name: 'login', description: 'Show API credential status' },
   { name: 'logout', description: 'Clear the API credential' },
   { name: 'add-dir', description: 'Show the filesystem policy scope' },
