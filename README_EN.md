@@ -427,6 +427,22 @@ Want to build a plugin or extension for dsh-TUI? Join the ecosystem:
 - **Reference implementation**: `dsh-working-activity` (live working-status
   line with dual outlets: TUI prompt slot + `activity/status` session events)
 
+### Seam stability reference
+
+An **informal** maturity grading to help plugin authors gauge investment;
+the authoritative status and compatibility agreement live in the
+[admission & development guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md):
+
+| Tier | Seams |
+| --- | --- |
+| Stable candidate (shape frozen; breaking changes go through a minor-version deprecation warning before removal) | VI settings sections · VIII full-screen scenes · X managed dialogs · XI status line · XII keyboard shortcuts · XIII entry renderers |
+| Experimental (may still shift with dsh-std / admission-spec evolution) | IX decision events · toast notifications (`ctx.tuiToast`, new) |
+| Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
+
+Also experimental public surfaces: `@deepseek-harness-tui/dsh-tui/test-utils`
+(headless admission/mounting test helpers) and `@deepseek-harness-tui/dsh-tui/api`
+(types-only entry).
+
 The core repository remains independent; community plugins live in their own
 repos. The organization only maintains the listing and admission rules — it
 does not endorse or warrant the functionality, quality, or safety of community
