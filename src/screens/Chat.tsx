@@ -3792,7 +3792,13 @@ function NewMessagesPill({
 }): React.ReactNode {
   const [hover, setHover] = React.useState(false)
   return (
-    <Box paddingX={2} paddingTop={1}>
+    // noSelect: the pill is chrome (a button), not transcript. Without this,
+    // its text row is ordinary selectable cells — a selection anchored at
+    // the screen bottom (or extended across it) captures
+    // "↓ 回到底部（Enter/End）" into the copy on release. noSelect keeps the
+    // click/hover wiring (dispatchClick ignores noSelect) and only removes
+    // the cells from the highlight and getSelectedText.
+    <NoSelect paddingX={2} paddingTop={1}>
       <Box
         backgroundColor={hover ? 'userMessageBackgroundHover' : 'background'}
         onClick={onClick}
@@ -3807,7 +3813,7 @@ function NewMessagesPill({
           {' '}
         </Text>
       </Box>
-    </Box>
+    </NoSelect>
   )
 }
 

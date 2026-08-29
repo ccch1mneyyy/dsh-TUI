@@ -151,6 +151,40 @@ export type FollowScroll = {
 let followScrolls: FollowScroll[] = []
 
 /**
+ * A ScrollBox viewport-edges change with NO content scroll: chrome mounting
+ * or unmounting around the box (the new-messages pill, the sticky prompt
+ * header, the working spinner, prompt multi-line growth) moves the edges
+ * while scrollTop stands still, so no FollowScroll fires. `delta` is
+ * therefore always 0 — the type extends FollowScroll only so
+ * pickFollowForSelection can attribute the resize by the PREVIOUS bounds
+ * (viewportTop/viewportBottom carry the old edges, exactly what
+ * anchor-containment needs). ink.tsx consumes these alongside
+ * followScrolls and calls shiftSelectionForViewportResize; without it the
+ * selection anchor strands below the shrunken viewport and wheel tracking
+ * silently dies (chrome text leaking into copies).
+ */
+export type ViewportResize = FollowScroll & {
+  /** Viewport bounds BEFORE this frame's layout (= the frontFrame's). */
+  prevTop: number
+  prevBottom: number
+  /** Viewport bounds AFTER this frame's layout. */
+  top: number
+  bottom: number
+}
+let viewportResizes: ViewportResize[] = []
+
+/**
+ * Read and clear this frame's viewport-resize events. At most one per
+ * ScrollBox per frame; empty unless some box's edges moved.
+ * @returns this frame's viewport-resize events; empty when none.
+ */
+export function consumeViewportResizes(): ViewportResize[] {
+  const v = viewportResizes
+  viewportResizes = []
+  return v
+}
+
+/**
  * Read and clear the follow-scroll events recorded this frame. At most one
  * per ScrollBox (a box that follows AND drains reports only the follow —
  * the follow branch clears pendingScrollDelta before the drain runs);
@@ -829,12 +863,34 @@ function renderNodeToOutput(
         // follow check compares against last frame's max.
         const prevScrollHeight = node.scrollHeight ?? scrollHeight
         const prevInnerHeight = node.scrollViewportHeight ?? innerHeight
+        const prevViewportTop = node.scrollViewportTop
         node.scrollHeight = scrollHeight
         node.scrollViewportHeight = innerHeight
         // Absolute screen-buffer row where the scrollable area (inside
         // padding) begins. Exposed via ScrollBoxHandle.getViewportTop() so
         // drag-to-scroll can detect when the drag leaves the scroll viewport.
         node.scrollViewportTop = (y1 ?? y) + padTop
+        // Viewport-edges change with no scroll delta (chrome mount/unmount
+        // around the box) — recorded for the selection translate in ink.tsx.
+        // prevViewportTop defined ⇒ a previous frame wrote both bounds, so
+        // prevInnerHeight is that frame's real height (the ?? fallback only
+        // fires on the first frame, which the prevViewportTop check skips).
+        const viewportBottom = node.scrollViewportTop + innerHeight - 1
+        if (
+          prevViewportTop !== undefined &&
+          (node.scrollViewportTop !== prevViewportTop ||
+            viewportBottom !== prevViewportTop + prevInnerHeight - 1)
+        ) {
+          viewportResizes.push({
+            delta: 0,
+            viewportTop: prevViewportTop,
+            viewportBottom: prevViewportTop + prevInnerHeight - 1,
+            prevTop: prevViewportTop,
+            prevBottom: prevViewportTop + prevInnerHeight - 1,
+            top: node.scrollViewportTop,
+            bottom: viewportBottom,
+          })
+        }
 
         const maxScroll = Math.max(0, scrollHeight - innerHeight)
         // scrollAnchor: scroll so the anchored element's top is at the

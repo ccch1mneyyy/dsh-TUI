@@ -135,6 +135,11 @@ export function updateSelection(
   if (!s.focus && s.anchor && s.anchor.col === col && s.anchor.row === row)
     return
   s.focus = { col, row }
+  // Fresh mouse position supersedes any virtual focus a resize clamp left
+  // behind (shiftSelection clamps focus when the chrome covered its row) —
+  // the same reset moveFocus does. Without this, the next shift computes
+  // rawFocus from a stale pre-motion row.
+  s.virtualFocusRow = undefined
 }
 
 /**
@@ -750,6 +755,88 @@ export function shiftSelectionForFollow(
   return false
 }
 
+/**
+ * Translate the selection for a SCROLLBOX VIEWPORT RESIZE: chrome mounting
+ * or unmounting around a ScrollBox (the new-messages pill, the sticky
+ * prompt header, the working spinner, prompt multi-line growth) moves the
+ * viewport edges WITHOUT any scroll delta — no followScroll event fires, so
+ * the follow path never runs and the endpoints keep pointing at stale screen
+ * rows. The visible failure: the anchor strands BELOW the shrunken viewport
+ * (exactly onto the pill text row when the pill mounts), pickFollowForSelection
+ * then rejects every subsequent follow event (anchor outside the viewport),
+ * wheel tracking silently dies, and copy-on-select spans whatever the
+ * highlight happens to cover — including the chrome row itself ("↓ 回到底部"
+ * leaking into bottom-to-top copies, and the rows that scrolled under the
+ * dead highlight never reaching the scrolledOff accumulators).
+ *
+ * Each SHRINKING edge contributes a band of rows the chrome covered:
+ *   - top band [oldTop, newTop-1] (chrome above — sticky prompt header)
+ *   - bottom band [newBottom+1, oldBottom] (chrome below — pill/spinner)
+ * captureScrolledRows preserves the band's text from the PREVIOUS frame's
+ * screen (the caller passes frontFrame.screen — the swap hasn't happened)
+ * before this frame's paint overwrites it with chrome cells. Growth edges
+ * have no band to capture; the shift below just re-widens the clamp.
+ *
+ * shiftSelection(dRow=0) then re-derives the endpoints: clamps stragglers
+ * into the new bounds (virtual-row tracked, so a later re-widening restores
+ * the true position and pops the accumulator), pops captured rows whose
+ * debt a re-widening returned to the viewport, and clears when BOTH ends
+ * land under the same band (the whole selection is under chrome). Unlike
+ * the follow path's shiftAnchor/shiftSelectionForFollow split, this uses
+ * shiftSelection for BOTH drag and released states: with dRow=0 a live drag
+ * focus stays at the mouse unless the chrome covered it too, and
+ * shiftSelection is the only shift that pops debt on re-widening — the
+ * follow path never re-widens, a resize does (pill unmount).
+ * @param s - the selection state to mutate.
+ * @param screen - the PREVIOUS frame's screen buffer providing the band
+ *   text (and the width for clamp-edge columns).
+ * @param oldTop - viewport top before this frame's layout.
+ * @param oldBottom - viewport bottom before this frame's layout.
+ * @param newTop - viewport top after this frame's layout.
+ * @param newBottom - viewport bottom after this frame's layout.
+ */
+export function shiftSelectionForViewportResize(
+  s: SelectionState,
+  screen: Screen,
+  oldTop: number,
+  oldBottom: number,
+  newTop: number,
+  newBottom: number,
+): void {
+  if (!s.anchor) return
+  // Re-widening edges (chrome unmounted): rows the chrome previously
+  // covered return to the viewport. shiftSelection measures debt against
+  // the NEW bounds only — correct for keyboard scroll, whose bounds stay
+  // fixed across the shift, but a resize CHANGES the bounds, so the
+  // returned rows are popped HERE by pure geometry: the g rows closest to
+  // the viewport re-enter, i.e. the FRONT of scrolledOffBelow (newest
+  // unshifted there) and the END of scrolledOffAbove (newest pushed there).
+  if (newBottom > oldBottom && s.scrolledOffBelow.length > 0) {
+    const drop = Math.min(newBottom - oldBottom, s.scrolledOffBelow.length)
+    s.scrolledOffBelow.splice(0, drop)
+    s.scrolledOffBelowSW.splice(0, drop)
+  }
+  if (newTop < oldTop && s.scrolledOffAbove.length > 0) {
+    const drop = Math.min(oldTop - newTop, s.scrolledOffAbove.length)
+    const keep = s.scrolledOffAbove.length - drop
+    s.scrolledOffAbove.length = keep
+    s.scrolledOffAboveSW.length = keep
+  }
+  if (newTop > oldTop) captureScrolledRows(s, screen, oldTop, newTop - 1, 'above')
+  if (newBottom < oldBottom)
+    captureScrolledRows(s, screen, newBottom + 1, oldBottom, 'below')
+  if (!s.focus) {
+    // Bare press (no drag motion yet, focus still null): shiftSelection
+    // needs both ends — clamp the anchor alone so a chrome mount can't
+    // strand it before the first motion sets focus.
+    const raw = s.virtualAnchorRow ?? s.anchor.row
+    s.anchor = { col: s.anchor.col, row: clamp(raw, newTop, newBottom) }
+    s.virtualAnchorRow = raw < newTop || raw > newBottom ? raw : undefined
+    return
+  }
+  shiftSelection(s, 0, newTop, newBottom, screen.width)
+}
+
 /** A scroll event reported by a ScrollBox this frame (follow or wheel
  *  drain): signed delta plus the box's viewport bounds. Structurally
  *  identical to FollowScroll in render-node-to-output. */
@@ -773,12 +860,12 @@ export type ScrollEvent = {
  *   selection is active.
  * @returns the event the selection should be translated by, or null.
  */
-export function pickFollowForSelection(
-  events: ScrollEvent[],
+export function pickFollowForSelection<T extends ScrollEvent>(
+  events: T[],
   anchorRow: number | null,
-): ScrollEvent | null {
+): T | null {
   if (anchorRow === null) return null
-  let best: ScrollEvent | null = null
+  let best: T | null = null
   let bestHeight = Infinity
   for (const e of events) {
     if (anchorRow < e.viewportTop || anchorRow > e.viewportBottom) continue
