@@ -307,6 +307,12 @@ const GROUPS = {
 // DATA_DIR 建目录 0700；临时 HOME 重定向 + 固定 umask，修复前按 umask
 // 落 0644 必红。
     ["verify-data-file-perms", ['node', '--import', 'tsx/esm', 'scripts/verify-data-file-perms.tsx']],
+// /resume・/tree 搜索框显示塌缩回归：SearchBox 的单行窗口化预算取自实测
+// 自身宽度，自适应宽度（默认 row 包裹、无 width prop）会让预算跟随内容
+// 收缩，收敛到「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。
+// 断言逐键英文、IME 整段上屏、退格、rename 预填+追加与 /tree 搜索的查询
+// 始终完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
+    ["verify-session-browser-searchbox", ['node', '--import', 'tsx/esm', 'scripts/verify-session-browser-searchbox.tsx']],
   ],
   'channel-ui': [
 // channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
