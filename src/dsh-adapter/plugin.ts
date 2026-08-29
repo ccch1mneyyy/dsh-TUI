@@ -97,6 +97,35 @@ export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined
   return promptArgs.join(' ').trim()
 }
 
+/**
+ * How this process should treat the TUI frontend, given the terminal it runs on.
+ *
+ * Three startup identities exist:
+ *  1. `dsh-tui` / standalone — the user explicitly asked for the terminal UI;
+ *  2. Web / Tauri / other GUI hosts — the profile merely has dsh-tui installed
+ *     and the current process is NOT a dsh-tui frontend. stdout is a pipe or
+ *     null there, and mounting a TUI would fail the whole composition.
+ *
+ * The official launcher (and the standalone runtime) mark explicit launches,
+ * so an explicit `dsh-tui` run without a TTY keeps failing loudly, while
+ * foreign hosts skip the plugin and let the host boot.
+ */
+export type TuiHostMode = 'interactive' | 'invalid-explicit-launch' | 'headless-host'
+
+export function resolveTuiHostMode(
+  stdoutIsTTY = process.stdout.isTTY === true,
+  env: NodeJS.ProcessEnv = process.env,
+): TuiHostMode {
+  if (stdoutIsTTY) {
+    return 'interactive'
+  }
+
+  const explicitTuiLaunch =
+    env.DSH_TUI_LAUNCHER_VERSION !== undefined || isStandaloneRuntime()
+
+  return explicitTuiLaunch ? 'invalid-explicit-launch' : 'headless-host'
+}
+
 export async function apply(ctx: Context, config: Config): Promise<void> {
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
@@ -153,11 +182,23 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     sampleAt(5000, 'stdin state +5s')
     sampleAt(12000, 'stdin state +12s')
   }
-  if (!process.stdout.isTTY) {
+  const hostMode = resolveTuiHostMode()
+  if (hostMode === 'invalid-explicit-launch') {
     if (process.env.DSH_TUI_RESTART_CHILD === '1') {
       logRestartEvent('boot: TTY gate failed - stdout is not a TTY')
     }
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
+  }
+  if (hostMode === 'headless-host') {
+    // Web / Tauri / GUI hosts load the plugin from the profile without being
+    // a dsh-tui frontend (stdout is a pipe or null). Mounting a TUI there
+    // would fail the whole composition, so skip quietly and let the host
+    // boot. The launcher marker above keeps explicit `dsh-tui` launches
+    // failing loudly instead of silently producing no UI.
+    ctx.logger.info(
+      'dsh-tui: non-interactive host detected (stdout is not a TTY); skipping the TUI frontend',
+    )
+    return
   }
 
   // The official profile launcher owns the system preset root and replaces
