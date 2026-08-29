@@ -43,6 +43,7 @@ import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
+import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
@@ -546,6 +547,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     expandEditor: config.expandEditor,
     statusBar: config.statusBar,
     handle,
+  })
+  // Plugin toasts ride the channel's own notification surface: the runtime
+  // already sanitized/rate-limited the delivery, the sink only forwards.
+  // Without the extensions row (tuiToast absent) plugin toasts are dropped
+  // by the runtime itself — same soft-degrade contract as the other seams.
+  const toastStore = getHostToastStore(ctx.get('tuiToast') as TuiToastRuntime | undefined)
+  toastStore?.setSink(delivery => {
+    channel.notify(delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
   })
   // Fullscreen layout decision: the settings user layer (edited through the
   // /settings screen) overrides cordis.yml when set. The settings injection

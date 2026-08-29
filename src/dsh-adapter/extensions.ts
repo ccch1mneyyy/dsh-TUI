@@ -10,6 +10,7 @@
  * - `ctx.tuiStatus`    — keyed status-line contributions
  * - `ctx.tuiShortcuts` — keyboard shortcut registry
  * - `ctx.tuiRenderers` — custom session-entry text renderers
+ * - `ctx.tuiToast`     — transient fire-and-forget notifications
  *
  * The decision-point events (`tui/input`, `tui/rewind-prompt`, …) need no
  * separate service — they are fired by the channel and answered through the
@@ -32,6 +33,7 @@ import TuiDialogRuntime from './dialogs.js'
 import TuiStatusRuntime from './status.js'
 import TuiShortcutRuntime from './shortcuts.js'
 import TuiRendererRuntime from './renderers.js'
+import TuiToastRuntime from './toast.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { readGrantStore } from './grants.js'
 
@@ -43,4 +45,5 @@ export function apply(ctx: Context): void {
   ctx.plugin(TuiStatusRuntime)
   ctx.plugin(TuiShortcutRuntime)
   ctx.plugin(TuiRendererRuntime)
+  ctx.plugin(TuiToastRuntime)
 }
