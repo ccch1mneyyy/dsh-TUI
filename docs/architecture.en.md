@@ -132,6 +132,15 @@ mounted by `cordis.patch.yml`:
 - MCP, shell, filesystem tools, and custom presets expand what the model can
   access and should be treated as code-execution surfaces in the same policy
   domain.
+- `/permission` reads the mounted DSH `permissionPresets` registry in declared
+  order. Third-party presets appear in the picker automatically; only IDs that
+  fit the existing command-token grammar enter Tab completion. `custom` is a
+  current-state projection, never a selectable target.
+- The TUI distinguishes `runtime`, `legacy`, and `unavailable`: the legacy
+  three-row roster is used only when the service is truly absent. A mounted
+  service that is empty, inconsistent, broken, or unsafe fails closed instead
+  of inferring identity from sandbox/approval knobs. All switches still call
+  the official `/permission <preset>` command.
 
 Inspect the active profile patch before running in an untrusted repository; the
 visual TUI alone does not describe the effective policy.
@@ -154,8 +163,11 @@ visual TUI alone does not describe the effective policy.
   Agent's asynchronous flush; the persistence plugin is the fallback.
 - The tool-level approval panel is implemented (approval service + TUI
   answerer); `/permission` preset switching is provided by the dsh-base
-  `permission-presets` plugin and works in profile compositions — the bare
-  `cordis.yml` mounts only the approval service, not `permission-presets`.
+  `permission-presets` plugin and works in profile compositions. When that
+  registry service is absent, TUI uses its legacy three-row compatibility roster;
+  a malformed mounted service is unavailable and fails closed. If the external
+  `/permission` command is not registered, input follows the existing
+  default/model dispatch behavior.
 - `/vim`, `/connect`, and `/hooks` are compatibility placeholders,
   not evidence that those DSH capabilities are mounted.
 - There is no automated full-flow suite that requires real model credentials;
@@ -166,7 +178,7 @@ visual TUI alone does not describe the effective policy.
 
 | Goal | Method |
 | --- | --- |
-| Environment and profile | Run `/doctor`, `/config`, and `/permissions` inside the TUI |
+| Environment and profile | Run `/doctor`, `/config`, and `/permission status` inside the TUI |
 | stderr diagnostics | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
 | Raw ANSI frames | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | Theme regression | `node --import tsx/esm scripts/verify-themes.mjs` |

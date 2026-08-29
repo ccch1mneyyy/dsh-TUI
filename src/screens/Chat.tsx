@@ -15,6 +15,7 @@ import { actionMatches } from '../utils/keymap.js'
 import { formatTokens } from '../cc/format.js'
 import { homeDir } from '../utils/paths.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../dsh-adapter/types.js'
+import { cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
 import {
   deriveModelGroups,
   modelPickerLanding,
@@ -22,7 +23,7 @@ import {
   RECENTS_GROUP_PROVIDER,
 } from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
-import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
+import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore } from '../dsh-adapter/status.js'
@@ -71,7 +72,7 @@ import { ActivityPicker } from '../components/ActivityPicker.js'
 import { ColorPicker } from '../components/ColorPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
-import { PermissionsPicker, PERMISSION_PRESET_IDS } from '../components/PermissionsPicker.js'
+import { PermissionsPicker } from '../components/PermissionsPicker.js'
 import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
@@ -114,6 +115,29 @@ import {
 
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
+
+const PERMISSION_RESULT_CELLS = 200
+
+function cleanPermissionError(error: unknown): string {
+  try {
+    if (error instanceof Error) {
+      return typeof error.message === 'string'
+        ? cleanRenderText(error.message, PERMISSION_RESULT_CELLS)
+        : ''
+    }
+    return cleanScalarText(error, PERMISSION_RESULT_CELLS)
+  } catch {
+    return ''
+  }
+}
+
+function clonePermissionPresetSnapshot(snapshot: PermissionPresetSnapshot): PermissionPresetSnapshot {
+  return {
+    availability: snapshot.availability,
+    options: snapshot.options.map(option => ({ ...option })),
+    ...(snapshot.current === undefined ? {} : { current: { ...snapshot.current } }),
+  }
+}
 
 /** Row kinds the message-selection cursor can land on. */
 const SELECTABLE_KINDS = new Set<ChatRow['kind']>([
@@ -336,6 +360,20 @@ export function Chat({
    * list while the fresh one loads, exactly as the boolean era did.
    */
   const [overlay, dispatchOverlay] = React.useReducer(chatOverlayReducer, NO_OVERLAY)
+  // Chat and PromptInput both receive one parsed stdin batch. Keep the
+  // permission focus synchronous so arrow+Enter in the same batch uses the
+  // post-arrow row rather than the previous render's index.
+  const permissionOverlayFocusRef = React.useRef<{ overlay: unknown; index: number } | null>(null)
+  if (overlay.kind === 'permission') {
+    // Seed each concrete picker instance once. Subsequent renders from
+    // channel/store updates must not overwrite a focus change that has already
+    // been applied synchronously for an arrow+Enter batch.
+    if (permissionOverlayFocusRef.current?.overlay !== overlay) {
+      permissionOverlayFocusRef.current = { overlay, index: overlay.index }
+    }
+  } else {
+    permissionOverlayFocusRef.current = null
+  }
   const [models, setModels] = React.useState<readonly LlmModelInfo[]>([])
   /** Provider display identities for the /model group level; refreshed alongside `models`. */
   const [providerInfos, setProviderInfos] = React.useState<readonly LlmProviderInfo[]>([])
@@ -875,15 +913,22 @@ export function Chat({
    * result text lands as a notification. `rawInput` carries the text after
    * the command name (`/plan off` → ` off`).
    */
-  /** Localized display name of a sandbox mode id (`read-only` /
-   *  `workspace-write` / `danger-full-access`), for `/permission status`. */
-  const permissionPresetName = (id: string | undefined): string => {
-    switch (id) {
-      case 'read-only': return t('permission-preset-readonly')
-      case 'workspace-write': return t('permission-preset-workspace-write')
-      case 'danger-full-access': return t('permission-preset-full-access')
-      default: return id ?? '—'
-    }
+  /** Route every permission switch through the official command path. */
+  const runPermissionCommand = (rawInput: string): void => {
+    const originAgentBinding = channel.agentBindingGeneration
+    void channel.runExternalCommand('permission', rawInput).then((text) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return
+      if (text === undefined) {
+        channel.notify(t('command-not-found', { name: 'permission' }), { color: 'error' })
+        return
+      }
+      const cleaned = typeof text === 'string' ? cleanRenderText(text, PERMISSION_RESULT_CELLS) : ''
+      if (cleaned !== '') channel.notify(cleaned)
+    }).catch((error: unknown) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return
+      const detail = cleanPermissionError(error)
+      if (detail !== '') channel.notify(detail, { color: 'error' })
+    })
   }
 
   /** Hot-swap the UI language (`/lang <id>` and the LangPicker both land
@@ -1590,19 +1635,27 @@ export function Chat({
       case 'permission': {
         // The command itself is registered by dsh-sandbox-policy (dsh-base
         // permission-presets row): bare `/permission` opens the preset
-        // picker (read-only / workspace-write / danger-full-access) and
+        // picker and
         // Enter dispatches `/permission <preset>` through the same
         // external-command path a hand-typed argument takes. `/permission
-        // status` prints the policy explainer (absorbed from the removed
-        // `/permissions` command); other arguments pass through verbatim.
+        // status` prints the policy explainer; other arguments pass through
+        // verbatim.
         // When the row is not mounted the default external path (or the
         // model, when nothing is registered) wins.
         const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (mounted && parts[0] === 'status') {
           setHelpOpen(false)
+          const snapshot = channel.permissionPresets()
+          if (snapshot.options.some(option => option.value === 'status')) {
+            runPermissionCommand(rawInput)
+            return true
+          }
+          const currentName = snapshot.availability === 'unavailable'
+            ? t('permission-roster-unavailable')
+            : snapshot.current?.name ?? '—'
           channel.pushLocal('/permission', [
-            t('permission-current', { name: permissionPresetName(channel.mode.sandbox) }),
+            t('permission-current', { name: currentName }),
             t('permission-policy-hint'),
             t('permission-approval-hint'),
             t('permission-root-hint', { cwd: channel.cwd }),
@@ -1612,22 +1665,31 @@ export function Chat({
         }
         if (mounted && parts.length === 0) {
           setHelpOpen(false)
-          const index = (PERMISSION_PRESET_IDS as readonly string[]).indexOf(channel.mode.sandbox ?? '')
+          const snapshot = channel.permissionPresets()
+          if (snapshot.availability === 'unavailable' || snapshot.options.length === 0) {
+            runPermissionCommand(rawInput)
+            return true
+          }
+          const currentValue = snapshot.current?.kind === 'preset' ? snapshot.current.value : undefined
+          const currentIndex = currentValue === undefined
+            ? -1
+            : snapshot.options.findIndex(option => option.value === currentValue)
+          const index = currentIndex >= 0
+            ? currentIndex
+            : Math.min(1, snapshot.options.length - 1)
           dispatchOverlay({
             type: 'open',
-            overlay: { kind: 'permission', index: index >= 0 ? index : 1 },
+            overlay: {
+              kind: 'permission',
+              index,
+              snapshot: clonePermissionPresetSnapshot(snapshot),
+            },
           })
           return true
         }
         if (mounted) {
           setHelpOpen(false)
-          void channel.runExternalCommand('permission', rawInput).then((text) => {
-            if (text !== undefined && text !== '') {
-              channel.notify(text)
-            } else if (text === undefined) {
-              channel.notify(t('command-not-found', { name: 'permission' }), { color: 'error' })
-            }
-          })
+          runPermissionCommand(rawInput)
           return true
         }
         return false
@@ -2513,16 +2575,18 @@ export function Chat({
     }
     if (overlay.kind === 'permission') {
       if (key.upArrow || key.downArrow) {
-        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: PERMISSION_PRESET_IDS.length })
+        const currentIndex = permissionOverlayFocusRef.current?.index ?? overlay.index
+        const nextIndex = wrapIndex(currentIndex, key.upArrow ? -1 : 1, overlay.snapshot.options.length)
+        permissionOverlayFocusRef.current = { overlay, index: nextIndex }
+        dispatchOverlay({ type: 'set-index', kind: 'permission', index: nextIndex })
       } else if (plainReturn) {
-        const id = PERMISSION_PRESET_IDS[overlay.index]
+        const currentIndex = permissionOverlayFocusRef.current?.index ?? overlay.index
+        const option = overlay.snapshot.options[currentIndex]
+        permissionOverlayFocusRef.current = null
         dispatchOverlay({ type: 'close' })
-        if (id !== undefined) {
-          void channel.runExternalCommand('permission', ` ${id}`).then((text) => {
-            if (text !== undefined && text !== '') channel.notify(text)
-          })
-        }
+        if (option !== undefined) runPermissionCommand(` ${option.value}`)
       } else if (key.escape) {
+        permissionOverlayFocusRef.current = null
         dispatchOverlay({ type: 'close' })
       }
       return
@@ -3048,7 +3112,8 @@ export function Chat({
     workspaceTargetCount: workspaceTargets.length,
     effortOptionCount: effortOptions.length,
     presetOptionCount: presetOptions.length,
-  })
+  }) && !(overlay.kind === 'permission'
+    && (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null))
 
   // The sticky header pins the turn owning the viewport top row
   // (timeline.activeId, reported by MessageList) — scrolled up to an old
@@ -3517,20 +3582,18 @@ export function Chat({
               />
             </Box>
           )}
-          {overlay.kind === 'permission' && (
+          {overlay.kind === 'permission' && overlay.snapshot.options.length > 0 && (
             <Box flexDirection="column" marginTop={1}>
               <PermissionsPicker
+                options={overlay.snapshot.options}
                 focusIndex={overlay.index}
-                currentMode={channel.mode.sandbox}
+                currentValue={overlay.snapshot.current?.value}
                 cwd={channel.cwd}
                 onPick={(index) => {
+                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
+                  const option = overlay.snapshot.options[index]
                   dispatchOverlay({ type: 'close' })
-                  const id = PERMISSION_PRESET_IDS[index]
-                  if (id !== undefined) {
-                    void channel.runExternalCommand('permission', ` ${id}`).then((text) => {
-                      if (text !== undefined && text !== '') channel.notify(text)
-                    })
-                  }
+                  if (option !== undefined) runPermissionCommand(` ${option.value}`)
                 }}
               />
             </Box>

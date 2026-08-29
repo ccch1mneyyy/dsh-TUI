@@ -263,7 +263,7 @@ so keep using `Ctrl`.
 | Session | `/new` new session · `/resume` working-directory/session browser (visible directory scope, search, preview, cross-project, sub-agent runs folded) · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
 | Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
-| Accounts/Policy | `/provider` add a model provider (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
+| Accounts/Policy | `/provider` add a model provider (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permission` dynamic preset/status notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/skills` lists skills discovered by DSH; user-invocable skills join the `/` menu as `/name` |
 | Other | `/agents` subagent list · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` vim editing mode toggle · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
 | Registry | `/plan` `/goal` `/feedback` `/permission` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
@@ -383,8 +383,11 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
 - Tool-level approval is implemented: the approval service + TUI answerer (CC-style
   approval panel) consumes the approval stream, and privilege-escalation commands pop
   an approval bar. `/permission` preset switching comes from dsh-base's
-  `permission-presets` plugin and is available in the profile composition by default;
-  the bare `cordis.yml` composition does not mount that plugin (no `/permission` command).
+  `permission-presets` plugin and is available in the profile composition by default.
+  If that registry service is absent, TUI uses its legacy three-row compatibility
+  roster; a malformed mounted service is unavailable and fails closed. If the
+  external `/permission` command is not registered, input keeps the existing
+  default/model dispatch behavior.
 - `/connect` `/hooks` are CC-named placeholders: the corresponding
   capabilities have no equivalent mechanism on the DSH side, and the commands give an
   explicit explanation rather than staying silent.
@@ -450,13 +453,21 @@ responsible for their maintenance and security.
 
 ## Permissions and Security Boundary
 
+> **Windows security warning:** The Windows profile defaults to `danger-full-access` with approval set to `never`. Tools therefore have unrestricted access; before starting in an environment with sensitive credentials or an untrusted repository, inspect and tighten the profile configuration.
+
 `dsh-TUI` does not implement a separate sandbox. It uses the filesystem,
-shell, sandbox, and approval policies of the active DSH profile. The supplied
-profile uses workspace confinement and approvals by default on non-Windows
-platforms. Windows currently has no corresponding sandbox backend, so the
-composition falls back to `danger-full-access` without approval prompts.
-Inspect the profile before starting it around sensitive credentials or an
-untrusted repository.
+shell, sandbox, and approval policies of the active DSH profile. Permission
+presets come from the mounted DSH `permissionPresets` registry: third-party
+presets appear automatically in the picker in registry order, while only IDs
+accepted by the existing command-token grammar enter completion. `custom` is a
+current-state label only, never a selectable target. Switching always uses the
+official `/permission <preset>` command.
+When the `permissionPresets` service is absent, TUI keeps its legacy three-row
+compatibility roster. A mounted but unusable service is marked unavailable and
+fails closed instead of inventing a roster. If the external `/permission` command
+is not registered, input follows the existing default/model dispatch path. Inspect
+the profile before starting it around sensitive credentials or an untrusted
+repository.
 
 See [Permissions and security boundary](docs/architecture.en.md#permissions-and-security-boundary)
 for details.

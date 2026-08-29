@@ -358,6 +358,7 @@ const dict = {
   'permission-root-hint': { zh: '当前文件系统策略以工作目录为根：{{cwd}}', en: 'Current filesystem policy is rooted at the working directory: {{cwd}}' },
   'permission-path-hint': { zh: '模型工具相对路径均解析自该目录；跨目录访问由 fs-policy 拦截。', en: 'Relative paths of model tools resolve from this directory; cross-directory access is blocked by fs-policy.' },
   'permission-current': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
+  'permission-roster-unavailable': { zh: '权限预设名册不可用', en: 'Permission preset roster unavailable' },
   'permission-picker-title': { zh: '权限预设', en: 'Permission preset' },
   'permission-preset-readonly': { zh: '只读', en: 'Read-only' },
   'permission-preset-readonly-desc': { zh: '会话只读：不写文件、不执行命令', en: 'Read-only session: no file writes, no commands' },

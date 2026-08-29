@@ -57,6 +57,15 @@ export interface CommandCompletion extends LocalCommand {
 export type CommandChildren = (canonicalPath: readonly string[]) => readonly CommandCompletionNode[]
 
 /**
+ * Whether a value can occupy one command-completion token. Keep this aligned
+ * with the grammar accepted by {@link completeCommands}; callers that need an
+ * empty prefix handle that case separately.
+ */
+export function isCommandCompletionToken(value: string): boolean {
+  return /^[a-z0-9_.:\/-]+$/iu.test(value)
+}
+
+/**
  * The built-in slash commands (name + description pairs). Plugin-registered
  * commands merge in at runtime; locals win on name collisions.
  */
@@ -227,7 +236,7 @@ export function completeCommands(
   // Token charset includes `. : /` so provider/model specs (e.g.
   // `deepseek/deepseek-v4-flash`, `openai/gpt-4.1`) survive as ONE token —
   // the /model completion matches its candidates against the whole spec.
-  if (!/^[a-z0-9_.:\/-]*(?:[\t ]+[a-z0-9_.:\/-]*)*$/iu.test(body)) return []
+  if (!body.split(/[\t ]+/u).every(token => token === '' || isCommandCompletionToken(token))) return []
   const trailingSeparator = /[\t ]$/u.test(body)
   const tokens = body.split(/[\t ]+/u)
   const prefix = trailingSeparator ? '' : (tokens.pop() ?? '')
@@ -245,7 +254,7 @@ export function completeCommands(
   const normalizedPrefix = prefix.toLowerCase()
   return candidates.flatMap(candidate => {
     const completionToken = matchingCompletionToken(candidate, normalizedPrefix)
-    if (completionToken === undefined) return []
+    if (completionToken === undefined || !isCommandCompletionToken(completionToken)) return []
     const path = [...tokens, completionToken]
     const commandLine = `/${path.join(' ')}`
     return [{

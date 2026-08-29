@@ -255,7 +255,7 @@ dsh-tui
 | `/provider` | 无 | 交互式添加模型提供方向导（持久化 profile + key） |
 | `/login` | 无 | 凭证状态（来源、存储可写性、base URL） |
 | `/logout` | 无 | 登出说明（env 来源需删环境变量并重启） |
-| `/permissions` | 无 | 权限策略与审批通道说明 |
+| `/permission` | 无 / `<preset>` / `status` | 查看当前权限预设与策略说明；无参时打开由 DSH `permissionPresets` registry 提供的选择器，参数通过官方命令切换。服务缺失时使用 legacy 三项名册，挂载但损坏时 unavailable；外部命令未注册时沿用默认命令/model dispatch |
 | `/add-dir` | 无 | 文件策略范围说明（以工作目录为根） |
 | `/hooks` | 无 | 占位：DSH hooks 未在组合中挂载时给出说明 |
 | `/mcp` | 无 | MCP 连接状态（工具按 `mcp__服务器__工具` 分组）；未配置时给出 `cordis.patch.yml` 插入示例 |
@@ -282,7 +282,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 | `/plan` | `[off\|message]` 计划模式；`/plan off` 退出 |
 | `/goal` | 设置/查看会话目标 |
 | `/feedback` | 提交使用反馈 |
-| `/permission` | 查看/切换权限预设（read-only / workspace-write / danger-full-access；非所有组合都有） |
+| `/permission` | 查看/切换 DSH `permissionPresets` registry 的预设；第三方预设按 registry 顺序显示，`custom` 只作为当前态，不是选择目标；服务缺失时使用 legacy 三项名册，服务已挂载但损坏时标记 unavailable；外部命令未注册时沿用默认命令/model dispatch |
 
 > 这些命令的行为由 DSH 命令注册表实现，本仓库只做菜单并入、补全与分发；
 > 未知命令会作为普通消息发给模型。
@@ -381,7 +381,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 - `/doctor` 自检：Node/平台、API key、模型路由、cwd、上下文窗口、会话存储、插件宿主。
 - `/provider` 交互向导添加模型提供方（密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`）。
 - `/init` 创建 AGENTS.md；`/agents` 子代理列表；`/login` `/logout` 凭证管理；
-  `/permissions` `/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
+  `/permission` `/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
 
 ---
 
