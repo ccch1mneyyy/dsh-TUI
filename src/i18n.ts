@@ -1052,6 +1052,15 @@ const dict = {
   'lang-zh-desc': { zh: '简体中文（默认）', en: 'Simplified Chinese (default)' },
   'lang-en-desc': { zh: 'English（英文）', en: 'English' },
 
+  // ── components/CockpitHud.tsx ────────────────────────────────────────
+  'cockpit-label-prov': { zh: 'prov', en: 'prov' },
+  'cockpit-label-model': { zh: 'model', en: 'model' },
+  'cockpit-label-eff': { zh: 'eff', en: 'eff' },
+  'cockpit-label-io': { zh: 'io', en: 'io' },
+  'cockpit-label-mode': { zh: 'mode', en: 'mode' },
+  'cockpit-io-vision': { zh: 'vision', en: 'vision' },
+  'cockpit-io-text': { zh: 'text', en: 'text' },
+
   // ── screens/StatusLine.tsx ───────────────────────────────────────────
   'status-cache-label': { zh: '缓存 ', en: 'cache ' },
 

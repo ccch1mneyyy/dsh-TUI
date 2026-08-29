@@ -739,6 +739,12 @@ export interface Channel {
    *  `dsh-tui.expandEditor`; on by default) — gates the ⛶ affordance and
    *  the expandEditor shortcut. */
   readonly expandEditor: boolean
+  /** Pin the identity HUD above the transcript (`dsh-tui.cockpit`; off by
+   *  default). When on, the footer omits model and thinking. */
+  readonly cockpit: boolean
+  /** Live model input modalities from the llm catalog (`image`/`text`/…);
+   *  `undefined` when the seam is missing or the lookup failed. */
+  readonly inputModalities: readonly string[] | undefined
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
@@ -1174,6 +1180,10 @@ export interface ChannelState {
   promptSessionLabel: boolean
   /** Fullscreen draft editor gate (see the public Channel type). */
   expandEditor: boolean
+  /** Identity HUD switch (see the public Channel type). */
+  cockpit: boolean
+  /** Live model input modalities (see the public Channel type). */
+  inputModalities: readonly string[] | undefined
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
@@ -1190,6 +1200,8 @@ export interface ChannelState {
   setPromptSessionLabel(enabled: boolean): void
   /** Apply a fullscreen-editor gate change. */
   setExpandEditor(enabled: boolean): void
+  /** Apply an identity-HUD visibility change. */
+  setCockpit(enabled: boolean): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -1727,6 +1739,9 @@ export function createChannel(
     /** Fullscreen draft editor entry points; default on (settings
      *  `dsh-tui.expandEditor`). */
     expandEditor?: boolean
+    /** Pin the identity HUD above the transcript; default off (settings
+     *  `dsh-tui.cockpit`). */
+    cockpit?: boolean
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -2256,9 +2271,43 @@ export function createChannel(
             efforts: ReadonlyArray<{ id: string; name: string; description?: string }>
             defaultEffort?: string
           }
+          inputModalities?: readonly string[]
         }>
+        listModels?(provider: string): Promise<readonly { id: string; inputModalities?: readonly string[] }[]>
       }
     | undefined
+
+  /** Catalog modalities: absent key = unknown; present array (even empty) = known. */
+  const readInputModalities = (info: unknown): readonly string[] | undefined => {
+    if (info === null || typeof info !== 'object' || !('inputModalities' in info)) return undefined
+    const raw = (info as { inputModalities: unknown }).inputModalities
+    if (!Array.isArray(raw)) return undefined
+    return raw.filter((item): item is string => typeof item === 'string')
+  }
+
+  const ingestModelInfo = (info: {
+    reasoning?: { efforts: ReadonlyArray<{ id: string }> }
+    inputModalities?: readonly string[]
+  }): void => {
+    state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+    const modalities = readInputModalities(info)
+    if (modalities !== undefined) state.inputModalities = modalities
+  }
+
+  const fillModalitiesFromCatalog = async (): Promise<void> => {
+    if (state.inputModalities !== undefined) return
+    if (llmRuntime === undefined || typeof llmRuntime.listModels !== 'function') return
+    try {
+      const listed = await llmRuntime.listModels(state.provider)
+      const match = listed.find(model => model.id === state.model)
+      const fromCatalog = readInputModalities(match)
+      if (fromCatalog === undefined) return
+      state.inputModalities = fromCatalog
+      state.emit()
+    } catch {
+      // Catalog lookup is best-effort; omit io rather than throw.
+    }
+  }
 
   /** Mutable per-agent model selection (dsh-agent's routing override seam).
    *  `current` stays undefined until the user explicitly cycles effort, so
@@ -2275,7 +2324,8 @@ export function createChannel(
     if (preferredEffort === undefined || llmRuntime === undefined) return
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+      ingestModelInfo(info)
+      await fillModalitiesFromCatalog()
       if (!info.reasoning?.efforts.some(effort => effort.id === preferredEffort)) return
       selection.current = {
         provider: state.provider,
@@ -2301,14 +2351,16 @@ export function createChannel(
     const generation = ++effortLevelsGeneration
     void llmRuntime
       .resolveModelInfo(state.provider, state.model)
-      .then(info => {
+      .then(async info => {
         if (generation !== effortLevelsGeneration) return
-        state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+        ingestModelInfo(info)
+        await fillModalitiesFromCatalog()
+        if (generation !== effortLevelsGeneration) return
         state.emit()
       })
       .catch(() => {
-        // Route metadata resolution is best-effort; a failure keeps the
-        // previous table until the next /effort interaction clears it.
+        if (generation !== effortLevelsGeneration) return
+        state.inputModalities = undefined
       })
   }
 
@@ -2326,7 +2378,8 @@ export function createChannel(
     if (llmRuntime === undefined) return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+      ingestModelInfo(info)
+      await fillModalitiesFromCatalog()
       return {
         efforts: info.reasoning?.efforts ?? [],
         defaultEffort: info.reasoning?.defaultEffort,
@@ -2825,6 +2878,8 @@ export function createChannel(
     foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true,
     expandEditor: options.expandEditor !== false,
+    cockpit: options.cockpit === true,
+    inputModalities: undefined,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,
@@ -4161,6 +4216,7 @@ export function createChannel(
       // Route changed: a stale tier table would let top-tier UI fire on the
       // wrong level (or never fire on the real one); clear and re-resolve.
       state.effortLevels = undefined
+      state.inputModalities = undefined
       state.reasoningEffort = undefined
       refreshEffortLevels()
       state.contextSegments = {
@@ -4330,6 +4386,7 @@ export function createChannel(
       // Route changed: a stale tier table would let top-tier UI fire on the
       // wrong level (or never fire on the real one); clear and re-resolve.
       state.effortLevels = undefined
+      state.inputModalities = undefined
       state.reasoningEffort = undefined
       refreshEffortLevels()
       state.contextSegments = {
@@ -4528,6 +4585,7 @@ export function createChannel(
       // Route changed: a stale tier table would let top-tier UI fire on the
       // wrong level (or never fire on the real one); clear and re-resolve.
       state.effortLevels = undefined
+      state.inputModalities = undefined
       state.reasoningEffort = undefined
       refreshEffortLevels()
       state.contextSegments = {
@@ -4645,6 +4703,11 @@ export function createChannel(
     setExpandEditor(enabled) {
       if (enabled === state.expandEditor) return
       state.expandEditor = enabled
+      state.emit()
+    },
+    setCockpit(enabled) {
+      if (enabled === state.cockpit) return
+      state.cockpit = enabled
       state.emit()
     },
     setStatusBar(config) {
@@ -6977,6 +7040,7 @@ ${output}
       selection.current = { provider: state.provider, model: state.model }
     }
     void applyPreferredEffort()
+    refreshEffortLevels()
     refreshMode()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),

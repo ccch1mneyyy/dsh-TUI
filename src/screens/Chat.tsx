@@ -56,6 +56,7 @@ import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
 import type { BalanceResult } from '../deepseekBalance.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
+import { CockpitHud } from '../components/CockpitHud.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
@@ -3133,6 +3134,9 @@ export function Chat({
 
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
+      {channel.cockpit && !channel.minimal && (
+        <CockpitHud channel={channel} />
+      )}
       {!isSticky && anchorUserText && (
         <StickyPromptHeader
           text={anchorUserText}

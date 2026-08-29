@@ -548,6 +548,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     foldTerminalCommand: config.foldTerminalCommand,
     promptSessionLabel: config.promptSessionLabel,
     expandEditor: config.expandEditor,
+    cockpit: config.cockpit,
     statusBar: config.statusBar,
     handle,
   })
@@ -605,6 +606,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // resolves `?? config.expandEditor ?? true` so cordis.yml stays
         // decisive while the user layer is unset.
         expandEditor: Schema.boolean(),
+        cockpit: Schema.boolean(),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -613,6 +615,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
           cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
           tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
+          cost: Schema.boolean().default(DEFAULT_STATUS_BAR.cost),
           tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
           gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
           sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
@@ -656,6 +659,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       foldTerminalCommand?: boolean
       promptSessionLabel?: boolean
       expandEditor?: boolean
+      cockpit?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -697,6 +701,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
+      channel.setCockpit(value.cockpit ?? config.cockpit === true)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
@@ -989,6 +994,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.expandEditor !== false)
+          },
+        },
+        {
+          path: ['cockpit'],
+          label: 'Cockpit HUD',
+          descriptions: { zh: '驾驶舱顶栏' },
+          hint: 'Pin a one-line identity HUD (provider, model, effort, io) above the transcript. When on, the footer omits model and thinking. Off by default.',
+          hintDescriptions: { zh: '在转录区上方钉一行身份栏（供应商、模型、推理强度、输入模态）。开启后底栏不再重复显示模型与思考档位。默认关闭。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            return String(typeof value === 'boolean' ? value : config.cockpit === true)
           },
         },
         {

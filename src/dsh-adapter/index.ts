@@ -106,6 +106,10 @@ export interface Config {
    *  Ctrl+Shift+E) expand the draft into a whole-screen editor. On by
    *  default; off removes both entry points. */
   expandEditor?: boolean
+  /** Pin a one-line identity HUD above the transcript (provider, model,
+   *  effort, io). Off by default; when on, the footer omits model and
+   *  thinking. Same key in `/settings`. Not a statusBar field. */
+  cockpit?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
@@ -145,6 +149,7 @@ export const Config: Schema<Config> = Schema.object({
   foldTerminalCommand: Schema.boolean().default(false),
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
+  cockpit: Schema.boolean().default(false),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -153,6 +158,7 @@ export const Config: Schema<Config> = Schema.object({
     contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
     cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
     tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
+    cost: Schema.boolean().default(DEFAULT_STATUS_BAR.cost),
     tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
     gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
     sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),

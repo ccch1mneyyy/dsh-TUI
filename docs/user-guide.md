@@ -424,12 +424,13 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**编辑是暂存制**：`s` 保存 / `d` 放弃 / `Esc` 丢弃脏区退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 20 个字段：
+dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 21 个字段：
 
 | 字段 | 说明 |
 |---|---|
 | lang | 界面语言 zh/en（DSH_TUI_LANG 钉死时不可改） |
 | whale | 开屏头部像素鲸鱼娘（默认开） |
+| cockpit | 转录区上方一行身份 HUD（供应商、模型、推理强度、输入模态）；开启后底栏不再重复模型与思考档位。默认关 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | toolBackground | 工具卡背景强调：none / subtle / strong |

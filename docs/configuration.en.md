@@ -39,6 +39,7 @@ A complete common override looks like this:
     activityFrames: claude
     contextBar: true
     fullscreen: false
+    # cockpit: false
     preset: !!js process.env.DSH_TUI_PRESET ?? undefined
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
@@ -56,6 +57,7 @@ A complete common override looks like this:
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
 | `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
+| `cockpit` | `false` | Pin a one-line identity HUD (provider, model, effort, io) above the transcript; when on, the footer omits model and thinking. Also toggled from `/settings` |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 

@@ -145,6 +145,10 @@ export function StatusLine({
     // footer can never grow decorations regardless of saved preferences.
     ? { ...DEFAULT_STATUS_BAR, compact: true, model: true, cwd: true }
     : normalizeStatusBar(channel.statusBar)
+  // Cockpit HUD already shows model + effort; the footer drops those chips
+  // so the identity row is not repeated. Minimal mode hides the HUD, so
+  // the model chip stays in the trimmed footer.
+  const hideRouteInFooter = channel.cockpit === true && !channel.minimal
   // Provider workspaces expose a remote display path alongside a host alias;
   // only the local target has identical cwd/displayCwd values to fold.
   const displayCwd = channel.displayCwd === channel.cwd
@@ -156,7 +160,7 @@ export function StatusLine({
     : usage.input + usage.cacheRead + usage.cacheWrite
   const contextParts: FieldPart[] = []
 
-  if (statusBar.thinking && channel.reasoningEffort !== undefined) {
+  if (statusBar.thinking && !hideRouteInFooter && channel.reasoningEffort !== undefined) {
     contextParts.push({
       key: 'effort',
       node: <Text color="inactiveShimmer">{channel.reasoningEffort}</Text>,
@@ -270,7 +274,7 @@ export function StatusLine({
   }
 
   const leftFields: FieldPart[] = [
-    ...(statusBar.model
+    ...(statusBar.model && !hideRouteInFooter
       ? [{ key: 'model', node: <Text color="inactiveShimmer">{channel.model}</Text> }]
       : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),

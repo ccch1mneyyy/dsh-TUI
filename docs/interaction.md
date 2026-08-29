@@ -241,7 +241,7 @@ prompt + 已有历史）做一次**无工具、单轮**的模型调用，答案�
 `↑`/`↓` 移动、`Enter` 展开/切换/编辑，`s` 保存 / `d` 放弃 / `Esc` 先丢弃
 脏区再退出。鼠标：字段/组行点击 = 设焦点并执行该行 Enter 动作，悬停即
 移动焦点，滚轮走焦点（焦点跟随窗口下即滚动）。dsh-tui 自身命名空间的字段写入 settings.yaml 用户层并**实时生效**
-（`lang`、`statusBar.*` 等）；未声明 TUI 区块的命名空间以只读形式列出，需
+（`lang`、`cockpit`、`statusBar.*` 等）；未声明 TUI 区块的命名空间以只读形式列出，需
 手工编辑 `~/.dsh/settings.yaml`。
 
 ### Model 与 preset

@@ -60,6 +60,8 @@
     # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
     # inline 渲染, 鼠标交给终端模拟器原生选择。
     fullscreen: true
+    # Optional identity HUD above the transcript (off by default).
+    # cockpit: false
     # Reasoning effort applied to every request, validated against the live
     # route's adapter levels (deepseek: off/high/max) — an unlisted level is
     # ignored and the adapter default applies. Wins over the persisted

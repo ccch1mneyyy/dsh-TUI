@@ -9,6 +9,7 @@ const [
   { Terminal: XTerm },
   { render, ThemeProvider },
   { StatusLine, formatCacheHitRate },
+  { CockpitHud },
   { AssistantToolUseMessage },
   { DEFAULT_STATUS_BAR, formatContextUsage, normalizeStatusBar, normalizeToolBackground },
   { homeDir },
@@ -19,6 +20,7 @@ const [
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/screens/StatusLine.js'),
+  import('../src/components/CockpitHud.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
   import('../src/tuiDisplayPrefs.js'),
   import('../src/utils/paths.js'),
@@ -74,6 +76,8 @@ function makeHarness(columns = 140, rows = 12) {
 
 const baseChannel = {
   statusBar: { ...DEFAULT_STATUS_BAR },
+  provider: 'probe-provider',
+  cockpit: false,
   agentId: 'd5a3b7c9-e1f2-4a6b-8c3d-0123456789ab',
   lastUsage: { input: 200_000, cacheRead: 5_000, cacheWrite: 1_000, output: 6_789 },
   contextWindow: 266_000,
@@ -152,6 +156,63 @@ async function renderStatus(
   return output
 }
 
+async function renderHud(
+  overrides: Record<string, unknown> = {},
+  columns = 140,
+): Promise<string> {
+  const harness = makeHarness(columns, 6)
+  const channel = { ...baseChannel, ...overrides }
+  const instance = await render(
+    <ThemeProvider theme="dark">
+      <CockpitHud channel={channel as never} />
+    </ThemeProvider>,
+    {
+      stdout: harness.stdout as NodeJS.WriteStream,
+      stderr: harness.stderr as NodeJS.WriteStream,
+      stdin: harness.stdin as NodeJS.ReadStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  await sleep(180)
+  const output = harness.screen()
+  await instance.unmount()
+  harness.term.dispose()
+  return output
+}
+
+async function renderChrome(
+  overrides: Record<string, unknown> = {},
+  columns = 140,
+): Promise<string> {
+  const harness = makeHarness(columns)
+  const channel = { ...baseChannel, ...overrides }
+  const showHud = channel.cockpit === true && channel.minimal !== true
+  const instance = await render(
+    <ThemeProvider theme="dark">
+      <>
+        {showHud ? <CockpitHud channel={channel as never} /> : null}
+        <StatusLine
+          channel={channel as never}
+          wake={wake as never}
+        />
+      </>
+    </ThemeProvider>,
+    {
+      stdout: harness.stdout as NodeJS.WriteStream,
+      stderr: harness.stderr as NodeJS.WriteStream,
+      stdin: harness.stdin as NodeJS.ReadStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  await sleep(180)
+  const output = harness.screen()
+  await instance.unmount()
+  harness.term.dispose()
+  return output
+}
+
 // Defaults and normalization.
 check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
   assert.deepEqual(DEFAULT_STATUS_BAR, {
@@ -162,6 +223,7 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     contextUsage: true,
     cache: true,
     tokens: false,
+    cost: true,
     tps: false,
     gitBranch: false,
     sessionTitle: false,
@@ -363,6 +425,52 @@ check('full StatusLine renders context bar and deterministic trajectory wake', (
   assert.ok(full.includes('system') || full.includes('sys'), `missing context-bar segment in:\n${full}`)
   assert.ok(full.includes('77.4%'), `missing context-bar percentage in:\n${full}`)
   assert.ok(/[▁▂▃▄▅▆▇█]/.test(full), `missing trajectory glyph in:\n${full}`)
+})
+
+// Cockpit HUD: identity row above the transcript, footer drops duplicated route chips.
+const cockpitOff = await renderChrome({ cockpit: false })
+check('cockpit off leaves the HUD unmounted and still shows the footer model', () => {
+  assert.ok(!/\bprov\b/.test(cockpitOff), `unexpected HUD label in:\n${cockpitOff}`)
+  assert.ok(cockpitOff.includes('display-model-probe'), `missing footer model in:\n${cockpitOff}`)
+})
+
+const cockpitHud = await renderHud({ cockpit: true })
+const cockpitFooter = await renderStatus({ cockpit: true })
+check('cockpit on pins provider, model, and effort in the HUD', () => {
+  for (const marker of ['prov', 'probe-provider', 'display-model-probe', 'eff', 'max']) {
+    assert.ok(cockpitHud.includes(marker), `missing ${JSON.stringify(marker)} in:\n${cockpitHud}`)
+  }
+})
+check('cockpit on drops model from the footer', () => {
+  assert.ok(!cockpitFooter.includes('display-model-probe'), `footer still shows model in:\n${cockpitFooter}`)
+  assert.ok(!cockpitFooter.includes('max'), `footer still shows thinking/effort in:\n${cockpitFooter}`)
+})
+
+const visionHud = await renderHud({ cockpit: true, inputModalities: ['image', 'text'] })
+check('image modality renders the vision io chip', () => {
+  assert.ok(/\bio\b/.test(visionHud), `missing io label in:\n${visionHud}`)
+  assert.ok(visionHud.includes('vision'), `missing vision chip in:\n${visionHud}`)
+})
+
+const textHud = await renderHud({ cockpit: true, inputModalities: ['text'] })
+check('text-only known modalities render the text io chip', () => {
+  assert.ok(/\bio\b/.test(textHud), `missing io label in:\n${textHud}`)
+  assert.ok(textHud.includes('text'), `missing text chip in:\n${textHud}`)
+  assert.ok(!textHud.includes('vision'), `unexpected vision chip in:\n${textHud}`)
+})
+
+const unknownHud = await renderHud({ cockpit: true })
+check('unknown modalities omit the io chip', () => {
+  assert.ok(!/\bio\b/.test(unknownHud), `unexpected io chip in:\n${unknownHud}`)
+})
+
+check('missing llm modalities do not throw', () => {
+  assert.ok(unknownHud.includes('probe-provider'), `HUD failed to render without modalities:\n${unknownHud}`)
+})
+
+const cockpitMinimal = await renderChrome({ cockpit: true, minimal: true })
+check('minimal mode hides the cockpit HUD', () => {
+  assert.ok(!/\bprov\b/.test(cockpitMinimal), `HUD leaked in minimal mode:\n${cockpitMinimal}`)
 })
 
 // Tool background normalization and terminal ANSI output.
