@@ -5335,7 +5335,12 @@ export function createChannel(
       const schemas = runtime?.schemas() ?? []
       const byServer = new Map<string, string[]>()
       for (const schema of schemas) {
-        const match = schema.name.match(/^mcp__([a-z0-9-]+)__(.+)$/)
+        // Mirror dsh-mcp-client's SERVER_NAME_PATTERN (/^[A-Za-z0-9_-]{1,32}$/):
+        // uppercase and underscores are legal server names (e.g. Roblox_Studio),
+        // and /mcp must not silently hide a connected server whose tools are
+        // registered. The lazy quantifier keeps the shortest server prefix when
+        // a public name contains a second `__`.
+        const match = schema.name.match(/^mcp__([A-Za-z0-9_-]{1,32}?)__(.+)$/)
         if (!match) continue
         const list = byServer.get(match[1]) ?? []
         list.push(match[2])
