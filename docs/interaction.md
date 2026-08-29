@@ -363,7 +363,7 @@ transcript。
 | 会话 | `/new`、`/resume`、`/rename`、`/recap`（最近活动摘要 + 建议标题一键应用；设置 `recapOnOpen` 开启时打开会话自动出分隔线 + `回顾：` 摘要行，发送新消息后消失，默认开）、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`）、`/rewind`（时间回溯，同空输入双击 `Esc`） |
 | 状态 | `/context`、`/status`、`/cost`、`/balance`（DeepSeek 官方余额：摘要行 + hover 明细，点击刷新）、`/config`、`/doctor`、`/init`、`/agents`、`/settings` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/color`（会话强调色：无参打开调色板选择器，`<名>` 直接设置，`status`/`reset`；输入框边框 + 右上角会话名标签，按会话保存；标签默认关闭，`/settings` 可开）、`/lang` |
-| 账号与策略 | `/provider`、`/login`、`/logout`、`/permissions`、`/add-dir`、`/hooks`、`/mcp`、`/plugins`（`check <路径>` 校验插件清单） |
+| 账号与策略 | `/provider`、`/login`、`/logout`、`/permission`、`/add-dir`、`/hooks`、`/mcp`、`/plugins`（`check <路径>` 校验插件清单） |
 | Skills | `/skills` 浏览 DSH 从当前 profile、用户与项目发现的技能；可直调技能以 `/name` 加入菜单 |
 | 其他 | `/update`、`/vim`（vim 编辑模式开关，见「输入编辑」）、`/terminal-setup`、`/connect`、`/help`、`/exit`（别名 `/quit`、`/q`） |
 | 注册表 | `/plan`、`/goal`，以及当前 DSH 组合注册的其他命令 |
@@ -382,6 +382,7 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
   `/effort status` 查看当前档位。
 - `/theme <name>` 与 `/theme status` 见主题文档。
+- `/permission` 的名册来自 DSH `permissionPresets` registry，按声明顺序显示并参与补全；第三方预设无需 TUI 硬编码，`custom` 只显示当前态，不是可选目标。registry 服务缺失时 TUI 使用三项 legacy 兼容名册；服务已挂载但损坏、为空或不一致时标记 unavailable 并 fail closed。若外部 `/permission` 命令未注册，输入沿用现有默认命令/model dispatch。
 - `/lang` 切换中英界面语言（见「界面语言」）。
 - `/compact` 压缩会话历史；minimal preset（仅 bash+编辑器）下不可用。
 - `/thinking` 扩展思考显示开关，仅本次界面状态、**不持久化**。

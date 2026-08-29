@@ -209,6 +209,10 @@ const GROUPS = {
 // 宿主（stdout 为 pipe/null）必须静默跳过插件、不 throw、不影响宿主启动；
 // 显式 dsh-tui launcher/standalone 启动无 TTY 仍保留原报错。
     ["verify-tui-host-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-tui-host-mode.ts']],
+// 插件 toast 接缝回归（ctx.tuiToast）：消毒/标量强制、timeout 钳制
+// （插件不可 sticky）、未知颜色拒绝、每激活 20/min 限速 + 粘性告警、
+// host-only 面不泄漏到插件服务对象、公开 shim 导出。
+    ["verify-plugin-toast", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-toast.tsx']],
 // 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
 // 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
     ["verify-session-titles", ['node', 'scripts/verify-session-titles.mjs']],

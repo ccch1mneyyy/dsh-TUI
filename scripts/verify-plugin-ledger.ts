@@ -40,7 +40,7 @@ const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcu
 const { loadSpecData } = await import('../src/plugin-spec/registry.js')
 const { check: schemaCheck } = await import('../src/plugin-spec/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 import type { LedgerEntry } from '../src/dsh-adapter/effect-ledger.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')

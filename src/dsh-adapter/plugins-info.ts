@@ -179,6 +179,15 @@ function checkManifestLines(pathArg: string, deps: PluginsInfoDeps): string[] {
     }))
   const decision = negotiate(index, manifest, host.descriptor, granted)
   lines.push(...decisionLines(decision))
+  if (decision.decision === 'waiting_authorization') {
+    // Close the loop on the five-state vocabulary: the user sees not just
+    // the state but the exact file + shape that flips it (the interactive
+    // grant flow is future work; this hint is its no-UI prerequisite).
+    lines.push(t('plugins-check-grant-hint', {
+      id: cell(manifest.id),
+      perms: cell(decision.deniedPermissions.join(', ')),
+    }))
+  }
   if (host.dropped.length > 0) {
     lines.push(t('plugins-check-dropped', { dropped: cell(host.dropped.join(', ')) }))
   }
@@ -277,6 +286,9 @@ export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] 
     if (plugins.length > shown.length) {
       lines.push(`  ${t('plugins-footprint-overflow', { count: plugins.length - shown.length })}`)
     }
+    // Actionable next step for the · marks (same loop-closer as the check
+    // path): the file path + rule shape, so granting needs no spec reading.
+    lines.push(`  ${t('plugins-grant-hint')}`)
   }
 
   // ── 台账尾 ──

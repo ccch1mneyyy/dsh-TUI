@@ -113,6 +113,12 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
   或脱敏片段。
 - MCP、Shell、文件工具和自定义 preset 都会扩展模型可见能力，应当视为同一权限域
   内的代码执行入口。
+- `/permission` 的可切换名册由已挂载的 DSH `permissionPresets` registry 提供，
+  保持 registry 声明顺序；第三方预设会自动进入 picker，只有符合既有命令 token
+  语法的 ID 进入 Tab 补全。`custom` 只作为 registry 投影出的当前态，不是目标。
+- TUI 将服务状态区分为 runtime、legacy、unavailable：只有服务确实缺失时才保留
+  旧三项 legacy 兼容；服务已挂载但损坏、空或数据不一致时 fail closed，不从
+  sandbox/approval 组合猜测当前预设。所有切换仍调用官方 `/permission <preset>`。
 
 在不可信仓库中运行前，检查实际 profile patch，而不是只看 TUI 的视觉界面。
 
@@ -127,9 +133,10 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
   不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。剪贴板图片
   导出为临时文件插入路径（0700 私有目录、0600 文件），不内嵌图片块。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
-- 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的沙箱
-  预设切换由 dsh-base 的 `permission-presets` 插件提供，profile 组合下可用；
-  裸组合 `cordis.yml` 只挂了 approval 服务，未挂 `permission-presets`。
+- 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的预设
+  切换由 dsh-base 的 `permission-presets` 插件提供。registry 服务缺失时使用三项
+  legacy 兼容名册；服务已挂载但空、损坏或不一致时标记 unavailable 并 fail closed，
+  不伪造旧名册。若外部 `/permission` 命令未注册，输入沿用现有默认命令/model dispatch。
 - `/vim`、`/connect`、`/hooks` 是兼容占位命令，不代表对应 DSH 能力已挂载。
 - 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务，
   真实模型集成仍需要在目标终端手动验证。
@@ -138,7 +145,7 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 
 | 目的 | 方式 |
 | --- | --- |
-| 环境与 profile | TUI 内运行 `/doctor`、`/config`、`/permissions` |
+| 环境与 profile | TUI 内运行 `/doctor`、`/config`、`/permission status` |
 | stderr 调试 | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
 | 原始 ANSI 帧 | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | 主题回归 | `node --import tsx/esm scripts/verify-themes.mjs` |
