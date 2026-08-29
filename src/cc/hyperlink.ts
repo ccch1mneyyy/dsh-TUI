@@ -41,11 +41,15 @@ function sanitizeHyperlinkUrl(raw: string): string | null {
 }
 
 // Display text keeps spaces (legitimate in link labels) but drops every
-// other control character: an OSC 8 sequence smuggled into `content` would
-// survive the plain-text wrap verbatim, hijack cell.hyperlink after
-// tokenize, and repaint a phish link over the legitimate URL.
-// Same set minus the space.
-const DISPLAY_TEXT_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g
+// escape sequence and leftover control character: an OSC 8 sequence
+// smuggled into `content` would survive the plain-text wrap verbatim,
+// hijack cell.hyperlink after tokenize, and repaint a phish link over the
+// legitimate URL. Stripping COMPLETE ANSI sequences (not just the ESC byte)
+// also keeps the display clean when a caller passes an already-painted
+// string — the SGR parameter text would otherwise appear on screen as
+// literal `[38;2;…m` garbage.
+const DISPLAY_TEXT_CONTROL_CHARS =
+  /[\u001b\u009b][[\]()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[\x00-\x1f\x7f-\x9f]/g
 
 /**
  * Create a clickable hyperlink using OSC 8 escape sequences.
