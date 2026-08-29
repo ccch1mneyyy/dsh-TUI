@@ -116,6 +116,11 @@ const GROUPS = {
 // Uc 优先、代理对与 keyup 交错、Rc 重复展开、conhost 拆散粘贴重组、
 // Alt+numpad 两轮合成。
     ["verify-win32-input", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-input.tsx']],
+// win32 协议重组回归：conhost 把 SGR/X10 鼠标报告与终端回复（DA1 等）
+// 合成成逐字符 CSI Vk;Sc;Uc;Kd;Cs;Rc 记录时，必须跨块重组回完整协议
+// 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
+// Escape/未知 CSI/物理键不受影响。
+    ["verify-win32-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-protocol.ts']],
 // 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
     ["verify-teardown-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-teardown-exit.tsx']],
 // 退出 resume marker 回归（issue #42）：仅有实际消息或 pending 操作时保留 marker。

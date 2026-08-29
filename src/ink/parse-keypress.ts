@@ -604,6 +604,111 @@ function feedWin32Paste(state: Win32PasteState, key: ParsedKey): ParsedKey[] {
   return [key]
 }
 
+// -- Terminal protocols decomposed into synthesized win32 key records --
+
+export type Win32ProtocolState = {
+  held: ParsedKey[]
+  sequence: string
+}
+
+function synthesizedWin32Char(key: ParsedKey): string | undefined {
+  const match = WIN32_INPUT_RE.exec(key.raw ?? '')
+  if (!match) return undefined
+  const fields = match[1]!.split(';')
+  const num = (index: number, dflt: number): number => {
+    const field = fields[index]
+    return field === undefined || field === '' ? dflt : parseInt(field, 10)
+  }
+  if (num(0, 0) !== 0 || num(1, 0) !== 0 || num(3, 0) !== 1 || num(4, 0) !== 0) {
+    return undefined
+  }
+  return win32RecordChar(key)
+}
+
+function parseReassembledWin32Protocol(sequence: string): ParsedInput | null {
+  const response = parseTerminalResponse(sequence)
+  if (response) return { kind: 'response', sequence, response }
+
+  const mouse = parseMouseEvent(sequence) ?? parseX10MouseEvent(sequence)
+  if (mouse) return mouse
+
+  if (SGR_MOUSE_RE.test(sequence) || (sequence.length === 6 && sequence.startsWith('\x1b[M'))) {
+    return parseKeypress(sequence)
+  }
+  return null
+}
+
+function feedWin32Protocol(
+  state: Win32ProtocolState,
+  key: ParsedKey,
+): ParsedInput[] {
+  const ch = synthesizedWin32Char(key)
+  if (state.held.length === 0) {
+    if (ch !== '\x1b') return [key]
+    state.held.push(key)
+    state.sequence = ch
+    return []
+  }
+
+  if (ch === undefined) {
+    const held = state.held
+    state.held = []
+    state.sequence = ''
+    return [...held, ...feedWin32Protocol(state, key)]
+  }
+
+  state.held.push(key)
+  state.sequence += ch
+  const sequence = state.sequence
+
+  if (sequence === '\x1b' || sequence === '\x1b[') return []
+
+  if (!sequence.startsWith('\x1b[') || sequence.length > 64) {
+    const held = state.held
+    state.held = []
+    state.sequence = ''
+    return held
+  }
+
+  if (sequence.startsWith('\x1b[M')) {
+    if (sequence.length < 6) return []
+    const held = state.held
+    state.held = []
+    state.sequence = ''
+    const parsed = sequence.length === 6
+      ? parseReassembledWin32Protocol(sequence)
+      : null
+    return parsed ? [parsed] : held
+  }
+
+  const code = ch.charCodeAt(0)
+  if ((code >= 0x20 && code <= 0x3f)) return []
+  if (code >= 0x40 && code <= 0x7e) {
+    const held = state.held
+    state.held = []
+    state.sequence = ''
+    const parsed = parseReassembledWin32Protocol(sequence)
+    return parsed ? [parsed] : held
+  }
+
+  const held = state.held
+  state.held = []
+  state.sequence = ''
+  return held
+}
+
+function feedWin32Input(
+  pasteState: Win32PasteState,
+  protocolState: Win32ProtocolState,
+  key: ParsedKey,
+): ParsedInput[] {
+  const inputs: ParsedInput[] = []
+  for (const pasteKey of feedWin32Paste(pasteState, key)) {
+    inputs.push(...feedWin32Protocol(protocolState, pasteKey))
+  }
+  return inputs
+}
+
 /**
  * Parser state carried between parseMultipleKeypresses calls: paste mode,
  * buffered incomplete input, and the internal tokenizer instance.
@@ -632,6 +737,12 @@ export type KeyParseState = {
    * arrive as ordinary key records and must be reassembled here (issue #147).
    */
   win32Paste?: Win32PasteState
+  /**
+   * Terminal CSI bytes synthesized by classic conhost as one win32 input
+   * record per character. Only Vk=0/Sc=0 records enter this matcher, keeping
+   * physically typed text out of the protocol path.
+   */
+  win32Protocol?: Win32ProtocolState
   /**
    * Pending prefix of an SGR mouse report that fragmented mid-sequence
    * (ConPTY split a report across reads and App's escape timer flushed the
@@ -712,6 +823,10 @@ export function parseMultipleKeypresses(
     held: [],
     buffer: '',
   }
+  const win32Protocol: Win32ProtocolState = prevState.win32Protocol ?? {
+    held: [],
+    sequence: '',
+  }
   // Pending fragmented SGR mouse prefix (see KeyParseState.mouseTailHold).
   let mouseTailHold: string | undefined = prevState.mouseTailHold
   // Set when THIS call captured (or extended) the hold — a flush that fires
@@ -747,7 +862,7 @@ export function parseMultipleKeypresses(
             // conhost the bracketed-paste markers themselves arrive as key
             // records and must be reassembled before dispatch.
             for (let i = 0; i < win32.repeat; i++) {
-              keys.push(...feedWin32Paste(win32Paste, win32.key))
+              keys.push(...feedWin32Input(win32Paste, win32Protocol, win32.key))
             }
           }
         } else {
@@ -790,7 +905,7 @@ export function parseMultipleKeypresses(
           const win32 = parseWin32KeyEvent('\x1b' + tail, win32Ctx)
           if (win32 !== undefined && win32 !== null) {
             for (let i = 0; i < win32.repeat; i++) {
-              keys.push(...feedWin32Paste(win32Paste, win32.key))
+              keys.push(...feedWin32Input(win32Paste, win32Protocol, win32.key))
             }
           }
         }
@@ -864,6 +979,18 @@ export function parseMultipleKeypresses(
     win32Paste.matched = 0
   }
 
+  // A quiet timeout ends a synthesized protocol candidate. Incomplete mouse
+  // reports are terminal input and must not become prompt text; other held
+  // input (a lone Escape or an unknown CSI sequence) remains ordinary keys.
+  if (isFlush && win32Protocol.held.length > 0) {
+    const isMouseCandidate =
+      win32Protocol.sequence.startsWith('\x1b[<') ||
+      win32Protocol.sequence.startsWith('\x1b[M')
+    if (!isMouseCandidate) keys.push(...win32Protocol.held)
+    win32Protocol.held = []
+    win32Protocol.sequence = ''
+  }
+
   // A held SGR mouse prefix that never completed: a flush that fires on a
   // call which did NOT capture/extend the hold means the 50ms grace expired
   // without continuation bytes — the fragments are a dead report (terminal
@@ -889,13 +1016,17 @@ export function parseMultipleKeypresses(
     // actually opens.
     incomplete:
       tokenizer.buffer() ||
-      (win32Paste.held.length > 0 || win32Paste.active || mouseTailHold !== undefined
+      (win32Paste.held.length > 0 ||
+      win32Paste.active ||
+      win32Protocol.held.length > 0 ||
+      mouseTailHold !== undefined
         ? '\x1b'
         : ''),
     pasteBuffer,
     win32HighSurrogate: win32Ctx.high,
     win32AltHighSurrogate: win32Ctx.altHigh,
     win32Paste,
+    win32Protocol,
     mouseTailHold,
     _tokenizer: tokenizer,
   }

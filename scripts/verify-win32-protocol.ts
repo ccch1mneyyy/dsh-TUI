@@ -1,8 +1,8 @@
 /**
- * repro-sgr-orphan-leak — 复现 PowerShell(ConPTY)下 SGR 鼠标序列
- * 被 50ms ESC flush 拆开后、碎片尾部漏进输入框的路径。
+ * verify-win32-protocol — SGR/X10 鼠标序列与终端回复被 conhost 合成成
+ * 逐字符 win32-input-mode 记录后的重组回归（PowerShell/ConPTY 路径）。
  *
- * 用法:node --import tsx/esm scripts/repro-sgr-orphan-leak.ts
+ * 用法:node --import tsx/esm scripts/verify-win32-protocol.ts
  */
 import { INITIAL_STATE, parseMultipleKeypresses } from '../src/ink/parse-keypress.js'
 import type { ParsedInput } from '../src/ink/parse-keypress.js'
@@ -29,7 +29,19 @@ function drive(chunks: Array<string | null>): ParsedInput[] {
 function describe(k: ParsedInput): string {
   if (k.kind === 'mouse') return `mouse(${k.button},${k.action}@${k.col},${k.row})`
   if (k.kind === 'key') return `key(${k.name || JSON.stringify(k.sequence)})`
-  return `response(${k.type ?? '?'})`
+  return `response(${k.response.type})`
+}
+
+function win32Record(
+  virtualKey: number,
+  scanCode: number,
+  codePoint: number,
+): string {
+  return `\x1b[${virtualKey};${scanCode};${codePoint};1;0;1_`
+}
+
+function synthesizedWin32(text: string): string[] {
+  return [...text].map(ch => win32Record(0, 0, ch.codePointAt(0)!))
 }
 
 // ── 基线:完整序列单块到达 → 必须解析为鼠标事件 ──
@@ -90,6 +102,82 @@ function describe(k: ParsedInput): string {
   const out = drive(['[', '<', '0', ';', '1'])
   check('G char-by-char typing never held',
     out.length === 5 && out.every(k => k.kind === 'key'),
+    out.map(describe).join(','))
+}
+
+// ── 真实 ConPTY 路径:SGR 报告被合成成逐字符 win32-input-mode 记录 ──
+{
+  const records = synthesizedWin32('\x1b[<35;190;25m')
+  const out = drive([records.join('')])
+  check('H synthesized Win32 SGR report reassembled',
+    out.length === 1 && out[0]!.kind === 'mouse' && out[0].action === 'release',
+    out.map(describe).join(','))
+}
+{
+  const records = synthesizedWin32('\x1b[<0;32;5M')
+  const out = drive([records.slice(0, 4).join(''), records.slice(4).join('')])
+  check('I synthesized Win32 SGR survives chunk boundary',
+    out.length === 1 && out[0]!.kind === 'mouse' && out[0].action === 'press',
+    out.map(describe).join(','))
+}
+{
+  const records = synthesizedWin32('\x1b[?1;0c')
+  const out = drive([records.slice(0, 3).join(''), records.slice(3).join('')])
+  check('J synthesized Win32 DA1 response reassembled',
+    out.length === 1 && out[0]!.kind === 'response' && out[0].response.type === 'da1',
+    out.map(describe).join(','))
+}
+{
+  const records = synthesizedWin32('\x1b[<64;74;16M')
+  const out = drive([records.join('')])
+  check('K synthesized Win32 wheel keeps coordinates',
+    out.length === 1 && out[0]!.kind === 'key' && out[0].name === 'wheelup' &&
+      out[0].mouseCol === 73 && out[0].mouseRow === 15,
+    out.map(describe).join(','))
+}
+{
+  const records = synthesizedWin32('\x1b[<0;32;')
+  const out = drive([records.join(''), null])
+  check('L truncated synthesized Win32 mouse report is discarded',
+    out.length === 0,
+    out.map(describe).join(','))
+}
+{
+  const records = synthesizedWin32('\x1b[M ')
+  const out = drive([records.join(''), null])
+  check('M truncated synthesized Win32 X10 report is discarded',
+    out.length === 0,
+    out.map(describe).join(','))
+}
+{
+  const records = synthesizedWin32('\x1b')
+  const out = drive([records.join(''), null])
+  check('N lone synthesized Win32 Escape is released',
+    out.length === 1 && out[0]!.kind === 'key' && out[0].name === 'escape',
+    out.map(describe).join(','))
+}
+{
+  const records = synthesizedWin32('\x1b[?')
+  const out = drive([records.join(''), null])
+  check('O unknown synthesized Win32 CSI is released',
+    out.length === records.length && out.every(k => k.kind === 'key'),
+    out.map(describe).join(','))
+}
+{
+  const physicallyTyped = [
+    win32Record(219, 26, 91),
+    win32Record(226, 86, 60),
+    win32Record(48, 11, 48),
+    win32Record(186, 39, 59),
+    win32Record(51, 4, 51),
+    win32Record(50, 3, 50),
+    win32Record(186, 39, 59),
+    win32Record(53, 6, 53),
+    win32Record(77, 50, 77),
+  ]
+  const out = drive([physicallyTyped.join('')])
+  check('P physical Win32 typing stays as text',
+    out.length === physicallyTyped.length && out.every(k => k.kind === 'key'),
     out.map(describe).join(','))
 }
 
