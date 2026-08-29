@@ -183,7 +183,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
   密钥引用会保留、只删配置；若 profile 已删而密钥清理失败，会明确提示
   手动处理（provider 本身已删除生效）。
 
-**添加**分支支持两种来源：
+**添加**分支支持以下来源（第三种按挂载条件出现）：
 
 - **内置 provider**：从 `llm.listConfigurableProviders()` 列出的 catalog
   路由（openai、anthropic、deepseek 等）中选择，只需输入 API key；baseURL
@@ -191,6 +191,14 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 - **自定义 API 端点**：输入路由名、API key、baseURL 与协议
   （`openai-completions` / `openai-responses` / `anthropic-messages`），
   向导会用草稿凭据探测端点公布的模型供勾选（探测失败则手输模型 id）。
+- **订阅账号登录（OAuth）**：仅当捆绑的 dsh-auth 插件挂载时多出该选项——从
+  向导列出的订阅账号（ChatGPT / Claude / Grok 等）中选择一个，走浏览器授权 /
+  设备码流程用官方订阅登录，**无需 API key**；列表中每个账号都带遮蔽的登录态
+  标注（已登录显示令牌到期时间，过期会注明），已登录的账号可选**重新登录**
+  （换账号或刷新凭据）或**登出**（删除本地保存的 OAuth 凭据）。凭据存储与路由
+  注册由 dsh-auth 拥有，`/auth status|login|logout` 与此分支同源。未挂载
+  dsh-auth 时选项不出现，向导与之前完全一致；挂载了插件但没有可 OAuth 登录的
+  provider 时会给出提示。
 
 写入/删除产物（profile 启动时，dsh-base 提供 settings/credentials 服务）：
 

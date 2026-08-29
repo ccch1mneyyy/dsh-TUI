@@ -204,7 +204,8 @@ restart. The first step picks an action:
   key cleanup failed, the wizard says so and points you at the store
   (the provider itself is gone).
 
-The **add** branch offers two sources:
+The **add** branch offers the following sources (the third appears only while
+the bundled dsh-auth plugin is mounted):
 
 - **Built-in provider**: pick a catalog route (openai, anthropic, deepseek, …)
   from `llm.listConfigurableProviders()`; only the API key is required. The
@@ -214,6 +215,17 @@ The **add** branch offers two sources:
   protocol (`openai-completions` / `openai-responses` / `anthropic-messages`).
   The wizard probes the endpoint with the draft credential and offers the
   advertised models for selection (manual id entry as fallback).
+- **Subscription sign-in (OAuth)**: this option appears only while the bundled
+  dsh-auth plugin is mounted. Pick a subscription account (ChatGPT / Claude /
+  Grok, …) from the list and sign in through the browser / device-code flow —
+  **no API key**. Every account carries a masked status line (signed in, with
+  the token expiry, or expired); an already-signed-in account offers **Sign in
+  again** (switch accounts or refresh the credential) and **Sign out** (remove
+  the locally stored OAuth credential). Credential storage and route
+  registration belong to dsh-auth; `/auth status|login|logout` shares the same
+  source. Without the plugin the option is absent and the wizard behaves
+  exactly as before; with the plugin mounted but no OAuth-capable provider,
+  the wizard says so.
 
 What gets written/removed (on a profile start, where dsh-base provides the
 settings/credentials services):

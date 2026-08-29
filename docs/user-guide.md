@@ -252,7 +252,7 @@ dsh-tui
 
 | 命令 | 参数 | 作用 |
 |---|---|---|
-| `/provider` | 无 | 交互式管理模型提供方向导（添加 / 编辑 / 删除；编辑单项只原地修补该字段、其余配置原样保留；持久化 profile，API key 非环境变量来源时才写入密钥库） |
+| `/provider` | 无 | 交互式管理模型提供方向导（添加 / 编辑 / 删除；捆绑 dsh-auth 挂载时添加分支多出**订阅 OAuth 登录**——ChatGPT / Claude / Grok 免 API key 登录 / 登出；编辑单项只原地修补该字段、其余配置原样保留；持久化 profile，API key 非环境变量来源时才写入密钥库） |
 | `/login` | 无 | 凭证状态（来源、存储可写性、base URL） |
 | `/logout` | 无 | 登出说明（env 来源需删环境变量并重启） |
 | `/permissions` | 无 | 权限策略与审批通道说明 |
@@ -379,7 +379,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 - `/workspace`：`resume` / `rename <名>` / `open <路径|file:// URI>`（打开并新建会话）；
   `dsh-tui <路径>` 启动器同样接受工作区目标。相对路径由当前工作区插件解析。
 - `/doctor` 自检：Node/平台、API key、模型路由、cwd、上下文窗口、会话存储、插件宿主。
-- `/provider` 交互向导管理模型提供方（添加 / 编辑 / 删除；编辑菜单可选 API Key、模型列表或删除该 provider，自定义端点额外提供 Base URL 与 wire protocol——这两项仅自定义端点可编辑；任一编辑项只原地修补所选字段，profile 其余配置原样保留；仅用户配置层写入的 provider 可编辑/删除；非环境变量来源的密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`；环境变量提供的密钥既不写入也不删除，与其他 provider 共用的密钥在删除时也保留）。
+- `/provider` 交互向导管理模型提供方（添加 / 编辑 / 删除；捆绑 dsh-auth 挂载时添加分支提供**订阅账号登录（OAuth）**——选择 ChatGPT / Claude / Grok 等订阅账号走浏览器 / 设备码流程登录，免 API key，已登录可重新登录或登出，与 `/auth status|login|logout` 同源，未挂载时无此选项；编辑菜单可选 API Key、模型列表或删除该 provider，自定义端点额外提供 Base URL 与 wire protocol——这两项仅自定义端点可编辑；任一编辑项只原地修补所选字段，profile 其余配置原样保留；仅用户配置层写入的 provider 可编辑/删除；非环境变量来源的密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`；环境变量提供的密钥既不写入也不删除，与其他 provider 共用的密钥在删除时也保留）。
 - `/init` 创建 AGENTS.md；`/agents` 子代理列表；`/login` `/logout` 凭证管理；
   `/permissions` `/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
 
