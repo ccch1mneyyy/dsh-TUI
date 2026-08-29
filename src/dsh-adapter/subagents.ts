@@ -241,6 +241,15 @@ export class SubagentActivityStore {
     this.notify()
   }
 
+  /** Drop all tracked subagents and session links (session swap: the old
+   * session's children were disposed with their parent — nothing may keep
+   * routing events of a session the channel no longer projects). */
+  reset(): void {
+    this.states.clear()
+    this.sessionToAgent.clear()
+    this.notify()
+  }
+
   snapshot(): SubagentState[] { return Array.from(this.states.values()).map(state => ({ ...state, output: [...state.output], outputEvents: [...state.outputEvents], toolCalls: state.toolCalls.map(tool => ({ ...tool })), tokens: state.tokens ? { ...state.tokens } : undefined })) }
   get(agentId: string): SubagentState | undefined { return this.snapshot().find(state => state.agentId === agentId) }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }

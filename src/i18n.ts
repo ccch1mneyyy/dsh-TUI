@@ -186,6 +186,7 @@ const dict = {
   'resume-unavailable': { zh: '恢复不可用——agents 服务未加载', en: 'Resume unavailable — agents service not loaded' },
   'resume-failed': { zh: '恢复失败 · {{err}}', en: 'Resume failed · {{err}}' },
   'resume-attach-failed': { zh: '已恢复会话，但工作区挂载失败 · {{err}}', en: 'Session resumed, but workspace attachment failed · {{err}}' },
+  'resume-session-changed': { zh: '会话已切换，恢复已放弃', en: 'The session changed; the resume was dropped' },
   'new-session-while-working': { zh: '回合运行中，无法新建会话', en: 'Cannot start a new session while a turn is running' },
   'new-session-unavailable': { zh: '新建会话不可用——agents 服务未加载', en: 'New session unavailable — agents service not loaded' },
   'new-session-failed': { zh: '新建会话失败 · {{err}}', en: 'New session failed · {{err}}' },

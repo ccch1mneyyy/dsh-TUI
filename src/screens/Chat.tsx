@@ -1217,7 +1217,8 @@ export function Chat({
       case 'new': {
         // One-shot `/new` (issue #25): the old session stays persisted and
         // is recoverable via /resume, so discarding the live view is
-        // non-destructive — no CC-style "press /new again" confirmation.        setHelpOpen(false)
+        // non-destructive — no CC-style "press /new again" confirmation.
+        setHelpOpen(false)
         void channel.newSession().then((ok) => {
           if (!ok) return
           // A new session is a fresh terminal page, not merely an emptied
@@ -2776,7 +2777,11 @@ export function Chat({
     }
     if (actionMatches('dashboard', input, key)) {
       // The subagent dashboard key (default Ctrl+A) opens the dashboard.
+      // Consume the key: without the stop the prompt editor's readline
+      // binding ALSO fires (Ctrl+A moves the caret to line start), so one
+      // press both opens the overlay and jumps the cursor.
       setSubagentDashboardOpen(true)
+      event.stopImmediatePropagation()
       return
     }
     if (actionMatches('contextPanel', input, key) && loadedContextVisible) {
@@ -2892,13 +2897,20 @@ export function Chat({
       // CC's app:redraw (default Ctrl+L) — clear the physical terminal and
       // repaint.
       instances.get(process.stdout)?.forceRedraw()
+      // Consume: same readline-shadowing rule as dashboard/showAll below.
+      event.stopImmediatePropagation()
     } else if (actionMatches('showAll', input, key)) {
       setShowAllMessages(previous => !previous)
+      // Ctrl+E is also the editor's line-end binding — stop the press from
+      // additionally moving the caret (one press, one meaning).
+      event.stopImmediatePropagation()
     } else if (actionMatches('todoFold', input, key)) {
       // Fold/unfold the GoalTodoPanel todo section (default Ctrl+Q) — works
       // mid-turn too: the collapsed line keeps the done/total count and the
       // live task preview, so long todo lists stop crowding the prompt.
       setTodoCollapsed(previous => !previous)
+      // Consume: same readline-shadowing rule as dashboard/showAll above.
+      event.stopImmediatePropagation()
     } else if (plainReturn && !isSticky) {
       // Enter while scrolled up returns to the bottom (CC's pill: the
       // affordance now exists whenever the view is off the bottom, not

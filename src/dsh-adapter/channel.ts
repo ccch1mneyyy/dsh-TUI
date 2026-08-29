@@ -1936,6 +1936,25 @@ export function createChannel(
     state.subagents = subagentStore.snapshot()
     syncSubagentRows(state.subagents)
   }
+  /** Drop the subagent row map (transcript wipe): the next event for a still
+   *  live subagent re-creates its card as a fresh row instead of feeding a
+   *  row object no transcript holds (update-only orphan). */
+  const dropSubagentRows = (): void => {
+    subagentStreamDirty = false
+    subagentRowsByAgentId.clear()
+  }
+  /** Full subagent reset for a session swap: the row map, the queued task
+   *  descriptions and the store itself are all scoped to the OLD agent's
+   *  session. Leaked into the adopted one, they would keep dead subagents in
+   *  the dashboard snapshot until new events overwrite it, grow the row map
+   *  without bound across swaps, and hand a stale queued description to the
+   *  new session's first card. */
+  const resetSubagentProjection = (): void => {
+    dropSubagentRows()
+    pendingTaskDescriptions.length = 0
+    subagentStore.reset()
+    state.subagents = []
+  }
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
   const foldCursor: { rows: unknown; index: number } = { rows: null, index: 0 }
@@ -2196,6 +2215,7 @@ export function createChannel(
     toolCards.clear()
     nextRowId = 0
     state.rows.length = 0
+    resetSubagentProjection()
     // Goal/todo/title are session-scoped; the replay re-derives them for
     // the session being entered (or leaves them empty).
     state.todos = []
@@ -2248,6 +2268,11 @@ export function createChannel(
     touchSession(childId)
     state.emit()
     void oldHandle?.dispose().catch(() => {})
+    // The staged-image map is session-scoped (the same contract the
+    // resumeTo/newSession tails enforce): tokens typed against the rewound
+    // conversation must not ride into the fork's next send, and the epoch
+    // bump fences saves still in flight for the old session.
+    clearStagedImages()
     return sourceSessionId
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
@@ -4062,6 +4087,11 @@ export function createChannel(
       // (and commit its checkpoint) once we leave it for the target — cancel
       // and await it before any target read.
       await settleManualCompaction()
+      // Identity pin for the rival-swap guard below: everything between here
+      // and the adoption can await (veto, preset, route, agents.resume), and
+      // an interrupt-queued /new or a second /resume may commit a different
+      // swap in that window.
+      const entrySession = agent.session
       let handle: AgentHandle
       // Compat boundary: register vouched-for legacy event types (e.g.
       // activity/status from pre-#143 logs) in every reachable dsh-session
@@ -4117,6 +4147,17 @@ export function createChannel(
           { color: 'warning', timeoutMs: 8000 },
         )
       }
+      // Rival-swap guard (rewindToNode's entrySession check, applied to the
+      // resume path): the awaits above can straddle another session swap
+      // committing first, and adopting now would stomp the newer session's
+      // live transcript with this target's replay. Free the just-created
+      // handle and bail — the live session stays exactly as the rival left
+      // it, and the persisted target simply stays in /resume.
+      if (agent.session !== entrySession) {
+        void handle.dispose().catch(() => {})
+        state.notify(t('resume-session-changed'), { color: 'error' })
+        return { ok: false, reason: 'failed', error: 'live session changed during resume' }
+      }
       // Replay the persisted history into a fresh transcript (same reset as
       // rewindTo, plus the context window which the replay re-derives).
       streaming = undefined
@@ -4128,6 +4169,7 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4319,6 +4361,7 @@ export function createChannel(
       lastTextDelta.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4513,6 +4556,7 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4575,6 +4619,9 @@ export function createChannel(
       touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
+      // Staged image tokens were typed against the pre-switch conversation;
+      // resumeTo/newSession already drop theirs on the swap — same contract.
+      clearStagedImages()
       // Persist the choice so the next boot and `/new` start on it (same
       // contract as /preset and /effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
@@ -4594,6 +4641,11 @@ export function createChannel(
       streaming = undefined
       reasoning = undefined
       toolCards.clear()
+      // In-flight subagents keep streaming after the wipe; clearing the row
+      // map lets their next event re-create the card as a fresh row instead
+      // of feeding a row object no transcript holds (the store keeps live
+      // tracking for the dashboard — same session, still running).
+      dropSubagentRows()
       state.activeToolCount = 0
       state.responseChars = 0
       state.rows.push({
