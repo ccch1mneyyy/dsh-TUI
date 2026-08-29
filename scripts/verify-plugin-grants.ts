@@ -37,7 +37,7 @@ const { createContractIndex, validateHost } = await import('../src/plugin-spec/v
 const { check } = await import('../src/plugin-spec/schema-check.js')
 const { negotiate } = await import('../src/plugin-spec/negotiate.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const specDir = join(root, 'dsh-ecosystem-spec')

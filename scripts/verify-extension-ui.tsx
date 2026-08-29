@@ -61,7 +61,7 @@ const [
   import('@deepseek-ai/dsh-session'),
   import('./lib/term-test.mjs'),
 ])
-const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 

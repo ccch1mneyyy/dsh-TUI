@@ -61,6 +61,14 @@
       "types": "./lib/types/plugin-host.d.ts",
       "import": "./lib/types/plugin-host.js"
     },
+    "./api": {
+      "types": "./lib/types/api.d.ts",
+      "import": "./lib/types/api.js"
+    },
+    "./test-utils": {
+      "types": "./lib/types/test-utils.d.ts",
+      "import": "./lib/types/test-utils.js"
+    },
     "./jsx-runtime": {
       "types": "./lib/types/jsx-runtime.d.ts",
       "import": "./lib/types/jsx-runtime.js"

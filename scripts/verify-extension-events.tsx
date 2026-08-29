@@ -104,7 +104,7 @@ const [
   import('../src/dsh-adapter/channel.js'),
   import('./lib/term-test.mjs'),
 ])
-const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 
 class FakeStdout extends Writable {
