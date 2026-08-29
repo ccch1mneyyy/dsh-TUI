@@ -201,6 +201,10 @@ const GROUPS = {
 //    与粘性报错、真 Chat 驱动的对话框/状态行/快捷键端到端。
     ["verify-extension-events", ['node', '--import', 'tsx/esm', 'scripts/verify-extension-events.tsx']],
     ["verify-extension-ui", ['node', '--import', 'tsx/esm', 'scripts/verify-extension-ui.tsx']],
+// 非 TTY 宿主门禁回归（Web/Tauri 共存）：profile 装有 dsh-tui 的非终端
+// 宿主（stdout 为 pipe/null）必须静默跳过插件、不 throw、不影响宿主启动；
+// 显式 dsh-tui launcher/standalone 启动无 TTY 仍保留原报错。
+    ["verify-tui-host-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-tui-host-mode.ts']],
 // 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
 // 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
     ["verify-session-titles", ['node', 'scripts/verify-session-titles.mjs']],
