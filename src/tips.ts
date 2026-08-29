@@ -559,8 +559,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'disp-theme-custom',
     group: 'display',
-    zh: '自定义主题：~/.dsh-tui/themes/<名>.json 即写即热切换',
-    en: 'Custom themes: ~/.dsh-tui/themes/<name>.json, hot-swappable',
+    zh: '主题：~/.dsh-tui/themes/<名>.json 或 npm 插件注册，即时热切换',
+    en: 'Themes: ~/.dsh-tui/themes/<name>.json or npm plugin registration, hot-swappable',
   },
   {
     id: 'disp-theme-status',

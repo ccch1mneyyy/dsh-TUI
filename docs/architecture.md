@@ -28,6 +28,8 @@ Cordis profile
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
 | `src/ui.ts` | 主题化 `Box`/`Text`、render、选择、滚动等公共 facade |
+| `src/theme.ts`、`src/themeCatalog.ts` | 内置、静态 JSON 与运行时插件主题的解析和统一列表 |
+| `src/dsh-adapter/themes.ts` | `ctx.tuiThemes` 主题插件接缝；注册生命周期与 host 私有 facade |
 | `src/ink/` | 移植的 Ink renderer、终端协议、事件、选择与 Yoga 桥接；属于敏感底层设施 |
 | `src/native-ts/yoga-layout/` | 纯 JS/TS 布局实现 |
 | `cordis.patch.yml` | profile bundle 层；决定服务行、覆盖关系与挂载顺序 |
@@ -36,8 +38,10 @@ Cordis profile
 service、registry 或 channel seam 接入。
 
 工作区扩展遵循单向依赖：TUI 只发布结构化 provider 接口，可选插件注册 URI、展示
-信息和命令执行器。协议解析与外部连接全部属于插件；删除插件后，本地工作区和会话
-路径不应出现缺失配置、占位文案或降级分支。
+信息和命令执行器。主题扩展同样只通过 `ctx.tuiThemes` 注册完整语义色板；宿主负责
+校验、排序、渲染与生命周期，插件不能直接改写主题目录或宿主 palette。协议解析与
+外部连接全部属于插件；删除插件后，本地工作区和会话路径不应出现缺失配置、占位文案
+或降级分支。
 
 ## Session 是真源
 
@@ -83,8 +87,8 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 | `~/.dsh-tui/sessions/` | 直接运行 `cordis.yml` 时的 JSONL 会话事件 |
 | `~/.dsh-tui/resume.txt` | Windows 启动器和退出提示使用的最近 session ID |
 | `~/.dsh-tui/last-used.json` | `/resume` 最近使用排序元数据 |
-| `~/.dsh-tui/theme.json` | 当前主题选择 |
-| `~/.dsh-tui/themes/` | 用户自定义主题 JSON |
+| `~/.dsh-tui/theme.json` | 当前主题选择（内置、静态或插件主题 ID） |
+| `~/.dsh-tui/themes/` | 用户自定义主题 JSON；运行时插件主题不写入此目录 |
 | `~/.dsh-tui/working-activity.json` | 工作状态动画选择 |
 | `~/.dsh-tui/agent-preset.json` | 新会话默认 Agent preset |
 

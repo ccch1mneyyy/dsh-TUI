@@ -11,6 +11,7 @@
  * - `ctx.tuiShortcuts` — keyboard shortcut registry
  * - `ctx.tuiRenderers` — custom session-entry text renderers
  * - `ctx.tuiToast`     — transient fire-and-forget notifications
+ * - `ctx.tuiThemes`    — runtime theme declarations (host-readable)
  *
  * The decision-point events (`tui/input`, `tui/rewind-prompt`, …) need no
  * separate service — they are fired by the channel and answered through the
@@ -25,7 +26,8 @@
  *
  * Every consumer (`channel.ts`, `Chat.tsx`) reads these with `ctx.get`
  * softly: without this row the TUI degrades to no dialogs/status/shortcuts/
- * renderers, and plugin.ts logs the skew warning once for profile launches.
+ * renderers/themes, and plugin.ts logs the skew warning once for profile
+ * launches.
  */
 
 import { Context } from '@deepseek-ai/cordis'
@@ -34,6 +36,7 @@ import TuiStatusRuntime from './status.js'
 import TuiShortcutRuntime from './shortcuts.js'
 import TuiRendererRuntime from './renderers.js'
 import TuiToastRuntime from './toast.js'
+import TuiThemeRuntime from './themes.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { readGrantStore } from './grants.js'
 
@@ -46,4 +49,5 @@ export function apply(ctx: Context): void {
   ctx.plugin(TuiShortcutRuntime)
   ctx.plugin(TuiRendererRuntime)
   ctx.plugin(TuiToastRuntime)
+  ctx.plugin(TuiThemeRuntime)
 }

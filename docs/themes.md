@@ -34,8 +34,8 @@ DSH_TUI_THEME
 
 ## 切换主题
 
-- `/theme`：打开主题选择器。`auto` 与内置主题在前，自定义主题在后。
-- `/theme <name>`：直接切换。
+- `/theme`：打开主题选择器。`auto` 与内置主题在前，静态 JSON 主题和插件主题在后。
+- `/theme <name>`：直接切换静态或运行时插件主题。
 - `/theme status`：显示当前主题与持久化位置。
 
 选择器确认后立即热切换，并把选择写入 `~/.dsh-tui/theme.json`。如果设置了
@@ -78,6 +78,33 @@ DSH_TUI_THEME
 
 如果文件声明了 `name`，文件名仍可作为加载别名。完整语义键见
 [`src/theme.ts`](../src/theme.ts) 中的 `Theme` 类型。
+
+## npm 插件主题
+
+npm 插件可以通过 `dsh-tui-extensions` 行注册运行时主题，不需要写入
+`~/.dsh-tui/themes/`：
+
+```ts
+import type { Context } from '@deepseek-ai/cordis'
+import type { TuiThemeDescriptor } from '@deepseek-harness-tui/dsh-tui/extensions'
+
+export function apply(ctx: Context): void {
+  const themes = ctx.get('tuiThemes', false)
+  themes?.register({
+    name: 'my-plugin:night',
+    displayName: 'Night',
+    base: 'dark',
+    colors: { claude: '#88AAFF', selectionBg: '#334466' },
+  }, ctx)
+}
+```
+
+使用 `plugin-id:theme-id` 形式的小写安全 ID。`base` 仍为 `light`、`dark` 或
+`dark-ansi`，`colors` 是 `Theme` 语义键的部分覆盖；`auto`、内置主题和
+`status` 不能作为插件主题名。注册会随插件 activation 自动清理，返回的 disposer
+可以提前注销。插件主题出现在 `/theme` 选择器、补全和直接切换中，名字沿用
+`~/.dsh-tui/theme.json` 持久化。内置主题优先于静态 JSON，静态 JSON 优先于同名
+插件主题；旧 profile 没有 `tuiThemes` 时插件静默降级，静态主题不受影响。
 
 常用可覆盖键分组：
 

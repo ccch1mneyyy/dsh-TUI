@@ -28,6 +28,7 @@ import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore } from '../dsh-adapter/status.js'
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
+import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
 import { ApprovalStore } from '../dsh-adapter/approvals.js'
@@ -215,6 +216,7 @@ export function Chat({
   extensionDialogs,
   extensionStatus,
   extensionShortcuts,
+  themeHost,
   onExit,
   onUpdate,
   onRestart,
@@ -239,6 +241,8 @@ export function Chat({
   extensionStatus?: TuiStatusStore
   /** Host-only keyboard shortcut dispatch path. */
   extensionShortcuts?: TuiShortcutHost
+  /** Optional runtime theme host; static JSON themes work without it. */
+  themeHost?: TuiThemeHost
   onExit: () => void
   /** Update the installed package and restart the current TUI process. */
   onUpdate?: () => void
@@ -1125,7 +1129,7 @@ export function Chat({
       }
       case 'theme': {
         // Bare `/theme` opens the interactive color picker (`auto` + built-in
-        // palettes + user themes from ~/.dsh-tui/themes); `/theme <name>`
+        // palettes + static/runtime themes); `/theme <name>`
         // switches directly; `/theme status` shows the current choice.
         // `auto` follows the terminal background (OSC 11). Selection
         // persists to ~/.dsh-tui/theme.json and hot swaps via the
@@ -1148,6 +1152,8 @@ export function Chat({
         }
         if (parts.length > 0) {
           setHelpOpen(false)
+          // setTheme rejects unknown names via isThemeAvailable, so pass the
+          // raw argument instead of resolving it against the catalog first.
           const ok = setTheme(parts[0])
           channel.notify(
             ok ? t('theme-switched-saved', { name: parts[0] }) : t('theme-unknown', { name: parts[0] }),
@@ -1160,7 +1166,7 @@ export function Chat({
           type: 'open',
           overlay: {
             kind: 'theme',
-            index: Math.max(0, getThemeOptions().findIndex(option => option.value === themeName)),
+            index: Math.max(0, getThemeOptions(themeHost).findIndex(option => option.value === themeName)),
           },
         })
         return true
@@ -2631,7 +2637,7 @@ export function Chat({
       return
     }
     if (overlay.kind === 'theme') {
-      const options = getThemeOptions()
+      const options = getThemeOptions(themeHost)
       if (key.upArrow || key.downArrow) {
         dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: options.length })
       } else if (plainReturn) {
@@ -3645,9 +3651,10 @@ export function Chat({
               <ThemePicker
                 focusIndex={overlay.index}
                 currentTheme={themeName}
+                themeHost={themeHost}
                 onPick={(index) => {
                   dispatchOverlay({ type: 'close' })
-                  const name = getThemeOptions()[index]?.value
+                  const name = getThemeOptions(themeHost)[index]?.value
                   if (name !== undefined) {
                     const ok = setTheme(name)
                     channel.notify(

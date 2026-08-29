@@ -176,7 +176,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | Goal/todo 投影与渲染 | `node scripts/verify-channel-goal-todo.mjs` + `node scripts/verify-goal-todo.mjs` |
 | Compaction 与折叠 transcript 行 | `node scripts/verify-compact.mjs` |
 | 压缩 × 会话切换生命周期（取消先于 fork 快照、persistence 分类提示） | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
-| 主题加载与持久化 | `node --import tsx/esm scripts/verify-themes.mjs` |
+| 主题加载、持久化与运行时插件接缝 | `node --import tsx/esm scripts/verify-themes.mjs`、`node --import tsx/esm scripts/verify-runtime-themes.ts` |
 | 滚动/粘底行为 | `node scripts/verify-scroll.mjs`、`node scripts/verify-resticky.mjs` 及对应 `repro-*` 环境 |
 | 全屏复制即选区 | `node scripts/verify-copy-on-select.mjs` |
 | 组件级鼠标拖拽协议（目标捕获、事件冒泡、点击/选区兼容与中断收尾） | `node --import tsx/esm scripts/verify-drag-protocol.tsx` |
@@ -289,10 +289,11 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
   检测/默认值。改变该顺序要记录。
 - 用户数据持久化在既有 `~/.dsh-tui` 位置下。校验并安全解析外部 JSON；损坏的
   可选状态应警告或回退，而不是让 TUI 崩溃。
-- 把主题名与文件内容当不可信输入。保留路径包含检查与损坏主题文件的
-  全有或全无校验。
+- 把主题名、插件主题 descriptor 与文件内容当不可信输入。保留路径包含检查、插件
+  ID 约束与损坏主题文件的全有或全无校验；插件注册必须随 activation 清理。
 - 主题新增必须完整覆盖 `Theme` 契约与每个内置色板。组件用语义主题键，不要用
-  孤立的字面颜色。
+  孤立的字面颜色。运行时主题通过 `tuiThemes` 接缝接入，不要让插件直接改写
+  `~/.dsh-tui/themes/` 或绕过现有扩展服务。
 
 ## 跨文件修改清单（Cross-File Change Checklist）
 
@@ -300,7 +301,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | --- | --- |
 | 插件配置或环境行为 | `src/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`、`README.md`、`README_EN.md` |
 | Slash 命令或快捷键 | `src/commands.ts`、`src/screens/Chat.tsx`、帮助/输入组件、双 README、相关技能映射/测试 |
-| 主题契约或持久化主题行为 | `src/theme.ts`、所有色板、主题 provider/picker、自定义主题解析器、主题验证、双 README |
+| 主题契约、插件接缝或持久化主题行为 | `src/theme.ts`、`src/themeCatalog.ts`、`src/dsh-adapter/themes.ts`、所有色板、主题 provider/picker、自定义主题解析器、主题验证、双 README、插件文档 |
 | 会话/channel 行为 | `src/dsh-adapter/channel.ts`、受影响的 UI 投影、编译产物、聚焦 channel/回放回归 |
 | 渲染器/布局行为 | `src/ink/` 或 Yoga 源、编译产物、CI 回归、聚焦滚动/resize/PTY 探针 |
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |

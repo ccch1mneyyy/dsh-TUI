@@ -276,7 +276,7 @@ so keep using `Ctrl`.
 | --- | --- |
 | [Getting started](docs/getting-started.en.md) | Prerequisites, installation, startup, profile lifecycle, source development |
 | [Configuration](docs/configuration.en.md) | Cordis overrides, fields, agent presets, MCP, environment variables |
-| [Themes](docs/themes.en.md) | Built-in themes, background detection, custom JSON themes, validation |
+| [Themes](docs/themes.en.md) | Built-in themes, background detection, static JSON and npm plugin themes, validation |
 | [Interaction and commands](docs/interaction.en.md) | Keyboard, mouse, questionnaires, slash commands, session workflows |
 | [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
 | [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers an experience almost identical to the official Claude Code extension (on the Marketplace) |
@@ -293,9 +293,10 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
   blank sessions take effect immediately. The default preset persists in
   `~/.dsh-tui/agent-preset.json`; `/model` selections persist in `~/.dsh-tui/model.json`.
   See [Configuration](docs/configuration.en.md#agent-preset).
-- **Custom themes**: the `/theme` picker (`auto` follows the system/terminal background,
-  built-in `light` / `dark` / `dark-ansi`) also accepts custom themes from
-  `~/.dsh-tui/themes/<name>.json` — selecting one hot-swaps and persists it; precedence is
+- **Themes**: the `/theme` picker (`auto` follows the system/terminal background,
+  built-in `light` / `dark` / `dark-ansi`) accepts static themes from
+  `~/.dsh-tui/themes/<name>.json` and runtime themes registered by npm plugins through
+  `ctx.tuiThemes` — selecting one hot-swaps and persists it; precedence is
   `DSH_TUI_THEME` env var > persisted selection > OSC 11 terminal-background auto-detection.
   See [Themes](docs/themes.en.md).
 - **MCP**: servers are mounted via `@deepseek-ai/dsh-mcp-client`, with tools registered as

@@ -43,14 +43,17 @@
   name: '@deepseek-harness-tui/dsh-tui/plugin-host'
 
 # Plugin-facing UI seams: managed dialogs, status-line contributions,
-# keyboard shortcuts, custom session-entry renderers (decision events are
-# fired by the channel and need no row).
+# keyboard shortcuts, custom session-entry renderers, and runtime themes
+# (decision events are fired by the channel and need no row).
 - id: dsh-tui-extensions
   name: '@deepseek-harness-tui/dsh-tui/extensions'
 
 - id: dsh-tui
   name: '@deepseek-harness-tui/dsh-tui'
-  inject: [agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers]
+  # Entry-level only: orders/rebinds optional extension services on reload;
+  # dsh-tui does not hard-inject them at code level, so stale profiles degrade
+  # to static themes and inert extension surfaces instead of deadlocking boot.
+  inject: [agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers, tuiThemes]
   config:
     provider: deepseek-official
     # Alt-screen fullscreen (CC 同款): 应用内鼠标选区（选择即复制, OSC 52 +

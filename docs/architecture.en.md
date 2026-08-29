@@ -28,6 +28,8 @@ Cordis profile
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |
+| `src/theme.ts`, `src/themeCatalog.ts` | Built-in, static JSON, and runtime plugin theme resolution and catalog ordering |
+| `src/dsh-adapter/themes.ts` | The `ctx.tuiThemes` theme seam, registration lifecycle, and private host facade |
 | `src/ink/` | Ported Ink renderer, terminal protocol, events, selection, and Yoga bridge; sensitive infrastructure |
 | `src/native-ts/yoga-layout/` | Pure JS/TS layout implementation |
 | `cordis.patch.yml` | Profile bundle layer, service rows, overrides, and mount ordering |
@@ -37,7 +39,10 @@ capability through an existing service, registry, or channel seam.
 
 Workspace extensions follow a one-way dependency: the TUI publishes only a
 structural provider interface, while optional plugins register URIs, display
-metadata, and command executors. Protocol parsing and external connections
+metadata, and command executors. Theme extensions follow the same rule: plugins
+register complete semantic palettes through `ctx.tuiThemes`; the host owns
+validation, ordering, rendering, and lifecycle, and plugins never rewrite the
+theme directory or host palette. Protocol parsing and external connections
 belong entirely to the plugin. Removing a plugin must leave local workspaces
 and session flows free of missing configuration, placeholders, or fallback
 branches.
@@ -96,8 +101,8 @@ ConPTY.
 | `~/.dsh-tui/sessions/` | JSONL session events for direct `cordis.yml` runs |
 | `~/.dsh-tui/resume.txt` | Recent session ID used by the Windows launcher and exit hint |
 | `~/.dsh-tui/last-used.json` | `/resume` recency metadata |
-| `~/.dsh-tui/theme.json` | Current theme selection |
-| `~/.dsh-tui/themes/` | User theme JSON files |
+| `~/.dsh-tui/theme.json` | Current built-in, static, or plugin theme ID |
+| `~/.dsh-tui/themes/` | User theme JSON files; runtime plugin themes do not write here |
 | `~/.dsh-tui/working-activity.json` | Activity animation selection |
 | `~/.dsh-tui/agent-preset.json` | Default Agent preset for new sessions |
 

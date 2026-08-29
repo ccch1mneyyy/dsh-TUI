@@ -113,10 +113,11 @@ check('runtime: empty text is refused', show('   ') === false && warnCount('reje
 check('runtime: unknown color is refused', show('x', { color: 'bogus' as unknown as 'error' }) === false
   && warnCount('unknown color') >= 1)
 
-// Sanitization: control chars become spaces (never smuggled to the screen),
-// whitespace folds, width caps at 200 cells WITH an ellipsis.
+// Sanitization: complete ANSI sequences are stripped whole (cleanRenderText
+// upgrade), remaining control chars become spaces (never smuggled to the
+// screen), whitespace folds, width caps at 200 cells WITH an ellipsis.
 check('runtime: control characters are flattened to spaces',
-  show('a\x07b\x1b[2kc') === true && received.at(-1)?.text === 'a b [2kc')
+  show('a\x07b\x1b[2kc') === true && received.at(-1)?.text === 'a bc')
 const wide = '鲸'.repeat(150)
 check('runtime: text is capped at 200 cells with an ellipsis',
   show(wide) === true

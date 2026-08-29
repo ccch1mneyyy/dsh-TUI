@@ -226,7 +226,7 @@ change, also run the closest focused script:
 | Goal/todo projection and rendering | `node scripts/verify-channel-goal-todo.mjs` and `node scripts/verify-goal-todo.mjs` |
 | Compaction and folded transcript rows | `node scripts/verify-compact.mjs` |
 | Compaction × session-switch lifecycle (cancel before the fork snapshot, persistence-classified toast) | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
-| Theme loading and persistence | `node --import tsx/esm scripts/verify-themes.mjs` |
+| Theme loading, persistence, and runtime plugin seam | `node --import tsx/esm scripts/verify-themes.mjs`, `node --import tsx/esm scripts/verify-runtime-themes.ts` |
 | Scrolling/sticky-bottom behavior | `node scripts/verify-scroll.mjs`, `node scripts/verify-resticky.mjs`, and the matching `repro-*` harness |
 | Fullscreen copy-on-select | `node scripts/verify-copy-on-select.mjs` |
 | Component-level mouse drag protocol (target capture, bubbling, click/selection compatibility, interrupted-session cleanup) | `node --import tsx/esm scripts/verify-drag-protocol.tsx` |
@@ -371,11 +371,13 @@ the required credentials.
 - Persist user data beneath the existing `~/.dsh-tui` locations. Validate and
   safely parse external JSON; malformed optional state should warn or fall
   back rather than crash the TUI.
-- Treat theme names and file contents as untrusted input. Preserve path
-  containment checks and all-or-nothing validation of malformed theme files.
+- Treat theme names, plugin descriptors, and file contents as untrusted input.
+  Preserve path containment checks, plugin ID constraints, activation cleanup,
+  and all-or-nothing validation of malformed theme files.
 - Keep theme additions complete across the `Theme` contract and every built-in
-  palette. Use semantic theme keys in components instead of isolated literal
-  colors.
+  palette. Runtime themes must use the `tuiThemes` seam; plugins must not rewrite
+  `~/.dsh-tui/themes/` or bypass the managed extension service. Use semantic
+  theme keys in components instead of isolated literal colors.
 
 ## Cross-File Change Checklist
 
@@ -383,7 +385,7 @@ the required credentials.
 | --- | --- |
 | Plugin config or environment behavior | `src/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml`, `README.md`, `README_EN.md` |
 | Slash commands or shortcuts | `src/commands.ts`, `src/screens/Chat.tsx`, help/input components, both READMEs, relevant skill mapping/tests |
-| Theme contract or persisted theme behavior | `src/theme.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs |
+| Theme contract, plugin seam, or persisted theme behavior | `src/theme.ts`, `src/themeCatalog.ts`, `src/dsh-adapter/themes.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs, plugin docs |
 | Session/channel behavior | `src/dsh-adapter/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
