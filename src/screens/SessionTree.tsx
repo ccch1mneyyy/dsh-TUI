@@ -561,6 +561,10 @@ export function SessionTree({
           isFocused={seat === 'tree'}
           isTerminalFocused={isTerminalFocused}
           placeholder={truncateWidth(t('tree-search'), inputBudget)}
+          // 定宽是正确性前提：SearchBox 的单行窗口化预算取自实测自身宽度，
+          // 自适应宽度（默认 row 包裹、无 width）会让预算跟随内容收缩，
+          // 收敛到只显示最新一个字符。
+          width="100%"
         />
       </Box>
 
