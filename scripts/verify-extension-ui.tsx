@@ -342,7 +342,7 @@ const plugin = pluginCtx
   }
   plugin.tuiStatus.set('demo', '构建\x1b[31m中')
   check('tuiStatus: control chars stripped',
-    statusStore.getSnapshot()[0]?.text === '构建 [31m中', JSON.stringify(statusStore.getSnapshot()[0]?.text))
+    statusStore.getSnapshot()[0]?.text === '构建中', JSON.stringify(statusStore.getSnapshot()[0]?.text))
   // Scalar-only coercion: a non-scalar text is refused with a warn — never
   // rendered as "[object Object]", and NOT treated as a clear either.
   plugin.tuiStatus.set('scalar', { nope: true } as unknown as string)

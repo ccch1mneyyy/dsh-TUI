@@ -373,7 +373,7 @@ await sleep(800)
     event.text === '消毒检查' ? { cancel: true, reason: '拦截\x1b[31m\x07原因' } : undefined)
   channel.submit('消毒检查')
   check('tui/input cancel: reason sanitized before toasting',
-    await settled(() => notified('拦截 [31m 原因')
+    await settled(() => notified('拦截 原因')
       && !(channel as unknown as { notifications: readonly { text: string }[] }).notifications
         .some(item => item.text.includes('\x1b'))))
   dispose()
