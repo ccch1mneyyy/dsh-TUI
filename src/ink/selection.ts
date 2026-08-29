@@ -787,6 +787,11 @@ export function shiftSelectionForFollow(
  * focus stays at the mouse unless the chrome covered it too, and
  * shiftSelection is the only shift that pops debt on re-widening — the
  * follow path never re-widens, a resize does (pill unmount).
+ *
+ * Degenerate bounds are handled explicitly: a collapsed new viewport
+ * (innerHeight 0 — chrome taller than the box) clears the selection, an
+ * invalid old range is a no-op, and neither ever reaches clamp/shiftSelection
+ * with min > max.
  * @param s - the selection state to mutate.
  * @param screen - the PREVIOUS frame's screen buffer providing the band
  *   text (and the width for clamp-edge columns).
@@ -804,6 +809,19 @@ export function shiftSelectionForViewportResize(
   newBottom: number,
 ): void {
   if (!s.anchor) return
+  // Degenerate ranges. A ScrollBox can fully collapse — chrome taller than
+  // the box drives innerHeight to 0, making viewportBottom = top-1 — and
+  // clamp/shiftSelection would then run with min > max and leave the
+  // endpoints pointing at arbitrary rows. A collapsed NEW viewport holds no
+  // selectable row at all: every selected row is under chrome, which is
+  // exactly shiftSelection's both-ends-off-viewport case → clear. An
+  // invalid OLD range means the selection could never have been tracked in
+  // it → nothing to translate, leave the state untouched.
+  if (newTop > newBottom) {
+    clearSelection(s)
+    return
+  }
+  if (oldTop > oldBottom) return
   // Re-widening edges (chrome unmounted): rows the chrome previously
   // covered return to the viewport. shiftSelection measures debt against
   // the NEW bounds only — correct for keyboard scroll, whose bounds stay

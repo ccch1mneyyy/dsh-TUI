@@ -53,6 +53,7 @@ const PILL_TEXT = '   ↓ 回到底部（Enter/End） '
 
 let failures = 0
 
+/** JSON-compare assertion that counts failures and prints both sides on mismatch. */
 function check(name: string, actual: unknown, expected: unknown): void {
   const a = JSON.stringify(actual)
   const e = JSON.stringify(expected)
@@ -66,11 +67,15 @@ function check(name: string, actual: unknown, expected: unknown): void {
   }
 }
 
+/** One synthetic transcript line tagged `O{row}` (pre frame) / `N{row}` (post frame). */
 function rowText(tag: string): string {
   return `${tag} transcript`
 }
 
-/** rows: explicit text per row; unlisted rows are blank. */
+/**
+ * Build a W×H screen buffer with the given text per row (unlisted rows
+ * blank), cells all narrow/empty-style — enough fidelity for extractRowText.
+ */
 function buildScreen(rows: Record<number, string>): Screen {
   const styles = new StylePool()
   const screen = createScreen(W, H, styles, new CharPool(), new HyperlinkPool())
@@ -88,6 +93,7 @@ function buildScreen(rows: Record<number, string>): Screen {
   return screen
 }
 
+/** A selection state with the given endpoints; null focus models a bare press. */
 function makeSelection(
   anchor: { col: number; row: number },
   focus: { col: number; row: number } | null,
@@ -319,6 +325,35 @@ function applyFollowDrain(
   updateSelection(sel, 3, 5)
   check('C7 focus moved to the mouse', sel.focus, { col: 3, row: 5 })
   check('C7 stale virtual focus dropped', sel.virtualFocusRow, undefined)
+}
+
+// ── Case 8: ScrollBox fully collapsed (chrome taller than the box —
+//    innerHeight 0 makes viewportBottom = top-1). clamp/shiftSelection
+//    with min > max would corrupt the state; the guard must CLEAR instead ──
+{
+  const pre = buildScreen({ 5: rowText('O05'), 6: rowText('O06') })
+  const sel = makeSelection({ col: 3, row: 5 }, { col: 6, row: 6 }, false)
+  sel.scrolledOffBelow = [rowText('O07')]
+  sel.scrolledOffBelowSW = [false]
+  // new viewport [12..11]: height 0, top > bottom.
+  shiftSelectionForViewportResize(sel, pre, 0, 11, 12, 11)
+  check('C8 selection cleared on collapsed new viewport', hasSelection(sel), false)
+  check('C8 accumulators discarded with the selection', sel.scrolledOffBelow, [])
+  check('C8 endpoints nulled', sel.anchor, null)
+}
+
+// ── Case 9: invalid OLD range (selection could never have been tracked in
+//    it) — the translate must be a safe no-op, leaving state untouched ──
+{
+  const pre = buildScreen({})
+  const sel = makeSelection({ col: 3, row: 5 }, { col: 6, row: 6 }, false)
+  sel.virtualAnchorRow = 7
+  // old viewport [12..11] is degenerate; new viewport is healthy.
+  shiftSelectionForViewportResize(sel, pre, 12, 11, 0, 9)
+  check('C9 no-op keeps the endpoints', sel.anchor, { col: 3, row: 5 })
+  check('C9 no-op keeps the focus', sel.focus, { col: 6, row: 6 })
+  check('C9 no-op keeps virtual debt', sel.virtualAnchorRow, 7)
+  check('C9 no-op keeps the selection active', hasSelection(sel), true)
 }
 
 if (failures > 0) {
