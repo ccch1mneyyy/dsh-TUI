@@ -12,7 +12,7 @@ import { parseRGB } from './Spinner/spinnerUtils.js'
 import { renderBigText } from './bigfont.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
-import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
+import { STANDARD_FRAME_INDEX, WhaleArt, WhaleMaidArt } from './Whale.js'
 import { OPENING_SEQUENCE } from './whaleFrames.js'
 
 /**
@@ -31,6 +31,14 @@ const VERSION = (() => {
 
 /** Below this width the whale hides and the header goes text-only. */
 const WHALE_MIN_COLUMNS = 64
+
+/**
+ * Fixed whale-girl box width (40 columns, matching the whale) and the
+ * art-column center the welcome tagline indents to while the maid persona
+ * easter egg is active — the same role FULL_WHALE_WIDTH/WHALE_CENTER play
+ * for the whale.
+ */
+const MAID_WHALE_CENTER = 20
 
 /**
  * Fixed whale box width: the tail-wag frames reach 4 columns further right
@@ -78,6 +86,7 @@ export function LogoV2({
   tip,
   whale = true,
   drift,
+  maid = false,
 }: {
   model: string
   effort?: string | undefined
@@ -91,6 +100,8 @@ export function LogoV2({
   /** Test seam: pin/suppress the upstream-drift notice (`null` forces it off;
    * `undefined` — the production default — auto-detects the install). */
   drift?: UpstreamDriftSummary | null
+  /** Maid persona easter egg: swap the whale art for the whale girl. */
+  maid?: boolean
 }): React.ReactNode {
   const [step, setStep] = React.useState(skipIntro ? OPENING_SEQUENCE.length : 0)
   const settled = step >= OPENING_SEQUENCE.length
@@ -125,6 +136,8 @@ export function LogoV2({
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
 
+  const artWidth = FULL_WHALE_WIDTH // 40 列对 whale 与 maid 一致（布局不漂移）
+  const artCenter = maid ? MAID_WHALE_CENTER : WHALE_CENTER
   const tagline = tr('logo-tagline')
   // One random tip per mount: the settled header must not re-roll on every
   // repaint (language switch, terminal resize), or the line would flicker.
@@ -138,7 +151,7 @@ export function LogoV2({
   )
   // Indent that centers the tagline under the whale art's bounding box.
   const welcomePad = showWhale
-    ? Math.max(0, Math.round(WHALE_CENTER - stringWidth(tagline) / 2))
+    ? Math.max(0, Math.round(artCenter - stringWidth(tagline) / 2))
     : 2
 
   const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 60)
@@ -147,7 +160,9 @@ export function LogoV2({
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
       <Box flexDirection="row" gap={2} width="100%" alignItems="center">
-        {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
+        {showWhale && (maid
+          ? <WhaleMaidArt width={artWidth} />
+          : <WhaleArt frameIndex={frameIndex} width={artWidth} />)}
         <Box flexDirection="column" flexShrink={1}>
           <Text wrap="truncate-end">
             {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}

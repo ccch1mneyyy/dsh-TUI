@@ -743,6 +743,9 @@ export interface Channel {
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
+  /** Maid persona easter egg: the header whale swaps for the whale girl
+   *  while the session's `maid` command fold reports active. */
+  readonly maidActive: boolean
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
   readonly minimal: boolean
@@ -1194,6 +1197,8 @@ export interface ChannelState {
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
   whale: boolean
+  /** Maid persona fold (see the public Channel type). */
+  maidActive: boolean
   /** Apply a whale-visibility change (see the public Channel type). */
   setWhale(visible: boolean): void
   minimal: boolean
@@ -2574,6 +2579,25 @@ export function createChannel(
     }
     return active
   }
+  /** Maid persona easter egg: `command/run` for the `maid` command folds
+   *  with toggle semantics (`off` deactivates, `on` force-activates, any
+   *  other form flips), so a resumed session restores its mascot — the same
+   *  last-wins shape as the mode folds above, plus the flip. `on` is a
+   *  force, not a flip: a future external plugin subcommand spelled `on`
+   *  must not bounce an already-active session back to the whale. */
+  const foldMaidActive = (events: readonly SessionEvent[]): boolean => {
+    let active = false
+    for (const event of events) {
+      if ((event as { type: string }).type === 'command/run') {
+        const data = event.data as unknown as { name?: string; args?: string }
+        if (data?.name === 'maid') {
+          const arg = typeof data.args === 'string' ? data.args.trim() : ''
+          active = arg === 'off' ? false : arg === 'on' ? true : !active
+        }
+      }
+    }
+    return active
+  }
   const foldSandboxMode = (events: readonly SessionEvent[]): string | undefined => {
     let mode: string | undefined
     for (const event of events) {
@@ -2614,6 +2638,23 @@ export function createChannel(
   const refreshMode = (): void => {
     state.modeIndex = deriveModeIndex(agent.session.events)
     state.mode = sessionModes[state.modeIndex]!
+  }
+
+  /** Re-derive the maid mascot fold; true when it flipped (caller emits). */
+  // /maid 命令由外置插件 dsh-whale-maid 提供（github.com/AdamPlatin123/
+  // dsh-whale-maid，照 dsh-routing-suite 的外置包方案，不注册进本仓库
+  // 命令表）——本文件只折叠其 command/run 事件驱动头部换装。没有该插件
+  // 时 maid 永不激活，此 fold 静默不触发，不构成死代码路径。
+  // 设计取舍（invocation-is-truth）：从 command/run（调用事件）而非独立
+  // 状态事件折叠——插件运行失败（如换机后插件缺失）时头部仍会换装，与
+  // 人格实际状态可能短暂脱钩；换取的是零仓库外事件类型（harness 已知
+  // 事件词表不含第三方类型，#423 的 plan-prompt/mode 教训）。/maid off
+  // 或重开 会话 即恢复一致。
+  const refreshMaid = (): boolean => {
+    const active = foldMaidActive(agent.session.events)
+    if (active === state.maidActive) return false
+    state.maidActive = active
+    return true
   }
 
   /** Apply one configured mode: each declared atom switches independently
@@ -2827,6 +2868,7 @@ export function createChannel(
     expandEditor: options.expandEditor !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
+    maidActive: false,
     minimal: options.minimal === true,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
@@ -6973,6 +7015,7 @@ ${output}
     }
     void applyPreferredEffort()
     refreshMode()
+    refreshMaid()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),
       ctx.on('agent/status', ({ agent: subject, status }) => {
@@ -7060,6 +7103,12 @@ ${output}
         const eventType = (event as { type: string }).type
         if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
           refreshMode()
+        }
+        // Only maid runs can flip the fold; skipping other commands keeps the
+        // full-log scan off every /tips-scale invocation.
+        if (eventType === 'command/run'
+          && (event.data as unknown as { name?: string })?.name === 'maid') {
+          refreshMaid()
         }
         renderEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned

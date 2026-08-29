@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
 import { WHALE_FRAMES, type WhaleFrame } from './whaleFrames.js'
+import { MAID_PALETTE, WHALE_MAID_FRAMES } from './whaleMaidFrames.js'
 
 /**
  * The DeepSeek pixel whale from the hand-drawn Excel art (whale_frames.zip):
@@ -48,10 +49,14 @@ export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb 
         seq = fg(up) + bg(lo)
         ch = '▀'
       } else if (up !== undefined) {
-        seq = fg(up)
+        // RESET first: SGR is stateful — a bare fg() here would keep the
+        // previous cell's bg() alive under the ▀, painting the "transparent"
+        // lower half with a stale color (the WT residue the maid sprite's
+        // thin hair lines exposed; whale's solid body almost never hits it).
+        seq = RESET + fg(up)
         ch = '▀'
       } else if (lo !== undefined) {
-        seq = fg(lo)
+        seq = RESET + fg(lo)
         ch = '▄'
       } else {
         seq = ''
@@ -76,6 +81,8 @@ export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb 
 /** Pre-rendered ANSI rows for every whale frame, computed once at module load. */
 const RENDERED: readonly string[][] = WHALE_FRAMES.map(frame => renderSpriteRows(frame, PALETTE))
 
+/** Pre-rendered ANSI rows for the maid pose (one static frame today). */
+const MAID_RENDERED: readonly string[][] = WHALE_MAID_FRAMES.map(frame => renderSpriteRows(frame, MAID_PALETTE))
 
 /** Index of the `standard` frame — the settled header's static pose. */
 export const STANDARD_FRAME_INDEX = 0
@@ -106,3 +113,20 @@ export function WhaleArt({
   )
 }
 
+/**
+ * The whale-girl pose for the maid persona easter egg: 13 rows x 40
+ * columns in the maid palette, rendered like {@link WhaleArt}. One static
+ * frame — no opening animation — pinned at the header's 13-row height.
+ */
+export function WhaleMaidArt({ width }: { width?: number }): React.ReactNode {
+  const rows = MAID_RENDERED[0] ?? []
+  return (
+    <Box flexDirection="column" flexShrink={0} width={width}>
+      {rows.map((row, index) => (
+        <Text key={index} wrap="truncate-end">
+          {row}
+        </Text>
+      ))}
+    </Box>
+  )
+}

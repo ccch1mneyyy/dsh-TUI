@@ -3165,6 +3165,7 @@ export function Chat({
           // frame budget right when the user wants to read history. Fresh
           // sessions keep the full intro; restored ones settle instantly.
           skipIntro={channel.rows.length > 30}
+          maid={channel.maidActive}
         />
         {/* The startup loaded-context panel: before the first message the
             transcript is empty, so the inventory of what this conversation
