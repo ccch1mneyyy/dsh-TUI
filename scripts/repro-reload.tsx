@@ -19,7 +19,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'     // 固定中文报告文案断言（lang 走 env-skip）
 
 // 隔离家目录（同 verify-extension-ui）：Chat 加载即解析 homedir()。
-const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+const { mkdtempSync, mkdirSync, readFileSync, writeFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
 const { join: joinPath } = await import('node:path')
 const isolatedHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-reload-home-'))
@@ -29,7 +29,9 @@ mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 // 预置 5 个 pref 文件：全部与 live 值不同 → planReload 应全部 apply。
 writeFileSync(joinPath(isolatedHome, '.dsh-tui', 'theme.json'), JSON.stringify({ theme: 'light' }))
 writeFileSync(joinPath(isolatedHome, '.dsh-tui', 'lang.json'), JSON.stringify({ lang: 'en' }))
-writeFileSync(joinPath(isolatedHome, '.dsh-tui', 'agent-preset.json'), JSON.stringify({ preset: 'code' }))
+const presetPrefPath = joinPath(isolatedHome, '.dsh-tui', 'agent-preset.json')
+// Intentional legacy fixture: /reload must apply ptc and lazily rewrite it.
+writeFileSync(presetPrefPath, JSON.stringify({ preset: 'code' }))
 writeFileSync(joinPath(isolatedHome, '.dsh-tui', 'model.json'), JSON.stringify({ provider: 'deepseek', model: 'deepseek-chat' }))
 writeFileSync(joinPath(isolatedHome, '.dsh-tui', 'working-activity.json'), JSON.stringify({ frames: 'moon' }))
 
@@ -213,7 +215,8 @@ check('报告含 4 条 apply（theme/preset/model/activity）', localRows.filter
 check('主题应用 dark → light', localRows.some(r => r.text.includes('light') && r.text.includes('已应用')), JSON.stringify(localRows))
 check('语言跳过（DSH_TUI_LANG 优先）', localRows.some(r => r.text.includes('语言') && r.text.includes('跳过')), JSON.stringify(localRows))
 check('模型应用 deepseek/deepseek-chat', modelCalls.join(',') === 'deepseek/deepseek-chat', modelCalls.join(','))
-check('预设应用 code', presetCalls.join(',') === 'code', presetCalls.join(','))
+check('旧 code 偏好按 ptc 应用', presetCalls.join(',') === 'ptc', presetCalls.join(','))
+check('旧 code 偏好惰性迁移到 ptc', JSON.parse(readFileSync(presetPrefPath, 'utf8')).preset === 'ptc')
 check('activity 应用 moon', activityCalls.join(',') === 'moon', activityCalls.join(','))
 check('报告 footer 在', localRows.some(r => r.text.includes('/restart')), JSON.stringify(localRows.slice(-2)))
 

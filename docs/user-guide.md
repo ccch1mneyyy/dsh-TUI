@@ -33,7 +33,8 @@ dsh-tui
 - `dsh-tui --resume`：恢复上次会话；Windows 可用仓库里的 `dsh-tui.cmd`（等价）。
 - `dsh --profile dsh-tui`：与 `dsh-tui` 等价的手工启动方式（`/update` 仅此方式可用）。
 - 运行模型需要 `DEEPSEEK_API_KEY`；环境自检用 `/doctor`。
-- 支持的 dsh 引擎版本：`0.1.0-rc.6` ～ `0.1.1-rc.2`（含 rc.7/rc.8、0.1.1-rc.1）。
+- 已验证的 dsh 引擎版本：`0.1.2-alpha.2`，以及 `0.1.0-rc.6/7/8`、
+  `0.1.1-rc.1/2` 兼容线。
   更老或更新的版本仍可启动，但 logo 页会提示版本漂移并给出对齐命令。
 
 ### 1.2 首次启动你会看到
@@ -242,7 +243,7 @@ dsh-tui
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | token 用量 + 上下文百分比 |
 | `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器；`frames` 列全部预设；`frames <名>` 直接设置。帧名 30 个（`random` 随机 + `claude/star2/sand/triangle/box/box2/corners/point/layer/flip/aesthetic/hamburger/moon/moon8/comet/breathe/dots/arrow/spark/bar/braille/arc/circle/grow/noise/bounce/rainbow/dqpb/toggle`，默认 `moon8`）。持久化 `~/.dsh-tui/working-activity.json` |
-| `/preset` | `<id>` / `status` | Agent 预设切换：官方 `standard` / `code` / `minimal` / `cordis` + TUI 打包**梁神模式 `liangshen`** + 用户自定义；**已开始的会话不可切换**（blank-only 锁定）。持久化 `~/.dsh-tui/agent-preset.json` |
+| `/preset` | `<id>` / `status` | Agent 预设切换：官方 `standard` / `ptc`（alpha.2；RC 名为 `code`）/ `minimal` / `cordis` + TUI 打包**梁神模式 `liangshen`** + 用户自定义；`ptc` / `code` 可跨版本兼容解析；**已开始的会话不可切换**（blank-only 锁定）。持久化 `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
 | `/color` | 无参 / `<名>` / `status` / `reset` | 会话强调色：**无参打开调色板选择器**（8 色 + 色点预览，`↑/↓` 选择、`Enter` 应用）；`<名>` 直接设置；`status` 当前；`reset` 恢复主题默认。输入框边框 + 会话名标签变色（标签显示在输入框顶边框**右上角**，**默认关闭**，`/settings` 的「会话名标签」可开启；`red/orange/yellow/green/blue/purple/pink/cyan`）。按会话经 `session/color` 事件保存，resume/rewind 后仍在 |
 | `/lang` | `en` / `zh` / `status` | 界面语言热切换。优先级：`DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |
@@ -255,7 +256,7 @@ dsh-tui
 | `/provider` | 无 | 交互式添加模型提供方向导（持久化 profile + key） |
 | `/login` | 无 | 凭证状态（来源、存储可写性、base URL） |
 | `/logout` | 无 | 登出说明（env 来源需删环境变量并重启） |
-| `/permissions` | 无 | 权限策略与审批通道说明 |
+| `/permission` | 无 / `<preset>` / `status` | 查看当前权限预设与策略说明；无参时打开由 DSH `permissionPresets` registry 提供的选择器，参数通过官方命令切换。服务缺失时使用 legacy 三项名册，挂载但损坏时 unavailable；外部命令未注册时沿用默认命令/model dispatch |
 | `/add-dir` | 无 | 文件策略范围说明（以工作目录为根） |
 | `/hooks` | 无 | 占位：DSH hooks 未在组合中挂载时给出说明 |
 | `/mcp` | 无 | MCP 连接状态（工具按 `mcp__服务器__工具` 分组）；未配置时给出 `cordis.patch.yml` 插入示例 |
@@ -282,7 +283,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 | `/plan` | `[off\|message]` 计划模式；`/plan off` 退出 |
 | `/goal` | 设置/查看会话目标 |
 | `/feedback` | 提交使用反馈 |
-| `/permission` | 查看/切换权限预设（read-only / workspace-write / danger-full-access；非所有组合都有） |
+| `/permission` | 查看/切换 DSH `permissionPresets` registry 的预设；第三方预设按 registry 顺序显示，`custom` 只作为当前态，不是选择目标；服务缺失时使用 legacy 三项名册，服务已挂载但损坏时标记 unavailable；外部命令未注册时沿用默认命令/model dispatch |
 
 > 这些命令的行为由 DSH 命令注册表实现，本仓库只做菜单并入、补全与分发；
 > 未知命令会作为普通消息发给模型。
@@ -350,7 +351,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 ### 4.6 模型切换与预设
 
 - `/model`：选择器，**切换 = fork 会话续聊**（历史保留、只换 provider/model 路由，preset 不变）；旧会话留在 `/resume`；选择持久化 `~/.dsh-tui/model.json`。运行时切换被拒绝。
-- `/preset`：`standard`（默认全功能）/ `code`（PTC）/ `minimal`（仅 bash+编辑器，无 compaction）/ `cordis`（创造模式）/ `liangshen`（梁神模式：首轮最小双工具，首次工具调用后开放全目录）。
+- `/preset`：`standard`（默认全功能）/ `ptc`（PTC）/ `minimal`（仅 bash+编辑器，无 compaction）/ `cordis`（创造模式）/ `liangshen`（梁神模式：首轮最小双工具，首次工具调用后开放全目录）。alpha 名册会把旧版 `code` 作为 `ptc` 的兼容别名；rc 名册仍使用 `code` 真名。
   **已产生对话的会话不可切换**（blank-only：选择只保存为下次 `/new` 的默认）。
 - 会话模式 `Shift+Tab` 循环三档：default（workspace-write + 审批）→ plan（read-only）→ full（danger-full-access）。
 
@@ -381,7 +382,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 - `/doctor` 自检：Node/平台、API key、模型路由、cwd、上下文窗口、会话存储、插件宿主。
 - `/provider` 交互向导添加模型提供方（密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`）。
 - `/init` 创建 AGENTS.md；`/agents` 子代理列表；`/login` `/logout` 凭证管理；
-  `/permissions` `/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
+  `/permission` `/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
 
 ---
 
@@ -454,7 +455,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 |---|---|---|
 | 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用 |
 | 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前 |
-| Agent 预设 | `/preset` | `standard` / `code` / `minimal` / `cordis` + **梁神模式 `liangshen`**；**已开始会话不可切换**（blank-only） |
+| Agent 预设 | `/preset` | `standard` / `ptc`（alpha.2；RC 名为 `code`）/ `minimal` / `cordis` + **梁神模式 `liangshen`**；**已开始会话不可切换**（blank-only） |
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |

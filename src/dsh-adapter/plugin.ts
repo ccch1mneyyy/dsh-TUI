@@ -2,17 +2,17 @@ import { randomUUID } from 'node:crypto'
 import React from 'react'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
-import UserQuestionService, { type UserQuestionProvider } from '@deepseek-ai/dsh-user-questions'
-import { decideQuestionProviderYield, incumbentQuestionProviderId, tagTuiQuestionProvider } from './providerGuard.js'
+import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { logForDebugging } from '../utils/debug.js'
 import { QuestionStore } from './questions.js'
+import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { ApprovalStore } from './approvals.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
@@ -20,7 +20,7 @@ import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readA
 import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
-import { readPresetPref } from '../presetPrefs.js'
+import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
@@ -43,7 +43,9 @@ import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
+import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
+import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
@@ -76,6 +78,55 @@ import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMult
  * recompose: latch the decision.
  */
 let lastBootedFullscreen: boolean | undefined
+
+/**
+ * Extract the startup prompt from raw app argv. `--resume <session>` selects
+ * a persisted session and must not leak its id into the conversation.
+ */
+export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined): string {
+  if (args === undefined) return ''
+  const promptArgs: string[] = []
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!
+    if (arg === '--resume') {
+      if (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i += 1
+      continue
+    }
+    if (arg.startsWith('--resume=')) continue
+    if (arg.startsWith('-')) continue
+    promptArgs.push(arg)
+  }
+  return promptArgs.join(' ').trim()
+}
+
+/**
+ * How this process should treat the TUI frontend, given the terminal it runs on.
+ *
+ * Three startup identities exist:
+ *  1. `dsh-tui` / standalone — the user explicitly asked for the terminal UI;
+ *  2. Web / Tauri / other GUI hosts — the profile merely has dsh-tui installed
+ *     and the current process is NOT a dsh-tui frontend. stdout is a pipe or
+ *     null there, and mounting a TUI would fail the whole composition.
+ *
+ * The official launcher (and the standalone runtime) mark explicit launches,
+ * so an explicit `dsh-tui` run without a TTY keeps failing loudly, while
+ * foreign hosts skip the plugin and let the host boot.
+ */
+export type TuiHostMode = 'interactive' | 'invalid-explicit-launch' | 'headless-host'
+
+export function resolveTuiHostMode(
+  stdoutIsTTY = process.stdout.isTTY === true,
+  env: NodeJS.ProcessEnv = process.env,
+): TuiHostMode {
+  if (stdoutIsTTY) {
+    return 'interactive'
+  }
+
+  const explicitTuiLaunch =
+    env.DSH_TUI_LAUNCHER_VERSION !== undefined || isStandaloneRuntime()
+
+  return explicitTuiLaunch ? 'invalid-explicit-launch' : 'headless-host'
+}
 
 export async function apply(ctx: Context, config: Config): Promise<void> {
   // /restart handoff diagnosis: the replacement process is marked by env and
@@ -133,11 +184,23 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     sampleAt(5000, 'stdin state +5s')
     sampleAt(12000, 'stdin state +12s')
   }
-  if (!process.stdout.isTTY) {
+  const hostMode = resolveTuiHostMode()
+  if (hostMode === 'invalid-explicit-launch') {
     if (process.env.DSH_TUI_RESTART_CHILD === '1') {
       logRestartEvent('boot: TTY gate failed - stdout is not a TTY')
     }
     throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
+  }
+  if (hostMode === 'headless-host') {
+    // Web / Tauri / GUI hosts load the plugin from the profile without being
+    // a dsh-tui frontend (stdout is a pipe or null). Mounting a TUI there
+    // would fail the whole composition, so skip quietly and let the host
+    // boot. The launcher marker above keeps explicit `dsh-tui` launches
+    // failing loudly instead of silently producing no UI.
+    ctx.logger.info(
+      'dsh-tui: non-interactive host detected (stdout is not a TTY); skipping the TUI frontend',
+    )
+    return
   }
 
   // The official profile launcher owns the system preset root and replaces
@@ -232,14 +295,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
 
   // DSH user-interaction seam: the model's ask_user_question tool parks on
-  // the userInteraction service until a UI provider answers. Mount the
+  // the userQuestions service until a UI answerer responds. Mount the
   // service when the composition doesn't (the official dsh-base
   // user-interaction config row does; a bare plugin mount creates it on
-  // this context), expose the model-facing tool, and register this TUI's
-  // questionnaire as the provider. All three must be in place before the
-  // agent is resolved so the per-step tool assembly includes
-  // ask_user_question. Optional-service access goes through `ctx.get`, not
-  // the inject proxy.
+  // this context), then expose the model-facing tool before resolving the
+  // agent so per-step assembly includes ask_user_question. rc.2's provider
+  // seat is registered below; alpha.2's agent-aware waterfall needs the
+  // channel owner and is therefore registered immediately after the channel
+  // is created. Optional-service access goes through `ctx.get`, not the
+  // inject proxy.
   const userQuestions = ctx.get('userQuestions') ?? new UserQuestionService(ctx)
   ctx.plugin(toolAskUser)
   // The host-level tool mount above is intentional for the TUI and for user
@@ -253,50 +317,33 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return filterMinimalPresetTools(assembled, presetId)
   })
   const questionStore = new QuestionStore()
+  // One store, one teardown effect on both API lines. The compatibility
+  // adapter binds either registration to this Cordis fiber; this separate
+  // effect rejects asks still parked in the UI during teardown.
+  ctx.effect(() => () => questionStore.rejectAll())
   // `/debug-prompt` snapshots the final provider-neutral request at the
   // llm/stream boundary, after every prompt and tool contributor has run.
   registerPromptDebug(ctx)
-  // Yield to an incumbent provider instead of crashing the whole plugin tree
-  // (issue #98): the harness allows exactly ONE user-questions provider per
-  // context, and stacking this TUI onto a profile that already carries
-  // @deepseek-ai/dsh-web-app (its api-gateway registers first) used to fail
-  // the boot with DUPLICATE_PROVIDER. The incumbent UI then owns questionnaire
-  // rendering; this TUI's ask_user_question requests are answered there.
-  //
-  // Security follow-up: silence must be reserved for host-VERIFIED front
-  // doors. A plugin that registers FIRST owns the seat just the same, and
-  // would then answer ask_user_question on the user's behalf without any
-  // signal. The DUPLICATE_PROVIDER error carries no incumbent identity, so
-  // the seat is probed structurally: the silent yield now requires this
-  // TUI's private symbol tag (or any future host-verified marker) on a
-  // whitelisted incumbent; a whitelist name the incumbent merely
-  // SELF-REPORTED (name/hostId/id fields are trivially copyable) gets an
-  // honest "identity not host-verified" alert instead — forgeable silence
-  // is worse than a loud warning. Anything else stays unregistered (the
-  // composition must not crash) but the user is told loudly.
-  const tuiQuestionProvider: UserQuestionProvider = { ask: request => questionStore.ask(request) }
-  tagTuiQuestionProvider(tuiQuestionProvider)
+  // API selection and registration live behind one adapter boundary. The UI
+  // bootstrap only translates a legacy seat conflict into its visible notice.
+  const questionAnswererRegistration = prepareQuestionAnswerer(ctx, userQuestions, questionStore)
+  const questionSeatDecision = questionAnswererRegistration.kind === 'legacy'
+    ? questionAnswererRegistration.yieldDecision
+    : undefined
   let questionSeatNotice: string | undefined
-  try {
-    userQuestions.registerProvider(tuiQuestionProvider)
-    ctx.effect(() => () => questionStore.rejectAll())
-  } catch (error) {
-    if ((error as { code?: string }).code !== 'DUPLICATE_PROVIDER') throw error
-    const decision = decideQuestionProviderYield(incumbentQuestionProviderId(userQuestions))
-    if (decision.action === 'alert-unverified') {
-      ctx.logger.error(
-        `dsh-tui: user-questions provider seat is held by a component self-reporting as ${decision.incumbentId} ` +
-          '(identity not host-verified); this TUI will not register its questionnaire and model questions may be answered by it',
-      )
-      questionSeatNotice = t('question-provider-occupied-unverified', { id: decision.incumbentId ?? '' })
-    } else if (decision.action === 'alert') {
-      const displayId = decision.incumbentId ?? t('question-provider-occupied-unknown')
-      ctx.logger.error(
-        `dsh-tui: user-questions provider seat is held by a non-host component (${displayId}); ` +
-          'this TUI will not register its questionnaire and model questions may be answered by it',
-      )
-      questionSeatNotice = t('question-provider-occupied', { id: displayId })
-    }
+  if (questionSeatDecision?.action === 'alert-unverified') {
+    ctx.logger.error(
+      `dsh-tui: user-questions provider seat is held by a component self-reporting as ${questionSeatDecision.incumbentId} ` +
+        '(identity not host-verified); this TUI will not register its questionnaire and model questions may be answered by it',
+    )
+    questionSeatNotice = t('question-provider-occupied-unverified', { id: questionSeatDecision.incumbentId ?? '' })
+  } else if (questionSeatDecision?.action === 'alert') {
+    const displayId = questionSeatDecision.incumbentId ?? t('question-provider-occupied-unknown')
+    ctx.logger.error(
+      `dsh-tui: user-questions provider seat is held by a non-host component (${displayId}); ` +
+        'this TUI will not register its questionnaire and model questions may be answered by it',
+    )
+    questionSeatNotice = t('question-provider-occupied', { id: displayId })
   }
 
   // Child-process stderr guard (issue #17): MCP servers spawned with an
@@ -379,12 +426,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   // Same skew guard for the plugin-UI services (dsh-tui-extensions row):
   // managed dialogs park unanswered, status contributions never render,
-  // shortcuts never match, and custom-entry renderers stay invisible when
-  // the row is absent — say why on profile launches.
-  if (ctx.get('tuiDialogs') === undefined && resolveDshProfileName() !== undefined) {
+  // shortcuts never match, custom-entry renderers stay invisible, and runtime
+  // themes stay out of the picker when the row is absent — say why on profile
+  // launches. The static JSON theme path remains available without this row.
+  const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
+  if ((ctx.get('tuiDialogs') === undefined || themeHost === undefined) && resolveDshProfileName() !== undefined) {
     ctx.logger.warn(
-      'dsh-tui: tuiDialogs/tuiStatus/tuiShortcuts/tuiRenderers services are not mounted; plugin dialogs, status contributions, shortcuts and custom-entry renderers are off. ' +
-      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+      'dsh-tui: tuiDialogs/tuiStatus/tuiShortcuts/tuiRenderers/tuiThemes services are not mounted; plugin dialogs, status contributions, shortcuts, custom-entry renderers and runtime themes are off. ' +
+      'Static ~/.dsh-tui/themes JSON remains available. The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
     )
   }
   // Same skew guard for the plugin-host row (dsh-tui-plugin-host): without
@@ -486,6 +535,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
+  // Plugin toasts ride the channel's own notification surface: the runtime
+  // already sanitized/rate-limited the delivery, the sink only forwards.
+  // Without the extensions row (tuiToast absent) plugin toasts are dropped
+  // by the runtime itself — same soft-degrade contract as the other seams.
+  const toastStore = getHostToastStore(ctx.get('tuiToast') as TuiToastRuntime | undefined)
+  toastStore?.setSink(delivery => {
+    channel.notify(delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
+  })
+  if (questionAnswererRegistration.kind === 'waterfall') {
+    // Ownership follows the mutable channel; registration cleanup belongs to
+    // this Cordis fiber.
+    questionAnswererRegistration.register(channel)
+  }
   // Fullscreen layout decision: the settings user layer (edited through the
   // /settings screen) overrides cordis.yml when set. The settings injection
   // below resolves it synchronously when the host settings service is up —
@@ -512,7 +574,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and
   // watch() lands commits on the live channel — no recompose needed.
   ctx.inject(['settings'], (settingsCtx) => {
-    const tuiSettingsNs = settingsNamespace('dsh-tui')
+    // alpha.2 removed the `settingsNamespace()` brand helper: register() now
+    // takes the raw string and validates it itself, while rc.2 still wants the
+    // branded handle. Brands are type-only, so the constant cast compiles
+    // against both lines and the runtime value is identical ('dsh-tui' always
+    // satisfied the namespace pattern).
+    const tuiSettingsNs = 'dsh-tui' as SettingsNamespace
     const scope = settingsCtx.settings.register(
       tuiSettingsNs,
       Schema.object({
@@ -851,8 +918,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           path: ['thinkingFold'],
           label: 'Thinking display',
           descriptions: { zh: '思考块展示' },
-          hint: 'Streaming thinking shows a 2-3 line live preview and each step folds when it settles; Full keeps thinking expanded until the turn ends.',
-          hintDescriptions: { zh: '流式时思考显示 2-3 行动态预览，每步落定后折叠；展开模式保持思考展开直到整轮结束。' },
+          hint: 'Preview shows 2-3 live lines; Full stays expanded until turn end. Click a streaming block to switch between preview and full.',
+          hintDescriptions: { zh: '预览模式显示 2-3 行动态思考；展开模式保持至轮末。点击流式思考块可在预览与全文间切换。' },
           kind: 'select',
           options: [
             { value: 'preview', label: 'Preview (2-3 lines)', descriptions: { zh: '预览（2-3 行）' } },
@@ -1156,7 +1223,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // timing is needed; flag-shaped leftovers are not prompt text.
   const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
   const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
-  const initialPrompt = cmdlineArgs?.filter(arg => !arg.startsWith('-')).join(' ').trim()
+  const initialPrompt = initialPromptFromCmdlineArgs(cmdlineArgs)
   if (initialPrompt) channel.submit(initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
@@ -1308,6 +1375,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     extensionDialogs: getHostDialogStore(ctx.get('tuiDialogs') as TuiDialogRuntime | undefined),
     extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
     extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
+    themeHost,
     // Full-screen surfaces inside Chat — the trajectory scene and the session
     // browser — enter the alt screen themselves in inline mode; in fullscreen
     // the tree is already wrapped below, so they must not nest.
@@ -1382,11 +1450,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // tracking), which turns on in-app text selection (copy-on-select via
   // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
   // mode leaves the mouse to the terminal emulator's native selection.
-  const tree = React.createElement(
-    ThemeProvider,
-    null,
-    bootedFullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
-  )
+  const tree = React.createElement(ThemeProvider, {
+    themeHost,
+    children: bootedFullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
+  })
   instance = await render(tree, { exitOnCtrlC: false })
   const isRecompose = lastBootedFullscreen !== undefined
   lastBootedFullscreen = bootedFullscreen
@@ -1527,7 +1594,13 @@ async function resolveAgent(
     }
   }
   const sessionId = SessionId(randomUUID())
-  const composed = await composePreset(ctx, configuredPreset ?? readPresetPref())
+  const presetPref = configuredPreset === undefined ? readPresetPref() : undefined
+  const composed = await composePreset(ctx, configuredPreset ?? presetPref)
+  if (!migratePresetPref(presetPref, composed.agentPreset)) {
+    ctx.logger.warn(
+      `dsh-tui: resolved preset preference "${presetPref}" as "${composed.agentPreset}" but could not persist the migrated id`,
+    )
+  }
   // Fresh-session route precedence (issues #14/#30/#67): resolved atomically
   // by the caller (complete cordis.yml route > the persisted `/model` choice
   // > the harness default), then validated against the adapter catalog — a

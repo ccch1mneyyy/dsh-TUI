@@ -182,11 +182,20 @@ $DSH_HOME/profiles/dsh-tui/cordis.patch.yml
 ## 从源码开发
 
 ```sh
-git clone https://github.com/ccch1mneyyy/dsh-TUI.git
+git clone --recurse-submodules https://github.com/ccch1mneyyy/dsh-TUI.git
 cd dsh-TUI
 pnpm install --frozen-lockfile
 pnpm build
 pnpm smoke
+```
+
+本仓库有三个子模块，其中 `vendor/dsh-std` 与 `dsh-auth` 是安装必需
+（`pnpm-workspace.yaml` 把 `vendor/dsh-std/packages/*` 列为 workspace 包，
+`dsh-auth` 经 `link:` 引入）。漏掉 `--recurse-submodules` 会让这两个目录为空，
+`pnpm install --frozen-lockfile` 直接失败。已经克隆过的检出补一条：
+
+```sh
+git submodule update --init --recursive
 ```
 
 `pnpm build` 会清理忽略入库的 `lib/`，把 `src/` 编译到 `lib/types/`，再运行
@@ -248,6 +257,11 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 ### `dsh-tui requires an interactive terminal`
 
 stdout 不是 TTY。请直接在终端中启动，不要把主进程输出管道到文件或其他命令。
+
+如果 dsh-tui 只是装在某个 profile 里、而实际由 Web / Tauri / GUI 等非终端宿主
+启动 DSH，dsh-tui 会检测到 stdout 不是 TTY 且并非由 `dsh-tui` launcher 启动，
+自动跳过 TUI 前端（不报错、不影响宿主启动）；只有显式执行 `dsh-tui`（含
+standalone 便携版）却没有 TTY 时才会报上面的错误。
 
 ### 找不到 `dsh` 或 `pnpm`
 

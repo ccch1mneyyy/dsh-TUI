@@ -22,12 +22,15 @@ Cordis profile
 | 模块 | 所有权 |
 | --- | --- |
 | `src/index.ts` | Cordis 插件名称、注入声明、配置接口与 Schema；保持入口轻量并延迟加载 runtime |
-| `src/dsh-adapter/plugin.ts` | TTY 检查、问卷与 Skills 注册、Agent 创建/恢复、React 挂载、统一退出清理 |
+| `src/dsh-adapter/plugin.ts` | TTY 检查、服务装配、Agent 创建/恢复、React 挂载、统一退出清理 |
+| `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | user-questions 与 agent-preset 的预发布兼容分派；调用方不感知上游版本分支 |
 | `src/dsh-adapter/channel.ts` | 将 DSH 持久化事件投影为 transcript；提供 submit、steer、resume、rewind、model/preset 等动作 |
 | `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
 | `src/ui.ts` | 主题化 `Box`/`Text`、render、选择、滚动等公共 facade |
+| `src/theme.ts`、`src/themeCatalog.ts` | 内置、静态 JSON 与运行时插件主题的解析和统一列表 |
+| `src/dsh-adapter/themes.ts` | `ctx.tuiThemes` 主题插件接缝；注册生命周期与 host 私有 facade |
 | `src/ink/` | 移植的 Ink renderer、终端协议、事件、选择与 Yoga 桥接；属于敏感底层设施 |
 | `src/native-ts/yoga-layout/` | 纯 JS/TS 布局实现 |
 | `cordis.patch.yml` | profile bundle 层；决定服务行、覆盖关系与挂载顺序 |
@@ -36,8 +39,10 @@ Cordis profile
 service、registry 或 channel seam 接入。
 
 工作区扩展遵循单向依赖：TUI 只发布结构化 provider 接口，可选插件注册 URI、展示
-信息和命令执行器。协议解析与外部连接全部属于插件；删除插件后，本地工作区和会话
-路径不应出现缺失配置、占位文案或降级分支。
+信息和命令执行器。主题扩展同样只通过 `ctx.tuiThemes` 注册完整语义色板；宿主负责
+校验、排序、渲染与生命周期，插件不能直接改写主题目录或宿主 palette。协议解析与
+外部连接全部属于插件；删除插件后，本地工作区和会话路径不应出现缺失配置、占位文案
+或降级分支。
 
 ## Session 是真源
 
@@ -83,8 +88,8 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 | `~/.dsh-tui/sessions/` | 直接运行 `cordis.yml` 时的 JSONL 会话事件 |
 | `~/.dsh-tui/resume.txt` | Windows 启动器和退出提示使用的最近 session ID |
 | `~/.dsh-tui/last-used.json` | `/resume` 最近使用排序元数据 |
-| `~/.dsh-tui/theme.json` | 当前主题选择 |
-| `~/.dsh-tui/themes/` | 用户自定义主题 JSON |
+| `~/.dsh-tui/theme.json` | 当前主题选择（内置、静态或插件主题 ID） |
+| `~/.dsh-tui/themes/` | 用户自定义主题 JSON；运行时插件主题不写入此目录 |
 | `~/.dsh-tui/working-activity.json` | 工作状态动画选择 |
 | `~/.dsh-tui/agent-preset.json` | 新会话默认 Agent preset |
 
@@ -113,6 +118,12 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
   或脱敏片段。
 - MCP、Shell、文件工具和自定义 preset 都会扩展模型可见能力，应当视为同一权限域
   内的代码执行入口。
+- `/permission` 的可切换名册由已挂载的 DSH `permissionPresets` registry 提供，
+  保持 registry 声明顺序；第三方预设会自动进入 picker，只有符合既有命令 token
+  语法的 ID 进入 Tab 补全。`custom` 只作为 registry 投影出的当前态，不是目标。
+- TUI 将服务状态区分为 runtime、legacy、unavailable：只有服务确实缺失时才保留
+  旧三项 legacy 兼容；服务已挂载但损坏、空或数据不一致时 fail closed，不从
+  sandbox/approval 组合猜测当前预设。所有切换仍调用官方 `/permission <preset>`。
 
 在不可信仓库中运行前，检查实际 profile patch，而不是只看 TUI 的视觉界面。
 
@@ -127,9 +138,10 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
   不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。剪贴板图片
   导出为临时文件插入路径（0700 私有目录、0600 文件），不内嵌图片块。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
-- 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的沙箱
-  预设切换由 dsh-base 的 `permission-presets` 插件提供，profile 组合下可用；
-  裸组合 `cordis.yml` 只挂了 approval 服务，未挂 `permission-presets`。
+- 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的预设
+  切换由 dsh-base 的 `permission-presets` 插件提供。registry 服务缺失时使用三项
+  legacy 兼容名册；服务已挂载但空、损坏或不一致时标记 unavailable 并 fail closed，
+  不伪造旧名册。若外部 `/permission` 命令未注册，输入沿用现有默认命令/model dispatch。
 - `/vim`、`/connect`、`/hooks` 是兼容占位命令，不代表对应 DSH 能力已挂载。
 - 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务，
   真实模型集成仍需要在目标终端手动验证。
@@ -138,7 +150,7 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 
 | 目的 | 方式 |
 | --- | --- |
-| 环境与 profile | TUI 内运行 `/doctor`、`/config`、`/permissions` |
+| 环境与 profile | TUI 内运行 `/doctor`、`/config`、`/permission status` |
 | stderr 调试 | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
 | 原始 ANSI 帧 | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | 主题回归 | `node --import tsx/esm scripts/verify-themes.mjs` |

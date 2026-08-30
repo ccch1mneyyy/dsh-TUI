@@ -1,12 +1,13 @@
 /**
  * Question-provider seat guard (issue #98 security follow-up).
  *
- * The harness allows exactly ONE user-questions provider per context. The
- * original fix made this TUI yield the seat silently on DUPLICATE_PROVIDER so
- * profiles carrying @deepseek-ai/dsh-web-app keep booting — but silence cuts
- * both ways: a malicious plugin that registers FIRST also gets silent
- * ownership of the questionnaire and can answer the model's
- * ask_user_question on the user's behalf.
+ * On the legacy/rc `registerProvider` API, the harness allows exactly ONE
+ * user-questions provider per context. The original fix made this TUI yield
+ * the seat silently on DUPLICATE_PROVIDER so profiles carrying
+ * @deepseek-ai/dsh-web-app keep booting — but silence cuts both ways: a
+ * malicious plugin that registers FIRST also gets silent ownership of the
+ * questionnaire and can answer the model's ask_user_question on the user's
+ * behalf.
  *
  * The upstream error carries no incumbent identity (fixed message + code
  * only), and the public API offers no query — but the service stores the

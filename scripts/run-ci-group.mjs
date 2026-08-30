@@ -33,6 +33,12 @@ const GROUPS = {
     ["verify-askpanel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-layout.tsx']],
     ["repro-toolcards", ['node', '--import', 'tsx/esm', 'scripts/repro-toolcards.tsx']],
     ["repro-diff-split", ['node', '--import', 'tsx/esm', 'scripts/repro-diff-split.tsx']],
+// 思考块流式视图回归：preview 固定三行且点击切全文/再点收回，full
+// 默认值反向但仍不进入 0 行正文；增量 Markdown 与整段渲染的块间距
+// 一致（真实段落空行保留，代码块后不凭空多一行）。
+    ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
+    ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
+    ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
 // 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
 // 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
 // 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
@@ -47,6 +53,10 @@ const GROUPS = {
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查
 // 2026-08-27）——tokenize 提取→回放链路的注入 payload 必须被剥除。
     ["verify-osc8-sanitize", ['node', '--import', 'tsx/esm', 'scripts/verify-osc8-sanitize.tsx']],
+// 文件链接 ANSI 完整性回归：renderCodeSpan 把已上色的路径代码段传入
+// createHyperlink 时，防注入消毒会剥掉合法 \x1b、SGR 参数文本上屏
+// （[38;2;…m 残片）；链接标签的样式序列同样不得残留裸参数。
+    ["verify-markdown-filelink-ansi", ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-filelink-ansi.ts']],
 // 全屏 resize 空白回归：宽度变化清空行高缓存 → scrollHeight 估算塌缩，
 // shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
 // 成"只剩输入框"（Orca pane 宽度抖动的现场取证复现）。
@@ -201,6 +211,14 @@ const GROUPS = {
 //    与粘性报错、真 Chat 驱动的对话框/状态行/快捷键端到端。
     ["verify-extension-events", ['node', '--import', 'tsx/esm', 'scripts/verify-extension-events.tsx']],
     ["verify-extension-ui", ['node', '--import', 'tsx/esm', 'scripts/verify-extension-ui.tsx']],
+// 非 TTY 宿主门禁回归（Web/Tauri 共存）：profile 装有 dsh-tui 的非终端
+// 宿主（stdout 为 pipe/null）必须静默跳过插件、不 throw、不影响宿主启动；
+// 显式 dsh-tui launcher/standalone 启动无 TTY 仍保留原报错。
+    ["verify-tui-host-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-tui-host-mode.ts']],
+// 插件 toast 接缝回归（ctx.tuiToast）：消毒/标量强制、timeout 钳制
+// （插件不可 sticky）、未知颜色拒绝、每激活 20/min 限速 + 粘性告警、
+// host-only 面不泄漏到插件服务对象、公开 shim 导出。
+    ["verify-plugin-toast", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-toast.tsx']],
 // 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
 // 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
     ["verify-session-titles", ['node', 'scripts/verify-session-titles.mjs']],
@@ -307,6 +325,12 @@ const GROUPS = {
 // DATA_DIR 建目录 0700；临时 HOME 重定向 + 固定 umask，修复前按 umask
 // 落 0644 必红。
     ["verify-data-file-perms", ['node', '--import', 'tsx/esm', 'scripts/verify-data-file-perms.tsx']],
+// /resume・/tree 搜索框显示塌缩回归：SearchBox 的单行窗口化预算取自实测
+// 自身宽度，自适应宽度（默认 row 包裹、无 width prop）会让预算跟随内容
+// 收缩，收敛到「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。
+// 断言逐键英文、IME 整段上屏、退格、rename 预填+追加与 /tree 搜索的查询
+// 始终完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
+    ["verify-session-browser-searchbox", ['node', '--import', 'tsx/esm', 'scripts/verify-session-browser-searchbox.tsx']],
   ],
   'channel-ui': [
 // channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
@@ -317,11 +341,14 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// 会话切换/清屏卫生：子代理投影（行 map/任务描述队列/仪表盘快照）随
+// 切换重置、/clear 后在途子代理卡可回现、staged image token 会话作用域
+// （switchModel 不泄漏）、resumeTo 竞争切换守卫、recap 预算从新到旧收容。
+    ["verify-session-reset-hygiene", ['node', '--import', 'tsx/esm', 'scripts/verify-session-reset-hygiene.tsx']],
 // Agent View 回归：派生辅助（折叠/摘要/状态映射/标题回退）、无头整屏
 // 组装、按键驱动（派发/预览/帮助/退出）、停止→删除武装的安全语义
 // （Enter 取消、焦点漂移不得改向、窗口过期自动解除）。
-    ["verify-agent-view", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view.mjs']],
-// /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
+    ["verify-agent-view", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view.mjs']],// /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
 // 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
 // （渲染、Enter 菜单、字母直达执行、Esc）。
@@ -379,6 +406,10 @@ const GROUPS = {
 // 启动上下文摘要窄终端回归（issue #167）：摘要与 Ctrl+T 提示必须
 // 作为一条可截断文本布局，不能换行后互相穿插。
     ["verify-loaded-context-width", ['node', '--import', 'tsx/esm', 'scripts/verify-loaded-context-width.tsx']],
+// Divider 可用宽度回归：横线按 Yoga 实际授予的宽度渲染（测量撑满
+// Box），嵌套在更窄容器里（transcript 旁 2 列 timeline rail 排水沟）
+// 不再按整终端宽度换行到第二行——「Conversation compacted」窄窗劈裂。
+    ["verify-divider-width", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-width.tsx']],
 // thinking spinner 残影回归（issue #72）：text-default emoji（✳）
 // 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
     ["repro-thinking", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking.tsx']],
@@ -408,6 +439,9 @@ const GROUPS = {
 // displayName 内嵌换行入口压平（#160 窗口化列表单行契约的第一道防
 // 线）。注意必须走 tsx——脚本直接 import src/customTheme.ts。
     ["verify-themes", ['node', '--import', 'tsx/esm', 'scripts/verify-themes.mjs']],
+// 运行时主题插件接缝回归：Cordis activation 归属与自动清理、host-only
+// facade、静态主题优先级、resolver token 清理及无服务降级。
+    ["verify-runtime-themes", ['node', '--import', 'tsx/esm', 'scripts/verify-runtime-themes.ts']],
 // Text 背景色回归（issue #166）：公开 themed Text 与 Box 一致支持
 // 原始颜色值，且必须把对应 ANSI 背景色写入终端。
     ["verify-text-background", ['node', '--import', 'tsx/esm', 'scripts/verify-text-background.tsx']],
@@ -443,6 +477,9 @@ const GROUPS = {
 // 长问卷列表回归：24 行终端中的 36 个两行 provider 选项必须围绕
 // focusIndex 窗口化，初始和深度导航后焦点 label/单选标记始终可见。
     ["verify-askpanel-long-list", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-long-list.tsx']],
+// 长 plan-review 正文回归（issue #413）：24 行终端里 40 段 plan 不得把
+// Approve/反馈顶出屏外；滚轮必须滚 plan body（直接面板 + 挂进 Chat）。
+    ["verify-plan-review-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-plan-review-scroll.tsx']],
 // 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
 // onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
     ["verify-plugin-scene-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-scene-boundary.tsx']],

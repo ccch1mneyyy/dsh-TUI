@@ -56,6 +56,11 @@ const ISSUE_REFERENCE_PATTERN =
  * @returns The content with those blocks removed and whitespace trimmed.
  */
 export function stripPromptXMLTags(content: string): string {
+  // Every alternative in the pattern is anchored on a literal '<', so content
+  // without one cannot match. Skip the regex entirely in that case: the
+  // backreference defeats most of the engine's fast paths, and streaming
+  // re-runs this over the whole accumulated message on every frame.
+  if (!content.includes('<')) return content.trim()
   return content.replace(TOOL_ANALYSIS_TAG_BLOCKS, '').trim()
 }
 
@@ -92,11 +97,15 @@ function paintInlineCode(text: string): string {
  * without OSC 8 support keep the plain painted code span.
  */
 function renderCodeSpan(token: Tokens.Codespan): string {
-  const painted = paintInlineCode(token.text)
-  if (!looksLikeFilePath(token.text)) return painted
-  if (!supportsHyperlinks()) return painted
-  return createHyperlink(fileLinkUrl(token.text), painted, {
-    style: (text: string) => text,
+  // Paint via the style callback so the permission color is applied AFTER
+  // createHyperlink's anti-smuggle content scrub: passing the painted
+  // string as content would have its ESC bytes stripped, leaving
+  // `[38;2;…m` parameter text on screen.
+  const paint = (text: string): string => paintInlineCode(text)
+  if (!looksLikeFilePath(token.text)) return paint(token.text)
+  if (!supportsHyperlinks()) return paint(token.text)
+  return createHyperlink(fileLinkUrl(token.text), token.text, {
+    style: paint,
   })
 }
 

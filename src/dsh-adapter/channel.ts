@@ -5,7 +5,6 @@ import { isModelInvocable, isUserInvocable, renderSkillContent, type SkillSummar
 import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
-  isTokenDelta,
   MessageId,
   ReasoningEffortId,
   type ContentBlock,
@@ -27,7 +26,7 @@ import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-pro
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
-import { completeCommands, HIDDEN_COMMAND_NAMES, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
+import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
 import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
 import {
@@ -67,16 +66,17 @@ import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { OAuthProviderStatus, OAuthSetupHost, ProviderSetupHost } from './providerWizard.js'
-import { readPresetPref, writePresetPref } from '../presetPrefs.js'
-import { composePreset, resolvePersistedPreset, resolvePersistedRoute, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
+import { migratePresetPref, readPresetPref, writePresetPref } from '../presetPrefs.js'
+import { composePreset, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf, serviceForAgent } from './presets.js'
+import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from './preset-resolution.js'
 import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
 import { getLang, LANGS, t } from '../i18n.js'
-import { AUTO_THEME_NAME, THEME_NAMES } from '../theme.js'
-import { listCustomThemes } from '../customTheme.js'
+import { AUTO_THEME_NAME } from '../theme.js'
+import { listThemeCatalog } from '../themeCatalog.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
@@ -94,6 +94,7 @@ import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettings
 import type { SettingsHost } from './settingsEditor.js'
 import { getHostSceneRuntime, type TuiSceneDescriptor, type TuiSceneRuntime } from './scenes.js'
 import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
+import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
 import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
 import { installDecisionGuard } from './decision-guard.js'
@@ -189,6 +190,131 @@ function normalizeRewindPromptDecision(
 /** Toast-bound plugin text (veto reasons, handled notices, rewind summaries)
  *  is render-path data too: same sanitization, toast-width cap. */
 const NOTICE_CELLS = 200
+
+const PERMISSION_PRESET_CUSTOM = 'custom'
+const PERMISSION_PRESET_NAME_CELLS = 120
+const PERMISSION_PRESET_DESCRIPTION_CELLS = 400
+
+type PermissionPresetService = {
+  names?: unknown
+  current?: (events: readonly SessionEvent[]) => unknown
+  optionOf?: (name: string) => unknown
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+}
+
+function legacyPermissionPresetOptions(): readonly PermissionPresetOption[] {
+  return [
+    {
+      value: 'read-only',
+      name: t('permission-preset-readonly'),
+      description: t('permission-preset-readonly-desc'),
+    },
+    {
+      value: 'workspace-write',
+      name: t('permission-preset-workspace-write'),
+      description: t('permission-preset-workspace-write-desc'),
+    },
+    {
+      value: 'danger-full-access',
+      name: t('permission-preset-full-access'),
+      description: t('permission-preset-full-access-desc'),
+    },
+  ]
+}
+
+function legacyPermissionPresetSnapshot(sandbox: SessionModeSpec['sandbox']): PermissionPresetSnapshot {
+  const options = legacyPermissionPresetOptions()
+  const currentOption = sandbox === undefined ? undefined : options.find(option => option.value === sandbox)
+  return {
+    availability: 'legacy',
+    options,
+    ...(currentOption === undefined
+      ? {}
+      : { current: { ...currentOption, kind: 'preset' as const } }),
+  }
+}
+
+function unavailablePermissionPresetSnapshot(): PermissionPresetSnapshot {
+  return { availability: 'unavailable', options: [] }
+}
+
+function normalizePermissionPresetOption(value: unknown): PermissionPresetOption | undefined {
+  if (!isRecord(value) || typeof value.value !== 'string' || typeof value.name !== 'string') return undefined
+  const name = cleanRenderText(value.name, PERMISSION_PRESET_NAME_CELLS)
+  if (name === '') return undefined
+  if (value.description !== undefined && typeof value.description !== 'string') return undefined
+  const description = value.description === undefined
+    ? undefined
+    : cleanRenderText(value.description, PERMISSION_PRESET_DESCRIPTION_CELLS)
+  if (value.description !== undefined && description === '') return undefined
+  return {
+    value: value.value,
+    name,
+    ...(description === undefined || description === '' ? {} : { description }),
+  }
+}
+
+function permissionPresetSnapshotFromService(
+  service: unknown,
+  events: readonly SessionEvent[],
+): PermissionPresetSnapshot {
+  if (!isRecord(service)) return unavailablePermissionPresetSnapshot()
+  const runtime = service as PermissionPresetService
+  try {
+    const capturedNames = runtime.names
+    const current = runtime.current
+    const optionOf = runtime.optionOf
+    if (!Array.isArray(capturedNames) || capturedNames.length === 0) return unavailablePermissionPresetSnapshot()
+    if (typeof current !== 'function' || typeof optionOf !== 'function') return unavailablePermissionPresetSnapshot()
+
+    const names = [...capturedNames]
+    const seen = new Set<string>()
+    for (const name of names) {
+      if (typeof name !== 'string' || name.trim() === '' || name === PERMISSION_PRESET_CUSTOM || seen.has(name)) {
+        return unavailablePermissionPresetSnapshot()
+      }
+      seen.add(name)
+    }
+
+    const options: PermissionPresetOption[] = []
+    for (const name of names) {
+      const option = normalizePermissionPresetOption(optionOf(name))
+      if (option === undefined || option.value !== name) return unavailablePermissionPresetSnapshot()
+      options.push({ ...option })
+    }
+
+    const currentValue = current(events)
+    if (typeof currentValue !== 'string' || (currentValue !== PERMISSION_PRESET_CUSTOM && !seen.has(currentValue))) {
+      return unavailablePermissionPresetSnapshot()
+    }
+    const currentOption = normalizePermissionPresetOption(optionOf(currentValue))
+    if (currentOption === undefined || currentOption.value !== currentValue) return unavailablePermissionPresetSnapshot()
+    if (currentValue !== PERMISSION_PRESET_CUSTOM) {
+      const rosterOption = options.find(option => option.value === currentValue)
+      if (
+        rosterOption === undefined
+        || rosterOption.name !== currentOption.name
+        || rosterOption.description !== currentOption.description
+      ) {
+        return unavailablePermissionPresetSnapshot()
+      }
+    }
+
+    return {
+      availability: 'runtime',
+      options,
+      current: {
+        ...currentOption,
+        kind: currentValue === PERMISSION_PRESET_CUSTOM ? 'custom' : 'preset',
+      },
+    }
+  } catch {
+    return unavailablePermissionPresetSnapshot()
+  }
+}
 
 /** `tui/rewind-done` return normalization: the first non-empty STRING is the
  *  summary; anything else is not a decision. */
@@ -501,11 +627,25 @@ export interface CredentialStatus {
   writable: boolean
 }
 
-/** One entry of the latest todo-list snapshot (mirrors the session domain's
- *  `TodoItem`; declared locally for the same reason as {@link ChannelGoal}). */
+/** One entry of the latest todo-list snapshot (mirrors dsh-tool-todo's
+ *  `TodoItem`; declared locally so the adapter needn't depend on that plugin). */
 export interface TodoPanelItem {
   content: string
   status: 'pending' | 'in_progress' | 'completed'
+}
+
+/** Narrow an optional plugin event without importing its module augmentation. */
+function todoPanelItems(data: unknown): TodoPanelItem[] | undefined {
+  if (typeof data !== 'object' || data === null) return undefined
+  const todos = (data as { todos?: unknown }).todos
+  if (!Array.isArray(todos)) return undefined
+  const valid = todos.every(item => {
+    if (typeof item !== 'object' || item === null) return false
+    const candidate = item as { content?: unknown; status?: unknown }
+    return typeof candidate.content === 'string' &&
+      (candidate.status === 'pending' || candidate.status === 'in_progress' || candidate.status === 'completed')
+  })
+  return valid ? todos as TodoPanelItem[] : undefined
 }
 
 /** One named prompt contribution with its model-visible text. */
@@ -582,6 +722,8 @@ export interface Channel {
    *  the prompt-input border + session label chip accent (cc/sessionColors). */
   readonly sessionColor: string
   readonly agentId: string
+  /** TUI-owned generation that changes on every live Agent rebind. */
+  readonly agentBindingGeneration: number
   /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
    *  into the dim AutoRecapRow when the session opens/resumes. Read live
    *  (settings service), so a `/settings` change applies on the next
@@ -845,6 +987,8 @@ export interface Channel {
   readonly modeIndex: number
   /** Shift+Tab: advance to the next configured session mode. */
   cycleMode(): Promise<void>
+  /** Read the official permission preset roster and current identity. */
+  permissionPresets(): PermissionPresetSnapshot
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined
@@ -1034,6 +1178,31 @@ export interface PresetOption {
   isDefault: boolean
 }
 
+export type PermissionPresetAvailability = 'runtime' | 'legacy' | 'unavailable'
+
+export interface PermissionPresetOption {
+  readonly value: string
+  readonly name: string
+  readonly description?: string
+}
+
+export interface PermissionPresetCurrent {
+  readonly value: string
+  readonly name: string
+  readonly description?: string
+  readonly kind: 'preset' | 'custom'
+}
+
+/**
+ * Adapter-owned permission roster snapshot. `options` never contains the
+ * official `custom` sentinel; it is represented only by `current`.
+ */
+export interface PermissionPresetSnapshot {
+  readonly availability: PermissionPresetAvailability
+  readonly options: readonly PermissionPresetOption[]
+  readonly current?: PermissionPresetCurrent
+}
+
 /** @internal */
 /** One user message submitted while the model was working, not yet claimed
  *  by a turn. `steer` lands at the next step boundary of the running turn;
@@ -1065,6 +1234,8 @@ export interface ChannelState {
   sessionColor: string
   autoRecapOnOpen: boolean
   agentId: string
+  /** TUI-owned generation that changes on every live Agent rebind. */
+  agentBindingGeneration: number
   model: string
   provider: string
   tokens: TokenUsage
@@ -1235,6 +1406,8 @@ export interface ChannelState {
   modeIndex: number
   /** Shift+Tab session-mode advance (see the public Channel type). */
   cycleMode(): Promise<void>
+  /** Read the official permission preset roster and current identity. */
+  permissionPresets(): PermissionPresetSnapshot
   /** The preset the current session runs under (see the public Channel type). */
   agentPreset: string | undefined
   /** The roster's presets for the `/preset` picker (see the public Channel type). */
@@ -1742,6 +1915,8 @@ export function createChannel(
 ): ChannelState {
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
+  const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
+
   // ── agent view (CC's `claude agents`) internal state ──────────────────────
   // Handles of background sessions this channel dispatched or backgrounded.
   // The agents themselves live in the host registry (ctx.agents) and die with
@@ -1977,6 +2152,25 @@ export function createChannel(
     subagentStreamDirty = false
     state.subagents = subagentStore.snapshot()
     syncSubagentRows(state.subagents)
+  }
+  /** Drop the subagent row map (transcript wipe): the next event for a still
+   *  live subagent re-creates its card as a fresh row instead of feeding a
+   *  row object no transcript holds (update-only orphan). */
+  const dropSubagentRows = (): void => {
+    subagentStreamDirty = false
+    subagentRowsByAgentId.clear()
+  }
+  /** Full subagent reset for a session swap: the row map, the queued task
+   *  descriptions and the store itself are all scoped to the OLD agent's
+   *  session. Leaked into the adopted one, they would keep dead subagents in
+   *  the dashboard snapshot until new events overwrite it, grow the row map
+   *  without bound across swaps, and hand a stale queued description to the
+   *  new session's first card. */
+  const resetSubagentProjection = (): void => {
+    dropSubagentRows()
+    pendingTaskDescriptions.length = 0
+    subagentStore.reset()
+    state.subagents = []
   }
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
@@ -2238,6 +2432,7 @@ export function createChannel(
     toolCards.clear()
     nextRowId = 0
     state.rows.length = 0
+    resetSubagentProjection()
     // Goal/todo/title are session-scoped; the replay re-derives them for
     // the session being entered (or leaves them empty).
     state.todos = []
@@ -2290,6 +2485,11 @@ export function createChannel(
     touchSession(childId)
     state.emit()
     void oldHandle?.dispose().catch(() => {})
+    // The staged-image map is session-scoped (the same contract the
+    // resumeTo/newSession tails enforce): tokens typed against the rewound
+    // conversation must not ride into the fork's next send, and the epoch
+    // bump fences saves still in flight for the old session.
+    clearStagedImages()
     return sourceSessionId
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
@@ -2563,7 +2763,7 @@ export function createChannel(
       }
       // `undefined` = not registered; a handler error surfaces as its
       // message so the user sees why the command failed.
-      return execution?.result.text ?? ''
+      return execution === undefined ? undefined : execution.result.text ?? ''
     } catch (error) {
       return error instanceof Error ? error.message : String(error)
     }
@@ -2824,6 +3024,8 @@ export function createChannel(
     ])
   }
 
+  let agentBindingGeneration = 0
+
   /**
    * Adopt a live agent in this process — the agent view's attach path for a
    * background session. The target is already composed (preset, route,
@@ -3074,7 +3276,6 @@ export function createChannel(
     notifySessionSwitched(kind, sessionId, previousSessionId)
     return { ok: true }
   }
-
   const state: ChannelState = {
     effortLevels: undefined,
     version: 0,
@@ -3094,6 +3295,7 @@ export function createChannel(
       return (ns?.value as Record<string, unknown> | undefined)?.recapOnOpen !== false
     },
     agentId: agent.id,
+    agentBindingGeneration: 0,
     model: options.model,
     provider: options.provider,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
@@ -3169,21 +3371,34 @@ export function createChannel(
           ]
         }
         if (path.length === 1 && path[0] === 'theme') {
+          const themeEntries = listThemeCatalog(themeHost)
           return [
             { name: 'status', description: 'Show the current theme', descriptionKey: 'sugg-status-desc' },
             { name: AUTO_THEME_NAME, description: 'Follow the terminal background', descriptionKey: 'sugg-theme-auto-desc' },
-            ...THEME_NAMES.map((name) => ({
-              name,
-              description: `Built-in theme ${name}`,
-              descriptionKey: 'sugg-theme-builtin-desc',
-            })),
-            ...listCustomThemes()
-              .filter((spec) => spec.name !== AUTO_THEME_NAME)
-              .map((spec) => ({
-                name: spec.name,
-                description: `User theme (${spec.base} base)`,
-                descriptionKey: 'sugg-theme-user-desc',
-              })),
+            ...themeEntries
+              .filter((entry) => entry.name !== AUTO_THEME_NAME)
+              .map((entry) => {
+                const base = entry.base ?? 'dark'
+                if (entry.source === 'builtin') {
+                  return {
+                    name: entry.name,
+                    description: `Built-in theme ${entry.name}`,
+                    descriptionKey: 'sugg-theme-builtin-desc',
+                  }
+                }
+                if (entry.source === 'runtime') {
+                  return {
+                    name: entry.name,
+                    description: `Plugin theme (${base} base)`,
+                    descriptionKey: 'sugg-theme-plugin-desc',
+                  }
+                }
+                return {
+                  name: entry.name,
+                  description: `User theme (${base} base)`,
+                  descriptionKey: 'sugg-theme-user-desc',
+                }
+              }),
           ]
         }
         if (path.length === 1 && path[0] === 'color') {
@@ -3258,13 +3473,23 @@ export function createChannel(
           ]
         }
         if (path.length === 1 && path[0] === 'permission') {
-          // Sandbox-preset vocabulary of the `/permission` picker — Tab
-          // completes it for keyboard users, Enter still dispatches.
-          return [
-            { name: 'read-only', description: 'Read-only session: no file writes, no commands', descriptionKey: 'permission-preset-readonly-desc' },
-            { name: 'workspace-write', description: 'Read/write inside the workspace; writes need a prior read', descriptionKey: 'permission-preset-workspace-write-desc' },
-            { name: 'danger-full-access', description: 'Unrestricted access, no approvals', descriptionKey: 'permission-preset-full-access-desc' },
-          ]
+          const snapshot = state.permissionPresets()
+          return snapshot.options
+            .filter(option => isCommandCompletionToken(option.value))
+            .map(option => ({
+              name: option.value,
+              description: option.description ?? option.name,
+              ...(option.value === 'read-only'
+                ? { descriptionKey: 'permission-preset-readonly-desc' }
+                : option.value === 'workspace-write'
+                  ? { descriptionKey: 'permission-preset-workspace-write-desc' }
+                  : option.value === 'danger-full-access'
+                    ? { descriptionKey: 'permission-preset-full-access-desc' }
+                    : {}),
+              ...(snapshot.current?.kind === 'preset' && snapshot.current.value === option.value
+                ? { tag: 'current' }
+                : {}),
+            }))
         }
         if (path.length === 1 && path[0] === 'plan') {
           return [
@@ -4330,6 +4555,11 @@ export function createChannel(
       // (and commit its checkpoint) once we leave it for the target — cancel
       // and await it before any target read.
       await settleManualCompaction()
+      // Identity pin for the rival-swap guard below: everything between here
+      // and the adoption can await (veto, preset, route, agents.resume), and
+      // an interrupt-queued /new or a second /resume may commit a different
+      // swap in that window.
+      const entrySession = agent.session
       let handle: AgentHandle
       // Compat boundary: register vouched-for legacy event types (e.g.
       // activity/status from pre-#143 logs) in every reachable dsh-session
@@ -4385,6 +4615,17 @@ export function createChannel(
           { color: 'warning', timeoutMs: 8000 },
         )
       }
+      // Rival-swap guard (rewindToNode's entrySession check, applied to the
+      // resume path): the awaits above can straddle another session swap
+      // committing first, and adopting now would stomp the newer session's
+      // live transcript with this target's replay. Free the just-created
+      // handle and bail — the live session stays exactly as the rival left
+      // it, and the persisted target simply stays in /resume.
+      if (agent.session !== entrySession) {
+        void handle.dispose().catch(() => {})
+        state.notify(t('resume-session-changed'), { color: 'error' })
+        return { ok: false, reason: 'failed', error: 'live session changed during resume' }
+      }
       // Replay the persisted history into a fresh transcript (same reset as
       // rewindTo, plus the context window which the replay re-derives).
       streaming = undefined
@@ -4396,6 +4637,7 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4508,7 +4750,14 @@ export function createChannel(
       // A fresh session composes the caller's DEFAULT preset: the cordis.yml
       // `preset` key wins over the persisted `/preset` choice, which wins
       // over the roster default (same precedence as activityFrames).
-      const newComposed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+      const presetPref = options.configuredPreset === undefined ? readPresetPref() : undefined
+      const newComposed = await composePreset(ctx, options.configuredPreset ?? presetPref)
+      if (!migratePresetPref(presetPref, newComposed.agentPreset)) {
+        state.notify(
+          t('preset-switched-pref-failed', { id: newComposed.agentPreset ?? presetPref ?? 'unknown' }),
+          { color: 'warning' },
+        )
+      }
       // Same precedence for the route (issues #14/#30/#67): the pair resolves
       // atomically — a complete cordis.yml route wins whole, else the
       // persisted `/model` choice (a switch earlier in this run just wrote
@@ -4580,6 +4829,7 @@ export function createChannel(
       lastTextDelta.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4774,6 +5024,7 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4836,6 +5087,9 @@ export function createChannel(
       touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
+      // Staged image tokens were typed against the pre-switch conversation;
+      // resumeTo/newSession already drop theirs on the swap — same contract.
+      clearStagedImages()
       // Persist the choice so the next boot and `/new` start on it (same
       // contract as /preset and /effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
@@ -4855,6 +5109,11 @@ export function createChannel(
       streaming = undefined
       reasoning = undefined
       toolCards.clear()
+      // In-flight subagents keep streaming after the wipe; clearing the row
+      // map lets their next event re-create the card as a fresh row instead
+      // of feeding a row object no transcript holds (the store keeps live
+      // tracking for the dashboard — same session, still running).
+      dropSubagentRows()
       state.activeToolCount = 0
       state.responseChars = 0
       state.rows.push({
@@ -4969,6 +5228,16 @@ export function createChannel(
       state.notify(t('activity-indicator-switched', { name }))
       return true
     },
+    permissionPresets() {
+      let service: unknown
+      try {
+        service = ctx.get('permissionPresets')
+      } catch {
+        return unavailablePermissionPresetSnapshot()
+      }
+      if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
+      return permissionPresetSnapshotFromService(service, agent.session.events)
+    },
     async listPresets() {
       const presets = rosterOf(ctx)
       if (presets === undefined) return []
@@ -4997,7 +5266,7 @@ export function createChannel(
       }
       let target: AgentPresetInfo
       try {
-        target = await presets.resolve(presetId)
+        target = await resolveCompatiblePreset(presets, presetId)
       } catch (error) {
         state.notify(
           t('preset-not-found', { id: presetId, err: error instanceof Error ? error.message : String(error) }),
@@ -5006,10 +5275,14 @@ export function createChannel(
         return false
       }
       if (target.broken !== undefined) {
-        state.notify(t('preset-load-failed', { id: presetId, broken: target.broken }), { color: 'error', timeoutMs: 8000 })
+        state.notify(t('preset-load-failed', { id: target.id, broken: target.broken }), { color: 'error', timeoutMs: 8000 })
         return false
       }
       if (target.id === state.agentPreset) {
+        if (!migratePresetPref(presetId, target.id)) {
+          state.notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
+          return true
+        }
         state.notify(t('preset-already-current', { id: target.id }), { color: 'success' })
         return true
       }
@@ -7374,21 +7647,31 @@ ${output}
       case 'session/title':
         state.sessionTitle = event.data.title
         break
-      case 'todo/write':
-        // Whole-list snapshot — latest write wins; log-only UI state.
-        state.todos = event.data.todos
-        break
       default:
+        // dsh-tool-todo owns this optional module augmentation in alpha.2.
+        // Match by name so the TUI remains loadable without that plugin.
+        if ((event as { type: string }).type === 'todo/write') {
+          const todos = todoPanelItems((event as unknown as { data?: unknown }).data)
+          if (todos !== undefined) state.todos = todos
+          break
+        }
         // Logged preset switch (blank sessions only, issue #8): a transcript
         // marker so a replayed log shows which composition produced the
         // turns after it. Not in dsh-session's typed union — matched here by
         // name, like the other plugin-defined events above.
         if ((event as { type: string }).type === 'agent-preset/selected') {
           const data = event.data as unknown as { agentPreset?: string }
+          const recordedPreset = typeof data.agentPreset === 'string' ? data.agentPreset : undefined
+          const renamedOfficialPreset =
+            (recordedPreset === 'code' && state.agentPreset === 'ptc') ||
+            (recordedPreset === 'ptc' && state.agentPreset === 'code')
+          const preset = renamedOfficialPreset && state.agentPreset !== undefined
+            ? state.agentPreset
+            : recordedPreset ?? 'unknown'
           state.rows.push({
             id: nextRowId,
             kind: 'notice',
-            text: t('agent-preset-switched', { preset: data.agentPreset ?? 'unknown' }),
+            text: t('agent-preset-switched', { preset }),
           })
           nextRowId += 1
           break
@@ -7537,6 +7820,8 @@ ${output}
   }
 
   const bindAgent = (): void => {
+    agentBindingGeneration += 1
+    state.agentBindingGeneration = agentBindingGeneration
     for (const dispose of agentSubscriptions) dispose()
     stopActivityTick()
     // Cancel state and deferred interrupt delivery belong to one bound agent.
@@ -7881,6 +8166,19 @@ export function sessionCwdMatches(
 /** Context-bar token estimate (pi-nano-context: ~4 chars per token). */
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
+}
+
+/** Whether one stream chunk advances the first-token/decode boundary. */
+function isTokenDelta(chunk: StreamChunk): boolean {
+  switch (chunk.type) {
+    case 'text-delta':
+    case 'reasoning-delta':
+      return chunk.text !== ''
+    case 'tool-call-delta':
+      return chunk.argumentsDelta !== '' || chunk.name !== undefined
+    default:
+      return false
+  }
 }
 
 /** Character payload of one token-bearing stream delta for the live fallback. */

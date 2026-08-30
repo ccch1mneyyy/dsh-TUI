@@ -146,9 +146,13 @@ for (const lang of ['zh', 'en'] as const) {
 const { UPSTREAM_VALIDATED_VERSION } = await import('../src/dsh-adapter/contract.js')
 type UpstreamDriftSummary = import('../src/dsh-adapter/contract.js').UpstreamDriftSummary
 const V = UPSTREAM_VALIDATED_VERSION
+// Keep the rendering fixture unambiguously newer than every realistic 0.x
+// contract line; using yesterday's primary here became semantically stale as
+// soon as alpha.1 replaced rc.2.
+const FUTURE_VERSION = '99.0.0-alpha.1'
 const driftCases: Array<{ summary: UpstreamDriftSummary; zh: string; en: string }> = [
   {
-    summary: { kind: 'newer', versions: ['0.1.1-rc.2'] },
+    summary: { kind: 'newer', versions: [FUTURE_VERSION] },
     zh: `比本界面验证过的 ${V} 新`,
     en: `newer than the ${V} this UI is validated against`,
   },

@@ -30,9 +30,8 @@ jobs:
         with:
           submodules: recursive
 
+      # 版本来自 package.json 的 packageManager 字段，不在此内联 pin。
       - uses: pnpm/action-setup@v6
-        with:
-          version: 11
 
       - uses: actions/setup-node@v7
         with:

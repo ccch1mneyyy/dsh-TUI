@@ -302,6 +302,7 @@ export const FIXED_RESERVED_COMBOS: readonly string[] = [
   'ctrl+u', // kill line
   'ctrl+k', // kill to end
   'ctrl+w', // kill word
+  'ctrl+j', // newline fallback (legacy LF / extended key reporting)
   'ctrl+left', // word jump
   'ctrl+right', // word jump
   'ctrl+return', // newline (multi-line input)
@@ -333,11 +334,24 @@ export function isFixedReserved(raw: string): boolean {
  */
 export function draftComboConflicts(action: ShortcutActionId, combos: readonly string[]): boolean {
   const others = new Set<string>()
+  const own = new Set<string>()
   for (const spec of SHORTCUT_ACTIONS) {
-    if (spec.id === action) continue
+    if (spec.id === action) {
+      // Restating a combo this action already binds — a default or the
+      // current override — changes nothing about what shadows what; it must
+      // not read as a conflict. This is what lets dashboard re-save its own
+      // ctrl+a default even though that combo is also fixed-reserved for
+      // the editor line-start (the dual-use the defaults themselves encode).
+      for (const raw of spec.defaults) own.add(canonicalComboString(raw))
+      for (const combo of effectiveCombos(spec.id)) own.add(canonicalCombo(combo))
+      continue
+    }
     for (const combo of effectiveCombos(spec.id)) others.add(canonicalCombo(combo))
   }
-  return combos.some(combo => isFixedReserved(combo) || others.has(canonicalComboString(combo)))
+  return combos.some(combo => {
+    if (own.has(canonicalComboString(combo))) return false
+    return isFixedReserved(combo) || others.has(canonicalComboString(combo))
+  })
 }
 
 /**

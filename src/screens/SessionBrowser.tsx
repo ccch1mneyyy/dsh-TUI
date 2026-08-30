@@ -1109,6 +1109,9 @@ export function SessionBrowser({
             placeholder={truncateWidth(t('resume-rename-placeholder'), inputBudget)}
             prefix="✎"
             borderless
+            // 同搜索卡片：自适应宽度会让窗口化预算跟随内容收缩，
+            // 追加字符后预填标题的头部被丢弃。
+            width="100%"
           />
         </Box>
       )}

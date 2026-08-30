@@ -28,7 +28,7 @@
  *      picker can paint the previous list while the fresh one loads,
  *      exactly as before.
  */
-import type { ChatRow } from '../dsh-adapter/channel.js'
+import type { ChatRow, PermissionPresetSnapshot } from '../dsh-adapter/channel.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import type { TuiWorkspaceCommandResult } from '../workspaces.js'
 
@@ -62,7 +62,7 @@ export type ChatOverlay =
   | { kind: 'effort'; index: number }
   | { kind: 'preset'; index: number }
   | { kind: 'theme'; index: number }
-  | { kind: 'permission'; index: number }
+  | { kind: 'permission'; index: number; snapshot: PermissionPresetSnapshot }
   | { kind: 'plan'; index: number }
   | { kind: 'lang'; index: number }
   | { kind: 'history'; query: string; cursor: number; focus: number }
@@ -117,7 +117,7 @@ export type ChatOverlayAction =
    *  with the authoritative focus (model list / preset roster), or a mouse
    *  click on a row of a panel that stays open (effort slider, workspace
    *  flow). Ignored unless that panel is still up. */
-  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'workspace-flow' | 'rewind' | 'file-actions'; index: number }
+  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'permission' | 'workspace-flow' | 'rewind' | 'file-actions'; index: number }
   /** Edit the history-search draft (query text, caret, focused match). */
   | { type: 'history-edit'; query?: string; cursor?: number; focus?: number }
   /** Workspace flow: an action is running (keys except Esc are swallowed). */
@@ -256,6 +256,8 @@ export function dialogOverlayVisible(
       return gates.effortOptionCount > 1
     case 'preset':
       return gates.presetOptionCount > 0
+    case 'permission':
+      return overlay.snapshot.options.length > 0
     default:
       return true
   }

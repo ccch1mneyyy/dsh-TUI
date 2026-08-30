@@ -264,7 +264,7 @@ so keep using `Ctrl`.
 | Session | `/new` new session · `/resume` working-directory/session browser (visible directory scope, search, preview, cross-project, sub-agent runs folded) · `/agentview` agent view (all sessions) · `/bg` (alias `/background`) background this session and open the view · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
 | Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
-| Accounts/Policy | `/provider` add a model provider (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permissions` permission notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
+| Accounts/Policy | `/provider` add a model provider (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permission` dynamic preset/status notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/skills` lists skills discovered by DSH; user-invocable skills join the `/` menu as `/name` |
 | Other | `/agents` subagent list · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` vim editing mode toggle · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
 | Registry | `/plan` `/goal` `/feedback` `/permission` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
@@ -300,7 +300,7 @@ One full-screen surface for every session in this process: the attached conversa
 | --- | --- |
 | [Getting started](docs/getting-started.en.md) | Prerequisites, installation, startup, profile lifecycle, source development |
 | [Configuration](docs/configuration.en.md) | Cordis overrides, fields, agent presets, MCP, environment variables |
-| [Themes](docs/themes.en.md) | Built-in themes, background detection, custom JSON themes, validation |
+| [Themes](docs/themes.en.md) | Built-in themes, background detection, static JSON and npm plugin themes, validation |
 | [Interaction and commands](docs/interaction.en.md) | Keyboard, mouse, questionnaires, slash commands, session workflows |
 | [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
 | [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers an experience almost identical to the official Claude Code extension (on the Marketplace) |
@@ -311,15 +311,16 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
 
 ## Configuration & Extensions
 
-- **Agent presets**: four official agent modes (`standard` / `code` / `minimal` / `cordis`)
+- **Agent presets**: four official agent modes (`standard` / `ptc` / `minimal` / `cordis`)
   plus the TUI-bundled Liangshen mode (`liangshen`),
   switched with `/preset`; sessions that already have a conversation cannot switch, while
   blank sessions take effect immediately. The default preset persists in
   `~/.dsh-tui/agent-preset.json`; `/model` selections persist in `~/.dsh-tui/model.json`.
   See [Configuration](docs/configuration.en.md#agent-preset).
-- **Custom themes**: the `/theme` picker (`auto` follows the system/terminal background,
-  built-in `light` / `dark` / `dark-ansi`) also accepts custom themes from
-  `~/.dsh-tui/themes/<name>.json` — selecting one hot-swaps and persists it; precedence is
+- **Themes**: the `/theme` picker (`auto` follows the system/terminal background,
+  built-in `light` / `dark` / `dark-ansi`) accepts static themes from
+  `~/.dsh-tui/themes/<name>.json` and runtime themes registered by npm plugins through
+  `ctx.tuiThemes` — selecting one hot-swaps and persists it; precedence is
   `DSH_TUI_THEME` env var > persisted selection > OSC 11 terminal-background auto-detection.
   See [Themes](docs/themes.en.md).
 - **MCP**: servers are mounted via `@deepseek-ai/dsh-mcp-client`, with tools registered as
@@ -412,8 +413,11 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
 - Tool-level approval is implemented: the approval service + TUI answerer (CC-style
   approval panel) consumes the approval stream, and privilege-escalation commands pop
   an approval bar. `/permission` preset switching comes from dsh-base's
-  `permission-presets` plugin and is available in the profile composition by default;
-  the bare `cordis.yml` composition does not mount that plugin (no `/permission` command).
+  `permission-presets` plugin and is available in the profile composition by default.
+  If that registry service is absent, TUI uses its legacy three-row compatibility
+  roster; a malformed mounted service is unavailable and fails closed. If the
+  external `/permission` command is not registered, input keeps the existing
+  default/model dispatch behavior.
 - `/connect` `/hooks` are CC-named placeholders: the corresponding
   capabilities have no equivalent mechanism on the DSH side, and the commands give an
   explicit explanation rather than staying silent.
@@ -456,6 +460,22 @@ Want to build a plugin or extension for dsh-TUI? Join the ecosystem:
 - **Reference implementation**: `dsh-working-activity` (live working-status
   line with dual outlets: TUI prompt slot + `activity/status` session events)
 
+### Seam stability reference
+
+An **informal** maturity grading to help plugin authors gauge investment;
+the authoritative status and compatibility agreement live in the
+[admission & development guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md):
+
+| Tier | Seams |
+| --- | --- |
+| Stable candidate (shape frozen; breaking changes go through a minor-version deprecation warning before removal) | VI settings sections · VIII full-screen scenes · X managed dialogs · XI status line · XII keyboard shortcuts · XIII entry renderers |
+| Experimental (may still shift with dsh-std / admission-spec evolution) | IX decision events · toast notifications (`ctx.tuiToast`, new) |
+| Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
+
+Also experimental public surfaces: `@deepseek-harness-tui/dsh-tui/test-utils`
+(headless admission/mounting test helpers) and `@deepseek-harness-tui/dsh-tui/api`
+(types-only entry).
+
 The core repository remains independent; community plugins live in their own
 repos. The organization only maintains the listing and admission rules — it
 does not endorse or warrant the functionality, quality, or safety of community
@@ -469,23 +489,34 @@ responsible for their maintenance and security.
   plugin, pitch an idea, or just hang out 🐋
 - **Chat groups** (Chinese-language): usage questions, plugin ideas, and
   feature wishes are all welcome.
+- **Code of conduct**: please read the
+  [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.en.md) before taking
+  part.
 
-| WeChat group | QQ group (ID 572549239) |
-| :---: | :---: |
-| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI community WeChat group QR code" width="200"> | <img src="screenshots/qq-group.png" alt="dsh-TUI community QQ group QR code" width="200"> |
+| WeChat group | QQ group (ID 572549239) | WeChat group 4 |
+| :---: | :---: | :---: |
+| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI community WeChat group QR code" width="200"> | <img src="screenshots/qq-group.png" alt="dsh-TUI community QQ group QR code" width="200"> | <img src="screenshots/wechat-group4.jpg" alt="dsh-TUI community WeChat group 4 QR code" width="200"> |
 
 > The WeChat QR code expires roughly every 7 days; if it stops working, use
 > the QQ group (572549239) or open an issue to nudge us for a refresh.
 
 ## Permissions and Security Boundary
 
+> **Windows security warning:** The Windows profile defaults to `danger-full-access` with approval set to `never`. Tools therefore have unrestricted access; before starting in an environment with sensitive credentials or an untrusted repository, inspect and tighten the profile configuration.
+
 `dsh-TUI` does not implement a separate sandbox. It uses the filesystem,
-shell, sandbox, and approval policies of the active DSH profile. The supplied
-profile uses workspace confinement and approvals by default on non-Windows
-platforms. Windows currently has no corresponding sandbox backend, so the
-composition falls back to `danger-full-access` without approval prompts.
-Inspect the profile before starting it around sensitive credentials or an
-untrusted repository.
+shell, sandbox, and approval policies of the active DSH profile. Permission
+presets come from the mounted DSH `permissionPresets` registry: third-party
+presets appear automatically in the picker in registry order, while only IDs
+accepted by the existing command-token grammar enter completion. `custom` is a
+current-state label only, never a selectable target. Switching always uses the
+official `/permission <preset>` command.
+When the `permissionPresets` service is absent, TUI keeps its legacy three-row
+compatibility roster. A mounted but unusable service is marked unavailable and
+fails closed instead of inventing a roster. If the external `/permission` command
+is not registered, input follows the existing default/model dispatch path. Inspect
+the profile before starting it around sensitive credentials or an untrusted
+repository.
 
 See [Permissions and security boundary](docs/architecture.en.md#permissions-and-security-boundary)
 for details.

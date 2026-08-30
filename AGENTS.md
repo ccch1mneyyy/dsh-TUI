@@ -10,11 +10,12 @@ src/plugin.ts       运行时实现：TTY 校验、服务注册、Agent 创建/�
 src/channel.ts      会话事件 → 视图投影 + 非 React 动作面（submit/steer/rewind/resume/切换）
 src/screens/        Chat.tsx 交互协调器与状态栏呈现
 src/components/     功能组件；design-system/ 是主题感知原语
+src/themeCatalog.ts  内置、静态 JSON 与运行时插件主题的统一列表/解析
 src/ui.ts           本地渲染器、主题化 Box/Text 与公共 TUI 原语的首选门面
 src/ink/            移植的 Ink 渲染器与终端实现——敏感基础设施，改动聚焦并附专用回归
 src/native-ts/      渲染器使用的移植 Yoga 布局引擎
 src/cc/             Claude Code 风格的终端格式化与呈现辅助
-src/dsh-adapter/    唯一允许 import 官方 @deepseek-ai/* 的位置
+src/dsh-adapter/    唯一允许 import 官方 @deepseek-ai/* 的位置；themes.ts 提供 tuiThemes 插件接缝
 src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据
 .agents/skills/     仅供仓库维护者使用的项目技能，不随 npm 包分发
 presets/            随包分发的 preset（liangshen）

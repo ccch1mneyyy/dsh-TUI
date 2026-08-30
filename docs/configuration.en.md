@@ -50,7 +50,7 @@ A complete common override looks like this:
 | `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
-| `effort` | normally `max` in the bundle | Reasoning effort actually applied to every request (validated against model levels; deepseek supports only off/high/max and invalid levels silently fall back to the adapter default; wins over the persisted `/effort` choice), also shown in the header at startup |
+| `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default and the configured value wins over the persisted `/effort` choice), also shown in the header at startup |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
@@ -81,7 +81,7 @@ Each session composes its model-visible tools and prompt through
 | ID | Name | Capability |
 | --- | --- | --- |
 | `standard` | Standard (default) | Editing, shell, search, skills, planning, goals, subagents, and workflows |
-| `code` | PTC | Standard plus Code Mode SDK presentation for composing operations in TypeScript |
+| `ptc` (alpha.2) / `code` (RC) | PTC | Standard plus the PTC SDK presentation for composing operations in TypeScript; both names resolve compatibly across versions |
 | `minimal` | Minimal | Persistent Bash and `str_replace_editor` only, without compaction |
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
 | `liangshen` | Liangshen mode | Minimal's two-tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
@@ -94,6 +94,9 @@ Usage rules:
   official blank-only rule stores the choice as the new default for `/new` or
   the next launch.
 - The default is stored in `~/.dsh-tui/agent-preset.json`.
+- A legacy `code` preference resolves to `ptc` when the active roster no
+  longer provides `code`, then migrates after that successful resolution;
+  rc rosters keep their real `code` id, and session logs are never rewritten.
 - Precedence is explicit `config.preset` or `DSH_TUI_PRESET`, then persisted
   preference, then the roster default `standard`.
 - Resuming a session restores the preset recorded in that session's log and
@@ -159,7 +162,7 @@ for the complete field reference.
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
-| `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`) or custom theme ahead of persisted selection |
+| `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`), static theme, or registered plugin theme ahead of persisted selection |
 | `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
 | `DSH_TUI_WORKSPACE_TARGET` | Workspace path or URI resolved at startup, normally set by `dsh-tui <target>` |

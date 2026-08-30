@@ -297,8 +297,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-preset',
     group: 'commands',
-    zh: '/preset 切换 agent 预设（standard/code 等）',
-    en: '/preset switches presets: standard/code/minimal/cordis/liangshen',
+    zh: '/preset 切换 agent 预设（standard/ptc 等）',
+    en: '/preset switches presets: standard/ptc/minimal/cordis/liangshen',
   },
   {
     id: 'cmd-preset-liangshen',
@@ -375,8 +375,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-permission',
     group: 'commands',
-    zh: '/permission 弹出权限预设选择器（只读/工作区读写/完全访问）',
-    en: '/permission opens the permission-preset picker (read-only/workspace-write/full)',
+    zh: '/permission 弹出由 DSH registry 提供的权限预设选择器',
+    en: '/permission opens the DSH registry-backed permission-preset picker',
   },
   {
     id: 'cmd-plan-goal',
@@ -559,8 +559,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'disp-theme-custom',
     group: 'display',
-    zh: '自定义主题：~/.dsh-tui/themes/<名>.json 即写即热切换',
-    en: 'Custom themes: ~/.dsh-tui/themes/<name>.json, hot-swappable',
+    zh: '主题：~/.dsh-tui/themes/<名>.json 或 npm 插件注册，即时热切换',
+    en: 'Themes: ~/.dsh-tui/themes/<name>.json or npm plugin registration, hot-swappable',
   },
   {
     id: 'disp-theme-status',

@@ -1,7 +1,15 @@
-/** Small helpers shared by the plugin runtime verification batteries. */
+/**
+ * Small helpers shared by the plugin runtime verification batteries — the
+ * main package re-exports them from `@deepseek-harness-tui/dsh-tui/test-utils`
+ * so ecosystem plugin authors can write the same headless admission tests.
+ *
+ * Test-only surface, Experimental: helpers mount REAL cordis fibers and
+ * drive the REAL admission path; nothing here is meant for production
+ * plugin runtime code.
+ */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { getHostAdmission } from '../src/dsh-adapter/plugin-host.js'
+import { getHostAdmission } from './plugin-host.js'
 
 export const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 

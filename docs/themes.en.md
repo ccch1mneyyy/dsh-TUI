@@ -37,8 +37,8 @@ DSH_TUI_THEME
 
 ## Switching themes
 
-- `/theme` opens the picker, with `auto` and the built-ins before custom themes.
-- `/theme <name>` switches directly.
+- `/theme` opens the picker, with `auto` and the built-ins before static JSON and plugin themes.
+- `/theme <name>` switches directly to a static or runtime plugin theme.
 - `/theme status` shows the current theme and persistence location.
 
 Confirming a choice hot-switches immediately and writes it to
@@ -81,6 +81,36 @@ Fields:
 
 When the file declares `name`, its filename remains a loading alias. See the
 `Theme` type in [`src/theme.ts`](../src/theme.ts) for every semantic key.
+
+## npm plugin themes
+
+An npm plugin can register a runtime theme through the `dsh-tui-extensions` row
+without writing to `~/.dsh-tui/themes/`:
+
+```ts
+import type { Context } from '@deepseek-ai/cordis'
+import type { TuiThemeDescriptor } from '@deepseek-harness-tui/dsh-tui/extensions'
+
+export function apply(ctx: Context): void {
+  const themes = ctx.get('tuiThemes', false)
+  themes?.register({
+    name: 'my-plugin:night',
+    displayName: 'Night',
+    base: 'dark',
+    colors: { claude: '#88AAFF', selectionBg: '#334466' },
+  }, ctx)
+}
+```
+
+Use a lowercase safe ID such as `plugin-id:theme-id`. `base` remains `light`,
+`dark`, or `dark-ansi`, and `colors` is a partial override of the `Theme`
+semantic keys. `auto`, built-ins, and `status` are reserved. Registrations are
+removed with the plugin activation, and the returned disposer can remove one
+early. Plugin themes appear in the `/theme` picker, completion, and direct
+switching; their names use the existing `~/.dsh-tui/theme.json` persistence.
+Built-ins win over static JSON, and static JSON wins over a same-name plugin
+theme. On an older profile without `tuiThemes`, the plugin degrades silently
+and static themes remain unaffected.
 
 Common override groups:
 

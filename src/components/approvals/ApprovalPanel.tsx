@@ -62,7 +62,7 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
-      <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} padding={4} />
+      <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} />
       <Box flexDirection="column" marginTop={1}>
         {background && (
           <Text color="warning">

@@ -945,8 +945,8 @@ export function tuiUpdatePluginArgs(profile: string, targetVersion?: string): st
 }
 
 /**
- * Postinstall-only transitive dependencies of the dsh-tui chain
- * (dsh-auth → @earendil-works/pi-ai → @google/genai + protobufjs, plus the
+ * Postinstall-only transitive dependencies of the dsh profile chain
+ * (dsh-llm-pi-ai → @earendil-works/pi-ai → @google/genai + protobufjs, plus the
  * esbuild/koffi peers of that chain): pnpm ≥11 refuses to run their build
  * scripts unless the workspace allowlists them, and a profile that never
  * opted in fails the WHOLE install with ERR_PNPM_IGNORED_BUILDS. None of
@@ -1038,6 +1038,90 @@ export function ensureProfileAllowBuilds(profile: string): AllowBuildsOutcome | 
     }
     writeFileSync(yamlPath, `${lines.join('\n')}\n`)
     return { existing: [...present], added }
+  } catch {
+    return undefined
+  }
+}
+
+/** What ensureProfileReleaseAgeExclude did to the profile workspace file. */
+export interface ReleaseAgeExcludeOutcome {
+  /** Final exclude entries after the run (ours plus preserved foreign ones). */
+  entries: string[]
+  /** True when the file was written (entry added or stale entry replaced). */
+  changed: boolean
+}
+
+/**
+ * pnpm ≥11 delays installs of packages published within `minimumReleaseAge`
+ * (24h by default) — on release day that gate refuses the very version
+ * `/update` is installing (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION), which
+ * reads to the user as a broken update until the window passes. Pre-seed the
+ * profile's pnpm-workspace.yaml with a release-age exclusion scoped to this
+ * package at the exact target version — the same best-effort, idempotent
+ * pattern as {@link ensureProfileAllowBuilds}: foreign entries are preserved,
+ * an existing entry for this package is replaced (one entry tracks the current
+ * target instead of accumulating), a missing `minimumReleaseAgeExclude` block
+ * is appended, a missing file is created, and an absent profile directory
+ * resolves to undefined — the caller still runs pnpm, whose own diagnostic
+ * stays the visible fallback.
+ */
+export function ensureProfileReleaseAgeExclude(
+  profile: string,
+  version: string,
+): ReleaseAgeExcludeOutcome | undefined {
+  const yamlPath = profileWorkspaceYamlPath(profile)
+  try {
+    if (!existsSafe(dirname(yamlPath))) return undefined
+    let text = ''
+    try {
+      text = readFileSync(yamlPath, 'utf8')
+    } catch {
+      // Missing file — start from an empty document; writeFileSync creates it.
+    }
+    const entry = `${PACKAGE_NAME}@${version}`
+    const lines = text.split(/\r?\n/u)
+    let blockStart = -1
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]
+      if (line !== '' && line === line.trimStart() && /^minimumReleaseAgeExclude:/u.test(line)) {
+        blockStart = i
+        break
+      }
+    }
+    /** Item text of a list line, unquoted (`- 'x@1'` / `- x@1` → `x@1`). */
+    const itemOf = (line: string): string => line.trim().replace(/^-\s*/u, '').replace(/^'(.*)'$/u, '$1')
+    const foreign: string[] = []
+    let blockEnd = -1
+    let alreadyCurrent = false
+    if (blockStart !== -1) {
+      blockEnd = blockStart + 1
+      for (let i = blockStart + 1; i < lines.length; i += 1) {
+        const line = lines[i]
+        if (line === '' || line === line.trimStart()) break // dedent = block ends
+        blockEnd = i + 1
+        const item = itemOf(line)
+        if (item === entry) {
+          alreadyCurrent = true
+          foreign.push(line)
+        } else if (!item.startsWith(`${PACKAGE_NAME}@`)) {
+          foreign.push(line)
+        }
+        // Stale entries for THIS package (older targets) are dropped above.
+      }
+    }
+    if (alreadyCurrent) {
+      const entries = [entry, ...lines.slice(blockStart + 1, blockEnd).map(itemOf)]
+      return { entries, changed: false }
+    }
+    const insert = foreign.concat(`  - '${entry}'`)
+    if (blockStart !== -1) {
+      lines.splice(blockStart + 1, blockEnd - blockStart - 1, ...insert)
+    } else {
+      if (lines.length > 0 && lines[lines.length - 1] !== '') lines.push('')
+      lines.push('minimumReleaseAgeExclude:', ...insert)
+    }
+    writeFileSync(yamlPath, `${lines.join('\n')}\n`)
+    return { entries: [...foreign.map(itemOf), entry], changed: true }
   } catch {
     return undefined
   }
@@ -1280,6 +1364,20 @@ export async function updateTui(
       `dsh-tui: pre-seeded profile pnpm allowBuilds (${allowBuilds.added.join(', ')}) — ` +
         'postinstall-only deps are explicitly ignored\n',
     )
+  }
+  // pnpm ≥11's minimumReleaseAge (24h by default) refuses installs of
+  // packages published within the window — on release day that gate rejects
+  // the exact version /update pins, surfacing as a failed update that heals
+  // itself a day later. Scope-exempt this package at the exact target before
+  // pnpm runs (release-day /update parity with the allowBuilds seed above).
+  if (targetVersion !== undefined) {
+    const releaseAge = ensureProfileReleaseAgeExclude(profile, targetVersion)
+    if (releaseAge !== undefined && releaseAge.changed) {
+      process.stderr.write(
+        `dsh-tui: pre-seeded profile release-age exclusion (${PACKAGE_NAME}@${targetVersion}) — ` +
+          'a freshly published version installs without the 24h supply-chain delay\n',
+      )
+    }
   }
   let updateStderr = ''
   const capture = (chunk: string): void => { updateStderr += chunk }
