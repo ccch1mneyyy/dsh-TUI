@@ -530,10 +530,9 @@ check('HUD is a value-first instrument strip with group rules', () => {
   assert.doesNotMatch(line ?? '', /prov\s+probe-provider/)
 })
 
-check('HUD is an identity strip with a brand tick and hairline, not a version line', () => {
+check('HUD is an identity strip with a brand tick, not a version line', () => {
   const line = cockpitHud.split('\n').find(row => row.includes('probe-provider'))
   assert.ok(line?.includes('▍'), `missing brand tick in:\n${cockpitHud}`)
-  assert.ok(cockpitHud.includes('─'), `missing HUD hairline in:\n${cockpitHud}`)
   assert.ok(!cockpitHud.includes('dsh-TUI'), `HUD still carries the splash wordmark:\n${cockpitHud}`)
 })
 

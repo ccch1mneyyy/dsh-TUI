@@ -12,12 +12,11 @@ import {
 /** ▴ / ▾ (U+25B4 / U+25BE — the small triangles; CP437-safe on ConHost too). */
 const CHEVRON_UP = ' ▴'
 const CHEVRON_DOWN = ' ▾'
-/** Tick glyphs, right-aligned across the 2-col rail (Grok Build spec):
- *  active = heavy stroke, hover = wide light stroke, idle = short dim
- *  stroke in the rightmost cell. */
-const TICK_ACTIVE = '━━'
-const TICK_HOVER = '──'
-const TICK_IDLE = ' ─'
+/** Subtle, clean rail glyphs:
+ *  active = clear solid tick (▎), hover = highlighted tick, idle = faint indicator. */
+const TICK_ACTIVE = ' ▎'
+const TICK_HOVER = ' ▍'
+const TICK_IDLE = ' ┆'
 
 /** Pointer rest time before the hover preview card pops (ms). Sweeps
  *  never mount a card; only a deliberate pause does. */

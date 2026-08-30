@@ -256,7 +256,7 @@ const darkTheme: Theme = {
   rate_limit_empty: rgb('#2B3447'),
   fastMode: rgb('#E5925A'),
   fastModeShimmer: rgb('#F0B07F'),
-  briefLabelYou: rgb('#F5D77F'),
+  briefLabelYou: rgb('#ECEFF4'), // Clean, crisp off-white for user prompts
   briefLabelClaude: rgb('#7DA1DE'),
   rainbow_red: rgb('#E06C75'),
   rainbow_orange: rgb('#E5925A'),

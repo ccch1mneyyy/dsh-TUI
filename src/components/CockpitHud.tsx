@@ -100,14 +100,14 @@ export function CockpitHud({ channel }: { channel: Channel }): React.ReactNode {
     <Box flexDirection="column" flexShrink={0} width="100%">
       <Box
         flexDirection="row"
-        justifyContent="space-between"
+        justifyContent="flex-end"
         width="100%"
         height={1}
         paddingX={1}
         flexShrink={0}
         overflow="hidden"
       >
-        {/* Left identity group */}
+        {/* Identity group (aligned right) */}
         <Box flexDirection="row" flexShrink={1} overflow="hidden">
           <Text color="claude">{TICK}</Text>
           {shownLeft.map((item, index) => (
@@ -127,9 +127,9 @@ export function CockpitHud({ channel }: { channel: Channel }): React.ReactNode {
           ))}
         </Box>
 
-        {/* Right environment group */}
+        {/* Environment group */}
         {showRight && (
-          <Box flexDirection="row" flexShrink={0} overflow="hidden">
+          <Box flexDirection="row" flexShrink={0} overflow="hidden" marginLeft={2}>
             {rightItems.map((item, index) => (
               <React.Fragment key={item.key}>
                 {index > 0 ? <Text color="promptBorder">{SEP}</Text> : null}
@@ -140,11 +140,6 @@ export function CockpitHud({ channel }: { channel: Channel }): React.ReactNode {
             ))}
           </Box>
         )}
-      </Box>
-
-      {/* Hairline boundary */}
-      <Box width="100%" height={1} overflow="hidden" flexShrink={0}>
-        <Text color="promptBorder" dimColor wrap="truncate">{'─'.repeat(Math.max(columns, 240))}</Text>
       </Box>
     </Box>
   )
