@@ -356,6 +356,8 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// 计划退出恢复进入前权限；覆盖延迟切换、会话恢复与未知权限不提权。
+    ["verify-plan-exit-restore", ['node', 'scripts/verify-plan-exit-restore.mjs']],
 // 会话切换/清屏卫生：子代理投影（行 map/任务描述队列/仪表盘快照）随
 // 切换重置、/clear 后在途子代理卡可回现、staged image token 会话作用域
 // （switchModel 不泄漏）、resumeTo 竞争切换守卫、recap 预算从新到旧收容。

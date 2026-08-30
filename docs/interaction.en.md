@@ -423,6 +423,12 @@ as markdown in the review panel (the dedicated decision layout for
 | `Enter` (input line) | Submit “continue planning” with the feedback text |
 | `Esc` | Interrupt the review to talk (`ASK_CANCELLED`); the model stays in plan mode |
 
+Approving a plan or running `/plan off` restores the actual sandbox and
+approval policy from before plan entry. `Shift+Tab` keeps the selected target
+mode, including switches deferred while a turn is running. Resumed sessions
+recover pre-plan permissions from event history; unknown historical permissions
+stay unchanged instead of falling back to full access when no configured mode matches.
+
 ## Tool approval
 
 When the permission layer issues an `approval/request`, the approval panel

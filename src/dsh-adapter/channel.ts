@@ -3088,19 +3088,50 @@ export function createChannel(
     state.mode = sessionModes[state.modeIndex]!
   }
 
-  /** Apply one configured mode: each declared atom switches independently
-   *  (plan via the registry `/plan` command; sandbox/approval via their
-   *  durable session-log override events). A failing plan toggle aborts the
-   *  whole switch so the session never lands in a half-applied mode. */
-  const applyMode = async (spec: SessionModeSpec): Promise<void> => {
-    if (spec.plan !== undefined && foldPlanActive(agent.session.events) !== spec.plan) {
-      const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
-      if (text === undefined) {
-        // The active preset registers no /plan.
-        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
-        return
+  // Session.append rejects observer reentry; restore after publication unwinds.
+  const pendingPlanExitRestores = new Map<object, SessionModeSpec>()
+  const prePlanModes = new WeakMap<object, SessionModeSpec>()
+  // An in-turn /plan off commits at pre-step, after the command has returned.
+  const explicitPlanExits = new WeakSet<object>()
+
+  const modePermissions = (events: readonly SessionEvent[]): SessionModeSpec => {
+    const sandbox = foldSandboxMode(events)
+    const approval = foldApprovalPolicy(events)
+    return {
+      id: 'restore',
+      ...(sandbox === 'read-only' || sandbox === 'workspace-write' || sandbox === 'danger-full-access'
+        ? { sandbox } : {}),
+      ...(approval === 'ask' || approval === 'never' ? { approval } : {}),
+    }
+  }
+
+  /** Recover a resumed plan's snapshot before /plan ran, not before its
+   *  deferred plan/mode event. Unknown historical atoms stay untouched. */
+  const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefined => {
+    let active = false
+    let start = -1
+    let command: { index: number; id: unknown } | undefined
+    for (let index = 0; index < log.length - 1; index += 1) {
+      const event = log[index]!
+      const type = (event as { type: string }).type
+      const data = event.data as unknown as Record<string, unknown>
+      if (!active && type === 'command/run' && data.name === 'plan' && typeof data.args === 'string') {
+        if (data.args.trim() === 'off') command = undefined
+        else command ??= { index, id: data.commandId }
+      }
+      if (type === 'command/done' && data.commandId === command?.id && data.kind !== 'success') {
+        command = undefined
+      }
+      if (type === 'plan/mode') {
+        if (data.active === true && !active) start = command?.index ?? index
+        active = data.active === true
+        command = undefined
       }
     }
+    return active && start >= 0 ? modePermissions(log.slice(0, start)) : undefined
+  }
+
+  const applyModeAtoms = (spec: SessionModeSpec): void => {
     // The durable sandbox override is one session event (dsh-sandbox-policy's
     // own write path); the session/event arm picks it up immediately.
     if (spec.sandbox !== undefined && foldSandboxMode(agent.session.events) !== spec.sandbox) {
@@ -3115,15 +3146,58 @@ export function createChannel(
       const approval = ctx.get('approval') as
         | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
         | undefined
-      if (approval) {
-        approval.setPolicy(agent, spec.approval)
-      } else {
+      approval?.setPolicy(agent, spec.approval)
+      // The service may no-op when its configured default already matches.
+      if (foldApprovalPolicy(agent.session.events) !== spec.approval) {
         ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
           'approval/policy',
           { policy: spec.approval },
         )
       }
     }
+  }
+
+  /** Apply the configured atoms; an explicit exit owns its target mode. */
+  const applyMode = async (spec: SessionModeSpec): Promise<void> => {
+    const session = agent.session
+    pendingPlanExitRestores.delete(session)
+    const planMode = ctx.get('planMode') as
+      | { get?(a: Agent): { active: boolean; pending?: boolean } }
+      | undefined
+    const planActive = foldPlanActive(session.events)
+    if (spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan) {
+      if (commandService?.find(agent, 'plan') === undefined) {
+        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+        return
+      }
+      if (spec.plan && !planActive && !prePlanModes.has(session)) {
+        const previous = modePermissions(session.events)
+        const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: SessionModeSpec['sandbox'] } | undefined
+        const approval = ctx.get('approval') as { effectivePolicy?(session: Agent['session']): SessionModeSpec['approval'] } | undefined
+        const base = previous.sandbox === undefined && previous.approval === undefined ? sessionModes[0] : undefined
+        previous.sandbox ??= sandbox?.defaultMode ?? base?.sandbox
+        previous.approval ??= approval?.effectivePolicy?.(session) ?? base?.approval
+        prePlanModes.set(session, previous)
+        // Persist missing defaults before /plan, so resume can recover them.
+        applyModeAtoms(previous)
+      }
+      if (!spec.plan) explicitPlanExits.add(session)
+      try {
+        const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
+        if (session !== agent.session) return
+        if (text === undefined) {
+          state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+          return
+        }
+      } finally {
+        if (session === agent.session) {
+          const pending = planMode?.get?.(agent).pending
+          if (!foldPlanActive(session.events) || pending !== false) explicitPlanExits.delete(session)
+          if (!foldPlanActive(session.events) && pending !== true) prePlanModes.delete(session)
+        }
+      }
+    }
+    applyModeAtoms(spec)
     refreshMode()
     state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
     state.emit()
@@ -8220,6 +8294,25 @@ ${output}
         const eventType = (event as { type: string }).type
         if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
           refreshMode()
+        }
+        if (eventType === 'plan/mode' && (event.data as unknown as { active?: boolean }).active === false) {
+          const target = prePlanModes.get(session) ?? prePlanModeSpec(session.events)
+          prePlanModes.delete(session)
+          if (!explicitPlanExits.delete(session) && target !== undefined) {
+            const queued = pendingPlanExitRestores.has(session)
+            pendingPlanExitRestores.set(session, target)
+            if (!queued) queueMicrotask(() => {
+              const restore = pendingPlanExitRestores.get(session)
+              pendingPlanExitRestores.delete(session)
+              // Rebinding, reentry, or an explicit switch supersedes this restore.
+              if (restore === undefined || session !== agent.session || foldPlanActive(session.events)) return
+              applyMode(restore).catch(error => {
+                ctx.logger.warn(
+                  `dsh-tui: plan-exit mode restore failed: ${error instanceof Error ? error.message : String(error)}`,
+                )
+              })
+            })
+          }
         }
         renderEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
