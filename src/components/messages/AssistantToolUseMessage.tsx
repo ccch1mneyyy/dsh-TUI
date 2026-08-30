@@ -69,9 +69,12 @@ function displayName(name: string): string {
     grep: 'Grep',
     write: 'Write',
     edit: 'Edit',
-    todo_write: 'TodoWrite',
+    todo_write: 'Tasks',
     subagent: 'Task',
-    web_search: 'WebSearch',
+    subagent_fork: 'Task',
+    web_search: 'Search',
+    web_fetch: 'Fetch',
+    read_image: 'Image',
   }
   const mapped = KNOWN[name]
   if (mapped) return mapped
@@ -85,6 +88,145 @@ function parseJsonArgs(args: string): unknown {
 
 function jsonArgsLanguage(args: string): 'json' | undefined {
   return parseJsonArgs(args) === undefined ? undefined : 'json'
+}
+
+const QUIET_COLLAPSED_TOOLS = new Set([
+  'read',
+  'glob',
+  'grep',
+  'skill',
+  'read_image',
+  'list_agents',
+  'job_list',
+  'todo_write',
+  'get_goal',
+  'create_goal',
+  'update_goal',
+  'blender_status',
+  'blender_scene_info',
+  'blender_object_info',
+  'blender_validate_scene',
+  'blender_validate_export',
+])
+
+function deriveSmartToolHeader(tool: ToolRow, viewTitle?: string): { name: string; title?: string; filePath?: string; isTerminal?: boolean } {
+  const toolName = tool.name.toLowerCase()
+  const rawArgs = tool.argsFull ?? tool.argsText
+  const parsed = parseJsonArgs(rawArgs) as Record<string, unknown> | undefined
+
+  if (toolName === 'bash' || toolName === 'shell' || toolName === 'terminal' || toolName === 'powershell') {
+    if (parsed && typeof parsed.description === 'string' && parsed.description.trim()) {
+      return { name: displayName(tool.name), title: parsed.description.trim(), isTerminal: false }
+    }
+    if (parsed && typeof parsed.command === 'string') {
+      const cmd = parsed.command.trim()
+      const firstLine = cmd.split('\n')[0] ?? ''
+      const cleaned = firstLine.length > 80 ? `${firstLine.slice(0, 78)}…` : firstLine
+      return { name: displayName(tool.name), title: cleaned, isTerminal: true }
+    }
+  }
+
+  if (toolName === 'skill') {
+    if (parsed && typeof parsed.name === 'string') {
+      return { name: 'Skill', title: `Load ${parsed.name}` }
+    }
+  }
+
+  if (toolName === 'todo_write') {
+    if (parsed && Array.isArray(parsed.todos)) {
+      const done = parsed.todos.filter((t: any) => t && t.status === 'completed').length
+      return { name: 'Tasks', title: `Update task list (${done}/${parsed.todos.length} done)` }
+    }
+    return { name: 'Tasks', title: 'Update task list' }
+  }
+
+  if (toolName === 'read') {
+    const filePath = (parsed?.file_path ?? parsed?.path) as string | undefined
+    if (filePath) {
+      return { name: 'Read', title: filePath, filePath }
+    }
+  }
+
+  if (toolName === 'edit') {
+    const filePath = (parsed?.file_path ?? parsed?.path) as string | undefined
+    if (filePath) {
+      return { name: 'Edit', title: filePath, filePath }
+    }
+  }
+
+  if (toolName === 'write') {
+    const filePath = (parsed?.file_path ?? parsed?.path) as string | undefined
+    if (filePath) {
+      return { name: 'Write', title: filePath, filePath }
+    }
+  }
+
+  if (toolName === 'glob') {
+    const pattern = parsed?.pattern as string | undefined
+    const dir = parsed?.path as string | undefined
+    if (pattern) {
+      return { name: 'Glob', title: `${pattern}${dir ? ` in ${dir}` : ''}` }
+    }
+  }
+
+  if (toolName === 'grep') {
+    const pattern = parsed?.pattern as string | undefined
+    const dir = (parsed?.path ?? parsed?.include) as string | undefined
+    if (pattern) {
+      return { name: 'Grep', title: `"${pattern}"${dir ? ` in ${dir}` : ''}` }
+    }
+  }
+
+  if (toolName === 'read_image') {
+    const filePath = (parsed?.file_path ?? parsed?.path) as string | undefined
+    if (filePath) {
+      return { name: 'Image', title: filePath, filePath }
+    }
+  }
+
+  if (toolName === 'subagent' || toolName === 'subagent_fork') {
+    const desc = parsed?.description as string | undefined
+    if (desc) {
+      return { name: 'Task', title: desc }
+    }
+  }
+
+  if (toolName === 'web_search') {
+    const queries = parsed?.queries as string[] | undefined
+    if (Array.isArray(queries) && queries[0]) {
+      return { name: 'Search', title: `"${queries[0]}"` }
+    }
+  }
+
+  if (toolName === 'web_fetch') {
+    const url = parsed?.url as string | undefined
+    if (url) {
+      return { name: 'Fetch', title: url }
+    }
+  }
+
+  if (toolName.startsWith('mcp__roblox_studio__')) {
+    const action = toolName.replace('mcp__roblox_studio__', '')
+    const desc = (parsed?.instance_path ?? parsed?.script ?? parsed?.query ?? '') as string
+    return { name: 'Roblox', title: `${action}${desc ? ` ${desc.slice(0, 40)}` : ''}` }
+  }
+
+  if (toolName.startsWith('blender_')) {
+    const action = toolName.replace('blender_', '')
+    return { name: 'Blender', title: action }
+  }
+
+  if (toolName === 'artifact') {
+    const cmd = (parsed?.command ?? '') as string
+    const p = (parsed?.path ?? '') as string
+    return { name: 'Artifact', title: `${cmd} ${p}`.trim() }
+  }
+
+  if (viewTitle) {
+    return { name: displayName(tool.name), title: viewTitle }
+  }
+
+  return { name: displayName(tool.name), title: viewTitle }
 }
 
 function filePathFromTool(tool: ToolRow, view: ToolCallView | ToolResultView | undefined): string | undefined {
@@ -322,14 +464,14 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
     return (
       <>
         <Box flexShrink={0}>
-          <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
+          <Text bold color={nameColor} wrap="truncate-end">{name} </Text>
         </Box>
         <Box flexWrap="nowrap" {...headerTooltip}>
           {folded === undefined ? (
-            <Text>({title})</Text>
+            <Text wrap="truncate-end">{title}</Text>
           ) : (
             <>
-              <Text>({folded.first})</Text>
+              <Text wrap="truncate-end">{folded.first}</Text>
               <Text dimColor>{` … +${folded.hidden} lines (ctrl+o to expand)`}</Text>
             </>
           )}
@@ -345,18 +487,14 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
       </Box>
     )
   }
-  // Clickable path: when the caller resolved a file path that appears in
-  // the title (`Edit /path (1 - 100)`), render that segment underlined and
-  // clickable. The click stops propagation so the row's fold toggle does
-  // not fire. indexOf keeps the split exact even for paths with regex
-  // metacharacters.
   if (onOpenFile !== undefined && filePath !== undefined && filePath !== '' && trimmed.includes(filePath)) {
     const at = trimmed.indexOf(filePath)
-    const before = trimmed.slice(0, at)
-    const after = trimmed.slice(at + filePath.length)
+    const before = trimmed.slice(0, at).trim()
+    const after = trimmed.slice(at + filePath.length).trim()
     return (
       <Box flexWrap="nowrap" {...headerTooltip}>
-        <Text bold color={nameColor} wrap="truncate-end">{before}</Text>
+        <Text bold color={nameColor} wrap="truncate-end">{name} </Text>
+        {before !== '' && <Text color="text">{before} </Text>}
         <Box
           onClick={(event: ClickEvent) => {
             event.stopImmediatePropagation()
@@ -366,20 +504,17 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
           <Text underline wrap="truncate-end">{filePath}</Text>
         </Box>
         {after !== '' && (
-          <Text bold={false} color="text" wrap="truncate-end">{after}</Text>
+          <Text bold={false} color="text" wrap="truncate-end"> {after}</Text>
         )}
       </Box>
     )
   }
-  const space = trimmed.indexOf(' ')
-  const head = space === -1 ? trimmed : trimmed.slice(0, space)
-  const tail = space === -1 ? '' : trimmed.slice(space)
+  const startsWithName = trimmed.toLowerCase().startsWith(name.toLowerCase())
+  const displayTitle = startsWithName ? trimmed.slice(name.length).trimStart() : trimmed
   return (
     <Box flexWrap="nowrap" {...headerTooltip}>
-      <Text bold color={nameColor} wrap="truncate-end">
-        {head}
-        <Text bold={false} color="text">{tail}</Text>
-      </Text>
+      <Text bold color={nameColor} wrap="truncate-end">{name} </Text>
+      <Text bold={false} color="text" wrap="truncate-end">{displayTitle}</Text>
     </Box>
   )
 }
@@ -407,24 +542,16 @@ export function AssistantToolUseMessage({
   const isError = tool.status === 'error'
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText
   const result = tool.resultFull ?? tool.resultText
-  const name = displayName(tool.name)
-  const minWidth = stringWidth(name) + 2
-  // The settled view carries the applied diff / actual output; while running,
-  // the call view already shows the pending change (CC's pending Edit diff).
   const view = tool.resultView ?? tool.callView
-  const filePath = filePathFromTool(tool, view)
+  const smart = deriveSmartToolHeader(tool, tool.resultView?.title ?? tool.callView?.title)
+  const name = smart.name
+  const headerTitle = smart.title
+  const filePath = smart.filePath ?? filePathFromTool(tool, view)
+  const minWidth = stringWidth(name) + 2
   const syntaxLanguage = view?.card === 'read' || view?.card === 'generic' || view === undefined
     ? languageFromPath(filePath)
     : undefined
-  // presentResult may omit a title (terminal results carry output, not a
-  // command) — then the call view's title stands.
-  const headerTitle = tool.resultView?.title ?? tool.callView?.title
-  const headerIsTerminal = view?.card === 'terminal'
-  // Fold only the terminal header: multi-line command script, folding on,
-  // and the card not verbose/expanded (Ctrl+O and row click both land in
-  // `verbose`, so expansion reuses the existing state machine). Memoized on
-  // the title reference: settled titles never change, so the 1s
-  // useAnimationFrame tick of a running card re-renders without rescanning.
+  const headerIsTerminal = smart.isTerminal ?? (view?.card === 'terminal')
   const foldedHeader = React.useMemo(
     () => headerIsTerminal && foldTerminalCommand && !verbose && headerTitle !== undefined
       ? foldTerminalTitle(headerTitle)
@@ -449,16 +576,23 @@ export function AssistantToolUseMessage({
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
   const useSplitDiff = !isError && view?.card === 'diff' && diffLayout === 'split'
+  const isQuietTool = QUIET_COLLAPSED_TOOLS.has(tool.name.toLowerCase())
+  const isCollapsed = !verbose && !isExpanded
+
   let body: BodyLine[] = []
   if (isError) {
     if (tool.errorText) body = [{ text: tool.errorText, tone: 'error' }]
   } else if (!useSplitDiff) {
-    if (view !== undefined) body = viewLines(view)
-    if (body.length === 0 && result) {
-      body = result.trimEnd().split('\n').map(plain)
-    }
-    if (isRunning && body.length === 0) {
+    if (isRunning) {
       body = [dim(`Running… (${formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now())))})`)]
+    } else if (isCollapsed && isQuietTool) {
+      // Clean 1-line tool card: suppress noisy result previews when collapsed
+      body = []
+    } else {
+      if (view !== undefined) body = viewLines(view)
+      if (body.length === 0 && result) {
+        body = result.trimEnd().split('\n').map(plain)
+      }
     }
   }
   const cap = view?.card === 'diff' ? DIFF_BODY_MAX_LINES : TEXT_BODY_MAX_LINES
