@@ -2146,7 +2146,7 @@ export function PromptInput({
     return (
       <Text key={absoluteLine} wrap="truncate-end">
         {prefix}
-        {pieces.map((piece, pieceIndex) =>
+        {pieces.length === 0 ? ' ' : pieces.map((piece, pieceIndex) =>
           piece.inverse ? (
             <Text key={pieceIndex} inverse>
               {piece.text}

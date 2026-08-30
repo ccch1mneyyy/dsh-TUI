@@ -204,6 +204,13 @@ function ScrollBox({
       const clampedTarget = Math.max(0, Math.min(maxScroll, targetTop));
       const nextPending = clampedTarget - curTop;
 
+      if (delta > 0 && (curTop >= maxScroll || nextPending <= 0)) {
+        return;
+      }
+      if (delta < 0 && (curTop <= 0 || nextPending >= 0)) {
+        return;
+      }
+
       // Cap accumulated pending delta to a reasonable ceiling so rapid flicks don't over-queue
       const maxPending = Math.max(viewportH * 2, 40);
       el.pendingScrollDelta = Math.max(-maxPending, Math.min(maxPending, nextPending));
