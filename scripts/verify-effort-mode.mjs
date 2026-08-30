@@ -4,8 +4,8 @@
  * against a minimal fake ctx/agent (llm/commands/approval service stubs),
  * then asserts
  *   - listEfforts/setEffort against the stubbed adapter level list
- *     (persistence lands in $HOME/.dsh-tui/effort.json — run under a throwaway
- *     HOME so the real preference file is untouched);
+ *     (the script redirects HOME to a throwaway directory before loading the
+ *     compiled channel, so the real preference file is untouched);
  *   - cycleMode over the built-in default→plan→full cycle: /plan registry
  *     command dispatched, sandbox/mode + approval/policy session events
  *     appended (or setPolicy called), state.mode following each step;
@@ -15,12 +15,19 @@
  *     atomically — no sandbox/approval event lands.
  *
  * Run with plain node against the compiled lib:
- *   HOME=$(mktemp -d) node scripts/verify-effort-mode.mjs
+ *   node scripts/verify-effort-mode.mjs
  */
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createChannel } from '../lib/types/dsh-adapter/channel.js'
+
+const isolatedHome = mkdtempSync(join(tmpdir(), 'dsh-tui-effort-mode-'))
+process.env.HOME = isolatedHome
+process.env.USERPROFILE = isolatedHome
+process.on('exit', () => rmSync(isolatedHome, { recursive: true, force: true }))
+
+const { createChannel } = await import('../lib/types/dsh-adapter/channel.js')
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -58,6 +65,9 @@ function makeEnv({ withCommands = true, withApproval = true } = {}) {
       ? {
           commands: {
             list: () => [],
+            find: (_agent, name) => name === 'plan'
+              ? { name: 'plan', description: 'Toggle plan mode', handler() {} }
+              : undefined,
             execute: async (agent, line, _signal) => {
               commands.push(line)
               if (line.startsWith('/plan')) {

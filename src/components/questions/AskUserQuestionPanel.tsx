@@ -479,7 +479,7 @@ export function AskUserQuestionPanel({
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
-      <Divider color="permission" title={headerTitle} padding={4} />
+      <Divider color="permission" title={headerTitle} />
       <Box flexDirection="column" marginTop={1}>
         {question.header !== undefined && (
           <Text color="suggestion" bold>

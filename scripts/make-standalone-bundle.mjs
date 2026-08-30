@@ -44,6 +44,110 @@ const entryFile = join(standaloneDir, 'entry.mjs')
 const pkgConfig = join(standaloneDir, 'pkg.config.json')
 const runtimeTar = join(standaloneDir, 'runtime.tar.gz')
 
+// ── 发布自助同步（一劳永逸）──────────────────────────────────────────
+// 本脚本在构建时把 standalone/package.json 的 dsh-tui 依赖 spec 改写为当前
+// 版本，而仓库提交的 pnpm-lock.yaml 仍解析上一个发行版——frozen install 会
+// 因 spec 失配直接失败；且 pnpm ≥11 的 minimumReleaseAge（默认 24h）会拒绝
+// 安装"刚发布"的自家包。以下三步让构建自愈，发版不再需要手工同步任何
+// standalone 文件：
+//   ① 临时关闭 minimumReleaseAge，用 --lockfile-only 只重解析被改写的
+//      spec（其余依赖沿用 lock 的既有解析，供应链面不放大）；
+//   ② 从重生成的 lockfile 解析自家包（dsh-tui / dsh-working-activity）的
+//      实际版本，写入精确版本的 minimumReleaseAgeExclude 条目（替换旧条目）；
+//   ③ 恢复配置后 --frozen-lockfile 严格按 lock 安装（#585 的供应链锁）。
+const FIRST_PARTY_PACKAGES = ['@deepseek-harness-tui/dsh-tui', 'dsh-working-activity']
+const workspaceYamlPath = join(standaloneDir, 'pnpm-workspace.yaml')
+const lockfilePath = join(standaloneDir, 'pnpm-lock.yaml')
+
+/**
+ * Run `fn` with `minimumReleaseAge: <value>` temporarily forced in the
+ * standalone workspace config; the original bytes are restored afterwards
+ * (and on failure), including the key-absent case.
+ */
+function withMinimumReleaseAge(value, fn) {
+  const original = readFileSync(workspaceYamlPath, 'utf8')
+  const existing = /^minimumReleaseAge:.*$/m.exec(original)
+  const modified = existing !== null
+    ? original.replace(existing[0], `minimumReleaseAge: ${value}`)
+    : `minimumReleaseAge: ${value}\n${original}`
+  writeFileSync(workspaceYamlPath, modified, 'utf8')
+  try {
+    return fn()
+  } finally {
+    writeFileSync(workspaceYamlPath, original, 'utf8')
+  }
+}
+
+/**
+ * Distinct resolved versions of each first-party package in the lockfile —
+ * packages/snapshot section keys read `'name@version'` / `'name@version(peers)'`.
+ */
+function firstPartyLockfileVersions() {
+  const result = new Map(FIRST_PARTY_PACKAGES.map(name => [name, new Set()]))
+  let text = ''
+  try {
+    text = readFileSync(lockfilePath, 'utf8')
+  } catch {
+    return result
+  }
+  for (const name of FIRST_PARTY_PACKAGES) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    // Scoped names serialize as `'name@version'` (quoted), unscoped as
+    // `name@version:` — the leading quote is optional and the capture stops
+    // at a quote, a peer-suffix `(`, or the key's trailing `:`.
+    const pattern = new RegExp(`^  '?${escaped}@([^'(:\\s]+)`, 'gm')
+    for (const match of text.matchAll(pattern)) result.get(name).add(match[1])
+  }
+  return result
+}
+
+/**
+ * Ensure the workspace config's minimumReleaseAgeExclude carries exact
+ * entries for the given first-party versions (stale own entries replaced,
+ * foreign entries preserved). Returns true when the file was written.
+ */
+function syncReleaseAgeExcludes(versionsByName) {
+  let text = ''
+  try {
+    text = readFileSync(workspaceYamlPath, 'utf8')
+  } catch {
+    return false
+  }
+  const ours = []
+  for (const [name, versions] of versionsByName) {
+    if (versions.size > 0) ours.push(`  - '${name}@${[...versions].sort().join(' || ')}'`)
+  }
+  if (ours.length === 0) return false
+  const lines = text.split(/\r?\n/)
+  let blockStart = -1
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line !== '' && line === line.trimStart() && /^minimumReleaseAgeExclude:/.test(line)) {
+      blockStart = i
+      break
+    }
+  }
+  if (blockStart === -1) {
+    if (lines.length > 0 && lines[lines.length - 1] !== '') lines.push('')
+    lines.push('minimumReleaseAgeExclude:', ...ours)
+  } else {
+    let blockEnd = blockStart + 1
+    const kept = []
+    for (let i = blockStart + 1; i < lines.length; i++) {
+      const line = lines[i]
+      if (line === '' || line === line.trimStart()) break
+      blockEnd = i + 1
+      const item = line.trim().replace(/^-\s*/, '').replace(/^'(.*)'$/, '$1')
+      if (!FIRST_PARTY_PACKAGES.some(name => item === name || item.startsWith(`${name}@`))) kept.push(line)
+    }
+    lines.splice(blockStart + 1, blockEnd - blockStart - 1, ...kept, ...ours)
+  }
+  const next = `${lines.join('\n')}\n`
+  if (next === text) return false
+  writeFileSync(workspaceYamlPath, next, 'utf8')
+  return true
+}
+
 console.log(`\n============================================`)
 console.log(`  dsh-TUI Standalone Bundle Builder`)
 console.log(`  Version: ${version}`)
@@ -74,12 +178,28 @@ if (existsSync(entryFile)) {
 // 2. 构建 runtime.tar.gz 运行时资源包
 console.log('==> 构建 runtime.tar.gz 运行时资源包…')
 rmSync(runtimeTar, { force: true })
+console.log('    正在同步 lockfile（仅重解析改写的 spec）…')
+// 版本号同步改写了 dsh-tui 的依赖 spec，提交的 lockfile 仍解析上一发行版；
+// --lockfile-only 只重解析该 spec（其余依赖沿用既有解析），且需临时关闭
+// minimumReleaseAge——刚发布的版本必然落在 24h 窗口内。失败即中止构建。
+withMinimumReleaseAge(0, () => {
+  execSync('pnpm install --lockfile-only', { cwd: standaloneDir, stdio: 'inherit' })
+})
+const firstParty = firstPartyLockfileVersions()
+if (syncReleaseAgeExcludes(firstParty)) {
+  const described = [...firstParty.entries()]
+    .filter(([, versions]) => versions.size > 0)
+    .map(([name, versions]) => `${name}@${[...versions].sort().join(' || ')}`)
+    .join(', ')
+  console.log(`    已同步 minimumReleaseAgeExclude：${described}`)
+}
 console.log('    正在执行 pnpm install…')
 // --frozen-lockfile：便携包供应链锁死——install 只按 pnpm-lock.yaml 的
 // 已解析版本装包，绝不隐式改 lock 拉新（--no-frozen-lockfile 会让每次
 // 构建重新解析依赖，被投毒的镜像/registry 能在构建机无感知换入恶意
 // 版本并打进发布产物）。lock 失配会直接失败，提示提交新的 lock 而非
-// 构建期静默重解析。
+// 构建期静默重解析；上面的 lockfile-only 预同步保证 spec 与 lock 一致，
+// 刚发布自家包的 24h 门禁由精确版本豁免承接。
 execSync('pnpm install --frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
 console.log('    正在打包 node_modules 到 runtime.tar.gz…')
 execFileSync('tar', ['-czf', runtimeTar, 'node_modules'], { cwd: standaloneDir, stdio: 'inherit' })

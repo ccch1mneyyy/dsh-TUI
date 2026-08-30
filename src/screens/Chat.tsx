@@ -347,10 +347,10 @@ export function Chat({
   const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
     () => new Set(),
   )
-  /** 流式 reasoning 行的用户折叠（点击/进入折叠态）。与 expandedRows 分开：
-   *  流式默认展开，用户点一下 = 折叠（preview ticker 或单行头）；落定后
-   *  默认折叠，此集合不再参与——两种默认互不翻转。 */
-  const [streamFoldedRows, setStreamFoldedRows] = React.useState<ReadonlySet<number>>(
+  /** 流式 reasoning 行相对 thinkingFold 默认值的用户切换。与
+   *  expandedRows 分开：preview 默认三行、full 默认全文，点击在两者间
+   *  翻转；落定后自动回到普通行的折叠语义。 */
+  const [streamViewToggledRows, setStreamViewToggledRows] = React.useState<ReadonlySet<number>>(
     () => new Set(),
   )
   /**
@@ -1013,7 +1013,7 @@ export function Chat({
         return true
       }
       case 'preset': {
-        // issue #8: bare `/preset` opens the roster picker (standard/code/
+        // issue #8: bare `/preset` opens the roster picker (standard/ptc/
         // minimal/cordis plus any user-authored presets); `/preset <id>`
         // switches directly; `/preset status` shows the current choice. A
         // blank session swaps composition in place (official blank-only
@@ -1217,7 +1217,8 @@ export function Chat({
       case 'new': {
         // One-shot `/new` (issue #25): the old session stays persisted and
         // is recoverable via /resume, so discarding the live view is
-        // non-destructive — no CC-style "press /new again" confirmation.        setHelpOpen(false)
+        // non-destructive — no CC-style "press /new again" confirmation.
+        setHelpOpen(false)
         void channel.newSession().then((ok) => {
           if (!ok) return
           // A new session is a fresh terminal page, not merely an emptied
@@ -2213,8 +2214,8 @@ export function Chat({
       return next
     })
   }, [])
-  const toggleStreamFolded = React.useCallback((rowId: number) => {
-    setStreamFoldedRows((previous) => {
+  const toggleStreamView = React.useCallback((rowId: number) => {
+    setStreamViewToggledRows((previous) => {
       const next = new Set(previous)
       if (next.has(rowId)) next.delete(rowId)
       else next.add(rowId)
@@ -2789,7 +2790,11 @@ export function Chat({
     }
     if (actionMatches('dashboard', input, key)) {
       // The subagent dashboard key (default Ctrl+A) opens the dashboard.
+      // Consume the key: without the stop the prompt editor's readline
+      // binding ALSO fires (Ctrl+A moves the caret to line start), so one
+      // press both opens the overlay and jumps the cursor.
       setSubagentDashboardOpen(true)
+      event.stopImmediatePropagation()
       return
     }
     if (actionMatches('contextPanel', input, key) && loadedContextVisible) {
@@ -2905,13 +2910,20 @@ export function Chat({
       // CC's app:redraw (default Ctrl+L) — clear the physical terminal and
       // repaint.
       instances.get(process.stdout)?.forceRedraw()
+      // Consume: same readline-shadowing rule as dashboard/showAll below.
+      event.stopImmediatePropagation()
     } else if (actionMatches('showAll', input, key)) {
       setShowAllMessages(previous => !previous)
+      // Ctrl+E is also the editor's line-end binding — stop the press from
+      // additionally moving the caret (one press, one meaning).
+      event.stopImmediatePropagation()
     } else if (actionMatches('todoFold', input, key)) {
       // Fold/unfold the GoalTodoPanel todo section (default Ctrl+Q) — works
       // mid-turn too: the collapsed line keeps the done/total count and the
       // live task preview, so long todo lists stop crowding the prompt.
       setTodoCollapsed(previous => !previous)
+      // Consume: same readline-shadowing rule as dashboard/showAll above.
+      event.stopImmediatePropagation()
     } else if (plainReturn && !isSticky) {
       // Enter while scrolled up returns to the bottom (CC's pill: the
       // affordance now exists whenever the view is off the bottom, not
@@ -3199,8 +3211,8 @@ export function Chat({
           expandedRows={expandedRows}
           selectedId={selectionActive ? selectedId : null}
           onToggleRow={toggleRowExpanded}
-          streamFoldedRows={streamFoldedRows}
-          onToggleStreamFold={toggleStreamFolded}
+          streamViewToggledRows={streamViewToggledRows}
+          onToggleStreamView={toggleStreamView}
           model={channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}

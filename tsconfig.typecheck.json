@@ -1,0 +1,14 @@
+{
+  // Fast type-check loop for editing `src/`: no emit, so `incremental` is safe
+  // here (there is no output tree that a stale buildinfo could skip).
+  //
+  // Do NOT port `incremental` into tsconfig.json: `compile` runs `clean`
+  // (deletes all of lib/) before tsc, and with a surviving buildinfo tsc
+  // reports success in ~3s while emitting nothing — leaving an empty lib/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": true,
+    "tsBuildInfoFile": "node_modules/.cache/dsh-tui/typecheck.tsbuildinfo"
+  }
+}

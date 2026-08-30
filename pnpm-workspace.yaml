@@ -10,11 +10,11 @@ packages:
 # Dev-tree resolution pin: pnpm's prerelease range resolution prefers the
 # registry `latest` dist-tag (0.1.0-rc.6 for most @deepseek-ai/dsh-* even
 # after the 0.1.1 release; the 0.1.1 line rides the `next` tag), so the
-# wide peer/dev range `^0.1.0-rc.6 || ^0.1.1-rc.1` would install an rc.6
-# mix instead of the 0.1.1 line this workspace validates against.
+# wide peer/dev range ending in `|| ^0.1.2-alpha.2` would install an rc.6
+# mix instead of the fixed rc.2 fixture tree used for legacy verification.
 # Overrides force the whole @deepseek-ai tree to the 0.1.1-rc.2 line
 # locally. Published peerDependencies stay wide (verified: rc.6/rc.7/rc.8
-# and 0.1.1-rc.1/rc.2 hosts all satisfy it), and this file is never
+# and 0.1.1-rc.1/rc.2 and 0.1.2 prereleases satisfy it), and this file is never
 # consulted by consumer installs.
 overrides:
   '@deepseek-ai/dsh-agent': 0.1.1-rc.2
@@ -24,6 +24,7 @@ overrides:
   '@deepseek-ai/dsh-attachment': 0.1.1-rc.2
   '@deepseek-ai/dsh-brand': 0.1.1-rc.2
   '@deepseek-ai/dsh-code-runtime': 0.1.1-rc.2
+  '@deepseek-ai/dsh-code-runtime-worker-thread': 0.1.1-rc.2
   '@deepseek-ai/dsh-commands': 0.1.1-rc.2
   '@deepseek-ai/dsh-cordis-host-runner': 0.1.1-rc.2
   '@deepseek-ai/dsh-fs': 0.1.1-rc.2
@@ -52,6 +53,7 @@ overrides:
   '@deepseek-ai/dsh-tool-ask-user': 0.1.1-rc.2
   '@deepseek-ai/dsh-tool-bash-persistent': 0.1.1-rc.2
   '@deepseek-ai/dsh-tool-cordis': 0.1.1-rc.2
+  '@deepseek-ai/dsh-tool-subagent': 0.1.1-rc.2
   '@deepseek-ai/dsh-tools': 0.1.1-rc.2
   '@deepseek-ai/dsh-typert-protocol': 0.1.1-rc.2
   '@deepseek-ai/dsh-user-approval': 0.1.1-rc.2
@@ -108,7 +110,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-user-approval@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-user-questions@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
   - '@deepseek-ai/schemastery@3.18.1'
-  - dsh-working-activity@0.2.6 || 0.3.0 || 0.3.2 || 0.3.3
+  - dsh-working-activity@0.2.6 || 0.3.0 || 0.3.2 || 0.3.3 || 0.4.0
   - '@deepseek-ai/dsh-session-persistence-jsonl@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-storage-domain@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-storage-json@0.1.0-rc.6 || 0.1.0-rc.7 || 0.1.0-rc.8 || 0.1.1-rc.1 || 0.1.1-rc.2'
@@ -192,6 +194,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-subagent@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-token-meter@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-tool-todo@0.1.0-rc.8 || 0.1.1-rc.2'
+  - '@deepseek-ai/dsh-tool-subagent@0.1.1-rc.2'
   - '@deepseek-ai/dsh-tool-workflow@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-typert-registry@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-web-app@0.1.0-rc.8 || 0.1.1-rc.2'

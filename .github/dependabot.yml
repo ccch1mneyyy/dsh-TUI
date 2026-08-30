@@ -1,0 +1,35 @@
+# 依赖更新策略。噪音控制优先：框架包与子模块包不走 registry 更新。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - '*'
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    versioning-strategy: increase-if-necessary
+    commit-message:
+      prefix: chore(deps)
+    ignore:
+      # 宿主提供的框架包：版本线由 pnpm-workspace.yaml 的 overrides 钉死，
+      # 发布用的 peer 范围是手工维护的宽范围，两者都不应由 bot 改动。
+      - dependency-name: '@deepseek-ai/*'
+      # 经 workspace / link: 从子模块引入，不存在 registry 版本。
+      - dependency-name: '@dsh-std/*'
+      - dependency-name: '@deepseek-harness-tui/*'
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch

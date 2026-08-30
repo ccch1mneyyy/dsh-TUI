@@ -4,6 +4,8 @@
     "dsh-tui-storage-json",
     "dsh-tui-storage-domain",
     "dsh-tui-workspace",
+    "dsh-tui-code-runtime",
+    "dsh-tui-subagent-model-selection-settings",
     "dsh-tui-workspaces",
     "dsh-tui-command-trees",
     "dsh-tui-settings-sections",
@@ -20,13 +22,29 @@
     "system-prompt",
     "llm-deepseek",
     "agent-loop",
+    "session-telemetry-otel",
+    "plugin-package-inventory-deepseek",
     "sandbox-policy",
     "approval",
     "session-persistence-jsonl"
   ],
-  "disablesBeyondWebApp": [],
-  "webAppDisablesBeyondTui": [
-    "hmr"
-  ],
-  "insertsSharedWithWebApp": []
+  "webAppComparisons": {
+    "0.1.1-rc.2": {
+      "disablesBeyondWebApp": [],
+      "webAppDisablesBeyondTui": [
+        "hmr"
+      ],
+      "insertsSharedWithWebApp": []
+    },
+    "0.1.2-alpha.1": {
+      "disablesBeyondWebApp": [],
+      "webAppDisablesBeyondTui": [],
+      "insertsSharedWithWebApp": []
+    },
+    "0.1.2-alpha.2": {
+      "disablesBeyondWebApp": [],
+      "webAppDisablesBeyondTui": [],
+      "insertsSharedWithWebApp": []
+    }
+  }
 }

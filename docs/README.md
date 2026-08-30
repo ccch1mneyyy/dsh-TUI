@@ -17,6 +17,7 @@ the `.en.md` suffix.
 | 运行链路、性能、安全与限制 / Runtime, performance, security, and limitations | [架构与限制](architecture.md) | [Architecture and limitations](architecture.en.md) |
 | VS Code：集成终端与 companion 扩展（Claude Code 一致体验）/ VS Code: integrated terminal and companion extension (Claude-Code-identical experience) | [VS Code 使用指南](vscode.md) | [VS Code guide](vscode.en.md) |
 | 贡献与开发约定 / Contributing and development rules | [贡献指南](contributing.md) | [Contributing](contributing.en.md) |
+| 社区行为准则 / Code of conduct | [行为准则](../CODE_OF_CONDUCT.md) | [Code of Conduct](../CODE_OF_CONDUCT.en.md) |
 | 插件准入与开发 / Plugin admission & development | [插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | [Plugin admission & development](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) |
 
 ## 快速入口 / Quick Links

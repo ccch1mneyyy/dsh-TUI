@@ -60,14 +60,20 @@ export function collectRecentActivity(events: readonly SessionEvent[], limitChar
 
   const tail = entries.slice(-RECAP_RECENT_TURNS * 2)
   let budget = limitChars
-  const lines: string[] = []
-  for (const entry of tail) {
-    const text = entry.text.length > budget ? entry.text.slice(0, budget) : entry.text
-    lines.push(`${entry.role}: ${text}`)
-    budget -= text.length + entry.role.length + 2
+  // Admit NEWEST first: the recap exists to summarize where the session
+  // STANDS, so the most recent exchanges must survive a long entry eating
+  // the budget — oldest-first admission lets one oversized message starve
+  // every exchange after it (the very ones a recap is for).
+  const picked: Array<{ role: 'user' | 'assistant'; text: string }> = []
+  for (const entry of [...tail].reverse()) {
     if (budget <= 0) break
+    const text = entry.text.length > budget ? entry.text.slice(0, budget) : entry.text
+    picked.push({ role: entry.role, text })
+    budget -= text.length + entry.role.length + 2
   }
-  return lines.join('\n')
+  // Present in chronological order (oldest → newest) for readable quoting.
+  picked.reverse()
+  return picked.map(entry => `${entry.role}: ${entry.text}`).join('\n')
 }
 
 /**

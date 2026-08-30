@@ -175,11 +175,22 @@ the profile.
 ## Develop from source
 
 ```sh
-git clone https://github.com/ccch1mneyyy/dsh-TUI.git
+git clone --recurse-submodules https://github.com/ccch1mneyyy/dsh-TUI.git
 cd dsh-TUI
 pnpm install --frozen-lockfile
 pnpm build
 pnpm smoke
+```
+
+The repository has three submodules, and two of them are required to install:
+`vendor/dsh-std` (its `packages/*` are listed as workspace packages in
+`pnpm-workspace.yaml`) and `dsh-auth` (pulled in through `link:`). Without
+`--recurse-submodules` those directories stay empty and
+`pnpm install --frozen-lockfile` fails outright. For a checkout that was already
+cloned:
+
+```sh
+git submodule update --init --recursive
 ```
 
 `pnpm build` cleans the ignored `lib/` directory, compiles `src/` into

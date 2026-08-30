@@ -81,7 +81,6 @@ export function SubagentDashboard({
       <Divider 
         color="claude" 
         title={t('subagent-dashboard-title')} 
-        padding={4} 
       />
       
       <Box flexDirection="row" gap={3} marginTop={1} marginBottom={1}>
@@ -132,7 +131,7 @@ export function SubagentDashboard({
         </ScrollBox>
       </Box>
 
-      <Divider color="subtle" title="" padding={4} />
+      <Divider color="subtle" title="" />
       <Box marginTop={0}>
         <Text dimColor>
           {onSelect 

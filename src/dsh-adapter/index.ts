@@ -74,7 +74,7 @@ export interface Config {
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
    *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */
   lang?: string
-  /** Agent preset id new sessions compose from (standard/code/minimal/
+  /** Agent preset id new sessions compose from (standard/ptc/minimal/
    *  cordis/… when the roster is mounted). When absent, the `/preset` choice
    *  persisted in `~/.dsh-tui/agent-preset.json` wins, then the roster
    *  default (`standard`). */
