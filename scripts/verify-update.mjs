@@ -47,6 +47,7 @@ const {
   profilePackageDir,
   removeStalePackageInstall,
   ensureProfileAllowBuilds,
+  ensureProfileReleaseAgeExclude,
   profileWorkspaceYamlPath,
   isStandaloneRuntime,
   getStandaloneBinaryPath,
@@ -322,6 +323,85 @@ check(
     if (DSH_HOME_BACKUP === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = DSH_HOME_BACKUP
     rmSync(allowScratch, { recursive: true, force: true })
+  }
+}
+
+// ---- pnpm minimumReleaseAgeExclude pre-seed: pnpm ≥11 delays installs of
+// packages published within minimumReleaseAge (24h default) — on release day
+// that gate refuses the exact version /update pins, so the update flow must
+// exempt this package at the exact target before pnpm runs.
+{
+  const DSH_HOME_BACKUP = process.env.DSH_HOME
+  const ageScratch = mkdtempSync(join(tmpdir(), 'verify-releaseage-'))
+  const profileRoot = join(ageScratch, 'profiles', 'tui')
+  try {
+    process.env.DSH_HOME = ageScratch
+    mkdirSync(profileRoot, { recursive: true })
+    const yamlPath = profileWorkspaceYamlPath('tui')
+
+    // Case 1: no workspace file yet → created with the exact-version entry.
+    let outcome = ensureProfileReleaseAgeExclude('tui', '0.10.0-beta.1')
+    check(
+      'releaseAge: missing file is created with the exact entry',
+      outcome !== undefined && outcome.changed === true &&
+        outcome.entries.length === 1 &&
+        outcome.entries[0] === '@deepseek-harness-tui/dsh-tui@0.10.0-beta.1' &&
+        existsSync(yamlPath),
+      JSON.stringify(outcome),
+    )
+    let text = readFileSync(yamlPath, 'utf8')
+    check(
+      'releaseAge: file carries the quoted list entry',
+      /minimumReleaseAgeExclude:\n  - '@deepseek-harness-tui\/dsh-tui@0\.10\.0-beta\.1'\n/u.test(text),
+      text,
+    )
+
+    // Case 2: idempotent — the same version again changes nothing.
+    const before = readFileSync(yamlPath, 'utf8')
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.10.0-beta.1')
+    check(
+      'releaseAge: second run for the same version is a no-op',
+      outcome !== undefined && outcome.changed === false && readFileSync(yamlPath, 'utf8') === before,
+      JSON.stringify(outcome),
+    )
+
+    // Case 3: a stale entry for this package is replaced (no accumulation)
+    // while foreign entries survive.
+    writeFileSync(yamlPath, "minimumReleaseAgeExclude:\n  - 'x@1.0.0'\n  - '@deepseek-harness-tui/dsh-tui@0.9.3'\n")
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.10.0-beta.1')
+    text = readFileSync(yamlPath, 'utf8')
+    check(
+      'releaseAge: stale own entry replaced, foreign entry kept',
+      outcome !== undefined && outcome.changed === true &&
+        text.includes("- 'x@1.0.0'") &&
+        text.includes("- '@deepseek-harness-tui/dsh-tui@0.10.0-beta.1'") &&
+        !text.includes('0.9.3'),
+      `${JSON.stringify(outcome)} :: ${text}`,
+    )
+
+    // Case 4: a file without the block keeps its content and gains one.
+    writeFileSync(yamlPath, 'packages:\n  - .\n\nnodeLinker: hoisted\n')
+    outcome = ensureProfileReleaseAgeExclude('tui', '1.2.3')
+    text = readFileSync(yamlPath, 'utf8')
+    check(
+      'releaseAge: block appended, existing keys preserved',
+      outcome !== undefined && outcome.changed === true &&
+        text.startsWith('packages:\n  - .\n\nnodeLinker: hoisted\n') &&
+        text.includes("minimumReleaseAgeExclude:\n  - '@deepseek-harness-tui/dsh-tui@1.2.3'\n"),
+      text,
+    )
+
+    // Case 5: absent profile directory → undefined, nothing written.
+    outcome = ensureProfileReleaseAgeExclude('missing-profile', '1.2.3')
+    check(
+      'releaseAge: absent profile directory yields undefined',
+      outcome === undefined,
+      JSON.stringify(outcome),
+    )
+  } finally {
+    if (DSH_HOME_BACKUP === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = DSH_HOME_BACKUP
+    rmSync(ageScratch, { recursive: true, force: true })
   }
 }
 

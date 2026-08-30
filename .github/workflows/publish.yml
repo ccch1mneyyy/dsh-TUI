@@ -25,9 +25,8 @@ jobs:
           # tsc 全线 TS2307。
           submodules: recursive
 
+      # 版本来自 package.json 的 packageManager 字段，不在此内联 pin。
       - uses: pnpm/action-setup@v6
-        with:
-          version: 11
 
       - uses: actions/setup-node@v7
         with:
@@ -97,7 +96,22 @@ jobs:
                 ;;
             esac
           fi
-      - run: node scripts/with-publish-manifest.mjs npm publish --access public --provenance
+      # npm ≥11 拒绝为 prerelease 版本隐式发布（"You must specify a tag
+      # using --tag when publishing a prerelease version"）。本仓库的发版
+      # 策略是 prerelease 也占 latest（用户决策：beta 立刻推给 /update
+      # 用户），因此对 prerelease 显式传 `--tag latest`；稳定版保持默认。
+      - name: Compute npm dist-tag flag for prerelease versions
+        id: disttag
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          case "$pkg" in
+            *-*) echo "flag=--tag latest" >> "$GITHUB_OUTPUT"
+                 echo "publishing prerelease $pkg with an explicit latest tag" ;;
+            *)   echo "flag=" >> "$GITHUB_OUTPUT"
+                 echo "publishing stable $pkg with the default latest tag" ;;
+          esac
+      - run: node scripts/with-publish-manifest.mjs npm publish --access public --provenance $DISTTAG_FLAG
         if: steps.published.outputs.exists != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DISTTAG_FLAG: ${{ steps.disttag.outputs.flag }}

@@ -7,7 +7,7 @@
 # restates every key it owns (see the dsh-base patch for the shared
 # defaults). The dsh-base core rows that need no dsh-tui value — tools,
 # sandbox/approval policy, skills, goal, plan mode, workspace context,
-# telemetry — are inherited unchanged.
+# telemetry — are inherited unless this surface explicitly restates them.
 
 # ── surface-specific values over the dsh-base layer ─────────────────────────
 
@@ -37,18 +37,39 @@
   config:
     agents: []
 
+# Preserve the TUI's opt-in privacy stance across the alpha base default
+# change to FEEDBACK_ONLY. An explicit DSH_TELEMETRY_MODE still wins. This
+# restates the whole alpha config because include patches replace config
+# objects rather than merging them.
+- id: session-telemetry-otel
+  config:
+    mode: !!js process.env.DSH_TELEMETRY_MODE || 'DISABLED'
+    shutdownTimeoutMillis: 3000
+    exporter:
+      url: !!js process.env.DSH_TELEMETRY_OTLP_URL ?? 'https://harness-telemetry.deepseeksvc.com/v1/logs'
+      compression: gzip
+      timeoutMillis: 1000
+    processor:
+      scheduledDelayMillis: 10000
+      maxQueueSize: 2048
+      maxExportBatchSize: 2048
+      exportTimeoutMillis: 1500
+
+# The alpha base sends the active Loader package inventory on official
+# DeepSeek requests by default. TUI keeps that diagnostic metadata opt-in.
+- id: plugin-package-inventory-deepseek
+  config:
+    enabled: false
+
 # ── agent presets (issue #8) ────────────────────────────────────────────────
 #
 # The model-facing plugin set moves INTO the agent-presets roster: every
 # session composes its tools/prompt sections from one preset directory
-# (standard/code/minimal/cordis) instead of the host rows below. The TUI's
-# roster row uses the scoped `dsh-tui-agent-presets` id and carries the
-# shipped `config/agent-presets/` system root itself (derived from the dsh
-# CLI installation through the launcher-maintained `profiles/node_modules`
-# fallback link), because the official profile-boot root overlay only targets
-# the unscoped `agent-presets` id that surface bundles own. The roster itself
-# appends `$DSH_HOME/.agent-presets` (user-authored presets,
-# `includeUserRoot` default). Mirroring the official dsh-web-app patch: every
+# (standard/ptc/minimal/cordis) instead of the host rows below. The TUI's
+# roster row uses the scoped `dsh-tui-agent-presets` id. alpha packages prepend
+# their bundled system root; the validated rc line still needs the dsh CLI's
+# `config/agent-presets/` directory supplied explicitly. Both append
+# `$DSH_HOME/.agent-presets`. Mirroring the official dsh-web-app patch: every
 # dsh-base row a preset now owns is disabled here, so a minimal agent does not
 # leak host-layer tools (an agent's registry view resolves agent → preset →
 # global).
@@ -59,7 +80,7 @@
 - id: command-compact
   disabled: true
 
-# compaction lives in the preset's own isolate realm (standard/code/cordis
+# compaction lives in the preset's own isolate realm (standard/ptc/cordis
 # carry `compaction-basic` with package defaults; minimal has none). The
 # CC_TUI_COMPACT_RATIO/CC_TUI_COMPACT_RETAIN tunables retired with this host
 # row — preset compositions own their compaction config.
@@ -80,6 +101,27 @@
 
 - id: tool-fs-search
   disabled: true
+
+- id: command-goal
+  # rc.2 presets do not carry this command, so their host row must remain
+  # active. alpha disables it only when the shipped standard preset really
+  # owns the command; reading the capability avoids guessing from another
+  # optional Loader row.
+  disabled: !!js >-
+    (() => {
+      const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+      const fs = process.getBuiltinModule('node:fs')
+      const path = process.getBuiltinModule('node:path')
+      try {
+        const manifest = require.resolve('@deepseek-ai/dsh-agent-presets/package.json')
+        const preset = path.join(path.dirname(manifest), 'presets', 'standard', 'agent.cordis.yml')
+        return fs.readFileSync(preset, 'utf8')
+          .split(/\r?\n/u)
+          .some(line => line.trim() === '- id: command-goal')
+      } catch {
+        return false
+      }
+    })()
 
 - id: tool-goal
   disabled: true
@@ -158,16 +200,17 @@
 # semantics would create a duplicate row. dsh-tui defensively creates the
 # service on its own context when no composition provides it (bare
 # `dsh --config cordis.yml` boots), then mounts the model-facing
-# ask_user_question tool and registers the questionnaire provider on
-# `ctx.userQuestions`.
+# ask_user_question tool. On legacy hosts it registers the TUI provider on
+# `ctx.userQuestions`; on Alpha it answers the scoped
+# `user-questions/request` waterfall.
 
 - insert:
     # Workspace grouping is a separate durable ledger, not a cwd-derived
     # projection. Mount the same domain stack and storage root as dsh-web-app
     # so TUI-created sessions can attach to the exact registry Web reads.
     #
-    # The six rows below own host-plane services that the official web-app
-    # bundle may already mount. Loader entry ids are process-global, so these
+    # These rows own host-plane services that the official web-app bundle may
+    # already mount. Loader entry ids are process-global, so these
     # rows use dsh-tui-* scoped ids and self-disable when an enabled row with
     # the official id/name is already present in the tree. The disabled check
     # is evaluated during the same include update that inserts every row, so
@@ -188,9 +231,37 @@
       config:
         backend: json
 
+    # Alpha moved the durable storage stack into dsh-base, so these three
+    # scoped copies self-disable there. Keep them for the validated rc lines,
+    # whose base layer does not provide the stack to a TUI-only profile.
+
     - id: dsh-tui-workspace
       name: '@deepseek-ai/dsh-workspace'
       disabled: !!js "[...ctx.loader.entries()].some(entry => entry.options.id === 'workspace' && entry.options.name === '@deepseek-ai/dsh-workspace' && !entry.disabled)"
+
+    # PTC presentation waits on this Host service. The scoped row supports a
+    # TUI-only profile and yields to the official web-app row in mixed profiles.
+    - id: dsh-tui-code-runtime
+      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+      disabled: !!js "[...ctx.loader.entries()].some(entry => entry.options.id === 'code-runtime' && entry.options.name === '@deepseek-ai/dsh-code-runtime-worker-thread' && !entry.disabled)"
+
+    # Alpha presets opt their delegation tool into Host-owned model-selection
+    # settings. Without this service standard/ptc/cordis preset mounting fails.
+    # The package subpath does not exist on rc.2, so resolve that capability
+    # directly before Loader attempts the import. An enabled official row still
+    # owns the seat in mixed profiles.
+    - id: dsh-tui-subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+      disabled: !!js >-
+        (() => {
+          const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+          try {
+            require.resolve('@deepseek-ai/dsh-tool-subagent/model-selection-settings')
+          } catch {
+            return true
+          }
+          return [...ctx.loader.entries()].some(entry => entry.options.id === 'subagent-model-selection-settings' && entry.options.name === '@deepseek-ai/dsh-tool-subagent/model-selection-settings' && !entry.disabled)
+        })()
 
     # Generic terminal workspace registry. Optional plugins add providers;
     # the TUI itself always supplies LOCAL and has no provider-specific code.
@@ -231,27 +302,35 @@
       name: '@deepseek-harness-tui/dsh-tui/extensions'
 
     # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
-    # TUI composes every session's model-facing world from. The scoped row
-    # carries the official CLI's shipped `config/agent-presets/` directory
-    # (standard/code/minimal/cordis, system trust) through the
-    # launcher-maintained profiles/node_modules fallback link; the roster
-    # itself appends `$DSH_HOME/.agent-presets` (user-authored presets,
-    # `includeUserRoot` default). A boot that never reached profile-boot
-    # leaves the system root empty and the roster finds only user presets.
+    # TUI composes every session's model-facing world from. alpha packages
+    # prepend their bundled presets as the read-only system root; rc.2 packages
+    # have no bundled root and still scan the dsh CLI directory. Both append
+    # `$DSH_HOME/.agent-presets` as the user root. Deployment-added roots may
+    # still be supplied by a later patch.
     - id: dsh-tui-agent-presets
       name: '@deepseek-ai/dsh-agent-presets'
       disabled: !!js "[...ctx.loader.entries()].some(entry => entry.options.id === 'agent-presets' && entry.options.name === '@deepseek-ai/dsh-agent-presets' && !entry.disabled)"
-      config:
-        default: standard
-        roots: !!js >-
-          (() => {
-            const base = ctx.baseUrl
-            if (!base) return undefined
-            const root = new URL('../node_modules/@deepseek-ai/dsh/config/agent-presets/', base)
-            let path = decodeURIComponent(root.pathname)
-            if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1)
-            return [{ path, trust: 'system' }]
-          })()
+      config: !!js >-
+        (() => {
+          const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+          const fs = process.getBuiltinModule('node:fs')
+          const path = process.getBuiltinModule('node:path')
+          try {
+            const manifest = require.resolve('@deepseek-ai/dsh-agent-presets/package.json')
+            if (fs.existsSync(path.join(path.dirname(manifest), 'presets'))) {
+              return { default: 'standard' }
+            }
+          } catch {
+            // Let the roster import report a missing package; preserve the rc
+            // root fallback below for every package generation without one.
+          }
+          const base = ctx.baseUrl
+          if (!base) return { default: 'standard' }
+          const root = new URL('../node_modules/@deepseek-ai/dsh/config/agent-presets/', base)
+          let rootPath = decodeURIComponent(root.pathname)
+          if (/^\/[A-Za-z]:/.test(rootPath)) rootPath = rootPath.slice(1)
+          return { default: 'standard', roots: [{ path: rootPath, trust: 'system' }] }
+        })()
 
     # Host-plane services the `cordis` preset's plugin-experimentation tool
     # waits on (dynamicCordisRunner/cordisInspect); dsh-base carries no such
@@ -307,9 +386,7 @@
         # split（强制双栏）/ unified（强制统一式）。/settings 屏可实时改。
         # diffLayout: auto
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
-        # （deepseek: off/high/max）——不在档位表里的值被忽略，回落 adapter
-        # 默认值。优先于持久化的 Shift+Tab 选择（~/.dsh-tui/effort.json）；
-        # 同时作为顶栏/状态栏的启动显示，首个请求头回来后以实际值为准。
+        #（deepseek: off/low/high/max）；非法值回落 adapter 默认。
         effort: max
         # Shift+Tab session-mode cycle (array order IS the cycle order;
         # absent → the built-in default/plan/full trio below). Each entry

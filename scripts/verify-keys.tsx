@@ -125,6 +125,12 @@ check('CSI 13;5u is ctrl+return (interruptSend path)', new Feeder().feed('\x1b[1
 check('modifyOtherKeys CSI 27;2;13~ is shift+return', new Feeder().feed('\x1b[27;2;13~'), [
   ret({ shift: true }, '\x1b[27;2;13~'),
 ])
+check('CSI 106;5u is ctrl+j', new Feeder().feed('\x1b[106;5u'), [
+  named('j', '\x1b[106;5u', { ctrl: true }),
+])
+check('modifyOtherKeys CSI 27;5;106~ is ctrl+j', new Feeder().feed('\x1b[27;5;106~'), [
+  named('j', '\x1b[27;5;106~', { ctrl: true }),
+])
 
 // --- 2. merged with following text ----------------------------------------
 

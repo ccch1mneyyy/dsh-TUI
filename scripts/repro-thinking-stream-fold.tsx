@@ -1,17 +1,15 @@
 /**
- * repro-thinking-stream-fold — 流式 thinking 行点击展开/折叠复现（用户报告：
- * thinking 流式时点击无效）。
+ * repro-thinking-stream-fold — 流式 thinking 行三行预览/全文切换回归。
  *
- * 病根：流式 reasoning 行 verbose 恒为 true（`isExpanded || expanded ||
- * streaming`），点击切换的是 expandedRows——显示毫无变化，落定前折叠语义
- * 不存在。修复：流式行走独立的 streamFoldedRows（默认展开，点击折叠到
- * ticker/单行头；再点展开），落定后自动回到默认折叠 + expandedRows 语义。
+ * 用户报告：thinkingFold=preview 时默认能看到三行，但点击后正文变成
+ * 0 行，只剩 spinner 头；期望点击展开全文，再点收回三行预览。
  *
- * 场景：fullscreen Chat + streaming reasoning 行（thinkingFold=full，即
- * 默认 live 全文），注入 SGR 点击：
- *   1. 初始：思考正文多行可见；
- *   2. 点击头部 → 正文消失（仅 spinner 头行）；
- *   3. 再点 → 正文恢复。
+ * 场景：fullscreen Chat + streaming reasoning 行（thinkingFold=preview），
+ * 注入 SGR 点击：
+ *   1. 初始：固定三行最新思考预览；
+ *   2. 点击头部 → 展开完整正文；
+ *   3. 再点 → 收回三行预览（而不是隐藏正文）；
+ *   4. full 默认全文，点击同样只收为三行预览。
  *
  * 运行：node --import tsx/esm scripts/repro-thinking-stream-fold.tsx
  */
@@ -78,7 +76,7 @@ const channel: any = {
   mode: { plan: false, sandbox: undefined },
   activityFrames: 'claude',
   agentPreset: undefined,
-  thinkingFold: 'full',
+  thinkingFold: 'preview',
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
   submit: () => {},
   cancel: () => {},
@@ -111,24 +109,42 @@ const headerRow = (ls: string[]) => ls.findIndex(l => l.includes('Thinking') || 
 let ls = lines()
 const headerIdx = headerRow(ls)
 check('流式思考头行可见', headerIdx >= 0, headerIdx >= 0 ? `行${headerIdx}` : '未找到')
-check('默认展开：正文多行可见（≥6 行）', bodyLines(ls) >= 6, `body=${bodyLines(ls)}`)
+check('默认三行预览', bodyLines(ls) === 3, `body=${bodyLines(ls)}`)
+check('预览跟随最新三行', ls.some(line => line.includes('推理第11行')), '应包含推理第11行')
 
-// 点击头行 → 折叠为单行
+// 点击头行 → 展开全文。
 stdin.write(`\x1b[<0;6;${headerIdx + 1}M`)
 stdin.write(`\x1b[<0;6;${headerIdx + 1}m`)
 await sleep(400)
 ls = lines()
-check('点击后正文折叠（0 行正文，头行仍在）', bodyLines(ls) === 0 && headerRow(ls) >= 0, `body=${bodyLines(ls)}`)
+check('点击后展开完整正文', bodyLines(ls) >= 10, `body=${bodyLines(ls)}`)
 
-// 再点同一行 → 展开。等过 500ms 多击窗：同格快连两次会被判双击选词，
-// 这是既有语义——快速连点本来就归选区，不归折叠。
+// 再点同一行 → 收回三行预览。等过 500ms 多击窗：同格快连两次会被判
+// 双击选词，这是既有语义——快速连点归选区，不归折叠。
 await sleep(300)
 const headerIdx2 = headerRow(ls)
 stdin.write(`\x1b[<0;6;${headerIdx2 + 1}M`)
 stdin.write(`\x1b[<0;6;${headerIdx2 + 1}m`)
 await sleep(400)
 ls = lines()
-check('再点恢复展开（正文回到 ≥6 行）', bodyLines(ls) >= 6, `body=${bodyLines(ls)}`)
+check('再点收回三行预览', bodyLines(ls) === 3, `body=${bodyLines(ls)}`)
+check('收起后不会隐藏全部正文', bodyLines(ls) > 0, `body=${bodyLines(ls)}`)
+
+// full 只是默认值相反：仍然只在全文/三行预览间切换，不再进入 0 行正文。
+channel.thinkingFold = 'full'
+channel.version += 1
+for (const listener of listeners) listener()
+await sleep(400)
+ls = lines()
+check('full 设置默认展开全文', bodyLines(ls) >= 10, `body=${bodyLines(ls)}`)
+
+await sleep(200)
+const fullHeaderIdx = headerRow(ls)
+stdin.write(`\x1b[<0;6;${fullHeaderIdx + 1}M`)
+stdin.write(`\x1b[<0;6;${fullHeaderIdx + 1}m`)
+await sleep(400)
+ls = lines()
+check('full 设置点击后收为三行预览', bodyLines(ls) === 3, `body=${bodyLines(ls)}`)
 
 await inst.unmount()
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)

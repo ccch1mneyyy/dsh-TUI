@@ -287,7 +287,7 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
 
 ## Configuration & Extensions
 
-- **Agent presets**: four official agent modes (`standard` / `code` / `minimal` / `cordis`)
+- **Agent presets**: four official agent modes (`standard` / `ptc` / `minimal` / `cordis`)
   plus the TUI-bundled Liangshen mode (`liangshen`),
   switched with `/preset`; sessions that already have a conversation cannot switch, while
   blank sessions take effect immediately. The default preset persists in
@@ -460,6 +460,9 @@ responsible for their maintenance and security.
   plugin, pitch an idea, or just hang out 🐋
 - **Chat groups** (Chinese-language): usage questions, plugin ideas, and
   feature wishes are all welcome.
+- **Code of conduct**: please read the
+  [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.en.md) before taking
+  part.
 
 | WeChat group | QQ group (ID 572549239) | WeChat group 4 |
 | :---: | :---: | :---: |

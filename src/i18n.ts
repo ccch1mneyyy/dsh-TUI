@@ -186,6 +186,7 @@ const dict = {
   'resume-unavailable': { zh: '恢复不可用——agents 服务未加载', en: 'Resume unavailable — agents service not loaded' },
   'resume-failed': { zh: '恢复失败 · {{err}}', en: 'Resume failed · {{err}}' },
   'resume-attach-failed': { zh: '已恢复会话，但工作区挂载失败 · {{err}}', en: 'Session resumed, but workspace attachment failed · {{err}}' },
+  'resume-session-changed': { zh: '会话已切换，恢复已放弃', en: 'The session changed; the resume was dropped' },
   'new-session-while-working': { zh: '回合运行中，无法新建会话', en: 'Cannot start a new session while a turn is running' },
   'new-session-unavailable': { zh: '新建会话不可用——agents 服务未加载', en: 'New session unavailable — agents service not loaded' },
   'new-session-failed': { zh: '新建会话失败 · {{err}}', en: 'New session failed · {{err}}' },
@@ -237,8 +238,8 @@ const dict = {
   // ── screens/Chat.tsx ────────────────────────────────────────────────
   'skill-unavailable': { zh: '技能 {{name}} 已不可用或未开放用户直调', en: 'Skill {{name}} is gone or not user-invocable' },
   'context-loaded': { zh: '已加载上下文', en: 'Context loaded' },
-  'context-panel-expand': { zh: '展开', en: 'Expand' },
-  'context-panel-collapse': { zh: '折叠', en: 'Collapse' },
+  'context-panel-expand': { zh: ' 展开', en: ' to expand' },
+  'context-panel-collapse': { zh: ' 折叠', en: ' to collapse' },
   'copied-chars': { zh: '已复制 {{n}} 个字符', en: 'Copied {{n}} characters' },
   'activity-current-preset': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
   'activity-switch-hint': { zh: '切换      /activity（选择器）或 /activity frames <名>', en: 'Switch      /activity (picker) or /activity frames <name>' },

@@ -52,6 +52,21 @@ boundaries and helpers over introducing parallel abstractions.
   lazy handoff to the runtime plugin.
 - `src/dsh-adapter/plugin.ts`: TTY validation, service registration, agent creation/resume,
   React tree mounting, and terminal/process teardown.
+- `src/dsh-adapter/questions-answerer.ts` and `preset-resolution.ts`: isolate
+  upstream prerelease dispatch for user questions and agent presets so version
+  branches do not spread into bootstrap or channel actions. Note: the
+  questionnaire "provider seat"
+  guard (DUPLICATE_PROVIDER probe + private symbol check, #586) only applies to
+  the rc `registerProvider` path. On alpha.2's `user-questions/request`
+  waterfall, Cordis first scope-filters requests carrying an agent; agentless
+  `/auth` requests are dispatched without a scope carrier. Under the answerer
+  convention, the first eligible listener that returns instead of delegating
+  with `next()` claims the request. Cordis waterfall is around middleware,
+  however: an outer listener can call `next()` and then observe, replace, or
+  reject the downstream result, while `{ prepend: true }` inserts a listener
+  at the front. Upstream offers no supported way to discover or reserve a
+  verifiably exclusive claimant, so the legacy seat guard and its warning
+  cannot be reproduced locally.
 - `src/dsh-adapter/channel.ts`: event-to-view projection and the non-React action surface.
   It translates DSH session events into transcript rows and implements submit,
   steering, rewind, resume, model/preset switching, local reports, and related
@@ -124,11 +139,19 @@ seam.
 
 - Supported Node versions are `^22.19 || >=24`; CI uses Node 24.
 - CI and publishing use pnpm 11. Use pnpm as the development package manager.
+  The `packageManager` field in the root `package.json` is the single source of
+  truth for the pnpm version; both CI and corepack read it from there.
 - Install a clean checkout with:
 
   ```sh
+  git clone --recurse-submodules https://github.com/ccch1mneyyy/dsh-TUI.git
+  cd dsh-TUI
   pnpm install --frozen-lockfile
   ```
+
+  In an existing checkout, run `git submodule update --init --recursive` first.
+  `vendor/dsh-std` and `dsh-auth` are workspace / `link:` dependencies, so the
+  install always fails while those submodules are empty.
 
 - `pnpm-lock.yaml` is the single lockfile. npm consumers do not read a
   dependency's lockfile, so `package-lock.json` has been removed (follow-up of
@@ -228,6 +251,7 @@ change, also run the closest focused script:
 | Compaction × session-switch lifecycle (cancel before the fork snapshot, persistence-classified toast) | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | Theme loading, persistence, and runtime plugin seam | `node --import tsx/esm scripts/verify-themes.mjs`, `node --import tsx/esm scripts/verify-runtime-themes.ts` |
 | Scrolling/sticky-bottom behavior | `node scripts/verify-scroll.mjs`, `node scripts/verify-resticky.mjs`, and the matching `repro-*` harness |
+| Long plan-review body (`exit_plan_mode` windowing + wheel) | `node --import tsx/esm scripts/verify-plan-review-scroll.tsx` |
 | Fullscreen copy-on-select | `node scripts/verify-copy-on-select.mjs` |
 | Component-level mouse drag protocol (target capture, bubbling, click/selection compatibility, interrupted-session cleanup) | `node --import tsx/esm scripts/verify-drag-protocol.tsx` |
 | Mouse pointer event pipeline (wheel coords/modifier bits, click/hover dispatch, out-of-bounds clamping, pointer-state reset) | `node --import tsx/esm scripts/verify-pointer-events.ts` |

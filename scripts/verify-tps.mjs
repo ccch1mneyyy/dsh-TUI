@@ -6,7 +6,8 @@
  * - live chars/4 estimates use every token delta, then provider usage settles it
  * - a retry-like delay stays inside the same step's decode span
  * - missing provider usage falls back to the streamed character estimate
- * - durable replay derives the same values from event.time
+ * - empty deltas do not start decode; a name-only tool delta does
+ * - durable replay omits TPS because settled stream chunks are intentionally dropped
  *
  * Run after build: `node scripts/verify-tps.mjs`
  */
@@ -179,14 +180,41 @@ emit('turn/end', B + 303_100, completed(4))
 check('missing usage falls back to chars/4', near(channel.tps, 50), String(channel.tps))
 check('one sample is retained per completed turn', channel.tpsSamples.length === 4, String(channel.tpsSamples.length))
 
-// Rebuild from durable history. Coalescing may merge adjacent text chunks, but
-// the first event's persisted time remains the decode boundary.
+// Turn 5: empty deltas do not start the decode clock, but a tool name does.
+emit('turn/start', B + 400_000, { turn: 5 })
+emit('step/start', B + 400_100, { turn: 5, step: 1 })
+emit('assistant/chunk', B + 401_000, {
+  turn: 5,
+  step: 1,
+  chunk: { type: 'text-delta', index: 0, text: '' },
+})
+emit('assistant/chunk', B + 402_000, {
+  turn: 5,
+  step: 1,
+  chunk: { type: 'reasoning-delta', index: 0, text: '' },
+})
+emit('assistant/chunk', B + 403_000, {
+  turn: 5,
+  step: 1,
+  chunk: { type: 'tool-call-delta', index: 0, id: 'call-5', argumentsDelta: '' },
+})
+emit('assistant/chunk', B + 404_000, {
+  turn: 5,
+  step: 1,
+  chunk: { type: 'tool-call-delta', index: 0, id: 'call-5', name: 'bash', argumentsDelta: '' },
+})
+emit('assistant/message', B + 406_000, message(5, 1, 100))
+emit('turn/end', B + 406_100, completed(5))
+check('empty deltas ignored; name-only tool delta starts decode', near(channel.tps, 50), String(channel.tps))
+check('fifth turn adds exactly one sample', channel.tpsSamples.length === 5, String(channel.tpsSamples.length))
+
+// Rebuild from durable history. prepareReplayEvents intentionally drops
+// settled chunks, so TPS remains a live-only metric after resume.
 const replayContext = makeContext()
 const replayAgent = makeAgent([...agent.session.events])
 const replay = createChannel(replayContext.ctx, replayAgent, options)
-check('replay rebuilds all turn samples', replay.tpsSamples.length === 4, JSON.stringify(replay.tpsSamples))
-check('replay derives the same latest TPS from event.time', near(replay.tps, channel.tps), `${replay.tps} vs ${channel.tps}`)
-check('replay preserves the weighted multi-step sample', near(replay.tpsSamples[0]?.tps, 100), JSON.stringify(replay.tpsSamples[0]))
+check('replay omits historical TPS samples', replay.tpsSamples.length === 0, JSON.stringify(replay.tpsSamples))
+check('replay leaves live TPS unset', replay.tps === undefined, String(replay.tps))
 
 if (failed > 0) {
   console.error(`\n${failed} TPS verification(s) failed`)

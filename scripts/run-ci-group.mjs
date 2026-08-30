@@ -33,6 +33,12 @@ const GROUPS = {
     ["verify-askpanel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-layout.tsx']],
     ["repro-toolcards", ['node', '--import', 'tsx/esm', 'scripts/repro-toolcards.tsx']],
     ["repro-diff-split", ['node', '--import', 'tsx/esm', 'scripts/repro-diff-split.tsx']],
+// 思考块流式视图回归：preview 固定三行且点击切全文/再点收回，full
+// 默认值反向但仍不进入 0 行正文；增量 Markdown 与整段渲染的块间距
+// 一致（真实段落空行保留，代码块后不凭空多一行）。
+    ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
+    ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
+    ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
 // 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
 // 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
 // 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
@@ -335,6 +341,10 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// 会话切换/清屏卫生：子代理投影（行 map/任务描述队列/仪表盘快照）随
+// 切换重置、/clear 后在途子代理卡可回现、staged image token 会话作用域
+// （switchModel 不泄漏）、resumeTo 竞争切换守卫、recap 预算从新到旧收容。
+    ["verify-session-reset-hygiene", ['node', '--import', 'tsx/esm', 'scripts/verify-session-reset-hygiene.tsx']],
 // /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
 // 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
@@ -393,6 +403,10 @@ const GROUPS = {
 // 启动上下文摘要窄终端回归（issue #167）：摘要与 Ctrl+T 提示必须
 // 作为一条可截断文本布局，不能换行后互相穿插。
     ["verify-loaded-context-width", ['node', '--import', 'tsx/esm', 'scripts/verify-loaded-context-width.tsx']],
+// Divider 可用宽度回归：横线按 Yoga 实际授予的宽度渲染（测量撑满
+// Box），嵌套在更窄容器里（transcript 旁 2 列 timeline rail 排水沟）
+// 不再按整终端宽度换行到第二行——「Conversation compacted」窄窗劈裂。
+    ["verify-divider-width", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-width.tsx']],
 // thinking spinner 残影回归（issue #72）：text-default emoji（✳）
 // 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
     ["repro-thinking", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking.tsx']],
@@ -460,6 +474,9 @@ const GROUPS = {
 // 长问卷列表回归：24 行终端中的 36 个两行 provider 选项必须围绕
 // focusIndex 窗口化，初始和深度导航后焦点 label/单选标记始终可见。
     ["verify-askpanel-long-list", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-long-list.tsx']],
+// 长 plan-review 正文回归（issue #413）：24 行终端里 40 段 plan 不得把
+// Approve/反馈顶出屏外；滚轮必须滚 plan body（直接面板 + 挂进 Chat）。
+    ["verify-plan-review-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-plan-review-scroll.tsx']],
 // 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
 // onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
     ["verify-plugin-scene-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-scene-boundary.tsx']],

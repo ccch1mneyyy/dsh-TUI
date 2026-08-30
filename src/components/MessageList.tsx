@@ -25,8 +25,9 @@ import type { ToolBackground } from '../tuiDisplayPrefs.js'
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
  * on a grey bubble with a `❯` pointer, assistant text with a `●` bullet and
- * markdown, thinking folded to `⚓ Thinking (ctrl+o to expand)`, tool calls as
- * status-dot cards. `expanded` (Ctrl+O) shows full reasoning + full tool
+ * markdown, thinking as a live three-line/full toggle then a settled
+ * `⚓ Thinking (ctrl+o to expand)` row, and tool calls as status-dot cards.
+ * `expanded` (Ctrl+O) shows full reasoning + full tool
  * args/results; `expandedRows` (message-selection mode, Enter) expands single
  * rows; `selectedId` highlights the selected row.
  */
@@ -52,13 +53,13 @@ const DEFAULT_ROW_HEIGHT = 2
 /** Cold-start estimate of the header block above the rows; corrected by the
  *  first layout measurement. */
 const DEFAULT_HEADER_LINES = 14
-/** Stable fallbacks for the stream-fold props: verify/repro harnesses and
- *  embedders render MessageList with prop sets that predate them, and the
+/** Stable fallbacks for the stream-view toggle props: verify/repro harnesses
+ *  and embedders render MessageList with prop sets that predate them, and the
  *  render must not throw (same rule as Chat's stubbed channel APIs). Module
  *  scope keeps the identities stable so MemoRow's shallow compare and the
  *  toggle callback's deps never churn. */
-const NO_STREAM_FOLDED: ReadonlySet<number> = new Set()
-const NOOP_TOGGLE_STREAM_FOLD = (_rowId: number): void => {}
+const NO_STREAM_VIEW_TOGGLED: ReadonlySet<number> = new Set()
+const NOOP_TOGGLE_STREAM_VIEW = (_rowId: number): void => {}
 
 /**
  * Per-kind layout signature PARTS: the O(1) identity of every input that
@@ -86,7 +87,7 @@ function signatureParts(
   columns: number,
   expanded: boolean,
   expandedRows: ReadonlySet<number>,
-  streamFolded: ReadonlySet<number>,
+  streamViewToggledRows: ReadonlySet<number>,
   thinkingVisible: boolean,
   thinkingFold: string,
   diffLayout: string,
@@ -107,10 +108,9 @@ function signatureParts(
       signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), expanded ? model : '')
       break
     case 'reasoning':
-      // thinkingFold (preview vs full) and the visibility filter change the
-      // folded card's height; streaming shows verbose live unless the user
-      // clicked it folded (streamFolded collapses to the ticker/header).
-      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), streamFolded.has(row.id), thinkingVisible, thinkingFold)
+      // thinkingFold (preview vs full), its per-row live override, and the
+      // visibility filter all change the card's height.
+      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
       break
     case 'tool': {
       const tool = row.tool
@@ -159,8 +159,8 @@ export function MessageList({
   expandedRows,
   selectedId,
   onToggleRow,
-  streamFoldedRows = NO_STREAM_FOLDED,
-  onToggleStreamFold = NOOP_TOGGLE_STREAM_FOLD,
+  streamViewToggledRows = NO_STREAM_VIEW_TOGGLED,
+  onToggleStreamView = NOOP_TOGGLE_STREAM_VIEW,
   model,
   diffLayout = 'auto',
   thinkingFold = 'preview',
@@ -188,9 +188,9 @@ export function MessageList({
   expandedRows: ReadonlySet<number>
   selectedId: number | null
   onToggleRow: (rowId: number) => void
-  /** 流式 reasoning 行被用户折叠（点击展开/折叠对流式行同样有效）。 */
-  streamFoldedRows?: ReadonlySet<number>
-  onToggleStreamFold?: (rowId: number) => void
+  /** 流式 reasoning 行相对 thinkingFold 默认视图的逐行切换。 */
+  streamViewToggledRows?: ReadonlySet<number>
+  onToggleStreamView?: (rowId: number) => void
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout?: 'auto' | 'split' | 'unified'
@@ -481,7 +481,7 @@ export function MessageList({
         columns,
         expanded,
         expandedRows,
-        streamFoldedRows,
+        streamViewToggledRows,
         thinkingVisible,
         thinkingFold,
         diffLayout,
@@ -1033,8 +1033,8 @@ export function MessageList({
               toolDurationMs={tool?.durationMs}
               subagent={subagent}
               onToggleRow={onToggleRow}
-              onToggleStreamFold={onToggleStreamFold}
-              streamFolded={streamFoldedRows.has(row.id)}
+              onToggleStreamView={onToggleStreamView}
+              streamViewToggled={streamViewToggledRows.has(row.id)}
               onOpenSubagent={onOpenSubagent}
               onOpenFile={onOpenFile}
               setRowRef={setRowRef}
@@ -1099,10 +1099,10 @@ type MemoRowProps = {
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined
   onToggleRow: (rowId: number) => void
-  /** 流式 reasoning 行折叠开关（默认展开 live，点击折叠；落定行用 onToggleRow）。 */
-  onToggleStreamFold: (rowId: number) => void
-  /** 该行是否被用户折叠（仅流式 reasoning 行消费）。 */
-  streamFolded: boolean
+  /** 流式 reasoning 行在三行预览/全文间切换；落定行用 onToggleRow。 */
+  onToggleStreamView: (rowId: number) => void
+  /** 是否反转该流式行的 thinkingFold 默认视图。 */
+  streamViewToggled: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
   setRowRef: (rowId: number, el: DOMElement | null) => void
@@ -1159,8 +1159,8 @@ function TranscriptRow({
   toolDurationMs,
   subagent,
   onToggleRow,
-  onToggleStreamFold,
-  streamFolded,
+  onToggleStreamView,
+  streamViewToggled,
   onOpenSubagent,
   onOpenFile,
   setRowRef,
@@ -1179,12 +1179,12 @@ function TranscriptRow({
     if (event.cellIsBlank) return
     onToggleRow(rowId)
   }, [onToggleRow, rowId])
-  // 流式 reasoning 行：点击折叠/展开 live 视图（默认展开，与落定行的
-  // 默认折叠相反——所以走独立开关，落定后语义自动回到 foldOnClick）。
-  const streamFoldOnClick = React.useCallback((event: ClickEvent): void => {
+  // 流式 reasoning 行：点击在三行预览/全文间切换。它反转 thinkingFold
+  // 的默认值，落定后语义自动回到 foldOnClick。
+  const streamViewOnClick = React.useCallback((event: ClickEvent): void => {
     if (event.cellIsBlank) return
-    onToggleStreamFold(rowId)
-  }, [onToggleStreamFold, rowId])
+    onToggleStreamView(rowId)
+  }, [onToggleStreamView, rowId])
   // 子代理卡：点击打开详情场景（不是折叠）。
   const openSubagent = React.useCallback(() => {
     if (subagent !== undefined) onOpenSubagent?.(subagent.agentId)
@@ -1248,29 +1248,28 @@ function TranscriptRow({
           />
         </Box>
       )
-    case 'reasoning':
+    case 'reasoning': {
+      // The setting chooses the live default; a row click reverses it. Global
+      // or per-row transcript expansion always wins and shows the full text.
+      const streamPreview = streaming && !expanded && !isExpanded &&
+        (streamViewToggled ? thinkingFold === 'full' : thinkingFold === 'preview')
       return (
         <Box flexDirection="column" ref={ref}>
           <AssistantThinkingMessage
             thinking={text}
             addMargin={addMargin}
             streaming={streaming}
-            preview={
-              streaming &&
-              !streamFolded &&
-              thinkingFold === 'preview' &&
-              !isExpanded
-            }
-            // Streaming reasoning shows expanded live (click collapses to the
-            // ticker/header via streamFolded); settled rows keep the
-            // fold-on-settle default and expand via expandedRows/Ctrl+O.
-            verbose={isExpanded || expanded || (streaming && !streamFolded)}
+            preview={streamPreview}
+            // Settled rows keep the fold-on-settle default and expand via
+            // expandedRows/Ctrl+O; a live row is always preview or full.
+            verbose={isExpanded || expanded || (streaming && !streamPreview)}
             durationMs={durationMs}
             isSelected={isSelected}
-            onClick={streaming ? streamFoldOnClick : foldOnClick}
+            onClick={streaming ? streamViewOnClick : foldOnClick}
           />
         </Box>
       )
+    }
     case 'tool': {
       if (
         toolCallId === undefined ||

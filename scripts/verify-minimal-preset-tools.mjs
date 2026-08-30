@@ -3,7 +3,12 @@
 
 import assert from 'node:assert/strict'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
-import { filterMinimalPresetTools } from '../lib/types/dsh-adapter/presets.js'
+import {
+  composePreset,
+  filterMinimalPresetTools,
+  resolvePersistedPreset,
+  runningPresetOf,
+} from '../lib/types/dsh-adapter/presets.js'
 import { settled } from './lib/term-test.mjs'
 
 const bash = { name: 'bash' }
@@ -20,12 +25,137 @@ const minimal = filterMinimalPresetTools(assembly, 'minimal')
 assert.deepEqual(minimal.tools.map(tool => tool.name), ['bash', 'str_replace_editor'])
 assert.notEqual(minimal, assembly)
 
-for (const preset of ['standard', 'code', 'cordis', 'liangshen', undefined]) {
+for (const preset of ['standard', 'ptc', 'cordis', 'liangshen', undefined]) {
   assert.equal(filterMinimalPresetTools(assembly, preset), assembly)
 }
 
 const alreadyTwoTools = { ...assembly, tools: [bash, editor] }
 assert.equal(filterMinimalPresetTools(alreadyTwoTools, 'minimal'), alreadyTwoTools)
+
+const legacyHeaderSession = {
+  header: { agentPreset: 'code' },
+  events: [],
+}
+const legacyEventSession = {
+  header: { agentPreset: 'standard' },
+  events: [{ type: 'agent-preset/selected', data: { agentPreset: 'code' } }],
+}
+const malformedLatestEventSession = {
+  header: { agentPreset: 'standard' },
+  events: [
+    { type: 'agent-preset/selected', data: { agentPreset: 'code' } },
+    { type: 'agent-preset/selected', data: null },
+  ],
+}
+assert.equal(runningPresetOf(legacyHeaderSession), 'code')
+assert.equal(runningPresetOf(legacyEventSession), 'code')
+assert.equal(runningPresetOf(malformedLatestEventSession), 'code')
+assert.equal(legacyHeaderSession.header.agentPreset, 'code')
+assert.equal(legacyEventSession.events[0].data.agentPreset, 'code')
+
+function presetContext(available, broken = new Set()) {
+  const attempts = []
+  const service = {
+    defaultId: 'standard',
+    async list() {
+      return [...available].map(id => ({ id, trust: 'system' }))
+    },
+    async resolve(id) {
+      attempts.push(id)
+      if (broken.has(id)) throw new Error(`broken ${id} preset`)
+      if (!available.has(id)) throw new Error(`missing ${id}`)
+      return { id, trust: 'system' }
+    },
+    async mount() {},
+    async recompose() { throw new Error('not used') },
+  }
+  return {
+    attempts,
+    ctx: {
+      get(name) {
+        if (name !== 'agentPresets') return undefined
+        return service
+      },
+      logger: { warn() {} },
+    },
+  }
+}
+
+const alphaRoster = presetContext(new Set(['standard', 'ptc']))
+const alphaComposition = await composePreset(alphaRoster.ctx, 'code')
+assert.deepEqual(alphaRoster.attempts, ['ptc'])
+assert.equal(alphaComposition.agentPreset, 'ptc')
+assert.equal(legacyHeaderSession.header.agentPreset, 'code')
+
+const rcRoster = presetContext(new Set(['standard', 'code']))
+const rcComposition = await composePreset(rcRoster.ctx, 'code')
+assert.deepEqual(rcRoster.attempts, ['code'])
+assert.equal(rcComposition.agentPreset, 'code')
+
+const rcNewName = presetContext(new Set(['standard', 'code']))
+const rcFallback = await composePreset(rcNewName.ctx, 'ptc')
+assert.deepEqual(rcNewName.attempts, ['code'])
+assert.equal(rcFallback.agentPreset, 'code')
+
+const brokenExact = presetContext(new Set(['standard', 'code', 'ptc']), new Set(['code']))
+const brokenComposition = await composePreset(brokenExact.ctx, 'code')
+assert.deepEqual(brokenExact.attempts, ['code'])
+assert.deepEqual(brokenComposition, {})
+
+const persistedPreset = await resolvePersistedPreset({
+  get(name) {
+    if (name !== 'sessionPersistence') return undefined
+    return { async load() { return { meta: legacyHeaderSession.header, events: legacyHeaderSession.events } } }
+  },
+}, 'legacy-session')
+assert.equal(persistedPreset, 'code')
+
+let directResolveId
+const directChannel = createChannel({
+  on() { return () => {} },
+  get(name) {
+    if (name !== 'agentPresets') return undefined
+    return {
+      defaultId: 'standard',
+      async list() { return [] },
+      async resolve(id) {
+        directResolveId = id
+        if (id !== 'ptc') throw new Error(`missing ${id}`)
+        return { id, trust: 'system' }
+      },
+      async mount() {},
+      async recompose() { throw new Error('not used') },
+    }
+  },
+  logger: { warn() {} },
+}, {
+  id: 'preset-alias-agent',
+  status: 'idle',
+  session: {
+    id: 'preset-alias-session',
+    seq: 1,
+    events: [{
+      type: 'agent-preset/selected',
+      seq: 1,
+      time: 1,
+      data: { agentPreset: 'code' },
+    }],
+  },
+  ctx: { on() { return () => {} } },
+  followup() {},
+  steer() {},
+}, {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+  agentPreset: 'ptc',
+})
+assert.equal(directChannel.agentPreset, 'ptc')
+assert.equal(directChannel.rows.some(row => row.text.includes('ptc')), true)
+assert.equal(directChannel.rows.some(row => row.text.includes('code')), false)
+assert.equal(await directChannel.switchPreset('ptc'), true)
+assert.equal(directResolveId, 'ptc')
 
 const bundledSkills = [{
   name: 'audit',

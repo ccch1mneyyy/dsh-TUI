@@ -380,6 +380,7 @@ it as “continue planning”:
 | Key | Behavior |
 | --- | --- |
 | `Up/Down` | Move between the options and the feedback input line at the bottom |
+| Mouse wheel | Scroll the plan body; Approve / Keep planning / feedback stay pinned in view |
 | `1`/`2` | Submit the corresponding option directly (when the feedback buffer is empty; otherwise digits are treated as feedback characters) |
 | Typing | Enters the feedback input line |
 | `Enter` (`Approve` row) | Approve the plan and leave plan mode; with feedback it errors out — approval must carry no feedback, or the protocol treats it as “continue planning” |

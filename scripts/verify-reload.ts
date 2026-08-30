@@ -15,8 +15,12 @@
  *
  * 运行：node --import tsx/esm scripts/verify-reload.ts
  */
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { planReload, type ReloadPlan } from '../src/reload.js'
 import { LOCAL_COMMANDS, isLocalCommandName, parseCommandName } from '../src/commands.js'
+import { migratePresetPref, parsePresetPref, readPresetPref, writePresetPref } from '../src/presetPrefs.js'
 
 let failures = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -64,7 +68,7 @@ const BASE = {
     ...BASE,
     themePref: 'light',
     langPref: 'en',
-    presetPref: 'code',
+    presetPref: 'ptc',
     modelPref: { provider: 'deepseek', model: 'deepseek-chat' },
     activityPref: 'moon',
   })
@@ -101,10 +105,10 @@ const BASE = {
 
 // ── 5. preset / activity：cordis.yml 显式优先 ───────────────────────────
 {
-  const preset = planReload({ ...BASE, configuredPreset: 'code', presetPref: 'standard' })
+  const preset = planReload({ ...BASE, configuredPreset: 'ptc', presetPref: 'standard' })
   check('preset cordis.yml → skip config-wins', preset.skipped.some(s => s.kind === 'preset' && s.reason === 'config-wins'))
-  const presetApply = planReload({ ...BASE, presetPref: 'code' })
-  check('preset 变化 → apply', presetApply.apply.some(a => a.kind === 'preset' && a.to === 'code'))
+  const presetApply = planReload({ ...BASE, presetPref: 'ptc' })
+  check('preset 变化 → apply', presetApply.apply.some(a => a.kind === 'preset' && a.to === 'ptc'))
   const presetNoFile = planReload({ ...BASE, presetPref: undefined })
   check('preset 无文件 → skip invalid', presetNoFile.skipped.some(s => s.kind === 'preset' && s.reason === 'invalid'))
   const activity = planReload({ ...BASE, configuredActivity: 'moon', activityPref: 'claude' })
@@ -136,7 +140,24 @@ const BASE = {
   check('model 无当前路由仍 apply', noCurrent.apply.some(a => a.kind === 'model' && a.from === '—'))
 }
 
-// ── 7. 命令注册：/reload、/restart ──────────────────────────────────────
+// ── 7. legacy code preset：名册解析后才迁移（rc 仍以 code 为真名） ─────
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-tui-preset-pref-'))
+  const file = join(dir, 'agent-preset.json')
+  try {
+    writeFileSync(file, JSON.stringify({ preset: 'code' }))
+    check('无名册时旧 preset JSON 保持 code', parsePresetPref(readFileSync(file, 'utf8')) === 'code')
+    check('无名册时读取旧 preset 保持 code', readPresetPref(dir) === 'code')
+    check('读取本身不做不可逆改写', JSON.parse(readFileSync(file, 'utf8')).preset === 'code')
+    check('alpha 名册解析后迁移为 ptc', migratePresetPref('code', 'ptc', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'ptc')
+    check('rc 写入 code 仍保存 code', writePresetPref('code', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'code')
+    check('自定义 preset id 保持不变', parsePresetPref(JSON.stringify({ preset: 'liangshen' })) === 'liangshen')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// ── 8. 命令注册：/reload、/restart ──────────────────────────────────────
 {
   const names = LOCAL_COMMANDS.map(c => c.name)
   check('/reload 已注册', names.includes('reload'))
