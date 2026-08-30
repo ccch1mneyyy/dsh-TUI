@@ -340,8 +340,9 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   // Strip ALL trailing newlines: trailing blank lines would otherwise leak a
   // stray blank line at the end of the block.
   const body = renderBody().replace(/\n+$/, '')
+  const closeFence = colorize('```', theme.subtle, 'foreground')
   if (body === '') {
-    return `${openFence}${EOL}`
+    return `${openFence}${EOL}${closeFence}${EOL}`
   }
   return (
     openFence +
@@ -349,7 +350,10 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
     body
       .split(EOL)
       .map(line => (line === '' ? line : indent + line))
-      .join(EOL) + EOL
+      .join(EOL) +
+    EOL +
+    closeFence +
+    EOL
   )
 }
 
