@@ -146,7 +146,7 @@ export const Config: Schema<Config> = Schema.object({
   fullscreen: Schema.boolean().default(true),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
-  diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+  diffLayout: Schema.union(['auto', 'split', 'unified']).default('unified'),
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
