@@ -204,8 +204,10 @@ export function GoalTodoPanel({
             onMouseLeave={() => setHeaderHovered(false)}
             backgroundColor={headerHovered ? 'userMessageBackgroundHover' : undefined}
           >
-            <Text dimColor>{collapsed ? '▸' : '▾'} </Text>
-            <Text dimColor>✓ {doneCount}/{allTodos.length}</Text>
+            <Text color="claude">{collapsed ? '▸' : '▾'} </Text>
+            <Text color={doneCount === allTodos.length && allTodos.length > 0 ? 'success' : 'claude'} bold>
+              ✓ {doneCount}/{allTodos.length}
+            </Text>
             {collapsed && preview !== undefined && (
               <Box flexGrow={1} flexShrink={1} marginLeft={1}>
                 {preview.status === 'in_progress' ? (

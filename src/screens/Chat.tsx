@@ -3143,12 +3143,17 @@ export function Chat({
       ? null
       : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
 
+  const isAtBottom = isSticky || (handle ? handle.getScrollTop() >= Math.max(0, handle.getScrollHeight() - handle.getViewportHeight()) : true)
+  const activeTurn = timeline.turns.find(t => t.id === anchorUserRowId)
+  const currentScrollTop = handle ? handle.getScrollTop() : 0
+  const showStickyHeader = !isAtBottom && anchorUserText !== null && activeTurn !== undefined && (activeTurn.folded === true || activeTurn.top < currentScrollTop)
+
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%" height="100%" backgroundColor="pane">
       {channel.cockpit && !channel.minimal && (
         <CockpitHud channel={channel} />
       )}
-      {!isSticky && anchorUserText && (
+      {showStickyHeader && anchorUserText && (
         <StickyPromptHeader
           text={anchorUserText}
           onClick={() => {

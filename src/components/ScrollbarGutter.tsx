@@ -74,7 +74,8 @@ export function ScrollbarGutter({
   // top follows scrollTop over the scroll range.
   const thumbH = Math.max(2, Math.round((viewport * viewport) / content))
   const trackH = Math.max(1, viewport - thumbH)
-  const thumbTop = Math.round((handle.getScrollTop() / Math.max(1, maxScroll)) * trackH)
+  const currentScroll = Math.max(0, Math.min(maxScroll, handle.getScrollTop()))
+  const thumbTop = Math.min(trackH, Math.max(0, Math.round((currentScroll / Math.max(1, maxScroll)) * trackH)))
   const thumbBottom = Math.min(viewport, thumbTop + thumbH)
 
   // Clicking the track maps the clicked row's position on the track back

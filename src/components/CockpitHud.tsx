@@ -56,7 +56,7 @@ export function CockpitHud({ channel }: { channel: Channel }): React.ReactNode {
   }
   const io = ioChip(channel.inputModalities)
   if (io !== undefined) {
-    leftItems.push({ key: 'io', chip: `[${io}]` })
+    leftItems.push({ key: 'io', chip: io })
   }
 
   // Right environment items — progressive disclosure based on column budget

@@ -192,6 +192,10 @@ function ScrollBox({
 
       // Clamp downward scroll when already at or past the bottom and already draining downwards
       if (delta > 0 && curTop >= maxScroll && curPending >= 0) {
+        if (el.stickyScroll === false) {
+          el.stickyScroll = true;
+          scrollMutated(el);
+        }
         return;
       }
       // Clamp upward scroll when already at top and already draining upwards
@@ -205,13 +209,17 @@ function ScrollBox({
       const nextPending = clampedTarget - curTop;
 
       if (delta > 0 && (curTop >= maxScroll || nextPending <= 0)) {
+        if (el.stickyScroll === false) {
+          el.stickyScroll = true;
+          scrollMutated(el);
+        }
         return;
       }
       if (delta < 0 && (curTop <= 0 || nextPending >= 0)) {
         return;
       }
 
-      // Cap accumulated pending delta to a reasonable ceiling so rapid flicks don't over-queue
+      el.stickyScroll = clampedTarget >= maxScroll;
       const maxPending = Math.max(viewportH * 2, 40);
       el.pendingScrollDelta = Math.max(-maxPending, Math.min(maxPending, nextPending));
       scrollMutated(el);

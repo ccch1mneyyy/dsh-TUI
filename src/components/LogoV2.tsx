@@ -153,13 +153,13 @@ export function LogoV2({
         {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
         <Box flexDirection="column" flexShrink={1}>
           {hideRoute ? (
-            <Text color="subtle" wrap="truncate-end">
+            <Text color="claude" wrap="truncate-end">
               {'v' + VERSION}
             </Text>
           ) : (
             <Text wrap="truncate-end">
               {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
-              <Text dimColor>{'  v' + VERSION}</Text>
+              <Text color="claude">{'  v' + VERSION}</Text>
             </Text>
           )}
           {bigDeepSeek.map((row, index) => (
@@ -174,15 +174,15 @@ export function LogoV2({
           ))}
           {hideRoute ? null : (
             <Text wrap="truncate-end">
-              {model}
+              <Text bold color="claude">{model}</Text>
               {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
             </Text>
           )}
-          <Text color={hideRoute ? 'subtle' : undefined} dimColor={!hideRoute} wrap="truncate-end">
+          <Text color="inactiveShimmer" wrap="truncate-end">
             {cwd}
           </Text>
           <Text wrap="truncate-end">
-            <Text dimColor>{tr('logo-tip-prefix')}</Text>
+            <Text color="claude">{tr('logo-tip-prefix')}</Text>
             {getLang() === 'zh' ? randomTip.zh : randomTip.en}
             <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
           </Text>
