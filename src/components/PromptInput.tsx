@@ -416,6 +416,11 @@ export function PromptInput({
   const prevCaretLineRef = React.useRef(-1)
   const [, setExpandedTick] = React.useState(0)
   const prevExpandedRef = React.useRef(false)
+  /** Inline prompt viewport scrolling for long messages. */
+  const inlineScrollRef = React.useRef(0)
+  const inlineFreeScrollRef = React.useRef(false)
+  const prevInlineCaretLineRef = React.useRef(-1)
+  const [, setInlineTick] = React.useState(0)
   /**
    * Feature gate (settings `dsh-tui.expandEditor`, on by default; a mock
    * channel without the field also reads as on). Off hides the ⛶
@@ -464,6 +469,9 @@ export function PromptInput({
         // Chat's idle Ctrl+C clear also withdraws the fullscreen editor —
         // the draft it was editing is gone, the cover must not linger.
         expandedRef.current = false
+        inlineScrollRef.current = 0
+        inlineFreeScrollRef.current = false
+        prevInlineCaretLineRef.current = -1
         setSelection(null)
         setFoldBlock(null)
         setExpanded(false)
@@ -983,6 +991,18 @@ export function PromptInput({
     const line = before.split('\n').pop() ?? ''
     return line.length
   }
+  /** Visual line index of the cursor within wrapped text. */
+  const cursorVisualLine = (text: string, cursorOffset: number, width: number) => {
+    const before = text.slice(0, cursorOffset)
+    return wrapToWidth(before, width).length - 1
+  }
+  /** Visual column of the cursor within its visual row. */
+  const cursorVisualColumn = (text: string, cursorOffset: number, width: number) => {
+    const before = text.slice(0, cursorOffset)
+    const rows = wrapToWidth(before, width)
+    const last = rows[rows.length - 1] ?? ''
+    return stringWidth(last)
+  }
 
   useInput((input, key, event) => {
     if (selectionActive) return
@@ -1366,6 +1386,25 @@ export function PromptInput({
       pullBackLast()
       return
     }
+    if (key.pageUp && !expanded) {
+      const vLines = wrapToWidth(value, inputWidth)
+      if (vLines.length > MAX_VISIBLE_LINES) {
+        inlineFreeScrollRef.current = true
+        inlineScrollRef.current = Math.max(0, inlineScrollRef.current - (MAX_VISIBLE_LINES - 1))
+        setInlineTick(tick => tick + 1)
+        return
+      }
+    }
+    if (key.pageDown && !expanded) {
+      const vLines = wrapToWidth(value, inputWidth)
+      if (vLines.length > MAX_VISIBLE_LINES) {
+        inlineFreeScrollRef.current = true
+        const max = Math.max(0, vLines.length - MAX_VISIBLE_LINES)
+        inlineScrollRef.current = Math.min(max, inlineScrollRef.current + (MAX_VISIBLE_LINES - 1))
+        setInlineTick(tick => tick + 1)
+        return
+      }
+    }
     if (key.upArrow) {
       if (fileOverlayOpen) {
         setFileSelected(index =>
@@ -1393,15 +1432,17 @@ export function PromptInput({
         setInput(value, block.start)
         return
       }
-      const line = cursorLine(value, cursor)
-      if (line > 0) {
-        // Move to the previous line, clamping to its length.
-        const upToLineStart = value.lastIndexOf('\n', cursor - 1)
-        const prevLineStart =
-          upToLineStart === -1 ? 0 : value.lastIndexOf('\n', upToLineStart - 1) + 1
-        const prevLine = value.slice(prevLineStart, upToLineStart)
-        setInput(value, prevLineStart + Math.min(cursorColumn(value, cursor), prevLine.length))
-        return
+      if (!block) {
+        const vLines = wrapToWidth(value, inputWidth)
+        if (vLines.length > 1) {
+          const vLine = cursorVisualLine(value, cursor, inputWidth)
+          if (vLine > 0) {
+            const vCol = cursorVisualColumn(value, cursor, inputWidth)
+            const prevOffset = clickToCursorOffset(value, inputWidth, vLine - 1, vCol)
+            setInput(value, prevOffset)
+            return
+          }
+        }
       }
       if (overlayOpen) {
         setSelectedCommand(index =>
@@ -1469,17 +1510,17 @@ export function PromptInput({
         setInput(value, block.end)
         return
       }
-      const line = cursorLine(value, cursor)
-      const lines = value.split('\n')
-      if (line < lines.length - 1) {
-        const nextLineStart = value.indexOf('\n', cursor) + 1
-        const nextLineEnd = value.indexOf('\n', nextLineStart)
-        const nextLine = value.slice(
-          nextLineStart,
-          nextLineEnd === -1 ? value.length : nextLineEnd,
-        )
-        setInput(value, nextLineStart + Math.min(cursorColumn(value, cursor), nextLine.length))
-        return
+      if (!block) {
+        const vLines = wrapToWidth(value, inputWidth)
+        if (vLines.length > 1) {
+          const vLine = cursorVisualLine(value, cursor, inputWidth)
+          if (vLine < vLines.length - 1) {
+            const vCol = cursorVisualColumn(value, cursor, inputWidth)
+            const nextOffset = clickToCursorOffset(value, inputWidth, vLine + 1, vCol)
+            setInput(value, nextOffset)
+            return
+          }
+        }
       }
       if (overlayOpen) {
         setSelectedCommand(index =>
@@ -1980,6 +2021,10 @@ export function PromptInput({
     editorFreeScrollRef.current = false
     prevCaretLineRef.current = caretVisualLine
   }
+  if (!expanded && caretVisualLine !== prevInlineCaretLineRef.current) {
+    inlineFreeScrollRef.current = false
+    prevInlineCaretLineRef.current = caretVisualLine
+  }
   let windowStart: number
   let visibleCount: number
   if (expanded) {
@@ -1996,13 +2041,14 @@ export function PromptInput({
     windowStart = win
     visibleCount = editorMaxRows
   } else {
-    windowStart = Math.max(
-      0,
-      Math.min(
-        caretVisualLine - MAX_VISIBLE_LINES + 1,
-        visualLines.length - MAX_VISIBLE_LINES,
-      ),
-    )
+    let win = inlineScrollRef.current
+    if (!inlineFreeScrollRef.current) {
+      if (caretVisualLine < win) win = caretVisualLine
+      if (caretVisualLine >= win + MAX_VISIBLE_LINES) win = caretVisualLine - MAX_VISIBLE_LINES + 1
+    }
+    win = Math.max(0, Math.min(win, Math.max(0, visualLines.length - MAX_VISIBLE_LINES)))
+    inlineScrollRef.current = win
+    windowStart = win
     visibleCount = MAX_VISIBLE_LINES
   }
   const visibleLines = visualLines.slice(
@@ -2791,6 +2837,16 @@ export function PromptInput({
             onDragStart={handleDragStart}
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
+            onWheel={(event) => {
+              if (visualLines.length <= MAX_VISIBLE_LINES) return
+              inlineFreeScrollRef.current = true
+              const max = Math.max(0, visualLines.length - MAX_VISIBLE_LINES)
+              inlineScrollRef.current = Math.max(
+                0,
+                Math.min(inlineScrollRef.current + Math.round(event.deltaY), max),
+              )
+              setInlineTick(tick => tick + 1)
+            }}
           >
             {value.length === 0 ? (
               // Solid block caret on a BLANK cell: the terminal paints the
@@ -2813,6 +2869,17 @@ export function PromptInput({
               <Box flexDirection="column">{rendered}</Box>
             )}
           </Box>
+          {!expanded && visualLines.length > MAX_VISIBLE_LINES && (
+            <Box flexShrink={0} paddingRight={1}>
+              <Text dimColor>
+                {windowStart > 0 ? `↑${windowStart}` : ''}
+                {windowStart > 0 && visualLines.length - (windowStart + visibleCount) > 0 ? ' ' : ''}
+                {visualLines.length - (windowStart + visibleCount) > 0
+                  ? `↓${visualLines.length - (windowStart + visibleCount)}`
+                  : ''}
+              </Text>
+            </Box>
+          )}
           {/* ⛶ 全屏草稿编辑入口：点击展开；hover 提亮为输入框强调色。
               inputWidth 已为它预留 2 列（见渲染派生区）；设置关闭时
               整体不渲染（宽度预算同步归还）。 */}
