@@ -245,7 +245,13 @@ export function GoalTodoPanel({
               )}
               {/* Fold affordance under the list — only while expanded; the
                   collapsed line already IS the folded state. */}
-              <Text dimColor>  {t('goal-todo-fold-hint', { mod: modLabel })}</Text>
+              <Box
+                onClick={onToggle}
+                onMouseEnter={() => setHeaderHovered(true)}
+                onMouseLeave={() => setHeaderHovered(false)}
+              >
+                <Text dimColor>  {t('goal-todo-fold-hint', { mod: modLabel })}</Text>
+              </Box>
             </Box>
           )}
         </Box>
