@@ -7016,10 +7016,6 @@ ${output}
       case 'session/title':
         state.sessionTitle = event.data.title
         break
-      case 'todo/write':
-        // Whole-list snapshot — latest write wins; log-only UI state.
-        state.todos = event.data.todos
-        break
       case LIANGSHEN_PLAN_PROMPT_EVENT:
         // Transcript projection for the durable /planPrompt switch: every
         // append site only logs a real state change, so one notice row per
