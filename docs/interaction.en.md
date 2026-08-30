@@ -38,8 +38,14 @@ Plugins may register additional combos through the `tuiShortcuts` seam (they
 must carry Ctrl or Alt); built-in bindings always win and conflicting combos
 are refused at registration. A managed plugin dialog (select/confirm/input)
 owns the keyboard while open: `↑`/`↓` to move, `Enter` to confirm, `Esc` to
-cancel. Plugins may also contribute display-only text to the status line
-above the prompt.
+cancel. Plugins may also contribute one text line above the prompt, or a
+compact rich status view of up to three rows when the host exposes
+`tuiStatus.registerView`. Rich views receive only host `Box`, `Text`, and
+terminal size; click/hover/drag work in fullscreen, and the view never owns the
+keyboard. Plugins provide the keyboard path for the same action through a
+slash command or `tuiShortcuts`. A refused rich registration returns
+`undefined`; an admitted registration returns a disposer that removes both
+the view and its Cordis effect.
 
 ## Editing keys
 

@@ -4,14 +4,16 @@
  *
  * Three layers, one file:
  *  A. Store units (cordis-free): FIFO queueing, decide/cancel, AbortSignal,
- *     timeout, settleAll, keyed status semantics.
+ *     timeout, settleAll, keyed text + rich status semantics.
  *  B. Runtime units over a REAL cordis context: input validation (warn,
  *     never throw), sanitization, shortcut parse/match/register/dispatch,
  *     renderer registration refusals + sticky failure logging.
  *  C. Chat UI integration (fake channel, REAL stores/runtimes): select /
  *     confirm / input dialogs render and settle from the keyboard, FIFO
  *     drain, Esc cancel, the status line appears/clears, and a plugin
- *     shortcut consumes its keypress through Chat's dispatch chain.
+ *     shortcut consumes its keypress through Chat's dispatch chain; rich
+ *     status views receive only the bounded host-render kit (including local
+ *     captured drag) and isolate a throwing component.
  *
  * Run: node --import tsx/esm scripts/verify-extension-ui.tsx
  */
@@ -322,6 +324,25 @@ const plugin = pluginCtx
 }
 
 {
+  const statusEffectBaseline = pluginFiber.getEffects().length
+  const disposeMissingClear = plugin.tuiStatus.set('missing-clear', undefined)
+  const disposeEmptyClear = plugin.tuiStatus.set('empty-clear', '')
+  check('tuiStatus.set: empty and missing clears do not register caller effects',
+    pluginFiber.getEffects().length === statusEffectBaseline,
+    `${pluginFiber.getEffects().length} !== ${statusEffectBaseline}`)
+  disposeMissingClear()
+  disposeEmptyClear()
+
+  let repeatedSetDisposers = true
+  for (let i = 0; i < 24; i++) {
+    const dispose = plugin.tuiStatus.set('effect-bounded-text', `pass-${i}`)
+    dispose()
+    repeatedSetDisposers &&= statusStore.getSnapshot().every(entry => entry.key !== 'effect-bounded-text')
+  }
+  check('tuiStatus.set: repeated register + dispose keeps caller effects bounded',
+    repeatedSetDisposers && pluginFiber.getEffects().length === statusEffectBaseline,
+    `${pluginFiber.getEffects().length} !== ${statusEffectBaseline}`)
+
   plugin.tuiStatus.set('Bad Key!', 'nope')
   check('tuiStatus: invalid key refused + warn', statusStore.getSnapshot().length === 0 && warnCount('tuiStatus.set rejected an invalid key') === 1)
   // P2-9：文档的 plugin:sub-item 冒号命名约定合法（逐段 slug 校验）。
@@ -388,6 +409,79 @@ const plugin = pluginCtx
   disposeSecond()
   check('tuiStatus: the owning disposer clears the same-value write',
     !statusStore.getSnapshot().some(e => e.key === 'aba'))
+
+  const EmptyView = () => null
+  check('tuiStatus.registerView: public method is feature-detectable',
+    typeof plugin.tuiStatus.registerView === 'function')
+  const invalidKeyView = plugin.tuiStatus.registerView({ key: 'Bad Key!', component: EmptyView })
+  check('tuiStatus.registerView: invalid key refused + warn',
+    statusStore.getViewSnapshot().length === 0
+    && warnCount('tuiStatus.registerView rejected an invalid key') === 1
+    && invalidKeyView === undefined)
+  const invalidRowsView = plugin.tuiStatus.registerView({ key: 'bad-rows', maxRows: 4 as 3, component: EmptyView })
+  check('tuiStatus.registerView: maxRows above three refused',
+    statusStore.getViewSnapshot().length === 0
+    && warnCount('maxRows must be an integer from 1 to 3') === 1
+    && invalidRowsView === undefined)
+  const invalidComponentView = plugin.tuiStatus.registerView({ key: 'bad-component', component: 42 as never })
+  check('tuiStatus.registerView: non-function component refused',
+    statusStore.getViewSnapshot().length === 0
+    && warnCount('component must be a function') === 1
+    && invalidComponentView === undefined)
+
+  const missingCallerView = ctx.tuiStatus.registerView({ key: 'missing-caller-view', component: EmptyView })
+  check('tuiStatus.registerView: a missing plugin caller returns undefined',
+    missingCallerView === undefined
+    && statusStore.getViewSnapshot().length === 0)
+
+  plugin.tuiStatus.set('text-seat', 'text owns this key')
+  const duplicateTextSeatView = plugin.tuiStatus.registerView({ key: 'text-seat', component: EmptyView })
+  check('tuiStatus.registerView: text and rich views share one key namespace',
+    statusStore.getViewSnapshot().length === 0
+    && warnCount('the key is already registered') === 1
+    && duplicateTextSeatView === undefined)
+  plugin.tuiStatus.set('text-seat', undefined)
+
+  const disposeViewSeat = plugin.tuiStatus.registerView({
+    key: 'view-seat',
+    maxRows: 2,
+    component: EmptyView,
+  })
+  plugin.tuiStatus.set('view-seat', 'must not duplicate')
+  check('tuiStatus.set: a rich view blocks a same-key text duplicate',
+    statusStore.getViewSnapshot()[0]?.key === 'view-seat'
+    && !statusStore.getSnapshot().some(entry => entry.key === 'view-seat')
+    && warnCount('the key already owns a rich view') === 1)
+  disposeViewSeat?.()
+  check('tuiStatus.registerView: disposer removes its own view',
+    statusStore.getViewSnapshot().length === 0)
+
+  const disposeBudgetA = plugin.tuiStatus.registerView({ key: 'budget-a', maxRows: 3, component: EmptyView })
+  const disposeBudgetB = plugin.tuiStatus.registerView({ key: 'budget-b', maxRows: 3, component: EmptyView })
+  const budgetOverflowView = plugin.tuiStatus.registerView({ key: 'budget-overflow', component: EmptyView })
+  check('tuiStatus.registerView: aggregate declared height is capped at six rows',
+    statusStore.getViewSnapshot().map(view => `${view.key}:${view.maxRows}`).join(',') === 'budget-a:3,budget-b:3'
+    && warnCount('rich status views are limited to 6 rows total') === 1
+    && budgetOverflowView === undefined)
+  disposeBudgetA?.()
+  disposeBudgetB?.()
+  check('tuiStatus.registerView: budget is released with its registrations',
+    statusStore.getViewSnapshot().length === 0)
+
+  const viewEffectBaseline = pluginFiber.getEffects().length
+  let repeatedViewRegistrations = true
+  for (let i = 0; i < 24; i++) {
+    const dispose = plugin.tuiStatus.registerView({ key: 'effect-bounded-view', component: EmptyView })
+    if (dispose === undefined) {
+      repeatedViewRegistrations = false
+      break
+    }
+    dispose()
+    repeatedViewRegistrations &&= statusStore.getViewSnapshot().every(view => view.key !== 'effect-bounded-view')
+  }
+  check('tuiStatus.registerView: repeated register + dispose keeps caller effects bounded',
+    repeatedViewRegistrations && pluginFiber.getEffects().length === viewEffectBaseline,
+    `${pluginFiber.getEffects().length} !== ${viewEffectBaseline}`)
 }
 
 {
@@ -466,10 +560,11 @@ const plugin = pluginCtx
     plugin.tuiShortcuts.list().length === 0 && warnCount('need ctrl/alt plus one key') === 1)
   plugin.tuiShortcuts.register('not-a-combo', { description: 'x', handler: noop })
   check('tuiShortcuts: malformed combo refused', warnCount('need ctrl/alt plus one key') === 2)
+  const duplicateBefore = warnCount('already registered')
   plugin.tuiShortcuts.register('ctrl+b', { description: 'first', handler: noop })
   plugin.tuiShortcuts.register('ctrl+b', { description: 'second', handler: noop })
   check('tuiShortcuts: duplicate refused',
-    plugin.tuiShortcuts.list().length === 1 && warnCount('already registered') === 1)
+    plugin.tuiShortcuts.list().length === 1 && warnCount('already registered') === duplicateBefore + 1)
   plugin.tuiShortcuts.register('ctrl+h', { description: '  ', handler: noop })
   check('tuiShortcuts: empty description refused', plugin.tuiShortcuts.list().length === 1)
 
@@ -896,6 +991,100 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   // 空洞成立，轮询会立即返回——保留固定窗口等待重绘发生。
   await sleep(300)
   check('ui: status line clears', !plainText(stdout.frames.slice(mark)).includes('构建中'))
+}
+
+// Rich status view: host React + a deliberately restricted render kit,
+// external-store updates, host height clipping, disposer cleanup.
+{
+  let value = '播放中 · 第一首'
+  const listeners = new Set<() => void>()
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+  const getSnapshot = () => value
+  let receivedKit = ''
+  let leakedKeyEvents = 0
+  const RichStatus = ({ React: HostReact, ui }: import('../src/dsh-adapter/status.js').TuiStatusViewProps) => {
+    receivedKit = Object.keys(ui).sort().join(',')
+    const current = HostReact.useSyncExternalStore(subscribe, getSnapshot)
+    const { columns } = ui.useTerminalSize()
+    return HostReact.createElement(
+      ui.Box,
+      {
+        flexDirection: 'column',
+        onClick: () => {},
+        onDragStart: () => {},
+        onDragMove: () => {},
+        onDragEnd: () => {},
+        onMouseEnter: () => {},
+        onMouseLeave: () => {},
+        // Untyped plugins can still send unsupported props. The host wrapper
+        // must discard them at runtime, not rely on the public type alone.
+        autoFocus: true,
+        tabIndex: 0,
+        onKeyDown: () => { leakedKeyEvents += 1 },
+      } as never,
+      HostReact.createElement(ui.Text, { key: 'title', color: 'rgb(80,180,255)' }, current),
+      HostReact.createElement(ui.Text, { key: 'progress' }, `━━━━━━ 01:23 / 03:45 · ${columns} cols`),
+      HostReact.createElement(ui.Text, { key: 'artist', dimColor: true }, '歌手 · 专辑'),
+      HostReact.createElement(ui.Text, { key: 'overflow' }, 'THIS-ROW-MUST-BE-CLIPPED'),
+    )
+  }
+  const disposeRich = plugin.tuiStatus.registerView({
+    key: 'demo-plugin:rich',
+    maxRows: 3,
+    component: RichStatus,
+  })
+  const richMark = stdout.frames.length
+  check('ui: rich status view renders above the prompt',
+    await settled(() => {
+      const output = plainText(stdout.frames.slice(richMark))
+      return output.includes('播放中 · 第一首') && output.includes('歌手 · 专辑')
+    }), plainText(stdout.frames.slice(richMark)).slice(-500))
+  check('ui: rich status view receives only Box/Text/useTerminalSize',
+    receivedKit === 'Box,Text,useTerminalSize', receivedKit)
+  check('ui: rich status view is clipped to its declared maxRows',
+    !plainText(stdout.frames.slice(richMark)).includes('THIS-ROW-MUST-BE-CLIPPED'),
+    plainText(stdout.frames.slice(richMark)).slice(-500))
+
+  stdin.write('x')
+  // Negative stability probe: waiting for leakedKeyEvents === 0 would pass
+  // immediately and never exercise the input dispatch.
+  await sleep(200)
+  check('ui: rich status Box strips focus and keyboard props at runtime',
+    leakedKeyEvents === 0, String(leakedKeyEvents))
+  stdin.write('\x7f')
+
+  const updateMark = stdout.frames.length
+  value = '暂停 · 第二首'
+  for (const listener of listeners) listener()
+  check('ui: rich status view updates through the plugin external store',
+    await settled(() => plainText(stdout.frames.slice(updateMark)).includes('暂停 · 第二首')),
+    plainText(stdout.frames.slice(updateMark)).slice(-500))
+
+  disposeRich?.()
+  check('ui: rich status disposer removes the registered view',
+    await settled(() => statusStore.getViewSnapshot().length === 0))
+}
+
+// A third-party render crash is contained to that view. Prove Chat is still
+// live by rendering a normal status contribution after the boundary fires.
+{
+  const before = warnCount('status view "demo-plugin:crash" crashed and was hidden')
+  const disposeCrash = plugin.tuiStatus.registerView({
+    key: 'demo-plugin:crash',
+    component: () => {
+      throw new Error('intentional rich status crash')
+    },
+  })
+  check('ui: rich status render failure is reported once',
+    await settled(() => warnCount('status view "demo-plugin:crash" crashed and was hidden') === before + 1))
+  plugin.tuiStatus.set('after-rich-crash', '主界面仍然存活')
+  check('ui: one crashing rich view does not take down Chat',
+    await settled(() => screen().includes('主界面仍然存活')), screen().slice(-500))
+  plugin.tuiStatus.set('after-rich-crash', undefined)
+  disposeCrash?.()
 }
 
 // Shortcut through Chat: the keypress is consumed, the handler runs; the
