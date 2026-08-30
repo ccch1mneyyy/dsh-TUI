@@ -89,6 +89,19 @@ export function ScrollbarGutter({
   const rows: React.ReactNode[] = []
   for (let y = 0; y < viewport; y++) {
     const inThumb = y >= thumbTop && y < thumbBottom
+    let glyph = '  '
+    if (inThumb) {
+      if (thumbH === 1 || thumbBottom - thumbTop === 1) {
+        glyph = ' █'
+      } else if (y === thumbTop) {
+        glyph = ' ▄'
+      } else if (y === thumbBottom - 1) {
+        glyph = ' ▀'
+      } else {
+        glyph = ' █'
+      }
+    }
+    const isHoveredThumb = hoverRow !== null && hoverRow >= thumbTop && hoverRow < thumbBottom
     rows.push(
       <Box
         key={y}
@@ -111,16 +124,8 @@ export function ScrollbarGutter({
           clearChip()
         }}
       >
-        <Text
-          color={
-            inThumb
-              ? hoverRow !== null && hoverRow >= thumbTop && hoverRow < thumbBottom
-                ? 'professionalBlue'
-                : 'inactive'
-              : undefined
-          }
-        >
-          {inThumb ? THUMB : '  '}
+        <Text color={inThumb ? (isHoveredThumb ? 'claude' : 'inactive') : undefined}>
+          {glyph}
         </Text>
       </Box>,
     )

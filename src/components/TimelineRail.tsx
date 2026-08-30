@@ -13,10 +13,10 @@ import {
 const CHEVRON_UP = ' ▴'
 const CHEVRON_DOWN = ' ▾'
 /** Subtle, clean rail glyphs:
- *  active = clear solid tick (▎), hover = highlighted tick, idle = faint indicator. */
-const TICK_ACTIVE = ' ▎'
-const TICK_HOVER = ' ▍'
-const TICK_IDLE = ' ┆'
+ *  active = minimal rounded bar, hover = highlighted bar, idle = clean empty space (no dashed lines). */
+const TICK_ACTIVE = ' █'
+const TICK_HOVER = ' █'
+const TICK_IDLE = '  '
 
 /** Pointer rest time before the hover preview card pops (ms). Sweeps
  *  never mount a card; only a deliberate pause does. */
@@ -204,7 +204,7 @@ export function TimelineRail({
     const isActive = index === activeIndex
     const isHovered = hover?.kind === 'tick' && hover.index === index
     const glyph = isActive ? TICK_ACTIVE : isHovered ? TICK_HOVER : TICK_IDLE
-    const color = isActive || isHovered ? 'text' : 'subtle'
+    const color = isActive || isHovered ? 'claude' : 'subtle'
     tickRows.push(
       <Box
         key={turn.id}
