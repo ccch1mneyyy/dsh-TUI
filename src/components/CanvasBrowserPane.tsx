@@ -17,37 +17,71 @@ interface CanvasBrowserPaneProps {
   activeUrl?: string
 }
 
-function parseHtmlContent(rawHtml: string): string[] {
-  if (!rawHtml) return ['(Empty artifact)']
-  return rawHtml
+function parseHtmlContent(rawHtml: string): { type: 'h1' | 'h2' | 'h3' | 'code' | 'li' | 'p'; text: string }[] {
+  if (!rawHtml || typeof rawHtml !== 'string') {
+    return [{ type: 'p', text: '(Empty artifact content)' }]
+  }
+
+  const clean = rawHtml
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n# $1\n')
-    .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n')
-    .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n### $1\n')
-    .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, ' • $1\n')
-    .replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '$1\n')
-    .replace(/<div[^>]*>([\s\S]*?)<\/div>/gi, '$1\n')
-    .replace(/<br\s*\/?>/gi, '\n')
+
+  const lines = clean.split(/\r?\n/)
+  const result: { type: 'h1' | 'h2' | 'h3' | 'code' | 'li' | 'p'; text: string }[] = []
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (!line) continue
+
+    if (/<h1[^>]*>([\s\S]*?)<\/h1>/i.test(line)) {
+      const match = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(line)
+      result.push({ type: 'h1', text: stripTags(match ? match[1] : line) })
+    } else if (/<h2[^>]*>([\s\S]*?)<\/h2>/i.test(line)) {
+      const match = /<h2[^>]*>([\s\S]*?)<\/h2>/i.exec(line)
+      result.push({ type: 'h2', text: stripTags(match ? match[1] : line) })
+    } else if (/<h3[^>]*>([\s\S]*?)<\/h3>/i.test(line)) {
+      const match = /<h3[^>]*>([\s\S]*?)<\/h3>/i.exec(line)
+      result.push({ type: 'h3', text: stripTags(match ? match[1] : line) })
+    } else if (/<li[^>]*>([\s\S]*?)<\/li>/i.test(line)) {
+      const match = /<li[^>]*>([\s\S]*?)<\/li>/i.exec(line)
+      result.push({ type: 'li', text: stripTags(match ? match[1] : line) })
+    } else if (/<pre|<code>/i.test(line)) {
+      result.push({ type: 'code', text: stripTags(line) })
+    } else {
+      const text = stripTags(line)
+      if (text) result.push({ type: 'p', text })
+    }
+  }
+
+  return result.length > 0 ? result : [{ type: 'p', text: '(Empty artifact)' }]
+}
+
+function stripTags(html: string): string {
+  return html
     .replace(/<[^>]*>/g, '')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
     .trim()
-    .split('\n')
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes < 1024) return `${bytes || 0}B`
+  return `${(bytes / 1024).toFixed(1)}K`
 }
 
 export function CanvasBrowserPane({
   onClose,
   onOpenExternal,
-  activeUrl = 'http://127.0.0.1:33007/',
+  activeUrl = 'http://127.0.0.1:45575/',
 }: CanvasBrowserPaneProps): React.ReactNode {
   const [artifacts, setArtifacts] = useState<CanvasArtifact[]>([])
   const [selectedIdx, setSelectedIdx] = useState<number>(0)
-  const [lines, setLines] = useState<string[]>([])
+  const [parsedBlocks, setParsedBlocks] = useState<{ type: string; text: string }[]>([])
   const [scrollOffset, setScrollOffset] = useState<number>(0)
   const artifactsDir = join(homedir(), '.dsh', 'artifacts')
 
@@ -80,7 +114,7 @@ export function CanvasBrowserPane({
 
   useEffect(() => {
     loadArtifacts()
-    const timer = setInterval(loadArtifacts, 1500)
+    const timer = setInterval(loadArtifacts, 1000)
     return () => clearInterval(timer)
   }, [])
 
@@ -88,21 +122,21 @@ export function CanvasBrowserPane({
   const activeArtifact = artifacts[selectedIdx]
   useEffect(() => {
     if (!activeArtifact) {
-      setLines(['No artifacts on stage. Write an artifact to stream live content here.'])
+      setParsedBlocks([{ type: 'p', text: 'No artifacts on stage.' }])
       return
     }
     const fullPath = join(artifactsDir, activeArtifact.name)
     readFile(fullPath, 'utf8')
       .then((html) => {
-        setLines(parseHtmlContent(html))
+        setParsedBlocks(parseHtmlContent(html))
         setScrollOffset(0)
       })
       .catch(() => {
-        setLines(['Failed to read artifact content.'])
+        setParsedBlocks([{ type: 'p', text: 'Failed to read artifact content.' }])
       })
   }, [activeArtifact?.name])
 
-  const visibleLines = lines.slice(scrollOffset, scrollOffset + 32)
+  const visibleBlocks = parsedBlocks.slice(scrollOffset, scrollOffset + 24)
 
   return (
     <Box
@@ -114,8 +148,9 @@ export function CanvasBrowserPane({
       backgroundColor="pane"
       height="100%"
       overflow="hidden"
+      width="100%"
     >
-      {/* Browser Chrome Header */}
+      {/* Top Header Bar */}
       <Box
         flexDirection="column"
         borderBottomColor="#2A4440"
@@ -124,57 +159,50 @@ export function CanvasBrowserPane({
       >
         <Box justifyContent="space-between" alignItems="center">
           <Box gap={1} alignItems="center">
-            <Box
-              borderStyle="single"
-              borderColor="#5EEAD4"
-              paddingX={0}
-              height={1}
-              justifyContent="center"
-              alignItems="center"
-            >
-              <Text bold color="#5EEAD4">
-                {' '}BROWSER{' '}
-              </Text>
-            </Box>
-            <Text bold color="#E8EEF0">
-              {activeArtifact?.title || 'Canvas Viewer'}
+            <Text bold color="#5EEAD4">
+              ◫ STAGE
+            </Text>
+            <Text color="#7D8C89">│</Text>
+            <Text bold color="#E8EEF0" wrap="truncate-end">
+              {activeArtifact?.title || 'Canvas'}
             </Text>
           </Box>
           <Box gap={1} alignItems="center">
             <Text color="#5EEAD4" bold>
               ● LIVE
             </Text>
-            <Text dimColor>
-              {activeUrl}
-            </Text>
           </Box>
         </Box>
 
-        {/* Tab Strip */}
+        {/* Tab Row */}
         <Box gap={1} marginTop={0}>
-          {artifacts.slice(0, 4).map((art, idx) => {
-            const isSelected = idx === selectedIdx
-            return (
-              <Box
-                key={art.name}
-                borderStyle={isSelected ? 'round' : undefined}
-                borderColor={isSelected ? '#5EEAD4' : undefined}
-                paddingX={1}
-              >
-                <Text
-                  color={isSelected ? '#5EEAD4' : '#7D8C89'}
-                  bold={isSelected}
-                  wrap="truncate-end"
+          {artifacts.length === 0 ? (
+            <Text dimColor>[ No artifacts ]</Text>
+          ) : (
+            artifacts.slice(0, 3).map((art, idx) => {
+              const isSelected = idx === selectedIdx
+              return (
+                <Box
+                  key={art.name}
+                  borderStyle={isSelected ? 'round' : undefined}
+                  borderColor={isSelected ? '#5EEAD4' : undefined}
+                  paddingX={1}
                 >
-                  {`${idx + 1}. ${art.title}`}
-                </Text>
-              </Box>
-            )
-          })}
+                  <Text
+                    color={isSelected ? '#5EEAD4' : '#7D8C89'}
+                    bold={isSelected}
+                    wrap="truncate-end"
+                  >
+                    {`${idx + 1}.${art.title.slice(0, 12)} (${formatBytes(art.size)})`}
+                  </Text>
+                </Box>
+              )
+            })
+          )}
         </Box>
       </Box>
 
-      {/* Browser Viewport / Live Stream */}
+      {/* Main Viewport Content */}
       <Box
         flexDirection="column"
         flexGrow={1}
@@ -183,35 +211,79 @@ export function CanvasBrowserPane({
         paddingY={1}
         overflow="hidden"
       >
-        {visibleLines.map((line, idx) => {
-          const isHeading = line.startsWith('#')
-          const isBullet = line.trim().startsWith('•')
+        {visibleBlocks.map((block, idx) => {
+          if (block.type === 'h1') {
+            return (
+              <Box key={idx} marginY={0} borderBottomColor="#2A4440">
+                <Text bold color="#5EEAD4" wrap="wrap">
+                  {`# ${block.text}`}
+                </Text>
+              </Box>
+            )
+          }
+          if (block.type === 'h2') {
+            return (
+              <Box key={idx} marginTop={0}>
+                <Text bold color="#60A5FA" wrap="wrap">
+                  {`## ${block.text}`}
+                </Text>
+              </Box>
+            )
+          }
+          if (block.type === 'h3') {
+            return (
+              <Box key={idx} marginTop={0}>
+                <Text bold color="#FBBF24" wrap="wrap">
+                  {`### ${block.text}`}
+                </Text>
+              </Box>
+            )
+          }
+          if (block.type === 'li') {
+            return (
+              <Box key={idx} paddingLeft={1}>
+                <Text color="#E8EEF0" wrap="wrap">
+                  <Text color="#5EEAD4">• </Text>
+                  {block.text}
+                </Text>
+              </Box>
+            )
+          }
+          if (block.type === 'code') {
+            return (
+              <Box
+                key={idx}
+                borderStyle="single"
+                borderColor="#2A4440"
+                paddingX={1}
+                marginY={0}
+              >
+                <Text color="#5EEAD4" wrap="wrap">
+                  {block.text}
+                </Text>
+              </Box>
+            )
+          }
           return (
-            <Text
-              key={idx}
-              bold={isHeading}
-              color={isHeading ? '#5EEAD4' : isBullet ? '#60A5FA' : '#E8EEF0'}
-              wrap="wrap"
-            >
-              {line || ' '}
+            <Text key={idx} color="#E8EEF0" wrap="wrap">
+              {block.text}
             </Text>
           )
         })}
       </Box>
 
-      {/* Footer Controls */}
+      {/* Footer Navigation Bar */}
       <Box
         borderTopColor="#2A4440"
         paddingX={1}
         justifyContent="space-between"
       >
-        <Text dimColor>
-          Artifacts: {artifacts.length} · Showing {activeArtifact?.name || 'none'}
+        <Text dimColor wrap="truncate-end">
+          {activeArtifact ? activeArtifact.name : 'empty'}
         </Text>
-        <Box gap={2}>
-          <Text color="#5EEAD4">1-4: Switch Tab</Text>
-          <Text dimColor>j/k: Scroll</Text>
-          <Text dimColor>Esc: Close</Text>
+        <Box gap={1}>
+          <Text color="#5EEAD4">^B Toggle</Text>
+          <Text dimColor>1-3 Tabs</Text>
         </Box>
       </Box>
     </Box>
