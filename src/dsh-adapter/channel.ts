@@ -6626,28 +6626,24 @@ ${output}
           tpsTurn === event.data.turn &&
           tpsMessageStep !== undefined &&
           tpsMessageStep.turn === event.data.turn &&
-          tpsMessageStep.step === event.data.step
+          tpsMessageStep.step === event.data.step &&
+          tpsMessageStep.firstTokenTime !== undefined
         ) {
           const outputTokens = usageOutputTokens(usage)
             ?? (tpsMessageStep.outputChars > 0
               ? Math.ceil(tpsMessageStep.outputChars / 4)
               : undefined)
           if (outputTokens !== undefined && outputTokens > 0) {
-            const streamSpanMs = tpsMessageStep.firstTokenTime !== undefined
-              ? Math.max(0, event.time - tpsMessageStep.firstTokenTime)
-              : 0
-            const stepSpanMs = tpsMessageStep.startTime !== undefined
-              ? Math.max(0, event.time - tpsMessageStep.startTime)
-              : 0
-            const effectiveStepDecodeMs = (streamSpanMs >= 200 || outputTokens <= 5)
-              ? streamSpanMs
-              : (stepSpanMs > 0 ? stepSpanMs : streamSpanMs)
-
-            if (effectiveStepDecodeMs > 0) {
-              tpsTurnDecodeMs += effectiveStepDecodeMs
+            const streamSpanMs = Math.max(0, event.time - tpsMessageStep.firstTokenTime)
+            // A valid decode sample requires a measurable stream span across time (>= 100ms).
+            // Single-packet batched tool calls arriving < 100ms before message lack stream duration and are excluded.
+            if (streamSpanMs >= 100) {
+              tpsTurnDecodeMs += streamSpanMs
               tpsTurnDecodeTokens += outputTokens
               tpsTurnSampled = true
-              state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
+              if (tpsTurnDecodeMs > 0) {
+                state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
+              }
             }
           }
         }

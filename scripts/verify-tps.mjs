@@ -180,7 +180,7 @@ check('missing usage falls back to chars/4', near(channel.tps, 50), String(chann
 check('one sample is retained per completed turn', channel.tpsSamples.length === 4, String(channel.tpsSamples.length))
 
 // Turn 5: batched tool-call generation (e.g. Gemini delivering tool call in 1 chunk 15ms before message).
-// Total step duration 2000ms, usage 400 output tokens. Decode span correctly falls back to step duration instead of 15ms.
+// Stream span is < 100ms so it is excluded from decode sampling, preserving prior turn's TPS.
 emit('turn/start', B + 400_000, { turn: 5 })
 emit('step/start', B + 400_000, { turn: 5, step: 1 })
 emit('assistant/chunk', B + 401_985, {
@@ -190,8 +190,8 @@ emit('assistant/chunk', B + 401_985, {
 })
 emit('assistant/message', B + 402_000, message(5, 1, 400))
 emit('turn/end', B + 402_100, completed(5))
-check('batched tool-call uses step duration preventing 27k TPS spike', near(channel.tps, 200), String(channel.tps))
-check('five turn samples retained', channel.tpsSamples.length === 5, String(channel.tpsSamples.length))
+check('batched tool-call preserves prior TPS without 27k spike', near(channel.tps, 50), String(channel.tps))
+check('four valid turn samples retained', channel.tpsSamples.length === 4, String(channel.tpsSamples.length))
 
 // Rebuild from durable history. Chunks are pruned during replay (see prepareReplayEvents),
 // so replay leaves live tps metrics clean for the newly resumed session.
