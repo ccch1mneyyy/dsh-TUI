@@ -3165,6 +3165,15 @@ export function createChannel(
       | { get?(a: Agent): { active: boolean; pending?: boolean } }
       | undefined
     const planActive = foldPlanActive(session.events)
+    // Reconcile a stale explicit-exit marker before acting. The marker only
+    // legitimately survives while a deferred exit awaits its plan/mode:false
+    // (foldPlanActive && pending === false). If plan is still logged active
+    // with no pending intent, that awaited event was abandoned (e.g. an
+    // aborted pre-step) — drop the orphan so it cannot suppress a later restore
+    // such as an approved exit_plan_mode.
+    if (planActive && planMode?.get?.(agent).pending === undefined) {
+      explicitPlanExits.delete(session)
+    }
     if (spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan) {
       if (commandService?.find(agent, 'plan') === undefined) {
         state.notify(t('mode-plan-unavailable'), { color: 'warning' })

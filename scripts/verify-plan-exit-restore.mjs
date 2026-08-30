@@ -125,7 +125,12 @@ function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = fal
     pendingPlan = undefined
     if (active !== undefined) agent.session.append('plan/mode', { active })
   }
-  return { ctx, agent, commands, approvalPolicies, appended, events, services, commitPlan, reentrancy: () => reentrantAppends }
+  // Model an aborted/rejected pre-step: the controller drops the pending
+  // intent and never appends plan/mode, so the log keeps its prior state.
+  const abortPlan = () => {
+    pendingPlan = undefined
+  }
+  return { ctx, agent, commands, approvalPolicies, appended, events, services, commitPlan, abortPlan, reentrancy: () => reentrantAppends }
 }
 
 const baseOptions = {
@@ -417,6 +422,27 @@ for (const resume of [false, true]) {
   env.agent.session.append('plan/mode', { active: false })
   await settleMicrotasks()
   check('unknown historical permissions append no overrides', env.appended.length === 1)
+}
+
+// An abandoned deferred exit must not orphan the explicit-exit marker: a later
+// mode action reconciles it, so the session recovers its pre-plan permissions
+// instead of staying stuck in the plan sandbox.
+{
+  const env = makeEnv({ deferredPlan: true })
+  const channel = createChannel(env.ctx, env.agent, { ...baseOptions, modes: FULL_PLAN_SAFE_MODES })
+  await channel.cycleMode()            // enter plan (deferred)
+  env.commitPlan()                     // plan/mode:true lands; pre-plan = full
+  await channel.cycleMode()            // deferred explicit exit: marker set + kept
+  env.abortPlan()                      // pre-step aborted: plan/mode:false never lands
+  await channel.cycleMode()            // later mode action reconciles the orphan
+  env.agent.session.append('plan/mode', { active: false })
+  await settleMicrotasks()
+  check(
+    'abandoned deferred exit does not strand the plan sandbox',
+    fold(env.events, 'sandbox/mode', 'mode') === 'danger-full-access',
+    fold(env.events, 'sandbox/mode', 'mode'),
+  )
+  check('reconciled session leaves the plan indicator', channel.mode.id !== 'plan', channel.mode.id)
 }
 
 process.exit(failed)
