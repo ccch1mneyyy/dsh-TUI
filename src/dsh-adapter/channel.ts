@@ -462,6 +462,8 @@ export interface ChatRow {
   /** True when loadOlder() restored this row from the log; restored rows are
    *  exempt from the next fold pass so a restore is not instantly undone. */
   restored?: boolean
+  /** True when unexecuted shell commands were detected in assistant text with no tool call. */
+  unexecutedCommands?: boolean
 }
 
 /**
@@ -533,6 +535,85 @@ const SUBAGENT_TOOL_NAMES = new Set([
 ])
 function isSubagentToolName(name: string): boolean {
   return SUBAGENT_TOOL_NAMES.has(name.toLowerCase())
+}
+
+/** Known executable shell command names for detecting unexecuted tool commands in markdown code blocks. */
+const UNEXECUTED_COMMAND_NAMES = new Set([
+  'curl', 'wget', 'git', 'npm', 'pnpm', 'yarn', 'bun', 'npx',
+  'bash', 'sh', 'zsh', 'fish', 'python', 'python3', 'node', 'deno',
+  'sed', 'awk', 'cat', 'rm', 'cp', 'mv', 'chmod', 'chown', 'touch',
+  'mkdir', 'rmdir', 'grep', 'rg', 'find', 'ls', 'cd', 'pwd', 'echo', 'printf',
+  'export', 'unset', 'source', 'env', 'tar', 'zip', 'unzip', 'gzip', 'gunzip',
+  'docker', 'podman', 'kubectl', 'systemctl', 'service', 'kill', 'pkill', 'ps',
+  'df', 'du', 'top', 'htop', 'apt', 'apt-get', 'dpkg', 'brew', 'yum', 'dnf', 'pacman',
+  'cargo', 'rustc', 'go', 'make', 'cmake', 'gcc', 'g++', 'clang',
+  'pytest', 'vitest', 'jest', 'mocha', 'tsc', 'pip', 'pip3', 'uv',
+  'ssh', 'scp', 'rsync', 'sudo', 'su', 'nvm', 'which', 'whereis', 'head',
+  'tail', 'less', 'more', 'diff', 'patch', 'ln', 'readlink', 'xargs', 'tee',
+  'wc', 'sort', 'uniq', 'tr', 'cut', 'jq', 'yq', 'dsh', 'dst', 'gh', 'glab',
+])
+
+/**
+ * Diagnostic helper: checks if text (e.g. an assistant response) contains code blocks
+ * (```bash ... ``` or ```sh ... ```) with actual unexecuted shell commands rather than comments/status text.
+ */
+export function detectUnexecutedToolCommands(text: string): boolean {
+  if (typeof text !== 'string' || text.trim() === '') return false
+
+  const blockRegex = /(?:```|~~~)(?:bash|sh|shell|zsh)\b[^\n]*\r?\n([\s\S]*?)(?:```|~~~|$)/gi
+  let match: RegExpExecArray | null
+
+  while ((match = blockRegex.exec(text)) !== null) {
+    const blockContent = match[1]
+    const lines = blockContent.split(/\r?\n/)
+
+    for (const rawLine of lines) {
+      const trimmed = rawLine.trim()
+      if (!trimmed) continue
+      // Skip comments
+      if (trimmed.startsWith('#') || trimmed.startsWith('//')) continue
+      // Skip status key-value pairs e.g. "Memory: 0", "[Status]: ok", "Status: Active"
+      if (/^\[?[\w\s()./-]+\]?:\s*.*/.test(trimmed)) {
+        const firstWordMatch = trimmed.match(/^([A-Za-z0-9_.-]+)/)
+        const firstWord = firstWordMatch ? firstWordMatch[1].toLowerCase() : ''
+        if (!UNEXECUTED_COMMAND_NAMES.has(firstWord)) {
+          continue
+        }
+      }
+      // Skip bullet status lines that don't start with a command
+      if (/^[-*•+]\s+/.test(trimmed)) {
+        const afterBullet = trimmed.replace(/^[-*•+]\s+/, '').trim()
+        if (!afterBullet || afterBullet.startsWith('#') || /^\[?[\w\s()./-]+\]?:\s*.*/.test(afterBullet)) {
+          const firstWordMatch = afterBullet.match(/^([A-Za-z0-9_.-]+)/)
+          const firstWord = firstWordMatch ? firstWordMatch[1].toLowerCase() : ''
+          if (!UNEXECUTED_COMMAND_NAMES.has(firstWord)) {
+            continue
+          }
+        }
+      }
+
+      // Strip leading environment variable assignments e.g. `VAR=1 cmd`
+      let cmdLine = trimmed.replace(/^([A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)+/, '')
+      // Strip leading wrapper prefixes e.g. sudo, nohup, time, exec
+      cmdLine = cmdLine.replace(/^(sudo|nohup|time|env|builtin|command|exec)\s+/i, '').trim()
+
+      // Check if starts with path-like executable (./, ../, /, ~/, scripts/, bin/)
+      if (/^(\.|\.\.|\/|~|[A-Za-z0-9_-]+\/)[^\s]+/.test(cmdLine)) {
+        return true
+      }
+
+      // Check command name
+      const firstWordMatch = cmdLine.match(/^([A-Za-z0-9_.-]+)/)
+      if (firstWordMatch) {
+        const firstWord = firstWordMatch[1].toLowerCase()
+        if (UNEXECUTED_COMMAND_NAMES.has(firstWord)) {
+          return true
+        }
+      }
+    }
+  }
+
+  return false
 }
 
 /**
@@ -1515,7 +1596,12 @@ function restoreRowFromEvent(row: ChatRow, event: SessionEvent): void {
     case 'assistant': {
       if (event.type !== 'assistant/message') break
       const text = event.data.message.content.map(block => block.type === 'text' ? block.text : '').join('').trim()
-      if (text) row.text = text
+      if (text) {
+        row.text = text
+        if (detectUnexecutedToolCommands(text)) {
+          row.unexecutedCommands = true
+        }
+      }
       break
     }
     case 'reasoning': {
@@ -6078,6 +6164,8 @@ ${output}
   const sealedReasoning: ChatRow[] = []
   /** Wall-clock start of the current reasoning row (durationMs on settle). */
   let reasoningStart = 0
+  /** Track whether tool calls were associated with the active turn. */
+  let turnToolCallCount = 0
   /** Decode-throughput fold for the current turn. DSH defines one step as
    *  one model call plus its tools; summing only first-token → message spans
    *  excludes tool execution and per-request TTFT from generation speed. */
@@ -6369,6 +6457,7 @@ ${output}
     handledAssistantChunks.clear()
     assistantRowsByStep.clear()
     lastTextDelta.clear()
+    turnToolCallCount = 0
     replaying = true
     try {
       for (const event of prepareReplayEvents(events)) renderEvent(event)
@@ -6569,6 +6658,12 @@ ${output}
           row.time = event.time
           if (text) row.text = text
           row.streaming = false
+          if (text && detectUnexecutedToolCommands(text) && turnToolCallCount === 0) {
+            row.unexecutedCommands = true
+            logForDebugging(
+              `assistant: unexecuted tool command(s) detected without tool calls in turn ${msgTurn ?? ''} step ${msgStep ?? ''}`,
+            )
+          }
         }
         streaming = undefined
         if (reasoning !== undefined) {
@@ -6666,6 +6761,7 @@ ${output}
         break
       }
       case 'tool/call': {
+        turnToolCallCount += 1
         // The ask-user-question tool renders as the interactive questionnaire
         // panel (DSH user-interaction seam), not as a tool card: the model is
         // parked waiting for the human, so no running card, no active-tool
@@ -6766,6 +6862,7 @@ ${output}
         state.turnStart = Date.now()
         state.responseChars = 0
         state.spinnerMode = 'requesting'
+        turnToolCallCount = 0
         // Keep the prior turn visible until this turn produces a measurable
         // decode span, while starting a fresh weighted step fold.
         tpsBeforeTurn = state.tps

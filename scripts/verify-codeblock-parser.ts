@@ -11,6 +11,7 @@
 
 import stripAnsi from 'strip-ansi'
 import { applyMarkdown } from '../src/cc/markdown.js'
+import { detectUnexecutedToolCommands } from '../src/dsh-adapter/channel.js'
 
 let checks = 0
 let failures = 0
@@ -93,6 +94,78 @@ function check(name: string, ok: boolean, detail = ''): void {
       plain.includes('Status: Operational') &&
       plain.includes('Worker 1: Active'),
     JSON.stringify(plain),
+  )
+}
+
+// ── Test 5: detectUnexecutedToolCommands on executable commands ──────────────
+{
+  const bashCommand = '```bash\ngit commit -m "feat"\n```'
+  check(
+    'Test 5.1: detectUnexecutedToolCommands flags git commit command',
+    detectUnexecutedToolCommands(bashCommand) === true,
+  )
+
+  const curlCommand = '```sh\ncurl -fsSL https://example.com/install.sh | bash\n```'
+  check(
+    'Test 5.2: detectUnexecutedToolCommands flags curl pipeline command',
+    detectUnexecutedToolCommands(curlCommand) === true,
+  )
+
+  const mixedCommand = '```bash\n# Setup step\nnpm install\npnpm test\n```'
+  check(
+    'Test 5.3: detectUnexecutedToolCommands flags npm/pnpm commands in mixed block',
+    detectUnexecutedToolCommands(mixedCommand) === true,
+  )
+
+  const dshCommand = '```bash\ndsh --profile dsh-tui\n```'
+  check(
+    'Test 5.4: detectUnexecutedToolCommands flags dsh command',
+    detectUnexecutedToolCommands(dshCommand) === true,
+  )
+
+  const pathCommand = '```bash\n./scripts/build.sh\nbin/dsh-tui.js\n```'
+  check(
+    'Test 5.5: detectUnexecutedToolCommands flags path-based executables',
+    detectUnexecutedToolCommands(pathCommand) === true,
+  )
+
+  const wrappedCommand = '```bash\nNODE_ENV=production sudo chmod +x run.sh\n```'
+  check(
+    'Test 5.6: detectUnexecutedToolCommands flags env/sudo wrapped commands',
+    detectUnexecutedToolCommands(wrappedCommand) === true,
+  )
+}
+
+// ── Test 6: detectUnexecutedToolCommands ignores status blocks & non-commands ─
+{
+  const statusBlock = '```bash\n# Memory & Harness Health\nMemory: 0\n```'
+  check(
+    'Test 6.1: detectUnexecutedToolCommands ignores comments and key-value status',
+    detectUnexecutedToolCommands(statusBlock) === false,
+  )
+
+  const bulletStatus = '```sh\n# System Overview\nStatus: Operational\n- Worker 1: Active\n- Worker 2: Idle\n```'
+  check(
+    'Test 6.2: detectUnexecutedToolCommands ignores bulleted status blocks',
+    detectUnexecutedToolCommands(bulletStatus) === false,
+  )
+
+  const commentOnly = '```bash\n# Just comments\n# Nothing to execute\n```'
+  check(
+    'Test 6.3: detectUnexecutedToolCommands ignores comment-only blocks',
+    detectUnexecutedToolCommands(commentOnly) === false,
+  )
+
+  const plainText = 'You can use git commit or npm test to verify changes.'
+  check(
+    'Test 6.4: detectUnexecutedToolCommands ignores prose without code blocks',
+    detectUnexecutedToolCommands(plainText) === false,
+  )
+
+  const pythonCode = '```python\nimport os\nprint("hello")\n```'
+  check(
+    'Test 6.5: detectUnexecutedToolCommands ignores non-shell language blocks',
+    detectUnexecutedToolCommands(pythonCode) === false,
   )
 }
 
