@@ -26,7 +26,7 @@ type Props = {
   thinking: string
   /** Adds the top margin between messages (CC: addMargin). */
   addMargin: boolean
-  /** True when Ctrl+O transcript/verbose mode is on — show the full text. */
+  /** Show the full text (Ctrl+O, per-row expansion, or live click toggle). */
   verbose: boolean
   /** True while the reasoning block is still streaming — the leading anchor
    *  becomes a rotating braille spinner (Kimi Code style) and settles back
@@ -44,10 +44,10 @@ type Props = {
 }
 
 /**
- * Thinking block: folded `⚓ Thinking (ctrl+o to expand)`, expanded shows the
- * full reasoning text indented under `⚓ Thinking…`. While the reasoning
- * streams the leading mark is a rotating braille spinner (`⠋⠙⠹…`, Kimi Code
- * style), settling back to the static anchor (`⚓`) once the turn ends. When
+ * Thinking block: settled rows fold to `⚓ Thinking (ctrl+o to expand)`;
+ * streaming rows switch between a three-line preview and the full reasoning
+ * text on click. The live leading mark is a rotating braille spinner
+ * (`⠋⠙⠹…`, Kimi Code style), settling back to the static anchor (`⚓`). When
  * the channel records the reasoning duration, the label carries it
  * (`⚓ Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
  * the transcript.

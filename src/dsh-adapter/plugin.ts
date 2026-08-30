@@ -918,8 +918,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           path: ['thinkingFold'],
           label: 'Thinking display',
           descriptions: { zh: '思考块展示' },
-          hint: 'Streaming thinking shows a 2-3 line live preview and each step folds when it settles; Full keeps thinking expanded until the turn ends.',
-          hintDescriptions: { zh: '流式时思考显示 2-3 行动态预览，每步落定后折叠；展开模式保持思考展开直到整轮结束。' },
+          hint: 'Preview shows 2-3 live lines; Full stays expanded until turn end. Click a streaming block to switch between preview and full.',
+          hintDescriptions: { zh: '预览模式显示 2-3 行动态思考；展开模式保持至轮末。点击流式思考块可在预览与全文间切换。' },
           kind: 'select',
           options: [
             { value: 'preview', label: 'Preview (2-3 lines)', descriptions: { zh: '预览（2-3 行）' } },

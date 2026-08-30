@@ -33,6 +33,12 @@ const GROUPS = {
     ["verify-askpanel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-layout.tsx']],
     ["repro-toolcards", ['node', '--import', 'tsx/esm', 'scripts/repro-toolcards.tsx']],
     ["repro-diff-split", ['node', '--import', 'tsx/esm', 'scripts/repro-diff-split.tsx']],
+// 思考块流式视图回归：preview 固定三行且点击切全文/再点收回，full
+// 默认值反向但仍不进入 0 行正文；增量 Markdown 与整段渲染的块间距
+// 一致（真实段落空行保留，代码块后不凭空多一行）。
+    ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
+    ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
+    ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
 // 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
 // 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
 // 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了

@@ -347,10 +347,10 @@ export function Chat({
   const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
     () => new Set(),
   )
-  /** 流式 reasoning 行的用户折叠（点击/进入折叠态）。与 expandedRows 分开：
-   *  流式默认展开，用户点一下 = 折叠（preview ticker 或单行头）；落定后
-   *  默认折叠，此集合不再参与——两种默认互不翻转。 */
-  const [streamFoldedRows, setStreamFoldedRows] = React.useState<ReadonlySet<number>>(
+  /** 流式 reasoning 行相对 thinkingFold 默认值的用户切换。与
+   *  expandedRows 分开：preview 默认三行、full 默认全文，点击在两者间
+   *  翻转；落定后自动回到普通行的折叠语义。 */
+  const [streamViewToggledRows, setStreamViewToggledRows] = React.useState<ReadonlySet<number>>(
     () => new Set(),
   )
   /**
@@ -2201,8 +2201,8 @@ export function Chat({
       return next
     })
   }, [])
-  const toggleStreamFolded = React.useCallback((rowId: number) => {
-    setStreamFoldedRows((previous) => {
+  const toggleStreamView = React.useCallback((rowId: number) => {
+    setStreamViewToggledRows((previous) => {
       const next = new Set(previous)
       if (next.has(rowId)) next.delete(rowId)
       else next.add(rowId)
@@ -3198,8 +3198,8 @@ export function Chat({
           expandedRows={expandedRows}
           selectedId={selectionActive ? selectedId : null}
           onToggleRow={toggleRowExpanded}
-          streamFoldedRows={streamFoldedRows}
-          onToggleStreamFold={toggleStreamFolded}
+          streamViewToggledRows={streamViewToggledRows}
+          onToggleStreamView={toggleStreamView}
           model={channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
