@@ -18,14 +18,12 @@ interface CanvasBrowserPaneProps {
 }
 
 interface ParsedNode {
-  kind: 'header' | 'metric' | 'bar' | 'table' | 'card' | 'badge' | 'list' | 'code' | 'text' | 'hr'
+  kind: 'header' | 'metric' | 'list' | 'text'
   title?: string
   subtitle?: string
   value?: string
-  max?: string
   pct?: number
-  color?: string
-  items?: { label: string; status: string; color?: string }[]
+  items?: { label: string; status: string }[]
   text?: string
 }
 
@@ -36,9 +34,9 @@ function parseHtmlToVisualDOM(html: string): ParsedNode[] {
 
   const nodes: ParsedNode[] = []
 
-  // Extract Main Page Title / Header
+  // Extract Page Title & Subtitle
   const h1Match = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html)
-  const subMatch = /<p[^>]*class="subtitle"[^>]*>([\s\S]*?)<\/p>/i.exec(html) || /<p[^>]*style="[^"]*color:[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(html)
+  const subMatch = /<p[^>]*>([\s\S]*?)<\/p>/i.exec(html)
   if (h1Match) {
     nodes.push({
       kind: 'header',
@@ -47,7 +45,7 @@ function parseHtmlToVisualDOM(html: string): ParsedNode[] {
     })
   }
 
-  // Extract Cards / Gauges / Metrics
+  // Extract Metric Cards & Gauges
   const cardRegex = /<div[^>]*class="card"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi
   let cardMatch: RegExpExecArray | null
   const extractedCards: ParsedNode[] = []
@@ -62,19 +60,13 @@ function parseHtmlToVisualDOM(html: string): ParsedNode[] {
     const val = valMatch ? cleanText(valMatch[1]) : ''
     const desc = descMatch ? cleanText(descMatch[1]) : ''
 
-    // Calculate percentage if numbers exist (e.g. 1480 / 1900 or 62 / 100)
     let pct = 75
-    let color = '#5EEAD4'
     const numMatch = val.match(/([\d,]+)\s*\/\s*([\d,]+)/)
     if (numMatch) {
       const cur = parseFloat(numMatch[1].replace(/,/g, ''))
       const max = parseFloat(numMatch[2].replace(/,/g, ''))
       if (max > 0) pct = Math.min(100, Math.max(0, Math.round((cur / max) * 100)))
     }
-    if (/health|hp/i.test(label)) color = '#4ADE80'
-    else if (/stamina/i.test(label)) color = '#FBBF24'
-    else if (/mana|astral/i.test(label)) color = '#60A5FA'
-    else if (/danger|error/i.test(label)) color = '#F87171'
 
     extractedCards.push({
       kind: 'metric',
@@ -82,7 +74,6 @@ function parseHtmlToVisualDOM(html: string): ParsedNode[] {
       value: val,
       text: desc,
       pct,
-      color,
     })
   }
 
@@ -90,36 +81,28 @@ function parseHtmlToVisualDOM(html: string): ParsedNode[] {
     nodes.push(...extractedCards)
   }
 
-  // Extract Lists / Spells / Tables
+  // Extract Lists & Badges
   const liMatches = [...html.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)]
   if (liMatches.length > 0) {
-    const listItems: { label: string; status: string; color?: string }[] = []
+    const listItems: { label: string; status: string }[] = []
     for (const m of liMatches) {
       const full = m[1]
       const spanMatches = [...full.matchAll(/<span[^>]*>([\s\S]*?)<\/span>/gi)]
       if (spanMatches.length >= 2) {
-        const label = cleanText(spanMatches[0][1])
-        const status = cleanText(spanMatches[1][1])
-        let color = '#5EEAD4'
-        if (/cd|cooldown/i.test(status)) color = '#FBBF24'
-        else if (/ready/i.test(status)) color = '#4ADE80'
-        listItems.push({ label, status, color })
+        listItems.push({
+          label: cleanText(spanMatches[0][1]),
+          status: cleanText(spanMatches[1][1]),
+        })
       } else {
-        listItems.push({ label: cleanText(full), status: '•', color: '#60A5FA' })
+        listItems.push({ label: cleanText(full), status: '•' })
       }
     }
     nodes.push({ kind: 'list', items: listItems })
   }
 
-  // Fallback / standard prose if no rich cards found
   if (nodes.length === 0) {
-    const clean = html
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      .replace(/<[^>]*>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-    nodes.push({ kind: 'text', text: clean.slice(0, 1000) })
+    const clean = cleanText(html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ''))
+    nodes.push({ kind: 'text', text: clean.slice(0, 800) })
   }
 
   return nodes
@@ -138,7 +121,7 @@ function cleanText(text: string): string {
     .trim()
 }
 
-function renderProgressBar(pct: number, width: number = 22): string {
+function renderProgressBar(pct: number, width: number = 18): string {
   const filled = Math.round((pct / 100) * width)
   const empty = Math.max(0, width - filled)
   return '█'.repeat(filled) + '░'.repeat(empty)
@@ -159,7 +142,6 @@ export function CanvasBrowserPane({
   const [nodes, setNodes] = useState<ParsedNode[]>([])
   const artifactsDir = join(homedir(), '.dsh', 'artifacts')
 
-  // Load and poll artifacts
   const loadArtifacts = async () => {
     try {
       const files = await readdir(artifactsDir, { withFileTypes: true })
@@ -192,11 +174,10 @@ export function CanvasBrowserPane({
     return () => clearInterval(timer)
   }, [])
 
-  // Load active artifact content
   const activeArtifact = artifacts[selectedIdx]
   useEffect(() => {
     if (!activeArtifact) {
-      setNodes([{ kind: 'text', text: 'No artifacts on stage. Write an artifact to see live browser preview.' }])
+      setNodes([{ kind: 'text', text: 'Stage Empty. Write an artifact to stream live content.' }])
       return
     }
     const fullPath = join(artifactsDir, activeArtifact.name)
@@ -221,7 +202,7 @@ export function CanvasBrowserPane({
       overflow="hidden"
       width="100%"
     >
-      {/* Chrome Window Top Bar (Traffic lights & Browser Tabs) */}
+      {/* Browser Chrome: Window Controls + Tabs */}
       <Box
         flexDirection="row"
         justifyContent="space-between"
@@ -229,18 +210,15 @@ export function CanvasBrowserPane({
         borderBottomColor="#2A4440"
         paddingX={1}
         paddingY={0}
+        backgroundColor="pane"
       >
-        {/* Window Controls */}
         <Box gap={1} alignItems="center">
           <Text color="#F87171">●</Text>
           <Text color="#FBBF24">●</Text>
           <Text color="#4ADE80">●</Text>
           <Text dimColor>│</Text>
-          {/* Active Tabs */}
           {artifacts.length === 0 ? (
-            <Box paddingX={1}>
-              <Text dimColor>New Tab</Text>
-            </Box>
+            <Text dimColor>Empty Tab</Text>
           ) : (
             artifacts.slice(0, 2).map((art, idx) => {
               const isSelected = idx === selectedIdx
@@ -252,7 +230,7 @@ export function CanvasBrowserPane({
                   paddingX={1}
                 >
                   <Text color={isSelected ? '#5EEAD4' : '#7D8C89'} bold={isSelected}>
-                    {`🌐 ${art.title.slice(0, 14)} ×`}
+                    {`🌐 ${art.title.slice(0, 15)} ×`}
                   </Text>
                 </Box>
               )
@@ -267,7 +245,7 @@ export function CanvasBrowserPane({
         </Box>
       </Box>
 
-      {/* Omnibox / Browser Navigation Toolbar */}
+      {/* Omnibar / Address Bar */}
       <Box
         flexDirection="row"
         alignItems="center"
@@ -276,14 +254,12 @@ export function CanvasBrowserPane({
         paddingX={1}
         paddingY={0}
       >
-        {/* Navigation Buttons */}
         <Box gap={1} alignItems="center">
           <Text dimColor>‹</Text>
           <Text dimColor>›</Text>
           <Text color="#5EEAD4">↻</Text>
         </Box>
 
-        {/* Address URL Pill */}
         <Box
           flexGrow={1}
           marginX={1}
@@ -310,7 +286,7 @@ export function CanvasBrowserPane({
         <Text dimColor>⋮</Text>
       </Box>
 
-      {/* Webpage Viewport Canvas */}
+      {/* Rendered Viewport Stage */}
       <Box
         flexDirection="column"
         flexGrow={1}
@@ -328,7 +304,7 @@ export function CanvasBrowserPane({
                     {`✦ ${node.title || 'Canvas'}`}
                   </Text>
                   <Text color="#4ADE80" bold>
-                    [ ACTIVE STAGE ]
+                    [ ACTIVE BLUEPRINT ]
                   </Text>
                 </Box>
                 {node.subtitle && (
@@ -360,7 +336,7 @@ export function CanvasBrowserPane({
                   </Text>
                 </Box>
                 {node.pct !== undefined && (
-                  <Box gap={1} alignItems="center" marginY={0}>
+                  <Box gap={1} alignItems="center">
                     <Text color="#5EEAD4">
                       {renderProgressBar(node.pct, 20)}
                     </Text>
@@ -415,14 +391,14 @@ export function CanvasBrowserPane({
         })}
       </Box>
 
-      {/* Browser Footer Status */}
+      {/* Footer Navigation Bar */}
       <Box
         borderTopColor="#2A4440"
         paddingX={1}
         justifyContent="space-between"
       >
         <Text dimColor>
-          {activeArtifact ? `Rendering ${activeArtifact.name} (${formatBytes(activeArtifact.size)})` : 'Ready'}
+          {activeArtifact ? `${activeArtifact.name} (${formatBytes(activeArtifact.size)})` : 'Ready'}
         </Text>
         <Box gap={2}>
           <Text color="#5EEAD4">Ctrl+B: Split</Text>
