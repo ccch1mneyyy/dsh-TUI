@@ -1250,6 +1250,12 @@ export function Chat({
         setExpandedRows(new Set())
         setSelectedId(null)
         setSelectionActive(false)
+        handle?.scrollTo(0)
+        setTimeout(() => {
+          handle?.scrollTo(0)
+          const ink = instances.get(process.stdout) ?? instances.values().next().value
+          ink?.clearScrollbackAndRedraw()
+        }, 0)
         return true
       case 'compact':
         channel.compact()
