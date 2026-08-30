@@ -73,6 +73,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Conversation
   { name: 'new', description: 'Start a new conversation' },
   { name: 'clear', description: 'Clear the conversation' },
+  { name: 'c', description: 'Clear the conversation', tag: 'alias of /clear' },
   { name: 'compact', description: 'Compact the conversation history' },
   { name: 'resume', description: 'Resume a previous session' },
   { name: 'rename', description: 'Rename the current session' },
@@ -89,7 +90,9 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'cost', description: 'Show session token usage' },
   { name: 'config', description: 'Show the dsh-tui configuration source' },
   { name: 'reload', description: 'Reload preference files from disk and apply live' },
+  { name: 'r', description: 'Reload preference files from disk and apply live', tag: 'alias of /reload' },
   { name: 'refresh', description: 'Refresh canvas stage, redraw viewport, and reload live state' },
+  { name: 'canvas', description: 'Refresh canvas stage, redraw viewport, and reload live state', tag: 'alias of /refresh' },
   { name: 'settings', description: 'View and edit plugin settings' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },

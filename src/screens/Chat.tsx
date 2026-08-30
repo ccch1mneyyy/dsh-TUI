@@ -1243,6 +1243,7 @@ export function Chat({
         })
         return true
       }
+      case 'c':
       case 'clear':
         channel.clear()
         // channel.clear() resets row ids to 0; stale expanded/selection
@@ -1766,6 +1767,8 @@ export function Chat({
           onUpdate()
         }
         return true
+      case 'canvas':
+      case 'r':
       case 'refresh':
       case 'reload': {
         // Redraw terminal frame and reanchor viewport
