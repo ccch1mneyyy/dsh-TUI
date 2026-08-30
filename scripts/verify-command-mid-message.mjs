@@ -22,14 +22,35 @@ check('mid-message command token detected', mid !== undefined && mid.start === 1
 const midCompletions = completeCommands(mid?.query ?? '', LOCAL_COMMANDS)
 check('mid-message completions include /clear', midCompletions.some(c => c.name === 'clear'), JSON.stringify(midCompletions.map(c => c.name)))
 
-// 3. URLs and file paths must not trigger command completion
+// 3. Consecutive slash commands one after the other
+const multiCmd = '/improve-codebase-architecture /code-review /pon'
+const multiCaret = commandAtCaret(multiCmd, multiCmd.length)
+check('consecutive command token detected at end of input', multiCaret !== undefined && multiCaret.start === 44 && multiCaret.end === 48 && multiCaret.query === '/pon', JSON.stringify(multiCaret))
+const skillCompletions = completeCommands(multiCaret?.query ?? '', [{ name: 'ponytail-audit', description: 'Audit' }, ...LOCAL_COMMANDS])
+check('consecutive command completes matching candidates', skillCompletions.some(c => c.name === 'ponytail-audit'), JSON.stringify(skillCompletions.map(c => c.name)))
+
+// 4. Trailing slash immediately following a previous command and space
+const trailingSlash = '/improve-codebase-architecture /'
+const trailingCaret = commandAtCaret(trailingSlash, trailingSlash.length)
+check('trailing slash after previous command detected', trailingCaret !== undefined && trailingCaret.start === 31 && trailingCaret.end === 32 && trailingCaret.query === '/', JSON.stringify(trailingCaret))
+const allCompletions = completeCommands(trailingCaret?.query ?? '', LOCAL_COMMANDS)
+check('trailing slash surfaces all root commands', allCompletions.length >= LOCAL_COMMANDS.length, `count: ${allCompletions.length}`)
+
+// 5. Root command with subcommands
+const subCmd = '/workspace res'
+const subCaret = commandAtCaret(subCmd, subCmd.length)
+check('root command with subcommand detected', subCaret !== undefined && subCaret.start === 0 && subCaret.end === 14 && subCaret.query === '/workspace res', JSON.stringify(subCaret))
+const subCompletions = completeCommands(subCaret?.query ?? '', [{ name: 'workspace', description: 'Workspace' }], () => [{ name: 'resume', description: 'Resume' }])
+check('root command completes subcommand', subCompletions.some(c => c.name === 'workspace resume'), JSON.stringify(subCompletions.map(c => c.name)))
+
+// 6. URLs and file paths must not trigger command completion
 const url = commandAtCaret('visit https://example.com/api/test', 30)
 check('URL path is not detected as a command', url === undefined, JSON.stringify(url))
 
 const filePath = commandAtCaret('check src/components/PromptInput.tsx', 20)
 check('file path slash is not detected as a command', filePath === undefined, JSON.stringify(filePath))
 
-// 4. Multiline inputs disable slash command completion
+// 7. Multiline inputs disable slash command completion
 const multi = commandAtCaret('first line\n/cle', 15)
 check('multiline input returns undefined', multi === undefined, JSON.stringify(multi))
 

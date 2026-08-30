@@ -289,23 +289,31 @@ function matchingCompletionToken(candidate: CommandCompletionNode, prefix: strin
 
 /**
  * Identify the slash-command token at the current caret position, whether at the start
- * of the line (classic command invocation) or embedded as a word mid-message.
+ * of the line, chained consecutively (e.g. `/cmd1 /cmd2 /cmd3`), or embedded mid-message.
  */
 export function commandAtCaret(
   value: string,
   cursor: number,
 ): { start: number; end: number; query: string } | undefined {
   if (value.includes('\n')) return undefined
-  if (value.startsWith('/')) {
-    return { start: 0, end: value.length, query: value }
-  }
+
+  // 1. Check if the token at or before caret starts with '/'
   let start = cursor
   while (start > 0 && !/\s/u.test(value[start - 1]!)) start--
-  if (value[start] !== '/') return undefined
-  if (start > 0 && !/\s/u.test(value[start - 1]!)) return undefined
-  let end = cursor
-  while (end < value.length && !/\s/u.test(value[end]!)) end++
-  const query = value.slice(start, cursor)
-  if (!query.startsWith('/')) return undefined
-  return { start, end, query }
+
+  if (value[start] === '/' && (start === 0 || /\s/u.test(value[start - 1]!))) {
+    let end = cursor
+    while (end < value.length && !/\s/u.test(value[end]!)) end++
+    const query = value.slice(start, cursor)
+    if (query.startsWith('/')) {
+      return { start, end, query }
+    }
+  }
+
+  // 2. Subcommand fallback for root command lines (e.g. `/workspace res`)
+  if (value.startsWith('/')) {
+    return { start: 0, end: value.length, query: value.slice(0, cursor) }
+  }
+
+  return undefined
 }

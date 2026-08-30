@@ -731,8 +731,7 @@ export function PromptInput({
   const acceptCommand = (command: CommandCompletion, executeIfRoot = false) => {
     if (!commandAt) return
     if (commandAt.start === 0 && executeIfRoot) {
-      tryRunCommand(command.commandLine)
-      return
+      if (tryRunCommand(command.commandLine)) return
     }
     updateFoldBlock(null)
     const next = value.slice(0, commandAt.start) + command.replacement + value.slice(commandAt.end)
