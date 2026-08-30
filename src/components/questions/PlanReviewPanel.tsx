@@ -67,7 +67,13 @@ export function PlanReviewPanel({
     0,
   ) + 1 /* extra gap on the focused option */ + 1 /* feedback row */
   const reservedRows = 12 + optionRows + (error === null ? 0 : 2)
-  const detailMax = Math.max(4, terminalRows - reservedRows)
+  // Floor at zero, not four: on a short terminal the decision rows fill the
+  // budget and no plan-body rows remain. Forcing four here would re-inflate
+  // the panel past the viewport and push the controls off-screen again — the
+  // exact regression this panel exists to prevent. When nothing remains, the
+  // body viewport is omitted entirely (a zero-height ScrollBox is neither
+  // readable nor a useful wheel target).
+  const detailMax = Math.max(0, terminalRows - reservedRows)
   const detailScrollRef = React.useRef<ScrollBoxHandle | null>(null)
 
   const inputFocused = focusIndex === options.length
@@ -243,7 +249,7 @@ export function PlanReviewPanel({
         <Text bold wrap="wrap">
           {question.question}
         </Text>
-        {question.detail !== undefined && (
+        {question.detail !== undefined && detailMax > 0 && (
           <Box flexDirection="column" marginTop={1} height={detailMax} flexShrink={0}>
             <ScrollBox ref={detailScrollRef} flexDirection="column" flexGrow={1} height={detailMax}>
               <Markdown>{question.detail}</Markdown>

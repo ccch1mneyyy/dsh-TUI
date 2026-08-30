@@ -37,6 +37,7 @@ const [
 
 const COLS = 90
 const ROWS = 24
+const SHORT_ROWS = 14
 const HEAD = 'ZZZHEAD'
 const LATE = 'ZZZLATE'
 const TAIL = 'ZZZTAIL'
@@ -84,12 +85,13 @@ class FakeStdin extends PassThrough {
   unref() { return this }
 }
 
-function makeTerm() {
-  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 1000, allowProposedApi: true })
+function makeTerm(rows = ROWS) {
+  const term = new XTerm({ cols: COLS, rows, scrollback: 1000, allowProposedApi: true })
   const stdout = new FakeStdout(term) as FakeStdout & NodeJS.WriteStream
+  stdout.rows = rows
   const stdin = new FakeStdin() as FakeStdin & NodeJS.ReadStream
   const stderr = new FakeStderr() as FakeStderr & NodeJS.WriteStream
-  const screen = () => viewportLines(term, ROWS).join('\n')
+  const screen = () => viewportLines(term, rows).join('\n')
   return { term, stdout, stdin, stderr, screen }
 }
 
@@ -213,7 +215,49 @@ function dump(label: string, shot: string) {
   await sleep(50)
 }
 
-// ── 2. Same payload inside Chat (prompt-slot layout) ────────────────
+// ── 2. Short terminal: omit the body before hiding the decisions ────
+{
+  const { term, stdout, stdin, stderr, screen } = makeTerm(SHORT_ROWS)
+  let answer: { selected: string[]; custom?: string } | undefined
+  const app = await render(
+    React.createElement(AlternateScreen, {
+      children: React.createElement(AskUserQuestionPanel, {
+        position: 1,
+        total: 1,
+        answered: 0,
+        question,
+        onAnswer(selection) { answer = selection },
+        onCancel() {},
+      }),
+    }),
+    { stdout, stdin, stderr, exitOnCtrlC: false, patchConsole: false },
+  )
+
+  let initial = ''
+  await settled(() => {
+    initial = screen()
+    return initial.includes('Approve') && initial.includes('Keep planning')
+  })
+  const controlsVisible = initial.includes('Approve')
+    && initial.includes('Keep planning')
+    && initial.includes('输入反馈')
+    && initial.includes('↑/↓ 选择')
+  check('short: decision rows stay visible when the body has no room', controlsVisible)
+  check('short: plan body is omitted when no rows remain', !initial.includes(HEAD))
+  if (!controlsVisible || initial.includes(HEAD)) dump('SHORT INITIAL', initial)
+
+  stdin.write('\r')
+  await settled(() => answer !== undefined)
+  check('short: Enter still submits clean Approve',
+    JSON.stringify(answer) === JSON.stringify({ selected: ['Approve'] }),
+    JSON.stringify(answer))
+
+  await app.unmount()
+  term.dispose()
+  await sleep(50)
+}
+
+// ── 3. Same payload inside Chat (prompt-slot layout) ────────────────
 {
   const { term, stdout, stdin, stderr, screen } = makeTerm()
   const store = new QuestionStore()
