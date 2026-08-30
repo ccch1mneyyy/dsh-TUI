@@ -1633,8 +1633,8 @@ function toolResultText(event: SessionEvent<'tool/result'>): string {
 /** Phase badge for the harness goal card — mirrors the panel's PhaseBadge. */
 const GOAL_RESULT_BADGE: Record<string, string> = {
   active: '● active',
-  paused: '⏸ paused',
-  blocked: '⛔ blocked',
+  paused: '❙❙ paused',
+  blocked: '× blocked',
   complete: '✓ complete',
 }
 
@@ -1674,9 +1674,9 @@ function harnessToolResultView(
         ? ` · ${goal.roundsStarted}/${goal.maxGoalRounds}`
         : ''
       const activation = typeof record.activation === 'string' ? ` · ${record.activation}` : ''
-      const lines = [`🎯 ${goal.objective}`, `${badge}${rounds}${activation}`]
+      const lines = [`⟡ ${goal.objective}`, `${badge}${rounds}${activation}`]
       const blocked = (goal.blockedReason as { message?: unknown } | undefined)?.message
-      if (typeof blocked === 'string') lines.push(`⛔ ${blocked}`)
+      if (typeof blocked === 'string') lines.push(`× ${blocked}`)
       return { card: 'generic', content: lines.map(line => ({ type: 'text', text: line })) }
     }
   }

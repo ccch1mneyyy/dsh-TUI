@@ -9,7 +9,7 @@ const MAX_TODOS = 8
 
 const PHASE_LABEL: Record<ChannelGoal['phase'], string> = {
   active: '● active',
-  paused: '⏸ paused',
+  paused: '❙❙ paused',
   blocked: '× blocked',
   complete: '✓ complete',
 }
@@ -17,7 +17,7 @@ const PHASE_LABEL: Record<ChannelGoal['phase'], string> = {
 /** Compact phase marker for the status-footer chip. */
 const PHASE_GLYPH: Record<ChannelGoal['phase'], string> = {
   active: '●',
-  paused: '⏸',
+  paused: '❙❙',
   blocked: '×',
   complete: '✓',
 }
@@ -168,7 +168,7 @@ export function GoalTodoPanel({
       {goal !== undefined && (
         <Box flexDirection="column" marginBottom={showTodoSection ? 1 : 0}>
           <Box flexDirection="row" width="100%">
-            <Text color="suggestion">🎯 </Text>
+            <Text color="suggestion">⟡ </Text>
             <Box flexGrow={1} flexShrink={1}>
               <Text bold wrap="truncate">
                 {goal.objective}

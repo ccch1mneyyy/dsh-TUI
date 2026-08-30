@@ -94,7 +94,7 @@ function FieldLine({
         <React.Fragment key={part.key}>
           {index > 0 ? <Text dimColor> · </Text> : null}
           <Box
-            flexShrink={1}
+            flexShrink={part.key === 'tps' || part.key === 'goal' || part.key === 'mode' || part.key === 'effort' ? 0 : 1}
             {...(part.id === undefined ? {} : hoverProps(part.id))}
           >
             {part.tooltip === undefined || part.tooltip === '' ? (

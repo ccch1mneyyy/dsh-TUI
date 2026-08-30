@@ -13,11 +13,11 @@
  *  Exported for the hoverable JSX bar (ContextBarView), which re-derives
  *  the same column split this module's ANSI path renders. */
 export const USED_SEGMENTS = [
-  { key: 'system', color: '#22305F', labels: ['system', 'sys', 's'] }, // deep navy
-  { key: 'prompt', color: '#2B3D78', labels: ['prompt', 'user', 'pr', 'p'] }, // navy
-  { key: 'assistant', color: '#344A92', labels: ['assistant', 'asst', 'ast', 'a'] }, // indigo
-  { key: 'thinking', color: '#4D6BFE', labels: ['thinking', 'think', 'th', 't'] }, // DeepSeek brand blue
-  { key: 'tools', color: '#5A7CFF', labels: ['tools', 'tl', 'x'] }, // lighter blue
+  { key: 'system', color: '#22305F', labels: ['system', 'sys'] }, // deep navy
+  { key: 'prompt', color: '#2B3D78', labels: ['prompt', 'user', 'pr'] }, // navy
+  { key: 'assistant', color: '#344A92', labels: ['assistant', 'asst', 'ast'] }, // indigo
+  { key: 'thinking', color: '#4D6BFE', labels: ['thinking', 'think', 'th'] }, // DeepSeek brand blue
+  { key: 'tools', color: '#5A7CFF', labels: ['tools', 'tool'] }, // lighter blue
 ] as const
 
 /** Used tokens per context content type (system, prompt, assistant, thinking, tools). */
@@ -71,6 +71,7 @@ export function centeredText(text: string, width: number): string {
 /** Pick the longest label that fits `width` cells. Exported for
  *  ContextBarView's JSX segments (same fallback ladder as the ANSI path). */
 export function chooseLabel(labels: readonly string[], width: number): string {
+  if (width < 3) return ''
   for (const label of labels) {
     if (plainWidth(label) <= width) return label
   }
