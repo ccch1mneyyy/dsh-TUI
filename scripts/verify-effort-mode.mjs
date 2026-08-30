@@ -57,6 +57,7 @@ function makeEnv({ withCommands = true, withApproval = true } = {}) {
     ...(withCommands
       ? {
           commands: {
+            find: () => undefined,
             list: () => [],
             execute: async (agent, line, _signal) => {
               commands.push(line)

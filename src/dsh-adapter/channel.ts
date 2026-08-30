@@ -5987,7 +5987,7 @@ export function createChannel(
     for (const [name, description] of wanted) {
       if (skillCommands.has(name) || skillCommandsRefused.has(name)) continue
       // Another plugin already owns this name (plan/goal/…): leave it alone.
-      if (commandService.find(target, name) !== undefined) continue
+      if (typeof commandService.find === 'function' && commandService.find(target, name) !== undefined) continue
       try {
         const dispose = commandService.register({
           name,

@@ -24,6 +24,7 @@ import { join } from 'node:path'
 const reproHome = mkdtempSync(join(tmpdir(), 'dshtui-compact-switch-'))
 process.env.HOME = reproHome
 process.env.USERPROFILE = reproHome
+process.env.DSH_TUI_LANG = 'zh'
 
 const [{ createChannel }] = await Promise.all([
   import('../src/dsh-adapter/channel.js'),

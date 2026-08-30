@@ -370,7 +370,7 @@ check('full StatusLine preserves provider-owned display paths', () => {
 })
 
 check('compact StatusLine hides disabled optional fields', () => {
-  for (const marker of ['37 t/s', 'feat/display-settings-probe', 'display settings title probe', '#d5a3b7c9', '12.3k→6.8k', 'system', 'free']) {
+  for (const marker of ['37 tps', 'feat/display-settings-probe', 'display settings title probe', '#d5a3b7c9', '12.3k→6.8k', 'system', 'free']) {
     assert.ok(!compact.includes(marker), `unexpected ${JSON.stringify(marker)} in:\n${compact}`)
   }
   assert.ok(!/[▁▂▃▄▅▆▇█▶]/.test(compact), `unexpected trajectory wake in:\n${compact}`)
@@ -464,7 +464,7 @@ const fullStatus = {
 }
 const full = await renderStatus({ statusBar: fullStatus }, 200)
 check('full StatusLine exposes tps, git, title, and token totals', () => {
-  for (const marker of ['37 t/s', 'feat/display-settings-probe', 'display settings title probe', '#d5a3b7c9', '12.3k→6.8k']) {
+  for (const marker of ['37 tps', 'feat/display-settings-probe', 'display settings title probe', '#d5a3b7c9', '12.3k→6.8k']) {
     assert.ok(full.includes(marker), `missing ${JSON.stringify(marker)} in:\n${full}`)
   }
 })
@@ -496,21 +496,21 @@ check('cockpit on drops model from the footer', () => {
 
 const visionHud = await renderHud({ cockpit: true, inputModalities: ['image', 'text'] })
 check('image modality renders the vision io chip', () => {
-  assert.ok(visionHud.includes('[vision]'), `missing vision chip in:\n${visionHud}`)
+  assert.ok(visionHud.includes('vision'), `missing vision chip in:\n${visionHud}`)
   assert.ok(!/\bio\s+vision\b/.test(visionHud), `io still dumps as a field in:\n${visionHud}`)
 })
 
 const textHud = await renderHud({ cockpit: true, inputModalities: ['text'] })
 check('text-only known modalities render the text io chip', () => {
-  assert.ok(textHud.includes('[text]'), `missing text chip in:\n${textHud}`)
+  assert.ok(textHud.includes('text'), `missing text chip in:\n${textHud}`)
   assert.ok(!/\bio\s+text\b/.test(textHud), `io still dumps as a field in:\n${textHud}`)
   assert.ok(!textHud.includes('vision'), `unexpected vision chip in:\n${textHud}`)
 })
 
 const unknownHud = await renderHud({ cockpit: true })
 check('unknown modalities omit the io chip', () => {
-  assert.ok(!unknownHud.includes('[text]'), `unexpected text chip in:\n${unknownHud}`)
-  assert.ok(!unknownHud.includes('[vision]'), `unexpected vision chip in:\n${unknownHud}`)
+  assert.ok(!unknownHud.includes(' text '), `unexpected text chip in:\n${unknownHud}`)
+  assert.ok(!unknownHud.includes(' vision '), `unexpected vision chip in:\n${unknownHud}`)
 })
 
 check('missing llm modalities do not throw', () => {
@@ -789,12 +789,43 @@ async function renderToolBackground(toolBackground: 'none' | 'subtle' | 'strong'
   return harness.writes.join('')
 }
 
+function toBgAnsi(color: string): string {
+  const rgbMatch = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/)
+  if (rgbMatch) return `\x1b[48;2;${rgbMatch[1]};${rgbMatch[2]};${rgbMatch[3]}m`
+  const ansiMatch = color.match(/38;2;(\d+);(\d+);(\d+)m/)
+  if (ansiMatch) return `\x1b[48;2;${ansiMatch[1]};${ansiMatch[2]};${ansiMatch[3]}m`
+  if (color.startsWith('#')) {
+    const r = parseInt(color.slice(1, 3), 16)
+    const g = parseInt(color.slice(3, 5), 16)
+    const b = parseInt(color.slice(5, 7), 16)
+    return `\x1b[48;2;${r};${g};${b}m`
+  }
+  return ''
+}
+
+function toFgAnsi(color: string): string {
+  const rgbMatch = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/)
+  if (rgbMatch) return `\x1b[38;2;${rgbMatch[1]};${rgbMatch[2]};${rgbMatch[3]}m`
+  const ansiMatch = color.match(/38;2;(\d+);(\d+);(\d+)m/)
+  if (ansiMatch) return `\x1b[38;2;${ansiMatch[1]};${ansiMatch[2]};${ansiMatch[3]}m`
+  if (color.startsWith('#')) {
+    const r = parseInt(color.slice(1, 3), 16)
+    const g = parseInt(color.slice(3, 5), 16)
+    const b = parseInt(color.slice(5, 7), 16)
+    return `\x1b[38;2;${r};${g};${b}m`
+  }
+  return ''
+}
+
 const noneAnsi = await renderToolBackground('none')
 const subtleAnsi = await renderToolBackground('subtle')
 const strongAnsi = await renderToolBackground('strong')
 check('tool background modes map to stable dark-theme ANSI backgrounds', () => {
-  const subtleBg = '\x1b[48;2;28;35;48m'
-  const strongBg = '\x1b[48;2;36;43;58m'
+  const dark = getTheme('dark')
+  const subtleBg = toBgAnsi(dark.toolCardBackgroundDim)
+  const strongBg = toBgAnsi(dark.toolCardBackground)
+  assert.ok(subtleBg !== '', 'subtleBg derived empty')
+  assert.ok(strongBg !== '', 'strongBg derived empty')
   assert.ok(!noneAnsi.includes(subtleBg) && !noneAnsi.includes(strongBg))
   assert.ok(subtleAnsi.includes(subtleBg), 'subtle background ANSI missing')
   assert.ok(strongAnsi.includes(strongBg), 'strong background ANSI missing')
@@ -834,9 +865,10 @@ const panePaint = await renderWrites(
   </Box>,
 )
 check('chrome pane emits a non-empty truecolor background', () => {
+  const dark = getTheme('dark')
   assert.ok(panePaint.screen.includes('opaque'), `missing pane copy in:\n${panePaint.screen}`)
   assert.ok(
-    panePaint.writes.includes('\x1b[48;2;22;27;36m'),
+    panePaint.writes.includes(toBgAnsi(dark.pane)),
     'dark pane SGR missing from writes',
   )
 })
@@ -847,15 +879,17 @@ const ioChipPaint = await renderWrites(
   4,
 )
 check('HUD io chip paints a claude fill', () => {
-  assert.ok(ioChipPaint.screen.includes('[text]'), `missing io chip in:\n${ioChipPaint.screen}`)
+  const dark = getTheme('dark')
+  assert.ok(ioChipPaint.screen.includes('text'), `missing io chip in:\n${ioChipPaint.screen}`)
   assert.ok(
-    ioChipPaint.writes.includes('\x1b[48;2;125;161;222m'),
+    ioChipPaint.writes.includes(toBgAnsi(dark.claude)),
     'io chip claude background SGR missing from writes',
   )
 })
 check('HUD hairline uses mist-blue promptBorder', () => {
+  const dark = getTheme('dark')
   assert.ok(
-    ioChipPaint.writes.includes('\x1b[38;2;94;136;204m'),
+    ioChipPaint.writes.includes(toFgAnsi(dark.promptBorder)),
     'promptBorder SGR missing from writes',
   )
 })

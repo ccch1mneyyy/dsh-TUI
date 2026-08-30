@@ -50,8 +50,7 @@ export function CockpitHud({ channel }: { channel: Channel }): React.ReactNode {
   }
   if (
     channel.reasoningEffort !== undefined &&
-    channel.reasoningEffort !== '' &&
-    channel.reasoningEffort.toLowerCase() !== 'max'
+    channel.reasoningEffort !== ''
   ) {
     leftItems.push({ key: 'eff', value: channel.reasoningEffort, label: t('cockpit-label-eff') })
   }

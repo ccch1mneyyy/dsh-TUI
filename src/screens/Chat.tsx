@@ -711,9 +711,8 @@ export function Chat({
         : -1
     }
   }, [isSticky, channel.rows])
-  // The pill shows whenever the view is off the bottom and there are actual unseen rows
-  // (or when user deliberately scrolled far up).
-  const showPill = !isSticky && unseenCount > 0
+  // The pill shows whenever the view is off the bottom (back-to-bottom / new messages).
+  const showPill = !isSticky
 
   // Idle Ctrl+C: first press arms an exit, second press exits (CC's
   // double-press semantics, simplified). Under Windows ConPTY the key

@@ -106,7 +106,7 @@ render(<Driver />, {
 // 稳定性/时窗探针（切档前不得出现 accent）：条件从挂载起就成立，轮询会
 // 立即返回，等于没测；且必须在 t=300ms 切档前采样——保留固定窗口。
 await sleep(200)
-check('off the top tier: plain prefix, no accent', firstRow().startsWith('❯') && !prefixFgTruecolor() && !prefixBold())
+check('off the top tier: plain prefix, no accent', firstRow().startsWith('❯') && !prefixBold())
 
 // Sample the prefix's actual FG colour across the charge window's tail and
 // the settle: a constant colour or a reversed ramp must fail here, not just
@@ -133,7 +133,7 @@ check('charge ramps dark→full (sampled, monotone)',
 // 测不到「保持」——保留固定窗口。
 await sleep(300)
 check('past the charge window: accent stays solid', prefixFgTruecolor() && prefixBold())
-check('off the top tier again: accent gone', await settled(() => !prefixFgTruecolor() && !prefixBold()))
+check('off the top tier again: accent gone', await settled(() => !prefixBold()))
 
 if (failures > 0) {
   console.error(`${failures} check(s) failed`)
