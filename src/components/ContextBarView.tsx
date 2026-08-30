@@ -12,8 +12,8 @@ import {
 } from '../screens/StatusMetrics.js'
 
 /** Free-segment colors, mirroring StatusMetrics' dark-theme defaults. */
-const FREE_FILL: Color = '#E8E8E8'
-const FREE_TEXT: Color = '#4A4A4A'
+const FREE_FILL: Color = '#232834'
+const FREE_TEXT: Color = '#8D95A6'
 const USED_TEXT: Color = '#FFFFFF'
 
 /**

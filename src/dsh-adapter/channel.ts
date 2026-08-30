@@ -2883,7 +2883,7 @@ export function createChannel(
     configuredActivityFrames: options.configuredActivityFrames,
     configuredLang: options.configuredLang,
     diffLayout: options.diffLayout ?? 'unified',
-    thinkingFold: options.thinkingFold ?? 'preview',
+    thinkingFold: options.thinkingFold ?? 'full',
     toolBackground: normalizeToolBackground(options.toolBackground),
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
     foldTerminalCommand: options.foldTerminalCommand === true,

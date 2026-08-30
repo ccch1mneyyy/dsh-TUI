@@ -48,7 +48,11 @@ export function CockpitHud({ channel }: { channel: Channel }): React.ReactNode {
   if (channel.model !== '') {
     leftItems.push({ key: 'model', value: channel.model, label: t('cockpit-label-model') })
   }
-  if (channel.reasoningEffort !== undefined && channel.reasoningEffort !== '') {
+  if (
+    channel.reasoningEffort !== undefined &&
+    channel.reasoningEffort !== '' &&
+    channel.reasoningEffort.toLowerCase() !== 'max'
+  ) {
     leftItems.push({ key: 'eff', value: channel.reasoningEffort, label: t('cockpit-label-eff') })
   }
   if (channel.modeIndex > 0 && channel.mode.id !== 'full') {

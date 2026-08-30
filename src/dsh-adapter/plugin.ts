@@ -592,7 +592,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       tuiSettingsNs,
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
-        thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+        thinkingFold: Schema.union(['preview', 'full']).default('full'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
         // No default on purpose (same rule as `fullscreen` below): a schema
@@ -703,7 +703,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Display preferences ride the same namespace: /settings writes them
     // live and future render consumers observe the channel version bump.
     const applyDisplay = (value: SettingsValue): void => {
-      channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
+      channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'full')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
       channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)

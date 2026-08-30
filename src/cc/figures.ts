@@ -66,6 +66,10 @@ export const FORK_GLYPH = '\u2442' // ⑂
 export const DIAMOND_OPEN = '\u25c7' // ◇
 /** Filled diamond (`◆`), review status indicator. */
 export const DIAMOND_FILLED = '\u25c6' // ◆
+/** Steer pending indicator (`⟡`) — minimal modern diamond sparkle. */
+export const STEER_ICON = '\u27e1' // ⟡
+/** Queue pending indicator (`◇`) — minimal modern open diamond. */
+export const QUEUE_ICON = DIAMOND_OPEN
 /** Reference mark (`※`), reference indicator. */
 export const REFERENCE_MARK = '\u203b' // ※
 

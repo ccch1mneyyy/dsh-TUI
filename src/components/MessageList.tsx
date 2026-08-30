@@ -163,7 +163,7 @@ export function MessageList({
   onToggleStreamFold = NOOP_TOGGLE_STREAM_FOLD,
   model,
   diffLayout = 'auto',
-  thinkingFold = 'preview',
+  thinkingFold = 'full',
   toolBackground = 'none',
   foldTerminalCommand = false,
   activityFrames,
@@ -1272,10 +1272,13 @@ function TranscriptRow({
               thinkingFold === 'preview' &&
               !isExpanded
             }
-            // Streaming reasoning shows expanded live (click collapses to the
-            // ticker/header via streamFolded); settled rows keep the
-            // fold-on-settle default and expand via expandedRows/Ctrl+O.
-            verbose={isExpanded || expanded || (streaming && !streamFolded)}
+            // When thinkingFold is 'full' (default), reasoning blocks stay expanded by default;
+            // streamFoldOnClick / foldOnClick allows toggling them folded if clicked.
+            verbose={
+              streaming
+                ? !streamFolded
+                : expanded || (thinkingFold === 'full' ? !isExpanded : isExpanded)
+            }
             durationMs={durationMs}
             isSelected={isSelected}
             onClick={streaming ? streamFoldOnClick : foldOnClick}

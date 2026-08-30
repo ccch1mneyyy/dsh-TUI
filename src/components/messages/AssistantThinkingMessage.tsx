@@ -86,7 +86,7 @@ export function AssistantThinkingMessage({
   // lively without strobing. Minimal mode drops the color (plain glyph);
   // settled always keeps the plain dim chevron.
   const label = `${t('thinking-label')}${duration}${
-    streaming ? '…' : cockpit ? '' : ` ${t('hint-expand-ctrl-o')}`
+    streaming ? '…' : cockpit || verbose ? '' : ` ${t('hint-expand-ctrl-o')}`
   }`
   const minimal = isMinimalMode()
   const pulse = (Math.sin(frame * 0.9) + 1) / 2

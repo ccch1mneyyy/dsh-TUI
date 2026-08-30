@@ -14,9 +14,9 @@
  *  the same column split this module's ANSI path renders. */
 export const USED_SEGMENTS = [
   { key: 'system', color: '#22305F', labels: ['system', 'sys', 's'] }, // deep navy
-  { key: 'prompt', color: '#2B3D78', labels: ['prompt', 'pr', 'p'] }, // navy
+  { key: 'prompt', color: '#2B3D78', labels: ['prompt', 'user', 'pr', 'p'] }, // navy
   { key: 'assistant', color: '#344A92', labels: ['assistant', 'asst', 'ast', 'a'] }, // indigo
-  { key: 'thinking', color: '#4D6BFE', labels: ['think', 'th', 't'] }, // DeepSeek brand blue
+  { key: 'thinking', color: '#4D6BFE', labels: ['thinking', 'think', 'th', 't'] }, // DeepSeek brand blue
   { key: 'tools', color: '#5A7CFF', labels: ['tools', 'tl', 'x'] }, // lighter blue
 ] as const
 
@@ -24,8 +24,8 @@ export const USED_SEGMENTS = [
 export type ContextSegments = Record<(typeof USED_SEGMENTS)[number]['key'], number>
 
 const USED_SEGMENT_TEXT = '#FFFFFF'
-const FREE_SEGMENT_FILL = '#E8E8E8'
-const FREE_SEGMENT_TEXT = '#4A4A4A'
+const FREE_SEGMENT_FILL = '#232834'
+const FREE_SEGMENT_TEXT = '#8D95A6'
 const FREE_SEGMENT_LABELS = ['free', 'fr', 'f'] as const
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g

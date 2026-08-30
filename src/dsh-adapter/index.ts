@@ -147,7 +147,7 @@ export const Config: Schema<Config> = Schema.object({
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('unified'),
-  thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+  thinkingFold: Schema.union(['preview', 'full']).default('full'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   foldTerminalCommand: Schema.boolean().default(false),

@@ -29,6 +29,7 @@ import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
+import { STEER_ICON, QUEUE_ICON } from '../cc/figures.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
@@ -2630,35 +2631,45 @@ export function PromptInput({
             />
           </Box>
         )}
-        {!helpOpen && channel.pending.length > 0 && (
-          <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-            {channel.pending.some(item => item.placement === 'steer') && (
-              <Box flexDirection="column">
-                <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
-                {channel.pending
-                  .filter(item => item.placement === 'steer')
-                  .map(item => (
-                    <Text key={item.id} dimColor wrap="truncate">
-                      {'  '}↳ {item.text}
-                    </Text>
+        {!helpOpen && channel.pending.length > 0 && (() => {
+          const steerItems = channel.pending.filter(item => item.placement === 'steer')
+          const followupItems = channel.pending.filter(item => item.placement === 'followup')
+          return (
+            <Box flexDirection="column" paddingLeft={2} paddingBottom={1} gap={0}>
+              {steerItems.length > 0 && (
+                <Box flexDirection="column" marginBottom={followupItems.length > 0 ? 1 : 0}>
+                  <Box flexDirection="row" gap={1}>
+                    <Text color={promptAccent}>{STEER_ICON}</Text>
+                    <Text color="text" bold>{t('input-pending-steer-label')}</Text>
+                  </Box>
+                  {steerItems.map(item => (
+                    <Box key={item.id} flexDirection="row" paddingLeft={1} gap={1}>
+                      <Text dimColor>│</Text>
+                      <Text dimColor wrap="truncate">{item.text}</Text>
+                    </Box>
                   ))}
-              </Box>
-            )}
-            {channel.pending.some(item => item.placement === 'followup') && (
-              <Box flexDirection="column">
-                <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
-                {channel.pending
-                  .filter(item => item.placement === 'followup')
-                  .map(item => (
-                    <Text key={item.id} dimColor wrap="truncate">
-                      {'  '}↳ {item.text}
-                    </Text>
+                </Box>
+              )}
+              {followupItems.length > 0 && (
+                <Box flexDirection="column">
+                  <Box flexDirection="row" gap={1}>
+                    <Text color="inactiveShimmer">{QUEUE_ICON}</Text>
+                    <Text color="text" bold>{t('input-pending-queue-label')}</Text>
+                  </Box>
+                  {followupItems.map(item => (
+                    <Box key={item.id} flexDirection="row" paddingLeft={1} gap={1}>
+                      <Text dimColor>│</Text>
+                      <Text dimColor wrap="truncate">{item.text}</Text>
+                    </Box>
                   ))}
+                </Box>
+              )}
+              <Box flexDirection="row" marginTop={0}>
+                <Text dimColor>{`Alt+↑ ${t('input-pending-actions-hint')}`}</Text>
               </Box>
-            )}
-            <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
-          </Box>
-        )}
+            </Box>
+          )
+        })()}
         {fileOverlayOpen && (
           <FileSuggestions
             files={fileMatches}

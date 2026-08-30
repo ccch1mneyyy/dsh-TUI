@@ -417,7 +417,7 @@ export function StatusLine({
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     themeName === 'light'
       ? undefined
-      : { freeFill: '#2E3440', freeText: '#8D95A6' }
+      : { freeFill: '#232834', freeText: '#8D95A6' }
   const barVisible =
     statusBar.contextBar &&
     channel.contextBarEnabled &&
