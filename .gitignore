@@ -14,3 +14,4 @@ package-lock.json
 .dsh-prompt-debug.json
 HANDOVER.md
 .local/
+.superpowers/
