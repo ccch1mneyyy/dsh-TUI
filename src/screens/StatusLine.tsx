@@ -279,37 +279,25 @@ export function StatusLine({
   let tpsPart: FieldPart | undefined
   if (statusBar.tps) {
     if (channel.tps !== undefined) {
-      if (channel.working && channel.tpsSamples.length === 0) {
-        tpsPart = {
-          key: 'tps',
-          id: 'tps',
-          node: (
-            <Text>
-              {renderTpsGauge(channel.tps, channel.tps)}{' '}
-              <Text dimColor>{Math.round(channel.tps)} tps</Text>
-            </Text>
-          ),
-        }
-      } else if (channel.tpsSamples.length > 0) {
-        const peak = Math.max(...channel.tpsSamples.map(sample => sample.tps), channel.tps)
-        tpsPart = {
-          key: 'tps',
-          id: 'tps',
-          node: (
-            <Text>
-              {channel.working
-                ? renderTpsGauge(channel.tps, peak)
-                : renderTpsSparkline(channel.tpsSamples)}{' '}
-              {speedColor(channel.tps, `${Math.round(channel.tps)}`)} tps
-            </Text>
-          ),
-        }
-      } else {
-        tpsPart = {
-          key: 'tps',
-          id: 'tps',
-          node: <Text dimColor>{Math.round(channel.tps)} t/s</Text>,
-        }
+      const peak = Math.max(
+        100,
+        ...channel.tpsSamples.map(sample => sample.tps),
+        channel.tps,
+      )
+      tpsPart = {
+        key: 'tps',
+        id: 'tps',
+        node: (
+          <Text>
+            {channel.working
+              ? renderTpsGauge(channel.tps, peak)
+              : channel.tpsSamples.length > 0
+                ? renderTpsSparkline(channel.tpsSamples)
+                : undefined}
+            {channel.working || channel.tpsSamples.length > 0 ? ' ' : ''}
+            {speedColor(channel.tps, `${Math.round(channel.tps)}`)} tps
+          </Text>
+        ),
       }
     } else {
       tpsPart = {

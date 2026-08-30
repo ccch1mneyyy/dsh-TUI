@@ -6090,8 +6090,10 @@ ${output}
     | {
       turn: number
       step: number
+      startTime?: number
       firstTokenTime: number | undefined
       outputChars: number
+      chunkCount?: number
     }
     | undefined
   /** Tool cards by callId, so tool/result can settle the running card. */
@@ -6460,8 +6462,10 @@ ${output}
           tpsStep = {
             turn: event.data.turn,
             step: event.data.step,
+            startTime: event.time,
             firstTokenTime: undefined,
             outputChars: 0,
+            chunkCount: 0,
           }
         }
         break
@@ -6500,11 +6504,14 @@ ${output}
         ) {
           step.firstTokenTime ??= event.time
           step.outputChars += tokenDeltaChars(chunk)
+          step.chunkCount = (step.chunkCount ?? 0) + 1
           const elapsedMs = Math.max(0, event.time - step.firstTokenTime)
           if (elapsedMs > 500) {
             const decodeMs = tpsTurnDecodeMs + elapsedMs
             const outputTokens = tpsTurnDecodeTokens + Math.ceil(step.outputChars / 4)
-            state.tps = outputTokens / (decodeMs / 1000)
+            if (decodeMs > 0) {
+              state.tps = outputTokens / (decodeMs / 1000)
+            }
           }
         }
         updateSpinnerMode()
@@ -6619,18 +6626,27 @@ ${output}
           tpsTurn === event.data.turn &&
           tpsMessageStep !== undefined &&
           tpsMessageStep.turn === event.data.turn &&
-          tpsMessageStep.step === event.data.step &&
-          tpsMessageStep.firstTokenTime !== undefined
+          tpsMessageStep.step === event.data.step
         ) {
           const outputTokens = usageOutputTokens(usage)
             ?? (tpsMessageStep.outputChars > 0
               ? Math.ceil(tpsMessageStep.outputChars / 4)
               : undefined)
-          if (outputTokens !== undefined) {
-            tpsTurnDecodeMs += Math.max(0, event.time - tpsMessageStep.firstTokenTime)
-            tpsTurnDecodeTokens += outputTokens
-            tpsTurnSampled = true
-            if (tpsTurnDecodeMs > 0) {
+          if (outputTokens !== undefined && outputTokens > 0) {
+            const streamSpanMs = tpsMessageStep.firstTokenTime !== undefined
+              ? Math.max(0, event.time - tpsMessageStep.firstTokenTime)
+              : 0
+            const stepSpanMs = tpsMessageStep.startTime !== undefined
+              ? Math.max(0, event.time - tpsMessageStep.startTime)
+              : 0
+            const effectiveStepDecodeMs = (streamSpanMs >= 200 || outputTokens <= 5)
+              ? streamSpanMs
+              : (stepSpanMs > 0 ? stepSpanMs : streamSpanMs)
+
+            if (effectiveStepDecodeMs > 0) {
+              tpsTurnDecodeMs += effectiveStepDecodeMs
+              tpsTurnDecodeTokens += outputTokens
+              tpsTurnSampled = true
               state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
             }
           }

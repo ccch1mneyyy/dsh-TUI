@@ -89,6 +89,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'cost', description: 'Show session token usage' },
   { name: 'config', description: 'Show the dsh-tui configuration source' },
   { name: 'reload', description: 'Reload preference files from disk and apply live' },
+  { name: 'refresh', description: 'Refresh canvas stage, redraw viewport, and reload live state' },
   { name: 'settings', description: 'View and edit plugin settings' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },

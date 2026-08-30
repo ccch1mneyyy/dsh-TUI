@@ -1763,7 +1763,12 @@ export function Chat({
           onUpdate()
         }
         return true
+      case 'refresh':
       case 'reload': {
+        // Redraw terminal frame and reanchor viewport
+        const ink = instances.get(process.stdout) ?? instances.values().next().value
+        ink?.invalidatePrevFrame()
+        ink?.reanchorViewport()
         // pi-style soft reload: re-read the persisted preference files
         // (~/.dsh-tui/{theme,lang,agent-preset,model,working-activity}.json)
         // and re-apply live, honoring the boot-time precedence (env >

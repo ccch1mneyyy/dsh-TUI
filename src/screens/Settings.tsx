@@ -706,9 +706,9 @@ export function Settings({
     }
     totalLines += entry.lines
   }
-  // Chrome: margin-top (1), title row, footer rule, notice slot, help row.
+  // Chrome: margin-top (1), title row + margin-bottom (2), footer rule (1), notice slot (1), help row (1) = 6 rows.
   // The notice slot is permanent (blank while quiet) so a save/discard toast never shifts the list above it.
-  const viewport = Math.max(1, rows - 5)
+  const viewport = Math.max(1, rows - 6)
   React.useEffect(() => {
     setWindowStart(start => {
       if (focusedOffset < start) return focusedOffset
