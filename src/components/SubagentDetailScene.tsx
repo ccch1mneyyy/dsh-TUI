@@ -24,10 +24,10 @@ function formatTimestamp(ts: number): string {
 
 function statusGlyph(status: SubagentState['status']): { glyph: string; color: keyof Theme | undefined; label: string } {
   const minimal = isMinimalMode()
-  if (status === 'completed') return { glyph: minimal ? '✓' : '🟢', color: minimal ? undefined : 'success', label: 'done' }
-  if (status === 'failed') return { glyph: minimal ? '×' : '🔴', color: minimal ? undefined : 'error', label: 'failed' }
-  if (status === 'cancelled') return { glyph: minimal ? '×' : '🔴', color: minimal ? undefined : 'error', label: 'cancelled' }
-  return { glyph: minimal ? '·' : '🟡', color: minimal ? undefined : 'warning', label: 'running' }
+  if (status === 'completed') return { glyph: '✓', color: minimal ? undefined : 'success', label: 'done' }
+  if (status === 'failed') return { glyph: minimal ? '×' : '✕', color: minimal ? undefined : 'error', label: 'failed' }
+  if (status === 'cancelled') return { glyph: minimal ? '×' : '✕', color: minimal ? undefined : 'error', label: 'cancelled' }
+  return { glyph: minimal ? '·' : '⟡', color: minimal ? undefined : 'warning', label: 'running' }
 }
 
 const PAGES = ['summary', 'output', 'tools'] as const

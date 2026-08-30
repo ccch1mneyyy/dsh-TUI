@@ -27,7 +27,7 @@ import {
 } from '../theme.js'
 
 /** The built-in palette a runtime theme overlays. */
-export type TuiThemeBase = 'light' | 'dark' | 'dark-ansi'
+export type TuiThemeBase = 'light' | 'dark' | 'dsh' | 'dark-ansi'
 
 /** Plugin-facing runtime theme declaration. */
 export interface TuiThemeDescriptor {

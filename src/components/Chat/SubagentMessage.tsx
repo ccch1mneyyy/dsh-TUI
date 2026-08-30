@@ -18,17 +18,45 @@ function duration(ms = 0): string {
   const seconds = Math.floor(ms / 1000)
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`
 }
+
 function tokens(row: SubagentRow): string {
   const total = row.tokens?.total ?? ((row.tokens?.input ?? 0) + (row.tokens?.output ?? 0) || 0)
-  return total > 0 ? `${total} tok` : '- tok'
+  if (total <= 0) return '- tok'
+  return total >= 1000 ? `${(total / 1000).toFixed(1)}k tok` : `${total} tok`
 }
+
 function status(row: SubagentRow): { glyph: string; label: string; color: keyof Theme | undefined } {
   const minimal = isMinimalMode()
-  if (row.status === 'completed') return { glyph: minimal ? '✓' : '🟢', label: t('subagent-status-completed'), color: minimal ? undefined : 'success' }
-  if (row.status === 'failed') return { glyph: minimal ? '×' : '🔴', label: t('subagent-status-failed'), color: minimal ? undefined : 'error' }
-  if (row.status === 'cancelled') return { glyph: minimal ? '×' : '🔴', label: t('subagent-status-cancelled'), color: minimal ? undefined : 'error' }
-  return { glyph: minimal ? '·' : '🟡', label: t('subagent-status-running'), color: minimal ? undefined : 'warning' }
+  if (row.status === 'completed') return { glyph: '✓', label: t('subagent-status-completed'), color: minimal ? undefined : 'success' }
+  if (row.status === 'failed') return { glyph: '✕', label: t('subagent-status-failed'), color: minimal ? undefined : 'error' }
+  if (row.status === 'cancelled') return { glyph: '✕', label: t('subagent-status-cancelled'), color: minimal ? undefined : 'error' }
+  return { glyph: minimal ? '·' : '⟡', label: t('subagent-status-running'), color: minimal ? undefined : 'warning' }
 }
+
+function formatToolArgs(rawArgs?: string): string | undefined {
+  if (!rawArgs) return undefined
+  try {
+    const parsed = JSON.parse(rawArgs)
+    if (typeof parsed === 'object' && parsed !== null) {
+      if (typeof parsed.description === 'string' && parsed.description.trim()) {
+        return parsed.description.trim()
+      }
+      if (typeof parsed.command === 'string' && parsed.command.trim()) {
+        return parsed.command.trim()
+      }
+      if (typeof parsed.file_path === 'string') return parsed.file_path
+      if (typeof parsed.filePath === 'string') return parsed.filePath
+      if (typeof parsed.path === 'string') return parsed.path
+      if (typeof parsed.pattern === 'string') return parsed.pattern
+      if (typeof parsed.query === 'string') return parsed.query
+      if (typeof parsed.name === 'string') return parsed.name
+    }
+  } catch {
+    // Non-JSON string
+  }
+  return rawArgs.replace(/\s+/g, ' ').trim()
+}
+
 /** Hard single-line clip by display width — a wrapped waterfall row would
  * break the constant-height window. */
 function clipLine(text: string, maxWidth: number): string {
@@ -36,8 +64,6 @@ function clipLine(text: string, maxWidth: number): string {
   let width = 0
   let index = 0
   while (index < text.length) {
-    // Advance by the next full code point so wide glyphs (CJK, emoji) are
-    // never split in half.
     const next = text.codePointAt(index)!
     const char = String.fromCodePoint(next)
     const charWidth = stringWidth(char)
@@ -49,13 +75,7 @@ function clipLine(text: string, maxWidth: number): string {
 }
 
 /**
- * Borderless, fixed-height activity card embedded directly in the transcript
- * (Kimi Code visual language). Running: header + one-line current tool + a
- * constant 3-row waterfall (each row hard-clipped to one terminal line so
- * the card height never changes). Settled: folds to the header line alone
- * (failure keeps one error line). The running glyph reuses the user's
- * working-activity preset (`/activity`), so the indicator follows the same
- * setting as the main spinner.
+ * Modern, clean activity card for subagent delegation.
  */
 export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }: {
   subagent: SubagentRow
@@ -65,10 +85,6 @@ export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }
   onClick?(event: ClickEvent): void
 }): React.ReactNode {
   const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled'
-  // 动画订阅仅限运行中的卡片：settled 后传 null 退出共享 clock（keepAlive
-  // 归零 → interval 清除），否则历史里的每张完成卡片都以 120ms 永久驱动
-  // React commit。viewportRef 必须挂到根节点——useTerminalViewport 初始
-  // isVisible:true，ref 不挂就永远不修正（虚拟化滚出视口的卡片继续动画）。
   const [viewportRef, time] = useAnimationFrame(settled ? null : 120)
   const { columns } = useTerminalSize()
   const info = status(subagent)
@@ -81,74 +97,93 @@ export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }
     : subagent.toolCalls[subagent.toolCalls.length - 1]
   const preset = React.useMemo(() => resolvePreset(activityFrames), [activityFrames])
   const activity = settled ? [] : subagent.outputLines.slice(-WATERFALL_ROWS)
-  const runningGlyph = preset.frames[Math.floor(time / preset.intervalMs) % preset.frames.length] ?? '·'
-  const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER)
+  const runningGlyph = preset.frames[Math.floor(time / preset.intervalMs) % preset.frames.length] ?? '⟡'
+  const termWidth = columns ?? 80
+  const rowWidth = Math.max(20, termWidth - WATERFALL_GUTTER - 2)
 
-  // 点击打开详情场景；hover 不刷整行背景（转录视觉保持安静），只把状态
-  // glyph 提亮为品牌色作为可点指示。
-  return <Box
-    flexDirection="column"
-    marginTop={addMargin ? 1 : 0}
-    paddingLeft={2}
-    ref={viewportRef}
-    onClick={onClick}
-    onMouseEnter={clickable ? () => setHovered(true) : undefined}
-    onMouseLeave={clickable ? () => setHovered(false) : undefined}
-  >
-    <Box flexDirection="row" gap={1}>
-      <Text color={hovered && clickable ? 'claude' : info.color}>{settled ? info.glyph : ` ${runningGlyph}`}</Text>
-      <Text bold color={hovered && clickable ? 'claude' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
-      <Text dimColor>·</Text><Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
-      {subagent.effort && <><Text dimColor>·</Text><Text dimColor>{subagent.effort}</Text></>}
-      <Text dimColor>·</Text><Text dimColor>{duration(elapsed)}</Text>
-      <Text dimColor>·</Text><Text dimColor>{tokens(subagent)}</Text>
-      <Text dimColor>·</Text><Text dimColor>{subagent.toolCalls.length} tools</Text>
-      <Text dimColor>·</Text><Text color={info.color}>{info.label}</Text>
+  const metaRight = [
+    subagent.model ?? subagent.provider ?? 'default',
+    subagent.effort ? subagent.effort : null,
+    duration(elapsed),
+    tokens(subagent),
+    `${subagent.toolCalls.length} tools`,
+    info.label,
+  ].filter(Boolean).join(' · ')
+
+  const prefixText = `⑂ ${t('subagent-card-prefix')}`
+  const availableDescWidth = Math.max(15, rowWidth - stringWidth(prefixText) - stringWidth(metaRight) - 8)
+  const clippedDesc = clipLine(subagent.description, availableDescWidth)
+
+  const activeTool = lastRunning ?? previousDone
+  const activeToolFormatted = activeTool ? formatToolArgs(activeTool.argsPreview) : undefined
+
+  return (
+    <Box
+      flexDirection="column"
+      marginTop={addMargin ? 1 : 0}
+      marginBottom={settled ? 0 : 1}
+      paddingLeft={1}
+      paddingRight={1}
+      ref={viewportRef}
+      onClick={onClick}
+      onMouseEnter={clickable ? () => setHovered(true) : undefined}
+      onMouseLeave={clickable ? () => setHovered(false) : undefined}
+    >
+      <Box flexDirection="row" width="100%" gap={1}>
+        <Text color={hovered && clickable ? 'claude' : info.color}>
+          {settled ? info.glyph : runningGlyph}
+        </Text>
+        <Text bold color={hovered && clickable ? 'claude' : 'claude'}>
+          {prefixText}
+        </Text>
+        <Text bold color={hovered && clickable ? 'claude' : 'text'} wrap="truncate">
+          {clippedDesc}
+        </Text>
+        <Text dimColor wrap="truncate">
+          {` · ${metaRight}`}
+        </Text>
+      </Box>
+
+      {!settled && activeTool !== undefined && (
+        <Box flexDirection="row" paddingLeft={2} gap={1}>
+          <Text dimColor>│</Text>
+          {lastRunning !== undefined ? (
+            <Text color="warning">▶</Text>
+          ) : (
+            <Text color="success">✓</Text>
+          )}
+          <Text color={toolNameColor(activeTool.name)} bold>
+            {activeTool.name}
+          </Text>
+          {activeToolFormatted && (
+            <Text dimColor wrap="truncate">
+              {clipLine(activeToolFormatted, Math.max(10, rowWidth - activeTool.name.length - 8))}
+            </Text>
+          )}
+        </Box>
+      )}
+
+      {!settled && Array.from({ length: WATERFALL_ROWS }, (_, index) => {
+        const line = activity[index]
+        if (!line) return null
+        return (
+          <Box key={`${subagent.agentId}-wf-${index}`} flexDirection="row" paddingLeft={2} gap={1}>
+            <Text dimColor>│</Text>
+            <Text dimColor wrap="truncate">
+              {clipLine(line, rowWidth - 4)}
+            </Text>
+          </Box>
+        )
+      })}
+
+      {settled && subagent.status === 'failed' && subagent.error && (
+        <Box flexDirection="row" paddingLeft={2} gap={1}>
+          <Text color="error">└</Text>
+          <Text color="error" wrap="truncate">
+            {clipLine(subagent.error, rowWidth - 4)}
+          </Text>
+        </Box>
+      )}
     </Box>
-    {!settled && (lastRunning ?? previousDone) !== undefined && (
-      <Text wrap="truncate">
-        {lastRunning !== undefined ? (
-          <>
-            {previousDone !== undefined && (
-              <>
-                <Text dimColor>{'  · '}</Text>
-                <Text color="success">✓</Text>
-                <Text color={toolNameColor(previousDone.name)}>{previousDone.name}</Text>
-                <Text dimColor>{' · '}</Text>
-              </>
-            )}
-            {lastRunning.argsPreview === undefined && (
-              <Text color={toolNameColor(lastRunning.name)}>{lastRunning.name}</Text>
-            )}
-            {lastRunning.argsPreview !== undefined && (
-              <>
-                <Text color={toolNameColor(lastRunning.name)}>{lastRunning.name}</Text>
-                <Text dimColor>{` (${clipLine(lastRunning.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - lastRunning.name.length - 6))})`}</Text>
-              </>
-            )}
-          </>
-        ) : (
-          previousDone !== undefined && (
-            <>
-              <Text dimColor>{'  · '}</Text>
-              <Text color="success">✓</Text>
-              <Text color={toolNameColor(previousDone.name)}>{previousDone.name}</Text>
-              {previousDone.argsPreview !== undefined && (
-                <Text dimColor>{` (${clipLine(previousDone.argsPreview.replace(/\s+/g, ' ').trim(), Math.max(10, rowWidth - previousDone.name.length - 6))})`}</Text>
-              )}
-            </>
-          )
-        )}
-      </Text>
-    )}
-    {!settled && Array.from({ length: WATERFALL_ROWS }, (_, index) => (
-      // key 不含 time：含 time 的 key 让每个 animation tick 都变成
-      // unmount+mount，DOMElement/Yoga node churn 且 nodeCache 失配扩大
-      // terminal damage。内容更新走 in-place diff。
-      <Text key={`${subagent.agentId}-wf-${index}`} dimColor wrap="truncate">{`  │ ${clipLine(activity[index] ?? '', rowWidth)}`}</Text>
-    ))}
-    {settled && subagent.status === 'failed' && subagent.error && (
-      <Text color="error" wrap="truncate">{`  └ ${clipLine(subagent.error, rowWidth)}`}</Text>
-    )}
-  </Box>
+  )
 }

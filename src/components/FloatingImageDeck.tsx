@@ -153,7 +153,7 @@ export function FloatingImageDeck({
                   height={3}
                   marginBottom={0}
                 >
-                  <Text color="#5EEAD4">▰▰▰ 🖼️ STREAM READY ▰▰▰</Text>
+                  <Text color="#5EEAD4">▰▰▰ ◇ STREAM READY ▰▰▰</Text>
                 </Box>
                 <Box justifyContent="space-between">
                   <Text dimColor wrap="truncate-end">

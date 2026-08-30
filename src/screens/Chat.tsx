@@ -784,7 +784,7 @@ export function Chat({
     ? (TITLE_ANIMATION_FRAMES[titleFrame] ?? '✦')
     : '✦'
   useTerminalTitle(
-    `${titlePrefix} 🐋 ${channel.sessionTitle}`,
+    `${titlePrefix} ✦ ${channel.sessionTitle}`,
   )
 
   const handleWorkspaceResult = (result: TuiWorkspaceCommandResult): void => {
@@ -3159,7 +3159,7 @@ export function Chat({
   })
 
   return (
-    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%" height="100%" backgroundColor="pane">
+    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%" height="100%" backgroundColor="pane" paddingX={1}>
       {channel.cockpit && !channel.minimal && (
         <CockpitHud channel={channel} />
       )}

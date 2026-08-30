@@ -130,7 +130,7 @@ export type Theme = {
 }
 
 /** The built-in theme names, in display order. */
-export const THEME_NAMES = ['dark', 'dark-ansi', 'light'] as const
+export const THEME_NAMES = ['dark', 'dsh', 'dark-ansi', 'light'] as const
 
 /**
  * The `auto` pseudo-theme: not a palette, but a standing request to follow
@@ -278,6 +278,109 @@ const darkTheme: Theme = {
   subagentElapsed: rgb('#94A3B8'),
   subagentToolName: rgb('#60A5FA'),
   subagentStatusRunning: rgb('#60A5FA'),
+  subagentStatusCompleted: rgb('#34D399'),
+  subagentStatusFailed: rgb('#FB7185'),
+}
+
+/**
+ * Signature DeepSeek Harness (DSH) theme — high-contrast slate & electric blue palette.
+ */
+const dshTheme: Theme = {
+  autoAccept: rgb('#818CF8'), // Electric indigo
+  bashBorder: rgb('#F43F5E'), // Coral rose
+  claude: rgb('#4D6BFE'), // Signature DeepSeek electric blue
+  toolNameMutate: rgb('#FBBF24'), // Crisp warm amber / gold
+  toolNameExec: rgb('#22D3EE'), // Bright modern cyan
+  claudeShimmer: rgb('#93C5FD'), // Vibrant blue shimmer
+  claudeBlue_FOR_SYSTEM_SPINNER: rgb('#4D6BFE'),
+  claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#93C5FD'),
+  permission: rgb('#60A5FA'), // Vibrant blue
+  permissionShimmer: rgb('#93C5FD'),
+  planMode: rgb('#34D399'), // Crisp emerald green
+  ide: rgb('#3B82F6'), // Modern vivid blue
+  promptBorder: rgb('#3B82F6'), // DeepSeek blue border
+  promptBorderShimmer: rgb('#60A5FA'),
+  text: rgb('#F8FAFC'), // High-clarity crisp white (Slate 50)
+  inverseText: rgb('#0F172A'), // Slate 900
+  inactive: rgb('#94A3B8'), // Slate 400
+  inactiveShimmer: rgb('#CBD5E1'), // Slate 300
+  subtle: rgb('#64748B'), // Slate 500
+  suggestion: rgb('#60A5FA'), // DeepSeek focus blue
+  remember: rgb('#818CF8'),
+  background: rgb('#4D6BFE'), // DeepSeek badge fill
+  pane: rgb('#0B0F19'), // Signature DeepSeek obsidian slate pane
+  success: rgb('#34D399'), // Radiant emerald
+  error: rgb('#FB7185'), // Vibrant coral-rose
+  warning: rgb('#FBBF24'), // Crisp amber
+  merged: rgb('#A78BFA'), // Vibrant purple
+  warningShimmer: rgb('#FDE047'),
+  diffAdded: rgb('#064E3B'),
+  diffRemoved: rgb('#881337'),
+  diffAddedDimmed: rgb('#022C22'),
+  diffRemovedDimmed: rgb('#4C0519'),
+  diffAddedWord: rgb('#10B981'),
+  diffRemovedWord: rgb('#F43F5E'),
+  toolCardBackground: rgb('#131B2E'), // Deep navy-slate card surface
+  toolCardBackgroundDim: rgb('#0E1524'), // Sleek midnight substrate
+  toolDotExec: rgb('#22D3EE'), // Neon cyan
+  toolDotRead: rgb('#38BDF8'), // Sky blue
+  toolDotWrite: rgb('#C084FC'), // Electric purple
+  toolDotWeb: rgb('#60A5FA'), // Modern blue
+  toolDotTask: rgb('#FBBF24'), // Vivid amber
+  syntaxKeyword: rgb('#38BDF8'), // Vivid cyan-blue keyword
+  syntaxString: rgb('#34D399'), // Radiant emerald string
+  syntaxComment: rgb('#64748B'), // Clean slate comment
+  syntaxNumber: rgb('#FBBF24'), // Vibrant gold numeric
+  syntaxFunction: rgb('#60A5FA'), // DeepSeek electric function
+  syntaxType: rgb('#C084FC'), // Vibrant violet type
+  syntaxVariable: rgb('#F1F5F9'), // Crisp variable
+  syntaxOperator: rgb('#94A3B8'), // Clean operator
+  syntaxPunctuation: rgb('#64748B'), // Subtle punctuation
+  syntaxConstant: rgb('#FB7185'), // Coral rose constant
+  red_FOR_SUBAGENTS_ONLY: rgb('#FB7185'),
+  blue_FOR_SUBAGENTS_ONLY: rgb('#4D6BFE'),
+  green_FOR_SUBAGENTS_ONLY: rgb('#34D399'),
+  yellow_FOR_SUBAGENTS_ONLY: rgb('#FBBF24'),
+  purple_FOR_SUBAGENTS_ONLY: rgb('#A78BFA'),
+  orange_FOR_SUBAGENTS_ONLY: rgb('#FB923C'),
+  pink_FOR_SUBAGENTS_ONLY: rgb('#F472B6'),
+  cyan_FOR_SUBAGENTS_ONLY: rgb('#22D3EE'),
+  professionalBlue: rgb('#4D6BFE'),
+  chromeYellow: rgb('#FBBF24'),
+  clawd_body: rgb('#4D6BFE'),
+  clawd_background: rgb('#0B0F19'),
+  userMessageBackground: '',
+  userMessageBackgroundHover: rgb('#1E293B'),
+  messageActionsBackground: rgb('#1E293B'),
+  selectionBg: rgb('#1E3A8A'),
+  bashMessageBackgroundColor: rgb('#131B2E'),
+  memoryBackgroundColor: rgb('#131B2E'),
+  rate_limit_fill: rgb('#4D6BFE'),
+  rate_limit_empty: rgb('#334155'),
+  fastMode: rgb('#FB923C'),
+  fastModeShimmer: rgb('#FDBA74'),
+  briefLabelYou: rgb('#F8FAFC'),
+  briefLabelClaude: rgb('#4D6BFE'),
+  rainbow_red: rgb('#F87171'),
+  rainbow_orange: rgb('#FB923C'),
+  rainbow_yellow: rgb('#FBBF24'),
+  rainbow_green: rgb('#34D399'),
+  rainbow_blue: rgb('#4D6BFE'),
+  rainbow_indigo: rgb('#818CF8'),
+  rainbow_violet: rgb('#C084FC'),
+  rainbow_red_shimmer: rgb('#FCA5A5'),
+  rainbow_orange_shimmer: rgb('#FDBA74'),
+  rainbow_yellow_shimmer: rgb('#FDE047'),
+  rainbow_green_shimmer: rgb('#6EE7B7'),
+  rainbow_blue_shimmer: rgb('#93C5FD'),
+  rainbow_indigo_shimmer: rgb('#A5B4FC'),
+  rainbow_violet_shimmer: rgb('#E9D5FF'),
+  subagentBullet: rgb('#4D6BFE'),
+  subagentDescription: rgb('#F8FAFC'),
+  subagentModel: rgb('#94A3B8'),
+  subagentElapsed: rgb('#94A3B8'),
+  subagentToolName: rgb('#38BDF8'),
+  subagentStatusRunning: rgb('#FBBF24'),
   subagentStatusCompleted: rgb('#34D399'),
   subagentStatusFailed: rgb('#FB7185'),
 }
@@ -514,6 +617,8 @@ export function getTheme(themeName: ThemeName): Theme {
     // resolver round-trip there re-enters theme-file parsing recursively.
     case 'dark':
       return darkTheme
+    case 'dsh':
+      return dshTheme
     case 'dark-ansi':
       return darkAnsiTheme
     case AUTO_THEME_NAME:
@@ -559,7 +664,7 @@ let runtimeThemeResolver: ThemeResolver | undefined
 export function isLightThemeActive(themeName: ThemeName): boolean {
   const theme = getTheme(themeName)
   if (theme === lightTheme) return true
-  if (theme === darkTheme || theme === darkAnsiTheme) return false
+  if (theme === darkTheme || theme === dshTheme || theme === darkAnsiTheme) return false
   // 自定义或运行时主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
   // 调色板的 background 字段是徽标填充色而非 chrome pane，不能作判据。
   const ink = theme.text
