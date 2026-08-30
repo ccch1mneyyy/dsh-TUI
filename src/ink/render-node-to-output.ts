@@ -902,7 +902,8 @@ function renderNodeToOutput(
         // content growth, and an idle stream leaves the pill stuck.
         const atBottom =
           sticky ||
-          (scrollTopBeforeFollow >= prevMaxScroll &&
+          (node.pendingScrollDelta === undefined &&
+            scrollTopBeforeFollow >= prevMaxScroll &&
             (grew || scrollTopBeforeFollow >= maxScroll))
         if (atBottom && (node.pendingScrollDelta ?? 0) >= 0 && !shrunk) {
           node.scrollTop = maxScroll
@@ -971,6 +972,10 @@ function renderNodeToOutput(
           if (pending > 0 && cur + drain >= maxScroll) {
             cur = maxScroll
             node.pendingScrollDelta = undefined
+            if (node.stickyScroll === false) {
+              node.stickyScroll = true
+              node.onStickyRestore?.()
+            }
           } else if (pending < 0 && cur + drain <= 0) {
             cur = 0
             node.pendingScrollDelta = undefined

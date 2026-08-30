@@ -199,8 +199,12 @@ function ScrollBox({
         return;
       }
 
+      // Cap accumulated target position strictly within [0, maxScroll] so wheel bursts never overshoot bounds
+      const targetTop = curTop + curPending + delta;
+      const clampedTarget = Math.max(0, Math.min(maxScroll, targetTop));
+      const nextPending = clampedTarget - curTop;
+
       // Cap accumulated pending delta to a reasonable ceiling so rapid flicks don't over-queue
-      const nextPending = curPending + delta;
       const maxPending = Math.max(viewportH * 2, 40);
       el.pendingScrollDelta = Math.max(-maxPending, Math.min(maxPending, nextPending));
       scrollMutated(el);
