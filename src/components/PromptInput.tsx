@@ -23,7 +23,7 @@ import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
-import { isHiddenCommandName, parseCommandName } from '../commands.js'
+import { commandAtCaret, isHiddenCommandName, parseCommandName, type CommandCompletion } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
@@ -555,7 +555,8 @@ export function PromptInput({
   // snapshot's cherry-pick resurrected the old formula.)
   const helpViewportHeight = Math.max(3, Math.min(terminalRows - 7, 15))
 
-  const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
+  const commandAt = commandAtCaret(value, cursor)
+  const suggestions = commandAt ? channel.commandCompletions(commandAt.query) : []
   const overlayOpen =
     suggestions.length > 0 &&
     !expanded &&
@@ -726,6 +727,18 @@ export function PromptInput({
     setFileSelected(0)
   }
 
+  const acceptCommand = (command: CommandCompletion, executeIfRoot = false) => {
+    if (!commandAt) return
+    if (commandAt.start === 0 && executeIfRoot) {
+      tryRunCommand(command.commandLine)
+      return
+    }
+    updateFoldBlock(null)
+    const next = value.slice(0, commandAt.start) + command.replacement + value.slice(commandAt.end)
+    setInput(next, commandAt.start + command.replacement.length)
+    setSelectedCommand(0)
+  }
+
   const submitText = (text: string, notice?: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -872,7 +885,7 @@ export function PromptInput({
     if (overlayOpen) {
       const command = suggestions[selectedCommand]
       if (command) {
-        tryRunCommand(command.commandLine)
+        acceptCommand(command, true)
         return
       }
     }
@@ -1303,8 +1316,7 @@ export function PromptInput({
     if (key.tab && overlayOpen) {
       const command = suggestions[selectedCommand]
       if (command) {
-        updateFoldBlock(null)
-        setInput(command.replacement)
+        acceptCommand(command, false)
       }
       return
     }
@@ -2670,12 +2682,12 @@ export function PromptInput({
             commands={suggestions}
             selectedIndex={selectedCommand}
             columns={columns}
-            query={value}
+            query={commandAt?.query ?? value}
             accent={promptAccent}
-            // 点击行 = 运行该命令（与 Enter 同路径）
+            // 点击行 = 运行/接受该命令
             onPick={(index) => {
               const command = suggestions[index]
-              if (command) tryRunCommand(command.commandLine)
+              if (command) acceptCommand(command, true)
             }}
             // 滚轮 = 移动选中行（与 ↑/↓ 同路径，窗口跟随）
             onWheelStep={(step) => {
