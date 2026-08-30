@@ -165,9 +165,8 @@ const CARD_BORDER: keyof Theme = 'promptBorder'
 /**
  * 区块卡片的顶边：`╭─ 标题 (副标题) ────── [徽章] ╮`。
  *
- * 标题用区块主题色加粗、徽章保留各自的语义色（未保存/重启/失败），其余
- * 边框线用卡片边框色。宽度按 stringWidth 精确计算（CJK 标题占 2 格），
- * 极窄终端依次退化：先丢副标题、再丢徽章、最后截断标题。
+ * 标题与命令菜单统一：用 `─ 标题 `，副标题用 dimColor，徽章保留各自的
+ * 语义色（未保存/重启/失败），其余边框线用卡片边框色。
  */
 function CardTop({
   title,
@@ -229,9 +228,9 @@ function CardBottom({ columns, color = CARD_BORDER }: { columns: number; color?:
 }
 
 /**
- * 卡片内一行：`│` 左右边框 + 内容区。聚焦行的高亮背景涂在内容区上
- * （padding 也在背景内），边框线本身不吃高亮——高亮条正好嵌在两道
- * 竖线之间。行内容恒 1 行，与窗口化滚动逐行兼容（SuggestionCard 同族）。
+ * 卡片内一行：`│` 左右边框 + 内容区。与 SuggestionCard 统一：聚焦行
+ * 使用 userMessageBackgroundHover / selectionBg，普通行使用 pane 背景，
+ * 边框线使用卡片边框色。
  */
 function CardRow({
   children,
@@ -250,7 +249,7 @@ function CardRow({
         flexGrow={1}
         minWidth={0}
         paddingX={1}
-        backgroundColor={highlight === true ? 'selectionBg' : undefined}
+        backgroundColor={highlight === true ? 'userMessageBackgroundHover' : 'pane'}
       >
         {children}
       </Box>
@@ -623,7 +622,7 @@ export function Settings({
           title={pick(activeGroupSpec.title, activeGroupSpec.descriptions)}
           subtitle={pick(activeSection.title, activeSection.descriptions)}
           badges={sectionBadges(activeSection)}
-          columns={columns}
+          columns={columns - 2}
         />
       ),
     })
@@ -631,7 +630,7 @@ export function Settings({
     if (groupFields.length === 0) {
       entries.push({ key: 'group:empty', lines: 1, node: <CardRow><Text dimColor>{t('settings-group-empty')}</Text></CardRow> })
     }
-    entries.push({ key: 'card:group:bottom', lines: 1, node: <CardBottom columns={columns} /> })
+    entries.push({ key: 'card:group:bottom', lines: 1, node: <CardBottom columns={columns - 2} /> })
   } else {
     sections.forEach((section, sectionIndex) => {
       if (sectionIndex > 0) entries.push({ key: `gap:${section.ns}`, lines: 1, node: <Text> </Text> })
@@ -643,7 +642,7 @@ export function Settings({
             title={pick(section.title, section.descriptions)}
             subtitle={section.ns}
             badges={sectionBadges(section)}
-            columns={columns}
+            columns={columns - 2}
           />
         ),
       })
@@ -682,7 +681,7 @@ export function Settings({
           ),
         })
       }
-      entries.push({ key: `card:${section.ns}:bottom`, lines: 1, node: <CardBottom columns={columns} /> })
+      entries.push({ key: `card:${section.ns}:bottom`, lines: 1, node: <CardBottom columns={columns - 2} /> })
     })
 
     // Namespaces without a plugin-declared section are deliberately NOT
@@ -707,10 +706,9 @@ export function Settings({
     }
     totalLines += entry.lines
   }
-  // Chrome: title row, footer rule, notice slot, help row. The notice slot is
-  // permanent (blank while quiet) so a save/discard toast never shifts the
-  // list above it.
-  const viewport = Math.max(1, rows - 4)
+  // Chrome: margin-top (1), title row, footer rule, notice slot, help row.
+  // The notice slot is permanent (blank while quiet) so a save/discard toast never shifts the list above it.
+  const viewport = Math.max(1, rows - 5)
   React.useEffect(() => {
     setWindowStart(start => {
       if (focusedOffset < start) return focusedOffset
@@ -758,14 +756,14 @@ export function Settings({
   // (Auto-save means there is no unsaved-draft count to surface here.)
 
   return (
-    <Box flexDirection="column" width={columns} height={rows}>
-      <Box>
-        <Text bold>{t('settings-title')}</Text>
+    <Box flexDirection="column" width={columns} height={rows} marginTop={1} paddingX={1}>
+      <Box marginBottom={1}>
+        <Text bold color="permission">{t('settings-title')}</Text>
         {inGroup && (
           <>
             <Text dimColor>{' › '}{pick(activeSection.title, activeSection.descriptions)}</Text>
             <Text dimColor>{' › '}</Text>
-            <Text bold>{pick(activeGroupSpec.title, activeGroupSpec.descriptions)}</Text>
+            <Text bold color="permission">{pick(activeGroupSpec.title, activeGroupSpec.descriptions)}</Text>
           </>
         )}
         <Box flexGrow={1} />

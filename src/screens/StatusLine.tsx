@@ -425,7 +425,7 @@ export function StatusLine({
     activity.phase !== 'idle'
   const showTrajectory = statusBar.trajectory && wake !== undefined
 
-  const barWidth = columns - 4
+  const barWidth = columns - 2
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     themeName === 'light'
       ? undefined

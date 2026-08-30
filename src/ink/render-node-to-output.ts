@@ -965,9 +965,18 @@ function renderNodeToOutput(
             (pending < 0 && cMin !== undefined && cur < cMin) ||
             (pending > 0 && cMax !== undefined && cur > cMax)
           const eff = pastClamp ? Math.min(4, innerHeight >> 3) : innerHeight
-          cur += isXtermJsHost()
+          const drain = isXtermJsHost()
             ? drainAdaptive(node, pending, eff)
             : drainProportional(node, pending, eff)
+          if (pending > 0 && cur + drain >= maxScroll) {
+            cur = maxScroll
+            node.pendingScrollDelta = undefined
+          } else if (pending < 0 && cur + drain <= 0) {
+            cur = 0
+            node.pendingScrollDelta = undefined
+          } else {
+            cur += drain
+          }
         } else if (pending === 0) {
           // Opposite scrollBy calls cancelled to zero — clear so we don't
           // schedule an infinite loop of no-op drain frames.
@@ -1396,7 +1405,8 @@ function renderNodeToOutput(
         // interior each render, so child blits from prevScreen would restore
         // stale cells (wrong bg if it changed) on top of the fresh fill.
         const ownBackgroundColor = node.style.backgroundColor
-        if (ownBackgroundColor || node.style.opaque) {
+        const effectiveFillColor = ownBackgroundColor ?? (node.style.opaque ? inheritedBackgroundColor : undefined)
+        if (effectiveFillColor !== undefined) {
           const borderLeft = yogaNode.getComputedBorder(LayoutEdge.Left)
           const borderRight = yogaNode.getComputedBorder(LayoutEdge.Right)
           const borderTop = yogaNode.getComputedBorder(LayoutEdge.Top)
@@ -1404,7 +1414,7 @@ function renderNodeToOutput(
           const innerWidth = Math.floor(width) - borderLeft - borderRight
           const innerHeight = Math.floor(height) - borderTop - borderBottom
           if (innerWidth > 0 && innerHeight > 0) {
-            const fillLine = backgroundFill(innerWidth, ownBackgroundColor)
+            const fillLine = backgroundFill(innerWidth, effectiveFillColor)
             const fill = Array(innerHeight).fill(fillLine).join('\n')
             output.write(x + borderLeft, y + borderTop, fill)
           }

@@ -184,10 +184,25 @@ function ScrollBox({
       el.stickyScroll = false;
       // Wheel input cancels any in-flight anchor seek — user override.
       el.scrollAnchor = undefined;
-      // Accumulate in pendingScrollDelta; renderer drains it at a capped
-      // rate so fast flicks show intermediate frames. Pure accumulator:
-      // scroll-up followed by scroll-down naturally cancels.
-      el.pendingScrollDelta = (el.pendingScrollDelta ?? 0) + Math.floor(dy);
+      const viewportH = el.scrollViewportHeight ?? 0;
+      const maxScroll = Math.max(0, (el.scrollHeight ?? 0) - viewportH);
+      const curTop = el.scrollTop ?? 0;
+      const curPending = el.pendingScrollDelta ?? 0;
+      const delta = Math.floor(dy);
+
+      // Clamp downward scroll when already at or past the bottom and already draining downwards
+      if (delta > 0 && curTop >= maxScroll && curPending >= 0) {
+        return;
+      }
+      // Clamp upward scroll when already at top and already draining upwards
+      if (delta < 0 && curTop <= 0 && curPending <= 0) {
+        return;
+      }
+
+      // Cap accumulated pending delta to a reasonable ceiling so rapid flicks don't over-queue
+      const nextPending = curPending + delta;
+      const maxPending = Math.max(viewportH * 2, 40);
+      el.pendingScrollDelta = Math.max(-maxPending, Math.min(maxPending, nextPending));
       scrollMutated(el);
     },
     scrollToBottom() {

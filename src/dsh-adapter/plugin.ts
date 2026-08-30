@@ -1234,10 +1234,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         },
         {
           path: ['whale'],
-          label: 'Whale art',
-          descriptions: { zh: '鲸鱼娘' },
-          hint: 'Show the pixel whale in the header splash.',
-          hintDescriptions: { zh: '开屏头部显示像素鲸鱼娘。' },
+          label: 'Splash mascot art',
+          descriptions: { zh: '启动画吉祥物' },
+          hint: 'Show the pixel mascot art in the header splash.',
+          hintDescriptions: { zh: '在开屏启动头部显示像素吉祥物图案。' },
           kind: 'boolean',
         },
         {

@@ -597,7 +597,7 @@ export function Chat({
   /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
   const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
   /** Built-in 50/50 Canvas Browser Split Mode (toggled with Ctrl+B / Alt+C or /canvas). */
-  const [canvasSplitOpen, setCanvasSplitOpen] = React.useState(true)
+  const [canvasSplitOpen, setCanvasSplitOpen] = React.useState(false)
   /**
    * The context panel changes the height of the main-screen transcript by a
    * large amount. In inline mode that invalidates the renderer's previous

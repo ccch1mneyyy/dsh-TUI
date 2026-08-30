@@ -183,103 +183,103 @@ const rgb = (hex: string): string => {
  * the palette reads calm rather than cyber-hard on a dark terminal.
  */
 const darkTheme: Theme = {
-  autoAccept: rgb('#B392DF'), // Soft lavender
-  bashBorder: rgb('#E87995'), // Mist rose
-  claude: rgb('#7DA1DE'), // Accent Soft — mist brand blue
-  toolNameMutate: rgb('#E5A96E'), // Warm amber — Edit/Write
-  toolNameExec: rgb('#62C8D4'), // Clean cyan — Bash/exec tools
-  claudeShimmer: rgb('#ABC2EC'), // Border Blue for shimmer effect
-  claudeBlue_FOR_SYSTEM_SPINNER: rgb('#7DA1DE'),
-  claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#ABC2EC'),
-  permission: rgb('#ABC2EC'), // Pane/dialog accent
-  permissionShimmer: rgb('#C9D7F2'),
-  planMode: rgb('#85C99E'), // Muted emerald green
-  ide: rgb('#5E88CC'), // Accent Blue
-  promptBorder: rgb('#5E88CC'), // Accent Blue — mist signature (tick/chip/border)
-  promptBorderShimmer: rgb('#7DA1DE'),
-  text: rgb('#ECEFF4'), // Crisp editor off-white (Nord-inspired)
-  inverseText: rgb('#22262E'), // Deep obsidian charcoal
-  inactive: rgb('#8D95A6'), // Mist gray-blue — feeds dimColor
-  inactiveShimmer: rgb('#AAB2C2'),
-  subtle: rgb('#5E6673'), // Dimmer blue-gray
-  suggestion: rgb('#ABC2EC'), // Focus/selection
-  remember: rgb('#ABC2EC'),
-  background: rgb('#5E88CC'), // Badge fill
-  pane: rgb('#161B24'), // Opaque mist-navy chrome
-  success: rgb('#85C99E'), // Emerald green
-  error: rgb('#E87995'), // Soft coral rose
-  warning: rgb('#E5A96E'), // Warm amber
-  merged: rgb('#B392DF'), // Soft lavender (matches autoAccept)
-  warningShimmer: rgb('#F0C392'),
-  diffAdded: rgb('#1B2E24'),
-  diffRemoved: rgb('#381E24'),
-  diffAddedDimmed: rgb('#16241D'),
-  diffRemovedDimmed: rgb('#2B181C'),
-  diffAddedWord: rgb('#62B883'),
-  diffRemovedWord: rgb('#E06C75'),
-  toolCardBackground: rgb('#242B3A'), // Sleek deep card surface
-  toolCardBackgroundDim: rgb('#1C2330'), // Substrate card fill
-  toolDotExec: rgb('#62C8D4'), // Terminal cyan — bash/pwsh
-  toolDotRead: rgb('#6BA6F7'), // Read blue — read/grep/glob
-  toolDotWrite: rgb('#B392DF'), // Lavender — edit/write
-  toolDotWeb: rgb('#7DA1DE'), // Brand blue — web search/fetch
-  toolDotTask: rgb('#E5A96E'), // Amber — subagent/jobs
-  syntaxKeyword: rgb('#6BA6F7'), // Crisp editor keyword blue
-  syntaxString: rgb('#85C99E'), // Fresh emerald string
-  syntaxComment: rgb('#637287'), // Neutral slate comment
-  syntaxNumber: rgb('#E5A96E'), // Warm amber numeric
-  syntaxFunction: rgb('#62C8D4'), // Muted cyan function
-  syntaxType: rgb('#B392DF'), // Softened violet type
-  syntaxVariable: rgb('#D8DEE9'), // Near-text variable
-  syntaxOperator: rgb('#8FA1B8'), // Slate operator
-  syntaxPunctuation: rgb('#708096'), // Dim punctuation
-  syntaxConstant: rgb('#E87995'), // Soft coral constant
-  red_FOR_SUBAGENTS_ONLY: rgb('#E06C75'),
-  blue_FOR_SUBAGENTS_ONLY: rgb('#7DA1DE'),
-  green_FOR_SUBAGENTS_ONLY: rgb('#85C99E'),
-  yellow_FOR_SUBAGENTS_ONLY: rgb('#E5A96E'),
-  purple_FOR_SUBAGENTS_ONLY: rgb('#B392DF'),
-  orange_FOR_SUBAGENTS_ONLY: rgb('#E5925A'),
-  pink_FOR_SUBAGENTS_ONLY: rgb('#E87995'),
-  cyan_FOR_SUBAGENTS_ONLY: rgb('#62C8D4'),
-  professionalBlue: rgb('#7DA1DE'),
-  chromeYellow: rgb('#E5A96E'),
-  clawd_body: rgb('#E5925A'), // Mascot orange
+  autoAccept: rgb('#C084FC'), // Modern vibrant lavender / violet
+  bashBorder: rgb('#F43F5E'), // Electric rose
+  claude: rgb('#60A5FA'), // Vibrant modern sapphire blue (Tailwind 400 tone)
+  toolNameMutate: rgb('#FBBF24'), // Crisp warm amber / gold
+  toolNameExec: rgb('#22D3EE'), // Bright modern cyan
+  claudeShimmer: rgb('#93C5FD'), // Vibrant blue shimmer
+  claudeBlue_FOR_SYSTEM_SPINNER: rgb('#60A5FA'),
+  claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#93C5FD'),
+  permission: rgb('#93C5FD'), // Vibrant pane/dialog accent
+  permissionShimmer: rgb('#BFDBFE'),
+  planMode: rgb('#34D399'), // Crisp emerald green
+  ide: rgb('#3B82F6'), // Modern vivid blue
+  promptBorder: rgb('#3B82F6'), // Crisp primary blue border
+  promptBorderShimmer: rgb('#60A5FA'),
+  text: rgb('#F8FAFC'), // High-clarity crisp white (Slate 50)
+  inverseText: rgb('#0F172A'), // Slate 900
+  inactive: rgb('#94A3B8'), // Slate 400
+  inactiveShimmer: rgb('#CBD5E1'), // Slate 300
+  subtle: rgb('#64748B'), // Slate 500
+  suggestion: rgb('#93C5FD'), // Radiant focus/selection text
+  remember: rgb('#93C5FD'),
+  background: rgb('#3B82F6'), // Vivid blue badge fill
+  pane: rgb('#0F172A'), // Ultra sleek, rich slate-navy pane
+  success: rgb('#34D399'), // Radiant emerald
+  error: rgb('#FB7185'), // Vibrant coral-rose
+  warning: rgb('#FBBF24'), // Crisp amber
+  merged: rgb('#C084FC'), // Vibrant lavender
+  warningShimmer: rgb('#FDE047'),
+  diffAdded: rgb('#064E3B'),
+  diffRemoved: rgb('#881337'),
+  diffAddedDimmed: rgb('#022C22'),
+  diffRemovedDimmed: rgb('#4C0519'),
+  diffAddedWord: rgb('#10B981'),
+  diffRemovedWord: rgb('#F43F5E'),
+  toolCardBackground: rgb('#1E293B'), // Modern slate-800 card surface
+  toolCardBackgroundDim: rgb('#141E30'), // Deep slate substrate
+  toolDotExec: rgb('#22D3EE'), // Neon cyan — bash/pwsh
+  toolDotRead: rgb('#38BDF8'), // Sky blue — read/grep/glob
+  toolDotWrite: rgb('#C084FC'), // Electric purple — edit/write
+  toolDotWeb: rgb('#60A5FA'), // Modern blue — web search/fetch
+  toolDotTask: rgb('#FBBF24'), // Vivid amber — subagent/jobs
+  syntaxKeyword: rgb('#38BDF8'), // Vivid cyan-blue keyword
+  syntaxString: rgb('#34D399'), // Radiant emerald string
+  syntaxComment: rgb('#64748B'), // Clean slate comment
+  syntaxNumber: rgb('#FBBF24'), // Vibrant gold numeric
+  syntaxFunction: rgb('#22D3EE'), // Bright cyan function
+  syntaxType: rgb('#C084FC'), // Vibrant violet type
+  syntaxVariable: rgb('#E2E8F0'), // Crisp variable
+  syntaxOperator: rgb('#94A3B8'), // Clean operator
+  syntaxPunctuation: rgb('#64748B'), // Subtle punctuation
+  syntaxConstant: rgb('#F43F5E'), // Electric rose constant
+  red_FOR_SUBAGENTS_ONLY: rgb('#FB7185'),
+  blue_FOR_SUBAGENTS_ONLY: rgb('#60A5FA'),
+  green_FOR_SUBAGENTS_ONLY: rgb('#34D399'),
+  yellow_FOR_SUBAGENTS_ONLY: rgb('#FBBF24'),
+  purple_FOR_SUBAGENTS_ONLY: rgb('#C084FC'),
+  orange_FOR_SUBAGENTS_ONLY: rgb('#FB923C'),
+  pink_FOR_SUBAGENTS_ONLY: rgb('#F472B6'),
+  cyan_FOR_SUBAGENTS_ONLY: rgb('#22D3EE'),
+  professionalBlue: rgb('#60A5FA'),
+  chromeYellow: rgb('#FBBF24'),
+  clawd_body: rgb('#FB923C'), // Vivid mascot orange
   clawd_background: rgb('#000000'),
   userMessageBackground: '', // user turn: no fill, gold bold text only
-  userMessageBackgroundHover: rgb('#2A4287'), // hover/expand
-  messageActionsBackground: rgb('#222B3D'),
-  selectionBg: rgb('#2D3B55'), // Mist-blue tint on dark
-  bashMessageBackgroundColor: rgb('#1D2433'),
-  memoryBackgroundColor: rgb('#202738'),
-  rate_limit_fill: rgb('#7DA1DE'),
-  rate_limit_empty: rgb('#2B3447'),
-  fastMode: rgb('#E5925A'),
-  fastModeShimmer: rgb('#F0B07F'),
-  briefLabelYou: rgb('#ECEFF4'), // Clean, crisp off-white for user prompts
-  briefLabelClaude: rgb('#7DA1DE'),
-  rainbow_red: rgb('#E06C75'),
-  rainbow_orange: rgb('#E5925A'),
-  rainbow_yellow: rgb('#E5A96E'),
-  rainbow_green: rgb('#85C99E'),
-  rainbow_blue: rgb('#7DA1DE'),
-  rainbow_indigo: rgb('#9687DB'),
-  rainbow_violet: rgb('#B392DF'),
-  rainbow_red_shimmer: rgb('#EE939B'),
-  rainbow_orange_shimmer: rgb('#F0B07F'),
-  rainbow_yellow_shimmer: rgb('#F0C392'),
-  rainbow_green_shimmer: rgb('#A8DBBC'),
-  rainbow_blue_shimmer: rgb('#ABC2EC'),
-  rainbow_indigo_shimmer: rgb('#B5A9EB'),
-  rainbow_violet_shimmer: rgb('#CBB0ED'),
-  subagentBullet: rgb('#E87995'),
-  subagentDescription: rgb('#ECEFF4'),
-  subagentModel: rgb('#8D95A6'),
-  subagentElapsed: rgb('#8D95A6'),
-  subagentToolName: rgb('#7DA1DE'),
-  subagentStatusRunning: rgb('#7DA1DE'),
-  subagentStatusCompleted: rgb('#82B89D'),
-  subagentStatusFailed: rgb('#DA8A93'),
+  userMessageBackgroundHover: rgb('#1E3A8A'), // Rich deep indigo/blue on hover
+  messageActionsBackground: rgb('#1E293B'),
+  selectionBg: rgb('#1E3A8A'), // Vivid deep indigo highlight
+  bashMessageBackgroundColor: rgb('#1E293B'),
+  memoryBackgroundColor: rgb('#1E293B'),
+  rate_limit_fill: rgb('#60A5FA'),
+  rate_limit_empty: rgb('#334155'),
+  fastMode: rgb('#FB923C'),
+  fastModeShimmer: rgb('#FDBA74'),
+  briefLabelYou: rgb('#F8FAFC'),
+  briefLabelClaude: rgb('#60A5FA'),
+  rainbow_red: rgb('#F87171'),
+  rainbow_orange: rgb('#FB923C'),
+  rainbow_yellow: rgb('#FBBF24'),
+  rainbow_green: rgb('#34D399'),
+  rainbow_blue: rgb('#60A5FA'),
+  rainbow_indigo: rgb('#818CF8'),
+  rainbow_violet: rgb('#C084FC'),
+  rainbow_red_shimmer: rgb('#FCA5A5'),
+  rainbow_orange_shimmer: rgb('#FDBA74'),
+  rainbow_yellow_shimmer: rgb('#FDE047'),
+  rainbow_green_shimmer: rgb('#6EE7B7'),
+  rainbow_blue_shimmer: rgb('#93C5FD'),
+  rainbow_indigo_shimmer: rgb('#A5B4FC'),
+  rainbow_violet_shimmer: rgb('#E9D5FF'),
+  subagentBullet: rgb('#F472B6'),
+  subagentDescription: rgb('#F8FAFC'),
+  subagentModel: rgb('#94A3B8'),
+  subagentElapsed: rgb('#94A3B8'),
+  subagentToolName: rgb('#60A5FA'),
+  subagentStatusRunning: rgb('#60A5FA'),
+  subagentStatusCompleted: rgb('#34D399'),
+  subagentStatusFailed: rgb('#FB7185'),
 }
 
 /**
