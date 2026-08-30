@@ -8,6 +8,7 @@ import { noteFrameCause } from '../geometry-trace.js';
 import { markCommitStart } from '../reconciler.js';
 import type { WheelEvent } from '../events/wheel-event.js';
 import type { Styles } from '../styles.js';
+import { computeWheelDelta } from '../scroll-coordinator.js';
 import Box from './Box.js';
 export type ScrollBoxHandle = {
   scrollTo: (y: number) => void;
@@ -190,38 +191,17 @@ function ScrollBox({
       const curPending = el.pendingScrollDelta ?? 0;
       const delta = Math.floor(dy);
 
-      // Clamp downward scroll when already at or past the bottom and already draining downwards
-      if (delta > 0 && curTop >= maxScroll && curPending >= 0) {
-        if (el.stickyScroll === false) {
+      const res = computeWheelDelta({ curTop, curPending, delta, maxScroll, viewportH });
+      if (res.handled) {
+        if (res.setSticky && el.stickyScroll === false) {
           el.stickyScroll = true;
           scrollMutated(el);
         }
         return;
       }
-      // Clamp upward scroll when already at top and already draining upwards
-      if (delta < 0 && curTop <= 0 && curPending <= 0) {
-        return;
-      }
 
-      // Cap accumulated target position strictly within [0, maxScroll] so wheel bursts never overshoot bounds
-      const targetTop = curTop + curPending + delta;
-      const clampedTarget = Math.max(0, Math.min(maxScroll, targetTop));
-      const nextPending = clampedTarget - curTop;
-
-      if (delta > 0 && (curTop >= maxScroll || nextPending <= 0)) {
-        if (el.stickyScroll === false) {
-          el.stickyScroll = true;
-          scrollMutated(el);
-        }
-        return;
-      }
-      if (delta < 0 && (curTop <= 0 || nextPending >= 0)) {
-        return;
-      }
-
-      el.stickyScroll = clampedTarget >= maxScroll;
-      const maxPending = Math.max(viewportH * 2, 40);
-      el.pendingScrollDelta = Math.max(-maxPending, Math.min(maxPending, nextPending));
+      el.stickyScroll = res.setSticky;
+      el.pendingScrollDelta = res.nextPending;
       scrollMutated(el);
     },
     scrollToBottom() {

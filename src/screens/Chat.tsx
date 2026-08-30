@@ -8,6 +8,7 @@ import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
 import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { shouldShowStickyHeader } from '../ink/scroll-coordinator.js'
 import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
@@ -3146,7 +3147,13 @@ export function Chat({
   const isAtBottom = isSticky || (handle ? handle.getScrollTop() >= Math.max(0, handle.getScrollHeight() - handle.getViewportHeight()) : true)
   const activeTurn = timeline.turns.find(t => t.id === anchorUserRowId)
   const currentScrollTop = handle ? handle.getScrollTop() : 0
-  const showStickyHeader = !isAtBottom && anchorUserText !== null && activeTurn !== undefined && (activeTurn.folded === true || activeTurn.top < currentScrollTop)
+  const showStickyHeader = shouldShowStickyHeader({
+    isAtBottom,
+    hasAnchorText: anchorUserText !== null,
+    activeTurnTop: activeTurn?.top,
+    scrollTop: currentScrollTop,
+    isFolded: activeTurn?.folded,
+  })
 
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%" height="100%" backgroundColor="pane">
