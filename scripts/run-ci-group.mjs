@@ -468,6 +468,9 @@ const GROUPS = {
 // 长问卷列表回归：24 行终端中的 36 个两行 provider 选项必须围绕
 // focusIndex 窗口化，初始和深度导航后焦点 label/单选标记始终可见。
     ["verify-askpanel-long-list", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-long-list.tsx']],
+// 长 plan-review 正文回归（issue #413）：24 行终端里 40 段 plan 不得把
+// Approve/反馈顶出屏外；滚轮必须滚 plan body（直接面板 + 挂进 Chat）。
+    ["verify-plan-review-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-plan-review-scroll.tsx']],
 // 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
 // onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
     ["verify-plugin-scene-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-scene-boundary.tsx']],
