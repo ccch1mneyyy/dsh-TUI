@@ -2,7 +2,7 @@ import React from 'react'
 import Text from '../../ink/components/Text.js'
 import type { Color, Styles } from '../../ink/styles.js'
 import type { DOMElement } from '../../ink/dom.js'
-import { getTheme, type Theme } from '../../theme.js'
+import { getTheme, isPaintedColor, type Theme } from '../../theme.js'
 import { useTheme } from './ThemeProvider.js'
 
 /**
@@ -20,17 +20,16 @@ function resolveColor(
   theme: Theme,
 ): Color | undefined {
   if (!color) return undefined
-  // Check if it's a raw color (starts with rgb(, #, ansi256(, or ansi:)
   if (
     color.startsWith('rgb(') ||
     color.startsWith('#') ||
     color.startsWith('ansi256(') ||
     color.startsWith('ansi:')
   ) {
-    return color as Color
+    return isPaintedColor(color) ? (color as Color) : undefined
   }
-  // It's a theme key - resolve it ('' means "no color" in that theme)
-  return (theme[color as keyof Theme] as Color) || undefined
+  const resolved = (theme[color as keyof Theme] as Color) || undefined
+  return isPaintedColor(resolved) ? resolved : undefined
 }
 
 export type Props = {

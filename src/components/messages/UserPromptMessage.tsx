@@ -10,6 +10,8 @@ type Props = {
   text: string
   /** Adds the top margin between turns (CC: addMargin). */
   addMargin: boolean
+  /** Cockpit frame: dim the pointer, keep the prompt body in brief gold. */
+  cockpit?: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
   onClick?(event: ClickEvent): void
@@ -23,6 +25,7 @@ type Props = {
 export function UserPromptMessage({
   text,
   addMargin,
+  cockpit = false,
   isSelected = false,
   onClick,
 }: Props): React.ReactNode {
@@ -47,16 +50,26 @@ export function UserPromptMessage({
     <Box
       flexDirection="column"
       marginTop={addMargin ? 1 : 0}
+      paddingX={cockpit ? 1 : 0}
       backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       paddingRight={1}
       onClick={onClick}
       {...(tooltipActive ? promptTooltip : {})}
     >
       {lines.map((line, index) => (
-        <Text key={index} color="briefLabelYou" bold wrap="truncate-end">
-          {index === 0 ? `${POINTER} ` : continuationIndent}
-          {line}
-        </Text>
+        cockpit ? (
+          <Box key={index} flexDirection="row">
+            <Text color="inactive" dimColor>
+              {index === 0 ? `${POINTER} ` : continuationIndent}
+            </Text>
+            <Text color="briefLabelYou" wrap="truncate-end">{line}</Text>
+          </Box>
+        ) : (
+          <Text key={index} color="briefLabelYou" bold wrap="truncate-end">
+            {index === 0 ? `${POINTER} ` : continuationIndent}
+            {line}
+          </Text>
+        )
       ))}
     </Box>
   )

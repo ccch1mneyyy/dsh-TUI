@@ -258,6 +258,16 @@ check('getTheme: registry resolves user themes, built-ins untouched', () => {
   assert.equal(getTheme('nope').claude, getTheme('dark').claude) // unknown -> dark
 })
 
+check('dark identity: mist-navy pane, mist-blue claude/promptBorder, not aurora teal', () => {
+  const dark = getTheme('dark')
+  assert.equal(dark.pane, 'rgb(22,27,36)') // #161B24
+  assert.equal(dark.claude, 'rgb(125,161,222)') // #7DA1DE
+  assert.equal(dark.promptBorder, 'rgb(94,136,204)') // #5E88CC
+  assert.equal(dark.promptBorderShimmer, 'rgb(125,161,222)')
+  assert.notEqual(dark.pane, 'rgb(11,23,22)') // aurora #0B1716
+  assert.notEqual(dark.claude, 'rgb(94,234,212)') // aurora #5EEAD4
+})
+
 // --- the auto pseudo-theme -------------------------------------------------
 check('auto: available, resolves to the detected base, shadows user themes', () => {
   assert.ok(isThemeAvailable('auto'))

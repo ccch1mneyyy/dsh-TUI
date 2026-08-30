@@ -28,7 +28,7 @@ import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../s
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { mergeStatusBar, normalizeScrollGutter, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -50,7 +50,7 @@ import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { withHostRootCapability } from './host-access.js'
-import { render, ThemeProvider, AlternateScreen } from '../ui.js'
+import { render, ThemeProvider, AlternateScreen, Box } from '../ui.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
@@ -607,26 +607,30 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // decisive while the user layer is unset.
         expandEditor: Schema.boolean(),
         cockpit: Schema.boolean(),
+        // No schema defaults (same rule as foldTerminalCommand / cockpit):
+        // a filled DEFAULT_STATUS_BAR here comes back from scope.get() and
+        // shadows an explicit cordis.yml / profile `statusBar` while the
+        // settings user layer is unset.
         statusBar: Schema.object({
-          compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
-          model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
-          thinking: Schema.boolean().default(DEFAULT_STATUS_BAR.thinking),
-          cwd: Schema.boolean().default(DEFAULT_STATUS_BAR.cwd),
-          contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
-          cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
-          tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
-          cost: Schema.boolean().default(DEFAULT_STATUS_BAR.cost),
-          tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
-          gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
-          sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
-          sessionId: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionId),
-          goal: Schema.boolean().default(DEFAULT_STATUS_BAR.goal),
-          mode: Schema.boolean().default(DEFAULT_STATUS_BAR.mode),
-          contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
-          activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
-          trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
-          shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
-        }).default({ ...DEFAULT_STATUS_BAR }),
+          compact: Schema.boolean(),
+          model: Schema.boolean(),
+          thinking: Schema.boolean(),
+          cwd: Schema.boolean(),
+          contextUsage: Schema.boolean(),
+          cache: Schema.boolean(),
+          tokens: Schema.boolean(),
+          cost: Schema.boolean(),
+          tps: Schema.boolean(),
+          gitBranch: Schema.boolean(),
+          sessionTitle: Schema.boolean(),
+          sessionId: Schema.boolean(),
+          goal: Schema.boolean(),
+          mode: Schema.boolean(),
+          contextBar: Schema.boolean(),
+          activity: Schema.boolean(),
+          trajectory: Schema.boolean(),
+          shortcutHint: Schema.boolean(),
+        }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
         whale: Schema.boolean().default(true),
         // Minimal mode: strips the header splash, emoji glyphs, and
@@ -702,7 +706,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setCockpit(value.cockpit ?? config.cockpit === true)
-      channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
+      channel.setStatusBar(mergeStatusBar(config.statusBar, value.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
     // cordis.yml's `shortcuts` (same precedence as every other field);
@@ -859,6 +863,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       },
     }
   })
+  const formatStatusBarFlag = (key: keyof StatusBarConfig) => (value: unknown): string =>
+    String(typeof value === 'boolean' ? value : mergeStatusBar(config.statusBar, undefined)[key])
   // Prefer the composition's sections service; fall back to the in-package
   // local host. Real compositions have been observed disposing the whole
   // dsh-tui-* host-seam insert list right after load (issue #557), which
@@ -1028,6 +1034,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '终端空间允许时优先使用紧凑状态栏布局。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('compact'),
         },
         {
           path: ['statusBar', 'model'],
@@ -1037,6 +1044,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '在状态栏显示当前模型标识。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('model'),
         },
         {
           path: ['statusBar', 'thinking'],
@@ -1046,6 +1054,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示当前推理强度或思考模式。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('thinking'),
         },
         {
           path: ['statusBar', 'cwd'],
@@ -1055,6 +1064,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示当前会话的工作目录。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('cwd'),
         },
         {
           path: ['statusBar', 'contextUsage'],
@@ -1064,6 +1074,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示当前上下文窗口占用情况。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('contextUsage'),
         },
         {
           path: ['statusBar', 'cache'],
@@ -1073,6 +1084,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示提示词缓存命中信息。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('cache'),
         },
         {
           path: ['statusBar', 'tokens'],
@@ -1082,6 +1094,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示累计输入与输出 Token。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('tokens'),
         },
         {
           path: ['statusBar', 'cost'],
@@ -1091,6 +1104,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '在 Token 总量旁显示本会话花费估算（≈¥）。仅在使用 DeepSeek 官方 API key 且模型有已知单价时显示；按官方每百万 token 单价（高峰/空闲时段）估算，非账单。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('cost'),
         },
         {
           path: ['statusBar', 'tps'],
@@ -1100,6 +1114,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示实时及近期每秒 Token 指标。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('tps'),
         },
         {
           path: ['statusBar', 'gitBranch'],
@@ -1109,6 +1124,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '可用时显示当前 Git 分支。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('gitBranch'),
         },
         {
           path: ['statusBar', 'sessionTitle'],
@@ -1118,6 +1134,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示当前会话标题。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('sessionTitle'),
         },
         {
           path: ['statusBar', 'sessionId'],
@@ -1127,6 +1144,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示短会话 ID（# + 前 8 位）——与日志文件名对应，方便 --resume 定位。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('sessionId'),
         },
         {
           path: ['statusBar', 'goal'],
@@ -1136,6 +1154,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '存在 Goal 时，在底部状态栏显示紧凑的 Goal 状态（阶段符号与轮次）。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('goal'),
         },
         {
           path: ['statusBar', 'mode'],
@@ -1145,6 +1164,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示当前启用的非默认会话模式。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('mode'),
         },
         {
           path: ['statusBar', 'contextBar'],
@@ -1154,6 +1174,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '在底部单独一行显示分段上下文进度条。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('contextBar'),
         },
         {
           path: ['statusBar', 'activity'],
@@ -1163,6 +1184,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '显示空闲时的工作活动摘要。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('activity'),
         },
         {
           path: ['statusBar', 'trajectory'],
@@ -1172,6 +1194,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '在状态栏边缘显示动态迷你轨迹条。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('trajectory'),
         },
         {
           path: ['statusBar', 'shortcutHint'],
@@ -1181,6 +1204,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           hintDescriptions: { zh: '仅控制空闲时的 `? for shortcuts` 提示；按 ? 打开快捷键以及 Esc 快捷提示均不受影响。' },
           group: 'status-bar',
           kind: 'boolean',
+          format: formatStatusBarFlag('shortcutHint'),
         },
         {
           path: ['whale'],
@@ -1469,9 +1493,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // tracking), which turns on in-app text selection (copy-on-select via
   // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
   // mode leaves the mouse to the terminal emulator's native selection.
+  const chrome = React.createElement(Box, {
+    flexDirection: 'column',
+    flexGrow: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: 'pane',
+  }, chat)
   const tree = React.createElement(ThemeProvider, {
     themeHost,
-    children: bootedFullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
+    children: bootedFullscreen ? React.createElement(AlternateScreen, null, chrome) : chrome,
   })
   instance = await render(tree, { exitOnCtrlC: false })
   const isRecompose = lastBootedFullscreen !== undefined

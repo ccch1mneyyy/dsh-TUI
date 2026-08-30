@@ -25,7 +25,7 @@ import type { ToolBackground } from '../tuiDisplayPrefs.js'
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
  * on a grey bubble with a `❯` pointer, assistant text with a `●` bullet and
- * markdown, thinking folded to `⚓ Thinking (ctrl+o to expand)`, tool calls as
+ * markdown, thinking folded to `› Thinking (ctrl+o to expand)`, tool calls as
  * status-dot cards. `expanded` (Ctrl+O) shows full reasoning + full tool
  * args/results; `expandedRows` (message-selection mode, Enter) expands single
  * rows; `selectedId` highlights the selected row.
@@ -167,6 +167,7 @@ export function MessageList({
   toolBackground = 'none',
   foldTerminalCommand = false,
   activityFrames,
+  cockpit = false,
   showAll,
   onToggleAll,
   onLoadOlder,
@@ -203,6 +204,8 @@ export function MessageList({
   /** Working-activity preset name from the channel; drives the subagent
    *  card's running glyph so both indicators follow one setting. */
   activityFrames?: string
+  /** Cockpit transcript frame (identity strip is on; messages get a left rule). */
+  cockpit?: boolean
   showAll: boolean
   onToggleAll: () => void
   /** Restore folded-away older rows from the session log (CC-style "load
@@ -1017,6 +1020,7 @@ export function MessageList({
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
               activityFrames={activityFrames}
+              cockpit={cockpit}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
               toolName={tool?.name}
@@ -1076,6 +1080,8 @@ type MemoRowProps = {
   foldTerminalCommand: boolean
   /** Working-activity preset name; drives the subagent card's running glyph. */
   activityFrames: string | undefined
+  /** Cockpit transcript frame. */
+  cockpit: boolean
   background: 'messageActionsBackground' | undefined
   // ToolRow, flattened: the channel writes status/result fields in place,
   // so passing the object itself would make mutations invisible to memo.
@@ -1143,6 +1149,7 @@ function TranscriptRow({
   toolBackground,
   foldTerminalCommand,
   activityFrames,
+  cockpit,
   background,
   toolCallId,
   toolName,
@@ -1199,6 +1206,7 @@ function TranscriptRow({
           <UserPromptMessage
             text={text}
             addMargin={addMargin}
+            cockpit={cockpit}
             isSelected={isSelected}
           />
         </Box>
@@ -1209,12 +1217,13 @@ function TranscriptRow({
           alignItems="flex-start"
           flexDirection="row"
           marginTop={addMargin ? 1 : 0}
+          paddingX={cockpit ? 1 : 0}
           width="100%"
           backgroundColor={background}
           ref={ref}
         >
           <Box minWidth={2}>
-            <Text color="text">●</Text>
+            <Text color={cockpit ? 'promptBorder' : 'text'}>{cockpit ? '│' : '●'}</Text>
           </Box>
           <Box flexDirection="column">
             {/* The ⏵ self-narration line (working-activity narrate contract)
@@ -1243,6 +1252,7 @@ function TranscriptRow({
           <AssistantTextMessage
             text={stripNarration(text)}
             addMargin={addMargin}
+            cockpit={cockpit}
             isSelected={isSelected}
             isExpanded={isExpanded}
           />
@@ -1254,6 +1264,7 @@ function TranscriptRow({
           <AssistantThinkingMessage
             thinking={text}
             addMargin={addMargin}
+            cockpit={cockpit}
             streaming={streaming}
             preview={
               streaming &&
@@ -1317,8 +1328,8 @@ function TranscriptRow({
     }
     case 'notice':
       return (
-        <Box marginTop={1} ref={ref}>
-          <Divider title={` ${text} `} />
+        <Box marginTop={1} paddingX={1} ref={ref}>
+          <Text color="subtle">{text}</Text>
         </Box>
       )
     case 'interrupt':
@@ -1403,6 +1414,7 @@ export function LogoHeader({
   cwd,
   whale = true,
   skipIntro = false,
+  hideRoute = false,
 }: {
   model: string
   effort?: string | undefined
@@ -1411,13 +1423,22 @@ export function LogoHeader({
   /** Jump straight to the settled header (long-session resume: the ~3.4s
    *  opening animation competes with transcript mount batches). */
   skipIntro?: boolean
+  /** Drop model/effort when the cockpit HUD already shows the route. */
+  hideRoute?: boolean
 }): React.ReactNode {
   // Minimal mode drops the whole splash (whale art AND wordmark) — only the
   // transcript and a bare status bar remain.
   if (isMinimalMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} skipIntro={skipIntro} />
+      <LogoV2
+        model={model}
+        effort={effort}
+        cwd={cwd}
+        whale={whale}
+        skipIntro={skipIntro}
+        hideRoute={hideRoute}
+      />
     </Box>
   )
 }

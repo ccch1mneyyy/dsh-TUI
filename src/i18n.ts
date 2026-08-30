@@ -461,7 +461,7 @@ const dict = {
   },
 
   // ── components/ActivityLine.tsx ──────────────────────────────────────
-  'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
+  'activity-ctx-warn': { zh: '上下文', en: 'ctx ' },
 
   // ── components/ActivityPicker.tsx ─────────────────────────────────────
   'activity-random-each-preset': { zh: '每次随机一个预设', en: 'random preset each time' },
@@ -1056,13 +1056,13 @@ const dict = {
   'cockpit-label-prov': { zh: 'prov', en: 'prov' },
   'cockpit-label-model': { zh: 'model', en: 'model' },
   'cockpit-label-eff': { zh: 'eff', en: 'eff' },
-  'cockpit-label-io': { zh: 'io', en: 'io' },
   'cockpit-label-mode': { zh: 'mode', en: 'mode' },
   'cockpit-io-vision': { zh: 'vision', en: 'vision' },
   'cockpit-io-text': { zh: 'text', en: 'text' },
 
   // ── screens/StatusLine.tsx ───────────────────────────────────────────
   'status-cache-label': { zh: '缓存 ', en: 'cache ' },
+  'status-tps-idle': { zh: '— tps', en: '— tps' },
 
   // ── screens/TrajectoryScene.tsx（issue #80 演进：全屏轨迹场景）──────────
   'traj-title': { zh: '轨迹', en: 'Trajectory' },

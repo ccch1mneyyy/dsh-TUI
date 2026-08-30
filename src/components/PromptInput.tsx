@@ -530,6 +530,7 @@ export function PromptInput({
     }
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
+  const composerCols = Math.max(1, columns - 2)
   React.useEffect(() => {
     // PromptInput self-detects double-clicks because its drag target resets
     // App's global chain. Geometry changed across resize, so the same screen
@@ -1928,7 +1929,7 @@ export function PromptInput({
   const editorGutterCols = editorNoWidth + 3
   const inputWidth = expanded
     ? Math.max(1, columns - 4 - editorGutterCols)
-    : Math.max(1, columns - 3 - vimBadgeCols - (expandEnabled ? 2 : 0))
+    : Math.max(1, composerCols - 5 - vimBadgeCols - (expandEnabled ? 2 : 0))
   // 展开态无视折叠块：全屏编辑就是为了看全文（foldBlock 状态保留，
   // 收起后折叠显示恢复）。
   const block = expanded ? null : foldBlock
@@ -2741,15 +2742,16 @@ export function PromptInput({
           overlay can play on them (sweep → tier name → fade; see
           EffortInputBorder). Idle colour keeps the plan-mode accent the old
           Box border carried. */}
+      <Box paddingX={1}>
       <EffortInputBorder
         effort={channel.reasoningEffort}
         levels={channel.effortLevels}
-        columns={columns}
+        columns={composerCols}
         onLight={isLightThemeActive(themeName)}
         idleColor={promptAccent}
         topRightLabel={topRightLabel}
       >
-        <Box flexDirection="row" alignItems="flex-start" width="100%">
+        <Box flexDirection="row" alignItems="flex-start" width="100%" paddingX={1}>
           <EffortChargeGlyph
             effort={channel.reasoningEffort}
             levels={channel.effortLevels}
@@ -2817,6 +2819,7 @@ export function PromptInput({
           )}
         </Box>
       </EffortInputBorder>
+      </Box>
     </Box>
   )
 }

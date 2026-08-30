@@ -26,11 +26,13 @@ type Props = {
   thinking: string
   /** Adds the top margin between messages (CC: addMargin). */
   addMargin: boolean
+  /** Cockpit frame: quieter settled header (no italic shout). */
+  cockpit?: boolean
   /** True when Ctrl+O transcript/verbose mode is on — show the full text. */
   verbose: boolean
-  /** True while the reasoning block is still streaming — the leading anchor
+  /** True while the reasoning block is still streaming — the leading mark
    *  becomes a rotating braille spinner (Kimi Code style) and settles back
-   *  to the anchor once the step ends. */
+   *  to the chevron once the step ends. */
   streaming?: boolean
   /** Streaming compact mode (thinkingFold=preview): a 3-row live ticker of
    *  the model's latest reasoning lines instead of the full block —
@@ -44,17 +46,18 @@ type Props = {
 }
 
 /**
- * Thinking block: folded `⚓ Thinking (ctrl+o to expand)`, expanded shows the
- * full reasoning text indented under `⚓ Thinking…`. While the reasoning
+ * Thinking block: folded `› Thinking (ctrl+o to expand)`, expanded shows the
+ * full reasoning text indented under `› Thinking…`. While the reasoning
  * streams the leading mark is a rotating braille spinner (`⠋⠙⠹…`, Kimi Code
- * style), settling back to the static anchor (`⚓`) once the turn ends. When
+ * style), settling back to the static chevron (`›`) once the turn ends. When
  * the channel records the reasoning duration, the label carries it
- * (`⚓ Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
+ * (`› Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
  * the transcript.
  */
 export function AssistantThinkingMessage({
   thinking,
   addMargin,
+  cockpit = false,
   verbose,
   streaming = false,
   preview = false,
@@ -81,8 +84,10 @@ export function AssistantThinkingMessage({
   // Kimi Code style blue pulse: the streaming glyph breathes along the
   // header's brand→ice ladder, one sine period per ~7 frames (≈0.56s) —
   // lively without strobing. Minimal mode drops the color (plain glyph);
-  // settled always keeps the plain dim anchor.
-  const label = `${t('thinking-label')}${duration}${streaming ? '…' : ` ${t('hint-expand-ctrl-o')}`}`
+  // settled always keeps the plain dim chevron.
+  const label = `${t('thinking-label')}${duration}${
+    streaming ? '…' : cockpit ? '' : ` ${t('hint-expand-ctrl-o')}`
+  }`
   const minimal = isMinimalMode()
   const pulse = (Math.sin(frame * 0.9) + 1) / 2
   const pulseColor = interpolateColor(BRAND, ICE, pulse)
@@ -98,10 +103,10 @@ export function AssistantThinkingMessage({
       <Box flexDirection="row">
         <Text>{minimal ? frameText : chalk.rgb(pulseColor.r, pulseColor.g, pulseColor.b).bold(frameText)}</Text>
         {/* 流式行同样可点击折叠（hover 提亮标签给出指示，与落定态一致） */}
-        <Text dimColor={!hovered} color={hovered ? 'text' : undefined} italic>{` ${label}`}</Text>
+        <Text dimColor={!hovered} color={hovered ? 'text' : cockpit ? 'inactive' : undefined} italic={!cockpit}>{` ${label}`}</Text>
       </Box>
     ) : (
-      <Text italic dimColor={!hovered} color={hovered ? 'text' : undefined}>{`${minimal ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
+      <Text italic={!cockpit} dimColor={!hovered} color={hovered ? 'text' : cockpit ? 'inactive' : undefined}>{`${minimal ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
     )
 
   if (preview) {
@@ -125,6 +130,7 @@ export function AssistantThinkingMessage({
       <Box
         flexDirection="column"
         marginTop={addMargin ? 1 : 0}
+        paddingX={cockpit ? 1 : 0}
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
         {...hoverProps}
@@ -163,6 +169,7 @@ export function AssistantThinkingMessage({
     return (
       <Box
         marginTop={addMargin ? 1 : 0}
+        paddingX={cockpit ? 1 : 0}
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
         {...hoverProps}
@@ -177,6 +184,7 @@ export function AssistantThinkingMessage({
       flexDirection="column"
       gap={1}
       marginTop={addMargin ? 1 : 0}
+      paddingX={cockpit ? 1 : 0}
       width="100%"
       backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       onClick={onClick}

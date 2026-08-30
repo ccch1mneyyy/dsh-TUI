@@ -76,6 +76,8 @@ export const FLAG_ICON = '\u2691' // ⚑
 export const BLOCKQUOTE_BAR = '\u258e' // ▎
 /** Heavy horizontal rule (`━`). */
 export const HEAVY_HORIZONTAL = '\u2501' // ━
+/** Instrument group rule (`│`) — HUD and footer clusters. */
+export const GROUP_RULE = '\u2502' // │
 
 // Bridge status
 /** Bridge spinner frames: `·|·` → `·/·` → `·—·` → `·\·`. */
@@ -91,26 +93,22 @@ export const BRIDGE_READY_INDICATOR = '\u00b7\u2714\ufe0e\u00b7'
 export const BRIDGE_FAILED_INDICATOR = '\u00d7'
 
 // Thinking spinner (Kimi Code style braille cycle, shown while reasoning
-// streams; the static anchor takes over once the step settles). Each frame
-// is padded to 2 columns (space BEFORE the braille glyph) so it matches the
-// settled ⚓ anchor exactly — the spinner sits one column right, hugging the
-// label like the anchor does, and a 1-col frame would shift the whole label
-// right by one column the moment the step settles.
+// streams; the settled chevron takes over once the step settles). Frames and
+// the settled mark are both 1 column so the label does not jump on settle.
 export const THINKING_SPINNER_FRAMES = [
-  ' \u280b', // ⠋
-  ' \u2819', // ⠙
-  ' \u2839', // ⠹
-  ' \u2838', // ⠸
-  ' \u283c', // ⠼
-  ' \u2834', // ⠴
-  ' \u2826', // ⠦
-  ' \u2827', // ⠧
-  ' \u2807', // ⠇
-  ' \u280f', // ⠏
+  '\u280b', // ⠋
+  '\u2819', // ⠙
+  '\u2839', // ⠹
+  '\u2838', // ⠸
+  '\u283c', // ⠼
+  '\u2834', // ⠴
+  '\u2826', // ⠦
+  '\u2827', // ⠧
+  '\u2807', // ⠇
+  '\u280f', // ⠏
 ]
 export const THINKING_SPINNER_INTERVAL_MS = 80
-/** Thinking settled marker: anchor (`⚓`) — the static end-state glyph after
- *  the reasoning block stops streaming. U+2693 is Emoji_Presentation in
- *  ink/stringWidth, so it measures 2 columns; the braille spinner frames
- *  above are padded to the same width to keep the label stationary. */
-export const THINKING_SETTLED_MARKER = '\u2693' // ⚓
+/** Thinking settled marker: single-angle chevron (`›`) — quiet, 1 column. */
+export const THINKING_SETTLED_MARKER = '\u203a' // ›
+/** Activity turn-token mark (`▸`) — geometric stand-in for the fire emoji. */
+export const ACTIVITY_TOKEN_MARK = '\u25b8' // ▸

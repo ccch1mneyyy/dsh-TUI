@@ -6,6 +6,7 @@ import { BRAND, FLASH, ICE, sweep } from './shimmer.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
+import { ACTIVITY_TOKEN_MARK } from '../cc/figures.js'
 import type { ActivityStatus } from '../dsh-adapter/channel.js'
 
 /**
@@ -30,7 +31,7 @@ export function contextPressurePct(
  * turn runs — replacing the CC random-verb spinner) or on the status bar
  * (the turn-summary card once idle). pi working-activity style: an animated
  * indicator frame, an ice-blue shimmer sweep over the line, an amber/red
- * `⚠ ctx N%` pressure prefix, and a trailing token suffix for the spinner
+ * `ctx N%` pressure prefix, and a trailing token suffix for the spinner
  * placement. Done summaries render statically in the brand mist blue.
  */
 export function ActivityLine({
@@ -65,6 +66,7 @@ export function ActivityLine({
     activity.phase === 'tool'
       ? (parseRGB(theme.claude) ?? BRAND)
       : (parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE)
+  const line = chromeActivityLine(activity.line)
 
   return (
     <Text wrap="truncate">
@@ -77,11 +79,16 @@ export function ActivityLine({
         </Text>
       )}
       {activity.phase === 'done' ? (
-        <Text color={color}>{activity.line}</Text>
+        <Text color={color}>{line}</Text>
       ) : (
-        <Text>{sweep(activity.line, time, baseRGB, FLASH, 60)}</Text>
+        <Text>{sweep(line, time, baseRGB, FLASH, 60)}</Text>
       )}
       {suffix !== undefined && <Text dimColor>{suffix}</Text>}
     </Text>
   )
+}
+
+/** Working-activity copy is owned upstream; strip the fire token mark here. */
+function chromeActivityLine(line: string): string {
+  return line.replace(/\u{1F525}\s*/gu, `${ACTIVITY_TOKEN_MARK} `)
 }

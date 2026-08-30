@@ -104,6 +104,23 @@ export function normalizeStatusBar(value: unknown): StatusBarConfig {
   return normalized
 }
 
+/**
+ * Overlay only the boolean keys actually present in a settings user layer
+ * onto a cordis/config base. Schema-filled defaults must not be passed as
+ * `overlay` — they would shadow an explicit profile `statusBar`.
+ */
+export function mergeStatusBar(base: unknown, overlay: unknown): StatusBarConfig {
+  const merged: StatusBarConfig = { ...normalizeStatusBar(base) }
+  if (overlay === null || typeof overlay !== 'object' || Array.isArray(overlay)) {
+    return merged
+  }
+  const input = overlay as Record<string, unknown>
+  for (const key of STATUS_BAR_KEYS) {
+    if (typeof input[key] === 'boolean') merged[key] = input[key]
+  }
+  return merged
+}
+
 function formatTokenCount(value: number): string {
   const rounded = Math.max(0, Math.round(value))
   if (rounded < 1_000) return String(rounded)

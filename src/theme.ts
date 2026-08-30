@@ -39,6 +39,9 @@ export type Theme = {
   suggestion: string
   remember: string
   background: string
+  /** Opaque chrome fill (transcript + prompt + HUD + footer). Not `background`,
+   *  which is a badge/pill fill. Empty or `#rrggbb00` must not leak wallpaper. */
+  pane: string
   // Semantic colors
   success: string
   error: string
@@ -192,7 +195,7 @@ const darkTheme: Theme = {
   permissionShimmer: rgb('#C9D7F2'),
   planMode: rgb('#7FAE99'), // Muted sage green
   ide: rgb('#5E88CC'), // Accent Blue
-  promptBorder: rgb('#55606F'), // Muted blue-gray
+  promptBorder: rgb('#5E88CC'), // Accent Blue — mist signature (tick/chip/border)
   promptBorderShimmer: rgb('#7DA1DE'),
   text: rgb('#E8E6E0'), // Warm off-white (from #F6F3ED)
   inverseText: rgb('#22262E'), // Deep warm charcoal (from #343945)
@@ -202,6 +205,7 @@ const darkTheme: Theme = {
   suggestion: rgb('#ABC2EC'), // Border Blue — focus/selection
   remember: rgb('#ABC2EC'),
   background: rgb('#5E88CC'), // Accent Blue — badge fill
+  pane: rgb('#161B24'), // opaque mist-navy chrome; not the badge `background`
   success: rgb('#82B89D'), // Mist green (from #4E9675)
   error: rgb('#DA8A93'), // Soft rose
   warning: rgb('#D8B270'), // Soft amber
@@ -307,6 +311,7 @@ const lightTheme: Theme = {
   suggestion: rgb('#3F6CC4'), // Primary Blue — focus/selection
   remember: rgb('#27478C'), // Deep Outline — picker titles
   background: rgb('#3F6CC4'), // Primary Blue — badge fill
+  pane: rgb('#F6F3ED'), // warm card fill — the documented light chrome
   success: rgb('#4E9675'),
   error: rgb('#C65D6B'), // Muted rose-red
   warning: rgb('#C08A3E'), // Muted amber
@@ -415,6 +420,7 @@ const darkAnsiTheme: Theme = {
   suggestion: 'ansi:blueBright',
   remember: 'ansi:blueBright',
   background: 'ansi:cyanBright',
+  pane: 'ansi:black',
   success: 'ansi:greenBright',
   error: 'ansi:redBright',
   warning: 'ansi:yellowBright',
@@ -547,7 +553,7 @@ let runtimeThemeResolver: ThemeResolver | undefined
  * to the shared light/dark instance, so this covers auto-with-light-terminal
  * that theme-NAME comparisons miss) and off the ink-text luminance for
  * custom and runtime themes (light palettes pair with dark ink). The palette's
- * `background` field is a badge fill, not the terminal background — never a
+ * `background` field is a badge fill, not the chrome pane — never a
  * lightness signal. Colour-pair variants (effort ignition hues) consume this.
  */
 export function isLightThemeActive(themeName: ThemeName): boolean {
@@ -555,7 +561,7 @@ export function isLightThemeActive(themeName: ThemeName): boolean {
   if (theme === lightTheme) return true
   if (theme === darkTheme || theme === darkAnsiTheme) return false
   // 自定义或运行时主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
-  // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。
+  // 调色板的 background 字段是徽标填充色而非 chrome pane，不能作判据。
   const ink = theme.text
   const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(ink)
   if (rgb === null) return false
@@ -630,6 +636,24 @@ let activeThemeName: ThemeName = 'dark'
  */
 export function setActiveThemeName(name: ThemeName): void {
   activeThemeName = name
+}
+
+/** True when a color will emit a visible fill (not empty / `#rrggbb00`). */
+export function isPaintedColor(color: string | undefined): boolean {
+  if (color === undefined || color === '') return false
+  const hex = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|([0-9a-f]{8}))$/i.exec(color)
+  if (hex === null) return true
+  const alpha = hex[1]
+  return alpha === undefined || alpha.slice(6).toLowerCase() !== '00'
+}
+
+/**
+ * Opaque chrome fill for the Chat surface. Falls back to the built-in dark
+ * pane when a user overlay leaves `pane` empty or fully transparent.
+ */
+export function resolvePane(theme: Theme): string {
+  if (isPaintedColor(theme.pane)) return theme.pane
+  return theme === lightTheme ? lightTheme.pane : darkTheme.pane
 }
 
 /**

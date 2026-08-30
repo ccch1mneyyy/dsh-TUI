@@ -10,7 +10,7 @@ const MAX_TODOS = 8
 const PHASE_LABEL: Record<ChannelGoal['phase'], string> = {
   active: '● active',
   paused: '⏸ paused',
-  blocked: '⛔ blocked',
+  blocked: '× blocked',
   complete: '✓ complete',
 }
 
@@ -18,7 +18,7 @@ const PHASE_LABEL: Record<ChannelGoal['phase'], string> = {
 const PHASE_GLYPH: Record<ChannelGoal['phase'], string> = {
   active: '●',
   paused: '⏸',
-  blocked: '⛔',
+  blocked: '×',
   complete: '✓',
 }
 

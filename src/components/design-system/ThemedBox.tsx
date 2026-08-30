@@ -9,7 +9,7 @@ import type { KeyboardEvent } from '../../ink/events/keyboard-event.js'
 import type { PointerEvent } from '../../ink/events/pointer-event.js'
 import type { WheelEvent } from '../../ink/events/wheel-event.js'
 import type { Color, Styles } from '../../ink/styles.js'
-import { getTheme, type Theme } from '../../theme.js'
+import { getTheme, isPaintedColor, type Theme } from '../../theme.js'
 import { useTheme } from './ThemeProvider.js'
 
 // Color props that accept theme keys
@@ -79,12 +79,13 @@ function resolveColor(
     color.startsWith('ansi256(') ||
     color.startsWith('ansi:')
   ) {
-    return color as Color
+    return isPaintedColor(color) ? (color as Color) : undefined
   }
   // Theme keys may be '' ("no color" in that theme) - collapse to undefined
   // so empty tokens render as no background/foreground instead of feeding
-  // an empty color string to Ink.
-  return (theme[color as keyof Theme] as Color) || undefined
+  // an empty color string to Ink. `#rrggbb00` is the same: no fill.
+  const resolved = (theme[color as keyof Theme] as Color) || undefined
+  return isPaintedColor(resolved) ? resolved : undefined
 }
 
 /**

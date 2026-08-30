@@ -116,6 +116,7 @@ Common override groups:
 
 | Group | Keys |
 | --- | --- |
+| Opaque chrome fill | `pane` (transcript + prompt + HUD + footer; `background` remains a badge fill) |
 | Tool card surfaces (two depths) | `toolCardBackground`, `toolCardBackgroundDim` |
 | Tool status dots (by category) | `toolDotExec`, `toolDotRead`, `toolDotWrite`, `toolDotWeb`, `toolDotTask` |
 | Diff rows | `diffAdded`, `diffRemoved`, `diffAddedDimmed`, `diffRemovedDimmed`, `diffAddedWord`, `diffRemovedWord` |

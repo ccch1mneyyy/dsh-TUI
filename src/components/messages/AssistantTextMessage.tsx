@@ -1,12 +1,14 @@
 import React from 'react'
 import { Box, NoSelect, Text } from '../../ui.js'
-import { BLACK_CIRCLE } from '../../cc/figures.js'
+import { BLACK_CIRCLE, GROUP_RULE } from '../../cc/figures.js'
 import { Markdown } from '../Markdown.js'
 
 type Props = {
   text: string
   /** Adds the top margin between messages (CC: addMargin). */
   addMargin: boolean
+  /** Cockpit message frame: muted left rule instead of the CC bullet. */
+  cockpit?: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
   /** Row expanded on its own (persistent hover-grey background, CC). */
@@ -23,6 +25,7 @@ type Props = {
 export function AssistantTextMessage({
   text,
   addMargin,
+  cockpit = false,
   isSelected = false,
   isExpanded = false,
 }: Props): React.ReactNode {
@@ -32,6 +35,7 @@ export function AssistantTextMessage({
       flexDirection="row"
       justifyContent="space-between"
       marginTop={addMargin ? 1 : 0}
+      paddingX={cockpit ? 1 : 0}
       width="100%"
       backgroundColor={
         isSelected
@@ -43,7 +47,9 @@ export function AssistantTextMessage({
     >
       <Box flexDirection="row">
         <NoSelect fromLeftEdge minWidth={2}>
-          <Text color={isSelected ? 'suggestion' : 'text'}>{BLACK_CIRCLE}</Text>
+          <Text color={cockpit ? 'promptBorder' : isSelected ? 'suggestion' : 'text'}>
+            {cockpit ? GROUP_RULE : BLACK_CIRCLE}
+          </Text>
         </NoSelect>
         <Box flexDirection="column">
           <Markdown>{text}</Markdown>

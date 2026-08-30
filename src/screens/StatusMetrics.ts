@@ -15,7 +15,7 @@
 export const USED_SEGMENTS = [
   { key: 'system', color: '#22305F', labels: ['system', 'sys', 's'] }, // deep navy
   { key: 'prompt', color: '#2B3D78', labels: ['prompt', 'pr', 'p'] }, // navy
-  { key: 'assistant', color: '#344A92', labels: ['assistant', 'ast', 'a'] }, // indigo
+  { key: 'assistant', color: '#344A92', labels: ['assistant', 'asst', 'ast', 'a'] }, // indigo
   { key: 'thinking', color: '#4D6BFE', labels: ['think', 'th', 't'] }, // DeepSeek brand blue
   { key: 'tools', color: '#5A7CFF', labels: ['tools', 'tl', 'x'] }, // lighter blue
 ] as const

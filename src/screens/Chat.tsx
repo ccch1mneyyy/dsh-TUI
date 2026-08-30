@@ -3133,7 +3133,7 @@ export function Chat({
       : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
 
   return (
-    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
+    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%" height="100%" backgroundColor="pane">
       {channel.cockpit && !channel.minimal && (
         <CockpitHud channel={channel} />
       )}
@@ -3163,6 +3163,7 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           whale={channel.whale}
+          hideRoute={channel.cockpit && !channel.minimal}
           // Resuming a long session skips the ~3.4s opening animation: it
           // keeps firing low-frequency React commits that compete with the
           // transcript mount batches (and the first wheel events) for the
@@ -3170,6 +3171,14 @@ export function Chat({
           // sessions keep the full intro; restored ones settle instantly.
           skipIntro={channel.rows.length > 30}
         />
+        {recap !== null && recap.auto && !recap.expanded && (
+          <AutoRecapRow
+            summary={recap.summary}
+            streaming={!recap.done}
+            onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
+            onDismiss={() => closeRecap()}
+          />
+        )}
         {/* The startup loaded-context panel: before the first message the
             transcript is empty, so the inventory of what this conversation
             will load (system prompt, workspace instructions, skills, tools)
@@ -3198,6 +3207,7 @@ export function Chat({
           toolBackground={channel.toolBackground}
           foldTerminalCommand={channel.foldTerminalCommand}
           activityFrames={channel.activityFrames}
+          cockpit={channel.cockpit && !channel.minimal}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
           historyPaintEnabled={!fullscreen}
@@ -3292,14 +3302,6 @@ export function Chat({
           collapsed={todoCollapsed}
           onToggle={() => setTodoCollapsed(previous => !previous)}
         />
-        {recap !== null && recap.auto && !recap.expanded && (
-          <AutoRecapRow
-            summary={recap.summary}
-            streaming={!recap.done}
-            onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
-            onDismiss={() => closeRecap()}
-          />
-        )}
         {balance !== null && (
           <BalanceReportRow
             result={balance.result}
@@ -3310,10 +3312,10 @@ export function Chat({
             onDismiss={() => setBalance(null)}
           />
         )}
-        {statusEntries.length > 0 && (
+        {statusEntries.length > 0 && !(channel.cockpit && !channel.minimal) && (
           // Plugin status contributions (tuiStatus seam): one joined line,
           // truncated by the Text wrap contract — the host owns the layout,
-          // plugins own only their text.
+          // plugins own only their text. Cockpit parks these in the footer.
           <Text dimColor wrap="truncate">
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
@@ -3393,6 +3395,11 @@ export function Chat({
           channel={channel}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
+          statusChips={
+            channel.cockpit && !channel.minimal
+              ? statusEntries.map(entry => entry.text)
+              : undefined
+          }
           wake={
             wakeBand === undefined
               ? undefined
