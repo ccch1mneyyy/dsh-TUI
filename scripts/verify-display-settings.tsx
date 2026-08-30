@@ -254,6 +254,7 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     contextBar: false,
     activity: false,
     trajectory: false,
+    pluginChips: true,
     shortcutHint: false,
   })
 })

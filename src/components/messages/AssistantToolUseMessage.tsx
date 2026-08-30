@@ -118,11 +118,10 @@ type BodyLine = {
   readonly revealOnHover?: boolean
 }
 
-/** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
-const TEXT_BODY_MAX_LINES = 3
-/** Diff bodies cap at the upstream chat row's 8 (dsh-client-ui-tool's
- *  CHAT_DIFF_MAX_LINES) — denser information than log output. */
-const DIFF_BODY_MAX_LINES = 8
+/** Collapsed text body keeps 2 lines for a linear, concise transcript stream. */
+const TEXT_BODY_MAX_LINES = 2
+/** Collapsed diff bodies cap at 3 lines — clean linear presentation without consuming screen height. */
+const DIFF_BODY_MAX_LINES = 3
 /** Minimum terminal width for the two-pane diff: below this the panes
  *  would squeeze under ~50 columns each and the unified view reads better. */
 const SPLIT_DIFF_MIN_COLS = 110

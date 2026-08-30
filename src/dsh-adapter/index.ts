@@ -110,6 +110,10 @@ export interface Config {
    *  effort, io). Off by default; when on, the footer omits model and
    *  thinking. Same key in `/settings`. Not a statusBar field. */
   cockpit?: boolean
+  /** Transcript message frame: quiet vertical rules instead of bullets,
+   *  muted prompt markers, and quiet settled thinking headers. Off by
+   *  default; enabled in cockpit profile. */
+  cockpitMessageFrame?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
@@ -150,6 +154,7 @@ export const Config: Schema<Config> = Schema.object({
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
   cockpit: Schema.boolean().default(false),
+  cockpitMessageFrame: Schema.boolean().default(false),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -168,6 +173,7 @@ export const Config: Schema<Config> = Schema.object({
     contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
     activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
     trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
+    pluginChips: Schema.boolean().default(DEFAULT_STATUS_BAR.pluginChips),
     shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
   }).default({ ...DEFAULT_STATUS_BAR }),
   // One optional combo string per customizable action (no defaults: unset

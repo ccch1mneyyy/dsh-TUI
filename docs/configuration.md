@@ -56,6 +56,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行 |
 | `fullscreen` | `false` | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
 | `cockpit` | `false` | 在转录区上方钉一行身份 HUD（供应商、模型、推理强度、输入模态）；开启后底栏不再重复模型与思考档位。也可在 `/settings` 开关 |
+| `cockpitMessageFrame` | `false` | 转录区消息紧凑安静样式：用垂直线替代圆点符号、弱化输入提示符并简化已完成的思考摘要。也可在 `/settings` 开关 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
 

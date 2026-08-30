@@ -48,6 +48,8 @@ export interface StatusBarConfig {
   activity: boolean
   /** Mini trajectory wake rendered at the footer's right edge. */
   trajectory: boolean
+  /** Park plugin status contributions as styled chips in the footer. */
+  pluginChips: boolean
   /** Idle `? for shortcuts` reminder; shortcut keys remain available when hidden. */
   shortcutHint: boolean
 }
@@ -71,6 +73,7 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   contextBar: false,
   activity: false,
   trajectory: false,
+  pluginChips: true,
   shortcutHint: false,
 })
 

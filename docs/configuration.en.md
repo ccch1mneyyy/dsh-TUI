@@ -58,6 +58,7 @@ A complete common override looks like this:
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
 | `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `cockpit` | `false` | Pin a one-line identity HUD (provider, model, effort, io) above the transcript; when on, the footer omits model and thinking. Also toggled from `/settings` |
+| `cockpitMessageFrame` | `false` | Quiet transcript message presentation: vertical rules instead of bullets, dimmed prompt markers, and quiet settled thinking headers. Also toggled from `/settings` |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 

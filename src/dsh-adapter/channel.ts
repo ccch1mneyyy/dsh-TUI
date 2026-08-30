@@ -742,6 +742,10 @@ export interface Channel {
   /** Pin the identity HUD above the transcript (`dsh-tui.cockpit`; off by
    *  default). When on, the footer omits model and thinking. */
   readonly cockpit: boolean
+  /** Transcript message frame: quiet vertical rules instead of bullets,
+   *  muted prompt markers, and quiet settled thinking headers
+   *  (`dsh-tui.cockpitMessageFrame`; off by default). */
+  readonly cockpitMessageFrame: boolean
   /** Live model input modalities from the llm catalog (`image`/`text`/…);
    *  `undefined` when the seam is missing or the lookup failed. */
   readonly inputModalities: readonly string[] | undefined
@@ -1182,6 +1186,8 @@ export interface ChannelState {
   expandEditor: boolean
   /** Identity HUD switch (see the public Channel type). */
   cockpit: boolean
+  /** Quiet transcript message frame (see the public Channel type). */
+  cockpitMessageFrame: boolean
   /** Live model input modalities (see the public Channel type). */
   inputModalities: readonly string[] | undefined
   /** Status-footer preferences (see the public Channel type). */
@@ -1202,6 +1208,8 @@ export interface ChannelState {
   setExpandEditor(enabled: boolean): void
   /** Apply an identity-HUD visibility change. */
   setCockpit(enabled: boolean): void
+  /** Apply a transcript quiet-frame styling change. */
+  setCockpitMessageFrame(enabled: boolean): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -1742,6 +1750,9 @@ export function createChannel(
     /** Pin the identity HUD above the transcript; default off (settings
      *  `dsh-tui.cockpit`). */
     cockpit?: boolean
+    /** Quiet transcript message frame; default off (settings
+     *  `dsh-tui.cockpitMessageFrame`). */
+    cockpitMessageFrame?: boolean
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -2879,6 +2890,7 @@ export function createChannel(
     promptSessionLabel: options.promptSessionLabel === true,
     expandEditor: options.expandEditor !== false,
     cockpit: options.cockpit === true,
+    cockpitMessageFrame: options.cockpitMessageFrame === true,
     inputModalities: undefined,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
@@ -4708,6 +4720,11 @@ export function createChannel(
     setCockpit(enabled) {
       if (enabled === state.cockpit) return
       state.cockpit = enabled
+      state.emit()
+    },
+    setCockpitMessageFrame(enabled) {
+      if (enabled === state.cockpitMessageFrame) return
+      state.cockpitMessageFrame = enabled
       state.emit()
     },
     setStatusBar(config) {

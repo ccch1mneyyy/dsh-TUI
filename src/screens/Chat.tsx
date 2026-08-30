@@ -3207,7 +3207,7 @@ export function Chat({
           toolBackground={channel.toolBackground}
           foldTerminalCommand={channel.foldTerminalCommand}
           activityFrames={channel.activityFrames}
-          cockpit={channel.cockpit && !channel.minimal}
+          cockpit={channel.cockpitMessageFrame && !channel.minimal}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
           historyPaintEnabled={!fullscreen}
@@ -3312,7 +3312,7 @@ export function Chat({
             onDismiss={() => setBalance(null)}
           />
         )}
-        {statusEntries.length > 0 && !(channel.cockpit && !channel.minimal) && (
+        {statusEntries.length > 0 && !(channel.statusBar?.pluginChips && !channel.minimal) && (
           // Plugin status contributions (tuiStatus seam): one joined line,
           // truncated by the Text wrap contract — the host owns the layout,
           // plugins own only their text. Cockpit parks these in the footer.
@@ -3396,7 +3396,7 @@ export function Chat({
           selectionActive={selectionActive}
           helpOpen={helpOpen}
           statusChips={
-            channel.cockpit && !channel.minimal
+            channel.statusBar?.pluginChips && !channel.minimal
               ? statusEntries.map(entry => entry.text)
               : undefined
           }

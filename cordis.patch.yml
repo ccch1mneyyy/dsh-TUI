@@ -305,6 +305,8 @@
         fullscreen: true
         # Optional identity HUD above the transcript (off by default).
         # cockpit: false
+        # Optional quiet transcript message framing (off by default).
+        # cockpitMessageFrame: false
         # Edit/Write diff 呈现：auto（≥110 列双栏对照，窄屏统一式）/
         # split（强制双栏）/ unified（强制统一式）。/settings 屏可实时改。
         # diffLayout: auto

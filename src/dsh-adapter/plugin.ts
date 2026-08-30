@@ -549,6 +549,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     promptSessionLabel: config.promptSessionLabel,
     expandEditor: config.expandEditor,
     cockpit: config.cockpit,
+    cockpitMessageFrame: config.cockpitMessageFrame,
     statusBar: config.statusBar,
     handle,
   })
@@ -607,6 +608,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // decisive while the user layer is unset.
         expandEditor: Schema.boolean(),
         cockpit: Schema.boolean(),
+        cockpitMessageFrame: Schema.boolean(),
         // No schema defaults (same rule as foldTerminalCommand / cockpit):
         // a filled DEFAULT_STATUS_BAR here comes back from scope.get() and
         // shadows an explicit cordis.yml / profile `statusBar` while the
@@ -629,6 +631,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           contextBar: Schema.boolean(),
           activity: Schema.boolean(),
           trajectory: Schema.boolean(),
+          pluginChips: Schema.boolean(),
           shortcutHint: Schema.boolean(),
         }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
@@ -664,6 +667,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       promptSessionLabel?: boolean
       expandEditor?: boolean
       cockpit?: boolean
+      cockpitMessageFrame?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -706,6 +710,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setCockpit(value.cockpit ?? config.cockpit === true)
+      channel.setCockpitMessageFrame(value.cockpitMessageFrame ?? config.cockpitMessageFrame === true)
       channel.setStatusBar(mergeStatusBar(config.statusBar, value.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
@@ -1014,6 +1019,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           },
         },
         {
+          path: ['cockpitMessageFrame'],
+          label: 'Cockpit message style',
+          descriptions: { zh: '驾驶舱消息样式' },
+          hint: 'Quiet transcript presentation: vertical rules instead of bullets, dimmed prompt markers, and quiet settled thinking headers.',
+          hintDescriptions: { zh: '紧凑安静的消息呈现：用垂直细线替代圆点符号、弱化输入提示符并简化已完成的思考摘要。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            return String(typeof value === 'boolean' ? value : config.cockpitMessageFrame === true)
+          },
+        },
+        {
           path: ['recapOnOpen'],
           label: 'Auto recap on open',
           descriptions: { zh: '打开会话时自动总结' },
@@ -1195,6 +1211,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           group: 'status-bar',
           kind: 'boolean',
           format: formatStatusBarFlag('trajectory'),
+        },
+        {
+          path: ['statusBar', 'pluginChips'],
+          label: 'Show plugin status chips',
+          descriptions: { zh: '显示插件状态胶囊' },
+          hint: 'Format plugin status contributions (such as canvas live server) as styled badge chips in the status footer.',
+          hintDescriptions: { zh: '将插件状态贡献（如 Canvas 实时预览服务地址）作为样式胶囊呈现在状态栏右侧。' },
+          group: 'status-bar',
+          kind: 'boolean',
+          format: formatStatusBarFlag('pluginChips'),
         },
         {
           path: ['statusBar', 'shortcutHint'],

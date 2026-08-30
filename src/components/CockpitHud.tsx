@@ -9,10 +9,10 @@ import { GROUP_RULE } from '../cc/figures.js'
 
 type HudItem = {
   key: string
-  /** Bright value; omitted for self-labelled chips like `[text]`. */
+  /** Bright value; omitted for self-labelled chips like `vision`. */
   value?: string
   label?: string
-  /** Whole chip text (`[text]`); takes the value slot and skips a micro-label. */
+  /** Whole chip text (`vision`); takes the value slot and skips a micro-label. */
   chip?: string
   /** Theme key for the value; labels always render in `subtle`. */
   valueColor?: 'text' | 'claude'
@@ -70,7 +70,9 @@ export function CockpitHud({ channel }: { channel: Channel }): React.ReactNode {
               <Text backgroundColor="claude" color="inverseText">{chipText(item.chip)}</Text>
             ) : (
               <>
-                <Text color={item.valueColor ?? 'text'}>{item.value}</Text>
+                <Text color={item.valueColor ?? 'text'} bold={item.key === 'model'}>
+                  {item.value}
+                </Text>
                 {item.label !== undefined ? <Text color="subtle" dimColor> {item.label}</Text> : null}
               </>
             )}
@@ -78,7 +80,7 @@ export function CockpitHud({ channel }: { channel: Channel }): React.ReactNode {
         ))}
       </Box>
       <Box width="100%" height={1} overflow="hidden" flexShrink={0}>
-        <Text color="promptBorder" wrap="truncate">{'─'.repeat(240)}</Text>
+        <Text color="promptBorder" dimColor wrap="truncate">{'─'.repeat(Math.max(columns, 240))}</Text>
       </Box>
     </Box>
   )
