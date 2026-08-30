@@ -47,7 +47,7 @@ try {
   const { logMouseDebug } = await import('../src/utils/debug.js')
   const { writeIndex } = await import('../src/dsh-adapter/sessions/store.js')
 
-  appendHistory('secret user input / sk-test-123')
+  await appendHistory('secret user input / sk-test-123')
   logMouseDebug('mouse arrive', { x: 1 })
   writeIndex(new Map([['s1', {
     derived: {
