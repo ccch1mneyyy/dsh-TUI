@@ -6787,7 +6787,7 @@ ${output}
         state.working = false
         state.activeToolCount = 0
         if (tpsTurn !== undefined && tpsTurn === event.data.turn) {
-          if (tpsTurnSampled && tpsTurnDecodeMs > 0) {
+          if (!replaying && tpsTurnSampled && tpsTurnDecodeMs > 0) {
             const turnTps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
             state.tps = turnTps
             state.tpsSamples.push({ tps: turnTps, at: event.time })

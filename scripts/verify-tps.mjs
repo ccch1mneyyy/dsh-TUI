@@ -179,14 +179,27 @@ emit('turn/end', B + 303_100, completed(4))
 check('missing usage falls back to chars/4', near(channel.tps, 50), String(channel.tps))
 check('one sample is retained per completed turn', channel.tpsSamples.length === 4, String(channel.tpsSamples.length))
 
-// Rebuild from durable history. Coalescing may merge adjacent text chunks, but
-// the first event's persisted time remains the decode boundary.
+// Turn 5: batched tool-call generation (e.g. Gemini delivering tool call in 1 chunk 15ms before message).
+// Total step duration 2000ms, usage 400 output tokens. Decode span correctly falls back to step duration instead of 15ms.
+emit('turn/start', B + 400_000, { turn: 5 })
+emit('step/start', B + 400_000, { turn: 5, step: 1 })
+emit('assistant/chunk', B + 401_985, {
+  turn: 5,
+  step: 1,
+  chunk: { type: 'tool-call-delta', index: 0, id: 'call-5', name: 'read', argumentsDelta: '{"path":"file.txt"}' },
+})
+emit('assistant/message', B + 402_000, message(5, 1, 400))
+emit('turn/end', B + 402_100, completed(5))
+check('batched tool-call uses step duration preventing 27k TPS spike', near(channel.tps, 200), String(channel.tps))
+check('five turn samples retained', channel.tpsSamples.length === 5, String(channel.tpsSamples.length))
+
+// Rebuild from durable history. Chunks are pruned during replay (see prepareReplayEvents),
+// so replay leaves live tps metrics clean for the newly resumed session.
 const replayContext = makeContext()
 const replayAgent = makeAgent([...agent.session.events])
 const replay = createChannel(replayContext.ctx, replayAgent, options)
-check('replay rebuilds all turn samples', replay.tpsSamples.length === 4, JSON.stringify(replay.tpsSamples))
-check('replay derives the same latest TPS from event.time', near(replay.tps, channel.tps), `${replay.tps} vs ${channel.tps}`)
-check('replay preserves the weighted multi-step sample', near(replay.tpsSamples[0]?.tps, 100), JSON.stringify(replay.tpsSamples[0]))
+check('replay leaves live tps clean', replay.tps === undefined, String(replay.tps))
+check('replay leaves live tps samples empty', replay.tpsSamples.length === 0, String(replay.tpsSamples.length))
 
 if (failed > 0) {
   console.error(`\n${failed} TPS verification(s) failed`)

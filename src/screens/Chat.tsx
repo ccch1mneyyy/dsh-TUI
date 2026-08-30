@@ -87,7 +87,6 @@ import { BtwPanel } from '../components/BtwPanel.js'
 import { RecapPanel } from '../components/RecapPanel.js'
 import { isValidSessionColor, SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 import { TipsPanel } from '../components/TipsPanel.js'
-import { CanvasBrowserPane } from '../components/CanvasBrowserPane.js'
 import { FloatingImageDeck } from '../components/FloatingImageDeck.js'
 import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { SubagentDetailScene } from '../components/SubagentDetailScene.js'
@@ -596,8 +595,6 @@ export function Chat({
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
   /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
   const [loadedContextOpen, setLoadedContextOpen] = React.useState(false)
-  /** Built-in 50/50 Canvas Browser Split Mode (toggled with Ctrl+B / Alt+C or /canvas). */
-  const [canvasSplitOpen, setCanvasSplitOpen] = React.useState(false)
   /**
    * The context panel changes the height of the main-screen transcript by a
    * large amount. In inline mode that invalidates the renderer's previous
@@ -2784,10 +2781,6 @@ export function Chat({
       openScene()
       return
     }
-    if ((key.ctrl && (input === 'b' || input === 'B')) || (key.meta && (input === 'c' || input === 'C'))) {
-      setCanvasSplitOpen(prev => !prev)
-      return
-    }
     if (actionMatches('dashboard', input, key)) {
       // The subagent dashboard key (default Ctrl+A) opens the dashboard.
       setSubagentDashboardOpen(true)
@@ -3001,28 +2994,23 @@ export function Chat({
   // the whole TUI down through ink's app-level boundary.
   const pluginScene = channel.pluginScene
   if (pluginScene !== undefined) {
-    if (pluginScene.id === 'canvas') {
-      channel.closePluginScene()
-      setCanvasSplitOpen(true)
-    } else {
-      const node = (
-        <PluginSceneBoundary
-          id={pluginScene.id}
-          onError={(id, error) => {
-            channel.notify(t('plugin-scene-crashed', { id, err: error.message }), { color: 'error' })
-            channel.closePluginScene()
-          }}
-        >
-          {React.createElement(pluginScene.component, {
-            React,
-            ui: tuiKit,
-            channel,
-            close: () => channel.closePluginScene(),
-          })}
-        </PluginSceneBoundary>
-      )
-      return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
-    }
+    const node = (
+      <PluginSceneBoundary
+        id={pluginScene.id}
+        onError={(id, error) => {
+          channel.notify(t('plugin-scene-crashed', { id, err: error.message }), { color: 'error' })
+          channel.closePluginScene()
+        }}
+      >
+        {React.createElement(pluginScene.component, {
+          React,
+          ui: tuiKit,
+          channel,
+          close: () => channel.closePluginScene(),
+        })}
+      </PluginSceneBoundary>
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }
 
   // The browser is a screen, not an overlay: it REPLACES the conversation
@@ -3174,12 +3162,6 @@ export function Chat({
         />
       )}
       <Box flexDirection="row" flexGrow={1} flexShrink={1} width="100%">
-        <Box
-          flexDirection="row"
-          flexGrow={1}
-          flexShrink={1}
-          width={canvasSplitOpen ? '50%' : '100%'}
-        >
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
         <LogoHeader
           key={logoNonce}
@@ -3256,7 +3238,7 @@ export function Chat({
           const gutter = normalizeScrollGutter(channel.scrollGutter)
           if (gutter === 'hidden') return null
           if (gutter === 'scrollbar') {
-            return <ScrollbarGutter handle={handle} terminalWidth={canvasSplitOpen ? Math.floor(terminalColumns / 2) : terminalColumns} />
+            return <ScrollbarGutter handle={handle} terminalWidth={terminalColumns} />
           }
           return (
             <TimelineRail
@@ -3265,24 +3247,12 @@ export function Chat({
               activeId={timeline.activeId}
               upId={timeline.upId}
               downId={timeline.downId}
-              terminalWidth={canvasSplitOpen ? Math.floor(terminalColumns / 2) : terminalColumns}
+              terminalWidth={terminalColumns}
               hoverEnabled={!promptSelectionActive}
               onRevealTurn={revealAndSeekRow}
             />
           )
         })()}
-        </Box>
-        {canvasSplitOpen && (
-          <Box width="50%" height="100%" flexDirection="column" flexShrink={0}>
-            <CanvasBrowserPane
-              activeUrl={
-                statusEntries.find(e => e.key === 'canvas')?.text.replace(/^canvas\s*/i, '') ||
-                'http://127.0.0.1:33007/'
-              }
-              onClose={() => setCanvasSplitOpen(false)}
-            />
-          </Box>
-        )}
       </Box>
       {/* Bottom chrome (pill, spinners, dialogs, prompt, statusline): never
           let flex shrink squeeze these fixed-height rows — the ScrollBox

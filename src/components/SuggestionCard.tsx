@@ -100,7 +100,7 @@ export function SuggestionCard({
       {footer ? (
         <Box flexDirection="row" width="100%">
           <Text color={borderColor}>│</Text>
-          <Box flexGrow={1} minWidth={0}>
+          <Box flexGrow={1} minWidth={0} backgroundColor="pane">
             <Text dimColor wrap="truncate-end"> {footer}</Text>
           </Box>
           <Text color={borderColor}>│</Text>
