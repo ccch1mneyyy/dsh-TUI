@@ -12,10 +12,10 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
 
 ## 上游契约
 
-- 校验版本线:主 `0.1.2-alpha.1`,兼容 `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
+- 校验版本线:主 `0.1.2-alpha.2`,兼容 `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
   (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_VERSIONS`;特性门控用
   `installedMeetsVersion(pkg, 'x.y.z-<alpha|beta|rc>.n')` 跨家族、跨预发布通道比较,老安装上优雅降级)
-- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.1`(契约外版本启动时打 drift 警告)
+- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2`(契约外版本启动时打 drift 警告)
 - 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
@@ -25,7 +25,7 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
 
 - **disabled overrides**:24 行。其中 23 行恒定禁用;`command-goal` 仅在
   `dsh-agent-presets` 的 shipped standard preset 实际自带该命令时禁用,
-  因而 alpha.1 与 web-app 对齐,rc.2 仍保留 host `/goal`;web-app 另有 `hmr`
+  因而 alpha.2 与 web-app 对齐,rc.2 仍保留 host `/goal`;web-app 另有 `hmr`
 - **config overrides**:8 行(原有 6 行加 session-telemetry-otel /
   plugin-package-inventory-deepseek),后两行保持 TUI 的隐私默认
 - **inserts**:17 行(dsh-tui、working-activity、dsh-tui-auth、六个插件互通行,以及
@@ -35,7 +35,7 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
   并在检测到官方同 id/name 行已存在时自行 disabled,因此可安全共存。
   `dsh-tui-subagent-model-selection-settings` 还直接探测自己的包子路径,
   不依赖可被用户禁用的 inventory 行;预设 roster 在 rc.2 显式恢复 dsh CLI
-  roots,alpha.1 则省略 roots 并使用包内 `includeShippedRoot`
+  roots,alpha.2 则省略 roots 并使用包内 `includeShippedRoot`
   (`dsh web` 不再 `duplicate loader entry id`)
 
 上游发版后如果 patch 面变化,`pnpm run verify:patch-surface` 会在 CI 先爆;

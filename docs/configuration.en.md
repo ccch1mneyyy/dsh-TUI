@@ -81,7 +81,7 @@ Each session composes its model-visible tools and prompt through
 | ID | Name | Capability |
 | --- | --- | --- |
 | `standard` | Standard (default) | Editing, shell, search, skills, planning, goals, subagents, and workflows |
-| `ptc` (alpha.1) / `code` (RC) | PTC | Standard plus the PTC SDK presentation for composing operations in TypeScript; both names resolve compatibly across versions |
+| `ptc` (alpha.2) / `code` (RC) | PTC | Standard plus the PTC SDK presentation for composing operations in TypeScript; both names resolve compatibly across versions |
 | `minimal` | Minimal | Persistent Bash and `str_replace_editor` only, without compaction |
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
 | `liangshen` | Liangshen mode | Minimal's two-tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |

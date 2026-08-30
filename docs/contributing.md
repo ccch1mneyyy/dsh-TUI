@@ -46,7 +46,7 @@ DeepSeek Harness 拥有，TUI 只消费它们。
   user-questions / agent-preset 的上游预发布兼容分派，避免把版本分支散进
   bootstrap 与 channel 动作面。注意：问卷
   "provider 座位"守卫（DUPLICATE_PROVIDER 探测 + 私有 symbol 校验，#586）只在
-  rc 的 `registerProvider` 路径生效。alpha.1 的 `user-questions/request`
+  rc 的 `registerProvider` 路径生效。alpha.2 的 `user-questions/request`
   waterfall 对带 agent 的请求先按 scope 过滤 listener；agentless 的 `/auth` 请求
   不带 scope carrier。按 answerer 约定，首个不调用 `next()` 委派的 eligible
   listener 会 claim 请求；但 Cordis waterfall 是 around middleware，外层 listener

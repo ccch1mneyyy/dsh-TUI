@@ -6782,7 +6782,7 @@ ${output}
         state.sessionTitle = event.data.title
         break
       default:
-        // dsh-tool-todo owns this optional module augmentation in alpha.1.
+        // dsh-tool-todo owns this optional module augmentation in alpha.2.
         // Match by name so the TUI remains loadable without that plugin.
         if ((event as { type: string }).type === 'todo/write') {
           const todos = todoPanelItems((event as unknown as { data?: unknown }).data)

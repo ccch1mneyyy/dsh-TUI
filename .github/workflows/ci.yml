@@ -126,9 +126,10 @@ jobs:
             vendor/dsh-std/packages/storage/lib/
             vendor/dsh-std/packages/messages/lib/
 
-  # Alpha is source-only (not published to npm). Keep the normal rc.2 build
-  # intact, then type-check the adapter and compose both patches against the
-  # immutable upstream alpha.1 source SHA. Missing source is a hard failure.
+  # Alpha is source-first (alpha.2 also ships to npm, but CI keeps the rc.2
+  # build as the installed baseline). Type-check the adapter and compose both
+  # patches against the immutable upstream alpha.2 source SHA. Missing source
+  # is a hard failure.
   alpha-compat:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -142,11 +143,11 @@ jobs:
         with:
           submodules: recursive
 
-      # deepseek-ai/deepseek-harness tag dsh-v0.1.2-alpha.1
+      # deepseek-ai/deepseek-harness tag dsh-v0.1.2-alpha.2
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: cd5ef8148158c3a752a658978873241fdf8e2bbc
+          ref: 0a53fb55bea101816fa226bb964ae2bed71c343b
           path: .upstream/deepseek-harness
           fetch-depth: 1
 

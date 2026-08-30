@@ -1,7 +1,7 @@
 /**
  * Agent-preset resolution across upstream prerelease lines.
  *
- * rc.2 exports `resolveSessionPreset` and ships `code`; alpha.1 replaces the
+ * rc.2 exports `resolveSessionPreset` and ships `code`; alpha.2 replaces the
  * helper with a projection definition and renames that preset to `ptc`.
  * Keeping both compatibility decisions here prevents composition and channel
  * code from acquiring prerelease-specific branches.

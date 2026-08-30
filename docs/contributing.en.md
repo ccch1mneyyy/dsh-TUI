@@ -57,7 +57,7 @@ boundaries and helpers over introducing parallel abstractions.
   branches do not spread into bootstrap or channel actions. Note: the
   questionnaire "provider seat"
   guard (DUPLICATE_PROVIDER probe + private symbol check, #586) only applies to
-  the rc `registerProvider` path. On alpha.1's `user-questions/request`
+  the rc `registerProvider` path. On alpha.2's `user-questions/request`
   waterfall, Cordis first scope-filters requests carrying an agent; agentless
   `/auth` requests are dispatched without a scope carrier. Under the answerer
   convention, the first eligible listener that returns instead of delegating

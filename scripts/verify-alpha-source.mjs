@@ -4,13 +4,13 @@
  * DSH_HARNESS_SOURCE_ROOT at a checkout or use ../deepseek-harness.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, parse, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
-const EXPECTED_ALPHA_VERSION = '0.1.2-alpha.1'
+const EXPECTED_ALPHA_VERSION = '0.1.2-alpha.2'
 const tuiRoot = resolve(import.meta.dirname, '..')
 const sourceRoot = resolve(process.env.DSH_HARNESS_SOURCE_ROOT ?? join(tuiRoot, '../deepseek-harness'))
 const sourceManifestPath = join(sourceRoot, 'package.json')
@@ -59,6 +59,15 @@ sourcePaths['@deepseek-ai/schemastery'] = [
 ]
 
 const typescriptRoot = dirname(fileURLToPath(import.meta.resolve('typescript/package.json')))
+// tsc requires every input file to live under rootDir. POSIX '/' covers any
+// absolute path; on Windows '/' normalizes to the process drive, which need
+// not hold either tree — use the tui drive root and require the alpha source
+// to live on the same drive.
+const typeRoot = process.platform === 'win32' ? parse(tuiRoot).root : '/'
+if (process.platform === 'win32' && parse(sourceRoot).root !== typeRoot) {
+  console.error(`alpha source must share the TUI drive for tsc rootDir (tui ${typeRoot}, source ${parse(sourceRoot).root})`)
+  process.exit(1)
+}
 const projects = [
   { label: 'dsh-tui', config: join(tuiRoot, 'tsconfig.json') },
   { label: 'dsh-auth', config: join(tuiRoot, 'dsh-auth/tsconfig.json') },
@@ -74,7 +83,7 @@ for (const project of projects) {
       noEmit: true,
       declaration: false,
       declarationMap: false,
-      rootDir: '/',
+      rootDir: typeRoot,
       allowImportingTsExtensions: true,
       typeRoots: [join(tuiRoot, 'node_modules/@types')],
       paths: sourcePaths,

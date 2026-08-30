@@ -5,7 +5,7 @@ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
@@ -300,7 +300,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // user-interaction config row does; a bare plugin mount creates it on
   // this context), then expose the model-facing tool before resolving the
   // agent so per-step assembly includes ask_user_question. rc.2's provider
-  // seat is registered below; alpha.1's agent-aware waterfall needs the
+  // seat is registered below; alpha.2's agent-aware waterfall needs the
   // channel owner and is therefore registered immediately after the channel
   // is created. Optional-service access goes through `ctx.get`, not the
   // inject proxy.
@@ -574,7 +574,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and
   // watch() lands commits on the live channel — no recompose needed.
   ctx.inject(['settings'], (settingsCtx) => {
-    const tuiSettingsNs = settingsNamespace('dsh-tui')
+    // alpha.2 removed the `settingsNamespace()` brand helper: register() now
+    // takes the raw string and validates it itself, while rc.2 still wants the
+    // branded handle. Brands are type-only, so the constant cast compiles
+    // against both lines and the runtime value is identical ('dsh-tui' always
+    // satisfied the namespace pattern).
+    const tuiSettingsNs = 'dsh-tui' as SettingsNamespace
     const scope = settingsCtx.settings.register(
       tuiSettingsNs,
       Schema.object({

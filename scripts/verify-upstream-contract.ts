@@ -18,14 +18,14 @@ const {
   UPSTREAM_VALIDATED_LABEL,
 } = await import('../src/dsh-adapter/contract.js')
 
-const alpha = parseUpstreamVersion('0.1.2-alpha.1')!
+const alpha = parseUpstreamVersion('0.1.2-alpha.2')!
 const beta = parseUpstreamVersion('0.1.2-beta.1')!
 const rc = parseUpstreamVersion('0.1.2-rc.1')!
-assert.deepEqual(alpha, [0, 1, 2, 'alpha', 1])
+assert.deepEqual(alpha, [0, 1, 2, 'alpha', 2])
 assert.ok(compareVersions(alpha, beta) < 0 && compareVersions(beta, rc) < 0)
 assert.ok(compareVersions(rc, parseUpstreamVersion('0.1.1-rc.2')!) > 0)
 assert.equal(parseUpstreamVersion('0.1.2'), undefined)
-assert.match(UPSTREAM_VALIDATED_LABEL, /0\.1\.2-alpha\.1/u)
+assert.match(UPSTREAM_VALIDATED_LABEL, /0\.1\.2-alpha\.2/u)
 
 const mixedVersions = Object.fromEntries(UPSTREAM_BLESSED_PACKAGES.map(packageName => [
   packageName,
@@ -35,12 +35,12 @@ const mixedVersions = Object.fromEntries(UPSTREAM_BLESSED_PACKAGES.map(packageNa
       ? '3.18.1'
       : '0.1.1-rc.2',
 ]))
-mixedVersions['@deepseek-ai/dsh-agent'] = '0.1.2-alpha.1'
-assert.deepEqual(installedUpstreamLines(mixedVersions), ['0.1.1-rc.2', '0.1.2-alpha.1'])
+mixedVersions['@deepseek-ai/dsh-agent'] = '0.1.2-alpha.2'
+assert.deepEqual(installedUpstreamLines(mixedVersions), ['0.1.1-rc.2', '0.1.2-alpha.2'])
 assert.deepEqual(upstreamDrift(mixedVersions), [])
 assert.deepEqual(upstreamDriftSummary(mixedVersions), {
   kind: 'mixed',
-  versions: ['0.1.1-rc.2', '0.1.2-alpha.1'],
+  versions: ['0.1.1-rc.2', '0.1.2-alpha.2'],
 })
 
 const installedLines = installedUpstreamLines()
