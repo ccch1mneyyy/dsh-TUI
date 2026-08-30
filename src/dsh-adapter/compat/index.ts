@@ -11,19 +11,25 @@
  *
  * Current residents:
  *  - sessionLog: tolerant title reads plus offline rename/delete helpers for
- *    persisted sessions that are not currently owned by a live Agent, and
- *    the resume-seam registration of vouched-for legacy event types into
- *    every reachable KNOWN_SESSION_EVENT_TYPES copy — retiring the day
- *    upstream's shared catalog adopts the types or ships a real
- *    registration API (issue #153).
+ *    persisted sessions that are not currently owned by a live Agent, the
+ *    resume-seam registration of vouched-for legacy event types into every
+ *    reachable KNOWN_SESSION_EVENT_TYPES copy (retiring the day upstream's
+ *    shared catalog adopts the types or ships a real registration API —
+ *    issue #153), and the bounded read-only log reader behind the session
+ *    tree (chunked I/O, lazy zstd frame walk, event + scan budgets,
+ *    inherited-prefix skip).
  * @module @deepseek-harness-tui/dsh-tui/compat
  */
 export {
   appendSessionTitle,
+  defaultMaxScanned,
   deleteSessionLog,
   ensureLegacySessionEventTypes,
   findSessionLogFile,
   LEGACY_SESSION_EVENT_TYPES,
+  readSessionEventsFromFile,
+  readSessionEventsFromLog,
   readSessionTitleFromLog,
+  type SessionLogRead,
   sessionsRoots,
 } from './sessionLog.js'

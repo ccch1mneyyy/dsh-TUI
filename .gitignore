@@ -5,6 +5,14 @@ package-lock.json
 .DS_Store
 *.tsbuildinfo
 *.tgz
+/dist-bundle/
+/dist-standalone/
+/standalone/runtime.tar.gz
+/standalone/node_modules/
+/standalone/dist/
 .tmp/
-AGENTS.md
 .dsh-prompt-debug.json
+HANDOVER.md
+.local/
+.claude/
+.upstream/

@@ -22,14 +22,13 @@
 import { Context } from '@deepseek-ai/cordis'
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { createChannel } from '../src/dsh-adapter/channel.js'
+import { settle, sleep } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
-
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 const root = new Context()
 const llm = new LlmRuntime(root)
@@ -85,8 +84,10 @@ const channel = createChannel(root as never, agent, {
 })
 check('startup status line seeds the configured effort', channel.reasoningEffort === 'high', channel.reasoningEffort)
 
-// applyPreferredEffort is async (route metadata resolution) — let it settle.
-await sleep(50)
+// applyPreferredEffort is async (route metadata resolution) — let it settle:
+// it writes state.effortLevels and installs selection.current in the same
+// synchronous continuation, so effortLevels appearing implies the install ran.
+await settle(() => channel.effortLevels !== undefined)
 
 // ── dsh-agent-loop buildRequest simulation (fresh session, first request) ──
 // 1. prompt assembly: installModelSelection snapshots selection.current here.
@@ -144,6 +145,8 @@ createChannel(root2 as never, agent2, {
   provider: 'deepseek-official',
   activity: false,
 })
+// 稳定性探针（状态不得改变）：断言的是「无配置 effort 时不安装选择」，
+// 无可轮询的完成条件（no-op 路径不留痕）——保留固定窗口让错误安装显形。
 await sleep(50)
 const seed2 = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
 const proposed2 = (await (agentCtx2 as Context).waterfall(

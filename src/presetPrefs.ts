@@ -17,11 +17,9 @@ const PREFS_DIR = DATA_DIR
 /** Ids a preset directory may use (dsh-agent-presets' own boundary). */
 const PRESET_ID = /^[a-z0-9][a-z0-9-]*$/
 
-/**
- * Parse a persisted `{ preset }` value; anything else yields undefined.
- * @param text - Raw file contents.
- * @returns The preset id when valid, else undefined.
- */
+/** Parse the value exactly as stored. Preset aliases are roster-dependent:
+ * rc.2 ships `code`, while alpha.2 ships `ptc`, so this file cannot safely
+ * canonicalize either name before the active roster has been queried. */
 export function parsePresetPref(text: string): string | undefined {
   try {
     const parsed: unknown = JSON.parse(text)
@@ -60,4 +58,16 @@ export function writePresetPref(preset: string, dir: string = PREFS_DIR): boolea
   } catch {
     return false
   }
+}
+
+/** Rewrite a stored alias only after the active roster resolved its concrete
+ * id. No-op for an exact match, an absent preference, or rosterless startup. */
+export function migratePresetPref(
+  requested: string | undefined,
+  resolved: string | undefined,
+  dir: string = PREFS_DIR,
+): boolean {
+  return requested === undefined || resolved === undefined || requested === resolved
+    ? true
+    : writePresetPref(resolved, dir)
 }

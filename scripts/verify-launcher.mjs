@@ -192,7 +192,7 @@ r = runBin([])
 check('forward skew: hint names both versions', r.stderr.includes(`v${newerProfile}`) && r.stderr.includes(`v${ownVersion}`))
 check(
   'forward skew: tells user to align the global launcher',
-  r.stderr.includes(`npm install -g ${PACKAGE}@${newerProfile}`),
+  r.stderr.includes(`npm install -g --legacy-peer-deps ${PACKAGE}@${newerProfile}`),
 )
 check(
   'forward skew: never tells user to update the profile again',
@@ -214,10 +214,15 @@ r = runBin([], { DSH_TUI_LANG: 'en' })
 check('reverse skew: English message', r.stderr.includes('cannot start'))
 
 // --- 3.6 同 minor 反向 patch-skew（0.8.2 Launcher / 0.8.1 Profile）---------
-// 非致命：允许启动，但应把 profile 对齐到启动器（用 prerelease 构造
-// "同 core、较旧"的 semver——对稳定发布 x.y.z，x.y.z-0 一定更旧且 major/
-// minor 相同）。
-const olderSameMinorProfile = `${ownVersion}-0`
+// 非致命：允许启动，但应把 profile 对齐到启动器。构造"同 core、较旧"的
+// semver：稳定发布 x.y.z 用 x.y.z-0（prerelease 一定更旧且 major/minor
+// 相同）；ownVersion 自身是 prerelease（x.y.z-beta.1）时把末段数字减一
+// （beta.1 → beta.0）。末段已是 0 时不存在更旧的同 core prerelease，
+// 该组断言退化为恒真（skip）。
+const olderSameMinorProfile = ownVersion.includes('-')
+  ? ownVersion.replace(/\.(\d+)$/, (_, n) => (Number(n) > 0 ? `.${Number(n) - 1}` : `.${n}`))
+  : `${ownVersion}-0`
+const patchSkewOlderExists = olderSameMinorProfile !== ownVersion
 setProfileVersion(olderSameMinorProfile)
 resetStubLog()
 r = runBin([])
@@ -227,11 +232,11 @@ check(
 )
 check(
   'patch skew: tells user to align the profile to the launcher',
-  r.stderr.includes(`dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`),
+  !patchSkewOlderExists || r.stderr.includes(`dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`),
 )
 check(
   'patch skew: does not tell user to update the global launcher',
-  !r.stderr.includes('npm install -g'),
+  !patchSkewOlderExists || !r.stderr.includes('npm install -g'),
 )
 
 // --- 3.7 Launcher→runtime 契约：子进程必须收到 DSH_TUI_LAUNCHER_VERSION ---
@@ -279,7 +284,7 @@ rmSync(join(home, PKG_DIR, 'bin'), { recursive: true, force: true })
 resetStubLog()
 r = runBin([], { DSH_TUI_LANG: 'en' }, { delegating: true })
 check('shim: no bin fails loud with the reinstall hint', r.status === 1 && r.stderr.includes(`Reinstall the global launcher`))
-check('shim: reinstall hint names the npm command', r.stderr.includes(`npm install -g ${PACKAGE}`))
+check('shim: reinstall hint names the npm command', r.stderr.includes(`npm install -g --legacy-peer-deps ${PACKAGE}`))
 
 
 // --- 5. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）

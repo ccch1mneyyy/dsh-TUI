@@ -9,22 +9,29 @@
  *
  * Scenario: 60-row content in a 24-row viewport (maxScroll 36). Scroll
  * away from the top, then re-render with 20 rows (shrink: maxScroll 0),
- * then back to 60 (grow). The shrink frame must keep the pre-frame
- * scrollTop (36 / 10), never 0.
+ * then back to 60 (grow). A MID-SCROLL shrink frame must keep the
+ * pre-frame scrollTop (10), never 0.
+ *
+ * Exception (#421/#422 contract): scrolling to the EXACT bottom re-pins
+ * sticky (the wheel-tremor restore in render-node-to-output). A sticky
+ * view on a shrink frame clamps to the shrunken maxScroll instead of
+ * freezing — the freeze would park scrollTop past the whole collapsed
+ * content and paint blank; clamping shows the (real) bottom rows.
+ * "Nothing renderable exists below maxScroll" — so the bottom-scrolled
+ * shrink frame now expects scrollTop 0 (= collapsed maxScroll).
  *
  * Run with plain node against the compiled lib: `node scripts/verify-scroll.mjs`
  */
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render, Text, ScrollBox } from '../lib/types/ui.js'
+import { settle, settled } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
-
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 function makeStreams() {
   const stdout = new Writable({
@@ -78,51 +85,47 @@ async function run() {
       })
     },
   })
-  await sleep(400)
-  if (!scrollHandle) {
-    check('ScrollBox handle attached', false)
-    process.exit(failed)
-  }
-  check('ScrollBox handle attached', true)
+  // The extra frame clause is ordering: scrollTo below needs the first
+  // full-height layout committed, which the fixed sleep used to cover.
+  check('ScrollBox handle attached', await settled(() => scrollHandle !== null && frameLog.at(-1)?.scrollHeight === 60))
+  if (!scrollHandle) process.exit(failed)
 
   // ---- bottom-scrolled: 60 rows, maxScroll 36, scroll to 36.
   scrollHandle.scrollTo(36)
-  await sleep(400)
-  const bottomScrolled = frameLog.at(-1)
-  check('bottom scroll landed at maxScroll', bottomScrolled.scrollTop === 36 && bottomScrolled.scrollHeight === 60, JSON.stringify(bottomScrolled))
+  check('bottom scroll landed at maxScroll', await settled(() => frameLog.at(-1)?.scrollTop === 36 && frameLog.at(-1)?.scrollHeight === 60), JSON.stringify(frameLog.at(-1)))
 
   // ---- shrink frame: 20 rows → content collapses to the viewport height
   // (24; the content wrapper flexGrows to at least the viewport), so
-  // maxScroll = 0. Must NOT jump to 0.
+  // maxScroll = 0. scrollTo(36) landed on the exact bottom, which re-pins
+  // sticky; a sticky shrink frame clamps to the collapsed maxScroll (#421:
+  // freezing past the content paints blank — see the docstring exception).
   instance.rerender(makeScroller(20))
-  await sleep(400)
-  const shrinkFrame = frameLog.find(f => f.scrollHeight === 24)
-  check('shrink frame keeps the scrolled position (no jump to top)', shrinkFrame !== undefined && shrinkFrame.scrollTop === 36, JSON.stringify(shrinkFrame ?? frameLog.at(-1)))
+  check('shrink frame clamps the re-pinned sticky view to the collapsed bottom', await settled(() => {
+    const f = frameLog.find(f => f.scrollHeight === 24)
+    return f !== undefined && f.scrollTop === 0
+  }), JSON.stringify(frameLog.find(f => f.scrollHeight === 24) ?? frameLog.at(-1)))
 
   // ---- grow back: 60 rows. Position re-validated at the bottom.
   instance.rerender(makeScroller(60))
-  await sleep(400)
-  const grownFrame = frameLog.at(-1)
-  check('grow-back frame stays at the bottom', grownFrame.scrollTop === 36 && grownFrame.scrollHeight === 60, JSON.stringify(grownFrame))
+  check('grow-back frame stays at the bottom', await settled(() => frameLog.at(-1)?.scrollTop === 36 && frameLog.at(-1)?.scrollHeight === 60), JSON.stringify(frameLog.at(-1)))
 
   // ---- mid-scrolled: 60 rows, scroll to 10 (away from bottom), shrink, grow.
   instance.rerender(makeScroller(60))
-  await sleep(400)
+  await settle(() => frameLog.at(-1)?.scrollHeight === 60)
   scrollHandle.scrollTo(10)
-  await sleep(400)
+  await settle(() => frameLog.at(-1)?.scrollTop === 10)
   instance.rerender(makeScroller(20))
-  await sleep(400)
-  const midShrink = frameLog.filter(f => f.scrollHeight === 24).at(-1)
-  check('mid-scroll shrink frame keeps the position', midShrink !== undefined && midShrink.scrollTop === 10, JSON.stringify(midShrink ?? frameLog.at(-1)))
+  check('mid-scroll shrink frame keeps the position', await settled(() => {
+    const f = frameLog.filter(f => f.scrollHeight === 24).at(-1)
+    return f !== undefined && f.scrollTop === 10
+  }), JSON.stringify(frameLog.filter(f => f.scrollHeight === 24).at(-1) ?? frameLog.at(-1)))
 
   // ---- the frame AFTER the shrink artifact must not pull the mid position
   // to the bottom: the positional at-bottom check must not trust a maxScroll
   // computed from the artifact frame (opentui #709: content-size changes
   // must not reset the manual-scroll state).
   instance.rerender(makeScroller(60))
-  await sleep(400)
-  const midGrown = frameLog.at(-1)
-  check('post-shrink grow frame keeps the mid position', midGrown.scrollTop === 10 && midGrown.scrollHeight === 60, JSON.stringify(midGrown))
+  check('post-shrink grow frame keeps the mid position', await settled(() => frameLog.at(-1)?.scrollTop === 10 && frameLog.at(-1)?.scrollHeight === 60), JSON.stringify(frameLog.at(-1)))
 
   instance.unmount()
   process.exit(failed)

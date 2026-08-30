@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import type { WheelEvent } from '../ink/events/wheel-event.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { Divider } from '../components/design-system/Divider.js'
 import { HintLine } from '../components/design-system/HintLine.js'
@@ -22,7 +23,7 @@ import {
 } from '../dsh-adapter/trajectory/index.js'
 import { HOTSPOT_SORTS, WAVE_PROJECTIONS } from '../dsh-adapter/trajectory/index.js'
 import type { Channel } from '../dsh-adapter/channel.js'
-import type { HotspotSort, WaveProjection } from '../dsh-adapter/types.js'
+import type { HotspotRow, HotspotSort, WaveProjection } from '../dsh-adapter/types.js'
 
 /**
  * The trajectory scene — the session's own screen.
@@ -92,6 +93,11 @@ export function TrajectoryScene({
   const [arrivalFrom, setArrivalFrom] = React.useState(Number.MAX_SAFE_INTEGER)
   /** Cursor pinned to the tail until the user scrolls away from it. */
   const [follow, setFollow] = React.useState(true)
+  /** Mouse hover states for the tab segments and the sort/projection label. */
+  const [hoverTab, setHoverTab] = React.useState<'timeline' | 'hotspot' | null>(null)
+  const [hoverAxis, setHoverAxis] = React.useState(false)
+  /** Hover state for the header ✕ exit button. */
+  const [closeHovered, setCloseHovered] = React.useState(false)
 
   // ── projection ───────────────────────────────────────────────────────────
   const nodes = build.nodes
@@ -210,6 +216,52 @@ export function TrajectoryScene({
     [tick],
   )
 
+  /**
+   * Jump back to the timeline, positioned on a hotspot group's first member —
+   * the keyboard Enter path, shared with the mouse row click.
+   */
+  const jumpFromHotspot = React.useCallback(
+    (row: HotspotRow | undefined) => {
+      switchView('timeline')
+      if (row !== undefined) {
+        const target = indexes.indexOf(row.firstIndex)
+        setCursor(target >= 0 ? target : 0)
+        setFollow(false)
+      }
+    },
+    [indexes, switchView],
+  )
+
+  /** Mouse wheel over the content area: move the selection, not a viewport. */
+  const handleWheel = React.useCallback(
+    (event: WheelEvent): void => {
+      if (view === 'hotspot') {
+        const total = hotspotRows(agg).length
+        const direction = event.deltaY >= 0 ? 1 : -1
+        setHotCursor(previous => Math.max(0, Math.min(total - 1, previous + direction)))
+        return
+      }
+      if (expanded) {
+        // Expanded inspector owns the wheel: same page step as j/k.
+        const direction = event.deltaY >= 0 ? 1 : -1
+        setInspectScroll(previous => Math.max(0, previous + direction * Math.max(1, inspectorRows - 2)))
+        return
+      }
+      move(event.deltaY)
+    },
+    [view, agg, expanded, inspectorRows, move],
+  )
+
+  /** Jump the timeline cursor to a filtered index (keyboard jump semantics). */
+  const jumpTo = React.useCallback(
+    (index: number) => {
+      setInspectScroll(0)
+      setCursor(index)
+      setFollow(index >= filtered.length - 1)
+    },
+    [filtered.length],
+  )
+
   // ── keys ─────────────────────────────────────────────────────────────────
   useInput((input, key) => {
     // The query line owns the keyboard while open, so a `q` typed into a
@@ -269,14 +321,7 @@ export function TrajectoryScene({
       }
       if (key.return) {
         // Jump back to the timeline, positioned on the group's first member.
-        const row = hotspotRows(agg)[hotCursor]
-        switchView('timeline')
-        if (row !== undefined) {
-          const target = indexes.indexOf(row.firstIndex)
-          setCursor(target >= 0 ? target : 0)
-          setFollow(false)
-        }
-        return
+        return jumpFromHotspot(hotspotRows(agg)[hotCursor])
       }
       return
     }
@@ -345,41 +390,123 @@ export function TrajectoryScene({
     (totals.retries > 0 ? ` \u00b7 ${t('traj-retries', { n: totals.retries })}` : '') +
     ` \u00b7 ${formatDuration(totals.spanMs)}`
 
+  // ✕ 退出按钮占 2 格（` ✕`）：预量测行给右端留出预算，按钮钉在末列
+  const CLOSE_WIDTH = 2
   const headerLine = spread(
     `\u2726 ${t('traj-title')}  ${channel.sessionTitle ?? channel.cwd}`,
     totalsText,
-    bandWidth,
+    bandWidth - CLOSE_WIDTH,
   )
   const header = (
     <Box width="100%" height={1} flexShrink={0}>
-      <Text>
-        <Text color="claude" bold>{`\u2726 ${t('traj-title')}`}</Text>
-        <Text color="subtle">{headerLine.left.slice((`\u2726 ${t('traj-title')}`).length)}</Text>
-        <Text>{headerLine.gap}</Text>
-        <Text color={totals.errors > 0 ? 'error' : 'subtle'}>{headerLine.right}</Text>
-      </Text>
+      {/* 显式分段宽度（页签行同法）：Text 自然宽度的布局测量在 CJK/混合
+          内容下有歧义，会把末段 ✕ 挤出 100% 行宽被裁——显式 width 钉死。 */}
+      <Box flexShrink={0} width={bandWidth - CLOSE_WIDTH}>
+        <Text>
+          <Text color="claude" bold>{`\u2726 ${t('traj-title')}`}</Text>
+          <Text color="subtle">{headerLine.left.slice((`\u2726 ${t('traj-title')}`).length)}</Text>
+          <Text>{headerLine.gap}</Text>
+          <Text color={totals.errors > 0 ? 'error' : 'subtle'}>{headerLine.right}</Text>
+        </Text>
+      </Box>
+      <Box
+        flexShrink={0}
+        width={CLOSE_WIDTH}
+        // 可点击退出（q/Esc 的鼠标等价）——hover 提亮给出可点指示
+        onClick={() => onClose()}
+        onMouseEnter={(): void => setCloseHovered(true)}
+        onMouseLeave={(): void => setCloseHovered(false)}
+      >
+        <Text color={closeHovered ? 'text' : 'subtle'}>{' ✕'}</Text>
+      </Box>
     </Box>
   )
 
   const axisLabel = view === 'hotspot' ? t(`traj-sort-${sort}`) : t(`traj-proj-${projection}`)
-  const tabsLeft =
-    `${view === 'timeline' ? '\u25cf' : '\u25cb'} ${t('traj-tab-timeline')}  ` +
-    `${view === 'hotspot' ? '\u25cf' : '\u25cb'} ${t('traj-tab-hotspot')}`
+  const tabTimelineText = `${view === 'timeline' ? '\u25cf' : '\u25cb'} ${t('traj-tab-timeline')}  `
+  const tabHotspotText = `${view === 'hotspot' ? '\u25cf' : '\u25cb'} ${t('traj-tab-hotspot')}`
   const queryText_ =
     queryOpen || !query.empty
       ? `   / ${queryText}${queryOpen ? '\u258c' : ''}  ${t('traj-matches', { n: filtered.length, total: nodes.length })}`
       : ''
+  const tabsLeft = tabTimelineText + tabHotspotText
   const tabsLine = spread(tabsLeft + queryText_, axisLabel, bandWidth)
+  // Segment truncation mirrors spread's left-clip: the query tail yields
+  // first, then the far tab label — the line stays exactly one row.
+  const leftRoom = stringWidth(tabsLine.left)
+  const hotspotShown = truncateWidth(tabHotspotText, Math.max(0, leftRoom - stringWidth(tabTimelineText)))
+  const queryShown =
+    queryText_ === ''
+      ? ''
+      : truncateWidth(
+          queryText_,
+          Math.max(0, leftRoom - stringWidth(tabTimelineText) - stringWidth(hotspotShown)),
+        )
   const tabs = (
     <Box width="100%" height={1} flexShrink={0}>
-      <Text>
-        <Text color={view === 'timeline' ? 'permission' : 'subtle'} bold={view === 'timeline'}>
-          {tabsLine.left.slice(0, tabsLeft.length)}
+      {/* Clickable segments over the same pre-measured line: each tab click
+          switches the view (←/→ equivalent), the query segment and the blank
+          gap open the search editor (`/` equivalent — the gap IS where the
+          query line sits), and the right label cycles sort (hotspot, `t`) or
+          projection (timeline, `m`). Non-active tabs brighten on hover. */}
+      <Box
+        flexShrink={0}
+        width={stringWidth(tabTimelineText)}
+        onClick={() => switchView('timeline')}
+        onMouseEnter={(): void => setHoverTab('timeline')}
+        onMouseLeave={(): void => setHoverTab(previous => (previous === 'timeline' ? null : previous))}
+      >
+        <Text
+          color={view === 'timeline' ? 'permission' : hoverTab === 'timeline' ? 'text' : 'subtle'}
+          bold={view === 'timeline'}
+        >
+          {tabTimelineText}
         </Text>
-        <Text color="suggestion">{tabsLine.left.slice(tabsLeft.length)}</Text>
+      </Box>
+      <Box
+        flexShrink={0}
+        width={stringWidth(hotspotShown)}
+        onClick={() => switchView('hotspot')}
+        onMouseEnter={(): void => setHoverTab('hotspot')}
+        onMouseLeave={(): void => setHoverTab(previous => (previous === 'hotspot' ? null : previous))}
+      >
+        <Text
+          color={view === 'hotspot' ? 'permission' : hoverTab === 'hotspot' ? 'text' : 'subtle'}
+          bold={view === 'hotspot'}
+        >
+          {hotspotShown}
+        </Text>
+      </Box>
+      {queryShown !== '' && (
+        <Box flexShrink={0} width={stringWidth(queryShown)} onClick={() => setQueryOpen(true)}>
+          <Text color="suggestion">{queryShown}</Text>
+        </Box>
+      )}
+      <Box flexGrow={1} flexShrink={1} onClick={() => { if (!queryOpen) setQueryOpen(true) }}>
         <Text>{tabsLine.gap}</Text>
-        <Text color="subtle">{tabsLine.right}</Text>
-      </Text>
+      </Box>
+      <Box
+        flexShrink={0}
+        // +1 slack: ink breaks a wrap line exactly AT the box width, so a
+        // wide-char-ending label (按耗时) at an exact fit loses its last
+        // glyph to a clipped second line (the truncateWidth doc's trap).
+        // The flexGrow gap absorbs the extra cell.
+        width={stringWidth(tabsLine.right) + 1}
+        onClick={() => {
+          if (view === 'hotspot') {
+            setSort(previous => HOTSPOT_SORTS[(HOTSPOT_SORTS.indexOf(previous) + 1) % HOTSPOT_SORTS.length]!)
+          } else {
+            setProjection(
+              previous => WAVE_PROJECTIONS[(WAVE_PROJECTIONS.indexOf(previous) + 1) % WAVE_PROJECTIONS.length]!,
+            )
+          }
+          setSwitchTick(tick)
+        }}
+        onMouseEnter={(): void => setHoverAxis(true)}
+        onMouseLeave={(): void => setHoverAxis(false)}
+      >
+        <Text color={hoverAxis ? 'text' : 'subtle'}>{tabsLine.right}</Text>
+      </Box>
     </Box>
   )
 
@@ -409,45 +536,65 @@ export function TrajectoryScene({
         matches={matchColumns}
         tick={tick}
         alertTick={alertTick}
+        onColumnClick={column => {
+          // 点击波形列（或标尺行）= 跳到该列最近事件；空列继承前驱的
+          // firstIndex，空档区点击落在空档开始处。查询过滤掉的行不跳。
+          const nodeIndex = band.buckets[column]?.firstIndex ?? -1
+          if (nodeIndex < 0) return
+          const target = indexes.indexOf(nodeIndex)
+          if (target >= 0) jumpTo(target)
+        }}
       />
       <Box height={1} flexShrink={0}><Text> </Text></Box>
-      {view === 'timeline' ? (
-        <>
-          <Ledger
-            rows={filtered}
-            start={windowStart}
-            height={ledgerRows}
-            cursor={clampedCursor}
+      {/* Content region with the wheel: the literal ink-box host — every Box
+          flavor (ThemedBox AND raw ink Box) is a compiled component whose
+          prop list drops onWheel into the style rest (SuggestionCard/ScrollBox
+          hit the same wall and write the host element directly). Layout stays
+          a flexGrow column, so the extra nesting changes nothing. */}
+      <ink-box
+        style={{ flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden', width: '100%' }}
+        onWheel={handleWheel}
+      >
+        {view === 'timeline' ? (
+          <>
+            <Ledger
+              rows={filtered}
+              start={windowStart}
+              height={ledgerRows}
+              cursor={clampedCursor}
+              width={columns - 4}
+              tick={tick}
+              arrivalTick={arrivalTick}
+              arrivalFrom={arrivalFrom}
+              onRowClick={index => jumpTo(index)}
+            />
+            {/* `Divider` defaults to the FULL terminal width; inside this
+                padded scene that overflows by two cells and wraps onto a
+                second row, which pushed the header off the top of the
+                viewport. Size it to the scene's own content width. */}
+            <Divider color="permission" width={bandWidth} />
+            <Inspector
+              node={focused}
+              detail={detail}
+              height={inspectorRows}
+              width={columns - 4}
+              expanded={expanded}
+              scroll={inspectScroll}
+            />
+          </>
+        ) : (
+          <HotspotView
+            agg={agg}
+            sort={sort}
             width={columns - 4}
+            height={ledgerRows + inspectorRows + 1}
+            cursor={hotCursor}
             tick={tick}
-            arrivalTick={arrivalTick}
-            arrivalFrom={arrivalFrom}
+            switchTick={switchTick}
+            onRowClick={index => jumpFromHotspot(hotspotRows(agg)[index])}
           />
-          {/* `Divider` defaults to the FULL terminal width; inside this
-              padded scene that overflows by two cells and wraps onto a
-              second row, which pushed the header off the top of the
-              viewport. Size it to the scene's own content width. */}
-          <Divider color="permission" width={bandWidth} />
-          <Inspector
-            node={focused}
-            detail={detail}
-            height={inspectorRows}
-            width={columns - 4}
-            expanded={expanded}
-            scroll={inspectScroll}
-          />
-        </>
-      ) : (
-        <HotspotView
-          agg={agg}
-          sort={sort}
-          width={columns - 4}
-          height={ledgerRows + inspectorRows + 1}
-          cursor={hotCursor}
-          tick={tick}
-          switchTick={switchTick}
-        />
-      )}
+        )}
+      </ink-box>
       <Box height={1} flexShrink={0}><Text> </Text></Box>
       <Box width="100%" height={1} flexShrink={0}>
         <Text dimColor italic wrap="truncate">

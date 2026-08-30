@@ -111,7 +111,7 @@ preset 装配实现（`src/presets.ts`）：
 2. 语言解析             src/plugin.ts:44-45    CC_TUI_LANG > config.lang > resolveStartupLang() > zh
 3. 更新标记校验         src/plugin.ts:52-71    DSH_CC_UPDATED_FROM 校验后删除
 4. 服务装配             src/plugin.ts:82-91    userQuestions 兜底创建 + toolAskUser 挂载
-                                             + registerPackagedSkills + 问卷 provider 注册
+                                             + 问卷 provider 注册
                                              + ctx.effect(rejectAll)（"All three must be in
                                                place before the agent is resolved"）
 5. stderr 守卫          src/plugin.ts:100-115  child-process spawn 补丁（issue #17）
@@ -228,9 +228,8 @@ consumed by the ported Ink core"——三个函数全部空操作
   仅声明最小接口 AgentPresetsLike）。
 - dsh-commands 注册表的 execute/list 语义（`src/channel.ts:879,1962-1976` 只
   消费 CommandRuntime 接口）。
-- packaged-skills 实际注册结果：skills/ 目录实含 audit/bug/practice/
-  pr-comments/release-notes/review/vuln-check 7 个，但各 SKILL.md 的 frontmatter
-  字段未逐一核验。
+- `.agents/skills/` 的项目技能由 DSH 文件系统 provider 在仓库工作区发现，
+  不属于 dsh-TUI npm 包或运行时注册面。
 
 相关文档：[overview.md](overview.md)（总览与模块边界）、
 [input-commands.md](input-commands.md)（命令与输入模型）、

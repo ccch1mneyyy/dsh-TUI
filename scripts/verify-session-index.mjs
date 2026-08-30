@@ -26,6 +26,7 @@
  */
 import assert from 'node:assert/strict'
 import {
+  appendFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -227,6 +228,62 @@ check(
   { text: 'via the inbox', source: 'prompt' },
 )
 
+// Regression: a large startup/context prefix can push both the first prompt
+// and its auto title beyond the cheap head window; later activity can also push
+// them outside the tail. The initial digest is honestly inconclusive, then the
+// exceptional progressive scan in listSummaries recovers and caches the title.
+// The cwd is a path whose basename is identical on every platform (a backslash
+// path would collapse to the whole string as basename on POSIX and break CI).
+const delayedOpening = []
+for (let i = 0; i < 180; i++) {
+  delayedOpening.push([{ type: 'plugin/noise', seq: i, time: i, data: { text: filler(700) } }])
+}
+delayedOpening.push([userPrompt('真实的首条问题', 180)])
+delayedOpening.push([autoTitle('跨目录会话标题', 181)])
+for (let i = 182; i < 560; i++) {
+  delayedOpening.push([{ type: 'plugin/noise', seq: i, time: i, data: { text: filler(700) } }])
+}
+const delayedFile = seed('delayed-opening', delayedOpening, { cwd: '/data/proj/dsh-tui' })
+const cheapDelayed = digestSession(delayedFile, '/data/proj/dsh-tui')
+check('cheap windows reproduce the cwd-basename fallback', cheapDelayed.title, {
+  text: 'dsh-tui',
+  source: 'fallback',
+})
+check('the inconclusive cheap digest keeps the real conversation visible', cheapDelayed.hasPrompt, true)
+const delayedHeader = {
+  id: 'delayed-opening',
+  cwd: '/data/proj/dsh-tui',
+  createdAt: 1,
+  delegationDepth: 0,
+}
+const delayedSource = (revision) => ({
+  listSnapshots: async () => [{ header: delayedHeader, revision }],
+  locate: () => ({ kind: 'jsonl', path: delayedFile }),
+})
+const delayedSummary = (await listSummaries(delayedSource('delayed-r1')))[0]
+check('progressive recovery restores the real cross-directory title', delayedSummary.title, {
+  text: '跨目录会话标题',
+  source: 'auto',
+})
+
+// A rename is observed in the tail, then ordinary appends push it outside both
+// windows. The append-only cache must retain that stronger title instead of
+// regressing to the opening auto title or cwd basename.
+appendFileSync(delayedFile, encode([[manualTitle('用户重命名标题', 560)]]))
+check('a newly appended rename wins immediately', (await listSummaries(delayedSource('delayed-r2')))[0].title, {
+  text: '用户重命名标题',
+  source: 'renamed',
+})
+const afterRenameNoise = []
+for (let i = 561; i < 900; i++) {
+  afterRenameNoise.push([{ type: 'plugin/noise', seq: i, time: i, data: { text: filler(700) } }])
+}
+appendFileSync(delayedFile, encode(afterRenameNoise))
+check('ordinary append growth never drops an older real title', (await listSummaries(delayedSource('delayed-r3')))[0].title, {
+  text: '用户重命名标题',
+  source: 'renamed',
+})
+
 check('a missing log degrades instead of throwing', digestSession(join(root, 'nope', 'x.zstd'), '/proj'), {
   title: undefined,
   hasPrompt: false,
@@ -359,7 +416,7 @@ check('and is valid again afterwards', readIndex().size, 3)
 writeFileSync(INDEX_FILE, JSON.stringify({ version: 999, entries: { auto: { derived: { revision: 'x' } } } }))
 const upgraded = await listSummaries(source)
 check('an index from another schema version is discarded, not misread', upgraded.length, 3)
-ok('and rewritten at the current version', JSON.parse(readFileSync(INDEX_FILE, 'utf8')).version === 1)
+ok('and rewritten at the current version', JSON.parse(readFileSync(INDEX_FILE, 'utf8')).version === 2)
 
 // ── 5. Final-state equivalence ──────────────────────────────────────────
 // An index grown across a sequence of changes must equal one built fresh at

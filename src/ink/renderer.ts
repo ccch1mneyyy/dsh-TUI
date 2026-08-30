@@ -1,6 +1,7 @@
 import { logForDebugging } from '../utils/debug.js'
 import { type DOMElement, markDirty } from './dom.js'
 import type { Frame } from './frame.js'
+import { invalidateNoInterestRect } from './hit-test.js'
 import { consumeAbsoluteRemovedFlag } from './node-cache.js'
 import Output from './output.js'
 import renderNodeToOutput, {
@@ -47,6 +48,12 @@ export default function createRenderer(
   return options => {
     const { frontFrame, backFrame, isTTY, terminalWidth, terminalRows } =
       options
+    // The no-interest hover rect (hit-test.ts) is strictly per-frame: drop
+    // it at the top of EVERY render pass so scroll drains, blits and any
+    // other geometry change without a React commit re-arm the hit-test.
+    // Placed before the invalid-dimension early return below so even
+    // empty frames cannot serve a stale rect.
+    invalidateNoInterestRect()
     const prevScreen = frontFrame.screen
     const backScreen = backFrame.screen
     // Read pools from the back buffer's screen — pools may be replaced

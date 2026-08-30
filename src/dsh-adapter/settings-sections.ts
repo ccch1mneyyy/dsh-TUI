@@ -13,6 +13,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { LocalizedDescriptions } from '../commands.js'
 import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import { vetSectionSecretRefs } from './credentialRefGuard.js'
 
 /** Control kinds the TUI settings screen knows how to render. */
 export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
@@ -146,7 +147,20 @@ export class TuiSettingsSectionsRuntime extends Service {
     const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.register', this)
     const owner = activationFiber(caller)
     if (owner === undefined) throw new Error('dsh-tui: tuiSettingsSections.register requires a live activation')
-    const dispose = registerSection(this, section, owner)
+    // The service path is plugin-land. A plugin's secret field names its own
+    // credential ref, but nothing stopped it from naming a host-owned ref
+    // (DEEPSEEK_API_KEY / DEEPSEEK_* / DSH_*) and overwriting the user's
+    // shared credentials through a card that looks like plugin config.
+    // Reserved refs are rejected here; host-identity registrations (the
+    // owner-less host objects below) never pass through this method.
+    const vetted = vetSectionSecretRefs(section)
+    for (const rejection of vetted.rejected) {
+      this.ctx.logger.warn(
+        `dsh-tui: settings section "${section.ns}" field "${rejection.path.join('.')}" was rejected: ` +
+          `credential ref "${rejection.ref}" is reserved by the host`,
+      )
+    }
+    const dispose = registerSection(this, vetted.section, owner)
     bindCallerEffect(caller, dispose)
     return dispose
   }
@@ -199,8 +213,8 @@ function settingsSectionStateFor(runtime: TuiSettingsSectionsRuntime): SettingsS
   return state
 }
 
-function registerSection(runtime: TuiSettingsSectionsRuntime, section: TuiSettingsSection, owner?: object): () => void {
-  const state = settingsSectionStateFor(runtime)
+function registerSection(runtime: TuiSettingsSectionsRuntime | SettingsSectionState, section: TuiSettingsSection, owner?: object): () => void {
+  const state = isSectionState(runtime) ? runtime : settingsSectionStateFor(runtime)
   const ns = section.ns.trim()
   if (!/^[a-z][a-z0-9_-]*$/u.test(ns)) throw new TypeError(`invalid TUI settings-section namespace: ${section.ns}`)
   if (state.sections.has(ns)) throw new Error(`TUI settings section "${ns}" is already registered`)
@@ -254,8 +268,8 @@ function registerSection(runtime: TuiSettingsSectionsRuntime, section: TuiSettin
   }
 }
 
-function subscribeSections(runtime: TuiSettingsSectionsRuntime, listener: () => void, owner?: object): () => void {
-  const state = settingsSectionStateFor(runtime)
+function subscribeSections(runtime: TuiSettingsSectionsRuntime | SettingsSectionState, listener: () => void, owner?: object): () => void {
+  const state = isSectionState(runtime) ? runtime : settingsSectionStateFor(runtime)
   const entry = { owner, listener }
   state.listeners.add(entry)
   return () => {
@@ -277,6 +291,42 @@ export function getHostSettingsSections(runtime: TuiSettingsSectionsRuntime | un
   } catch {
     return undefined
   }
+}
+
+function isSectionState(value: object): value is SettingsSectionState {
+  return value instanceof Map === false && 'sections' in value && 'listeners' in value
+}
+
+/**
+ * In-package fallback registry: some real compositions dispose the
+ * `dsh-tui-settings-sections` service row right after it loads (the whole
+ * dsh-tui-* host-seam insert list is affected — see the issue-#183 skew
+ * family), leaving `ctx.get('tuiSettingsSections')` permanently undefined.
+ * The TUI's own section must not depend on that: plugin.ts registers into —
+ * and channel.ts reads from — this local host whenever the composition
+ * service is unavailable. Third-party sections still require the service
+ * row; the local host only carries the TUI's own section.
+ */
+const localSectionsState: SettingsSectionState = {
+  sections: new Map(),
+  owners: new Map(),
+  listeners: new Set(),
+  host: undefined,
+}
+
+export function getLocalSettingsSectionsHost(): TuiSettingsSectionsHost {
+  localSectionsState.host ??= Object.freeze({
+    register(section: TuiSettingsSection) {
+      return registerSection(localSectionsState, section)
+    },
+    list() {
+      return [...localSectionsState.sections.values()]
+    },
+    subscribe(listener: () => void) {
+      return subscribeSections(localSectionsState, listener)
+    },
+  })
+  return localSectionsState.host
 }
 
 export default TuiSettingsSectionsRuntime

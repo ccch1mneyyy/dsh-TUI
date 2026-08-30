@@ -1,0 +1,28 @@
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+
+supportedArchitectures:
+  os:
+    - linux
+    - darwin
+    - win32
+  cpu:
+    - x64
+    - arm64
+  libc:
+    - glibc
+
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
+  # 原生依赖的构建脚本是便携包运行时必需的（pty/ffi/子进程桥），必须放行；
+  # 否则 pnpm ≥11 以 ERR_PNPM_IGNORED_BUILDS 拒绝整个安装。
+  koffi: true
+  node-pty: true
+  '@deepseek-ai/dsh-subprocess-local': true
+
+minimumReleaseAgeExclude:
+  - '@deepseek-harness-tui/dsh-tui@0.9.3'

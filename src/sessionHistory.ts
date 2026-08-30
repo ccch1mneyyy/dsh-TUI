@@ -72,6 +72,33 @@ export function readResumeTarget(): string | undefined {
 }
 
 /**
+ * The session id requested through `--resume`/`-c`/`--continue` in app args,
+ * mirroring the standalone bin's interception (issue #120/#53). The
+ * `dsh --profile tui` boot path forwards these args to the booted app
+ * verbatim and never parses them into DSH_TUI_RESUME_SESSION, so the
+ * in-profile plugin reads them itself. A bare flag with no id defers to the
+ * exit-time marker, exactly like the bin.
+ * @param argv - the app arguments (typically `process.argv.slice(2)`).
+ * @returns The requested session id, or undefined when none was given.
+ */
+export function resumeTargetFromArgv(argv: readonly string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
+      let sessionId = ''
+      if (a.startsWith('--resume=')) {
+        sessionId = a.slice('--resume='.length).trim()
+      } else if (a === '--resume' && argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) {
+        sessionId = argv[++i].trim()
+      }
+      if (!sessionId) sessionId = readResumeTarget() ?? ''
+      if (sessionId) return sessionId
+    }
+  }
+  return undefined
+}
+
+/**
  * Session-id → last-used epoch ms map for MRU ordering.
  * @returns The parsed map; best effort, an unreadable file yields {}.
  */

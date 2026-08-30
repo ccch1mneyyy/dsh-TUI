@@ -1,8 +1,11 @@
 # 主题系统与 i18n
 
-本文覆盖 Gentle Mist Blue（雾蓝）主题家族（内置三色板 + 用户自定义主题）、
-启动解析与 /theme 热切换，以及 en/zh 双语 i18n 系统与 /lang 热换。行号均以
-审计基线 b2f4087 为准。
+本文覆盖 Gentle Mist Blue（雾蓝）主题家族（内置三色板 + 静态用户主题 + 运行时
+插件主题）、启动解析与 /theme 热切换，以及 en/zh 双语 i18n 系统与 /lang 热换。
+历史行号均以审计基线 b2f4087 为准；其中的 `CC_TUI_THEME` / `CC_TUI_LANG` 环境变量与
+`~/.dsh-cc/*` 路径同为基线时期旧名，现行为 `DSH_TUI_THEME` / `DSH_TUI_LANG` 与
+`~/.dsh-tui/*`（见[配置参考](../configuration.md)）。运行时插件主题的当前契约以
+[主题系统](../themes.md) 与[插件开发指南](../plugins.md)为准。
 
 ## 主题家族与键面
 
@@ -80,11 +83,21 @@ colors }：
 - resolveCustomTheme 带缓存 + name→file 索引（:258-289）：声明 name 与
   文件名不同的主题首次 miss 后建索引，显示名处处可解析；失败不缓存。
 - listCustomThemes 按主题 name localeCompare 排序、跳过坏文件（:233-247）。
-- ThemePicker 行预览（src/components/ThemePicker.tsx:12-65）：██ 双块色样，预览键
-  claude/text/success；选项为三内置 + 发现的自定义主题。
+- ThemePicker 行预览（src/components/ThemePicker.tsx）：██ 双块色样，预览键
+  claude/text/success；选项由 themeCatalog 统一组合内置、静态主题和运行时插件主题。
 - 回归：scripts/verify-themes.mjs（临时 HOME + 7 夹具、19 项断言、失败
   非零退出；未挂 CI，为手动回归脚本），`node --import tsx/esm
   scripts/verify-themes.mjs` 直跑源码。
+
+## 运行时插件主题（当前实现）
+
+`src/dsh-adapter/themes.ts` 在既有 `dsh-tui-extensions` 行中提供
+`ctx.tuiThemes`。插件用 `ctx.get('tuiThemes', false)?.register()` 注册
+`plugin-id:theme-id` 形式的安全 ID；注册随 Cordis activation 自动清理，host
+通过 `src/themeCatalog.ts` 将 `auto → 内置 → 静态文件 → runtime` 统一投影给
+`/theme` 选择器、补全和直接切换。内置/静态主题优先级不变，运行时主题名沿用
+`theme.json` 持久化但不写入 themes 目录。聚焦回归为
+`node --import tsx/esm scripts/verify-runtime-themes.ts`。
 
 ## i18n 系统（#22，提交 283aba1）
 

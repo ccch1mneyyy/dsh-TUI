@@ -17,7 +17,7 @@
 
 import React from 'react'
 import { t } from '../../i18n.js'
-import { Box, Text, useInput } from '../../ui.js'
+import { Box, Text, useInput, ScrollBox, useTerminalSize, type ScrollBoxHandle } from '../../ui.js'
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
@@ -55,6 +55,26 @@ export function PlanReviewPanel({
   const [feedback, setFeedback] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
   const [error, setError] = React.useState<string | null>(null)
+  const { rows: terminalRows } = useTerminalSize()
+  // Chat chrome (status line) + panel scaffolding (divider, question,
+  // spacings, hint) consume twelve rows before the plan body — same
+  // constant as AskUserQuestionPanel. Option/feedback/error rows are
+  // charged on top so a long markdown detail cannot push them off-screen.
+  // A definite `height` (not just maxHeight) is required: otherwise the
+  // ScrollBox grows with the markdown and scrollBy is a no-op.
+  const optionRows = options.reduce(
+    (sum, option) => sum + (option.description === undefined ? 1 : 2),
+    0,
+  ) + 1 /* extra gap on the focused option */ + 1 /* feedback row */
+  const reservedRows = 12 + optionRows + (error === null ? 0 : 2)
+  // Floor at zero, not four: on a short terminal the decision rows fill the
+  // budget and no plan-body rows remain. Forcing four here would re-inflate
+  // the panel past the viewport and push the controls off-screen again — the
+  // exact regression this panel exists to prevent. When nothing remains, the
+  // body viewport is omitted entirely (a zero-height ScrollBox is neither
+  // readable nor a useful wheel target).
+  const detailMax = Math.max(0, terminalRows - reservedRows)
+  const detailScrollRef = React.useRef<ScrollBoxHandle | null>(null)
 
   const inputFocused = focusIndex === options.length
 
@@ -115,7 +135,16 @@ export function PlanReviewPanel({
     onAnswer({ selected: declineSelected(), ...(text !== '' ? { custom: text } : {}) })
   }
 
-  useInput((input, key) => {
+  useInput((input, key, event) => {
+    // Steal the wheel while this panel is mounted so Chat's fallback cannot
+    // scroll the transcript. Position-first already hits the ScrollBox when
+    // the pointer is over it; this covers the option/hint rows and any
+    // dispatchWheelAt miss. Up/Down stay on the decision rows.
+    if (key.wheelUp || key.wheelDown) {
+      detailScrollRef.current?.scrollBy(key.wheelUp ? -3 : 3)
+      event.stopImmediatePropagation()
+      return
+    }
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel()
       return
@@ -198,21 +227,33 @@ export function PlanReviewPanel({
   }, { isActive: true })
 
   const cursorChar = cursor < feedback.length ? feedback[cursor] : ' '
+  /** Mouse: click a decision row = focus it + submit (same as Enter). */
+  const [hoverIndex, setHoverIndex] = React.useState(-1)
+  const clickOption = (index: number): void => {
+    setFocusIndex(index)
+    submitOption(index)
+  }
+  /** Mouse: click the feedback row to focus it. */
+  const focusFeedbackRow = (): void => {
+    setFocusIndex(options.length)
+    setError(null)
+  }
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
       <Divider
         color="permission"
         title={` ${question.header ?? t('plan-review-fallback-header')} `}
-        padding={4}
       />
       <Box flexDirection="column" marginTop={1}>
         <Text bold wrap="wrap">
           {question.question}
         </Text>
-        {question.detail !== undefined && (
-          <Box flexDirection="column" marginTop={1}>
-            <Markdown>{question.detail}</Markdown>
+        {question.detail !== undefined && detailMax > 0 && (
+          <Box flexDirection="column" marginTop={1} height={detailMax} flexShrink={0}>
+            <ScrollBox ref={detailScrollRef} flexDirection="column" flexGrow={1} height={detailMax}>
+              <Markdown>{question.detail}</Markdown>
+            </ScrollBox>
           </Box>
         )}
       </Box>
@@ -221,7 +262,15 @@ export function PlanReviewPanel({
           const focused = index === focusIndex
           const isApprove = option.label === approveLabel
           return (
-            <Box key={option.label} flexDirection="row" marginTop={focused ? 1 : 0}>
+            <Box
+              key={option.label}
+              flexDirection="row"
+              marginTop={focused ? 1 : 0}
+              onClick={() => clickOption(index)}
+              onMouseEnter={() => setHoverIndex(index)}
+              onMouseLeave={() => setHoverIndex(current => (current === index ? -1 : current))}
+              backgroundColor={hoverIndex === index && !focused ? 'userMessageBackgroundHover' : undefined}
+            >
               <Box width={1} flexShrink={0}>
                 <Text color={focused ? 'claude' : undefined} bold={focused}>
                   {focused ? POINTER : ' '}
@@ -244,7 +293,14 @@ export function PlanReviewPanel({
             </Box>
           )
         })}
-        <Box flexDirection="row" marginTop={inputFocused ? 1 : 0}>
+        <Box
+          flexDirection="row"
+          marginTop={inputFocused ? 1 : 0}
+          onClick={focusFeedbackRow}
+          onMouseEnter={() => setHoverIndex(options.length)}
+          onMouseLeave={() => setHoverIndex(current => (current === options.length ? -1 : current))}
+          backgroundColor={hoverIndex === options.length && !inputFocused ? 'userMessageBackgroundHover' : undefined}
+        >
           <Box width={1} flexShrink={0}>
             <Text color={inputFocused ? 'claude' : undefined} bold={inputFocused}>
               {inputFocused ? POINTER : ' '}

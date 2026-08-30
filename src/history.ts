@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
 const HISTORY_DIR = DATA_DIR
 const HISTORY_FILE = join(HISTORY_DIR, 'history.jsonl')
+const HISTORY_LOCK = `${HISTORY_FILE}.lock`
 
 /** One persisted input-history entry. */
 export type HistoryEntry = {
@@ -14,6 +15,50 @@ export type HistoryEntry = {
 }
 
 const HISTORY_LIMIT = 200
+const LOCK_RETRY_LIMIT = 500
+const LOCK_RETRY_DELAY_MS = 5
+const STALE_LOCK_MS = 30_000
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function removeStaleHistoryLock(): boolean {
+  try {
+    const ageMs = Date.now() - statSync(HISTORY_LOCK).mtimeMs
+    if (ageMs < STALE_LOCK_MS) return false
+    rmSync(HISTORY_LOCK, { recursive: true, force: true })
+    return true
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') return true
+    throw error
+  }
+}
+
+function withHistoryLock(write: () => void): void {
+  // 0700: history.jsonl holds the user's raw inputs (incl. pasted secrets),
+  // so the directory must not be group/world-readable. Mode applies to the
+  // creation only; pre-existing dirs are left as-is (no migration chmod).
+  mkdirSync(HISTORY_DIR, { recursive: true, mode: 0o700 })
+  for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt += 1) {
+    try {
+      mkdirSync(HISTORY_LOCK)
+      try {
+        write()
+      } finally {
+        rmSync(HISTORY_LOCK, { recursive: true, force: true })
+      }
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'EEXIST') throw error
+      if (removeStaleHistoryLock()) continue
+      sleepSync(LOCK_RETRY_DELAY_MS + Math.floor(Math.random() * 5))
+    }
+  }
+  throw new Error('history lock busy')
+}
 
 function loadRaw(): HistoryEntry[] {
   if (!existsSync(HISTORY_FILE)) return []
@@ -45,23 +90,25 @@ function loadRaw(): HistoryEntry[] {
 export function appendHistory(text: string): void {
   const trimmed = text.trim()
   if (!trimmed) return
-  const entries = loadRaw()
-  // Skip consecutive duplicates (CC behavior: repeated submits of the same
-  // command only advance the existing entry's timestamp).
-  const last = entries[entries.length - 1]
-  if (last && last.text === trimmed) {
-    last.ts = Date.now()
-  } else {
-    entries.push({ text: trimmed, ts: Date.now() })
-  }
-  const sliced = entries.slice(-HISTORY_LIMIT)
   try {
-    mkdirSync(HISTORY_DIR, { recursive: true })
-    writeFileSync(
-      HISTORY_FILE,
-      sliced.map(e => JSON.stringify(e)).join('\n') + '\n',
-      'utf8',
-    )
+    withHistoryLock(() => {
+      const entries = loadRaw()
+      // Skip consecutive duplicates (CC behavior: repeated submits of the same
+      // command only advance the existing entry's timestamp).
+      const last = entries[entries.length - 1]
+      if (last && last.text === trimmed) {
+        last.ts = Date.now()
+      } else {
+        entries.push({ text: trimmed, ts: Date.now() })
+      }
+      const sliced = entries.slice(-HISTORY_LIMIT)
+      writeFileSync(
+        HISTORY_FILE,
+        sliced.map(e => JSON.stringify(e)).join('\n') + '\n',
+        // 0600 on creation: entries carry the full user input text
+        { encoding: 'utf8', mode: 0o600 },
+      )
+    })
   } catch {
     // Best-effort persistence; history still works for the session.
   }
@@ -76,10 +123,11 @@ export function loadHistory(): HistoryEntry[] {
 }
 
 /**
- * Stable id for a history entry (dedupes React keys across identical texts).
+ * Stable id for a history entry (keeps React keys distinct across identical texts).
  * @param entry - The history entry to hash.
- * @returns A 12-char hex id derived from the entry text.
+ * @param index - Position in the currently rendered result list.
+ * @returns A 12-char hex id derived from the entry text, timestamp, and index.
  */
-export function historyEntryId(entry: HistoryEntry): string {
-  return createHash('sha1').update(entry.text).digest('hex').slice(0, 12)
+export function historyEntryId(entry: HistoryEntry, index = 0): string {
+  return createHash('sha1').update(`${entry.text}\0${entry.ts}\0${index}`).digest('hex').slice(0, 12)
 }

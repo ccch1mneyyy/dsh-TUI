@@ -20,6 +20,7 @@ export function HelpMenu({
   viewportHeight,
   viewportWidth,
   scrollRef,
+  onCommandPick,
 }: {
   commands: readonly LocalCommand[]
   /** Fixed viewport supplied by the prompt overlay; unset for standalone renders. */
@@ -28,6 +29,12 @@ export function HelpMenu({
   viewportWidth?: number
   /** PromptInput owns keyboard routing and drives this scroll viewport. */
   scrollRef?: React.Ref<ScrollBoxHandle>
+  /**
+   * Mouse pick on a command row (fullscreen): fills `/<name> ` into the
+   * prompt — the Tab-completion's mouse equivalent. Absent for standalone
+   * renders (i18n verifier): rows render exactly as before.
+   */
+  onCommandPick?: (name: string) => void
 }): React.ReactNode {
   const chrome = commands.filter(command => !command.skill)
   const primaryShortcuts = (
@@ -81,21 +88,16 @@ export function HelpMenu({
       <Box>
         <Text dimColor>{t('help-open-editor')}</Text>
       </Box>
+      <Box>
+        <Text dimColor>{t('help-fold-todos', { mod: modLabel })}</Text>
+      </Box>
     </Box>
   )
   const commandRows = chrome.map(command => (
-    <Box key={command.name} flexShrink={0}>
-      <Text dimColor wrap="truncate-end">
-        /{command.name} — {localizedDescription(command)}
-      </Text>
-    </Box>
+    <HelpCommandRow key={command.name} command={command} onPick={onCommandPick} />
   ))
   const compactCommandRows = chrome.map(command => (
-    <Box key={command.name} flexShrink={0}>
-      <Text dimColor wrap="truncate-end">
-        /{command.name} — {localizedDescription(command)}
-      </Text>
-    </Box>
+    <HelpCommandRow key={command.name} command={command} onPick={onCommandPick} />
   ))
   const commandList = (
     <Box flexDirection="column" flexShrink={0}>
@@ -147,6 +149,32 @@ export function HelpMenu({
       <Box paddingX={2} flexShrink={0}>
         <Text dimColor wrap="truncate-end">{t('help-scroll-hint')}</Text>
       </Box>
+    </Box>
+  )
+}
+
+/** One `/name — description` row; clickable (hover background) when the
+ *  host wired a pick handler — the menu IS a control surface. */
+function HelpCommandRow({
+  command,
+  onPick,
+}: {
+  command: LocalCommand
+  onPick?: (name: string) => void
+}): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  const clickable = onPick !== undefined
+  return (
+    <Box
+      flexShrink={0}
+      onClick={clickable ? () => onPick(command.name) : undefined}
+      onMouseEnter={clickable ? (): void => setHovered(true) : undefined}
+      onMouseLeave={clickable ? (): void => setHovered(false) : undefined}
+      backgroundColor={clickable && hovered ? 'userMessageBackgroundHover' : undefined}
+    >
+      <Text dimColor wrap="truncate-end">
+        /{command.name} — {localizedDescription(command)}
+      </Text>
     </Box>
   )
 }

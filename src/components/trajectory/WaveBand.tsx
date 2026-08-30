@@ -1,6 +1,7 @@
 import React from 'react'
 import chalk from 'chalk'
 import { Box, Text, useTheme } from '../../ui.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 import { getTheme } from '../../theme.js'
 import { alert, alive, mix } from '../../trajectory/motion.js'
 import { parseRGB } from '../Spinner/spinnerUtils.js'
@@ -64,6 +65,7 @@ export function WaveBand({
   matches,
   tick,
   alertTick,
+  onColumnClick,
 }: {
   band: Band
   /** Rendered width in cells; equals `band.buckets.length`. */
@@ -83,6 +85,14 @@ export function WaveBand({
   tick: number
   /** Tick the most recent alert was triggered on. */
   alertTick: number
+  /**
+   * Mouse pick (fullscreen): reports the clicked column (0-based within the
+   * band; the ruler row counts too — its ▐▌ bracket is the seek affordance).
+   * The scene jumps to that column's nearest event via bucket.firstIndex,
+   * which empty columns inherit from their predecessor for exactly this
+   * purpose. No hover: column density makes per-cell indication noise.
+   */
+  onColumnClick?: (column: number, event: ClickEvent) => void
 }): React.ReactNode {
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
@@ -174,7 +184,18 @@ export function WaveBand({
   }
 
   return (
-    <Box flexDirection="column" flexShrink={0}>
+    <Box
+      flexDirection="column"
+      flexShrink={0}
+      onClick={
+        onColumnClick === undefined
+          ? undefined
+          : (event: ClickEvent) => {
+              const column = Math.max(0, Math.min(band.buckets.length - 1, event.localCol))
+              onColumnClick(column, event)
+            }
+      }
+    >
       <Text>{wave}</Text>
       <Text>{rulerText}</Text>
     </Box>

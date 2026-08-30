@@ -2,8 +2,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import { render } from '../src/ui.js'
 import { MessageList } from '../src/components/MessageList.js'
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+import { settled } from './lib/term-test.mjs'
 
 class Output extends Writable {
   columns = 120
@@ -43,6 +42,8 @@ const instance = await render(<MessageList
   expandedRows={new Set()}
   selectedId={null}
   onToggleRow={() => {}}
+  streamFoldedRows={new Set()}
+  onToggleStreamFold={() => {}}
   model="deepseek-chat"
   showAll
   onToggleAll={() => {}}
@@ -54,8 +55,8 @@ const instance = await render(<MessageList
   patchConsole: false,
 })
 
-const deadline = Date.now() + 2000
-while (textRevision < 60 && Date.now() < deadline) await sleep(25)
+// 等待与断言共用同一谓词：settled 终值直接决定下方的失败分支。
+const measured = await settled(() => textRevision === 60)
 
 await instance.unmount()
 const output = stdout.text + stderr.text
@@ -63,7 +64,7 @@ if (/Maximum update depth|Minified React error #185/.test(output)) {
   console.error('FAIL: MessageList entered a nested measurement update loop')
   process.exit(1)
 }
-if (textRevision !== 60) {
+if (!measured) {
   console.error(`FAIL: MessageList measurement stopped at revision ${textRevision}`)
   process.exit(1)
 }

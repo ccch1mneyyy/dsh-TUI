@@ -11,18 +11,20 @@ type Props = {
   isSelected?: boolean
   /** Row expanded on its own (persistent hover-grey background, CC). */
   isExpanded?: boolean
-  onClick?(): void
 }
 
 /**
  * Assistant text message:  bullet + markdown body (mirroring Claude Code's  default branch).
+ *
+ * Deliberately not clickable: the transcript is reading material and the
+ * mouse's job there is text selection (user feedback — row hover tints and
+ * fold toggling were noise, not affordance).
  */
 export function AssistantTextMessage({
   text,
   addMargin,
   isSelected = false,
   isExpanded = false,
-  onClick,
 }: Props): React.ReactNode {
   return (
     <Box
@@ -38,7 +40,6 @@ export function AssistantTextMessage({
             ? 'userMessageBackgroundHover'
             : undefined
       }
-      onClick={onClick}
     >
       <Box flexDirection="row">
         <NoSelect fromLeftEdge minWidth={2}>

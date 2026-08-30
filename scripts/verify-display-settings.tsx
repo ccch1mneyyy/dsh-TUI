@@ -11,6 +11,7 @@ const [
   { StatusLine, formatCacheHitRate },
   { AssistantToolUseMessage },
   { DEFAULT_STATUS_BAR, formatContextUsage, normalizeStatusBar, normalizeToolBackground },
+  { homeDir },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -20,6 +21,7 @@ const [
   import('../src/screens/StatusLine.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
   import('../src/tuiDisplayPrefs.js'),
+  import('../src/utils/paths.js'),
 ])
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -72,12 +74,14 @@ function makeHarness(columns = 140, rows = 12) {
 
 const baseChannel = {
   statusBar: { ...DEFAULT_STATUS_BAR },
+  agentId: 'd5a3b7c9-e1f2-4a6b-8c3d-0123456789ab',
   lastUsage: { input: 200_000, cacheRead: 5_000, cacheWrite: 1_000, output: 6_789 },
   contextWindow: 266_000,
   reasoningEffort: 'max',
   modeIndex: 0,
   mode: { id: 'default', plan: false },
   model: 'display-model-probe',
+  cwd: 'C:/work/display-project',
   tokens: { input: 12_345, output: 6_789 },
   tps: 37,
   tpsSamples: [],
@@ -161,6 +165,8 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     tps: false,
     gitBranch: false,
     sessionTitle: false,
+    sessionId: false,
+    goal: true,
     mode: false,
     contextBar: false,
     activity: false,
@@ -210,11 +216,62 @@ check('compact StatusLine shows model, effort, cwd basename, context, and cache'
   }
 })
 
+const home = homeDir()
+const homeRoot = await renderStatus({ displayCwd: home, cwd: home })
+check('compact StatusLine collapses the home directory to a tilde', () => {
+  assert.ok(homeRoot.includes('~'), `missing home marker in:\n${homeRoot}`)
+  assert.ok(!homeRoot.includes(home), `raw home path leaked in:\n${homeRoot}`)
+})
+
+const homeRootWithSeparator = await renderStatus({ displayCwd: `${home}/`, cwd: `${home}/` })
+check('compact StatusLine collapses the home directory with a trailing separator', () => {
+  assert.ok(homeRootWithSeparator.includes('~'), `missing home marker in:\n${homeRootWithSeparator}`)
+  assert.ok(!homeRootWithSeparator.includes(home), `raw home path leaked in:\n${homeRootWithSeparator}`)
+})
+
+const homeChild = await renderStatus({
+  displayCwd: `${home}/dev/display-project`,
+  cwd: `${home}/dev/display-project`,
+  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
+})
+check('full StatusLine collapses paths below home', () => {
+  assert.ok(homeChild.includes('~/dev/display-project'), `missing collapsed home child in:\n${homeChild}`)
+  assert.ok(!homeChild.includes(home), `raw home path leaked in:\n${homeChild}`)
+})
+
+const external = await renderStatus({
+  displayCwd: '/opt/display-project',
+  cwd: '/opt/display-project',
+  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
+})
+check('full StatusLine keeps local paths outside home unchanged', () => {
+  assert.ok(external.includes('/opt/display-project'), `missing external cwd in:\n${external}`)
+  assert.ok(!external.includes('~/display-project'), `external cwd was collapsed:\n${external}`)
+})
+
+const providerDisplay = await renderStatus({
+  displayCwd: `${home}/remote-project`,
+  cwd: '/tmp/provider-alias',
+  statusBar: { ...DEFAULT_STATUS_BAR, compact: false },
+})
+check('full StatusLine preserves provider-owned display paths', () => {
+  assert.ok(providerDisplay.includes(`${home}/remote-project`), `missing provider cwd in:\n${providerDisplay}`)
+  assert.ok(!providerDisplay.includes('~/remote-project'), `provider cwd was collapsed:\n${providerDisplay}`)
+})
+
 check('compact StatusLine hides disabled optional fields', () => {
-  for (const marker of ['37 t/s', 'feat/display-settings-probe', 'display settings title probe', '12.3k→6.8k', 'system', 'free']) {
+  for (const marker of ['37 t/s', 'feat/display-settings-probe', 'display settings title probe', '#d5a3b7c9', '12.3k→6.8k', 'system', 'free']) {
     assert.ok(!compact.includes(marker), `unexpected ${JSON.stringify(marker)} in:\n${compact}`)
   }
   assert.ok(!/[▁▂▃▄▅▆▇█▶]/.test(compact), `unexpected trajectory wake in:\n${compact}`)
+})
+
+const withSessionId = await renderStatus({
+  statusBar: { ...DEFAULT_STATUS_BAR, sessionId: true },
+})
+check('session id switch shows the # + 8-char short id', () => {
+  assert.ok(withSessionId.includes('#d5a3b7c9'), `missing short session id in:\n${withSessionId}`)
+  assert.ok(!withSessionId.includes('d5a3b7c9-e1f2'), `full id leaked in:\n${withSessionId}`)
 })
 
 check('compact StatusLine hides the shortcuts hint by default', () => {
@@ -226,6 +283,28 @@ const compactWithShortcutHint = await renderStatus({
 })
 check('compact StatusLine renders the enabled shortcuts hint exactly once', () => {
   assert.equal((compactWithShortcutHint.match(/\? for shortcuts/g) ?? []).length, 1)
+})
+
+const probeGoal = {
+  id: 'g-probe',
+  revision: 1,
+  objective: 'probe goal objective',
+  phase: 'active',
+  maxGoalRounds: 5,
+  roundsStarted: 2,
+} as const
+
+const withGoal = await renderStatus({ goal: probeGoal })
+check('compact StatusLine renders the goal chip when a goal exists', () => {
+  assert.ok(withGoal.includes('● 2/5'), `missing goal chip in:\n${withGoal}`)
+})
+
+const withGoalHidden = await renderStatus({
+  goal: probeGoal,
+  statusBar: { ...DEFAULT_STATUS_BAR, goal: false },
+})
+check('goal chip respects the statusBar.goal switch', () => {
+  assert.ok(!withGoalHidden.includes('2/5'), `unexpected goal chip in:\n${withGoalHidden}`)
 })
 
 const working = await renderStatus({ working: true })
@@ -269,12 +348,13 @@ const fullStatus = {
   tps: true,
   gitBranch: true,
   sessionTitle: true,
+  sessionId: true,
   contextBar: true,
   trajectory: true,
 }
 const full = await renderStatus({ statusBar: fullStatus }, 200)
 check('full StatusLine exposes tps, git, title, and token totals', () => {
-  for (const marker of ['37 t/s', 'feat/display-settings-probe', 'display settings title probe', '12.3k→6.8k']) {
+  for (const marker of ['37 t/s', 'feat/display-settings-probe', 'display settings title probe', '#d5a3b7c9', '12.3k→6.8k']) {
     assert.ok(full.includes(marker), `missing ${JSON.stringify(marker)} in:\n${full}`)
   }
 })

@@ -1,3 +1,9 @@
+> [!WARNING]
+> **基线过时提示（v0.9.0+ 读者）**：本目录文档基于 2026-08-15 审计基线 `b2f4087`
+> （目录重命名之前）。其中 `~/.dsh-cc/*` 现为 `~/.dsh-tui/*`（theme/model/preset/lang
+> 等 prefs 均随 `DATA_DIR` 迁移），顶层 `src/plugin.ts` / `src/channel.ts` 等现为
+> `src/dsh-adapter/` 下。引用时以活文档与源码为准。
+
 # dsh-cc-tui 架构文档
 
 本目录是 dsh-cc-tui（`@deepseek-ai/dsh-cc-tui`）的架构文档集，与 `docs/` 下

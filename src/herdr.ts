@@ -70,7 +70,7 @@ export function attachHerdrIntegration(
       return Promise.reject(new Error('Herdr command could not be started'))
     }
   }
-  let sequence = 0
+  let sequence = Date.now() * 1000
   let lastConfirmedReport = ''
   let disposed = false
   let running = false

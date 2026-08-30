@@ -16,9 +16,13 @@ import { FRAME_PRESETS, PRESET_NAMES } from './activityFrames.js'
 export function ActivityPicker({
   focusIndex,
   currentPreset,
+  onPick,
 }: {
   focusIndex: number
   currentPreset: string | undefined
+  /** Mouse pick (fullscreen): clicked row's absolute index (Chat applies
+   *  the same code path as the keyboard Enter). */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   return (
     <Pane color="permission">
@@ -38,6 +42,7 @@ export function ActivityPicker({
           }))}
           focusIndex={focusIndex}
           selectedValue={currentPreset}
+          onPick={onPick ? index => onPick(index) : undefined}
         />
         <Text dimColor italic>
           <HintLine text={t('hint-confirm-exit')} />

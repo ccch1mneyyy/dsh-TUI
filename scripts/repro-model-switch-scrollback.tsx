@@ -28,7 +28,7 @@ const reproHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-repro-home-'))
 process.env.HOME = reproHome
 process.env.USERPROFILE = reproHome
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { createChannel }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { createChannel }, { settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -36,6 +36,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/dsh-adapter/channel.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100
@@ -64,8 +65,6 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-
 function fullBufferLines(): string[] {
   const buf = term.buffer.active
   const out: string[] = []
@@ -173,21 +172,24 @@ const instance = await render(
   <Chat channel={channel as never} questionStore={new QuestionStore()} onExit={() => {}} />,
   { stdout: stdoutObj, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(1200)
 
 const SPLASH = '探索未至之境'
 const HIST0 = '历史问题 0：检查一下构建配置'
 const HIST1 = '历史回答 1：'
-
-console.log(`boot: buffer=${term.buffer.active.length} 行 (视口 ${ROWS})`)
-check('boot 后 splash 恰好一份', countMarker(SPLASH) === 1, `实际 ${countMarker(SPLASH)}`)
-check('boot 后历史行恰好一份', countMarker(HIST0) === 1 && countMarker(HIST1) === 1,
+// boot 落定：轮询到 splash 与历史行都上屏再断言（原固定 1200ms 在慢
+// runner 上会断言到未画完的缓冲区）——等待与断言共用同一谓词（settled）。
+check('boot 后 splash 恰好一份', await settled(() => countMarker(SPLASH) === 1), `实际 ${countMarker(SPLASH)}`)
+check('boot 后历史行恰好一份', await settled(() => countMarker(HIST0) === 1 && countMarker(HIST1) === 1),
   `问题=${countMarker(HIST0)} 回答=${countMarker(HIST1)}`)
+console.log(`boot: buffer=${term.buffer.active.length} 行 (视口 ${ROWS})`)
 
 // ---- 走真实 UI 路径：输入 /model → 回车开 picker → ↓ → 回车切换 ----------------
 // 与真机操作逐键一致：补全面板、picker、notify、fork+replay 全部经过。
 const bufLen = (tag: string) =>
   console.log(`  [${tag}] buffer=${term.buffer.active.length} scrollback=${term.buffer.active.baseY}`)
+// 逐键 40ms 与各步 200/600ms 均为按键序列的 ordering pacing：补全浮层/
+// picker 的 key-ready 状态无法用纯文本屏幕内容观测（同 repro-settings），
+// 保留固定窗口。
 const typeKeys = async (keys: string) => {
   for (const ch of keys) {
     stdin.write(ch)
@@ -204,10 +206,12 @@ bufLen('picker open')
 stdin.write('\x1b[B')        // ↓ 选中下一个模型
 await sleep(200)
 stdin.write('\r')            // 确认 → fork + replay
+// 稳定性探针保留固定窗口：「恰好一份」断言防的是切换后追加帧的多余沉积，
+// 对已成立条件（count===1）轮询立即返回等于没测。
 await sleep(1500)
 bufLen('switched')
 
-check('切换后模型名生效', channel.model === 'deepseek-v4-pro', `实际 ${channel.model}`)
+check('切换后模型名生效', await settled(() => channel.model === 'deepseek-v4-pro'), `实际 ${channel.model}`)
 check('切换后 splash 恰好一份', countMarker(SPLASH) === 1, `实际 ${countMarker(SPLASH)}`)
 check('切换后历史行恰好一份', countMarker(HIST0) === 1 && countMarker(HIST1) === 1,
   `问题=${countMarker(HIST0)} 回答=${countMarker(HIST1)}`)
@@ -224,6 +228,7 @@ await sleep(600)
 stdin.write('\x1b[B')
 await sleep(200)
 stdin.write('\r')
+// 同上：沉积探针保留固定窗口。
 await sleep(1500)
 check('二次切换后 splash 恰好一份', countMarker(SPLASH) === 1, `实际 ${countMarker(SPLASH)}`)
 
@@ -250,6 +255,8 @@ await sleep(200)
 stdin.write('\r')            // 打开 picker
 await sleep(600)
 stdin.write('\x1b')          // Esc：只关闭，不切换
+// 稳定性探针保留固定窗口：Esc 不切换/历史仍在/缓冲区零增长都是「状态不得
+// 改变」断言，轮询已成立条件立即返回等于没测。
 await sleep(600)
 check('Esc 不改动模型', channel.model === modelBeforeEsc, `实际 ${channel.model}`)
 check('Esc 关闭后被覆盖历史行仍在',

@@ -17,6 +17,7 @@ import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { MessageList } from '../lib/types/components/MessageList.js'
 import { Writable, PassThrough } from 'node:stream'
+import { settled, sleep } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -29,8 +30,6 @@ const toPlain = s =>
     .replace(/\x1b\[(\d+)C/g, (_, n) => ' '.repeat(Number(n)))
     .replace(/\x1b\[[0-9;?>:]*[a-zA-Z]/g, '')
     .replace(/\x1b\]9;[^\x07]*\x07/g, '')
-
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const est = text => Math.ceil(text.length / 4)
 
@@ -195,10 +194,16 @@ const listProps = (expanded) => ({
     React.createElement(MessageList, listProps(false)),
     { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
   )
+  const frame = () => toPlain(stdout.frames.at(-1) ?? '')
+  // 空帧守卫：渲染崩溃时两条 hides 断言会空洞通过（本文件曾因 MessageList
+  // 新增必需 prop 而空帧,只有 shows 报警）。先证明画面存在。
+  await settled(() => frame().includes('Conversation compacted') && frame().includes('摘要已折叠'))
+  // 负向断言观察窗保留：完整摘要若在正向落定之后迟到出现，落定瞬间检查会漏掉。
   await sleep(200)
-  const frame = toPlain(stdout.frames.at(-1) ?? '')
-  check('folded summary shows the fold line', frame.includes('摘要已折叠'), '')
-  check('folded summary hides the full text', !frame.includes(LONG_SUMMARY), '')
+  const shot = frame()
+  check('compact scenario renders at all', shot.includes('Conversation compacted'), '')
+  check('folded summary shows the fold line', shot.includes('摘要已折叠'), '')
+  check('folded summary hides the full text', !shot.includes(LONG_SUMMARY), '')
   instance.unmount()
 }
 
@@ -208,11 +213,14 @@ const listProps = (expanded) => ({
     React.createElement(MessageList, listProps(true)),
     { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(200)
   // Terminal wrap inserts newlines mid-string, so flatten before matching.
-  const frame = toPlain(stdout.frames.at(-1) ?? '').replace(/\n/g, '')
-  check('expanded summary shows the full text', frame.includes('压缩摘要'), '')
-  check('expanded summary hides the fold line', !frame.includes('摘要已折叠'), '')
+  const frame = () => toPlain(stdout.frames.at(-1) ?? '').replace(/\n/g, '')
+  await settled(() => frame().includes('压缩摘要'))
+  // 负向断言观察窗保留：折叠行若迟到泄漏，落定瞬间检查会漏掉。
+  await sleep(200)
+  const shot = frame()
+  check('expanded summary shows the full text', shot.includes('压缩摘要'), '')
+  check('expanded summary hides the fold line', !shot.includes('摘要已折叠'), '')
   instance.unmount()
 }
 

@@ -26,6 +26,9 @@ export function RewindPicker({
   modes = null,
   modeIndex = 0,
   busy = false,
+  onPickRow,
+  onConfirm,
+  onPickMode,
 }: {
   rows: readonly ChatRow[]
   focusIndex: number
@@ -36,6 +39,17 @@ export function RewindPicker({
   modeIndex?: number
   /** True while the plugin decision is in flight. */
   busy?: boolean
+  /**
+   * Mouse pick on a list row (fullscreen): sets focus only — rewind is a
+   * high-risk invisible-confirm operation, so stepping into the confirm
+   * state stays an explicit keyboard Enter.
+   */
+  onPickRow?: (index: number) => void
+  /** Mouse click on the plain confirm row: executes the rewind directly —
+   *  the confirm pane itself is the explicit confirmation layer. */
+  onConfirm?: () => void
+  /** Mouse pick on a modes-list option: executes that mode directly. */
+  onPickMode?: (index: number) => void
 }): React.ReactNode {
   if (confirmRow !== null) {
     if (modes !== null) {
@@ -70,6 +84,7 @@ export function RewindPicker({
                   description={option.description}
                   showScrollUp={absoluteIndex === start && start > 0}
                   showScrollDown={absoluteIndex === end - 1 && end < options.length}
+                  onClick={onPickMode === undefined ? undefined : () => onPickMode(absoluteIndex)}
                 >
                   {option.label}
                 </ListItem>
@@ -90,7 +105,7 @@ export function RewindPicker({
               {t('rewind-confirm-title')}
             </Text>
           </Box>
-          <ListItem isFocused={false} description={t('rewind-confirm-desc')}>
+          <ListItem isFocused={false} description={t('rewind-confirm-desc')} onClick={onConfirm}>
             {preview(confirmRow.text)}
           </ListItem>
           <Text dimColor italic>
@@ -113,7 +128,7 @@ export function RewindPicker({
   return (
     <Pane color="permission">
       <Box flexDirection="column">
-        <Box marginBottom={1}>
+        <Box marginBottom={1} flexDirection="column">
           <Text color="remember" bold>
             {t('rewind-title')}
           </Text>
@@ -131,6 +146,11 @@ export function RewindPicker({
                 description={absoluteIndex === 0 ? t('rewind-last-message') : undefined}
                 showScrollUp={absoluteIndex === start && start > 0}
                 showScrollDown={absoluteIndex === end - 1 && end < rows.length}
+                onClick={
+                  onPickRow !== undefined && !busy
+                    ? () => onPickRow(absoluteIndex)
+                    : undefined
+                }
               >
                 {preview(row.text)}
               </ListItem>

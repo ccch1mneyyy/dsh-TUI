@@ -12,6 +12,7 @@ import {
 import { BRAND, ICE } from '../shimmer.js'
 import { interpolateColor } from '../Spinner/spinnerUtils.js'
 import { isMinimalMode } from '../../minimalMode.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 
 /** Preview body rows — a FIXED row count (kimicode-style constant-height
  *  ticker). Ink's truncate slices the whole string across newlines as one
@@ -25,7 +26,7 @@ type Props = {
   thinking: string
   /** Adds the top margin between messages (CC: addMargin). */
   addMargin: boolean
-  /** True when Ctrl+O transcript/verbose mode is on — show the full text. */
+  /** Show the full text (Ctrl+O, per-row expansion, or live click toggle). */
   verbose: boolean
   /** True while the reasoning block is still streaming — the leading anchor
    *  becomes a rotating braille spinner (Kimi Code style) and settles back
@@ -39,14 +40,14 @@ type Props = {
   durationMs?: number
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  onClick?(): void
+  onClick?(event: ClickEvent): void
 }
 
 /**
- * Thinking block: folded `⚓ Thinking (ctrl+o to expand)`, expanded shows the
- * full reasoning text indented under `⚓ Thinking…`. While the reasoning
- * streams the leading mark is a rotating braille spinner (`⠋⠙⠹…`, Kimi Code
- * style), settling back to the static anchor (`⚓`) once the turn ends. When
+ * Thinking block: settled rows fold to `⚓ Thinking (ctrl+o to expand)`;
+ * streaming rows switch between a three-line preview and the full reasoning
+ * text on click. The live leading mark is a rotating braille spinner
+ * (`⠋⠙⠹…`, Kimi Code style), settling back to the static anchor (`⚓`). When
  * the channel records the reasoning duration, the label carries it
  * (`⚓ Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
  * the transcript.
@@ -86,14 +87,21 @@ export function AssistantThinkingMessage({
   const pulse = (Math.sin(frame * 0.9) + 1) / 2
   const pulseColor = interpolateColor(BRAND, ICE, pulse)
   const frameText = THINKING_SPINNER_FRAMES[frame % THINKING_SPINNER_FRAMES.length]!
+  // Hover 轻指示：可点击折叠时折叠头从 dim 提亮为正常色（不刷整行背景，
+  // 转录视觉保持安静）。
+  const [hovered, setHovered] = React.useState(false)
+  const hoverProps = onClick !== undefined
+    ? { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) }
+    : {}
   const header =
     streaming ? (
       <Box flexDirection="row">
         <Text>{minimal ? frameText : chalk.rgb(pulseColor.r, pulseColor.g, pulseColor.b).bold(frameText)}</Text>
-        <Text dimColor italic>{` ${label}`}</Text>
+        {/* 流式行同样可点击折叠（hover 提亮标签给出指示，与落定态一致） */}
+        <Text dimColor={!hovered} color={hovered ? 'text' : undefined} italic>{` ${label}`}</Text>
       </Box>
     ) : (
-      <Text dimColor italic>{`${minimal ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
+      <Text italic dimColor={!hovered} color={hovered ? 'text' : undefined}>{`${minimal ? '*' : THINKING_SETTLED_MARKER} ${label}`}</Text>
     )
 
   if (preview) {
@@ -119,6 +127,7 @@ export function AssistantThinkingMessage({
         marginTop={addMargin ? 1 : 0}
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
+        {...hoverProps}
       >
         {header}
         <Box
@@ -156,6 +165,7 @@ export function AssistantThinkingMessage({
         marginTop={addMargin ? 1 : 0}
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
+        {...hoverProps}
       >
         {header}
       </Box>
@@ -170,6 +180,7 @@ export function AssistantThinkingMessage({
       width="100%"
       backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       onClick={onClick}
+      {...hoverProps}
     >
       {header}
       <Box paddingLeft={2}>

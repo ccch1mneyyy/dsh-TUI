@@ -29,6 +29,9 @@ const OUTCOMES = ['allowed-once', 'rejected'] as const
 
 export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React.ReactNode {
   const [focusIndex, setFocusIndex] = React.useState(0)
+  // Hover highlight per decision row (mouse affordance; the click handler
+  // below mirrors the keyboard Enter on the focused row).
+  const [hoverIndex, setHoverIndex] = React.useState(-1)
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === 'c')) {
@@ -56,8 +59,11 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
-      <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} padding={4} />
+      <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} />
       <Box flexDirection="column" marginTop={1}>
+        {approval.external === true && (
+          <Text color="warning" wrap="wrap">[external] {t('approval-external-hint')}</Text>
+        )}
         {approval.command !== undefined && (
           <Box flexDirection="column" paddingX={2}>
             <Text dimColor wrap="wrap">
@@ -75,8 +81,17 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
       <Box flexDirection="column" marginTop={1}>
         {optionLabels.map((label, index) => {
           const focused = index === focusIndex
+          const hovered = index === hoverIndex
           return (
-            <Box key={label} flexDirection="row" marginTop={focused ? 1 : 0}>
+            <Box
+              key={label}
+              flexDirection="row"
+              marginTop={focused ? 1 : 0}
+              onClick={() => onDecide(OUTCOMES[index]!)}
+              onMouseEnter={() => setHoverIndex(index)}
+              onMouseLeave={() => setHoverIndex(current => (current === index ? -1 : current))}
+              backgroundColor={hovered && !focused ? 'userMessageBackgroundHover' : undefined}
+            >
               <Box width={1} flexShrink={0}>
                 <Text color={focused ? 'claude' : undefined} bold={focused}>
                   {focused ? POINTER : ' '}

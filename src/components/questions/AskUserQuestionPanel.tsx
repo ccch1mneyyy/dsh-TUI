@@ -18,7 +18,7 @@ import { Box, Text, useInput, useTerminalSize } from '../../ui.js'
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../cc/figures.js'
-import type { QuestionSelection } from '../../dsh-adapter/questions.js'
+import type { QuestionDraft, QuestionSelection } from '../../dsh-adapter/questions.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { listWindow } from '../listWindow.js'
@@ -49,9 +49,13 @@ export type AskUserQuestionPanelProps = {
   readonly total: number
   /** Questions answered before the current one. */
   readonly answered: number
+  /** Previously saved answer or draft, restored when returning to this item. */
+  readonly initialDraft?: QuestionDraft
   readonly onAnswer: (selection: QuestionSelection) => void
-  /** Esc / Ctrl+C — aborts the whole ask (ASK_ABORTED back to the model). */
+  /** Esc on the first question / Ctrl+C — aborts the whole ask. */
   readonly onCancel: () => void
+  /** Esc on later questions — navigates to the previous question. */
+  readonly onBack?: (draft: QuestionDraft) => void
 }
 
 export function AskUserQuestionPanel({
@@ -59,8 +63,10 @@ export function AskUserQuestionPanel({
   position,
   total,
   answered,
+  initialDraft,
   onAnswer,
   onCancel,
+  onBack,
 }: AskUserQuestionPanelProps): React.ReactNode {
   // Plan-mode's exit_plan_mode ask carries a presentation intent: render
   // the CC-style decision card instead of the generic questionnaire. The
@@ -74,13 +80,25 @@ export function AskUserQuestionPanel({
   const { rows: terminalRows } = useTerminalSize()
   /** Rows: the real options plus the inline input row at the tail. */
   const rowCount = options.length + (hideCustomInput ? 0 : 1)
-  const [focusIndex, setFocusIndex] = React.useState(0)
-  const [checked, setChecked] = React.useState<ReadonlySet<number>>(() => new Set())
-  const [customText, setCustomText] = React.useState('')
-  const [customCursor, setCustomCursor] = React.useState(0)
+  const initialSelected = initialDraft?.selected ?? []
+  const initialCustom = initialDraft?.custom ?? ''
+  const selectedIndices = options
+    .map((option, index) => initialSelected.includes(option.label) ? index : -1)
+    .filter(index => index >= 0)
+  const initialFocus = initialCustom !== '' && selectedIndices.length === 0 && !hideCustomInput
+    ? options.length
+    : selectedIndices[0] ?? 0
+  const [focusIndex, setFocusIndex] = React.useState(initialFocus)
+  const [checked, setChecked] = React.useState<ReadonlySet<number>>(
+    () => new Set(multiSelect ? selectedIndices : []),
+  )
+  const [customText, setCustomText] = React.useState(initialCustom)
+  const [customCursor, setCustomCursor] = React.useState(initialCustom.length)
   /** Single-select label captured by typing on a focused option — submitted
    *  together with the custom text when the input row itself is Entered. */
-  const [attached, setAttached] = React.useState<string | null>(null)
+  const [attached, setAttached] = React.useState<string | null>(
+    () => initialCustom !== '' && !multiSelect ? (initialSelected[0] ?? null) : null,
+  )
   const [error, setError] = React.useState<string | null>(null)
 
   const inputFocused = !hideCustomInput && focusIndex === options.length
@@ -183,9 +201,30 @@ export function AskUserQuestionPanel({
     onAnswer({ selected: attached !== null ? [attached] : [], custom: text })
   }
 
+  /** Capture the visible answer state before navigating away. */
+  const currentDraft = (): QuestionDraft => {
+    const selected = multiSelect
+      ? checkedLabels()
+      : inputFocused
+        ? (attached === null ? [] : [attached])
+        : (() => {
+            const label = options[focusIndex]?.label
+            return label === undefined ? [] : [label]
+          })()
+    return {
+      selected,
+      ...(customText !== '' ? { custom: customText } : {}),
+    }
+  }
+
   useInput((input, key) => {
-    if (key.escape || (key.ctrl && input === 'c')) {
+    if (key.ctrl && input === 'c') {
       onCancel()
+      return
+    }
+    if (key.escape) {
+      if (onBack !== undefined) onBack(currentDraft())
+      else onCancel()
       return
     }
 
@@ -284,8 +323,43 @@ export function AskUserQuestionPanel({
   const headerTitle = ` ${t('question-header-progress', { position, total, remaining: remaining > 1 ? t('question-remaining-more', { n: remaining }) : '' })} `
 
   const cursorChar = customCursor < customText.length ? customText[customCursor] : ' '
+  /** Mouse: click the input row to focus it (same as Tab). */
+  const focusInputRow = (): void => {
+    if (hideCustomInput) return
+    setFocusIndex(options.length)
+    setError(null)
+  }
+  /**
+   * Mouse: click an option row. Multi-select toggles the checkmark (same as
+   * Space); single-select answers immediately with that option plus any
+   * typed text (same as focusing the row and pressing Enter) — one click =
+   * one answer, matching ApprovalPanel's click semantics.
+   */
+  const clickOption = (index: number): void => {
+    if (multiSelect) {
+      setChecked(previous => {
+        const next = new Set(previous)
+        if (next.has(index)) next.delete(index)
+        else next.add(index)
+        return next
+      })
+      return
+    }
+    const label = options[index]?.label
+    if (label === undefined) return
+    const text = customText.trim()
+    onAnswer({ selected: [label], ...(text !== '' ? { custom: text } : {}) })
+  }
+  const [hoverIndex, setHoverIndex] = React.useState(-1)
   const renderInputRow = (): React.ReactNode => (
-    <Box flexDirection="row" marginTop={inputFocused ? 1 : 0}>
+    <Box
+      flexDirection="row"
+      marginTop={inputFocused ? 1 : 0}
+      onClick={focusInputRow}
+      onMouseEnter={() => setHoverIndex(options.length)}
+      onMouseLeave={() => setHoverIndex(current => (current === options.length ? -1 : current))}
+      backgroundColor={hoverIndex === options.length && !inputFocused ? 'userMessageBackgroundHover' : undefined}
+    >
       <Box width={1} flexShrink={0}>
         <Text color={inputFocused ? 'claude' : undefined} bold={inputFocused}>
           {inputFocused ? POINTER : ' '}
@@ -339,6 +413,10 @@ export function AskUserQuestionPanel({
             key={`${absoluteIndex}:${option.label}`}
             flexDirection="row"
             marginTop={!windowedOptions && focused ? 1 : 0}
+            onClick={() => clickOption(absoluteIndex)}
+            onMouseEnter={() => setHoverIndex(absoluteIndex)}
+            onMouseLeave={() => setHoverIndex(current => (current === absoluteIndex ? -1 : current))}
+            backgroundColor={hoverIndex === absoluteIndex && !focused ? 'userMessageBackgroundHover' : undefined}
           >
             <Box width={1} flexShrink={0}>
               <Text color={focused ? 'claude' : undefined} bold={focused}>
@@ -376,7 +454,8 @@ export function AskUserQuestionPanel({
         t('question-hint-type'),
         t('question-hint-enter'),
         ...(options.length > 0 ? [t('question-hint-back')] : []),
-        t('question-hint-esc'),
+        onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
+        ...(onBack === undefined ? [] : [t('question-hint-cancel')]),
         ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
       ]
     : [
@@ -384,13 +463,14 @@ export function AskUserQuestionPanel({
         ...(multiSelect ? [t('question-hint-multi')] : []),
         ...(hideCustomInput ? [] : [t('question-hint-attach')]),
         t('question-hint-enter'),
-        t('question-hint-esc'),
+        onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
+        ...(onBack === undefined ? [] : [t('question-hint-cancel')]),
         ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
       ]
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
-      <Divider color="permission" title={headerTitle} padding={4} />
+      <Divider color="permission" title={headerTitle} />
       <Box flexDirection="column" marginTop={1}>
         {question.header !== undefined && (
           <Text color="suggestion" bold>

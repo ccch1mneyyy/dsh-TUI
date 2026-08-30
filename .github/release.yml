@@ -1,0 +1,10 @@
+# 控制 GitHub Release 页 "Generate release notes" / `gh release create
+# --generate-notes` 生成的 What's Changed 清单。署名约定见
+# docs/contributing.md 的 Release note 一节。
+changelog:
+  exclude:
+    authors:
+      - github-actions
+      - github-actions[bot]
+      - dependabot
+      - dependabot[bot]

@@ -77,6 +77,12 @@ export const TIPS: readonly Tip[] = [
     en: 'Ctrl+G edits your input in the $VISUAL/$EDITOR editor',
   },
   {
+    id: 'keys-vim',
+    group: 'keys',
+    zh: '/vim 开启输入框 vim 编辑：Esc 切 normal，i/a/o 回 insert',
+    en: '/vim enables vim editing: Esc to normal, i/a/o back to insert',
+  },
+  {
     id: 'keys-ctrl-enter',
     group: 'keys',
     zh: 'Ctrl+Enter 打断当前回合并立即发送',
@@ -109,8 +115,14 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-home-end',
     group: 'keys',
-    zh: 'Home/End 与 Ctrl+A 快速到行首/行尾',
-    en: 'Home/End and Ctrl+A jump to line start/end',
+    zh: 'Home/End 到行首/行尾，Ctrl+E 到行尾',
+    en: 'Home/End jump to line start/end; Ctrl+E to line end',
+  },
+  {
+    id: 'keys-ctrl-a',
+    group: 'keys',
+    zh: 'Ctrl+A 子代理面板：Enter 看详情 · X 中断 · Esc 关',
+    en: 'Ctrl+A opens the subagent dashboard; Enter details, X interrupt, Esc close',
   },
   {
     id: 'keys-edit-keys',
@@ -139,8 +151,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-paste',
     group: 'keys',
-    zh: 'Ctrl+V 粘贴文本、文件路径或图片附件',
-    en: 'Ctrl+V pastes text, file paths, or image attachments',
+    zh: 'Ctrl+V 或 Alt+V 粘贴文本、文件路径或图片附件；/settings 可改快捷键',
+    en: 'Ctrl+V or Alt+V pastes text, file paths, or image attachments; remappable in /settings',
   },
   {
     id: 'keys-slash-search',
@@ -151,8 +163,14 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-mouse-click',
     group: 'keys',
-    zh: '单击消息行展开/收起；点链接直接打开浏览器',
-    en: 'Click a message row to expand it; click links to open the browser',
+    zh: '工具卡/thinking/摘要点击展开，子代理卡点击看详情；输入框点击定位光标',
+    en: 'Click tool/thinking/summary rows to fold; subagent cards open detail; click input to move caret',
+  },
+  {
+    id: 'keys-mouse-scenes',
+    group: 'keys',
+    zh: '轨迹与 /settings 支持鼠标：行点击跳转/编辑，滚轮移动光标或焦点',
+    en: 'Trajectory and /settings take the mouse: row clicks jump/edit, the wheel moves cursor or focus',
   },
 
   // ── 命令 ──────────────────────────────────────────────────
@@ -165,8 +183,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-resume-search',
     group: 'commands',
-    zh: '/resume 里直接打字即可搜索会话',
-    en: 'In /resume, just type to search sessions',
+    zh: '/resume 顶部可选工作目录，← 切目录，打字搜索当前层',
+    en: '/resume has a directory selector; ← switches scope, typing searches the active list',
   },
   {
     id: 'cmd-rename',
@@ -199,6 +217,12 @@ export const TIPS: readonly Tip[] = [
     en: '/btw asks aside: no interruption, no history',
   },
   {
+    id: 'cmd-recap',
+    group: 'commands',
+    zh: '/recap 总结近期活动并建议标题，a 键应用',
+    en: '/recap summarizes recent activity and suggests a title; a applies it',
+  },
+  {
     id: 'cmd-status',
     group: 'commands',
     zh: '/status 看模型、分支、token 与上下文占用',
@@ -209,6 +233,12 @@ export const TIPS: readonly Tip[] = [
     group: 'commands',
     zh: '/cost 看 token 用量与缓存命中率',
     en: '/cost shows token usage and cache hit rate',
+  },
+  {
+    id: 'cmd-balance',
+    group: 'commands',
+    zh: '/balance 查 DeepSeek 官方余额，点击行可刷新',
+    en: '/balance shows your DeepSeek balance; click the row to refresh',
   },
   {
     id: 'cmd-context',
@@ -229,6 +259,12 @@ export const TIPS: readonly Tip[] = [
     en: '/config shows config sources and how you launched',
   },
   {
+    id: 'cmd-reload',
+    group: 'commands',
+    zh: '/reload 重读偏好文件并即时应用（主题/语言/预设/模型/动画）',
+    en: '/reload re-reads pref files (theme/lang/preset/model/activity) and applies live',
+  },
+  {
     id: 'cmd-model',
     group: 'commands',
     zh: '/model 换模型会 fork 续聊，历史不丢',
@@ -247,6 +283,12 @@ export const TIPS: readonly Tip[] = [
     en: '/thinking toggles expanded thinking display',
   },
   {
+    id: 'cmd-color',
+    group: 'commands',
+    zh: '/color 会话强调色：无参调色板 / <名> 直设 / reset 清除，resume 后仍在',
+    en: '/color sets a per-session accent: bare = palette, <name> direct, reset clears; survives resume',
+  },
+  {
     id: 'cmd-tokens',
     group: 'commands',
     zh: '/tokens 看 token 明细与上下文百分比',
@@ -255,8 +297,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-preset',
     group: 'commands',
-    zh: '/preset 切换 agent 预设（standard/code 等）',
-    en: '/preset switches presets: standard/code/minimal/cordis/liangshen',
+    zh: '/preset 切换 agent 预设（standard/ptc 等）',
+    en: '/preset switches presets: standard/ptc/minimal/cordis/liangshen',
   },
   {
     id: 'cmd-preset-liangshen',
@@ -283,16 +325,10 @@ export const TIPS: readonly Tip[] = [
     en: '/skills lists the skill catalog',
   },
   {
-    id: 'cmd-audit',
+    id: 'cmd-agents',
     group: 'commands',
-    zh: '/audit 全面代码审计；/review 代码评审',
-    en: '/audit runs a code audit; /review reviews the code',
-  },
-  {
-    id: 'cmd-vuln',
-    group: 'commands',
-    zh: '/vuln-check 扫依赖漏洞；/bug 生成结构化 bug 报告',
-    en: '/vuln-check scans dependencies; /bug drafts a bug report',
+    zh: '/agents 列出子代理，Enter 看详情 / X 中断',
+    en: '/agents lists subagents; Enter for details, X to interrupt',
   },
   {
     id: 'cmd-init',
@@ -331,10 +367,16 @@ export const TIPS: readonly Tip[] = [
     en: '/update updates the TUI and restarts, resuming the session',
   },
   {
+    id: 'cmd-restart',
+    group: 'commands',
+    zh: '/restart 重启进程并恢复本会话',
+    en: '/restart relaunches the process and resumes this session',
+  },
+  {
     id: 'cmd-permission',
     group: 'commands',
-    zh: '/permission 切换权限预设（read-only/workspace/full）',
-    en: '/permission switches permission presets (read-only/workspace/full)',
+    zh: '/permission 弹出由 DSH registry 提供的权限预设选择器',
+    en: '/permission opens the DSH registry-backed permission-preset picker',
   },
   {
     id: 'cmd-plan-goal',
@@ -363,10 +405,34 @@ export const TIPS: readonly Tip[] = [
     en: 'Rewind forks a session; your message returns to the input',
   },
   {
+    id: 'flow-tree',
+    group: 'workflow',
+    zh: '/tree 打开会话分叉树：悬停预览、点击回退/分叉/切分支',
+    en: '/tree opens the session tree: hover to preview, click to rewind/fork/adopt',
+  },
+  {
+    id: 'flow-tree-search',
+    group: 'workflow',
+    zh: '/tree 顶部搜索框直接打字过滤分支',
+    en: 'In /tree, type in the search box to filter branches',
+  },
+  {
+    id: 'flow-fork-copy',
+    group: 'workflow',
+    zh: '/fork 把当前会话复制成可恢复副本，原会话不受影响',
+    en: '/fork copies the session into a resumable twin; the original is untouched',
+  },
+  {
     id: 'flow-resume',
     group: 'workflow',
     zh: '/resume 里 Ctrl+S 折叠子 agent 运行',
     en: 'In /resume, Ctrl+S folds subagent runs',
+  },
+  {
+    id: 'flow-resume-clean',
+    group: 'workflow',
+    zh: '/resume 里 Ctrl+X 清理空壳会话',
+    en: 'In /resume, Ctrl+X prunes empty sessions',
   },
   {
     id: 'flow-search',
@@ -377,8 +443,14 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'flow-at',
     group: 'workflow',
-    zh: '任意位置 @ 补全文件，@ink 也能命中 src/ink',
-    en: '@ completes files anywhere; @ink matches src/ink',
+    zh: '@ 补全支持模糊匹配；@src/ 直达该目录',
+    en: '@ completes files with fuzzy matching; @dir/ lists that directory',
+  },
+  {
+    id: 'flow-mention-lines',
+    group: 'workflow',
+    zh: '@src/a.ts#L12-14 精确引用文件行区间',
+    en: 'Append #L12-14 to an @ path to cite exact line ranges',
   },
   {
     id: 'flow-question-type',
@@ -405,6 +477,18 @@ export const TIPS: readonly Tip[] = [
     en: 'Goals/Todos appear automatically when the model writes them',
   },
   {
+    id: 'flow-recap-open',
+    group: 'workflow',
+    zh: '打开会话自动出回顾摘要，点击回顾行展开详情',
+    en: 'Opening a session auto-shows a recap; click the row to expand',
+  },
+  {
+    id: 'flow-file-actions',
+    group: 'workflow',
+    zh: '全屏模式下点击转录中的文件路径：打开/定位/复制',
+    en: 'Click a file path in the transcript (fullscreen): open, reveal, copy',
+  },
+  {
     id: 'flow-btw-copy',
     group: 'workflow',
     zh: '/btw 面板按 c 一键复制答案',
@@ -417,6 +501,42 @@ export const TIPS: readonly Tip[] = [
     group: 'display',
     zh: '底栏 TPS、轨迹条、上下文条默认关，/settings 里打开',
     en: 'TPS, trajectory, context bars are off by default — enable in /settings',
+  },
+  {
+    id: 'disp-statusbar-session-id',
+    group: 'display',
+    zh: '底栏可显示短会话 ID（# 前 8 位），与日志文件名对应，/settings 里开',
+    en: 'Footer can show the short session id (# + 8 chars, matches the log filename) — enable in /settings',
+  },
+  {
+    id: 'disp-statusbar-title',
+    group: 'display',
+    zh: '底栏可显示会话标题；/rename 随时改',
+    en: 'Footer can show the session title; rename anytime with /rename',
+  },
+  {
+    id: 'disp-statusbar-fields',
+    group: 'display',
+    zh: '底栏字段逐项开关：token 总量、git 分支、模式、活动摘要…… /settings 里配',
+    en: 'Footer fields are per-field switches: token totals, git branch, mode, activity — set in /settings',
+  },
+  {
+    id: 'disp-statusbar-compact',
+    group: 'display',
+    zh: '底栏 compact 开=单行收纳；关=左右分组（指标在左、位置在右）',
+    en: 'Footer compact on = one merged line; off = metrics left, location right',
+  },
+  {
+    id: 'disp-statusbar-hint',
+    group: 'display',
+    zh: "空闲时 '? 查看快捷键' 常驻提示也是底栏开关（shortcutHint）",
+    en: 'The idle "? for shortcuts" reminder is itself a footer switch (shortcutHint)',
+  },
+  {
+    id: 'disp-cost',
+    group: 'display',
+    zh: '底栏花费估算 ≈¥ 峰/谷：仅官方 DeepSeek 显示，/settings 可关',
+    en: 'Footer cost estimate (peak/idle) shows only for official DeepSeek; toggle in /settings',
   },
   {
     id: 'disp-context-warn',
@@ -439,8 +559,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'disp-theme-custom',
     group: 'display',
-    zh: '自定义主题：~/.dsh-tui/themes/<名>.json 即写即热切换',
-    en: 'Custom themes: ~/.dsh-tui/themes/<name>.json, hot-swappable',
+    zh: '主题：~/.dsh-tui/themes/<名>.json 或 npm 插件注册，即时热切换',
+    en: 'Themes: ~/.dsh-tui/themes/<name>.json or npm plugin registration, hot-swappable',
   },
   {
     id: 'disp-theme-status',
@@ -467,6 +587,12 @@ export const TIPS: readonly Tip[] = [
     en: 'In /settings, diffLayout switches split/unified diff',
   },
   {
+    id: 'disp-settings-save',
+    group: 'display',
+    zh: '/settings 改动自动保存，Esc 直接退出',
+    en: '/settings saves every change; Esc exits straight away',
+  },
+  {
     id: 'disp-thinking-fold',
     group: 'display',
     zh: '/settings 里 thinkingFold：preview 折叠 / full 全展开',
@@ -485,6 +611,24 @@ export const TIPS: readonly Tip[] = [
     en: 'Drag-select copies instantly in fullscreen; Esc cancels',
   },
   {
+    id: 'disp-keymap',
+    group: 'display',
+    zh: '/settings → shortcuts 自定义快捷键，改完立即生效',
+    en: 'Remap shortcuts in /settings → shortcuts; changes apply instantly',
+  },
+  {
+    id: 'disp-hover-footer',
+    group: 'display',
+    zh: '悬停底栏字段：ctx 原地变等宽压力条，明细走常驻底行，布局不动',
+    en: 'Hover footer fields: ctx morphs in place into a same-width bar, details on a stable line',
+  },
+  {
+    id: 'disp-wheel-sel',
+    group: 'display',
+    zh: '有文本选区时，滚轮平移选区而非滚动列表',
+    en: 'With a text selection, the wheel translates the selection, not the list',
+  },
+  {
     id: 'disp-whale',
     group: 'display',
     zh: '首屏鲸鱼动画（终端 ≥64 列才显示）',
@@ -492,6 +636,12 @@ export const TIPS: readonly Tip[] = [
   },
 
   // ── 避坑 ──────────────────────────────────────────────────
+  {
+    id: 'pit-cost-approx',
+    group: 'pitfalls',
+    zh: '底栏花费是估算值，仅供参考，以 DeepSeek 平台为准',
+    en: 'The footer cost is an estimate — the DeepSeek platform is authoritative',
+  },
   {
     id: 'pit-busy',
     group: 'pitfalls',
@@ -501,14 +651,14 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-esc',
     group: 'pitfalls',
-    zh: '审批条 Esc=拒绝；问卷 Esc=取消整批提问',
-    en: 'Esc rejects approvals and cancels question batches',
+    zh: '审批条 Esc=拒绝；问卷第 2 题起 Esc=上一题，Ctrl+C=取消整批',
+    en: 'Esc rejects approvals; question batches use Esc for previous and Ctrl+C to cancel',
   },
   {
     id: 'pit-ctrl-c',
     group: 'pitfalls',
-    zh: 'Ctrl+C 有输入时先清空，连按两次才退出',
-    en: 'Ctrl+C clears input first; double-tap to exit',
+    zh: 'Ctrl+C 工作时先中断；中断卡住再按强制退出；空闲连按两次退出',
+    en: 'Ctrl+C interrupts; press again if it stalls, double-tap when idle',
   },
   {
     id: 'pit-unknown-cmd',
@@ -529,10 +679,28 @@ export const TIPS: readonly Tip[] = [
     en: '/update requires launching via dsh --profile',
   },
   {
+    id: 'pit-reload-scope',
+    group: 'pitfalls',
+    zh: '/reload 不重读 cordis.yml 与全屏布局，改它们用 /restart',
+    en: '/reload skips cordis.yml and fullscreen layout; use /restart for those',
+  },
+  {
+    id: 'pit-restart-busy',
+    group: 'pitfalls',
+    zh: '/restart 回合运行中会被拒绝，先 Ctrl+C',
+    en: '/restart is refused while a turn runs — Ctrl+C first',
+  },
+  {
     id: 'pit-version-skew',
     group: 'pitfalls',
     zh: '提示版本错位时，按提示 npm install -g 对齐启动器',
     en: 'On version skew, follow the npm install -g hint to align the launcher',
+  },
+  {
+    id: 'pit-drift',
+    group: 'pitfalls',
+    zh: 'logo ⚠ 提示 dsh 版本不符时，按提示 npm i -g @deepseek-ai/dsh 对齐',
+    en: 'When the logo warns about dsh versions, follow the npm i -g @deepseek-ai/dsh hint',
   },
   {
     id: 'pit-mac',
@@ -555,8 +723,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-mouse-mode',
     group: 'pitfalls',
-    zh: '鼠标操作仅在全屏模式（fullscreen）下生效',
-    en: 'Mouse support only works in fullscreen mode',
+    zh: '主界面鼠标需开 fullscreen；轨迹/resume 整屏页两种模式都带鼠标',
+    en: 'Main-chat mouse needs fullscreen; full-page screens (trajectory, /resume) have it in both modes',
   },
   {
     id: 'pit-env-rename',

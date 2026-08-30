@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type AgentStatus, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandExecution, CommandRuntime } from '@deepseek-ai/dsh-commands'
-import { isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
-import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo } from '@deepseek-ai/dsh-llm'
+import { isModelInvocable, isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
+import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
-  isTokenDelta,
   MessageId,
   ReasoningEffortId,
   type ContentBlock,
@@ -13,42 +12,63 @@ import {
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
+import { isReservedCredentialRef } from './credentialRefGuard.js'
+import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
+import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
+import { fetchBalance, type BalanceResult } from '../deepseekBalance.js'
+import { isPeakHour } from '../deepseekPricing.js'
 /** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
 type SideQuestionLlm = {
   stream(options: object): AsyncIterable<StreamChunk>
 }
-import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
-import { completeCommands, HIDDEN_COMMAND_NAMES, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
+import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../sessionHistory.js'
-import { appendSessionTitle, deleteSessionLog, ensureLegacySessionEventTypes, sessionsRoots } from './compat/index.js'
+import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
+import {
+  buildSessionTree,
+  forkTarget,
+  liveTailWindow,
+  rewindTarget,
+  turnUserText,
+  type FamilySession,
+  type SessionTreeData,
+} from './sessionTree.js'
+import { resolveDshProfileName } from '../update.js'
 import {
   listSummaries,
   locateSession,
   noteBranch,
   previewSession,
+  readHeader,
   type PreviewEntry,
+  type RawSessionHeader,
   type SessionSource,
   type SessionSummary,
 } from './sessions/index.js'
 import { writeActivityFrames } from '../activityPrefs.js'
+import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
-import type { ProviderSetupHost } from './providerWizard.js'
-import { readPresetPref, writePresetPref } from '../presetPrefs.js'
-import { composePreset, resolvePersistedPreset, rosterOf, runningPresetOf, serviceForAgent, type AgentPresetInfo } from './presets.js'
-import { isPresetName } from '../components/activityFrames.js'
+import type { OAuthProviderStatus, OAuthSetupHost, ProviderSetupHost } from './providerWizard.js'
+import { migratePresetPref, readPresetPref, writePresetPref } from '../presetPrefs.js'
+import { composePreset, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf, serviceForAgent } from './presets.js'
+import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from './preset-resolution.js'
+import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
-import { t } from '../i18n.js'
+import { getLang, LANGS, t } from '../i18n.js'
+import { AUTO_THEME_NAME } from '../theme.js'
+import { listThemeCatalog } from '../themeCatalog.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
-import { normalizeStatusBar, normalizeToolBackground, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
@@ -60,17 +80,18 @@ import { readActivityConfig } from '../activityPrefs.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime, type TuiWorkspaceCommand, type TuiWorkspaceCommandResult, type TuiWorkspaceTarget } from './workspaces.js'
 import { getHostCommandTrees } from './command-trees.js'
-import { getHostSettingsSections, type TuiSettingsSection, type TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsSection, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import type { SettingsHost } from './settingsEditor.js'
 import { getHostSceneRuntime, type TuiSceneDescriptor, type TuiSceneRuntime } from './scenes.js'
 import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
+import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
 import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
 import { readGrantStore } from './grants.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
-import { installedLineOf } from './contract.js'
+import { installedMeetsVersion } from './contract.js'
 import { pluginsInfoLines } from './plugins-info.js'
 import { cleanRenderText, cleanScalarText } from './sanitize.js'
 import type {
@@ -159,6 +180,131 @@ function normalizeRewindPromptDecision(
 /** Toast-bound plugin text (veto reasons, handled notices, rewind summaries)
  *  is render-path data too: same sanitization, toast-width cap. */
 const NOTICE_CELLS = 200
+
+const PERMISSION_PRESET_CUSTOM = 'custom'
+const PERMISSION_PRESET_NAME_CELLS = 120
+const PERMISSION_PRESET_DESCRIPTION_CELLS = 400
+
+type PermissionPresetService = {
+  names?: unknown
+  current?: (events: readonly SessionEvent[]) => unknown
+  optionOf?: (name: string) => unknown
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+}
+
+function legacyPermissionPresetOptions(): readonly PermissionPresetOption[] {
+  return [
+    {
+      value: 'read-only',
+      name: t('permission-preset-readonly'),
+      description: t('permission-preset-readonly-desc'),
+    },
+    {
+      value: 'workspace-write',
+      name: t('permission-preset-workspace-write'),
+      description: t('permission-preset-workspace-write-desc'),
+    },
+    {
+      value: 'danger-full-access',
+      name: t('permission-preset-full-access'),
+      description: t('permission-preset-full-access-desc'),
+    },
+  ]
+}
+
+function legacyPermissionPresetSnapshot(sandbox: SessionModeSpec['sandbox']): PermissionPresetSnapshot {
+  const options = legacyPermissionPresetOptions()
+  const currentOption = sandbox === undefined ? undefined : options.find(option => option.value === sandbox)
+  return {
+    availability: 'legacy',
+    options,
+    ...(currentOption === undefined
+      ? {}
+      : { current: { ...currentOption, kind: 'preset' as const } }),
+  }
+}
+
+function unavailablePermissionPresetSnapshot(): PermissionPresetSnapshot {
+  return { availability: 'unavailable', options: [] }
+}
+
+function normalizePermissionPresetOption(value: unknown): PermissionPresetOption | undefined {
+  if (!isRecord(value) || typeof value.value !== 'string' || typeof value.name !== 'string') return undefined
+  const name = cleanRenderText(value.name, PERMISSION_PRESET_NAME_CELLS)
+  if (name === '') return undefined
+  if (value.description !== undefined && typeof value.description !== 'string') return undefined
+  const description = value.description === undefined
+    ? undefined
+    : cleanRenderText(value.description, PERMISSION_PRESET_DESCRIPTION_CELLS)
+  if (value.description !== undefined && description === '') return undefined
+  return {
+    value: value.value,
+    name,
+    ...(description === undefined || description === '' ? {} : { description }),
+  }
+}
+
+function permissionPresetSnapshotFromService(
+  service: unknown,
+  events: readonly SessionEvent[],
+): PermissionPresetSnapshot {
+  if (!isRecord(service)) return unavailablePermissionPresetSnapshot()
+  const runtime = service as PermissionPresetService
+  try {
+    const capturedNames = runtime.names
+    const current = runtime.current
+    const optionOf = runtime.optionOf
+    if (!Array.isArray(capturedNames) || capturedNames.length === 0) return unavailablePermissionPresetSnapshot()
+    if (typeof current !== 'function' || typeof optionOf !== 'function') return unavailablePermissionPresetSnapshot()
+
+    const names = [...capturedNames]
+    const seen = new Set<string>()
+    for (const name of names) {
+      if (typeof name !== 'string' || name.trim() === '' || name === PERMISSION_PRESET_CUSTOM || seen.has(name)) {
+        return unavailablePermissionPresetSnapshot()
+      }
+      seen.add(name)
+    }
+
+    const options: PermissionPresetOption[] = []
+    for (const name of names) {
+      const option = normalizePermissionPresetOption(optionOf(name))
+      if (option === undefined || option.value !== name) return unavailablePermissionPresetSnapshot()
+      options.push({ ...option })
+    }
+
+    const currentValue = current(events)
+    if (typeof currentValue !== 'string' || (currentValue !== PERMISSION_PRESET_CUSTOM && !seen.has(currentValue))) {
+      return unavailablePermissionPresetSnapshot()
+    }
+    const currentOption = normalizePermissionPresetOption(optionOf(currentValue))
+    if (currentOption === undefined || currentOption.value !== currentValue) return unavailablePermissionPresetSnapshot()
+    if (currentValue !== PERMISSION_PRESET_CUSTOM) {
+      const rosterOption = options.find(option => option.value === currentValue)
+      if (
+        rosterOption === undefined
+        || rosterOption.name !== currentOption.name
+        || rosterOption.description !== currentOption.description
+      ) {
+        return unavailablePermissionPresetSnapshot()
+      }
+    }
+
+    return {
+      availability: 'runtime',
+      options,
+      current: {
+        ...currentOption,
+        kind: currentValue === PERMISSION_PRESET_CUSTOM ? 'custom' : 'preset',
+      },
+    }
+  } catch {
+    return unavailablePermissionPresetSnapshot()
+  }
+}
 
 /** `tui/rewind-done` return normalization: the first non-empty STRING is the
  *  summary; anything else is not a decision. */
@@ -324,10 +470,40 @@ export interface ChatRow {
  */
 const SKILL_COMMAND_RETRY_MS = 800
 
+/** One 计费时段（高峰/空闲）的 token 累计。 */
+export interface TokenBucket {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
 /** Running token totals across the session's assistant messages. */
 export interface TokenUsage {
   input: number
   output: number
+  /** Prompt-cache hit tokens across the session (priced at the hit rate). */
+  cacheRead: number
+  /** Prompt-cache write tokens across the session (priced with uncached input). */
+  cacheWrite: number
+  /** Peak-hour tokens (billed at peak rates) — each usage lands in a bucket
+   *  by its event time, so a session spanning both windows is priced per
+   *  window instead of all at the current rate. */
+  peak: TokenBucket
+  /** Off-peak-hour tokens (billed at idle rates). */
+  idle: TokenBucket
+}
+
+/** 全零 token 累计（新会话 / 复位用）。 */
+export function emptyTokenUsage(): TokenUsage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  }
 }
 
 /** In-process working-line snapshot derived from the base session stream. */
@@ -392,11 +568,25 @@ export interface CredentialStatus {
   writable: boolean
 }
 
-/** One entry of the latest todo-list snapshot (mirrors the session domain's
- *  `TodoItem`; declared locally for the same reason as {@link ChannelGoal}). */
+/** One entry of the latest todo-list snapshot (mirrors dsh-tool-todo's
+ *  `TodoItem`; declared locally so the adapter needn't depend on that plugin). */
 export interface TodoPanelItem {
   content: string
   status: 'pending' | 'in_progress' | 'completed'
+}
+
+/** Narrow an optional plugin event without importing its module augmentation. */
+function todoPanelItems(data: unknown): TodoPanelItem[] | undefined {
+  if (typeof data !== 'object' || data === null) return undefined
+  const todos = (data as { todos?: unknown }).todos
+  if (!Array.isArray(todos)) return undefined
+  const valid = todos.every(item => {
+    if (typeof item !== 'object' || item === null) return false
+    const candidate = item as { content?: unknown; status?: unknown }
+    return typeof candidate.content === 'string' &&
+      (candidate.status === 'pending' || candidate.status === 'in_progress' || candidate.status === 'completed')
+  })
+  return valid ? todos as TodoPanelItem[] : undefined
 }
 
 /** One named prompt contribution with its model-visible text. */
@@ -468,11 +658,34 @@ export interface Channel {
   readonly rows: readonly ChatRow[]
   readonly status: AgentStatus | 'starting' | 'disposed'
   readonly sessionTitle: string
+  /** Per-session accent color name (`/color`), '' when unset — persisted via
+   *  a `session/color` log event so it survives resume/rewind. Renders as
+   *  the prompt-input border + session label chip accent (cc/sessionColors). */
+  readonly sessionColor: string
   readonly agentId: string
+  /** TUI-owned generation that changes on every live Agent rebind. */
+  readonly agentBindingGeneration: number
+  /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
+   *  into the dim AutoRecapRow when the session opens/resumes. Read live
+   *  (settings service), so a `/settings` change applies on the next
+   *  session switch; absent settings service → on. */
+  readonly autoRecapOnOpen: boolean
   /** Resolved model id (from the plugin config). */
   readonly model: string
   /** Provider route of the live agent. */
   readonly provider: string
+  /** Raw cordis.yml `provider` key (undefined when unset) — the boot-time
+   *  pin `/reload` must never override. */
+  readonly configuredProvider: string | undefined
+  /** Raw cordis.yml `model` key (undefined when unset). */
+  readonly configuredModel: string | undefined
+  /** Explicit cordis.yml `preset` (undefined = roster default wins) — `/reload`
+   *  must not override a static deployment choice. */
+  readonly configuredPreset: string | undefined
+  /** Explicit cordis.yml `activityFrames` (undefined = pref/default wins). */
+  readonly configuredActivityFrames: string | undefined
+  /** Explicit cordis.yml `lang` (undefined = settings/lang.json wins). */
+  readonly configuredLang: string | undefined
   /** Running token totals across the session's assistant messages. */
   readonly tokens: TokenUsage
   /** Working directory of the session. */
@@ -483,6 +696,10 @@ export interface Channel {
   readonly gitBranch: string | undefined
   /** True between turn/start and turn/end — drives the working spinner. */
   readonly working: boolean
+  /** True while a user-requested abort (Ctrl+C/Esc interrupt) has not yet
+   *  converged — no turn/start or turn/end has retired the aborted turn.
+   *  Chat uses it so a repeated Ctrl+C during a stuck abort force-exits. */
+  readonly cancelPending: boolean
   /** Which phase the spinner should present while working. */
   readonly spinnerMode: SpinnerMode
   /** Chars streamed as text this turn (feeds the spinner token counter). */
@@ -522,6 +739,20 @@ export interface Channel {
   readonly thinkingFold: 'preview' | 'full'
   /** Live tool-card background treatment. */
   readonly toolBackground: ToolBackground
+  /** What the fullscreen transcript's right gutter shows (settings
+   *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
+   *  nothing). */
+  readonly scrollGutter: ScrollGutterMode
+  /** Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
+   *  collapse a multi-line command title to its first line + count hint. */
+  readonly foldTerminalCommand: boolean
+  /** Whether the session-name chip shows on the prompt top border's right
+   *  side (settings `dsh-tui.promptSessionLabel`; off by default). */
+  readonly promptSessionLabel: boolean
+  /** Whether the fullscreen draft editor is enabled (settings
+   *  `dsh-tui.expandEditor`; on by default) — gates the ⛶ affordance and
+   *  the expandEditor shortcut. */
+  readonly expandEditor: boolean
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
@@ -536,10 +767,11 @@ export interface Channel {
   readonly contextBarEnabled: boolean
   /**
    * Current same-session goal projection, when a goal exists. Derived live
-   * from the durable `goal/change` context events (round-zero goal-sourced
-   * user messages) in the session log — every goal mutation appends one, so
-   * this snapshot tracks create/edit/pause/resume/complete/block/clear in
-   * real time and replays correctly on resume/rewind.
+   * from the durable goal events in the session log — top-level
+   * `goal/change` snapshots (every goal mutation appends one) plus the
+   * goal-sourced continuation rounds that advance the counter — so this
+   * snapshot tracks create/edit/pause/resume/complete/block/clear in real
+   * time and replays correctly on resume/rewind.
    */
   readonly goal: ChannelGoal | undefined
   /**
@@ -622,7 +854,9 @@ export interface Channel {
   steer(text: string): void
   /** Pull a pending message back out of the inbox (Alt+Up) for re-editing. */
   removePending(id: string): boolean
-  /** Abort the in-flight turn (`Ctrl+C` while working). */
+  /** Abort the in-flight turn (`Ctrl+C` while working). While `cancelPending`
+   *  stays true the abort has not converged; Chat force-exits on the next
+   *  Ctrl+C press in that window. */
   cancel(): void
   /** Abort the in-flight turn and process `texts` right away (Esc/Ctrl+Enter
    *  with queued input): each text is re-queued as a followup once the abort
@@ -641,6 +875,25 @@ export interface Channel {
    * choices to the confirm pane, null means no opinion (plain confirm).
    */
   promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
+  /**
+   * The session family tree for the /tree screen (pi's Session Tree): the
+   * live session's whole lineage — ancestors, siblings, descendants —
+   * stitched across fork sessions into one message-level tree. `null` (with
+   * a notify) when session persistence is unavailable or the live session
+   * swapped while the family loaded.
+   */
+  buildSessionTree(): Promise<SessionTreeData | null>
+  /**
+   * Session-tree fork: `rewind` drops the picked user turn (its prompt comes
+   * back as the returned text), `fork` keeps the picked entry. `seq` is the
+   * tree entry's source event seq inside `sessionId`'s log; `sessionId` may
+   * be any family member (adopting a dead branch forks IT at the picked
+   * point). Null = refused (the channel notified why).
+   */
+  rewindToNode(sessionId: string, seq: number, mode?: 'rewind' | 'fork'): Promise<string | null>
+  /** `/fork`: fork the current session at its tip into a persisted copy the
+   *  user enters via `/resume` — the live session keeps running untouched. */
+  forkSession(): Promise<boolean>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<ResumeResult>
   /** Start a fresh conversation (`/new`): a brand-new agent + session, the
@@ -675,6 +928,8 @@ export interface Channel {
   readonly modeIndex: number
   /** Shift+Tab: advance to the next configured session mode. */
   cycleMode(): Promise<void>
+  /** Read the official permission preset roster and current identity. */
+  permissionPresets(): PermissionPresetSnapshot
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined
@@ -705,6 +960,8 @@ export interface Channel {
   setActivityFrames(name: string): boolean
   /** Advertised models across every registered provider route (empty when the LLM service is absent). */
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Provider display identities for the same routes (picker group labels). */
+  listProviders(): Promise<readonly LlmProviderInfo[]>
   /** The live agent's full skill catalog for `/skills` (issue #204) — name,
    *  description, invocation flags and source bucket. Undefined on a failed
    *  or incomplete registry read (the picker shows an error); empty only
@@ -712,10 +969,18 @@ export interface Channel {
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login`; undefined without the service. */
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
+  /** DeepSeek official account balance for `/balance`: resolves
+   *  `DEEPSEEK_API_KEY` through the credentials seam (env fallback) and
+   *  queries the official balance endpoint. The key is used only for the
+   *  request header — never logged, printed or persisted. */
+  balanceInfo(): Promise<BalanceResult>
   /** Runtime capabilities for the `/provider` wizard, over the settings /
    *  credentials / llm seams; undefined when the composition lacks them
    *  (bare cordis.yml start without the dsh-base services). */
   providerSetup(): ProviderSetupHost | undefined
+  /** OAuth sign-in states from a mounted dsh-auth-style plugin; undefined
+   *  without the plugin, so `/login` renders exactly what it did before. */
+  oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined>
   /**
    * Runtime capabilities for the `/settings` screen, over the settings /
    * credentials seams; undefined when the composition lacks the settings
@@ -728,7 +993,9 @@ export interface Channel {
   settingsSections(): readonly TuiSettingsSection[]
   /** Subscribe to settings-section register/unregister events. */
   subscribeSettingsSections(listener: () => void): () => void
-  /** Top-level entries of the session cwd for `@` file completion. */
+  /** Structured `@` file completion, using the session's remote fs service. */
+  listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }): Promise<readonly FileCandidate[]>
+  /** Backward-compatible top-level/recursive listing. */
   listFiles(): Promise<readonly string[]>
   /** Every session the persistence backend stores, classified and unfiltered
    *  — the browser (`/resume`) decides which of them a given view shows. */
@@ -740,6 +1007,14 @@ export interface Channel {
   /** Rename the current session (CC's /rename): appends a `session/title`
    *  event, which the status line and the /resume picker both read. */
   renameSession(title: string): void
+  /** Set the current session's accent color (`/color <name>`): appends a
+   *  `session/color` event; '' clears it back to the theme default. */
+  setSessionColor(color: string): void
+  /** Generate a recap of the session's recent activity (`/recap`): one
+   *  tool-less LLM call over the tail exchanges, returning a one-line
+   *  summary plus an optional proposed title. The answer is pure UI state
+   *  and never enters the session log. */
+  recapRecent(options?: { signal?: AbortSignal; onText?: (delta: string) => void }): Promise<RecapOutcome>
   /** Delete a persisted session (`/resume` picker ctrl+d): removes its log
    *  directory, its last-used entry, and the resume marker when it points
    *  here. False for the live session or a missing/unwritable log. */
@@ -802,6 +1077,31 @@ export interface PresetOption {
   isDefault: boolean
 }
 
+export type PermissionPresetAvailability = 'runtime' | 'legacy' | 'unavailable'
+
+export interface PermissionPresetOption {
+  readonly value: string
+  readonly name: string
+  readonly description?: string
+}
+
+export interface PermissionPresetCurrent {
+  readonly value: string
+  readonly name: string
+  readonly description?: string
+  readonly kind: 'preset' | 'custom'
+}
+
+/**
+ * Adapter-owned permission roster snapshot. `options` never contains the
+ * official `custom` sentinel; it is represented only by `current`.
+ */
+export interface PermissionPresetSnapshot {
+  readonly availability: PermissionPresetAvailability
+  readonly options: readonly PermissionPresetOption[]
+  readonly current?: PermissionPresetCurrent
+}
+
 /** @internal */
 /** One user message submitted while the model was working, not yet claimed
  *  by a turn. `steer` lands at the next step boundary of the running turn;
@@ -830,7 +1130,11 @@ export interface ChannelState {
   rows: ChatRow[]
   status: AgentStatus | 'starting' | 'disposed'
   sessionTitle: string
+  sessionColor: string
+  autoRecapOnOpen: boolean
   agentId: string
+  /** TUI-owned generation that changes on every live Agent rebind. */
+  agentBindingGeneration: number
   model: string
   provider: string
   tokens: TokenUsage
@@ -838,6 +1142,8 @@ export interface ChannelState {
   displayCwd: string
   gitBranch: string | undefined
   working: boolean
+  /** Whether a requested abort is still converging (see the public Channel type). */
+  cancelPending: boolean
   spinnerMode: SpinnerMode
   responseChars: number
   activeToolCount: number
@@ -862,12 +1168,26 @@ export interface ChannelState {
   workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset (see the public Channel type). */
   activityFrames: string | undefined
+  /** Raw cordis.yml pins `/reload` must respect (see the public Channel type). */
+  configuredProvider: string | undefined
+  configuredModel: string | undefined
+  configuredPreset: string | undefined
+  configuredActivityFrames: string | undefined
+  configuredLang: string | undefined
   /** Diff presentation preference (see the public Channel type). */
   diffLayout: 'auto' | 'split' | 'unified'
   /** Thinking-block display (see the public Channel type). */
   thinkingFold: 'preview' | 'full'
   /** Tool-card background treatment (see the public Channel type). */
   toolBackground: ToolBackground
+  /** Transcript gutter mode (see the public Channel type). */
+  scrollGutter: ScrollGutterMode
+  /** Terminal-card header folding (see the public Channel type). */
+  foldTerminalCommand: boolean
+  /** Session-name chip on the prompt border (see the public Channel type). */
+  promptSessionLabel: boolean
+  /** Fullscreen draft editor gate (see the public Channel type). */
+  expandEditor: boolean
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
@@ -876,6 +1196,14 @@ export interface ChannelState {
   setThinkingFold(mode: 'preview' | 'full'): void
   /** Apply a tool-card background change. */
   setToolBackground(background: ToolBackground): void
+  /** Apply a transcript gutter mode change. */
+  setScrollGutter(mode: ScrollGutterMode): void
+  /** Apply a terminal-card header folding change. */
+  setFoldTerminalCommand(enabled: boolean): void
+  /** Apply a prompt session-name chip change. */
+  setPromptSessionLabel(enabled: boolean): void
+  /** Apply a fullscreen-editor gate change. */
+  setExpandEditor(enabled: boolean): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -903,6 +1231,12 @@ export interface ChannelState {
     question: string,
     options?: { signal?: AbortSignal; onText?: (delta: string) => void },
   ): Promise<{ answer: string | null; error?: string }>
+  /** 会话 recap（见 public Channel.recapRecent）。 */
+  recapRecent(
+    options?: { signal?: AbortSignal; onText?: (delta: string) => void },
+  ): Promise<RecapOutcome>
+  /** 会话强调色（见 public Channel.setSessionColor）。 */
+  setSessionColor(color: string): void
   /** Effective slash commands (see the public Channel type). */
   commandList: readonly LocalCommand[]
   /** Context-aware slash completions (see the public Channel type). */
@@ -943,6 +1277,12 @@ export interface ChannelState {
   rewindTo(row: ChatRow, mode?: string | null): Promise<string | null>
   /** @internal rewind decision prompt (see the public Channel.promptRewind). */
   promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
+  /** @internal session-tree assembly (see the public Channel.buildSessionTree). */
+  buildSessionTree(): Promise<SessionTreeData | null>
+  /** @internal tree-entry rewind/fork (see the public Channel.rewindToNode). */
+  rewindToNode(sessionId: string, seq: number, mode?: 'rewind' | 'fork'): Promise<string | null>
+  /** @internal tip fork (see the public Channel.forkSession). */
+  forkSession(): Promise<boolean>
   /** Switch the live agent to a persisted session, replaying its history. */
   resumeTo(sessionId: string): Promise<ResumeResult>
   /** Start a fresh conversation (`/new`). */
@@ -965,6 +1305,8 @@ export interface ChannelState {
   modeIndex: number
   /** Shift+Tab session-mode advance (see the public Channel type). */
   cycleMode(): Promise<void>
+  /** Read the official permission preset roster and current identity. */
+  permissionPresets(): PermissionPresetSnapshot
   /** The preset the current session runs under (see the public Channel type). */
   agentPreset: string | undefined
   /** The roster's presets for the `/preset` picker (see the public Channel type). */
@@ -978,18 +1320,25 @@ export interface ChannelState {
   /** Switch the working-activity indicator preset (see the public Channel). */
   setActivityFrames(name: string): boolean
   listModels(): Promise<readonly LlmModelInfo[]>
+  /** Provider display identities (see the public Channel type). */
+  listProviders(): Promise<readonly LlmProviderInfo[]>
   /** The live agent's skill catalog for `/skills` (see the public Channel type). */
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login` (see the public Channel type). */
   describeCredential(ref: string): Promise<CredentialStatus | undefined>
+  /** DeepSeek official balance for `/balance` (see the public Channel type). */
+  balanceInfo(): Promise<BalanceResult>
   /** `/provider` wizard capabilities (see the public Channel type). */
   providerSetup(): ProviderSetupHost | undefined
+  /** OAuth sign-in states (see the public Channel type). */
+  oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined>
   /** `/settings` screen capabilities (see the public Channel type). */
   settingsHost(): SettingsHost | undefined
   /** Plugin-declared settings sections (see the public Channel type). */
   settingsSections(): readonly TuiSettingsSection[]
   /** Subscribe to settings-section register/unregister events. */
   subscribeSettingsSections(listener: () => void): () => void
+  listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }): Promise<readonly FileCandidate[]>
   listFiles(): Promise<readonly string[]>
   listSessions(): Promise<readonly SessionSummary[]>
   /** Trailing exchanges of a persisted session (see the public Channel type). */
@@ -1189,6 +1538,72 @@ function toolResultText(event: SessionEvent<'tool/result'>): string {
   return block.content.map(item => item.type === 'text' ? item.text : '').join('').trim()
 }
 
+/** Phase badge for the harness goal card — mirrors the panel's PhaseBadge. */
+const GOAL_RESULT_BADGE: Record<string, string> = {
+  active: '● active',
+  paused: '⏸ paused',
+  blocked: '⛔ blocked',
+  complete: '✓ complete',
+}
+
+/**
+ * Summary cards for the harness's goal/todo tools. Their results are machine
+ * JSON (`{"goal":{…}}` / `{"todos":[…]}`) that would otherwise dump under the
+ * tool card as a raw `⎿ {"goal":…}` line. Matched by tool-name substring AND
+ * payload shape, so unrelated tools and plain-text results pass through to
+ * the registry/raw-text path untouched. Runs on the live stream and replay.
+ */
+function harnessToolResultView(
+  name: string,
+  data: SessionEvent<'tool/result'>['data'],
+): ToolResultView | undefined {
+  const lower = name.toLowerCase()
+  const isGoalTool = lower.includes('goal')
+  const isTodoTool = lower.includes('todo')
+  if (!isGoalTool && !isTodoTool) return undefined
+  const block = data.message.content[0]
+  if (block === undefined || block.type !== 'tool-result') return undefined
+  const text = block.content.map(item => item.type === 'text' ? item.text : '').join('').trim()
+  if (text === '' || !text.startsWith('{')) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined
+  const record = parsed as Record<string, unknown>
+
+  if (isGoalTool && typeof record.goal === 'object' && record.goal !== null) {
+    const goal = record.goal as Record<string, unknown>
+    if (typeof goal.objective === 'string' && typeof goal.phase === 'string') {
+      const badge = GOAL_RESULT_BADGE[goal.phase] ?? goal.phase
+      const rounds = typeof goal.roundsStarted === 'number' && typeof goal.maxGoalRounds === 'number'
+        ? ` · ${goal.roundsStarted}/${goal.maxGoalRounds}`
+        : ''
+      const activation = typeof record.activation === 'string' ? ` · ${record.activation}` : ''
+      const lines = [`🎯 ${goal.objective}`, `${badge}${rounds}${activation}`]
+      const blocked = (goal.blockedReason as { message?: unknown } | undefined)?.message
+      if (typeof blocked === 'string') lines.push(`⛔ ${blocked}`)
+      return { card: 'generic', content: lines.map(line => ({ type: 'text', text: line })) }
+    }
+  }
+
+  if (isTodoTool && Array.isArray(record.todos)) {
+    const rows = record.todos as Array<Record<string, unknown>>
+    const done = rows.filter(row => row.status === 'completed').length
+    const lines = [`todos ✓ ${done}/${rows.length}`]
+    for (const row of rows) {
+      if (row.status !== 'in_progress' || typeof row.content !== 'string') continue
+      lines.push(`● ${row.content}`)
+      if (lines.length >= 4) break
+    }
+    return { card: 'generic', content: lines.map(line => ({ type: 'text', text: line })) }
+  }
+
+  return undefined
+}
+
 function toolErrorText(event: SessionEvent<'tool/result'>): string {
   const failure = event.data.error
   if (failure === undefined) return ''
@@ -1315,6 +1730,17 @@ export function createChannel(
     thinkingFold?: 'preview' | 'full'
     /** Tool-card background treatment; default `none`. */
     toolBackground?: ToolBackground
+    /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
+    scrollGutter?: ScrollGutterMode
+    /** Terminal-card header folding; default off (settings
+     *  `dsh-tui.foldTerminalCommand`). */
+    foldTerminalCommand?: boolean
+    /** Session-name chip on the prompt top border; default off (settings
+     *  `dsh-tui.promptSessionLabel`). */
+    promptSessionLabel?: boolean
+    /** Fullscreen draft editor entry points; default on (settings
+     *  `dsh-tui.expandEditor`). */
+    expandEditor?: boolean
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -1333,6 +1759,12 @@ export function createChannel(
      *  only route a resume overrides the target's own record with. */
     configuredProvider?: string
     configuredModel?: string
+    /** cordis.yml's raw `lang` key, undefined when unset: `/reload` consults
+     *  it so a static deployment choice is never overridden by lang.json. */
+    configuredLang?: string
+    /** cordis.yml's raw `activityFrames` key, undefined when unset: the
+     *  static choice `/reload` must not override. */
+    configuredActivityFrames?: string
     /** The preset the initial agent's session runs under (from resolveAgent). */
     agentPreset?: string
     /** Shift+Tab session-mode cycle from cordis.yml `modes`; undefined →
@@ -1344,6 +1776,7 @@ export function createChannel(
 ): ChannelState {
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
+  const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
   const subagentControl: SubagentControl = {
     interrupt(agentId) {
       const child = subagentStore.get(agentId)
@@ -1353,8 +1786,7 @@ export function createChannel(
       try {
         runtime.interrupt(target, { kind: 'ancestor', agent })
         subagentStore.onCancelled(agentId, 'interrupted')
-        state.subagents = subagentStore.snapshot()
-        syncSubagentRows()
+        syncSubagentsNow()
         state.emit()
         return true
       } catch {
@@ -1388,9 +1820,12 @@ export function createChannel(
   /**
    * Sync subagentStore state into ChatRows (insert/update in state.rows).
    * Called whenever subagent state changes (spawned/completed/failed/output).
+   * Accepts a caller-taken snapshot to avoid the double copy on the hot path
+   * (session/event fires per subagent token: snapshot here + snapshot in the
+   * caller = two full state copies before emitStream's 16ms throttle).
    */
-  const syncSubagentRows = (): void => {
-    const snapshot = subagentStore.snapshot()
+  const syncSubagentRows = (preSnapshot?: readonly SubagentState[]): void => {
+    const snapshot = preSnapshot ?? subagentStore.snapshot()
     for (const sub of snapshot) {
       let row = subagentRowsByAgentId.get(sub.agentId)
       if (!row) {
@@ -1455,9 +1890,12 @@ export function createChannel(
   // tuiWorkspaces/tuiCommandTrees): mounted by the bundle patch's
   // dsh-tui-scenes row; absent the row, `pluginScene` simply stays undefined.
   const sceneRuntime = getHostSceneRuntime(ctx.get('tuiScenes') as TuiSceneRuntime | undefined)
+  // Falls back to the in-package local host when the composition's service
+  // row is unavailable (issue #557: the row can be disposed right after
+  // load in real compositions); the TUI's own section registers there.
   const settingsSectionsRuntime = getHostSettingsSections(
     ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-  )
+  ) ?? getLocalSettingsSectionsHost()
   // Custom-entry text renderers (optional service, dsh-tui-extensions row):
   // absent the row, unknown plugin event types stay invisible in the
   // transcript, exactly as before the seam existed.
@@ -1473,6 +1911,50 @@ export function createChannel(
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
+  /** True while subagent assistant/chunk deltas have deferred their
+   *  snapshot+projection to the frame-aligned flush (emitStream's timer).
+   *  Chunks arrive at token rate (100-300 events/s) and the projection is a
+   *  full deep state copy (SubagentActivityStore.snapshot) plus a SubagentRow
+   *  rebuild per tracked agent — running that per token sits BEFORE
+   *  emitStream's 16ms coalescing and defeats it. Non-chunk events
+   *  (tool/call, subagent/end, interrupt) project immediately and clear
+   *  this flag, so lifecycle transitions stay synchronous. */
+  let subagentStreamDirty = false
+  /** Deferred projection for the frame-aligned flush: runs INSIDE the
+   *  emitStream timer, before listeners wake, so React always reads fully
+   *  projected rows. No-op unless a chunk marked the projection dirty. */
+  const flushSubagentStream = (): void => {
+    if (!subagentStreamDirty) return
+    subagentStreamDirty = false
+    state.subagents = subagentStore.snapshot()
+    syncSubagentRows(state.subagents)
+  }
+  /** Immediate projection; supersedes any pending deferred flush (the fresh
+   *  snapshot already contains everything the deferred pass would project). */
+  const syncSubagentsNow = (): void => {
+    subagentStreamDirty = false
+    state.subagents = subagentStore.snapshot()
+    syncSubagentRows(state.subagents)
+  }
+  /** Drop the subagent row map (transcript wipe): the next event for a still
+   *  live subagent re-creates its card as a fresh row instead of feeding a
+   *  row object no transcript holds (update-only orphan). */
+  const dropSubagentRows = (): void => {
+    subagentStreamDirty = false
+    subagentRowsByAgentId.clear()
+  }
+  /** Full subagent reset for a session swap: the row map, the queued task
+   *  descriptions and the store itself are all scoped to the OLD agent's
+   *  session. Leaked into the adopted one, they would keep dead subagents in
+   *  the dashboard snapshot until new events overwrite it, grow the row map
+   *  without bound across swaps, and hand a stale queued description to the
+   *  new session's first card. */
+  const resetSubagentProjection = (): void => {
+    dropSubagentRows()
+    pendingTaskDescriptions.length = 0
+    subagentStore.reset()
+    state.subagents = []
+  }
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
   const foldCursor: { rows: unknown; index: number } = { rows: null, index: 0 }
@@ -1696,7 +2178,7 @@ export function createChannel(
   /** Fire-and-forget `tui/session-switched` (parallel): per-session plugin
    *  state rebinds here. Listener failures are logged, never propagated —
    *  the switch itself already succeeded. */
-  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind', sessionId: string, previousSessionId: string): void => {
+  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind' | 'fork', sessionId: string, previousSessionId: string): void => {
       try {
         void dispatchTuiNotification(ctx, 'tui/session-switched', { kind, sessionId, previousSessionId, cwd: state.cwd }).catch((error: unknown) => {
           ctx.logger.warn('dsh-tui: tui/session-switched listener failed: %o', error)
@@ -1706,6 +2188,92 @@ export function createChannel(
       // switch itself already succeeded, so this stays a log line.
       ctx.logger.warn('dsh-tui: tui/session-switched dispatch failed: %o', error)
     }
+  }
+
+  /**
+   * Swap the live agent for a freshly created fork (rewindTo and the session
+   * tree's rewindToNode share this tail): reset every session-scoped
+   * projection, replay the fork's seed into a fresh transcript (tokens/
+   * spinner counters land back at the rewind point, matching the fork),
+   * rebind subscriptions to the new agent, and free the replaced handle.
+   * Returns the source session's id (for the session-switched notification).
+   */
+  const adoptForkedAgent = (
+    handle: AgentHandle,
+    seed: readonly SessionEvent[],
+    agentPreset: string | undefined,
+    childId: SessionId,
+  ): string => {
+    // Replay the forked history into a fresh transcript (tokens/spinner
+    // counters land back at the rewind point, matching the fork).
+    streaming = undefined
+    reasoning = undefined
+    // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
+    // keep it out of the next turn's settle logs and revive cache.
+    sealedReasoning.length = 0
+    lastReasoningRow = undefined
+    toolCards.clear()
+    nextRowId = 0
+    state.rows.length = 0
+    resetSubagentProjection()
+    // Goal/todo/title are session-scoped; the replay re-derives them for
+    // the session being entered (or leaves them empty).
+    state.todos = []
+    // Queued-but-undelivered messages live in the OLD agent's inbox; the
+    // swap must drop their previews or they linger forever (unretirable —
+    // retire events are filtered to the new agent, unwithdrawable — the
+    // new inbox never heard of them).
+    state.pending = []
+    state.goal = undefined
+    state.sessionTitle = ''
+    state.sessionColor = ''
+    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+    state.responseChars = 0
+    state.activeToolCount = 0
+    state.lastUserText = ''
+    state.working = false
+    state.cancelPending = false
+    state.spinnerMode = 'requesting'
+    state.status = handle.agent.status
+    state.agentId = handle.agent.id
+    state.agentPreset = agentPreset
+    state.tps = undefined
+    state.tpsSamples = []
+    state.lastUsage = undefined
+    state.workingActivity = undefined
+    state.contextSegments = {
+      system: 0,
+      prompt: 0,
+      assistant: 0,
+      thinking: 0,
+      tools: 0,
+    }
+    replayEvents(seed)
+    settleStreaming()
+    // A seed ending mid-turn replays a turn/start that set working=true;
+    // the boot path resets this after replay — mirror it here so an idle
+    // rewound agent doesn't sit with a live spinner (a still-running
+    // agent re-asserts on its next event).
+    state.working = handle.agent.status === 'running'
+    // Rebind subscriptions to the new agent, then free the old one.
+    const oldHandle = currentHandle
+    const sourceSessionId = String(agent.session.id)
+    agent = handle.agent
+    currentHandle = handle
+    bindAgent()
+    refreshCommandList()
+    void refreshLoadedContext()
+    void refreshSkillCommands()
+    // The forked session (rewind) becomes the most recently used.
+    touchSession(childId)
+    state.emit()
+    void oldHandle?.dispose().catch(() => {})
+    // The staged-image map is session-scoped (the same contract the
+    // resumeTo/newSession tails enforce): tokens typed against the rewound
+    // conversation must not ride into the fork's next send, and the epoch
+    // bump fences saves still in flight for the old session.
+    clearStagedImages()
+    return sourceSessionId
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
@@ -1888,12 +2456,13 @@ export function createChannel(
     signal: AbortSignal,
   ) => Promise<CommandExecution | undefined>
 
-  /** Whether the installed command service takes composer images: rc line
-   *  gate with a structural fallback, so a failed manifest probe (bundlers,
-   *  exotic loaders) still lands on the 4-param rc.8 shape at runtime. */
+  /** Whether the installed command service takes composer images: version
+   *  gate (composer images arrived on 0.1.0-rc.8 and every later family —
+   *  0.1.1 included — keeps the 4-param shape) with a structural fallback,
+   *  so a failed manifest probe (bundlers, exotic loaders) still lands on
+   *  the 4-param rc.8 shape at runtime. */
   const commandServiceSupportsImages = (service: CommandRuntime): boolean => {
-    const line = installedLineOf('@deepseek-ai/dsh-commands')
-    if (line !== undefined) return line >= 8
+    if (installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')) return true
     return typeof (service.execute as { length?: number } | undefined)?.length === 'number'
       && (service.execute as { length: number }).length >= 4
   }
@@ -1977,7 +2546,7 @@ export function createChannel(
       }
       // `undefined` = not registered; a handler error surfaces as its
       // message so the user sees why the command failed.
-      return execution?.result.text ?? ''
+      return execution === undefined ? undefined : execution.result.text ?? ''
     } catch (error) {
       return error instanceof Error ? error.message : String(error)
     }
@@ -2135,20 +2704,138 @@ export function createChannel(
     await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
   }
 
+  // Session-lifetime candidate pool for non-path queries. The load promise is
+  // shared so concurrent first keystrokes cannot kick off duplicate scans, and
+  // it is keyed by cwd so a /workspace switch or resumed session never reuses
+  // another directory's listing.
+  const fileCandidateCache = { cwd: '', load: undefined as Promise<readonly FileCandidate[]> | undefined }
+
+  // `/model <provider/id>` completion: the model catalog is async (one llm
+  // listModels per provider), so the first keystrokes that could be heading
+  // for /model warm a session-lifetime cache — the shared promise dedupes
+  // concurrent triggers, children() synchronously serves whatever has landed,
+  // and the arrival state.emit() reopens the menu mid-typing. switchModel's
+  // success path drops the cache so the [current] tag re-resolves against
+  // the new route.
+  const modelNodeCache = {
+    nodes: undefined as readonly CommandCompletionNode[] | undefined,
+    load: undefined as Promise<void> | undefined,
+  }
+  const warmModelNodes = (): void => {
+    if (modelNodeCache.load !== undefined) return
+    modelNodeCache.load = state.listModels().then((list) => {
+      modelNodeCache.nodes = list.map((model) => ({
+        name: `${model.provider}/${model.id}`,
+        description: model.name,
+        ...(state.provider === model.provider && state.model === model.id
+          ? { tag: 'current' }
+          : {}),
+      }))
+      state.emit()
+    }).catch(() => {
+      // listModels already swallows per-provider failures; this only fires
+      // when the llm service shape itself is missing — settle on an empty
+      // menu rather than retrying on every keystroke.
+      modelNodeCache.nodes = []
+    })
+  }
+
+  // `/preset <id>` completion: same warm-cache pattern as models. The
+  // current/default tags resolve at children() time (sync state reads), so
+  // no cache invalidation is needed on switch.
+  const presetOptionCache = {
+    list: undefined as readonly PresetOption[] | undefined,
+    load: undefined as Promise<void> | undefined,
+  }
+  const warmPresetOptions = (): void => {
+    if (presetOptionCache.load !== undefined) return
+    presetOptionCache.load = state.listPresets().then((list) => {
+      presetOptionCache.list = list
+      state.emit()
+    }).catch(() => {
+      presetOptionCache.list = []
+    })
+  }
+
+  // `/effort <id>` completion: state.effortLevels is the sync vocabulary
+  // (populated on route changes); when still unknown, one best-effort
+  // resolveEfforts warms it. `tried` caps the retry — resolveEfforts
+  // notifies on hard errors, so keystroke-time retries would spam.
+  const effortWarm = { tried: false }
+  const warmEffortLevels = (): void => {
+    if (state.effortLevels !== undefined || effortWarm.tried) return
+    effortWarm.tried = true
+    void resolveEfforts().then((resolved) => {
+      if (resolved === 'unavailable' || resolved === 'error') return
+      effortWarm.tried = false
+      state.emit()
+    }).catch(() => {})
+  }
+
+  // --- Manual-compaction lifecycle ---------------------------------------
+  // The in-flight /compact transaction: its abort hook plus the settled
+  // promise. Every path that replaces `agent` (rewind / rewind-node /
+  // resume / new / model switch) must cancel and await it BEFORE snapshot-
+  // ting the session. Without this, a slow summarizer keeps running against
+  // the OLD session across the switch and can commit its replacement
+  // checkpoint AFTER the fork snapshot — silently swapping the history the
+  // user believed intact ("compaction failed → /model → context lost").
+  let manualCompaction:
+    | { controller: AbortController; settled: Promise<void> }
+    | undefined
+  /** Compactions cancelled by settleManualCompaction: their rejection is expected. */
+  const cancelledCompactions = new WeakSet<AbortController>()
+
+  /**
+   * Cancel an in-flight manual compaction and wait for it to settle.
+   * Aborting tears the summarizer stream down; dsh-compaction then closes
+   * the transaction with an error end marker and rejects compactNow with
+   * the `cancelled` class — no checkpoint is committed, the surface stays
+   * whole. The settle race is capped so a stuck stream can never wedge the
+   * session switch itself.
+   */
+  const settleManualCompaction = async (): Promise<void> => {
+    const active = manualCompaction
+    if (active === undefined) return
+    manualCompaction = undefined
+    cancelledCompactions.add(active.controller)
+    active.controller.abort(new Error('session switch'))
+    state.notify(t('compact-cancelled-switch'), { color: 'warning', timeoutMs: 4000 })
+    await Promise.race([
+      active.settled,
+      new Promise<void>(resolve => { setTimeout(resolve, 3000) }),
+    ])
+  }
+
+  let agentBindingGeneration = 0
   const state: ChannelState = {
     effortLevels: undefined,
     version: 0,
     rows: [],
     status: 'starting',
     sessionTitle: '',
+    sessionColor: '',
+    get autoRecapOnOpen(): boolean {
+      // Live read (not a boot snapshot): a /settings change applies on the
+      // next session switch. No settings service → off (framework absent,
+      // e.g. headless fixtures — nothing to configure and no llm route).
+      const settings = ctx.get('settings') as
+        | { describe(options?: { redactSecrets?: boolean }): readonly { ns: string; value: unknown }[] }
+        | undefined
+      if (settings === undefined) return false
+      const ns = settings.describe({ redactSecrets: true }).find(entry => entry.ns === 'dsh-tui')
+      return (ns?.value as Record<string, unknown> | undefined)?.recapOnOpen !== false
+    },
     agentId: agent.id,
+    agentBindingGeneration: 0,
     model: options.model,
     provider: options.provider,
-    tokens: { input: 0, output: 0 },
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd,
     displayCwd: workspaceService.describe(options.cwd).description ?? options.cwd,
     gitBranch: undefined,
     working: false,
+    cancelPending: false,
     spinnerMode: 'requesting',
     responseChars: 0,
     activeToolCount: 0,
@@ -2165,9 +2852,18 @@ export function createChannel(
     modeIndex: 0,
     workingActivity: undefined,
     activityFrames: options.activityFrames,
+    configuredProvider: options.configuredProvider,
+    configuredModel: options.configuredModel,
+    configuredPreset: options.configuredPreset,
+    configuredActivityFrames: options.configuredActivityFrames,
+    configuredLang: options.configuredLang,
     diffLayout: options.diffLayout ?? 'auto',
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
+    scrollGutter: normalizeScrollGutter(options.scrollGutter),
+    foldTerminalCommand: options.foldTerminalCommand === true,
+    promptSessionLabel: options.promptSessionLabel === true,
+    expandEditor: options.expandEditor !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,
@@ -2180,7 +2876,116 @@ export function createChannel(
     pending: [],
     commandList: LOCAL_COMMANDS,
     commandCompletions(input: string) {
+      // Warm the async vocabularies as soon as the input could be heading
+      // for their commands (`/m`, `/pre`, …) — by the time a trailing space
+      // asks children() for nodes, the fetch has usually landed.
+      const head = input.slice(1).split(/[\t ]/)[0]?.toLowerCase() ?? ''
+      if (head !== '') {
+        if ('model'.startsWith(head)) warmModelNodes()
+        if ('preset'.startsWith(head)) warmPresetOptions()
+        if ('effort'.startsWith(head)) warmEffortLevels()
+      }
       return completeCommands(input, state.commandList, (path) => {
+        if (path.length === 1 && path[0] === 'model') {
+          // provider/id specs, current model tagged; see modelNodeCache.
+          warmModelNodes()
+          return modelNodeCache.nodes ?? []
+        }
+        if (path.length === 1 && path[0] === 'lang') {
+          return [
+            { name: 'status', description: 'Show the current UI language', descriptionKey: 'sugg-status-desc' },
+            ...LANGS.map((lang) => ({
+              name: lang,
+              description: `Switch the UI language to ${lang}`,
+              descriptionKey: lang === 'zh' ? 'sugg-lang-zh-desc' : 'sugg-lang-en-desc',
+              ...(getLang() === lang ? { tag: 'current' } : {}),
+            })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'theme') {
+          const themeEntries = listThemeCatalog(themeHost)
+          return [
+            { name: 'status', description: 'Show the current theme', descriptionKey: 'sugg-status-desc' },
+            { name: AUTO_THEME_NAME, description: 'Follow the terminal background', descriptionKey: 'sugg-theme-auto-desc' },
+            ...themeEntries
+              .filter((entry) => entry.name !== AUTO_THEME_NAME)
+              .map((entry) => {
+                const base = entry.base ?? 'dark'
+                if (entry.source === 'builtin') {
+                  return {
+                    name: entry.name,
+                    description: `Built-in theme ${entry.name}`,
+                    descriptionKey: 'sugg-theme-builtin-desc',
+                  }
+                }
+                if (entry.source === 'runtime') {
+                  return {
+                    name: entry.name,
+                    description: `Plugin theme (${base} base)`,
+                    descriptionKey: 'sugg-theme-plugin-desc',
+                  }
+                }
+                return {
+                  name: entry.name,
+                  description: `User theme (${base} base)`,
+                  descriptionKey: 'sugg-theme-user-desc',
+                }
+              }),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'color') {
+          return [
+            { name: 'status', description: 'Show the current session color', descriptionKey: 'sugg-status-desc' },
+            { name: 'reset', description: 'Clear the session color', descriptionKey: 'sugg-color-reset-desc' },
+            ...SESSION_COLOR_NAMES.map((name) => ({
+              name,
+              description: 'Session accent color',
+              descriptionKey: 'sugg-color-name-desc',
+              ...(state.sessionColor === name ? { tag: 'current' } : {}),
+            })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'effort') {
+          warmEffortLevels()
+          return [
+            { name: 'status', description: 'Show the current reasoning effort', descriptionKey: 'sugg-status-desc' },
+            ...(state.effortLevels ?? []).map((id) => ({
+              name: id,
+              description: 'Reasoning effort level',
+              descriptionKey: 'sugg-effort-level-desc',
+              ...(state.reasoningEffort === id ? { tag: 'current' } : {}),
+            })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'preset') {
+          warmPresetOptions()
+          return [
+            { name: 'status', description: 'Show the current agent preset', descriptionKey: 'sugg-status-desc' },
+            ...(presetOptionCache.list ?? []).map((preset) => ({
+              name: preset.id,
+              description: preset.description ?? preset.name ?? preset.id,
+              ...(preset.id === state.agentPreset
+                ? { tag: 'current' }
+                : preset.isDefault
+                  ? { tag: 'default' }
+                  : {}),
+            })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'activity') {
+          return [
+            { name: 'status', description: 'Show the current activity preset', descriptionKey: 'sugg-status-desc' },
+            { name: 'frames', description: 'List or switch frame presets', descriptionKey: 'sugg-activity-frames-desc' },
+          ]
+        }
+        if (path.length === 2 && path[0] === 'activity' && path[1] === 'frames') {
+          return PRESET_NAMES.map((name) => ({
+            name,
+            description: 'Animation frame preset',
+            descriptionKey: 'sugg-activity-frame-desc',
+            ...(state.activityFrames === name ? { tag: 'current' } : {}),
+          }))
+        }
         if (path.length === 1 && path[0] === 'workspace') {
           const builtins: CommandCompletionNode[] = [
             { name: 'resume', description: 'Switch to another workspace', descriptionKey: 'cmd-desc-workspace-resume' },
@@ -2197,6 +3002,31 @@ export function createChannel(
                 aliases: command.aliases,
                 description: command.description,
               })),
+          ]
+        }
+        if (path.length === 1 && path[0] === 'permission') {
+          const snapshot = state.permissionPresets()
+          return snapshot.options
+            .filter(option => isCommandCompletionToken(option.value))
+            .map(option => ({
+              name: option.value,
+              description: option.description ?? option.name,
+              ...(option.value === 'read-only'
+                ? { descriptionKey: 'permission-preset-readonly-desc' }
+                : option.value === 'workspace-write'
+                  ? { descriptionKey: 'permission-preset-workspace-write-desc' }
+                  : option.value === 'danger-full-access'
+                    ? { descriptionKey: 'permission-preset-full-access-desc' }
+                    : {}),
+              ...(snapshot.current?.kind === 'preset' && snapshot.current.value === option.value
+                ? { tag: 'current' }
+                : {}),
+            }))
+        }
+        if (path.length === 1 && path[0] === 'plan') {
+          return [
+            { name: 'on', description: 'Enter plan mode: read-only, plan before acting', descriptionKey: 'plan-mode-on-desc' },
+            { name: 'off', description: 'Exit plan mode, back to normal execution', descriptionKey: 'plan-mode-off-desc' },
           ]
         }
         return commandTrees?.children(path) ?? []
@@ -2237,6 +3067,9 @@ export function createChannel(
       streamNotifyScheduled = true
       const timer = setTimeout(() => {
         streamNotifyScheduled = false
+        // Deferred subagent projection rides this same frame: flush BEFORE
+        // the listeners wake so React reads fully projected rows.
+        flushSubagentStream()
         foldRows(state.rows, MAX_ROWS, foldCursor)
         for (const listener of listeners) listener()
       }, 16)
@@ -2328,9 +3161,11 @@ export function createChannel(
       // Keep the staged queue: an interrupt aborts the running turn but the
       // queued/steered messages are delivered as the next turn (web parity).
       // Cancellation converges asynchronously; ignore a repeated Esc/Ctrl+C
-      // until the aborted turn has produced its terminal event.
+      // until the aborted turn has produced its terminal event. `cancelPending`
+      // mirrors that window for the UI, where a repeated press force-exits.
       if (cancelInFlight) return
       cancelInFlight = true
+      state.cancelPending = true
       agent.cancel({ kind: 'user' }, { keepInbox: true })
     },
     interruptAndDeliver(texts: readonly string[]): number {
@@ -2348,6 +3183,7 @@ export function createChannel(
         cancelInFlight = true
         agent.cancel({ kind: 'user' })
       }
+      state.cancelPending = true
       const token = ++interruptSeq
       const deliver = (): void => {
         // A second interrupt while the abort is still settling must not
@@ -2426,6 +3262,10 @@ export function createChannel(
           return null
         }
       }
+      // An in-flight manual compaction must not straddle the fork: cancel it
+      // and wait, or its checkpoint could commit right after the seed snapshot
+      // below and quietly replace history the rewind was meant to preserve.
+      await settleManualCompaction()
       const childId = SessionId(randomUUID())
       // DSH event order is `turn/start → user/message → … → turn/end`, so a
       // message's own seq always sits inside its turn — forking there would
@@ -2493,67 +3333,9 @@ export function createChannel(
           { color: 'warning', timeoutMs: 8000 },
         )
       }
-      // Replay the forked history into a fresh transcript (tokens/spinner
-      // counters land back at the rewind point, matching the fork).
-      streaming = undefined
-      reasoning = undefined
-      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
-      // keep it out of the next turn's settle logs and revive cache.
-      sealedReasoning.length = 0
-      lastReasoningRow = undefined
-      toolCards.clear()
-      nextRowId = 0
-      state.rows.length = 0
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.spinnerMode = 'requesting'
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.agentPreset = rewindComposed.agentPreset
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      replayEvents(seed)
-      settleStreaming()
-      // A seed ending mid-turn replays a turn/start that set working=true;
-      // the boot path resets this after replay — mirror it here so an idle
-      // rewound agent doesn't sit with a live spinner (a still-running
-      // agent re-asserts on its next event).
-      state.working = handle.agent.status === 'running'
-      // Rebind subscriptions to the new agent, then free the old one.
-      const oldHandle = currentHandle
-      const sourceSessionId = String(agent.session.id)
-      agent = handle.agent
-      currentHandle = handle
-      bindAgent()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      // The forked session (rewind) becomes the most recently used.
-      touchSession(childId)
-      state.emit()
-      void oldHandle?.dispose().catch(() => {})
+      // Swap the live agent for the fork (shared with rewindToNode): replay
+      // the seed, rebind, and free the replaced handle.
+      const sourceSessionId = adoptForkedAgent(handle, seed, rewindComposed.agentPreset, childId)
       // Decision-event pair around the completed rewind: `tui/rewind-done`
       // (the first non-empty string is toasted as the post-rewind summary,
       // e.g. a plugin reporting restored files) and the generic
@@ -2591,6 +3373,691 @@ export function createChannel(
       notifySessionSwitched('rewind', String(childId), sourceSessionId)
       return row.text
     },
+    async buildSessionTree(): Promise<SessionTreeData | null> {
+      const persistence = ctx.get('sessionPersistence') as
+        | (SessionSource & {
+          // Optional at runtime: fakes and third-party backends may not
+          // implement the full coordinator surface.
+          inspect?(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[] }>
+        })
+        | undefined
+      if (!persistence) {
+        state.notify(t('tree-unavailable'), { color: 'error' })
+        return null
+      }
+      // Pin the live session snapshot NOW: every await below (list/inspect)
+      // is a window in which a fire-and-forget switch (/new, /resume,
+      // /model) can swap `agent`. Reading agent.session piecemeal would
+      // stitch the NEW session's events under the OLD session's id — a
+      // confirm would then rewind from the wrong persisted log. Everything
+      // below reads this snapshot, and the result is discarded if the live
+      // session moved on before the build finished.
+      const liveSession = agent.session
+      const currentId = String(liveSession.id)
+      // Same enumerate as the /resume listing (snapshots when the backend
+      // offers revisions, plain list otherwise), each header narrowed through
+      // the sessions reader — one malformed header costs that session its
+      // metadata, never the whole tree. `raw` stays the backend's own header
+      // object for locate() below.
+      let listed: { header: RawSessionHeader; raw: unknown }[] = []
+      try {
+        if (typeof persistence.listSnapshots === 'function') {
+          const snapshots = await persistence.listSnapshots()
+          listed = snapshots.flatMap(snapshot => {
+            const raw = (snapshot as { header?: unknown } | null)?.header
+            const header = readHeader(raw)
+            return header === undefined ? [] : [{ header, raw }]
+          })
+        } else if (typeof persistence.list === 'function') {
+          const headers = await persistence.list()
+          listed = headers.flatMap(raw => {
+            const header = readHeader(raw)
+            return header === undefined ? [] : [{ header, raw }]
+          })
+        }
+      } catch {
+        // A listing failure degrades the tree to the live session only.
+      }
+      // Same cwd scoping as /resume (Claude Code's project dimension): forks
+      // inherit cwd, so the family never crosses projects — and the match is
+      // the project-aware one /resume uses, so a pre-upgrade subdirectory
+      // path, Windows separators, or a case variant on one header cannot
+      // quietly amputate the ancestors and siblings it records. Subagent
+      // child sessions carry parentSession too, but they are delegation
+      // artifacts, not rewind branches — exclude them from the family.
+      const local = listed.filter(entry =>
+        sessionCwdMatches(state.cwd, entry.header.cwd ?? '') &&
+        entry.header.origin !== 'subagent' &&
+        (entry.header.delegationDepth ?? 0) === 0,
+      )
+      const headerById = new Map(local.map(entry => [entry.header.id, entry]))
+      // The live session's header may not be materialized in list() yet
+      // (the jsonl backend writes on first append) — overlay the in-memory
+      // header so the ancestor walk below still finds a fresh fork's parent.
+      const liveMeta = (liveSession as { header?: SessionHeader }).header
+      if (!headerById.has(currentId) && liveMeta !== undefined) {
+        headerById.set(currentId, { header: readHeader(liveMeta) ?? { id: currentId, cwd: undefined, createdAt: undefined, parentSession: undefined, origin: undefined, delegationDepth: undefined, seedLength: undefined, agentPreset: undefined }, raw: liveMeta })
+      }
+      // Family = the live session's ancestor chain PLUS every descendant of
+      // its topmost known ancestor (siblings and cousins included).
+      const childrenByParent = new Map<string, string[]>()
+      for (const entry of local) {
+        if (entry.header.parentSession === undefined) continue
+        const list = childrenByParent.get(entry.header.parentSession)
+        if (list === undefined) childrenByParent.set(entry.header.parentSession, [entry.header.id])
+        else list.push(entry.header.id)
+      }
+      const ancestorIds: string[] = []
+      {
+        const visited = new Set<string>([currentId])
+        let cursor = headerById.get(currentId)
+        while (cursor?.header.parentSession !== undefined) {
+          const parentId = cursor.header.parentSession
+          if (visited.has(parentId)) break
+          visited.add(parentId)
+          if (!headerById.has(parentId)) break
+          ancestorIds.push(parentId)
+          cursor = headerById.get(parentId)
+        }
+      }
+      // BFS from the topmost ancestor. The scan must NOT be gated by family
+      // membership: ancestor-chain nodes are already in the family, and
+      // skipping them here would never enumerate their other children —
+      // siblings/cousins forking off a MIDDLE ancestor would be lost.
+      const family = new Set<string>([currentId, ...ancestorIds])
+      {
+        const scanned = new Set<string>()
+        const queue = [ancestorIds.at(-1) ?? currentId]
+        while (queue.length > 0) {
+          const id = queue.shift()!
+          if (scanned.has(id)) continue
+          scanned.add(id)
+          family.add(id)
+          for (const child of childrenByParent.get(id) ?? []) {
+            queue.push(child)
+          }
+        }
+      }
+      // Processing order is TOPOLOGICAL (a parent before its children): the
+      // coverage bookkeeping below — which seq range each chain already
+      // shows — feeds the next read's inherited-prefix skip, so a parent
+      // must be read before its forks. Within each sibling group the live
+      // chain wins, then newest first (the same priority the read budget
+      // always had).
+      const ancestorSet = new Set(ancestorIds)
+      const priorityOf = (a: string, b: string): number => {
+        const aChain = a === currentId || ancestorSet.has(a)
+        const bChain = b === currentId || ancestorSet.has(b)
+        if (aChain !== bChain) return aChain ? -1 : 1
+        return (headerById.get(b)?.header.createdAt ?? 0) - (headerById.get(a)?.header.createdAt ?? 0)
+      }
+      const kidsOf = new Map<string, string[]>()
+      const familyRoots: string[] = []
+      for (const id of family) {
+        const parentId = headerById.get(id)?.header.parentSession
+        if (parentId !== undefined && parentId !== id && family.has(parentId)) {
+          const list = kidsOf.get(parentId)
+          if (list === undefined) kidsOf.set(parentId, [id])
+          else list.push(id)
+        } else {
+          familyRoots.push(id)
+        }
+      }
+      familyRoots.sort(priorityOf)
+      for (const list of kidsOf.values()) list.sort(priorityOf)
+      const ordered: string[] = []
+      {
+        const seen = new Set<string>()
+        const stack = [...familyRoots].reverse()
+        while (stack.length > 0) {
+          const id = stack.pop()!
+          if (seen.has(id)) continue
+          seen.add(id)
+          ordered.push(id)
+          const kids = kidsOf.get(id)
+          if (kids !== undefined) {
+            for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!)
+          }
+        }
+        // Cycle-broken leftovers (corrupt parent headers) — never drop one.
+        for (const id of [...family].sort(priorityOf)) {
+          if (!seen.has(id)) ordered.push(id)
+        }
+      }
+      // Caps: the ancestor chain + live session ALWAYS stay selected — the
+      // structural invariant (the live branch must reach the family root)
+      // outranks the session cap, which therefore evicts only non-ancestors.
+      // The event budget bounds the READ cost too: non-live logs decode
+      // lazily and stop at the remaining budget (see below), the live
+      // session keeps only its tail.
+      const MAX_TREE_SESSIONS = 24
+      const MAX_TREE_EVENTS = 200_000
+      // The event budget alone does NOT bound read cost: skipped envelopes
+      // (ignorable frames, headers) are paid for but never collected, so a
+      // noisy log can return ZERO events and leave the next log a full scan
+      // allowance — 23 logs × ~800k envelopes would block the TUI for
+      // seconds. scanBudget caps the TOTAL envelopes inspected across all
+      // logs (the reader reports its real scanned count); per-log caps
+      // derive from the event budget as before, and the smaller of the two
+      // applies, so one flood cannot starve every later sibling either.
+      const MAX_TREE_SCANNED = defaultMaxScanned(MAX_TREE_EVENTS)
+      let scanBudget = MAX_TREE_SCANNED
+      const selected = new Set<string>()
+      let slots = MAX_TREE_SESSIONS
+      for (const id of ordered) {
+        const chain = id === currentId || ancestorSet.has(id)
+        if (chain || slots > 0) {
+          selected.add(id)
+          if (!chain) slots -= 1
+        }
+      }
+      // The live session's events come from memory (its header may not be
+      // materialized yet — the jsonl backend writes on first append).
+      const liveHeader = headerById.get(currentId)
+      const familySessions: FamilySession[] = []
+      let truncated = selected.size < family.size
+      let eventBudget = 0
+      // Coverage bookkeeping: coveredThrough(S) = the highest K such that
+      // [0..K] is already displayed by S's chain or an ancestor's. A fork's
+      // inherited seed prefix duplicates that range, so non-live reads SKIP
+      // it (the reader's skipBelowSeq): the prefix still costs scan budget
+      // (its bytes are read and parsed) but NOT the event budget — a fork
+      // of a huge parent pays only for its OWN events, so two small forks
+      // of a 70k-event parent both stay visible. Unreadable/unloaded
+      // sessions are transparent: they claim nothing beyond what their own
+      // ancestors covered, so a fork of a dead branch dedups against the
+      // grandparent instead of hiding its self-contained history.
+      const coveredThrough = new Map<string, number>()
+      for (const id of ordered) {
+        if (!selected.has(id)) continue
+        const entry = headerById.get(id)
+        if (id === currentId) {
+          const liveParentId = liveHeader?.header.parentSession ?? liveMeta?.parentSession
+          const liveParent = liveParentId !== undefined ? String(liveParentId) : undefined
+          const parentCovered = liveParent !== undefined
+            ? (coveredThrough.get(liveParent) ?? -1)
+            : -1
+          const liveEvents = liveSession.events
+          const remaining = Math.max(0, MAX_TREE_EVENTS - eventBudget)
+          // The live session's in-memory log is SELF-CONTAINED: a fork's
+          // events still carry the inherited seed prefix, which the parent's
+          // chain already displays (and already charged to the budget).
+          // Skipping it exactly like the non-live reads do keeps a live fork
+          // of a huge parent from spending the whole family budget on
+          // duplicated history and evicting its own siblings.
+          const liveSeed = liveHeader?.header.seedLength ?? liveMeta?.seedLength
+          const skipBelow =
+            liveParent !== undefined && liveSeed !== undefined
+              ? Math.min(liveSeed, parentCovered + 1)
+              : 0
+          const own = skipBelow > 0 ? liveEvents.filter(event => event.seq >= skipBelow) : liveEvents
+          // A live session larger than the remaining budget keeps its TAIL,
+          // aligned to whole turns (sessionTree.liveTailWindow): leftover
+          // entries of a turn whose turn/start was cut away render as
+          // selectable rows that can never rewind; a window holding no
+          // turn/start at all (one oversized LAST turn spans the budget)
+          // retries over the earlier complete turns instead of blacking the
+          // session out. Rewind itself never reads this copy (rewindToNode
+          // forks the real session), so the slice only narrows what the tree
+          // can display.
+          const events = liveTailWindow(own, remaining)
+          // Charge the KEPT tail, not the in-memory length: extraction only
+          // ever touches `events`, and charging the full log would black out
+          // every other family member's budget behind a discarded prefix.
+          eventBudget += events.length
+          if (events.length !== own.length) truncated = true
+          familySessions.push({
+            id,
+            createdAt: liveHeader?.header.createdAt ?? liveMeta?.createdAt ?? Date.now(),
+            ...(liveParent !== undefined ? { parentSession: liveParent } : {}),
+            ...(liveHeader?.header.seedLength !== undefined || liveMeta?.seedLength !== undefined
+              ? { seedLength: liveHeader?.header.seedLength ?? liveMeta!.seedLength }
+              : {}),
+            events,
+            live: true,
+            // The in-memory log always reaches the tip (liveTailWindow trims
+            // the head only), so the adopt/warning UX facts are derivable.
+            tailComplete: true,
+          })
+          // A kept tail cut off the front connects to nothing — coverage
+          // stays at the parent's (a fork of the live session re-reads the
+          // hidden prefix from its own log).
+          const firstKept = events.length > 0 ? events[0]!.seq : Number.POSITIVE_INFINITY
+          const lastKept = events.length > 0 ? events[events.length - 1]!.seq : -1
+          coveredThrough.set(
+            id,
+            firstKept <= parentCovered + 1 ? Math.max(parentCovered, lastKept) : parentCovered,
+          )
+          continue
+        }
+        const header = entry?.header
+        const parentId = header?.parentSession
+        const parentCovered = parentId !== undefined ? (coveredThrough.get(parentId) ?? -1) : -1
+        // Never skip past the seed prefix: events beyond it are this
+        // session's OWN — no ancestor can show them. A parent that was never
+        // read (evicted, or outside the family) covers nothing (skip 0).
+        const skipBelow =
+          parentId !== undefined && header?.seedLength !== undefined
+            ? Math.min(header.seedLength, parentCovered + 1)
+            : 0
+        const facts = {
+          id,
+          createdAt: header?.createdAt ?? 0,
+          ...(parentId !== undefined ? { parentSession: parentId } : {}),
+          ...(header?.seedLength !== undefined ? { seedLength: header.seedLength } : {}),
+        }
+        if (eventBudget >= MAX_TREE_EVENTS || scanBudget <= 0) {
+          // Budget spent: keep the STRUCTURE — the session degrades to an
+          // unloaded placeholder so its branch (and any ancestor chain
+          // through it) stays visible instead of vanishing from the tree.
+          truncated = true
+          familySessions.push({ ...facts, events: [], live: false, unloaded: true })
+          coveredThrough.set(id, parentCovered)
+          continue
+        }
+        // Read-only, tolerant, bounded: the compat reader decodes frames
+        // lazily and stops at the remaining event budget. Browsing the tree
+        // must never REWRITE history logs (the ignorable-marking repair
+        // stays on the explicit resume/rewind path), and the strict backend
+        // inspect would both reject third-party event types wholesale and
+        // parse chunk-heavy logs whole. Header facts come from list().
+        const remaining = MAX_TREE_EVENTS - eventBudget
+        // Source precedence, all read-only:
+        //  1. persistence.locate — the backend's OWN artifact resolution is
+        //     authoritative (custom root, workspace-key scheme). When it
+        //     names a path, ONLY that file is read: falling back to a
+        //     same-id copy under the stock root could surface a STALE log
+        //     from another backend configuration. A locate miss or an ABSENT
+        //     file falls through to inspect, never to the stock scan.
+        //  2. Stock root scan — only for backends WITHOUT locate (fakes,
+        //     older custom implementations).
+        //  3. inspect — the backend's strict read (non-file backends), with
+        //     the same budget enforced on what we keep — and ONLY when the
+        //     file read found NOTHING (undefined). A read that failed on a
+        //     safety cap or corruption (failed) must never escalate here:
+        //     inspect parses the WHOLE log up front, so falling through
+        //     would re-read unboundedly exactly the logs the caps exist to
+        //     bound (64 MiB frames, decode bombs) — degrade to a placeholder
+        //     instead.
+        let events: readonly SessionEvent[] | undefined
+        let complete = true
+        let failed = false
+        // First seq the chosen source actually covers: the file readers start
+        // at the inherited-prefix skip, inspect always hands the whole log.
+        let readFrom = 0
+        // Per-log scan allowance: the usual 4×-of-remaining derivation,
+        // clamped to what the tree-level scan budget still has.
+        const scanAllowance = Math.min(defaultMaxScanned(remaining), scanBudget)
+        const locate = persistence.locate
+        const hasLocate = typeof locate === 'function'
+        if (hasLocate && entry !== undefined) {
+          let locatedPath: string | undefined
+          try {
+            const location: unknown = locate.call(persistence, entry.raw)
+            // Only the jsonl kind enters the compat file layer — a foreign
+            // kind's artifact is the backend's own format (inspect below).
+            if (location !== null && typeof location === 'object') {
+              const record = location as { kind?: unknown; path?: unknown }
+              if (record.kind === 'jsonl' && typeof record.path === 'string') {
+                locatedPath = record.path
+              }
+            }
+          } catch {
+            // Best effort — a locate hiccup falls through to inspect.
+          }
+          if (locatedPath !== undefined) {
+            const viaPath = readSessionEventsFromFile(locatedPath, remaining, scanAllowance, skipBelow)
+            if (viaPath !== undefined) {
+              scanBudget -= viaPath.scanned
+              if (viaPath.failed === true) failed = true
+              else {
+                events = viaPath.events
+                complete = viaPath.complete
+                readFrom = skipBelow
+              }
+            }
+          }
+        } else if (!hasLocate) {
+          const read = readSessionEventsFromLog(id, remaining, scanAllowance, skipBelow)
+          if (read !== undefined) {
+            scanBudget -= read.scanned
+            if (read.failed === true) failed = true
+            else {
+              events = read.events
+              complete = read.complete
+              readFrom = skipBelow
+            }
+          }
+        }
+        if (!failed && events === undefined && typeof persistence.inspect === 'function') {
+          try {
+            const inspection = await persistence.inspect(SessionId(id))
+            // inspect parses the WHOLE log up front: charge the full length
+            // to the scan budget (may overdraw; the next iterations skip).
+            scanBudget -= inspection.events.length
+            // Non-file backends hand back the self-contained log from seq 0:
+            // the inherited-prefix skip the file readers got must apply here
+            // too, or a long prefix would fill the slice and the branch's OWN
+            // events — the only ones nobody else displays — would be cut.
+            const all = skipBelow > 0 ? inspection.events.filter(event => event.seq >= skipBelow) : inspection.events
+            readFrom = skipBelow
+            events = all
+            if (events.length > remaining) {
+              events = events.slice(0, remaining)
+              complete = false
+            }
+          } catch {
+            events = undefined
+          }
+        }
+        if (failed || events === undefined) {
+          // An unreadable log keeps the branch structure, no entries — and
+          // stays transparent for coverage, so a fork of this branch dedups
+          // against the grandparent instead of hiding its own history.
+          familySessions.push({ ...facts, events: [], live: false, unreadable: true })
+          coveredThrough.set(id, parentCovered)
+          continue
+        }
+        eventBudget += events.length
+        if (!complete) truncated = true
+        // tailComplete gates the branch-adopt target and the drop-turn
+        // warning: a budget-sliced read lost the tail, and a tip computed
+        // from it would fork mid-branch while claiming to keep everything.
+        familySessions.push({ ...facts, events, live: false, ...(complete ? { tailComplete: true } : {}) })
+        const lastRead = events.length > 0 ? events[events.length - 1]!.seq : -1
+        coveredThrough.set(
+          id,
+          readFrom <= parentCovered + 1 ? Math.max(parentCovered, lastRead) : parentCovered,
+        )
+      }
+      // A session swap mid-build invalidates the whole assembly (it mixes
+      // the snapshot's lineage with headers listed for the OLD cwd state):
+      // drop it silently — the reopened tree rebuilds on the new session.
+      if (agent.session !== liveSession) return null
+      return buildSessionTree(familySessions, currentId, truncated)
+    },
+    async rewindToNode(sessionId: string, seq: number, mode: 'rewind' | 'fork' = 'rewind'): Promise<string | null> {
+      const agents = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!agents) {
+        state.notify(t('rewind-unavailable'), { color: 'error' })
+        return null
+      }
+      // An in-flight manual compaction must not straddle the snapshot below
+      // (live branch) nor keep summarizing the current session while the
+      // rewind targets another — cancel and await it first.
+      await settleManualCompaction()
+      // Pin the entry-time session: the awaits below (log load, preset
+      // compose, agent create) are windows in which a queued switch
+      // (/new, /resume, /model) can swap `agent` — the mutation queue only
+      // serializes the REPLACING entries, so the boundary and restored text
+      // derive from THIS session's log and any swap along the way aborts
+      // the rewind (forking or disposing whatever agent happens to be
+      // current at the end would rewind the wrong session).
+      const entrySession = agent.session
+      const currentId = String(entrySession.id)
+      const childId = SessionId(randomUUID())
+      // Source events: the live session from memory; any other family member
+      // from its durable log (legacy event types registered first — the same
+      // in-process compat seam as resumeTo, since load validates known types).
+      let sourceEvents: readonly SessionEvent[]
+      let sourceCwd = state.cwd
+      let forkFromLive = true
+      if (sessionId === currentId) {
+        sourceEvents = entrySession.events
+      } else {
+        forkFromLive = false
+        const persistence = ctx.get('sessionPersistence') as
+          | {
+            load(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>
+          }
+          | undefined
+        if (!persistence || typeof persistence.load !== 'function') {
+          state.notify(t('rewind-no-persistence'), { color: 'error' })
+          return null
+        }
+        try {
+          ensureLegacySessionEventTypes()
+          const loaded = await persistence.load(SessionId(sessionId))
+          sourceEvents = loaded.events
+          sourceCwd = loaded.meta.cwd ?? state.cwd
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          state.notify(t('rewind-load-failed', { err: message }), { color: 'error' })
+          return null
+        }
+      }
+      // DSH event order is `turn/start → user/message → … → turn/end`, and a
+      // fork seed must not end inside an open turn. pi's navigateTree
+      // semantics mapped onto that constraint (sessionTree.rewindTarget): a
+      // USER message drops its turn — the boundary sits just before the
+      // turn/start and the prompt comes back into the input for re-editing;
+      // any OTHER entry keeps through its enclosing STEP — a mid-turn cut at
+      // the step/end with the turn closed synthetically (DSH agentic turns
+      // span thousands of events, so turn-granular keeping would barely move
+      // the visible history). Fork mode (pi's /fork) instead KEEPS the
+      // picked entry: a user message cuts right after itself (the turn's
+      // reply drops) and never returns text to the input.
+      const target = mode === 'fork'
+        ? forkTarget(sourceEvents, seq)
+        : rewindTarget(sourceEvents, seq)
+      const boundary = target.boundary
+      if (boundary < 0) {
+        state.notify(t('rewind-first-message'), { color: 'error' })
+        return null
+      }
+      // Keeping the entry can still be a NO-OP: when nothing message-bearing
+      // follows the boundary (only a turn/end, or nothing at all), the fork's
+      // transcript would be identical to the live one. pi truncates to right
+      // after the entry; DSH's step/turn-closed seed cannot always express
+      // that, so the honest answer is to say there is nothing to rewind. A
+      // DEAD session's tip still forks: that adopts the branch, a real
+      // switch.
+      if (forkFromLive && !sourceEvents.some(event =>
+        event.seq > boundary &&
+        (event.type === 'user/message' || event.type === 'assistant/message' ||
+          event.type === 'tool/call' || event.type === 'tool/result'))) {
+        state.notify(t('rewind-noop'), { color: 'warning' })
+        return null
+      }
+      // The dropped turn's own prompt text, restored into the input after
+      // the swap ('' whenever the entry was kept — fork mode included — or
+      // the turn had no human-typed text to restore).
+      const restoredText = mode === 'fork' ? '' : turnUserText(sourceEvents, seq)
+      // The fork continues under the source session's own preset: switches
+      // are blank-only, so every `agent-preset/selected` event predates any
+      // rewind boundary and the source log resolves the exact composition.
+      // The route likewise stays the live one — a rewind continues the same
+      // conversation, so a `/model` switch must survive it (issue #30).
+      const sourcePreset = forkFromLive
+        ? runningPresetOf(entrySession)
+        : ((await resolvePersistedPreset(ctx, SessionId(sessionId))) ?? runningPresetOf(entrySession))
+      const rewindComposed = await composePreset(ctx, sourcePreset)
+      // Everything fallible is done — only NOW stop a running turn (a load
+      // or preset failure above must not kill it). But bail first when the
+      // live session was swapped during those awaits: cancelling/forking
+      // now would hit the NEW session with THIS session's boundary.
+      if (agent.session !== entrySession) {
+        state.notify(t('rewind-session-changed'), { color: 'error' })
+        return null
+      }
+      // Stop a running turn first and WAIT for its turn/end to land: fork
+      // rejects boundaries inside open turns, and Agent.cancel() closes the
+      // turn asynchronously (a long thinking turn can take seconds to
+      // settle). Cross-session rewinds need this too: the live agent is
+      // about to be disposed, and its turn must close cleanly.
+      const wasWorking = state.working
+      const cancelSeq = agent.session.seq
+      if (wasWorking) agent.cancel({ kind: 'user' })
+      if (wasWorking) {
+        const turnSettled = await waitForTurnEnd(agent.session, cancelSeq, 30000)
+        if (!turnSettled) {
+          state.notify(t('rewind-settling'), { color: 'error' })
+          return null
+        }
+      }
+      // Slice the seed from the PINNED event snapshot. Never sessions.fork
+      // here: fork() rejects a boundary inside an open turn, which is
+      // exactly where a keep-style cut lands (closeTurn set) — close it
+      // with the exact event a real user interrupt writes instead (the
+      // persistence layer closes crash-orphaned turns the same way).
+      // agents.create validates the result itself (contiguous from seq 0,
+      // no open turns).
+      const seed = sourceEvents.filter(event => event.seq <= boundary)
+      if (target.closeTurn !== undefined) {
+        const last = seed[seed.length - 1]
+        if (last !== undefined) {
+          seed.push({
+            type: 'turn/end',
+            seq: last.seq + 1,
+            time: last.time + 1,
+            data: { turn: target.closeTurn, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+          })
+        }
+      }
+      let handle: AgentHandle
+      try {
+        handle = await agents.create({
+          sessionId: childId,
+          seed,
+          meta: {
+            cwd: sourceCwd,
+            parentSession: SessionId(sessionId),
+            seedLength: seed.length,
+            ...(rewindComposed.agentPreset === undefined
+              ? {}
+              : { agentPreset: rewindComposed.agentPreset }),
+          },
+          agentOptions: { provider: state.provider, model: state.model },
+          ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
+        })
+      } catch {
+        state.notify(t('rewind-create-failed'), { color: 'error' })
+        return null
+      }
+      try {
+        await attachSessionToWorkspace(ctx, sourceCwd, childId)
+      } catch (error) {
+        state.notify(
+          t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+          { color: 'warning', timeoutMs: 8000 },
+        )
+      }
+      // The create await was another swap window: adopting now would dispose
+      // the NEW session's agent. Free the fork we just made and bail.
+      if (agent.session !== entrySession) {
+        void handle.dispose().catch(() => {})
+        state.notify(t('rewind-session-changed'), { color: 'error' })
+        return null
+      }
+      // Replay the forked history into a fresh transcript (the same swap
+      // tail rewindTo runs), then announce the session switch.
+      const sourceSessionId = adoptForkedAgent(handle, seed, rewindComposed.agentPreset, childId)
+      notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
+      return restoredText
+    },
+    async forkSession(): Promise<boolean> {
+      const sessions = ctx.get('sessions') as
+        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
+        | undefined
+      const agents = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!sessions || !agents) {
+        state.notify(t('fork-unavailable'), { color: 'error' })
+        return false
+      }
+      // kimi-code /fork semantics: refuse mid-turn instead of cancelling —
+      // the fork must not surprise the user by killing their running turn,
+      // and sessions.fork rejects an open-turn log anyway.
+      if (state.working) {
+        state.notify(t('fork-while-working'), { color: 'warning' })
+        return false
+      }
+      // An in-flight manual compaction must not straddle the fork snapshot:
+      // cancel and await it, or its checkpoint could commit right after the
+      // seed copy below and quietly replace history the fork preserved.
+      await settleManualCompaction()
+      const source = agent.session
+      const childId = SessionId(randomUUID())
+      // No boundary: the whole (turn-closed) log. Slice via sessions.fork for
+      // the same validation the rewind path gets, never sessions.fork's
+      // session-storing sibling — agents.create must own the new session.
+      let seed: readonly SessionEvent[]
+      try {
+        seed = sessions.fork(source).events
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(t('fork-failed', { err: message }), { color: 'error' })
+        return false
+      }
+      // Same preset/route rule as a rewind fork: the source log's own
+      // composition, the live route (a /model switch survives forking).
+      const forkComposed = await composePreset(ctx, runningPresetOf(source))
+      let handle: AgentHandle
+      try {
+        handle = await agents.create({
+          sessionId: childId,
+          seed,
+          meta: {
+            cwd: state.cwd,
+            // NO parentSession: a /fork copy is an independent conversation
+            // (kimi-code semantics — a copy of the message list under a new
+            // root session, like /new plus the history), not a rewind branch.
+            // Recording lineage would fold it into the source's family in
+            // /resume and the user would never find it.
+            seedLength: seed.length,
+            ...(forkComposed.agentPreset === undefined
+              ? {}
+              : { agentPreset: forkComposed.agentPreset }),
+          },
+          agentOptions: { provider: state.provider, model: state.model },
+          ...(forkComposed.setup === undefined ? {} : { setup: forkComposed.setup }),
+        })
+      } catch {
+        state.notify(t('fork-create-failed'), { color: 'error' })
+        return false
+      }
+      // STAY in the source session: adopting the fork would dispose the live
+      // agent (killing its in-flight turn and background tasks) — the fork is
+      // an independent copy the user enters via /resume or the printed resume
+      // command. The teardown order matters:
+      // 1. attach while the fork's agent is still LIVE — the workspace's
+      //    header read resolves live sessions from the registry, so attaching
+      //    after dispose races the persistence index and can fail with
+      //    "cannot validate session".
+      // 2. await the dispose so the seed log finishes flushing…
+      // 3. …then append the Fork: title — appending mid-flush races the
+      //    writer and the frame is silently dropped.
+      try {
+        await attachSessionToWorkspace(ctx, state.cwd, childId)
+      } catch (error) {
+        state.notify(
+          t('fork-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+          { color: 'warning', timeoutMs: 8000 },
+        )
+      }
+      try {
+        await handle.dispose()
+      } catch (error: unknown) {
+        ctx.logger.warn('dsh-tui: forked session dispose failed: %o', error)
+      }
+      // kimi's naming convention: the fork wears `Fork: <source title>` (the
+      // prefix stays English in both locales). Best effort — a backend whose
+      // log the compat layer cannot reach just leaves the fork untitled.
+      const sourceTitle = state.sessionTitle.trim()
+      appendSessionTitle(String(childId), `Fork: ${sourceTitle === '' ? String(source.id).slice(0, 8) : sourceTitle}`)
+      // The same resume-command shape the exit hint prints (plugin.ts
+      // resumeCommand): DSH_TUI_RESUME_SESSION + the boot profile.
+      const profile = resolveDshProfileName()
+      const boot = profile === undefined ? 'dsh --config cordis.yml' : `dsh --profile ${profile}`
+      const command = process.platform === 'win32'
+        ? `dsh-tui --resume ${childId}`
+        : `DSH_TUI_RESUME_SESSION=${childId} ${boot}`
+      state.notify(t('fork-done', { id: String(childId), command }), { timeoutMs: 8000 })
+      return true
+    },
     async resumeTo(sessionId: string): Promise<ResumeResult> {
       // Switch the live agent to a persisted session: /resume picker Enter
       // loads the history immediately (the `--resume` launcher path keeps
@@ -2616,6 +4083,15 @@ export function createChannel(
       // target — a veto leaves the live session and its transcript
       // untouched.
       if (await sessionSwitchVetoed('resume', sessionId)) return { ok: false, reason: 'cancelled' }
+      // The live session's in-flight manual compaction must not keep running
+      // (and commit its checkpoint) once we leave it for the target — cancel
+      // and await it before any target read.
+      await settleManualCompaction()
+      // Identity pin for the rival-swap guard below: everything between here
+      // and the adoption can await (veto, preset, route, agents.resume), and
+      // an interrupt-queued /new or a second /resume may commit a different
+      // swap in that window.
+      const entrySession = agent.session
       let handle: AgentHandle
       // Compat boundary: register vouched-for legacy event types (e.g.
       // activity/status from pre-#143 logs) in every reachable dsh-session
@@ -2639,10 +4115,20 @@ export function createChannel(
         provider: options.configuredProvider,
         model: options.configuredModel,
       })
+      // The recorded route feeds back into agentOptions too — not just the
+      // status line below: a provider-only cordis.yml pin (issue #67) leaves
+      // agentOptions.model undefined on resume, which breaks the `{{model}}`
+      // persona variable for the resumed agent's own assembly AND for every
+      // subagent it spawns (dsh-subagent's resolveChildAgentOptions inherits
+      // `parent.options.model`).
+      const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
       try {
         handle = await agents.resume({
           resumeSessionId: SessionId(sessionId),
-          agentOptions: { provider: resumeRoute?.provider, model: resumeRoute?.model },
+          agentOptions: {
+            provider: resumeRoute?.provider ?? recordedRoute?.provider,
+            model: resumeRoute?.model ?? recordedRoute?.model,
+          },
           ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
         })
       } catch (error) {
@@ -2661,6 +4147,17 @@ export function createChannel(
           { color: 'warning', timeoutMs: 8000 },
         )
       }
+      // Rival-swap guard (rewindToNode's entrySession check, applied to the
+      // resume path): the awaits above can straddle another session swap
+      // committing first, and adopting now would stomp the newer session's
+      // live transcript with this target's replay. Free the just-created
+      // handle and bail — the live session stays exactly as the rival left
+      // it, and the persisted target simply stays in /resume.
+      if (agent.session !== entrySession) {
+        void handle.dispose().catch(() => {})
+        state.notify(t('resume-session-changed'), { color: 'error' })
+        return { ok: false, reason: 'failed', error: 'live session changed during resume' }
+      }
       // Replay the persisted history into a fresh transcript (same reset as
       // rewindTo, plus the context window which the replay re-derives).
       streaming = undefined
@@ -2672,6 +4169,7 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -2682,11 +4180,13 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
+      state.sessionColor = ''
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
       state.working = false
+      state.cancelPending = false
       state.spinnerMode = 'requesting'
       state.status = handle.agent.status
       state.agentId = handle.agent.id
@@ -2773,12 +4273,23 @@ export function createChannel(
       // Plugin veto point (tui/session-switch): no side effects have
       // happened yet — the session id below is not even allocated.
       if (await sessionSwitchVetoed('new')) return false
+      // Leaving the live session: its in-flight manual compaction must not
+      // keep summarizing (and later commit a checkpoint the user believes
+      // cancelled) — cancel and await it first.
+      await settleManualCompaction()
       const sessionId = SessionId(randomUUID())
       let handle: AgentHandle
       // A fresh session composes the caller's DEFAULT preset: the cordis.yml
       // `preset` key wins over the persisted `/preset` choice, which wins
       // over the roster default (same precedence as activityFrames).
-      const newComposed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+      const presetPref = options.configuredPreset === undefined ? readPresetPref() : undefined
+      const newComposed = await composePreset(ctx, options.configuredPreset ?? presetPref)
+      if (!migratePresetPref(presetPref, newComposed.agentPreset)) {
+        state.notify(
+          t('preset-switched-pref-failed', { id: newComposed.agentPreset ?? presetPref ?? 'unknown' }),
+          { color: 'warning' },
+        )
+      }
       // Same precedence for the route (issues #14/#30/#67): the pair resolves
       // atomically — a complete cordis.yml route wins whole, else the
       // persisted `/model` choice (a switch earlier in this run just wrote
@@ -2850,6 +4361,7 @@ export function createChannel(
       lastTextDelta.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -2860,11 +4372,13 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
+      state.sessionColor = ''
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
       state.working = false
+      state.cancelPending = false
       state.spinnerMode = 'requesting'
       state.status = handle.agent.status
       state.agentId = handle.agent.id
@@ -2988,6 +4502,11 @@ export function createChannel(
       }
       let seed: readonly SessionEvent[]
       try {
+        // An in-flight manual compaction must not straddle the fork: cancel
+        // it first, or its checkpoint can commit right after this snapshot —
+        // the model-switched child would start from the summary alone while
+        // the user believes the full history carried over ("context lost").
+        await settleManualCompaction()
         // No boundary = fork the whole log (continue the conversation).
         seed = sessions.fork(agent.session).events
       } catch (error) {
@@ -3037,6 +4556,7 @@ export function createChannel(
       toolCards.clear()
       nextRowId = 0
       state.rows.length = 0
+      resetSubagentProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -3047,17 +4567,24 @@ export function createChannel(
       state.pending = []
       state.goal = undefined
       state.sessionTitle = ''
-      state.tokens = { input: 0, output: 0 }
+      state.sessionColor = ''
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
       state.responseChars = 0
       state.activeToolCount = 0
       state.lastUserText = ''
       state.working = false
+      state.cancelPending = false
       state.spinnerMode = 'requesting'
       state.status = handle.agent.status
       state.agentId = handle.agent.id
       state.agentPreset = modelComposed.agentPreset
       state.model = model
       state.provider = provider
+      // /model completion cache: the [current] tag was resolved at fetch
+      // time — drop the cache so the next `/model ` refetches for the new
+      // route.
+      modelNodeCache.nodes = undefined
+      modelNodeCache.load = undefined
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
@@ -3084,7 +4611,7 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       // Model-switch quip rides the fresh tracker (pi parity).
-      activityTracker.onModelSwitch(model)
+      updateWorkingActivity('model switch', () => activityTracker.onModelSwitch(model))
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -3092,6 +4619,9 @@ export function createChannel(
       touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
+      // Staged image tokens were typed against the pre-switch conversation;
+      // resumeTo/newSession already drop theirs on the swap — same contract.
+      clearStagedImages()
       // Persist the choice so the next boot and `/new` start on it (same
       // contract as /preset and /effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
@@ -3111,6 +4641,11 @@ export function createChannel(
       streaming = undefined
       reasoning = undefined
       toolCards.clear()
+      // In-flight subagents keep streaming after the wipe; clearing the row
+      // map lets their next event re-create the card as a fresh row instead
+      // of feeding a row object no transcript holds (the store keeps live
+      // tracking for the dashboard — same session, still running).
+      dropSubagentRows()
       state.activeToolCount = 0
       state.responseChars = 0
       state.rows.push({
@@ -3164,6 +4699,27 @@ export function createChannel(
       state.toolBackground = normalized
       state.emit()
     },
+    setScrollGutter(mode) {
+      const normalized = normalizeScrollGutter(mode)
+      if (normalized === state.scrollGutter) return
+      state.scrollGutter = normalized
+      state.emit()
+    },
+    setFoldTerminalCommand(enabled) {
+      if (enabled === state.foldTerminalCommand) return
+      state.foldTerminalCommand = enabled
+      state.emit()
+    },
+    setPromptSessionLabel(enabled) {
+      if (enabled === state.promptSessionLabel) return
+      state.promptSessionLabel = enabled
+      state.emit()
+    },
+    setExpandEditor(enabled) {
+      if (enabled === state.expandEditor) return
+      state.expandEditor = enabled
+      state.emit()
+    },
     setStatusBar(config) {
       const next = normalizeStatusBar({ ...state.statusBar, ...config })
       const changed = Object.keys(next).some(key =>
@@ -3204,6 +4760,16 @@ export function createChannel(
       state.notify(t('activity-indicator-switched', { name }))
       return true
     },
+    permissionPresets() {
+      let service: unknown
+      try {
+        service = ctx.get('permissionPresets')
+      } catch {
+        return unavailablePermissionPresetSnapshot()
+      }
+      if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
+      return permissionPresetSnapshotFromService(service, agent.session.events)
+    },
     async listPresets() {
       const presets = rosterOf(ctx)
       if (presets === undefined) return []
@@ -3232,7 +4798,7 @@ export function createChannel(
       }
       let target: AgentPresetInfo
       try {
-        target = await presets.resolve(presetId)
+        target = await resolveCompatiblePreset(presets, presetId)
       } catch (error) {
         state.notify(
           t('preset-not-found', { id: presetId, err: error instanceof Error ? error.message : String(error) }),
@@ -3241,10 +4807,14 @@ export function createChannel(
         return false
       }
       if (target.broken !== undefined) {
-        state.notify(t('preset-load-failed', { id: presetId, broken: target.broken }), { color: 'error', timeoutMs: 8000 })
+        state.notify(t('preset-load-failed', { id: target.id, broken: target.broken }), { color: 'error', timeoutMs: 8000 })
         return false
       }
       if (target.id === state.agentPreset) {
+        if (!migratePresetPref(presetId, target.id)) {
+          state.notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
+          return true
+        }
         state.notify(t('preset-already-current', { id: target.id }), { color: 'success' })
         return true
       }
@@ -3302,6 +4872,14 @@ export function createChannel(
       return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
         .then(lists => lists.flat())
     },
+    listProviders() {
+      // Group labels for the two-level /model picker: the registry's own
+      // display names, detached so a registry swap cannot leak through.
+      const llm = ctx.get('llm') as
+        | { listProviders(): readonly { id: string; name: string }[] }
+        | undefined
+      return Promise.resolve(llm === undefined ? [] : llm.listProviders().map(info => ({ ...info })))
+    },
     async listSkills() {
       // snapshot() over list(): only a COMPLETE observation is authoritative
       // (same contract as the skill-command merge above) — a partial catalog
@@ -3330,6 +4908,25 @@ export function createChannel(
         | undefined
       if (!credentials) return undefined
       return credentials.describe(ref)
+    },
+    async balanceInfo() {
+      // Same key resolution order as the community balance plugins: the
+      // harness credentials seam first, the process environment as fallback
+      // (the /doctor check reads the env directly). The value rides only in
+      // the Authorization header — never logged, printed or persisted.
+      const credentials = ctx.get('credentials') as
+        | { resolve(ref: string): Promise<{ value: string } | undefined> }
+        | undefined
+      let apiKey = ''
+      if (credentials !== undefined) {
+        try {
+          apiKey = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value ?? ''
+        } catch {
+          apiKey = ''
+        }
+      }
+      if (apiKey === '') apiKey = process.env.DEEPSEEK_API_KEY ?? ''
+      return fetchBalance(apiKey)
     },
     settingsHost(): SettingsHost | undefined {
       if (settingsHostResolved) return settingsHostCache
@@ -3387,6 +4984,13 @@ export function createChannel(
         },
         async writeCredential(ref, value) {
           if (!credentials) throw new Error('credentials service unavailable')
+          // Second layer of the secret-ref reservation guard: the
+          // registration layer already rejects plugin sections with
+          // host-owned refs, but this seam must not trust it — a stale
+          // section (registered before the guard) or a direct call must not
+          // reach the shared credentials. The host's own main-credential
+          // writes go through providerSetup().writeCredential instead.
+          if (isReservedCredentialRef(ref)) throw new Error(t('settings-secret-ref-reserved', { ref }))
           await credentials.set(ref, value)
         },
       }
@@ -3446,7 +5050,12 @@ export function createChannel(
       }
       const revision = (): number | undefined =>
         settings.describe().find(descriptor => descriptor.ns === 'llm-pi-ai')?.revision
+      // The OAuth sign-in surface (dsh-auth-style plugin), structural and
+      // optional: mounting the plugin lights up the wizard's OAuth branch,
+      // and without it the wizard is exactly what it was before.
+      const oauthApi = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
       return {
+        ...(oauthApi === undefined ? {} : { oauth: oauthApi }),
         listCatalogProviders() {
           // declared === true marks routes the adapter knows only because a
           // stored profile names them (user-added); the rest are activatable
@@ -3492,6 +5101,12 @@ export function createChannel(
         },
       }
     },
+    async oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined> {
+      // Same optional seam the wizard's OAuth branch reads: absent plugin →
+      // undefined, and `/login` renders exactly its pre-plugin lines.
+      const api = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
+      return api === undefined ? undefined : api.providers()
+    },
     async sideQuestion(
       question: string,
       options?: { signal?: AbortSignal; onText?: (delta: string) => void },
@@ -3529,20 +5144,30 @@ export function createChannel(
         signal: options?.signal,
       })
     },
-    listFiles() {
-      const fs = ctx.get('fs') as
-        | {
-          resolve(path: string): Promise<{ displayPath: string }>
-          listDir(target: { displayPath: string }): Promise<
-            Array<{
-              name: string
-              type: 'file' | 'directory' | 'other'
-              target: { displayPath: string }
-            }>
-          >
-        }
-        | undefined
-      return listFilesDeep(fs, state.cwd)
+    async listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }) {
+      const fs = ctx.get('fs') as MentionFs | undefined
+      if (!fs || options?.signal?.aborted) return []
+      if (isPathLikeQuery(query)) {
+        return listPathCandidates(fs, state.cwd, query, options?.signal, options?.topK ?? 50)
+      }
+      if (fileCandidateCache.cwd !== state.cwd) {
+        fileCandidateCache.cwd = state.cwd
+        fileCandidateCache.load = undefined
+      }
+      fileCandidateCache.load ??= listFilesDeepCandidates(fs, state.cwd).then(candidates => {
+        if (candidates.length > 0) return candidates
+        // An empty scan is not worth caching forever — retry on next query.
+        fileCandidateCache.load = undefined
+        return candidates
+      })
+      const candidates = await fileCandidateCache.load
+      if (options?.signal?.aborted) return []
+      return rankFileCandidates(candidates, query, options?.topK ?? 50)
+    },
+    async listFiles() {
+      const fs = ctx.get('fs') as MentionFs | undefined
+      const candidates = await listFilesDeepCandidates(fs, state.cwd)
+      return candidates.map(candidate => candidate.path)
     },
     async listSessions() {
       // Every stored session, classified and unfiltered. Which of them a
@@ -3570,6 +5195,57 @@ export function createChannel(
       agent.session.append('session/title', { title })
       state.sessionTitle = title
       state.emit()
+    },
+    setSessionColor(color) {
+      // `session/color` is a dsh-tui plugin event — not in dsh-session's
+      // typed union, so appended through the same cast applyMode uses for
+      // its sandbox/approval overrides. It replays on resume/rewind like
+      // session/title, keeping each session's accent color its own.
+      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
+        .append('session/color', { color })
+      state.sessionColor = color
+      state.emit()
+    },
+    async recapRecent(options) {
+      // `/recap` (pi-recap semantics): one tool-less LLM call over the
+      // session's TAIL exchanges — unlike /btw it does not replay the full
+      // derived history (the excerpt IS the payload), so it stays cheap.
+      // The answer is pure UI state: never appended to the session log.
+      const llm = ctx.get('llm') as SideQuestionLlm | undefined
+      if (!llm) return { summary: null, error: t('recap-llm-unavailable') }
+      const header = agent.session.requestHeader()
+      const config = header?.config
+      const activity = collectRecentActivity(agent.session.events, RECAP_RECENT_CHARS)
+      if (activity === '') return { summary: null, error: t('recap-no-activity') }
+      const messages: Message[] = [
+        createUserMessage({
+          content: [{ type: 'text', text: wrapRecapPrompt(activity) }],
+          source: { kind: 'plugin', plugin: 'dsh-tui/recap' },
+        }),
+      ]
+      const request: Record<string, unknown> = {
+        provider: config?.provider ?? state.provider,
+        model: config?.model ?? state.model,
+        messages,
+        ...(header?.system !== undefined && { system: header.system }),
+        ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
+        ...(config?.temperature !== undefined && { temperature: config.temperature }),
+        ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),
+        ...(config?.stop !== undefined && { stop: [...config.stop] }),
+        sessionId: agent.session.id,
+        ...(options?.signal && { signal: options.signal }),
+      }
+      const outcome = await runSideQuestion({
+        stream: llm.stream.bind(llm),
+        options: request,
+        onText: options?.onText,
+        signal: options?.signal,
+      })
+      if (outcome.answer === null) return { summary: null, error: outcome.error }
+      const parsed = parseRecapResponse(outcome.answer)
+      return parsed.title === undefined
+        ? { summary: parsed.summary }
+        : { summary: parsed.summary, title: parsed.title }
     },
     async deleteSession(sessionId) {
       // The live session's log is still being appended by this process —
@@ -3658,22 +5334,53 @@ export function createChannel(
           state.notify(t('compact-while-working'), { color: 'warning' })
           return
         }
-        const signal = new AbortController().signal
+        const controller = new AbortController()
         state.notify(t('compact-working'))
-        void compactService
-          .compactNow(agent, signal)
-          .then((result) => {
+        // Register the in-flight transaction so any agent-replacing path
+        // (rewind/resume/new/model switch) can cancel it before snapshotting
+        // the session — see settleManualCompaction. `settled` never rejects:
+        // every branch lands in a notification.
+        const settled = (async () => {
+          try {
+            const result = await compactService.compactNow(agent, controller.signal)
             state.notify(result ? t('compact-done') : t('compact-nothing'))
             // Compaction quip rides the next thinking rotation (pi parity).
-            if (result) activityTracker.onCompact('done')
-          })
-          .catch((error: unknown) => {
+            if (result) updateWorkingActivity('compaction', () => activityTracker.onCompact('done'))
+          } catch (error: unknown) {
+            // ManualCompactionError('persistence'): the replacement checkpoint
+            // is ALREADY committed — only the durability flush failed. The
+            // surface is now the summary, so a plain "failed" toast here sent
+            // users to /model expecting full history and finding only the
+            // summary ("context lost"). Distinguish it, structurally — the
+            // TUI must not import the error class across the adapter seam.
+            if ((error as { code?: unknown }).code === 'persistence') {
+              state.notify(t('compact-flush-failed'), { color: 'warning', timeoutMs: 12000 })
+              return
+            }
+            // A switch-initiated abort rejects compactNow with the abort reason;
+            // the cancellation was already toasted above — a second generic
+            // "failed" toast for the same, expected rejection would mislead.
+            if (cancelledCompactions.has(controller)) return
             state.notify(
               t('compact-failed', { err: error instanceof Error ? error.message : String(error) }),
               { color: 'error', timeoutMs: 8000 },
             )
-          })
-      })()
+          }
+        })()
+        manualCompaction = { controller, settled }
+        void settled.finally(() => {
+          if (manualCompaction?.controller === controller) manualCompaction = undefined
+        })
+      })().catch((error: unknown) => {
+        // Sync throws from compactNow (e.g. runMaintenance rejecting a
+        // non-idle agent right after /resume) reject this IIFE itself;
+        // uncaught, that is an unhandled rejection and Node exits the
+        // whole TUI. Surface it as the same failure notification.
+        state.notify(
+          t('compact-failed', { err: error instanceof Error ? error.message : String(error) }),
+          { color: 'error', timeoutMs: 8000 },
+        )
+      })
     },
     runExternalCommand(name, rawInput) {
       return executeRegistryCommand(name, rawInput)
@@ -3828,7 +5535,7 @@ export function createChannel(
       }
       // Session store candidates mirror the compat layer (sessionsRoots):
       // the active root depends on the composition (bare cordis.yml →
-      // legacy ~/.dsh-tui, profile → $DSH_HOME/sessions), so list every
+      // legacy ~/.dsh-tui/sessions, profile → $DSH_HOME/sessions), so list every
       // candidate with its own state instead of hardcoding one.
       for (const dir of sessionsRoots()) {
         lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
@@ -3949,20 +5656,20 @@ export function createChannel(
         ...(renderedInstructions?.truncated ?? []).map(file => file.displayPath),
       ])
       files.push(...[...instructionPaths].map(displayPath => ({ displayPath })))
-      // The skills registry is host-plane but scope-layered: preset rows
-      // (skill-filesystem) register into the preset's layer, so the catalog
-      // must be read through the agent's scope chain (serviceForAgent falls
-      // back to the host context when no roster is mounted).
-      const skillsService = serviceForAgent<{
-        list(options?: unknown): Promise<readonly { name: string; description: string }[]>
-      }>(ctx, target, 'skills')
-      if (skillsService !== undefined) {
-        const catalog = await skillsService.list({})
+      // A registry entry reaches the model only through dsh-tool-skill's
+      // catalog, which is gated on that exact tool being visible to the agent.
+      const skillsRegistry = tools.some(tool => tool.name === 'skill')
+        ? skillRegistryFor(target)
+        : undefined
+      if (skillsRegistry !== undefined) {
+        const observation = await skillsRegistry.snapshot(skillViewOptions(target))
         if (target !== agent) return
-        skills.push(...catalog.map(skill => ({
-          name: skill.name,
-          description: skill.description,
-        })))
+        if (observation.complete) {
+          skills.push(...observation.skills.filter(isModelInvocable).map(skill => ({
+            name: skill.name,
+            description: skill.description,
+          })))
+        }
       }
     } catch (error) {
       ctx.logger.warn('loaded-context snapshot failed: %o', error)
@@ -3976,7 +5683,7 @@ export function createChannel(
    * Rebuild the merged slash-command list: built-in locals, then registry
    * commands (plan/goal/…), then user-invocable skills from the DSH skill
    * registry (issue #86 — filesystem-discovered skills must appear in the
-   * `/` menu and Tab completion, like /audit and /review). Skill entries
+   * `/` menu and Tab completion, like /my-skill). Skill entries
    * are completion-only: dispatch falls through to the model as plain text,
    * where dsh-tool-skill's pre-step hook injects the skill body — the same
    * path a hand-typed `/skill-name` takes. Registry and skill reads are
@@ -4436,6 +6143,11 @@ ${output}
    *  its result-time contextual diff back from here). */
   const presentResultView = (name: string, rawArgs: string, data: SessionEvent<'tool/result'>['data']): ToolResultView | undefined => {
     try {
+      // Harness goal/todo tools first: their raw JSON reads as noise in the
+      // transcript — fold recognizable shapes into a summary card before the
+      // registry gets a chance to (not) know them.
+      const local = harnessToolResultView(name, data)
+      if (local !== undefined) return local
       const tool = toolsRegistry?.get(name, agent)
       if (tool?.presentResult === undefined) return undefined
       const block = data.message.content[0]
@@ -4571,28 +6283,49 @@ ${output}
   }
 
   /**
+   * One durable goal mutation as the goal service records it (the `data` of
+   * a top-level `goal/change` session event, and of the snapshot a round-zero
+   * goal-sourced `user/message` may inline). Declared structurally: the
+   * pinned peer's `SessionEvent` union predates the event type, so the fold
+   * admits the payload by shape, not by union membership.
+   */
+  type GoalChangePayload = {
+    kind: 'goal/change'
+    version: number
+    operation:
+      | 'create'
+      | 'edit'
+      | 'pause'
+      | 'resume'
+      | 'complete'
+      | 'block'
+      | 'clear'
+    goal?: Omit<ChannelGoal, 'roundsStarted'>
+    roundsStarted?: number
+  }
+
+  /** Fold one goal mutation into the channel's goal projection. */
+  const applyGoalChange = (change: GoalChangePayload): void => {
+    if (change.operation === 'clear') {
+      state.goal = undefined
+    } else if (change.goal !== undefined) {
+      state.goal = {
+        ...change.goal,
+        roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
+      }
+    }
+  }
+
+  /**
    * Fold one goal-sourced message into the channel's goal projection.
-   * Round-zero goal messages carry the full durable snapshot (or a clear
+   * Round-zero goal messages may carry the full durable snapshot (or a clear
    * tombstone) in their source; positive-round messages are admitted
    * continuation prompts that only advance the rounds counter.
    */
   const applyGoalEvent = (event: SessionEvent<'user/message'>): void => {
     const source = event.data.source as unknown as {
       round: number
-      change?: {
-        kind: 'goal/change'
-        version: 1
-        operation:
-          | 'create'
-          | 'edit'
-          | 'pause'
-          | 'resume'
-          | 'complete'
-          | 'block'
-          | 'clear'
-        goal?: ChannelGoal
-        roundsStarted?: number
-      }
+      change?: GoalChangePayload
     }
     if (source.round > 0) {
       // Admitted continuation round — the snapshot itself is unchanged.
@@ -4607,14 +6340,7 @@ ${output}
     const change = source.change
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may not match the static type
     if (change === undefined || change.kind !== 'goal/change') return
-    if (change.operation === 'clear') {
-      state.goal = undefined
-    } else if (change.goal !== undefined) {
-      state.goal = {
-        ...change.goal,
-        roundsStarted: change.roundsStarted ?? state.goal?.roundsStarted ?? 0,
-      }
-    }
+    applyGoalChange(change)
   }
 
   /** True while the durable transcript is being replayed (boot /resume /
@@ -4642,6 +6368,15 @@ ${output}
   }
 
   const renderEvent = (event: SessionEvent): void => {
+    // Top-level `goal/change` events are how the goal service actually
+    // records durable goal mutations (create/edit/pause/resume/complete/
+    // block/clear) — confirmed in production logs. The pinned peer's
+    // SessionEvent union predates the type, so admit it structurally: the
+    // goal chip and panel stay dark without this fold.
+    if ((event as { type: string }).type === 'goal/change') {
+      applyGoalChange((event as { data: GoalChangePayload }).data)
+      return
+    }
     switch (event.type) {
       case 'user/message': {
         // Compaction checkpoint: `source = { kind: 'plugin', plugin:
@@ -4687,10 +6422,13 @@ ${output}
           contextWarned = false
           break
         }
-        // Same-session goal domain: round-zero goal-sourced messages carry
-        // the durable goal snapshot (or clear tombstone) in their source.
-        // They are not transcript bubbles — they drive the goal panel's
-        // live projection (replayed on resume/rewind like every other event).
+        // Same-session goal domain: goal-sourced messages are the round
+        // driver's continuation prompts (positive rounds advance the
+        // counter); some hosts also inline the durable snapshot in a
+        // round-zero source. They are not transcript bubbles — they drive
+        // the goal panel's live projection (replayed on resume/rewind like
+        // every other event; the snapshot itself arrives as the top-level
+        // `goal/change` event admitted above).
         if ((event.data.source as { kind: string }).kind === 'goal') {
           applyGoalEvent(event)
           break
@@ -4839,6 +6577,23 @@ ${output}
           state.tokens.input += usage.inputTokens ?? 0
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack tokens
           state.tokens.output += usage.outputTokens ?? 0
+          // Cache split totals feed the session cost estimate (hit-priced
+          // input vs. uncached input) — the durable replay may lack them.
+          state.tokens.cacheRead += usage.cacheReadTokens ?? 0
+          state.tokens.cacheWrite += usage.cacheWriteTokens ?? 0
+          // Peak/idle bucketing by the request's own time (the durable replay
+          // replays historical events, so a resumed session prices each
+          // request at the rate window it actually ran in — the session cost
+          // estimate never prices the whole session at the current window).
+          {
+            const bucket = isPeakHour(new Date(event.time))
+              ? state.tokens.peak
+              : state.tokens.idle
+            bucket.input += usage.inputTokens ?? 0
+            bucket.output += usage.outputTokens ?? 0
+            bucket.cacheRead += usage.cacheReadTokens ?? 0
+            bucket.cacheWrite += usage.cacheWriteTokens ?? 0
+          }
           // The most recent request's usage describes the CURRENT context:
           // input (uncached) + cache hits all occupy the window. Cache hits
           // also drive the status-line `cache N` readout.
@@ -4986,6 +6741,7 @@ ${output}
       }
       case 'turn/start': {
         cancelInFlight = false
+        state.cancelPending = false
         state.working = true
         state.turnStart = Date.now()
         state.responseChars = 0
@@ -5002,6 +6758,7 @@ ${output}
       }
       case 'turn/end': {
         cancelInFlight = false
+        state.cancelPending = false
         settleStreaming()
         state.working = false
         state.activeToolCount = 0
@@ -5039,7 +6796,11 @@ ${output}
           nextRowId += 1
           break
         }
-        const detail = reason.kind === 'error' ? reason.error.message : ''
+        // The notice renders as a single-line Divider title: error.message
+        // can carry newlines/control chars, and an embedded \n splits the
+        // rule across rows. cleanRenderText is the render-path single-line
+        // contract (sessionTree's preview() folds likewise for the tree).
+        const detail = reason.kind === 'error' ? cleanRenderText(reason.error.message, NOTICE_CELLS) : ''
         state.rows.push({ id: nextRowId, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         nextRowId += 1
         state.notify(
@@ -5072,23 +6833,40 @@ ${output}
       case 'session/title':
         state.sessionTitle = event.data.title
         break
-      case 'todo/write':
-        // Whole-list snapshot — latest write wins; log-only UI state.
-        state.todos = event.data.todos
-        break
       default:
+        // dsh-tool-todo owns this optional module augmentation in alpha.2.
+        // Match by name so the TUI remains loadable without that plugin.
+        if ((event as { type: string }).type === 'todo/write') {
+          const todos = todoPanelItems((event as unknown as { data?: unknown }).data)
+          if (todos !== undefined) state.todos = todos
+          break
+        }
         // Logged preset switch (blank sessions only, issue #8): a transcript
         // marker so a replayed log shows which composition produced the
         // turns after it. Not in dsh-session's typed union — matched here by
         // name, like the other plugin-defined events above.
         if ((event as { type: string }).type === 'agent-preset/selected') {
           const data = event.data as unknown as { agentPreset?: string }
+          const recordedPreset = typeof data.agentPreset === 'string' ? data.agentPreset : undefined
+          const renamedOfficialPreset =
+            (recordedPreset === 'code' && state.agentPreset === 'ptc') ||
+            (recordedPreset === 'ptc' && state.agentPreset === 'code')
+          const preset = renamedOfficialPreset && state.agentPreset !== undefined
+            ? state.agentPreset
+            : recordedPreset ?? 'unknown'
           state.rows.push({
             id: nextRowId,
             kind: 'notice',
-            text: t('agent-preset-switched', { preset: data.agentPreset ?? 'unknown' }),
+            text: t('agent-preset-switched', { preset }),
           })
           nextRowId += 1
+          break
+        }
+        // `/color` accent (dsh-tui plugin event, replayed on resume/rewind
+        // like session/title): last write wins, '' clears to the default.
+        if ((event as { type: string }).type === 'session/color') {
+          const data = event.data as unknown as { color?: unknown }
+          state.sessionColor = typeof data.color === 'string' ? data.color : ''
           break
         }
         // Custom plugin events (tuiRenderers seam): a registered renderer
@@ -5127,6 +6905,7 @@ ${output}
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.
   state.working = false
+  state.cancelPending = false
   state.status = agent.status
   state.emit()
 
@@ -5185,16 +6964,64 @@ ${output}
     return rendered
   }
 
+  // Working Activity is an optional presentation sidecar. A malformed durable
+  // event must never let it abort the authoritative channel projection (Cordis
+  // contains the listener throw, but the rest of THIS callback would otherwise
+  // be skipped — including turn/end and inbox retirement).
+  let activityFailureReported = false
+  const updateWorkingActivity = (
+    source: string,
+    update?: () => void,
+  ): ActivityStatus | undefined => {
+    try {
+      update?.()
+      return renderWorkingActivity()
+    } catch (error: unknown) {
+      if (!activityFailureReported) {
+        activityFailureReported = true
+        const detail = error instanceof Error ? error.message : String(error)
+        ctx.logger.warn(`dsh-tui: working-activity ignored ${source} after a projection error: ${detail}`)
+      }
+      return undefined
+    }
+  }
+
+  /**
+   * Release volatile UI gates when the bound driver is definitively quiescent
+   * but its terminal session event did not reach this projection. This does not
+   * invent a turn/end or any transcript fact; it only reconciles live controls
+   * to the authoritative Agent status so Enter/Esc cannot remain latched.
+   */
+  const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
+    if (!state.working) return
+    ctx.logger.warn(
+      `dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`,
+    )
+    cancelInFlight = false
+    state.cancelPending = false
+    state.working = false
+    state.activeToolCount = 0
+    settleStreaming()
+    updateSpinnerMode()
+  }
+
   const bindAgent = (): void => {
+    agentBindingGeneration += 1
+    state.agentBindingGeneration = agentBindingGeneration
     for (const dispose of agentSubscriptions) dispose()
     stopActivityTick()
+    // Cancel state and deferred interrupt delivery belong to one bound agent.
+    // A replacement must neither inherit the old latch nor receive its queued
+    // microtask after the session identity changes.
+    cancelInFlight = false
+    interruptSeq += 1
     const prefs = activityPrefsSnapshot()
     activityTracker = new ActivityTracker(prefs.config, Date.now, prefs.customActions)
-    activityTracker.onAgentStatus(agent.status)
-    renderWorkingActivity()
+    activityFailureReported = false
+    updateWorkingActivity('agent bind', () => activityTracker.onAgentStatus(agent.status))
     activityTickTimer = setInterval(() => {
       const previous = state.workingActivity
-      const rendered = renderWorkingActivity()
+      const rendered = updateWorkingActivity('activity tick')
       if (rendered === undefined) return
       // Live phases deliberately wake at 500 ms even when the formatted line
       // has not crossed its next whole-second boundary: turnElapsedMs remains
@@ -5238,14 +7065,15 @@ ${output}
       ctx.on('agent/status', ({ agent: subject, status }) => {
         if (subject !== agent) return
         state.status = status
-        activityTracker.onAgentStatus(status)
-        renderWorkingActivity()
+        updateWorkingActivity(`agent/status:${status}`, () => activityTracker.onAgentStatus(status))
+        if (status === 'idle') reconcileRetiredProjection('idle')
         state.emit()
       }),
       ctx.on('agent/disposed', ({ agent: subject }) => {
         if (subject !== agent) return
         state.status = 'disposed'
         stopActivityTick()
+        reconcileRetiredProjection('disposed')
         state.emit()
       }),
       // Pending delivery is driven by the agent inbox: a claimed message
@@ -5273,32 +7101,47 @@ ${output}
         }
       })(),
       ctx.on('session/event', (session, event) => {
-        // First check if this is a subagent session
-        const subagentId = subagentStore.getSubagentIdBySession(session)
-        if (subagentId) {
+        // The currently bound main session always wins. SubagentActivityStore
+        // intentionally retains Session-object mappings for completed cards;
+        // if one of those sessions is later adopted/resumed as the main agent,
+        // checking the stale child mapping first would swallow every main event
+        // (including turn/end) and leave working/cancelPending latched forever.
+        const isMainSession = session === agent.session
+        const subagentId = isMainSession
+          ? undefined
+          : subagentStore.getSubagentIdBySession(session)
+        if (subagentId !== undefined) {
           subagentStore.onSessionEvent(subagentId, event)
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
-          if (event.type === 'assistant/chunk') state.emitStream()
-          else state.emit()
+          if (event.type === 'assistant/chunk') {
+            // Token-rate path (100-300 events/s): the store append stays
+            // synchronous (cheap); the expensive snapshot + row projection
+            // defers to the frame-aligned flush inside emitStream's 16ms
+            // timer, so it coalesces exactly like the main-agent stream.
+            subagentStreamDirty = true
+            state.emitStream()
+          } else {
+            syncSubagentsNow()
+            state.emit()
+          }
           return
         }
-        // Otherwise handle main agent session
-        if (session !== agent.session) return
+        // Otherwise handle the bound main-agent session.
+        if (!isMainSession) return
         // Observation broker (C-042): maps user/message + assistant/message
         // into grant-gated envelopes; every other event type is a no-op, and
         // publish never throws into this arm.
         messageObserver?.publish(session, event)
-        activityTracker.onSessionEvent(event)
-        // Interrupt quip: an aborted/interrupted turn ends the round; the
-        // comeback copy shows on the next thinking rotation (pi parity).
-        if ((event as { type: string }).type === 'turn/end') {
-          const reason = (event.data as { reason?: { kind?: string } }).reason
-          if (reason?.kind === 'aborted' || reason?.kind === 'interrupted') {
-            activityTracker.onInterrupted()
+        updateWorkingActivity(`session/event:${event.type}`, () => {
+          activityTracker.onSessionEvent(event)
+          // Interrupt quip: an aborted/interrupted turn ends the round; the
+          // comeback copy shows on the next thinking rotation (pi parity).
+          if ((event as { type: string }).type === 'turn/end') {
+            const reason = (event.data as { reason?: { kind?: string } }).reason
+            if (reason?.kind === 'aborted' || reason?.kind === 'interrupted') {
+              activityTracker.onInterrupted()
+            }
           }
-        }
-        renderWorkingActivity()
+        })
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
         // moment they land (whether appended by cycleMode or by hand).
         const eventType = (event as { type: string }).type
@@ -5339,8 +7182,7 @@ ${output}
           } catch {
             // Session discovery is best-effort and must not break the parent turn.
           }
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
+          syncSubagentsNow()
           state.emit()
         })
         const disposeEnd = ctx.on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
@@ -5358,8 +7200,7 @@ ${output}
           if (info.stopReason === 'completed') subagentStore.onCompleted(info.id, output, info.stopReason)
           else if (info.stopReason === 'cancelled' || info.stopReason === 'aborted') subagentStore.onCancelled(info.id, info.stopReason, output)
           else subagentStore.onFailed(info.id, info.stopReason || 'Unknown error')
-          state.subagents = subagentStore.snapshot()
-          syncSubagentRows()
+          syncSubagentsNow()
           state.emit()
         })
         return () => {
@@ -5424,7 +7265,7 @@ ${output}
           // is exactly what the column claims.
           noteBranch(agent.session.id, branch)
           // Feed the working line so git tools can show ` · git <branch>`.
-          activityTracker.onGitBranch(branch)
+          updateWorkingActivity('git branch', () => activityTracker.onGitBranch(branch))
           state.emit()
         }
       })
@@ -5507,6 +7348,19 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
 
+/** Whether one stream chunk advances the first-token/decode boundary. */
+function isTokenDelta(chunk: StreamChunk): boolean {
+  switch (chunk.type) {
+    case 'text-delta':
+    case 'reasoning-delta':
+      return chunk.text !== ''
+    case 'tool-call-delta':
+      return chunk.argumentsDelta !== '' || chunk.name !== undefined
+    default:
+      return false
+  }
+}
+
 /** Character payload of one token-bearing stream delta for the live fallback. */
 function tokenDeltaChars(chunk: StreamChunk): number {
   switch (chunk.type) {
@@ -5529,82 +7383,89 @@ function usageOutputTokens(usage: unknown): number | undefined {
     : undefined
 }
 
-/**
- * `@` file listing through the leaf's fs service (dsh-fs-local): skips
- * VCS/dependency/build dirs and rotates across directory listings so one
- * large subtree cannot consume the global MAX_FILES budget. That budget also
- * bounds directory reads without imposing an arbitrary source-tree depth.
- * Relative directories retain the trailing `/` that FileSuggestions expects.
- * Unreadable subtrees are skipped, not fatal.
- */
-async function listFilesDeep(
-  fs: {
-    resolve(path: string): Promise<{ displayPath: string }>
-    listDir(target: { displayPath: string }): Promise<
-      Array<{
-        name: string
-        type: 'file' | 'directory' | 'other'
-        target: { displayPath: string }
-      }>
-    >
-  } | undefined,
-  root: string,
-): Promise<string[]> {
+type FileSuggestionFs = {
+  resolve(path: string): Promise<{ displayPath: string }>
+  listDir(target: { displayPath: string }): Promise<Array<{ name: string; type: 'file' | 'directory' | 'other'; target?: { displayPath: string } }>>
+}
+
+async function listPathCandidates(fs: FileSuggestionFs, cwd: string, query: string, signal: AbortSignal | undefined, topK: number): Promise<FileCandidate[]> {
+  const normalized = query.replaceAll('\\', '/')
+  const slash = normalized.lastIndexOf('/')
+  // `.` / `..` without a trailing separator are whole-directory queries too.
+  const bareDir = slash < 0 && (normalized === '.' || normalized === '..' || normalized === '~')
+  const directoryPart = slash < 0 ? (bareDir ? `${normalized}/` : '') : normalized.slice(0, slash + 1)
+  const nameQuery = slash < 0 || bareDir ? '' : normalized.slice(slash + 1)
+  // `~/` expands against the host home (matches the cwd resolution rules);
+  // drive-letter and POSIX-absolute prefixes pass through untouched.
+  const expanded = directoryPart === '~/'
+    ? `${homeDir()}/`
+    : directoryPart.startsWith('/') || /^[A-Za-z]:\//.test(directoryPart)
+      ? directoryPart
+      : join(cwd, directoryPart || '.')
+  try {
+    if (signal?.aborted) return []
+    const target = await fs.resolve(expanded)
+    const entries = (await fs.listDir(target)).slice().sort((a, b) => a.name.localeCompare(b.name))
+    return rankFileCandidates(entries.filter(entry => entry.type === 'file' || entry.type === 'directory').map(entry => {
+      const path = `${directoryPart}${entry.name}${entry.type === 'directory' ? '/' : ''}`
+      return { id: path, path, displayPath: path, name: entry.name, kind: entry.type as 'file' | 'directory', score: 0 }
+    }), nameQuery, topK)
+  } catch {
+    return []
+  }
+}
+
+async function listFilesDeepCandidates(fs: FileSuggestionFs | undefined, root: string, signal?: AbortSignal): Promise<FileCandidate[]> {
   if (!fs) return []
-  const out: string[] = []
+  const out: FileCandidate[] = []
   const SKIP = new Set(['node_modules', '.git', '.hg', '.svn', '.DS_Store', 'dist'])
   const BUILD_DIR = /^(?:build(?:[-_].*)?|cmake-build(?:[-_].*)?)$/i
-  const MAX_FILES = 100
-
-  type Entry = {
-    name: string
-    type: 'file' | 'directory' | 'other'
-    target: { displayPath: string }
-  }
-  type Directory = {
-    dir: string
-    prefix: string
-    entries?: Entry[]
-    index: number
-  }
-  const directories: Directory[] = [{ dir: root, prefix: '', index: 0 }]
-
-  while (directories.length > 0 && out.length < MAX_FILES) {
-    const current = directories.shift()
-    if (!current) continue
+  type Entry = { name: string; type: 'file' | 'directory' | 'other'; target?: { displayPath: string } }
+  type Node = { dir: string; prefix: string; entries?: Entry[]; index: number }
+  const queue: Node[] = [{ dir: root, prefix: '', index: 0 }]
+  const visited = new Set<string>()
+  const maxFiles = 100
+  const maxDirectories = 100
+  let fileCount = 0
+  let dirCount = 0
+  // Round-robin: each directory yields ONE non-skipped entry per visit before
+  // it re-queues, so a large early sibling (e.g. `generated/` with 120 files)
+  // cannot starve `src/` out of the per-kind budgets. This is the regression
+  // contract pinned by scripts/verify-file-completion.mjs.
+  while (queue.length && fileCount < maxFiles && dirCount < maxDirectories) {
+    if (signal?.aborted) return []
+    const current = queue.shift()!
     if (!current.entries) {
       try {
         const target = await fs.resolve(current.dir)
-        current.entries = await fs.listDir(target)
-      } catch {
-        continue // unreadable subtree — skip
-      }
+        if (visited.has(target.displayPath)) continue
+        visited.add(target.displayPath)
+        current.entries = (await fs.listDir(target)).slice().sort((a, b) => a.name.localeCompare(b.name))
+      } catch { continue }
     }
-
     let entry: Entry | undefined
     while (current.index < current.entries.length) {
-      const candidate = current.entries[current.index++]
+      const candidate = current.entries[current.index++]!
       if (SKIP.has(candidate.name) || BUILD_DIR.test(candidate.name)) continue
       entry = candidate
       break
     }
     if (!entry) continue
-    if (current.index < current.entries.length) directories.push(current)
+    if (current.index < current.entries.length) queue.push(current)
 
-    const rel = current.prefix ? `${current.prefix}/${entry.name}` : entry.name
+    const path = current.prefix ? `${current.prefix}/${entry.name}` : entry.name
     if (entry.type === 'directory') {
-      out.push(`${rel}/`)
-      directories.push({
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: symlink targets optional
-        dir: entry.target?.displayPath ?? join(current.dir, entry.name),
-        prefix: rel,
-        index: 0,
-      })
+      if (dirCount >= maxDirectories) continue
+      out.push({ id: `${path}/`, path: `${path}/`, displayPath: `${path}/`, name: entry.name, kind: 'directory', score: 0 })
+      dirCount += 1
+      queue.push({ dir: entry.target?.displayPath ?? join(current.dir, entry.name), prefix: path, index: 0 })
     } else if (entry.type === 'file') {
-      out.push(rel)
+      if (fileCount >= maxFiles) continue
+      out.push({ id: path, path, displayPath: path, name: entry.name, kind: 'file', score: 0 })
+      fileCount += 1
     }
   }
-  return out
+  return out.sort((a, b) => a.path.localeCompare(b.path))
 }
 
 /** One attached file's contribution is capped so an absent-minded `@` of a
@@ -5661,6 +7522,25 @@ function mentionImageMediaType(path: string): MentionImageMediaType | undefined 
   return MENTION_IMAGE_MEDIA_TYPES[extname(path).toLowerCase()]
 }
 
+/** One mention target that resolved and stat'ed to something attachable. */
+interface ResolvedMention {
+  target: { displayPath: string }
+  info: { type: 'file' | 'directory' | 'other' }
+}
+
+/** Resolve+stat one candidate path; undefined when it throws OR stats
+ * absent — both are a miss for strip-first mention resolution (issue #359). */
+async function tryResolveMention(fs: MentionFs, absolute: string): Promise<ResolvedMention | undefined> {
+  try {
+    const target = await fs.resolve(absolute)
+    const info = await fs.stat(target)
+    if (info === undefined) return undefined
+    return { target, info }
+  } catch {
+    return undefined
+  }
+}
+
 export interface MentionExpansion {
   /** Model-facing blocks: the typed text first, one block per attachment. */
   blocks: ContentBlock[]
@@ -5694,64 +7574,95 @@ export async function expandMentions(
   let imageBytes = 0
   if (fs !== undefined) {
     for (const mention of mentions) {
+    const display = mention.literal ?? mention.path
     const imageMediaType = mentionImageMediaType(mention.path)
     if (budget <= 0 && imageMediaType === undefined) break
     // Mentions resolve against the session cwd, same as the model-facing fs
-    // tools; absolute paths pass through untouched.
+    // tools; absolute paths pass through untouched. A `#L12-14` line suffix
+    // (issue #359) is stripped before resolution; when the stripped path
+    // misses, the typed literal (suffix intact) gets ONE fallback try so
+    // filenames genuinely containing `#L…` still resolve as whole files.
     const absolute = isAbsolute(mention.path) ? mention.path : join(cwd, mention.path)
-    let target: { displayPath: string }
-    let info: { type: 'file' | 'directory' | 'other' } | undefined
-    try {
-      target = await fs.resolve(absolute)
-      info = await fs.stat(target)
-    } catch {
-      missing.push(mention.path)
+    let resolved = await tryResolveMention(fs, absolute)
+    let literalFallback = false
+    if (resolved === undefined && mention.literal !== undefined) {
+      const literalPath = isAbsolute(mention.literal) ? mention.literal : join(cwd, mention.literal)
+      resolved = await tryResolveMention(fs, literalPath)
+      literalFallback = resolved !== undefined
+    }
+    if (resolved === undefined) {
+      missing.push(display)
       continue
     }
+    const { target, info } = resolved
+    // On a literal-fallback hit the attached file IS the typed name — the
+    // model must see that path, not the suffix-stripped one.
+    const shownPath = literalFallback ? display : mention.path
+    // …and judge image-ness by the typed extension in that case too.
+    const imageType = literalFallback && mention.literal !== undefined
+      ? mentionImageMediaType(mention.literal)
+      : imageMediaType
     if (info?.type === 'file') {
-      if (imageMediaType !== undefined && attachments !== undefined && fs.readBytes !== undefined) {
+      if (imageType !== undefined && attachments !== undefined && fs.readBytes !== undefined) {
         const limits = attachments.imageLimits
-        if (!limits.mediaTypes.includes(imageMediaType) || imageCount >= limits.maxImagesPerMessage) {
-          missing.push(mention.path)
+        if (!limits.mediaTypes.includes(imageType) || imageCount >= limits.maxImagesPerMessage) {
+          missing.push(display)
           continue
         }
         try {
           const data = await fs.readBytes(target, undefined, limits.maxImageBytes)
           if (imageBytes + data.byteLength > limits.maxMessageImageBytes) {
-            missing.push(mention.path)
+            missing.push(display)
             continue
           }
           const attachment = await attachments.saveImage({
             data,
-            mediaType: imageMediaType,
+            mediaType: imageType,
             name: basename(target.displayPath),
           })
           blocks.push({ type: 'image', attachment })
           imageCount += 1
           imageBytes += data.byteLength
-          attached.push(mention.path)
+          attached.push(display)
         } catch {
-          missing.push(mention.path)
+          missing.push(display)
         }
         continue
       }
       try {
         const cap = Math.min(MENTION_MAX_FILE_CHARS, budget)
-        let content = await fs.readText(target)
+        const content = await fs.readText(target)
+        let body = content
         let truncated = false
-        if (content.length > cap) {
-          content = content.slice(0, cap)
+        let header = `<attached-file path="${shownPath}">`
+        if (mention.startLine !== undefined && !literalFallback) {
+          // Line-range slice (issue #359): 1-based inclusive. An endLine
+          // past EOF clamps to the file; a startLine past EOF falls back
+          // to the whole file with an in-band note — never a silent
+          // empty attach. Line ranges never apply to literal-fallback
+          // hits (those files really are named `…#L…`, no suffix typed).
+          const lines = content.split('\n')
+          if (mention.startLine > lines.length) {
+            header = `<attached-file path="${shownPath}" lines="${mention.startLine}-${mention.endLine}" note="requested lines beyond EOF (file has ${lines.length} line${lines.length === 1 ? '' : 's'}); whole file attached">`
+          } else {
+            const endLine = Math.min(mention.endLine ?? mention.startLine, lines.length)
+            header = `<attached-file path="${shownPath}" lines="${mention.startLine}${endLine === mention.startLine ? '' : `-${endLine}`}">`
+            body = lines.slice(mention.startLine - 1, endLine).join('\n')
+          }
+        }
+        if (body.length > cap) {
+          body = body.slice(0, cap)
           truncated = true
         }
-        budget -= content.length
+        budget -= body.length
         blocks.push({
           type: 'text',
-          text: `<attached-file path="${mention.path}">\n${content}${truncated ? '\n[… truncated]' : ''}\n</attached-file>`,
+          text: `${header}\n${body}${truncated ? '\n[… truncated]' : ''}\n</attached-file>`,
         })
-        attached.push(mention.path)
+        attached.push(display)
       } catch {
         // Binary/undecodable or unreadable — report it like a miss.
-        missing.push(mention.path)
+        missing.push(display)
       }
       continue
     }
@@ -5768,16 +7679,16 @@ export async function expandMentions(
         budget -= body.length
         blocks.push({
           type: 'text',
-          text: `<attached-directory path="${mention.path}">\n${body}\n</attached-directory>`,
+          text: `<attached-directory path="${shownPath}">\n${body}\n</attached-directory>`,
         })
-        attached.push(mention.path)
+        attached.push(display)
       } catch {
-        missing.push(mention.path)
+        missing.push(display)
       }
       continue
     }
     // Absent (stat → undefined) or a special file.
-    missing.push(mention.path)
+    missing.push(display)
     }
   }
   if (attachments !== undefined && stagedImages !== undefined) {

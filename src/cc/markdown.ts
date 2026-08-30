@@ -23,6 +23,7 @@ import { buildSyntaxTheme } from './syntaxTheme.js'
 import type { CliHighlight } from './cliHighlight.js'
 import { logForDebugging } from '../utils/debug.js'
 import { createHyperlink } from './hyperlink.js'
+import { fileLinkUrl, linkifyFilePaths, looksLikeFilePath } from '../utils/fileTarget.js'
 
 // '\n' is used unconditionally — os.EOL is '\r\n' on Windows, and the stray
 // '\r' breaks the character-to-segment mapping in applyStylesToWrappedText,
@@ -55,6 +56,11 @@ const ISSUE_REFERENCE_PATTERN =
  * @returns The content with those blocks removed and whitespace trimmed.
  */
 export function stripPromptXMLTags(content: string): string {
+  // Every alternative in the pattern is anchored on a literal '<', so content
+  // without one cannot match. Skip the regex entirely in that case: the
+  // backreference defeats most of the engine's fast paths, and streaming
+  // re-runs this over the whole accumulated message on every frame.
+  if (!content.includes('<')) return content.trim()
   return content.replace(TOOL_ANALYSIS_TAG_BLOCKS, '').trim()
 }
 
@@ -82,6 +88,41 @@ export function configureMarked(): void {
 /** Inline code is painted with the active theme's permission accent. */
 function paintInlineCode(text: string): string {
   return colorize(text, getActiveTheme().permission, 'foreground')
+}
+
+/**
+ * Inline code that reads as a file path becomes a clickable target (the
+ * OSC 8 wrap keeps the code's permission color via the identity style —
+ * createHyperlink's default blue would otherwise override it). Terminals
+ * without OSC 8 support keep the plain painted code span.
+ */
+function renderCodeSpan(token: Tokens.Codespan): string {
+  // Paint via the style callback so the permission color is applied AFTER
+  // createHyperlink's anti-smuggle content scrub: passing the painted
+  // string as content would have its ESC bytes stripped, leaving
+  // `[38;2;…m` parameter text on screen.
+  const paint = (text: string): string => paintInlineCode(text)
+  if (!looksLikeFilePath(token.text)) return paint(token.text)
+  if (!supportsHyperlinks()) return paint(token.text)
+  return createHyperlink(fileLinkUrl(token.text), token.text, {
+    style: paint,
+  })
+}
+
+/**
+ * Linkify path-like text into clickable file targets, then issue
+ * references (owner/repo#123). File spans exclude `#`, so the two
+ * linkifiers cannot nest or overlap. Without OSC 8 support the text stays
+ * untouched (createHyperlink's URL fallback would show the raw encoded
+ * `dsh-file:` payload — worse than plain text).
+ */
+function linkifyText(text: string): string {
+  const withFiles = supportsHyperlinks()
+    ? linkifyFilePaths(text, (path, display) =>
+        createHyperlink(fileLinkUrl(path), display),
+      )
+    : text
+  return linkifyIssueReferences(withFiles)
 }
 
 /**
@@ -179,7 +220,7 @@ function isToken<K extends MarkedToken['type']>(
 function dispatch(token: Token, state: RenderState): string {
   if (isToken(token, 'blockquote')) return renderBlockquote(token, state)
   if (isToken(token, 'code')) return renderCodeBlock(token, state)
-  if (isToken(token, 'codespan')) return paintInlineCode(token.text)
+  if (isToken(token, 'codespan')) return renderCodeSpan(token)
   if (isToken(token, 'em')) return renderEmphasis(token, state)
   if (isToken(token, 'strong')) return renderStrong(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
@@ -331,14 +372,14 @@ function renderText(token: Tokens.Text, state: RenderState): string {
     const bullet = ordinal === null ? '-' : `${formatListMarker(listDepth, ordinal)}.`
     const body = token.tokens
       ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
-      : linkifyIssueReferences(token.text)
+      : linkifyText(token.text)
     // Blue bullet marker: list structure gets a tint without loading the
     // whole item (kimi-style `•` in the accent color).
     const tinted = colorize(bullet, getActiveTheme().permission, 'foreground')
     return `${tinted} ${body}${EOL}`
   }
 
-  return linkifyIssueReferences(token.text)
+  return linkifyText(token.text)
 }
 
 function renderTable(token: Tokens.Table, state: RenderState): string {

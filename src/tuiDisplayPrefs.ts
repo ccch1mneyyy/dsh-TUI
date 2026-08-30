@@ -1,6 +1,16 @@
 /** Background treatment applied to tool-call cards. */
 export type ToolBackground = 'none' | 'subtle' | 'strong'
 
+/**
+ * What the fullscreen transcript's right gutter shows:
+ *  - `timeline`: Grok-style turn rail — one tick per user turn (conversation
+ *    order, not scroll proportion), active turn highlighted, click to jump;
+ *  - `scrollbar`: classic proportional thumb — position/size of the visible
+ *    window over the whole content, click the track to scroll there;
+ *  - `hidden`: no gutter; the transcript takes the full width.
+ */
+export type ScrollGutterMode = 'timeline' | 'scrollbar' | 'hidden'
+
 /** Individually selectable fields in the status footer. */
 export interface StatusBarConfig {
   /** Prefer the compact, single-line presentation when space permits. */
@@ -17,12 +27,19 @@ export interface StatusBarConfig {
   cache: boolean
   /** Running input/output token totals. */
   tokens: boolean
+  /** Estimated session spend (≈¥, DeepSeek official pricing — only shown
+   *  for official DeepSeek providers whose model has a known price). */
+  cost: boolean
   /** Live and recent output speed. */
   tps: boolean
   /** Current git branch. */
   gitBranch: boolean
   /** Current session title. */
   sessionTitle: boolean
+  /** Short session id (# + first 8 chars), matching the session log filename. */
+  sessionId: boolean
+  /** Compact goal chip (phase glyph + rounds) while a goal exists. */
+  goal: boolean
   /** Non-default session mode. */
   mode: boolean
   /** Segmented context progress bar on its own footer row. */
@@ -44,9 +61,12 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   contextUsage: true,
   cache: true,
   tokens: false,
+  cost: true,
   tps: false,
   gitBranch: false,
   sessionTitle: false,
+  sessionId: false,
+  goal: true,
   mode: false,
   contextBar: false,
   activity: false,
@@ -55,6 +75,7 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
 })
 
 const TOOL_BACKGROUNDS = new Set<ToolBackground>(['none', 'subtle', 'strong'])
+const SCROLL_GUTTERS = new Set<ScrollGutterMode>(['timeline', 'scrollbar', 'hidden'])
 const STATUS_BAR_KEYS = Object.keys(DEFAULT_STATUS_BAR) as (keyof StatusBarConfig)[]
 
 /** Normalize untrusted/config-layer values without mutating the input. */
@@ -62,6 +83,13 @@ export function normalizeToolBackground(value: unknown): ToolBackground {
   return typeof value === 'string' && TOOL_BACKGROUNDS.has(value as ToolBackground)
     ? value as ToolBackground
     : 'none'
+}
+
+/** Same normalize contract as toolBackground; `timeline` is the default. */
+export function normalizeScrollGutter(value: unknown): ScrollGutterMode {
+  return typeof value === 'string' && SCROLL_GUTTERS.has(value as ScrollGutterMode)
+    ? value as ScrollGutterMode
+    : 'timeline'
 }
 
 /** Merge a partial settings value over the stable status-bar defaults. */

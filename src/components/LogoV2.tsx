@@ -1,6 +1,7 @@
 import React from 'react'
-import { getLang, t as tr } from '../i18n.js'
+import { getLang, t as tr, tOr } from '../i18n.js'
 import { pickRandomTip, type Tip } from '../tips.js'
+import { upstreamDriftSummary, UPSTREAM_VALIDATED_VERSION, type UpstreamDriftSummary } from '../dsh-adapter/contract.js'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -76,6 +77,7 @@ export function LogoV2({
   skipIntro = false,
   tip,
   whale = true,
+  drift,
 }: {
   model: string
   effort?: string | undefined
@@ -86,6 +88,9 @@ export function LogoV2({
   tip?: Tip
   /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
   whale?: boolean
+  /** Test seam: pin/suppress the upstream-drift notice (`null` forces it off;
+   * `undefined` — the production default — auto-detects the install). */
+  drift?: UpstreamDriftSummary | null
 }): React.ReactNode {
   const [step, setStep] = React.useState(skipIntro ? OPENING_SEQUENCE.length : 0)
   const settled = step >= OPENING_SEQUENCE.length
@@ -125,6 +130,12 @@ export function LogoV2({
   // repaint (language switch, terminal resize), or the line would flicker.
   // `tip` is a test seam; production always passes undefined and rolls.
   const [randomTip] = React.useState<Tip>(() => tip ?? pickRandomTip())
+  // Upstream-drift notice, merged to one line: computed once per mount from
+  // the same memoized contract data the adapter checks (undefined when the
+  // install matches). `drift` is a test seam to pin or suppress it.
+  const [driftLine] = React.useState<UpstreamDriftSummary | null | undefined>(() =>
+    drift === undefined ? upstreamDriftSummary() : drift,
+  )
   // Indent that centers the tagline under the whale art's bounding box.
   const welcomePad = showWhale
     ? Math.max(0, Math.round(WHALE_CENTER - stringWidth(tagline) / 2))
@@ -164,6 +175,20 @@ export function LogoV2({
             {getLang() === 'zh' ? randomTip.zh : randomTip.en}
             <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
           </Text>
+          {driftLine != null && (
+            <Text color="warning" wrap="wrap">
+              ⚠{' '}
+              {tOr(
+                `logo-drift-${driftLine.kind}`,
+                `The dsh engine (${driftLine.versions.join(' / ')}) does not match the validated ${UPSTREAM_VALIDATED_VERSION}; reinstall via npm i -g @deepseek-ai/dsh@${UPSTREAM_VALIDATED_VERSION}.`,
+                {
+                  installed: driftLine.versions.join(' / '),
+                  validated: UPSTREAM_VALIDATED_VERSION,
+                  primary: UPSTREAM_VALIDATED_VERSION,
+                },
+              )}
+            </Text>
+          )}
         </Box>
       </Box>
       <Box marginTop={1} paddingLeft={welcomePad}>

@@ -7,9 +7,11 @@ import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../
 import { ToolUseLoader } from '../ToolUseLoader.js'
 import { SplitDiffView } from '../SplitDiffView.js'
 import { SyntaxText } from '../SyntaxText.js'
+import { useTooltip } from '../Tooltip.js'
 import { formatDuration } from '../../cc/format.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 
 type Props = {
   tool: ToolRow
@@ -21,6 +23,12 @@ type Props = {
   isSelected?: boolean
   /** Row expanded on its own (persistent hover-grey background, CC). */
   isExpanded?: boolean
+  /**
+   * Mouse click (fullscreen): toggles the row's expansion — same action as
+   * clicking other transcript rows. Also makes the `(ctrl+o to expand)`
+   * hint actionable with the mouse.
+   */
+  onClick?(event: ClickEvent): void
   /**
    * Trajectory pointer, rendered as one more `⎿` line under a failed call.
    *
@@ -34,6 +42,19 @@ type Props = {
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Background treatment for the ordinary, unselected tool card surface. */
   toolBackground?: ToolBackground
+  /**
+   * Click-to-act (fullscreen): opens the file-action menu for the tool's
+   * file path. When provided, the path in the card header (and diff path
+   * rows) renders underlined and clickable; the click stops propagation so
+   * the row's own fold-toggle does not fire.
+   */
+  onOpenFile?: (path: string) => void
+  /**
+   * Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
+   * collapsed cards keep the command title's first source line plus a
+   * `+N lines` hint; verbose/expanded cards render the full title.
+   */
+  foldTerminalCommand?: boolean
 }
 
 /** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
@@ -89,7 +110,13 @@ function languageFromPath(path: string | undefined): string | undefined {
 
 /** `hint` is the trajectory pointer: recessive, never competing with output. */
 type BodyTone = 'add' | 'del' | 'dim' | 'plain' | 'error' | 'hint' | 'path'
-type BodyLine = { readonly text: string; readonly tone: BodyTone }
+type BodyLine = {
+  readonly text: string
+  readonly tone: BodyTone
+  /** The row's collapse hint: dim at rest, steps to text while hovered so the
+   *  toggle reads before the click (the compaction row's pattern). */
+  readonly revealOnHover?: boolean
+}
 
 /** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
 const TEXT_BODY_MAX_LINES = 3
@@ -209,7 +236,7 @@ function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] 
   if (lines.length - max === 1) return lines
   return [
     ...lines.slice(0, max),
-    dim(`… +${lines.length - max} lines (ctrl+o to expand)`),
+    { ...dim(`… +${lines.length - max} lines (ctrl+o to expand)`), revealOnHover: true },
   ]
 }
 
@@ -230,14 +257,52 @@ function clipHeaderArgs(args: string): string {
   return `${args.slice(0, HEADER_ARGS_BUDGET)}…`
 }
 
-function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameColor }: {
+/** Terminal-card header folding shape: the first source line plus how many
+ *  lines are hidden. */
+type FoldedTitle = { first: string; hidden: number }
+
+/** Fold a multi-line terminal command title to its first SOURCE line.
+ *  Counts '\n' separators in place instead of materializing a line array —
+ *  running cards re-render every second and a streamed command can reach
+ *  hundreds of KB, and the exact cost the HEADER_ARGS_BUDGET comment above
+ *  keeps out of the header must not sneak back in through folding. (Lone-\r
+ *  titles are not a thing presentCall produces; CRLF is normalized on the
+ *  first line only.) Single-line titles return undefined: nothing to fold,
+ *  rendering stays byte-identical to the unfolded card. */
+function foldTerminalTitle(title: string): FoldedTitle | undefined {
+  const firstEnd = title.indexOf('\n')
+  if (firstEnd === -1) return undefined
+  let separators = 1
+  for (let at = title.indexOf('\n', firstEnd + 1); at !== -1; at = title.indexOf('\n', at + 1)) separators++
+  // Same trailing-newline rule as sideLines: a terminator is not a line.
+  const hidden = separators - (title.endsWith('\n') ? 1 : 0)
+  if (hidden <= 0) return undefined
+  const first = title.slice(0, title.charCodeAt(firstEnd - 1) === 13 ? firstEnd - 1 : firstEnd)
+  return { first, hidden }
+}
+
+function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile }: {
   name: string
   title: string | undefined
   isTerminal: boolean
+  /** Terminal-card fold result (multi-line title, folding on, not verbose). */
+  folded: FoldedTitle | undefined
   displayArgs: string
   argsLanguage?: 'json'
   nameColor: keyof Theme
+  /** Clickable file target: when set and present in the title, the path
+   *  segment renders underlined and clickable (opens the file menu). */
+  filePath?: string
+  onOpenFile?: (path: string) => void
 }): React.ReactNode {
+  // Hover tooltip: the header line truncates long paths/commands, so the
+  // full string (or the unfolded terminal script) pops up after a dwell.
+  // Empty content is a no-op inside the hook.
+  const headerTooltip = useTooltip(() => {
+    if (title === undefined) return displayArgs
+    if (isTerminal) return title
+    return title.trim()
+  })
   if (title === undefined) {
     return (
       <>
@@ -245,7 +310,7 @@ function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameC
           <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
         </Box>
         {displayArgs !== '' && (
-          <Box flexWrap="nowrap">
+          <Box flexWrap="nowrap" {...headerTooltip}>
             <Text>(</Text>
             <SyntaxText text={clipHeaderArgs(displayArgs)} sourceText={displayArgs} language={argsLanguage} />
             <Text>)</Text>
@@ -260,8 +325,15 @@ function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameC
         <Box flexShrink={0}>
           <Text bold color={nameColor} wrap="truncate-end">{name}</Text>
         </Box>
-        <Box flexWrap="nowrap">
-          <Text>({title})</Text>
+        <Box flexWrap="nowrap" {...headerTooltip}>
+          {folded === undefined ? (
+            <Text>({title})</Text>
+          ) : (
+            <>
+              <Text>({folded.first})</Text>
+              <Text dimColor>{` … +${folded.hidden} lines (ctrl+o to expand)`}</Text>
+            </>
+          )}
         </Box>
       </>
     )
@@ -274,11 +346,37 @@ function HeaderTitle({ name, title, isTerminal, displayArgs, argsLanguage, nameC
       </Box>
     )
   }
+  // Clickable path: when the caller resolved a file path that appears in
+  // the title (`Edit /path (1 - 100)`), render that segment underlined and
+  // clickable. The click stops propagation so the row's fold toggle does
+  // not fire. indexOf keeps the split exact even for paths with regex
+  // metacharacters.
+  if (onOpenFile !== undefined && filePath !== undefined && filePath !== '' && trimmed.includes(filePath)) {
+    const at = trimmed.indexOf(filePath)
+    const before = trimmed.slice(0, at)
+    const after = trimmed.slice(at + filePath.length)
+    return (
+      <Box flexWrap="nowrap" {...headerTooltip}>
+        <Text bold color={nameColor} wrap="truncate-end">{before}</Text>
+        <Box
+          onClick={(event: ClickEvent) => {
+            event.stopImmediatePropagation()
+            onOpenFile(filePath)
+          }}
+        >
+          <Text underline wrap="truncate-end">{filePath}</Text>
+        </Box>
+        {after !== '' && (
+          <Text bold={false} color="text" wrap="truncate-end">{after}</Text>
+        )}
+      </Box>
+    )
+  }
   const space = trimmed.indexOf(' ')
   const head = space === -1 ? trimmed : trimmed.slice(0, space)
   const tail = space === -1 ? '' : trimmed.slice(space)
   return (
-    <Box flexWrap="nowrap">
+    <Box flexWrap="nowrap" {...headerTooltip}>
       <Text bold color={nameColor} wrap="truncate-end">
         {head}
         <Text bold={false} color="text">{tail}</Text>
@@ -299,9 +397,12 @@ export function AssistantToolUseMessage({
   verbose,
   isSelected = false,
   isExpanded = false,
+  onClick,
   footnote,
   diffLayout = 'auto',
   toolBackground = 'none',
+  onOpenFile,
+  foldTerminalCommand = false,
 }: Props): React.ReactNode {
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
@@ -320,6 +421,17 @@ export function AssistantToolUseMessage({
   // command) — then the call view's title stands.
   const headerTitle = tool.resultView?.title ?? tool.callView?.title
   const headerIsTerminal = view?.card === 'terminal'
+  // Fold only the terminal header: multi-line command script, folding on,
+  // and the card not verbose/expanded (Ctrl+O and row click both land in
+  // `verbose`, so expansion reuses the existing state machine). Memoized on
+  // the title reference: settled titles never change, so the 1s
+  // useAnimationFrame tick of a running card re-renders without rescanning.
+  const foldedHeader = React.useMemo(
+    () => headerIsTerminal && foldTerminalCommand && !verbose && headerTitle !== undefined
+      ? foldTerminalTitle(headerTitle)
+      : undefined,
+    [headerIsTerminal, foldTerminalCommand, verbose, headerTitle],
+  )
 
   // Live elapsed clock while the call runs (CC's bash elapsed timer): the
   // 1s tick re-renders the card; elapsed derives from wall-clock refs.
@@ -367,6 +479,16 @@ export function AssistantToolUseMessage({
     : ordinaryToolBackground === 'strong'
       ? 'toolCardBackground'
       : undefined
+  // Hover affordance for the click-to-toggle row: the theme's tool-card blue
+  // face marks the call's content area while the pointer dwells (the
+  // toolBackground treatment steps up one level to the strong card face), the
+  // collapsed `(ctrl+o to expand)` hint steps from dim to text, the elapsed
+  // clock stops dimming, and a ▾/▴ discloses the row is a toggle.
+  // No layout change: the indicator is a fixed column on the header line, the
+  // body never moves.
+  const [hovered, setHovered] = React.useState(false)
+  const interactive = onClick !== undefined
+  const hoverTint = interactive && hovered && !isSelected
 
   return (
     <Box
@@ -375,9 +497,12 @@ export function AssistantToolUseMessage({
       justifyContent="space-between"
       marginTop={addMargin ? 1 : 0}
       width="100%"
+      onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies
       // to an ordinary card. Diff line tints stay - they are content, not chrome.
-      backgroundColor={isSelected ? 'messageActionsBackground' : ordinaryBackground}
+      backgroundColor={isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground}
+      onMouseEnter={interactive ? () => setHovered(true) : undefined}
+      onMouseLeave={interactive ? () => setHovered(false) : undefined}
     >
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="row" flexWrap="nowrap" minWidth={minWidth}>
@@ -387,10 +512,15 @@ export function AssistantToolUseMessage({
             isError={isError}
             toolName={tool.name}
           />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} />
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} />
           {!isRunning && (
             <Box flexWrap="nowrap">
-              <Text dimColor>{elapsedText}</Text>
+              <Text dimColor={!hovered}>{elapsedText}</Text>
+            </Box>
+          )}
+          {hovered && (
+            <Box flexShrink={0}>
+              <Text dimColor>{isExpanded ? '▴' : '▾'}</Text>
             </Box>
           )}
         </Box>
@@ -427,29 +557,42 @@ export function AssistantToolUseMessage({
                 </Text>
               </Box>
               <Box flexGrow={1}>
-                <Text
-                  color={
-                    line.tone === 'add'
-                      ? 'diffAddedWord'
-                      : line.tone === 'del'
-                        ? 'diffRemovedWord'
-                        : line.tone === 'error'
-                          ? 'error'
-                          : line.tone === 'hint'
-                            ? 'subtle'
-                            : line.tone === 'path'
-                              ? 'ide'
-                              : undefined
-                  }
-                  dimColor={line.tone === 'dim'}
-                  wrap="wrap"
-                >
-                  {line.tone === 'plain' && syntaxLanguage !== undefined ? (
-                    <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />
-                  ) : (
-                    line.text === '' ? ' ' : line.text
-                  )}
-                </Text>
+                {line.tone === 'path' && onOpenFile !== undefined ? (
+                  <Box
+                    onClick={(event: ClickEvent) => {
+                      // Stop propagation so the row's fold toggle does not
+                      // fire when clicking the path.
+                      event.stopImmediatePropagation()
+                      onOpenFile(line.text)
+                    }}
+                  >
+                    <Text color="ide" underline>{line.text}</Text>
+                  </Box>
+                ) : (
+                  <Text
+                    color={
+                      line.tone === 'add'
+                        ? 'diffAddedWord'
+                        : line.tone === 'del'
+                          ? 'diffRemovedWord'
+                          : line.tone === 'error'
+                            ? 'error'
+                            : line.tone === 'hint'
+                              ? 'subtle'
+                              : line.tone === 'path'
+                                ? 'ide'
+                                : undefined
+                    }
+                    dimColor={line.tone === 'dim' && !(line.revealOnHover === true && hovered)}
+                    wrap="wrap"
+                  >
+                    {line.tone === 'plain' && syntaxLanguage !== undefined ? (
+                      <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />
+                    ) : (
+                      line.text === '' ? ' ' : line.text
+                    )}
+                  </Text>
+                )}
               </Box>
             </Box>
           ))

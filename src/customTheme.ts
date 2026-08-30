@@ -22,7 +22,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getTheme, THEME_NAMES, AUTO_THEME_NAME, type Theme } from './theme.js'
+import { getTheme, AUTO_THEME_NAME, type Theme } from './theme.js'
 import { DATA_DIR } from './utils/paths.js'
 
 /** The base palettes a user theme may overlay. */
@@ -83,8 +83,14 @@ const cache = new Map<string, Theme>()
 const nameIndex = new Map<string, string>()
 let nameIndexed = false
 
-function isThemeBase(value: string): value is ThemeBase {
-  return THEME_BASE_NAMES.includes(value as ThemeBase)
+/** Whether a value names one of the three built-in overlay palettes. */
+export function isThemeBase(value: unknown): value is ThemeBase {
+  return typeof value === 'string' && THEME_BASE_NAMES.includes(value as ThemeBase)
+}
+
+/** Whether a value is an own key of the complete Theme contract. */
+export function isThemeKey(value: unknown): value is keyof Theme {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(getTheme('dark'), value)
 }
 
 /**
@@ -188,12 +194,11 @@ export function parseCustomTheme(
     return undefined
   }
 
-  // Key/color validation against the base palette, so unknown keys and bad
+  // Key/color validation against the Theme contract, so unknown keys and bad
   // values are skipped per key (warned) instead of killing the theme.
-  const baseTheme = getTheme(base)
   const colors: Partial<Theme> = {}
   for (const [key, value] of Object.entries(colorsRaw)) {
-    if (!(key in baseTheme)) {
+    if (!isThemeKey(key)) {
       warn(`theme "${fileName}": unknown color key "${key}" skipped`)
       continue
     }

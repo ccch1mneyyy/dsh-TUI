@@ -7,9 +7,9 @@
 ```text
 Cordis profile
   -> src/index.ts (plugin contract and Schema)
-  -> src/plugin.ts (services, Agent, and React lifecycle)
+  -> src/dsh-adapter/plugin.ts (services, Agent, and React lifecycle)
   -> DSH Agent / session / tool services
-  -> src/channel.ts (session/event -> Channel)
+  -> src/dsh-adapter/channel.ts (session/event -> Channel)
   -> src/screens/Chat.tsx (keyboard and mode orchestration)
   -> src/components/* (views)
   -> src/ui.ts (themed renderer facade)
@@ -22,12 +22,15 @@ Cordis profile
 | Module | Owns |
 | --- | --- |
 | `src/index.ts` | Cordis plugin name, injection declaration, config interface, and Schema; keep the entry small and lazy |
-| `src/plugin.ts` | TTY guard, questionnaire/skill registration, Agent create/resume, React mount, and the single cleanup funnel |
-| `src/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
+| `src/dsh-adapter/plugin.ts` | TTY guard, service assembly, Agent create/resume, React mount, and the single cleanup funnel |
+| `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | Prerelease dispatch for user questions and agent presets; consumers stay unaware of upstream version branches |
+| `src/dsh-adapter/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |
+| `src/theme.ts`, `src/themeCatalog.ts` | Built-in, static JSON, and runtime plugin theme resolution and catalog ordering |
+| `src/dsh-adapter/themes.ts` | The `ctx.tuiThemes` theme seam, registration lifecycle, and private host facade |
 | `src/ink/` | Ported Ink renderer, terminal protocol, events, selection, and Yoga bridge; sensitive infrastructure |
 | `src/native-ts/yoga-layout/` | Pure JS/TS layout implementation |
 | `cordis.patch.yml` | Profile bundle layer, service rows, overrides, and mount ordering |
@@ -37,7 +40,10 @@ capability through an existing service, registry, or channel seam.
 
 Workspace extensions follow a one-way dependency: the TUI publishes only a
 structural provider interface, while optional plugins register URIs, display
-metadata, and command executors. Protocol parsing and external connections
+metadata, and command executors. Theme extensions follow the same rule: plugins
+register complete semantic palettes through `ctx.tuiThemes`; the host owns
+validation, ordering, rendering, and lifecycle, and plugins never rewrite the
+theme directory or host palette. Protocol parsing and external connections
 belong entirely to the plugin. Removing a plugin must leave local workspaces
 and session flows free of missing configuration, placeholders, or fallback
 branches.
@@ -96,8 +102,8 @@ ConPTY.
 | `~/.dsh-tui/sessions/` | JSONL session events for direct `cordis.yml` runs |
 | `~/.dsh-tui/resume.txt` | Recent session ID used by the Windows launcher and exit hint |
 | `~/.dsh-tui/last-used.json` | `/resume` recency metadata |
-| `~/.dsh-tui/theme.json` | Current theme selection |
-| `~/.dsh-tui/themes/` | User theme JSON files |
+| `~/.dsh-tui/theme.json` | Current built-in, static, or plugin theme ID |
+| `~/.dsh-tui/themes/` | User theme JSON files; runtime plugin themes do not write here |
 | `~/.dsh-tui/working-activity.json` | Activity animation selection |
 | `~/.dsh-tui/agent-preset.json` | Default Agent preset for new sessions |
 
@@ -132,6 +138,15 @@ mounted by `cordis.patch.yml`:
 - MCP, shell, filesystem tools, and custom presets expand what the model can
   access and should be treated as code-execution surfaces in the same policy
   domain.
+- `/permission` reads the mounted DSH `permissionPresets` registry in declared
+  order. Third-party presets appear in the picker automatically; only IDs that
+  fit the existing command-token grammar enter Tab completion. `custom` is a
+  current-state projection, never a selectable target.
+- The TUI distinguishes `runtime`, `legacy`, and `unavailable`: the legacy
+  three-row roster is used only when the service is truly absent. A mounted
+  service that is empty, inconsistent, broken, or unsafe fails closed instead
+  of inferring identity from sandbox/approval knobs. All switches still call
+  the official `/permission <preset>` command.
 
 Inspect the active profile patch before running in an untrusted repository; the
 visual TUI alone does not describe the effective policy.
@@ -154,8 +169,11 @@ visual TUI alone does not describe the effective policy.
   Agent's asynchronous flush; the persistence plugin is the fallback.
 - The tool-level approval panel is implemented (approval service + TUI
   answerer); `/permission` preset switching is provided by the dsh-base
-  `permission-presets` plugin and works in profile compositions — the bare
-  `cordis.yml` mounts only the approval service, not `permission-presets`.
+  `permission-presets` plugin and works in profile compositions. When that
+  registry service is absent, TUI uses its legacy three-row compatibility roster;
+  a malformed mounted service is unavailable and fails closed. If the external
+  `/permission` command is not registered, input follows the existing
+  default/model dispatch behavior.
 - `/vim`, `/connect`, and `/hooks` are compatibility placeholders,
   not evidence that those DSH capabilities are mounted.
 - There is no automated full-flow suite that requires real model credentials;
@@ -166,7 +184,7 @@ visual TUI alone does not describe the effective policy.
 
 | Goal | Method |
 | --- | --- |
-| Environment and profile | Run `/doctor`, `/config`, and `/permissions` inside the TUI |
+| Environment and profile | Run `/doctor`, `/config`, and `/permission status` inside the TUI |
 | stderr diagnostics | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
 | Raw ANSI frames | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | Theme regression | `node --import tsx/esm scripts/verify-themes.mjs` |

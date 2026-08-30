@@ -11,14 +11,13 @@
  */
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 import { LOCAL_COMMANDS } from '../lib/types/commands.js'
+import { settled, sleep } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
-
-const tick = () => new Promise(resolve => setTimeout(resolve, 20))
 
 // Multicast: `commands/change` and `skills/change` each have MORE than one
 // subscriber inside the channel (the menu merge and the command registration),
@@ -100,17 +99,15 @@ check(
   !channel.commandList.some(command => command.name === 'i-h'),
 )
 
-await tick()
-
 // ---- async phase: user-invocable skills merged, marked, deduped
-const names = channel.commandList.map(command => command.name)
-check('user-invocable skill merged (i-h)', names.includes('i-h'))
-check('user-invocable skill merged (helper)', names.includes('helper'))
+check('user-invocable skill merged (i-h)', await settled(() => channel.commandList.some(command => command.name === 'i-h')))
+check('user-invocable skill merged (helper)', await settled(() => channel.commandList.some(command => command.name === 'helper')))
 check(
   'skill entries carry the skill marker + description',
-  channel.commandList.some(command =>
-    command.name === 'i-h' && command.skill === true && command.description === 'Interactive help skill'),
+  await settled(() => channel.commandList.some(command =>
+    command.name === 'i-h' && command.skill === true && command.description === 'Interactive help skill')),
 )
+const names = channel.commandList.map(command => command.name)
 check('model-only skill excluded', !names.includes('secret'))
 check(
   'registry command wins a name collision',
@@ -118,7 +115,7 @@ check(
     channel.commandList.find(command => command.name === 'plan')?.external === true,
 )
 check(
-  'local command wins a name collision',
+  'review (removed from locals) stays single in the menu as the registered skill command',
   channel.commandList.filter(command => command.name === 'review').length === 1 &&
     channel.commandList.find(command => command.name === 'review')?.skill !== true,
 )
@@ -136,11 +133,9 @@ if (skillsChange === undefined || skillsChange.length === 0) {
 } else {
   check('skills/change handler captured', true)
   fire('skills/change')
-  await tick()
-  const refreshed = channel.commandList.map(command => command.name)
-  check('removed skill leaves the menu', !refreshed.includes('helper'))
-  check('added skill enters the menu', refreshed.includes('newskill'))
-  check('kept skill stays', refreshed.includes('i-h'))
+  check('removed skill leaves the menu', await settled(() => !channel.commandList.some(command => command.name === 'helper')))
+  check('added skill enters the menu', await settled(() => channel.commandList.some(command => command.name === 'newskill')))
+  check('kept skill stays', channel.commandList.some(command => command.name === 'i-h'))
 }
 
 // ---- skills/change with a failed read keeps the last-good skill list
@@ -152,14 +147,14 @@ ctx.get = (name) => {
 let warned = 0
 ctx.logger = { warn() { warned += 1 } }
 fire('skills/change')
-await tick()
 {
-  const after = channel.commandList.map(command => command.name)
   check(
     'failed skill read keeps locals + registry and logs a warning',
-    after.includes('plan') && warned >= 1,
+    await settled(() => channel.commandList.some(command => command.name === 'plan') && warned >= 1),
     `warned=${warned}`,
   )
+  // keep 语义：完成信号（warned）落定后同步判定，轮询已成立的条件测不到误清。
+  const after = channel.commandList.map(command => command.name)
   check(
     'failed skill read restores the last-good skills',
     after.includes('i-h') && after.includes('newskill'),
@@ -178,14 +173,13 @@ ctx.get = (name) => {
 }
 warned = 0
 fire('skills/change')
-await tick()
 {
-  const after = channel.commandList.map(command => command.name)
   check(
     'incomplete observation logs a warning',
-    warned >= 1,
+    await settled(() => warned >= 1),
     `warned=${warned}`,
   )
+  const after = channel.commandList.map(command => command.name)
   check(
     'incomplete observation keeps the last-good skills',
     after.includes('i-h') && after.includes('newskill'),
@@ -201,13 +195,14 @@ ctx.get = (name) => {
   return undefined
 }
 fire('skills/change')
-await tick()
 {
-  const after = channel.commandList.map(command => command.name)
   check(
     'complete empty observation authoritatively clears skills',
-    !after.includes('i-h') && !after.includes('newskill') && after.includes('plan'),
-    after.join(','),
+    await settled(() => {
+      const after = channel.commandList.map(command => command.name)
+      return !after.includes('i-h') && !after.includes('newskill') && after.includes('plan')
+    }),
+    channel.commandList.map(command => command.name).join(','),
   )
 }
 
@@ -229,10 +224,11 @@ await tick()
     skills: [{ name: 'live', description: 'Live skill', invocation: { modelInvocable: true, userInvocable: true } }],
     complete: true,
   })
-  await tick()
-  check('superseding read repopulates the menu', channel.commandList.some(command => command.name === 'live'))
+  check('superseding read repopulates the menu', await settled(() => channel.commandList.some(command => command.name === 'live')))
   pending[0].reject(new Error('stale scan failed'))
-  await tick()
+  // Stability probe (nothing may change, nothing may warn): a settle over an
+  // already-true condition returns immediately — keep the fixed window.
+  await sleep(20)
   check('stale read failure logs no warning', staleWarned === 0, `warned=${staleWarned}`)
   check(
     'stale read failure does not touch the live menu',
@@ -268,19 +264,24 @@ await tick()
     { name: 'review', description: 'Shadow skill (review)', invocation: { modelInvocable: true, userInvocable: true } },
   )
   fire('skills/change')
-  await tick()
-  await tick()
 
   check(
     'user-invocable skill is registered as a real command',
-    registered.has('i-h') && typeof registered.get('i-h').handler === 'function',
+    await settled(() => registered.has('i-h') && typeof registered.get('i-h')?.handler === 'function'),
   )
   check('model-only skill is not registered', !registered.has('secret'))
   check(
     'a name another plugin owns is left alone',
     registered.get('plan')?.owner === 'other-plugin',
   )
-  check('a built-in local name is not registered', !registered.has('review'))
+  // #496: built-in skill names are no longer LOCAL_COMMANDS entries, so the
+  // collision filter no longer locks them out — the skill registers as a
+  // deterministic dispatch command (handler present) instead of silently
+  // falling back to the legacy activation prompt.
+  check(
+    'a built-in skill name registers as a dispatch command',
+    registered.has('review') && typeof registered.get('review')?.handler === 'function',
+  )
 
   const descriptor = registered.get('i-h')
   if (descriptor?.handler === undefined) {
@@ -309,9 +310,8 @@ await tick()
     agent.followups.length = 0
     const outcome = await descriptor.handler({ agent, rawInput: ' 做年终总结', signal: undefined })
     check('kernel path reports success', outcome?.kind === 'success', JSON.stringify(outcome))
-    await tick()
+    check('kernel path delivers exactly one message', await settled(() => agent.followups.length === 1))
     const gesture = agent.followups[0]
-    check('kernel path delivers exactly one message', agent.followups.length === 1)
     check(
       'kernel path submits the gesture as a plain user message with args',
       gesture?.source?.kind === 'user' && gesture.content?.[0]?.text === '/i-h 做年终总结',

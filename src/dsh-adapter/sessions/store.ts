@@ -37,15 +37,23 @@ import type { TitleSource } from './types.js'
  * rather than migrating it — re-deriving is cheap and bounded, whereas a
  * migration path is code that runs once and is never exercised again.
  */
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 const INDEX_FILE = join(DATA_DIR, 'session-index.json')
 
 /** Facts derived from a log at one revision. */
 export interface DerivedEntry {
   readonly revision: string
+  /** Artifact size at this observation; append growth can retain older title evidence. */
+  readonly bytes: number
+  /** Physical file identity; a replacement invalidates append-only evidence. */
+  readonly identity: string | undefined
+  /** Hash of the previous EOF neighborhood, validating append-only carry-forward. */
+  readonly anchor: string | undefined
   readonly title: string
   readonly titleSource: TitleSource
+  /** False keeps the same revision eligible for another progressive attempt. */
+  readonly titleComplete: boolean
   readonly hasPrompt: boolean
   readonly model: string | undefined
   readonly label: string | undefined
@@ -77,17 +85,35 @@ function readEntry(value: unknown): IndexEntry | undefined {
   if (raw === null || typeof raw !== 'object') return { derived: undefined, branch }
   const derived = raw as Record<string, unknown>
   const revision = derived['revision']
+  const bytes = derived['bytes']
+  const identity = derived['identity']
+  const anchor = derived['anchor']
   const title = derived['title']
   const titleSource = readTitleSource(derived['titleSource'])
-  if (typeof revision !== 'string' || typeof title !== 'string' || titleSource === undefined) {
+  const titleComplete = derived['titleComplete']
+  if (
+    typeof revision !== 'string' ||
+    typeof bytes !== 'number' ||
+    !Number.isFinite(bytes) ||
+    bytes < 0 ||
+    (identity !== undefined && typeof identity !== 'string') ||
+    (anchor !== undefined && typeof anchor !== 'string') ||
+    typeof title !== 'string' ||
+    titleSource === undefined ||
+    typeof titleComplete !== 'boolean'
+  ) {
     return { derived: undefined, branch }
   }
   return {
     branch,
     derived: {
       revision,
+      bytes,
+      identity: typeof identity === 'string' ? identity : undefined,
+      anchor: typeof anchor === 'string' ? anchor : undefined,
       title,
       titleSource,
+      titleComplete,
       hasPrompt: derived['hasPrompt'] === true,
       model: typeof derived['model'] === 'string' ? derived['model'] : undefined,
       label: typeof derived['label'] === 'string' ? derived['label'] : undefined,
@@ -140,8 +166,12 @@ export function writeIndex(index: SessionIndex): void {
   }
   const temporary = `${INDEX_FILE}.${process.pid}.tmp`
   try {
-    mkdirSync(DATA_DIR, { recursive: true })
-    writeFileSync(temporary, JSON.stringify({ version: SCHEMA_VERSION, entries }))
+    // 0700/0600: DATA_DIR also hosts history.jsonl / mouse-debug.log (0600
+    // files), so directory creation and the index itself (session titles
+    // quote the user's first input; branch names) must match that privacy
+    // posture. Creation only — pre-existing paths keep their current mode.
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
+    writeFileSync(temporary, JSON.stringify({ version: SCHEMA_VERSION, entries }), { mode: 0o600 })
     renameSync(temporary, INDEX_FILE)
   } catch {
     try {

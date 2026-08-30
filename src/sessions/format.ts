@@ -233,10 +233,29 @@ export function titleColor(source: TitleSource, focused: boolean): keyof Theme {
  */
 export function formatProject(cwd: string, home: string): string {
   if (cwd.length === 0) return t('session-project-unknown')
-  const normalized = cwd.replace(/\\/g, '/')
-  const base = home.replace(/\\/g, '/').replace(/\/$/, '')
-  if (base.length > 0 && (normalized === base || normalized.startsWith(`${base}/`))) {
-    return `~${normalized.slice(base.length)}`
+  const normalize = (value: string): string => {
+    const normalized = value.replace(/\\/g, '/')
+    return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized
+  }
+  const normalized = normalize(cwd)
+  const base = normalize(home)
+  const comparableCwd = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+  const comparableBase = process.platform === 'win32' ? base.toLowerCase() : base
+  const isBelowHome = comparableBase === '/'
+    ? comparableCwd.startsWith('/')
+    : comparableCwd.startsWith(`${comparableBase}/`)
+  if (base.length > 0 && (comparableCwd === comparableBase || isBelowHome)) {
+    const suffix = normalized.slice(base.length)
+    return suffix.length === 0 ? '~' : `~${suffix.startsWith('/') ? suffix : `/${suffix}`}`
   }
   return normalized
+}
+
+/** Compact final path segment for the working-directory menu. */
+export function projectName(cwd: string): string {
+  if (cwd.length === 0) return t('session-project-unknown')
+  const slashed = cwd.replace(/\\/g, '/')
+  const normalized = /^\/+$/u.test(slashed) ? '/' : slashed.replace(/\/+$/, '')
+  const name = normalized.split('/').filter(Boolean).at(-1)
+  return name ?? normalized
 }

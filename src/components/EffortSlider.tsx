@@ -16,10 +16,14 @@ export function EffortSlider({
   options,
   focusIndex,
   currentId,
+  onPick,
 }: {
   options: readonly EffortOption[]
   focusIndex: number
   currentId: string | undefined
+  /** Mouse pick (fullscreen): click a tier = move there and live-apply —
+   *  the same semantics as the ←/→ keys (the slider IS the control). */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   const focused = options[focusIndex]
   return (
@@ -36,12 +40,21 @@ export function EffortSlider({
               {index > 0 ? (
                 <Text dimColor> ── </Text>
               ) : null}
-              <Text
-                inverse={index === focusIndex}
-                bold={index === focusIndex}
+              <Box
+                onClick={onPick ? () => onPick(index) : undefined}
+                backgroundColor={
+                  onPick !== undefined && index !== focusIndex
+                    ? 'userMessageBackgroundHover'
+                    : undefined
+                }
               >
-                {option.name}
-              </Text>
+                <Text
+                  inverse={index === focusIndex}
+                  bold={index === focusIndex}
+                >
+                  {option.name}
+                </Text>
+              </Box>
               {option.id === currentId ? <Text color="remember">✓</Text> : null}
             </React.Fragment>
           ))}

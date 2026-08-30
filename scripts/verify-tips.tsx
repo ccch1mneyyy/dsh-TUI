@@ -1,6 +1,8 @@
 /**
  * Verify the tips pool (src/tips.ts) and its two consumers:
- * the startup tip line (LogoV2) and the `/tips` panel (TipsPanel).
+ * the startup tip line (LogoV2) and the `/tips` panel (TipsPanel),
+ * plus the merged upstream-drift notice LogoV2 renders under the tip
+ * (hidden on a coherent install; one natural-language line per drift kind).
  *
  * Run with:
  *   node --import tsx/esm scripts/verify-tips.ts
@@ -130,8 +132,85 @@ for (const lang of ['zh', 'en'] as const) {
   if (!plain.includes(expectedTip)) throw new Error(`logo (${lang}): random tip "${expectedTip}" missing`)
   if (!plain.includes('/tips')) throw new Error(`logo (${lang}): /tips pointer missing`)
   if (!plain.includes('dsh-TUI')) throw new Error(`logo (${lang}): wordmark missing`)
+  // This repo's tree is coherent (CI gate verify:contract), so the drift
+  // notice must stay hidden without an explicit pin.
+  if (plain.includes('⚠')) throw new Error(`logo (${lang}): drift notice shown on a coherent install`)
   instance.unmount()
   console.log(`logo tip line (${lang}) OK`)
+}
+
+// ── 4. LogoV2 drift notice: one merged line per kind, hidden when null ─
+// Expected copy interpolates UPSTREAM_VALIDATED_VERSION so a contract bump
+// (e.g. adapting to 0.1.1) needs zero edits here — the notice itself must
+// always show the newest validated line, never a pinned literal.
+const { UPSTREAM_VALIDATED_VERSION } = await import('../src/dsh-adapter/contract.js')
+type UpstreamDriftSummary = import('../src/dsh-adapter/contract.js').UpstreamDriftSummary
+const V = UPSTREAM_VALIDATED_VERSION
+// Keep the rendering fixture unambiguously newer than every realistic 0.x
+// contract line; using yesterday's primary here became semantically stale as
+// soon as alpha.1 replaced rc.2.
+const FUTURE_VERSION = '99.0.0-alpha.1'
+const driftCases: Array<{ summary: UpstreamDriftSummary; zh: string; en: string }> = [
+  {
+    summary: { kind: 'newer', versions: [FUTURE_VERSION] },
+    zh: `比本界面验证过的 ${V} 新`,
+    en: `newer than the ${V} this UI is validated against`,
+  },
+  {
+    summary: { kind: 'older', versions: ['0.1.0-rc.5'] },
+    zh: `低于本界面验证过的 ${V}`,
+    en: `older than the ${V} this UI is validated against`,
+  },
+  {
+    summary: { kind: 'mixed', versions: ['0.1.0-rc.8', '0.1.1-rc.2'] },
+    zh: '多版本混装（0.1.0-rc.8 / 0.1.1-rc.2）',
+    en: 'Mixed dsh engine versions detected (0.1.0-rc.8 / 0.1.1-rc.2)',
+  },
+  {
+    summary: { kind: 'broken', versions: ['missing'] },
+    zh: '版本异常（missing）',
+    en: 'Unexpected dsh engine versions (missing)',
+  },
+]
+for (const lang of ['zh', 'en'] as const) {
+  i18nModule.setLang(lang)
+  const { LogoV2 } = await import('../src/components/LogoV2.js')
+  for (const { summary, zh, en } of driftCases) {
+    const stdout = new FakeStdout()
+    const instance = await render(
+      <LogoV2
+        model="deepseek-v4-flash"
+        effort="max"
+        cwd="D:\\code"
+        skipIntro={true}
+        tip={pickRandomTip(() => 0)}
+        drift={summary}
+      />,
+      { stdout, stdin: new FakeStdin(), stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+    )
+    await new Promise(resolve => setTimeout(resolve, 150))
+    // The notice wraps at the fake terminal's 120 columns and continuation
+    // lines re-indent to the whale column, so squash ALL whitespace on both
+    // sides before substring assertions — robust to any wrap/indent point.
+    const squash = (text: string): string => text.replace(/\s+/g, '')
+    const flat = squash(plainText(stdout.frames))
+    if (!plainText(stdout.frames).includes('⚠')) throw new Error(`logo drift ${summary.kind} (${lang}): notice missing`)
+    const expected = squash(lang === 'zh' ? zh : en)
+    if (!flat.includes(expected)) throw new Error(`logo drift ${summary.kind} (${lang}): copy "${expected}" missing`)
+    const fix = squash(`npm i -g @deepseek-ai/dsh@${UPSTREAM_VALIDATED_VERSION}`)
+    if (!flat.includes(fix)) throw new Error(`logo drift ${summary.kind} (${lang}): fix command missing`)
+    instance.unmount()
+  }
+  // Explicit null suppresses the notice (test seam → hidden line).
+  const stdout = new FakeStdout()
+  const instance = await render(
+    <LogoV2 model="deepseek-v4-flash" cwd="D:\\code" skipIntro={true} tip={pickRandomTip(() => 0)} drift={null} />,
+    { stdout, stdin: new FakeStdin(), stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await new Promise(resolve => setTimeout(resolve, 150))
+  if (plainText(stdout.frames).includes('⚠')) throw new Error(`logo drift (${lang}): null must suppress the notice`)
+  instance.unmount()
+  console.log(`logo drift notice (${lang}) OK`)
 }
 
 console.log('verify-tips OK')

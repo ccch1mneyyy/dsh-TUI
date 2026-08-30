@@ -676,10 +676,12 @@ export function shiftAnchor(
  * the selection is text-anchored at both ends — both must move. The
  * isDragging check in ink.tsx picks which shift to apply.
  *
- * If both ends would shift strictly BELOW minRow (unclamped), the selected
- * text has scrolled entirely off the top. Clear it — otherwise a single
- * inverted cell lingers at the viewport top as a ghost (native terminals
- * drop the selection when it leaves scrollback). Landing AT minRow is
+ * If both ends would shift strictly BELOW minRow or strictly ABOVE maxRow
+ * (unclamped), the selected text has scrolled entirely off the viewport —
+ * off the top via streaming follow / wheel-down, off the bottom via
+ * wheel-up. Clear it — otherwise a single inverted cell lingers at the
+ * edge as a ghost (native terminals drop the selection when it leaves
+ * scrollback). Landing AT the edge row is
  * still valid: that cell holds the correct text. Returns true if the
  * selection was cleared so the caller can notify React-land subscribers
  * (useHasSelection) — the caller is inside onRender so it can't use
@@ -710,7 +712,13 @@ export function shiftSelectionForFollow(
   const rawFocus = s.focus
     ? (s.virtualFocusRow ?? s.focus.row) + dRow
     : undefined
-  if (rawAnchor < minRow && rawFocus !== undefined && rawFocus < minRow) {
+  // Both ends strictly past the same edge = selection fully scrolled off
+  // (top: follow/wheel-down; bottom: wheel-up). Symmetric clear — a
+  // clamped-to-edge pair would render as a 1-row ghost highlight.
+  if (
+    (rawAnchor < minRow && rawFocus !== undefined && rawFocus < minRow) ||
+    (rawAnchor > maxRow && rawFocus !== undefined && rawFocus > maxRow)
+  ) {
     clearSelection(s)
     return true
   }
@@ -740,6 +748,47 @@ export function shiftSelectionForFollow(
     }
   }
   return false
+}
+
+/** A scroll event reported by a ScrollBox this frame (follow or wheel
+ *  drain): signed delta plus the box's viewport bounds. Structurally
+ *  identical to FollowScroll in render-node-to-output. */
+export type ScrollEvent = {
+  delta: number
+  viewportTop: number
+  viewportBottom: number
+}
+
+/**
+ * Pick which scroll event a selection belongs to when several ScrollBoxes
+ * scrolled in the same frame (e.g., the transcript still draining a wheel
+ * burst while an overlay panel's box scrolls). The selection follows the
+ * INNERMOST viewport containing the anchor: overlay panels render on top
+ * of the transcript, so a selection inside the overlap rows belongs to
+ * the panel, not the covered transcript beneath it. A selection outside
+ * every viewport (footer/prompt, static text) follows nothing — scrolling
+ * doesn't move the content under it.
+ * @param events - this frame's scroll events (signed deltas).
+ * @param anchorRow - the selection anchor's screen row, or null when no
+ *   selection is active.
+ * @returns the event the selection should be translated by, or null.
+ */
+export function pickFollowForSelection(
+  events: ScrollEvent[],
+  anchorRow: number | null,
+): ScrollEvent | null {
+  if (anchorRow === null) return null
+  let best: ScrollEvent | null = null
+  let bestHeight = Infinity
+  for (const e of events) {
+    if (anchorRow < e.viewportTop || anchorRow > e.viewportBottom) continue
+    const height = e.viewportBottom - e.viewportTop
+    if (best === null || height < bestHeight) {
+      best = e
+      bestHeight = height
+    }
+  }
+  return best
 }
 
 /**

@@ -1,6 +1,7 @@
 import { c as _c } from "react/compiler-runtime";
 import React, { createContext, useEffect, useState } from 'react';
 import { FRAME_INTERVAL_MS } from '../constants.js';
+import { noteFrameCause } from '../geometry-trace.js';
 import { useTerminalFocus } from '../hooks/use-terminal-focus.js';
 export type Clock = {
   subscribe: (onChange: () => void, keepAlive: boolean) => () => void;
@@ -17,6 +18,7 @@ export function createClock(tickIntervalMs: number): Clock {
   let tickTime = 0;
   function tick(): void {
     tickTime = Date.now() - startTime;
+    noteFrameCause('animation');
     for (const onChange of subscribers.keys()) {
       onChange();
     }

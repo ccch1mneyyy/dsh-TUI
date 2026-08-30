@@ -175,11 +175,22 @@ the profile.
 ## Develop from source
 
 ```sh
-git clone https://github.com/ccch1mneyyy/dsh-TUI.git
+git clone --recurse-submodules https://github.com/ccch1mneyyy/dsh-TUI.git
 cd dsh-TUI
 pnpm install --frozen-lockfile
 pnpm build
 pnpm smoke
+```
+
+The repository has three submodules, and two of them are required to install:
+`vendor/dsh-std` (its `packages/*` are listed as workspace packages in
+`pnpm-workspace.yaml`) and `dsh-auth` (pulled in through `link:`). Without
+`--recurse-submodules` those directories stay empty and
+`pnpm install --frozen-lockfile` fails outright. For a checkout that was already
+cloned:
+
+```sh
+git submodule update --init --recursive
 ```
 
 `pnpm build` cleans the ignored `lib/` directory, compiles `src/` into
@@ -235,6 +246,13 @@ the same profile installation path as an end-user install.
 
 stdout is not a TTY. Start the process directly in a terminal rather than
 redirecting its main output to another command or file.
+
+When dsh-tui is only installed in a profile and the DSH composition is started
+by a non-terminal host (Web / Tauri / GUI, stdout piped or null), dsh-tui
+detects that stdout is not a TTY and that the process was not started by the
+`dsh-tui` launcher, and silently skips the TUI frontend (no error, the host
+keeps booting). The error above only appears when `dsh-tui` (or the standalone
+portable build) was explicitly launched without a TTY.
 
 ### `dsh` or `pnpm` cannot be found
 

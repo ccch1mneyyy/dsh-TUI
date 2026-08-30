@@ -7,6 +7,7 @@ import { resolvePreset } from '../activityFrames.js'
 import { toolNameColor } from '../messages/AssistantToolUseMessage.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { isMinimalMode } from '../../minimalMode.js'
+import type { ClickEvent } from '../../ink/events/click-event.js'
 
 /** The waterfall window is a Kimi Code style constant-height region. */
 const WATERFALL_ROWS = 3
@@ -61,12 +62,18 @@ export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }
   addMargin: boolean
   activityFrames?: string
   isExpanded: boolean
-  onClick: () => void
+  onClick?(event: ClickEvent): void
 }): React.ReactNode {
-  const [, time] = useAnimationFrame(120)
+  const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled'
+  // 动画订阅仅限运行中的卡片：settled 后传 null 退出共享 clock（keepAlive
+  // 归零 → interval 清除），否则历史里的每张完成卡片都以 120ms 永久驱动
+  // React commit。viewportRef 必须挂到根节点——useTerminalViewport 初始
+  // isVisible:true，ref 不挂就永远不修正（虚拟化滚出视口的卡片继续动画）。
+  const [viewportRef, time] = useAnimationFrame(settled ? null : 120)
   const { columns } = useTerminalSize()
   const info = status(subagent)
-  const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled'
+  const [hovered, setHovered] = React.useState(false)
+  const clickable = onClick !== undefined
   const elapsed = subagent.completedAt ? subagent.durationMs : Date.now() - subagent.startedAt
   const lastRunning = [...subagent.toolCalls].reverse().find(tool => tool.status === 'running')
   const previousDone = lastRunning
@@ -77,10 +84,20 @@ export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }
   const runningGlyph = preset.frames[Math.floor(time / preset.intervalMs) % preset.frames.length] ?? '·'
   const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER)
 
-  return <Box flexDirection="column" marginTop={addMargin ? 1 : 0} paddingLeft={2} onClick={onClick}>
+  // 点击打开详情场景；hover 不刷整行背景（转录视觉保持安静），只把状态
+  // glyph 提亮为品牌色作为可点指示。
+  return <Box
+    flexDirection="column"
+    marginTop={addMargin ? 1 : 0}
+    paddingLeft={2}
+    ref={viewportRef}
+    onClick={onClick}
+    onMouseEnter={clickable ? () => setHovered(true) : undefined}
+    onMouseLeave={clickable ? () => setHovered(false) : undefined}
+  >
     <Box flexDirection="row" gap={1}>
-      <Text color={info.color}>{settled ? info.glyph : ` ${runningGlyph}`}</Text>
-      <Text bold>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
+      <Text color={hovered && clickable ? 'claude' : info.color}>{settled ? info.glyph : ` ${runningGlyph}`}</Text>
+      <Text bold color={hovered && clickable ? 'claude' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
       <Text dimColor>·</Text><Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
       {subagent.effort && <><Text dimColor>·</Text><Text dimColor>{subagent.effort}</Text></>}
       <Text dimColor>·</Text><Text dimColor>{duration(elapsed)}</Text>
@@ -125,7 +142,10 @@ export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }
       </Text>
     )}
     {!settled && Array.from({ length: WATERFALL_ROWS }, (_, index) => (
-      <Text key={`${subagent.agentId}-wf-${index}-${time}`} dimColor wrap="truncate">{`  │ ${clipLine(activity[index] ?? '', rowWidth)}`}</Text>
+      // key 不含 time：含 time 的 key 让每个 animation tick 都变成
+      // unmount+mount，DOMElement/Yoga node churn 且 nodeCache 失配扩大
+      // terminal damage。内容更新走 in-place diff。
+      <Text key={`${subagent.agentId}-wf-${index}`} dimColor wrap="truncate">{`  │ ${clipLine(activity[index] ?? '', rowWidth)}`}</Text>
     ))}
     {settled && subagent.status === 'failed' && subagent.error && (
       <Text color="error" wrap="truncate">{`  └ ${clipLine(subagent.error, rowWidth)}`}</Text>

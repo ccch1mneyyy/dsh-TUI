@@ -162,9 +162,10 @@ export function getAutoThemeBase(): 'light' | 'dark' {
 }
 
 /**
- * Any theme name: a built-in palette (`light`/`dark`/`dark-ansi`) or a user
- * theme from ~/.dsh-tui/themes/<name>.json. Always resolvable to a concrete
- * color palette via getTheme() (unknown names fall back to `dark`).
+ * Any theme name: a built-in palette (`light`/`dark`/`dark-ansi`), a user
+ * theme from ~/.dsh-tui/themes/<name>.json, or a host runtime contribution.
+ * Always resolvable to a concrete color palette via getTheme() (unknown names
+ * fall back to `dark`).
  */
 export type ThemeName = string
 
@@ -386,9 +387,10 @@ const lightTheme: Theme = {
  * Dark ANSI theme using only the 16 standard ANSI colors, for terminals
  * without true color support (verbatim from Claude Code).
  *
- * User themes (JSON files in ~/.dsh-tui/themes/) overlay one of these three
- * bases — see customTheme.ts. `getTheme` resolves them through a resolver
- * registered by ThemeProvider.
+ * User themes (JSON files in ~/.dsh-tui/themes/) and host runtime themes
+ * overlay one of these three bases — see customTheme.ts and the adapter seam.
+ * `getTheme` resolves static themes through the resolver registered by
+ * ThemeProvider, then consults the optional runtime resolver.
  */
 const darkAnsiTheme: Theme = {
   autoAccept: 'ansi:magentaBright',
@@ -510,24 +512,41 @@ export function getTheme(themeName: ThemeName): Theme {
       return darkAnsiTheme
     case AUTO_THEME_NAME:
       return autoBase === 'light' ? lightTheme : darkTheme
-    default:
-      return customThemeResolver?.(themeName) ?? darkTheme
+    default: {
+      // Static file themes keep precedence over runtime contributions. A
+      // resolver that returns undefined declines the name and lets the next
+      // layer try; both layers still fall back to the dark identity below.
+      const custom = customThemeResolver?.(themeName)
+      return custom ?? runtimeThemeResolver?.(themeName) ?? darkTheme
+    }
   }
 }
+
+/** A resolver for a fully built palette. Undefined means “not mine”. */
+export type ThemeResolver = (name: string) => Theme | undefined
 
 /**
  * Resolver that maps a user theme name to a fully built palette (see
  * customTheme.ts). Wired by ThemeProvider at startup so non-React rendering
  * (markdown inline code) resolves user themes through getActiveTheme().
  */
-let customThemeResolver: ((name: string) => Theme | undefined) | undefined
+let customThemeResolver: ThemeResolver | undefined
+
+/** Runtime resolver registrations, newest host first; cleanup removes one token. */
+interface RuntimeResolverRegistration {
+  readonly token: object
+  readonly resolver: ThemeResolver
+}
+
+const runtimeResolverRegistrations: RuntimeResolverRegistration[] = []
+let runtimeThemeResolver: ThemeResolver | undefined
 
 /**
  * Whether the active theme's RESOLVED palette renders on a light background.
  * Keyed off the resolved palette's IDENTITY for the built-ins (auto resolves
  * to the shared light/dark instance, so this covers auto-with-light-terminal
  * that theme-NAME comparisons miss) and off the ink-text luminance for
- * custom themes (light palettes pair with dark ink). The palette's
+ * custom and runtime themes (light palettes pair with dark ink). The palette's
  * `background` field is a badge fill, not the terminal background — never a
  * lightness signal. Colour-pair variants (effort ignition hues) consume this.
  */
@@ -535,7 +554,7 @@ export function isLightThemeActive(themeName: ThemeName): boolean {
   const theme = getTheme(themeName)
   if (theme === lightTheme) return true
   if (theme === darkTheme || theme === darkAnsiTheme) return false
-  // 自定义主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
+  // 自定义或运行时主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
   // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。
   const ink = theme.text
   const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(ink)
@@ -550,10 +569,51 @@ export function isLightThemeActive(themeName: ThemeName): boolean {
  * falls back to `dark`.
  * @param resolver - Resolves a user theme name to a built palette.
  */
-export function registerCustomThemeResolver(
-  resolver: (name: string) => Theme | undefined,
-): void {
+export function registerCustomThemeResolver(resolver: ThemeResolver): void {
   customThemeResolver = resolver
+}
+
+/**
+ * Register the host runtime resolver. The returned cleanup is generation-safe:
+ * disposing an older registration cannot clear a resolver installed later;
+ * nested registrations restore the previous live resolver when they leave.
+ */
+export function registerRuntimeThemeResolver(resolver: ThemeResolver): () => void {
+  if (typeof resolver !== 'function') return () => {}
+  const registration: RuntimeResolverRegistration = { token: {}, resolver }
+  runtimeResolverRegistrations.push(registration)
+  runtimeThemeResolver = resolver
+  return () => {
+    const index = runtimeResolverRegistrations.findIndex(item => item.token === registration.token)
+    if (index === -1) return
+    runtimeResolverRegistrations.splice(index, 1)
+    const current = runtimeResolverRegistrations.at(-1)
+    runtimeThemeResolver = current?.resolver
+  }
+}
+
+/** Clear all runtime resolvers, primarily for isolated host teardown/tests. */
+export function clearRuntimeThemeResolver(): void {
+  runtimeResolverRegistrations.length = 0
+  runtimeThemeResolver = undefined
+}
+
+/**
+ * Whether a name resolves through the built-ins, static custom resolver, or
+ * the optional runtime resolver. This deliberately remains separate from
+ * customTheme.isThemeAvailable(), whose contract is static-file-only.
+ */
+export function isThemeAvailable(themeName: ThemeName): boolean {
+  if (
+    themeName === AUTO_THEME_NAME ||
+    THEME_NAMES.includes(themeName as (typeof THEME_NAMES)[number])
+  ) return true
+  try {
+    return customThemeResolver?.(themeName) !== undefined
+      || runtimeThemeResolver?.(themeName) !== undefined
+  } catch {
+    return false
+  }
 }
 
 /**

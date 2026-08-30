@@ -12,10 +12,11 @@
  *      禁令）与畸形 valueDigest 的记录被丢弃；超长 kind 清洗截断后保留；
  *   E. schema 缺失 fail-closed：全部写入被抑制、文件不创建、warn 恰好一次；
  *   F. 接线端到端：storage open/deny、shortcut register/dispose、status
- *      set/overwrite/dispose 经服务真实落台账且三元组正确；
+ *      set/overwrite/dispose、runtime theme create/release/duplicate 经服务
+ *      真实落台账且三元组正确；
  *   G. 文件零哨兵值：全文无 undefined/NaN，逐行 JSON 可解析且过 schema；
  *   H. 接线断言：plugin-host apply 挂载序（host→ledger→storage→observer）、
- *      公共 shim 导出、四服务 identity 末参签名。
+ *      公共 shim 导出、五服务 identity 末参签名。
  *
  * HOME/USERPROFILE 在导入 src 前隔离。
  *
@@ -37,10 +38,11 @@ const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { TuiEffectLedgerRuntime, EFFECT_LEDGER_FILE } = await import('../src/dsh-adapter/effect-ledger.js')
 const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
+const { default: TuiThemeRuntime } = await import('../src/dsh-adapter/themes.js')
 const { loadSpecData } = await import('../src/plugin-spec/registry.js')
 const { check: schemaCheck } = await import('../src/plugin-spec/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 import type { LedgerEntry } from '../src/dsh-adapter/effect-ledger.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -246,6 +248,18 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   status.set('alpha-line', 'v2', alpha)
   disposeStatus() // v1 的 disposer 已被 v2 取代 → 不得再落 release
 
+  new TuiThemeRuntime(ctx)
+  const themes = alpha.get('tuiThemes') as InstanceType<typeof TuiThemeRuntime>
+  const disposeTheme = themes.register(
+    { name: 'alpha:theme', base: 'dark', colors: { claude: '#123456' } },
+    alpha,
+  )
+  themes.register(
+    { name: 'alpha:theme', base: 'dark', colors: { claude: '#654321' } },
+    alpha,
+  )
+  disposeTheme()
+
   const records = readRecords(EFFECT_LEDGER_FILE)
   const byKind = (kind: string, id?: string) => records.filter(r => r.resource.kind === kind && (id === undefined || r.resource.id === id))
 
@@ -268,6 +282,14 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   const replace = statusRecords.find(r => r.operation === 'replace')
   check1('status overwrite records replace with replaces.resourceId', replace?.replaces?.resourceId === 'alpha-line')
   check1('stale status disposer records nothing', !statusRecords.some(r => r.operation === 'release'))
+
+  const themeRecords = byKind('theme', 'alpha:theme')
+  check1('runtime theme register records create with the plugin identity',
+    themeRecords.some(r => r.operation === 'create' && r.result === 'applied' && r.pluginId === 'com.example.alpha'))
+  check1('runtime theme duplicate records DUPLICATE_CONTRIBUTION_ID',
+    themeRecords.some(r => r.operation === 'create' && r.result === 'failed' && r.errorCode === 'DUPLICATE_CONTRIBUTION_ID'))
+  check1('runtime theme dispose records release',
+    themeRecords.some(r => r.operation === 'release' && r.result === 'applied' && r.pluginId === 'com.example.alpha'))
 
   const alphaWired = records.filter(r => r.pluginId === 'com.example.alpha')
   check1('wired records share one activationInstance per fiber', new Set(alphaWired.map(r => r.activationInstance)).size === 1)
@@ -333,6 +355,8 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
     identityParam('src/dsh-adapter/status.ts', "text: string | number | boolean | undefined"))
   check1('tuiRenderers.register takes the optional identity param',
     identityParam('src/dsh-adapter/renderers.ts', 'renderer: TuiEntryRenderer'))
+  check1('tuiThemes.register takes the optional identity param',
+    identityParam('src/dsh-adapter/themes.ts', 'descriptor: TuiThemeDescriptor'))
 }
 
 // ── 汇总 ──────────────────────────────────────────────────────────────────

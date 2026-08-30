@@ -52,6 +52,9 @@ for (const presetFile of [
 if ([...packed].some(path => path.startsWith('src/'))) {
   throw new Error('npm package unexpectedly contains TypeScript sources')
 }
+if ([...packed].some(path => path.startsWith('skills/') || path.startsWith('.agents/skills/'))) {
+  throw new Error('npm package unexpectedly contains developer skills')
+}
 if (packed.has('lib/invariant.js')) {
   throw new Error('npm package contains the obsolete hand-built invariant entry')
 }

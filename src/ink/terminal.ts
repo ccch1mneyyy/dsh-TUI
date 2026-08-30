@@ -189,6 +189,34 @@ export function isXtermJs(): boolean {
   return xtversionName?.startsWith('xterm.js') ?? false
 }
 
+/**
+ * True when the terminal can be safely probed with DECRQM
+ * (`CSI ? <mode> $ p`).
+ *
+ * DECRQM carries a `$` intermediate byte before its final `p`. A conforming
+ * parser consumes the whole sequence and either answers with DECRPM or stays
+ * silent, so callers have historically treated an unanswered probe as
+ * "unsupported" and sent it unconditionally. macOS Terminal.app breaks that
+ * assumption: it does not implement DECRQM *and* its CSI parser gives up at
+ * the `$`, printing the trailing `p` to the screen as literal text. Every
+ * probe therefore leaks a visible `p` at the cursor.
+ *
+ * Terminal.app reports `TERM=xterm-256color`, so TERM sniffing cannot tell it
+ * apart from a real xterm — `TERM_PROGRAM=Apple_Terminal` is the only marker.
+ * It is not forwarded over SSH, which matches the scope of the bug: the leak
+ * only happens when the sequence reaches Terminal.app's own parser, and a
+ * remote session is parsed by whatever terminal is actually attached.
+ *
+ * Kept as an exclusion rather than an allowlist so unknown terminals keep the
+ * (correct, spec-conforming) probe and only the known-broken one opts out.
+ * Same failure mode as the extended-keys allowlist below: assuming terminals
+ * silently ignore unknown CSI is not safe in practice.
+ * @returns true when it is safe to send a DECRQM probe.
+ */
+export function supportsDecrqmProbe(): boolean {
+  return process.env.TERM_PROGRAM !== 'Apple_Terminal'
+}
+
 // Terminals known to correctly implement the Kitty keyboard protocol
 // (CSI >1u) and/or xterm modifyOtherKeys (CSI >4;2m) for ctrl+shift+<letter>
 // disambiguation. We previously enabled unconditionally (#23350), assuming
@@ -334,14 +362,22 @@ export type Terminal = {
  * @param diff - the frame diff patches to render.
  * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
  */
-export function writeDiffToTerminal(
+/**
+ * Serialize a frame diff into a single ANSI string (BSU/ESU-wrapped unless
+ * skipSyncMarkers is set). Empty string when the diff has no patches.
+ * Extracted from writeDiffToTerminal so shutdown paths can write the last
+ * frame synchronously (issue #522: an async frame write racing the
+ * synchronous EXIT_ALT_SCREEN lands on the MAIN screen after the alt
+ * screen is gone, leaving misplaced residue).
+ */
+export function serializeDiff(
   terminal: Terminal,
   diff: Diff,
   skipSyncMarkers = false,
-): void {
+): string {
   // No output if there are no patches
   if (diff.length === 0) {
-    return
+    return ''
   }
 
   // BSU/ESU wrapping is opt-out to keep main-screen behavior unchanged.
@@ -425,5 +461,25 @@ export function writeDiffToTerminal(
   // Add synchronized update end and flush buffer
   if (useSync) buffer += ESU
   dumpFrame(buffer)
+  return buffer
+}
+
+/**
+ * Write a frame diff to the terminal as a single buffered write. Wraps
+ * the output in BSU/ESU synchronized-update markers unless skipSyncMarkers
+ * is set. No-op when the diff contains no patches.
+ * @param terminal - the terminal to write to.
+ * @param diff - the frame diff patches to render.
+ * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
+ */
+export function writeDiffToTerminal(
+  terminal: Terminal,
+  diff: Diff,
+  skipSyncMarkers = false,
+): void {
+  const buffer = serializeDiff(terminal, diff, skipSyncMarkers)
+  if (buffer === '') {
+    return
+  }
   terminal.stdout.write(buffer)
 }

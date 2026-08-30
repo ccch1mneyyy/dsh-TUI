@@ -12,9 +12,13 @@ import { HintLine } from './design-system/HintLine.js'
 export function ThinkingToggle({
   currentValue,
   focusIndex,
+  onPick,
 }: {
   currentValue: boolean
   focusIndex: number
+  /** Mouse pick (fullscreen): reports the clicked row's index — Chat
+   *  applies it with the same code path as the keyboard Enter. */
+  onPick?: (index: number) => void
 }): React.ReactNode {
   const options = [
     {
@@ -45,6 +49,7 @@ export function ThinkingToggle({
             focusIndex={focusIndex}
             selectedValue={currentValue ? 'true' : 'false'}
             visibleOptionCount={2}
+            onPick={onPick === undefined ? undefined : (index) => onPick(index)}
           />
         </Box>
       </Box>

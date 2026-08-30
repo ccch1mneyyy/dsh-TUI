@@ -45,7 +45,7 @@ const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
 const { TuiSceneRuntime } = await import('../src/dsh-adapter/scenes.js')
 const { TuiRendererRuntime } = await import('../src/dsh-adapter/renderers.js')
-const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('./plugin-test-utils.js')
+const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -288,9 +288,9 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   check1('per-owner checkpoint present', ownerCheckpoint !== -1)
   check1('per-owner checkpoint runs BEFORE commandService.execute',
     channel.indexOf('commandService.execute', ownerCheckpoint) > ownerCheckpoint)
-  check1('rc.8 composer-images invocation is version-gated (gate + 4-param shape present)',
+  check1('composer-images invocation is version-gated (0.1.0-rc.8 threshold + 4-param shape present)',
     channel.includes('commandServiceSupportsImages(')
-    && channel.includes("installedLineOf('@deepseek-ai/dsh-commands')")
+    && channel.includes("installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')")
     && channel.includes('CommandExecuteWithImages'))
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',

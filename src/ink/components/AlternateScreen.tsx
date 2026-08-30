@@ -1,6 +1,7 @@
 import { c as _c } from "react/compiler-runtime";
 import React, { type PropsWithChildren, useContext, useInsertionEffect } from 'react';
 import instances from '../instances.js';
+import { logMouseDebug } from '../../utils/debug.js';
 import { DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN } from '../termio/dec.js';
 import { TerminalWriteContext } from '../useTerminalNotification.js';
 import Box from './Box.js';
@@ -43,13 +44,24 @@ export function AlternateScreen(t0) {
   let t3;
   if ($[0] !== mouseTracking || $[1] !== writeRaw) {
     t2 = () => {
-      const ink = instances.get(process.stdout);
+      // Same fallback as Chat's reanchor plumbing: embedders and test
+      // harnesses render with a stdout that is not process.stdout, so the
+      // strict key lookup would miss the only live instance and the
+      // alt-screen flag would never flip — silently killing click/hover
+      // dispatch (both are gated on altScreenActive). The "any instance"
+      // fallback is deliberately narrowed to the SINGLE-instance case:
+      // with several live Ink instances (multi-app embedding, tests
+      // running in parallel) guessing the first one would flip the wrong
+      // app's alt-screen state.
+      const ink = instances.get(process.stdout) ?? (instances.size === 1 ? instances.values().next().value : undefined);
+      logMouseDebug('alt-screen enter', { mouseTracking, inkFound: ink !== undefined, writeRaw: !!writeRaw, stack: new Error().stack?.split('\n').slice(2, 5).join(' | ') });
       if (!writeRaw) {
         return;
       }
       writeRaw(ENTER_ALT_SCREEN + "\x1B[2J\x1B[H" + (mouseTracking ? ENABLE_MOUSE_TRACKING : ""));
       ink?.setAltScreenActive(true, mouseTracking);
       return () => {
+        logMouseDebug('alt-screen exit', { stack: new Error().stack?.split('\n').slice(2, 5).join(' | ') });
         ink?.setAltScreenActive(false);
         ink?.clearTextSelection();
         writeRaw((mouseTracking ? DISABLE_MOUSE_TRACKING : "") + EXIT_ALT_SCREEN);

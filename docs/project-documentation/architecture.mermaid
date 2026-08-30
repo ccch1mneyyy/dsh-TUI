@@ -74,7 +74,7 @@ flowchart TB
     S3["模型路由 src/modelRoute.ts：config 优先级 > pref > default 原子整对解析（issue 67，scripts/verify-model-route.mjs 挂 CI .github/workflows/ci.yml:67）；/model 即时 fork 切换并持久化；provider 钉 cc-tui 段；resume 后状态栏跟随会话自身记录（issue 67）"]
     S4["上下文 src/utils/loaded-context.ts：注入上下文展示口径冲突（面板独立组 vs 旧文档不列出）；/doctor 存储路径检查 ~/.dsh-cc/sessions 与 JSONL 根不符"]
     S5["本地命令 src/commands.ts：39 条内置（程序化计数）+ 解析辅助；/rewind 与 /new 一次生效（pr-55）"]
-    S6["打包技能 skills/*/SKILL.md：由 src/packaged-skills.ts 注册随 npm 分发"]
+    S6["维护技能 .agents/skills/*/SKILL.md：由 DSH 项目发现，不随 npm 分发"]
   end
 
   subgraph ORG["来源归属审计（元信息参考块）"]

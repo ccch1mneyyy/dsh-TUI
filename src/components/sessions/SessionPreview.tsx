@@ -40,7 +40,9 @@ export function SessionPreview({
   home: string
   now: number
 }): React.ReactNode {
-  const body = Math.max(8, width - 2)
+  const framed = width >= 24 && height >= 4
+  const body = Math.max(8, width - (framed ? 4 : 2))
+  const bodyHeight = Math.max(0, height - (framed ? 2 : 0))
 
   // The pane is a fixed-height box, so its content is laid out as a flat list
   // of lines and cut to fit. Letting several adaptive paragraphs share a fixed
@@ -94,10 +96,21 @@ export function SessionPreview({
 
   // Keep the newest content: an overlong preview is cut at the TOP, so the
   // last thing said is always the last thing visible.
-  const visible = lines.length > height ? lines.slice(lines.length - height) : lines
+  const visible = lines.length > bodyHeight ? lines.slice(lines.length - bodyHeight) : lines
 
   return (
-    <Box flexDirection="column" width={width} height={height} flexShrink={0} paddingLeft={2}>
+    <Box
+      flexDirection="column"
+      width={width}
+      height={height}
+      flexShrink={0}
+      borderStyle={framed ? 'round' : undefined}
+      borderColor={framed ? 'permission' : undefined}
+      borderDimColor
+      paddingX={framed ? 1 : 0}
+      paddingLeft={framed ? 1 : 2}
+      overflow="hidden"
+    >
       {visible}
     </Box>
   )
