@@ -1078,9 +1078,9 @@ function writeLineToScreen(
         for (let i = 0; i < spacesToNextStop && offsetX < screenWidth; i++) {
           setCellAt(screen, offsetX, y, {
             char: ' ',
-            styleId: stylePool.none,
+            styleId: character.styleId,
             width: CellWidth.Narrow,
-            hyperlink: undefined,
+            hyperlink: character.hyperlink,
           })
           offsetX++
         }

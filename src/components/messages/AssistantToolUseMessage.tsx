@@ -107,6 +107,25 @@ const QUIET_COLLAPSED_TOOLS = new Set([
   'blender_object_info',
   'blender_validate_scene',
   'blender_validate_export',
+  'mcp__roblox_studio__list_roblox_studios',
+  'mcp__roblox_studio__get_studio_state',
+  'mcp__roblox_studio__inspect_instance',
+  'mcp__roblox_studio__search_game_tree',
+  'mcp__roblox_studio__script_read',
+  'mcp__roblox_studio__script_search',
+  'mcp__roblox_studio__script_grep',
+  'mcp__roblox_studio__get_console_output',
+  'mcp__roblox_studio__search_asset',
+  'mcp__roblox_studio__skill',
+  'mcp__roblox_studio__http_get',
+  'mcp__browser__browser_snapshot',
+  'mcp__browser__browser_find',
+  'mcp__browser__browser_console_messages',
+  'mcp__browser__browser_tabs',
+  'mcp__browser__browser_network_requests',
+  'mcp__browser__browser_network_request',
+  'mcp__context7__resolve-library-id',
+  'mcp__context7__query-docs',
 ])
 
 function deriveSmartToolHeader(tool: ToolRow, viewTitle?: string): { name: string; title?: string; filePath?: string; isTerminal?: boolean } {
@@ -312,11 +331,16 @@ function diffLines(diffs: readonly ToolFileDiff[]): BodyLine[] {
     }
     prevPath = diff.path
     if (diff.oldText !== null) {
-      for (const line of sideLines(diff.oldText)) out.push(del(`- ${line}`))
+      for (const line of sideLines(diff.oldText)) out.push(del(`- ${line.replaceAll('\t', '  ')}`))
     }
-    for (const line of sideLines(diff.newText)) out.push(add(`+ ${line}`))
+    for (const line of sideLines(diff.newText)) out.push(add(`+ ${line.replaceAll('\t', '  ')}`))
   }
   return out
+}
+
+function clampLineLength(text: string, maxChars = 240): string {
+  if (text.length <= maxChars) return text
+  return `${text.slice(0, maxChars)}…`
 }
 
 /** Join the text blocks of a view's content payload (read/generic cards). */
@@ -371,13 +395,16 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
 }
 
 /** Collapsed bodies fold past the card's line budget; verbose (Ctrl+O) is
- *  always uncapped. Mirrors wrapText's "one extra line is shown directly". */
+ *  always uncapped. Long lines are clamped to prevent massive wrap-out. */
 function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] {
-  if (verbose || lines.length <= max) return lines
-  if (lines.length - max === 1) return lines
+  const processed = verbose
+    ? lines
+    : lines.map(line => (line.text.length > 240 ? { ...line, text: clampLineLength(line.text, 240) } : line))
+  if (verbose || processed.length <= max) return processed
+  if (processed.length - max === 1) return processed
   return [
-    ...lines.slice(0, max),
-    { ...dim(`… +${lines.length - max} lines (ctrl+o to expand)`), revealOnHover: true },
+    ...processed.slice(0, max),
+    { ...dim(`… +${processed.length - max} lines (ctrl+o to expand)`), revealOnHover: true },
   ]
 }
 
