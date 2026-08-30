@@ -710,10 +710,9 @@ export function Chat({
         : -1
     }
   }, [isSticky, channel.rows])
-  // The pill shows whenever the view is off the bottom (one-click return
-  // home): with unseen rows it counts them, otherwise it is the plain
-  // "return to bottom" affordance (Enter/End/click all land it).
-  const showPill = !isSticky
+  // The pill shows whenever the view is off the bottom and there are actual unseen rows
+  // (or when user deliberately scrolled far up).
+  const showPill = !isSticky && unseenCount > 0
 
   // Idle Ctrl+C: first press arms an exit, second press exits (CC's
   // double-press semantics, simplified). Under Windows ConPTY the key
