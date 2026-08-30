@@ -789,33 +789,22 @@ async function renderToolBackground(toolBackground: 'none' | 'subtle' | 'strong'
   return harness.writes.join('')
 }
 
-function toBgAnsi(color: string): string {
+function toSgrAnsi(color: string, plane: '38' | '48'): string {
   const rgbMatch = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/)
-  if (rgbMatch) return `\x1b[48;2;${rgbMatch[1]};${rgbMatch[2]};${rgbMatch[3]}m`
-  const ansiMatch = color.match(/38;2;(\d+);(\d+);(\d+)m/)
-  if (ansiMatch) return `\x1b[48;2;${ansiMatch[1]};${ansiMatch[2]};${ansiMatch[3]}m`
+  if (rgbMatch) return `\x1b[${plane};2;${rgbMatch[1]};${rgbMatch[2]};${rgbMatch[3]}m`
+  const ansiMatch = color.match(/[34]8;2;(\d+);(\d+);(\d+)m/)
+  if (ansiMatch) return `\x1b[${plane};2;${ansiMatch[1]};${ansiMatch[2]};${ansiMatch[3]}m`
   if (color.startsWith('#')) {
     const r = parseInt(color.slice(1, 3), 16)
     const g = parseInt(color.slice(3, 5), 16)
     const b = parseInt(color.slice(5, 7), 16)
-    return `\x1b[48;2;${r};${g};${b}m`
+    return `\x1b[${plane};2;${r};${g};${b}m`
   }
   return ''
 }
 
-function toFgAnsi(color: string): string {
-  const rgbMatch = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/)
-  if (rgbMatch) return `\x1b[38;2;${rgbMatch[1]};${rgbMatch[2]};${rgbMatch[3]}m`
-  const ansiMatch = color.match(/38;2;(\d+);(\d+);(\d+)m/)
-  if (ansiMatch) return `\x1b[38;2;${ansiMatch[1]};${ansiMatch[2]};${ansiMatch[3]}m`
-  if (color.startsWith('#')) {
-    const r = parseInt(color.slice(1, 3), 16)
-    const g = parseInt(color.slice(3, 5), 16)
-    const b = parseInt(color.slice(5, 7), 16)
-    return `\x1b[38;2;${r};${g};${b}m`
-  }
-  return ''
-}
+const toBgAnsi = (color: string) => toSgrAnsi(color, '48')
+const toFgAnsi = (color: string) => toSgrAnsi(color, '38')
 
 const noneAnsi = await renderToolBackground('none')
 const subtleAnsi = await renderToolBackground('subtle')
