@@ -302,6 +302,7 @@ export const FIXED_RESERVED_COMBOS: readonly string[] = [
   'ctrl+u', // kill line
   'ctrl+k', // kill to end
   'ctrl+w', // kill word
+  'ctrl+j', // newline fallback (legacy LF / extended key reporting)
   'ctrl+left', // word jump
   'ctrl+right', // word jump
   'ctrl+return', // newline (multi-line input)

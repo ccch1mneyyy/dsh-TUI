@@ -190,7 +190,9 @@ check(
 // remain a usable multiline fallback instead of submitting the first line.
 channel.working = false
 const multilineCases = [
-  ['Ctrl+J', '\n', 'ctrl'],
+  ['Ctrl+J (legacy LF)', '\n', 'ctrl'],
+  ['Ctrl+J (CSI-u)', '\x1b[106;5u', 'csi-u'],
+  ['Ctrl+J (modifyOtherKeys)', '\x1b[27;5;106~', 'modify-other-keys'],
   ['Option+Enter', '\x1b\r', 'option'],
   ['Shift+Enter', '\x1b[13;2u', 'shift'],
 ]
@@ -208,6 +210,32 @@ for (const [index, [label, newlineKey, prefix]] of multilineCases.entries()) {
     `${label} inserts a newline before Enter submits the multiline draft`,
     await settled(() => submitted.length === index + 3
       && submitted[index + 2] === `${prefix} first\n${prefix} second`),
+    JSON.stringify(submitted),
+  )
+}
+
+// Enhanced protocols distinguish extra modifiers that legacy LF cannot carry.
+// Only exact Ctrl+J is the fallback; modified variants stay available to other
+// bindings instead of silently changing the draft.
+const modifiedCtrlJCases = [
+  ['Ctrl+Shift+J', '\x1b[106;6u', 'ctrl-shift'],
+  ['Ctrl+Alt+J', '\x1b[106;7u', 'ctrl-alt'],
+  ['Ctrl+Super+J', '\x1b[106;13u', 'ctrl-super'],
+]
+for (const [index, [label, newlineKey, prefix]] of modifiedCtrlJCases.entries()) {
+  stdin.write(`${prefix} first`)
+  await sleep(100)
+  stdin.write(newlineKey)
+  await sleep(100)
+  stdin.write(`${prefix} second`)
+  await sleep(100)
+  stdin.write('\r')
+
+  const submission = multilineCases.length + index + 2
+  check(
+    `${label} does not insert a Ctrl+J fallback newline`,
+    await settled(() => submitted.length === submission + 1
+      && submitted[submission] === `${prefix} first${prefix} second`),
     JSON.stringify(submitted),
   )
 }

@@ -1203,10 +1203,11 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+J is the only portable multiline fallback when a terminal cannot
-    // report modifiers on Enter. The parser names its bare LF `enter`, while
-    // the physical Enter key arrives as CR (`return`).
-    if (input === '\n' && event?.keypress.name === 'enter') {
+    // Ctrl+J is the portable multiline fallback when a terminal cannot
+    // report modifiers on Enter. Legacy terminals deliver bare LF (`enter`),
+    // while kitty/modifyOtherKeys encode it as an exact Ctrl+J key.
+    const isCtrlJ = input === 'j' && key.ctrl && !key.shift && !key.meta && !key.super
+    if ((input === '\n' && event?.keypress.name === 'enter') || isCtrlJ) {
       insertAtCaret('\n')
       return
     }
