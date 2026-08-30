@@ -448,8 +448,7 @@ export function AssistantToolUseMessage({
   // source line per terminal row (truncate) keeps the panes row-aligned,
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
-  const useSplitDiff = !isError && view?.card === 'diff' &&
-    (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
+  const useSplitDiff = !isError && view?.card === 'diff' && diffLayout === 'split'
   let body: BodyLine[] = []
   if (isError) {
     if (tool.errorText) body = [{ text: tool.errorText, tone: 'error' }]

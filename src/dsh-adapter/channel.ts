@@ -2882,7 +2882,7 @@ export function createChannel(
     configuredPreset: options.configuredPreset,
     configuredActivityFrames: options.configuredActivityFrames,
     configuredLang: options.configuredLang,
-    diffLayout: options.diffLayout ?? 'auto',
+    diffLayout: options.diffLayout ?? 'unified',
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
