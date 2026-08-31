@@ -756,6 +756,88 @@ export function shiftSelectionForFollow(
 }
 
 /**
+ * Translate selection screen coordinates when a ScrollBox moves without
+ * changing height. This is layout movement, not content scrolling: existing
+ * off-screen row accumulators remain untouched and both viewport edges move
+ * by the same amount. During a drag only the text anchor moves; after release
+ * both endpoints move when both are owned by the old viewport.
+ * @param s - the selection state to mutate.
+ * @param rowDelta - signed screen-row movement from the old viewport to the new one.
+ * @param oldTop - viewport top before the layout move.
+ * @param oldBottom - viewport bottom before the layout move.
+ * @param newTop - viewport top after the layout move.
+ * @param newBottom - viewport bottom after the layout move.
+ * @returns true when the selection was cleared because it left the viewport.
+ */
+export function shiftSelectionForViewportTranslation(
+  s: SelectionState,
+  rowDelta: number,
+  oldTop: number,
+  oldBottom: number,
+  newTop: number,
+  newBottom: number,
+): boolean {
+  if (!s.anchor) return false
+  if (newTop > newBottom) {
+    clearSelection(s)
+    return true
+  }
+  if (oldTop > oldBottom) return false
+  if (
+    rowDelta === 0 ||
+    newBottom - oldBottom !== rowDelta ||
+    newTop - oldTop !== rowDelta
+  ) return false
+  const dRow = rowDelta
+
+  if (!s.focus || s.isDragging) {
+    // During a live drag focus is screen-local (the mouse), so only the text
+    // anchor follows the moved viewport. A bare press has no focus yet and
+    // follows the same anchor-only rule.
+    shiftAnchor(s, dRow, newTop, newBottom)
+    return false
+  }
+  // A released selection that crosses into static chrome belongs partly to
+  // that chrome. Keep it fixed rather than teleporting the static endpoint.
+  if (
+    s.anchor.row < oldTop ||
+    s.anchor.row > oldBottom ||
+    s.focus.row < oldTop ||
+    s.focus.row > oldBottom
+  ) {
+    return false
+  }
+
+  const rawAnchor = (s.virtualAnchorRow ?? s.anchor.row) + dRow
+  const rawFocus = (s.virtualFocusRow ?? s.focus.row) + dRow
+  if (
+    (rawAnchor < newTop && rawFocus < newTop) ||
+    (rawAnchor > newBottom && rawFocus > newBottom)
+  ) {
+    clearSelection(s)
+    return true
+  }
+  s.anchor = { col: s.anchor.col, row: clamp(rawAnchor, newTop, newBottom) }
+  s.focus = { col: s.focus.col, row: clamp(rawFocus, newTop, newBottom) }
+  s.virtualAnchorRow =
+    rawAnchor < newTop || rawAnchor > newBottom ? rawAnchor : undefined
+  s.virtualFocusRow =
+    rawFocus < newTop || rawFocus > newBottom ? rawFocus : undefined
+  if (s.anchorSpan) {
+    const shift = (p: Point): Point => ({
+      col: p.col,
+      row: clamp(p.row + dRow, newTop, newBottom),
+    })
+    s.anchorSpan = {
+      lo: shift(s.anchorSpan.lo),
+      hi: shift(s.anchorSpan.hi),
+      kind: s.anchorSpan.kind,
+    }
+  }
+  return false
+}
+
+/**
  * Translate the selection for a SCROLLBOX VIEWPORT RESIZE: chrome mounting
  * or unmounting around a ScrollBox (the new-messages pill, the sticky
  * prompt header, the working spinner, prompt multi-line growth) moves the

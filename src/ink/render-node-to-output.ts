@@ -156,14 +156,18 @@ let followScrolls: FollowScroll[] = []
  * header, the working spinner, prompt multi-line growth) moves the edges
  * while scrollTop stands still, so no FollowScroll fires. `delta` is
  * therefore always 0 — the type extends FollowScroll only so
- * pickFollowForSelection can attribute the resize by the PREVIOUS bounds
+ * pickFollowForSelection can attribute the change by the PREVIOUS bounds
  * (viewportTop/viewportBottom carry the old edges, exactly what
- * anchor-containment needs). ink.tsx consumes these alongside
- * followScrolls and calls shiftSelectionForViewportResize; without it the
- * selection anchor strands below the shrunken viewport and wheel tracking
- * silently dies (chrome text leaking into copies).
+ * anchor-containment needs). Equal movement of both edges is a viewport
+ * translation, not an edge resize: its rowDelta must move the selection
+ * without capturing or popping scroll debt. ink.tsx consumes these alongside
+ * followScrolls and dispatches the two geometries separately.
  */
 export type ViewportResize = FollowScroll & {
+  /** Geometry kind: chrome edge change or a same-height viewport move. */
+  kind: 'edge-resize' | 'translate'
+  /** Screen-row movement for a `translate`; 0 for an edge resize. */
+  rowDelta: number
   /** Viewport bounds BEFORE this frame's layout (= the frontFrame's). */
   prevTop: number
   prevBottom: number
@@ -172,6 +176,32 @@ export type ViewportResize = FollowScroll & {
   bottom: number
 }
 let viewportResizes: ViewportResize[] = []
+
+/**
+ * Classify a viewport edge change without consulting scroll state. A valid
+ * same-height range whose two edges move by the same non-zero amount is a
+ * screen-space translation; every other change is an edge resize. Invalid
+ * ranges deliberately stay on the resize path so its collapse guards can
+ * clear or preserve selection safely.
+ * @param prevTop - previous viewport top row.
+ * @param prevBottom - previous viewport bottom row.
+ * @param top - current viewport top row.
+ * @param bottom - current viewport bottom row.
+ * @returns the geometry kind for the viewport event.
+ */
+export function classifyViewportChange(
+  prevTop: number,
+  prevBottom: number,
+  top: number,
+  bottom: number,
+): 'edge-resize' | 'translate' {
+  const valid = (lo: number, hi: number): boolean =>
+    Number.isFinite(lo) && Number.isFinite(hi) && lo <= hi
+  if (!valid(prevTop, prevBottom) || !valid(top, bottom)) return 'edge-resize'
+  const topDelta = top - prevTop
+  const bottomDelta = bottom - prevBottom
+  return topDelta !== 0 && topDelta === bottomDelta ? 'translate' : 'edge-resize'
+}
 
 /**
  * Read and clear this frame's viewport-resize events. At most one per
@@ -881,12 +911,21 @@ function renderNodeToOutput(
           (node.scrollViewportTop !== prevViewportTop ||
             viewportBottom !== prevViewportTop + prevInnerHeight - 1)
         ) {
+          const prevViewportBottom = prevViewportTop + prevInnerHeight - 1
+          const kind = classifyViewportChange(
+            prevViewportTop,
+            prevViewportBottom,
+            node.scrollViewportTop,
+            viewportBottom,
+          )
           viewportResizes.push({
             delta: 0,
             viewportTop: prevViewportTop,
-            viewportBottom: prevViewportTop + prevInnerHeight - 1,
+            viewportBottom: prevViewportBottom,
+            kind,
+            rowDelta: kind === 'translate' ? node.scrollViewportTop - prevViewportTop : 0,
             prevTop: prevViewportTop,
-            prevBottom: prevViewportTop + prevInnerHeight - 1,
+            prevBottom: prevViewportBottom,
             top: node.scrollViewportTop,
             bottom: viewportBottom,
           })

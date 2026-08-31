@@ -36,7 +36,7 @@ import { applyPositionedHighlight, type MatchPosition, scanPositions } from './r
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './searchHighlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -683,19 +683,31 @@ export default class Ink {
         this.frontFrame.screen.height === terminalRows
       ) {
         const hadSelection = hasSelection(this.selection);
-        shiftSelectionForViewportResize(
-          this.selection,
-          this.frontFrame.screen,
-          resize.prevTop,
-          resize.prevBottom,
-          resize.top,
-          resize.bottom,
-        );
-        // Both-ends-covered clear must notify React-land so useHasSelection
-        // re-renders and the footer copy/escape hint disappears — direct
-        // listener fire (notifySelectionChange would re-enter onRender).
-        if (hadSelection && !hasSelection(this.selection)) {
-          for (const cb of this.selectionListeners) cb();
+        if (resize.kind === 'translate') {
+          const cleared = shiftSelectionForViewportTranslation(
+            this.selection,
+            resize.rowDelta,
+            resize.prevTop,
+            resize.prevBottom,
+            resize.top,
+            resize.bottom,
+          );
+          if (cleared) for (const cb of this.selectionListeners) cb();
+        } else {
+          shiftSelectionForViewportResize(
+            this.selection,
+            this.frontFrame.screen,
+            resize.prevTop,
+            resize.prevBottom,
+            resize.top,
+            resize.bottom,
+          );
+          // Both-ends-covered clear must notify React-land so useHasSelection
+          // re-renders and the footer copy/escape hint disappears — direct
+          // listener fire (notifySelectionChange would re-enter onRender).
+          if (hadSelection && !hasSelection(this.selection)) {
+            for (const cb of this.selectionListeners) cb();
+          }
         }
       }
     }

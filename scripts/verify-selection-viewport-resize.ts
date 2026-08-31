@@ -35,6 +35,9 @@ import {
   type Screen,
 } from '../src/ink/screen.js'
 import {
+  classifyViewportChange,
+} from '../src/ink/render-node-to-output.js'
+import {
   captureScrolledRows,
   createSelectionState,
   getSelectedText,
@@ -42,6 +45,7 @@ import {
   pickFollowForSelection,
   shiftAnchor,
   shiftSelectionForViewportResize,
+  shiftSelectionForViewportTranslation,
   updateSelection,
   type ScrollEvent,
   type SelectionState,
@@ -354,6 +358,78 @@ function applyFollowDrain(
   check('C9 no-op keeps the focus', sel.focus, { col: 6, row: 6 })
   check('C9 no-op keeps virtual debt', sel.virtualAnchorRow, 7)
   check('C9 no-op keeps the selection active', hasSelection(sel), true)
+}
+
+// ── Case 10: equal edge movement is a viewport translation, not a resize ──
+{
+  check('C10 classify positive equal translation', classifyViewportChange(0, 9, 1, 10), 'translate')
+  check('C10 classify negative equal translation', classifyViewportChange(1, 10, 0, 9), 'translate')
+  check('C10 classify bottom-only shrink as edge resize', classifyViewportChange(0, 9, 0, 8), 'edge-resize')
+  check('C10 classify mixed edge movement as edge resize', classifyViewportChange(0, 9, 1, 9), 'edge-resize')
+  check('C10 classify collapsed new range as edge resize', classifyViewportChange(0, 9, 10, 9), 'edge-resize')
+}
+
+// ── Case 11: released selection follows a positive viewport translation ──
+{
+  const sel = makeSelection({ col: 2, row: 3 }, { col: 8, row: 6 }, false)
+  sel.scrolledOffAbove = [rowText('A-1')]
+  sel.scrolledOffAboveSW = [false]
+  sel.scrolledOffBelow = [rowText('B10')]
+  sel.scrolledOffBelowSW = [false]
+  const beforeAbove = [...sel.scrolledOffAbove]
+  const beforeBelow = [...sel.scrolledOffBelow]
+  const cleared = shiftSelectionForViewportTranslation(sel, 2, 0, 9, 2, 11)
+  check('C11 released anchor follows translation', sel.anchor, { col: 2, row: 5 })
+  check('C11 released focus follows translation', sel.focus, { col: 8, row: 8 })
+  check('C11 translation preserves above accumulator', sel.scrolledOffAbove, beforeAbove)
+  check('C11 translation preserves below accumulator', sel.scrolledOffBelow, beforeBelow)
+  check('C11 translation does not clear active selection', cleared, false)
+}
+
+// ── Case 12: dragging translation moves only the text anchor ──
+{
+  const sel = makeSelection({ col: 4, row: 8 }, { col: 1, row: 5 }, true)
+  const cleared = shiftSelectionForViewportTranslation(sel, -1, 2, 11, 1, 10)
+  check('C12 dragging anchor follows negative translation', sel.anchor, { col: 4, row: 7 })
+  check('C12 dragging focus stays at mouse row', sel.focus, { col: 1, row: 5 })
+  check('C12 dragging translation does not clear', cleared, false)
+}
+
+// ── Case 13: bare press translation keeps focus null and clamps anchor ──
+{
+  const sel = makeSelection({ col: 3, row: 2 }, null, true)
+  const cleared = shiftSelectionForViewportTranslation(sel, 2, 0, 9, 2, 11)
+  check('C13 bare anchor follows translation', sel.anchor, { col: 3, row: 4 })
+  check('C13 bare focus remains null', sel.focus, null)
+  check('C13 bare translation does not clear', cleared, false)
+}
+
+// ── Case 14: a released selection touching static chrome is not teleported ──
+{
+  const sel = makeSelection({ col: 2, row: 4 }, { col: 7, row: 12 }, false)
+  const cleared = shiftSelectionForViewportTranslation(sel, 1, 0, 9, 1, 10)
+  check('C14 straddling selection keeps anchor', sel.anchor, { col: 2, row: 4 })
+  check('C14 straddling selection keeps static focus', sel.focus, { col: 7, row: 12 })
+  check('C14 straddling selection does not clear', cleared, false)
+}
+
+// ── Case 15: translation is applied before same-frame wheel drain ──
+{
+  const screen = buildScreen(
+    Object.fromEntries(
+      Array.from({ length: 12 }, (_, row) => [row, rowText(`O${String(row).padStart(2, '0')}`)]),
+    ),
+  )
+  const sel = makeSelection({ col: W - 1, row: 8 }, { col: 0, row: 5 }, true)
+  const translated = shiftSelectionForViewportTranslation(sel, 1, 0, 9, 1, 10)
+  check('C15 translation succeeds before wheel drain', translated, false)
+  check('C15 translated anchor is inside the new viewport', sel.anchor, { col: W - 1, row: 9 })
+  applyFollowDrain(sel, screen, -2, 1, 10)
+  check('C15 wheel drain continues from the translated anchor', sel.virtualAnchorRow, 11)
+  check('C15 wheel drain captures only the selected bottom rows', sel.scrolledOffBelow, [
+    rowText('O09'),
+  ])
+  check('C15 focus remains at the mouse after both changes', sel.focus, { col: 0, row: 5 })
 }
 
 if (failures > 0) {
