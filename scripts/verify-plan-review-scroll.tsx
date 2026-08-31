@@ -45,7 +45,7 @@ const PARAGRAPHS = 40
 
 const planDetail = Array.from({ length: PARAGRAPHS }, (_, index) => {
   if (index === 0) return `## Step 1\n\n${HEAD} first paragraph of the plan.`
-  if (index === 24) return `## Step 25\n\n${LATE} later paragraph of the plan.`
+  if (index === 8) return `## Step 9\n\n${LATE} later paragraph of the plan.`
   if (index === PARAGRAPHS - 1) return `## Step ${PARAGRAPHS}\n\n${TAIL} last paragraph of the plan.`
   return `## Step ${index + 1}\n\nBody of step ${index + 1}: more plan detail here.`
 }).join('\n\n')
