@@ -39,7 +39,12 @@ const transmission = transmitKittyRgba(101, source)
 const chunks = [...transmission.matchAll(/\x1b_G([^;]+);([^\x1b]*)\x1b\\/gu)]
 assert.ok(chunks.length > 1, 'large RGBA payload must be chunked')
 assert.ok(chunks.every(match => match[2]!.length <= 4096))
-assert.match(chunks[0]![1]!, /a=T,t=d,f=32,s=40,v=40,i=101/u)
+assert.match(chunks[0]![1]!, /a=t,t=d,f=32,s=40,v=40,i=101/u)
+assert.doesNotMatch(
+  transmission,
+  /\x1b_Ga=T,/u,
+  'upload must not create an implicit natural-size placement',
+)
 assert.ok(chunks.slice(1).every(match => !match[1]!.includes('f=32')))
 
 const node = createNode('ink-image')
@@ -53,14 +58,34 @@ const placement = {
   source,
 }
 const first = manager.reconcile([placement])
-assert.match(first, /a=T,t=d,f=32/u)
-assert.match(first, /a=p,i=101,p=1,c=6,r=3,C=1/u)
+assert.match(first, /a=t,t=d,f=32/u)
+assert.match(first, /a=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1/u)
+assert.match(
+  first,
+  /\x1b\[4;3H\x1b_Ga=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1,q=2;/u,
+  'the sole display action must follow the target-cell cursor placement',
+)
+assert.equal(
+  [...first.matchAll(/\x1b_Ga=p,/gu)].length,
+  1,
+  'one image request must create exactly one placement',
+)
+assert.ok(
+  first.indexOf('\x1b_Ga=t,') < first.indexOf('\x1b[4;3H\x1b_Ga=p,'),
+  'all image data must be uploaded before the sole placement is created',
+)
 assert.equal(manager.reconcile([placement]), '', 'stable frame must emit no graphics bytes')
 const moved = manager.reconcile([{ ...placement, x: 4 }])
-assert.doesNotMatch(moved, /a=T/u)
-assert.match(moved, /a=p,i=101/u)
+assert.doesNotMatch(moved, /\x1b_Ga=[tT],/u)
+assert.match(moved, /a=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1/u)
 manager.invalidateAll()
-assert.match(manager.reconcile([placement]), /a=T,t=d,f=32/u)
+const invalidated = manager.reconcile([placement])
+assert.match(invalidated, /a=t,t=d,f=32/u)
+assert.equal([...invalidated.matchAll(/\x1b_Ga=p,/gu)].length, 1)
+assert.match(
+  invalidated,
+  /a=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1/u,
+)
 assert.match(manager.reconcile([]), /a=d,d=I,i=101/u)
 
 const query = kittyGraphics(31)
@@ -188,7 +213,7 @@ stdin.write('\x1b_Gi=31;OK\x1b\\\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c')
 assert.ok(
   await settled(
     () =>
-      stdout.output.includes('a=T,t=d,f=32') &&
+      stdout.output.includes('a=t,t=d,f=32') &&
       stdout.output.includes('a=p,i='),
   ),
   'a successful query must upload and place RGBA pixels',
@@ -213,7 +238,7 @@ assert.ok(
 const beforeRestore = stdout.output.length
 instance.rerender(tree)
 assert.ok(
-  await settled(() => stdout.output.slice(beforeRestore).includes('a=T,t=d,f=32')),
+  await settled(() => stdout.output.slice(beforeRestore).includes('a=t,t=d,f=32')),
   'restoring a source must upload it again',
 )
 stdout.isTTY = false

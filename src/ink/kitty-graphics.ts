@@ -10,6 +10,8 @@ const ST = '\u001b\\'
 const BASE64_CHUNK_CELLS = 4096
 const ID_MIN = 0x40000000
 const ID_MAX_EXCLUSIVE = 0x7fffffff
+// Keep raster content behind terminal text and explicit panel backgrounds.
+const IMAGE_Z_INDEX = -0x80000000
 
 type PlacementState = {
   readonly imageId: number
@@ -162,7 +164,7 @@ export function transmitKittyRgba(
       const more = index + 1 < chunks.length ? 1 : 0
       const control =
         index === 0
-          ? `a=T,t=d,f=32,s=${source.width},v=${source.height},i=${imageId},q=2,m=${more}`
+          ? `a=t,t=d,f=32,s=${source.width},v=${source.height},i=${imageId},q=2,m=${more}`
           : `m=${more},q=2`
       return kittyCommand(control, chunk)
     })
@@ -180,7 +182,7 @@ export function kittyPlacement(
   return (
     `\u001b[${y + 1};${x + 1}H` +
     kittyCommand(
-      `a=p,i=${imageId},p=${placementId},c=${columns},r=${rows},C=1,q=2`,
+      `a=p,i=${imageId},p=${placementId},c=${columns},r=${rows},z=${IMAGE_Z_INDEX},C=1,q=2`,
     )
   )
 }
