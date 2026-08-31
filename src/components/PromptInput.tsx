@@ -1381,7 +1381,11 @@ export function PromptInput({
       return
     }
     if (key.upArrow) {
-      if (fileOverlayOpen) {
+      // A history walk owns the arrows until it returns to the draft: a
+      // recalled entry can itself open the @ menu or the slash menu (e.g.
+      // `/model`), and letting the overlay navigate here strands the stashed
+      // draft — Down would cycle menu rows instead of walking back.
+      if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
           index <= 0 ? fileMatches.length - 1 : index - 1,
         )
@@ -1417,7 +1421,7 @@ export function PromptInput({
         setInput(value, prevLineStart + Math.min(cursorColumn(value, cursor), prevLine.length))
         return
       }
-      if (overlayOpen) {
+      if (overlayOpen && historyIndex.current < 0) {
         setSelectedCommand(index =>
           index <= 0 ? suggestions.length - 1 : index - 1,
         )
@@ -1436,7 +1440,8 @@ export function PromptInput({
       return
     }
     if (key.downArrow) {
-      if (fileOverlayOpen) {
+      // Same history-walk ownership as ↑ above.
+      if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
           index >= fileMatches.length - 1 ? 0 : index + 1,
         )
@@ -1495,7 +1500,7 @@ export function PromptInput({
         setInput(value, nextLineStart + Math.min(cursorColumn(value, cursor), nextLine.length))
         return
       }
-      if (overlayOpen) {
+      if (overlayOpen && historyIndex.current < 0) {
         setSelectedCommand(index =>
           index >= suggestions.length - 1 ? 0 : index + 1,
         )
