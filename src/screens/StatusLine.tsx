@@ -168,7 +168,10 @@ export function StatusLine({
       node: <Text color="inactiveShimmer">{channel.reasoningEffort}</Text>,
     })
   }
-  if (statusBar.mode && channel.modeIndex > 0) {
+  const modeNeedsExplicitMarker = channel.mode.plan === true
+    || channel.mode.sandbox === 'danger-full-access'
+    || channel.mode.approval === 'never'
+  if (statusBar.mode && (channel.modeIndex > 0 || modeNeedsExplicitMarker)) {
     contextParts.push({
       key: 'mode',
       node: (

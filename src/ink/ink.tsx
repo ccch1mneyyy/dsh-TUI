@@ -31,12 +31,12 @@ import { optimize } from './optimizer.js';
 import Output from './output.js';
 import type { ParsedKey } from './parse-keypress.js';
 import reconciler, { dispatcher, getLastCommitMs, getLastYogaMs, isDebugRepaintsEnabled, recordYogaMs, resetProfileCounters } from './reconciler.js';
-import renderNodeToOutput, { consumeFollowScroll, didLayoutShift } from './render-node-to-output.js';
+import renderNodeToOutput, { consumeFollowScroll, consumeViewportResizes, didLayoutShift } from './render-node-to-output.js';
 import { applyPositionedHighlight, type MatchPosition, scanPositions } from './render-to-screen.js';
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './searchHighlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -652,6 +652,66 @@ export default class Ink {
     });
     const rendererMs = performance.now() - renderStart;
 
+    // Viewport-shrink translation (companion to the follow block below):
+    // chrome mounting around a ScrollBox (the new-messages pill, the sticky
+    // prompt header, the working spinner, prompt growth) moves the viewport
+    // edges with NO scroll delta, so no followScroll event fires and the
+    // block below never sees it. The selection endpoints are screen-buffer
+    // rows; unhandled, the anchor strands BELOW the shrunken viewport —
+    // pickFollowForSelection then rejects every follow event (anchor
+    // outside the viewport) and wheel tracking silently dies, leaving the
+    // highlight pinned to the chrome row: copy-on-select grabs the chrome
+    // text itself (the "↓ 回到底部" pill leaking into bottom-to-top copies)
+    // and the rows that scrolled under the dead highlight never reach the
+    // scrolledOff accumulators. Capture the covered band from the PREVIOUS
+    // frame's screen (frontFrame — the swap is below) and re-clamp the
+    // endpoints BEFORE the follow pick, so the clamped anchor is in-viewport
+    // and this frame's wheel drain translates normally.
+    const viewportResizes = consumeViewportResizes();
+    if (viewportResizes.length > 0 && this.selection.anchor) {
+      const resize = pickFollowForSelection(
+        viewportResizes,
+        this.selection.anchor.row,
+      );
+      // Terminal resize rebuilds the screen at new dimensions; the
+      // selection's screen-buffer coords are stale against the previous
+      // frame's buffer and band capture would read garbage. Chrome-mount
+      // resizes (the target case) never change the terminal size.
+      if (
+        resize &&
+        this.frontFrame.screen.width === terminalWidth &&
+        this.frontFrame.screen.height === terminalRows
+      ) {
+        const hadSelection = hasSelection(this.selection);
+        if (resize.kind === 'translate') {
+          const cleared = shiftSelectionForViewportTranslation(
+            this.selection,
+            resize.rowDelta,
+            resize.prevTop,
+            resize.prevBottom,
+            resize.top,
+            resize.bottom,
+          );
+          if (cleared) for (const cb of this.selectionListeners) cb();
+        } else {
+          shiftSelectionForViewportResize(
+            this.selection,
+            this.frontFrame.screen,
+            resize.prevTop,
+            resize.prevBottom,
+            resize.top,
+            resize.bottom,
+          );
+          // Both-ends-covered clear must notify React-land so useHasSelection
+          // re-renders and the footer copy/escape hint disappears — direct
+          // listener fire (notifySelectionChange would re-enter onRender).
+          if (hadSelection && !hasSelection(this.selection)) {
+            for (const cb of this.selectionListeners) cb();
+          }
+        }
+      }
+    }
+
     // Sticky/auto-follow or wheel-drain scrolled one or more ScrollBoxes
     // this frame. Translate the selection by the same delta so the highlight
     // stays anchored to the TEXT (native terminal behavior — the
@@ -702,7 +762,7 @@ export default class Ink {
       // each shift branch so the pairing can't be broken by a new guard.
       if (this.selection.isDragging) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
+          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
           // Record the viewport bounds for finishSelection's deferred
           // commit-time check: the in-flight drag never clears (a wheel
           // must not kill the gesture), so a drag that wheeled fully
@@ -727,7 +787,7 @@ export default class Ink {
       // old screen row.
       !this.selection.focus || this.selection.focus.row >= viewportTop && this.selection.focus.row <= viewportBottom) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
+          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
         }
         const cleared = shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom);
         // Auto-clear (both ends overshot an edge — off the top via

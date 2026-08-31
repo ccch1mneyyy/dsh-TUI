@@ -64,13 +64,13 @@ const EFFORTS = [
   { id: 'max', name: 'Max' },
 ]
 
-function makeChannel() {
+function makeChannel(options = {}) {
   const setEffortCalls = []
   const cycled = []
   const notifications = []
   const rows = []
-  let modeIndex = 0
-  const MODES = [
+  let modeIndex = options.modeIndex ?? 0
+  let MODES = options.modes ?? [
     { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
     { id: 'plan', plan: true, sandbox: 'read-only', approval: 'ask' },
     { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' },
@@ -123,6 +123,12 @@ function makeChannel() {
     async cycleMode() {
       cycled.push(modeIndex)
       modeIndex = (modeIndex + 1) % MODES.length
+      channel.version += 1
+      for (const listener of listeners) listener()
+    },
+    setModesForTest(nextModes, nextIndex = 0) {
+      MODES = nextModes
+      modeIndex = nextIndex
       channel.version += 1
       for (const listener of listeners) listener()
     },
@@ -251,6 +257,10 @@ stdin.write('\x1b[Z')
 check('second backtab → full', await settled(() => channel.mode.id === 'full'), channel.mode.id)
 stdin.write('\x1b[Z')
 check('third backtab → default (no segment)', await settled(() => channel.modeIndex === 0), String(channel.modeIndex))
+channel.setModesForTest([
+  { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' },
+])
+check('index-0 full mode stays visible', await settled(() => screen().includes('full access')), screen().slice(-300))
 
 // 6. zh locale: the slider chrome hot-swaps to the localized strings
 //    (picker i18n branch: picker-title-effort / hint-adjust-done).
