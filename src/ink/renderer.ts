@@ -160,7 +160,12 @@ export default function createRenderer(
     if (drainNode) markDirty(drainNode)
 
     return {
-      scrollHint: options.altScreen ? getScrollHint() : null,
+      // A contaminated previous frame is unsafe for both blit and hardware
+      // scroll: DECSTBM would shift cells carrying the selection overlay.
+      scrollHint:
+        options.altScreen && !options.prevFrameContaminated
+          ? getScrollHint()
+          : null,
       scrollDrainPending: drainNode !== null,
       screen: renderedScreen,
       viewport: {

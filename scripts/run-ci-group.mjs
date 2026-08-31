@@ -76,6 +76,10 @@ const GROUPS = {
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
     ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx'], { NODE_ENV: 'production' }],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
+// Windows Terminal 全屏拖选+滚轮回归：长 User 气泡的 selection overlay
+// 会污染上一帧；污染帧不得进入 DECSTBM/shiftRows 硬件滚动，否则带背景
+// 的旧像素被物理搬移后偶发重复/错位。A/B 同轨迹断言终态画面一致。
+    ["repro-user-drag-wheel-render", ['node', '--import', 'tsx/esm', 'scripts/repro-user-drag-wheel-render.tsx']],
     ["verify-shrink", ['node', 'scripts/verify-shrink.mjs']],
 // 高于视口的收缩必须记 anchoredPad：终端 scrollback 不随内容收缩，
 // 高度差公式会少算 1 行 → 上移在视口顶被钳制 → 整帧相对写入链低一行
