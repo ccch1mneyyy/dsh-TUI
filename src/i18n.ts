@@ -62,6 +62,22 @@ const dict = {
   'preset-switch-failed': { zh: 'Preset 切换失败 · {{err}}', en: 'Preset switch failed · {{err}}' },
   'preset-switched-pref-failed': { zh: 'Preset 已切换：{{id}}，但默认偏好写入失败（重启后不保留）', en: 'Preset switched: {{id}}, but writing the default preference failed (won\'t persist after restart)' },
   'preset-switched-saved': { zh: 'Preset 已切换：{{id}}（已保存为默认）', en: 'Preset switched: {{id}} (saved as default)' },
+  // Built-in preset display text (issue: the /preset picker showed the raw
+  // preset.yml copy, which is Chinese, even under `en`). zh mirrors the
+  // stock preset.yml `name`/`description` verbatim (zh display keeps the
+  // roster text — see listPresets in channel.ts); en is the localized
+  // surface. Keys resolve per roster id via tOr(`preset-name-${id}`), so
+  // unknown (user-authored) ids fall through untouched.
+  'preset-name-standard': { zh: '标准模式', en: 'Standard' },
+  'preset-desc-standard': { zh: '功能完整的编码 Agent，支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。', en: 'Full-featured coding agent: file editing, shell, file & web search, skills, plans, goals, subagents and workflows.' },
+  'preset-name-minimal': { zh: '极简模式', en: 'Minimal' },
+  'preset-desc-minimal': { zh: '仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent。', en: 'A two-tool coding agent exposing only persistent bash and str_replace_editor.' },
+  'preset-name-code': { zh: 'PTC 模式', en: 'PTC' },
+  'preset-desc-code': { zh: '具备标准模式的全部能力，并通过 Code Mode SDK 呈现工具，让模型用一个 TypeScript 程序组合多步操作。', en: 'Everything standard mode offers, with tools exposed through the Code Mode SDK so the model composes multi-step operations in one TypeScript program.' },
+  'preset-name-cordis': { zh: '创造模式', en: 'Creation' },
+  'preset-desc-cordis': { zh: '用于创建自定义 Agent preset：具备标准模式的全部能力，并提供运行时检查、插件实验和 preset 创作指导。', en: 'For authoring custom agent presets: everything standard mode offers plus runtime inspection, plugin experiments and preset-authoring guidance.' },
+  'preset-name-liangshen': { zh: '梁神模式', en: 'Liangshen mode' },
+  'preset-desc-liangshen': { zh: '主 Agent 与子 Agent 首轮均保持 Minimal 双工具，首次工具调用后开放完整目录，压缩后重新锚定。', en: 'Root and delegated agents keep the minimal two-tool pair on the first turn; the full catalog opens after the first tool call and re-anchors after compaction.' },
   'mcp-none-configured': { zh: '未配置 MCP 服务器。', en: 'No MCP servers configured.' },
   'mcp-insert-hint': { zh: '在 profile 补丁层（~/.dsh/profiles/dsh-tui/cordis.patch.yml）insert 一行即可，例：', en: 'Insert one line in the profile patch layer (~/.dsh/profiles/dsh-tui/cordis.patch.yml), e.g.:' },
   'mcp-readme-hint': { zh: '详见仓库 README 的 MCP 章节。', en: 'See the MCP section of the repo README.' },

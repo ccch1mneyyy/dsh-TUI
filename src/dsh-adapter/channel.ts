@@ -74,7 +74,7 @@ import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
-import { getLang, LANGS, t } from '../i18n.js'
+import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
@@ -3283,13 +3283,25 @@ export function createChannel(
 
   // `/preset <id>` completion: same warm-cache pattern as models. The
   // current/default tags resolve at children() time (sync state reads), so
-  // no cache invalidation is needed on switch.
+  // no cache invalidation is needed on switch. The localized display text,
+  // however, resolves at listPresets() call time — a mid-session /lang
+  // switch invalidates lazily here (lang-keyed warm) so completion hints
+  // never serve the previous language.
   const presetOptionCache = {
+    lang: undefined as Lang | undefined,
     list: undefined as readonly PresetOption[] | undefined,
     load: undefined as Promise<void> | undefined,
   }
+  /** Warm the `/preset <id>` completion roster once per UI language; a
+   *  language change since the last warm drops the stale localized copy. */
   const warmPresetOptions = (): void => {
+    const lang = getLang()
+    if (presetOptionCache.lang !== undefined && presetOptionCache.lang !== lang) {
+      presetOptionCache.list = undefined
+      presetOptionCache.load = undefined
+    }
     if (presetOptionCache.load !== undefined) return
+    presetOptionCache.lang = lang
     presetOptionCache.load = state.listPresets().then((list) => {
       presetOptionCache.list = list
       state.emit()
@@ -5575,15 +5587,30 @@ export function createChannel(
       if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
       return permissionPresetSnapshotFromService(service, agent.session.events)
     },
+    /** Localized roster projection for the /preset picker — resolves
+     *  built-in display text through the dictionary under `en`; the
+     *  Channel.listPresets contract comment carries the full doc. */
     async listPresets() {
       const presets = rosterOf(ctx)
       if (presets === undefined) return []
+      // The roster copies `name`/`description` verbatim from each preset.yml,
+      // and the stock yml files are written in Chinese — the /preset picker
+      // showed them under `en` too. Built-in ids have dictionary surfaces
+      // (preset-name-* / preset-desc-*); under `en` they win via tOr, while
+      // unknown (user-authored) ids fall through to the roster text. Under
+      // `zh` the roster text is kept as-is so a user-edited or upstream-
+      // reworded preset.yml is never shadowed by a stale dictionary copy.
+      const localized = getLang() === 'en'
       try {
         const list = await presets.list()
         return list.map(preset => ({
           id: preset.id,
-          ...(preset.name === undefined ? {} : { name: preset.name }),
-          ...(preset.description === undefined ? {} : { description: preset.description }),
+          ...(preset.name === undefined
+            ? {}
+            : { name: localized ? tOr(`preset-name-${preset.id}`, preset.name) : preset.name }),
+          ...(preset.description === undefined
+            ? {}
+            : { description: localized ? tOr(`preset-desc-${preset.id}`, preset.description) : preset.description }),
           ...(preset.broken === undefined ? {} : { broken: preset.broken }),
           isDefault: preset.id === presets.defaultId,
         }))

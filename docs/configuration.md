@@ -86,6 +86,9 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 
 - `/preset` 打开选择器。
 - `/preset <id>` 直接选择；`/preset status` 查看当前状态。
+- 选择器显示的名称与描述取自各 preset 的 `preset.yml`（中文）。界面语言为
+  `en`（`/lang en`）时，内置 preset（`standard` / `minimal` / `code` / `cordis` /
+  `liangshen`）显示本地化的英文名称与描述；自定义 preset 原样显示。
 - 空白会话可以原地切换。已经产生对话的会话遵循官方 blank-only 规则，选择只会
   保存为新默认值，在 `/new` 或下一次启动时生效。
 - 默认值保存在 `~/.dsh-tui/agent-preset.json`。

@@ -90,6 +90,10 @@ Usage rules:
 
 - `/preset` opens the picker.
 - `/preset <id>` selects directly; `/preset status` reports the current state.
+- Picker names and descriptions come verbatim from each preset's `preset.yml`
+  (written in Chinese). Under the `en` UI language (`/lang en`), the built-in
+  presets (`standard` / `minimal` / `code` / `cordis` / `liangshen`) show
+  localized English names and descriptions; custom presets are shown as-is.
 - A blank session can switch in place. Once a conversation has started, the
   official blank-only rule stores the choice as the new default for `/new` or
   the next launch.

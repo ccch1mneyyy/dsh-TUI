@@ -316,6 +316,8 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
   switched with `/preset`; sessions that already have a conversation cannot switch, while
   blank sessions take effect immediately. The default preset persists in
   `~/.dsh-tui/agent-preset.json`; `/model` selections persist in `~/.dsh-tui/model.json`.
+  Under the `en` UI language the `/preset` picker shows localized English names
+  and descriptions for the built-in presets.
   See [Configuration](docs/configuration.en.md#agent-preset).
 - **Themes**: the `/theme` picker (`auto` follows the system/terminal background,
   built-in `light` / `dark` / `dark-ansi`) accepts static themes from
