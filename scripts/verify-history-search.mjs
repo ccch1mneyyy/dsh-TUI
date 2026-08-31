@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -66,6 +75,48 @@ try {
   } finally {
     clearTimeout(releaseLiveLock)
     rmSync(liveLock, { recursive: true, force: true })
+  }
+
+  // Ordering under contention: without a local append chain each call races the
+  // file lock on its own, and the later input can land first.
+  const orderingLock = join(fakeHome, '.dsh-tui', 'history.jsonl.lock')
+  mkdirSync(orderingLock)
+  const releaseOrderingLock = setTimeout(() => {
+    rmSync(orderingLock, { recursive: true, force: true })
+  }, 20)
+  try {
+    await Promise.all([
+      appendHistory('order one'),
+      appendHistory('order two'),
+      appendHistory('order three'),
+    ])
+    assert.deepEqual(
+      loadHistory().slice(0, 3).map(entry => entry.text),
+      ['order three', 'order two', 'order one'],
+      'concurrent appends persist in invocation order',
+    )
+  } finally {
+    clearTimeout(releaseOrderingLock)
+    rmSync(orderingLock, { recursive: true, force: true })
+  }
+
+  // Rename failure: appendHistory swallows the error, so the temp file holding
+  // the user's raw input must still be removed.
+  const historyFile = join(fakeHome, '.dsh-tui', 'history.jsonl')
+  const historyBackup = readFileSync(historyFile, 'utf8')
+  const dataDir = join(fakeHome, '.dsh-tui')
+  rmSync(historyFile, { force: true })
+  mkdirSync(join(historyFile, 'blocked'), { recursive: true })
+  try {
+    await appendHistory('rename failure')
+    assert.equal(
+      readdirSync(dataDir).some(name => name.endsWith('.tmp')),
+      false,
+      'a failed rename must not leave the input behind in a temp file',
+    )
+  } finally {
+    rmSync(historyFile, { recursive: true, force: true })
+    writeFileSync(historyFile, historyBackup, { encoding: 'utf8', mode: 0o600 })
   }
 
   const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { HistorySearchDialog }] =

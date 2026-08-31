@@ -92,14 +92,7 @@ async function loadRawAsync(): Promise<HistoryEntry[]> {
   }
 }
 
-/**
- * Append an input to the persisted history, deduping the immediately
- * previous entry and capping the file at 200 entries.
- * @param text - Input to persist; blank inputs are ignored.
- */
-export async function appendHistory(text: string): Promise<void> {
-  const trimmed = text.trim()
-  if (!trimmed) return
+async function persistEntry(trimmed: string): Promise<void> {
   try {
     await withHistoryLock(async () => {
       const entries = await loadRawAsync()
@@ -117,16 +110,46 @@ export async function appendHistory(text: string): Promise<void> {
       // temp file + rename is atomic on POSIX and Windows alike; the temp
       // keeps mode 0600 — entries carry the full user input text.
       const tmpFile = `${HISTORY_FILE}.${process.pid}.tmp`
-      await writeFile(
-        tmpFile,
-        sliced.map(e => JSON.stringify(e)).join('\n') + '\n',
-        { encoding: 'utf8', mode: 0o600 },
-      )
-      await rename(tmpFile, HISTORY_FILE)
+      try {
+        await writeFile(
+          tmpFile,
+          sliced.map(e => JSON.stringify(e)).join('\n') + '\n',
+          { encoding: 'utf8', mode: 0o600 },
+        )
+        await rename(tmpFile, HISTORY_FILE)
+      } finally {
+        // A failed rename would otherwise leave the user's raw input behind in
+        // the temp file, which appendHistory's best-effort catch swallows.
+        await rm(tmpFile, { force: true })
+      }
     })
   } catch {
     // Best-effort persistence; history still works for the session.
   }
+}
+
+/**
+ * Serializes local appends. The file lock only orders writers across
+ * processes; without this chain two rapid submits can reach it in either
+ * order and loadHistory() would show them reversed.
+ */
+let appendChain: Promise<void> = Promise.resolve()
+
+/**
+ * Append an input to the persisted history, deduping the immediately
+ * previous entry and capping the file at 200 entries.
+ * @param text - Input to persist; blank inputs are ignored.
+ * @returns Resolves once this entry is persisted; callers on the input path
+ * intentionally discard it because persistence is best-effort.
+ */
+export function appendHistory(text: string): Promise<void> {
+  const trimmed = text.trim()
+  if (!trimmed) return Promise.resolve()
+  const queued = appendChain.then(() => persistEntry(trimmed))
+  // persistEntry never rejects, but keep the chain alive regardless so one
+  // failure cannot stall every later append.
+  appendChain = queued.catch(() => {})
+  return queued
 }
 
 /**
