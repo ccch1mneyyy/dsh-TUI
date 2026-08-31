@@ -12,6 +12,10 @@ import { formatDuration } from '../../cc/format.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
+import { getRevealVersion, revealLinesOf, snapReveal, subscribeReveal } from '../smoothReveal.js'
+
+const NOOP_REVEAL_SUBSCRIBE = (_listener: () => void): (() => void) => () => {}
+const getNoRevealVersion = (): number => 0
 
 type Props = {
   tool: ToolRow
@@ -55,6 +59,20 @@ type Props = {
    * `+N lines` hint; verbose/expanded cards render the full title.
    */
   foldTerminalCommand?: boolean
+  /**
+   * Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): the card
+   * BODY (diff hunks / write content — model-authored prose, not tool
+   * output) paints through an even ~30fps line reveal when it first appears,
+   * instead of one jarring block. Only the pending CALL view animates; the
+   * settled result view paints complete (real output is progress, not
+   * prose), and so do replayed cards.
+   */
+  smoothReveal?: boolean
+  /** Live-arrived row (channel `fresh`): gates reveal participation —
+   *  replayed cards must paint complete. */
+  fresh?: boolean
+  /** Reveal version supplied by MessageList to avoid one store subscriber per card. */
+  revealVersion?: number
 }
 
 /** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
@@ -403,7 +421,17 @@ export function AssistantToolUseMessage({
   toolBackground = 'none',
   onOpenFile,
   foldTerminalCommand = false,
+  smoothReveal = false,
+  fresh = false,
+  revealVersion,
 }: Props): React.ReactNode {
+  // MessageList owns the single production subscription and passes a version
+  // prop only to active reveal rows. Standalone consumers keep the fallback
+  // subscription so the component contract remains self-contained.
+  React.useSyncExternalStore(
+    revealVersion === undefined ? subscribeReveal : NOOP_REVEAL_SUBSCRIBE,
+    revealVersion === undefined ? getRevealVersion : getNoRevealVersion,
+  )
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText
@@ -471,6 +499,21 @@ export function AssistantToolUseMessage({
   const lines = capLines(body, cap, verbose)
   const rendered: BodyLine[] =
     footnote === undefined ? lines : [...lines, { text: footnote, tone: 'hint' }]
+  // Smooth reveal (line-unit, pending CALL body only): model-authored prose
+  // (diff hunks, write content) flows in at ~30fps; the settled RESULT view,
+  // error bodies, verbose/expanded cards, and replayed (non-fresh) cards all
+  // paint complete. `snapReveal` on every non-revealable render retires a
+  // cursor the moment its card stops qualifying (result arrived, user
+  // expanded) — idempotent, safe during render.
+  const revealKey = `tool:${tool.callId}`
+  const revealable = smoothReveal && !isError && isRunning && view !== undefined &&
+    tool.resultView === undefined && !verbose && !isExpanded && fresh
+  if (!revealable) snapReveal(revealKey)
+  const revealedLineCount = revealable
+    ? revealLinesOf(revealKey, rendered.length, { enabled: true, active: true })
+    : rendered.length
+  const shownLines: BodyLine[] =
+    revealedLineCount >= rendered.length ? rendered : rendered.slice(0, revealedLineCount)
   // Nested split-diff context panes must also yield to interaction highlights.
   // `none` leaves them transparent so the selected/expanded root shows through.
   const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
@@ -535,10 +578,11 @@ export function AssistantToolUseMessage({
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
               toolBackground={ordinaryToolBackground}
+              reveal={revealable ? { key: `${revealKey}:split` } : undefined}
             />
           </Box>
         ) : (
-          rendered.map((line, index) => (
+          shownLines.map((line, index) => (
             <Box key={index} flexDirection="row">
               <Box width={3} flexShrink={0}>
                 <Text

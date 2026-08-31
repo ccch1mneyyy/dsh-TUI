@@ -532,6 +532,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     foldTerminalCommand: config.foldTerminalCommand,
     promptSessionLabel: config.promptSessionLabel,
     expandEditor: config.expandEditor,
+    smoothStreaming: config.smoothStreaming,
     statusBar: config.statusBar,
     handle,
   })
@@ -599,6 +600,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // resolves `?? config.expandEditor ?? true` so cordis.yml stays
         // decisive while the user layer is unset.
         expandEditor: Schema.boolean(),
+        // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
+        smoothStreaming: Schema.boolean(),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -650,6 +653,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       foldTerminalCommand?: boolean
       promptSessionLabel?: boolean
       expandEditor?: boolean
+      smoothStreaming?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -691,6 +695,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
+      channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
@@ -983,6 +988,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.expandEditor !== false)
+          },
+        },
+        {
+          path: ['smoothStreaming'],
+          label: 'Smooth streaming',
+          descriptions: { zh: '流式平滑输出' },
+          hint: 'Reveal live replies, expanded thinking, and tool-call bodies through an even ~30fps flow instead of per-burst jumps; one-shot non-streaming replies paint as a flow too. Replay/history always paints complete. On by default.',
+          hintDescriptions: { zh: '把实时回复、展开的思考与工具卡正文按 ~30fps 匀速揭示，不再随供应商突发一跳一跳；一次性到达的非流式回复也会平滑打出。回放/历史内容始终完整直出。默认开启。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: the effective default is on.
+            return String(typeof value === 'boolean' ? value : config.smoothStreaming !== false)
           },
         },
         {

@@ -39,17 +39,29 @@ type DividerProps = {
   title?: string
 }
 
+// Upper bound on distinct measurements applied per terminal-width
+// generation. Converging layouts apply one or two; a non-converging
+// context (content-sized Box, or a sibling negotiating space the same
+// way) would keep changing the measured width once per commit forever,
+// so freeze well before the reconciler's 50-nested-update limit.
+const MAX_APPLIED_MEASUREMENTS = 8
+
 /**
  * A horizontal divider line, optionally with a title in the middle
  * (in the Claude Code visual language).
  *
- * The rule fills the width Yoga actually grants it: the stretched Box is
- * measured after layout (SearchBox pattern — a resize re-layouts without
- * any prop change, so measure on every commit; the setState is a no-op
- * when the width is unchanged) and the terminal column count only seeds
- * the first frame. A full-terminal-width rule nested in a narrower
+ * The rule fills the width Yoga actually grants it: the Box is measured
+ * after layout (SearchBox pattern — a resize re-layouts without any prop
+ * change, so measure on every commit) and the terminal column count only
+ * seeds the first frame. A full-terminal-width rule nested in a narrower
  * container (e.g., the transcript beside the 2-column timeline rail)
  * would otherwise wrap onto a second row.
+ *
+ * Because the rendered rule width feeds back into the width Yoga grants
+ * the Box, the measurement negotiation is bounded per terminal-width
+ * generation (MAX_APPLIED_MEASUREMENTS below): a non-converging layout
+ * degrades to a frozen, truncated rule instead of tripping React's max
+ * update depth (error #185, a hard process crash).
  *
  * @example
  * // ─────────── Title ───────────
@@ -65,11 +77,42 @@ export function Divider({
   const { columns } = useTerminalSize()
   const [measuredWidth, setMeasuredWidth] = useState<number | null>(null)
   const boxRef = useRef<DOMElement | null>(null)
+  // Measurement feedback guard: the rule width rendered from
+  // `measuredWidth` feeds back into the width Yoga grants the Box, so
+  // the measured value can drift or ping-pong without ever converging —
+  // one setState per commit then trips React's max update depth (error
+  // #185) and kills the process. Apply at most MAX_APPLIED_MEASUREMENTS
+  // distinct widths per terminal-width generation and freeze once a
+  // value repeats (A→B→A). truncate-end keeps an over-wide frozen rule
+  // on one row, so freezing degrades gracefully; a resize (columns
+  // change) reopens the negotiation.
+  const negotiation = useRef({ columns, applied: [] as number[], frozen: false })
   useLayoutEffect(() => {
     const node = boxRef.current
     if (!node) return
+    const state = negotiation.current
+    if (state.columns !== columns) {
+      state.columns = columns
+      state.applied = []
+      state.frozen = false
+      // The current Yoga layout was rendered from the previous terminal
+      // width. Clear it and let the next render seed from the new columns;
+      // measuring this stale pass would keep a grown terminal permanently
+      // pinned to its old narrow width.
+      setMeasuredWidth(null)
+      return
+    }
+    if (state.frozen) return
     const w = measureElement(node).width
-    if (w > 0) setMeasuredWidth(prev => (prev === w ? prev : w))
+    if (w <= 0) return
+    const applied = state.applied
+    if (w === applied[applied.length - 1]) return
+    if (applied.includes(w) || applied.length >= MAX_APPLIED_MEASUREMENTS) {
+      state.frozen = true
+      return
+    }
+    applied.push(w)
+    setMeasuredWidth(w)
   })
   const available = measuredWidth ?? columns
   const lineWidth = Math.max(0, Math.min(available, width ?? columns) - padding)
