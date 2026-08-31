@@ -3,6 +3,8 @@ import type { DOMElement } from './dom.js'
 /** Hard bounds for one decoded image admitted to the terminal renderer. */
 export const TERMINAL_IMAGE_MAX_EDGE = 1024
 export const TERMINAL_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+/** Maximum decoded RGBA bytes represented by placements in one frame. */
+export const TERMINAL_IMAGE_MAX_FRAME_BYTES = 16 * 1024 * 1024
 export const TERMINAL_IMAGE_MAX_CELLS = 512
 export const TERMINAL_IMAGE_MAX_PLACEMENTS = 64
 

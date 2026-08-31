@@ -33,6 +33,7 @@ import { stringWidth } from './stringWidth.js'
 import type { DOMElement } from './dom.js'
 import {
   TERMINAL_IMAGE_MAX_CELLS,
+  TERMINAL_IMAGE_MAX_FRAME_BYTES,
   TERMINAL_IMAGE_MAX_PLACEMENTS,
   type TerminalImagePlacement,
   type TerminalImageSource,
@@ -484,6 +485,7 @@ export default class Output {
   private readonly imagePlacements: TerminalImagePlacement[] = []
   private readonly imageNodes = new Set<DOMElement>()
   private readonly imageClips: Clip[] = []
+  private imageDecodedBytes = 0
   private previousImages: readonly TerminalImagePlacement[]
 
   private charCache = new CharCache()
@@ -573,6 +575,7 @@ export default class Output {
     this.imagePlacements.length = 0
     this.imageNodes.clear()
     this.imageClips.length = 0
+    this.imageDecodedBytes = 0
     resetScreen(screen, width, height)
     // Bounds are enforced at insertion time (CharCache.set); nothing to
     // do here. The cache intentionally survives frames — most lines don't
@@ -625,8 +628,9 @@ export default class Output {
   }
 
   /**
-   * Record a fully visible image request for this frame. Partial placements
-   * are rejected so terminal graphics can never escape an overflow clip.
+   * Record a fully visible, frame-budgeted image request. Rejected placements
+   * keep their cell fallback, so terminal graphics never escape a clip or
+   * create an unbounded decoded-data upload burst.
    */
   image(
     node: DOMElement,
@@ -667,6 +671,13 @@ export default class Output {
     ) {
       return false
     }
+    const decodedBytes = source.data.byteLength
+    if (
+      this.imageDecodedBytes + decodedBytes >
+      TERMINAL_IMAGE_MAX_FRAME_BYTES
+    ) {
+      return false
+    }
     this.imagePlacements.push({
       node,
       x: left,
@@ -676,22 +687,39 @@ export default class Output {
       source,
     })
     this.imageNodes.add(node)
+    this.imageDecodedBytes += decodedBytes
     return true
   }
 
-  /** Reuse images inside a clean subtree whose cells came from prevScreen. */
-  reuseImages(node: DOMElement): void {
+  /**
+   * Reuse images inside a clean subtree whose cells came from prevScreen.
+   * Returns false when any former placement no longer fits this frame, so
+   * the painter can descend and restore that image's text fallback instead
+   * of blitting its old blank backing cells.
+   */
+  reuseImages(node: DOMElement): boolean {
+    let reusedAll = true
     for (const placement of this.previousImages) {
       if (!isNodeInSubtree(placement.node, node)) continue
-      this.image(
-        placement.node,
-        placement.x,
-        placement.y,
-        placement.columns,
-        placement.rows,
-        placement.source,
-      )
+      if (
+        !this.image(
+          placement.node,
+          placement.x,
+          placement.y,
+          placement.columns,
+          placement.rows,
+          placement.source,
+        )
+      ) {
+        reusedAll = false
+      }
     }
+    return reusedAll
+  }
+
+  /** Whether this node owned a terminal placement in the previous frame. */
+  hadPreviousImage(node: DOMElement): boolean {
+    return this.previousImages.some(placement => placement.node === node)
   }
 
   /** Whether a baseline placement overlaps a screen region. */
@@ -701,6 +729,7 @@ export default class Output {
     width: number,
     height: number,
   ): boolean {
+    if (!this.terminalImagesEnabled) return false
     const right = x + width
     const bottom = y + height
     return this.previousImages.some(

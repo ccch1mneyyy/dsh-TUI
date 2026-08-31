@@ -457,7 +457,15 @@ export default class Ink {
   enterAlternateScreen(): void {
     this.pause();
     this.suspendStdin();
+    // Kitty placements are independent of the terminal cell grid: clearing
+    // the screen for an external editor does not remove them. Delete every
+    // renderer-owned image before handing the buffer over, otherwise a
+    // negative-z preview can remain visible through the editor's default-
+    // background cells. deleteAll() also forgets the ids so the restore pass
+    // uploads fresh data after resetFramesForAltScreen().
+    const deleteImages = this.kittyGraphicsManager.deleteAll();
     this.options.stdout.write(
+    deleteImages +
     // Disable extended key reporting first — editors that don't speak
     // CSI-u (e.g. nano) show "Unknown sequence" for every Ctrl-<key> if
     // kitty/modifyOtherKeys stays active. exitAlternateScreen re-enables.

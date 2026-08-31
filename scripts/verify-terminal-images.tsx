@@ -5,8 +5,13 @@ import { PassThrough, Writable } from 'node:stream'
 import chalk from 'chalk'
 import React from 'react'
 import { OverlayAbove } from '../src/components/OverlayAbove.js'
+import {
+  PromptEditorLayer,
+  setPromptEditorNode,
+} from '../src/components/PromptEditor.js'
 import { AlternateScreen, Box, Image, render, Text } from '../src/ui.js'
 import { createNode } from '../src/ink/dom.js'
+import instances from '../src/ink/instances.js'
 import {
   KittyGraphicsManager,
   transmitKittyRgba,
@@ -16,10 +21,20 @@ import {
   INITIAL_STATE,
   parseMultipleKeypresses,
 } from '../src/ink/parse-keypress.js'
-import { CharPool, createScreen, HyperlinkPool, StylePool } from '../src/ink/screen.js'
+import {
+  CharPool,
+  cellAt,
+  createScreen,
+  HyperlinkPool,
+  isEmptyCellAt,
+  type Screen,
+  StylePool,
+} from '../src/ink/screen.js'
 import { kittyGraphics } from '../src/ink/terminal-querier.js'
 import {
   isTerminalImageSource,
+  TERMINAL_IMAGE_MAX_FRAME_BYTES,
+  type TerminalImagePlacement,
   type TerminalImageSource,
 } from '../src/ink/terminal-image.js'
 import { settled } from './lib/term-test.mjs'
@@ -140,6 +155,65 @@ assert.equal(
 )
 node.parentNode = undefined
 
+const maximalSource: TerminalImageSource = {
+  data: new Uint8Array(1024 * 1024 * 4),
+  width: 1024,
+  height: 1024,
+}
+assert.equal(
+  maximalSource.data.byteLength * 4,
+  TERMINAL_IMAGE_MAX_FRAME_BYTES,
+  'the frame budget must admit four maximum-sized sources',
+)
+const budgetOutput = new Output({
+  width: 8,
+  height: 2,
+  stylePool,
+  screen: createScreen(8, 2, stylePool, new CharPool(), new HyperlinkPool()),
+  terminalImages: true,
+})
+assert.deepEqual(
+  Array.from({ length: 5 }, (_, index) =>
+    budgetOutput.image(
+      createNode('ink-image'),
+      index,
+      0,
+      1,
+      1,
+      maximalSource,
+    ),
+  ),
+  [true, true, true, true, false],
+  'the fifth maximum-sized placement must exceed the decoded frame budget',
+)
+
+const fallbackScrollOutput = new Output({
+  width: 12,
+  height: 6,
+  stylePool,
+  screen: createScreen(12, 6, stylePool, new CharPool(), new HyperlinkPool()),
+  terminalImages: false,
+  previousImages: [placement],
+})
+assert.equal(
+  fallbackScrollOutput.hasPreviousImageInRegion(0, 0, 12, 6),
+  false,
+  'inline and unsupported fallbacks must not disable the terminal scroll fast path',
+)
+const graphicsScrollOutput = new Output({
+  width: 12,
+  height: 6,
+  stylePool,
+  screen: createScreen(12, 6, stylePool, new CharPool(), new HyperlinkPool()),
+  terminalImages: true,
+  previousImages: [placement],
+})
+assert.equal(
+  graphicsScrollOutput.hasPreviousImageInRegion(0, 0, 12, 6),
+  true,
+  'active terminal placements must still fence the scroll fast path',
+)
+
 class FakeStdout extends Writable {
   columns = 40
   rows = 8
@@ -191,9 +265,17 @@ delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
 
 const stdin = new FakeStdin()
 const stdout = new FakeStdout()
-const imageTree = (covered: boolean): React.ReactElement => (
+const imageTree = (
+  covered: boolean,
+  coloredParent = false,
+): React.ReactElement => (
   <AlternateScreen>
-    <Box width={4} height={4} flexDirection="column">
+    <Box
+      width={4}
+      height={4}
+      flexDirection="column"
+      {...(coloredParent ? { backgroundColor: '#123456' as const } : {})}
+    >
       <Image source={source} width={4} height={2} alt="cover art">
         <Text>{'▓▓▓▓\n▓▓▓▓'}</Text>
       </Image>
@@ -205,6 +287,39 @@ const imageTree = (covered: boolean): React.ReactElement => (
             </Box>
           </OverlayAbove>
         ) : null}
+      </Box>
+    </Box>
+  </AlternateScreen>
+)
+const budgetTree = (withLeadingImage: boolean): React.ReactElement => (
+  <AlternateScreen>
+    <Box width={6} height={2} flexDirection="row">
+      {withLeadingImage ? (
+        <Box
+          key="leading"
+          position="absolute"
+          top={0}
+          left={5}
+          width={1}
+          height={1}
+        >
+          <Image source={maximalSource} width={1} height={1} alt="leading">
+            <Text>X</Text>
+          </Image>
+        </Box>
+      ) : null}
+      <Box key="stable" width={4} height={1} flexDirection="row">
+        {(['A', 'B', 'C', 'D'] as const).map(label => (
+          <Image
+            key={label}
+            source={maximalSource}
+            width={1}
+            height={1}
+            alt={label}
+          >
+            <Text>{label}</Text>
+          </Image>
+        ))}
       </Box>
     </Box>
   </AlternateScreen>
@@ -235,8 +350,36 @@ assert.ok(
   ),
   'a successful query must upload and place RGBA pixels',
 )
+const ink = instances.get(stdout)
+assert.ok(ink, 'the rendered tree must retain its Ink instance')
+const inkState = ink as unknown as {
+  readonly frontFrame: {
+    readonly images?: readonly TerminalImagePlacement[]
+    readonly screen: Screen
+  }
+  readonly kittyGraphicsManager: KittyGraphicsManager
+}
+
+const beforeColoredParent = stdout.output.length
+instance.rerender(imageTree(false, true))
+assert.ok(
+  await settled(() => stdout.output.length > beforeColoredParent),
+  'adding a colored parent must repaint the image row',
+)
+const coloredScreen = inkState.frontFrame.screen
+assert.equal(
+  isEmptyCellAt(coloredScreen, 0, 0),
+  true,
+  'image-owned cells must clear an inherited non-default background',
+)
+assert.equal(
+  isEmptyCellAt(coloredScreen, 0, 2),
+  false,
+  'clearing the image backing must not erase the surrounding parent surface',
+)
+
 const beforeOcclusion = stdout.output.length
-instance.rerender(imageTree(true))
+instance.rerender(imageTree(true, true))
 assert.ok(
   await settled(() => stdout.output.slice(beforeOcclusion).includes('menu')),
   'the image-covering overlay must finish painting before its styles are checked',
@@ -252,6 +395,93 @@ assert.doesNotMatch(
   /\x1b_Ga=[dpt],/u,
   'covering an image must not delete, retransmit, or replace its stable placement',
 )
+const beforeUncover = stdout.output.length
+instance.rerender(imageTree(false, true))
+assert.ok(
+  await settled(() => stdout.output.length > beforeUncover),
+  'closing the image-covering overlay must repaint its cells',
+)
+assert.doesNotMatch(
+  stdout.output.slice(beforeUncover),
+  /\x1b_Ga=[dpt],/u,
+  'closing an overlay must reveal the stable placement without protocol churn',
+)
+
+setPromptEditorNode(<Text>editor cover</Text>)
+const beforeEditorCover = stdout.output.length
+instance.rerender(
+  <AlternateScreen>
+    <Box width={4} height={4} flexDirection="column">
+      <Image source={source} width={4} height={2} alt="cover art" />
+    </Box>
+    <PromptEditorLayer />
+  </AlternateScreen>,
+)
+assert.ok(
+  await settled(() => stdout.output.slice(beforeEditorCover).includes('editor cover')),
+  'the fullscreen prompt editor must paint above terminal images',
+)
+assert.match(
+  stdout.output.slice(beforeEditorCover),
+  /\x1b\[48;2;\d+;\d+;\d+m/u,
+  'the fullscreen prompt editor must use a non-default background surface',
+)
+assert.doesNotMatch(
+  stdout.output.slice(beforeEditorCover),
+  /\x1b_Ga=[dpt],/u,
+  'covering the screen must not delete or retransmit a stable image',
+)
+const editorScreen = inkState.frontFrame.screen
+for (let y = 0; y < 2; y++) {
+  for (let x = 0; x < 4; x++) {
+    assert.notEqual(
+      cellAt(editorScreen, x, y)?.styleId,
+      editorScreen.emptyStyleId,
+      `the fullscreen editor must cover image cell ${x},${y}`,
+    )
+  }
+}
+setPromptEditorNode(null)
+
+// Reordering the 16 MiB budget must repaint a former image as fallback,
+// not blit the default-background cells that sat behind its old placement.
+// Stub protocol reconciliation here: the renderer behavior is under test,
+// and base64-encoding four shared 4 MiB sources would add no coverage.
+const graphicsManager = inkState.kittyGraphicsManager
+const reconcileGraphics = graphicsManager.reconcile
+graphicsManager.reconcile = () => ''
+try {
+  instance.rerender(budgetTree(false))
+  assert.ok(
+    await settled(
+      () =>
+        inkState.frontFrame.images?.length === 4 &&
+        inkState.frontFrame.images.every(
+          image => image.source.data === maximalSource.data,
+        ),
+    ),
+    'the first budget frame must place all four stable images',
+  )
+  const firstBudgetFrame = inkState.frontFrame
+  instance.rerender(budgetTree(true))
+  assert.ok(
+    await settled(() => inkState.frontFrame !== firstBudgetFrame),
+    'inserting the leading image must produce a second budget frame',
+  )
+  assert.equal(
+    inkState.frontFrame.images?.length,
+    4,
+    'the second frame must remain within the decoded image budget',
+  )
+  assert.equal(
+    cellAt(inkState.frontFrame.screen, 3, 0)?.char,
+    'D',
+    'a clean image displaced from the budget must repaint its fallback',
+  )
+} finally {
+  graphicsManager.reconcile = reconcileGraphics
+}
+
 const beforeFallbackRestore = stdout.output.length
 const fallbackTree = (
   <AlternateScreen>
@@ -274,6 +504,26 @@ instance.rerender(tree)
 assert.ok(
   await settled(() => stdout.output.slice(beforeRestore).includes('a=t,t=d,f=32')),
   'restoring a source must upload it again',
+)
+const beforeHandoff = stdout.output.length
+ink.enterAlternateScreen()
+const handoffOutput = stdout.output.slice(beforeHandoff)
+const handoffDeleteAt = handoffOutput.indexOf('a=d,d=I,i=')
+const handoffClearAt = handoffOutput.indexOf('\x1b[2J')
+assert.ok(
+  handoffDeleteAt >= 0 && handoffDeleteAt < handoffClearAt,
+  'external-editor handoff must delete Kitty images before clearing its screen',
+)
+const beforeHandoffRestore = stdout.output.length
+ink.exitAlternateScreen()
+assert.ok(
+  await settled(
+    () => {
+      const restored = stdout.output.slice(beforeHandoffRestore)
+      return restored.includes('a=t,t=d,f=32') && restored.includes('a=p,i=')
+    },
+  ),
+  'returning from an external editor must upload and place visible images again',
 )
 stdout.isTTY = false
 const beforeUnmount = stdout.output.length
