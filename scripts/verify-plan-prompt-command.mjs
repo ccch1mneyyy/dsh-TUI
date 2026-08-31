@@ -389,6 +389,27 @@ function makeEnv(agentPreset, services = {}) {
 }
 
 {
+  // 复审修复：/plan 先开的 plan mode 不被 /planPrompt off 误关。所有权由事件
+  // 序推断（switch ON 时 plan 是否已被开启），无 controller 的 fallback 路径
+  // 与 controller 路径走同一守卫，resume 后仍成立。
+  const a = makeEnv('liangshen')
+  a.events.push({ type: 'plan/mode', seq: 0, time: 0, data: { active: true } })
+  a.channel.setPlanPrompt(true)
+  a.channel.setPlanPrompt(false)
+  check('plan-mode owned by /plan survives planPrompt off',
+    !a.appended.some(e => e.type === 'plan/mode' && e.data.active === false)
+      && a.channel.planModeEnabled() === true,
+    JSON.stringify(a.appended))
+  // 对照：自己开的（ON 时 plan 未 active）→ off 时关掉
+  const b = makeEnv('liangshen')
+  b.channel.setPlanPrompt(true)
+  b.channel.setPlanPrompt(false)
+  check('plan-mode acquired by planPrompt is torn down on off',
+    b.appended.some(e => e.type === 'plan/mode' && e.data.active === false),
+    JSON.stringify(b.appended))
+}
+
+{
   const { channel, appended } = makeEnv('standard')
   check('setPlanPrompt is undefined outside Liangshen', channel.setPlanPrompt(true) === undefined)
   check('/planPrompt is not listed outside Liangshen', !channel.commandList.some(command => command.name === 'planPrompt'))

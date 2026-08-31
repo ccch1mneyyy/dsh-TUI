@@ -2711,6 +2711,39 @@ export function createChannel(
     }
     return active
   }
+
+  /**
+   * Whether the CURRENT `/planPrompt` ON stretch owns the live plan mode.
+   * Ownership is acquired only when plan mode was NOT already active when
+   * the switch turned on — the user's own `/plan` keeps its mode. OFF tears
+   * plan mode down only while the switch holds ownership (the setPlanPrompt
+   * comment's promise, actually enforced now). Derived from event order
+   * alone, so it survives resume/restart like the folds.
+   */
+  const foldPlanPromptOwnsPlanMode = (events: readonly SessionEvent[]): boolean => {
+    let planActive = false
+    let owns = false
+    let ownsAtLastOff: boolean | undefined = undefined
+    for (const event of events) {
+      const type = (event as { type: string }).type
+      if (type === 'plan/mode') {
+        const next = (event.data as unknown as { active?: boolean }).active === true
+        // Something turned plan off under our stretch: our claim is spent.
+        if (owns && !next) owns = false
+        planActive = next
+      } else if (type === LIANGSHEN_PLAN_PROMPT_EVENT) {
+        if ((event.data as unknown as { active?: boolean }).active === true) {
+          owns = !planActive
+        } else {
+          // The OFF event is already in the stream when the caller folds:
+          // report ownership AS OF that moment, not the post-off zero.
+          ownsAtLastOff = owns
+          owns = false
+        }
+      }
+    }
+    return ownsAtLastOff ?? owns
+  }
   /**
    * Sessions whose stale `/planPrompt` clear is queued. The clear must NOT
    * append from inside the `session/event` observer that noticed the plan
@@ -2928,10 +2961,10 @@ export function createChannel(
       } else if (!planActive) {
         session.append('plan/mode', { active: true })
       }
-    } else if (promptActive) {
+    } else if (promptActive && foldPlanPromptOwnsPlanMode(agent.session.events)) {
       // Never let an OFF command tear down a plan mode the user entered
-      // through plain `/plan`: only touch plan state when this switch was
-      // the one keeping the injection on.
+      // through plain `/plan`: only touch plan state when this switch
+      // ACQUIRED plan mode itself (it was off at the switch's ON moment).
       if (planMode?.set !== undefined) {
         planMode.set(agent, false)
       } else if (planActive) {
