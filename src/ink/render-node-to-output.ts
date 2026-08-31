@@ -1607,7 +1607,8 @@ function renderNodeToOutput(
 // AFTER a dirty/removed sibling can contain stale overflow in prevScreen.
 // Disable blit for siblings after a dirty child — but still pass prevScreen
 // TO the dirty child itself so its clean descendants can blit. The dirty
-// child's own blit check already fails (node.dirty=true at line 216), so
+// child's own blit check already fails (node.dirty=true, set by markDirty
+// in dom.ts), so
 // passing prevScreen only benefits its subtree.
 // For removed children we don't know their original position, so
 // conservatively disable blit for all.

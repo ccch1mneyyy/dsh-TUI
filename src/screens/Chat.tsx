@@ -3305,7 +3305,7 @@ export function Chat({
     return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
   }
 
-  // Subagent dashboard: displays all active and completed subagents.
+  // Jobs panel: background jobs (running/killed) with kill/inspect actions.
   // Like the browser and settings, it replaces the conversation entirely.
   if (jobsPanelOpen) {
     const panel = (
