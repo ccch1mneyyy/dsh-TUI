@@ -385,7 +385,7 @@
     "@deepseek-ai/dsh-workspace": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/lodash-es": "^4.17.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.4.0",
     "@types/react": "^19.0.0",
     "@types/react-reconciler": "^0.33.0",
     "@types/semver": "^7.0.0",
