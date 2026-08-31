@@ -58,6 +58,9 @@ export interface CatalogProviderCandidate {
  */
 export interface ConfiguredProvider {
   readonly route: string
+  /** Display name when the profile sets one (adapter-side default is the
+   *  route key); any language — it is a label, never an identifier. */
+  readonly displayName?: string
   /** Credential ref (profile.apiKeyEnv) when the profile names one. */
   readonly ref: string
   /** Whether the process environment shadows the ref (env-provided key). */
@@ -341,7 +344,12 @@ async function runAddFlow(
   const isCatalog = pickedMode === t('provider-opt-catalog')
 
   // ── 2. route ───────────────────────────────────────────────────────
+  // Catalog routes are picked (or typed) as-is — their display names come
+  // from the adapter's catalog. Custom endpoints instead ask for a NAME
+  // in any language: it becomes the display name (/model group label),
+  // and the machine route id is derived from it (see routeFromName).
   let route = ''
+  let displayName: string | undefined
   if (isCatalog) {
     const candidates = host.listCatalogProviders()
     if (candidates.length > 0) {
@@ -362,8 +370,15 @@ async function runAddFlow(
     }
   }
   if (route === '') {
-    route = await promptRouteId(ask, notify)
-    if (route === '') return 'cancelled'
+    if (isCatalog) {
+      route = await promptRouteId(ask, notify)
+      if (route === '') return 'cancelled'
+    } else {
+      const named = await promptProviderName(ask, notify)
+      if (named === undefined) return 'cancelled'
+      route = named.route
+      displayName = named.displayName
+    }
   }
 
   // ── 3. API key (own batch so redact covers exactly the secret) ─────
@@ -458,7 +473,7 @@ async function runAddFlow(
 
   // ── 7. confirm ─────────────────────────────────────────────────────
   const summaryLines = buildSummaryLines({
-    route, ref, shadowed, baseURL, api, models, isCatalog, keyLine,
+    route, displayName, ref, shadowed, baseURL, api, models, isCatalog, keyLine,
   })
   const detail = host.routeExists(route)
     ? `${summaryLines.join('\n')}\n${t('provider-route-exists-warning')}`
@@ -485,7 +500,7 @@ async function runAddFlow(
     await host.writeCredential(ref, apiKey)
     wroteCredential = true
   }
-  const profile = buildProfile({ isCatalog, ref, baseURL, api, models, discoveredById })
+  const profile = buildProfile({ isCatalog, ref, displayName, baseURL, api, models, discoveredById })
   try {
     await host.writeProfile(route, profile)
   } catch (error) {
@@ -513,7 +528,7 @@ async function runAddFlow(
       ? [t('provider-switch-hint')]
       : []),
   ])
-  notify(t('provider-success', { route }), { color: 'success' })
+  notify(t('provider-success', { route: displayName ?? route }), { color: 'success' })
 
   if (!deps.working() && models.length > 0) {
     const target = models[0]!
@@ -543,14 +558,33 @@ async function runEditWizard(
     notify(t('provider-none-configured'), { color: 'warning' })
     return 'cancelled'
   }
+  // Picker labels speak the display name (any language) — the route id is a
+  // machine key and reads poorly for derived routes (gw-<hash>). Labels must
+  // be globally unique (the pick is matched back by label): any collision —
+  // two routes sharing a display name, or a display name literally looking
+  // like another row's suffixed label — gets a route suffix; routes are
+  // unique, so re-suffixing the still-colliding rows always terminates.
+  const labeled = configured.map(provider => ({
+    provider,
+    label: provider.displayName ?? provider.route,
+  }))
+  for (let guard = 0; guard < 3; guard += 1) {
+    const counts = new Map<string, number>()
+    for (const row of labeled) counts.set(row.label, (counts.get(row.label) ?? 0) + 1)
+    const duplicates = new Set([...counts].flatMap(([label, n]) => n > 1 ? [label] : []))
+    if (duplicates.size === 0) break
+    for (const row of labeled) {
+      if (duplicates.has(row.label)) row.label = `${row.label} (${row.provider.route})`
+    }
+  }
   const pickAnswer = await ask({
-    questions: [optionQuestion('edit-provider', t('provider-q-edit'), configured.map(provider => ({
-      label: provider.route,
-      description: providerRowDescription(provider),
+    questions: [optionQuestion('edit-provider', t('provider-q-edit'), labeled.map(row => ({
+      label: row.label,
+      description: providerRowDescription(row.provider),
     })), { hideCustomInput: true })],
   })
-  const route = answerSelected(pickAnswer, 'edit-provider')[0]
-  const existing = configured.find(row => row.route === route)
+  const picked = answerSelected(pickAnswer, 'edit-provider')[0]
+  const existing = labeled.find(row => row.label === picked)?.provider
   if (existing === undefined) return 'cancelled'
   return runEditMenu(deps, existing)
 }
@@ -574,6 +608,7 @@ async function runEditMenu(
   const picked = answerSelected(menuAnswer, 'edit-menu')[0]
   if (picked === t('provider-opt-edit-delete')) return deleteConfiguredProvider(deps, provider)
   if (picked === t('provider-opt-edit-key')) return editApiKey(deps, provider)
+  if (picked === t('provider-opt-edit-name')) return editDisplayName(deps, provider)
   if (picked === t('provider-opt-edit-baseurl')) return editBaseUrl(deps, provider)
   if (picked === t('provider-opt-edit-protocol')) return editWireProtocol(deps, provider)
   if (picked === t('provider-opt-edit-models')) return editModelList(deps, provider)
@@ -589,6 +624,11 @@ function buildEditMenuOptions(provider: ConfiguredProvider): { label: string; de
   const options: { label: string; description?: string }[] = [
     { label: t('provider-opt-edit-key'),
       ...(provider.shadowed ? { description: t('provider-row-key-shadowed') } : {}) },
+    // Display name is language-free (Chinese is fine) and applies to catalog
+    // routes too — it patches the user-layer profile, overriding the name the
+    // catalog/adapters report.
+    { label: t('provider-opt-edit-name'),
+      description: provider.displayName ?? provider.route },
   ]
   if (!isCatalog) {
     options.push(
@@ -670,6 +710,7 @@ async function editApiKey(
   await host.writeCredential(provider.ref, value)
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    displayName: provider.displayName,
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: provider.baseURL,
@@ -692,12 +733,13 @@ async function patchProfileField(
   path: readonly string[],
   value: unknown,
   /** Summary override for the field that changed; the others as stored. */
-  change: { baseURL?: string; api?: string },
+  change: { baseURL?: string; api?: string; displayName?: string },
 ): Promise<ProviderWizardOutcome> {
   const { host, notify, pushLocal } = deps
   await host.mutateProfile(provider.route, [{ op: 'set', path, value }])
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    displayName: change.displayName ?? provider.displayName,
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: change.baseURL ?? provider.baseURL,
@@ -710,6 +752,26 @@ async function patchProfileField(
   }))
   notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
   return 'updated'
+}
+
+/** Edit the display name (any language — it is a label, never an
+ *  identifier): prompt, then patch just that field. An empty answer is a
+ *  no-op. */
+async function editDisplayName(
+  deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
+): Promise<ProviderWizardOutcome> {
+  const { ask, notify } = deps
+  const nameAnswer = await ask({
+    questions: [textQuestion('display-name', t('provider-q-name'),
+      t('provider-edit-current', { value: provider.displayName ?? provider.route }))],
+  })
+  const value = answerText(nameAnswer, 'display-name')
+  if (value === '') {
+    notify(t('provider-edit-no-changes'))
+    return 'cancelled'
+  }
+  return patchProfileField(deps, provider, ['displayName'], value, { displayName: value })
 }
 
 /** Edit the base URL (custom routes only): prompt the new endpoint, then
@@ -863,6 +925,7 @@ async function editModelList(
   ])
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    displayName: provider.displayName,
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: provider.baseURL,
@@ -996,6 +1059,9 @@ async function deleteConfiguredProvider(
 /** Short picker-row description for one configured provider. */
 function providerRowDescription(provider: ConfiguredProvider): string {
   const parts: string[] = []
+  // The row label carries the display name when one exists; the route id
+  // (the machine identity) moves into the description for those rows.
+  if (provider.displayName !== undefined) parts.push(provider.route)
   if (provider.baseURL !== undefined) parts.push(provider.baseURL)
   parts.push(provider.models !== undefined && provider.models.length > 0
     ? t('provider-row-models', { n: provider.models.length })
@@ -1008,6 +1074,9 @@ function providerRowDescription(provider: ConfiguredProvider): string {
  *  and models lines; no credential values are ever rendered). */
 function buildDeleteSummary(provider: ConfiguredProvider): string[] {
   const lines = [t('provider-line-route', { route: provider.route })]
+  if (provider.displayName !== undefined) {
+    lines.push(t('provider-line-name', { name: provider.displayName }))
+  }
   if (provider.baseURL !== undefined) lines.push(t('provider-line-baseurl', { url: provider.baseURL }))
   if (provider.api !== undefined) lines.push(t('provider-line-protocol', { api: provider.api }))
   lines.push(provider.models !== undefined && provider.models.length > 0
@@ -1115,6 +1184,54 @@ async function promptRouteId(
   return ''
 }
 
+/**
+ * Resolve a hand-entered provider NAME into the machine route id plus an
+ * optional display name. A name that already matches the route rule is used
+ * verbatim and needs no display name; anything else (Chinese, capitals,
+ * spaces) becomes the display name while the route id is derived — the
+ * longest ASCII slug the name yields, or a deterministic hash fallback when
+ * the name has no usable ASCII at all. The derivation is deterministic so
+ * re-adding the same name lands on the same route and hits the existing
+ * overwrite warning instead of forking duplicate routes.
+ */
+export function routeFromName(name: string): { route: string; displayName?: string } {
+  if (PROVIDER_ROUTE_ID.test(name)) return { route: name }
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/g, '')
+  const route = PROVIDER_ROUTE_ID.test(slug) ? slug : `gw-${fnv1aHex(name)}`
+  return { route, displayName: name }
+}
+
+/** FNV-1a 32-bit hash of the name, for routes derived from all-CJK names. */
+function fnv1aHex(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+/**
+ * Prompt for a custom endpoint's NAME (any language — this is what /model
+ * shows); the route id is derived by {@link routeFromName}. Catalog routes
+ * keep using {@link promptRouteId}: their display names come from the
+ * adapter's catalog, not from the user.
+ */
+async function promptProviderName(
+  ask: ProviderWizardDeps['ask'],
+  notify: ProviderWizardDeps['notify'],
+): Promise<{ route: string; displayName?: string } | undefined> {
+  for (let attempt = 0; attempt < MAX_RETRY; attempt += 1) {
+    const answer = await ask({
+      questions: [textQuestion('provider-name', t('provider-q-name'), t('provider-q-name-detail'))],
+    })
+    const name = answerText(answer, 'provider-name')
+    if (name !== '') return routeFromName(name)
+    notify(t('provider-name-required'), { color: 'warning' })
+  }
+  return undefined
+}
+
 /** Merge multi-select picks with comma/space-separated custom input, deduped. */
 function mergeModelIds(selected: readonly string[], custom: string): string[] {
   const ids = [...selected]
@@ -1127,6 +1244,7 @@ function mergeModelIds(selected: readonly string[], custom: string): string[] {
 
 function buildSummaryLines(input: {
   route: string
+  displayName?: string | undefined
   ref: string
   shadowed: boolean
   baseURL: string | undefined
@@ -1137,6 +1255,9 @@ function buildSummaryLines(input: {
   keyLine?: string
 }): string[] {
   const lines = [t('provider-line-route', { route: input.route })]
+  if (input.displayName !== undefined) {
+    lines.push(t('provider-line-name', { name: input.displayName }))
+  }
   lines.push(input.keyLine ?? (input.shadowed
     ? t('provider-line-keyref-env', { ref: input.ref })
     : t('provider-line-keyref', { ref: input.ref })))
@@ -1153,6 +1274,7 @@ function buildSummaryLines(input: {
 function buildProfile(input: {
   isCatalog: boolean
   ref: string
+  displayName: string | undefined
   baseURL: string | undefined
   api: string | undefined
   models: readonly string[]
@@ -1162,6 +1284,10 @@ function buildProfile(input: {
   // Preserve the profile's credential shape: an empty ref (no apiKeyEnv)
   // must not be rewritten as `apiKeyEnv: ''`.
   if (input.ref !== '') profile['apiKeyEnv'] = input.ref
+  // `displayName` is the adapter's own profile field (dsh-llm-pi-ai): it
+  // drives configuration surfaces and listProviders().name — the /model
+  // picker's group label — and defaults to the route key when absent.
+  if (input.displayName !== undefined) profile['displayName'] = input.displayName
   if (input.baseURL !== undefined && input.baseURL !== '') profile['baseURL'] = input.baseURL
   if (input.isCatalog) {
     // `models` replaces the catalog when present; omit it to keep the whole

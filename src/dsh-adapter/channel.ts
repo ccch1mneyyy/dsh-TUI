@@ -6003,6 +6003,9 @@ export function createChannel(
             if (typeof profile !== 'object' || profile === null) return []
             const stored = profile as Record<string, unknown>
             const ref = typeof stored.apiKeyEnv === 'string' ? stored.apiKeyEnv : ''
+            const displayName = typeof stored.displayName === 'string' && stored.displayName !== ''
+              ? stored.displayName
+              : undefined
             const baseURL = typeof stored.baseURL === 'string' && stored.baseURL !== ''
               ? stored.baseURL
               : undefined
@@ -6026,6 +6029,7 @@ export function createChannel(
               ref,
               isCatalog: catalog.has(route),
               shadowed: ref !== '' && process.env[ref] !== undefined,
+              ...(displayName !== undefined ? { displayName } : {}),
               ...(baseURL !== undefined ? { baseURL } : {}),
               ...(api !== undefined ? { api } : {}),
               ...(models !== undefined ? { models } : {}),
