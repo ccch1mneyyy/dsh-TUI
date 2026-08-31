@@ -41,9 +41,9 @@ const watchdog = setTimeout(() => {
   process.exit(1)
 }, 20000)
 
-function makeStdout(term) {
+function makeStdout(term, columns = COLS) {
   class FakeStdout extends Writable {
-    constructor() { super(); this.columns = COLS; this.rows = ROWS; this.isTTY = true }
+    constructor() { super(); this.columns = columns; this.rows = ROWS; this.isTTY = true }
     _write(chunk, _encoding, callback) { term.write(String(chunk), callback) }
   }
   return new FakeStdout()
@@ -52,9 +52,9 @@ function makeStdout(term) {
 // Divider under test in a content-sized context: the Divider's Box is a
 // child of a row parent, so Yoga grants it exactly its content width —
 // the feedback loop under test. The marker sits on its own row below.
-async function mountDivider(padding) {
-  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
-  const stdout = makeStdout(term)
+async function mountDivider(padding, columns = COLS) {
+  const term = new XTerm({ cols: columns, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = makeStdout(term, columns)
   const app = await render(
     <ThemeProvider theme="dark">
       <Box flexDirection="column" width="100%">
@@ -135,6 +135,38 @@ function assertSingleRule(lines, label) {
   if (width < floor || width > 40 - 1) {
     throw new Error(
       'post-resize rule width ' + width + ' outside bounded range [' + floor + ', ' + (40 - 1) + ']:\n'
+      + viewportLines(term, ROWS).join('\n'),
+    )
+  }
+  await app.unmount()
+}
+
+// 4. Growth resize also re-seeds from the new terminal width. Keeping the
+//    old measuredWidth here would render the Box at its pre-resize width,
+//    measure that same stale width again, and leave the rule permanently
+//    narrow even though the terminal grew.
+{
+  const initialColumns = 40
+  const expandedColumns = 60
+  const { term, stdout, app } = await mountDivider(1, initialColumns)
+  if (!await settled(() => viewportLines(term, ROWS).some(l => l.includes('marker-row')))) {
+    throw new Error('marker row never rendered (growth-resize scenario)')
+  }
+  const before = assertSingleRule(viewportLines(term, ROWS), 'pre-growth rule')
+  term.resize(expandedColumns, ROWS)
+  stdout.columns = expandedColumns
+  stdout.emit('resize')
+  const grown = await settled(() =>
+    ruleRow(viewportLines(term, ROWS)).some(r => [...r].length > before),
+  )
+  if (!grown) {
+    throw new Error('rule never grew after resize:\n' + viewportLines(term, ROWS).join('\n'))
+  }
+  const width = assertSingleRule(viewportLines(term, ROWS), 'post-growth rule')
+  const floor = expandedColumns - 1 - MEASUREMENT_LIMIT
+  if (width < floor || width > expandedColumns - 1) {
+    throw new Error(
+      'post-growth rule width ' + width + ' outside bounded range [' + floor + ', ' + (expandedColumns - 1) + ']:\n'
       + viewportLines(term, ROWS).join('\n'),
     )
   }

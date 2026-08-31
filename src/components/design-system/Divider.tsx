@@ -95,6 +95,12 @@ export function Divider({
       state.columns = columns
       state.applied = []
       state.frozen = false
+      // The current Yoga layout was rendered from the previous terminal
+      // width. Clear it and let the next render seed from the new columns;
+      // measuring this stale pass would keep a grown terminal permanently
+      // pinned to its old narrow width.
+      setMeasuredWidth(null)
+      return
     }
     if (state.frozen) return
     const w = measureElement(node).width
