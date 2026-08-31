@@ -707,7 +707,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setCockpit(value.cockpit ?? config.cockpit === true)
       channel.setCockpitMessageFrame(value.cockpitMessageFrame ?? config.cockpitMessageFrame === true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
-      channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
+      channel.setStatusBar(mergeStatusBar(config.statusBar, value.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
     // cordis.yml's `shortcuts` (same precedence as every other field);
