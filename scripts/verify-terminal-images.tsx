@@ -217,8 +217,13 @@ assert.ok(
   'restoring a source must upload it again',
 )
 stdout.isTTY = false
+const beforeUnmount = stdout.output.length
 instance.unmount()
-assert.match(stdout.output, /a=d,d=I,i=/u, 'alt-screen exit must delete images')
+assert.match(
+  stdout.output.slice(beforeUnmount),
+  /a=d,d=I,i=/u,
+  'alt-screen exit must delete images',
+)
 
 for (const [key, value] of Object.entries(previousEnv)) {
   const envKey =
