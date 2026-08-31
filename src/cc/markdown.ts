@@ -56,6 +56,11 @@ const ISSUE_REFERENCE_PATTERN =
  * @returns The content with those blocks removed and whitespace trimmed.
  */
 export function stripPromptXMLTags(content: string): string {
+  // Every alternative in the pattern is anchored on a literal '<', so content
+  // without one cannot match. Skip the regex entirely in that case: the
+  // backreference defeats most of the engine's fast paths, and streaming
+  // re-runs this over the whole accumulated message on every frame.
+  if (!content.includes('<')) return content.trim()
   return content.replace(TOOL_ANALYSIS_TAG_BLOCKS, '').trim()
 }
 

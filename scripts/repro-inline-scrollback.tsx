@@ -17,7 +17,7 @@ process.env.TERM_PROGRAM = 'WezTerm'  // DEC-2026 同步输出路径（与真机
 process.env.DSH_TUI_THEME = 'dark'    // 跳过 OSC 11 探测，保持确定性
 process.env.DSH_TUI_LANG = 'zh'       // 固定中文 UI（splash 标语断言）
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { sleep }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { sleep }, { activateModernEmojiWidths }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -25,6 +25,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('./lib/term-test.mjs'),
+  import('./lib/modern-widths.mjs'),
 ])
 
 const COLS = 100
@@ -32,6 +33,9 @@ const ROWS = 20
 const SCROLLBACK = 2000
 const INPUT_MARKER = 'CARET_ANCHOR_7F31'
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: SCROLLBACK, allowProposedApi: true })
+// 取证终端与真实终端同宽（⚓ 等 Emoji_Presentation 字符 2 格）——
+// 否则现场思考行落定重绘的断言测的是 xterm 旧表的宽度（#574）。
+activateModernEmojiWidths(term)
 
 const rawChunks: string[] = []
 /** 逐帧账本：buffer 总行数增量 vs 该帧特征（定位污染来源）。 */

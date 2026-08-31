@@ -51,7 +51,7 @@ A complete common override looks like this:
 | `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
-| `effort` | normally `max` in the bundle | Reasoning effort actually applied to every request (validated against model levels; deepseek supports only off/high/max and invalid levels silently fall back to the adapter default; wins over the persisted `/effort` choice), also shown in the header at startup |
+| `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default and the configured value wins over the persisted `/effort` choice), also shown in the header at startup |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
@@ -84,7 +84,7 @@ Each session composes its model-visible tools and prompt through
 | ID | Name | Capability |
 | --- | --- | --- |
 | `standard` | Standard (default) | Editing, shell, search, skills, planning, goals, subagents, and workflows |
-| `code` | PTC | Standard plus Code Mode SDK presentation for composing operations in TypeScript |
+| `ptc` (alpha.2) / `code` (RC) | PTC | Standard plus the PTC SDK presentation for composing operations in TypeScript; both names resolve compatibly across versions |
 | `minimal` | Minimal | Persistent Bash and `str_replace_editor` only, without compaction |
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
 | `liangshen` | Liangshen mode | Minimal's two-tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
@@ -93,10 +93,17 @@ Usage rules:
 
 - `/preset` opens the picker.
 - `/preset <id>` selects directly; `/preset status` reports the current state.
+- Picker names and descriptions come verbatim from each preset's `preset.yml`
+  (written in Chinese). Under the `en` UI language (`/lang en`), the built-in
+  presets (`standard` / `minimal` / `code` / `cordis` / `liangshen`) show
+  localized English names and descriptions; custom presets are shown as-is.
 - A blank session can switch in place. Once a conversation has started, the
   official blank-only rule stores the choice as the new default for `/new` or
   the next launch.
 - The default is stored in `~/.dsh-tui/agent-preset.json`.
+- A legacy `code` preference resolves to `ptc` when the active roster no
+  longer provides `code`, then migrates after that successful resolution;
+  rc rosters keep their real `code` id, and session logs are never rewritten.
 - Precedence is explicit `config.preset` or `DSH_TUI_PRESET`, then persisted
   preference, then the roster default `standard`.
 - Resuming a session restores the preset recorded in that session's log and
@@ -182,10 +189,33 @@ the transition for older launchers.
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
 Do not attach it to a public issue without reviewing and redacting it.
 
-## `/provider`: add a model provider at runtime
+## `/provider`: manage model providers at runtime
 
-`/provider` opens an interactive wizard that adds a model provider without a
-restart:
+`/provider` opens an interactive wizard that manages model providers without a
+restart. The first step picks an action:
+
+- **Add a new provider**: built-in catalog or custom API endpoint (below).
+- **Edit an existing provider**: pick one of the routes your **user settings
+  layer** carries (providers inherited from the composition base cannot be
+  removed from the user layer, so they stay out of the edit/delete menu),
+  then edit through a menu. Built-in routes offer **Edit API Key**, **Edit
+  model list**, and **Delete this provider**; custom endpoints additionally
+  get **Edit Base URL** and **Edit wire protocol** (a built-in route stays
+  built-in even when its profile carries an explicit `api` override). Any
+  edit patches only the picked field in place and exits immediately — no
+  further confirmation; every other profile field (including keys the TUI
+  does not model, like `headers`, `timeoutMs`, `retryPolicy`) never enters
+  the write and survives untouched. "Edit model list" pre-checks the models
+  you already enabled, and the stored entries of kept models are preserved
+  verbatim too. "Delete this provider" is the one exception: it asks for
+  confirmation, then removes the profile and the API key — an
+  environment-provided key, or one shared with another provider, is kept
+  (only the configuration is deleted); if the profile was removed but the
+  key cleanup failed, the wizard says so and points you at the store
+  (the provider itself is gone).
+
+The **add** branch offers the following sources (the third appears only while
+the bundled dsh-auth plugin is mounted):
 
 - **Built-in provider**: pick a catalog route (openai, anthropic, deepseek, …)
   from `llm.listConfigurableProviders()`; only the API key is required. The
@@ -195,22 +225,33 @@ restart:
   protocol (`openai-completions` / `openai-responses` / `anthropic-messages`).
   The wizard probes the endpoint with the draft credential and offers the
   advertised models for selection (manual id entry as fallback).
+- **Subscription sign-in (OAuth)**: this option appears only while the bundled
+  dsh-auth plugin is mounted. Pick a subscription account (ChatGPT / Claude /
+  Grok, …) from the list and sign in through the browser / device-code flow —
+  **no API key**. Every account carries a masked status line (signed in, with
+  the token expiry, or expired); an already-signed-in account offers **Sign in
+  again** (switch accounts or refresh the credential) and **Sign out** (remove
+  the locally stored OAuth credential). Credential storage and route
+  registration belong to dsh-auth; `/auth status|login|logout` shares the same
+  source. Without the plugin the option is absent and the wizard behaves
+  exactly as before; with the plugin mounted but no OAuth-capable provider,
+  the wizard says so.
 
-What gets written (on a profile start, where dsh-base provides the
+What gets written/removed (on a profile start, where dsh-base provides the
 settings/credentials services):
 
 | Artifact | Location |
 | --- | --- |
-| Provider profile | `llm-pi-ai.providers.<route>` in `~/.dsh/settings.yaml`; the route registers on write |
+| Provider profile | `llm-pi-ai.providers.<route>` in `~/.dsh/settings.yaml`; the route registers on write and unregisters on delete |
 | API key | `~/.dsh/.credentials.yaml` (mode 0600), referenced as `<ROUTE>_API_KEY` |
 
 Key answers render as `••••••` in the transcript; when the process environment
 already provides the same-named variable, the write is skipped and the value
-resolves from the environment at request time. The configuration is shared
-with the dsh web UI's Models settings page (same settings section). A bare
-`dsh --config cordis.yml` start lacks these services and `/provider` reports
-itself unavailable. After adding, run `/model` to switch to the new route's
-models.
+resolves from the environment at request time (deletion never touches it). The
+configuration is shared with the dsh web UI's Models settings page (same
+settings section). A bare `dsh --config cordis.yml` start lacks these services
+and `/provider` reports itself unavailable. After adding or editing, run
+`/model` to switch to the route's models.
 
 ## Composition constraints
 

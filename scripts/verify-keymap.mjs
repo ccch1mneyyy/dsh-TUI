@@ -93,6 +93,7 @@ check('other actions keep their defaults reserved', reserved.has('ctrl+o') && re
 check('fixed: ctrl+u kill-line reserved', isFixedReserved('ctrl+u'))
 check('fixed: ctrl+return reserved', isFixedReserved('ctrl+return'))
 check('fixed: ctrl+w reserved', isFixedReserved('ctrl+w'))
+check('fixed: ctrl+j newline fallback reserved', isFixedReserved('ctrl+j'))
 check('free combo not reserved', !isFixedReserved('ctrl+n'))
 
 // ---- settings drafts ------------------------------------------------------
@@ -108,6 +109,14 @@ check('conflict: history → ctrl+v refused (owned by paste)', draftComboConflic
 check('conflict: paste → ctrl+u refused (fixed kill-line)', draftComboConflicts('paste', ['ctrl+u']))
 check('no conflict: history restating ctrl+r', !draftComboConflicts('history', ['ctrl+r']))
 check('no conflict: fresh combo ctrl+n', !draftComboConflicts('history', ['ctrl+n']))
+// Restating an action's OWN default (even one that is also fixed-reserved
+// for the editor, like dashboard's ctrl+a / showAll's ctrl+e) changes
+// nothing about what shadows what — it must not read as a conflict.
+check('no conflict: dashboard restating its fixed-reserved default ctrl+a', !draftComboConflicts('dashboard', ['ctrl+a']))
+check('no conflict: showAll restating its fixed-reserved default ctrl+e', !draftComboConflicts('showAll', ['ctrl+e']))
+check('conflict: showAll claiming ctrl+a (dashboard owns it)', draftComboConflicts('showAll', ['ctrl+a']))
+check('conflict: dashboard claiming ctrl+e (showAll owns it)', draftComboConflicts('dashboard', ['ctrl+e']))
+check('conflict: another action cannot borrow the fixed ctrl+u', draftComboConflicts('dashboard', ['ctrl+u']))
 resetKeymapOverrides()
 
 // ---- live Chat: Alt+V triggers the paste branch ---------------------------

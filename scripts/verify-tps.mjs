@@ -6,7 +6,8 @@
  * - live chars/4 estimates use every token delta, then provider usage settles it
  * - a retry-like delay stays inside the same step's decode span
  * - missing provider usage falls back to the streamed character estimate
- * - durable replay derives the same values from event.time
+ * - empty deltas do not start decode; a name-only tool delta does
+ * - durable replay omits TPS because settled stream chunks are intentionally dropped
  *
  * Run after build: `node scripts/verify-tps.mjs`
  */
@@ -179,27 +180,41 @@ emit('turn/end', B + 303_100, completed(4))
 check('missing usage falls back to chars/4', near(channel.tps, 50), String(channel.tps))
 check('one sample is retained per completed turn', channel.tpsSamples.length === 4, String(channel.tpsSamples.length))
 
-// Turn 5: batched tool-call generation (e.g. Gemini delivering tool call in 1 chunk 15ms before message).
-// Stream span is < 100ms so it is excluded from decode sampling, preserving prior turn's TPS.
+// Turn 5: empty deltas do not start the decode clock, but a tool name does.
 emit('turn/start', B + 400_000, { turn: 5 })
-emit('step/start', B + 400_000, { turn: 5, step: 1 })
-emit('assistant/chunk', B + 401_985, {
+emit('step/start', B + 400_100, { turn: 5, step: 1 })
+emit('assistant/chunk', B + 401_000, {
   turn: 5,
   step: 1,
-  chunk: { type: 'tool-call-delta', index: 0, id: 'call-5', name: 'read', argumentsDelta: '{"path":"file.txt"}' },
+  chunk: { type: 'text-delta', index: 0, text: '' },
 })
-emit('assistant/message', B + 402_000, message(5, 1, 400))
-emit('turn/end', B + 402_100, completed(5))
-check('batched tool-call preserves prior TPS without 27k spike', near(channel.tps, 50), String(channel.tps))
-check('four valid turn samples retained', channel.tpsSamples.length === 4, String(channel.tpsSamples.length))
+emit('assistant/chunk', B + 402_000, {
+  turn: 5,
+  step: 1,
+  chunk: { type: 'reasoning-delta', index: 0, text: '' },
+})
+emit('assistant/chunk', B + 403_000, {
+  turn: 5,
+  step: 1,
+  chunk: { type: 'tool-call-delta', index: 0, id: 'call-5', argumentsDelta: '' },
+})
+emit('assistant/chunk', B + 404_000, {
+  turn: 5,
+  step: 1,
+  chunk: { type: 'tool-call-delta', index: 0, id: 'call-5', name: 'bash', argumentsDelta: '' },
+})
+emit('assistant/message', B + 406_000, message(5, 1, 100))
+emit('turn/end', B + 406_100, completed(5))
+check('empty deltas ignored; name-only tool delta starts decode', near(channel.tps, 50), String(channel.tps))
+check('fifth turn adds exactly one sample', channel.tpsSamples.length === 5, String(channel.tpsSamples.length))
 
-// Rebuild from durable history. Chunks are pruned during replay (see prepareReplayEvents),
-// so replay leaves live tps metrics clean for the newly resumed session.
+// Rebuild from durable history. prepareReplayEvents intentionally drops
+// settled chunks, so TPS remains a live-only metric after resume.
 const replayContext = makeContext()
 const replayAgent = makeAgent([...agent.session.events])
 const replay = createChannel(replayContext.ctx, replayAgent, options)
-check('replay leaves live tps clean', replay.tps === undefined, String(replay.tps))
-check('replay leaves live tps samples empty', replay.tpsSamples.length === 0, String(replay.tpsSamples.length))
+check('replay omits historical TPS samples', replay.tpsSamples.length === 0, JSON.stringify(replay.tpsSamples))
+check('replay leaves live TPS unset', replay.tps === undefined, String(replay.tps))
 
 if (failed > 0) {
   console.error(`\n${failed} TPS verification(s) failed`)

@@ -74,7 +74,7 @@ export interface Config {
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
    *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */
   lang?: string
-  /** Agent preset id new sessions compose from (standard/code/minimal/
+  /** Agent preset id new sessions compose from (standard/ptc/minimal/
    *  cordis/… when the roster is mounted). When absent, the `/preset` choice
    *  persisted in `~/.dsh-tui/agent-preset.json` wins, then the roster
    *  default (`standard`). */
@@ -114,6 +114,11 @@ export interface Config {
    *  muted prompt markers, and quiet settled thinking headers. Off by
    *  default; enabled in cockpit profile. */
   cockpitMessageFrame?: boolean
+  /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): live
+   *  assistant text, expanded thinking, and tool call bodies paint through
+   *  a ~30fps reveal instead of jumping per provider burst — bursty or
+   *  one-shot deliveries read as an even flow. On by default. */
+  smoothStreaming?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
@@ -155,6 +160,7 @@ export const Config: Schema<Config> = Schema.object({
   expandEditor: Schema.boolean().default(true),
   cockpit: Schema.boolean().default(false),
   cockpitMessageFrame: Schema.boolean().default(false),
+  smoothStreaming: Schema.boolean().default(true),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),

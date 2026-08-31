@@ -210,6 +210,45 @@ On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
 `~/.dsh-tui/resume.txt` (also dual-written to the old path
 `~/.dsh-cc/resume.txt` for older launchers that only read it).
 
+### Agent view
+
+`/agentview` opens the agent view — a full screen listing every session in
+this process: the attached conversation, the background sessions dispatched
+here, and the stopped sessions persisted on disk. Rows are grouped by state
+(needs input > working > failed > completed > idle > stopped), each with a
+one-line activity summary derived from the session's own output — no extra
+summary-model calls.
+
+| Key | Action |
+| --- | --- |
+| Type | Write a task into the input at the bottom |
+| `Enter` | With input text: dispatch a new background session; otherwise attach to the selected session |
+| `Shift+Enter` | Dispatch and attach immediately |
+| `↑` `↓` / `PgUp` `PgDn` | Move, page |
+| `→` | Attach to the selected session |
+| `Space` | Toggle the peek panel (when the input is empty); type a reply inside and `Enter` to send |
+| `Ctrl+X` | Stop a background session; press again within 2s to delete it |
+| `Ctrl+R` | Rename the selected session |
+| `Esc` | Close peek → clear input → exit |
+| `Ctrl+C` | Clear input; press again to exit |
+| `?` | Show all shortcuts |
+
+Dispatched sessions run independently inside this process (turns, tools,
+approvals all work); switching the TUI elsewhere never interrupts them. A
+background session's approval request shows as "needs input" and its panel
+pops up inside the view (labelled with the session); the row's summary shows
+the question it is blocked on. `/bg` (alias `/background`) moves the attached
+session to the background — it keeps running — switches the terminal to a
+fresh session and opens the view. **`←` on an empty prompt does the same
+thing**: the session moves to the background and the view opens (with text,
+`←` moves the caret as usual); the view tops out with "Your conversation
+moved to the background — Enter opens it · Esc returns to it · Ctrl+C twice
+quits" and the final Esc returns to the backgrounded session; the prompt
+footer keeps a live "← N agents" count of sessions waiting on you. Peek and
+reply work live for running sessions; a stopped session needs an `Enter`
+attach first. Background sessions stop when the TUI process exits (logs
+survive for resume); there is no supervisor process.
+
 ### Rewind
 
 Double-tap `Esc` on an empty editor to open the user-message list. After a
@@ -377,11 +416,18 @@ as markdown in the review panel (the dedicated decision layout for
 | Key | Behavior |
 | --- | --- |
 | `Up/Down` | Move between the options and the feedback input line at the bottom |
+| Mouse wheel | Scroll the plan body; Approve / Keep planning / feedback stay pinned in view |
 | `1`/`2` | Submit the corresponding option directly (when the feedback buffer is empty; otherwise digits are treated as feedback characters) |
 | Typing | Enters the feedback input line |
 | `Enter` (option row) | Submit that option; an approval row with feedback errors out — approval must carry no feedback, or the protocol treats it as “continue planning” |
 | `Enter` (input line) | Submit “continue planning” with the feedback text |
 | `Esc` | Interrupt the review to talk (`ASK_CANCELLED`); the model stays in plan mode |
+
+Approving a plan or running `/plan off` restores the actual sandbox and
+approval policy from before plan entry. `Shift+Tab` keeps the selected target
+mode, including switches deferred while a turn is running. Resumed sessions
+recover pre-plan permissions from event history; unknown historical permissions
+stay unchanged instead of falling back to full access when no configured mode matches.
 
 ## Tool approval
 
@@ -409,8 +455,8 @@ zh; unmapped registry commands fall back to the registry's own text.
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `/new`, `/resume`, `/rename`, `/recap` (recent-activity summary + one-key suggested title), `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`), `/rewind` (time travel, same as double-`Esc` on an empty input) |
-| Status | `/context`, `/status`, `/cost`, `/balance` (official DeepSeek balance: summary row + hover details, click to refresh), `/config`, `/doctor`, `/init`, `/agents`, `/settings` |
+| Sessions | `/new`, `/resume`, `/agentview` (agent view), `/bg` (alias `/background`, backgrounds the session and opens the view), `/rename`, `/recap` (recent-activity summary + one-key suggested title), `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`), `/rewind` (time travel, same as double-`Esc` on an empty input) |
+| Status | `/context`, `/status`, `/cost`, `/balance` (official DeepSeek balance: summary row + hover details, click to refresh), `/config`, `/doctor`, `/init`, `/agents`, `/jobs` (background jobs panel: status/elapsed/exit code, `k` kills), `/settings` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/color` (session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`; input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`), `/lang` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permission`, `/add-dir`, `/hooks`, `/mcp`, `/plugins` (`check <path>` validates a plugin manifest) |
 | Skills | `/skills` lists skills DSH discovers from the active profile, user, and project; user-invocable skills join the menu as `/name` |

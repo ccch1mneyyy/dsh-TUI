@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
-import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow } from '../dsh-adapter/channel.js'
+import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobRow } from '../dsh-adapter/channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
@@ -10,8 +10,10 @@ import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
+import { JobCard } from './Chat/JobCard.js'
 import { isMinimalMode } from '../minimalMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
+import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { InterruptedByUser } from './InterruptedByUser.js'
 import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
@@ -21,12 +23,14 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
+import { getRevealVersion, revealLengthOf, revealTextOf, subscribeReveal } from './smoothReveal.js'
 
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
  * on a grey bubble with a `❯` pointer, assistant text with a `●` bullet and
- * markdown, thinking folded to `› Thinking (ctrl+o to expand)`, tool calls as
- * status-dot cards. `expanded` (Ctrl+O) shows full reasoning + full tool
+ * markdown, thinking as a live three-line/full toggle then a settled
+ * `› Thinking (ctrl+o to expand)` row, and tool calls as status-dot cards.
+ * `expanded` (Ctrl+O) shows full reasoning + full tool
  * args/results; `expandedRows` (message-selection mode, Enter) expands single
  * rows; `selectedId` highlights the selected row.
  */
@@ -52,13 +56,48 @@ const DEFAULT_ROW_HEIGHT = 2
 /** Cold-start estimate of the header block above the rows; corrected by the
  *  first layout measurement. */
 const DEFAULT_HEADER_LINES = 14
-/** Stable fallbacks for the stream-fold props: verify/repro harnesses and
- *  embedders render MessageList with prop sets that predate them, and the
+/** Stable fallbacks for the stream-view toggle props: verify/repro harnesses
+ *  and embedders render MessageList with prop sets that predate them, and the
  *  render must not throw (same rule as Chat's stubbed channel APIs). Module
  *  scope keeps the identities stable so MemoRow's shallow compare and the
  *  toggle callback's deps never churn. */
-const NO_STREAM_FOLDED: ReadonlySet<number> = new Set()
-const NOOP_TOGGLE_STREAM_FOLD = (_rowId: number): void => {}
+const NO_STREAM_VIEW_TOGGLED: ReadonlySet<number> = new Set()
+const NOOP_TOGGLE_STREAM_VIEW = (_rowId: number): void => {}
+
+// --- smooth-streaming display text -----------------------------------------
+// Render-phase reads of the shared reveal cursors (see smoothReveal.ts for
+// why the cursors live outside React). `active` gates cursor CREATION to
+// live-arrived content (streaming rows, live-settled rows marked `fresh`,
+// replayed history paints complete); once created, a cursor keeps revealing
+// until it catches up — settling mid-reveal must not snap (that is the
+// "non-streaming delivery becomes a smooth flow" contract).
+
+function assistantRevealText(row: ChatRow, enabled: boolean): string {
+  const stripped = stripNarration(row.text)
+  return revealTextOf(`a${row.id}`, stripped, {
+    enabled,
+    active: row.streaming === true || row.fresh === true,
+  })
+}
+
+function reasoningRevealText(row: ChatRow, enabled: boolean): string {
+  return revealTextOf(`r${row.id}`, row.text, { enabled, active: row.streaming === true })
+}
+
+/** Display length only (layout signature; no slice allocation). */
+function revealDisplayLen(row: ChatRow, enabled: boolean): number {
+  if (row.kind === 'assistant') {
+    const stripped = stripNarration(row.text)
+    return revealLengthOf(`a${row.id}`, stripped, {
+      enabled,
+      active: row.streaming === true || row.fresh === true,
+    })
+  }
+  if (row.kind === 'reasoning') {
+    return revealLengthOf(`r${row.id}`, row.text, { enabled, active: row.streaming === true })
+  }
+  return row.text.length
+}
 
 /**
  * Per-kind layout signature PARTS: the O(1) identity of every input that
@@ -86,7 +125,7 @@ function signatureParts(
   columns: number,
   expanded: boolean,
   expandedRows: ReadonlySet<number>,
-  streamFolded: ReadonlySet<number>,
+  streamViewToggledRows: ReadonlySet<number>,
   thinkingVisible: boolean,
   thinkingFold: string,
   diffLayout: string,
@@ -94,11 +133,14 @@ function signatureParts(
   model: string,
   failureHintRowId: number | null | undefined,
   failureHint: string | undefined,
+  displayTextLen: number,
 ): Array<string | number | boolean> {
   signatureScratch.length = 0
   // Universal height inputs: width reflows every row; kind switches height
-  // semantics wholesale; text length drives wrapping.
-  signatureScratch.push(columns, row.kind, row.text?.length ?? 0)
+  // semantics wholesale; text length drives wrapping. `displayTextLen` is the
+  // REVEALED length while smooth streaming is painting (the height follows
+  // what is on screen, not what has arrived).
+  signatureScratch.push(columns, row.kind, displayTextLen)
   switch (row.kind) {
     case 'assistant':
       // Streaming vs settled swaps renderers; Ctrl+O/per-row expand adds the
@@ -107,10 +149,9 @@ function signatureParts(
       signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), expanded ? model : '')
       break
     case 'reasoning':
-      // thinkingFold (preview vs full) and the visibility filter change the
-      // folded card's height; streaming shows verbose live unless the user
-      // clicked it folded (streamFolded collapses to the ticker/header).
-      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), streamFolded.has(row.id), thinkingVisible, thinkingFold)
+      // thinkingFold (preview vs full), its per-row live override, and the
+      // visibility filter all change the card's height.
+      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
       break
     case 'tool': {
       const tool = row.tool
@@ -159,13 +200,14 @@ export function MessageList({
   expandedRows,
   selectedId,
   onToggleRow,
-  streamFoldedRows = NO_STREAM_FOLDED,
-  onToggleStreamFold = NOOP_TOGGLE_STREAM_FOLD,
+  streamViewToggledRows = NO_STREAM_VIEW_TOGGLED,
+  onToggleStreamView = NOOP_TOGGLE_STREAM_VIEW,
   model,
   diffLayout = 'auto',
   thinkingFold = 'full',
   toolBackground = 'none',
   foldTerminalCommand = false,
+  smoothStreaming = false,
   activityFrames,
   cockpit = false,
   showAll,
@@ -182,6 +224,7 @@ export function MessageList({
   failureHintRowId,
   failureHint,
   onOpenSubagent,
+  onOpenJobs,
   onOpenFile,
 }: {
   rows: readonly ChatRow[]
@@ -189,9 +232,9 @@ export function MessageList({
   expandedRows: ReadonlySet<number>
   selectedId: number | null
   onToggleRow: (rowId: number) => void
-  /** 流式 reasoning 行被用户折叠（点击展开/折叠对流式行同样有效）。 */
-  streamFoldedRows?: ReadonlySet<number>
-  onToggleStreamFold?: (rowId: number) => void
+  /** 流式 reasoning 行相对 thinkingFold 默认视图的逐行切换。 */
+  streamViewToggledRows?: ReadonlySet<number>
+  onToggleStreamView?: (rowId: number) => void
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout?: 'auto' | 'split' | 'unified'
@@ -201,6 +244,10 @@ export function MessageList({
   toolBackground?: ToolBackground
   /** Terminal-card header folding from the live channel settings. */
   foldTerminalCommand?: boolean
+  /** Smooth streaming reveal from the live channel settings (default off at
+   *  this layer — embedders and verify harnesses keep exact-paint behavior;
+   *  Chat passes the channel's `dsh-tui.smoothStreaming` value). */
+  smoothStreaming?: boolean
   /** Working-activity preset name from the channel; drives the subagent
    *  card's running glyph so both indicators follow one setting. */
   activityFrames?: string
@@ -265,6 +312,8 @@ export function MessageList({
   failureHint?: string
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
+  /** 打开 /jobs 后台任务面板（transcript 内点击任务卡）。 */
+  onOpenJobs?: () => void
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
   onOpenFile?: (path: string) => void
 }) {
@@ -385,6 +434,13 @@ export function MessageList({
 
   // --- layout virtualization ---------------------------------------------
   const { columns, rows: termRows } = useTerminalSize()
+  // Smooth-reveal wakeups: the scheduler's tick bumps this store, re-running
+  // MessageList so the revealed `text`/line-count reads below feed fresh
+  // values through the same MemoRow-prop pipeline an arriving chunk uses —
+  // memo miss → re-render → post-commit height re-measure. Without this
+  // subscription a reveal living in child state would change row heights
+  // invisibly to the virtualization (stale cached heights → blank bands).
+  React.useSyncExternalStore(subscribeReveal, getRevealVersion)
   // Measured row heights, remembered after a row unmounts so virtualization
   // can compute total content height. Bounded: row ids grow monotonically
   // and rows are never removed from the transcript (foldRows keeps the
@@ -407,19 +463,22 @@ export function MessageList({
   const paintedOnceRef = React.useRef<Set<number>>(new Set())
   const paintedBaseRef = React.useRef<number | undefined>(undefined)
   /** Window-expansion hold: after the window WIDENS (new rows mounted),
-   *  refuse to tighten for a short hold so the mounted rows actually reach
-   *  the terminal. React commits within one ink frame coalesce — a render
-   *  that mounts rows followed by the measure-tick re-render that drops
-   *  them paints only the DROPPED layout, and never-mounted rows have no
-   *  scrollback copy (preset history at boot vanished — CI
-   *  repro-inline-scrollback). After the hold, tightening is visually
-   *  free: those rows sit in scrollback and the diff skips them. */
+   *  refuse to tighten until a frame containing that layout has actually
+   *  been FLUSHED to the terminal (flush-tick based, issue #574). React
+   *  commits and terminal writes are decoupled — the throttled deferred
+   *  leading edge lets a later commit supersede the wide one inside the
+   *  same task, so a wall-clock hold (the old 120ms timer) expires during
+   *  long cold-cache layout work (~190ms on the repro) and the measure-tick
+   *  re-render still drops the rows before a single byte of them was
+   *  written; never-mounted rows have no scrollback copy and preset history
+   *  vanishes. Once flushed, tightening is visually free: those rows sit in
+   *  scrollback and the diff skips them. */
   const lastStartRef = React.useRef<number>(-1)
-  const holdUntilRef = React.useRef<number>(0)
+  const holdFlushTickRef = React.useRef<number>(-1)
   /** True when frame-budgeted history painting still has batches left
    *  (main-screen open): the layout effect schedules the next slice. */
   const paintPendingRef = React.useRef(false)
-  const paintQueuedRef = React.useRef(false)
+  const paintTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Persistent history-paint edge: how far batched painting has advanced
    *  (index into visibleRows). -1 = not painting / reset (list head change:
    *  rewind, new session, loadOlder — must repaint from scratch). */
@@ -434,9 +493,19 @@ export function MessageList({
   if (listHeadId !== undefined) paintedBaseRef.current = listHeadId
   /** Content-space offset of visibleRows[0] (header + dividers), measured. */
   const baseRef = React.useRef<number | null>(null)
-  const measureQueuedRef = React.useRef(false)
+  const measureTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const [, setMeasureTick] = React.useState(0)
   const [, setScrollTick] = React.useState(0)
+  React.useEffect(() => () => {
+    if (measureTimerRef.current !== null) {
+      clearTimeout(measureTimerRef.current)
+      measureTimerRef.current = null
+    }
+    if (paintTimerRef.current !== null) {
+      clearTimeout(paintTimerRef.current)
+      paintTimerRef.current = null
+    }
+  }, [])
 
   // A width change reflows every row — all measurements are stale.
   const lastColumns = React.useRef(columns)
@@ -484,7 +553,7 @@ export function MessageList({
         columns,
         expanded,
         expandedRows,
-        streamFoldedRows,
+        streamViewToggledRows,
         thinkingVisible,
         thinkingFold,
         diffLayout,
@@ -492,6 +561,7 @@ export function MessageList({
         model,
         failureHintRowId,
         failureHint,
+        revealDisplayLen(row, smoothStreaming),
       )
       const cachedParts = sigs.get(row.id)
       let same = false
@@ -682,15 +752,20 @@ export function MessageList({
       }
     }
     // Expansion hold — AFTER the extension so it tracks the FINAL window:
-    // never tighten within the hold window after a widen. React commits
-    // inside one ink frame coalesce; a mount followed by the measure-tick
-    // re-render that drops the row paints only the DROPPED layout, and the
-    // row's painted-once mark (set at the first commit) is a lie.
-    if (lastStartRef.current >= 0 && start > lastStartRef.current && performance.now() < holdUntilRef.current) {
+    // never tighten past a widen until a frame with that layout has been
+    // flushed (getTerminalFlushTick advanced since the widen). A mount
+    // followed by the measure-tick re-render that drops the row paints only
+    // the DROPPED layout, and the row's painted-once mark (set at the first
+    // commit) is a lie; holding until the flush makes the mark real.
+    if (
+      lastStartRef.current >= 0 &&
+      start > lastStartRef.current &&
+      getTerminalFlushTick() === holdFlushTickRef.current
+    ) {
       start = lastStartRef.current
     }
     if (lastStartRef.current < 0 || start < lastStartRef.current) {
-      holdUntilRef.current = performance.now() + 120
+      holdFlushTickRef.current = getTerminalFlushTick()
     }
     lastStartRef.current = start
   }
@@ -947,15 +1022,15 @@ export function MessageList({
         )
       }
     }
-    if (changed && !measureQueuedRef.current) {
-      // Layout corrections can cascade for many rows. Yield between commits
-      // so React does not count the valid convergence as nested updates.
-      measureQueuedRef.current = true
-      queueMicrotask(() => {
-        measureQueuedRef.current = false
+    if (changed && measureTimerRef.current === null) {
+      // Layout corrections can cascade for many rows. Yield to the next
+      // macrotask so React does not count the valid convergence as nested
+      // updates when a streaming/reveal commit is already in flight.
+      measureTimerRef.current = setTimeout(() => {
+        measureTimerRef.current = null
         noteFrameCause('measure')
         setMeasureTick(t => t + 1)
-      })
+      }, 0)
     }
     // History-paint continuation (main-screen open): more never-painted
     // batches remain — schedule the next slice on the macrotask queue so
@@ -964,10 +1039,9 @@ export function MessageList({
     // enough: each batch's mount+measure work is bounded (~2 viewports),
     // unlike the previous single-commit full mount that saturated the main
     // thread for seconds.
-    if (paintPendingRef.current && !paintQueuedRef.current) {
-      paintQueuedRef.current = true
-      setTimeout(() => {
-        paintQueuedRef.current = false
+    if (paintPendingRef.current && paintTimerRef.current === null) {
+      paintTimerRef.current = setTimeout(() => {
+        paintTimerRef.current = null
         if (!paintPendingRef.current) return
         noteFrameCause('measure')
         setMeasureTick(t => t + 1)
@@ -1000,14 +1074,38 @@ export function MessageList({
           const addMargin = margins.get(row.id) === true
           const tool = row.tool
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
+          const job = row.kind === 'job' ? row.job : undefined
+          const revealVersion = smoothStreaming && row.kind === 'tool' && row.fresh === true &&
+            row.tool?.status === 'running' && row.tool.resultView === undefined
+            ? getRevealVersion()
+            : 0
+          // Smooth reveal feeds the SAME flattened text prop a chunk feeds,
+          // and keeps the streaming layout alive until the reveal catches up
+          // (settling mid-reveal must not snap — a one-shot non-streaming
+          // delivery still paints as a flow).
+          let displayText = row.text
+          let displayStreaming = row.streaming === true
+          if (row.kind === 'assistant' && smoothStreaming) {
+            const stripped = stripNarration(row.text)
+            displayText = revealTextOf(`a${row.id}`, stripped, {
+              enabled: true,
+              active: displayStreaming || row.fresh === true,
+            })
+            displayStreaming = displayStreaming || displayText.length !== stripped.length
+          } else if (row.kind === 'assistant') {
+            displayText = stripNarration(row.text)
+          } else if (row.kind === 'reasoning' && smoothStreaming) {
+            displayText = revealTextOf(`r${row.id}`, row.text, { enabled: true, active: displayStreaming })
+          }
           return (
             <MemoRow
               key={row.id}
               rowId={row.id}
               kind={row.kind}
-              text={row.text}
+              text={displayText}
+              textFull={row.kind === 'reasoning' ? row.text : undefined}
               executionTarget={row.executionTarget}
-              streaming={row.streaming === true}
+              streaming={displayStreaming}
               durationMs={row.durationMs}
               time={row.time}
               addMargin={addMargin}
@@ -1019,6 +1117,9 @@ export function MessageList({
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
+              smoothStreaming={smoothStreaming}
+              fresh={row.fresh === true}
+              revealVersion={revealVersion}
               activityFrames={activityFrames}
               cockpit={cockpit}
               background={rowBackground(row.id)}
@@ -1036,10 +1137,12 @@ export function MessageList({
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
               subagent={subagent}
+              job={job}
               onToggleRow={onToggleRow}
-              onToggleStreamFold={onToggleStreamFold}
-              streamFolded={streamFoldedRows.has(row.id)}
+              onToggleStreamView={onToggleStreamView}
+              streamViewToggled={streamViewToggledRows.has(row.id)}
               onOpenSubagent={onOpenSubagent}
+              onOpenJobs={onOpenJobs}
               onOpenFile={onOpenFile}
               setRowRef={setRowRef}
             />
@@ -1063,6 +1166,10 @@ type MemoRowProps = {
   rowId: number
   kind: ChatRow['kind']
   text: string
+  /** Reasoning rows: the FULL un-revealed text — the live three-line preview
+   *  ticker follows the newest arrived content (never the reveal), while the
+   *  expanded body shows the revealed slice in `text`. */
+  textFull?: string
   executionTarget: string | undefined
   streaming: boolean
   durationMs: number | undefined
@@ -1074,6 +1181,12 @@ type MemoRowProps = {
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout: 'auto' | 'split' | 'unified'
+  /** Smooth streaming reveal (forwarded to thinking/tool renderers). */
+  smoothStreaming: boolean
+  /** Live-arrived row flag (drives tool-card reveal participation). */
+  fresh: boolean
+  /** Version tick for active tool reveal; 0 keeps settled rows memoized. */
+  revealVersion: number
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
@@ -1104,12 +1217,15 @@ type MemoRowProps = {
   // SubagentRow, stable ref (subagent lifecycle events update the store, not
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined
+  // JobRow, same update contract as SubagentRow (replaced per job commit).
+  job: JobRow | undefined
   onToggleRow: (rowId: number) => void
-  /** 流式 reasoning 行折叠开关（默认展开 live，点击折叠；落定行用 onToggleRow）。 */
-  onToggleStreamFold: (rowId: number) => void
-  /** 该行是否被用户折叠（仅流式 reasoning 行消费）。 */
-  streamFolded: boolean
+  /** 流式 reasoning 行在三行预览/全文间切换；落定行用 onToggleRow。 */
+  onToggleStreamView: (rowId: number) => void
+  /** 是否反转该流式行的 thinkingFold 默认视图。 */
+  streamViewToggled: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
+  onOpenJobs: (() => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
   setRowRef: (rowId: number, el: DOMElement | null) => void
 }
@@ -1135,6 +1251,7 @@ function TranscriptRow({
   rowId,
   kind,
   text,
+  textFull,
   executionTarget,
   streaming,
   durationMs,
@@ -1145,6 +1262,9 @@ function TranscriptRow({
   expanded,
   model,
   diffLayout,
+  smoothStreaming,
+  fresh,
+  revealVersion,
   thinkingFold,
   toolBackground,
   foldTerminalCommand,
@@ -1165,10 +1285,12 @@ function TranscriptRow({
   toolStartedAt,
   toolDurationMs,
   subagent,
+  job,
   onToggleRow,
-  onToggleStreamFold,
-  streamFolded,
+  onToggleStreamView,
+  streamViewToggled,
   onOpenSubagent,
+  onOpenJobs,
   onOpenFile,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
@@ -1186,12 +1308,12 @@ function TranscriptRow({
     if (event.cellIsBlank) return
     onToggleRow(rowId)
   }, [onToggleRow, rowId])
-  // 流式 reasoning 行：点击折叠/展开 live 视图（默认展开，与落定行的
-  // 默认折叠相反——所以走独立开关，落定后语义自动回到 foldOnClick）。
-  const streamFoldOnClick = React.useCallback((event: ClickEvent): void => {
+  // 流式 reasoning 行：点击在三行预览/全文间切换。它反转 thinkingFold
+  // 的默认值，落定后语义自动回到 foldOnClick。
+  const streamViewOnClick = React.useCallback((event: ClickEvent): void => {
     if (event.cellIsBlank) return
-    onToggleStreamFold(rowId)
-  }, [onToggleStreamFold, rowId])
+    onToggleStreamView(rowId)
+  }, [onToggleStreamView, rowId])
   // 子代理卡：点击打开详情场景（不是折叠）。
   const openSubagent = React.useCallback(() => {
     if (subagent !== undefined) onOpenSubagent?.(subagent.agentId)
@@ -1258,33 +1380,30 @@ function TranscriptRow({
           />
         </Box>
       )
-    case 'reasoning':
+    case 'reasoning': {
+      // The setting chooses the live default; a row click reverses it. Global
+      // or per-row transcript expansion always wins and shows the full text.
+      const streamPreview = streaming && !expanded && !isExpanded &&
+        (streamViewToggled ? thinkingFold === 'full' : thinkingFold === 'preview')
       return (
         <Box flexDirection="column" ref={ref}>
           <AssistantThinkingMessage
             thinking={text}
+            textFull={textFull}
             addMargin={addMargin}
             cockpit={cockpit}
             streaming={streaming}
-            preview={
-              streaming &&
-              !streamFolded &&
-              thinkingFold === 'preview' &&
-              !isExpanded
-            }
-            // When thinkingFold is 'full' (default), reasoning blocks stay expanded by default;
-            // streamFoldOnClick / foldOnClick allows toggling them folded if clicked.
-            verbose={
-              streaming
-                ? !streamFolded
-                : expanded || (thinkingFold === 'full' ? !isExpanded : isExpanded)
-            }
+            preview={streamPreview}
+            // Settled rows keep the fold-on-settle default and expand via
+            // expandedRows/Ctrl+O; a live row is always preview or full.
+            verbose={isExpanded || expanded || (streaming && !streamPreview)}
             durationMs={durationMs}
             isSelected={isSelected}
-            onClick={streaming ? streamFoldOnClick : foldOnClick}
+            onClick={streaming ? streamViewOnClick : foldOnClick}
           />
         </Box>
       )
+    }
     case 'tool': {
       if (
         toolCallId === undefined ||
@@ -1322,6 +1441,8 @@ function TranscriptRow({
             footnote={toolFootnote}
             diffLayout={diffLayout}
             toolBackground={toolBackground}
+            smoothReveal={smoothStreaming}
+            fresh={fresh}
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
@@ -1389,6 +1510,17 @@ function TranscriptRow({
             activityFrames={activityFrames}
             isExpanded={isExpanded}
             onClick={openSubagent}
+          />
+        </Box>
+      )
+    case 'job':
+      if (!job) return null
+      return (
+        <Box flexDirection="column" ref={ref}>
+          <JobCard
+            job={job}
+            addMargin={addMargin}
+            onClick={onOpenJobs}
           />
         </Box>
       )

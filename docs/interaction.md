@@ -179,6 +179,38 @@ Tab 会在进入编辑缓冲区时展开为空格。
 Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的会话 ID
 （该文件同时双写到旧路径 `~/.dsh-cc/resume.txt`，供只读旧路径的旧版启动器过渡）。
 
+### 会话总览（Agent View）
+
+`/agentview` 打开会话总览——一个全屏界面，列出本进程内的全部会话：当前会话、
+从这里派发的后台会话，以及磁盘上已停止的历史会话。行按状态分组（等待输入 >
+运行中 > 失败 > 已完成 > 空闲 > 已停止），每行带一行活动摘要——取自会话自身
+输出，不做额外摘要模型调用。
+
+| 按键 | 作用 |
+| --- | --- |
+| 直接输入 | 底部输入框写任务描述 |
+| `Enter` | 输入框有文字=派发新后台会话；否则切换到选中会话 |
+| `Shift+Enter` | 派发并立即切换过去 |
+| `↑` `↓` / `PgUp` `PgDn` | 移动、翻页 |
+| `→` | 切换到选中会话 |
+| `Space` | 打开/关闭预览面板（输入框为空时）；预览内输入回复 + `Enter` 发送 |
+| `Ctrl+X` | 停止后台会话；两秒内再次按下删除 |
+| `Ctrl+R` | 重命名选中会话 |
+| `Esc` | 关预览 → 清空输入 → 退出 |
+| `Ctrl+C` | 清空输入；再按一次退出 |
+| `?` | 快捷键帮助 |
+
+派发出去的会话在本进程内独立运行（回合、工具、审批照常），TUI 切换到其他会话
+不打断它。后台会话的审批请求会显示为「等待输入」，审批面板直接在总览内弹出
+（标注来源会话），行的摘要显示它被阻塞的问题。`/bg`（别名 `/background`）把
+当前会话转入后台继续运行、终端切到新会话并打开总览；**聊天输入框为空时按
+`←` 是同一件事**——当前会话转入后台并直接打开总览（输入框有文字时 `←` 照常
+移动光标）。经 `←`/`/bg` 打开时，总览顶部显示「当前会话已转入后台——Enter
+打开它 · Esc 返回它 · Ctrl+C 两次退出」，最终 Esc 会返回被转入后台的会话。
+输入框底部在有会话等待输入时显示「← N 个会话等待输入」计数（N=0 时不占行）。预览与回复对运行中会话即时生效；
+已停止会话需先 `Enter` 切换进去。后台会话随 TUI 进程退出而停止（日志保留，
+可恢复）；没有 supervisor 进程。
+
 ### Rewind
 
 输入框为空时连续按两次 `Esc` 打开用户消息列表。选择并确认后：
@@ -332,11 +364,17 @@ transcript。
 | 按键 | 行为 |
 | --- | --- |
 | `Up/Down` | 在选项与底部反馈输入行之间移动 |
+| 鼠标滚轮 | 滚动计划正文；批准 / 继续规划 / 反馈行保持钉在视口内 |
 | `1`/`2` | 直接提交对应选项（反馈缓冲为空时；非空则数字视为反馈字符） |
 | 打字 | 进入反馈输入行 |
 | `Enter`（选项行） | 提交该选项；批准行有反馈时会报错——批准必须不带反馈，否则协议视为"继续规划" |
 | `Enter`（输入行） | 提交"继续规划"并附上反馈文本 |
 | `Esc` | 打断评审去说话（`ASK_CANCELLED`），模型停留在计划模式 |
+
+批准计划或执行 `/plan off` 后，会话恢复进入计划前的实际沙箱与审批策略；
+`Shift+Tab` 切走则保留用户选择的目标模式，包括运行中延迟生效的切换。
+恢复已有会话时从事件历史还原进入前权限；历史不足以确定的权限保持不变，
+不会因为无法匹配配置模式而自动回落到 full access。
 
 ## 工具审批（approval）
 
@@ -360,8 +398,8 @@ transcript。
 
 | 分组 | 命令 |
 | --- | --- |
-| 会话 | `/new`、`/resume`、`/rename`、`/recap`（最近活动摘要 + 建议标题一键应用；设置 `recapOnOpen` 开启时打开会话自动出分隔线 + `回顾：` 摘要行，发送新消息后消失，默认开）、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`）、`/rewind`（时间回溯，同空输入双击 `Esc`） |
-| 状态 | `/context`、`/status`、`/cost`、`/balance`（DeepSeek 官方余额：摘要行 + hover 明细，点击刷新）、`/config`、`/doctor`、`/init`、`/agents`、`/settings` |
+| 会话 | `/new`、`/resume`、`/agentview`（会话总览）、`/bg`（别名 `/background`，会话转入后台并打开总览）、`/rename`、`/recap`（最近活动摘要 + 建议标题一键应用；设置 `recapOnOpen` 开启时打开会话自动出分隔线 + `回顾：` 摘要行，发送新消息后消失，默认开）、`/workspace resume|rename|open`、`/clear`、`/compact`、`/export`、`/btw`、`/trace`（轨迹场景，亦可 `Ctrl+T`）、`/rewind`（时间回溯，同空输入双击 `Esc`） |
+| 状态 | `/context`、`/status`、`/cost`、`/balance`（DeepSeek 官方余额：摘要行 + hover 明细，点击刷新）、`/config`、`/doctor`、`/init`、`/agents`、`/jobs`（后台任务面板：状态/时长/退出码，`k` 停止）、`/settings` |
 | 模型与显示 | `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`、`/color`（会话强调色：无参打开调色板选择器，`<名>` 直接设置，`status`/`reset`；输入框边框 + 右上角会话名标签，按会话保存；标签默认关闭，`/settings` 可开）、`/lang` |
 | 账号与策略 | `/provider`、`/login`、`/logout`、`/permission`、`/add-dir`、`/hooks`、`/mcp`、`/plugins`（`check <路径>` 校验插件清单） |
 | Skills | `/skills` 浏览 DSH 从当前 profile、用户与项目发现的技能；可直调技能以 `/name` 加入菜单 |
@@ -398,3 +436,23 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
 
 `/connect`、`/hooks` 当前是兼容占位命令；当 DSH 组合没有
 对应能力时会给出明确说明，而不是静默执行。
+
+## 外部注入通道（编辑器集成）
+
+运行中的会话会开一个**本会话独占的本地注入通道**，供编辑器插件（如
+`dsh.nvim`）把上下文推进输入框。它是
+OpenCode `POST /tui/publish` 的对应物，但走本地 socket 而非 HTTP 端口：无端口
+分配、无鉴权面，端点随会话退出自动清理。
+
+- **传输**：Unix domain socket `~/.dsh-tui/inject/<sessionId>.sock`
+  （Windows 为命名管道 `\\.\pipe\dsh-tui-inject-<sessionId>`）。
+- **发现**：`~/.dsh-tui/inject/servers.json` 列出每个存活会话
+  （`pid`、`sessionId`、`cwd`、`socketPath`），客户端据此按 `cwd` 匹配项目并
+  选择目标会话；会话退出时该记录被移除。
+- **协议**：换行分隔的 JSON，每行一条：
+  `{"type":"prompt.append","text":"@src/foo.ts "}` 把文本追加到输入框；
+  `{"type":"command.execute","command":"prompt.submit"}` 提交当前输入。追加文本以
+  空格结尾（OpenCode 惯例）时保持不提交，便于继续编辑。
+- **接线**：追加复用输入框的 `PromptController.append`，提交走
+  `channel.submit`（工作态下自动进 inbox，回合结束后处理）。实现见
+  `src/dsh-adapter/inject-channel.ts`，回归门禁 `scripts/verify-inject-channel.mjs`。

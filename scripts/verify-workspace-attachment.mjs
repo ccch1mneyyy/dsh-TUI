@@ -129,8 +129,8 @@ assert.match(
 assert.doesNotMatch(plugin, /if \(created\)/, 'startup attachment must not skip resumed legacy sessions')
 assert.equal(
   [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|handle\.agent\.session\.header\.cwd \?\? state\.cwd|sourceCwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
-  6,
-  'rewind, /resume, /new, model-switch, tree rewindToNode, and /fork paths all attach ownership',
+  9,
+  'rewind, /resume, /new, model-switch, tree rewindToNode, /fork, and agent-view (adopt/background/attach) paths all attach ownership',
 )
 for (const id of ['storage', 'storage-json', 'storage-domain', 'workspace']) {
   assert.match(patch, new RegExp(`- id: dsh-tui-${id}\\n`), `profile patch mounts scoped dsh-tui-${id}`)

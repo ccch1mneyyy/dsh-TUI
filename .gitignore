@@ -15,3 +15,5 @@ package-lock.json
 HANDOVER.md
 .local/
 .superpowers/
+.claude/
+.upstream/

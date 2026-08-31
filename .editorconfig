@@ -1,0 +1,18 @@
+# 与 AGENTS.md 的风格约定和 .gitattributes 的换行规则保持一致。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Markdown 行尾双空格是硬换行语义，不能裁剪。
+[*.md]
+trim_trailing_whitespace = false
+
+# Windows 批处理由 cmd.exe 解析，检出为 CRLF（见 .gitattributes）。
+[*.cmd]
+end_of_line = crlf

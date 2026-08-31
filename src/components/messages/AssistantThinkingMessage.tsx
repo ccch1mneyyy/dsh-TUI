@@ -24,11 +24,16 @@ const PREVIEW_ROWS = 3
 
 type Props = {
   thinking: string
+  /** The FULL un-revealed text (reasoning rows under smooth streaming):
+   *  `thinking` carries the revealed slice the expanded body paints, while
+   *  the live preview ticker must follow the newest ARRIVED content — never
+   *  a lagging reveal. Falls back to `thinking`. */
+  textFull?: string
   /** Adds the top margin between messages (CC: addMargin). */
   addMargin: boolean
   /** Cockpit frame: quieter settled header (no italic shout). */
   cockpit?: boolean
-  /** True when Ctrl+O transcript/verbose mode is on — show the full text. */
+  /** Show the full text (Ctrl+O, per-row expansion, or live click toggle). */
   verbose: boolean
   /** True while the reasoning block is still streaming — the leading mark
    *  becomes a rotating braille spinner (Kimi Code style) and settles back
@@ -46,16 +51,17 @@ type Props = {
 }
 
 /**
- * Thinking block: folded `› Thinking (ctrl+o to expand)`, expanded shows the
- * full reasoning text indented under `› Thinking…`. While the reasoning
- * streams the leading mark is a rotating braille spinner (`⠋⠙⠹…`, Kimi Code
- * style), settling back to the static chevron (`›`) once the turn ends. When
+ * Thinking block: settled rows fold to `› Thinking (ctrl+o to expand)`;
+ * streaming rows switch between a three-line preview and the full reasoning
+ * text on click. The live leading mark is a rotating braille spinner
+ * (`⠋⠙⠹…`, Kimi Code style), settling back to the static chevron (`›`). When
  * the channel records the reasoning duration, the label carries it
  * (`› Thinking · 12s …`) — dsh-tui's take on making thinking time visible in
  * the transcript.
  */
 export function AssistantThinkingMessage({
   thinking,
+  textFull,
   addMargin,
   cockpit = false,
   verbose,
@@ -66,6 +72,11 @@ export function AssistantThinkingMessage({
   onClick,
 }: Props): React.ReactNode {
   if (!thinking) return null
+
+  // The preview ticker tracks the newest ARRIVED line (smooth streaming must
+  // not lag it behind the reveal); the expanded body below paints `thinking`
+  // — the revealed slice under smooth streaming, the full text otherwise.
+  const tickerText = textFull ?? thinking
 
   // Spinner frame (80ms cadence, only while the reasoning is still
   // streaming — same pattern as BtwPanel's answering spinner).
@@ -117,7 +128,7 @@ export function AssistantThinkingMessage({
     // from the start (leading ellipsis) so the newest tokens — which grow
     // at the line's end — stay visible while the line is longer than the
     // width.
-    const lines = thinking.split('\n')
+    const lines = tickerText.split('\n')
     const visible = lines.slice(-PREVIEW_ROWS)
     const clipped = lines.length > visible.length
     // Pad with single spaces — an empty-string Text renders with zero

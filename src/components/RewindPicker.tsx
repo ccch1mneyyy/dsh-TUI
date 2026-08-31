@@ -128,7 +128,7 @@ export function RewindPicker({
   return (
     <Pane color="permission">
       <Box flexDirection="column">
-        <Box marginBottom={1}>
+        <Box marginBottom={1} flexDirection="column">
           <Text color="remember" bold>
             {t('rewind-title')}
           </Text>

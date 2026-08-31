@@ -22,12 +22,15 @@ import type { ApprovalSnapshot } from '../../dsh-adapter/approvals.js'
 export type ApprovalPanelProps = {
   /** The approval to render (from the ApprovalStore snapshot). */
   readonly approval: ApprovalSnapshot
+  /** True when the asking agent is NOT the attached session — a background
+   *  (agent view) session's ask, answered from the same single panel. */
+  readonly background?: boolean
   readonly onDecide: (outcome: 'allowed-once' | 'rejected') => void
 }
 
 const OUTCOMES = ['allowed-once', 'rejected'] as const
 
-export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React.ReactNode {
+export function ApprovalPanel({ approval, background = false, onDecide }: ApprovalPanelProps): React.ReactNode {
   const [focusIndex, setFocusIndex] = React.useState(0)
   // Hover highlight per decision row (mouse affordance; the click handler
   // below mirrors the keyboard Enter on the focused row).
@@ -59,8 +62,13 @@ export function ApprovalPanel({ approval, onDecide }: ApprovalPanelProps): React
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
-      <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} padding={4} />
+      <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} />
       <Box flexDirection="column" marginTop={1}>
+        {background && (
+          <Text color="warning">
+            {t('approval-background-agent', { id: approval.agentId.slice(0, 8) })}
+          </Text>
+        )}
         {approval.external === true && (
           <Text color="warning" wrap="wrap">[external] {t('approval-external-hint')}</Text>
         )}

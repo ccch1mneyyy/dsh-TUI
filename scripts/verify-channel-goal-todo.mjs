@@ -195,11 +195,20 @@ if (sessionHandler === undefined) {
   check('live todo/write replaces the list', channel.todos?.length === 2 && channel.todos[1]?.status === 'in_progress')
   check('subscriber notified after todo write', notified === 2)
 
-  // 3. Positive-round continuation prompt advances roundsStarted only.
+  // 3. Malformed optional-plugin data must not poison the last good snapshot.
   sessionHandler(session, {
-    type: 'user/message',
+    type: 'todo/write',
     seq: 7,
     time: now + 2,
+    data: { todos: [{ content: 42, status: 'pending' }] },
+  })
+  check('malformed todo/write is ignored', channel.todos?.length === 2 && channel.todos[1]?.status === 'in_progress')
+
+  // 4. Positive-round continuation prompt advances roundsStarted only.
+  sessionHandler(session, {
+    type: 'user/message',
+    seq: 8,
+    time: now + 3,
     data: {
       source: { kind: 'goal', goalId: 'g1', revision: 3, round: 2 },
       content: [],
@@ -207,11 +216,11 @@ if (sessionHandler === undefined) {
   })
   check('continuation round advances roundsStarted', channel.goal?.roundsStarted === 2 && channel.goal?.revision === 3)
 
-  // 4. Clear tombstone removes the goal.
+  // 5. Clear tombstone removes the goal.
   sessionHandler(session, {
     type: 'user/message',
-    seq: 8,
-    time: now + 3,
+    seq: 9,
+    time: now + 4,
     data: {
       source: {
         kind: 'goal',
@@ -223,7 +232,7 @@ if (sessionHandler === undefined) {
           version: 1,
           operation: 'clear',
           cleared: { id: 'g1', revision: 4 },
-          clearedAt: now + 3,
+          clearedAt: now + 4,
         },
       },
       content: [],
@@ -231,11 +240,11 @@ if (sessionHandler === undefined) {
   })
   check('clear removes the goal', channel.goal === undefined)
 
-  // 5. Non-goal injected context must not disturb the projection.
+  // 6. Non-goal injected context must not disturb the projection.
   sessionHandler(session, {
     type: 'user/message',
-    seq: 9,
-    time: now + 4,
+    seq: 10,
+    time: now + 5,
     data: { source: { kind: 'plugin', plugin: 'skills' }, content: [] },
   })
   check('non-goal injected message ignored', channel.goal === undefined && channel.todos?.length === 2)

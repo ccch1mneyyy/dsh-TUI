@@ -61,11 +61,13 @@ const isBigInput = (text: string): boolean =>
  */
 const EDITABLE_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f]/u
 
+/** Normalize editable text so no terminal control characters remain in state. */
 function sanitizeEditableText(text: string): string {
   // Fast path for ordinary and multi-line drafts: newline is intentionally
   // absent from the probe, so a large clean paste returns without regex work.
   if (!EDITABLE_CONTROL.test(text)) return text
   return stripAnsi(text)
+    .replace(/\r\n?/gu, '\n')
     .replace(/\t/gu, '        ')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
 }
@@ -267,6 +269,13 @@ export interface PromptController {
   hasText(): boolean
   clear(): void
   /**
+   * Append `text` at the end of the input (external injection channel; see
+   * dsh-adapter/inject-channel.ts). Unlike `fillText`, which replaces the
+   * whole value, this accumulates — matching OpenCode's `tui.prompt.append`
+   * so repeated editor sends build one prompt. Returns the resulting value.
+   */
+  append(text: string): string
+  /**
    * Copy the active mouse selection to the system clipboard (OSC 52 + the
    * native fallback) and KEEP the selection for further editing. Returns
    * true when a selection existed and consumed the key; Chat's Ctrl+C
@@ -277,8 +286,7 @@ export interface PromptController {
   toggleVim(): boolean
   /** True while vim mode is on (either submode). Esc belongs to vim then —
    *  Chat's working-turn Esc interrupt must yield in BOTH submodes. */
-  vimActive(): boolean
-}
+  vimActive(): boolean}
 
 export interface PromptInputProps {
   channel: Channel
@@ -301,6 +309,17 @@ export interface PromptInputProps {
   onFillConsumed?(): void
   /** Double-tap Esc with an empty input: open the rewind picker (CC rewind). */
   onRewindRequest?(): void
+  /**
+   * CC agent-view parity: ← on an EMPTY prompt backgrounds this session and
+   * opens the agent view (with text, ← moves the caret as usual).
+   */
+  onBackgroundRequest?(): void
+  /**
+   * Background sessions waiting on the user (agent view "needs input" rows
+   * excluding this session); the prompt footer shows the CC-style
+   * "← N agents" hint when provided (hidden when undefined).
+   */
+  backgroundAgentsNeedingInput?: number
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
 }
@@ -345,6 +364,8 @@ export function PromptInput({
   fillText,
   onFillConsumed,
   onRewindRequest,
+  onBackgroundRequest,
+  backgroundAgentsNeedingInput,
   controllerRef,
 }: PromptInputProps) {
   const [themeName] = useTheme()
@@ -478,6 +499,14 @@ export function PromptInput({
         setValue('')
         setCursor(0)
       },
+      append: (text: string) => {
+        const next = valueRef.current + text
+        valueRef.current = next
+        cursorRef.current = next.length
+        setValue(next)
+        setCursor(next.length)
+        return next
+      },
       consumeSelectionCopy: () => {
         const sel = selectionRef.current
         if (!sel) return false
@@ -502,8 +531,7 @@ export function PromptInput({
         vimUndoRef.current = []
         return next
       },
-      vimActive: () => vimEnabledRef.current,
-    }
+      vimActive: () => vimEnabledRef.current,    }
     return () => {
       controllerRef.current = null
     }
@@ -755,7 +783,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.submit(trimmed)
     if (notice) {
       channel.notify(notice, { timeoutMs: 2500 })
@@ -779,7 +807,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.steer(trimmed)
     channel.notify(t('input-interrupted-next'), { timeoutMs: 2500 })
   }
@@ -796,7 +824,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.submit(trimmed)
     channel.notify(t('input-queued-after-turn'), { timeoutMs: 2500 })
   }
@@ -841,7 +869,7 @@ export function PromptInput({
     setInput('', 0)
     setSelectedCommand(0)
     setFileSelected(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.notify(t('input-interrupt-immediate'), { timeoutMs: 2500 })
   }
 
@@ -867,7 +895,7 @@ export function PromptInput({
       historyIndex.current = -1
       setInput('', 0)
       setSelectedCommand(0)
-      appendHistory(text.trim())
+      void appendHistory(text.trim())
     }
     return handled
   }
@@ -1237,10 +1265,11 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+J is the only portable multiline fallback when a terminal cannot
-    // report modifiers on Enter. The parser names its bare LF `enter`, while
-    // the physical Enter key arrives as CR (`return`).
-    if (input === '\n' && event?.keypress.name === 'enter') {
+    // Ctrl+J is the portable multiline fallback when a terminal cannot
+    // report modifiers on Enter. Legacy terminals deliver bare LF (`enter`),
+    // while kitty/modifyOtherKeys encode it as an exact Ctrl+J key.
+    const isCtrlJ = input === 'j' && key.ctrl && !key.shift && !key.meta && !key.super
+    if ((input === '\n' && event?.keypress.name === 'enter') || isCtrlJ) {
       insertAtCaret('\n')
       return
     }
@@ -1291,9 +1320,7 @@ export function PromptInput({
       // supports extended key reporting (kitty/modifyOtherKeys allowlist in
       // ink/terminal.ts); Option+Enter (ESC CR) is the fallback on terminals
       // that can't report shift — e.g. macOS Terminal.app (issue #110).
-      const next = value.slice(0, cursor) + '\n' + value.slice(cursor)
-      setInput(next, cursor + 1)
-      setSelectedCommand(0)
+      insertAtCaret('\n')
       return
     }
     if (key.return && expandedRef.current) {
@@ -1406,7 +1433,11 @@ export function PromptInput({
       }
     }
     if (key.upArrow) {
-      if (fileOverlayOpen) {
+      // A history walk owns the arrows until it returns to the draft: a
+      // recalled entry can itself open the @ menu or the slash menu (e.g.
+      // `/model`), and letting the overlay navigate here strands the stashed
+      // draft — Down would cycle menu rows instead of walking back.
+      if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
           index <= 0 ? fileMatches.length - 1 : index - 1,
         )
@@ -1444,7 +1475,7 @@ export function PromptInput({
           }
         }
       }
-      if (overlayOpen) {
+      if (overlayOpen && historyIndex.current < 0) {
         setSelectedCommand(index =>
           index <= 0 ? suggestions.length - 1 : index - 1,
         )
@@ -1463,7 +1494,8 @@ export function PromptInput({
       return
     }
     if (key.downArrow) {
-      if (fileOverlayOpen) {
+      // Same history-walk ownership as ↑ above.
+      if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
           index >= fileMatches.length - 1 ? 0 : index + 1,
         )
@@ -1522,7 +1554,7 @@ export function PromptInput({
           }
         }
       }
-      if (overlayOpen) {
+      if (overlayOpen && historyIndex.current < 0) {
         setSelectedCommand(index =>
           index >= suggestions.length - 1 ? 0 : index + 1,
         )
@@ -1554,6 +1586,14 @@ export function PromptInput({
       return
     }
     if (key.leftArrow) {
+      // CC agent-view parity: ← on an EMPTY prompt backgrounds this session
+      // and opens the agent view; with text it moves the caret as usual.
+      // (The command/file overlays both imply non-empty text, so no extra
+      // gate beyond the help menu is needed.)
+      if (value.length === 0 && !helpOpen) {
+        onBackgroundRequest?.()
+        return
+      }
       // Grapheme-step: skip the whole cluster (surrogate pair, ZWJ emoji,
       // combining mark) so the caret never sits inside one. With a
       // selection, collapse to its start edge instead.
@@ -1998,11 +2038,21 @@ export function PromptInput({
   const visualLines = block
     ? [...headRows, '', ...tailRows]
     : wrapToWidth(value, inputWidth)
-  const caretVisualLine = block
+  // Caret geometry uses the FULL wrap (not `value.slice(0, cursor)`):
+  // word-wrap carry moves already-placed clusters, so a prefix wrap would
+  // disagree with the displayed rows whenever the cursor sits inside a
+  // carried word.
+  const caretPlaced = block
     ? cursor <= block.start
-      ? wrapToWidth(value.slice(0, cursor), inputWidth).length - 1
-      : headRows.length + 1 + wrapToWidth(value.slice(block.end, cursor), inputWidth).length - 1
-    : wrapToWidth(value.slice(0, cursor), inputWidth).length - 1
+      ? caretInText(head, inputWidth, cursor)
+      : caretInText(tail, inputWidth, Math.max(0, cursor - block.end))
+    : caretInText(value, inputWidth, cursor)
+  const caretVisualLine =
+    block && cursor > block.start
+      ? headRows.length + 1 + caretPlaced.line
+      : caretPlaced.line
+  const caretCharCol = caretPlaced.charCol
+  const caretVisualCol = caretPlaced.visualCol
 
   // Fold stats describe the BLOCK (or the whole input when expanded and
   // the ▾ prefix offers a manual whole-input fold). The chip shows the
@@ -2058,27 +2108,6 @@ export function PromptInput({
   // useInput 的滚轮分支需要这份几何（它在这些派生之前注册）。
   if (expanded) {
     editorViewportRef.current = { maxRows: editorMaxRows, total: visualLines.length }
-  }
-
-  // Caret position in the caret's visual row, in two units:
-  // - char index (for slicing the row's characters in the render below)
-  // - visual column (for the physical cursor declaration — CJK characters
-  //   occupy TWO terminal columns, so the raw char count would park the
-  //   cursor mid-character and Windows Terminal would paint the IME
-  //   preedit (pinyin) over the surrounding text).
-  const caretCharCol = () => {
-    const before =
-      block && cursor >= block.end ? value.slice(block.end, cursor) : value.slice(0, cursor)
-    const rows = wrapToWidth(before, inputWidth)
-    const last = rows[rows.length - 1] ?? ''
-    return last.length
-  }
-  const caretVisualCol = () => {
-    const before =
-      block && cursor >= block.end ? value.slice(block.end, cursor) : value.slice(0, cursor)
-    const rows = wrapToWidth(before, inputWidth)
-    const last = rows[rows.length - 1] ?? ''
-    return stringWidth(last)
   }
 
   // Folded chip content: block stats + first-line preview + hover hint,
@@ -2138,7 +2167,7 @@ export function PromptInput({
     }
     let endBlankCaret = false
     if (absoluteLine === caretVisualLine) {
-      const col = Math.min(caretCharCol(), text.length)
+      const col = Math.min(caretCharCol, text.length)
       const clusterEnd = nextGraphemeBoundary(graphemeBoundaries(text), col)
       if (clusterEnd > col) intervals.push([col, clusterEnd])
       else endBlankCaret = col === text.length
@@ -2308,7 +2337,7 @@ export function PromptInput({
     // (padding + gutter included), so those columns ride along and the
     // clamp grows with them.
     column: Math.min(
-      caretVisualCol() +
+      caretVisualCol +
         (expanded
           ? editorGutterCols + 1
           : caretVisualLine === 0 && prefixCols > 0
@@ -2909,51 +2938,105 @@ export function PromptInput({
         </Box>
       </EffortInputBorder>
       </Box>
+      {/* CC agent-view footer: "← N agents" when background sessions are
+          waiting on the user, "← for agents" otherwise — the ← affordance's
+          discoverability hint. Only rendered when the Chat screen supplies
+          the count. */}
+      {backgroundAgentsNeedingInput !== undefined && (
+        <Box flexDirection="row" justifyContent="flex-end" paddingRight={2}>
+          <Text dimColor>
+            {backgroundAgentsNeedingInput > 0
+              ? t('input-background-hint-count', { n: backgroundAgentsNeedingInput })
+              : t('input-background-hint-idle')}
+          </Text>
+        </Box>
+      )}
     </Box>
   )
 }
 
 /**
- * Hard-wrap text into visual rows of at most `width` columns (CJK-aware via
- * stringWidth). Used by the input renderer so long lines wrap instead of
- * truncating, with exact caret-row mapping. Wrapping only ever breaks
- * BETWEEN grapheme clusters: iterating code points would split ZWJ emoji
- * and combining sequences across rows, leaving a broken half at each edge
- * and desyncing the caret's row arithmetic (which walks cluster
- * boundaries).
+ * Grapheme word-wrap for one logical line: break at the last space when
+ * the row overflows; hard-wrap a word that cannot fit; never split a
+ * cluster (ZWJ emoji, combining sequences, CJK wide cells stay whole).
  */
-function wrapToWidth(text: string, width: number): string[] {
-  const rows: string[] = []
+function wrapLineRows(
+  line: string,
+  width: number,
+): Array<{ start: number; end: number }> {
+  if (line === '') return [{ start: 0, end: 0 }]
+  const rows: Array<{ start: number; end: number }> = []
   const segmenter = getGraphemeSegmenter()
-  for (const line of text.split('\n')) {
-    if (line === '') {
-      rows.push('')
-      continue
-    }
-    let current = ''
-    let currentWidth = 0
-    for (const { segment } of segmenter.segment(line)) {
-      const w = stringWidth(segment)
-      if (currentWidth + w > width && current !== '') {
-        rows.push(current)
-        current = segment
-        currentWidth = w
+  let rowStart = 0
+  let currentWidth = 0
+  let offset = 0
+  let lastBreak = -1
+  for (const { segment } of segmenter.segment(line)) {
+    const w = stringWidth(segment)
+    while (currentWidth + w > width && offset > rowStart) {
+      if (lastBreak > rowStart) {
+        rows.push({ start: rowStart, end: lastBreak })
+        rowStart = lastBreak
+        currentWidth = stringWidth(line.slice(rowStart, offset))
+        lastBreak = -1
       } else {
-        current += segment
-        currentWidth += w
+        rows.push({ start: rowStart, end: offset })
+        rowStart = offset
+        currentWidth = 0
+        lastBreak = -1
       }
     }
-    rows.push(current)
+    currentWidth += w
+    offset += segment.length
+    if (segment === ' ') lastBreak = offset
   }
+  rows.push({ start: rowStart, end: offset })
   return rows
+}
+
+/** Wrap text to `width` columns via {@link wrapLineRows} (newlines honoured). */
+function wrapToWidth(text: string, width: number): string[] {
+  return text.split('\n').flatMap(line =>
+    wrapLineRows(line, width).map(r => line.slice(r.start, r.end)),
+  )
+}
+
+/**
+ * Locate `offset` in the wrapped layout of `text`. Uses the full wrap —
+ * not a prefix — so a cursor inside a carried word maps to the displayed
+ * row. At a wrap join the caret stays on the earlier row (after the space).
+ */
+function caretInText(
+  text: string,
+  width: number,
+  offset: number,
+): { line: number; charCol: number; visualCol: number } {
+  let line = 0
+  let lineBase = 0
+  let last = { line: 0, charCol: 0, visualCol: 0 }
+  for (const logical of text.split('\n')) {
+    for (const r of wrapLineRows(logical, width)) {
+      const start = lineBase + r.start
+      const charCol = Math.max(0, offset - start)
+      last = {
+        line,
+        charCol,
+        visualCol: stringWidth(logical.slice(r.start, r.start + charCol)),
+      }
+      if (offset <= lineBase + r.end) return last
+      line++
+    }
+    lineBase += logical.length + 1
+  }
+  return last
 }
 
 /**
  * Inverse of {@link wrapToWidth}: map a click position (visual row index +
- * visual column) back to a UTF-16 offset in the original text. Walks the
- * same grapheme boundaries with the same break rule, so every visual row's
- * start offset is known exactly. Within the clicked row, the caret snaps to
- * the boundary nearest the click: a grapheme whose midpoint lies past the
+ * visual column) back to a UTF-16 offset in the original text. Uses the
+ * same {@link wrapLineRows} row boundaries, so every visual row's start
+ * offset is known exactly. Within the clicked row, the caret snaps to the
+ * boundary nearest the click: a grapheme whose midpoint lies past the
  * click column takes the caret before it, otherwise after.
  */
 function clickToCursorOffset(
@@ -2965,77 +3048,47 @@ function clickToCursorOffset(
 ): number {
   const segmenter = getGraphemeSegmenter()
   let row = 0
-  let offset = 0
+  let lineBase = 0
   for (const line of text.split('\n')) {
-    if (line === '') {
-      if (row === visualLine) return offset
-      row++
-      offset++ // the '\n'
-      continue
-    }
-    let currentWidth = 0
-    for (const { segment } of segmenter.segment(line)) {
-      const w = stringWidth(segment)
-      if (currentWidth + w > width && currentWidth > 0) {
-        if (row === visualLine) return offset // end of the clicked wrapped row
-        row++
-        currentWidth = 0
-      }
+    for (const r of wrapLineRows(line, width)) {
       if (row === visualLine) {
-        // Caret positioning uses the nearest edge. Double-click selection
-        // instead needs the grapheme UNDER the cell: on the second cell of a
-        // CJK/emoji glyph, nearest-edge would point after the glyph (and the
-        // final glyph would select nothing).
-        if (snapWithin === 'grapheme-start' && currentWidth + w > visualCol) return offset
-        if (currentWidth + w / 2 > visualCol) return offset
-        if (currentWidth + w > visualCol) return offset + segment.length
+        let currentWidth = 0
+        let local = 0
+        for (const { segment } of segmenter.segment(line.slice(r.start, r.end))) {
+          const w = stringWidth(segment)
+          // Caret positioning uses the nearest edge. Double-click selection
+          // instead needs the grapheme UNDER the cell: on the second cell of a
+          // CJK/emoji glyph, nearest-edge would point after the glyph (and the
+          // final glyph would select nothing).
+          if (snapWithin === 'grapheme-start' && currentWidth + w > visualCol) {
+            return lineBase + r.start + local
+          }
+          if (currentWidth + w / 2 > visualCol) return lineBase + r.start + local
+          if (currentWidth + w > visualCol) return lineBase + r.start + local + segment.length
+          currentWidth += w
+          local += segment.length
+        }
+        return lineBase + r.end
       }
-      currentWidth += w
-      offset += segment.length
+      row++
     }
-    if (row === visualLine) return offset
-    row++
-    offset++ // the '\n'
+    lineBase += line.length + 1
   }
-  return offset
+  return lineBase
 }
 
 /**
- * Offset range [start, end) of every visual row, mirroring
- * {@link wrapToWidth}'s break rule exactly (breaks BETWEEN grapheme
- * clusters at `width` display columns, hard '\n' rows included). The
- * selection highlight intersects each row with these ranges so offsets
- * map 1:1 onto the rendered row strings.
+ * Offset range [start, end) of every visual row, using the same {@link
+ * wrapLineRows} boundaries as `wrapToWidth`. The selection highlight
+ * intersects each row with these ranges so offsets map 1:1 onto the
+ * rendered row strings.
  */
 function visualLineRanges(text: string, width: number): Array<[number, number]> {
   const ranges: Array<[number, number]> = []
-  const segmenter = getGraphemeSegmenter()
-  let offset = 0
+  let lineBase = 0
   for (const line of text.split('\n')) {
-    if (line === '') {
-      ranges.push([offset, offset])
-      offset++ // the '\n'
-      continue
-    }
-    let start = offset
-    let currentWidth = 0
-    let currentLength = 0
-    for (const { segment } of segmenter.segment(line)) {
-      const w = stringWidth(segment)
-      // `currentLength > 0` is wrapToWidth's `current !== ''` — a row
-      // starting with a zero-width cluster must never break on it.
-      if (currentWidth + w > width && currentLength > 0) {
-        ranges.push([start, offset])
-        start = offset
-        currentWidth = 0
-        currentLength = 0
-      }
-      currentWidth += w
-      currentLength += segment.length
-      offset += segment.length
-    }
-    ranges.push([start, offset])
-    offset++ // the '\n'
+    for (const r of wrapLineRows(line, width)) ranges.push([lineBase + r.start, lineBase + r.end])
+    lineBase += line.length + 1
   }
   return ranges
 }

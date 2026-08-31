@@ -14,6 +14,7 @@ export { parseAnsiRuns, highlightLines } from '../cc/syntaxRuns.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
+import { revealLinesOf } from './smoothReveal.js'
 
 /**
  * Side-by-side (two-pane) diff view for Edit/Write tool cards.
@@ -298,6 +299,7 @@ export function SplitDiffView({
   maxRows,
   verbose,
   toolBackground = 'none',
+  reveal,
 }: {
   readonly diffs: readonly ToolFileDiff[]
   /** Content width available to the whole two-pane block (divider included). */
@@ -306,6 +308,14 @@ export function SplitDiffView({
   readonly maxRows: number
   readonly verbose: boolean
   readonly toolBackground?: ToolBackground
+  /**
+   * Smooth-streaming participation (the card owning this view computes
+   * eligibility): when present, the capped row list reveals line-by-line at
+   * the shared ~30fps cadence instead of painting as one block. The `+N
+   * lines` fold hint stays rendered throughout — it describes the cap, not
+   * the reveal.
+   */
+  readonly reveal?: { readonly key: string }
 }): React.ReactNode {
   const [hl, setHl] = React.useState<CliHighlight | null>(null)
   React.useEffect(() => {
@@ -339,6 +349,12 @@ export function SplitDiffView({
   const capped = verbose || totalRows <= maxRows || totalRows - maxRows === 1
   const visible = capped ? rows : rows.slice(0, maxRows)
   const hidden = totalRows - visible.length
+  // Smooth reveal reads happen during render (the owning card subscribes to
+  // the scheduler's version, so its re-render drives this view too).
+  const revealedRows = reveal !== undefined
+    ? revealLinesOf(reveal.key, visible.length, { enabled: true, active: true })
+    : visible.length
+  const shown = revealedRows >= visible.length ? visible : visible.slice(0, revealedRows)
 
   const paneWidth = Math.max(20, Math.floor((width - 1) / 2))
 
@@ -354,7 +370,7 @@ export function SplitDiffView({
 
   return (
     <Box flexDirection="column" width={paneWidth * 2 + 1}>
-      {visible.map((row, index) => {
+      {shown.map((row, index) => {
         if ('separator' in row) {
           return (
             <Box key={index} width={paneWidth * 2 + 1}>

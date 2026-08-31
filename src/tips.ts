@@ -223,6 +223,12 @@ export const TIPS: readonly Tip[] = [
     en: '/recap summarizes recent activity and suggests a title; a applies it',
   },
   {
+    id: 'cmd-jobs',
+    group: 'commands',
+    zh: '/jobs 面板实时跟踪后台任务：状态、运行时长、退出码，k 键停止',
+    en: '/jobs tracks background jobs live: status, elapsed time, exit code; k kills',
+  },
+  {
     id: 'cmd-status',
     group: 'commands',
     zh: '/status 看模型、分支、token 与上下文占用',
@@ -297,8 +303,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-preset',
     group: 'commands',
-    zh: '/preset 切换 agent 预设（standard/code 等）',
-    en: '/preset switches presets: standard/code/minimal/cordis/liangshen',
+    zh: '/preset 切换 agent 预设（standard/ptc 等）',
+    en: '/preset switches presets: standard/ptc/minimal/cordis/liangshen',
   },
   {
     id: 'cmd-preset-liangshen',

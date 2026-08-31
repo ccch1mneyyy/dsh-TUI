@@ -51,6 +51,7 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
@@ -90,6 +91,7 @@ import { isValidSessionColor, SESSION_COLOR_NAMES } from '../cc/sessionColors.js
 import { TipsPanel } from '../components/TipsPanel.js'
 import { FloatingImageDeck } from '../components/FloatingImageDeck.js'
 import { SubagentDashboard } from '../components/SubagentDashboard.js'
+import { JobsPanel } from '../components/JobsPanel.js'
 import { SubagentDetailScene } from '../components/SubagentDetailScene.js'
 import { FileActionsPanel, FILE_ACTION_COUNT } from '../components/FileActionsPanel.js'
 import { openExternal, openFile, revealInFileManager } from '../utils/openExternal.js'
@@ -101,6 +103,7 @@ import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
+import { AgentView } from './AgentView.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
@@ -225,6 +228,7 @@ export function Chat({
   onRestart,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
+  injectControllerRef,
 }: {
   channel: Channel
   questionStore: QuestionStore
@@ -268,6 +272,14 @@ export function Chat({
    * persisted flag when the host does not supply one.
    */
   trajectorySeen?: boolean
+  /**
+   * External injection controller (dsh-adapter/inject-channel.ts). When the
+   * host runs the injection socket, Chat publishes `{ append, submit }` into
+   * this ref every render so the adapter-owned socket drives the prompt input
+   * without reaching into React state directly. Absent for hosts that do not
+   * open the channel (headless scripts, bare embeds).
+   */
+  injectControllerRef?: React.RefObject<InjectController | null>
 }) {
   const writeRaw = React.useContext(TerminalWriteContext)
   // Re-render whenever the channel mutates; rows/status are read fresh below.
@@ -350,10 +362,10 @@ export function Chat({
   const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
     () => new Set(),
   )
-  /** 流式 reasoning 行的用户折叠（点击/进入折叠态）。与 expandedRows 分开：
-   *  流式默认展开，用户点一下 = 折叠（preview ticker 或单行头）；落定后
-   *  默认折叠，此集合不再参与——两种默认互不翻转。 */
-  const [streamFoldedRows, setStreamFoldedRows] = React.useState<ReadonlySet<number>>(
+  /** 流式 reasoning 行相对 thinkingFold 默认值的用户切换。与
+   *  expandedRows 分开：preview 默认三行、full 默认全文，点击在两者间
+   *  翻转；落定后自动回到普通行的折叠语义。 */
+  const [streamViewToggledRows, setStreamViewToggledRows] = React.useState<ReadonlySet<number>>(
     () => new Set(),
   )
   /**
@@ -371,16 +383,17 @@ export function Chat({
   // permission focus synchronous so arrow+Enter in the same batch uses the
   // post-arrow row rather than the previous render's index.
   const permissionOverlayFocusRef = React.useRef<{ overlay: unknown; index: number } | null>(null)
-  if (overlay.kind === 'permission') {
-    // Seed each concrete picker instance once. Subsequent renders from
-    // channel/store updates must not overwrite a focus change that has already
-    // been applied synchronously for an arrow+Enter batch.
-    if (permissionOverlayFocusRef.current?.overlay !== overlay) {
-      permissionOverlayFocusRef.current = { overlay, index: overlay.index }
+  React.useEffect(() => {
+    if (overlay.kind === 'permission') {
+      // Seed each concrete picker instance after commit. Keyboard handlers
+      // update this ref synchronously; render must remain side-effect free.
+      if (permissionOverlayFocusRef.current?.overlay !== overlay) {
+        permissionOverlayFocusRef.current = { overlay, index: overlay.index }
+      }
+    } else {
+      permissionOverlayFocusRef.current = null
     }
-  } else {
-    permissionOverlayFocusRef.current = null
-  }
+  }, [overlay])
   const [models, setModels] = React.useState<readonly LlmModelInfo[]>([])
   /** Provider display identities for the /model group level; refreshed alongside `models`. */
   const [providerInfos, setProviderInfos] = React.useState<readonly LlmProviderInfo[]>([])
@@ -430,6 +443,37 @@ export function Chat({
    *  fork stitched back onto the message it diverged from, hover previews,
    *  and per-node rewind/fork/adopt actions. Like the browser, a screen. */
   const [treeOpen, setTreeOpen] = React.useState(false)
+  /** `/agentview` and `/bg` open the agent view — a screen like the browser:
+   *  it owns selection, the dispatch input and every key while up. */
+  const [agentViewOpen, setAgentViewOpen] = React.useState(false)
+  /** The session backgrounded when the view opened via ←/`/bg` (CC's "Esc
+   *  returns to that conversation" return target), cleared on close. */
+  const [agentViewReturnId, setAgentViewReturnId] = React.useState<string | undefined>(undefined)
+  /** Live agent-view rows: the prompt footer's "← N agents" hint reads the
+   *  needs-input count from here (cached snapshot in the channel). The
+   *  `?.()` fallbacks keep pre-agent-view test stubs (channel facades in
+   *  scripts/*) rendering — the real channel always provides the seams. */
+  const EMPTY_AGENT_VIEW_ROWS: readonly never[] = []
+  const agentViewRows = React.useSyncExternalStore(
+    listener => channel.subscribeAgentView?.(listener) ?? (() => {}),
+    () => channel.agentViewRows?.() ?? EMPTY_AGENT_VIEW_ROWS,
+  )
+  const backgroundAgentsNeedingInput = agentViewRows.filter(
+    row => row.status === 'needs-input' && !row.current,
+  ).length
+  /** CC parity: background the attached session and open the agent view
+   *  (`/bg`, `/background`, and ← on an empty prompt all land here). The
+   *  backgrounded session becomes the view's return target (final Esc
+   *  attaches back to it). */
+  const backgroundToAgentView = React.useCallback((): void => {
+    void channel.backgroundCurrent().then((result) => {
+      if (result.ok) {
+        setAgentViewReturnId(result.backgroundedSessionId)
+        agentViewOpenSessionRef.current = channel.agentId
+        setAgentViewOpen(true)
+      }
+    })
+  }, [channel])
   /** `/settings` opens the plugin settings screen (issue #165) — like the
    *  browser, a screen rather than a panel: it owns its own focus, staged
    *  drafts and keyboard; Chat only opens it. */
@@ -553,8 +597,61 @@ export function Chat({
       closeRecap()
     }
   }, [lastUserRowId, recap])
+  /**
+   * Session switches that do not go through `/new` (agent-view attach,
+   * backgrounding, `/resume`) remount the transcript tree without resetting
+   * view-local state. Row-id-based UI would keep pointing at rows of the
+   * PREVIOUS session (ids restart at 0 after an adopt), so the new session
+   * renders with stale folds/expansion/selection — the "entered a freshly
+   * dispatched session and it renders wrong" bug. Reset the same set `/new`
+   * resets, plus the search overlay and the side question, and repaint the
+   * transcript from the top.
+   */
+  const repaintTranscript = (): void => {
+    const ink = instances.get(process.stdout) ?? instances.values().next().value
+    // Wait one task so React commits the new session's tree before the
+    // scrollback clear repaints (same pattern as `/new`).
+    setTimeout(() => {
+      handle?.scrollTo(0)
+      ink?.clearScrollbackAndRedraw()
+    }, 0)
+  }
+  const lastAgentIdRef = React.useRef<string | undefined>(undefined)
+  React.useEffect(() => {
+    const id = channel.agentId
+    if (lastAgentIdRef.current === undefined) {
+      lastAgentIdRef.current = id
+      return
+    }
+    if (lastAgentIdRef.current === id) return
+    lastAgentIdRef.current = id
+    setExpanded(false)
+    setExpandedRows(new Set())
+    setSelectedId(null)
+    setSelectionActive(false)
+    setShowAllMessages(false)
+    setLoadedContextOpen(false)
+    setSearchQuery('')
+    setSearchCursor(0)
+    setSearchCount(0)
+    setSearchCurrent(0)
+    closeBtw()
+    repaintTranscript()
+  }, [channel.agentId]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** The session attached when the agent view opened; a close on a
+   *  DIFFERENT session means a switch happened inside the view, and the
+   *  transcript repaint cannot be skipped. */
+  const agentViewOpenSessionRef = React.useRef<string | undefined>(undefined)
+  /**
+   * Leaving a whole screen (agent view, browser) remounts the transcript
+   * tree, which would replay the ~3.4s whale opening animation on every
+   * close — competing with resumed or streaming rows for frame budget.
+   * Suppress the intro on those remounts; `/deepseek` re-enables it.
+   */
+  const suppressLogoIntroRef = React.useRef(false)
   /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
+  const [jobsPanelOpen, setJobsPanelOpen] = React.useState(false)
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
@@ -723,6 +820,33 @@ export function Chat({
   // Live view into the prompt's text for the Ctrl+C rule (clears text when
   // non-empty; the double-press exit only arms on an empty input).
   const promptControllerRef = React.useRef<PromptController | null>(null)
+  // Publish the external-injection controller (dsh.nvim etc.) every render so
+  // the adapter-owned socket can append to the prompt and submit. `submit`
+  // mirrors an Enter press: `channel.submit` routes through the DSH inbox
+  // (queued after the current turn while working), then the input is cleared.
+  React.useEffect(() => {
+    if (!injectControllerRef) return
+    injectControllerRef.current = {
+      append: (text: string) => {
+        promptControllerRef.current?.append(text)
+      },
+      submit: () => {
+        const controller = promptControllerRef.current
+        if (!controller) return
+        const text = controller.append('').trim()
+        if (text === '') return
+        channel.submit(text)
+        controller.clear()
+        channel.notify(
+          channel.working ? t('input-sent-after-turn') : t('input-injected'),
+          { timeoutMs: 2500 },
+        )
+      },
+    }
+    return () => {
+      injectControllerRef.current = null
+    }
+  })
   const requestExit = () => {
     if (exitPendingRef.current) {
       onExit()
@@ -1014,7 +1138,7 @@ export function Chat({
         return true
       }
       case 'preset': {
-        // issue #8: bare `/preset` opens the roster picker (standard/code/
+        // issue #8: bare `/preset` opens the roster picker (standard/ptc/
         // minimal/cordis plus any user-authored presets); `/preset <id>`
         // switches directly; `/preset status` shows the current choice. A
         // blank session swaps composition in place (official blank-only
@@ -1218,7 +1342,8 @@ export function Chat({
       case 'new': {
         // One-shot `/new` (issue #25): the old session stays persisted and
         // is recoverable via /resume, so discarding the live view is
-        // non-destructive — no CC-style "press /new again" confirmation.        setHelpOpen(false)
+        // non-destructive — no CC-style "press /new again" confirmation.
+        setHelpOpen(false)
         void channel.newSession().then((ok) => {
           if (!ok) return
           // A new session is a fresh terminal page, not merely an emptied
@@ -1226,6 +1351,7 @@ export function Chat({
           // top, then clear native scrollback and repaint the whale homepage.
           setExpanded(false)
           setExpandedRows(new Set())
+          setStreamViewToggledRows(new Set())
           setSelectedId(null)
           setSelectionActive(false)
           setShowAllMessages(false)
@@ -1248,6 +1374,7 @@ export function Chat({
         // channel.clear() resets row ids to 0; stale expanded/selection
         // state would mis-highlight fresh rows (known-limitation fix).
         setExpandedRows(new Set())
+        setStreamViewToggledRows(new Set())
         setSelectedId(null)
         setSelectionActive(false)
         handle?.scrollTo(0)
@@ -1390,6 +1517,19 @@ export function Chat({
           pushLocal: (title, lines) => channel.pushLocal(title, lines),
           working: () => channel.working,
           switchModel: (provider, model) => switchModelRecorded(provider, model),
+        }).then((outcome) => {
+          // A catalog-changing outcome invalidates every cached model surface
+          // so `/model` (picker + completion) reflects it immediately — the
+          // same consistency the picker's per-open refetch provides, minus
+          // the stale flash on the next open. The wizard's live-switch branch
+          // already dropped the completion cache via switchModelRecorded;
+          // this covers keep-current, add, edit, delete and OAuth login/logout.
+          if (outcome === 'added' || outcome === 'updated'
+            || outcome === 'deleted' || outcome === 'signed-out') {
+            channel.invalidateModelCompletion()
+            void channel.listModels().then(setModels)
+            void channel.listProviders().then(setProviderInfos).catch(() => setProviderInfos([]))
+          }
         }).catch(() => {
           // The wizard notifies on every handled failure; this only swallows
           // an unexpected reject so it never surfaces as an unhandled promise.
@@ -1422,6 +1562,23 @@ export function Chat({
         // the listing here would make `/resume` feel slower the more history
         // a project has, which is exactly backwards.
         setBrowserOpen(true)
+        return true
+      }
+      case 'agentview': {
+        // CC's `claude agents`: one screen for every session. Opens
+        // immediately; the view reads its own rows (live + persisted).
+        setHelpOpen(false)
+        agentViewOpenSessionRef.current = channel.agentId
+        setAgentViewOpen(true)
+        return true
+      }
+      case 'bg':
+      case 'background': {
+        // CC's `/background`: the attached session moves to the background
+        // (it keeps running in this process), the terminal lands on a fresh
+        // session, and the agent view opens on top.
+        setHelpOpen(false)
+        backgroundToAgentView()
         return true
       }
       case 'workspace': {
@@ -1594,6 +1751,10 @@ export function Chat({
         else channel.notify(t('agentsmd-created', { result }))
         return true
       }
+      case 'jobs':
+        setHelpOpen(false)
+        setJobsPanelOpen(true)
+        return true
       case 'agents':
         setHelpOpen(false)
         void channel.listSubagents().then((lines) => {
@@ -1934,6 +2095,7 @@ export function Chat({
         // shimmer. The command is intentionally not in the suggestion/help
         // catalogs; PromptInput recognizes it through HIDDEN_COMMAND_NAMES.
         setHelpOpen(false)
+        suppressLogoIntroRef.current = false
         setLogoNonce(n => n + 1)
         // Bring the logo back into view if the transcript has scrolled.
         setTimeout(() => {
@@ -2215,8 +2377,8 @@ export function Chat({
       return next
     })
   }, [])
-  const toggleStreamFolded = React.useCallback((rowId: number) => {
-    setStreamFoldedRows((previous) => {
+  const toggleStreamView = React.useCallback((rowId: number) => {
+    setStreamViewToggledRows((previous) => {
       const next = new Set(previous)
       if (next.has(rowId)) next.delete(rowId)
       else next.add(rowId)
@@ -2243,6 +2405,9 @@ export function Chat({
     // Same for the session tree: plain letters drive its search, clicks and
     // Enter drive its action menu.
     if (treeOpen) return
+    // The agent view (CC `claude agents`) is another whole-screen surface:
+    // its dispatch input owns every printable key.
+    if (agentViewOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
     // the field draft editor belong to it alone.
     if (settingsOpen) return
@@ -2596,12 +2761,16 @@ export function Chat({
     }
     if (overlay.kind === 'permission') {
       if (key.upArrow || key.downArrow) {
-        const currentIndex = permissionOverlayFocusRef.current?.index ?? overlay.index
+        const currentIndex = permissionOverlayFocusRef.current?.overlay === overlay
+          ? permissionOverlayFocusRef.current.index
+          : overlay.index
         const nextIndex = wrapIndex(currentIndex, key.upArrow ? -1 : 1, overlay.snapshot.options.length)
         permissionOverlayFocusRef.current = { overlay, index: nextIndex }
         dispatchOverlay({ type: 'set-index', kind: 'permission', index: nextIndex })
       } else if (plainReturn) {
-        const currentIndex = permissionOverlayFocusRef.current?.index ?? overlay.index
+        const currentIndex = permissionOverlayFocusRef.current?.overlay === overlay
+          ? permissionOverlayFocusRef.current.index
+          : overlay.index
         const option = overlay.snapshot.options[currentIndex]
         permissionOverlayFocusRef.current = null
         dispatchOverlay({ type: 'close' })
@@ -2791,7 +2960,11 @@ export function Chat({
     }
     if (actionMatches('dashboard', input, key)) {
       // The subagent dashboard key (default Ctrl+A) opens the dashboard.
+      // Consume the key: without the stop the prompt editor's readline
+      // binding ALSO fires (Ctrl+A moves the caret to line start), so one
+      // press both opens the overlay and jumps the cursor.
       setSubagentDashboardOpen(true)
+      event.stopImmediatePropagation()
       return
     }
     if (actionMatches('contextPanel', input, key) && loadedContextVisible) {
@@ -2907,13 +3080,20 @@ export function Chat({
       // CC's app:redraw (default Ctrl+L) — clear the physical terminal and
       // repaint.
       instances.get(process.stdout)?.forceRedraw()
+      // Consume: same readline-shadowing rule as dashboard/showAll below.
+      event.stopImmediatePropagation()
     } else if (actionMatches('showAll', input, key)) {
       setShowAllMessages(previous => !previous)
+      // Ctrl+E is also the editor's line-end binding — stop the press from
+      // additionally moving the caret (one press, one meaning).
+      event.stopImmediatePropagation()
     } else if (actionMatches('todoFold', input, key)) {
       // Fold/unfold the GoalTodoPanel todo section (default Ctrl+Q) — works
       // mid-turn too: the collapsed line keeps the done/total count and the
       // live task preview, so long todo lists stop crowding the prompt.
       setTodoCollapsed(previous => !previous)
+      // Consume: same readline-shadowing rule as dashboard/showAll above.
+      event.stopImmediatePropagation()
     } else if (plainReturn && !isSticky) {
       // Enter while scrolled up returns to the bottom (CC's pill: the
       // affordance now exists whenever the view is off the bottom, not
@@ -2957,6 +3137,7 @@ export function Chat({
     <ApprovalPanel
       key={approvalSnapshot.key}
       approval={approvalSnapshot}
+      background={approvalSnapshot.agentId !== channel.agentId}
       onDecide={outcome => approvals.decide(outcome)}
     />
   ) : null
@@ -3021,6 +3202,35 @@ export function Chat({
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }
 
+  // The agent view is a screen like the browser: it REPLACES the
+  // conversation. Every session keeps running behind it — including the
+  // attached one mid-turn.
+  if (agentViewOpen) {
+    const view = (
+      <AgentView
+        channel={channel}
+        home={homeDir()}
+        approval={approvalSnapshot}
+        onApprove={outcome => approvals.decide(outcome)}
+        returnSessionId={agentViewReturnId}
+        onClose={() => {
+          // The transcript tree remounts on close: never replay the whale
+          // intro there, and when the session changed INSIDE the view
+          // (attach / backgrounded dispatch), repaint the fresh transcript
+          // from the top like `/new` does.
+          suppressLogoIntroRef.current = true
+          const switched =
+            agentViewOpenSessionRef.current !== undefined &&
+            agentViewOpenSessionRef.current !== channel.agentId
+          if (switched) repaintTranscript()
+          setAgentViewReturnId(undefined)
+          setAgentViewOpen(false)
+        }}
+      />
+    )
+    return fullscreen ? view : <AlternateScreen>{view}</AlternateScreen>
+  }
+
   // The browser is a screen, not an overlay: it REPLACES the conversation
   // rather than floating above it. Rendering it as an early return (after
   // every hook above has run) is what makes that literal — there is no
@@ -3031,7 +3241,10 @@ export function Chat({
         channel={channel}
         home={homeDir()}
         sameProject={sessionCwdMatches}
-        onClose={() => setBrowserOpen(false)}
+        onClose={() => {
+          suppressLogoIntroRef.current = true
+          setBrowserOpen(false)
+        }}
       />
     )
     // Inline hosts enter the alternate screen for the duration; full-screen
@@ -3086,6 +3299,25 @@ export function Chat({
       />
     )
     return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+  }
+
+  // Subagent dashboard: displays all active and completed subagents.
+  // Like the browser and settings, it replaces the conversation entirely.
+  if (jobsPanelOpen) {
+    const panel = (
+      <JobsPanel
+        jobs={channel.backgroundJobs ?? []}
+        onClose={() => setJobsPanelOpen(false)}
+        onKill={(id) => {
+          // Stub channels (verify harnesses) have no jobControl — surface
+          // the same failure toast as a refused kill instead of throwing.
+          if (channel.jobControl?.kill(id) !== true) {
+            channel.notify(t('jobs-kill-failed', { id }), { color: 'error' })
+          }
+        }}
+      />
+    )
+    return fullscreen ? panel : <AlternateScreen>{panel}</AlternateScreen>
   }
 
   // Subagent dashboard: displays all active and completed subagents.
@@ -3194,7 +3426,9 @@ export function Chat({
           // transcript mount batches (and the first wheel events) for the
           // frame budget right when the user wants to read history. Fresh
           // sessions keep the full intro; restored ones settle instantly.
-          skipIntro={channel.rows.length > 30}
+          // A remount after a whole screen closed also settles instantly
+          // (see suppressLogoIntroRef).
+          skipIntro={suppressLogoIntroRef.current || channel.rows.length > 30}
         />
         {recap !== null && recap.auto && !recap.expanded && (
           <AutoRecapRow
@@ -3224,13 +3458,14 @@ export function Chat({
           expandedRows={expandedRows}
           selectedId={selectionActive ? selectedId : null}
           onToggleRow={toggleRowExpanded}
-          streamFoldedRows={streamFoldedRows}
-          onToggleStreamFold={toggleStreamFolded}
+          streamViewToggledRows={streamViewToggledRows}
+          onToggleStreamView={toggleStreamView}
           model={channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
           toolBackground={channel.toolBackground}
           foldTerminalCommand={channel.foldTerminalCommand}
+          smoothStreaming={channel.smoothStreaming}
           activityFrames={channel.activityFrames}
           cockpit={channel.cockpitMessageFrame && !channel.minimal}
           showAll={showAllMessages}
@@ -3245,6 +3480,7 @@ export function Chat({
           onUnseenCount={setUnseenCount}
           onTimeline={setTimeline}
           onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
+          onOpenJobs={() => setJobsPanelOpen(true)}
           onOpenFile={openFileActions}
         />
         </ScrollBox>
@@ -3413,6 +3649,20 @@ export function Chat({
             fillText={historyFill}
             onFillConsumed={() =>{  setHistoryFill(null) }}
             onRewindRequest={openRewind}
+            onBackgroundRequest={backgroundToAgentView}
+            backgroundAgentsNeedingInput={
+              // Only the real channel supplies the seam; pre-agent-view test
+              // stubs must not grow the footer row (layout-dependent
+              // regressions pin the visible row count). The footer only
+              // renders while some session actually waits (N > 0): a
+              // permanent idle row would steal a transcript row on every
+              // real channel — one row is enough to scroll the startup
+              // header fully off a short terminal, pausing its viewport
+              // clock and shifting every row-count layout invariant.
+              channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
+                ? backgroundAgentsNeedingInput
+                : undefined
+            }
             controllerRef={promptControllerRef}
           />
         )}
@@ -3822,7 +4072,13 @@ function NewMessagesPill({
 }): React.ReactNode {
   const [hover, setHover] = React.useState(false)
   return (
-    <Box paddingX={2} paddingTop={1}>
+    // noSelect: the pill is chrome (a button), not transcript. Without this,
+    // its text row is ordinary selectable cells — a selection anchored at
+    // the screen bottom (or extended across it) captures
+    // "↓ 回到底部（Enter/End）" into the copy on release. noSelect keeps the
+    // click/hover wiring (dispatchClick ignores noSelect) and only removes
+    // the cells from the highlight and getSelectedText.
+    <NoSelect paddingX={2} paddingTop={1}>
       <Box
         backgroundColor={hover ? 'userMessageBackgroundHover' : 'background'}
         onClick={onClick}
@@ -3837,7 +4093,7 @@ function NewMessagesPill({
           {' '}
         </Text>
       </Box>
-    </Box>
+    </NoSelect>
   )
 }
 
