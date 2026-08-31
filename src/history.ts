@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DATA_DIR } from './utils/paths.js'
@@ -112,12 +112,17 @@ export async function appendHistory(text: string): Promise<void> {
         entries.push({ text: trimmed, ts: Date.now() })
       }
       const sliced = entries.slice(-HISTORY_LIMIT)
+      // Atomic replace: a direct async overwrite exposes truncated bytes to
+      // the synchronous loadHistory() mid-write (review finding). Same-dir
+      // temp file + rename is atomic on POSIX and Windows alike; the temp
+      // keeps mode 0600 — entries carry the full user input text.
+      const tmpFile = `${HISTORY_FILE}.${process.pid}.tmp`
       await writeFile(
-        HISTORY_FILE,
+        tmpFile,
         sliced.map(e => JSON.stringify(e)).join('\n') + '\n',
-        // 0600 on creation: entries carry the full user input text
         { encoding: 'utf8', mode: 0o600 },
       )
+      await rename(tmpFile, HISTORY_FILE)
     })
   } catch {
     // Best-effort persistence; history still works for the session.
