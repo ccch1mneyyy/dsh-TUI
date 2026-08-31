@@ -763,8 +763,15 @@ export default class Ink {
       if (this.selection.isDragging) {
         if (hasSelection(this.selection)) {
           captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
+          // Record the viewport bounds for finishSelection's deferred
+          // commit-time check: the in-flight drag never clears (a wheel
+          // must not kill the gesture), so a drag that wheeled fully
+          // off-edge is dropped when it ENDS, not while it is running.
+          this.selection.dragBounds = { top: viewportTop, bottom: viewportBottom };
         }
-        shiftAnchor(this.selection, shift, viewportTop, viewportBottom);
+        // allowClear=false: both ends clamp to the edge; the ghost guard
+        // runs at release via dragBounds above.
+        shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom, false);
       } else if (
       // Flag-3 guard: the anchor check above only proves ONE endpoint is
       // on scrollbox content. A drag from row 3 (scrollbox) into the
@@ -775,9 +782,9 @@ export default class Ink {
       // straddling selection falls through to NEITHER shift NOR capture:
       // the footer endpoint pins the selection, text scrolls away under
       // the highlight, and getSelectedText reads the CURRENT screen
-      // contents — no accumulation. Dragging branch doesn't need this:
-      // shiftAnchor ignores focus, and the anchor DOES shift (so capture
-      // is correct there even when focus is in the footer).
+      // contents — no accumulation. Both endpoints are text-anchored in
+      // the active drag branch too, so a wheel cannot leave focus on the
+      // old screen row.
       !this.selection.focus || this.selection.focus.row >= viewportTop && this.selection.focus.row <= viewportBottom) {
         if (hasSelection(this.selection)) {
           captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);

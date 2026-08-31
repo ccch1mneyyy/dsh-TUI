@@ -162,6 +162,8 @@ async function runScenario(withSelection: boolean, seekTicks?: number): Promise<
   lines: string[]
   seekTicks: number
   activeDecstbm: number
+  selectionBeforeWheel: { anchor: { col: number; row: number } | null; focus: { col: number; row: number } | null }
+  selectionAfterWheel: { anchor: { col: number; row: number } | null; focus: { col: number; row: number } | null }
 }> {
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const writes: string[] = []
@@ -230,8 +232,19 @@ async function runScenario(withSelection: boolean, seekTicks?: number): Promise<
     await sleep(70)
   }
 
+  const beforeWheelState = instances.get(process.stdout)?.selection
+  const selectionBeforeWheel = {
+    anchor: beforeWheelState?.anchor ? { ...beforeWheelState.anchor } : null,
+    focus: beforeWheelState?.focus ? { ...beforeWheelState.focus } : null,
+  }
+
   wheel(stdin, 'up', 7)
   await sleep(180)
+  const afterWheelState = instances.get(process.stdout)?.selection
+  const selectionAfterWheel = {
+    anchor: afterWheelState?.anchor ? { ...afterWheelState.anchor } : null,
+    focus: afterWheelState?.focus ? { ...afterWheelState.focus } : null,
+  }
   if (withSelection) {
     stdin.write(`\x1b[<32;${Math.min(COLS - 2, markerCol + 34)};${Math.min(ROWS - 6, markerRow + 3) + 1}M`)
   }
@@ -249,11 +262,19 @@ async function runScenario(withSelection: boolean, seekTicks?: number): Promise<
   await instance.unmount()
   instances.delete(process.stdout)
   term.dispose()
-  return { lines, seekTicks: usedSeekTicks, activeDecstbm }
+  return { lines, seekTicks: usedSeekTicks, activeDecstbm, selectionBeforeWheel, selectionAfterWheel }
 }
 
 const selected = await runScenario(true)
 const control = await runScenario(false, selected.seekTicks)
+check(
+  '拖动选区时滚轮同时移动 anchor/focus',
+  selected.selectionBeforeWheel.anchor !== null && selected.selectionAfterWheel.anchor !== null &&
+    selected.selectionBeforeWheel.focus !== null && selected.selectionAfterWheel.focus !== null &&
+    selected.selectionBeforeWheel.anchor.row !== selected.selectionAfterWheel.anchor.row &&
+    selected.selectionBeforeWheel.focus.row !== selected.selectionAfterWheel.focus.row,
+  `before=${JSON.stringify(selected.selectionBeforeWheel)} after=${JSON.stringify(selected.selectionAfterWheel)}`,
+)
 
 checkCoherent('拖选+滚轮', selected.lines)
 checkCoherent('无选区对照', control.lines)

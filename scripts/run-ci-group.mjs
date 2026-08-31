@@ -360,6 +360,11 @@ const GROUPS = {
 // 切换重置、/clear 后在途子代理卡可回现、staged image token 会话作用域
 // （switchModel 不泄漏）、resumeTo 竞争切换守卫、recap 预算从新到旧收容。
     ["verify-session-reset-hygiene", ['node', '--import', 'tsx/esm', 'scripts/verify-session-reset-hygiene.tsx']],
+// 后台任务（ctx.jobs）UI 投影：BackgroundJobStore 单元（注册/转换/消失
+// 合成 killed/输出镜像有界）、channel 集成（建卡、job_output 镜像、落定
+// toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
+// 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
+    ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
 // /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
 // 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装

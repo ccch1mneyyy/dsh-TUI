@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.10.0-beta.2",
+  "version": "0.10.0-beta.3",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "keywords": [
     "dsh",

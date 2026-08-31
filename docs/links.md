@@ -17,6 +17,7 @@
 | **cc-dsh-notifier** | <https://github.com/baobaolaodie/cc-dsh-notifier> | DeepSeek Harness / Claude Code 会话失焦时的 Windows 原生 Toast 通知与点击跳回（web 与 dsh-tui 双 profile） |
 | **YesPlayMusic ypm skill** | <https://github.com/nagi-studio/YesPlayMusic/tree/master/skills/ypm> | 让 dsh 的 agent 控制本机 YesPlayMusic 音乐播放：查询在放的歌、暂停/继续、切歌（SKILL.md 直接可用） |
 | **dsh-tui-theme** | <https://github.com/xiaoxiaohaigui/dsh-tui-theme> | 樱花粉主题包：昼樱 / 夜樱 / ANSI 三套全键覆盖调色板，终端背景自动跟随（OSC 11，与宿主同阈值），✿ 状态行与 /settings 设置面板（[npm](https://www.npmjs.com/package/dsh-tui-theme)） |
+| **dsh-tui-find** | <https://github.com/xiaoxiaohaigui/dsh-tui-find> | 跨会话全文搜索插件：/find 或 Ctrl+Shift+F 对本机全部 dsh 会话（zstd 帧链 / 明文 JSONL）即时检索，命中词高亮、按会话分组，只读预览 / 复制原文 / 二次确认恢复会话（[npm](https://www.npmjs.com/package/dsh-tui-find)） |
 
 > 本页是社区与第三方项目的链接罗列。所列项目与组织由各自的维护者独立维护，
 > dsh-TUI 仓库与其不存在隶属关系，也不对其内容、质量或安全作任何担保，使用前

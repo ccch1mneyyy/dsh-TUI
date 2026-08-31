@@ -58,6 +58,13 @@ export type SelectionState = {
   virtualAnchorRow?: number
   /** Same for focus. */
   virtualFocusRow?: number
+  /** Viewport bounds recorded by the LAST in-drag follow shift. During an
+   *  active drag a wheel that pushes both ends off the same edge CLAMPS
+   *  instead of clearing (the gesture must survive); finishSelection then
+   *  re-checks these bounds and drops the selection if it is still fully
+   *  off-edge at commit time — the ghost-highlight guard is deferred, not
+   *  removed. Undefined while no drag shift has run. */
+  dragBounds?: { top: number; bottom: number }
   /** True if the mouse-down that started this selection had the alt
    *  modifier set (SGR button bit 0x08). On macOS xterm.js this is a
    *  signal that VS Code's macOptionClickForcesSelection is OFF — if it
@@ -110,6 +117,7 @@ export function startSelection(
   s.scrolledOffBelowSW = []
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
+  s.dragBounds = undefined
   s.lastPressHadAlt = false
 }
 
@@ -146,12 +154,25 @@ export function updateSelection(
  * End a drag: clear the dragging flag while keeping anchor/focus so the
  * highlight stays visible and the text can be copied. Call
  * clearSelection to drop the selection after copy or on Esc.
+ *
+ * Deferred ghost guard: a drag that scrolled both ends fully off the same
+ * viewport edge (wheeled away while the button was held) is dropped HERE,
+ * at commit time, instead of during the drag — the in-flight gesture must
+ * survive the wheel, but a committed selection left entirely off-screen
+ * would linger as an invisible ghost (see shiftSelectionForFollow).
  * @param s - the selection state to mutate.
  */
 export function finishSelection(s: SelectionState): void {
   s.isDragging = false
-  // Keep anchor/focus so highlight stays visible and text can be copied.
-  // Clear via clearSelection() on Esc or after copy.
+  if (s.dragBounds !== undefined) {
+    const { top, bottom } = s.dragBounds
+    s.dragBounds = undefined
+    if (selectionFullyOffEdge(s, top, bottom)) {
+      clearSelection(s)
+    }
+  }
+  // Otherwise keep anchor/focus so highlight stays visible and text can be
+  // copied. Clear via clearSelection() on Esc or after copy.
 }
 
 /**
@@ -170,6 +191,7 @@ export function clearSelection(s: SelectionState): void {
   s.scrolledOffBelowSW = []
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
+  s.dragBounds = undefined
   s.lastPressHadAlt = false
 }
 
@@ -450,6 +472,7 @@ export function extendSelection(
 ): void {
   if (!s.isDragging || !s.anchorSpan) return
   const span = s.anchorSpan
+  s.virtualFocusRow = undefined
   let mLo: Point
   let mHi: Point
   if (span.kind === 'word') {
@@ -670,6 +693,27 @@ export function shiftAnchor(
 }
 
 /**
+ * Whether both ends of the selection are strictly past the SAME edge of
+ * [minRow, maxRow] — the fully-off-screen condition. Rows are read through
+ * the virtual (pre-clamp) trackers so a clamped-then-reversed scroll
+ * evaluates at the TRUE position. Shared by shiftSelectionForFollow's
+ * immediate clear and finishSelection's deferred commit-time check.
+ */
+export function selectionFullyOffEdge(
+  s: SelectionState,
+  minRow: number,
+  maxRow: number,
+): boolean {
+  const rawAnchor = s.virtualAnchorRow ?? s.anchor?.row
+  const rawFocus = s.virtualFocusRow ?? s.focus?.row
+  if (rawAnchor === undefined || rawFocus === undefined) return false
+  return (
+    (rawAnchor < minRow && rawFocus < minRow) ||
+    (rawAnchor > maxRow && rawFocus > maxRow)
+  )
+}
+
+/**
  * Shift the whole selection (anchor + focus + anchorSpan) by dRow, clamped
  * to [minRow, maxRow]. Used when sticky/auto-follow scrolls the ScrollBox
  * while a selection is active — native terminal behavior is for the
@@ -691,10 +735,16 @@ export function shiftAnchor(
  * selection was cleared so the caller can notify React-land subscribers
  * (useHasSelection) — the caller is inside onRender so it can't use
  * notifySelectionChange (recursion), must fire listeners directly.
+ *
+ * `allowClear` is false for ACTIVE DRAGS: a wheel must never kill the
+ * in-flight gesture, so both ends clamp to the edge instead; the clear is
+ * deferred to finishSelection's commit-time check via the recorded
+ * dragBounds. Released selections keep the immediate clear.
  * @param s - the selection state to mutate.
  * @param dRow - signed row offset to shift by.
  * @param minRow - lowest allowed row (viewport top).
  * @param maxRow - highest allowed row (viewport bottom).
+ * @param allowClear - clear when both ends exit the same edge (default true).
  * @returns true when the selection was cleared because it scrolled
  *   entirely off the top, false otherwise.
  */
@@ -703,6 +753,7 @@ export function shiftSelectionForFollow(
   dRow: number,
   minRow: number,
   maxRow: number,
+  allowClear = true,
 ): boolean {
   if (!s.anchor) return false
   // Mirror shiftSelection: compute raw (unclamped) positions from virtual
@@ -719,10 +770,14 @@ export function shiftSelectionForFollow(
     : undefined
   // Both ends strictly past the same edge = selection fully scrolled off
   // (top: follow/wheel-down; bottom: wheel-up). Symmetric clear — a
-  // clamped-to-edge pair would render as a 1-row ghost highlight.
+  // clamped-to-edge pair would render as a 1-row ghost highlight. Skipped
+  // during an active drag: the gesture survives (clamp below), and the
+  // release-time check in finishSelection drops it if still off-edge.
   if (
-    (rawAnchor < minRow && rawFocus !== undefined && rawFocus < minRow) ||
-    (rawAnchor > maxRow && rawFocus !== undefined && rawFocus > maxRow)
+    allowClear &&
+    rawFocus !== undefined &&
+    ((rawAnchor < minRow && rawFocus < minRow) ||
+      (rawAnchor > maxRow && rawFocus > maxRow))
   ) {
     clearSelection(s)
     return true

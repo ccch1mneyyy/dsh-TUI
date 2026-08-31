@@ -71,6 +71,7 @@ import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../s
 import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
+import { BackgroundJobStore, formatJobDuration, type BackgroundJobState, type BackgroundJobStatus, type JobsRuntime } from './jobs.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 import type { TrackerConfig } from 'dsh-working-activity/status'
@@ -410,6 +411,15 @@ export interface SubagentControl {
   interrupt(agentId: string): boolean
 }
 
+/**
+ * Background-job row control (`/jobs` panel): cancellation with the same
+ * authority the owning agent itself would use (`job_kill`). Returns false
+ * when the jobs service is absent or the job is unknown/foreign.
+ */
+export interface JobControl {
+  kill(id: string): boolean
+}
+
 export interface SubagentRow {
   agentId: string
   runId?: string
@@ -429,6 +439,19 @@ export interface SubagentRow {
   error?: string
 }
 
+/** One background job as a live transcript card (see `kind: 'job'`). */
+export interface JobRow {
+  id: string
+  kind: string
+  label: string
+  status: BackgroundJobStatus
+  detail?: string
+  startedAt: number
+  finishedAt?: number
+  /** Mirrored `job_output` tail feeding the card's three-line waterfall. */
+  outputLines: readonly string[]
+}
+
 /**
  * One rendered transcript row. The DSH session log is the source of truth:
  * rows are derived from `session/event` records (and the initial
@@ -436,7 +459,7 @@ export interface SubagentRow {
  */
 export interface ChatRow {
   id: number
-  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent'
+  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent' | 'job'
   /** Extra label for non-human user rows (e.g. `steering`). */
   label?: string
   /** Actual execution location for `!command` rows. */
@@ -448,6 +471,8 @@ export interface ChatRow {
   tool?: ToolRow
   /** Present on `subagent` rows; the subagent state snapshot. */
   subagent?: SubagentRow
+  /** Present on `job` rows; the background-job state snapshot. */
+  job?: JobRow
   /** Event wall-clock time (transcript-mode metadata, assistant rows). */
   time?: number
   /** Present on `reasoning` rows once settled: thinking wall-clock duration. */
@@ -539,6 +564,38 @@ const SUBAGENT_TOOL_NAMES = new Set([
 function isSubagentToolName(name: string): boolean {
   return SUBAGENT_TOOL_NAMES.has(name.toLowerCase())
 }
+
+/** Extract `job_id` from a job_output call's raw args (JSON), or undefined. */
+function parseJobOutputId(argsFull: string | undefined): string | undefined {
+  if (argsFull === undefined || argsFull === '') return undefined
+  try {
+    const args = JSON.parse(argsFull) as { job_id?: unknown }
+    return typeof args.job_id === 'string' && args.job_id !== '' ? args.job_id : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Extract the command that launched a background job from its tool args
+ *  (`command` for the shell tools, `text` for terminal_send). The registry
+ *  label is the friendly description; the command is the actual invocation. */
+function toolCommandOf(argsFull: string | undefined): string | undefined {
+  if (argsFull === undefined || argsFull === '') return undefined
+  try {
+    const args = JSON.parse(argsFull) as { command?: unknown; text?: unknown }
+    const candidate = typeof args.command === 'string' && args.command !== ''
+      ? args.command
+      : typeof args.text === 'string' && args.text !== ''
+        ? args.text
+        : undefined
+    return candidate
+  } catch {
+    return undefined
+  }
+}
+
+/** The ack a shell tool returns for `run_in_background: true`. */
+const BACKGROUND_START_ACK = /^started background job (\S+)/
 
 /**
  * Durable same-session goal projection surfaced on the channel (see
@@ -853,6 +910,15 @@ export interface Channel {
   readonly subagents: readonly SubagentState[]
   /** Native control operations; unavailable providers safely return false. */
   readonly subagentControl: SubagentControl
+  /**
+   * Background jobs of the current session (`run_in_background` tool work),
+   * live-tracked from the harness job registry. Empty when the composition
+   * has no jobs service. Drives the `/jobs` panel, transcript job cards and
+   * the status-line chip.
+   */
+  readonly backgroundJobs: readonly BackgroundJobState[]
+  /** Cancellation of a background job with the owning agent's authority. */
+  readonly jobControl: JobControl
   subscribe: (listener: () => void) => () => void
   /** Validate and persist a pasted image, returning its prompt placeholder. */
   stageImage(input: StagedImageInput): Promise<string>
@@ -1274,6 +1340,9 @@ export interface ChannelState {
   /** Active subagents roster (see the public Channel type). */
   subagents: readonly SubagentState[]
   subagentControl: SubagentControl
+  /** Background jobs of the current session (see the public Channel type). */
+  backgroundJobs: readonly BackgroundJobState[]
+  jobControl: JobControl
   subscribe: (listener: () => void) => () => void
   stageImage(input: StagedImageInput): Promise<string>
   /** @internal event bump (the public `notify(text)` posts a notification). */
@@ -1833,7 +1902,128 @@ export function createChannel(
   // Task tool descriptions, queued in call order; each subagent/start consumes
   // the oldest one so the card shows the user-visible task label.
   const pendingTaskDescriptions: string[] = []
-  
+  // Background-job tracking (`ctx.jobs`, optional service): the registry's
+  // host-level listeners see every owner's commits; the channel re-reads the
+  // CURRENT agent's visible set after each one and projects it into
+  // transcript rows (kind 'job'), the /jobs panel, the status-line chip and
+  // completion toasts. The registry read stays untouched — output is
+  // mirrored from the agent's own job_output results (see onOutputSeen).
+  const jobRowsByJobId = new Map<string, ChatRow>()
+  const syncJobRows = (): void => {
+    state.backgroundJobs = jobStore.snapshot()
+    for (const job of state.backgroundJobs) {
+      let row = jobRowsByJobId.get(job.id)
+      if (!row) {
+        // New job: card joins the transcript tail, like the subagent cards.
+        row = {
+          id: nextRowId++,
+          kind: 'job',
+          text: job.label,
+          job: undefined,
+        }
+        jobRowsByJobId.set(job.id, row)
+        state.rows.push(row)
+      }
+      row.job = {
+        id: job.id,
+        kind: job.kind,
+        label: job.label,
+        status: job.status,
+        ...(job.detail === undefined ? {} : { detail: job.detail }),
+        startedAt: job.startedAt,
+        ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
+        outputLines: job.outputLines,
+      }
+      row.text = job.label
+    }
+  }
+  const jobStore = new BackgroundJobStore({
+    onSettled(job) {
+      state.notify(
+        t(
+          job.status === 'completed'
+            ? 'jobs-toast-completed'
+            : job.status === 'failed'
+              ? 'jobs-toast-failed'
+              : 'jobs-toast-killed',
+          {
+            id: job.id,
+            label: job.label,
+            duration: formatJobDuration(job),
+            detail: job.detail ?? '',
+          },
+        ),
+        {
+          color: job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'warning',
+          timeoutMs: 6000,
+        },
+      )
+    },
+    onChanged() {
+      syncJobRows()
+      state.emit()
+    },
+  })
+  /** Live reference to the registry while the jobs service is mounted;
+   *  cleared again when the service goes away (inject fiber cleanup). */
+  let jobsRuntime: JobsRuntime | undefined
+  const jobControl: JobControl = {
+    kill(id) {
+      const jobs = jobsRuntime
+      if (!jobs?.kill) return false
+      const job = jobStore.get(id)
+      try {
+        jobs.kill(id, agent, 'dsh-tui /jobs panel')
+      } catch {
+        return false
+      }
+      // kill() marks the job reported, which SUPPRESSES the harness
+      // completion notice — without this steer the model only learns about
+      // the user's kill lazily, from its next job_list/job_output read.
+      // Steer only for a job that was actually live; the steering row
+      // doubles as the transcript record of the action.
+      if (job !== undefined && (job.status === 'running' || job.status === 'stopping')) {
+        state.steer(t('jobs-steer-killed', { id, label: job.label }))
+      }
+      return true
+    },
+  }
+  // The jobs registry is optional: compositions without it load the UI
+  // unchanged (feature silently off). inject() handles any load order when
+  // the context offers it; stub/embedded contexts without the inject
+  // lifecycle fall back to a direct lookup — the same degradation posture
+  // as `(ctx as any).subagents` above.
+  const attachJobs = (jobs: JobsRuntime | undefined, onDetach?: (dispose: () => void) => void): void => {
+    if (jobs === undefined) return
+    jobsRuntime = jobs
+    const refresh = (): void => {
+      try {
+        jobStore.replace(jobs.list(agent))
+      } catch {
+        // Owner no longer live / service disposing: keep the last view.
+      }
+    }
+    const disposers = [
+      typeof jobs.onJobsChanged === 'function' ? jobs.onJobsChanged(refresh) : undefined,
+      typeof jobs.onJobDone === 'function' ? jobs.onJobDone(refresh) : undefined,
+    ]
+    refresh()
+    onDetach?.(() => {
+      jobsRuntime = undefined
+      for (const dispose of disposers) dispose?.()
+    })
+  }
+  if (typeof (ctx as { inject?: unknown }).inject === 'function') {
+    ctx.inject(['jobs'], jobsCtx => {
+      attachJobs(
+        (jobsCtx as { jobs?: JobsRuntime }).jobs,
+        dispose => jobsCtx.effect(() => dispose),
+      )
+    })
+  } else {
+    attachJobs((ctx as { get?: (name: string) => unknown }).get?.('jobs') as JobsRuntime | undefined)
+  }
+
   /**
    * Sync subagentStore state into ChatRows (insert/update in state.rows).
    * Called whenever subagent state changes (spawned/completed/failed/output).
@@ -1971,6 +2161,14 @@ export function createChannel(
     pendingTaskDescriptions.length = 0
     subagentStore.reset()
     state.subagents = []
+  }
+  /** Full job reset for a session swap: the row map and store are scoped to
+   *  the OLD agent's session. Runs BEFORE the swap disposes the old agent,
+   *  so the teardown cancellation those jobs receive finds an empty store —
+   *  no "killed" toast storm for work the swap itself took down. */
+  const resetJobProjection = (): void => {
+    jobRowsByJobId.clear()
+    jobStore.reset()
   }
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
@@ -2233,6 +2431,7 @@ export function createChannel(
     nextRowId = 0
     state.rows.length = 0
     resetSubagentProjection()
+    resetJobProjection()
     // Goal/todo/title are session-scoped; the replay re-derives them for
     // the session being entered (or leaves them empty).
     state.todos = []
@@ -3062,6 +3261,8 @@ export function createChannel(
     },
     subagents: [],
     subagentControl,
+    backgroundJobs: [],
+    jobControl,
     subscribe(listener) {
       listeners.add(listener)
       return () => {
@@ -4188,6 +4389,7 @@ export function createChannel(
       nextRowId = 0
       state.rows.length = 0
       resetSubagentProjection()
+      resetJobProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4380,6 +4582,7 @@ export function createChannel(
       nextRowId = 0
       state.rows.length = 0
       resetSubagentProjection()
+      resetJobProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4575,6 +4778,7 @@ export function createChannel(
       nextRowId = 0
       state.rows.length = 0
       resetSubagentProjection()
+      resetJobProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4664,6 +4868,9 @@ export function createChannel(
       // of feeding a row object no transcript holds (the store keeps live
       // tracking for the dashboard — same session, still running).
       dropSubagentRows()
+      // Live jobs keep running across the wipe too (same session): clear the
+      // row map so their next commit re-creates the card as a fresh row.
+      jobRowsByJobId.clear()
       state.activeToolCount = 0
       state.responseChars = 0
       state.rows.push({
@@ -6748,6 +6955,22 @@ ${output}
             // pairs the args: live cards are never folded, so it is intact.
             card.tool.resultView = presentResultView(card.tool.name, card.tool.argsFull ?? '', event.data)
             state.contextSegments.tools += estimateTokens(result)
+            // A job_output result doubles as the job card's output feed:
+            // the registry's read() is consuming and reserved for the
+            // owning agent, so the UI mirrors the tail that already streams
+            // through the transcript instead of polling the job itself.
+            if (card.tool.name === 'job_output' && result !== '') {
+              const id = parseJobOutputId(card.tool.argsFull)
+              if (id !== undefined) jobStore.onOutputSeen(id, result, event.time ?? Date.now())
+            }
+            // A `started background job <id>` ack pairs the job with its
+            // tool call: capture the FULL command from the args (the
+            // registry label is the friendly description) for the panel.
+            const startAck = BACKGROUND_START_ACK.exec(result)
+            if (startAck !== null) {
+              const command = toolCommandOf(card.tool.argsFull)
+              if (command !== undefined) jobStore.onStarted(startAck[1], command)
+            }
           }
           state.activeToolCount = Math.max(0, state.activeToolCount - 1)
           // The card is settled: no later event looks it up by callId, so

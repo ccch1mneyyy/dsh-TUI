@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
-import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow } from '../dsh-adapter/channel.js'
+import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobRow } from '../dsh-adapter/channel.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
@@ -10,6 +10,7 @@ import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
+import { JobCard } from './Chat/JobCard.js'
 import { isMinimalMode } from '../minimalMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { InterruptedByUser } from './InterruptedByUser.js'
@@ -221,6 +222,7 @@ export function MessageList({
   failureHintRowId,
   failureHint,
   onOpenSubagent,
+  onOpenJobs,
   onOpenFile,
 }: {
   rows: readonly ChatRow[]
@@ -306,6 +308,8 @@ export function MessageList({
   failureHint?: string
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
+  /** 打开 /jobs 后台任务面板（transcript 内点击任务卡）。 */
+  onOpenJobs?: () => void
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
   onOpenFile?: (path: string) => void
 }) {
@@ -1058,6 +1062,7 @@ export function MessageList({
           const addMargin = margins.get(row.id) === true
           const tool = row.tool
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
+          const job = row.kind === 'job' ? row.job : undefined
           const revealVersion = smoothStreaming && row.kind === 'tool' && row.fresh === true &&
             row.tool?.status === 'running' && row.tool.resultView === undefined
             ? getRevealVersion()
@@ -1119,10 +1124,12 @@ export function MessageList({
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
               subagent={subagent}
+              job={job}
               onToggleRow={onToggleRow}
               onToggleStreamView={onToggleStreamView}
               streamViewToggled={streamViewToggledRows.has(row.id)}
               onOpenSubagent={onOpenSubagent}
+              onOpenJobs={onOpenJobs}
               onOpenFile={onOpenFile}
               setRowRef={setRowRef}
             />
@@ -1195,12 +1202,15 @@ type MemoRowProps = {
   // SubagentRow, stable ref (subagent lifecycle events update the store, not
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined
+  // JobRow, same update contract as SubagentRow (replaced per job commit).
+  job: JobRow | undefined
   onToggleRow: (rowId: number) => void
   /** 流式 reasoning 行在三行预览/全文间切换；落定行用 onToggleRow。 */
   onToggleStreamView: (rowId: number) => void
   /** 是否反转该流式行的 thinkingFold 默认视图。 */
   streamViewToggled: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
+  onOpenJobs: (() => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
   setRowRef: (rowId: number, el: DOMElement | null) => void
 }
@@ -1259,10 +1269,12 @@ function TranscriptRow({
   toolStartedAt,
   toolDurationMs,
   subagent,
+  job,
   onToggleRow,
   onToggleStreamView,
   streamViewToggled,
   onOpenSubagent,
+  onOpenJobs,
   onOpenFile,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
@@ -1411,7 +1423,6 @@ function TranscriptRow({
             toolBackground={toolBackground}
             smoothReveal={smoothStreaming}
             fresh={fresh}
-            revealVersion={revealVersion}
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
@@ -1479,6 +1490,17 @@ function TranscriptRow({
             activityFrames={activityFrames}
             isExpanded={isExpanded}
             onClick={openSubagent}
+          />
+        </Box>
+      )
+    case 'job':
+      if (!job) return null
+      return (
+        <Box flexDirection="column" ref={ref}>
+          <JobCard
+            job={job}
+            addMargin={addMargin}
+            onClick={onOpenJobs}
           />
         </Box>
       )
