@@ -297,10 +297,11 @@ type BodyLine = {
   readonly revealOnHover?: boolean
 }
 
-/** Collapsed text body keeps 2 lines for a linear, concise transcript stream. */
-const TEXT_BODY_MAX_LINES = 2
-/** Collapsed diff bodies cap at 3 lines — clean linear presentation without consuming screen height. */
-const DIFF_BODY_MAX_LINES = 3
+/** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
+const TEXT_BODY_MAX_LINES = 3
+/** Diff bodies cap at the upstream chat row's 8 (dsh-client-ui-tool's
+ *  CHAT_DIFF_MAX_LINES) — denser information than log output. */
+const DIFF_BODY_MAX_LINES = 8
 /** Minimum terminal width for the two-pane diff: below this the panes
  *  would squeeze under ~50 columns each and the unified view reads better. */
 const SPLIT_DIFF_MIN_COLS = 110
@@ -638,15 +639,15 @@ export function AssistantToolUseMessage({
   if (isError) {
     if (tool.errorText) body = [{ text: tool.errorText, tone: 'error' }]
   } else if (!useSplitDiff) {
-    if (isRunning) {
-      body = [dim(`Running… (${formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now())))})`)]
-    } else if (isCollapsed && isQuietTool) {
-      // Clean 1-line tool card: suppress noisy result previews when collapsed
+    if (isCollapsed && isQuietTool && !isRunning) {
       body = []
     } else {
       if (view !== undefined) body = viewLines(view)
       if (body.length === 0 && result) {
         body = result.trimEnd().split('\n').map(plain)
+      }
+      if (isRunning && body.length === 0) {
+        body = [dim(`Running… (${formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now())))})`)]
       }
     }
   }
