@@ -45,9 +45,9 @@ import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProb
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
-import { decrqm, kittyGraphics } from './terminal-querier.js';
+import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
-import type { TerminalImagePlacement } from './terminal-image.js';
+import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
 // which is always false in alt-screen (TTY + content fills screen).
@@ -65,6 +65,7 @@ const ERASE_THEN_HOME_PATCH = Object.freeze({
   type: 'stdout' as const,
   content: ERASE_SCREEN + CURSOR_HOME
 });
+const TERMINAL_REPLY_QUARANTINE_MS = 120;
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -74,6 +75,7 @@ function makeAltScreenParkPatch(terminalRows: number) {
     content: cursorPosition(terminalRows, 1)
   });
 }
+
 export type Options = {
   stdout: NodeJS.WriteStream;
   stdin: NodeJS.ReadStream;
@@ -89,6 +91,9 @@ export default class Ink {
   private readonly kittyGraphicsManager = new KittyGraphicsManager();
   private kittyGraphicsSupported = false;
   private kittyGraphicsProbeStarted = false;
+  private terminalCellMetricsInFlight = false;
+  private terminalCellMetricsRefreshPending = false;
+  private terminalQueryResumeTimer: ReturnType<typeof setTimeout> | null = null;
   private app: App | null = null;
   private scheduleRender: (() => void) & {
     cancel?: () => void;
@@ -373,10 +378,16 @@ export default class Ink {
     // Terminals often emit 2+ resize events for one user action (window
     // settling). Same-dimension events are no-ops; skip to avoid redundant
     // frame resets and renders.
-    if (cols === this.terminalColumns && rows === this.terminalRows) return;
+    if (cols === this.terminalColumns && rows === this.terminalRows) {
+      // A font zoom or DPI move can change cell pixels without changing the
+      // row/column grid. The in-flight guard coalesces duplicate events.
+      this.refreshTerminalCellMetrics();
+      return;
+    }
     noteFrameCause('resize');
     this.terminalColumns = cols;
     this.terminalRows = rows;
+    this.refreshTerminalCellMetrics();
     this.altScreenParkPatch = makeAltScreenParkPatch(this.terminalRows);
     // Reflow moved every rect the pointer state was tracking: hover sets
     // and the multi-click chain reference pre-resize geometry. Fire the
@@ -456,6 +467,15 @@ export default class Ink {
    */
   enterAlternateScreen(): void {
     this.pause();
+    this.app?.querier.suspend();
+    if (this.terminalQueryResumeTimer !== null) {
+      clearTimeout(this.terminalQueryResumeTimer);
+      this.terminalQueryResumeTimer = null;
+    }
+    // Replies cannot be routed while the child owns stdin. Release every
+    // query hold before cooked mode is restored; an interrupted first Kitty
+    // probe may be attempted again after the handoff.
+    if (!this.kittyGraphicsSupported) this.kittyGraphicsProbeStarted = false;
     this.suspendStdin();
     // Kitty placements are independent of the terminal cell grid: clearing
     // the screen for an external editor does not remove them. Delete every
@@ -520,7 +540,7 @@ export default class Ink {
       // replies, mouse fragments): resumeStdin's drain only covers bytes
       // already buffered, and a stray ESC would clear a non-empty prompt
       // (issue #123 field report).
-      suppressInputFor(120);
+      suppressInputFor(TERMINAL_REPLY_QUARANTINE_MS);
       this.resetFramesForAltScreen();
       this.resume();
     } else {
@@ -539,7 +559,7 @@ export default class Ink {
       '\x1b[?25l' // hide cursor (Ink manages)
       );
       this.resumeStdin();
-      suppressInputFor(120);
+      suppressInputFor(TERMINAL_REPLY_QUARANTINE_MS);
       this.repaint();
       // repaint()'s fresh empty frontFrame would let the blit fast path
       // copy blanks and diff to nothing — same flag forceRedraw() sets.
@@ -553,6 +573,7 @@ export default class Ink {
     // Kitty stack balanced (a well-behaved editor restores our entry, so
     // without the pop we'd accumulate depth on each editor round-trip).
     this.options.stdout.write('\x1b[?1004h' + (supportsWin32InputMode() ? ENABLE_WIN32_INPUT_MODE : supportsExtendedKeys() ? DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS : ''));
+    this.resumeTerminalQueriesAfterHandoff();
   }
   /**
    * One-shot viewport re-anchor for the NEXT main-screen frame: repaint the
@@ -1138,6 +1159,14 @@ export default class Ink {
   resume(): void {
     this.isPaused = false;
     this.renderNow();
+    if (
+      this.terminalCellMetricsRefreshPending &&
+      !this.terminalCellMetricsInFlight &&
+      !this.terminalQueriesSuspended
+    ) {
+      this.terminalCellMetricsRefreshPending = false;
+      this.refreshTerminalCellMetrics();
+    }
   }
 
   /**
@@ -1372,6 +1401,10 @@ export default class Ink {
     if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
+    }
+    if (this.terminalQueryResumeTimer !== null) {
+      clearTimeout(this.terminalQueryResumeTimer);
+      this.terminalQueryResumeTimer = null;
     }
     // Delete Kitty placements before terminal mode cleanup. This write uses
     // the renderer's own ordered stream, matching the rest of this shutdown
@@ -1621,6 +1654,7 @@ export default class Ink {
     // is skipped, which costs nothing: Terminal.app never answered it.
     if (!supportsDecrqmProbe()) return;
     void Promise.all([querier.send(decrqm(1049)), querier.flush()]).then(([reply]) => {
+      if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
       // DECRPM status: 1/3 = set, 2/4 = reset, 0/undefined = unknown.
       // Heal only on a POSITIVE reset — an unanswered probe must not
       // trigger the destructive re-entry.
@@ -1663,6 +1697,8 @@ export default class Ink {
       placements.length === 0 ||
       this.kittyGraphicsProbeStarted ||
       !this.altScreenActive ||
+      this.isPaused ||
+      this.terminalQueriesSuspended ||
       !this.options.stdout.isTTY ||
       process.env.TMUX !== undefined ||
       process.env.STY !== undefined ||
@@ -1675,14 +1711,34 @@ export default class Ink {
     if (querier === undefined) return;
     this.kittyGraphicsProbeStarted = true;
     const queryId = 31;
+    const columns = this.terminalColumns;
+    const rows = this.terminalRows;
     void Promise.all([
       querier.send(kittyGraphics(queryId)),
+      querier.send(terminalCellSizePixels()),
+      querier.send(terminalWindowSizePixels()),
       querier.flush(),
     ])
-      .then(([reply]) => {
+      .then(([reply, cellPixels, windowPixels]) => {
+        if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) {
+          return;
+        }
         if (reply === undefined || !reply.status.startsWith('OK')) return;
         this.kittyGraphicsSupported = true;
-        if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+        if (
+          columns === this.terminalColumns &&
+          rows === this.terminalRows
+        ) {
+          this.kittyGraphicsManager.setCellSize(
+            resolveTerminalCellSize(cellPixels, windowPixels, columns, rows) ??
+              DEFAULT_TERMINAL_CELL_SIZE,
+          );
+        } else {
+          // The capability result is still valid, but its geometry snapshot
+          // is not. Start one fresh metrics batch after this sentinel.
+          this.refreshTerminalCellMetrics();
+        }
+        if (!this.altScreenActive) return;
         // The preceding frame painted text fallback cells. Force one complete
         // paint so image nodes replace those cells with blank backing before
         // their graphics placements are uploaded.
@@ -1693,6 +1749,102 @@ export default class Ink {
       .catch(() => {
         /* Capability detection is best-effort; fallback remains visible. */
       });
+  }
+
+  /** Refresh image pixel geometry after a resize, coalescing resize bursts. */
+  private refreshTerminalCellMetrics(): void {
+    if (
+      !this.kittyGraphicsSupported ||
+      this.isUnmounted ||
+      !this.options.stdout.isTTY
+    ) {
+      return;
+    }
+    if (this.isPaused || this.terminalQueriesSuspended) {
+      this.terminalCellMetricsRefreshPending = true;
+      return;
+    }
+    const querier = this.app?.querier;
+    if (querier === undefined) return;
+    if (this.terminalCellMetricsInFlight) {
+      this.terminalCellMetricsRefreshPending = true;
+      return;
+    }
+
+    this.terminalCellMetricsInFlight = true;
+    this.terminalCellMetricsRefreshPending = false;
+    const columns = this.terminalColumns;
+    const rows = this.terminalRows;
+    void Promise.all([
+      querier.send(terminalCellSizePixels()),
+      querier.send(terminalWindowSizePixels()),
+      querier.flush(),
+    ])
+      .then(([cellPixels, windowPixels]) => {
+        if (this.isUnmounted) return;
+        if (this.isPaused || this.terminalQueriesSuspended) {
+          this.terminalCellMetricsRefreshPending = true;
+          return;
+        }
+        if (
+          columns !== this.terminalColumns ||
+          rows !== this.terminalRows
+        ) {
+          this.terminalCellMetricsRefreshPending = true;
+          return;
+        }
+        const cellSize = resolveTerminalCellSize(
+          cellPixels,
+          windowPixels,
+          columns,
+          rows,
+        );
+        if (cellSize === undefined) return;
+        const changed = this.kittyGraphicsManager.setCellSize(cellSize);
+        if (changed && this.altScreenActive) {
+          this.scheduleRender();
+        }
+      })
+      .catch(() => {
+        /* Pixel geometry is best-effort; retain the last known value. */
+      })
+      .finally(() => {
+        this.terminalCellMetricsInFlight = false;
+        if (
+          this.terminalCellMetricsRefreshPending &&
+          !this.isPaused &&
+          !this.terminalQueriesSuspended
+        ) {
+          this.terminalCellMetricsRefreshPending = false;
+          this.refreshTerminalCellMetrics();
+        }
+      });
+  }
+
+  /** Reopen terminal queries only after late handoff replies are quarantined. */
+  private resumeTerminalQueriesAfterHandoff(): void {
+    if (this.terminalQueryResumeTimer !== null) {
+      clearTimeout(this.terminalQueryResumeTimer);
+    }
+    this.terminalQueryResumeTimer = setTimeout(() => {
+      this.terminalQueryResumeTimer = null;
+      if (this.isUnmounted) return;
+      this.app?.querier.resume();
+      this.app?.scheduleXtversionProbe();
+      if (
+        this.terminalCellMetricsRefreshPending &&
+        !this.terminalCellMetricsInFlight
+      ) {
+        this.terminalCellMetricsRefreshPending = false;
+        this.refreshTerminalCellMetrics();
+      } else if (!this.kittyGraphicsSupported) {
+        this.scheduleRender();
+      }
+    }, TERMINAL_REPLY_QUARANTINE_MS);
+  }
+
+  private get terminalQueriesSuspended(): boolean {
+    return this.app?.querier.isSuspended ?? false;
   }
 
   /**
@@ -2424,6 +2576,10 @@ export default class Ink {
     if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
+    }
+    if (this.terminalQueryResumeTimer !== null) {
+      clearTimeout(this.terminalQueryResumeTimer);
+      this.terminalQueryResumeTimer = null;
     }
 
     // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists in react-reconciler but not in @types/react-reconciler

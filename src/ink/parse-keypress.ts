@@ -158,6 +158,10 @@ const KITTY_GRAPHICS_RE = /^\x1b_G([^;]*);([^\x1b]*)\x1b\\$/
 // Ctrl+F3 = CSI 1;5 R, etc.) — plain CSI row;col R is genuinely ambiguous.
 // eslint-disable-next-line no-control-regex
 const CURSOR_POSITION_RE = /^\x1b\[\?(\d+);(\d+)R$/
+// XTWINOPS pixel-size replies: CSI 6;height;width t (cell) and
+// CSI 4;height;width t (text area).
+// eslint-disable-next-line no-control-regex
+const TERMINAL_PIXEL_SIZE_RE = /^\x1b\[([46]);(\d+);(\d+)t$/
 // OSC response: OSC code ; data (BEL|ST)
 // eslint-disable-next-line no-control-regex
 const OSC_RESPONSE_RE = /^\x1b\](\d+);(.*?)(?:\x07|\x1b\\)$/s
@@ -215,6 +219,13 @@ export type TerminalResponse =
   | { type: 'kittyGraphics'; imageId: number; status: string }
   /** DSR: cursor position report (answer to CSI 6 n) */
   | { type: 'cursorPosition'; row: number; col: number }
+  /** XTWINOPS: physical pixels for one cell or the terminal text area. */
+  | {
+      type: 'terminalPixelSize'
+      scope: 'cell' | 'window'
+      height: number
+      width: number
+    }
   /** OSC response: generic operating-system-command reply (e.g. OSC 11 bg color) */
   | { type: 'osc'; code: number; data: string }
   /** XTVERSION: terminal name/version string (answer to CSI > 0 q).
@@ -260,6 +271,15 @@ function parseTerminalResponse(s: string): TerminalResponse | null {
         type: 'cursorPosition',
         row: parseInt(m[1]!, 10),
         col: parseInt(m[2]!, 10),
+      }
+    }
+
+    if ((m = TERMINAL_PIXEL_SIZE_RE.exec(s))) {
+      return {
+        type: 'terminalPixelSize',
+        scope: m[1] === '6' ? 'cell' : 'window',
+        height: parseInt(m[2]!, 10),
+        width: parseInt(m[3]!, 10),
       }
     }
 
