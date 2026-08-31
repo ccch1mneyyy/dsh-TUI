@@ -21,6 +21,7 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
+import { getRevealVersion, revealLengthOf, revealTextOf, subscribeReveal } from './smoothReveal.js'
 
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
@@ -61,6 +62,41 @@ const DEFAULT_HEADER_LINES = 14
 const NO_STREAM_VIEW_TOGGLED: ReadonlySet<number> = new Set()
 const NOOP_TOGGLE_STREAM_VIEW = (_rowId: number): void => {}
 
+// --- smooth-streaming display text -----------------------------------------
+// Render-phase reads of the shared reveal cursors (see smoothReveal.ts for
+// why the cursors live outside React). `active` gates cursor CREATION to
+// live-arrived content (streaming rows, live-settled rows marked `fresh`,
+// replayed history paints complete); once created, a cursor keeps revealing
+// until it catches up — settling mid-reveal must not snap (that is the
+// "non-streaming delivery becomes a smooth flow" contract).
+
+function assistantRevealText(row: ChatRow, enabled: boolean): string {
+  const stripped = stripNarration(row.text)
+  return revealTextOf(`a${row.id}`, stripped, {
+    enabled,
+    active: row.streaming === true || row.fresh === true,
+  })
+}
+
+function reasoningRevealText(row: ChatRow, enabled: boolean): string {
+  return revealTextOf(`r${row.id}`, row.text, { enabled, active: row.streaming === true })
+}
+
+/** Display length only (layout signature; no slice allocation). */
+function revealDisplayLen(row: ChatRow, enabled: boolean): number {
+  if (row.kind === 'assistant') {
+    const stripped = stripNarration(row.text)
+    return revealLengthOf(`a${row.id}`, stripped, {
+      enabled,
+      active: row.streaming === true || row.fresh === true,
+    })
+  }
+  if (row.kind === 'reasoning') {
+    return revealLengthOf(`r${row.id}`, row.text, { enabled, active: row.streaming === true })
+  }
+  return row.text.length
+}
+
 /**
  * Per-kind layout signature PARTS: the O(1) identity of every input that
  * decides a row's rendered HEIGHT (see sigRef in MessageList). Fields are
@@ -95,11 +131,14 @@ function signatureParts(
   model: string,
   failureHintRowId: number | null | undefined,
   failureHint: string | undefined,
+  displayTextLen: number,
 ): Array<string | number | boolean> {
   signatureScratch.length = 0
   // Universal height inputs: width reflows every row; kind switches height
-  // semantics wholesale; text length drives wrapping.
-  signatureScratch.push(columns, row.kind, row.text?.length ?? 0)
+  // semantics wholesale; text length drives wrapping. `displayTextLen` is the
+  // REVEALED length while smooth streaming is painting (the height follows
+  // what is on screen, not what has arrived).
+  signatureScratch.push(columns, row.kind, displayTextLen)
   switch (row.kind) {
     case 'assistant':
       // Streaming vs settled swaps renderers; Ctrl+O/per-row expand adds the
@@ -166,6 +205,7 @@ export function MessageList({
   thinkingFold = 'preview',
   toolBackground = 'none',
   foldTerminalCommand = false,
+  smoothStreaming = false,
   activityFrames,
   showAll,
   onToggleAll,
@@ -200,6 +240,10 @@ export function MessageList({
   toolBackground?: ToolBackground
   /** Terminal-card header folding from the live channel settings. */
   foldTerminalCommand?: boolean
+  /** Smooth streaming reveal from the live channel settings (default off at
+   *  this layer — embedders and verify harnesses keep exact-paint behavior;
+   *  Chat passes the channel's `dsh-tui.smoothStreaming` value). */
+  smoothStreaming?: boolean
   /** Working-activity preset name from the channel; drives the subagent
    *  card's running glyph so both indicators follow one setting. */
   activityFrames?: string
@@ -382,6 +426,13 @@ export function MessageList({
 
   // --- layout virtualization ---------------------------------------------
   const { columns, rows: termRows } = useTerminalSize()
+  // Smooth-reveal wakeups: the scheduler's tick bumps this store, re-running
+  // MessageList so the revealed `text`/line-count reads below feed fresh
+  // values through the same MemoRow-prop pipeline an arriving chunk uses —
+  // memo miss → re-render → post-commit height re-measure. Without this
+  // subscription a reveal living in child state would change row heights
+  // invisibly to the virtualization (stale cached heights → blank bands).
+  React.useSyncExternalStore(subscribeReveal, getRevealVersion)
   // Measured row heights, remembered after a row unmounts so virtualization
   // can compute total content height. Bounded: row ids grow monotonically
   // and rows are never removed from the transcript (foldRows keeps the
@@ -489,6 +540,7 @@ export function MessageList({
         model,
         failureHintRowId,
         failureHint,
+        revealDisplayLen(row, smoothStreaming),
       )
       const cachedParts = sigs.get(row.id)
       let same = false
@@ -997,14 +1049,33 @@ export function MessageList({
           const addMargin = margins.get(row.id) === true
           const tool = row.tool
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
+          // Smooth reveal feeds the SAME flattened text prop a chunk feeds,
+          // and keeps the streaming layout alive until the reveal catches up
+          // (settling mid-reveal must not snap — a one-shot non-streaming
+          // delivery still paints as a flow).
+          let displayText = row.text
+          let displayStreaming = row.streaming === true
+          if (row.kind === 'assistant' && smoothStreaming) {
+            const stripped = stripNarration(row.text)
+            displayText = revealTextOf(`a${row.id}`, stripped, {
+              enabled: true,
+              active: displayStreaming || row.fresh === true,
+            })
+            displayStreaming = displayStreaming || displayText.length !== stripped.length
+          } else if (row.kind === 'assistant') {
+            displayText = stripNarration(row.text)
+          } else if (row.kind === 'reasoning' && smoothStreaming) {
+            displayText = revealTextOf(`r${row.id}`, row.text, { enabled: true, active: displayStreaming })
+          }
           return (
             <MemoRow
               key={row.id}
               rowId={row.id}
               kind={row.kind}
-              text={row.text}
+              text={displayText}
+              textFull={row.kind === 'reasoning' ? row.text : undefined}
               executionTarget={row.executionTarget}
-              streaming={row.streaming === true}
+              streaming={displayStreaming}
               durationMs={row.durationMs}
               time={row.time}
               addMargin={addMargin}
@@ -1016,6 +1087,8 @@ export function MessageList({
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
+              smoothStreaming={smoothStreaming}
+              fresh={row.fresh === true}
               activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
@@ -1059,6 +1132,10 @@ type MemoRowProps = {
   rowId: number
   kind: ChatRow['kind']
   text: string
+  /** Reasoning rows: the FULL un-revealed text — the live three-line preview
+   *  ticker follows the newest arrived content (never the reveal), while the
+   *  expanded body shows the revealed slice in `text`. */
+  textFull?: string
   executionTarget: string | undefined
   streaming: boolean
   durationMs: number | undefined
@@ -1070,6 +1147,10 @@ type MemoRowProps = {
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout: 'auto' | 'split' | 'unified'
+  /** Smooth streaming reveal (forwarded to thinking/tool renderers). */
+  smoothStreaming: boolean
+  /** Live-arrived row flag (drives tool-card reveal participation). */
+  fresh: boolean
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
@@ -1129,6 +1210,7 @@ function TranscriptRow({
   rowId,
   kind,
   text,
+  textFull,
   executionTarget,
   streaming,
   durationMs,
@@ -1139,6 +1221,8 @@ function TranscriptRow({
   expanded,
   model,
   diffLayout,
+  smoothStreaming,
+  fresh,
   thinkingFold,
   toolBackground,
   foldTerminalCommand,
@@ -1257,6 +1341,7 @@ function TranscriptRow({
         <Box flexDirection="column" ref={ref}>
           <AssistantThinkingMessage
             thinking={text}
+            textFull={textFull}
             addMargin={addMargin}
             streaming={streaming}
             preview={streamPreview}
@@ -1307,6 +1392,8 @@ function TranscriptRow({
             footnote={toolFootnote}
             diffLayout={diffLayout}
             toolBackground={toolBackground}
+            smoothReveal={smoothStreaming}
+            fresh={fresh}
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}

@@ -462,6 +462,11 @@ export interface ChatRow {
   /** True when loadOlder() restored this row from the log; restored rows are
    *  exempt from the next fold pass so a restore is not instantly undone. */
   restored?: boolean
+  /** True on rows created by LIVE event handling (not replay/resume/fold
+   *  restore) — the smooth-streaming reveal animates freshly-arrived
+   *  content only; replayed history must paint complete. Set once at
+   *  creation; never mutated afterwards. */
+  fresh?: boolean
 }
 
 /**
@@ -753,6 +758,11 @@ export interface Channel {
    *  `dsh-tui.expandEditor`; on by default) — gates the ⛶ affordance and
    *  the expandEditor shortcut. */
   readonly expandEditor: boolean
+  /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`; on by
+   *  default): live-arriving assistant text, expanded thinking, and tool
+   *  call bodies paint through a ~30fps reveal instead of jumping per
+   *  provider burst. */
+  readonly smoothStreaming: boolean
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
@@ -1193,6 +1203,8 @@ export interface ChannelState {
   promptSessionLabel: boolean
   /** Fullscreen draft editor gate (see the public Channel type). */
   expandEditor: boolean
+  /** Smooth streaming reveal (see the public Channel type). */
+  smoothStreaming: boolean
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
@@ -1209,6 +1221,8 @@ export interface ChannelState {
   setPromptSessionLabel(enabled: boolean): void
   /** Apply a fullscreen-editor gate change. */
   setExpandEditor(enabled: boolean): void
+  /** Apply a smooth-streaming reveal change. */
+  setSmoothStreaming(enabled: boolean): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -1748,6 +1762,9 @@ export function createChannel(
     /** Fullscreen draft editor entry points; default on (settings
      *  `dsh-tui.expandEditor`). */
     expandEditor?: boolean
+    /** Smooth streaming reveal; default on (settings
+     *  `dsh-tui.smoothStreaming`). */
+    smoothStreaming?: boolean
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -2889,6 +2906,7 @@ export function createChannel(
     foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true,
     expandEditor: options.expandEditor !== false,
+    smoothStreaming: options.smoothStreaming !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,
@@ -4744,6 +4762,11 @@ export function createChannel(
       state.expandEditor = enabled
       state.emit()
     },
+    setSmoothStreaming(enabled) {
+      if (enabled === state.smoothStreaming) return
+      state.smoothStreaming = enabled
+      state.emit()
+    },
     setStatusBar(config) {
       const next = normalizeStatusBar({ ...state.statusBar, ...config })
       const changed = Object.keys(next).some(key =>
@@ -6325,7 +6348,7 @@ ${output}
       streaming = existing
       return existing
     }
-    streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
+    streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, fresh: true, ...seq !== undefined ? { seq } : {} }
     nextRowId += 1
     state.rows.push(streaming)
     return streaming
@@ -6689,6 +6712,10 @@ ${output}
           row.time = event.time
           if (text) row.text = text
           row.streaming = false
+          // Live settles keep the smooth-reveal cursor alive (a one-shot
+          // non-streaming delivery still paints as a flow); replayed
+          // settles must not — the transcript would typewrite on open.
+          if (!replaying && text) row.fresh = true
         }
         streaming = undefined
         if (reasoning !== undefined) {
@@ -6811,6 +6838,9 @@ ${output}
           kind: 'tool',
           text: '',
           seq: event.seq,
+          // Smooth-reveal participation flag: live cards animate their body
+          // in; replayed cards (resume/rewind) paint complete.
+          fresh: !replaying,
           tool: {
             callId: event.data.callId,
             name: event.data.name,
