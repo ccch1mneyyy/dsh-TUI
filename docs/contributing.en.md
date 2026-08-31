@@ -19,6 +19,12 @@ development contract for humans and coding agents working on `@deepseek-harness-
 - **Open a pull request** against `main`. Keep changes focused: one logical
   change per PR, with a Chinese or bilingual title and a description that
   covers motivation, what changed, and how it was verified.
+  **A pull request that changes code must link an issue**: add a `Closes #<issue>`
+  line to the description, or link it through the Development sidebar. The
+  `issue-link` CI group checks this and fails without a link. Docs-only changes
+  are exempt (same routing as the build and regression groups); for a maintainer
+  release, revert, or CI hotfix that genuinely has no issue to link, apply the
+  `no-issue-needed` label.
 - **Run the verification matrix** below before requesting a review; CI runs
   the same commands.
 - New features should include or extend a focused regression script.

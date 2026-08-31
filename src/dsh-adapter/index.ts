@@ -106,6 +106,11 @@ export interface Config {
    *  Ctrl+Shift+E) expand the draft into a whole-screen editor. On by
    *  default; off removes both entry points. */
   expandEditor?: boolean
+  /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): live
+   *  assistant text, expanded thinking, and tool call bodies paint through
+   *  a ~30fps reveal instead of jumping per provider burst — bursty or
+   *  one-shot deliveries read as an even flow. On by default. */
+  smoothStreaming?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
@@ -145,6 +150,7 @@ export const Config: Schema<Config> = Schema.object({
   foldTerminalCommand: Schema.boolean().default(false),
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
+  smoothStreaming: Schema.boolean().default(true),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),

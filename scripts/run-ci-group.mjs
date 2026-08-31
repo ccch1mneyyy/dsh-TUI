@@ -39,6 +39,12 @@ const GROUPS = {
     ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
     ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
     ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
+// 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
+// （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
+// 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
+// （thinking ticker 跟随已到达文本而展开体吃切片、工具卡行级揭示、
+// result 落定即全显）。
+    ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
 // 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
 // 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
 // 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
@@ -76,6 +82,10 @@ const GROUPS = {
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
     ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx'], { NODE_ENV: 'production' }],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
+// Windows Terminal 全屏拖选+滚轮回归：长 User 气泡的 selection overlay
+// 会污染上一帧；污染帧不得进入 DECSTBM/shiftRows 硬件滚动，否则带背景
+// 的旧像素被物理搬移后偶发重复/错位。A/B 同轨迹断言终态画面一致。
+    ["repro-user-drag-wheel-render", ['node', '--import', 'tsx/esm', 'scripts/repro-user-drag-wheel-render.tsx']],
     ["verify-shrink", ['node', 'scripts/verify-shrink.mjs']],
 // 高于视口的收缩必须记 anchoredPad：终端 scrollback 不随内容收缩，
 // 高度差公式会少算 1 行 → 上移在视口顶被钳制 → 整帧相对写入链低一行
@@ -122,6 +132,11 @@ const GROUPS = {
 // Uc 优先、代理对与 keyup 交错、Rc 重复展开、conhost 拆散粘贴重组、
 // Alt+numpad 两轮合成。
     ["verify-win32-input", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-input.tsx']],
+// win32 协议重组回归：conhost 把 SGR/X10 鼠标报告与终端回复（DA1 等）
+// 合成成逐字符 CSI Vk;Sc;Uc;Kd;Cs;Rc 记录时，必须跨块重组回完整协议
+// 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
+// Escape/未知 CSI/物理键不受影响。
+    ["verify-win32-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-protocol.ts']],
 // 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
     ["verify-teardown-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-teardown-exit.tsx']],
 // 退出 resume marker 回归（issue #42）：仅有实际消息或 pending 操作时保留 marker。
@@ -345,6 +360,11 @@ const GROUPS = {
 // 切换重置、/clear 后在途子代理卡可回现、staged image token 会话作用域
 // （switchModel 不泄漏）、resumeTo 竞争切换守卫、recap 预算从新到旧收容。
     ["verify-session-reset-hygiene", ['node', '--import', 'tsx/esm', 'scripts/verify-session-reset-hygiene.tsx']],
+// 后台任务（ctx.jobs）UI 投影：BackgroundJobStore 单元（注册/转换/消失
+// 合成 killed/输出镜像有界）、channel 集成（建卡、job_output 镜像、落定
+// toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
+// 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
+    ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
 // /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
 // 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
@@ -407,6 +427,11 @@ const GROUPS = {
 // Box），嵌套在更窄容器里（transcript 旁 2 列 timeline rail 排水沟）
 // 不再按整终端宽度换行到第二行——「Conversation compacted」窄窗劈裂。
     ["verify-divider-width", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-width.tsx']],
+// Divider 测量循环回归（React #185 启动即崩）：横线宽度会反馈进 Box 的
+// 实际授予宽度，内容定宽上下文（或同模式测量的兄弟元素）里测量值漂移
+// 不收敛，每 commit 一次 setState 撞 reconciler 50 层嵌套更新上限直接
+// 崩进程。钉住测量协商逐代有界 + resize 后重新开协商。
+    ["verify-divider-stability", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-stability.tsx']],
 // thinking spinner 残影回归（issue #72）：text-default emoji（✳）
 // 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
     ["repro-thinking", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking.tsx']],

@@ -126,8 +126,9 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:runtime-themes && npm run verify:packaged-presets && npm run verify:history-search && npm run verify:initial-prompt && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:inject-channel && npm run verify:wheel-selection && npm run verify:liangshen-instruction-hint && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
-    "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",    "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:runtime-themes && npm run verify:packaged-presets && npm run verify:history-search && npm run verify:initial-prompt && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:inject-channel && npm run verify:wheel-selection && npm run verify:liangshen-instruction-hint && npm run verify:win32-protocol && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
+    "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",
+    "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
     "verify:alpha-source": "node scripts/verify-alpha-source.mjs",
@@ -165,7 +166,8 @@
     "sync:profile": "node scripts/sync-profile.mjs",
     "sync:profile:check": "node scripts/sync-profile.mjs --check",
     "bundle:installer": "node scripts/make-installer-bundle.mjs",
-    "bundle:standalone": "node scripts/make-standalone-bundle.mjs"
+    "bundle:standalone": "node scripts/make-standalone-bundle.mjs",
+    "verify:win32-protocol": "node --import tsx/esm scripts/verify-win32-protocol.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

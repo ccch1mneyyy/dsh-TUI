@@ -7,6 +7,11 @@ import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type Status
 import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
+import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
+
+/** Stable fallback for stubbed channels: verify/repro harnesses render the
+ *  real Chat with partial channel literals that predate the jobs field. */
+const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
 import type { Channel } from '../dsh-adapter/channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
@@ -49,6 +54,7 @@ type HoverTarget =
   | 'tokens'
   | 'cost'
   | 'goal'
+  | 'jobs'
   | 'sessionId'
   | 'cwd'
   | 'title'
@@ -269,11 +275,33 @@ export function StatusLine({
     }
   }
 
+  // Background-job chip (ctx.jobs; /jobs): live count of running/stopping
+  // jobs, shown only while non-zero — a silent zero is not information.
+  // Not preference-gated: it is transient situational state like the goal
+  // chip, not chrome. Hover lists the live jobs with elapsed times.
+  // Marker is ●, NOT ⚙ (U+2699 is EA-ambiguous: ink measures 1 cell, CJK
+  // terminal fonts paint 2 → the count overlaps the glyph).
+  const liveJobs = (channel.backgroundJobs ?? NO_BACKGROUND_JOBS).filter(
+    job => job.status === 'running' || job.status === 'stopping',
+  )
+  const jobsPart: FieldPart | undefined = liveJobs.length === 0
+    ? undefined
+    : {
+        key: 'jobs',
+        id: 'jobs',
+        node: (
+          <Text color="toolDotTask">
+            {'● '}{liveJobs.length}
+          </Text>
+        ),
+      }
+
   const leftFields: FieldPart[] = [
     ...(statusBar.model
       ? [{ key: 'model', node: <Text color="inactiveShimmer">{channel.model}</Text> }]
       : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),
+    ...(jobsPart !== undefined ? [jobsPart] : []),
     ...contextParts,
     ...(statusBar.tokens
       ? [{
@@ -621,6 +649,21 @@ function buildHoverDetail(
         <Text wrap="truncate">
           {dim('goal ')}{goal.phase} · {dim('r')}{goal.roundsStarted}/{goal.maxGoalRounds} ·{' '}
           {goal.objective}
+        </Text>
+      )
+    }
+    case 'jobs': {
+      const live = (channel.backgroundJobs ?? NO_BACKGROUND_JOBS).filter(
+        job => job.status === 'running' || job.status === 'stopping',
+      )
+      if (live.length === 0) return null
+      const shown = live.slice(0, 3)
+      const rest = live.length - shown.length
+      return (
+        <Text wrap="truncate">
+          {dim('jobs ')}
+          {shown.map(job => `${job.id} ${job.label} (${formatJobDuration(job)})`).join(' · ')}
+          {rest > 0 ? ` · +${rest}` : ''}
         </Text>
       )
     }
