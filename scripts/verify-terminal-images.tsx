@@ -2,8 +2,10 @@
 
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
+import chalk from 'chalk'
 import React from 'react'
-import { AlternateScreen, Image, render, Text } from '../src/ui.js'
+import { OverlayAbove } from '../src/components/OverlayAbove.js'
+import { AlternateScreen, Box, Image, render, Text } from '../src/ui.js'
 import { createNode } from '../src/ink/dom.js'
 import {
   KittyGraphicsManager,
@@ -27,6 +29,9 @@ const source: TerminalImageSource = {
   width: 40,
   height: 40,
 }
+
+const previousChalkLevel = chalk.level
+chalk.level = 3
 
 assert.equal(isTerminalImageSource(source), true)
 assert.equal(
@@ -186,13 +191,25 @@ delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
 
 const stdin = new FakeStdin()
 const stdout = new FakeStdout()
-const tree = (
+const imageTree = (covered: boolean): React.ReactElement => (
   <AlternateScreen>
-    <Image source={source} width={4} height={2} alt="cover art">
-      <Text>{'▓▓▓▓\n▓▓▓▓'}</Text>
-    </Image>
+    <Box width={4} height={4} flexDirection="column">
+      <Image source={source} width={4} height={2} alt="cover art">
+        <Text>{'▓▓▓▓\n▓▓▓▓'}</Text>
+      </Image>
+      <Box width={4} height={2}>
+        {covered ? (
+          <OverlayAbove>
+            <Box width={4} height={2}>
+              <Text>{'menu'}</Text>
+            </Box>
+          </OverlayAbove>
+        ) : null}
+      </Box>
+    </Box>
   </AlternateScreen>
 )
+const tree = imageTree(false)
 const instance = await render(tree, {
   stdin,
   stdout,
@@ -217,6 +234,23 @@ assert.ok(
       stdout.output.includes('a=p,i='),
   ),
   'a successful query must upload and place RGBA pixels',
+)
+const beforeOcclusion = stdout.output.length
+instance.rerender(imageTree(true))
+assert.ok(
+  await settled(() => stdout.output.slice(beforeOcclusion).includes('menu')),
+  'the image-covering overlay must finish painting before its styles are checked',
+)
+const occlusionOutput = stdout.output.slice(beforeOcclusion)
+assert.match(
+  occlusionOutput,
+  /\x1b\[48;2;\d+;\d+;\d+m/u,
+  'a shared overlay must paint a non-default background that covers negative-z Kitty graphics',
+)
+assert.doesNotMatch(
+  occlusionOutput,
+  /\x1b_Ga=[dpt],/u,
+  'covering an image must not delete, retransmit, or replace its stable placement',
 )
 const beforeFallbackRestore = stdout.output.length
 const fallbackTree = (
@@ -262,5 +296,6 @@ for (const [key, value] of Object.entries(previousEnv)) {
   if (value === undefined) delete process.env[envKey]
   else process.env[envKey] = value
 }
+chalk.level = previousChalkLevel
 
 console.log('PASS: terminal images keep fallback, probe, chunk, place, and clean up')
