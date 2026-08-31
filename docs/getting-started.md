@@ -182,11 +182,20 @@ $DSH_HOME/profiles/dsh-tui/cordis.patch.yml
 ## 从源码开发
 
 ```sh
-git clone https://github.com/ccch1mneyyy/dsh-TUI.git
+git clone --recurse-submodules https://github.com/ccch1mneyyy/dsh-TUI.git
 cd dsh-TUI
 pnpm install --frozen-lockfile
 pnpm build
 pnpm smoke
+```
+
+本仓库有三个子模块，其中 `vendor/dsh-std` 与 `dsh-auth` 是安装必需
+（`pnpm-workspace.yaml` 把 `vendor/dsh-std/packages/*` 列为 workspace 包，
+`dsh-auth` 经 `link:` 引入）。漏掉 `--recurse-submodules` 会让这两个目录为空，
+`pnpm install --frozen-lockfile` 直接失败。已经克隆过的检出补一条：
+
+```sh
+git submodule update --init --recursive
 ```
 
 `pnpm build` 会清理忽略入库的 `lib/`，把 `src/` 编译到 `lib/types/`，再运行

@@ -297,8 +297,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-preset',
     group: 'commands',
-    zh: '/preset 切换 agent 预设（standard/code 等）',
-    en: '/preset switches presets: standard/code/minimal/cordis/liangshen',
+    zh: '/preset 切换 agent 预设（standard/ptc 等）',
+    en: '/preset switches presets: standard/ptc/minimal/cordis/liangshen',
   },
   {
     id: 'cmd-preset-liangshen',

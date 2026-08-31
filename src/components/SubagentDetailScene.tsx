@@ -308,7 +308,7 @@ export function SubagentDetailScene({
         </ScrollBox>
       </Box>
 
-      <Divider color="subtle" title="" padding={4} />
+      <Divider color="subtle" title="" />
       {/* Footer hint */}
       <Box marginTop={0} flexDirection="row">
         <Text dimColor>

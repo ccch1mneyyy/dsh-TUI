@@ -8,8 +8,8 @@
  *   阶段 A（真实 PromptInput + AlternateScreen + Chat 式 useInput 持有者）：
  *     拖选→打字替换、反向拖选、Backspace/Delete 删选区、Shift+click 扩展
  *     + 控制器复制（OSC 52 断言）、Esc 仅清选区→再 Esc 清输入、双击选词
- *     （500ms/1 格自检测）、方向键坍缩、CJK 宽字符、fold block 选区钳制
- *     与无选区 consumeSelectionCopy=false。
+ *     （500ms/1 格自检测）、方向键坍缩、CJK 宽字符、英文整词换行与换行词上的
+ *     caret/点击、fold block 选区钳制与无选区 consumeSelectionCopy=false。
  *   阶段 B（真实 Chat）：Ctrl+C 经 Chat→控制器复制选区且保留选区、再打字
  *     替换；无选区 Ctrl+C 保持既有清空语义。
  *
@@ -573,6 +573,51 @@ function makeHarness(cols: number, rows: number): Harness {
     check('A11 controller clear 同步清除折叠 chip 与选区',
       await settled(() => !screenHas('▸ 12 lines') && !screenHas('TAIL')) &&
         controllerBox.current?.consumeSelectionCopy() === false)
+
+    // A12: #607 英文整词换行。COLS=80 时 inputWidth = 80-3-2 = 75（边框/展开钮）。
+    // 70 个 x + 空格 + classification(14) = 85 > 75：硬换行会在词中劈开
+    // （clas|sification），整词换行把 classification 整段带到下一行。
+    const word = 'classification'
+    stdin.write(`${'x'.repeat(70)} ${word}`)
+    check(
+      'A12 长英文词整词换到下一行',
+      await settled(() => {
+        const wpos = findText(word)
+        const xs = findText('xxxxx')
+        return wpos !== null && xs !== null && wpos.row > xs.row
+      }),
+    )
+    const wpos = findText(word)!
+    stdin.write('\x1b[D'.repeat(7))
+    check(
+      'A12 词中 caret 留在换行后的词行',
+      await settled(
+        () => inverseAt(wpos.col + 7, wpos.row) && !inverseAt(wpos.col + 7, wpos.row - 1),
+      ),
+    )
+    click(wpos.col + 3, wpos.row)
+    check(
+      'A12 点击换行词 caret 在词行而非上一行',
+      await settled(
+        () =>
+          (inverseAt(wpos.col + 2, wpos.row) ||
+            inverseAt(wpos.col + 3, wpos.row) ||
+            inverseAt(wpos.col + 4, wpos.row)) &&
+          !inverseAt(wpos.col + 3, wpos.row - 1),
+      ),
+    )
+    dragRange(wpos.col, wpos.col + word.length, wpos.row)
+    const wrapCopies = oscPayloads().length
+    check(
+      'A12 拖选换行词复制整词',
+      await settled(
+        () => inverseAt(wpos.col, wpos.row) && inverseAt(wpos.col + word.length - 1, wpos.row),
+      ) &&
+        controllerBox.current?.consumeSelectionCopy() === true &&
+        (await settled(() => oscPayloads().length === wrapCopies + 1)) &&
+        oscPayloads().at(-1) === word,
+      oscPayloads().at(-1) ?? 'no osc52',
+    )
   } finally {
     app.unmount()
   }

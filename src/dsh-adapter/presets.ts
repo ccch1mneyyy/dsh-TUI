@@ -20,39 +20,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
-import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
 import { recordedModelRoute, type ModelRoute } from '../modelRoute.js'
+import {
+  resolveCompatiblePreset,
+  resolveRecordedPreset,
+  rosterOf,
+} from './preset-resolution.js'
 
 const ASK_USER_TOOL = 'ask_user_question'
-
-/** One roster entry, as returned by `agentPresets.list()`/`resolve()`. */
-export interface AgentPresetInfo {
-  readonly id: string
-  readonly trust: 'system' | 'user'
-  readonly name?: string
-  readonly description?: string
-  /** Present when the preset cannot compose a session (human-readable). */
-  readonly broken?: string
-}
-
-/** The `ctx.agentPresets` service surface dsh-tui consumes. */
-export interface AgentPresetsLike {
-  readonly defaultId: string
-  list(): Promise<readonly AgentPresetInfo[]>
-  resolve(id?: string): Promise<AgentPresetInfo>
-  mount(agentCtx: Context, id?: string): Promise<AgentPresetInfo>
-  recompose(agentCtx: Context, id: string): Promise<AgentPresetInfo>
-  /** Read one service from the agent's own scope chain (preset realms). */
-  serviceFor?(agent: { ctx: Context }, key: string): unknown
-}
-
-/**
- * The mounted preset roster, or undefined when the composition has no
- * `agent-presets` row (bare boots) — optional-service access via `ctx.get`.
- */
-export function rosterOf(ctx: Context): AgentPresetsLike | undefined {
-  return ctx.get('agentPresets') as AgentPresetsLike | undefined
-}
 
 /** The composition inputs for `agents.create`/`agents.resume`. */
 export interface PresetComposition {
@@ -80,7 +55,7 @@ export async function composePreset(ctx: Context, requested?: string): Promise<P
   if (presets === undefined) return {}
   let resolvedId: string
   try {
-    resolvedId = (await presets.resolve(requested)).id
+    resolvedId = (await resolveCompatiblePreset(presets, requested)).id
   } catch (error) {
     ctx.logger.warn(
       `dsh-tui: agent preset ${requested === undefined ? '(default)' : `"${requested}"`} unavailable ` +
@@ -118,10 +93,7 @@ export async function resolvePersistedPreset(ctx: Context, sessionId: SessionId)
   if (persistence === undefined) return undefined
   try {
     const { meta, events } = await persistence.load(sessionId)
-    return resolveSessionPreset({
-      header: meta,
-      events,
-    } as Parameters<typeof resolveSessionPreset>[0])
+    return resolveRecordedPreset({ header: meta, events })
   } catch {
     // A missing/corrupt artifact leaves resume itself to report the failure;
     // the preset lookup must not mask it with a second, misleading error.
@@ -141,7 +113,7 @@ export function runningPresetOf(session: {
   header: { agentPreset?: string }
   events: readonly { type: string; data: unknown }[]
 }): string | undefined {
-  return resolveSessionPreset(session as Parameters<typeof resolveSessionPreset>[0])
+  return resolveRecordedPreset(session)
 }
 
 /**

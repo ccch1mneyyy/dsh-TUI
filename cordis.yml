@@ -3,9 +3,10 @@
 # Requires DEEPSEEK_API_KEY; a terminal TTY is mandatory.
 
 # The user-interaction service: hosts `ctx.userQuestions`, the seam behind
-# the model-facing ask_user_question tool. dsh-tui registers its questionnaire
-# provider on it; the service must live at the root so the agent loop's tool
-# execution can reach it.
+# the model-facing ask_user_question tool. dsh-tui uses the legacy provider
+# API when present, otherwise the scoped user-questions/request waterfall;
+# the service must live at the root so the agent loop's tool execution can
+# reach it.
 - id: user-questions
   name: '@deepseek-ai/dsh-user-questions'
 
@@ -61,10 +62,9 @@
     # inline 渲染, 鼠标交给终端模拟器原生选择。
     fullscreen: true
     # Reasoning effort applied to every request, validated against the live
-    # route's adapter levels (deepseek: off/high/max) — an unlisted level is
-    # ignored and the adapter default applies. Wins over the persisted
-    # Shift+Tab choice (~/.dsh-tui/effort.json); also seeds the startup
-    # header/statusline until the first request header reports the live value.
+    # route's adapter levels. An unlisted level falls back to the adapter
+    # default; this wins over the persisted /effort choice and seeds the
+    # startup header/statusline.
     effort: max
     # Shift+Tab 会话模式循环（数组顺序即循环顺序；缺省为下面三档）。
     # 每档可声明 plan（计划模式开/关）、sandbox（read-only/
