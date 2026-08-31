@@ -54,6 +54,77 @@ jobs:
             core.setOutput('code', String(code))
             core.notice(`${paths.length} 个文件改动，code=${code}`)
 
+  # 代码 PR 必须关联 issue——docs/contributing.md「如何贡献」的 CI 落地：
+  # bug 走 bug 表单开 issue，功能建议经 Discussions 认可后由维护者开跟踪
+  # issue，两条路都产出一个 issue。没有关联 issue 的代码 PR 意味着这份实现
+  # 没有经过认可，正是被关掉的那批整套实现（OAuth、/cost、通知、插件 API、
+  # remote runtime）的共同特征。
+  #
+  # 判定用 GraphQL 的 closingIssuesReferences：正文里的 Closes/Fixes #N 与
+  # 侧边栏 Development 手工关联都算，不自己解析文案。
+  #
+  # 三条豁免，缺一不可：
+  #   - 纯文档改动（本 job 在 code=false 时整个不跑，与其余组同一分流）；
+  #   - 机器人作者（release/star-history/dependabot 这类没有人可去开 issue）；
+  #   - `no-issue-needed` 标签：维护者的 release、回滚、CI 急修等确实无 issue
+  #     可关联的场合的逃生口，留痕在标签上而不是靠 gate 网开一面。
+  # 以及不追溯：只对 CUTOFF 起新建的 PR 生效——功能提案流程本身就是
+  # 「只对 2026-08-24 起新建的 PR 生效」，30 个开着的 PR 不该因为门禁上线
+  # 集体变红。
+  issue-link:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            // push 事件没有 PR 可查，直接放行——门禁的对象是 PR。
+            if (context.eventName !== 'pull_request') {
+              core.notice('非 pull_request 事件，跳过关联 issue 检查')
+              return
+            }
+            const pr = context.payload.pull_request
+            const CUTOFF = '2026-08-25T00:00:00Z'
+            if (new Date(pr.created_at) < new Date(CUTOFF)) {
+              core.notice(`PR 建于 ${pr.created_at}，早于门禁生效时间 ${CUTOFF}，按旧规则放行`)
+              return
+            }
+            if (pr.user.type === 'Bot' || pr.user.login.endsWith('[bot]')) {
+              core.notice(`作者 ${pr.user.login} 是机器人，跳过`)
+              return
+            }
+            if ((pr.labels ?? []).some(l => l.name === 'no-issue-needed')) {
+              core.notice('带 no-issue-needed 标签，维护者已豁免')
+              return
+            }
+            // 查询失败时不放行（fail-closed）：github-script 默认让抛出的
+            // 异常判定 step 失败，这里不 catch，与 ci-gate 的同一姿态。
+            const { repository } = await github.graphql(
+              `query($owner:String!, $repo:String!, $number:Int!) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$number) {
+                    closingIssuesReferences(first: 20) { nodes { number } }
+                  }
+                }
+              }`,
+              { owner: context.repo.owner, repo: context.repo.repo, number: pr.number },
+            )
+            const linked = repository.pullRequest.closingIssuesReferences.nodes.map(n => n.number)
+            if (linked.length === 0) {
+              core.setFailed(
+                '代码 PR 必须关联 issue。在描述里写一行 `Closes #<issue 号>`（或用侧边栏 '
+                + 'Development 关联）。还没有 issue：bug 用 bug 表单开一个；功能建议先发 '
+                + 'Discussions Ideas 等维护者认可后开跟踪 issue（见 docs/contributing.md）。',
+              )
+              return
+            }
+            core.notice(`已关联 issue：${linked.map(n => `#${n}`).join(' ')}`)
+
   build:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -394,7 +465,7 @@ jobs:
   # gate 仍然运行（被跳过的 check 不会阻塞合并，失败才会）；后续 CI 内部
   # 再拆组、改名、加 matrix，branch protection 只需盯住这一个稳定名字。
   ci-gate:
-    needs: [changes, build, alpha-compat, render-scroll, input-terminal, session-workspace, channel-ui]
+    needs: [changes, issue-link, build, alpha-compat, render-scroll, input-terminal, session-workspace, channel-ui]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -402,6 +473,7 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
+          ISSUE_LINK: ${{ needs.issue-link.result }}
           BUILD: ${{ needs.build.result }}
           ALPHA_COMPAT: ${{ needs.alpha-compat.result }}
           RENDER_SCROLL: ${{ needs.render-scroll.result }}
@@ -422,7 +494,8 @@ jobs:
             echo "::error title=CI gate::changes 结束状态为 ${CHANGES}（要求 success，无法分类改动）"
             status=1
           fi
-          for pair in "build:${BUILD}" \
+          for pair in "issue-link:${ISSUE_LINK}" \
+                      "build:${BUILD}" \
                       "alpha-compat:${ALPHA_COMPAT}" \
                       "render-scroll:${RENDER_SCROLL}" \
                       "input-terminal:${INPUT_TERMINAL}" \
