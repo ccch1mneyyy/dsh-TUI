@@ -47,7 +47,9 @@ the interface, and removing it leaves no core modifications behind.
   requested lines, clamping past-EOF ranges or falling back to the whole file
   with a note), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
-  zh/en UI language switching.
+  zh/en UI language switching. Durable image blocks from user attachments and
+  assistant/tool output render as in-transcript previews through Kitty graphics,
+  with a same-size text fallback when graphics are unavailable.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch; **clicking the whale pops a heart pass** any time, and with
   `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
