@@ -210,7 +210,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `?` | Keybinding menu (responds only when the input is empty) |
 | `Shift+↑` | Message selection mode (`Enter` expands a single message) |
 | `Ctrl+P` | Toggle the startup loaded-context panel while it is on screen; inside `/resume`, pin/unpin the selected session |
-| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Logical line start / end; `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
+| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (in-editor `Mod+A` still moves to line start); `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
 | `Ctrl+←` / `Ctrl+→` (⌘←/→) | Jump by word |
 | `Ctrl+U` / `Ctrl+K` | Delete before the cursor (to line start) / after the cursor (to line end) |
 | `Ctrl+W` | Delete the previous word |

@@ -84,7 +84,7 @@ diagnostics to an active TUI's stdout; use stderr `DSH_TUI_DEBUG` or
 
 ## Inline and fullscreen modes
 
-- **Inline (default)**: content remains on the main screen, and the terminal
+- **Inline**: content remains on the main screen, and the terminal
   emulator owns scrollback and native text selection.
 - **Fullscreen**: `AlternateScreen` switches to the alternate screen, where the
   TUI owns scrolling, mouse selection, OSC 52 copy, and screen restoration.

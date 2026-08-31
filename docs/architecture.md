@@ -73,7 +73,7 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 
 ## Inline 与 fullscreen
 
-- **Inline（默认）**：内容留在主屏，终端模拟器管理 scrollback 和原生文本选区。
+- **Inline**：内容留在主屏，终端模拟器管理 scrollback 和原生文本选区（出厂默认是 fullscreen，见下）。
 - **Fullscreen**：`AlternateScreen` 切换到备用屏，TUI 自己管理滚动、鼠标选区、OSC 52
   复制和退出时的屏幕恢复。
 
