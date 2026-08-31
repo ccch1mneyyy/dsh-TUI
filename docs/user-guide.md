@@ -231,6 +231,7 @@ dsh-tui
 | `/doctor` | 无 | 环境自检 |
 | `/init` | 无 | 在工作目录创建 `AGENTS.md`（created / exists / failed 三态提示） |
 | `/agents` | 无 | 本会话子代理列表 |
+| `/jobs` | 无 | 本会话后台任务面板（`run_in_background` 启动的命令）：状态/运行时长/退出码实时跟踪，`↑/↓` 选择、`k` 停止选中任务；转录流内嵌任务卡（有输出时显示最多三行瀑布、无输出时仅头行，点击进面板），状态栏有运行数角标，任务落定弹 toast。输出来自 agent `job_output` 读取的镜像，非实时 tail |
 | `/settings` | 无 | 打开插件设置编辑器（命名空间读取/编辑） |
 | `/help` | 无 | 快捷键 + 命令帮助菜单（`?` 同款） |
 
@@ -425,7 +426,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**编辑是暂存制**：`s` 保存 / `d` 放弃 / `Esc` 丢弃脏区退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 20 个字段：
+dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 21 个字段：
 
 | 字段 | 说明 |
 |---|---|
@@ -433,6 +434,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 20 �
 | whale | 开屏头部像素鲸鱼娘（默认开） |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
+| smoothStreaming | 流式平滑输出（默认开）：实时回复/展开思考/工具卡正文按 ~30fps 匀速揭示，突发送达不再跳变，一次性到达的非流式回复也平滑打出；回放/历史始终完整直出 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 

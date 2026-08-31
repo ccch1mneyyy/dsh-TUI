@@ -96,6 +96,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
+  { name: 'jobs', description: 'Show background jobs of this session' },
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
   { name: 'preset', description: 'Switch the agent preset (including Liangshen mode)' },

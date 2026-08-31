@@ -450,7 +450,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 | Group | Commands |
 | --- | --- |
 | Sessions | `/new`, `/resume`, `/agentview` (agent view), `/bg` (alias `/background`, backgrounds the session and opens the view), `/rename`, `/recap` (recent-activity summary + one-key suggested title), `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`), `/rewind` (time travel, same as double-`Esc` on an empty input) |
-| Status | `/context`, `/status`, `/cost`, `/balance` (official DeepSeek balance: summary row + hover details, click to refresh), `/config`, `/doctor`, `/init`, `/agents`, `/settings` |
+| Status | `/context`, `/status`, `/cost`, `/balance` (official DeepSeek balance: summary row + hover details, click to refresh), `/config`, `/doctor`, `/init`, `/agents`, `/jobs` (background jobs panel: status/elapsed/exit code, `k` kills), `/settings` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/color` (session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`; input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`), `/lang` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permission`, `/add-dir`, `/hooks`, `/mcp`, `/plugins` (`check <path>` validates a plugin manifest) |
 | Skills | `/skills` lists skills DSH discovers from the active profile, user, and project; user-invocable skills join the menu as `/name` |

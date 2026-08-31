@@ -36,7 +36,7 @@ import { applyPositionedHighlight, type MatchPosition, scanPositions } from './r
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './searchHighlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -703,8 +703,15 @@ export default class Ink {
       if (this.selection.isDragging) {
         if (hasSelection(this.selection)) {
           captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
+          // Record the viewport bounds for finishSelection's deferred
+          // commit-time check: the in-flight drag never clears (a wheel
+          // must not kill the gesture), so a drag that wheeled fully
+          // off-edge is dropped when it ENDS, not while it is running.
+          this.selection.dragBounds = { top: viewportTop, bottom: viewportBottom };
         }
-        shiftAnchor(this.selection, shift, viewportTop, viewportBottom);
+        // allowClear=false: both ends clamp to the edge; the ghost guard
+        // runs at release via dragBounds above.
+        shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom, false);
       } else if (
       // Flag-3 guard: the anchor check above only proves ONE endpoint is
       // on scrollbox content. A drag from row 3 (scrollbox) into the
@@ -715,9 +722,9 @@ export default class Ink {
       // straddling selection falls through to NEITHER shift NOR capture:
       // the footer endpoint pins the selection, text scrolls away under
       // the highlight, and getSelectedText reads the CURRENT screen
-      // contents — no accumulation. Dragging branch doesn't need this:
-      // shiftAnchor ignores focus, and the anchor DOES shift (so capture
-      // is correct there even when focus is in the footer).
+      // contents — no accumulation. Both endpoints are text-anchored in
+      // the active drag branch too, so a wheel cannot leave focus on the
+      // old screen row.
       !this.selection.focus || this.selection.focus.row >= viewportTop && this.selection.focus.row <= viewportBottom) {
         if (hasSelection(this.selection)) {
           captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
