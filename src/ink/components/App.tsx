@@ -223,6 +223,7 @@ export default class App extends PureComponent<Props, State> {
 	// Deferred XTVERSION probe (setImmediate). Cleared on unmount so the
 	// DA1 sentinel it flushes cannot land after raw mode is off.
 	xtversionProbe: NodeJS.Immediate | null = null;
+	xtversionAttempted = false;
 	// Timeout durations for incomplete sequences (ms)
 	readonly NORMAL_TIMEOUT = 50; // Short timeout for regular esc sequences
 	readonly PASTE_TIMEOUT = 500; // Longer timeout for paste operations
@@ -468,6 +469,29 @@ export default class App extends PureComponent<Props, State> {
 	override componentDidCatch(error: Error) {
 		this.handleExit(error);
 	}
+	scheduleXtversionProbe = (): void => {
+		if (this.xtversionAttempted || this.xtversionProbe !== null) return;
+		this.xtversionProbe = setImmediate(() => {
+			this.xtversionProbe = null;
+			if (this.rawModeEnabledCount === 0 || this.querier.isSuspended) return;
+			void Promise.all([
+				this.querier.send(xtversion()),
+				this.querier.flush(),
+			]).then(([r]) => {
+				// A handoff may suspend and drain this batch before its sentinel.
+				// Leave it retryable once the reply quarantine has ended.
+				if (this.querier.isSuspended) return;
+				this.xtversionAttempted = true;
+				if (r) {
+					setXtversionName(r.name);
+					logForDebugging(`XTVERSION: terminal identified as "${r.name}"`);
+				} else {
+					logForDebugging("XTVERSION: no reply (terminal ignored query)");
+				}
+			});
+		});
+	};
+
 	handleSetRawMode = (isEnabled: boolean): void => {
 		const { stdin } = this.props;
 		if (!this.isRawModeSupported()) {
@@ -520,26 +544,7 @@ export default class App extends PureComponent<Props, State> {
 				// Deferred to next tick so it fires AFTER the current synchronous
 				// init sequence completes — avoids interleaving with alt-screen/mouse
 				// tracking enable writes that may happen in the same render cycle.
-				this.xtversionProbe = setImmediate(() => {
-					this.xtversionProbe = null;
-					// The original borrower may unmount before this callback runs.
-					// Once sent, TerminalQuerier keeps raw mode held until the reply
-					// and DA1 barrier arrive, so delayed responses cannot echo.
-					if (this.rawModeEnabledCount === 0) {
-						return;
-					}
-					void Promise.all([
-						this.querier.send(xtversion()),
-						this.querier.flush(),
-					]).then(([r]) => {
-						if (r) {
-							setXtversionName(r.name);
-							logForDebugging(`XTVERSION: terminal identified as "${r.name}"`);
-						} else {
-							logForDebugging("XTVERSION: no reply (terminal ignored query)");
-						}
-					});
-				});
+				this.scheduleXtversionProbe();
 			}
 			this.rawModeEnabledCount++;
 			return;

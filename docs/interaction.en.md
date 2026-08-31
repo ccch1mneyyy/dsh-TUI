@@ -43,7 +43,9 @@ compact rich status view of up to three rows when the host exposes
 `tuiStatus.registerView`. Rich views receive only host `Box`, `Text`, `Image`,
 and terminal size; click/hover/drag work in fullscreen, and the view never owns
 the keyboard. `Image` takes decoded RGBA pixels plus a same-size cell fallback:
-the host shows graphics after a successful Kitty probe and otherwise renders
+after a successful Kitty probe, the host centers the image at its natural
+aspect ratio using terminal-reported cell geometry (or a conservative default),
+adding transparent letterboxing and downsampling when needed. Otherwise it renders
 the fallback (including inline, accessibility, and multiplexer sessions).
 Plugins provide the keyboard path for the same action through a
 slash command or `tuiShortcuts`. A refused rich registration returns

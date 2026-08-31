@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
+import { inflateSync } from 'node:zlib'
 import chalk from 'chalk'
 import React from 'react'
 import { OverlayAbove } from '../src/components/OverlayAbove.js'
@@ -30,9 +31,15 @@ import {
   type Screen,
   StylePool,
 } from '../src/ink/screen.js'
-import { kittyGraphics } from '../src/ink/terminal-querier.js'
 import {
+  kittyGraphics,
+  terminalCellSizePixels,
+  terminalWindowSizePixels,
+} from '../src/ink/terminal-querier.js'
+import {
+  fitTerminalImageSource,
   isTerminalImageSource,
+  resolveTerminalCellSize,
   TERMINAL_IMAGE_MAX_FRAME_BYTES,
   type TerminalImagePlacement,
   type TerminalImageSource,
@@ -48,6 +55,28 @@ const source: TerminalImageSource = {
 const previousChalkLevel = chalk.level
 chalk.level = 3
 
+function rgbaFromTransmission(transmission: string): {
+  readonly chunks: readonly RegExpMatchArray[]
+  readonly data: Buffer
+  readonly height: number
+  readonly width: number
+} {
+  const chunks = [
+    ...transmission.matchAll(/\x1b_G([^;]+);([^\x1b]*)\x1b\\/gu),
+  ]
+  assert.ok(chunks.length > 0, 'RGBA transmission must contain a Kitty chunk')
+  const firstControl = chunks[0]![1]!
+  const width = Number(/(?:^|,)s=(\d+)(?:,|$)/u.exec(firstControl)?.[1])
+  const height = Number(/(?:^|,)v=(\d+)(?:,|$)/u.exec(firstControl)?.[1])
+  const encoded = Buffer.from(chunks.map(chunk => chunk[2]!).join(''), 'base64')
+  return {
+    chunks,
+    data: firstControl.includes('o=z') ? inflateSync(encoded) : encoded,
+    height,
+    width,
+  }
+}
+
 assert.equal(isTerminalImageSource(source), true)
 assert.equal(
   isTerminalImageSource({ ...source, data: source.data.subarray(1) }),
@@ -55,17 +84,89 @@ assert.equal(
   'RGBA byte length must match dimensions exactly',
 )
 
-const transmission = transmitKittyRgba(101, source)
-const chunks = [...transmission.matchAll(/\x1b_G([^;]+);([^\x1b]*)\x1b\\/gu)]
+const noisyData = new Uint8Array(source.data.byteLength)
+let noise = 0x12345678
+for (let index = 0; index < noisyData.length; index++) {
+  noise = (Math.imul(noise, 1664525) + 1013904223) >>> 0
+  noisyData[index] = noise >>> 24
+}
+const noisySource = { ...source, data: noisyData }
+const transmission = transmitKittyRgba(101, noisySource)
+const decodedTransmission = rgbaFromTransmission(transmission)
+const chunks = decodedTransmission.chunks
 assert.ok(chunks.length > 1, 'large RGBA payload must be chunked')
 assert.ok(chunks.every(match => match[2]!.length <= 4096))
-assert.match(chunks[0]![1]!, /a=t,t=d,f=32,s=40,v=40,i=101/u)
+assert.match(chunks[0]![1]!, /a=t,t=d,f=32,s=40,v=40,i=101,o=z/u)
+assert.deepEqual(decodedTransmission.data, Buffer.from(noisyData))
 assert.doesNotMatch(
   transmission,
   /\x1b_Ga=T,/u,
   'upload must not create an implicit natural-size placement',
 )
-assert.ok(chunks.slice(1).every(match => !match[1]!.includes('f=32')))
+assert.ok(
+  chunks
+    .slice(1)
+    .every(
+      match =>
+        !match[1]!.includes('f=32') && !match[1]!.includes('o=z'),
+    ),
+)
+
+const solidSquare: TerminalImageSource = {
+  data: new Uint8Array(80 * 80 * 4),
+  width: 80,
+  height: 80,
+}
+for (let offset = 0; offset < solidSquare.data.length; offset += 4) {
+  solidSquare.data[offset] = 20
+  solidSquare.data[offset + 1] = 40
+  solidSquare.data[offset + 2] = 60
+  solidSquare.data[offset + 3] = 255
+}
+const fittedSquare = fitTerminalImageSource(
+  solidSquare,
+  6,
+  2,
+  { width: 10, height: 20 },
+)
+assert.deepEqual(
+  [fittedSquare.width, fittedSquare.height],
+  [60, 40],
+  'a square source in a 60x40 pixel box must use a bounded letterbox raster',
+)
+assert.equal(fittedSquare.data[(0 * fittedSquare.width + 9) * 4 + 3], 0)
+assert.equal(fittedSquare.data[(20 * fittedSquare.width + 10) * 4 + 3], 255)
+assert.equal(fittedSquare.data[(20 * fittedSquare.width + 49) * 4 + 3], 255)
+assert.equal(fittedSquare.data[(20 * fittedSquare.width + 50) * 4 + 3], 0)
+
+const tinySquare: TerminalImageSource = {
+  data: new Uint8Array([20, 40, 60, 255]),
+  width: 1,
+  height: 1,
+}
+const fittedTinySquare = fitTerminalImageSource(
+  tinySquare,
+  6,
+  2,
+  { width: 10, height: 20 },
+)
+assert.equal(
+  fittedTinySquare.width * 40,
+  fittedTinySquare.height * 60,
+  'even a tiny source canvas must exactly match the physical cell-box aspect',
+)
+const fittedWideBanner = fitTerminalImageSource(
+  solidSquare,
+  200,
+  1,
+  { width: 9, height: 17 },
+)
+assert.equal(
+  fittedWideBanner.width * 17,
+  fittedWideBanner.height * 1800,
+  'a legal wide placement must retain its exact physical aspect ratio',
+)
+assert.ok(fittedWideBanner.data.byteLength <= 4 * 1024 * 1024)
 
 const guardedPixels = new Uint8Array([9, 1, 2, 3, 4, 9])
 const subarrayTransmission = transmitKittyRgba(102, {
@@ -73,11 +174,8 @@ const subarrayTransmission = transmitKittyRgba(102, {
   width: 1,
   height: 1,
 })
-const subarrayPayload = [
-  ...subarrayTransmission.matchAll(/\x1b_G[^;]+;([^\x1b]*)\x1b\\/gu),
-].map(match => match[1]!).join('')
 assert.deepEqual(
-  Buffer.from(subarrayPayload, 'base64'),
+  rgbaFromTransmission(subarrayTransmission).data,
   Buffer.from([1, 2, 3, 4]),
   'zero-copy encoding must stay within the Uint8Array view boundaries',
 )
@@ -147,8 +245,83 @@ assert.match(
 )
 assert.match(manager.reconcile([]), new RegExp(`a=d,d=I,i=${replacementImageId}`, 'u'))
 
+const sharedManager = new KittyGraphicsManager({ firstImageId: 201 })
+const sharedNodeA = createNode('ink-image')
+const sharedNodeB = createNode('ink-image')
+const sharedNodeC = createNode('ink-image')
+const sharedPlacement = {
+  x: 1,
+  y: 1,
+  columns: 6,
+  rows: 3,
+  source,
+}
+const sharedFirst = sharedManager.reconcile([
+  { ...sharedPlacement, node: sharedNodeA },
+  {
+    ...sharedPlacement,
+    node: sharedNodeB,
+    x: 8,
+    source: { ...source, data: source.data.slice() },
+  },
+])
+assert.equal([...sharedFirst.matchAll(/\x1b_Ga=t,/gu)].length, 1)
+const sharedPlaces = [
+  ...sharedFirst.matchAll(/a=p,i=(\d+),p=(\d+),c=6,r=3,z=(-?\d+)/gu),
+]
+assert.equal(sharedPlaces.length, 2)
+assert.equal(sharedPlaces[0]![1], sharedPlaces[1]![1])
+assert.notEqual(sharedPlaces[0]![2], sharedPlaces[1]![2])
+assert.notEqual(sharedPlaces[0]![3], sharedPlaces[1]![3])
+assert.ok(sharedPlaces.every(match => Number(match[3]) < -1073741824))
+assert.equal(
+  sharedManager.reconcile([
+    { ...sharedPlacement, node: sharedNodeA, source: { ...source, data: source.data.slice() } },
+    {
+      ...sharedPlacement,
+      node: sharedNodeB,
+      x: 8,
+      source: { ...source, data: source.data.slice() },
+    },
+  ]),
+  '',
+  'fresh buffers with identical immutable content must reuse the uploaded image',
+)
+sharedManager.invalidateAll()
+const sharedInvalidated = sharedManager.reconcile([
+  { ...sharedPlacement, node: sharedNodeA },
+  { ...sharedPlacement, node: sharedNodeB, x: 8 },
+])
+assert.equal([...sharedInvalidated.matchAll(/\x1b_Ga=t,/gu)].length, 1)
+assert.equal([...sharedInvalidated.matchAll(/\x1b_Ga=p,/gu)].length, 2)
+const remounted = sharedManager.reconcile([
+  { ...sharedPlacement, node: sharedNodeB, x: 8 },
+  {
+    ...sharedPlacement,
+    node: sharedNodeC,
+    source: { ...source, data: source.data.slice() },
+  },
+])
+assert.doesNotMatch(remounted, /\x1b_Ga=t,/u)
+assert.equal([...remounted.matchAll(/\x1b_Ga=p,/gu)].length, 1)
+assert.equal([...remounted.matchAll(/a=d,d=i,i=\d+,p=\d+/gu)].length, 1)
+assert.doesNotMatch(remounted, /a=d,d=I/u)
+const removeSharedPeer = sharedManager.reconcile([
+  { ...sharedPlacement, node: sharedNodeC },
+])
+assert.match(removeSharedPeer, /a=d,d=i,i=\d+,p=\d+/u)
+assert.doesNotMatch(removeSharedPeer, /a=d,d=I/u)
+assert.equal(
+  [...sharedManager.reconcile([]).matchAll(/a=d,d=I,i=\d+/gu)].length,
+  1,
+  'the last placement must release shared terminal image data exactly once',
+)
+
 const query = kittyGraphics(31)
-assert.equal(query.request, '\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\')
+assert.equal(
+  query.request,
+  '\x1b_Gi=31,s=1,v=1,a=q,t=d,f=32,o=z;eAFjYGBgAAAABAAB\x1b\\',
+)
 const [parsed] = parseMultipleKeypresses(
   INITIAL_STATE,
   '\x1b_Gi=31;OK\x1b\\',
@@ -161,6 +334,59 @@ assert.deepEqual(parsed[0].response, {
   status: 'OK',
 })
 assert.equal(query.match(parsed[0].response), true)
+
+const cellSizeQuery = terminalCellSizePixels()
+const windowSizeQuery = terminalWindowSizePixels()
+assert.equal(cellSizeQuery.request, '\x1b[16t')
+assert.equal(windowSizeQuery.request, '\x1b[14t')
+const [pixelReplies] = parseMultipleKeypresses(
+  INITIAL_STATE,
+  '\x1b[6;20;10t\x1b[4;800;1200t',
+)
+assert.deepEqual(
+  pixelReplies.map(reply =>
+    reply.kind === 'response' ? reply.response : undefined,
+  ),
+  [
+    { type: 'terminalPixelSize', scope: 'cell', height: 20, width: 10 },
+    { type: 'terminalPixelSize', scope: 'window', height: 800, width: 1200 },
+  ],
+)
+assert.ok(
+  pixelReplies[0]?.kind === 'response' &&
+    cellSizeQuery.match(pixelReplies[0].response),
+)
+assert.ok(
+  pixelReplies[1]?.kind === 'response' &&
+    windowSizeQuery.match(pixelReplies[1].response),
+)
+assert.deepEqual(
+  resolveTerminalCellSize(
+    { width: 10, height: 20 },
+    { width: 1200, height: 800 },
+    120,
+    40,
+  ),
+  { width: 10, height: 20 },
+  'the direct cell report must win over the derived window size',
+)
+assert.deepEqual(
+  resolveTerminalCellSize(undefined, { width: 1200, height: 800 }, 120, 40),
+  { width: 10, height: 20 },
+)
+assert.deepEqual(
+  resolveTerminalCellSize(undefined, undefined, 120, 40),
+  undefined,
+)
+assert.deepEqual(
+  resolveTerminalCellSize(
+    { width: 0, height: 0 },
+    { width: 0, height: 0 },
+    120,
+    40,
+  ),
+  undefined,
+)
 
 const stylePool = new StylePool()
 const screen = createScreen(
@@ -199,6 +425,14 @@ const maximalSource: TerminalImageSource = {
   width: 1024,
   height: 1024,
 }
+const fittedMaximal = fitTerminalImageSource(
+  maximalSource,
+  6,
+  2,
+  { width: 10, height: 20 },
+)
+assert.ok(fittedMaximal.width <= 60 && fittedMaximal.height <= 40)
+assert.equal(fittedMaximal.data.byteLength, fittedMaximal.width * fittedMaximal.height * 4)
 assert.equal(
   maximalSource.data.byteLength * 4,
   TERMINAL_IMAGE_MAX_FRAME_BYTES,
@@ -330,6 +564,59 @@ const imageTree = (
     </Box>
   </AlternateScreen>
 )
+
+const interruptedStdin = new FakeStdin()
+const interruptedStdout = new FakeStdout()
+const interruptedTree = imageTree(false)
+const interruptedInstance = await render(interruptedTree, {
+  stdin: interruptedStdin,
+  stdout: interruptedStdout,
+  stderr: new FakeStderr(),
+  exitOnCtrlC: false,
+  patchConsole: false,
+})
+assert.ok(
+  await settled(
+    () =>
+      interruptedStdout.output.includes(query.request) &&
+      interruptedStdout.output.includes(cellSizeQuery.request) &&
+      interruptedStdout.output.includes(windowSizeQuery.request),
+  ),
+  'the interrupted fixture must start its first Kitty capability batch',
+)
+const interruptedInk = instances.get(interruptedStdout)
+assert.ok(interruptedInk)
+const interruptedProbeCount = (): number =>
+  interruptedStdout.output.split(query.request).length - 1
+const probesBeforeInterrupt = interruptedProbeCount()
+interruptedInk.enterAlternateScreen()
+interruptedInk.exitAlternateScreen()
+await new Promise(resolve => setTimeout(resolve, 20))
+assert.equal(
+  interruptedProbeCount(),
+  probesBeforeInterrupt,
+  'an interrupted Kitty probe must stay suspended during reply quarantine',
+)
+assert.ok(
+  await settled(() => interruptedProbeCount() === probesBeforeInterrupt + 1),
+  'an interrupted first Kitty probe must retry after the handoff',
+)
+interruptedStdin.write(
+  '\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[4;160;400t' +
+    '\x1bP>|ghostty(1.2.3)\x1b\\' +
+    '\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c',
+)
+assert.ok(
+  await settled(
+    () =>
+      interruptedStdout.output.includes('a=t,t=d,f=32') &&
+      interruptedStdout.output.includes('a=p,i='),
+  ),
+  'the retried Kitty probe must enable and place the waiting image',
+)
+interruptedStdout.isTTY = false
+interruptedInstance.unmount()
+
 const budgetTree = (withLeadingImage: boolean): React.ReactElement => (
   <AlternateScreen>
     <Box width={6} height={2} flexDirection="row">
@@ -377,17 +664,91 @@ assert.ok(
   'fallback cells must render before capability succeeds',
 )
 assert.ok(
-  await settled(() => stdout.output.includes(query.request)),
-  'a laid-out fullscreen image must trigger one Kitty query',
+  await settled(
+    () =>
+      stdout.output.includes(query.request) &&
+      stdout.output.includes(cellSizeQuery.request) &&
+      stdout.output.includes(windowSizeQuery.request),
+  ),
+  'a laid-out fullscreen image must trigger Kitty and pixel-size queries',
 )
-stdin.write('\x1b_Gi=31;OK\x1b\\\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c')
+stdout.columns = 50
+stdout.rows = 10
+stdout.emit('resize')
+stdin.write(
+  '\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[4;160;400t' +
+    '\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c',
+)
 assert.ok(
   await settled(
     () =>
-      stdout.output.includes('a=t,t=d,f=32') &&
-      stdout.output.includes('a=p,i='),
+      stdout.output.includes('a=t,t=d,f=32,s=32,v=32') &&
+      stdout.output.includes('a=p,i=') &&
+      stdout.output.split(cellSizeQuery.request).length - 1 === 2,
   ),
-  'a successful query must upload and place RGBA pixels',
+  'a resize during the probe must discard stale metrics and start one refresh',
+)
+assert.doesNotMatch(
+  stdout.output,
+  /a=t,t=d,f=32,s=40,v=40/u,
+  'stale 10x20 cell metrics must never reach a renderer transmission',
+)
+const beforeFreshMetrics = stdout.output.length
+stdin.write('\x1b[4;200;600t\x1b[?61;4c')
+assert.ok(
+  await settled(() => {
+    const refreshed = stdout.output.slice(beforeFreshMetrics)
+    return (
+      refreshed.includes('a=t,t=d,f=32,s=48,v=40') &&
+      refreshed.includes('a=d,d=I,i=')
+    )
+  }),
+  'a 14t-only refresh must upload the derived-ratio variant and retire the old image',
+)
+const cellSizeQueryCount = (): number =>
+  stdout.output.split(cellSizeQuery.request).length - 1
+const beforeResizeBurst = stdout.output.length
+stdout.columns = 60
+stdout.emit('resize')
+assert.ok(
+  await settled(() => cellSizeQueryCount() === 3),
+  'the first supported resize must start one metrics batch',
+)
+stdout.columns = 70
+stdout.emit('resize')
+stdout.columns = 80
+stdout.emit('resize')
+stdin.write(
+  '\x1b[6;20;11t\x1b[4;200;660t' +
+    '\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c',
+)
+assert.ok(
+  await settled(() => cellSizeQueryCount() === 4),
+  'an in-flight resize burst must coalesce into one latest-geometry batch',
+)
+assert.doesNotMatch(
+  stdout.output.slice(beforeResizeBurst),
+  /a=t,t=d,f=32,s=44,v=40/u,
+  'a superseded in-flight cell size must not produce an image variant',
+)
+const beforeLatestMetrics = stdout.output.length
+stdin.write(
+  '\x1b[6;20;9t\x1b[4;200;1600t' +
+    '\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c',
+)
+assert.ok(
+  await settled(() =>
+    stdout.output
+      .slice(beforeLatestMetrics)
+      .includes('a=t,t=d,f=32,s=36,v=40'),
+  ),
+  'the coalesced batch must apply the latest direct cell metrics',
+)
+await new Promise(resolve => setTimeout(resolve, 20))
+assert.equal(
+  cellSizeQueryCount(),
+  4,
+  'the resize burst must not leave another metrics refresh pending',
 )
 const ink = instances.get(stdout)
 assert.ok(ink, 'the rendered tree must retain its Ink instance')
@@ -545,7 +906,19 @@ assert.ok(
   'restoring a source must upload it again',
 )
 const beforeHandoff = stdout.output.length
+const queriesBeforeHandoff = cellSizeQueryCount()
+stdout.emit('resize')
+assert.ok(
+  await settled(() => cellSizeQueryCount() === queriesBeforeHandoff + 1),
+  'a same-grid resize must refresh cell pixels for font and DPI changes',
+)
 ink.enterAlternateScreen()
+stdout.emit('resize')
+assert.equal(
+  cellSizeQueryCount(),
+  queriesBeforeHandoff + 1,
+  'a resize during an external-editor handoff must not write terminal queries',
+)
 const handoffOutput = stdout.output.slice(beforeHandoff)
 const handoffDeleteAt = handoffOutput.indexOf('a=d,d=I,i=')
 const handoffClearAt = handoffOutput.indexOf('\x1b[2J')
@@ -555,14 +928,32 @@ assert.ok(
 )
 const beforeHandoffRestore = stdout.output.length
 ink.exitAlternateScreen()
+stdin.write(
+  '\x1b[6;20;77t\x1b[4;200;6160t' +
+    '\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c',
+)
+await new Promise(resolve => setTimeout(resolve, 20))
+assert.equal(
+  cellSizeQueryCount(),
+  queriesBeforeHandoff + 1,
+  'new terminal queries must wait until late handoff replies are quarantined',
+)
 assert.ok(
   await settled(
     () => {
       const restored = stdout.output.slice(beforeHandoffRestore)
-      return restored.includes('a=t,t=d,f=32') && restored.includes('a=p,i=')
+      return (
+        restored.includes('a=t,t=d,f=32') &&
+        restored.includes('a=p,i=') &&
+        cellSizeQueryCount() === queriesBeforeHandoff + 2
+      )
     },
   ),
-  'returning from an external editor must upload and place visible images again',
+  'returning from an external editor must restore images and refresh deferred metrics',
+)
+stdin.write(
+  '\x1b[6;20;9t\x1b[4;200;1600t' +
+    '\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c',
 )
 stdout.isTTY = false
 const beforeUnmount = stdout.output.length
