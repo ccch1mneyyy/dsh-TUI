@@ -1042,8 +1042,8 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
       const output = plainText(stdout.frames.slice(richMark))
       return output.includes('播放中 · 第一首') && output.includes('歌手 · 专辑')
     }), plainText(stdout.frames.slice(richMark)).slice(-500))
-  check('ui: rich status view receives only Box/Text/useTerminalSize',
-    receivedKit === 'Box,Text,useTerminalSize', receivedKit)
+  check('ui: rich status view receives only Box/Image/Text/useTerminalSize',
+    receivedKit === 'Box,Image,Text,useTerminalSize', receivedKit)
   check('ui: rich status view is clipped to its declared maxRows',
     !plainText(stdout.frames.slice(richMark)).includes('THIS-ROW-MUST-BE-CLIPPED'),
     plainText(stdout.frames.slice(richMark)).slice(-500))

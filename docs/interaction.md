@@ -38,7 +38,9 @@ transcript 模式中打开会话全文搜索。全文搜索使用 `n`/`N` 在结
 （select/confirm/input）打开期间独占键盘：`↑`/`↓` 移动、`Enter` 确认、
 `Esc` 取消。插件也可以在提示框上方贡献一行纯文本，或在宿主支持
 `tuiStatus.registerView` 时显示最多三行的紧凑富状态；富状态只能使用宿主提供的
-`Box`、`Text` 与终端尺寸，点击/悬停/拖动只在 fullscreen 下生效，不会取得键盘；
+`Box`、`Text`、`Image` 与终端尺寸，点击/悬停/拖动只在 fullscreen 下生效，不会取得键盘；
+`Image` 接收已解码 RGBA 和同尺寸字符回退：宿主探测到 Kitty graphics 时显示图片，
+否则自动显示回退内容（inline、辅助功能模式与多路复用器中同样如此）。
 同一动作的键盘路径由插件另行提供 slash 命令或注册 `tuiShortcuts`。富状态注册
 被拒绝时返回 `undefined`；注册成功时返回的 disposer 会同时撤下视图和对应的
 Cordis effect。

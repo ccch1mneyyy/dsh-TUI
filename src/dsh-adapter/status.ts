@@ -49,6 +49,10 @@ type TuiStatusViewTextProps = Omit<
   'ref'
 >
 
+type TuiStatusViewImageProps = React.ComponentProps<
+  typeof import('../ui.js').Image
+>
+
 type Assert<T extends true> = T
 type _TuiStatusViewBoxForbidsGlobalInput = Assert<
   Extract<TuiStatusViewForbiddenBoxProps, keyof TuiStatusViewBoxProps> extends never
@@ -79,6 +83,7 @@ type _TuiStatusViewTextForbidsRef = Assert<
  * context-menu, wheel, or ref props. Raw-terminal APIs are absent. */
 export interface TuiStatusViewUi {
   readonly Box: React.ComponentType<TuiStatusViewBoxProps>
+  readonly Image: React.ComponentType<TuiStatusViewImageProps>
   readonly Text: React.ComponentType<TuiStatusViewTextProps>
   readonly useTerminalSize: typeof import('../ui.js').useTerminalSize
 }

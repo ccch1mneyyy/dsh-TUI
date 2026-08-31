@@ -15,6 +15,7 @@ import {
 } from './squash-text-nodes.js'
 import type { Color } from './styles.js'
 import { isXtermJs } from './terminal.js'
+import { terminalImageSourceFromAttributes } from './terminal-image.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
 
@@ -617,6 +618,14 @@ function renderNodeToOutput(
     let y = offsetY + yogaTop
     const width = yogaNode.getComputedWidth()
     const height = yogaNode.getComputedHeight()
+    const imageSource =
+      node.nodeName === 'ink-image'
+        ? terminalImageSourceFromAttributes(node.attributes)
+        : undefined
+    const imageAdmitted =
+      imageSource === undefined
+        ? false
+        : output.image(node, x, y, width, height, imageSource)
 
     // Absolute-positioned overlays anchored above their parent
     // (bottom='100%') compute negative screen y when their content is
@@ -664,6 +673,7 @@ function renderNodeToOutput(
       const fw = Math.floor(width)
       const fh = Math.floor(height)
       output.blit(prevScreen, fx, fy, fw, fh)
+      output.reuseImages(node)
       if (node.style.position === 'absolute') {
         absoluteRectsCur.push(cached)
         absoluteHitList.push({ node, rect: cached })
@@ -822,7 +832,21 @@ function renderNodeToOutput(
 
         output.write(x, y, text, softWrap)
       }
-    } else if (node.nodeName === 'ink-box') {
+    } else if (
+      node.nodeName === 'ink-image' &&
+      imageAdmitted &&
+      output.terminalImagesEnabled
+    ) {
+      output.noSelect({
+        x: Math.floor(x),
+        y: Math.floor(y),
+        width: Math.floor(width),
+        height: Math.floor(height),
+      })
+      for (const child of node.childNodes) {
+        if (child.nodeName !== '#text') dropSubtreeCache(child as DOMElement)
+      }
+    } else if (node.nodeName === 'ink-box' || node.nodeName === 'ink-image') {
       const boxBackgroundColor =
         node.style.backgroundColor ?? inheritedBackgroundColor
 
@@ -1284,12 +1308,25 @@ function renderNodeToOutput(
             !hint ||
             heightDelta === 0 ||
             (hint.delta > 0 && heightDelta === hint.delta)
+          const graphicsInScrollRegion =
+            hint !== null &&
+            output.hasPreviousImageInRegion(
+              Math.floor(x),
+              hint.top,
+              Math.floor(width),
+              hint.bottom - hint.top + 1,
+            )
           // scrollHint is set above when hint is captured. If safeForFastPath
           // is false the full path renders a next.screen that doesn't match
           // the DECSTBM shift — emitting DECSTBM leaves stale rows (seen as
           // content bleeding through during scroll-up + streaming). Clear it.
-          if (!safeForFastPath) scrollHint = null
-          if (hint && prevScreen && safeForFastPath) {
+          if (!safeForFastPath || graphicsInScrollRegion) scrollHint = null
+          if (
+            hint &&
+            prevScreen &&
+            safeForFastPath &&
+            !graphicsInScrollRegion
+          ) {
             const { top, bottom, delta } = hint
             const w = Math.floor(width)
             output.blit(prevScreen, Math.floor(x), top, w, bottom - top + 1)
@@ -1567,7 +1604,12 @@ function renderNodeToOutput(
           // same reason: the old fill lives in prevScreen and the children's
           // blits would resurrect it — the frame then equals prevScreen and
           // the diff never clears the stale highlight.
-          ownBackgroundColor || node.style.opaque || bgChanged ? undefined : prevScreen,
+          node.nodeName === 'ink-image' ||
+            ownBackgroundColor ||
+            node.style.opaque ||
+            bgChanged
+            ? undefined
+            : prevScreen,
           boxBackgroundColor,
         )
       }

@@ -150,6 +150,9 @@ const DA2_RE = /^\x1b\[>([\d;]*)c$/
 // (private ? marker distinguishes from CSI u key events)
 // eslint-disable-next-line no-control-regex
 const KITTY_FLAGS_RE = /^\x1b\[\?(\d+)u$/
+// Kitty graphics APC response: ESC_G key=value,...;OK|error ESC\\
+// eslint-disable-next-line no-control-regex
+const KITTY_GRAPHICS_RE = /^\x1b_G([^;]*);([^\x1b]*)\x1b\\$/
 // DECXCPR cursor position: CSI ? row ; col R
 // The ? marker disambiguates from modified F3 keys (Shift+F3 = CSI 1;2 R,
 // Ctrl+F3 = CSI 1;5 R, etc.) — plain CSI row;col R is genuinely ambiguous.
@@ -208,6 +211,8 @@ export type TerminalResponse =
   | { type: 'da2'; params: number[] }
   /** Kitty keyboard protocol: current flags (answer to CSI ? u) */
   | { type: 'kittyKeyboard'; flags: number }
+  /** Kitty graphics protocol response to an a=q capability query. */
+  | { type: 'kittyGraphics'; imageId: number; status: string }
   /** DSR: cursor position report (answer to CSI 6 n) */
   | { type: 'cursorPosition'; row: number; col: number }
   /** OSC response: generic operating-system-command reply (e.g. OSC 11 bg color) */
@@ -274,6 +279,23 @@ function parseTerminalResponse(s: string): TerminalResponse | null {
     const m = XTVERSION_RE.exec(s)
     if (m) {
       return { type: 'xtversion', name: m[1]! }
+    }
+  }
+
+  if (s.startsWith('\x1b_G')) {
+    const m = KITTY_GRAPHICS_RE.exec(s)
+    if (m) {
+      const imageId = m[1]!
+        .split(',')
+        .map(field => field.split('=', 2))
+        .find(([key]) => key === 'i')?.[1]
+      if (imageId !== undefined && /^\d+$/u.test(imageId)) {
+        return {
+          type: 'kittyGraphics',
+          imageId: parseInt(imageId, 10),
+          status: m[2]!,
+        }
+      }
     }
   }
 

@@ -56,6 +56,7 @@ export type {
   TuiStatusViewProps,
   TuiStatusViewUi,
 } from './dsh-adapter/status.js'
+export type { TerminalImageSource } from './ink/terminal-image.js'
 export { matchShortcut, parseShortcutCombo, TuiShortcutRuntime } from './dsh-adapter/shortcuts.js'
 export type { TuiShortcutKey, TuiShortcutOptions } from './dsh-adapter/shortcuts.js'
 export { TuiRendererRuntime } from './dsh-adapter/renderers.js'

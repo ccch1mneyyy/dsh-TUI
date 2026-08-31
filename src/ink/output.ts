@@ -30,6 +30,13 @@ import {
   type CellRun,
 } from './screen.js'
 import { stringWidth } from './stringWidth.js'
+import type { DOMElement } from './dom.js'
+import {
+  TERMINAL_IMAGE_MAX_CELLS,
+  TERMINAL_IMAGE_MAX_PLACEMENTS,
+  type TerminalImagePlacement,
+  type TerminalImageSource,
+} from './terminal-image.js'
 import { widestLine } from './widest-line.js'
 
 /**
@@ -174,6 +181,10 @@ type Options = {
    * For double-buffering, pass a reusable screen. Otherwise create a new one.
    */
   screen: Screen
+  /** Paint image fallbacks as blank backing cells and collect placements. */
+  terminalImages?: boolean
+  /** Image requests from the diff baseline, reused by clean subtree blits. */
+  previousImages?: readonly TerminalImagePlacement[]
 }
 
 /** A queued paint operation: write, clip, unclip, blit, clear, noSelect, or shift. */
@@ -246,6 +257,15 @@ function minDefined(
   if (a === undefined) return b
   if (b === undefined) return a
   return Math.min(a, b)
+}
+
+function isNodeInSubtree(node: DOMElement, root: DOMElement): boolean {
+  let current: DOMElement | undefined = node
+  while (current !== undefined) {
+    if (current === root) return true
+    current = current.parentNode
+  }
+  return false
 }
 
 type UnclipOperation = {
@@ -458,8 +478,13 @@ export default class Output {
   height: number
   private readonly stylePool: StylePool
   private screen: Screen
+  terminalImagesEnabled: boolean
 
   private readonly operations: Operation[] = []
+  private readonly imagePlacements: TerminalImagePlacement[] = []
+  private readonly imageNodes = new Set<DOMElement>()
+  private readonly imageClips: Clip[] = []
+  private previousImages: readonly TerminalImagePlacement[]
 
   private charCache = new CharCache()
 
@@ -516,6 +541,8 @@ export default class Output {
     this.height = height
     this.stylePool = stylePool
     this.screen = screen
+    this.terminalImagesEnabled = options.terminalImages ?? false
+    this.previousImages = options.previousImages ?? []
 
     resetScreen(screen, width, height)
   }
@@ -530,11 +557,22 @@ export default class Output {
    * @param height - the new screen height in rows.
    * @param screen - the screen buffer to render into.
    */
-  reset(width: number, height: number, screen: Screen): void {
+  reset(
+    width: number,
+    height: number,
+    screen: Screen,
+    terminalImages = false,
+    previousImages: readonly TerminalImagePlacement[] = [],
+  ): void {
     this.width = width
     this.height = height
     this.screen = screen
+    this.terminalImagesEnabled = terminalImages
+    this.previousImages = previousImages
     this.operations.length = 0
+    this.imagePlacements.length = 0
+    this.imageNodes.clear()
+    this.imageClips.length = 0
     resetScreen(screen, width, height)
     // Bounds are enforced at insertion time (CharCache.set); nothing to
     // do here. The cache intentionally survives frames — most lines don't
@@ -587,6 +625,99 @@ export default class Output {
   }
 
   /**
+   * Record a fully visible image request for this frame. Partial placements
+   * are rejected so terminal graphics can never escape an overflow clip.
+   */
+  image(
+    node: DOMElement,
+    x: number,
+    y: number,
+    columns: number,
+    rows: number,
+    source: TerminalImageSource,
+  ): boolean {
+    if (this.imageNodes.has(node)) return true
+    if (this.imagePlacements.length >= TERMINAL_IMAGE_MAX_PLACEMENTS) return false
+    const left = Math.floor(x)
+    const top = Math.floor(y)
+    const width = Math.floor(columns)
+    const height = Math.floor(rows)
+    if (
+      width <= 0 ||
+      height <= 0 ||
+      width * height > TERMINAL_IMAGE_MAX_CELLS
+    ) {
+      return false
+    }
+    if (
+      left < 0 ||
+      top < 0 ||
+      left + width > this.width ||
+      top + height > this.height
+    ) {
+      return false
+    }
+    const clip = this.imageClips.at(-1)
+    if (
+      clip !== undefined &&
+      ((clip.x1 !== undefined && left < clip.x1) ||
+        (clip.x2 !== undefined && left + width > clip.x2) ||
+        (clip.y1 !== undefined && top < clip.y1) ||
+        (clip.y2 !== undefined && top + height > clip.y2))
+    ) {
+      return false
+    }
+    this.imagePlacements.push({
+      node,
+      x: left,
+      y: top,
+      columns: width,
+      rows: height,
+      source,
+    })
+    this.imageNodes.add(node)
+    return true
+  }
+
+  /** Reuse images inside a clean subtree whose cells came from prevScreen. */
+  reuseImages(node: DOMElement): void {
+    for (const placement of this.previousImages) {
+      if (!isNodeInSubtree(placement.node, node)) continue
+      this.image(
+        placement.node,
+        placement.x,
+        placement.y,
+        placement.columns,
+        placement.rows,
+        placement.source,
+      )
+    }
+  }
+
+  /** Whether a baseline placement overlaps a screen region. */
+  hasPreviousImageInRegion(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): boolean {
+    const right = x + width
+    const bottom = y + height
+    return this.previousImages.some(
+      placement =>
+        placement.x < right &&
+        placement.x + placement.columns > x &&
+        placement.y < bottom &&
+        placement.y + placement.rows > y,
+    )
+  }
+
+  /** Current frame's immutable-by-convention terminal image requests. */
+  getImages(): readonly TerminalImagePlacement[] {
+    return this.imagePlacements.slice()
+  }
+
+  /**
    * Queue a text write at a position, split across lines on newlines.
    * @param x - the left column.
    * @param y - the top row.
@@ -612,6 +743,7 @@ export default class Output {
    * @param clip - the clip region to apply.
    */
   clip(clip: Clip): void {
+    this.imageClips.push(intersectClip(this.imageClips.at(-1), clip))
     this.operations.push({
       type: 'clip',
       clip,
@@ -620,6 +752,7 @@ export default class Output {
 
   /** Pop the most recent clip region. */
   unclip(): void {
+    this.imageClips.pop()
     this.operations.push({
       type: 'unclip',
     })
