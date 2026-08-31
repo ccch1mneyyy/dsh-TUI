@@ -23,7 +23,7 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
 
 `cordis.patch.yml` 里对官方行的干预已快照到 `patch-surface.snapshot.json`:
 
-- **disabled overrides**:24 行。其中 23 行恒定禁用;`command-goal` 仅在
+- **disabled overrides**:24 行。其中 23 行恒定禁用；`command-goal` 仅在
   `dsh-agent-presets` 的 shipped standard preset 实际自带该命令时禁用,
   因而 0.1.2 线与 web-app 对齐,旧 0.1.1-rc.2 仍保留 host `/goal`;web-app 另有 `hmr`
 - **config overrides**:8 行(原有 6 行加 session-telemetry-otel /
