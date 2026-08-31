@@ -128,6 +128,21 @@ function makeDeps(script, options = {}) {
       { provider: 'same-name', displayName: 'same-name' },
     ],
     listConfiguredProviders: () => options.configured ?? [],
+    // All-layer ref census. The stub derives it from `configured` by default,
+    // dropping routes whose profile unset already landed (stateful like the
+    // real merged section); `options.refUsers` overrides per ref to simulate
+    // base-layer consumers invisible to the user layer.
+    listRefUsers: (ref, exceptRoute) => {
+      // Only the post-unset re-check (no exclusion arg) throws under the
+      // flag; the pre-confirm census still runs the derived stub.
+      if (options.refUsersThrows && exceptRoute === undefined) throw new Error('settings layer unavailable')
+      if (options.refUsers) return options.refUsers[ref] ?? []
+      return (options.configured ?? [])
+        .filter(row => row.route !== exceptRoute
+          && !calls.removedProfiles.includes(row.route)
+          && row.ref === ref)
+        .map(row => row.route)
+    },
     routeExists: () => false,
     discoverModels: async () => {
       if (options.discoverThrows) throw new Error('connection refused')
@@ -736,7 +751,9 @@ function oauthStub(behavior = {}) {
 }
 
 // 23. delete via the edit menu, stored key: profile removed, then the
-// credential removed, transcript notes both, outcome deleted.
+// credential removed (after the post-unset reference re-check comes back
+// empty), transcript notes both, outcome deleted. A non-reserved ref so the
+// removal path is the one under test (33 covers the reserved namespace).
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_EDIT,
@@ -744,16 +761,16 @@ function oauthStub(behavior = {}) {
     'edit-menu': MENU_DELETE,
     'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
   }, {
-    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true, models: ['deepseek-chat'] }],
+    configured: [{ route: 'deepseek', ref: 'MY-ROUTE_KEY', shadowed: false, isCatalog: true, models: ['deepseek-chat'] }],
   })
   const outcome = await runProviderWizard(deps)
   check('23 delete: outcome deleted', outcome === 'deleted', outcome)
   check('23 delete: profile removed', eq(calls.removedProfiles, ['deepseek']), JSON.stringify(calls.removedProfiles))
-  check('23 delete: credential removed', eq(calls.removed, ['DEEPSEEK_API_KEY']), JSON.stringify(calls.removed))
+  check('23 delete: credential removed', eq(calls.removed, ['MY-ROUTE_KEY']), JSON.stringify(calls.removed))
   check('23 delete: nothing written', eq(calls.profiles, []) && eq(calls.credentials, []))
   check('23 delete: success notified', calls.notifications.some(n => n.color === 'success'))
   check('23 delete: transcript notes the removed key',
-    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key', { ref: 'DEEPSEEK_API_KEY' })) === true,
+    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key', { ref: 'MY-ROUTE_KEY' })) === true,
     JSON.stringify(calls.pushed[0]?.lines))
 }
 
@@ -903,6 +920,7 @@ function oauthStub(behavior = {}) {
 // 30. delete with a failing credential cleanup: the profile unset landed,
 // so the outcome is still 'deleted' (caller refreshes completions), the
 // transcript says the key cleanup failed, and a warning names the ref (#2).
+// Non-reserved ref: the removal path itself is under test here.
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_EDIT,
@@ -910,7 +928,7 @@ function oauthStub(behavior = {}) {
     'edit-menu': MENU_DELETE,
     'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
   }, {
-    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true, models: ['deepseek-chat'] }],
+    configured: [{ route: 'deepseek', ref: 'MY-ROUTE_KEY', shadowed: false, isCatalog: true, models: ['deepseek-chat'] }],
     credentialRemoveThrows: true,
   })
   const outcome = await runProviderWizard(deps)
@@ -918,10 +936,10 @@ function oauthStub(behavior = {}) {
     outcome === 'deleted', outcome)
   check('30 delete key-cleanup failure: profile removed', eq(calls.removedProfiles, ['deepseek']))
   check('30 delete key-cleanup failure: warning names the ref',
-    calls.notifications.some(n => n.color === 'warning' && n.text.includes('DEEPSEEK_API_KEY')),
+    calls.notifications.some(n => n.color === 'warning' && n.text.includes('MY-ROUTE_KEY')),
     JSON.stringify(calls.notifications))
   check('30 delete key-cleanup failure: transcript says the cleanup failed',
-    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-cleanup-failed', { ref: 'DEEPSEEK_API_KEY' })) === true,
+    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-cleanup-failed', { ref: 'MY-ROUTE_KEY' })) === true,
     JSON.stringify(calls.pushed[0]?.lines))
   check('30 delete key-cleanup failure: no error toast, catalog is consistent',
     !calls.notifications.some(n => n.color === 'error'))
@@ -948,28 +966,29 @@ function oauthStub(behavior = {}) {
 // 31. delete of a route whose key ref is shared with another configured
 // route: the key is kept (removing it would break the sibling), the confirm
 // detail warns up front and the transcript records the decision (#5).
+// Non-reserved ref: the shared branch is under test (33 covers reserved).
 {
   const { deps, calls } = makeDeps({
     'action': ACTION_EDIT,
-    'edit-provider': { selected: ['deepseek'] },
+    'edit-provider': { selected: ['acme-gateway'] },
     'edit-menu': MENU_DELETE,
     'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
   }, {
     configured: [
-      { route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true, models: ['deepseek-chat'] },
-      { route: 'deepseek-clone', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://clone.example/v1', api: 'openai-completions', models: ['deepseek-chat'] },
+      { route: 'acme-gateway', ref: 'ACME_SHARED_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] },
+      { route: 'acme-clone', ref: 'ACME_SHARED_KEY', shadowed: false, isCatalog: false, baseURL: 'https://clone.example/v1', api: 'openai-completions', models: ['acme-large'] },
     ],
   })
   const outcome = await runProviderWizard(deps)
   check('31 delete shared key: outcome deleted', outcome === 'deleted', outcome)
   check('31 delete shared key: profile removed, credential kept',
-    eq(calls.removedProfiles, ['deepseek']) && eq(calls.removed, []),
+    eq(calls.removedProfiles, ['acme-gateway']) && eq(calls.removed, []),
     JSON.stringify(calls.removed))
   check('31 delete shared key: confirm detail warns about the shared ref',
-    (calls.details['delete-confirm'] ?? '').includes('deepseek-clone'),
+    (calls.details['delete-confirm'] ?? '').includes('acme-clone'),
     calls.details['delete-confirm'])
   check('31 delete shared key: transcript notes the kept key',
-    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-shared', { ref: 'DEEPSEEK_API_KEY', routes: 'deepseek-clone' })) === true,
+    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-shared', { ref: 'ACME_SHARED_KEY', routes: 'acme-clone' })) === true,
     JSON.stringify(calls.pushed[0]?.lines))
 }
 
@@ -1003,6 +1022,191 @@ function oauthStub(behavior = {}) {
   check('32 edit models: newly enabled model is built from the discovery row',
     eq(mutations[0][1][0].value[1], { id: 'acme-small', contextWindow: 2048 }),
     JSON.stringify(mutations[0][1][0].value[1]))
+}
+
+// 33. delete of a route whose ref is host-reserved (DEEPSEEK_API_KEY): the
+// credential is NEVER removed even though the user layer shows no other
+// user — the harness itself resolves this ref. Transcript says reserved.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_DELETE,
+    'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
+  }, {
+    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true, models: ['deepseek-chat'] }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('33 delete reserved ref: outcome deleted', outcome === 'deleted', outcome)
+  check('33 delete reserved ref: profile removed, credential kept',
+    eq(calls.removedProfiles, ['deepseek']) && eq(calls.removed, []),
+    JSON.stringify(calls.removed))
+  check('33 delete reserved ref: transcript notes the reserved key',
+    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-reserved', { ref: 'DEEPSEEK_API_KEY' })) === true,
+    JSON.stringify(calls.pushed[0]?.lines))
+}
+
+// 33b. delete of a route whose ref is consumed by a BASE-layer profile the
+// editable user-layer list never shows: the all-layer census keeps the key
+// even though no OTHER CONFIGURED ROUTE names the ref.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['my-gateway'] },
+    'edit-menu': MENU_DELETE,
+    'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
+  }, {
+    configured: [{ route: 'my-gateway', ref: 'GATEWAY_SHARED_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['m1'] }],
+    // Base-inherited consumer, invisible to listConfiguredProviders.
+    refUsers: { GATEWAY_SHARED_KEY: ['deepseek'] },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('33b delete with hidden base consumer: outcome deleted', outcome === 'deleted', outcome)
+  check('33b delete with hidden base consumer: credential kept', eq(calls.removed, []),
+    JSON.stringify(calls.removed))
+  check('33b delete with hidden base consumer: transcript names the base route',
+    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-shared', { ref: 'GATEWAY_SHARED_KEY', routes: 'deepseek' })) === true,
+    JSON.stringify(calls.pushed[0]?.lines))
+}
+
+// 33c. the reference RE-CHECK runs after the profile unset: the pre-confirm
+// census saw no sharer, but the merged section still names consumers when
+// removal time comes (e.g. the unset re-inherited a base profile) — the key
+// is kept.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['my-gateway'] },
+    'edit-menu': MENU_DELETE,
+    'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
+  }, {
+    configured: [{ route: 'my-gateway', ref: 'GATEWAY_SHARED_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['m1'] }],
+  })
+  const base = deps.host.listRefUsers
+  deps.host.listRefUsers = (ref, exceptRoute) => {
+    // First call: pre-confirm census — empty. Second: post-unset re-check —
+    // a consumer appeared in the merged section meanwhile.
+    const users = exceptRoute === undefined ? ['deepseek'] : base(ref, exceptRoute)
+    return users
+  }
+  const outcome = await runProviderWizard(deps)
+  check('33c post-unset recheck finds a consumer: credential kept',
+    outcome === 'deleted' && eq(calls.removed, []), JSON.stringify(calls.removed))
+  check('33c post-unset recheck finds a consumer: transcript notes shared key',
+    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-shared', { ref: 'GATEWAY_SHARED_KEY', routes: 'deepseek' })) === true,
+    JSON.stringify(calls.pushed[0]?.lines))
+}
+
+// 33d. the post-unset re-check itself throws: fail closed — the key is kept
+// with an unknown-users note (an unremovable key is recoverable, a
+// destroyed one is not).
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['my-gateway'] },
+    'edit-menu': MENU_DELETE,
+    'delete-confirm': { selected: [t('provider-opt-delete-yes')] },
+  }, {
+    configured: [{ route: 'my-gateway', ref: 'GATEWAY_SHARED_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['m1'] }],
+    refUsersThrows: true,
+  })
+  const outcome = await runProviderWizard(deps)
+  check('33d ref query failure: outcome deleted, credential kept',
+    outcome === 'deleted' && eq(calls.removed, []), JSON.stringify(calls.removed))
+  check('33d ref query failure: transcript notes the kept key',
+    calls.pushed[0]?.lines.includes(t('provider-line-deleted-key-shared',
+      { ref: 'GATEWAY_SHARED_KEY', routes: t('provider-unknown-ref-users') })) === true,
+    JSON.stringify(calls.pushed[0]?.lines))
+}
+
+// 34. edit the API key of a route whose ref is shared: the write is gated
+// by an explicit overwrite confirm naming the other users; cancelling the
+// confirm writes nothing.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_KEY,
+    'apikey': { custom: 'sk-new' },
+    'key-overwrite-confirm': { selected: [t('provider-opt-confirm-cancel')] },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+    storedCredentials: { ACME_GATEWAY_API_KEY: 'sk-old' },
+    refUsers: { ACME_GATEWAY_API_KEY: ['acme-clone'] },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('34 edit shared key declined: outcome cancelled', outcome === 'cancelled', outcome)
+  check('34 edit shared key declined: credential untouched', eq(calls.credentials, []),
+    JSON.stringify(calls.credentials))
+  check('34 edit shared key declined: confirm names the other user',
+    (calls.details['key-overwrite-confirm'] ?? '').includes('acme-clone'),
+    calls.details['key-overwrite-confirm'])
+}
+
+// 34b. same, confirming the overwrite: the shared credential is written.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_KEY,
+    'apikey': { custom: 'sk-new' },
+    'key-overwrite-confirm': { selected: [t('provider-opt-key-overwrite-yes')] },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+    storedCredentials: { ACME_GATEWAY_API_KEY: 'sk-old' },
+    refUsers: { ACME_GATEWAY_API_KEY: ['acme-clone'] },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('34b edit shared key confirmed: credential overwritten',
+    outcome === 'updated' && eq(calls.credentials, [['ACME_GATEWAY_API_KEY', 'sk-new']]),
+    JSON.stringify(calls.credentials))
+}
+
+// 34c. an unshared ref edits straight through: no confirm question at all.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_KEY,
+    'apikey': { custom: 'sk-new' },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+    storedCredentials: { ACME_GATEWAY_API_KEY: 'sk-old' },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('34c edit unshared key: no overwrite confirm asked',
+    outcome === 'updated' && !calls.asks.includes('key-overwrite-confirm'),
+    JSON.stringify(calls.asks))
+}
+
+// 35. a model-list edit where discovery drops an existing model: the stored
+// model still appears in the panel (marked not-found, pre-checked) so an
+// Enter-through confirm cannot silently delete it; explicit un-check of the
+// others keeps it.
+{
+  const storedMissing = { id: 'acme-legacy', contextWindow: 4096, compat: { tier: 'legacy' } }
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['acme-large', 'acme-legacy', 'acme-new'] },
+  }, {
+    configured: [{
+      route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false,
+      baseURL: 'https://gw.example/v1', api: 'openai-completions',
+      models: ['acme-large', 'acme-legacy'], modelEntries: [{ id: 'acme-large' }, storedMissing],
+    }],
+    discovered: [{ id: 'acme-large' }, { id: 'acme-new' }],
+    storedCredentials: { ACME_GATEWAY_API_KEY: 'sk-old' },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('35 edit models: undiscovered stored model stays in the option list',
+    calls.optionDescriptions.models?.['acme-legacy'] === t('provider-row-model-missing'),
+    JSON.stringify(calls.optionDescriptions.models))
+  check('35 edit models: outcome updated', outcome === 'updated', outcome)
+  const value = calls.mutations[0][1][0].value
+  check('35 edit models: kept-but-undiscovered model is preserved verbatim',
+    eq(value[1], storedMissing), JSON.stringify(value))
 }
 
 // 28b. single-field custom-route patch shape: editing baseURL addresses

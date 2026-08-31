@@ -5136,6 +5136,22 @@ export function createChannel(
             | undefined
           return section?.providers !== undefined && route in section.providers
         },
+        listRefUsers(ref, exceptRoute) {
+          // The RESOLVED merge (settings.get), not the user layer: a base
+          // provider or composition-base route naming this ref is invisible
+          // to listConfiguredProviders() but still consumes the credential.
+          const section = settings.get('llm-pi-ai') as
+            | { providers?: Record<string, unknown> }
+            | undefined
+          const providers = section?.providers
+          if (providers === undefined || typeof providers !== 'object' || providers === null) return []
+          return Object.entries(providers).flatMap(([route, profile]) => {
+            if (route === exceptRoute) return []
+            if (typeof profile !== 'object' || profile === null) return []
+            const stored = profile as Record<string, unknown>
+            return stored.apiKeyEnv === ref ? [route] : []
+          })
+        },
         listConfiguredProviders() {
           // The editable/deletable set is the USER layer only: `describe()`'s
           // `user` is the raw user section — the same source the /settings

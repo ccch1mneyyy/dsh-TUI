@@ -18,6 +18,7 @@
  */
 
 import { t } from '../i18n.js'
+import { isReservedCredentialRef } from './credentialRefGuard.js'
 import {
   UserQuestionError,
   type AskUserQuestionAnswer,
@@ -133,6 +134,15 @@ export interface ProviderSetupHost {
    * route would promise a delete that silently reverts to the base value.
    */
   listConfiguredProviders(): readonly ConfiguredProvider[]
+  /**
+   * Routes whose stored profile names `ref` as `apiKeyEnv` at ANY settings
+   * layer (user + inherited base), minus `exceptRoute`. Credential-impact
+   * decisions (delete cleanup, shared-key confirm) must go through this,
+   * never through {@link listConfiguredProviders}: that lists the user
+   * layer only (a deletable set), so a base provider or a composition-base
+   * route sharing the ref would be invisible and its key destroyed.
+   */
+  listRefUsers(ref: string, exceptRoute?: string): readonly string[]
   /** Whether a profile (any layer) already exists for the route. */
   routeExists(route: string): boolean
   /** Interrogate a draft endpoint; the draft key is never persisted. */
@@ -626,6 +636,37 @@ async function editApiKey(
     notify(t('provider-key-empty'), { color: 'warning' })
     return 'cancelled'
   }
+  // The ref is only a name: writing it replaces the key for EVERY profile
+  // pointing at it (the all-layer census also covers base-inherited routes
+  // the editable list never shows). Silently rotating a shared credential
+  // would break those routes' auth, so the overwrite needs an explicit
+  // opt-in naming the blast radius.
+  const otherUsers = host.listRefUsers(provider.ref, provider.route)
+  if (otherUsers.length > 0) {
+    let overwriteAnswer: AskUserQuestionAnswer
+    try {
+      overwriteAnswer = await ask({
+        questions: [optionQuestion('key-overwrite-confirm',
+          t('provider-q-key-overwrite-confirm', { ref: provider.ref }), [
+            { label: t('provider-opt-key-overwrite-yes') },
+            { label: t('provider-opt-confirm-cancel') },
+          ], {
+            detail: t('provider-key-overwrite-warning', { routes: otherUsers.join(', ') }),
+            hideCustomInput: true,
+          })],
+      })
+    } catch (error) {
+      if (error instanceof UserQuestionError) {
+        notify(t('provider-edit-cancelled'))
+        return 'cancelled'
+      }
+      throw error
+    }
+    if (answerSelected(overwriteAnswer, 'key-overwrite-confirm')[0] !== t('provider-opt-key-overwrite-yes')) {
+      notify(t('provider-edit-cancelled'))
+      return 'cancelled'
+    }
+  }
   await host.writeCredential(provider.ref, value)
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
@@ -756,15 +797,28 @@ async function editModelList(
     }
   } else {
     discoveredById = new Map(discovered.map(model => [model.id, model] as const))
+    // Existing models the endpoint no longer advertises (renamed, beta
+    // pulled, transient discovery gap) must still appear in the panel,
+    // pre-checked and marked: options built from `discovered` alone would
+    // silently drop them on an Enter-through confirm, destroying their
+    // stored entries and the unmodeled per-model fields. Only an explicit
+    // un-check removes one.
+    const optionRows = discovered.map(model => ({
+      label: model.id,
+      description: [
+        model.name ?? '',
+        model.contextWindow !== undefined ? `${model.contextWindow}` : '',
+      ].filter(part => part !== '').join(' · ') || undefined,
+    }))
+    const missingRows = previous
+      .filter(id => !discoveredById.has(id))
+      .map(id => ({
+        label: id,
+        description: t('provider-row-model-missing'),
+      }))
     const modelsAnswer = await ask({
       questions: [optionQuestion('models', t('provider-q-models'),
-        discovered.map(model => ({
-          label: model.id,
-          description: [
-            model.name ?? '',
-            model.contextWindow !== undefined ? `${model.contextWindow}` : '',
-          ].filter(part => part !== '').join(' · ') || undefined,
-        })),
+        [...optionRows, ...missingRows],
         { multiSelect: true, defaultSelected: previous },
       )],
     })
@@ -845,15 +899,16 @@ async function deleteConfiguredProvider(
   provider: ConfiguredProvider,
 ): Promise<ProviderWizardOutcome> {
   const { host, ask, notify, pushLocal } = deps
-  // A credential ref is only a name — several routes may share it. Removing
-  // the key together with this route would silently break every other
-  // profile pointing at the same ref, so a shared key is kept: the confirm
-  // detail says so up front and the transcript repeats it.
+  // A credential ref is only a name — several routes may share it, possibly
+  // at settings layers the editable list never shows (a base-inherited
+  // provider, or a consumer like the balance probe that resolves the ref
+  // without any profile). The all-layer ref query is the only sound sharer
+  // census: removing the key together with this route would silently break
+  // every remaining consumer, so a shared key is kept — the confirm detail
+  // says so up front and the transcript repeats it.
   const sharers = provider.ref === ''
     ? []
-    : host.listConfiguredProviders()
-      .filter(other => other.route !== provider.route && other.ref === provider.ref)
-      .map(other => other.route)
+    : host.listRefUsers(provider.ref, provider.route)
   const lines = buildDeleteSummary(provider)
   let confirmAnswer: AskUserQuestionAnswer
   try {
@@ -895,15 +950,36 @@ async function deleteConfiguredProvider(
   if (provider.ref !== '') {
     if (provider.shadowed) {
       pushedLines.push(t('provider-line-deleted-key-shadowed', { ref: provider.ref }))
-    } else if (sharers.length > 0) {
-      pushedLines.push(t('provider-line-deleted-key-shared', { ref: provider.ref, routes: sharers.join(', ') }))
+    } else if (isReservedCredentialRef(provider.ref)) {
+      // Host-owned credential namespace (the harness's own main key lives
+      // here): never removed as a side effect of deleting a route.
+      pushedLines.push(t('provider-line-deleted-key-reserved', { ref: provider.ref }))
     } else {
+      // Reference re-check AFTER the profile unset, not the pre-confirm
+      // census: the store may have gained or lost users while the confirm
+      // was up (and a route whose user-layer override was just cleared can
+      // re-inherit a base profile still pointing at the ref). The route is
+      // gone from the merged section, so no exclusion is needed — any hit
+      // here is a live consumer. When the running settings layer cannot
+      // answer the query at all, treat the ref as shared and keep it: an
+      // unremovable key is recoverable, a destroyed one is not.
+      let remaining: readonly string[]
       try {
-        await host.removeCredential(provider.ref)
-        pushedLines.push(t('provider-line-deleted-key', { ref: provider.ref }))
+        remaining = host.listRefUsers(provider.ref)
       } catch {
-        keyCleanupFailed = true
-        pushedLines.push(t('provider-line-deleted-key-cleanup-failed', { ref: provider.ref }))
+        remaining = [t('provider-unknown-ref-users')]
+      }
+      if (remaining.length > 0) {
+        pushedLines.push(t('provider-line-deleted-key-shared',
+          { ref: provider.ref, routes: remaining.join(', ') }))
+      } else {
+        try {
+          await host.removeCredential(provider.ref)
+          pushedLines.push(t('provider-line-deleted-key', { ref: provider.ref }))
+        } catch {
+          keyCleanupFailed = true
+          pushedLines.push(t('provider-line-deleted-key-cleanup-failed', { ref: provider.ref }))
+        }
       }
     }
   }
