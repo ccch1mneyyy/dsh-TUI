@@ -124,7 +124,7 @@ function signatureParts(
   row: ChatRow,
   columns: number,
   expanded: boolean,
-  expandedRows: ReadonlySet<number>,
+  expandedRows: ReadonlyMap<number, number>,
   streamViewToggledRows: ReadonlySet<number>,
   thinkingVisible: boolean,
   thinkingFold: string,
@@ -141,23 +141,24 @@ function signatureParts(
   // REVEALED length while smooth streaming is painting (the height follows
   // what is on screen, not what has arrived).
   signatureScratch.push(columns, row.kind, displayTextLen)
+  const tier = expanded ? 2 : (expandedRows.get(row.id) ?? 0)
   switch (row.kind) {
     case 'assistant':
       // Streaming vs settled swaps renderers; Ctrl+O/per-row expand adds the
       // metadata row (model only renders expanded — keeps an idle /model
       // switch from touching settled rows).
-      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), expanded ? model : '')
+      signatureScratch.push(row.streaming === true, expanded, tier, expanded ? model : '')
       break
     case 'reasoning':
       // thinkingFold (preview vs full), its per-row live override, and the
       // visibility filter all change the card's height.
-      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
+      signatureScratch.push(row.streaming === true, expanded, tier, streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
       break
     case 'tool': {
       const tool = row.tool
       signatureScratch.push(
         expanded,
-        expandedRows.has(row.id),
+        tier,
         diffLayout,
         // Terminal header folding changes the header's height the same way
         // diffLayout changes the body's — without it, a /settings toggle
@@ -184,7 +185,7 @@ function signatureParts(
       break
     case 'compact':
       // Folded one-liner vs full summary text.
-      signatureScratch.push(expanded, expandedRows.has(row.id))
+      signatureScratch.push(expanded, tier)
       break
     default:
       // user / notice / interrupt / local / local-output: height follows
@@ -229,7 +230,7 @@ export function MessageList({
 }: {
   rows: readonly ChatRow[]
   expanded: boolean
-  expandedRows: ReadonlySet<number>
+  expandedRows: ReadonlyMap<number, number>
   selectedId: number | null
   onToggleRow: (rowId: number) => void
   /** 流式 reasoning 行相对 thinkingFold 默认视图的逐行切换。 */
@@ -399,14 +400,16 @@ export function MessageList({
         ? sliced
         : sliced.filter(row => row.kind !== 'reasoning')
     // CC addMargin: every rendered block gets a 1-row top margin except the
-    // first. Pre-pass over the FULL list so a windowed row keeps the exact
+    // first, and consecutive tool cards group together with 0 margin (like Cursor).
+    // Pre-pass over the FULL list so a windowed row keeps the exact
     // spacing it would have in a fully-mounted list.
     const margins = new Map<number, boolean>()
     {
-      let prev: ChatRow['kind'] | undefined
+      let prev: ChatRow | undefined
       for (const row of out) {
-        margins.set(row.id, prev !== undefined)
-        prev = row.kind
+        const isConsecutiveTool = prev !== undefined && prev.kind === 'tool' && row.kind === 'tool'
+        margins.set(row.id, prev !== undefined && !isConsecutiveTool)
+        prev = row
       }
     }
     const streamBits = new Uint8Array(rows.length)
@@ -1097,6 +1100,8 @@ export function MessageList({
           } else if (row.kind === 'reasoning' && smoothStreaming) {
             displayText = revealTextOf(`r${row.id}`, row.text, { enabled: true, active: displayStreaming })
           }
+          const rowTier = expanded ? 2 : (expandedRows.get(row.id) ?? 0)
+          const isExpanded = rowTier > 0
           return (
             <MemoRow
               key={row.id}
@@ -1110,7 +1115,8 @@ export function MessageList({
               time={row.time}
               addMargin={addMargin}
               isSelected={selectedId === row.id}
-              isExpanded={expandedRows.has(row.id)}
+              isExpanded={isExpanded}
+              expansionTier={rowTier}
               expanded={expanded}
               model={model}
               diffLayout={diffLayout}
@@ -1177,6 +1183,7 @@ type MemoRowProps = {
   addMargin: boolean
   isSelected: boolean
   isExpanded: boolean
+  expansionTier: number
   expanded: boolean
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
@@ -1259,6 +1266,7 @@ function TranscriptRow({
   addMargin,
   isSelected,
   isExpanded,
+  expansionTier,
   expanded,
   model,
   diffLayout,
@@ -1436,6 +1444,7 @@ function TranscriptRow({
             tool={tool}
             addMargin={addMargin}
             verbose={isExpanded || expanded}
+            expansionTier={expansionTier}
             isSelected={isSelected}
             isExpanded={isExpanded}
             footnote={toolFootnote}

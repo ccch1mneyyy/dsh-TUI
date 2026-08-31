@@ -400,7 +400,7 @@ export function SplitDiffView({
         )
       })}
       {hidden > 0 && (
-        <Text dimColor>{`… +${hidden} lines (ctrl+o to expand)`}</Text>
+        <Text dimColor>{`… +${hidden} lines (click or ctrl+o to expand)`}</Text>
       )}
     </Box>
   )

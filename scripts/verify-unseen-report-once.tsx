@@ -50,7 +50,7 @@ const ANCHOR_ID = 5
 const reports: number[] = []
 const props = {
   expanded: false,
-  expandedRows: new Set<number>(),
+  expandedRows: new Map<number, number>(),
   selectedId: null,
   onToggleRow: () => {},
   streamFoldedRows: new Set<number>(),

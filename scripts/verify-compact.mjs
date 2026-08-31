@@ -16,8 +16,11 @@ import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { MessageList } from '../lib/types/components/MessageList.js'
+import { setLang } from '../lib/types/i18n.js'
 import { Writable, PassThrough } from 'node:stream'
 import { settled, sleep } from './lib/term-test.mjs'
+
+setLang('zh')
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -179,7 +182,7 @@ const listProps = (expanded) => ({
     { id: 2, kind: 'compact', text: LONG_SUMMARY },
   ],
   expanded,
-  expandedRows: new Set(),
+  expandedRows: new Map(),
   selectedId: null,
   onToggleRow() {},
   model: 'deepseek-chat',

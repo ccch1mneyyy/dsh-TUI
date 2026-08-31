@@ -359,8 +359,8 @@ export function Chat({
   })
   const [selectionActive, setSelectionActive] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
-  const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
-    () => new Set(),
+  const [expandedRows, setExpandedRows] = React.useState<ReadonlyMap<number, number>>(
+    () => new Map(),
   )
   /** 流式 reasoning 行相对 thinkingFold 默认值的用户切换。与
    *  expandedRows 分开：preview 默认三行、full 默认全文，点击在两者间
@@ -626,7 +626,7 @@ export function Chat({
     if (lastAgentIdRef.current === id) return
     lastAgentIdRef.current = id
     setExpanded(false)
-    setExpandedRows(new Set())
+    setExpandedRows(new Map())
     setSelectedId(null)
     setSelectionActive(false)
     setShowAllMessages(false)
@@ -1350,7 +1350,7 @@ export function Chat({
           // transcript. Reset view-local state, return the ScrollBox to the
           // top, then clear native scrollback and repaint the whale homepage.
           setExpanded(false)
-          setExpandedRows(new Set())
+          setExpandedRows(new Map())
           setStreamViewToggledRows(new Set())
           setSelectedId(null)
           setSelectionActive(false)
@@ -1373,7 +1373,7 @@ export function Chat({
         channel.clear()
         // channel.clear() resets row ids to 0; stale expanded/selection
         // state would mis-highlight fresh rows (known-limitation fix).
-        setExpandedRows(new Set())
+        setExpandedRows(new Map())
         setStreamViewToggledRows(new Set())
         setSelectedId(null)
         setSelectionActive(false)
@@ -2371,9 +2371,14 @@ export function Chat({
   // closures each render would defeat every row's memo.
   const toggleRowExpanded = React.useCallback((rowId: number) => {
     setExpandedRows((previous) => {
-      const next = new Set(previous)
-      if (next.has(rowId)) next.delete(rowId)
-      else next.add(rowId)
+      const next = new Map(previous)
+      const currentTier = next.get(rowId) ?? 0
+      const nextTier = (currentTier + 1) % 3
+      if (nextTier === 0) {
+        next.delete(rowId)
+      } else {
+        next.set(rowId, nextTier)
+      }
       return next
     })
   }, [])

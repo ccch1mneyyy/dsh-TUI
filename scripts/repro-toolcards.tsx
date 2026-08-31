@@ -67,12 +67,13 @@ const base = {
   durationMs: 12,
 }
 
-function card(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false): React.ReactElement {
+function card(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false, expansionTier?: number): React.ReactElement {
   return React.createElement(AssistantToolUseMessage, {
     key,
     tool: { ...base, ...tool },
     addMargin: false,
     verbose,
+    expansionTier,
     foldTerminalCommand,
   })
 }
@@ -99,8 +100,8 @@ const app = await render(card('edit', editTool), { stdout, debug: true, exitOnCt
  * scenario's checks poll their own full condition via settled（等待与断言
  * 共用同一谓词），so no separate ready predicate is needed here.
  */
-function show(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false): void {
-  app.rerender(card(key, tool, verbose, foldTerminalCommand))
+function show(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false, expansionTier?: number): void {
+  app.rerender(card(key, tool, verbose, foldTerminalCommand, expansionTier))
 }
 
 // 1. Settled Edit: diff body, red `- ` / green `+ ` lines under the ⎿ gutter.
@@ -164,14 +165,14 @@ show('fallback', {
 check('无视图时回退 Name(args) 标题', await settled(() => screen().includes('Read({"file_path":"/tmp/a.ts"})')))
 check('无视图时结果仍缩进', await settled(() => { const r = rowOf('raw output here'); return r >= 0 && lines()[r]!.startsWith(' ⎿ raw output here') }))
 
-// 7. 折叠上限：文本正文超过 3 行折叠 + 提示；Ctrl+O 展开。
+// 7. 折叠上限：默认 Tier 0 文本正文为 1 行 + 提示；Ctrl+O 展开。
 show('cap', {
   name: 'bash',
   callView: { card: 'terminal', title: 'seq 6' },
   resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
   resultFull: '1\n2\n3\n4\n5\n6',
 })
-check('文本正文折叠为 3 行 + 提示', await settled(() => screen().includes('… +3 lines (ctrl+o to expand)') && rowOf('4') === -1))
+check('文本正文折叠为 1 行 + 提示', await settled(() => screen().includes('… +5 lines (click or ctrl+o to expand)') && rowOf('2') === -1))
 show('cap-open', {
   name: 'bash',
   callView: { card: 'terminal', title: 'seq 6' },
@@ -227,7 +228,7 @@ show('multi-hunk', {
       { path: '/tmp/a.ts', oldText: 'l9', newText: 'l9c' },
     ],
   },
-})
+}, true)
 check('多 hunk 用 ⋯ 分隔', await settled(() => rowOf('⋯') >= 0 && rowOf('- l1') >= 0 && rowOf('+ l9c') >= 0))
 
 // 11. Grep 搜索卡：按文件分组的 matches。
@@ -242,7 +243,7 @@ show('grep', {
     total: 7,
   },
   resultFull: 'src/a.ts:12: // TODO fix',
-})
+}, true)
 check('搜索卡标题回退到 call 标题', await settled(() => screen().includes('Grep TODO in src')))
 check('搜索卡按文件分组 + 截断计数', await settled(() => rowOf('src/a.ts') >= 0 && rowOf('12: // TODO fix') >= 0 && rowOf('(7 total)') >= 0))
 
