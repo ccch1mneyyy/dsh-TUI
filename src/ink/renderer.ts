@@ -160,10 +160,13 @@ export default function createRenderer(
     if (drainNode) markDirty(drainNode)
 
     return {
-      // A contaminated previous frame is unsafe for both blit and hardware
-      // scroll: DECSTBM would shift cells carrying the selection overlay.
+      // An invalid previous frame is unsafe for both blit and hardware
+      // scroll: DECSTBM would shift selection-overlay cells or pixels from
+      // an absolute node that was just removed.
       scrollHint:
-        options.altScreen && !options.prevFrameContaminated
+        options.altScreen &&
+        !absoluteRemoved &&
+        !options.prevFrameContaminated
           ? getScrollHint()
           : null,
       scrollDrainPending: drainNode !== null,

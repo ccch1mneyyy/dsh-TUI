@@ -152,9 +152,10 @@ function checkCoherent(tag: string, lines: string[]): void {
     check(`${tag}: ${marker} 至多出现一次`, rows.length <= 1, `rows=${rows.join(',')}`)
   }
   const found = markerLocations(lines)
-  const sourceIndices = found.map(({ marker }) => TARGET_MARKERS.indexOf(marker))
+  const byRow = [...found].sort((a, b) => a.row - b.row)
+  const sourceIndices = byRow.map(({ marker }) => TARGET_MARKERS.indexOf(marker))
   const ordered = sourceIndices.every((value, index) => index === 0 || value > sourceIndices[index - 1]!)
-  check(`${tag}: User marker 顺序单调`, ordered, found.map(v => `${v.marker}@${v.row}`).join(' '))
+  check(`${tag}: User marker 顺序单调`, ordered, byRow.map(v => `${v.marker}@${v.row}`).join(' '))
 }
 
 async function runScenario(withSelection: boolean, seekTicks?: number): Promise<{
