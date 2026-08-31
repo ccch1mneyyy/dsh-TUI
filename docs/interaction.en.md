@@ -147,6 +147,13 @@ On `Ctrl+V`, files copied from a file manager (Windows Explorer, GNOME Files, KD
 Dolphin, …) insert as paths, while image files become `@` references. Clipboard
 bitmaps are saved in the attachment store and appear as `[Image #N]`; submitting
 the prompt sends a real image block. The prompt never contains base64.
+After submission, user images are re-projected from durable session events into
+the transcript. Assistant messages and tool results use the same preview path
+whenever their content contains image blocks. Fullscreen sessions with a
+successful Kitty graphics probe show bounded, aspect-preserving thumbnails;
+inline, accessibility, multiplexer, and read-failure paths reserve the same
+layout with a text fallback. Images load lazily for visible messages, so resumed
+sessions do not depend on the original local path.
 
 ## Interface language
 
