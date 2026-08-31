@@ -121,6 +121,7 @@ function applyFollowDrain(
   delta: number,
   viewportTop: number,
   viewportBottom: number,
+  screenRowOffset = 0,
 ): void {
   if (delta === 0) return
   const rows = Math.abs(delta)
@@ -130,7 +131,7 @@ function applyFollowDrain(
   const side: 'above' | 'below' = up ? 'above' : 'below'
   const shift = up ? -rows : rows
   if (hasSelection(sel)) {
-    captureScrolledRows(sel, screen, firstRow, lastRow, side)
+    captureScrolledRows(sel, screen, firstRow, lastRow, side, screenRowOffset)
   }
   shiftAnchor(sel, shift, viewportTop, viewportBottom)
 }
@@ -420,15 +421,19 @@ function applyFollowDrain(
       Array.from({ length: 12 }, (_, row) => [row, rowText(`O${String(row).padStart(2, '0')}`)]),
     ),
   )
-  const sel = makeSelection({ col: W - 1, row: 8 }, { col: 0, row: 5 }, true)
+  // The anchor reaches new row 10 after the +1 viewport translation, so the
+  // same-frame wheel capture must read the corresponding PRE rows 8..9.
+  const sel = makeSelection({ col: W - 1, row: 9 }, { col: 0, row: 5 }, true)
   const translated = shiftSelectionForViewportTranslation(sel, 1, 0, 9, 1, 10)
   check('C15 translation succeeds before wheel drain', translated, false)
-  check('C15 translated anchor is inside the new viewport', sel.anchor, { col: W - 1, row: 9 })
-  applyFollowDrain(sel, screen, -2, 1, 10)
-  check('C15 wheel drain continues from the translated anchor', sel.virtualAnchorRow, 11)
-  check('C15 wheel drain captures only the selected bottom rows', sel.scrolledOffBelow, [
+  check('C15 translated anchor is inside the new viewport', sel.anchor, { col: W - 1, row: 10 })
+  applyFollowDrain(sel, screen, -2, 1, 10, 1)
+  check('C15 wheel drain continues from the translated anchor', sel.virtualAnchorRow, 12)
+  check('C15 wheel drain maps capture rows to the PRE frame', sel.scrolledOffBelow, [
+    rowText('O08'),
     rowText('O09'),
   ])
+  check('C15 wheel drain does not capture the adjacent PRE row', sel.scrolledOffBelow.includes(rowText('O10')), false)
   check('C15 focus remains at the mouse after both changes', sel.focus, { col: 0, row: 5 })
 }
 

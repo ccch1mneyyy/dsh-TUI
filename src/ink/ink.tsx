@@ -762,7 +762,7 @@ export default class Ink {
       // each shift branch so the pairing can't be broken by a new guard.
       if (this.selection.isDragging) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
+          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
         }
         shiftAnchor(this.selection, shift, viewportTop, viewportBottom);
       } else if (
@@ -780,7 +780,7 @@ export default class Ink {
       // is correct there even when focus is in the footer).
       !this.selection.focus || this.selection.focus.row >= viewportTop && this.selection.focus.row <= viewportBottom) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
+          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
         }
         const cleared = shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom);
         // Auto-clear (both ends overshot an edge — off the top via

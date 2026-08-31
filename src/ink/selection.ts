@@ -944,6 +944,8 @@ export type ScrollEvent = {
   delta: number
   viewportTop: number
   viewportBottom: number
+  /** Current viewport rows map to PREVIOUS screen rows by this offset. */
+  screenRowOffset?: number
 }
 
 /**
@@ -1142,6 +1144,7 @@ export function captureScrolledRows(
   firstRow: number,
   lastRow: number,
   side: 'above' | 'below',
+  screenRowOffset = 0,
 ): void {
   const b = selectionBounds(s)
   if (!b || firstRow > lastRow) return
@@ -1159,8 +1162,9 @@ export function captureScrolledRows(
   for (let row = lo; row <= hi; row++) {
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? end.col : width - 1
-    captured.push(extractRowText(screen, row, colStart, colEnd))
-    capturedSW.push(sw[row]! > 0)
+    const screenRow = row - screenRowOffset
+    captured.push(extractRowText(screen, screenRow, colStart, colEnd))
+    capturedSW.push(sw[screenRow]! > 0)
   }
 
   if (side === 'above') {

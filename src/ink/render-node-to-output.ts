@@ -147,6 +147,8 @@ export type FollowScroll = {
   delta: number
   viewportTop: number
   viewportBottom: number
+  /** Current viewport rows map to PREVIOUS screen rows by this offset. */
+  screenRowOffset?: number
 }
 let followScrolls: FollowScroll[] = []
 
@@ -906,6 +908,16 @@ function renderNodeToOutput(
         // prevInnerHeight is that frame's real height (the ?? fallback only
         // fires on the first frame, which the prevViewportTop check skips).
         const viewportBottom = node.scrollViewportTop + innerHeight - 1
+        const screenRowOffset =
+          prevViewportTop !== undefined &&
+          classifyViewportChange(
+            prevViewportTop,
+            prevViewportTop + prevInnerHeight - 1,
+            node.scrollViewportTop,
+            viewportBottom,
+          ) === 'translate'
+            ? node.scrollViewportTop - prevViewportTop
+            : 0
         if (
           prevViewportTop !== undefined &&
           (node.scrollViewportTop !== prevViewportTop ||
@@ -1021,6 +1033,7 @@ function renderNodeToOutput(
             delta: followDelta,
             viewportTop: vpTop,
             viewportBottom: vpTop + innerHeight - 1,
+            screenRowOffset,
           })
         }
         // Drain pendingScrollDelta. Native terminals (proportional burst
@@ -1144,7 +1157,8 @@ function renderNodeToOutput(
           followScrolls.push({
             delta: wheelDelta,
             viewportTop: wheelVpTop,
-            viewportBottom: wheelVpTop + innerHeight - 1
+            viewportBottom: wheelVpTop + innerHeight - 1,
+            screenRowOffset,
           })
         }
         // A manual scroll that lands exactly on the bottom re-pins sticky
