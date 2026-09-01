@@ -128,7 +128,7 @@ import type {
   TuiRewindMode,
   TuiRewindPromptDecision,
 } from './extension-events.js'
-import { transcriptImagesOf, type TranscriptImage } from './transcript-images.js'
+import { transcriptImageFromAttachment, transcriptImagesOf, type TranscriptImage } from './transcript-images.js'
 
 /** `tui/input` return normalization: transform/handled/cancel or no opinion.
  *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
@@ -1089,6 +1089,14 @@ export interface Channel {
   subscribe: (listener: () => void) => () => void
   /** Validate and persist a pasted image, returning its prompt placeholder. */
   stageImage(input: StagedImageInput): Promise<string>
+  /** The staged image behind one `[Image #N]` placeholder still in the
+   *  composer, as the same lazily-read facade transcript rows use —
+   *  undefined once the token was evicted or never staged. */
+  stagedImage(token: string): TranscriptImage | undefined
+  /** The profile's image-paste limits, for callers that must bound work
+   *  BEFORE reading bytes (a Finder path is untrusted input). Undefined
+   *  when the composition has no attachment service. */
+  stagedImageLimits(): { readonly maxImageBytes: number; readonly maxImagesPerMessage: number } | undefined
   submit(text: string): void
   /**
    * Steer a message into the running turn (Codex/pi semantics): injected at
@@ -1577,6 +1585,8 @@ export interface ChannelState {
   jobControl: JobControl
   subscribe: (listener: () => void) => () => void
   stageImage(input: StagedImageInput): Promise<string>
+  stagedImage(token: string): TranscriptImage | undefined
+  stagedImageLimits(): { readonly maxImageBytes: number; readonly maxImagesPerMessage: number } | undefined
   /** @internal event bump (the public `notify(text)` posts a notification). */
   emit(): void
   /** @internal frame-aligned emit for high-frequency streaming deltas:
@@ -2682,9 +2692,19 @@ export function createChannel(
    */
   let sendChain: Promise<void> = Promise.resolve()
   let stagedImageSequence = 0
+  /** Session epoch for the staged-image maps: bumped by every clear so a
+   *  `saveImage` that was still in flight when the session changed cannot
+   *  register its token (or bump the sequence) in the NEW session. */
+  let stagedImageEpoch = 0
   const stagedImages = new Map<string, ChannelImageBlock['attachment']>()
+  /** UI facades for the staged tokens, one stable object per token so the
+   *  component-side decode cache (keyed by object identity) can hit. Keys
+   *  mirror `stagedImages` exactly — same insert, evict and clear. */
+  const stagedImageViews = new Map<string, TranscriptImage>()
   const clearStagedImages = (): void => {
+    stagedImageEpoch += 1
     stagedImages.clear()
+    stagedImageViews.clear()
     stagedImageSequence = 0
   }
   /**
@@ -2694,6 +2714,16 @@ export function createChannel(
    * attachment block. The pending preview tracks the typed text.
    */
   const deliverUserText = (text: string, placement: PendingMessage['placement']): void => {
+    // A `[Image #N]` placeholder whose staging was evicted (FIFO cap) or
+    // cleared by a session switch would otherwise ship as plain text with
+    // no image attached — warn loudly, deliver unchanged (the text is the
+    // user's; silently rewriting it would be worse).
+    for (const match of text.matchAll(/\[Image #\d+\]/gu)) {
+      if (!stagedImages.has(match[0])) {
+        state.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
+        break
+      }
+    }
     sendChain = sendChain.then(async () => {
       const expansion = await expandMentions(
         mentionFs(ctx),
@@ -4430,18 +4460,42 @@ export function createChannel(
       if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
         throw new Error(`image exceeds this profile's per-image size limit`)
       }
+      const epoch = stagedImageEpoch
       const attachment = await attachments.saveImage(input)
+      // A session change (/new, resume, rewind, model switch, background)
+      // cleared the maps while the save was in flight: the durable object
+      // exists (content-addressed, harmless) but the OLD session's token
+      // must not surface in the new composer. Throwing keeps every caller
+      // on its existing failure path (path/@ fallback, no token inserted).
+      if (epoch !== stagedImageEpoch) {
+        throw new Error('the session changed while the image was being staged')
+      }
       stagedImageSequence += 1
       const token = `[Image #${stagedImageSequence}]`
       stagedImages.set(token, attachment)
+      const view = transcriptImageFromAttachment(attachment, () => ctx.get('attachments'))
+      if (view !== undefined) stagedImageViews.set(token, view)
       // References are content-addressed and durable. This map only connects
-      // editable prompt placeholders to them; cap it to bound a long TUI run.
+      // editable prompt placeholders to them; the 128 cap evicts in
+      // insertion order (plain FIFO, not an LRU — reads never refresh).
       while (stagedImages.size > 128) {
         const oldest = stagedImages.keys().next().value as string | undefined
         if (oldest === undefined) break
         stagedImages.delete(oldest)
+        stagedImageViews.delete(oldest)
       }
       return token
+    },
+    stagedImage(token: string): TranscriptImage | undefined {
+      return stagedImageViews.get(token)
+    },
+    stagedImageLimits() {
+      const limits = mentionAttachments(ctx)?.imageLimits
+      if (limits === undefined) return undefined
+      return {
+        maxImageBytes: limits.maxImageBytes,
+        maxImagesPerMessage: limits.maxImagesPerMessage,
+      }
     },
     submit(text) {
       const trimmed = text.trim()

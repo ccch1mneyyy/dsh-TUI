@@ -143,10 +143,18 @@ and directory listings are attached as text; PNG, JPEG, WebP,
 and GIF files are sent as durable Harness image blocks. Reads use the active
 workspace filesystem, including provider-owned workspaces.
 
-On `Ctrl+V`, files copied from a file manager (Windows Explorer, GNOME Files, KDE
-Dolphin, …) insert as paths, while image files become `@` references. Clipboard
-bitmaps are saved in the attachment store and appear as `[Image #N]`; submitting
-the prompt sends a real image block. The prompt never contains base64.
+On `Ctrl+V`, files copied from a file manager (Finder, Windows Explorer, GNOME
+Files, KDE Dolphin, …) insert as paths, while copied image files are staged into
+the attachment store exactly like clipboard bitmaps and appear as `[Image #N]`
+(falling back to an `@` reference when staging fails); submitting the prompt
+sends a real image block. The prompt never contains base64. When a terminal
+forwards a drop as pasted text (Ghostty sends a shell-escaped path through the
+PTY), the paste stages only when it is exactly one existing local image path —
+anything ambiguous stays verbatim text. In fullscreen, clicking a staged
+`[Image #N]` token or a transcript thumbnail opens one shared centered preview
+(Esc or a click outside the card closes it; narrow terminals get a
+metadata-only card), and a stale `[Image #N]` placeholder (evicted past 128
+staged images or cleared by a session switch) warns on both click and submit.
 After submission, user images are re-projected from durable session events into
 the transcript. Assistant messages and tool results use the same preview path
 whenever their content contains image blocks. Fullscreen sessions with a

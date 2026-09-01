@@ -1,6 +1,6 @@
 import React from 'react'
 import stripAnsi from 'strip-ansi'
-import { readFile, unlink } from 'node:fs/promises'
+import { readFile, stat, unlink } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
@@ -20,9 +20,11 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
+import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
+import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import { isHiddenCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
@@ -69,14 +71,6 @@ function sanitizeEditableText(text: string): string {
     .replace(/\r\n?/gu, '\n')
     .replace(/\t/gu, '        ')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
-}
-
-function clipboardImageMediaType(path: string): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | undefined {
-  if (/\.png$/iu.test(path)) return 'image/png'
-  if (/\.jpe?g$/iu.test(path)) return 'image/jpeg'
-  if (/\.webp$/iu.test(path)) return 'image/webp'
-  if (/\.gif$/iu.test(path)) return 'image/gif'
-  return undefined
 }
 
 /** Index of the word boundary at or before `cursor` (readline alt+b). */
@@ -321,6 +315,8 @@ export interface PromptInputProps {
   backgroundAgentsNeedingInput?: number
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
+  /** Click on a staged `[Image #N]` token: open the shared preview overlay. */
+  onPreviewImage?(image: TranscriptImage): void
 }
 
 /**
@@ -366,6 +362,7 @@ export function PromptInput({
   onBackgroundRequest,
   backgroundAgentsNeedingInput,
   controllerRef,
+  onPreviewImage,
 }: PromptInputProps) {
   const [themeName] = useTheme()
   // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
@@ -986,6 +983,27 @@ export function PromptInput({
     return { next, at: position }
   }
 
+  /** Read one local image file and stage it through the channel, returning
+   *  its `[Image #N]` composer token. Shared by every image paste path:
+   *  clipboard bitmap export, Finder-copied files, and pasted drop paths.
+   *  A Finder/drop path is untrusted input: the profile's byte limit is
+   *  checked against stat() BEFORE the bytes are read, so an oversized
+   *  fake image never gets loaded into memory just to be rejected. */
+  const stageImagePath = async (path: string): Promise<string> => {
+    const info = await stat(path)
+    if (!info.isFile()) throw new Error(`${basename(path)} is not a regular file`)
+    const maxImageBytes = channel.stagedImageLimits?.()?.maxImageBytes
+    if (maxImageBytes !== undefined && info.size > maxImageBytes) {
+      throw new Error(`image exceeds this profile's per-image size limit`)
+    }
+    return channel.stageImage({
+      data: new Uint8Array(await readFile(path)),
+      // Callers gate on imagePathMediaType; the assertion is unreachable.
+      mediaType: imagePathMediaType(path) ?? 'image/png',
+      name: basename(path),
+    })
+  }
+
   /** Line index of the cursor; -1 when the cursor is at the very end. */
   const cursorLine = (text: string, cursorOffset: number) => {
     const before = text.slice(0, cursorOffset)
@@ -1114,6 +1132,25 @@ export function PromptInput({
     // the whole-line submit rule.
     if (event?.isPasted && input.length > 0) {
       const text = sanitizeEditableText(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+      // Desktop drops reach the TUI as pasted text (Ghostty forwards
+      // Shell.escape(path) through the PTY with no drop boundary). Only a
+      // paste that IS one unambiguous existing local image path stages as
+      // an image; any parse/stat/staging failure inserts the text verbatim.
+      const droppedPath = parsePastedImagePath(text)
+      if (droppedPath !== null) {
+        if (helpOpen) onToggleHelp()
+        setSelectedCommand(0)
+        setFileSelected(0)
+        void stageImagePath(droppedPath)
+          .then(token => {
+            insertClipboardAtCaret(`${token} `)
+            channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+          })
+          .catch(() => {
+            insertClipboardAtCaret(text)
+          })
+        return
+      }
       const at = insertAtCaret(text)
       // A big paste becomes a CC-style fold block right away (hover peeks
       // at it); an existing block is replaced by the new paste's span.
@@ -1147,24 +1184,43 @@ export function PromptInput({
             channel.notify(t('input-clipboard-unavailable'), { color: 'warning' })
             return
           }
-          if (content.kind === 'image') {
-            const mediaType = clipboardImageMediaType(content.path)
-            if (mediaType !== undefined) {
-              try {
-                const token = await channel.stageImage({
-                  data: new Uint8Array(await readFile(content.path)),
-                  mediaType,
-                  name: basename(content.path),
-                })
-                await unlink(content.path).catch(() => undefined)
-                insertClipboardAtCaret(`${token} `)
-                channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
-                return
-              } catch (error: unknown) {
-                const message = error instanceof Error ? error.message : String(error)
-                channel.notify(t('input-image-paste-failed', { err: message }), { color: 'warning', timeoutMs: 5000 })
-              }
+          if (content.kind === 'image' && imagePathMediaType(content.path) !== undefined) {
+            try {
+              const token = await stageImagePath(content.path)
+              await unlink(content.path).catch(() => undefined)
+              insertClipboardAtCaret(`${token} `)
+              channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+              return
+            } catch (error: unknown) {
+              const message = error instanceof Error ? error.message : String(error)
+              channel.notify(t('input-image-paste-failed', { err: message }), { color: 'warning', timeoutMs: 5000 })
             }
+          }
+          if (content.kind === 'files') {
+            // Finder/Explorer-copied image FILES stage like clipboard
+            // bitmaps (macOS furl offers exactly one). Other files keep the
+            // quoted/@ path insert, and an image that fails to stage falls
+            // back to its `@` reference — the mention pipeline still
+            // attaches it at submit.
+            const { parts, staged, failure } = await stageClipboardFilePaths(
+              content.paths,
+              stageImagePath,
+              filePath => formatClipboardInsert({ kind: 'files', paths: [filePath] }),
+            )
+            if (failure !== '') {
+              channel.notify(t('input-image-paste-failed', { err: failure }), { color: 'warning', timeoutMs: 5000 })
+            }
+            if (staged.length > 0) {
+              insertClipboardAtCaret(`${parts.join(' ')} `)
+              channel.notify(
+                staged.length === 1
+                  ? t('input-image-pasted', { token: staged[0]! })
+                  : t('input-images-staged', { count: staged.length }),
+                { timeoutMs: 2500 },
+              )
+              return
+            }
+            // Nothing staged: fall through to the verbatim files insert.
           }
           // Insert against the LIVE input state: the read above resolved
           // asynchronously and the user may have typed while waiting.
@@ -2344,6 +2400,28 @@ export function PromptInput({
    * value box starts at the line-number gutter, so its callers subtract
    * the gutter width (0 for the inline prompt).
    */
+  /** Open the shared image preview when a plain click lands on a staged
+   *  `[Image #N]` token the channel still knows. Offsets come from the
+   *  input's own click-to-cursor mapping, never from screen coordinates. */
+  const openStagedImageAt = (offset: number): void => {
+    if (onPreviewImage === undefined) return
+    for (const match of valueRef.current.matchAll(/\[Image #\d+\]/gu)) {
+      const start = match.index ?? 0
+      if (start > offset) break
+      if (offset < start + match[0].length) {
+        const image = channel.stagedImage(match[0])
+        if (image === undefined) {
+          // Evicted by the FIFO cap or cleared by a session switch: the
+          // placeholder text will NOT attach an image on submit.
+          channel.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
+        } else {
+          onPreviewImage(image)
+        }
+        return
+      }
+    }
+  }
+
   const handleValueClick = (e: ClickEvent, colOffset = 0) => {
     const now = Date.now()
     const modified = e.shift || e.alt || e.ctrl
@@ -2391,6 +2469,7 @@ export function PromptInput({
       }
       clearSelection()
       setCursor(offset)
+      openStagedImageAt(offset)
       return
     }
     if (clamped === 0 && prefixCols > 0 && localCol < prefixCols) {
@@ -2427,6 +2506,7 @@ export function PromptInput({
     }
     clearSelection()
     setCursor(offset)
+    openStagedImageAt(offset)
   }
 
   /**

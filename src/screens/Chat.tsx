@@ -28,6 +28,7 @@ import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type 
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
+import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
@@ -64,6 +65,7 @@ import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
+import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
 import { SessionTree } from './SessionTree.js'
@@ -790,6 +792,23 @@ export function Chat({
     else if (index === 1) revealInFileManager(path)
     else void setClipboard(path)
   }, [])
+
+  /** Shared open path for the modal image preview: composer `[Image #N]`
+   *  tokens and transcript thumbnails both land here. */
+  const openImagePreview = React.useCallback((image: TranscriptImage): void => {
+    dispatchOverlay({ type: 'open', overlay: { kind: 'image-preview', image } })
+  }, [])
+  // A questionnaire/approval/plugin dialog owns the keyboard while pending
+  // (their guard runs BEFORE the overlay key chain), so a preview left open
+  // underneath would be visually on top yet key-dead. Close it instead.
+  React.useEffect(() => {
+    if (
+      overlay.kind === 'image-preview' &&
+      (questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null)
+    ) {
+      dispatchOverlay({ type: 'close-if', kind: 'image-preview' })
+    }
+  }, [overlay.kind, questionSnapshot, approvalSnapshot, dialogSnapshot])
 
   const handleOpenTarget = React.useCallback((url: string): void => {
     const classification = classifyOpenTarget(url)
@@ -2533,6 +2552,15 @@ export function Chat({
       event.stopImmediatePropagation()
       return
     }
+    if (overlay.kind === 'image-preview') {
+      // Modal like every picker: Esc/Ctrl+C/Enter close, everything else is
+      // swallowed (the prompt is inert via promptSelectionActive anyway).
+      if (key.escape || (key.ctrl && input === 'c') || plainReturn) {
+        dispatchOverlay({ type: 'close' })
+      }
+      event.stopImmediatePropagation()
+      return
+    }
     if (overlay.kind === 'search') {
       // Transcript search bar (less-style): edit the query, Enter commits
       // (query persists for n/N), Esc/ctrl+c cancels back to the anchor.
@@ -3530,6 +3558,7 @@ export function Chat({
           onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
           onOpenJobs={() => setJobsPanelOpen(true)}
           onOpenFile={openFileActions}
+          onPreviewImage={openImagePreview}
         />
         </ScrollBox>
         {(() => {
@@ -3746,6 +3775,7 @@ export function Chat({
                 : undefined
             }
             controllerRef={promptControllerRef}
+            onPreviewImage={openImagePreview}
           />
         )}
         <StatusLine
@@ -4097,6 +4127,14 @@ export function Chat({
         invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
+      {/* 模态图片预览：输入框 [Image #N] 与 transcript 缩略图共用。
+          居中卡片 + 全屏点击捕获（点外部关闭）；Esc 在 Chat 的按键链关闭。 */}
+      {overlay.kind === 'image-preview' && (
+        <ImagePreviewOverlay
+          image={overlay.image}
+          onClose={() => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
+        />
+      )}
       {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后（树序最后），
           才能盖住包括状态栏在内的全部后绘兄弟。内容由 PromptInput
           经 module store 发布（见 PromptEditor.tsx）。 */}
