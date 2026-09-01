@@ -29,18 +29,17 @@ process.env.DSH_TUI_LANG = 'zh'
 process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context } = await import('@deepseek-ai/cordis')
-const { parseGrantStore, readGrantStore, EXTENSION_GRANTS_FILE } = await import('../src/dsh-adapter/grants.js')
+const { parseGrantStore, readGrantStore, EXTENSION_GRANTS_FILE } = await import('../src/adapter/standard/grants.js')
 const { getHostGrantStore } = await import('../src/dsh-adapter/host-grants.js')
 const { installDecisionGuard, markDecisionDispatchTopology, unmarkDecisionDispatchTopology, DECISION_EVENT_PERMISSIONS } = await import('../src/dsh-adapter/decision-guard.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
-const { mountedAdmissionCoordinates } = await import('../src/dsh-adapter/plugin-host.js')
-const { buildHostDescriptor, buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS, readOwnPackageVersion } = await import('../src/dsh-adapter/host-descriptor.js')
+const { buildHostDescriptor, buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS, readOwnPackageVersion } = await import('../src/adapter/standard/descriptor.js')
 const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
 const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
-const { loadSpecData, digestFile, verifyRegistry, verifyContractProfiles } = await import('../src/plugin-spec/registry.js')
-const { createContractIndex, validateHost } = await import('../src/plugin-spec/validate.js')
-const { check } = await import('../src/plugin-spec/schema-check.js')
-const { negotiate } = await import('../src/plugin-spec/negotiate.js')
+const { loadSpecData, digestFile, verifyRegistry, verifyContractProfiles } = await import('../src/adapter/standard/registry.js')
+const { createContractIndex, validateHost } = await import('../src/adapter/standard/validate.js')
+const { check } = await import('../src/adapter/standard/schema-check.js')
+const { negotiate } = await import('../src/adapter/standard/negotiate.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 const { mountAdmitted, testManifest, COMMAND_COORDINATE, STORAGE_COORDINATE, DECISION_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 
@@ -522,90 +521,6 @@ check1('decision permission map is immutable',
       decisionError !== undefined && decisionError.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE')
       && decisionError.message.includes('tui.dsh/v1alpha1#DecisionEvents'),
       decisionError?.message ?? 'no error')
-  }
-
-  // AdmissionCompat method-level checks: a mounted service row is only a
-  // declared compatibility contract when its key mediated method exists.
-  {
-    const coordinatesFor = (services: Record<string, unknown>) =>
-      mountedAdmissionCoordinates({ get: name => services[name] } as never)
-
-    const noRegister = coordinatesFor({ commands: { list: () => [] } })
-    check1('admissionCompat omits Command when commands exists without register',
-      !noRegister.some(coordinate => coordinate.kind === 'Command'),
-      JSON.stringify(noRegister))
-
-    const noOpen = coordinatesFor({ tuiPluginStorage: { probeDiagnostic: () => ({ ok: true }) } })
-    check1('admissionCompat omits LocalStorage when tuiPluginStorage exists without open',
-      !noOpen.some(coordinate => coordinate.kind === 'LocalStorage'),
-      JSON.stringify(noOpen))
-
-    const noSubscribe = coordinatesFor({ tuiMessageObserver: { probeDiagnostic: () => ({ ok: true }) } })
-    check1('admissionCompat omits MessageObserver when tuiMessageObserver exists without subscribe',
-      !noSubscribe.some(coordinate => coordinate.kind === 'MessageObserver'),
-      JSON.stringify(noSubscribe))
-
-    // DecisionEvents: real guard + dispatch topology exist, but the mediated
-    // subscription method is missing on the exposed host row.
-    const decisionMissingCtx = new Context()
-    decisionMissingCtx.logger.warn = () => undefined
-    installDecisionGuard(decisionMissingCtx, parseGrantStore(''))
-    markDecisionDispatchTopology(decisionMissingCtx)
-    const originalGet = decisionMissingCtx.get.bind(decisionMissingCtx)
-    let probeCalled = false
-    ;(decisionMissingCtx as unknown as {
-      get(name: string): unknown
-    }).get = ((name: string) => {
-      if (name === 'tuiPluginHost') {
-        probeCalled = true
-        return {
-          probeDecisionEvents: () => [...TUI_DECISION_EVENT_NAMES],
-        }
-      }
-      return originalGet(name)
-    }) as never
-    const decisionCoords = mountedAdmissionCoordinates(decisionMissingCtx as never)
-    check1('DecisionEvents probe is observed in the method-level battery', probeCalled)
-    check1('admissionCompat omits DecisionEvents when probe exists but subscribeDecision is missing',
-      !decisionCoords.some(coordinate => coordinate.kind === 'DecisionEvents'),
-      JSON.stringify(decisionCoords))
-    const decisionManifest = JSON.parse(testManifest({
-      id: 'missing-subscribe-decision',
-      requires: [DECISION_COORDINATE],
-    }))
-    const decisionCompatDescriptor = buildHostDescriptor({
-      generationId: 'admission-method-decision',
-      admissionCompat: true,
-      admissionCompatCoordinates: decisionCoords,
-    }).descriptor
-    const decisionNeg = negotiate(index, decisionManifest, decisionCompatDescriptor, [])
-    check1('required DecisionEvents is rejected by admission negotiation when subscribeDecision is missing',
-      decisionNeg.decision === 'rejected'
-      && 'missingRequired' in decisionNeg
-      && decisionNeg.missingRequired?.includes('tui.dsh/v1alpha1#DecisionEvents'),
-      JSON.stringify(decisionNeg))
-
-    const assertRequiredRejected = (
-      coordinates: readonly { apiVersion: string; kind: string }[],
-      required: { apiVersion: string; kind: string },
-      label: string,
-    ): void => {
-      const manifest = JSON.parse(testManifest({ id: label, requires: [required] }))
-      const descriptor = buildHostDescriptor({
-        generationId: `admission-method-${required.kind}`,
-        admissionCompat: true,
-        admissionCompatCoordinates: coordinates,
-      }).descriptor
-      const result = negotiate(index, manifest, descriptor, [])
-      check1(`required ${required.kind} is rejected when its key method is missing`,
-        result.decision === 'rejected'
-        && 'missingRequired' in result
-        && result.missingRequired?.includes(`${required.apiVersion}#${required.kind}`),
-        JSON.stringify(result))
-    }
-    assertRequiredRejected(noRegister, COMMAND_COORDINATE, 'missing-command-register')
-    assertRequiredRejected(noOpen, STORAGE_COORDINATE, 'missing-storage-open')
-    assertRequiredRejected(noSubscribe, { apiVersion: 'messages.dsh/v1alpha1', kind: 'MessageObserver' }, 'missing-message-subscribe')
   }
 
   // A lazy descriptor must also follow services that appear or disappear

@@ -40,8 +40,8 @@ const { TuiEffectLedgerRuntime, EFFECT_LEDGER_FILE } = await import('../src/dsh-
 const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
 const { default: TuiThemeRuntime } = await import('../src/dsh-adapter/themes.js')
-const { loadSpecData } = await import('../src/plugin-spec/registry.js')
-const { check: schemaCheck } = await import('../src/plugin-spec/schema-check.js')
+const { loadSpecData } = await import('../src/adapter/standard/registry.js')
+const { check: schemaCheck } = await import('../src/adapter/standard/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 import type { LedgerEntry } from '../src/dsh-adapter/effect-ledger.js'

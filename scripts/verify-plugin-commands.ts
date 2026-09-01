@@ -41,7 +41,7 @@ const {
   mapCommandError,
   withCommandErrorMapping,
 } = await import('../src/dsh-adapter/command-errors.js')
-const { parseGrantStore } = await import('../src/dsh-adapter/grants.js')
+const { parseGrantStore } = await import('../src/adapter/standard/grants.js')
 const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
 const { TuiSceneRuntime } = await import('../src/dsh-adapter/scenes.js')

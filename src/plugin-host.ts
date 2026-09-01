@@ -1,12 +1,10 @@
-// COMPAT(dsh-tui-adapter-v2): legacy public path retained while consumers migrate to adapter/standard.
-// UNTIL: adapter-v2 P6 (all src/plugin-spec and legacy dsh-adapter consumers migrated)
-// OWNER: dsh-tui adapter team
-// TEST: verify:plugin-spec / verify:plugin-negotiation / verify:compat-removal
-// Public plugin-host shim. Keep the Cordis-backed implementation behind the
-// adapter boundary: plugin authors receive protocol types and mediated service
-// contracts, while loader-only admission, host ingress, mutable stores and
-// attribution registries remain adapter-internal. Type-only runtime exports
-// still load the adapter declarations so Context augmentation is available.
+// P6 canonical public plugin-host surface.
+//
+// Keep the Cordis-backed implementation behind the adapter boundary: plugin
+// authors receive protocol types and mediated service contracts, while
+// loader-only admission, host ingress, mutable stores and attribution
+// registries remain adapter-internal. Type-only runtime exports still load
+// the adapter declarations so Context augmentation is available.
 export { name, apply } from './dsh-adapter/plugin-host.js'
 export type { TuiPluginHost, HostGrantFacade } from './dsh-adapter/plugin-host.js'
 export type { HostContract, HostDescriptor, ContractCoordinate, ContractRef, NegotiationDecision, PermissionEntry, PermissionRegistry } from './adapter/standard/types.js'

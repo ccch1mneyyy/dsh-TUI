@@ -33,7 +33,7 @@ import {
   parseGrantStore,
   readGrantStore,
   type GrantStore,
-} from './grants.js'
+} from '../adapter/standard/grants.js'
 import {
   componentIdentityOf,
   requireComponentIdentity,

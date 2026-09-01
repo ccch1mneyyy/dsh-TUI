@@ -42,10 +42,10 @@ const {
   storageFileName,
   PLUGIN_STORAGE_DIR,
 } = await import('../src/dsh-adapter/plugin-storage.js')
-const { buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS } = await import('../src/dsh-adapter/host-descriptor.js')
+const { buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS } = await import('../src/adapter/standard/descriptor.js')
 const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
 const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
-const { readGrantStore } = await import('../src/dsh-adapter/grants.js')
+const { readGrantStore } = await import('../src/adapter/standard/grants.js')
 const { TuiPluginStorageRuntime } = await import('../src/dsh-adapter/plugin-storage.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')

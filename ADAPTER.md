@@ -44,6 +44,20 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-uti
 web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用;
 当相邻 `deepseek-harness` 源码存在时还会额外校验其 base + web patch。
 
+## Adapter-v2 P4-P6（本地分支状态）
+
+- **P4 Channel 拆分**:live Channel 拆为 `projection / actions / state /
+  plugins / transcript` 五个 Host Port;新增 `channel` KernelSlice、上游
+  driver 与 `verify:adapter-channel`。
+- **P5 Channel Provider/Consumer**:支持真实 DSH session snapshot/transcript
+  回放 `tui.dsh/v1alpha1#Channel`,并新增
+  `verify:adapter-channel-conformance`。
+- **P6 compat 清理**:删除 `src/plugin-spec/*`、`src/dsh-adapter/{grants,
+  host-descriptor}.ts` shim;彻底移除 `admissionCompat` 与
+  `mountedAdmissionCoordinates`;`src/plugin-host.ts` 保留为规范化公开面;
+  `verify:compat-removal` 改为真实生产导入图/导出图校验。
+- 所有 adapter 门禁已并入 `npm run verify:build`。
+
 ## 升级流程
 
 - 安装基线与验证线分离:dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在

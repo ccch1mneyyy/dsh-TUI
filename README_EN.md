@@ -629,16 +629,20 @@ harness:
   `node --import tsx/esm scripts/verify-adapter-replay-harness.ts`, or call
   `runReplayShadow({ schemaVersion: 'tui-adapter-replay/v1', ... })` in code to
   get a comparison report containing `kernelContracts`, `legacyContracts`,
-  `missing`, `extra`, and `lifecycles`.
+  `missing`, `extra`, and `lifecycles`. From P5 the harness also supports real
+  DSH session snapshot/transcript replay through
+  `runChannelReplay(...)` / `verify:adapter-channel-conformance`, following the
+  `tui.dsh/v1alpha1#Channel` Provider/Consumer envelope and validators.
 - The public Host Descriptor still publishes only live lifecycles carrying real
   probe evidence; before live refresh completes (or in passive/replay modes)
   `Command` / `LocalStorage` / `MessageObserver` remain staged/degraded and are
   not claimed as fully supported. `DecisionEvents` keeps its per-feature probe +
   real channel/dispatch topology publication rule.
-- Plugin admission still uses the internal `admissionCompat` view, but it is now
-  derived from the same structured detection/lifecycle evidence instead of a
-  parallel method-presence list; it keeps `COMPAT`/`UNTIL` markers and will be
-  removed or narrowed to live-only once probes are stable.
+- P6 removes the internal `admissionCompat` parallel view and deletes the
+  `src/plugin-spec/*` and `src/dsh-adapter/{grants,host-descriptor}.ts` compat
+  shims. Production code imports `src/adapter/standard/*` directly;
+  `verify:compat-removal` now scans the real production import/export graph
+  instead of checking markers only.
 - The new kernel is no longer a P1 shell: `KernelRuntime` owns driver
   registration/mount, detection, `declared → staged → live`, cleanup, and a
   diagnostic snapshot. Production Host Descriptor, `getHostFacade()`, `/doctor`,
@@ -671,6 +675,15 @@ harness:
   `presentation`, `decisions` → `decisions`), and rejects unknown slice ids
   fail-closed. `toast` is no longer implicitly loaded by `presentation`, and
   `decisions` is no longer implicitly loaded by `messages`.
+- **P4 Channel split**: the live Channel is decomposed into
+  `projection / actions / state / plugins / transcript` Host Port modules and
+  mounted as a `channel` KernelSlice. HostFacade guards each method with the
+  shadow policy, so passive/replay allows read-only projections while denying
+  mutations.
+- **P5 Channel conformance**: a local Channel Provider/Consumer replays real
+  DSH session snapshot/transcript data through open/subscribe/invoke/close and
+  validates it against `tui.dsh/v1alpha1#Channel`, including monotonic version
+  continuity.
 - **P3 feature lifecycle stability**: after `refresh`, subsequent
   `mount()` / `descriptorBuild()` / `diagnosticSnapshot()` calls that rerun
   synchronous `detect()` do not clear the probed P3 features. These features are

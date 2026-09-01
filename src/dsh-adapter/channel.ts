@@ -118,7 +118,7 @@ import { getHostMessageObserver, type TuiMessageObserverRuntime } from './messag
 import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
 import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
-import { readGrantStore } from './grants.js'
+import { readGrantStore } from '../adapter/standard/grants.js'
 import { getHostGrantStore } from './host-grants.js'
 import { getHostFacade } from './plugin-host.js'
 import { collectAdapterDiagnostics } from '../adapter/kernel/diagnostics.js'

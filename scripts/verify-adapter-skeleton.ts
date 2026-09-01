@@ -61,9 +61,10 @@ checkNoImports('upstream', UPSTREAM_STANDARD_SPEC_IMPORT, '../standard or ../spe
 checkNoImports('standard', OFFICIAL_FORBIDDEN, '@deepseek-ai/*')
 checkNoImports('spec', OFFICIAL_FORBIDDEN, '@deepseek-ai/*')
 
-// Legacy public shims should delegate to the canonical standard layer instead
-// of reimplementing protocol/admission code.
-const legacyShims = [
+// P6: the legacy public shims have been removed. Production code must import
+// directly from adapter/standard; the existence of a legacy shim here is a
+// hard failure instead of a delegated path.
+const legacyShimPaths = [
   join(SRC, 'plugin-spec/types.ts'),
   join(SRC, 'plugin-spec/schema-check.ts'),
   join(SRC, 'plugin-spec/registry.ts'),
@@ -74,10 +75,10 @@ const legacyShims = [
   join(SRC, 'dsh-adapter/grants.ts'),
   join(SRC, 'dsh-adapter/host-descriptor.ts'),
 ]
-for (const shim of legacyShims) {
-  const content = readFileSync(shim, 'utf8')
-  if (!content.includes('../adapter/standard/')) {
-    failures.push(`${relative(SRC, shim)} does not delegate to adapter/standard`)
+for (const shim of legacyShimPaths) {
+  const { existsSync } = await import('node:fs')
+  if (existsSync(shim)) {
+    failures.push(`${relative(SRC, shim)} legacy shim still exists after P6 compat removal`)
   }
 }
 
@@ -86,4 +87,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  - ${failure}`)
   process.exit(1)
 }
-console.log(`adapter skeleton boundary OK (${Object.keys(LAYERS).length} layers, ${legacyShims.length} legacy shims)`)
+console.log(`adapter skeleton boundary OK (${Object.keys(LAYERS).length} layers, ${legacyShimPaths.length} legacy shim paths verified absent)`)

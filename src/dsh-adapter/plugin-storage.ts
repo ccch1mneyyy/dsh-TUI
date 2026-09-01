@@ -55,7 +55,7 @@ import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { activationContext, assertCallerContext, bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
 import { registerStorageLiveProbe } from '../adapter/kernel/host-probe-access.js'
 import { declaresPermission, requireComponentIdentity, requiresContract, type VerifiedComponentIdentity } from './component-identity.js'
-import { readGrantStore, type GrantStore } from './grants.js'
+import { readGrantStore, type GrantStore } from '../adapter/standard/grants.js'
 import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
 import { getHostGrantStore } from './host-grants.js'
 

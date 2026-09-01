@@ -39,7 +39,7 @@ import TuiRendererRuntime from './renderers.js'
 import TuiToastRuntime from './toast.js'
 import TuiThemeRuntime from './themes.js'
 import { installDecisionGuard } from './decision-guard.js'
-import { readGrantStore } from './grants.js'
+import { readGrantStore } from '../adapter/standard/grants.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 export const name = 'dsh-tui-extensions'

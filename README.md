@@ -218,13 +218,17 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
   `node --import tsx/esm scripts/verify-adapter-replay-harness.ts`（门禁脚本），
   或在代码中调用 `runReplayShadow({ schemaVersion: 'tui-adapter-replay/v1', ... })`
   获取 `{ kernelContracts, legacyContracts, missing, extra, lifecycles }` 对比报告。
+  P5 起还支持真实 DSH session snapshot/transcript 的
+  `runChannelReplay(...)` / `verify:adapter-channel-conformance`，走
+  `tui.dsh/v1alpha1#Channel` 的 Provider/Consumer 与协议校验。
 - 公开 Host Descriptor 仍然只发布带真实 probe evidence 的 live 生命周期；
   未完成 live refresh 或 passive/replay 下 `Command` / `LocalStorage` /
   `MessageObserver` 保持 staged/degraded，不伪造完整支持。`DecisionEvents`
   维持逐 feature probe + 真实 channel/dispatch 拓扑发布规则。
-- 插件准入暂用内部 `admissionCompat`，但已改为从同一套结构化检测/lifecycle
-  证据派生，不再维护独立的 method-presence 平行事实；带 COMPAT/UNTIL 标记，
-  待 live probe 稳定后移除或缩窄为 live-only。
+- P6 已彻底移除内部 `admissionCompat` 平行视图，并删除
+  `src/plugin-spec/*` 与 `src/dsh-adapter/{grants,host-descriptor}.ts` compat
+  shim。生产代码直接导入 `src/adapter/standard/*`；`verify:compat-removal`
+  现在扫描真实生产导入图与公开导出图，不再是标记自证。
 - 新 Kernel 不再是 P1 空壳：`KernelRuntime` 管理 driver 注册/mount、detection、
   `declared → staged → live`、清理与诊断快照；生产 Host Descriptor、`getHostFacade()`、
   `/doctor`、`/plugins` 均走该 runtime。
@@ -251,6 +255,12 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
   常见别名（如 `dialogs` → `presentation`、`decisions` → `decisions`），未知
   slice id 直接拒绝并 fail-closed。`toast` 不再被 `presentation` 隐式加载，
   `decisions` 不再被 `messages` 隐式加载。
+- **P4 Channel 拆分**：live Channel 已拆成 `projection / actions / state /
+  plugins / transcript` 五个 Host Port 模块，并由 `channel` KernelSlice 挂载；
+  `HostFacade` 按方法做 shadow 守卫，passive/replay 下只读投影可用、变更动作被拒。
+- **P5 Channel conformance**：新增本地 Channel Provider/Consumer，支持真实
+  DSH session snapshot/transcript 的 open/subscribe/invoke/close 回放，并接入
+  `tui.dsh/v1alpha1#Channel` 的规范校验与单调版本连续性检查。
 - **P3 feature 生命周期稳定性**：`refresh` 之后执行 `mount()` / `descriptorBuild()` /
   `diagnosticSnapshot()` 再次触发同步 `detect()`，也不会清空已探测的 P3 feature；
   这些 feature 是内部 Kernel/Port 事实，不进入公开 Host Descriptor。

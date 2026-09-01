@@ -212,40 +212,7 @@ ok('live DecisionEvents without verified features is not published', () => {
   assert.ok(build.dropped.includes(decisionKey))
 })
 
-ok('internal admission compatibility view cannot admit staged/degraded coordinates', () => {
-  const compat = buildHostDescriptor({
-    generationId: 'descriptor-admission-compat',
-    admissionCompat: true,
-    admissionCompatCoordinates: Object.freeze([COMMAND, STORAGE]),
-  })
-  const live = buildHostDescriptor({ generationId: 'descriptor-public-live' })
-  assert.equal(compat.descriptor.contracts.length, 0)
-  assert.equal(live.descriptor.contracts.length, 0)
-  assert.ok(!compat.descriptor.contracts.some(contract => contract.kind === 'Command'), 'admission view must not invent a staged Command')
-  assert.ok(!compat.descriptor.contracts.some(contract => contract.kind === 'LocalStorage'), 'admission view must not invent a staged LocalStorage')
-  assert.ok(!compat.descriptor.contracts.some(contract => contract.kind === 'MessageObserver'), 'admission view must not invent an unmounted MessageObserver contract')
-  assert.ok(!compat.descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'), 'admission view must not invent DecisionEvents without real dispatch topology')
-  assert.ok(compat.warnings.some(warning => warning.includes('admission compatibility view')), compat.warnings.join(' | '))
-})
-
-ok('admission compatibility with live evidence uses the same live contracts', () => {
-  const liveCompat = buildHostDescriptor({
-    generationId: 'descriptor-admission-live',
-    admissionCompat: true,
-    admissionCompatCoordinates: Object.freeze([COMMAND, STORAGE]),
-    lifecycles: [liveCommand],
-  })
-  assert.ok(liveCompat.descriptor.contracts.some(contract => contract.kind === 'Command'), 'live Command can be admitted')
-  assert.ok(!liveCompat.descriptor.contracts.some(contract => contract.kind === 'LocalStorage'), 'staged LocalStorage still cannot be admitted')
-})
-
-ok('admission compatibility fails closed when no mounted topology/lifecycles are supplied', () => {
-  const compat = buildHostDescriptor({ generationId: 'descriptor-admission-compat-empty', admissionCompat: true })
-  assert.equal(compat.descriptor.contracts.length, 0)
-  assert.ok(compat.warnings.some(warning => warning.includes('without mounted topology')), compat.warnings.join(' | '))
-})
-
-ok('no-lifecycle buildHostDescriptor does not fall back to full support', () => {
+ok('a build without lifecycles/legacy mode does not fall back to full support', () => {
   const build = buildHostDescriptor({ generationId: 'no-fallback-battery' })
   assert.equal(build.descriptor.contracts.length, 0)
   assert.ok(build.warnings.some(warning => warning.includes('no live lifecycle evidence')), build.warnings.join(' | '))

@@ -9,7 +9,7 @@
  * watches use this module instead.
  */
 
-import type { GrantStore } from './grants.js'
+import type { GrantStore } from '../adapter/standard/grants.js'
 import { concreteService } from './host-access.js'
 
 const hostGrantStores = new WeakMap<object, GrantStore>()

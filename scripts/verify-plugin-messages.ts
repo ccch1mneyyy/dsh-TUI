@@ -44,8 +44,8 @@ const {
   OBSERVE_SUMMARY_CELLS,
 } = await import('../src/dsh-adapter/message-observer.js')
 const { runMessageLiveProbe } = await import('../src/adapter/kernel/host-probe-access.js')
-const { loadSpecData } = await import('../src/plugin-spec/registry.js')
-const { check } = await import('../src/plugin-spec/schema-check.js')
+const { loadSpecData } = await import('../src/adapter/standard/registry.js')
+const { check } = await import('../src/adapter/standard/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 const { mountAdmitted, testManifest, MESSAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 const { validateMessageEvent } = await import('@dsh-std/messages')

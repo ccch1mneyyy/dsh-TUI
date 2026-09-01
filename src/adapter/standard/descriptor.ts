@@ -33,29 +33,6 @@ export interface HostDescriptorOptions {
    */
   lifecycles?: readonly CapabilityLifecycle[]
   /**
-   * Deprecated internal flag retained only for callers/tests that need to
-   * request the same live-only descriptor shape without changing signatures.
-   * Despite the historical name, this flag does NOT admit staged or degraded
-   * coordinates: the builder still uses `lifecycles` and `publishableLifecycles`
-   * as its sole publication source. `admissionCompatCoordinates` is retained
-   * for fail-closed warnings only and is never consulted as a second contract
-   * source.
-   *
-   * COMPAT(dsh-tui#admission-live-only): compatibility flag kept for callers
-   * during the live-only admission migration.
-   * UNTIL: adapter-v2-p6
-   * REMOVAL_CONDITION: all admission callers use the live public Host
-   * Descriptor and the flag/parameters can be removed.
-   * OWNER: src/adapter/standard/descriptor.ts + src/dsh-adapter/plugin-host.ts
-   * TEST: verify:adapter-descriptor / verify:plugin-grants / verify:compat-removal
-   */
-  admissionCompat?: boolean
-  /**
-   * Deprecated, fail-closed diagnostic input only. No non-live contract is
-   * admitted from these coordinates.
-   */
-  admissionCompatCoordinates?: readonly ContractCoordinate[]
-  /**
    * Explicit legacy-compatibility topology. This is NOT live probe evidence:
    * it represents the old mounted-service declaration path that remains the
    * default in `legacy` adapter mode. It is intentionally kept separate from
@@ -283,21 +260,13 @@ export interface LegacyHostDescriptorOptions {
 }
 
 /**
- * Build the explicit legacy-compatibility Host Descriptor.
+ * Build the explicit legacy-mode Host Descriptor.
  *
- * COMPAT(dsh-tui-adapter-v2#legacy-descriptor): transitional legacy default
- * publication path retained while the parallel migration keeps legacy mode as
- * the default.
- * UNTIL: adapter-v2-p6
- * REMOVAL_CONDITION: default adapter mode moves to the new live-only path and
- * legacy mounted-service declarations are no longer required for compatibility.
- * OWNER: src/adapter/standard/descriptor.ts + src/dsh-adapter/plugin-host.ts
- * TEST: verify:adapter-descriptor / verify:plugin-grants
- *
- * This path preserves the old default (`legacy` adapter mode) publication
- * semantics: Command / LocalStorage / MessageObserver are declared when their
- * legacy service rows are mounted, without running the new Kernel or any
- * reversible live probe. It is deliberately distinct from the live-only
+ * P6 keeps this as a first-class mode, not a compatibility shim: it preserves
+ * the old default (`legacy` adapter mode) publication semantics. Command /
+ * LocalStorage / MessageObserver are declared when their legacy service rows
+ * are mounted, without running the new Kernel or any reversible live probe.
+ * It is deliberately distinct from the live-only
  * `buildHostDescriptorFromLifecycles` path and returns warnings identifying it
  * as a legacy declaration.
  */
@@ -336,18 +305,13 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
   if (options.lifecycles === undefined && !legacyMode) {
     warnings.push('no live lifecycle evidence supplied; host descriptor advertises no contracts (host unavailable / non-live)')
   }
-  if (options.admissionCompat === true && options.admissionCompatCoordinates === undefined) {
-    warnings.push('internal admission compatibility view requested without mounted topology; declaring no contracts (fail-closed)')
-  }
   if (legacyMode) {
     warnings.push('legacy compatibility descriptor: contracts declared from the mounted legacy service topology without live probe evidence')
   }
-  // Admission compatibility is not a second publication path: only the same
-  // live/feature-split lifecycle evidence may enter any descriptor, including
-  // the internal admission view. Degraded/staged capabilities are never
-  // admitted solely because a service row is mounted.
+  // Admission is a live/feature-split evidence path only. Degraded/staged
+  // capabilities are never admitted solely because a service row is mounted.
   //
-  // The one explicit exception is the legacy compatibility path used by the
+  // The explicit exception is the legacy compatibility path used by the
   // default `legacy` adapter mode. It is a separate, non-live declaration of
   // the old mounted-service topology (kept alive for zero-behavior-change
   // migration), not a fake live claim and never mixed into new-mode live
@@ -361,9 +325,6 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
   if (data === undefined) {
     warnings.push('admission profile unavailable (dsh-ecosystem-spec/); advertising an empty protocol surface')
   } else {
-    if (options.admissionCompat === true) {
-      warnings.push('internal admission compatibility view requested; no additional non-live contracts are admitted (live/feature-split only)')
-    }
     const index = createContractIndex(data.registry, data.permissions)
     for (const item of selected) {
       const coordinate = item.coordinate

@@ -40,7 +40,7 @@ import { parseManifest, projectManifest } from '../adapter/standard/protocols.js
 import type { HostDescriptor } from '../adapter/standard/types.js'
 import { loadSpecData, verifyContractProfiles, verifyRegistry } from '../adapter/standard/registry.js'
 import { createContractIndex, validatePlugin, negotiate } from '../adapter/standard/admission.js'
-import { readGrantStore, type GrantStore } from './grants.js'
+import { readGrantStore, type GrantStore } from '../adapter/standard/grants.js'
 import { facadeFromLegacy } from '../adapter/kernel/legacy-facade.js'
 import { createShadowGuardedHostFacade } from '../adapter/kernel/host-facade.js'
 import { KernelRuntime } from '../adapter/kernel/kernel-runtime.js'
@@ -50,10 +50,8 @@ import {
   type AdapterRuntimeOptions,
 } from '../adapter/kernel/runtime.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
-import { verifyAndPromote, type CapabilityLifecycle } from '../adapter/kernel/lifecycle.js'
-import { buildHostCapabilityLifecycles, hostDescriptorDriver } from '../adapter/upstream/host-descriptor-driver.js'
+import { hostDescriptorDriver } from '../adapter/upstream/host-descriptor-driver.js'
 import { buildHostDescriptor, buildHostDescriptorFromLifecycles, buildLegacyHostDescriptor, HOST_SUPPORTED_CONTRACTS, type HostDescriptorBuild } from '../adapter/standard/descriptor.js'
-import type { ContractCoordinate } from '../adapter/standard/types.js'
 import { TuiEffectLedgerRuntime } from './effect-ledger.js'
 import { TuiPluginStorageRuntime } from './plugin-storage.js'
 import { TuiMessageObserverRuntime } from './message-observer.js'
@@ -739,37 +737,6 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
     if (data === undefined) return ['vendored spec data unavailable (dsh-ecosystem-spec/)']
     return [...verifyRegistry(data), ...verifyContractProfiles(data)]
   }
-}
-
-function hasHostMethod(service: unknown, method: string): boolean {
-  return typeof (service as Record<string, unknown> | null | undefined)?.[method] === 'function'
-}
-
-/**
- * Legacy helper name retained for diagnostic/topology batteries.
- *
- * It now returns only the live/feature-split contract set from the same
- * Host Descriptor publication path. There is intentionally no distinct
- * admission-compatibility set that would let a staged/degraded mounted
- * service be admitted as a real capability.
- *
- * COMPAT(dsh-tui#admission-live-only): transitional helper name kept for
- * tests while the production admission path moves fully to live descriptors.
- * UNTIL: adapter-v2-p6
- * REMOVAL_CONDITION: all callers use KernelRuntime.descriptorBuild() for
- * admission; no separate mounted-coordinate helper remains.
- * OWNER: src/dsh-adapter/plugin-host.ts
- * TEST: verify:adapter-descriptor / verify:plugin-grants / verify:compat-removal
- */
-export function mountedAdmissionCoordinates(host: Pick<Context, 'get'>): readonly ContractCoordinate[] {
-  const lifecycles = buildHostCapabilityLifecycles(host).map(verifyAndPromote)
-  const build = buildHostDescriptorFromLifecycles(lifecycles, {
-    generationId: 'admission-live-only',
-  })
-  return Object.freeze(build.descriptor.contracts.map(contract => Object.freeze({
-    apiVersion: contract.apiVersion,
-    kind: contract.kind,
-  } as ContractCoordinate)))
 }
 
 const HOST_ADMISSION_TOKEN = Symbol('dsh-tui.host-admission')

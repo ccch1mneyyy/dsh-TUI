@@ -29,17 +29,17 @@ process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
 
 const { pluginsInfoLines, PLUGINS_MATRIX_MAX_ROWS } = await import('../src/dsh-adapter/plugins-info.js')
-const { readGrantStore } = await import('../src/dsh-adapter/grants.js')
-const { buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS } = await import('../src/dsh-adapter/host-descriptor.js')
+const { readGrantStore } = await import('../src/adapter/standard/grants.js')
+const { buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS } = await import('../src/adapter/standard/descriptor.js')
 const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
 const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 const { PLUGIN_STORAGE_DIR } = await import('../src/dsh-adapter/plugin-storage.js')
 const { EFFECT_LEDGER_FILE } = await import('../src/dsh-adapter/effect-ledger.js')
 const { parseManifest } = await import('@dsh-std/manifest')
-const { loadSpecData } = await import('../src/plugin-spec/registry.js')
-const { createContractIndex, validatePlugin } = await import('../src/plugin-spec/validate.js')
-const { negotiate } = await import('../src/plugin-spec/negotiate.js')
+const { loadSpecData } = await import('../src/adapter/standard/registry.js')
+const { createContractIndex, validatePlugin } = await import('../src/adapter/standard/validate.js')
+const { negotiate } = await import('../src/adapter/standard/negotiate.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = (name: string) => join(root, 'dsh-ecosystem-spec', 'conformance', 'fixtures', name)

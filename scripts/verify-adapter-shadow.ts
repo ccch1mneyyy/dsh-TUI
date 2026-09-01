@@ -690,7 +690,7 @@ try {
     decisionRegistryOf,
     decisionHandlersOf,
   } = await import('../src/dsh-adapter/decision-guard.js')
-  const { parseGrantStore } = await import('../src/dsh-adapter/grants.js')
+  const { parseGrantStore } = await import('../src/adapter/standard/grants.js')
   const { testManifest } = await import('./lib/plugin-test-utils.js')
 
   const mountPassive = async () => {
@@ -943,7 +943,7 @@ try {
   const { parseManifest, projectManifest } = await import('../src/adapter/standard/protocols.js')
   const { bindComponentIdentity } = await import('../src/dsh-adapter/component-identity.js')
   const { decisionRegistryOf, decisionHandlersOf } = await import('../src/dsh-adapter/decision-guard.js')
-  const { parseGrantStore } = await import('../src/dsh-adapter/grants.js')
+  const { parseGrantStore } = await import('../src/adapter/standard/grants.js')
   const { testManifest } = await import('./lib/plugin-test-utils.js')
   const root = new Context()
   root.logger.warn = () => undefined
