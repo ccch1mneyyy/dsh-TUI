@@ -23,6 +23,7 @@ import xterm from '@xterm/headless'
 import sharp from 'sharp'
 import type { ChatRow } from '../src/dsh-adapter/channel.js'
 import type { PromptController } from '../src/components/PromptInput.js'
+import type { InjectController } from '../src/dsh-adapter/inject-channel.js'
 import type { TuiStatusViewProps } from '../src/dsh-adapter/status.js'
 import type { TranscriptImage } from '../src/dsh-adapter/transcript-images.js'
 import { settled, sleep } from './lib/term-test.mjs'
@@ -32,6 +33,7 @@ const [
   { render, AlternateScreen, Box },
   { Chat },
   { QuestionStore },
+  { TuiDialogStore },
   { ImagePreviewOverlay },
   { clearTranscriptImageCacheForTests, TranscriptImages },
   { parsePastedImagePath, stageClipboardFilePaths },
@@ -43,6 +45,7 @@ const [
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('../src/dsh-adapter/dialogs.js'),
   import('../src/components/ImagePreviewOverlay.js'),
   import('../src/components/messages/TranscriptImages.js'),
   import('../src/utils/pastedImagePath.js'),
@@ -794,6 +797,137 @@ function makeChannel() {
   await sleep(200)
   check('chat: clicks elsewhere never open the preview',
     !screen.text().includes(OVERLAY_HINT))
+
+  await app.unmount()
+  terminal.dispose()
+}
+
+// --- Chat command + managed dialog: the real prompt slot keeps its draft --
+{
+  const dialogStore = new TuiDialogStore()
+  const discarded: string[] = []
+  const submitted: string[] = []
+  let commandCalls = 0
+  let commandImageCount = 0
+  const channel = {
+    ...makeChannel(),
+    commandList: [
+      ...LOCAL_COMMANDS,
+      {
+        name: 'vision-dialog',
+        description: 'Fixture dialog command',
+        external: true,
+        acceptsImages: true,
+      },
+    ],
+    submit(text: string) { submitted.push(text) },
+    discardStagedImage(stageId: string) { discarded.push(stageId) },
+    runExternalCommandOutcome(
+      _name: string,
+      _rawInput: string,
+      images: readonly { stageId: string }[],
+    ) {
+      commandCalls += 1
+      commandImageCount = images.length
+      return dialogStore.ask({
+        kind: 'confirm',
+        title: 'DRAFT-LEASE-DIALOG',
+        confirmLabel: 'Continue',
+        cancelLabel: 'Cancel',
+      }).then(() => ({ kind: 'error' as const, text: '', consumeDraft: false }))
+    },
+  }
+  const dialogImagePath = `${process.env.HOME}/dialog-command.png`
+  writeFileSync(dialogImagePath, png)
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const stdin = new FakeStdin()
+  const injectControllerRef = React.createRef<InjectController | null>()
+  const app = await render(
+    <AlternateScreen>
+      <Chat
+        channel={channel as never}
+        questionStore={new QuestionStore()}
+        extensionDialogs={dialogStore}
+        injectControllerRef={injectControllerRef}
+        onExit={() => {}}
+        fullscreen
+      />
+    </AlternateScreen>,
+    { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await sleep(500)
+  const injector = injectControllerRef.current
+  check('chat dialog: external injection controller is published while the prompt is visible',
+    injector !== null)
+
+  stdin.write('/vision-dialog ')
+  stdin.write(`\x1b[200~${dialogImagePath}\x1b[201~`)
+  check('chat dialog: image command draft is capability-backed',
+    await settled(() => screen.text().includes('/vision-dialog') && screen.text().includes('[Image #1]')),
+    screen.text())
+  stdin.write('\r')
+  check('chat dialog: the real managed dialog replaces the composer',
+    await settled(() => screen.text().includes('DRAFT-LEASE-DIALOG'))
+      && commandCalls === 1
+      && commandImageCount === 1
+      && !screen.text().includes('/vision-dialog'),
+    `calls=${commandCalls}, images=${commandImageCount}\n${screen.text()}`)
+  stdin.write('LEAK-SENTINEL')
+  await sleep(150)
+  check('chat dialog: ordinary dialog input cannot mutate or release the hidden draft',
+    dialogStore.getSnapshot()?.kind === 'confirm' && !discarded.includes('stage-1'),
+    JSON.stringify(discarded))
+  injector?.append('INJECT-SENTINEL')
+  injector?.submit()
+  await sleep(150)
+  check('chat dialog: external injection cannot submit or clear the hidden draft',
+    submitted.length === 0 && !discarded.includes('stage-1'),
+    `submitted=${JSON.stringify(submitted)}, discarded=${JSON.stringify(discarded)}`)
+  stdin.write('\x03')
+  check('chat dialog: Ctrl+C cancels only the dialog and restores the exact draft',
+    await settled(() =>
+      dialogStore.getSnapshot() === null
+      && screen.text().includes('/vision-dialog')
+      && screen.text().includes('[Image #1]')
+      && !screen.text().includes('LEAK-SENTINEL')
+      && !screen.text().includes('INJECT-SENTINEL'))
+      && !discarded.includes('stage-1')
+      && channel.hasStagedImage('stage-1'),
+    `${JSON.stringify(discarded)}\n${screen.text()}`)
+  injector?.append(' POST-DIALOG')
+  check('chat dialog: external injection resumes only after the dialog closes',
+    await settled(() => screen.text().includes('POST-DIALOG')),
+    screen.text())
+
+  // A dialog can also arrive independently while the fullscreen draft editor
+  // is open. It must withdraw the graphics layer and restore the same editor
+  // after cancellation without an inline-viewport stale frame.
+  stdin.write(CTRL_SHIFT_E)
+  check('chat dialog: restored image draft opens in the fullscreen editor',
+    await settled(() => screen.text().includes('Draft editor') && screen.text().includes('[Image #1]')),
+    screen.text())
+  const editorDialog = dialogStore.ask({
+    kind: 'confirm',
+    title: 'EDITOR-SUSPEND-DIALOG',
+    confirmLabel: 'Continue',
+    cancelLabel: 'Cancel',
+  })
+  check('chat dialog: dialog suspension withdraws the fullscreen editor layer',
+    await settled(() =>
+      screen.text().includes('EDITOR-SUSPEND-DIALOG')
+      && !screen.text().includes('Draft editor')),
+    screen.text())
+  stdin.write('\x1b')
+  await editorDialog
+  check('chat dialog: closing the dialog restores the same editor and capability',
+    await settled(() =>
+      screen.text().includes('Draft editor')
+      && screen.text().includes('/vision-dialog')
+      && screen.text().includes('[Image #1]'))
+      && !discarded.includes('stage-1'),
+    `${JSON.stringify(discarded)}\n${screen.text()}`)
 
   await app.unmount()
   terminal.dispose()

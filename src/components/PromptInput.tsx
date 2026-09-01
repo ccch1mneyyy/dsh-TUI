@@ -345,6 +345,8 @@ export interface PromptController {
 
 export interface PromptInputProps {
   channel: Channel
+  /** Keep the draft mounted while another prompt-slot panel owns the UI. */
+  suspended?: boolean
   /** Whether the `?` help menu is open (state lives in the Chat screen). */
   helpOpen: boolean
   onToggleHelp(): void
@@ -418,6 +420,7 @@ export interface PromptInputProps {
  */
 export function PromptInput({
   channel,
+  suspended = false,
   helpOpen,
   onToggleHelp,
   onRunCommand,
@@ -605,9 +608,15 @@ export function PromptInput({
   valueRef.current = value
   cursorRef.current = cursor
   // Publish the live controller (fresh closure over `value` every render).
-  // clear() mirrors the double-tap-Esc clear: text + caret reset.
-  React.useEffect(() => {
+  // A prompt-slot panel withdraws the handle in the same commit: external
+  // injection must not append/submit a hidden command draft while it waits
+  // for a decision. clear() mirrors the double-tap-Esc clear.
+  React.useLayoutEffect(() => {
     if (!controllerRef) return
+    if (suspended) {
+      controllerRef.current = null
+      return
+    }
     controllerRef.current = {
       hasText: () => value.length > 0,
       clear: () => {
@@ -2405,7 +2414,7 @@ export function PromptInput({
       setSelectedCommand(0)
       setFileSelected(0)
     }
-  })
+  }, { isActive: !suspended })
 
   // === Render: hard-wrap every logical line at the input width, then show
   // the window of visual lines with the caret row always visible (CC's
@@ -2749,7 +2758,7 @@ export function PromptInput({
             : 0),
       expanded ? editorGutterCols + 1 + inputWidth : inputWidth,
     ),
-    active: !selectionActive,
+    active: !suspended && !selectionActive,
   })
 
   /**
@@ -2956,6 +2965,7 @@ export function PromptInput({
   // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。展开态由
   // 全屏编辑器接管，内联浮层全部撤下。
   const floatersOpen =
+    !suspended &&
     !expanded &&
     (helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen || peekOpen)
   // 顶边框右侧的会话名标签（CC 风格 chip）：色随强调色；超宽截断，宽度
@@ -2987,16 +2997,21 @@ export function PromptInput({
     ink?.reanchorViewport()
   }, [floatersOpen])
 
-  // 展开态开关 = 全屏覆盖增删：与浮层开关同款的视口重锚（inline 模式的
-  // 虚屏↔scrollback 映射不漂移），并在展开首帧把滚动窗口归零。
+  // 全屏编辑器的真实可见性同时受 expanded 与 prompt-slot suspension
+  // 控制。对话框临时接管时撤下、关闭后恢复，和手动展开/收起一样都必须
+  // 重锚 inline 视口；只在一次真正的 false→true 展开时归零滚动位置，
+  // suspension 往返保留用户浏览到的行。
+  const editorVisible = expanded && !suspended
+  const prevEditorVisibleRef = React.useRef(editorVisible)
   React.useLayoutEffect(() => {
-    if (expanded === prevExpandedRef.current) return
+    if (expanded && !prevExpandedRef.current) expandedScrollRef.current = 0
     prevExpandedRef.current = expanded
-    if (expanded) expandedScrollRef.current = 0
+    if (editorVisible === prevEditorVisibleRef.current) return
+    prevEditorVisibleRef.current = editorVisible
     const ink = instances.get(process.stdout) ?? instances.values().next().value
     ink?.invalidatePrevFrame()
     ink?.reanchorViewport()
-  }, [expanded])
+  }, [editorVisible, expanded])
 
   // Feature turned off mid-session while the editor is up: withdraw the
   // cover (the draft and every other editing state survive).
@@ -3010,7 +3025,7 @@ export function PromptInput({
   // useInsertionEffect 发布：sink 的同步重渲染发生在 layout 阶段之前，
   // useDeclaredCursor（layout effect）读到的新 ref 已指向编辑区 Box。
   // 点击/拖拽坐标以内容区为原点（localCol 去掉行号槽宽度）。
-  const editorNode = expanded ? (
+  const editorNode = editorVisible ? (
     <Box
       flexDirection="column"
       width="100%"
@@ -3111,6 +3126,12 @@ export function PromptInput({
       setPromptEditorNode(null)
     }
   }, [])
+
+  // Approval, question and managed-dialog panels temporarily own Chat's
+  // prompt slot. Stay mounted so an async command can settle without losing
+  // its exact text/image draft, while contributing no layout, input, cursor,
+  // editor layer, or external injection controller.
+  if (suspended) return null
 
   return (
     <Box flexDirection="column" marginTop={1}>

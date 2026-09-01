@@ -2509,11 +2509,16 @@ export function Chat({
   const lastModalEnterAtRef = React.useRef(0)
 
   useInput((input, key, event) => {
-    // The /btw panel owns the keyboard while open (its own useInput handles
-    // Esc/Enter/Space close, ↑/↓ scroll, c copy; everything else is
-    // swallowed there). Chat registered first, so an early return here does
-    // not block the event from reaching the panel.
-    if (btw !== null) return
+    // Prompt-slot panels own the keyboard while visible. Their own useInput
+    // handles the relevant keys; Chat registered first, so yielding here
+    // still lets the panel receive them. PromptInput now stays mounted but
+    // suspended to preserve async command drafts, making this guard also
+    // essential for Ctrl+C: it must never clear the hidden composer.
+    if (
+      btw !== null
+      || overlay.kind === 'tips'
+      || (recap !== null && (!recap.auto || recap.expanded))
+    ) return
     // Same for the session browser: it renders instead of the conversation,
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
@@ -2571,7 +2576,7 @@ export function Chat({
     if (helpOpen) return
     // The questionnaire / approval panel / managed plugin dialog owns the
     // keyboard while one is pending (the panel's own useInput handles
-    // ↑/↓/Space/Tab/Enter/Esc; the prompt input is unmounted, so nothing
+    // ↑/↓/Space/Tab/Enter/Esc; the prompt input is suspended, so nothing
     // else should see these keys).
     if (questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null) return
     const returnCandidate = isPlainReturnInput(input, key)
@@ -3469,6 +3474,17 @@ export function Chat({
   const promptSelectionActive =
     selectionActive || overlay.kind !== 'none' || btw !== null
 
+  // These panels replace the visible composer, but PromptInput remains
+  // mounted (suspended) so an async registry command cannot lose its exact
+  // text/image draft while it waits for a user decision.
+  const promptReplacementOpen =
+    approvalPanelNode !== null
+    || dialogSnapshot !== null
+    || overlay.kind === 'tips'
+    || (recap !== null && (!recap.auto || recap.expanded))
+    || btw !== null
+    || questionPanelNode !== null
+
   // The trajectory scene replaces the conversation for as long as it is open.
   // Rendering it INSTEAD of (not above) the transcript is what makes it a
   // screen rather than an overlay: it owns the full viewport, and the
@@ -3787,34 +3803,35 @@ export function Chat({
           </Box>
         ) : questionPanelNode !== null ? (
           questionPanelNode
-        ) : (
-          <PromptInput
-            channel={channel}
-            helpOpen={helpOpen}
-            onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
-            onRunCommand={runCommand}
-            selectionActive={promptSelectionActive}
-            fillText={historyFill}
-            onFillConsumed={() =>{  setHistoryFill(null) }}
-            onRewindRequest={openRewind}
-            onBackgroundRequest={backgroundToAgentView}
-            backgroundAgentsNeedingInput={
-              // Only the real channel supplies the seam; pre-agent-view test
-              // stubs must not grow the footer row (layout-dependent
-              // regressions pin the visible row count). The footer only
-              // renders while some session actually waits (N > 0): a
-              // permanent idle row would steal a transcript row on every
-              // real channel — one row is enough to scroll the startup
-              // header fully off a short terminal, pausing its viewport
-              // clock and shifting every row-count layout invariant.
-              channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
-                ? backgroundAgentsNeedingInput
-                : undefined
-            }
-            controllerRef={promptControllerRef}
-            onPreviewImage={openImagePreview}
-          />
-        )}
+        ) : null}
+        <PromptInput
+          key="prompt-input"
+          channel={channel}
+          suspended={promptReplacementOpen}
+          helpOpen={helpOpen}
+          onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
+          onRunCommand={runCommand}
+          selectionActive={promptSelectionActive}
+          fillText={historyFill}
+          onFillConsumed={() =>{  setHistoryFill(null) }}
+          onRewindRequest={openRewind}
+          onBackgroundRequest={backgroundToAgentView}
+          backgroundAgentsNeedingInput={
+            // Only the real channel supplies the seam; pre-agent-view test
+            // stubs must not grow the footer row (layout-dependent
+            // regressions pin the visible row count). The footer only
+            // renders while some session actually waits (N > 0): a
+            // permanent idle row would steal a transcript row on every
+            // real channel — one row is enough to scroll the startup
+            // header fully off a short terminal, pausing its viewport
+            // clock and shifting every row-count layout invariant.
+            channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
+              ? backgroundAgentsNeedingInput
+              : undefined
+          }
+          controllerRef={promptControllerRef}
+          onPreviewImage={openImagePreview}
+        />
         <StatusLine
           channel={channel}
           selectionActive={selectionActive}
