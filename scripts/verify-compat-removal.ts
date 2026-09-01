@@ -2,12 +2,15 @@
  * P6 compat-removal / migration-graph gate.
  *
  * This is NOT a marker-list self-check. It verifies the actual cleanup state:
- * - the legacy shim files are gone;
- * - no production source or verify script imports/refers to those legacy
- *   paths, `mountedAdmissionCoordinates`, or `admissionCompat`;
+ * - the legacy shim files are gone from `src/` and from generated `lib/`
+ *   (when present);
+ * - no production source, script, bin, or compiled lib file still imports
+ *   or refers to those legacy paths, `admissionCompat*`,
+ *   `mountedAdmissionCoordinates`, or the old `./grants.js` /
+ *   `./host-descriptor.js` comments;
+ * - no package export entry points at a legacy shim;
  * - the public `./plugin-host` export graph points at the canonical public
- *   surface and the surface no longer carries COMPAT markers;
- * - no `COMPAT(` marker remains anywhere in `src/`.
+ *   surface and that surface carries no COMPAT markers.
  *
  * Run via `node --import tsx/esm scripts/verify-compat-removal.ts`.
  */
@@ -18,6 +21,8 @@ import { fileURLToPath } from 'node:url'
 const ROOT = resolve(import.meta.dirname, '..')
 const SRC = join(ROOT, 'src')
 const SCRIPTS = join(ROOT, 'scripts')
+const BIN = join(ROOT, 'bin')
+const LIB = join(ROOT, 'lib')
 const ADAPTER_V2_PHASE = 'P6'
 
 const LEGACY_SHIM_PATHS = [
@@ -32,13 +37,27 @@ const LEGACY_SHIM_PATHS = [
   'dsh-adapter/host-descriptor.ts',
 ] as const
 
+const LEGACY_LIB_SHIM_PATHS = [
+  'lib/types/plugin-spec/types.js',
+  'lib/types/plugin-spec/schema-check.js',
+  'lib/types/plugin-spec/registry.js',
+  'lib/types/plugin-spec/validate.js',
+  'lib/types/plugin-spec/negotiate.js',
+  'lib/types/plugin-spec/permission-scope.js',
+  'lib/types/plugin-spec/tui-extension.js',
+  'lib/types/dsh-adapter/grants.js',
+  'lib/types/dsh-adapter/host-descriptor.js',
+] as const
+
+const TEXT_FILE = /\.(?:ts|tsx|js|mjs|cjs|d\.ts)$/u
+
 function collect(dir: string, out: string[] = []): string[] {
   if (!existsSync(dir)) return out
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry)
     const stat = statSync(path)
     if (stat.isDirectory()) collect(path, out)
-    else if (/\.(?:ts|tsx)$/u.test(entry)) out.push(path)
+    else if (TEXT_FILE.test(entry)) out.push(path)
   }
   return out
 }
@@ -46,27 +65,48 @@ function collect(dir: string, out: string[] = []): string[] {
 const failures: string[] = []
 let checkedFiles = 0
 
-// 1. Legacy shims must be absent.
+// 1. Legacy shims must be absent from source and generated lib.
 for (const relativePath of LEGACY_SHIM_PATHS) {
   const path = join(SRC, relativePath)
   if (existsSync(path)) {
     failures.push(`${relativePath}: legacy compat shim still exists after P6 removal`)
   }
 }
+for (const relativePath of LEGACY_LIB_SHIM_PATHS) {
+  const path = join(ROOT, relativePath)
+  if (existsSync(path)) {
+    failures.push(`${relativePath}: legacy compat shim still exists in generated lib/`)
+  }
+}
 
-// 2. Production source and verify scripts must resolve the canonical surface.
+// 2. Production source, scripts, bin, and generated lib must resolve the
+// canonical surface and must not retain removed state/path references.
 const LEGACY_ADAPTER_IMPORT = /(?:import|export)\s[^'"\n]*?from\s*['"][^'"]*dsh-adapter\/(?:grants|host-descriptor)|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"][^'"]*dsh-adapter\/(?:grants|host-descriptor)/u
 const LEGACY_PLUGIN_SPEC_IMPORT = /(?:import|export)\s[^'"\n]*?from\s*['"][^'"]*plugin-spec|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"][^'"]*plugin-spec/u
-for (const root of [SRC, SCRIPTS]) {
+const REMOVED_ADMISSION_STATE = /(?:admissionCompat(?:Coordinates)?|mountedAdmissionCoordinates)/u
+const LEGACY_OLD_PATH_REFERENCE = /(?:\.\/grants\.js|\.\/host-descriptor\.js|\.\.\/grants\.js|\.\.\/host-descriptor\.js)/u
+const ADMISSION_COMPATIBILITY_PHRASE = /admission\s+compatibility/iu
+for (const root of [SRC, SCRIPTS, BIN, LIB]) {
   for (const file of collect(root)) {
     if (file === fileURLToPath(import.meta.url)) continue
     checkedFiles += 1
     const source = readFileSync(file, 'utf8')
+    const normalized = file.replaceAll('\\', '/')
+    const inLegacyArea = normalized.includes('/dsh-adapter/')
+      || normalized.includes('/plugin-spec/')
+      || normalized.includes('/lib/types/dsh-adapter/')
+      || normalized.includes('/lib/types/plugin-spec/')
     if (LEGACY_ADAPTER_IMPORT.test(source) || LEGACY_PLUGIN_SPEC_IMPORT.test(source)) {
       failures.push(`${relative(ROOT, file)} still resolves a legacy shim path`)
     }
-    if (root === SRC && (/\badmissionCompat\b/u.test(source) || /\bmountedAdmissionCoordinates\b/u.test(source))) {
+    if (REMOVED_ADMISSION_STATE.test(source)) {
       failures.push(`${relative(ROOT, file)} still references removed admissionCompat state`)
+    }
+    if (inLegacyArea && LEGACY_OLD_PATH_REFERENCE.test(source)) {
+      failures.push(`${relative(ROOT, file)} still references the removed ./grants.js or ./host-descriptor.js paths`)
+    }
+    if (ADMISSION_COMPATIBILITY_PHRASE.test(source)) {
+      failures.push(`${relative(ROOT, file)} still uses the removed 'admission compatibility' phrasing`)
     }
     if (source.includes('COMPAT(')) {
       failures.push(`${relative(ROOT, file)} still carries a COMPAT marker after P6 cleanup`)
@@ -74,17 +114,31 @@ for (const root of [SRC, SCRIPTS]) {
   }
 }
 
-// 3. Public export graph: ./plugin-host must remain a canonical public surface.
+// 3. Public export graph: every package export target must exist and none may
+// point at a legacy/compat path.
 const packageJsonPath = join(ROOT, 'package.json')
 const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
-  exports?: Record<string, { import?: string; types?: string; default?: string }>
+  exports?: Record<string, { import?: string; types?: string; default?: string } | string>
+}
+for (const [name, target] of Object.entries(manifest.exports ?? {})) {
+  const values = typeof target === 'string' ? [target] : Object.values(target ?? {}).filter((value): value is string => typeof value === 'string')
+  for (const value of values) {
+    const normalized = value.replace(/^\.\//u, '')
+    if (normalized.includes('plugin-spec/') || /dsh-adapter\/(?:grants|host-descriptor)(?:\.|$)/u.test(normalized)) {
+      failures.push(`package export ${name} points at a legacy shim: ${value}`)
+    }
+  }
 }
 const pluginHostExport = manifest.exports?.['./plugin-host']
-if (pluginHostExport?.import !== './lib/types/plugin-host.js') {
-  failures.push('package.json ./plugin-host import must point at ./lib/types/plugin-host.js')
-}
-if (pluginHostExport?.types !== './lib/types/plugin-host.d.ts') {
-  failures.push('package.json ./plugin-host types must point at ./lib/types/plugin-host.d.ts')
+if (typeof pluginHostExport === 'string' || pluginHostExport === undefined) {
+  failures.push('package.json ./plugin-host must be an export object')
+} else {
+  if (pluginHostExport.import !== './lib/types/plugin-host.js') {
+    failures.push('package.json ./plugin-host import must point at ./lib/types/plugin-host.js')
+  }
+  if (pluginHostExport.types !== './lib/types/plugin-host.d.ts') {
+    failures.push('package.json ./plugin-host types must point at ./lib/types/plugin-host.d.ts')
+  }
 }
 const publicSurfacePath = join(SRC, 'plugin-host.ts')
 if (!existsSync(publicSurfacePath)) {
@@ -94,8 +148,19 @@ if (!existsSync(publicSurfacePath)) {
   if (!publicSource.includes('TuiPluginHost')) {
     failures.push('public plugin-host surface must export the narrowed TuiPluginHost type')
   }
-  if (publicSource.includes('COMPAT(') || publicSource.includes('admissionCompat')) {
+  if (publicSource.includes('COMPAT(') || REMOVED_ADMISSION_STATE.test(publicSource)) {
     failures.push('public plugin-host surface must not carry COMPAT/admissionCompat markers')
+  }
+}
+
+// 4. Generated lib (when present) must not re-export old server-side shims.
+if (existsSync(LIB)) {
+  const pluginHostLib = join(LIB, 'types', 'plugin-host.js')
+  if (existsSync(pluginHostLib)) {
+    const source = readFileSync(pluginHostLib, 'utf8')
+    if (source.includes('mountedAdmissionCoordinates') || /admissionCompat(?:Coordinates)?/u.test(source)) {
+      failures.push('lib/types/plugin-host.js still exposes removed admissionCompat helpers')
+    }
   }
 }
 
@@ -104,4 +169,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  - ${failure}`)
   process.exit(1)
 }
-console.log(`verify:compat-removal OK (phase ${ADAPTER_V2_PHASE}; ${LEGACY_SHIM_PATHS.length} shim paths absent; ${checkedFiles} source/script files scanned for migration graph; public ./plugin-host export verified)`)
+console.log(`verify:compat-removal OK (phase ${ADAPTER_V2_PHASE}; ${LEGACY_SHIM_PATHS.length} src shim paths + ${LEGACY_LIB_SHIM_PATHS.length} lib shim paths absent; ${checkedFiles} text files scanned; package export graph verified)`)

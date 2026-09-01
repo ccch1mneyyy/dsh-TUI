@@ -247,7 +247,11 @@ export class TuiMessageObserverRuntime extends Service {
       grants?: GrantStore
       ledger?: TuiEffectLedgerRuntime
       validateEnvelope?: (value: unknown) => void
-      /** @deprecated compatibility alias; prefer validateEnvelope. */
+      /**
+       * @deprecated Use `validateEnvelope` instead.
+       * Compatibility alias retained as a long-term face for existing
+       * embedders/tests. OWNER: dsh-tui adapter. UNTIL: no scheduled removal.
+       */
       envelopeSchema?: Record<string, unknown>
     } = {},
   ) {

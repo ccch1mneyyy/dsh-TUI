@@ -9,9 +9,11 @@
  * - `generationId` — the runtime generation id (C-050), a fresh UUID per
  *   row activation; ledger records and the Host Descriptor stamp it so
  *   effects from different process generations can never be confused.
- * - `grants` — the unified 8-permission live GrantStore (./grants.js).
- * - `hostDescriptor()` — the C-010 Host Descriptor (./host-descriptor.js),
- *   built lazily and cached; drifted contracts are dropped fail-closed.
+ * - `grants` — the unified 8-permission live GrantStore
+ *   (`../adapter/standard/grants.js`).
+ * - `hostDescriptor()` — the C-010 Host Descriptor
+ *   (`../adapter/standard/descriptor.js`), built lazily and cached; drifted
+ *   contracts are dropped fail-closed.
  * - `selfCheck()` — vendored registry + contract-profile violations
  *   (definition/profile drift, ten-point incompleteness, parity mismatches).
  * - `registerCommand(pluginCtx, definition)` — the MEDIATED command
@@ -51,7 +53,7 @@ import {
 } from '../adapter/kernel/runtime.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { hostDescriptorDriver } from '../adapter/upstream/host-descriptor-driver.js'
-import { buildHostDescriptor, buildHostDescriptorFromLifecycles, buildLegacyHostDescriptor, HOST_SUPPORTED_CONTRACTS, type HostDescriptorBuild } from '../adapter/standard/descriptor.js'
+import { buildHostDescriptor, buildLegacyHostDescriptor, HOST_SUPPORTED_CONTRACTS, type HostDescriptorBuild } from '../adapter/standard/descriptor.js'
 import { TuiEffectLedgerRuntime } from './effect-ledger.js'
 import { TuiPluginStorageRuntime } from './plugin-storage.js'
 import { TuiMessageObserverRuntime } from './message-observer.js'

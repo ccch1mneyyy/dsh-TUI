@@ -7,6 +7,10 @@
  * expose admission, grants, or ledger writes: those are sensitive Kernel /
  * Standard internal services and must not be callable through the Host Port /
  * HostFacade surface (especially in passive shadow).
+ *
+ * `facadeFromLegacy` is a retained long-term compatibility fallback for
+ * bare/test compositions and is explicitly outside the P6 removal scope.
+ * OWNER: dsh-tui adapter. UNTIL: no scheduled removal.
  */
 
 import type { HostDescriptorSnapshot, HostDescriptorPort } from '../ports/descriptor.js'

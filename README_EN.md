@@ -641,8 +641,11 @@ harness:
 - P6 removes the internal `admissionCompat` parallel view and deletes the
   `src/plugin-spec/*` and `src/dsh-adapter/{grants,host-descriptor}.ts` compat
   shims. Production code imports `src/adapter/standard/*` directly;
-  `verify:compat-removal` now scans the real production import/export graph
-  instead of checking markers only.
+  `verify:compat-removal` now scans `src/`, `scripts/`, `bin/`, generated
+  `lib/` (when present), and the package export graph;
+  `verify:package` rejects old shims in the npm tarball. Retained compatibility
+  aliases (`ExtensionGrants`, `envelopeSchema`, `createAdmissionCatalog`,
+  `facadeFromLegacy`, etc.) are explicitly marked as outside P6 / long-term.
 - The new kernel is no longer a P1 shell: `KernelRuntime` owns driver
   registration/mount, detection, `declared → staged → live`, cleanup, and a
   diagnostic snapshot. Production Host Descriptor, `getHostFacade()`, `/doctor`,

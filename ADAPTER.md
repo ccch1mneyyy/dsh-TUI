@@ -57,7 +57,8 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 - **P6 compat 清理**:删除 `src/plugin-spec/*`、`src/dsh-adapter/{grants,
   host-descriptor}.ts` shim;彻底移除 `admissionCompat` 与
   `mountedAdmissionCoordinates`;`src/plugin-host.ts` 保留为规范化公开面;
-  `verify:compat-removal` 改为真实生产导入图/导出图校验。
+  `verify:compat-removal` 扫描 `src/`/`scripts/`/`bin/`/生成 `lib/` 与
+  package export 图,`verify:package` 拒绝 tarball 旧 shim;长期兼容别名已标注。
 - 所有 adapter 门禁已并入 `npm run verify:build`。
 
 ## 升级流程

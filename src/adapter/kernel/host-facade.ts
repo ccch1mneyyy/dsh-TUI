@@ -3,8 +3,9 @@
  *
  * P2 callers normally obtain this from `KernelRuntime.facade()`, which backs
  * the descriptor port with the unified kernel lifecycle evidence.
- * `facadeFromLegacy` remains only as a compatibility fallback for bare/test
- * compositions. Hard rules:
+ * `facadeFromLegacy` remains only as a long-term compatibility fallback for
+ * bare/test compositions (outside P6 removal scope; owner: dsh-tui adapter).
+ * Hard rules:
  * - It performs no business logic, no protocol translation, no capability
  *   detection, no registry, and stores no mutable host state.
  * - It is for TUI host-internal code only. External plugins continue to use

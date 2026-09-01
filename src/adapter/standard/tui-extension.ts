@@ -59,9 +59,11 @@ export function getAdmissionCatalog(): AdmissionCatalog {
   return canonicalAdmissionCatalog
 }
 
-/** Backward-compatible factory retained for existing callers. It now returns
- * the same process-level canonical catalog rather than allocating a new one,
- * so no second admission core can appear in production. */
+/** Backward-compatible factory retained as a long-term compatibility face
+ * for existing callers. It now returns the same process-level canonical
+ * catalog rather than allocating a new one, so no second admission core can
+ * appear in production. OWNER: dsh-tui adapter. UNTIL: no scheduled removal.
+ */
 export function createAdmissionCatalog(): AdmissionCatalog {
   return getAdmissionCatalog()
 }

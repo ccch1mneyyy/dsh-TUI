@@ -49,6 +49,19 @@ for (const presetFile of [
 ]) {
   if (!packed.has(presetFile)) throw new Error(`packaged preset file missing from tarball: ${presetFile}`)
 }
+for (const legacyPackedPath of [
+  'lib/types/dsh-adapter/grants.js',
+  'lib/types/dsh-adapter/host-descriptor.js',
+  'lib/types/plugin-spec/types.js',
+  'lib/types/plugin-spec/schema-check.js',
+  'lib/types/plugin-spec/registry.js',
+  'lib/types/plugin-spec/validate.js',
+  'lib/types/plugin-spec/negotiate.js',
+  'lib/types/plugin-spec/permission-scope.js',
+  'lib/types/plugin-spec/tui-extension.js',
+]) {
+  if (packed.has(legacyPackedPath)) throw new Error(`npm package contains legacy compat shim: ${legacyPackedPath}`)
+}
 if ([...packed].some(path => path.startsWith('src/'))) {
   throw new Error('npm package unexpectedly contains TypeScript sources')
 }

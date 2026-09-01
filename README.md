@@ -228,7 +228,10 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
 - P6 已彻底移除内部 `admissionCompat` 平行视图，并删除
   `src/plugin-spec/*` 与 `src/dsh-adapter/{grants,host-descriptor}.ts` compat
   shim。生产代码直接导入 `src/adapter/standard/*`；`verify:compat-removal`
-  现在扫描真实生产导入图与公开导出图，不再是标记自证。
+  现在扫描 `src/`、`scripts/`、`bin/`、生成 `lib/`（存在时）与 package export
+  图，`verify:package` 也会拒绝 npm tarball 中的旧 shim；仍保留的兼容别名
+  （`ExtensionGrants`、`envelopeSchema`、`createAdmissionCatalog`、
+  `facadeFromLegacy` 等）已明确标注为 P6 范围外/长期兼容面。
 - 新 Kernel 不再是 P1 空壳：`KernelRuntime` 管理 driver 注册/mount、detection、
   `declared → staged → live`、清理与诊断快照；生产 Host Descriptor、`getHostFacade()`、
   `/doctor`、`/plugins` 均走该 runtime。

@@ -50,9 +50,14 @@ are logged in Chinese, with English summaries when appropriate.
     surface.
   - `src/plugin-host.ts` remains as the canonical public plugin-host surface
     without COMPAT markers.
-  - `verify:compat-removal` now verifies the actual prod migration/export
-    graph (shim absence, no legacy imports, no admissionCompat references,
-    canonical `./plugin-host` export) rather than marker self-certification.
+  - `verify:compat-removal` now scans `src/`, `scripts/`, `bin/`, generated
+    `lib/` (when present) and the package export graph (shim absence, no
+    legacy imports/path refs, no admissionCompat references, canonical
+    `./plugin-host` export) rather than marker self-certification.
+  - `verify:package` rejects legacy shim paths in the npm tarball file list.
+  - Retained compatibility aliases (`ExtensionGrants`, `envelopeSchema`,
+    `createAdmissionCatalog`, `facadeFromLegacy`, etc.) are explicitly marked
+    as P6-out-of-scope / long-term compatibility surface.
 
 ### Verification
 

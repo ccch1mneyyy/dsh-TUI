@@ -8,10 +8,11 @@
  * and `tui/compact` are NOT free-for-all `ctx.on` targets: the subscribing
  * plugin (identified by its verified Component identity) must hold the
  * matching `domain.resource.intercept` grant. Grant answers
- * come from the unified 8-permission GrantStore in ./grants.js (registry-
- * driven defaults, `grants`/`denies` sections, corrupt fail-closed) — this
- * module is only the subscribe-time CHECKPOINT: which event needs which
- * permission, and the cordis bail hook that enforces it.
+ * come from the unified 8-permission GrantStore in
+ * `../adapter/standard/grants.js` (registry-driven defaults,
+ * `grants`/`denies` sections, corrupt fail-closed) — this module is only the
+ * subscribe-time CHECKPOINT: which event needs which permission, and the
+ * cordis bail hook that enforces it.
  *
  * A denied subscription never enters the dispatch chain — it is "as if
  * unregistered" (D-7) and the caller gets a no-op disposer plus a logger
@@ -61,18 +62,22 @@ export { DECISION_EVENT_PERMISSIONS }
 
 
 // ── Compatibility aliases (pre-GrantStore names) ────────────────────────────
-// The grant-file format and these entry points predate the unified store;
-// keep them working — verify batteries and any embedder code import them
-// from this module.
+// These aliases are intentionally outside the P6 removal scope: they are a
+// long-term compatibility surface for existing embedder/test code. They map
+// directly to the canonical `../adapter/standard/grants.js` implementation.
+// OWNER: dsh-tui adapter. UNTIL: no scheduled removal.
 export { EXTENSION_GRANTS_FILE }
 
-/** @deprecated Use GrantStore from ./grants.js (same shape, plus more). */
+/** @deprecated Use GrantStore from `../adapter/standard/grants.js` (same shape, plus more).
+ * Long-term compatibility alias; owner: dsh-tui adapter. */
 export type ExtensionGrants = GrantStore
 
-/** @deprecated Use parseGrantStore from ./grants.js. */
+/** @deprecated Use parseGrantStore from `../adapter/standard/grants.js`.
+ * Long-term compatibility alias; owner: dsh-tui adapter. */
 export const parseExtensionGrants: (text: string) => GrantStore = parseGrantStore
 
-/** @deprecated Use readGrantStore from ./grants.js. */
+/** @deprecated Use readGrantStore from `../adapter/standard/grants.js`.
+ * Long-term compatibility alias; owner: dsh-tui adapter. */
 export const readExtensionGrants: (dir?: string) => GrantStore = readGrantStore
 
 /**
@@ -380,7 +385,7 @@ export function decisionDispatchEventNames(ctx: Context): readonly string[] {
 }
 
 /** True when this composition has at least one real DecisionEvents dispatch
- * source (today: the live channel). Used by admission compatibility views. */
+ * source (today: the live channel). Used by host descriptor/admission views. */
 export function hasDecisionDispatchTopology(ctx: Context): boolean {
   return decisionDispatchEventNames(ctx).length > 0
 }
