@@ -5,6 +5,11 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { Channel } from './channel.js'
 import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 /**
  * Props every plugin scene receives. Both element creation and hooks must go
@@ -46,6 +51,8 @@ export interface TuiSceneDescriptor {
 /** Host-only scene controls used by the channel; omitted from the plugin export. */
 export interface TuiSceneHost {
   readonly active: TuiSceneDescriptor | undefined
+  register(descriptor: TuiSceneDescriptor): () => void
+  list(): readonly TuiSceneDescriptor[]
   open(id: string): boolean
   close(): void
   subscribe(listener: () => void): () => void
@@ -80,10 +87,31 @@ export class TuiSceneRuntime extends Service {
       current: undefined,
       host: undefined,
       logger: ctx.logger,
+      runtime: adapterRuntimeFor(ctx),
     }
     state.host = Object.freeze({
       get active() {
         return sceneStateFor(runtime).current
+      },
+      register(descriptor: TuiSceneDescriptor) {
+        const state = sceneStateFor(runtime)
+        const id = descriptor.id.trim().toLowerCase()
+        if (!/^[a-z][a-z0-9_-]*$/u.test(id)) throw new TypeError(`invalid TUI scene id: ${descriptor.id}`)
+        if (state.scenes.has(id)) throw new Error(`TUI scene "${id}" is already registered`)
+        const normalized = Object.freeze({ ...descriptor, id })
+        state.scenes.set(id, normalized)
+        return () => {
+          if (state.scenes.get(id) !== normalized) return
+          state.scenes.delete(id)
+          state.owners.delete(id)
+          if (state.current === normalized) {
+            state.current = undefined
+            notifyScenes(state)
+          }
+        }
+      },
+      list() {
+        return [...sceneStateFor(runtime).scenes.values()]
       },
       open(id: string) {
         return openScene(runtime, id)
@@ -105,6 +133,7 @@ export class TuiSceneRuntime extends Service {
    * records `undeclared` (C-060).
    */
   register(descriptor: TuiSceneDescriptor, identity?: Context): () => void {
+    assertCapabilityShadowPolicy('host.scenes.register', sceneStateFor(this).runtime.mode, sceneStateFor(this).runtime.slices)
     const state = sceneStateFor(this)
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.register', this)
     const activationOwner = activationFiber(caller)
@@ -159,12 +188,14 @@ export class TuiSceneRuntime extends Service {
    * the log, not silently do nothing in the UI.
    */
   open(id: string): boolean {
+    assertCapabilityShadowPolicy('host.scenes.open', sceneStateFor(this).runtime.mode, sceneStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.open', this)
     const owner = activationFiber(caller)
     return owner === undefined ? false : openScene(this, id, caller, owner)
   }
 
   close(): void {
+    assertCapabilityShadowPolicy('host.scenes.close', sceneStateFor(this).runtime.mode, sceneStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.close', this)
     const owner = activationFiber(caller)
     if (owner !== undefined) closeScene(this, caller, owner)
@@ -172,6 +203,7 @@ export class TuiSceneRuntime extends Service {
 
   /** The scene currently replacing the conversation, if any. */
   get active(): TuiSceneDescriptor | undefined {
+    assertCapabilityShadowPolicy('host.scenes.active', sceneStateFor(this).runtime.mode, sceneStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.active', this)
     const owner = activationFiber(caller)
     const state = sceneStateFor(this)
@@ -182,6 +214,7 @@ export class TuiSceneRuntime extends Service {
 
   /** UI-side change feed: fired after every open/close/dispose transition. */
   subscribe(listener: () => void): () => void {
+    assertCapabilityShadowPolicy('host.scenes.subscribe', sceneStateFor(this).runtime.mode, sceneStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiScenes.subscribe', this)
     const owner = activationFiber(caller)
     if (owner === undefined) return () => {}
@@ -193,6 +226,7 @@ export class TuiSceneRuntime extends Service {
 }
 
 interface SceneState {
+  readonly runtime: AdapterRuntimeOptions
   readonly scenes: Map<string, TuiSceneDescriptor>
   readonly owners: Map<string, object>
   readonly listeners: Set<{ owner: object | undefined; listener: () => void }>

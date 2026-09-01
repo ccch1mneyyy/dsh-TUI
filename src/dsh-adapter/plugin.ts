@@ -13,9 +13,10 @@ import { createChildStderrReporter, installChildStderrGuard } from './childStder
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { logForDebugging } from '../utils/debug.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
-import { QuestionStore } from './questions.js'
+import { QuestionStore, bindQuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
-import { ApprovalStore } from './approvals.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
@@ -300,7 +301,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
     return filterMinimalPresetTools(assembled, presetId)
   })
-  const questionStore = new QuestionStore()
+  const questionStore = new QuestionStore(adapterRuntimeFor(ctx))
+  bindQuestionStore(ctx, questionStore)
   // One store, one teardown effect on both API lines. The compatibility
   // adapter binds either registration to this Cordis fiber; this separate
   // effect rejects asks still parked in the UI during teardown.
@@ -905,7 +907,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   {
     const settingsSections = getHostSettingsSections(
       ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-    ) ?? getLocalSettingsSectionsHost()
+    ) ?? getLocalSettingsSectionsHost(ctx)
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
       title: 'dsh-tui',
@@ -1318,13 +1320,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // DSH approval seam: the permission layer asks ApprovalService.request(),
   // which dispatches an `approval/request` waterfall. With no answerer the
   // chain falls through to the fail-closed 'unavailable', so register this
-  // TUI as the interactive answerer for EVERY agent in this process — the
-  // attached session's asks and any background (agent view) session's asks
-  // alike, so an unattended session surfaces as "needs input" instead of
-  // failing closed. One ask is shown at a time, whichever agent asked.
-  // Guarded on the service being mounted — a bare composition without the
-  // dsh-base approval row has nothing to answer into.
-  const approvalStore = new ApprovalStore()
+  // TUI as the interactive answerer for the agent it owns; requests for
+  // other agents delegate down the chain (next()). Guarded on the service
+  // being mounted — a bare composition without the dsh-base approval row
+  // has nothing to answer into. channel.agentId tracks agent swaps
+  // (/new, /resume, rewind), so ownership is re-evaluated per request.
+  const approvalStore = new ApprovalStore(adapterRuntimeFor(ctx))
+  bindApprovalStore(ctx, approvalStore)
   if (ctx.get('approval') !== undefined) {
     ctx.on('approval/request', (req, next) =>
       approvalStore.park(req).catch(() => next()))

@@ -14,6 +14,12 @@
  * no allow-always or feedback channel in the protocol.
  */
 
+import { compositionRoot } from './host-access.js'
+import {
+  assertCapabilityShadowPolicy,
+  defaultAdapterRuntime,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { snapshotLiveSessionEvents } from './compat/liveSession.js'
@@ -77,6 +83,20 @@ interface PendingApproval {
   snapshot: PendingSnapshot
   resolve: (outcome: ApprovalOutcome) => void
   onAbort: () => void
+}
+
+const approvalStores = new WeakMap<object, ApprovalStore>()
+
+/** Host-only registration used by the TUI plugin bootstrap. */
+export function bindApprovalStore(ctx: Parameters<typeof compositionRoot>[0], store: ApprovalStore): void {
+  const root = compositionRoot(ctx) as object
+  approvalStores.set(root, store)
+}
+
+/** Host-only lookup used by the presentation Port bridge. */
+export function getApprovalStore(ctx: Parameters<typeof compositionRoot>[0]): ApprovalStore | undefined {
+  const root = compositionRoot(ctx) as object
+  return approvalStores.get(root)
 }
 
 const COMMAND_CLIP = 500
@@ -154,6 +174,11 @@ function consumedKey(agentId: unknown, callId: unknown): string {
  * {@link ApprovalStore.decide}.
  */
 export class ApprovalStore {
+  private readonly runtime: AdapterRuntimeOptions
+
+  constructor(runtime: AdapterRuntimeOptions = defaultAdapterRuntime()) {
+    this.runtime = runtime
+  }
   private readonly queue: PendingApproval[] = []
   private active: PendingApproval | undefined
   private readonly listeners = new Set<() => void>()
@@ -358,6 +383,7 @@ export class ApprovalStore {
    *   when the ask is withdrawn or the plugin tears down.
    */
   park(req: ApprovalRequest): Promise<ApprovalOutcome> {
+    assertCapabilityShadowPolicy('host.presentation.approve', this.runtime.mode, this.runtime.slices)
     return new Promise<ApprovalOutcome>(resolve => {
       const command = commandOf(req)
       // Source badge: park() is reached through the approval/request

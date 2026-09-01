@@ -80,7 +80,12 @@ const files = [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--
   .filter(f => existsSync(f))
   .filter(f => f !== 'src/i18n.ts' && f !== 'scripts/verify-i18n.ts')
 let corpus = ''
-for (const f of files) corpus += readFileSync(f, 'utf8')
+for (const f of files) {
+  // Worktrees may have deleted tracked files before a later commit; a missing
+  // source file cannot contribute dead-key corpus and should not fail this gate.
+  if (!existsSync(f)) continue
+  corpus += readFileSync(f, 'utf8')
+}
 for (const key of Object.keys(i18nDict)) {
   if (DYNAMIC_PREFIXES.some(p => key.startsWith(p))) continue
   if (!corpus.includes(`'${key}'`) && !corpus.includes(`"${key}"`) && !corpus.includes(`\`${key}\``)) {
