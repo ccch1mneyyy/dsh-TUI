@@ -1496,6 +1496,12 @@ export default class Ink {
   drainAltScreenReentry = (): void => {
     if (!this.pendingAltScreenReentry) return;
     if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+    // Dual latch: never re-enter while a physical button is held OR while a
+    // protocol candidate (split SGR prefix) is in flight. The destructive
+    // re-entry (1049h + 2J + mouse DECSET) would erase the screen under the
+    // user's pointer and reset button tracking mid-drag, or corrupt a
+    // half-parsed report.
+    if (this.pointerGestureActive || this.protocolCandidateActive) return;
     this.pendingAltScreenReentry = false;
     this.reenterAltScreen();
   };
@@ -1509,6 +1515,10 @@ export default class Ink {
   drainPendingProbe = (): void => {
     const req = this.pendingProbeRequest;
     if (!req) return;
+    // Dual latch: never probe while a physical button is held OR while a
+    // protocol candidate is in flight — the probe's DECSET/DECRQM writes
+    // would corrupt the stream.
+    if (this.pointerGestureActive || this.protocolCandidateActive) return;
     const now = Date.now();
     const throttleLeft = 250 - (now - this.lastHealthProbeAt);
     if (throttleLeft > 0) {

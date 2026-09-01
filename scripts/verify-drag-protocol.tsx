@@ -486,13 +486,18 @@ const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi
 // 全量 stdout 记录：I6 据此断言手势窗口内的协议写入为零。
 // 在公共 write() 入口同步记录，而非 _write()——Writable 的内部队列会把
 // 已调用的 write() 缓冲到 _write 回调之后，快照可能漏掉在途写入。
+// 单调序号：每条写入递增，用于跨事件 timeline 断言（如 I9b 的 re-entry
+// 必须在 click 之后）。
 const stdoutWrites: string[] = []
+let stdoutSeq = 0
+const stdoutSeqs: number[] = [] // 与 stdoutWrites 平行，记录每条写入的序号
 class FakeStdout extends Writable {
   columns = COLS
   rows = ROWS
   isTTY = true
   write(chunk: any, encodingOrCb?: BufferEncoding | ((error: Error | null | undefined) => void), cb?: (error: Error | null | undefined) => void): boolean {
     stdoutWrites.push(String(chunk))
+    stdoutSeqs.push(stdoutSeq++)
     return super.write(chunk, encodingOrCb as BufferEncoding, cb)
   }
   _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
@@ -522,6 +527,7 @@ const stdout = new FakeStdout()
 const stderr = new FakeStderr()
 
 const dragEvents: DragRecord[] = []
+const dragEventSeqs: number[] = [] // 与 dragEvents 平行，记录每个事件的序号
 let sliderValue = -1
 
 function recordDrag(e: DragRecord) {
@@ -534,6 +540,7 @@ function recordDrag(e: DragRecord) {
     localCol: e.localCol,
     localRow: e.localRow,
   })
+  dragEventSeqs.push(stdoutSeq) // 事件发生时的 stdout 序号（近似时序锚点）
 }
 
 function Slider() {
@@ -636,10 +643,21 @@ type AppInternals = {
     >
   }
 }
+type InkInternals = {
+  pendingProbeRequest: { skipMouseReassert?: boolean } | undefined
+  pendingAltScreenReentry: boolean
+  pointerGestureActive: boolean
+  protocolCandidateActive: boolean
+}
 function appInternals(): AppInternals {
   const ink = instances.get(stdout) as unknown as { app: AppInternals | null }
   if (!ink?.app) throw new Error('App instance not reachable')
   return ink.app
+}
+function inkInternals(): InkInternals {
+  const ink = instances.get(stdout) as unknown as InkInternals
+  if (!ink) throw new Error('Ink instance not reachable')
+  return ink
 }
 // headless xterm 的查询应答不会被喂回 stdin，历史 probe 的在途 query/sentinel
 // 永不到期；本用例注入的 DECRPM/DA1 回包按 FIFO 会先被它们吃掉。测试前清空
@@ -888,7 +906,11 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   appInternals().lastStdinTime = Date.now() - 6000
   dragEvents.length = 0
   const splitStart = stdoutWrites.length
-  const pressSeq = `\x1b[<0;${padPos.col + 2};${padPos.row}M`
+  // SGR 是 1-based：padPos 是 0-based，+1 转换。press(c, r) 内部也 +1，
+  // 这里直接写 stdin 需要手动对齐。
+  const pressCol = padPos.col + 2 + 1 // 0-based padPos.col+2 → 1-based SGR col
+  const pressRow = padPos.row + 1 // 0-based row → 1-based SGR row
+  const pressSeq = `\x1b[<0;${pressCol};${pressRow}M`
   const cut = Math.floor(pressSeq.length / 2)
   stdin.write(pressSeq.slice(0, cut)) // 首段：ESC[<0;18（未形成 ParsedMouse）
   await sleep(120) // >50ms flush 窗口，hold 捕获
@@ -901,13 +923,15 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   const splitBeforeRelease = stdoutWrites.length
   release(padPos.col + 8, padPos.row)
   check(
-    'I8b 分段 press + gap 后 drag 事件流完整',
+    'I8b 分段 press + gap 后 drag 事件流完整（含起点坐标）',
     await settled(
       () =>
         dragEvents.map((e) => e.type).join(',') ===
-        'dragstart,dragmove,dragmove,dragend',
+          'dragstart,dragmove,dragmove,dragend' &&
+        dragEvents[0]!.startCol === padPos.col + 2 &&
+        dragEvents[0]!.startRow === padPos.row,
     ),
-    dragEvents.map((e) => e.type).join(','),
+    dragEvents.map((e) => `${e.type}@${e.col},${e.row} start=${e.startCol},${e.startRow}`).join(' '),
   )
   const splitWindow = stdoutWrites.slice(splitStart, splitBeforeRelease).join('')
   check(
@@ -985,12 +1009,25 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   await sleep(60)
   release(padPos.col + 2, padPos.row) // 无 motion → dormant → click 路径
   await sleep(100)
-  // re-entry 必须在 release 之后发生（click 路径的 dispatchClick 已完成）
+  // re-entry 必须在 click 之后发生（统一 timeline：click 事件的 stdout 序号
+  // 必须小于 re-entry 的 stdout 序号——若 re-entry 先执行，frontFrame 被清空，
+  // dispatchClick 读到空帧，click 事件不会发出或读到错误坐标）。
   const clickHeal = stdoutWrites.slice(clickReplyStart).join('')
+  const clickHealWrites = stdoutWrites.slice(clickReplyStart)
+  const clickHealSeqs = stdoutSeqs.slice(clickReplyStart)
+  // 找包含 [?1049h 的写入的数组索引（不是字符索引——clickHeal 是拼接字符串）
+  const reentryWriteIdx = clickHealWrites.findIndex((w) => w.includes('[?1049h'))
+  const reentrySeq = reentryWriteIdx >= 0 ? clickHealSeqs[reentryWriteIdx]! : -1
+  const clickSeq = dragEventSeqs.length > 0 ? dragEventSeqs[dragEventSeqs.length - 1]! : -1
   check(
     'I9b dormant click release 后补做延期重入（?1049h + 清屏）',
     clickHeal.includes('[?1049h') && clickHeal.includes('[2J'),
     JSON.stringify(clickHeal.match(/\[\?\d+[$hl][a-z]?|\[2J/g) ?? []),
+  )
+  check(
+    'I9b re-entry 在 click 之后（统一 timeline）',
+    reentrySeq > clickSeq && clickSeq >= 0,
+    `clickSeq=${clickSeq} reentrySeq=${reentrySeq}`,
   )
   // dormant press→release 无 motion → click 事件（非 drag）
   check(
@@ -1029,17 +1066,26 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   )
   const beforeRelease = stdoutWrites.length
   release(padPos.col + 5, padPos.row) // 物理松手 → 解闩
-  await sleep(150) // 给 release 尾部的 drainReleaseTail + probe 落的时间
+  // drainPendingProbe 可能被 250ms 节流（release 后 renderer 帧完成触发的
+  // dispatchKeyboardEvent probe 更新了 lastHealthProbeAt），setTimeout 安排
+  // 冷却重试。等重试窗口过完再断言 pendingProbeRequest 排空。
+  await sleep(300)
   // I10c: release 尾部排空被 gesture 挡住的 resize probe —— P1-3 修复。
   // resize 在按住期间被闩挡住并记入 pendingProbeRequest；release 后
   // drainReleaseTail 重试它，probe 正常发出（可能发现 1049 丢失并补做
   // re-entry）。窗口从 release 写入【之前】开始，包含 drainReleaseTail 的
-  // 同步写入。
+  // 同步写入。直接断言 pendingProbeRequest 被排空，证明输出来自被 resize
+  // 阻塞的 pending probe 而非其他路径。
   const afterReleaseProbe = stdoutWrites.slice(beforeRelease).join('')
   check(
     'I10c release 后排空被挡的 resize probe（P1-3 恢复）',
     /\[\?(1000|1002|1003|1006)h/.test(afterReleaseProbe) || afterReleaseProbe.includes('[?1049$p'),
     JSON.stringify(afterReleaseProbe.match(/\[\?\d+[$hl][a-z]?/g) ?? []),
+  )
+  check(
+    'I10c pendingProbeRequest 已排空（证明输出来自被挡 probe）',
+    inkInternals().pendingProbeRequest === undefined,
+    `pendingProbeRequest=${JSON.stringify(inkInternals().pendingProbeRequest)}`,
   )
   // 还原几何并重新定位标记，后续用例不受影响
   stdout.columns = COLS
@@ -1131,6 +1177,13 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   const hoverHealStart = stdoutWrites.length
   stdin.write(`\x1b[<35;${padPos.col + 4};${padPos.row + 1}M`)
   await settled(() => stdoutWrites.slice(hoverHealStart).join('').includes('[?1049$p'))
+  // query 已创建，reply 前无 re-entry
+  const beforeReply = stdoutWrites.slice(hoverHealStart).join('')
+  check(
+    'I11c query 已创建且 reply 前无 re-entry',
+    beforeReply.includes('[?1049$p') && !beforeReply.includes('[?1049h') && !beforeReply.includes('[2J'),
+    JSON.stringify(beforeReply.match(/\[\?\d+[$hl][a-z]?|\[2J/g) ?? []),
+  )
   stdin.write('\x1b[?1049;2$y') // DECRPM: 1049 = reset
   stdin.write('\x1b[?1;2c') // DA1 哨兵：让 probe 的 flush() 完成
   check(
@@ -1150,6 +1203,13 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   const wheelHealStart = stdoutWrites.length
   stdin.write(`\x1b[<64;${padPos.col + 4};${padPos.row + 1}M`)
   await settled(() => stdoutWrites.slice(wheelHealStart).join('').includes('[?1049$p'))
+  // query 已创建，reply 前无 re-entry
+  const beforeReplyWheel = stdoutWrites.slice(wheelHealStart).join('')
+  check(
+    'I11d query 已创建且 reply 前无 re-entry',
+    beforeReplyWheel.includes('[?1049$p') && !beforeReplyWheel.includes('[?1049h') && !beforeReplyWheel.includes('[2J'),
+    JSON.stringify(beforeReplyWheel.match(/\[\?\d+[$hl][a-z]?|\[2J/g) ?? []),
+  )
   stdin.write('\x1b[?1049;2$y')
   stdin.write('\x1b[?1;2c')
   check(

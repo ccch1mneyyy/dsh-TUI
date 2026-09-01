@@ -263,6 +263,92 @@ function parse(seq: string) {
   )
 }
 
+// ── 1c. P1-4 流式消费与边界场景（第四轮评审） ──
+{
+  // tail + text suffix：`;34Mabc` 从 token 开头切出完整报告，后缀按普通输入
+  let state = INITIAL_STATE
+  const feed = (s: string | null) => {
+    const [keys, next] = parseMultipleKeypresses(state, s)
+    state = next
+    return keys
+  }
+  feed('\x1b[<0;18')
+  feed(null) // flush → hold 捕获
+  const k1 = feed(';34Mabc')
+  check(
+    'hold: tail+text 流式消费（;34Mabc → press + abc）',
+    k1.length === 2 &&
+      k1[0]!.kind === 'mouse' &&
+      (k1[0] as { action?: string }).action === 'press' &&
+      k1[1]!.kind === 'key' &&
+      (k1[1] as { sequence?: string }).sequence === 'abc',
+    JSON.stringify(k1.map((k) => (k.kind === 'key' ? k.sequence : k.kind))),
+  )
+  check('hold: 流式消费后 hold 清空', state.mouseTailHold === undefined)
+
+  // tail + release suffix：`;34mxyz`
+  state = INITIAL_STATE
+  feed('\x1b[<0;18')
+  feed(null)
+  const k2 = feed(';34mxyz')
+  check(
+    'hold: tail+text 流式消费 release（;34mxyz → release + xyz）',
+    k2.length === 2 &&
+      k2[0]!.kind === 'mouse' &&
+      (k2[0] as { action?: string }).action === 'release' &&
+      k2[1]!.kind === 'key' &&
+      (k2[1] as { sequence?: string }).sequence === 'xyz',
+    JSON.stringify(k2.map((k) => (k.kind === 'key' ? k.sequence : k.kind))),
+  )
+
+  // tail + 后续未完成 CSI：`;34Mabc ESC[` —— suffix 里的未完成协议不损坏
+  state = INITIAL_STATE
+  feed('\x1b[<0;18')
+  feed(null)
+  const k3 = feed(';34Mabc\x1b[')
+  check(
+    'hold: tail+text+incomplete CSI（;34Mabc ESC[ → press + abc + incomplete）',
+    k3.length === 2 &&
+      k3[0]!.kind === 'mouse' &&
+      k3[1]!.kind === 'key' &&
+      (k3[1] as { sequence?: string }).sequence === 'abc' &&
+      state.incomplete === '\x1b[',
+    `keys=${k3.map((k) => (k.kind === 'key' ? k.sequence : k.kind)).join(',')} incomplete=${JSON.stringify(state.incomplete)}`,
+  )
+  // 后续输入完成 CSI
+  const k4 = feed('A')
+  check(
+    'hold: 后续输入完成 CSI（ESC[A → Shift+Up）',
+    k4.length === 1 && k4[0]!.kind === 'key' && (k4[0] as { name?: string }).name === 'up',
+    JSON.stringify(k4.map((k) => (k.kind === 'key' ? k.name : k.kind))),
+  )
+
+  // 分段 wheel：ESC[<64;74 → flush → ;16M —— 解析为 wheelup，无永久闩锁
+  state = INITIAL_STATE
+  feed('\x1b[<64;74')
+  feed(null)
+  const k5 = feed(';16M')
+  check(
+    'hold: 分段 wheel 解析为 wheelup（无永久闩锁）',
+    k5.length === 1 && k5[0]!.kind === 'key' && (k5[0] as { name?: string }).name === 'wheelup',
+    JSON.stringify(k5.map((k) => (k.kind === 'key' ? k.name : k.kind))),
+  )
+  check('hold: 分段 wheel 后 hold 清空', state.mouseTailHold === undefined)
+
+  // paste 边界：hold 后 paste 开始，迟到尾段不合成 phantom press
+  state = INITIAL_STATE
+  feed('\x1b[<0;18')
+  feed(null)
+  feed('\x1b[200~pasted text\x1b[201~')
+  const k6 = feed(';34M')
+  check(
+    'hold: paste 边界后迟到尾段按文本通过（无 phantom press）',
+    k6.length === 1 && k6[0]!.kind === 'key' && (k6[0] as { sequence?: string }).sequence === ';34M',
+    JSON.stringify(k6.map((k) => (k.kind === 'key' ? k.sequence : k.kind))),
+  )
+  check('hold: paste 边界后 hold 清空', state.mouseTailHold === undefined)
+}
+
 // ── 2. 事件模型 ────────────────────────────────────────────
 {
   const e = new PointerEvent('pointermove', 5, 6, { button: 0x04 | 0x08 | 0x10 })
