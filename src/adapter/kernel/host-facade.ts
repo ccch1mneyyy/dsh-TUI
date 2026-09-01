@@ -28,6 +28,7 @@ import type {
   HostCommandTreesPort,
 } from '../ports/extensions.js'
 import type { HostDecisionsPort } from '../ports/decisions.js'
+import type { HostChannelPort } from '../ports/channel.js'
 import {
   assertShadowPolicy,
   effectClassFor,
@@ -47,6 +48,7 @@ export interface HostFacade {
   readonly toast?: HostToastPort
   readonly commandTrees?: HostCommandTreesPort
   readonly decisions?: HostDecisionsPort
+  readonly channel?: HostChannelPort
 }
 
 export interface HostFacadePorts {
@@ -62,6 +64,7 @@ export interface HostFacadePorts {
   readonly toast?: HostToastPort
   readonly commandTrees?: HostCommandTreesPort
   readonly decisions?: HostDecisionsPort
+  readonly channel?: HostChannelPort
 }
 
 /**
@@ -136,6 +139,41 @@ const PORT_METHOD_CAPABILITIES: Readonly<Record<string, Readonly<Record<string, 
   }),
 })
 
+/**
+ * Nested shadow-policy capabilities for the Channel Host Port. The Channel is
+ * intentionally split into five sub-ports; each leaf method is guarded.
+ */
+const CHANNEL_PORT_CAPABILITIES: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+  projection: Object.freeze({
+    snapshot: 'host.channel.projection.snapshot',
+    subscribe: 'host.channel.projection.subscribe',
+  }),
+  actions: Object.freeze({
+    submit: 'host.channel.actions.submit',
+    steer: 'host.channel.actions.steer',
+    cancel: 'host.channel.actions.cancel',
+    interruptAndDeliver: 'host.channel.actions.interruptAndDeliver',
+    clear: 'host.channel.actions.clear',
+    loadOlder: 'host.channel.transcript.loadOlder',
+    notify: 'host.channel.actions.notify',
+  }),
+  state: Object.freeze({
+    snapshot: 'host.channel.state.snapshot',
+  }),
+  plugins: Object.freeze({
+    runExternalCommand: 'host.channel.plugins.run-external-command',
+    openPluginScene: 'host.channel.plugins.open-scene',
+    closePluginScene: 'host.channel.plugins.close-scene',
+    settingsSections: 'host.channel.plugins.settings-sections',
+    subscribeSettingsSections: 'host.channel.plugins.subscribe-settings-sections',
+  }),
+  transcript: Object.freeze({
+    rows: 'host.channel.transcript.rows',
+    traceEvents: 'host.channel.transcript.trace-events',
+    loadOlder: 'host.channel.transcript.loadOlder',
+  }),
+})
+
 function assertPortMethod(mode: AdapterMode, capability: string): void {
   const effectClass = effectClassFor(capability)
   if (effectClass === undefined) {
@@ -179,6 +217,33 @@ function wrapPort<T extends object>(port: T, portName: string, mode: AdapterMode
   return Object.freeze(wrapped) as T
 }
 
+function wrapChannelPort(port: HostChannelPort, mode: AdapterMode): HostChannelPort {
+  const wrapped: Record<string, unknown> = {}
+  for (const subName of Object.keys(CHANNEL_PORT_CAPABILITIES)) {
+    const subPort = (port as unknown as Record<string, Record<string, unknown>>)[subName]
+    if (subPort === undefined) continue
+    const capabilities = CHANNEL_PORT_CAPABILITIES[subName]!
+    const subWrapped: Record<string, unknown> = {}
+    for (const key of Object.keys(subPort)) {
+      const capability = capabilities[key]
+      if (capability === undefined) {
+        throw new Error(`dsh-tui: Host Channel "${subName}" method "${key}" is missing from the shadow-policy map`)
+      }
+      const original = subPort[key]
+      if (typeof original === 'function') {
+        subWrapped[key] = function (this: unknown, ...args: unknown[]) {
+          assertPortMethod(mode, capability)
+          return Reflect.apply(original, subPort, args)
+        }
+      } else {
+        subWrapped[key] = original
+      }
+    }
+    wrapped[subName] = Object.freeze(subWrapped)
+  }
+  return Object.freeze(wrapped) as unknown as HostChannelPort
+}
+
 /** Build the immutable facade from already-composed slice implementations. */
 export function createHostFacade(ports: HostFacadePorts): HostFacade {
   return Object.freeze({
@@ -194,6 +259,7 @@ export function createHostFacade(ports: HostFacadePorts): HostFacade {
     ...(ports.toast === undefined ? {} : { toast: ports.toast }),
     ...(ports.commandTrees === undefined ? {} : { commandTrees: ports.commandTrees }),
     ...(ports.decisions === undefined ? {} : { decisions: ports.decisions }),
+    ...(ports.channel === undefined ? {} : { channel: ports.channel }),
   })
 }
 
@@ -227,6 +293,7 @@ export function createShadowGuardedHostFacade(ports: HostFacadePorts, mode: Adap
     ...(ports.toast === undefined ? {} : { toast: wrapPort(ports.toast, 'toast', mode) }),
     ...(ports.commandTrees === undefined ? {} : { commandTrees: wrapPort(ports.commandTrees, 'commandTrees', mode) }),
     ...(ports.decisions === undefined ? {} : { decisions: wrapPort(ports.decisions, 'decisions', mode) }),
+    ...(ports.channel === undefined ? {} : { channel: wrapChannelPort(ports.channel, mode) }),
   }
   return createHostFacade(wrapped)
 }

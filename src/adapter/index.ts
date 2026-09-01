@@ -15,5 +15,6 @@
 export * from './ports/index.js'
 export * from './kernel/index.js'
 export * from './upstream/index.js'
+export * from './channel/index.js'
 export * from './standard/index.js'
 export * from './spec/index.js'

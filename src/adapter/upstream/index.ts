@@ -48,3 +48,8 @@ export {
   toastDriver,
   commandTreesDriver,
 } from './extensions-driver.js'
+export {
+  detectChannelCapability,
+  verifyChannelLive,
+  channelDriver,
+} from './channel-driver.js'

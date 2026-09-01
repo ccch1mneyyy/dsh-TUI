@@ -12,6 +12,7 @@ export { presentationSlice } from './presentation.js'
 export { workspaceSlice } from './workspace.js'
 export { scenesSlice } from './scenes.js'
 export { settingsSlice } from './settings.js'
+export { channelSlice } from './channel.js'
 export {
   statusSlice,
   shortcutsSlice,
@@ -27,6 +28,7 @@ import { presentationSlice } from './presentation.js'
 import { workspaceSlice } from './workspace.js'
 import { scenesSlice } from './scenes.js'
 import { settingsSlice } from './settings.js'
+import { channelSlice } from './channel.js'
 import {
   statusSlice,
   shortcutsSlice,
@@ -42,6 +44,7 @@ export const ADAPTER_KERNEL_SLICES: readonly KernelSlice[] = Object.freeze([
   workspaceSlice,
   scenesSlice,
   settingsSlice,
+  channelSlice,
   statusSlice,
   shortcutsSlice,
   renderersSlice,

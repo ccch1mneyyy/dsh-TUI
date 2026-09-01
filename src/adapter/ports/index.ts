@@ -69,3 +69,17 @@ export type {
   HostDecisionsPort,
   HostDecisionsDisposer,
 } from './decisions.js'
+export type {
+  HostChannelPort,
+  HostChannelProjectionPort,
+  HostChannelActionsPort,
+  HostChannelStatePort,
+  HostChannelPluginsPort,
+  HostChannelTranscriptPort,
+  HostChannelProjectionSnapshot,
+  HostChannelStateSnapshot,
+  HostChannelRowProjection,
+  HostChannelToolProjection,
+  HostChannelSettingsSectionProjection,
+  HostChannelDisposer,
+} from './channel.js'
