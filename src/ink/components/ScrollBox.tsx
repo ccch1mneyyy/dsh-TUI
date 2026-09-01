@@ -190,13 +190,28 @@ function ScrollBox({
     scrollBy(dy: number) {
       const el = domRef.current;
       if (!el) return;
-      el.stickyScroll = false;
       // Wheel input cancels any in-flight anchor seek — user override.
       el.scrollAnchor = undefined;
+      const delta = Math.floor(dy);
+      const viewportH = el.scrollViewportHeight ?? 0;
+      const maxScroll = Math.max(0, (el.scrollHeight ?? 0) - viewportH);
+      const projectedTop = (el.scrollTop ?? 0) + (el.pendingScrollDelta ?? 0);
+      // Wheel-down while already pinned at the bottom can't move the viewport;
+      // breaking stickiness here surfaces a transient stickyScroll=false to
+      // React subscribers before the renderer re-pins a frame later, flashing
+      // Chat's "back to bottom" pill. Keep sticky, drop the no-op delta.
+      if (delta >= 0 && projectedTop >= maxScroll) {
+        if (el.stickyScroll === false) {
+          el.stickyScroll = true;
+          scrollMutated(el);
+        }
+        return;
+      }
+      el.stickyScroll = false;
       // Accumulate in pendingScrollDelta; renderer drains it at a capped
       // rate so fast flicks show intermediate frames. Pure accumulator:
       // scroll-up followed by scroll-down naturally cancels.
-      el.pendingScrollDelta = (el.pendingScrollDelta ?? 0) + Math.floor(dy);
+      el.pendingScrollDelta = (el.pendingScrollDelta ?? 0) + delta;
       scrollMutated(el);
     },
     scrollToBottom() {
