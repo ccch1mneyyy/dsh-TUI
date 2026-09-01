@@ -365,6 +365,11 @@ const GROUPS = {
 // toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
 // 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
     ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
+// #185 自愈守卫：React nested-update overflow（Minified error #185）抛出时
+// reconciler 已清零计数器，守卫在 clock.tick / reveal.tick / scrollbox.notify /
+// channel.emit(+emitStream) / selection.notify 等高频 enqueue 热点吸收该类
+// 错误——丢一拍而非进程死亡；单元（分类/透传/限流）+ 热点集成 + 渲染零干扰。
+    ["verify-update-overflow-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-update-overflow-guard.tsx']],
 // /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
 // 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
