@@ -655,7 +655,9 @@ harness:
   whole capability is live. Only methods actually verified by a read-only or
   reversible probe are promoted to live (for example `host.workspaces.list`,
   `host.workspaces.resolve`, `host.scenes.register`, `host.settings.register`,
-  `host.status.set`, `host.toast.show`, `host.command-trees.children`);
+  `host.status.set`, `host.command-trees.children`);
+  `host.toast.show` remains degraded because the real production delivery path
+  is not yet verified;
   unverified methods such as `rename`, `runCommand`, `commandShell`,
   `scenes.open`, `settings.subscribe`, shortcut dispatch, and command-tree
   descriptions stay degraded/staged. Interactive `presentation.ask` is bridged

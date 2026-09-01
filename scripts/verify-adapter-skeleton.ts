@@ -8,7 +8,7 @@
  *   @dsh-std or dsh-ecosystem-spec private protocol.
  * - standard/ may import @dsh-std and dsh-ecosystem-spec, but never
  *   @deepseek-ai.
- * - legacy shim files re-export from the canonical standard layer.
+ * - legacy shim paths are verified absent.
  *
  * Run via `node --import tsx/esm scripts/verify-adapter-skeleton.ts`.
  */

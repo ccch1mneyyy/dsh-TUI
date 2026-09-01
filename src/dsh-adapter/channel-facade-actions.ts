@@ -39,8 +39,11 @@ export function notifyViaChannelFacade(
     try {
       facade.channel.actions.notify(text, options)
       return 'facade'
-    } catch {
+    } catch (error) {
       if (isShadowAdapterRuntime(runtime)) return 'dropped'
+      // Non-shadow: a facade that exists but throws is not a "not mounted"
+      // condition; surface it instead of silently falling back to native.
+      throw error
     }
   } else if (isShadowAdapterRuntime(runtime)) {
     return 'dropped'
@@ -61,8 +64,9 @@ export function submitViaChannelFacade(
     try {
       facade.channel.actions.submit(text)
       return 'facade'
-    } catch {
+    } catch (error) {
       if (isShadowAdapterRuntime(runtime)) return 'dropped'
+      throw error
     }
   } else if (isShadowAdapterRuntime(runtime)) {
     return 'dropped'

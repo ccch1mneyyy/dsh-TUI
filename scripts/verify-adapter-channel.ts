@@ -378,7 +378,9 @@ passive.dispose()
 
 {
   const previousMode = process.env.DSH_TUI_ADAPTER_MODE
+  const previousSlices = process.env.DSH_TUI_ADAPTER_SLICES
   process.env.DSH_TUI_ADAPTER_MODE = 'passive-shadow'
+  process.env.DSH_TUI_ADAPTER_SLICES = 'channel'
   try {
     const passiveCtx = new Context()
     passiveCtx.logger.warn = () => undefined
@@ -400,10 +402,46 @@ passive.dispose()
     assert.equal(notifyOutcome, 'dropped', 'passive shadow must drop notify')
     assert.equal(submitOutcome, 'dropped', 'passive shadow must drop submit')
     assert.equal(nativeCalls, 0,
-      'passive shadow must never fall back to native Channel')
+      'passive channel-only shadow must never fall back to native Channel')
   } finally {
     if (previousMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
     else process.env.DSH_TUI_ADAPTER_MODE = previousMode
+    if (previousSlices === undefined) delete process.env.DSH_TUI_ADAPTER_SLICES
+    else process.env.DSH_TUI_ADAPTER_SLICES = previousSlices
+  }
+}
+
+{
+  const previousMode = process.env.DSH_TUI_ADAPTER_MODE
+  const previousSlices = process.env.DSH_TUI_ADAPTER_SLICES
+  process.env.DSH_TUI_ADAPTER_MODE = 'replay-shadow'
+  process.env.DSH_TUI_ADAPTER_SLICES = 'channel'
+  try {
+    const replayCtx = new Context()
+    replayCtx.logger.warn = () => undefined
+    new TuiPluginHostRuntime(replayCtx)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const child = replayCtx.extend()
+    registerTuiChannel(child, channel)
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const host = replayCtx.get('tuiPluginHost')
+    let nativeCalls = 0
+    const native = {
+      notify: () => { nativeCalls += 1 },
+      submit: () => { nativeCalls += 1 },
+    }
+    const runtime = adapterRuntimeFor(replayCtx)
+    const notifyOutcome = notifyViaChannelFacade(host, native, runtime, 'replay notify')
+    const submitOutcome = submitViaChannelFacade(host, native, runtime, 'replay submit')
+    assert.equal(notifyOutcome, 'dropped', 'replay shadow must drop notify')
+    assert.equal(submitOutcome, 'dropped', 'replay shadow must drop submit')
+    assert.equal(nativeCalls, 0,
+      'replay channel-only shadow must never fall back to native Channel')
+  } finally {
+    if (previousMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
+    else process.env.DSH_TUI_ADAPTER_MODE = previousMode
+    if (previousSlices === undefined) delete process.env.DSH_TUI_ADAPTER_SLICES
+    else process.env.DSH_TUI_ADAPTER_SLICES = previousSlices
   }
 }
 

@@ -239,7 +239,8 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
   `Extensions` 不再用“注册+list+dispose”冒充整个能力 live。只有实际通过
   只读/可逆探针验证的方法才进入 live（如 `host.workspaces.list`、
   `host.workspaces.resolve`、`host.scenes.register`、`host.settings.register`、
-  `host.status.set`、`host.toast.show`、`host.command-trees.children` 等）；
+  `host.status.set`、`host.command-trees.children` 等）；
+  `host.toast.show` 因尚未验证真实生产 deliver 路径，保持 degraded；
   `rename` / `runCommand` / `commandShell` / `scenes.open` /
   `settings.subscribe` / 快捷键 dispatch / command-tree descriptions 等未验证
   方法保持 degraded/staged。`Presentation` 的交互 `ask` 已桥接到真实
