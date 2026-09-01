@@ -36,12 +36,22 @@ export function useExternalVersion(
   enabled: boolean = true,
 ): number {
   const [version, setVersion] = React.useState(getVersion)
+  // Latest-refs, NOT effect deps: callers pass inline closures (e.g.
+  // `() => channel.version`), and a fresh reference per render would re-run
+  // the effect after EVERY render — re-subscribing and dispatching
+  // setVersion(getVersion()) from the passive effect. On a slow machine
+  // (CI) each re-run can land while the version changed again, chaining
+  // passive updates until React's dev-build nested-update check throws
+  // "Maximum update depth exceeded". Subscribe exactly once per enabled
+  // window; the listener reads the fresh getter through the ref.
+  const latest = React.useRef({ subscribe, getVersion })
+  latest.current = { subscribe, getVersion }
   React.useEffect(() => {
     if (!enabled) return
     // Catch up on any store change between the first render and this
     // effect's mount — the subscription alone would miss it.
-    setVersion(getVersion())
-    return subscribe(() => setVersion(getVersion()))
-  }, [subscribe, getVersion, enabled])
+    setVersion(latest.current.getVersion())
+    return latest.current.subscribe(() => setVersion(latest.current.getVersion()))
+  }, [enabled])
   return version
 }
