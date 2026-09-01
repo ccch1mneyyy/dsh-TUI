@@ -10,6 +10,7 @@
  * Run with plain node against the compiled lib: `node scripts/verify-skill-commands.mjs`
  */
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
+import { decisionRegistryOf } from '../lib/types/dsh-adapter/decision-guard.js'
 import { LOCAL_COMMANDS } from '../lib/types/commands.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
@@ -307,10 +308,37 @@ fire('skills/change')
       if (name === 'tools') return { get: toolName => (toolName === 'skill' ? {} : undefined) }
       return undefined
     }
+    const decisionRegistry = decisionRegistryOf(ctx)
+    const originalGrants = decisionRegistry.grants
+    const seenSkillInputs = []
+    decisionRegistry.grants = { ...originalGrants, allows: () => true }
+    decisionRegistry.handlers.set('tui/input', new Map([[
+      'verify-skill-command',
+      {
+        event: 'tui/input',
+        scope: 'tui/input',
+        componentId: 'verify-skill-command',
+        activationId: 'verify-skill-command',
+        order: 'verify-skill-command',
+        identity: {},
+        ownerContext: ctx,
+        listener(payload) {
+          seenSkillInputs.push(payload)
+          return undefined
+        },
+      },
+    ]]))
     agent.followups.length = 0
     const outcome = await descriptor.handler({ agent, rawInput: ' 做年终总结', signal: undefined })
     check('kernel path reports success', outcome?.kind === 'success', JSON.stringify(outcome))
     check('kernel path delivers exactly one message', await settled(() => agent.followups.length === 1))
+    check(
+      'kernel path crosses tui/input exactly once',
+      seenSkillInputs.length === 1
+        && seenSkillInputs[0]?.text === '/i-h 做年终总结'
+        && seenSkillInputs[0]?.delivery === 'followup',
+      JSON.stringify(seenSkillInputs),
+    )
     const gesture = agent.followups[0]
     check(
       'kernel path submits the gesture as a plain user message with args',
@@ -328,6 +356,11 @@ fire('skills/change')
     agent.followups.length = 0
     const fallbackOutcome = await descriptor.handler({ agent, rawInput: '', signal: undefined })
     check('fallback reports success', fallbackOutcome?.kind === 'success', JSON.stringify(fallbackOutcome))
+    check(
+      'fallback host injection does not cross tui/input',
+      seenSkillInputs.length === 1,
+      JSON.stringify(seenSkillInputs),
+    )
     const injected = agent.followups[0]
     check('fallback injects exactly one message', agent.followups.length === 1)
     check(
@@ -339,6 +372,8 @@ fire('skills/change')
       injected?.source?.kind === 'skill-invocation' && injected.source.name === 'i-h',
       JSON.stringify(injected?.source),
     )
+    decisionRegistry.handlers.delete('tui/input')
+    decisionRegistry.grants = originalGrants
   }
 
   // A SKILL.md deleted between listing and Enter must report, not throw —

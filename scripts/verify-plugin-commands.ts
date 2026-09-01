@@ -264,6 +264,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   // `execute`'s agent-scoped lookup checks.
   const definitionLookup = channel.indexOf('const definition = commandService.find(commandAgent, name)')
   const ownerLookup = channel.indexOf('const owner = commandOwner(ctx, definition)', definitionLookup)
+  const imagePreparation = channel.indexOf('const batch = await registryCommandImages(', definitionLookup)
+  const rootGrantCheckpoint = channel.indexOf("if (!currentGrantStore().allows(", imagePreparation)
   const checkpoint = definitionLookup
   check1('owner-scoped invoke checkpoint present in channel.ts', checkpoint !== -1)
   check1('owner lookup uses the effective definition', ownerLookup > definitionLookup)
@@ -273,7 +275,13 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   // that the owner checkpoint precedes the invocation.
   const executeAfter = channel.indexOf('commandService.execute', checkpoint)
   check1('owner checkpoint runs BEFORE commandService.execute', executeAfter > checkpoint)
-  check1("owner deny path returns t('command-invoke-denied-owner')", channel.includes("return t('command-invoke-denied-owner'"))
+  check1('image preparation runs before the live grant checkpoint',
+    imagePreparation > definitionLookup && rootGrantCheckpoint > imagePreparation)
+  check1('the live grant checkpoint immediately precedes command execution',
+    executeAfter > rootGrantCheckpoint)
+  check1('owner deny keeps the structured draft-preserving error outcome',
+    channel.includes("text: t('command-invoke-denied-owner'")
+      && channel.includes('consumeDraft: false'))
   check1('owner invoke deny records a scoped permission id', channel.includes('resource: { kind: \'permission\', id: `${owner.componentId}:commands.invoke:${owner.commandId}` }'))
   check1('skill register catch maps through mapCommandError', /catch \(error\) \{[\s\S]{0,400}mapCommandError\(error\)/.test(channel))
   check1("skill success recorded as command create applied",
@@ -296,6 +304,15 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     channel.includes('acceptsImages: descriptor.input?.images === true'))
   check1('registry adapter forwards supplied images for upstream admission',
     !channel.includes('if (!declaresImages) return { images: [], dropped: [] }'))
+  check1('public scene command API keeps the legacy text result',
+    /runExternalCommand\([\s\S]{0,180}\): Promise<string \| undefined>/.test(channel))
+  check1('draft-aware command outcome is additive',
+    channel.includes('runExternalCommandOutcome(')
+      && channel.includes('Promise<ExternalCommandOutcome | undefined>'))
+  check1('public scene image staging keeps the legacy token result',
+    channel.includes('stageImage(input: StagedImageInput): Promise<string>'))
+  check1('opaque composer image staging is additive',
+    channel.includes('stageComposerImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle>'))
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',
     pluginHost.includes('registerCommand(pluginCtx: Context'))

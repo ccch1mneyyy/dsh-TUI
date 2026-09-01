@@ -82,14 +82,18 @@ export function TranscriptImages({
   images,
   indent = 2,
   onPreview,
+  suppressGraphics = false,
 }: {
   readonly images: readonly TranscriptImage[]
   readonly indent?: number
   /** Present = thumbnails are clickable and open the shared preview overlay. */
   readonly onPreview?: (image: TranscriptImage) => void
+  /** Keep fallback geometry/click targets but yield the global terminal-image
+   * frame budget to the modal full preview. */
+  readonly suppressGraphics?: boolean
 }): React.ReactNode {
   const { columns } = useTerminalSize()
-  const graphicsAvailable = useTerminalImages(images.length > 0)
+  const graphicsAvailable = useTerminalImages(images.length > 0 && !suppressGraphics)
   React.useSyncExternalStore(subscribeLang, getLang)
   if (images.length === 0) return null
   const available = Math.max(1, columns - indent - 3)

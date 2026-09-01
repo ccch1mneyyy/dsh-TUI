@@ -467,6 +467,30 @@ const dict = {
     zh: '/{{name}} 不接受图片；草稿已保留',
     en: '/{{name}} does not accept images; the draft was preserved',
   },
+  'command-images-runtime-unsupported': {
+    zh: '/{{name}}：当前命令运行时不支持图片；草稿已保留',
+    en: '/{{name}}: this command runtime cannot accept images; the draft was preserved',
+  },
+  'command-images-limit': {
+    zh: '/{{name}}：图片数量或总大小超过当前 profile 限制；草稿已保留',
+    en: '/{{name}}: the image batch exceeds this profile\'s limits; the draft was preserved',
+  },
+  'command-images-missing': {
+    zh: '/{{name}}：图片已失效或不可读取（{{paths}}）；草稿已保留',
+    en: '/{{name}}: images are stale or unreadable ({{paths}}); the draft was preserved',
+  },
+  'command-running': {
+    zh: '命令仍在执行，请等待本次结果',
+    en: 'The command is still running; wait for this attempt to settle',
+  },
+  'command-changed': {
+    zh: '/{{name}} 在图片准备期间发生变化；未执行，草稿已保留',
+    en: '/{{name}} changed while its images were prepared; it was not run and the draft was preserved',
+  },
+  'shell-images-unsupported': {
+    zh: 'Shell 命令不接受图片；草稿已保留',
+    en: 'Shell commands do not accept images; the draft was preserved',
+  },
   'thinking-toggled': { zh: '思考过程：{{state}}', en: 'Thinking display: {{state}}' },
   'thinking-on': { zh: '显示', en: 'shown' },
   'thinking-off': { zh: '隐藏', en: 'hidden' },
@@ -561,6 +585,7 @@ const dict = {
   'input-clipboard-unavailable': { zh: '无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）', en: 'Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)' },
   'input-image-pasted': { zh: '已粘贴图片 {{token}}', en: 'Pasted image {{token}}' },
   'input-image-paste-failed': { zh: '粘贴图片失败：{{err}}', en: 'Could not paste image: {{err}}' },
+  'input-image-format-unsupported': { zh: '剪贴板图片格式不受支持；请使用 PNG、JPEG、WebP 或 GIF', en: 'Clipboard image format is unsupported; use PNG, JPEG, WebP, or GIF' },
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },
   'input-pending-actions-hint': { zh: '撤回 · Esc 打断并立即发送', en: 'Retract · Esc interrupts and sends immediately' },

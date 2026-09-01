@@ -22,6 +22,8 @@ import React from 'react'
 import xterm from '@xterm/headless'
 import sharp from 'sharp'
 import type { ChatRow } from '../src/dsh-adapter/channel.js'
+import type { PromptController } from '../src/components/PromptInput.js'
+import type { TuiStatusViewProps } from '../src/dsh-adapter/status.js'
 import type { TranscriptImage } from '../src/dsh-adapter/transcript-images.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
@@ -31,8 +33,10 @@ const [
   { Chat },
   { QuestionStore },
   { ImagePreviewOverlay },
-  { clearTranscriptImageCacheForTests },
+  { clearTranscriptImageCacheForTests, TranscriptImages },
   { parsePastedImagePath, stageClipboardFilePaths },
+  { PromptInput },
+  { TuiStatusStore },
   { LOCAL_COMMANDS },
   { createChannel },
 ] = await Promise.all([
@@ -42,6 +46,8 @@ const [
   import('../src/components/ImagePreviewOverlay.js'),
   import('../src/components/messages/TranscriptImages.js'),
   import('../src/utils/pastedImagePath.js'),
+  import('../src/components/PromptInput.js'),
+  import('../src/dsh-adapter/status.js'),
   import('../src/commands.js'),
   import('../src/dsh-adapter/channel.js'),
 ])
@@ -62,6 +68,11 @@ function check(name: string, ok: boolean, detail = ''): void {
   check('chat: preview modal consumes Esc before transcript mouse selection',
     previewModalGuard !== -1 && mouseSelectionEsc > previewModalGuard,
     `preview=${previewModalGuard}, selection=${mouseSelectionEsc}`)
+  check('chat: modal owns the global graphics budget while open',
+    chatSource.includes("overlay.kind !== 'image-preview' && statusViews.map(view => (")
+      && chatSource.includes("suppressImageGraphics={overlay.kind === 'image-preview'}"))
+  check('chat: adapter command outcomes own draft-consumption semantics',
+    chatSource.includes('outcome.consumeDraft'))
 }
 
 // --- parsePastedImagePath: conservative drop-path recognition --------------
@@ -73,6 +84,9 @@ function check(name: string, ok: boolean, detail = ''): void {
     ['/tmp/with\\ space.jpeg', '/tmp/with space.jpeg'],
     ["'/tmp/a b.webp'", '/tmp/a b.webp'],
     ['"/tmp/a b.gif"', '/tmp/a b.gif'],
+    ['"/tmp/a\\\\b.png"', '/tmp/a\\b.png'],
+    ['"/tmp/a\\ b.png"', null],
+    ['"/tmp/a\\q.png"', null],
     ['~/pic.png', `${home}/pic.png`],
     ['/tmp/a.png /tmp/b.png', null],
     ['see /tmp/a.png', null],
@@ -105,6 +119,20 @@ function check(name: string, ok: boolean, detail = ''): void {
     JSON.stringify(outcome))
   check('files: staged tokens and the last failure are reported',
     JSON.stringify(outcome.staged) === JSON.stringify(['[Image #1]', '[Image #2]']) && outcome.failure === 'stage refused')
+
+  sequence = 0
+  const capped = await stageClipboardFilePaths(
+    ['/tmp/a.png', '/tmp/b.png', '/tmp/c.png'],
+    async () => `[Image #${++sequence}]`,
+    path => `@${path}`,
+    2,
+  )
+  check('files: Finder batches never stage past the remaining draft limit',
+    sequence === 2
+      && JSON.stringify(capped.parts.map(part => part.value))
+        === JSON.stringify(['[Image #1]', '[Image #2]', '@/tmp/c.png'])
+      && capped.failure?.includes('limit') === true,
+    JSON.stringify(capped))
 }
 
 
@@ -116,6 +144,18 @@ const png = new Uint8Array(await sharp({
 {
   type Deferred = { resolve: (value: unknown) => void; reject: (error: Error) => void }
   const pendingSaves: Deferred[] = []
+  let commandDefinition = {
+    name: 'probe',
+    description: 'Probe image admission',
+    input: { hint: '', images: true },
+  }
+  let commandExecutions = 0
+  let commandImages: readonly { data: string; name?: string }[] = []
+  const deliveredMessages: unknown[] = []
+  let imageReads = 0
+  let unreadableName: string | undefined
+  let readBarrier: Promise<void> | undefined
+  let grantsAllow = true
   const savedRef = (index: number) => ({
     attachmentId: `sha256:${String(index).repeat(64).slice(0, 64)}`,
     mediaType: 'image/png',
@@ -133,14 +173,33 @@ const png = new Uint8Array(await sharp({
     },
     saveImage: () =>
       new Promise((resolve, reject) => { pendingSaves.push({ resolve, reject }) }),
-    readImage: async () => ({ data: png }),
+    readImage: async (ref: { bytes: number; name?: string }) => {
+      imageReads += 1
+      if (readBarrier !== undefined) await readBarrier
+      if (ref.name === unreadableName) throw new Error('fixture unreadable')
+      return { data: new Uint8Array(ref.bytes).fill(7) }
+    },
+  }
+  const commandService = {
+    list: () => [commandDefinition],
+    find: (_agent: unknown, name: string) => name === 'probe' ? commandDefinition : undefined,
+    async execute(
+      _agent: unknown,
+      _line: string,
+      images: readonly { data: string; name?: string }[],
+      _signal: AbortSignal,
+    ) {
+      commandExecutions += 1
+      commandImages = images
+      return { commandId: 'fixture', result: { kind: 'success', text: 'accepted' } }
+    },
   }
   const makeAgent = (id: string) => ({
     id,
     status: 'idle',
     session: { id, seq: 0, events: [] },
     ctx: { on: () => () => {} },
-    followup() {},
+    followup(message: unknown) { deliveredMessages.push(message) },
     steer() {},
     cancel() {},
   })
@@ -149,6 +208,10 @@ const png = new Uint8Array(await sharp({
     get: (name: string) =>
       name === 'attachments'
         ? attachments
+        : name === 'commands'
+          ? commandService
+          : name === 'tuiPluginHost'
+            ? { grants: { allows: () => grantsAllow } }
         : name === 'agents'
           ? { create: async () => ({ agent: makeAgent('fresh-session'), dispose: async () => {} }) }
           : undefined,
@@ -161,7 +224,7 @@ const png = new Uint8Array(await sharp({
     activity: false,
   })
   const stageOne = (name: string) =>
-    channel.stageImage(
+    channel.stageComposerImage(
       { data: new Uint8Array([1, 2, 3, 4]), mediaType: 'image/png', name },
       channel.stagedImageGeneration(),
     )
@@ -207,12 +270,128 @@ const png = new Uint8Array(await sharp({
     freshHandle.stageId !== firstHandle.stageId &&
     channel.stagedImage(freshHandle.stageId) !== undefined)
 
+  const freshSecond = stageOne('fresh-b.png')
+  await settled(() => pendingSaves.length === 6)
+  pendingSaves[5]!.resolve(savedRef(6))
+  const freshSecondHandle = await freshSecond
+  const commandRefs = [
+    { token: '[Image #1]', stageId: freshHandle.stageId },
+    { token: '[Image #2]', stageId: freshSecondHandle.stageId },
+  ]
+  const runProbe = () => channel.runExternalCommandOutcome(
+    'probe',
+    ' [Image #1] [Image #2]',
+    commandRefs,
+  )
+
+  // Metadata admission is atomic and precedes reads/base64. A batch that is
+  // too large must neither touch storage nor partially invoke the handler.
+  attachments.imageLimits.maxImagesPerMessage = 1
+  const beforeLimitReads = imageReads
+  const limited = await runProbe()
+  check('channel: command image count limits reject before storage reads',
+    limited?.kind === 'error' && limited.consumeDraft === false
+      && imageReads === beforeLimitReads && commandExecutions === 0,
+    JSON.stringify({ limited, imageReads, commandExecutions }))
+
+  attachments.imageLimits.maxImagesPerMessage = 4
+  attachments.imageLimits.maxMessageImageBytes = 7
+  const beforeBytesReads = imageReads
+  const bytesLimited = await runProbe()
+  check('channel: command aggregate byte limits reject before storage reads',
+    bytesLimited?.kind === 'error' && bytesLimited.consumeDraft === false
+      && imageReads === beforeBytesReads && commandExecutions === 0,
+    JSON.stringify({ bytesLimited, imageReads, commandExecutions }))
+
+  attachments.imageLimits.maxMessageImageBytes = 16
+  unreadableName = 'save-6.png'
+  const unreadable = await runProbe()
+  check('channel: one unreadable command image aborts the whole invocation',
+    unreadable?.kind === 'error' && unreadable.consumeDraft === false
+      && commandExecutions === 0,
+    JSON.stringify({ unreadable, imageReads, commandExecutions }))
+
+  unreadableName = undefined
+  const accepted = await runProbe()
+  check('channel: a complete command image batch executes once in text order',
+    accepted?.kind === 'success' && accepted.consumeDraft === true
+      && commandExecutions === 1
+      && commandImages.length === 2
+      && commandImages[0]?.name === 'save-5.png'
+      && commandImages[1]?.name === 'save-6.png',
+    JSON.stringify({ accepted, commandExecutions, commandImages }))
+
+  const legacyText = await channel.runExternalCommand('probe', '')
+  check('channel: public scene command API retains its legacy text result',
+    legacyText === 'accepted', JSON.stringify(legacyText))
+
+  // Definition identity is rechecked after asynchronous attachment reads:
+  // unloading/replacing a same-name registration may not inherit an already
+  // prepared and authorized batch.
+  let releaseRead = (): void => {}
+  readBarrier = new Promise<void>(resolve => { releaseRead = resolve })
+  const beforeSwapReads = imageReads
+  const beforeSwapExecutions = commandExecutions
+  const swapped = runProbe()
+  await settled(() => imageReads > beforeSwapReads)
+  commandDefinition = { ...commandDefinition }
+  releaseRead()
+  const swappedOutcome = await swapped
+  readBarrier = undefined
+  check('channel: a command definition swap during image reads stale-drops',
+    swappedOutcome?.kind === 'error' && swappedOutcome.consumeDraft === false
+      && commandExecutions === beforeSwapExecutions,
+    JSON.stringify({ swappedOutcome, commandExecutions }))
+
+  let releaseGrantRead = (): void => {}
+  readBarrier = new Promise<void>(resolve => { releaseGrantRead = resolve })
+  const beforeGrantReads = imageReads
+  const beforeGrantExecutions = commandExecutions
+  const revoked = runProbe()
+  await settled(() => imageReads > beforeGrantReads)
+  grantsAllow = false
+  releaseGrantRead()
+  const revokedOutcome = await revoked
+  readBarrier = undefined
+  grantsAllow = true
+  check('channel: a grant revoked during image reads blocks execution',
+    revokedOutcome?.kind === 'error' && revokedOutcome.consumeDraft === false
+      && commandExecutions === beforeGrantExecutions,
+    JSON.stringify({ revokedOutcome, commandExecutions }))
+
+  const legacyStaging = channel.stageImage({
+    data: new Uint8Array([1, 2, 3, 4]),
+    mediaType: 'image/png',
+    name: 'legacy-scene.png',
+  })
+  await settled(() => pendingSaves.length === 7)
+  pendingSaves[6]!.resolve(savedRef(7))
+  const legacyToken = await legacyStaging
+  const beforeLegacyDelivery = deliveredMessages.length
+  channel.submit(`legacy scene ${legacyToken}`)
+  await settled(() => deliveredMessages.length === beforeLegacyDelivery + 1)
+  const legacyMessage = deliveredMessages.at(-1) as
+    | { content?: readonly { type?: string; text?: string }[] }
+    | undefined
+  check('channel: public stageImage token still submits a real image block',
+    legacyToken === '[Image #1]'
+      && legacyMessage?.content?.some(block => block.type === 'image') === true
+      && legacyMessage.content.some(block => block.type === 'text' && block.text?.includes(legacyToken) === true),
+    JSON.stringify({ legacyToken, legacyMessage }))
+
   // A stale placeholder in submitted text warns loudly (and still sends).
   channel.submit('please look at [Image #7]')
   check('channel: submitting an unstaged token raises a visible warning',
     await settled(() => channel.notifications.some(item =>
       item.text.includes('[Image #7]') && item.text.includes('no longer staged'))),
     JSON.stringify(channel.notifications))
+
+  const notificationCount = channel.notifications.length
+  channel.submit('!echo ignored', [{ token: '[Image #1]', stageId: freshHandle.stageId }])
+  check('channel: non-UI shell callers reject image capabilities loudly',
+    channel.notifications.length === notificationCount + 1
+      && channel.notifications.at(-1)?.text.includes('Shell commands') === true,
+    JSON.stringify(channel.notifications.at(-1)))
 }
 
 // --- shared fixtures --------------------------------------------------------
@@ -348,6 +527,48 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   await app.unmount()
   terminal.dispose()
 }
+{
+  clearTranscriptImageCacheForTests()
+  const id = 'sha256:\x1b[31mBAD\x07'
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const app = await render(
+    <Box width={COLS} height={ROWS}>
+      <ImagePreviewOverlay image={fakeImage(id, 'safe.png')} onClose={() => {}} />
+    </Box>,
+    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  check('overlay: untrusted attachment ids render control-free text',
+    await settled(() => screen.text().includes('source sha256:BAD')),
+    screen.text())
+  await app.unmount()
+  terminal.dispose()
+}
+
+// Background galleries must stop decoding/placing graphics while the modal
+// owns the renderer's global byte + placement budget, then recover normally.
+{
+  clearTranscriptImageCacheForTests()
+  const image = fakeImage('sha256:suppressed', 'suppressed.png')
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const stdin = new FakeStdin()
+  const app = await render(
+    <TranscriptImages images={[image]} suppressGraphics />,
+    { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(100)
+  check('transcript: modal suppression performs no thumbnail read',
+    (readCounts.get(image.id) ?? 0) === 0,
+    `reads=${readCounts.get(image.id) ?? 0}`)
+  app.rerender(<TranscriptImages images={[image]} />)
+  check('transcript: thumbnails resume after modal suppression ends',
+    await settled(() => (readCounts.get(image.id) ?? 0) === 1),
+    `reads=${readCounts.get(image.id) ?? 0}`)
+  await app.unmount()
+  terminal.dispose()
+}
 
 // --- Chat integration: one shared overlay for composer + transcript --------
 function makeChannel() {
@@ -362,6 +583,7 @@ function makeChannel() {
     status: 'idle' as const,
     sessionTitle: 'probe',
     agentId: 'probe',
+    agentBindingGeneration: 0,
     model: 'model-00',
     provider: 'fake-provider',
     tokens: { input: 0, output: 0 },
@@ -389,7 +611,8 @@ function makeChannel() {
     clear() {},
     notify() {},
     stagedImageGeneration: () => 0,
-    stageImage: async () => ({ stageId: 'stage-1' }),
+    stageImage: async () => '[Image #1]',
+    stageComposerImage: async () => ({ stageId: 'stage-1' }),
     discardStagedImage() {},
     hasStagedImage: (stageId: string) => staged.has(stageId),
     stagedImage: (stageId: string) => staged.get(stageId),
@@ -407,22 +630,37 @@ function makeChannel() {
   const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(terminal)
   const stdin = new FakeStdin()
-  // Pointer interaction is fullscreen-only (inline mode has no mouse
-  // tracking); mirror the host's fullscreen wrapping.
-  const app = await render(
+  const channel = makeChannel()
+  const statusStore = new TuiStatusStore()
+  statusStore.addView({
+    key: 'budget-probe',
+    maxRows: 1,
+    registrationId: 1,
+    component: ({ React: HostReact, ui }: TuiStatusViewProps) =>
+      HostReact.createElement(ui.Text, null, 'RICH-BUDGET-PROBE'),
+  }, 1, {})
+  const chatTree = () => (
     <AlternateScreen>
       <Chat
-        channel={makeChannel() as never}
+        channel={channel as never}
         questionStore={new QuestionStore()}
+        extensionStatus={statusStore}
         onExit={() => {}}
         fullscreen
       />
-    </AlternateScreen>,
+    </AlternateScreen>
+  )
+  // Pointer interaction is fullscreen-only (inline mode has no mouse
+  // tracking); mirror the host's fullscreen wrapping.
+  const app = await render(
+    chatTree(),
     { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
   )
   const screen = screenOf(terminal, ROWS)
   // 首帧挂载 pacing：同 verify-extension-ui,等 React 树与输入监听落地。
   await sleep(600)
+  check('chat: rich status graphics surface is mounted without a preview',
+    screen.text().includes('RICH-BUDGET-PROBE'), screen.text())
 
   const click = (col: number, row: number): void => {
     stdin.write(`\x1b[<0;${col + 1};${row + 1}M`)
@@ -439,9 +677,27 @@ function makeChannel() {
     await settled(() =>
       screen.text().includes(OVERLAY_HINT) && screen.text().includes('sent.png')),
     screen.text())
+  check('chat: preview temporarily unmounts rich status graphics consumers',
+    !screen.text().includes('RICH-BUDGET-PROBE'), screen.text())
+
+  // Keep the same public id but replace the agent binding (the ABA case from
+  // /new -> resume). The old preview disappears in the replacement render,
+  // before an effect can leak one stale frame.
+  channel.agentBindingGeneration += 1
+  channel.version += 1
+  app.rerender(chatTree())
+  check('chat: agent replacement closes a preview even when the id is reused',
+    await settled(() => !screen.text().includes(OVERLAY_HINT)
+      && screen.text().includes('RICH-BUDGET-PROBE')),
+    screen.text())
+
+  const thumbAfterBinding = screen.find('Image · sent.png')!
+  click(thumbAfterBinding.col, thumbAfterBinding.row)
+  await settled(() => screen.text().includes(OVERLAY_HINT))
   stdin.write('\x1b')
   check('chat: Esc closes the preview',
-    await settled(() => !screen.text().includes(OVERLAY_HINT)), screen.text())
+    await settled(() => !screen.text().includes(OVERLAY_HINT)
+      && screen.text().includes('RICH-BUDGET-PROBE')), screen.text())
 
   // Reopen, then a click OUTSIDE the centered card closes it.
   const readsAfterFirstOpen = readCounts.get('sha256:sent') ?? 0
@@ -543,6 +799,98 @@ function makeChannel() {
   terminal.dispose()
 }
 
+// --- Prompt command transaction: async settle never clears newer edits ----
+{
+  type CommandAttempt = { resolve: (consume: boolean) => void }
+  const attempts: CommandAttempt[] = []
+  let invocations = 0
+  let generation = 0
+  const channel = {
+    ...makeChannel(),
+    commandList: [
+      ...LOCAL_COMMANDS,
+      { name: 'vision', description: 'Fixture vision command', external: true, acceptsImages: true },
+    ],
+    stagedImageGeneration: () => generation,
+  }
+  const controllerRef = React.createRef<PromptController | null>()
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const stdin = new FakeStdin()
+  const promptTree = () => (
+    <PromptInput
+      channel={channel as never}
+      helpOpen={false}
+      onToggleHelp={() => {}}
+      onRunCommand={() => {
+        invocations += 1
+        return new Promise<boolean>(resolve => { attempts.push({ resolve }) })
+      }}
+      selectionActive={false}
+      controllerRef={controllerRef}
+    />
+  )
+  const app = await render(
+    promptTree(),
+    { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await sleep(300)
+
+  stdin.write('/vision first')
+  await settled(() => screen.text().includes('/vision first'))
+  stdin.write('\r')
+  check('prompt: async registry command keeps its submitted draft visible',
+    await settled(() => invocations === 1) && screen.text().includes('/vision first'),
+    screen.text())
+  await sleep(100)
+  stdin.write('\r')
+  await sleep(100)
+  check('prompt: duplicate Enter does not invoke the same pending attempt twice',
+    invocations === 1, `invocations=${invocations}`)
+
+  controllerRef.current?.append(' edited')
+  check('prompt: host injection edits the pending draft synchronously',
+    await settled(() => screen.text().includes('/vision first edited')), screen.text())
+  await sleep(100)
+  stdin.write('\r')
+  check('prompt: an edited pending draft may start a distinct command attempt',
+    await settled(() => invocations === 2), `invocations=${invocations}`)
+
+  attempts[0]!.resolve(true)
+  await sleep(100)
+  check('prompt: late success cannot clear text appended after its snapshot',
+    screen.text().includes('/vision first edited'), screen.text())
+  attempts[1]!.resolve(true)
+  check('prompt: the matching latest success clears exactly its own draft',
+    await settled(() => !screen.text().includes('/vision first edited')), screen.text())
+
+  stdin.write('/vision [Image #99]')
+  await settled(() => screen.text().includes('[Image #99]'))
+  stdin.write('\r')
+  await settled(() => invocations === 3)
+  attempts[2]!.resolve(false)
+  await sleep(100)
+  check('prompt: a rejected stale image token remains editable',
+    screen.text().includes('/vision [Image #99]'), screen.text())
+
+  controllerRef.current?.clear()
+  await settled(() => !screen.text().includes('[Image #99]'))
+  stdin.write('/vision session-bound')
+  await settled(() => screen.text().includes('/vision session-bound'))
+  stdin.write('\r')
+  await settled(() => invocations === 4)
+  generation += 1
+  app.rerender(promptTree())
+  attempts[3]!.resolve(true)
+  await sleep(100)
+  check('prompt: a previous-session success cannot consume the retained draft',
+    screen.text().includes('/vision session-bound'), screen.text())
+
+  await app.unmount()
+  terminal.dispose()
+}
+
 // --- Prompt async-paste fence: an old continuation cannot edit new draft --
 {
   const pastedImagePath = `${process.env.HOME}/composer.png`
@@ -567,7 +915,7 @@ function makeChannel() {
   const channel = makeChannel()
   channel.stagedImageGeneration = () => generation
   channel.submit = (text: string) => { submitted.push(text) }
-  channel.stageImage = () => new Promise(resolve => {
+  channel.stageComposerImage = () => new Promise(resolve => {
     stageCalls += 1
     stageResolvers.push(resolve)
   })

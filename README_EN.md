@@ -396,9 +396,9 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   deriving it in-process from base session events without writing UI state into the shared log.
 - **Terminal paste**: in raw mode `Ctrl+V` is handled by the app and reads the system
   clipboard per platform — PowerShell `Get-Clipboard` on Windows, `osascript`/`pbpaste`
-  on macOS, and auto-detected `wl-paste`/`xclip`/`xsel` on Linux; regular files insert
-  their path, image files generate an `@` reference, clipboard bitmaps are written to
-  the attachment library and shown in the input as `[Image #N]`, and plain text is
+  on macOS, and auto-detected `wl-paste`/`xclip`/`xsel` on Linux; regular non-image
+  files insert their path, while copied image files and clipboard bitmaps are written
+  to the attachment library and shown in the input as `[Image #N]`; plain text is
   inserted at the cursor.
 
 ## Known Limitations
@@ -415,8 +415,10 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   on macOS (multi-file copies in Finder have no stable AppleScript read path, falling
   back to text/images); Linux needs one of `wl-paste`/`xclip`/`xsel` and a connectable
   session (a missing tool or unreachable session shows a "no clipboard tool available"
-  notice). Unsupported image formats or an unavailable attachment service keep a
-  temporary file reference as a degraded fallback.
+  notice). Unsupported clipboard-bitmap formats are rejected with a warning and
+  their private temporary export is deleted; an unavailable attachment service
+  likewise leaves the bitmap out of the draft. Copied image files can still fall
+  back to an `@` reference when direct staging fails.
 - Exit finishes with a process exit and does not wait for the agent's async disk writes
   (persistence is covered by the persistence plugin as a backstop).
 - **Agent view background sessions live inside this process**: they all stop when the
