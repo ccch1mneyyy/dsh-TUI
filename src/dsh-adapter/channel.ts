@@ -14,6 +14,7 @@ import {
 import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
 import { isReservedCredentialRef } from './credentialRefGuard.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
+import { swallowNestedUpdateOverflow } from '../ink/update-overflow-guard.js'
 import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 import { fetchBalance, type BalanceResult } from '../deepseekBalance.js'
 import { isPeakHour } from '../deepseekPricing.js'
@@ -3272,7 +3273,16 @@ export function createChannel(
     emit() {
       foldRows(state.rows, MAX_ROWS, foldCursor)
       state.version += 1
-      for (const listener of listeners) listener()
+      // #185 self-heal: a forceStoreRerender enqueue can surface React's
+      // nested-update overflow here; React resets the counter on throw, so
+      // absorb it and let the next wakeup render with a clean slate.
+      for (const listener of listeners) {
+        try {
+          listener()
+        } catch (error) {
+          if (!swallowNestedUpdateOverflow(error, 'channel.emit')) throw error
+        }
+      }
     },
     // Frame-aligned notification for streaming deltas. LLM chunks arrive at
     // 100-300 events/s (one per token); waking React synchronously per event
@@ -3290,7 +3300,15 @@ export function createChannel(
         // the listeners wake so React reads fully projected rows.
         flushSubagentStream()
         foldRows(state.rows, MAX_ROWS, foldCursor)
-        for (const listener of listeners) listener()
+        // Same #185 self-heal as emit(): this timer is the busiest enqueue
+        // site during streaming, so the overflow most often surfaces here.
+        for (const listener of listeners) {
+          try {
+            listener()
+          } catch (error) {
+            if (!swallowNestedUpdateOverflow(error, 'channel.emitStream')) throw error
+          }
+        }
       }, 16)
       // Never hold the process open for a pending UI wakeup.
       timer.unref()

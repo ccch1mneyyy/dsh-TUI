@@ -17,6 +17,7 @@ import type { CursorDeclaration, CursorDeclarationSetter } from './components/Cu
 import { FRAME_INTERVAL_MS, PTY_BACKLOG_BYTES } from './constants.js';
 import * as dom from './dom.js';
 import { beginGeometryFrame, endGeometryFrame, GEOMETRY_TRACE_ENABLED, noteFrameCause } from './geometry-trace.js';
+import { callWithUpdateOverflowGuard, installNestedUpdateOverflowProcessGuard } from './update-overflow-guard.js';
 import { KeyboardEvent } from './events/keyboard-event.js';
 import type { DragEvent } from './events/drag-event.js';
 import { FocusManager } from './focus.js';
@@ -315,6 +316,11 @@ export default class Ink {
     // onRecoverableError
     noop // onDefaultTransitionIndicator
     );
+    // #185 process backstop: the nested-update overflow can surface from any
+    // timer dispatch (not only the guarded hotspots), which would kill the
+    // process. React resets the counter before throwing, so absorbing the
+    // error class process-wide is safe — see update-overflow-guard.ts.
+    installNestedUpdateOverflowProcessGuard();
     if (process.env.NODE_ENV === 'development') {
       reconciler.injectIntoDevTools({
         bundleType: 0,
@@ -736,8 +742,8 @@ export default class Ink {
         // copy/escape hint disappears. notifySelectionChange() would
         // recurse into onRender; fire the listeners directly — they
         // schedule a React update for LATER, they don't re-enter this
-        // frame.
-        if (cleared) for (const cb of this.selectionListeners) cb();
+        // frame. (#185 self-heal guard: same as selection.notify.)
+        if (cleared) for (const cb of this.selectionListeners) callWithUpdateOverflowGuard('selection.notify', cb);
       }
     }
 
@@ -1699,7 +1705,11 @@ export default class Ink {
   }
   private notifySelectionChange(): void {
     this.renderNow();
-    for (const cb of this.selectionListeners) cb();
+    // #185 self-heal: selection listeners drive React state; an overflow
+    // throw resets React's nested counter, so absorb and keep the rest.
+    for (const cb of this.selectionListeners) {
+      callWithUpdateOverflowGuard('selection.notify', cb);
+    }
   }
 
   /**

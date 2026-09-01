@@ -38,6 +38,7 @@
  * chains) may briefly show a partial cluster mid-reveal — transient frames
  * repaint within 33ms, and settled rendering is always the full text.
  */
+import { registerOverflowQuench, swallowNestedUpdateOverflow } from '../ink/update-overflow-guard.js'
 
 /** Reveal tick cadence — ~30fps, matching oh-my-pi's controller. */
 export const REVEAL_FRAME_MS = 1000 / 30
@@ -124,6 +125,23 @@ function stopRevealTimerIfIdle(): void {
   }
 }
 
+// Circuit-breaker quench: a sustained #185 oscillation surfacing at the
+// reveal tick pauses this scheduler for the backoff window (cursors freeze
+// in place; the resume timer — or a later render reading an active cursor —
+// restarts it). Absorbing forever would leave the process alive but laggy.
+registerOverflowQuench('reveal.tick', ms => {
+  if (revealTimer !== undefined) {
+    clearInterval(revealTimer)
+    revealTimer = undefined
+    const resume = setTimeout(() => {
+      if (revealTimer === undefined && (textCursors.size > 0 || countCursors.size > 0)) {
+        ensureRevealTimer()
+      }
+    }, ms)
+    resume.unref?.()
+  }
+})
+
 function revealTick(): void {
   let advanced = false
   for (const [key, cursor] of textCursors) {
@@ -147,7 +165,15 @@ function revealTick(): void {
   }
   if (advanced) {
     revealVersionValue += 1
-    for (const listener of [...revealListeners]) listener()
+    // #185 self-heal: a forceStoreRerender enqueue can surface the overflow
+    // here; React resets the counter on throw, so absorb and drop the tick.
+    for (const listener of [...revealListeners]) {
+      try {
+        listener()
+      } catch (error) {
+        if (!swallowNestedUpdateOverflow(error, 'reveal.tick')) throw error
+      }
+    }
   } else {
     stopRevealTimerIfIdle()
   }
