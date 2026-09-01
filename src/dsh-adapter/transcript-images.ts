@@ -9,6 +9,8 @@ export interface TranscriptImage {
   readonly width: number
   readonly height: number
   readonly name?: string
+  /** Verified media type, when the durable reference carries one. */
+  readonly mediaType?: string
   read(): Promise<Uint8Array>
 }
 
@@ -38,29 +40,43 @@ export function transcriptImagesOf(
         continue
       }
       if (block.type !== 'image') continue
-      const attachment = validAttachment(block.attachment)
-      if (attachment === undefined) continue
-      images.push({
-        id: String(attachment.attachmentId),
-        width: attachment.width,
-        height: attachment.height,
-        ...(attachment.name === undefined ? {} : { name: attachment.name }),
-        async read() {
-          const reader = resolveAttachments() as AttachmentReader | undefined
-          if (typeof reader?.readImage !== 'function') {
-            throw new Error('image attachments are unavailable in this profile')
-          }
-          const stored = await reader.readImage(attachment)
-          if (!(stored?.data instanceof Uint8Array)) {
-            throw new Error('attachment store returned invalid image data')
-          }
-          return stored.data
-        },
-      })
+      const image = transcriptImageFromAttachment(block.attachment, resolveAttachments)
+      if (image !== undefined) images.push(image)
     }
   }
   visit(content)
   return images
+}
+
+/**
+ * Build the UI facade for one durable image reference. Shared by the
+ * transcript projection and the staged-composer path, so both hand the UI
+ * the same lazily-read shape (and the same per-object decode cache key).
+ */
+export function transcriptImageFromAttachment(
+  value: unknown,
+  resolveAttachments: () => unknown,
+): TranscriptImage | undefined {
+  const attachment = validAttachment(value)
+  if (attachment === undefined) return undefined
+  return {
+    id: String(attachment.attachmentId),
+    width: attachment.width,
+    height: attachment.height,
+    ...(attachment.name === undefined ? {} : { name: attachment.name }),
+    mediaType: attachment.mediaType,
+    async read() {
+      const reader = resolveAttachments() as AttachmentReader | undefined
+      if (typeof reader?.readImage !== 'function') {
+        throw new Error('image attachments are unavailable in this profile')
+      }
+      const stored = await reader.readImage(attachment)
+      if (!(stored?.data instanceof Uint8Array)) {
+        throw new Error('attachment store returned invalid image data')
+      }
+      return stored.data
+    },
+  }
 }
 
 function validAttachment(value: unknown): ImageAttachment | undefined {
