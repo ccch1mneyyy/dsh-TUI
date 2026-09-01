@@ -54,7 +54,7 @@ import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
-import { getHostFacade } from './plugin-host.js'
+import { notifyViaChannelFacade, submitViaChannelFacade } from './channel-facade-actions.js'
 import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
@@ -106,43 +106,6 @@ export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined
     promptArgs.push(arg)
   }
   return promptArgs.join(' ').trim()
-}
-
-interface NotifyChannelOptions {
-  readonly color?: 'error' | 'warning' | 'success'
-  readonly timeoutMs?: number
-}
-
-/** T1 partial migration: route production channel notifications through the
- * shadow-guarded `HostFacade.channel.actions` when the production Kernel has
- * mounted the Channel Port, falling back to the native Channel for hosts
- * where the facade is not yet available. */
-function notifyChannel(
-  pluginHost: unknown,
-  channel: { notify(text: string, options?: NotifyChannelOptions): unknown },
-  text: string,
-  options?: NotifyChannelOptions,
-): void {
-  const facade = getHostFacade(pluginHost as never)
-  if (facade?.channel !== undefined) {
-    facade.channel.actions.notify(text, options)
-    return
-  }
-  channel.notify(text, options)
-}
-
-/** T1 partial migration: submit through HostFacade.channel when available. */
-function submitChannel(
-  pluginHost: unknown,
-  channel: { submit(text: string): void },
-  text: string,
-): void {
-  const facade = getHostFacade(pluginHost as never)
-  if (facade?.channel !== undefined) {
-    facade.channel.actions.submit(text)
-    return
-  }
-  channel.submit(text)
 }
 
 /**
@@ -575,6 +538,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // child activation context.
   registerTuiChannel(compositionRoot(ctx), channel)
   const pluginHost = ctx.get('tuiPluginHost')
+  const adapterRuntime = adapterRuntimeFor(ctx)
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
@@ -583,7 +547,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Port, route through the shadow-guarded `HostFacade.channel.actions`.
   const toastStore = getHostToastStore(ctx.get('tuiToast') as TuiToastRuntime | undefined)
   toastStore?.setSink(delivery => {
-    notifyChannel(pluginHost, channel, delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
+    notifyViaChannelFacade(pluginHost, channel, adapterRuntime, delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
   })
   if (questionAnswererRegistration.kind === 'waterfall') {
     // Ownership follows the mutable channel; registration cleanup belongs to
@@ -829,7 +793,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       unset: () => settingsCtx.settings.mutate(tuiSettingsNs, [{ op: 'unset', path: ['fullscreen'] }]),
     })
     if (fullscreenMigration === 'unset') {
-      notifyChannel(pluginHost, channel, t('settings-fullscreen-migrated'), { color: 'warning' })
+      notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('settings-fullscreen-migrated'), { color: 'warning' })
     }
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
@@ -837,7 +801,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
-        notifyChannel(pluginHost, channel, t('settings-fullscreen-restart'), { color: 'warning' })
+        notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('settings-fullscreen-restart'), { color: 'warning' })
       }
       const terminalImages = next.terminalImages ?? config.terminalImages ?? true
       if (terminalImages !== lastTerminalImages && terminalImages !== bootedTerminalImages) {
@@ -1410,14 +1374,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
   const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
   const initialPrompt = initialPromptFromCmdlineArgs(cmdlineArgs)
-  if (initialPrompt) submitChannel(pluginHost, channel, initialPrompt)
+  if (initialPrompt) submitViaChannelFacade(pluginHost, channel, adapterRuntime, initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
-  notifyStderr = (text, options) => notifyChannel(pluginHost, channel, text, options)
+  notifyStderr = (text, options) => notifyViaChannelFacade(pluginHost, channel, adapterRuntime, text, options)
   // The question-seat alert was raised before the channel existed; flush it
   // now so it lands as an in-UI notice, not only in the log file.
   if (questionSeatNotice !== undefined) {
-    notifyChannel(pluginHost, channel, questionSeatNotice, { color: 'error' })
+    notifyViaChannelFacade(pluginHost, channel, adapterRuntime, questionSeatNotice, { color: 'error' })
     questionSeatNotice = undefined
   }
   for (const [text, options] of stderrBacklog.splice(0)) {
@@ -1578,7 +1542,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       if (exited || restartRequested) return
       restartRequested = true
       logRestartEvent('command: /restart accepted')
-      notifyChannel(pluginHost, channel, t('restart-starting'))
+      notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('restart-starting'))
       handleExit()
     },
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -1592,11 +1556,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       void resolveTuiUpdateTarget().then((target) => {
         if (exited || updateRequested) return
         if (target.kind === 'latest') {
-          notifyChannel(pluginHost, channel, t('update-already-latest', { current: target.current }), { color: 'warning' })
+          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-already-latest', { current: target.current }), { color: 'warning' })
           return
         }
         if (target.kind === 'unknown') {
-          notifyChannel(pluginHost, channel, t('update-check-failed'))
+          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-check-failed'))
         } else {
           // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
           // an older global launcher patch (no service row) that is a
@@ -1604,21 +1568,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
           // pinning /update onto that range must be refused, not installed.
           if (isBootDeadlockTarget(target.latest)) {
-            notifyChannel(pluginHost, channel, t('update-refused-deadlock', {
+            notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-refused-deadlock', {
               latest: target.latest,
               authoritative: target.authoritative ?? target.latest,
             }), { color: 'warning' })
             return
           }
           if (target.authoritative !== undefined) {
-            notifyChannel(pluginHost, channel, t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+            notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
           }
           updateTargetVersion = target.latest
         }
         if (isStandaloneRuntime()) {
-          notifyChannel(pluginHost, channel, t('update-standalone-starting'))
+          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-standalone-starting'))
         } else {
-          notifyChannel(pluginHost, channel, t('update-starting'))
+          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-starting'))
         }
         updateRequested = true
         handleExit()
@@ -1696,9 +1660,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const suffix = update.isStandalone && update.checksumUrl === undefined
       ? ` ${t('update-standalone-no-checksum')}`
       : ''
-    notifyChannel(
+    notifyViaChannelFacade(
       pluginHost,
       channel,
+      adapterRuntime,
       `${t(key, { current: update.current, latest: update.latest })}${suffix}`,
       { color: 'warning', timeoutMs: 12000 },
     )

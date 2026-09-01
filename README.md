@@ -263,7 +263,8 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
   并由 `channel` KernelSlice 挂载到生产 HostFacade；**生产 `src/dsh-adapter/channel.ts`
   本体尚未物理拆分**，仍由 live Channel 作为实现来源，拆分模块是生产 driver
   实际消费的 Port/投影层；**T1 已做核心迁移：生产 `plugin.ts` 中的通知与初始提交
-  已优先走 `HostFacade.channel.actions`（facade 不可用时回退原生 Channel）**；
+  已优先走 `HostFacade.channel.actions`；**非 shadow 模式下 facade 尚未 mount
+  时可回退原生 Channel，passive/replay shadow 下禁止回退，缺失或拒绝时丢弃**；
   其余 UI/Channel 内部动作仍大部分直接调用原生 Channel，尚未完整迁移。
   `HostFacade` 按方法做 shadow 守卫，passive/replay 下只读投影可用、变更动作被拒。
 - **P5 Channel Provider/Consumer**：新增本地 Channel Provider/Consumer，

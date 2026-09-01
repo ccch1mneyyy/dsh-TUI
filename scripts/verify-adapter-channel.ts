@@ -33,6 +33,8 @@ import {
 import { CHANNEL_SPLIT_TOKEN } from '../src/adapter/channel/internal-token.js'
 import { verifyChannelLive } from '../src/adapter/upstream/channel-driver.js'
 import { TuiPluginHostRuntime, getHostFacade } from '../src/dsh-adapter/plugin-host.js'
+import { notifyViaChannelFacade, submitViaChannelFacade } from '../src/dsh-adapter/channel-facade-actions.js'
+import { adapterRuntimeFor } from '../src/adapter/kernel/runtime-context.js'
 
 const ROOT = resolve(import.meta.dirname, '..')
 
@@ -323,6 +325,82 @@ passive.dispose()
     assert.equal(productionFacade.channel.projection.snapshot().rows.length, 2)
     assert.equal(productionFacade.channel.state.snapshot().agentId, 'session-1')
     assert.equal(productionFacade.channel.transcript.traceEvents().length, 0)
+  } finally {
+    if (previousMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
+    else process.env.DSH_TUI_ADAPTER_MODE = previousMode
+  }
+}
+
+// P4 T1 regression: channel facade helpers must be shadow-safe and must not
+// fall back to the native Channel in passive/replay shadow.
+{
+  // No plugin-host: non-shadow mode uses the documented native fallback.
+  let nativeNotifyCalls = 0
+  let nativeSubmitCalls = 0
+  const native = {
+    notify: () => { nativeNotifyCalls += 1 },
+    submit: () => { nativeSubmitCalls += 1 },
+  }
+  const runtime = { mode: 'new' as const, slices: [] }
+  assert.equal(notifyViaChannelFacade(undefined, native, runtime, 'hello'), 'native')
+  assert.equal(submitViaChannelFacade(undefined, native, runtime, 'hello'), 'native')
+  assert.equal(nativeNotifyCalls, 1)
+  assert.equal(nativeSubmitCalls, 1)
+}
+
+{
+  const previousMode = process.env.DSH_TUI_ADAPTER_MODE
+  process.env.DSH_TUI_ADAPTER_MODE = 'new'
+  try {
+    const facadeCtx = new Context()
+    facadeCtx.logger.warn = () => undefined
+    new TuiPluginHostRuntime(facadeCtx)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const child = facadeCtx.extend()
+    registerTuiChannel(child, channel)
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const host = facadeCtx.get('tuiPluginHost')
+    let nativeCalls = 0
+    const native = {
+      notify: () => { nativeCalls += 1 },
+      submit: () => { nativeCalls += 1 },
+    }
+    const runtime = adapterRuntimeFor(facadeCtx)
+    assert.equal(notifyViaChannelFacade(host, native, runtime, 'facade notify'), 'facade')
+    assert.equal(submitViaChannelFacade(host, native, runtime, 'facade submit'), 'facade')
+    assert.equal(nativeCalls, 0,
+      'new mode must route through HostFacade.channel, not native')
+  } finally {
+    if (previousMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
+    else process.env.DSH_TUI_ADAPTER_MODE = previousMode
+  }
+}
+
+{
+  const previousMode = process.env.DSH_TUI_ADAPTER_MODE
+  process.env.DSH_TUI_ADAPTER_MODE = 'passive-shadow'
+  try {
+    const passiveCtx = new Context()
+    passiveCtx.logger.warn = () => undefined
+    new TuiPluginHostRuntime(passiveCtx)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const child = passiveCtx.extend()
+    registerTuiChannel(child, channel)
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const host = passiveCtx.get('tuiPluginHost')
+    let nativeCalls = 0
+    const native = {
+      notify: () => { nativeCalls += 1 },
+      submit: () => { nativeCalls += 1 },
+    }
+    const runtime = adapterRuntimeFor(passiveCtx)
+    const notifyOutcome = notifyViaChannelFacade(host, native, runtime, 'passive notify')
+    const submitOutcome = submitViaChannelFacade(host, native, runtime, 'passive submit')
+    assert.ok(notifyOutcome === 'dropped' || submitOutcome === 'dropped')
+    assert.equal(notifyOutcome, 'dropped', 'passive shadow must drop notify')
+    assert.equal(submitOutcome, 'dropped', 'passive shadow must drop submit')
+    assert.equal(nativeCalls, 0,
+      'passive shadow must never fall back to native Channel')
   } finally {
     if (previousMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
     else process.env.DSH_TUI_ADAPTER_MODE = previousMode

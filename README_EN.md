@@ -685,8 +685,10 @@ harness:
   `src/dsh-adapter/channel.ts` implementation itself is **not yet physically
   split**; it remains the live Channel implementation source. **T1 core
   migration is partial: production `plugin.ts` notifications/initial submit
-  now prefer `HostFacade.channel.actions` (falling back to the native Channel);
-  most remaining UI/Channel actions still call the native Channel directly.**
+  now prefer `HostFacade.channel.actions`; in non-shadow modes a not-yet-mounted
+  facade can fall back to the native Channel, but passive/replay shadow never
+  falls back (missing/denied calls are dropped); most remaining UI/Channel
+  actions still call the native Channel directly.**
   HostFacade guards each method with the shadow policy, so passive/replay allows
   read-only projections while denying mutations.
 - **P5 Channel Provider/Consumer**: new local Provider/Consumer implement the
