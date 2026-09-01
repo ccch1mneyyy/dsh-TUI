@@ -216,7 +216,7 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
     const violations = this.selfCheck()
     if (violations.length > 0) {
       ctx.logger.warn(
-        `dsh-tui: vendored plugin-spec registry failed self-check (${violations.length} violation(s)); ` +
+        `dsh-tui: vendored adapter registry failed self-check (${violations.length} violation(s)); ` +
         `affected contracts are dropped from the Host Descriptor fail-closed: ${violations.join(' | ')}`,
       )
     }

@@ -443,7 +443,7 @@ check1('decision permission map is immutable',
       && descriptor.contracts.length === 0)
   }
 
-  // AdmissionCompat must use the same mounted topology as the public
+  // Admission must use the same mounted topology as the public
   // descriptor: a required Command plugin is rejected when the commands
   // service is not mounted, and a required LocalStorage plugin is rejected
   // when tuiPluginStorage is not mounted.

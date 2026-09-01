@@ -49,7 +49,8 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 - **P4 Channel Port/投影层**:新增 `projection / actions / state /
   plugins / transcript` 五个 Host Port 与 `src/adapter/channel/*` 拆分模块;
   生产 `channel.ts` 本体尚未物理拆分,由 live Channel 作为实现来源;
-  生产 UI 动作仍直接走原生 Channel,未迁移到 HostFacade.channel;
+  T1 核心迁移:plugin.ts 通知/初始提交已优先走 HostFacade.channel.actions,
+  其余 UI/Channel 动作仍大部分直接调用原生 Channel,未完整迁移;
   新增 `channel` KernelSlice、上游 driver 与 `verify:adapter-channel`。
 - **P5 Channel Provider/Consumer**:实现 `tui.dsh/v1alpha1#Channel`
   协议包络与校验;`runChannelReplay` 支持录制 snapshots 与真实 DSH

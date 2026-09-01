@@ -51,7 +51,7 @@ interface SessionEventLike {
  * the exact type is present. Unknown types must be marked top-level
  * `ignorable: true` to be skipped.
  */
-const KNOWN_DSH_EVENT_TYPES = new Set<string>([
+export const KNOWN_DSH_EVENT_TYPES = new Set<string>([
   // dsh-session core event map
   'turn/start',
   'turn/end',
@@ -198,8 +198,9 @@ export function projectDshSessionEventsToSnapshots(
     const event = raw as SessionEventLike
     const type = typeof event.type === 'string' ? event.type : ''
     if (type === '') {
-      if (isIgnorable(event)) continue
-      throw new DshSessionProjectionError('DSH session event is missing a type and is not ignorable')
+      // Missing type is always rejectable: even an `ignorable` marker cannot
+      // describe which event is being skipped.
+      throw new DshSessionProjectionError('DSH session event is missing a type')
     }
     if (!isKnownEventType(type)) {
       if (isIgnorable(event)) continue

@@ -63,8 +63,8 @@ function collect(dir: string, out: string[] = []): string[] {
 }
 
 function isLegacyShimPath(path: string): boolean {
-  const normalized = path.replaceAll('\\', '/')
-  return LEGACY_LIB_SHIM_PATHS.some(shim => normalized === join(ROOT, shim).replaceAll('\\', '/'))
+  const normalized = path.replaceAll('\\', '/').toLowerCase()
+  return LEGACY_LIB_SHIM_PATHS.some(shim => normalized === join(ROOT, shim).replaceAll('\\', '/').toLowerCase())
     || normalized.includes('/plugin-spec/')
     || /\/dsh-adapter\/(?:grants|host-descriptor)(?:\.|$)/u.test(normalized)
 }
@@ -114,10 +114,10 @@ for (const relativePath of LEGACY_LIB_SHIM_PATHS) {
 
 // 2. Production source, scripts, bin, and generated lib must resolve the
 // canonical surface and must not retain removed state/path references.
-const LEGACY_ADAPTER_IMPORT = /(?:import|export)\s[^'"\n]*?from\s*['"][^'"]*dsh-adapter\/(?:grants|host-descriptor)|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"][^'"]*dsh-adapter\/(?:grants|host-descriptor)/u
-const LEGACY_PLUGIN_SPEC_IMPORT = /(?:import|export)\s[^'"\n]*?from\s*['"][^'"]*plugin-spec|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"][^'"]*plugin-spec/u
-const REMOVED_ADMISSION_STATE = /(?:admissionCompat(?:Coordinates)?|mountedAdmissionCoordinates)/u
-const LEGACY_OLD_PATH_REFERENCE = /(?:\.\/grants\.js|\.\/host-descriptor\.js|\.\.\/grants\.js|\.\.\/host-descriptor\.js)/u
+const LEGACY_ADAPTER_IMPORT = /(?:import|export)\s[^'"\n]*?from\s*['"][^'"]*dsh-adapter\/(?:grants|host-descriptor)|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"][^'"]*dsh-adapter\/(?:grants|host-descriptor)/iu
+const LEGACY_PLUGIN_SPEC_IMPORT = /(?:import|export)\s[^'"\n]*?from\s*['"][^'"]*plugin-spec|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"][^'"]*plugin-spec/iu
+const REMOVED_ADMISSION_STATE = /(?:admissionCompat(?:Coordinates)?|mountedAdmissionCoordinates)/iu
+const LEGACY_OLD_PATH_REFERENCE = /(?:\.\/grants\.js|\.\/host-descriptor\.js|\.\.\/grants\.js|\.\.\/host-descriptor\.js)/iu
 const ADMISSION_COMPATIBILITY_PHRASE = /admission\s+compatibility/iu
 for (const root of [SRC, SCRIPTS, BIN, LIB]) {
   for (const file of collect(root)) {
@@ -125,10 +125,15 @@ for (const root of [SRC, SCRIPTS, BIN, LIB]) {
     checkedFiles += 1
     const source = readFileSync(file, 'utf8')
     const normalized = file.replaceAll('\\', '/')
-    const inLegacyArea = normalized.includes('/dsh-adapter/')
-      || normalized.includes('/plugin-spec/')
-      || normalized.includes('/lib/types/dsh-adapter/')
-      || normalized.includes('/lib/types/plugin-spec/')
+    const lowerNormalized = normalized.toLowerCase()
+    const inLegacyArea = lowerNormalized.includes('/dsh-adapter/')
+      || lowerNormalized.includes('/plugin-spec/')
+      || lowerNormalized.includes('/lib/types/dsh-adapter/')
+      || lowerNormalized.includes('/lib/types/plugin-spec/')
+    if (lowerNormalized.includes('/plugin-spec/')
+      || /\/dsh-adapter\/(?:grants|host-descriptor)(?:\.|$)/u.test(lowerNormalized)) {
+      failures.push(`${relative(ROOT, file)} is a case-insensitive legacy shim path`)
+    }
     if (LEGACY_ADAPTER_IMPORT.test(source) || LEGACY_PLUGIN_SPEC_IMPORT.test(source)) {
       failures.push(`${relative(ROOT, file)} still resolves a legacy shim path`)
     }
@@ -156,7 +161,7 @@ const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
 for (const [name, target] of Object.entries(manifest.exports ?? {})) {
   const values = typeof target === 'string' ? [target] : Object.values(target ?? {}).filter((value): value is string => typeof value === 'string')
   for (const value of values) {
-    const normalized = value.replace(/^\.\//u, '')
+    const normalized = value.replace(/^\.\//u, '').toLowerCase()
     if (normalized.includes('plugin-spec/') || /dsh-adapter\/(?:grants|host-descriptor)(?:\.|$)/u.test(normalized)) {
       failures.push(`package export ${name} points at a legacy shim: ${value}`)
     }

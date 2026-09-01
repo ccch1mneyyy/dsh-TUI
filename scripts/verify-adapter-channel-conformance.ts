@@ -32,6 +32,7 @@ import {
 import { withReplayIsolation } from '../src/adapter/kernel/replay-isolation.js'
 import { registerTuiChannel } from '../src/adapter/channel/host-registry.js'
 import { verifyChannelLive } from '../src/adapter/upstream/channel-driver.js'
+import { KNOWN_DSH_EVENT_TYPES } from '../src/adapter/channel/session-projection.js'
 import {
   validateTuiChannelSnapshot,
   validateTuiChannelInput,
@@ -280,6 +281,36 @@ await assert.rejects(
   'data-level ignorable must not bypass the top-level SessionEvent contract',
 )
 checks += 1
+
+// Missing type is always rejected, even with top-level ignorable.
+await assert.rejects(
+  runChannelReplay({
+    sessionEvents: [
+      { seq: 1, time: 1, ignorable: true, data: {} },
+    ],
+    sessionMeta: { channelId: 'missing-type' },
+    features: ['session-state'],
+  }),
+  /missing a type/u,
+  'missing event type must be rejected even when top-level ignorable is set',
+)
+checks += 1
+
+// Allowlist consistency: every core dsh-session SessionEventMap type must be
+// present in the projection's explicit allowlist.
+{
+  const sessionTypesPath = join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-session', 'lib', 'types', 'types.d.ts')
+  const sessionTypes = readFileSync(sessionTypesPath, 'utf8')
+  const coreEventTypes = [...sessionTypes.matchAll(/^\s*'([a-z][a-z0-9_/-]*)':/gm)]
+    .map(match => match[1]!)
+    .filter(type => type.includes('/'))
+  assert.ok(coreEventTypes.length >= 10, 'dsh-session core event type extraction should be meaningful')
+  for (const type of coreEventTypes) {
+    assert.ok(KNOWN_DSH_EVENT_TYPES.has(type),
+      `DSH event allowlist must include dsh-session core type ${type}`)
+  }
+  checks += 1
+}
 
 // ── real DSH session-event projection (B1) ────────────────────────────────
 const dshReport = await runChannelReplay({
