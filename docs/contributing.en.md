@@ -63,7 +63,7 @@ boundaries and helpers over introducing parallel abstractions.
   branches do not spread into bootstrap or channel actions. Note: the
   questionnaire "provider seat"
   guard (DUPLICATE_PROVIDER probe + private symbol check, #586) only applies to
-  the rc `registerProvider` path. On alpha.2's `user-questions/request`
+  the rc `registerProvider` path. On the alpha line's `user-questions/request`
   waterfall, Cordis first scope-filters requests carrying an agent; agentless
   `/auth` requests are dispatched without a scope carrier. Under the answerer
   convention, the first eligible listener that returns instead of delegating
@@ -421,6 +421,7 @@ the required credentials.
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
+| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety
 

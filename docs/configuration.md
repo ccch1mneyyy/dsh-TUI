@@ -77,7 +77,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | ID | 名称 | 能力 |
 | --- | --- | --- |
 | `standard` | 标准模式（默认） | 编辑、Shell、检索、Skills、计划、Goals、子代理与工作流 |
-| `ptc`（alpha.2）/ `code`（RC） | PTC 模式 | 标准能力，加 PTC SDK 呈现工具，可用 TypeScript 组合多步操作；两个名字可跨版本兼容解析 |
+| `ptc`（alpha）/ `code`（RC） | PTC 模式 | 标准能力，加 PTC SDK 呈现工具，可用 TypeScript 组合多步操作；两个名字可跨版本兼容解析 |
 | `minimal` | 极简模式 | 仅持久 Bash 与 `str_replace_editor`，不带 compaction |
 | `cordis` | 创造模式 | 标准能力，加运行时检查与插件实验工具 |
 | `liangshen` | 梁神模式 | 主 Agent 与子 Agent 首轮均保持 Minimal 双工具，首次工具调用后开放完整目录，压缩后重新锚定 |

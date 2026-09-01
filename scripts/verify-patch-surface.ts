@@ -157,8 +157,8 @@ const requireAlphaBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
 if (existsSync(sourceManifest) && existsSync(sourcePatch)) {
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   const source = baseline('source', sourceManifest, sourcePatch, resolver.baseUrl)
-  if (requireAlphaBaseline && source.version !== '0.1.2-alpha.2') {
-    throw new Error(`required alpha baseline is 0.1.2-alpha.2, got ${source.version}`)
+  if (requireAlphaBaseline && source.version !== '0.1.2-alpha.3') {
+    throw new Error(`required alpha baseline is 0.1.2-alpha.3, got ${source.version}`)
   }
   baselines.push(source)
 } else if (requireAlphaBaseline) {

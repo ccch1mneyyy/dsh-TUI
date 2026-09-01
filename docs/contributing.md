@@ -50,7 +50,7 @@ DeepSeek Harness 拥有，TUI 只消费它们。
   user-questions / agent-preset 的上游预发布兼容分派，避免把版本分支散进
   bootstrap 与 channel 动作面。注意：问卷
   "provider 座位"守卫（DUPLICATE_PROVIDER 探测 + 私有 symbol 校验，#586）只在
-  rc 的 `registerProvider` 路径生效。alpha.2 的 `user-questions/request`
+  rc 的 `registerProvider` 路径生效。alpha 线的 `user-questions/request`
   waterfall 对带 agent 的请求先按 scope 过滤 listener；agentless 的 `/auth` 请求
   不带 scope carrier。按 answerer 约定，首个不调用 `next()` 委派的 eligible
   listener 会 claim 请求；但 Cordis waterfall 是 around middleware，外层 listener
@@ -326,6 +326,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
+| 上游验证线 bump | `src/dsh-adapter/contract.ts`、`package.json` peer+dev 两组范围、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
 
 ## Git 与发布安全（Git And Release Safety）
 
