@@ -302,7 +302,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // user-interaction config row does; a bare plugin mount creates it on
   // this context), then expose the model-facing tool before resolving the
   // agent so per-step assembly includes ask_user_question. rc.2's provider
-  // seat is registered below; alpha.2's agent-aware waterfall needs the
+  // seat is registered below; the alpha line's agent-aware waterfall needs the
   // channel owner and is therefore registered immediately after the channel
   // is created. Optional-service access goes through `ctx.get`, not the
   // inject proxy.

@@ -3,7 +3,7 @@
  *
  * TUI-owned inserts/config overrides are one fixed snapshot. Comparisons with
  * the official web patch are keyed by web-app version because ownership moved
- * between rc.2 and alpha.2. Dynamic disabled conditions are evaluated from
+ * between rc.2 and alpha.1. Dynamic disabled conditions are evaluated from
  * each baseline's package root so the snapshot records effective ownership,
  * not the raw YAML representation. The installed package is always checked; an
  * source-authoritative alpha tree is checked too when present. CI sets
