@@ -23,14 +23,18 @@ are logged in Chinese, with English summaries when appropriate.
     live Channel implementation file remains the source of truth.
   - New gate: `npm run verify:adapter-channel`.
 
-- **P5 real DSH snapshot/transcript replay + Channel Provider/Consumer**
+- **P5 DSH event projection + Channel Provider/Consumer**
   - Added `ChannelProvider` and `ChannelConsumer` for the
     `tui.dsh/v1alpha1#Channel` operation envelope
     (`open` / `subscribe` / `invoke` / `close`).
   - Extended `src/adapter/kernel/replay.ts` with `runChannelReplay()` and a
     channel section on `runReplayShadow()`.
-  - Replays use recorded DSH session snapshots/transcripts, validate against
-    the vendored dsh-ecosystem-spec validators, and check monotonic versions.
+  - Replays use recorded snapshots or a minimal real DSH
+    `agent.session.events` projection; validate against the vendored
+    dsh-ecosystem-spec validators and official fixture, and check monotonic
+    versions, features and method→feature mappings.
+  - Unknown methods fail per protocol; continuity violations fail closed;
+    replay JSON is size/depth bounded and deep-frozen.
   - New gate: `npm run verify:adapter-channel-conformance`.
 
 ### Removed / changed

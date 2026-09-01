@@ -50,9 +50,10 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   plugins / transcript` 五个 Host Port 与 `src/adapter/channel/*` 拆分模块;
   生产 `channel.ts` 本体尚未物理拆分,由 live Channel 作为实现来源;
   新增 `channel` KernelSlice、上游 driver 与 `verify:adapter-channel`。
-- **P5 Channel Provider/Consumer**:支持真实 DSH session snapshot/transcript
-  回放 `tui.dsh/v1alpha1#Channel`,并新增
-  `verify:adapter-channel-conformance`。
+- **P5 Channel Provider/Consumer**:实现 `tui.dsh/v1alpha1#Channel`
+  协议包络与校验;`runChannelReplay` 支持录制 snapshots 与真实 DSH
+  sessionEvents 的最小投影;未知 method 失败、feature/method 映射纳入 ok,
+  连续性 fail-closed;新增 `verify:adapter-channel-conformance`。
 - **P6 compat 清理**:删除 `src/plugin-spec/*`、`src/dsh-adapter/{grants,
   host-descriptor}.ts` shim;彻底移除 `admissionCompat` 与
   `mountedAdmissionCoordinates`;`src/plugin-host.ts` 保留为规范化公开面;

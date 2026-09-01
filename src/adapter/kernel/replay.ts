@@ -32,10 +32,76 @@ import {
   TUI_CHANNEL_FEATURES,
   TUI_CHANNEL_WIRE_REVISION,
 } from '../standard/tui-extension.js'
+import {
+  validateTuiChannelRequirement,
+  validateTuiChannelSupport,
+} from '../spec/index.js'
 import type { TuiChannelSnapshot } from '../spec/index.js'
+import {
+  projectDshSessionEventsToSnapshots,
+  type DshSessionProjectionMeta,
+} from '../channel/session-projection.js'
 
 export const REPLAY_SCHEMA_VERSION = 'tui-adapter-replay/v1'
 export const REPLAY_CHANNEL_SCHEMA_VERSION = 'tui-adapter-channel-replay/v1'
+
+/**
+ * Replay method → feature mapping used by the conformance harness.
+ *
+ * The DSH Channel RFC requires `invoke.method` to correspond to a feature
+ * the provider declared. This is the harness-side recognized map for the live
+ * channel methods; unknown method names are rejected instead of pretending
+ * success.
+ */
+export const CHANNEL_METHOD_FEATURES: Readonly<Record<string, string>> = Object.freeze({
+  commandCompletions: 'commands',
+  runExternalCommand: 'commands',
+  runWorkspaceCommand: 'workspaces',
+  listWorkspaces: 'workspaces',
+  resolveWorkspace: 'workspaces',
+  switchWorkspace: 'workspaces',
+  workspaceCommands: 'workspaces',
+  listModels: 'models',
+  switchModel: 'models',
+  listEfforts: 'models',
+  setEffort: 'models',
+  listProviders: 'provider-setup',
+  providerSetup: 'provider-setup',
+  describeCredential: 'credentials',
+  oauthProviderStatuses: 'credentials',
+  listPresets: 'presets',
+  switchPreset: 'presets',
+  listSkills: 'skills',
+  listSessions: 'session-history',
+  previewSession: 'session-history',
+  deleteSession: 'session-history',
+  renameSession: 'session-history',
+  forkSession: 'session-history',
+  resumeTo: 'session-history',
+  newSession: 'session-lifecycle',
+  compact: 'session-lifecycle',
+  submit: 'session-input',
+  steer: 'session-input',
+  cancel: 'session-input',
+  interruptAndDeliver: 'session-input',
+  clear: 'session-input',
+  loadOlder: 'session-input',
+  rewindTo: 'session-input',
+  promptRewind: 'session-input',
+  openPluginScene: 'scenes',
+  closePluginScene: 'scenes',
+  settingsSections: 'settings',
+  subscribeSettingsSections: 'settings',
+  traceEvents: 'trace',
+  notify: 'presentation',
+  doctorInfo: 'diagnostics',
+  mcpStatus: 'diagnostics',
+  pluginsInfo: 'diagnostics',
+  listFileCandidates: 'files',
+  listFiles: 'files',
+  listSubagents: 'subagents',
+  balanceInfo: 'credentials',
+})
 
 export interface ReplayContractRef {
   readonly apiVersion: string
@@ -66,13 +132,19 @@ export interface ReplayInput {
 /** P5 Channel replay input: recorded `tui.dsh/v1alpha1#Channel` snapshots
  * (a real DSH session projection) and optional transcript/event provenance. */
 export interface ReplayChannelInput {
-  readonly snapshots: readonly TuiChannelSnapshot[]
+  /** Recorded channel snapshots. If omitted, `sessionEvents` must be given. */
+  readonly snapshots?: readonly TuiChannelSnapshot[]
   readonly transcript?: readonly unknown[]
   /** Feature set advertised by this recorded Channel provider. */
   readonly features?: readonly string[]
   /** Optional method handlers, for example `commandCompletions` or
    * `runWorkspaceCommand`, exercised during replay. */
   readonly methods?: Readonly<Record<string, (args: readonly unknown[]) => unknown | Promise<unknown>>>
+  /** Optional real DSH session-event source, projected by the harness. */
+  readonly sessionEvents?: readonly unknown[]
+  readonly sessionMeta?: DshSessionProjectionMeta
+  /** Which declared method to invoke, if any. */
+  readonly invokeMethod?: string
 }
 
 export interface ReplayChannelReport {
@@ -87,6 +159,11 @@ export interface ReplayChannelReport {
   readonly openVersion: number
   readonly invokeValueDefined: boolean
   readonly closed: boolean
+  /** 'dsh-session-events' when snapshots were projected from real DSH events. */
+  readonly source: 'snapshots' | 'dsh-session-events'
+  readonly sessionEventCount: number
+  readonly featureErrors: readonly string[]
+  readonly methodErrors: readonly string[]
 }
 
 export interface ReplayReport {
@@ -220,15 +297,28 @@ export function createReplayContext(input: ReplayInput): unknown {
  * - monotonic version/wire-revision continuity is checked by the consumer.
  */
 export async function runChannelReplay(input: ReplayChannelInput): Promise<ReplayChannelReport> {
-  if (input === null || typeof input !== 'object' || !Array.isArray(input.snapshots) || input.snapshots.length === 0) {
-    throw new ReplayHarnessError('channel replay input must contain at least one snapshot')
+  if (input === null || typeof input !== 'object') {
+    throw new ReplayHarnessError('channel replay input must be an object')
   }
+  const hasSessionEvents = Array.isArray(input.sessionEvents)
+  const snapshots = input.snapshots ?? (
+    hasSessionEvents
+      ? projectDshSessionEventsToSnapshots(input.sessionEvents!, input.sessionMeta ?? {
+          channelId: 'dsh-session-replay',
+        })
+      : []
+  )
+  if (!Array.isArray(snapshots) || snapshots.length === 0) {
+    throw new ReplayHarnessError('channel replay input must contain snapshots or DSH sessionEvents')
+  }
+  const source: ReplayChannelReport['source'] = input.snapshots !== undefined ? 'snapshots' : 'dsh-session-events'
   return await withReplayIsolation(async () => {
-    const provider = createReplayChannelProvider(input)
+    const replaySource = { ...input, snapshots }
+    const provider = createReplayChannelProvider(replaySource)
     const versions: number[] = []
     const subscriptionSnapshots: TuiChannelSnapshot[] = []
     const subscriptionConsumer = createChannelConsumer(provider)
-    const first = input.snapshots[0]!
+    const first = snapshots[0]!
     // Subscribe first on an independent consumer so version continuity is
     // observed over the recorded stream without conflating it with `open`
     // returning the latest current snapshot.
@@ -237,16 +327,57 @@ export async function runChannelReplay(input: ReplayChannelInput): Promise<Repla
       versions.push(snapshot.version)
     })
 
+    const featureErrors: string[] = []
+    const features = [...new Set(input.features ?? TUI_CHANNEL_FEATURES)]
+    const allowedFeatures = new Set(TUI_CHANNEL_FEATURES)
+    for (const feature of features) {
+      if (!allowedFeatures.has(feature)) featureErrors.push(`unknown Channel feature: ${feature}`)
+    }
+    try {
+      validateTuiChannelRequirement({ wireRevision: TUI_CHANNEL_WIRE_REVISION, features })
+      validateTuiChannelSupport({ wireRevision: TUI_CHANNEL_WIRE_REVISION, features })
+    } catch (error) {
+      featureErrors.push(error instanceof Error ? error.message : String(error))
+    }
+
+    const methodErrors: string[] = []
+    for (const [method, feature] of Object.entries(CHANNEL_METHOD_FEATURES)) {
+      if (input.methods?.[method] === undefined) continue
+      if (!features.includes(feature)) {
+        methodErrors.push(`method ${method} requires feature ${feature}, which is not declared`)
+      }
+    }
+    if (input.methods !== undefined) {
+      for (const method of Object.keys(input.methods)) {
+        if (CHANNEL_METHOD_FEATURES[method] === undefined) {
+          methodErrors.push(`method ${method} is not in the recognized method->feature map`)
+        }
+      }
+    }
+
     const consumer = createChannelConsumer(provider)
     const opened = await consumer.open({})
-    const invoke = await consumer.invoke(opened.channelId, 'replay/probe', [])
+    let invokeValueDefined = false
+    if (input.invokeMethod !== undefined) {
+      if (input.methods?.[input.invokeMethod] === undefined) {
+        methodErrors.push(`invokeMethod ${input.invokeMethod} is not provided by replay methods`)
+      } else {
+        try {
+          const invoke = await consumer.invoke(opened.channelId, input.invokeMethod, [])
+          invokeValueDefined = invoke.valueDefined === true
+        } catch (error) {
+          methodErrors.push(error instanceof Error ? error.message : String(error))
+        }
+      }
+    }
     const closed = await consumer.close(opened.channelId)
     const continuityErrors = [
       ...subscriptionConsumer.continuityErrors(),
       ...consumer.continuityErrors(),
     ]
-    const features = [...new Set(input.features ?? TUI_CHANNEL_FEATURES)]
     const ok = continuityErrors.length === 0
+      && featureErrors.length === 0
+      && methodErrors.length === 0
       && opened.wireRevision === TUI_CHANNEL_WIRE_REVISION
       && opened.channelId === first.channelId
       && closed.closed === true
@@ -260,8 +391,12 @@ export async function runChannelReplay(input: ReplayChannelInput): Promise<Repla
       transcriptCount: input.transcript?.length ?? 0,
       continuityErrors: Object.freeze(continuityErrors),
       openVersion: opened.version,
-      invokeValueDefined: invoke.valueDefined === true,
+      invokeValueDefined,
       closed: closed.closed,
+      source,
+      sessionEventCount: input.sessionEvents?.length ?? 0,
+      featureErrors: Object.freeze(featureErrors),
+      methodErrors: Object.freeze(methodErrors),
     })
   })
 }

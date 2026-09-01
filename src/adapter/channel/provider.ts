@@ -7,6 +7,12 @@
  * service, but it follows the protocol envelope (open/subscribe/invoke/
  * close), validates inputs/outputs, preserves monotonic channel versions,
  * and can be driven from a real recorded DSH session snapshot/transcript.
+ *
+ * The replay provider is intentionally protocol-envelope focused:
+ * - unknown methods are rejected (never treated as a successful no-op);
+ * - feature/support validation happens in the replay harness, not here;
+ * - values are bounded in size/depth and deep-frozen before being handed out;
+ * - method handlers only run inside the harness-provided replay isolation.
  */
 
 import {
@@ -47,31 +53,100 @@ export interface ReplayChannelSnapshotSource {
    * for conformance report details. */
   readonly transcript?: readonly unknown[]
   /** Optional method invocation handlers. Unknown methods are rejected with
-   * `FEATURE_UNAVAILABLE`/`INVALID_ARGUMENT`-style provider errors. */
+   * `FEATURE_UNAVAILABLE` (or `INVALID_ARGUMENT` for malformed input). */
   readonly methods?: Readonly<Record<string, (args: readonly unknown[]) => unknown | Promise<unknown>>>
 }
 
-function assertJsonValue(value: unknown): void {
-  // JSON value validation is done by the protocol validators at the edge.
-  // This helper only rejects functions and symbols which would make a
-  // snapshot non-serializable.
-  if (typeof value === 'function' || typeof value === 'symbol') {
-    throw new TypeError('replay Channel values must be JSON-serializable')
+/** Safety bound for replay JSON payloads. */
+export const REPLAY_JSON_MAX_BYTES = 512 * 1024
+/** Safety bound for replay JSON nesting depth. */
+export const REPLAY_JSON_MAX_DEPTH = 64
+
+function deepFreezeCopy<T>(value: T, seen = new WeakMap<object, object>()): T {
+  if (value === null || typeof value !== 'object') return value
+  const existing = seen.get(value as object)
+  if (existing !== undefined) return existing as T
+  if (Array.isArray(value)) {
+    const copy: unknown[] = []
+    seen.set(value as object, copy)
+    for (const item of value) copy.push(deepFreezeCopy(item, seen))
+    return Object.freeze(copy) as T
+  }
+  const copy: Record<string, unknown> = {}
+  seen.set(value as object, copy)
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    copy[key] = deepFreezeCopy(item, seen)
+  }
+  return Object.freeze(copy) as T
+}
+
+function assertBoundedJson(value: unknown, label: string, depth = 0, ancestors = new Set<object>()): void {
+  if (depth > REPLAY_JSON_MAX_DEPTH) {
+    throw new TypeError(`${label}: JSON nesting exceeds ${REPLAY_JSON_MAX_DEPTH} levels`)
+  }
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError(`${label}: JSON numbers must be finite`)
+    return
+  }
+  if (typeof value !== 'object') {
+    throw new TypeError(`${label}: must be a JSON value`)
+  }
+  if (ancestors.has(value)) throw new TypeError(`${label}: must not contain cycles`)
+  ancestors.add(value)
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) assertBoundedJson(item, `${label}[${index}]`, depth + 1, ancestors)
+  } else {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(`${label}: must contain only plain objects`)
+    }
+    for (const [key, item] of Object.entries(value)) {
+      assertBoundedJson(item, `${label}.${key}`, depth + 1, ancestors)
+    }
+  }
+  ancestors.delete(value)
+}
+
+function assertJsonSize(value: unknown, label: string): void {
+  let json: string
+  try {
+    json = JSON.stringify(value)
+  } catch {
+    throw new TypeError(`${label}: value is not JSON-serializable`)
+  }
+  if (json === undefined) throw new TypeError(`${label}: value is not JSON-serializable`)
+  if (json.length > REPLAY_JSON_MAX_BYTES) {
+    throw new TypeError(`${label}: JSON payload exceeds ${REPLAY_JSON_MAX_BYTES} bytes`)
   }
 }
 
 function channelSnapshot(value: unknown): TuiChannelSnapshot {
-  return validateTuiChannelSnapshot(value)
+  const validated = validateTuiChannelSnapshot(value)
+  assertBoundedJson(validated, 'Channel snapshot')
+  assertJsonSize(validated, 'Channel snapshot')
+  return deepFreezeCopy(validated)
 }
 
 function invokeOutput(value: unknown): TuiChannelInvokeOutput {
-  return validateTuiChannelOutput('invoke', value) as TuiChannelInvokeOutput
+  const validated = validateTuiChannelOutput('invoke', value) as TuiChannelInvokeOutput
+  assertBoundedJson(validated, 'Channel invoke output')
+  assertJsonSize(validated, 'Channel invoke output')
+  return deepFreezeCopy(validated)
 }
 
 /** Create an isolated replay Channel Provider over recorded snapshots. */
 export function createReplayChannelProvider(source: ReplayChannelSnapshotSource): ChannelProvider {
   if (!Array.isArray(source.snapshots) || source.snapshots.length === 0) {
     throw new TypeError('replay Channel provider requires at least one snapshot')
+  }
+  if (source.methods !== undefined && (source.methods === null || typeof source.methods !== 'object' || Array.isArray(source.methods))) {
+    throw new TypeError('replay Channel methods must be an object map')
+  }
+  for (const [name, handler] of Object.entries(source.methods ?? {})) {
+    if (typeof handler !== 'function') {
+      throw new TypeError(`replay Channel method "${name}" must be a function`)
+    }
   }
   const snapshots = Object.freeze([...source.snapshots].map(channelSnapshot))
   for (let index = 1; index < snapshots.length; index += 1) {
@@ -109,9 +184,11 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
         throw new Error('CHANNEL_NOT_FOUND')
       }
       let stopped = false
+      // RFC: subscribe is "not earlier than afterVersion", so equal/version 0
+      // snapshots must also be delivered.
       for (const snapshot of snapshots) {
         if (stopped) break
-        if (snapshot.version > afterVersion) {
+        if (snapshot.version >= afterVersion) {
           listener(snapshot)
         }
       }
@@ -125,14 +202,18 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
       args: readonly unknown[],
     ): Promise<TuiChannelInvokeOutput> {
       validateTuiChannelInput('invoke', { channelId, method, arguments: args as never })
+      assertBoundedJson(args, 'Channel.invoke arguments')
+      assertJsonSize(args, 'Channel.invoke arguments')
       const channel = latest()
       if (channel.channelId !== channelId) {
         throw new Error('CHANNEL_NOT_FOUND')
       }
       const handler = source.methods?.[method]
-      const value = handler === undefined
-        ? undefined
-        : await handler(args)
+      if (handler === undefined) {
+        // Unknown methods are protocol errors, never a successful no-op.
+        throw new Error(`FEATURE_UNAVAILABLE: unknown Channel method "${method}"`)
+      }
+      const value = await handler(args)
       assertJsonValue(value)
       const output = invokeOutput({
         value: value ?? null,
@@ -165,6 +246,14 @@ export function createReplayChannelProviderFromSnapshot(
     snapshots: [snapshot],
     transcript,
   })
+}
+
+function assertJsonValue(value: unknown): void {
+  if (typeof value === 'function' || typeof value === 'symbol') {
+    throw new TypeError('replay Channel values must be JSON-serializable')
+  }
+  assertBoundedJson(value, 'Channel.invoke result')
+  assertJsonSize(value, 'Channel.invoke result')
 }
 
 export const REPLAY_CHANNEL_WIRE_REVISION = TUI_CHANNEL_WIRE_REVISION

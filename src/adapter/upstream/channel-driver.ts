@@ -22,12 +22,15 @@ import type { UpstreamDriver, UpstreamDriverMount } from './driver.js'
 import type { Channel } from '../../dsh-adapter/channel.js'
 import {
   createChannelActions,
+  createChannelConsumer,
   createChannelPlugins,
   createChannelTranscript,
+  createReplayChannelProviderFromSnapshot,
   getRegisteredTuiChannel,
   projectChannelRows,
   projectChannelSnapshot,
   projectChannelState,
+  TUI_CHANNEL_WIRE_REVISION,
 } from '../channel/index.js'
 import { CHANNEL_FEATURES } from '../channel/features.js'
 import { CHANNEL_SPLIT_TOKEN } from '../channel/internal-token.js'
@@ -82,7 +85,47 @@ export function detectChannelCapability(ctx: unknown): Detection {
 }
 
 export function verifyChannelLive(ctx: unknown): Promise<CapabilityLifecycle[]> {
-  return Promise.resolve(verifyChannelLiveSync(ctx))
+  return verifyChannelLiveAsync(ctx)
+}
+
+async function verifyChannelLiveAsync(ctx: unknown): Promise<CapabilityLifecycle[]> {
+  const lifecycles = verifyChannelLiveSync(ctx)
+  const channel = channelFor(ctx)
+  if (channel === undefined) return lifecycles
+  try {
+    // Real production use of the Provider/Consumer protocol path: project the
+    // live Channel into a `tui.dsh/v1alpha1#Channel` snapshot and validate it
+    // through the same consumer used by the replay harness. This is not a
+    // self-referential string check; it exercises the actual protocol
+    // envelope against the live Channel projection.
+    const projection = projectChannelSnapshot(channel)
+    const state = projectChannelState(channel)
+    const protocolSnapshot = {
+      wireRevision: TUI_CHANNEL_WIRE_REVISION,
+      channelId: String(projection.agentId || 'live-channel'),
+      version: projection.version,
+      state: Object.freeze({
+        ...projection,
+        ...state,
+      }),
+    } as unknown as import('../spec/index.js').TuiChannelSnapshot
+    const protocolProvider = createReplayChannelProviderFromSnapshot(protocolSnapshot)
+    await createChannelConsumer(protocolProvider).open({})
+  } catch (error) {
+    // A live Channel that cannot be represented as a protocol snapshot must
+    // not keep read-only live claims.
+    const reason = errorText(error)
+    return lifecycles.map(lifecycle =>
+      lifecycle.capability.startsWith('host.channel.') && lifecycle.state === 'live'
+        ? lifecycleFromDetection(lifecycle.capability, {
+            state: 'degraded',
+            missing: [reason],
+            evidence: 'evidence' in lifecycle.detection ? lifecycle.detection.evidence ?? [] : [],
+          })
+        : lifecycle,
+    )
+  }
+  return lifecycles
 }
 
 function liveFeature(capability: string, evidence: DetectionEvidence[]): CapabilityLifecycle {

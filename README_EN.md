@@ -683,10 +683,14 @@ harness:
   split**; it remains the live Channel implementation source. HostFacade guards
   each method with the shadow policy, so passive/replay allows read-only
   projections while denying mutations.
-- **P5 Channel conformance**: a local Channel Provider/Consumer replays real
-  DSH session snapshot/transcript data through open/subscribe/invoke/close and
-  validates it against `tui.dsh/v1alpha1#Channel`, including monotonic version
-  continuity.
+- **P5 Channel Provider/Consumer**: new local Provider/Consumer implement the
+  `tui.dsh/v1alpha1#Channel` open/subscribe/invoke/close envelope and validation.
+  `runChannelReplay` accepts recorded snapshot arrays and also projects real
+  DSH `agent.session.events`-shaped records into monotonic
+  `TuiChannelSnapshot`s (a minimal real DSH replay projection, not the full
+  production `channel.ts` parser). Unknown methods fail per protocol, features
+  and method→feature mappings are included in `ok`, and continuity violations
+  fail closed.
 - **P3 feature lifecycle stability**: after `refresh`, subsequent
   `mount()` / `descriptorBuild()` / `diagnosticSnapshot()` calls that rerun
   synchronous `detect()` do not clear the probed P3 features. These features are

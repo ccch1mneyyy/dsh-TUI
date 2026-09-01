@@ -6,11 +6,20 @@
  * it opens a provider, subscribes to snapshots, enforces monotonic versions
  * and full-snapshot continuity, invokes JSON-value methods, and closes the
  * channel. It never interprets provider business methods itself.
+ *
+ * Continuity violations are fail-closed by default: the consumer throws
+ * instead of silently retaining a discontinuous snapshot.
  */
 
 import { validateTuiChannelOutput, validateTuiChannelSnapshot } from '../spec/index.js'
 import type { TuiChannelInvokeOutput, TuiChannelSnapshot } from '../spec/index.js'
 import type { ChannelProvider, ChannelProviderOpenInput } from './provider.js'
+
+export interface ChannelConsumerOptions {
+  /** When true (default), a continuity violation throws immediately and the
+   * discontinuous snapshot is not retained. */
+  readonly failClosed?: boolean
+}
 
 export interface ChannelConsumer {
   open(input: ChannelProviderOpenInput): Promise<TuiChannelSnapshot>
@@ -28,7 +37,11 @@ export interface ChannelConsumer {
 }
 
 /** Wrap a Channel Provider with the consumer-side protocol envelope checks. */
-export function createChannelConsumer(provider: ChannelProvider): ChannelConsumer {
+export function createChannelConsumer(
+  provider: ChannelProvider,
+  options: ChannelConsumerOptions = {},
+): ChannelConsumer {
+  const failClosed = options.failClosed !== false
   let last: TuiChannelSnapshot | undefined
   const continuityErrors: string[] = []
 
@@ -46,6 +59,12 @@ export function createChannelConsumer(provider: ChannelProvider): ChannelConsume
       } else if (snapshot.version > last.version && snapshot.version !== last.version + 1) {
         continuityErrors.push(`version gap: expected ${last.version + 1}, got ${snapshot.version}`)
       }
+    }
+    if (continuityErrors.length > 0) {
+      if (failClosed) {
+        throw new Error(`dsh-tui: Channel continuity violation: ${continuityErrors[continuityErrors.length - 1]}`)
+      }
+      return snapshot
     }
     if (last === undefined || snapshot.version >= last.version) {
       last = snapshot
