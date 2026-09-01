@@ -347,6 +347,38 @@ function parse(seq: string) {
     JSON.stringify(k6.map((k) => (k.kind === 'key' ? k.sequence : k.kind))),
   )
   check('hold: paste 边界后 hold 清空', state.mouseTailHold === undefined)
+
+  // P1-1 回归（第五轮评审）：stale hold + response/CSI/paste 先使 hold 失效，
+  // 再出现 tail-shaped text —— 绝不能合成 phantom mouse。
+  // DA1 response 边界
+  state = INITIAL_STATE
+  feed('\x1b[<0;18')
+  feed(null)
+  const k7 = feed('\x1b[?1;2c;34M[<1;19;35M')
+  check(
+    'hold: response 使 hold 失效后 tail-shaped text 不合成 phantom mouse',
+    k7.length === 2 &&
+      k7[0]!.kind === 'response' &&
+      k7[1]!.kind === 'key' &&
+      (k7[1] as { sequence?: string }).sequence === ';34M[<1;19;35M',
+    JSON.stringify(k7.map((k) => (k.kind === 'key' ? k.sequence : k.kind))),
+  )
+  check('hold: response 边界后 hold 清空', state.mouseTailHold === undefined)
+
+  // 普通 CSI（方向键）边界
+  state = INITIAL_STATE
+  feed('\x1b[<0;18')
+  feed(null)
+  const k8 = feed('\x1b[A;34M')
+  check(
+    'hold: 普通 CSI 使 hold 失效后 tail-shaped text 按文本通过',
+    k8.length === 2 &&
+      k8[0]!.kind === 'key' &&
+      (k8[0] as { name?: string }).name === 'up' &&
+      k8[1]!.kind === 'key' &&
+      (k8[1] as { sequence?: string }).sequence === ';34M',
+    JSON.stringify(k8.map((k) => (k.kind === 'key' ? (k.name || k.sequence) : k.kind))),
+  )
 }
 
 // ── 2. 事件模型 ────────────────────────────────────────────

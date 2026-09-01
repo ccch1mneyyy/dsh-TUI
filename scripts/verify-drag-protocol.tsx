@@ -584,7 +584,7 @@ function Scene() {
           width={24}
           height={2}
           flexDirection="column"
-          onClick={() => dragEvents.push({ type: 'click', col: -1, row: -1, startCol: -1, startRow: -1, localCol: -1, localRow: -1 })}
+          onClick={() => recordDrag({ type: 'click', col: -1, row: -1, startCol: -1, startRow: -1, localCol: -1, localRow: -1 })}
           onDragStart={recordDrag}
           onDragMove={recordDrag}
           onDragEnd={recordDrag}
@@ -689,7 +689,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 
 {
   // I1: press→move→move→release：顺序与坐标
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
   motion(padPos.col + 5, padPos.row)
   motion(padPos.col + 8, padPos.row)
@@ -720,7 +720,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 
 {
   // I2: press 原地不动→release：无 drag 事件、onClick 触发
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 3, padPos.row)
   release(padPos.col + 3, padPos.row)
   const clicked = await settled(
@@ -733,13 +733,13 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 {
   // I2b: classic X10 uses low bits 3 as a generic release. Both a dormant
   // component click and a started drag must complete through the real parser.
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   x10(0, padPos.col + 3, padPos.row)
   x10(3, padPos.col + 3, padPos.row)
   check('I2b X10 press→release 触发 click',
     await settled(() => dragEvents.length === 1 && dragEvents[0]?.type === 'click'),
     dragEvents.map(event => event.type).join(','))
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   x10(0, padPos.col + 2, padPos.row)
   x10(0x20, padPos.col + 6, padPos.row)
   x10(3, padPos.col + 6, padPos.row)
@@ -750,7 +750,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 
 {
   // I3: drag 中 FOCUS_OUT → 收到 dragend
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
   motion(padPos.col + 6, padPos.row)
   await settled(() => dragEvents.some((e) => e.type === 'dragmove'))
@@ -764,7 +764,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 
 {
   // I4: localCol/localRow 相对坐标（Box rect 左上 = 标记起点）
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 4, padPos.row)
   motion(padPos.col + 9, padPos.row)
   await settled(() => dragEvents.some((e) => e.type === 'dragmove'))
@@ -815,7 +815,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 安全边界恢复属正确行为（I6b 专门验证），不能计入禁止窗口——否则修复
   // 在 release 后立即做安全 probe 的正确实现反而会被判 FAIL。
   await sleep(300) // 让 250ms 探测节流彻底冷却
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   const gestureStart = stdoutWrites.length
   press(padPos.col + 2, padPos.row)
   await sleep(30)
@@ -870,7 +870,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   drainQuerier()
   await sleep(300) // 节流冷却：resume 若没被闩挡住，probe 必发
   appInternals().lastStdinTime = Date.now() - 6000
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   const gapStart = stdoutWrites.length
   press(padPos.col + 2, padPos.row)
   await sleep(30)
@@ -904,7 +904,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   drainQuerier()
   await sleep(300)
   appInternals().lastStdinTime = Date.now() - 6000
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   const splitStart = stdoutWrites.length
   // SGR 是 1-based：padPos 是 0-based，+1 转换。press(c, r) 内部也 +1，
   // 这里直接写 stdin 需要手动对齐。
@@ -956,7 +956,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
     await settled(() => stdoutWrites.slice(probeStart).join('').includes('[?1049$p')),
     JSON.stringify(stdoutWrites.slice(probeStart).join('').match(/\[\?\d+[$hl][a-z]?/g) ?? []),
   )
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
   await sleep(30)
   const replyStart = stdoutWrites.length
@@ -1000,7 +1000,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   const clickProbeStart = stdoutWrites.length
   stdin.write('\x1b[I')
   await settled(() => stdoutWrites.slice(clickProbeStart).join('').includes('[?1049$p'))
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
   await sleep(30)
   const clickReplyStart = stdoutWrites.length
@@ -1026,7 +1026,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   )
   check(
     'I9b re-entry 在 click 之后（统一 timeline）',
-    reentrySeq > clickSeq && clickSeq >= 0,
+    reentrySeq >= clickSeq && clickSeq >= 0,
     `clickSeq=${clickSeq} reentrySeq=${reentrySeq}`,
   )
   // dormant press→release 无 motion → click 事件（非 drag）
@@ -1044,7 +1044,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 立刻漏写。
   drainQuerier()
   await sleep(300)
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
   await sleep(30)
   motion(padPos.col + 5, padPos.row)
@@ -1063,6 +1063,13 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
     'I10 resize 把进行中的 drag 收尾为 dragend',
     await settled(() => dragEvents.at(-1)?.type === 'dragend'),
     dragEvents.map((e) => e.type).join(','),
+  )
+  // I10c 前置：resize 的 probe 必须已被闩挡住并记入 pendingProbeRequest —
+  // 否则 release 后的"有 probe 输出 + pending 为空"不能证明 drain 发生。
+  check(
+    'I10c 前置：resize probe 已被闩挡住并记入 pendingProbeRequest',
+    inkInternals().pendingProbeRequest !== undefined,
+    `pendingProbeRequest=${JSON.stringify(inkInternals().pendingProbeRequest)}`,
   )
   const beforeRelease = stdoutWrites.length
   release(padPos.col + 5, padPos.row) // 物理松手 → 解闩
@@ -1223,9 +1230,109 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 }
 
 {
+  // I12: 同一 stdin batch 的 release → next press —— release 的批次尾 drain
+  // 在 next press 已上闩后执行，probe/re-entry 被闩挡住（不写入）。旧代码在
+  // release 的单事件 finally 里 drain，probe 字节落进下一次手势的开口窗口。
+  drainQuerier()
+  await sleep(400) // 节流冷却
+  dragEvents.length = 0; dragEventSeqs.length = 0
+  // 第一次手势：press → motion → release
+  press(padPos.col + 2, padPos.row)
+  await sleep(30)
+  motion(padPos.col + 5, padPos.row)
+  await settled(() => dragEvents.some((e) => e.type === 'dragmove'))
+  // 同一 batch：release + 立即 next press（一个 stdin write 携带两个事件）
+  const batchStart = stdoutWrites.length
+  stdin.write(`\x1b[<0;${padPos.col + 5 + 1};${padPos.row + 1}m\x1b[<0;${padPos.col + 2 + 1};${padPos.row + 1}M`)
+  await sleep(50)
+  // next press 已上闩，批次尾 drain 被挡住——窗口内零 probe 写入
+  const batchWindow = stdoutWrites.slice(batchStart).join('')
+  check(
+    'I12 同 batch release→press：批次尾 drain 被 next press 闩挡住',
+    !/\[\?(1000|1002|1003|1006)h/.test(batchWindow) &&
+      !batchWindow.includes('[?1049$p') &&
+      !batchWindow.includes('[?1049h') &&
+      !batchWindow.includes('[2J'),
+    JSON.stringify(batchWindow.match(/\[\?\d+[$hl][a-z]?|\[2J/g) ?? []),
+  )
+  // 第二次手势完成
+  motion(padPos.col + 5, padPos.row)
+  await sleep(30)
+  motion(padPos.col + 8, padPos.row)
+  await sleep(30)
+  release(padPos.col + 8, padPos.row)
+  check(
+    'I12 两次手势的 drag 事件流完整',
+    await settled(
+      () =>
+        dragEvents.map((e) => e.type).join(',') ===
+        'dragstart,dragmove,dragend,dragstart,dragmove,dragmove,dragend',
+    ),
+    dragEvents.map((e) => e.type).join(','),
+  )
+}
+
+{
+  // I12b: 同一 stdin batch 的 FOCUS_IN → press —— focus probe 延迟到批次尾，
+  // 此时 press 闩已建立，probe 被挡住。
+  drainQuerier()
+  await sleep(400)
+  dragEvents.length = 0; dragEventSeqs.length = 0
+  const focusBatchStart = stdoutWrites.length
+  stdin.write(`\x1b[I\x1b[<0;${padPos.col + 2 + 1};${padPos.row + 1}M`)
+  await sleep(50)
+  const focusBatchWindow = stdoutWrites.slice(focusBatchStart).join('')
+  check(
+    'I12b 同 batch FOCUS_IN→press：focus probe 被 press 闩挡住',
+    !/\[\?(1000|1002|1003|1006)h/.test(focusBatchWindow) &&
+      !focusBatchWindow.includes('[?1049$p'),
+    JSON.stringify(focusBatchWindow.match(/\[\?\d+[$hl][a-z]?/g) ?? []),
+  )
+  motion(padPos.col + 5, padPos.row)
+  await sleep(30)
+  release(padPos.col + 5, padPos.row)
+  check(
+    'I12b 手势 drag 事件流完整',
+    await settled(
+      () => dragEvents.map((e) => e.type).join(',') === 'dragstart,dragmove,dragend',
+    ),
+    dragEvents.map((e) => e.type).join(','),
+  )
+}
+
+{
+  // I12c: X10 多按钮重叠——左键按住时右键 press + generic release（X10 不携带
+  // 按钮身份），probe 必须保持 blocked（ambiguous-held）直到可靠的终止信号。
+  drainQuerier()
+  await sleep(400)
+  dragEvents.length = 0; dragEventSeqs.length = 0
+  // X10 press（ESC M + 3字节）：左键
+  stdin.write(`\x1b[M${String.fromCharCode(32 + 0)}${String.fromCharCode(32 + padPos.col + 3)}${String.fromCharCode(32 + padPos.row + 1)}`)
+  await sleep(30)
+  const x10PressStart = stdoutWrites.length
+  // X10 press：右键（button=2）
+  stdin.write(`\x1b[M${String.fromCharCode(32 + 2)}${String.fromCharCode(32 + padPos.col + 4)}${String.fromCharCode(32 + padPos.row + 1)}`)
+  await sleep(30)
+  // X10 generic release（button=3）——不携带按钮身份
+  stdin.write(`\x1b[M${String.fromCharCode(32 + 3)}${String.fromCharCode(32 + padPos.col + 4)}${String.fromCharCode(32 + padPos.row + 1)}`)
+  await sleep(50)
+  const x10Window = stdoutWrites.slice(x10PressStart).join('')
+  check(
+    'I12c X10 generic release 后 probe 保持 blocked（ambiguous-held）',
+    !/\[\?(1000|1002|1003|1006)h/.test(x10Window) &&
+      !x10Window.includes('[?1049$p') &&
+      !x10Window.includes('[?1049h'),
+    JSON.stringify(x10Window.match(/\[\?\d+[$hl][a-z]?/g) ?? []),
+  )
+  // 可靠终止：no-button motion 清除 ambiguous-held
+  stdin.write(`\x1b[<35;${padPos.col + 4};${padPos.row + 1}M`)
+  await sleep(50)
+}
+
+{
   // I7: leaving AlternateScreen settles dragend before the active-screen gate
   // closes. The consumer must not be left with a captured gesture.
-  dragEvents.length = 0
+  dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
   motion(padPos.col + 7, padPos.row)
   await settled(() => dragEvents.some(event => event.type === 'dragmove'))

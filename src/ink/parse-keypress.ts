@@ -880,39 +880,18 @@ export function parseMultipleKeypresses(
     mouseTailHoldAt = undefined
   }
 
-  // Pre-process tokens: if a text token starts with the completion of a
-  // held SGR prefix but carries trailing bytes (e.g. `;34Mabc` — the
-  // terminal batched the tail and the next keystrokes into one read), split
-  // it into [completion-tail, suffix-text] so the suffix continues through
-  // the normal token loop (it may itself be another protocol prefix, a
-  // win32 tail, or ordinary typing). This avoids re-feeding the tokenizer
-  // with already-tokenized bytes, which would corrupt its buffer state.
-  const expandedTokens: Array<{ type: 'sequence' | 'text'; value: string }> = []
-  for (const token of tokens) {
-    if (
-      token.type === 'text' &&
-      mouseTailHold !== undefined &&
-      SGR_MOUSE_TAIL_PREFIX_RE.test(mouseTailHold + token.value) &&
-      (() => {
-        const combined = mouseTailHold + token.value
-        const m = combined.match(SGR_MOUSE_TAIL_PREFIX_RE)!
-        return m[0].length < combined.length
-      })()
-    ) {
-      const combined = mouseTailHold + token.value
-      const m = combined.match(SGR_MOUSE_TAIL_PREFIX_RE)!
-      const reportEnd = m[0].length
-      // The completion tail (without the hold prefix — the hold is already
-      // in mouseTailHold and will be prepended by the completion branch).
-      expandedTokens.push({ type: 'text', value: combined.slice(mouseTailHold.length, reportEnd) })
-      // The suffix continues as ordinary text through the token loop.
-      expandedTokens.push({ type: 'text', value: combined.slice(reportEnd) })
-    } else {
-      expandedTokens.push(token)
-    }
-  }
+  // Mutable token queue: a text token that starts with the completion of
+  // the CURRENT hold but carries trailing bytes is split in-place — the
+  // completion tail is consumed now, the suffix is pushed back for the
+  // next iteration (it may itself be another protocol prefix, a win32
+  // tail, or ordinary typing). This avoids both re-feeding the tokenizer
+  // with already-tokenized bytes AND the stale-hold pre-expansion bug
+  // (a response/CSI/paste earlier in the same batch may have cleared the
+  // hold before the tail-shaped text token is reached).
+  const tokenQueue: Array<{ type: 'sequence' | 'text'; value: string }> = [...tokens]
 
-  for (const token of expandedTokens) {
+  for (let qi = 0; qi < tokenQueue.length; qi++) {
+    const token = tokenQueue[qi]!
     if (token.type === 'sequence') {
       if (token.value === PASTE_START) {
         inPaste = true
@@ -1045,13 +1024,25 @@ export function parseMultipleKeypresses(
         keys.push(mouse ?? parseKeypress(resynthesized))
       } else if (
         mouseTailHold !== undefined &&
-        SGR_MOUSE_TAIL_RE.test(mouseTailHold + token.value)
+        SGR_MOUSE_TAIL_PREFIX_RE.test(mouseTailHold + token.value)
       ) {
         // Completion of the held prefix: the split report's tail finally
         // arrived (SSH jitter, render-stalled reads). Resynthesize and clear.
-        // `expandedTokens` pre-split any trailing suffix into its own text
-        // token, so this branch only sees exact completions.
-        const resynthesized = '\x1b' + mouseTailHold + token.value
+        // If the token carries trailing bytes beyond the completion (e.g.
+        // `;34Mabc` — the terminal batched the tail and the next keystrokes
+        // into one read), split the suffix off and push it back into the
+        // token queue for the next iteration — it may itself be another
+        // protocol prefix, a win32 tail, or ordinary typing. The prefix
+        // regex (no $ anchor) matches the report at the head; the suffix
+        // is whatever follows.
+        const combined = mouseTailHold + token.value
+        const m = combined.match(SGR_MOUSE_TAIL_PREFIX_RE)!
+        const reportEnd = m[0].length
+        if (reportEnd < combined.length) {
+          const suffix = combined.slice(reportEnd)
+          tokenQueue.splice(qi + 1, 0, { type: 'text', value: suffix })
+        }
+        const resynthesized = '\x1b' + combined.slice(0, reportEnd)
         mouseTailHold = undefined
         mouseTailHoldAt = undefined
         const mouse = parseMouseEvent(resynthesized)

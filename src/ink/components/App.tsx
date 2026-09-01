@@ -96,7 +96,10 @@ type Props = {
 	// No-op (returns false) outside fullscreen mode (Ink.dispatchClick
 	// gates on altScreenActive). The button byte is the raw SGR release
 	// code, carrying the modifier bits (shift/alt/ctrl) for ClickEvent.
-	readonly onClickAt: (col: number, row: number, button?: number) => boolean;
+	// deferProbe: release-path clicks defer the health probe to the batch
+	// tail — a single stdin chunk can carry `release → next press`, and the
+	// probe must not write before the next press latch is established.
+	readonly onClickAt: (col: number, row: number, button?: number, deferProbe?: boolean) => boolean;
 	// Dispatch a context-menu event at (col, row) on RIGHT-button press —
 	// hit-tests the DOM tree and bubbles onContextMenu handlers, mirroring
 	// the DOM contextmenu event that shows on mousedown. Returns true if a
@@ -164,6 +167,11 @@ type Props = {
 	// START of release handling, but the destructive re-entry must wait
 	// until dispatchClick has read frontFrame (cellIsBlank, getHyperlinkAt).
 	readonly onReleaseTail?: () => void;
+	// Called at the batch tail when a release-path click deferred its health
+	// probe (deferProbe). Ink issues the skipMouseReassert probe here — after
+	// the entire batch is processed, so a `release → next press` chunk never
+	// sees the probe write land before the next press latch.
+	readonly onClickProbe?: () => void;
 	// Called when stdin data arrives after a >STDIN_RESUME_GAP_MS gap.
 	// Ink re-asserts terminal modes: extended key reporting, and (when in
 	// fullscreen) re-enters alt-screen + mouse tracking. Idempotent on the
@@ -247,6 +255,13 @@ export default class App extends PureComponent<Props, State> {
 	 */
 	heldButtons = 0;
 	/**
+	 * Set when an X10 generic release (low bits 3) arrived with buttons still
+	 * potentially held — the release carries no button identity, so the probe
+	 * stays blocked until a reliable termination signal (no-button motion,
+	 * focus-out, or a fresh press identifying the still-held button).
+	 */
+	ambiguousHeld = false;
+	/**
 	 * Set when a release, focus-out, or no-button motion cleared the gesture
 	 * latch during the current batch. processKeysInBatch drains the deferred
 	 * alt-screen re-entry / blocked probe at the batch tail, not mid-batch —
@@ -255,6 +270,18 @@ export default class App extends PureComponent<Props, State> {
 	 * window.
 	 */
 	pendingReleaseTail = false;
+	/**
+	 * Set when FOCUS_IN arrived during the current batch. The focus probe
+	 * (handleTerminalFocusProbe) is deferred to the batch tail so a single
+	 * stdin chunk carrying FOCUS_IN + press doesn't write probe bytes before
+	 * the press latch is established.
+	 */
+	pendingFocusProbe = false;
+	/**
+	 * Set when a release-path click deferred its health probe (deferProbe).
+	 * The probe fires at the batch tail via onClickProbe.
+	 */
+	pendingClickProbe = false;
 	// Last mode-1003 motion position. Terminals already dedupe to cell
 	// granularity but this also lets us skip dispatchHover entirely on
 	// repeat events (drag-then-release at same cell, etc.).
@@ -579,14 +606,23 @@ export default class App extends PureComponent<Props, State> {
 		// it clears on any complete event (mouse or key), ordinary text,
 		// paste/response boundary, or the 1s hold deadline — see ink.tsx's
 		// setProtocolCandidateActive for the full contract.
-		const hadHold = this.keyParseState.mouseTailHold !== undefined;
-		const hasHold = newState.mouseTailHold !== undefined;
-		const hadIncomplete = this.keyParseState.incomplete.startsWith('\x1b[<');
-		const hasIncomplete = newState.incomplete.startsWith('\x1b[<');
-		if ((!hadHold && hasHold) || (!hadIncomplete && hasIncomplete)) {
+		// Candidate state is the OR of both signals: the latch stays active
+		// while EITHER a hold or an SGR-prefixed incomplete buffer remains —
+		// a flush can move the prefix from `incomplete` into `mouseTailHold`
+		// (or back), and treating either transition alone as a falling edge
+		// would drop the latch mid-report.
+		const hadCandidate = this.keyParseState.mouseTailHold !== undefined || this.keyParseState.incomplete.startsWith('\x1b[<');
+		const hasCandidate = newState.mouseTailHold !== undefined || newState.incomplete.startsWith('\x1b[<');
+		if (!hadCandidate && hasCandidate) {
 			this.props.onProtocolCandidateChange?.(true);
-		} else if ((hadHold && !hasHold) || (hadIncomplete && !hasIncomplete)) {
+		} else if (hadCandidate && !hasCandidate) {
 			this.props.onProtocolCandidateChange?.(false);
+			// Candidate falling edge (timeout, response, paste boundary,
+			// completion): a probe/re-entry blocked by the candidate may be
+			// pending — schedule a batch-end drain. The drain re-checks the
+			// latch state, so a candidate that fell because a press completed
+			// (physical latch now held) stays safe.
+			this.pendingReleaseTail = true;
 		}
 		this.keyParseState = newState;
 
@@ -823,8 +859,11 @@ function processKeysInBatch(
 			app.handleTerminalFocus(true);
 			// Refocus is the first observable moment after a terminal-side
 			// mode reset (conpty drops 1049/mouse on DPI moves, renderer
-			// restarts, window snapping): probe and self-heal.
-			app.props.onTerminalFocus?.(true);
+			// restarts, window snapping): probe and self-heal. Deferred to
+			// the batch tail — a single stdin chunk can carry FOCUS_IN +
+			// press, and the probe must not write before the press latch
+			// is established.
+			app.pendingFocusProbe = true;
 			const event = new TerminalFocusEvent("terminalfocus");
 			app.internal_eventEmitter.emit("terminalfocus", event);
 			continue;
@@ -836,6 +875,7 @@ function processKeysInBatch(
 			// OS) — clear the held-button set so the health probe may write
 			// again.
 			app.heldButtons = 0;
+			app.ambiguousHeld = false;
 			app.props.onPointerGestureChange?.(false);
 			// Drag protocol: focus loss also orphans an in-flight drag
 			// session — settle it with a dragend (if started) like the
@@ -928,6 +968,18 @@ function processKeysInBatch(
 		app.pendingReleaseTail = false;
 		app.props.onReleaseTail?.();
 	}
+	// Focus-in probe is also deferred to the batch tail: a single stdin chunk
+	// can carry FOCUS_IN + press, and the probe must not write before the
+	// press latch is established.
+	if (app.pendingFocusProbe) {
+		app.pendingFocusProbe = false;
+		app.props.onTerminalFocus?.(true);
+	}
+	// Release-click probe deferred via deferProbe fires at the batch tail.
+	if (app.pendingClickProbe) {
+		app.pendingClickProbe = false;
+		app.props.onClickProbe?.();
+	}
 }
 
 /** Exported for testing. Mutates app.props.selection and click/hover state. */
@@ -946,26 +998,42 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 	// physical latch (probe must not write while a button is held even if
 	// clicks are disabled). SGR encodes button identity in the low 2 bits;
 	// X10's generic release (low bits 3) cannot identify which button ended,
-	// so it conservatively clears the entire set — a no-button motion or
-	// focus-out is the reliable termination signal for X10.
+	// so it conservatively enters an ambiguous-held state — the probe stays
+	// blocked until a reliable termination signal (no-button motion,
+	// focus-out, or a fresh press identifying the still-held button).
+	const wasLatched = app.heldButtons !== 0 || app.ambiguousHeld;
 	if (m.action === "press") {
 		if ((m.button & 0x20) !== 0 && baseButton === 3) {
 			// Mode-1003 no-button motion: no button held.
 			app.heldButtons = 0;
+			app.ambiguousHeld = false;
 		} else {
 			// Real press: add the button to the held set.
 			app.heldButtons |= 1 << baseButton;
+			app.ambiguousHeld = false;
 		}
 	} else {
 		// Release: SGR encodes the released button; X10's generic release
-		// (low bits 3) clears all.
+		// (low bits 3) cannot identify which button ended — conservatively
+		// keep the probe blocked (ambiguous-held) until a reliable
+		// termination signal arrives.
 		if (baseButton === 3) {
 			app.heldButtons = 0;
+			app.ambiguousHeld = true;
 		} else {
 			app.heldButtons &= ~(1 << baseButton);
 		}
 	}
-	app.props.onPointerGestureChange?.(app.heldButtons !== 0);
+	const isLatched = app.heldButtons !== 0 || app.ambiguousHeld;
+	app.props.onPointerGestureChange?.(isLatched);
+	// Falling edge (latched → unlatched) is a recovery boundary: schedule a
+	// batch-end drain even when the click policy below will consume or skip
+	// the event — pending probe/re-entry recovery must not depend on click
+	// policy. The drain itself re-checks the latch state at the batch tail,
+	// so a `release → next press` chunk stays safe.
+	if (wasLatched && !isLatched) {
+		app.pendingReleaseTail = true;
+	}
 
 	// Allow disabling click handling while keeping wheel scroll (which goes
 	// through the keybinding system as 'wheelup'/'wheeldown', not here).
@@ -985,11 +1053,8 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 				finishSelection(sel);
 				app.props.onSelectionChange();
 			}
-			// Gesture latch: no-button motion proves no button is held — if a
-			// release was lost the latch is stale; clear the held-button set
-			// so the health probe may write again.
-			app.heldButtons = 0;
-			app.props.onPointerGestureChange?.(false);
+			// Transport layer above already cleared heldButtons/ambiguousHeld
+			// and fired onPointerGestureChange — no duplicate unlatch here.
 			// Drag protocol: no-button motion during a drag session means
 			// the release was dropped (pointer left the window) — settle
 			// the session before the hover path takes over.
@@ -1212,8 +1277,12 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 		if (!hasSelection(sel) && sel.anchor) {
 			// Single click: dispatch DOM click immediately (cursor repositioning
 			// etc. are latency-sensitive). If no DOM handler consumed it, defer
-			// the hyperlink check so a second click can cancel it.
-			if (!app.props.onClickAt(col, row, m.button)) {
+			// the hyperlink check so a second click can cancel it. deferProbe:
+			// the health probe is deferred to the batch tail — a single stdin
+			// chunk can carry `release → next press`, and the probe must not
+			// write before the next press latch is established.
+			app.pendingClickProbe = true;
+			if (!app.props.onClickAt(col, row, m.button, true)) {
 				// Resolve the hyperlink URL synchronously while the screen buffer
 				// still reflects what the user clicked — deferring only the
 				// browser-open so double-click can cancel it.

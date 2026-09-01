@@ -1929,7 +1929,11 @@ export default class Ink {
    * The button byte is the raw SGR release code; its modifier bits land
    * on ClickEvent.shift/alt/ctrl.
    */
-  dispatchClick(col: number, row: number, button = 0): boolean {
+  /** Batch-tail probe for release-path clicks that deferred via deferProbe. */
+  clickProbeAtBatchTail = (): void => {
+    this.probeAltScreenHealth({ skipMouseReassert: true });
+  };
+  dispatchClick(col: number, row: number, button = 0, deferProbe = false): boolean {
     // Safe-boundary probe: clicks are dispatched from the RELEASE tail,
     // after App cleared the gesture latch — no button is held here. A
     // received mouse report proves tracking is alive but says nothing about
@@ -1938,7 +1942,12 @@ export default class Ink {
     // mouse-only user — without a mouse-path probe, a silently dropped
     // alt-screen would never recover. skipMouseReassert: the arriving event
     // already proves tracking, so only the DECRQM 1049 query is sent.
-    this.probeAltScreenHealth({ skipMouseReassert: true });
+    // deferProbe: release-path clicks defer the probe to the batch tail — a
+    // single stdin chunk can carry `release → next press`, and the probe
+    // must not write before the next press latch is established.
+    if (!deferProbe) {
+      this.probeAltScreenHealth({ skipMouseReassert: true });
+    }
     if (!this.altScreenActive) {
       logMouseDebug('dispatchClick skipped — alt screen inactive', { col, row });
       return false;
@@ -2234,7 +2243,7 @@ export default class Ink {
   }
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           {node}
         </TerminalWriteProvider>
