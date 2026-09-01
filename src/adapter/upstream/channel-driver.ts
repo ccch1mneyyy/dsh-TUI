@@ -25,7 +25,7 @@ import {
   createChannelConsumer,
   createChannelPlugins,
   createChannelTranscript,
-  createReplayChannelProviderFromSnapshot,
+  createReplayChannelProvider,
   projectChannelRows,
   projectChannelSnapshot,
   projectChannelState,
@@ -34,6 +34,7 @@ import {
 import { getRegisteredTuiChannel } from '../channel/host-registry.js'
 import { CHANNEL_FEATURES } from '../channel/features.js'
 import { CHANNEL_SPLIT_TOKEN } from '../channel/internal-token.js'
+import { withReplayIsolation } from '../kernel/replay-isolation.js'
 
 const CAPABILITY = 'host.channel'
 
@@ -109,8 +110,27 @@ async function verifyChannelLiveAsync(ctx: unknown): Promise<CapabilityLifecycle
         ...state,
       }),
     } as unknown as import('../spec/index.js').TuiChannelSnapshot
-    const protocolProvider = createReplayChannelProviderFromSnapshot(protocolSnapshot)
-    await createChannelConsumer(protocolProvider).open({})
+    // Exercise the full protocol envelope (open/subscribe/invoke/close) using
+    // the same Provider/Consumer pair as the replay harness. The only method
+    // exposed here is the read-only traceEvents projection, and it runs under
+    // replay isolation so the method-handler gate is satisfied.
+    const methods = typeof channel.traceEvents === 'function'
+      ? { traceEvents: () => channel.traceEvents() }
+      : undefined
+    const protocolProvider = createReplayChannelProvider({
+      snapshots: [protocolSnapshot],
+      ...(methods === undefined ? {} : { methods }),
+    })
+    const protocolConsumer = createChannelConsumer(protocolProvider)
+    const subscriptionConsumer = createChannelConsumer(protocolProvider)
+    await withReplayIsolation(async () => {
+      const opened = await protocolConsumer.open({})
+      await subscriptionConsumer.subscribe(opened.channelId, 0, () => undefined)
+      if (methods !== undefined) {
+        await protocolConsumer.invoke(opened.channelId, 'traceEvents', [])
+      }
+      await protocolConsumer.close(opened.channelId)
+    })
   } catch (error) {
     // A live Channel that cannot be represented as a protocol snapshot must
     // never be promoted to live by the Kernel. `verifyChannelLiveSync()` may

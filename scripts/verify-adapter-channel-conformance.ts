@@ -24,12 +24,14 @@ import {
   runReplayShadow,
   REPLAY_SCHEMA_VERSION,
   REPLAY_CHANNEL_SCHEMA_VERSION,
-  CHANNEL_METHOD_FEATURES,
 } from '../src/adapter/kernel/replay.js'
 import {
   createReplayChannelProvider,
   createChannelConsumer,
 } from '../src/adapter/channel/index.js'
+import { withReplayIsolation } from '../src/adapter/kernel/replay-isolation.js'
+import { registerTuiChannel } from '../src/adapter/channel/host-registry.js'
+import { verifyChannelLive } from '../src/adapter/upstream/channel-driver.js'
 import {
   validateTuiChannelSnapshot,
   validateTuiChannelInput,
@@ -98,13 +100,26 @@ const consumer = createChannelConsumer(realMethodsProvider)
 const opened = await consumer.open({})
 assert.equal(opened.channelId, official.snapshot.channelId)
 assert.equal(opened.version, 2)
-const invoked = await consumer.invoke(opened.channelId, 'commandCompletions', [])
+const invoked = await withReplayIsolation(() =>
+  consumer.invoke(opened.channelId, 'commandCompletions', []))
 assert.deepEqual(invoked.value, ['help', 'clear'])
 assert.equal(invoked.valueDefined, true)
 await assert.rejects(
   consumer.invoke(opened.channelId, 'definitely-not-a-method', []),
   /FEATURE_UNAVAILABLE/u,
   'unknown Channel method must fail per protocol',
+)
+const outsideConsumer = createChannelConsumer(realMethodsProvider)
+await assert.rejects(
+  outsideConsumer.invoke(opened.channelId, 'commandCompletions', []),
+  /replay isolation/u,
+  'method handlers must not execute outside replay isolation',
+)
+const selectorConsumer = createChannelConsumer(realMethodsProvider)
+await assert.rejects(
+  selectorConsumer.open({ workspace: 'file:///nonexistent', sessionId: 'wrong-session' }),
+  /REPLAY_PROVIDER_UNSUPPORTED_SELECTOR/u,
+  'replay provider must not silently ignore open selectors',
 )
 checks += 1
 
@@ -165,6 +180,63 @@ const realMethodReport = await runChannelReplay({
 })
 assert.equal(realMethodReport.ok, true, `real method replay should pass: ${JSON.stringify(realMethodReport)}`)
 assert.equal(realMethodReport.invokeValueDefined, true)
+checks += 1
+
+// ── round2 feature/evidence/duplicate/unknown-event fail-closed cases ─────
+const noExplicitFeaturesReport = await runChannelReplay({
+  snapshots: [snapshot1],
+})
+assert.equal(noExplicitFeaturesReport.ok, false)
+assert.ok(noExplicitFeaturesReport.featureErrors.some(error => /explicitly declared/u.test(error)),
+  'features must be explicitly declared')
+checks += 1
+
+const emptyStateSnapshot = Object.freeze({
+  wireRevision: TUI_CHANNEL_WIRE_REVISION,
+  channelId: 'channel-empty',
+  version: 1,
+  state: Object.freeze({}),
+})
+const noEvidenceReport = await runChannelReplay({
+  snapshots: [emptyStateSnapshot],
+  features: ['commands'],
+})
+assert.equal(noEvidenceReport.ok, false)
+assert.ok(noEvidenceReport.featureErrors.some(error => /no observable evidence/u.test(error)),
+  'declared features without state/method evidence must fail')
+checks += 1
+
+const duplicateFeatureReport = await runChannelReplay({
+  snapshots: [snapshot1],
+  features: ['session-state', 'session-state'],
+})
+assert.equal(duplicateFeatureReport.ok, false)
+assert.ok(duplicateFeatureReport.featureErrors.some(error => /duplicate Channel feature/u.test(error)),
+  'duplicate features must be rejected before dedupe')
+checks += 1
+
+await assert.rejects(
+  runChannelReplay({
+    sessionEvents: [
+      { type: 'totally/unknown-required', data: {} },
+    ],
+    sessionMeta: { channelId: 'unknown-event' },
+    features: ['session-state', 'session-input'],
+  }),
+  /unknown non-ignorable DSH session event/u,
+  'unknown non-ignorable DSH event must fail closed',
+)
+checks += 1
+
+const ignorableReport = await runChannelReplay({
+  sessionEvents: [
+    { type: 'totally/unknown-but-ignorable', data: { ignorable: true } },
+  ],
+  sessionMeta: { channelId: 'ignorable-event' },
+  features: ['session-state'],
+})
+assert.equal(ignorableReport.ok, true,
+  'unknown ignorable DSH events may be skipped')
 checks += 1
 
 // ── real DSH session-event projection (B1) ────────────────────────────────
@@ -232,14 +304,45 @@ assert.ok(shadow.channel !== undefined)
 assert.equal(shadow.channel.source, 'snapshots')
 checks += 1
 
-// ── production wiring source gate: channel driver must consume provider/consumer ──
-const channelDriverSource = readFileSync(join(ROOT, 'src/adapter/upstream/channel-driver.ts'), 'utf8')
-assert.ok(channelDriverSource.includes('createChannelConsumer'),
-  'production channel-driver must consume ChannelConsumer')
-assert.ok(channelDriverSource.includes('createReplayChannelProviderFromSnapshot'),
-  'production channel-driver must consume ChannelProvider')
-assert.ok(channelDriverSource.includes('CHANNEL_METHOD_FEATURES') || Object.keys(CHANNEL_METHOD_FEATURES).length > 0,
-  'method→feature map must exist for conformance checks')
-checks += 1
+// ── production runtime path: channel-driver's live protocol validation must
+// actually run open/subscribe/invoke/close (not just a source-string gate) ──
+{
+  const liveChannel = {
+    version: 1,
+    rows: [],
+    status: 'idle',
+    sessionTitle: 'live',
+    sessionColor: '',
+    agentId: 'live-channel',
+    agentBindingGeneration: 1,
+    model: '',
+    provider: '',
+    cwd: '/',
+    displayCwd: '/',
+    working: false,
+    cancelPending: false,
+    spinnerMode: 'idle',
+    responseChars: 0,
+    activeToolCount: 0,
+    turnStart: 0,
+    lastUserText: '',
+    commandList: [],
+    contextSegments: {},
+    subagents: [],
+    todos: [],
+    pending: [],
+    mode: { id: 'default' },
+    traceEvents: () => [],
+  }
+  const liveCtx = {}
+  registerTuiChannel(liveCtx, liveChannel)
+  const liveLifecycles = await verifyChannelLive(liveCtx)
+  assert.ok(Array.isArray(liveLifecycles))
+  assert.ok(liveLifecycles.some(lifecycle =>
+    lifecycle.capability === 'host.channel.transcript.trace-events'
+    && lifecycle.state !== 'degraded'),
+  'production channel-driver live protocol validation must complete open/subscribe/invoke/close')
+  checks += 1
+}
 
 console.log(`verify:adapter-channel-conformance OK (${checks} checks, official fixture + real DSH projection + protocol negative cases)`)

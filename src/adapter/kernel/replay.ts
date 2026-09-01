@@ -103,6 +103,55 @@ export const CHANNEL_METHOD_FEATURES: Readonly<Record<string, string>> = Object.
   balanceInfo: 'credentials',
 })
 
+/**
+ * Per-feature state evidence keys.
+ *
+ * A declared Channel feature must be backed by an observable state field or
+ * a declared method handler; otherwise the replay is only an empty protocol
+ * envelope and must not be reported `ok`.
+ */
+const CHANNEL_FEATURE_STATE_EVIDENCE_KEYS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  'session-state': ['status', 'sessionTitle', 'homeDir', 'pathCaseInsensitive', 'model', 'mode', 'agentId'],
+  'session-input': ['transcript', 'pending', 'lastUserText'],
+  'commands': ['commandCatalog'],
+  'models': ['model'],
+  'modes': ['mode'],
+  'presets': ['agentPreset'],
+  'presentation': ['notification', 'toast'],
+  'provider-setup': ['provider'],
+  'credentials': ['credential', 'credentials', 'oauthProviderStatuses'],
+  'diagnostics': ['diagnostic', 'diagnostics'],
+  'files': ['files', 'fileCandidates'],
+  'scenes': ['pluginScene', 'scene'],
+  'settings': ['settingsSections'],
+  'skills': ['skills'],
+  'subagents': ['subagents'],
+  'workspaces': ['workspace', 'workspaces'],
+  'session-history': ['sessions', 'sessionHistory'],
+  'session-lifecycle': ['sessionLifecycle'],
+  'trace': ['traceEvents', 'traceData'],
+})
+
+function hasMeaningfulEvidenceValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0
+  if (value !== null && typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0
+  if (typeof value === 'string') return value.trim() !== ''
+  return value !== undefined
+}
+
+function featureHasEvidence(
+  feature: string,
+  snapshots: readonly TuiChannelSnapshot[],
+  methods: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const state = snapshots.at(-1)?.state ?? {}
+  const keys = CHANNEL_FEATURE_STATE_EVIDENCE_KEYS[feature] ?? []
+  for (const key of keys) {
+    if (hasMeaningfulEvidenceValue((state as Record<string, unknown>)[key])) return true
+  }
+  return Object.keys(methods ?? {}).some(method => CHANNEL_METHOD_FEATURES[method] === feature)
+}
+
 export interface ReplayContractRef {
   readonly apiVersion: string
   readonly kind: string
@@ -328,7 +377,18 @@ export async function runChannelReplay(input: ReplayChannelInput): Promise<Repla
     })
 
     const featureErrors: string[] = []
-    const features = [...new Set(input.features ?? TUI_CHANNEL_FEATURES)]
+    const rawFeatures = input.features
+    if (rawFeatures === undefined) {
+      featureErrors.push('features must be explicitly declared by the replay input')
+    }
+    const seenFeatures = new Set<string>()
+    for (const feature of rawFeatures ?? []) {
+      if (seenFeatures.has(feature)) {
+        featureErrors.push(`duplicate Channel feature: ${feature}`)
+      }
+      seenFeatures.add(feature)
+    }
+    const features = [...new Set(rawFeatures ?? [])]
     const allowedFeatures = new Set(TUI_CHANNEL_FEATURES)
     for (const feature of features) {
       if (!allowedFeatures.has(feature)) featureErrors.push(`unknown Channel feature: ${feature}`)
@@ -338,6 +398,11 @@ export async function runChannelReplay(input: ReplayChannelInput): Promise<Repla
       validateTuiChannelSupport({ wireRevision: TUI_CHANNEL_WIRE_REVISION, features })
     } catch (error) {
       featureErrors.push(error instanceof Error ? error.message : String(error))
+    }
+    for (const feature of features) {
+      if (!featureHasEvidence(feature, snapshots, input.methods)) {
+        featureErrors.push(`Channel feature ${feature} has no observable evidence in state/methods`)
+      }
     }
 
     const methodErrors: string[] = []

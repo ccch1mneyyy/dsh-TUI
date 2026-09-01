@@ -268,9 +268,13 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
 - **P5 Channel Provider/Consumer**：新增本地 Channel Provider/Consumer，
   实现 `tui.dsh/v1alpha1#Channel` 的 open/subscribe/invoke/close 协议包络与
   规范校验；`runChannelReplay` 支持录制 snapshot 数组，也支持把真实 DSH
-  `agent.session.events` 形状事件投影为单调 `TuiChannelSnapshot`（这是最小真实
-  DSH 回放投影，不是生产 `channel.ts` 的完整解析器）。未知 method 按协议失败，
-  features 与 method→feature 映射纳入 `ok`，连续性错误 fail-closed。
+  `agent.session.events` 形状事件投影为单调 `TuiChannelSnapshot`。该投影定位为
+  **minimal transcript replay**：只覆盖 transcript/status/基础 session 字段，
+  **不声明是完整 RFC 0007 Channel state/conformance**。未知方法按协议失败、
+  features 必须显式声明且每个 feature 必须有 state/method 可观察证据、
+  重复 features 先拒绝、未知非 ignorable DSH event fail-closed、
+  method handler 只能在 replay isolation 内执行、replay provider 不解析
+  workspace/sessionId selector（显式 unsupported）；连续性错误 fail-closed。
 - **P3 feature 生命周期稳定性**：`refresh` 之后执行 `mount()` / `descriptorBuild()` /
   `diagnosticSnapshot()` 再次触发同步 `detect()`，也不会清空已探测的 P3 feature；
   这些 feature 是内部 Kernel/Port 事实，不进入公开 Host Descriptor。

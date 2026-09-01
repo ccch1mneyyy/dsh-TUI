@@ -53,8 +53,11 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   新增 `channel` KernelSlice、上游 driver 与 `verify:adapter-channel`。
 - **P5 Channel Provider/Consumer**:实现 `tui.dsh/v1alpha1#Channel`
   协议包络与校验;`runChannelReplay` 支持录制 snapshots 与真实 DSH
-  sessionEvents 的最小投影;未知 method 失败、feature/method 映射纳入 ok,
-  连续性 fail-closed;新增 `verify:adapter-channel-conformance`。
+  sessionEvents 的 **minimal transcript replay**(不宣称完整 RFC state);
+  未知 method 失败、features 必须显式声明且有证据、重复 features 先拒、
+  未知非 ignorable event fail-closed、method handler 仅在 replay isolation 内执行,
+  replay provider 不解析 selector(显式 unsupported);生产 driver 已真正跑
+  open/subscribe/invoke/close;新增 `verify:adapter-channel-conformance`。
 - **P6 compat 清理**:删除 `src/plugin-spec/*`、`src/dsh-adapter/{grants,
   host-descriptor}.ts` shim;彻底移除 `admissionCompat` 与
   `mountedAdmissionCoordinates`;`src/plugin-host.ts` 保留为规范化公开面;

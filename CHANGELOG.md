@@ -32,11 +32,18 @@ are logged in Chinese, with English summaries when appropriate.
   - Extended `src/adapter/kernel/replay.ts` with `runChannelReplay()` and a
     channel section on `runReplayShadow()`.
   - Replays use recorded snapshots or a minimal real DSH
-    `agent.session.events` projection; validate against the vendored
+    `agent.session.events` transcript projection (explicitly not a complete
+    RFC 0007 Channel state projection); validate against the vendored
     dsh-ecosystem-spec validators and official fixture, and check monotonic
     versions, features and method→feature mappings.
-  - Unknown methods fail per protocol; continuity violations fail closed;
-    replay JSON is size/depth bounded and deep-frozen.
+  - Unknown methods fail per protocol; features must be explicitly declared
+    and each must have observable evidence; duplicate features are rejected;
+    unknown non-ignorable DSH events fail closed; method handlers only run
+    inside replay isolation; replay provider explicitly does not resolve
+    open selectors; continuity violations fail closed; replay JSON is
+    size/depth bounded and deep-frozen.
+  - Production channel-driver live protocol validation now runs
+    open/subscribe/invoke/close through the real Provider/Consumer path.
   - New gate: `npm run verify:adapter-channel-conformance`.
 
 ### Removed / changed

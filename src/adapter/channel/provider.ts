@@ -21,6 +21,7 @@ import {
   validateTuiChannelOutput,
   validateTuiChannelSnapshot,
 } from '../spec/index.js'
+import { isReplayIsolationActive } from '../kernel/replay-isolation.js'
 import type { TuiChannelInvokeOutput, TuiChannelSnapshot } from '../spec/index.js'
 
 export interface ChannelProviderOpenInput {
@@ -171,6 +172,14 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
         ...input,
         ...(input.options === undefined ? {} : { options: input.options }),
       })
+      // The replay provider is a deterministic fixture harness, not a DSH
+      // endpoint that resolves workspace/session authorities. Selector
+      // resolution is explicitly unsupported: silently returning the latest
+      // snapshot for a wrong selector would be a false conformance claim.
+      if ((input.workspace !== undefined && input.workspace !== '')
+        || (input.sessionId !== undefined && input.sessionId !== '')) {
+        throw new Error('REPLAY_PROVIDER_UNSUPPORTED_SELECTOR: replay provider does not resolve workspace/sessionId selectors')
+      }
       return latest()
     },
     async subscribe(
@@ -212,6 +221,9 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
       if (handler === undefined) {
         // Unknown methods are protocol errors, never a successful no-op.
         throw new Error(`FEATURE_UNAVAILABLE: unknown Channel method "${method}"`)
+      }
+      if (!isReplayIsolationActive()) {
+        throw new Error('replay Channel method handlers may only run inside replay isolation')
       }
       const value = await handler(args)
       assertJsonValue(value)

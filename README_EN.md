@@ -691,10 +691,14 @@ harness:
   `tui.dsh/v1alpha1#Channel` open/subscribe/invoke/close envelope and validation.
   `runChannelReplay` accepts recorded snapshot arrays and also projects real
   DSH `agent.session.events`-shaped records into monotonic
-  `TuiChannelSnapshot`s (a minimal real DSH replay projection, not the full
-  production `channel.ts` parser). Unknown methods fail per protocol, features
-  and method→feature mappings are included in `ok`, and continuity violations
-  fail closed.
+  `TuiChannelSnapshot`s. This is explicitly a **minimal transcript replay**:
+  it covers transcript/status/basic session fields and does **not** claim full
+  RFC 0007 Channel state/conformance. Unknown methods fail per protocol,
+  features must be explicitly declared and each must have observable
+  state/method evidence, duplicate features are rejected first, unknown
+  non-ignorable DSH events fail closed, method handlers only run inside replay
+  isolation, and the replay provider explicitly does not resolve
+  workspace/sessionId selectors. Continuity violations fail closed.
 - **P3 feature lifecycle stability**: after `refresh`, subsequent
   `mount()` / `descriptorBuild()` / `diagnosticSnapshot()` calls that rerun
   synchronous `detect()` do not clear the probed P3 features. These features are
