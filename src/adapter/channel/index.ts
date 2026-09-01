@@ -15,7 +15,7 @@ export { projectChannelState } from './state.js'
 export { createChannelActions } from './actions.js'
 export { createChannelPlugins } from './plugins.js'
 export { createChannelTranscript } from './transcript.js'
-export { registerTuiChannel, getRegisteredTuiChannel, onTuiChannelRegistered } from './host-registry.js'
+export { registerTuiChannel, onTuiChannelRegistered } from './host-registry.js'
 export { CHANNEL_FEATURES, CHANNEL_PORT_METHOD_CAPABILITIES, CHANNEL_STANDARD_DECLARATIONS } from './features.js'
 export { TUI_CHANNEL_WIRE_REVISION } from '../spec/index.js'
 export {

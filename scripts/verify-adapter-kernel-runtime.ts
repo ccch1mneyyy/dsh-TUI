@@ -20,6 +20,7 @@ import ts from 'typescript'
 import { KernelRuntime } from '../src/adapter/kernel/kernel-runtime.js'
 import { ADAPTER_KERNEL_SLICES } from '../src/adapter/kernel/slices/index.js'
 import { hostDescriptorDriver } from '../src/adapter/upstream/host-descriptor-driver.js'
+import { registerTuiChannel } from '../src/adapter/channel/host-registry.js'
 
 const ROOT = resolve(import.meta.dirname, '..')
 
@@ -366,6 +367,54 @@ assert.notEqual(failed.currentLifecycles().find(lifecycle => lifecycle.capabilit
     'dispose must cause an in-flight refresh to stop rather than complete')
   assert.equal(disposing.currentLifecycles().length, 0,
     'a refresh that completes after dispose must not publish live lifecycles')
+}
+
+// R2: a Channel registered while a refresh is in flight must queue a rerun,
+// so the late Channel is observed by a subsequent refresh instead of waiting
+// for the TTL.
+{
+  let firstEnteredResolve: (() => void) | undefined
+  let firstContinueResolve: (() => void) | undefined
+  let secondEnteredResolve: (() => void) | undefined
+  const firstEntered = new Promise<void>(resolve => { firstEnteredResolve = resolve })
+  const firstContinue = new Promise<void>(resolve => { firstContinueResolve = resolve })
+  const secondEntered = new Promise<void>(resolve => { secondEnteredResolve = resolve })
+  const calls: number[] = []
+  const slowDriver = {
+    id: 'channel-rerun',
+    upstreamFamily: 'test',
+    capability: 'test.channel-rerun',
+    mountEffectClass: 'read-only' as const,
+    detect: () => ({ state: 'unsupported' as const, reason: 'not relevant' }),
+    verifyLive: async () => {
+      calls.push(calls.length + 1)
+      if (calls.length === 1) {
+        firstEnteredResolve!()
+        await firstContinue
+      } else if (calls.length === 2) {
+        secondEnteredResolve!()
+      }
+      return []
+    },
+  }
+  const rerunCtx = {}
+  const rerunKernel = new KernelRuntime({
+    context: rerunCtx,
+    mode: 'new',
+    generationId: 'kernel-rerun-battery',
+    drivers: [slowDriver],
+  })
+  const inFlight = rerunKernel.refresh()
+  await firstEntered
+  // Register the Channel while the first refresh is still blocked.
+  registerTuiChannel(rerunCtx, {})
+  firstContinueResolve!()
+  await secondEntered
+  await inFlight
+  checks += 1
+  assert.equal(calls.length, 2,
+    'a Channel registered during an in-flight refresh must trigger a rerun')
+  rerunKernel.dispose()
 }
 
 // M3: DSH_TUI_ADAPTER_SLICES / KernelRuntimeOptions.slices must actually filter

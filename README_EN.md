@@ -683,9 +683,10 @@ harness:
   `src/adapter/channel/*` split modules, mounted as a `channel` KernelSlice and
   consumed by the production driver. The production
   `src/dsh-adapter/channel.ts` implementation itself is **not yet physically
-  split**; it remains the live Channel implementation source. HostFacade guards
-  each method with the shadow policy, so passive/replay allows read-only
-  projections while denying mutations.
+  split**; it remains the live Channel implementation source. **Production UI
+  actions still call the native Channel directly and are not yet migrated to
+  `HostFacade.channel`.** HostFacade guards each method with the shadow policy,
+  so passive/replay allows read-only projections while denying mutations.
 - **P5 Channel Provider/Consumer**: new local Provider/Consumer implement the
   `tui.dsh/v1alpha1#Channel` open/subscribe/invoke/close envelope and validation.
   `runChannelReplay` accepts recorded snapshot arrays and also projects real

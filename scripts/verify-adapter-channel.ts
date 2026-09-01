@@ -270,6 +270,36 @@ passive.dispose()
   assert.match(traceLifecycle.detection.missing?.[0] ?? '', /trace-events probe failed/u)
 }
 
+// R1: a Channel whose projected protocol state contains non-JSON values must
+// not have its read-only features promoted to live by the Kernel.
+{
+  const badStateChannel = makeFakeChannel()
+  badStateChannel.workingActivity = { fn: () => undefined }
+  const badStateCtx = new Context()
+  badStateCtx.logger.warn = () => undefined
+  registerTuiChannel(badStateCtx, badStateChannel)
+  const badStateKernel = new KernelRuntime({
+    context: badStateCtx,
+    mode: 'new',
+    generationId: 'channel-nonjson-battery',
+    kernelSlices: ADAPTER_KERNEL_SLICES,
+    slices: ['channel'],
+  })
+  await badStateKernel.refresh()
+  for (const feature of [
+    'host.channel.projection.snapshot',
+    'host.channel.state.snapshot',
+    'host.channel.transcript.rows',
+    'host.channel.transcript.trace-events',
+  ]) {
+    const lifecycle = badStateKernel.currentLifecycles().find(item => item.capability === feature)
+    assert.ok(lifecycle !== undefined, `expected lifecycle for ${feature}`)
+    assert.notEqual(lifecycle.state, 'live',
+      `non-JSON Channel state must not allow ${feature} to become live`)
+  }
+  badStateKernel.dispose()
+}
+
 // Real production assembly: mount the actual TuiPluginHostRuntime, register
 // the live Channel through a child context after the Kernel has started, and
 // verify the production getHostFacade()/Kernel can read the Channel Port.
@@ -310,5 +340,8 @@ assert.ok(registrySource.includes("compositionRoot(ctx as never)"),
 const hostFacadeSource = readFileSync(resolve(ROOT, 'src/adapter/kernel/host-facade.ts'), 'utf8')
 assert.ok(hostFacadeSource.includes('channel?: HostChannelPort'),
   'HostFacade must expose the Channel Port')
+const channelIndexSource = readFileSync(resolve(ROOT, 'src/adapter/channel/index.ts'), 'utf8')
+assert.ok(!channelIndexSource.includes('getRegisteredTuiChannel'),
+  'raw Channel lookup must not be re-exported from the public internal channel index')
 
 console.log('verify:adapter-channel OK (channel split, Kernel mounting, real trace probe, production root wiring)')

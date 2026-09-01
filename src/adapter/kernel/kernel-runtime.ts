@@ -106,6 +106,7 @@ export class KernelRuntime {
   private refreshError: string | undefined
   private refreshTimer: ReturnType<typeof setInterval> | undefined
   private refreshInFlight: Promise<readonly CapabilityLifecycle[]> | undefined
+  private refreshRerunRequested = false
   private mountPromise: Promise<void> | undefined
   private unsubscribeChannelListener: (() => void) | undefined
   private disposed = false
@@ -256,13 +257,24 @@ export class KernelRuntime {
    * explicitly passes `allowReplay: true` for an isolated replay/mock context.
    */
   async refresh(options: KernelRefreshOptions = {}): Promise<readonly CapabilityLifecycle[]> {
-    if (this.refreshInFlight !== undefined) return this.refreshInFlight
+    if (this.refreshInFlight !== undefined) {
+      // A refresh is already running. If the live Channel registers (or any
+      // other state changes) while it is in flight, ask for a background rerun
+      // after the current pass completes so late registrations are not only
+      // observed on the next TTL.
+      this.refreshRerunRequested = true
+      return this.refreshInFlight
+    }
     const run = this.refreshInternal(options)
     this.refreshInFlight = run
     try {
       return await run
     } finally {
       if (this.refreshInFlight === run) this.refreshInFlight = undefined
+      if (this.refreshRerunRequested && !this.disposed) {
+        this.refreshRerunRequested = false
+        void this.refresh(options).catch(() => undefined)
+      }
     }
   }
 

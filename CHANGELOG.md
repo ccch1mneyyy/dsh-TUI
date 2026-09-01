@@ -20,7 +20,9 @@ are logged in Chinese, with English summaries when appropriate.
   - Production TUI wiring registers the live Channel with the adapter kernel.
   - Honest note: this is a new Port/projection and split-module layer, not a
     physical split of the production `src/dsh-adapter/channel.ts`; the large
-    live Channel implementation file remains the source of truth.
+    live Channel implementation file remains the source of truth, and
+    production UI actions still call the native Channel directly instead of
+    going through `HostFacade.channel`.
   - New gate: `npm run verify:adapter-channel`.
 
 - **P5 DSH event projection + Channel Provider/Consumer**

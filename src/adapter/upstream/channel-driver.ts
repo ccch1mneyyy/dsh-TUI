@@ -26,12 +26,12 @@ import {
   createChannelPlugins,
   createChannelTranscript,
   createReplayChannelProviderFromSnapshot,
-  getRegisteredTuiChannel,
   projectChannelRows,
   projectChannelSnapshot,
   projectChannelState,
   TUI_CHANNEL_WIRE_REVISION,
 } from '../channel/index.js'
+import { getRegisteredTuiChannel } from '../channel/host-registry.js'
 import { CHANNEL_FEATURES } from '../channel/features.js'
 import { CHANNEL_SPLIT_TOKEN } from '../channel/internal-token.js'
 
@@ -113,10 +113,14 @@ async function verifyChannelLiveAsync(ctx: unknown): Promise<CapabilityLifecycle
     await createChannelConsumer(protocolProvider).open({})
   } catch (error) {
     // A live Channel that cannot be represented as a protocol snapshot must
-    // not keep read-only live claims.
-    const reason = errorText(error)
+    // never be promoted to live by the Kernel. `verifyChannelLiveSync()` may
+    // return `staged` lifecycles carrying probe evidence; the Kernel's
+    // `verifyAndPromote()` would otherwise turn them into live after this
+    // function returns. Force every channel lifecycle (including staged
+    // read-only features) to degraded when protocol validation fails.
+    const reason = `channel protocol snapshot rejected: ${errorText(error)}`
     return lifecycles.map(lifecycle =>
-      lifecycle.capability.startsWith('host.channel.') && lifecycle.state === 'live'
+      lifecycle.capability.startsWith('host.channel.')
         ? lifecycleFromDetection(lifecycle.capability, {
             state: 'degraded',
             missing: [reason],
