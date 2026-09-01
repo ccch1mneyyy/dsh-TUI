@@ -167,14 +167,20 @@ export class KernelRuntime {
         const projected = driver.lifecycles(this.context)
         detected.push(...projected.map(verifyAndPromote))
       } else {
-        // P3 slices often expose only detect()/verifyLive() without a separate
-        // synchronous lifecycle projection. The Kernel must not forget the
-        // most recent verified feature facts when detect() runs again during
-        // mount/descriptor/diagnostic refresh. Keep those cached features as
-        // internal Port facts until the next successful live refresh replaces
-        // them.
-        const cached = this.lastVerifiedLifecycles.get(driver.id)
-        if (cached !== undefined) detected.push(...cached)
+        // P3 slices often expose only detect()/verifyLive(). Their cached
+        // verified features are only a *current* fact inside a fresh,
+        // successful verification window; outside that window (failed
+        // refresh, expired TTL, unsupported detect, or dispose) the cache must
+        // not be treated as live/detected state anymore.
+        const detection = this.driverDetections.get(driver.id)
+        if (
+          this.hasFreshVerification()
+          && detection?.state !== 'unsupported'
+          && !this.disposed
+        ) {
+          const cached = this.lastVerifiedLifecycles.get(driver.id)
+          if (cached !== undefined) detected.push(...cached)
+        }
       }
       // A driver without a lifecycle projection is not yet part of the P2
       // publication path; it remains a diagnostic-only driver.
@@ -188,6 +194,13 @@ export class KernelRuntime {
     // immediately.
     this.replaceLifecycles(this.preserveFreshVerifiedLifecycles(detected))
     return this.lifecycles
+  }
+
+  private hasFreshVerification(): boolean {
+    return !this.disposed
+      && this.refreshState === 'completed'
+      && this.lastRefreshAt !== undefined
+      && (Date.now() - this.lastRefreshAt) <= this.refreshTtlMs
   }
 
   private preserveFreshVerifiedLifecycles(detected: readonly CapabilityLifecycle[]): CapabilityLifecycle[] {
@@ -566,6 +579,11 @@ export class KernelRuntime {
       this.unsubscribeChannelListener()
       this.unsubscribeChannelListener = undefined
     }
+    // A disposed Kernel must not continue to expose previously live P3
+    // feature facts.
+    this.lifecycles = Object.freeze([])
+    this.lastVerifiedLifecycles.clear()
+    this.liveVerifiedAt.clear()
     for (const driver of this.drivers) {
       const mount = this.mountDisposers.get(driver.id)
       if (mount === undefined) continue

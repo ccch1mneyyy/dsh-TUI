@@ -61,6 +61,13 @@ export class TuiToastStore {
     this.sink = sink
   }
 
+  /** Whether a real production sink (the host's channel.notify bridge) is
+   * present. Used by the toast live probe to distinguish “host store exists”
+   * from “real production delivery path is actually wired”. */
+  hasSink(): boolean {
+    return this.sink !== undefined
+  }
+
   /** Host-only probe sink registration. Probe sinks are independent of the
    * production sink, so a live probe never replaces or swallows production
    * toast delivery. */

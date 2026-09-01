@@ -417,6 +417,110 @@ assert.notEqual(failed.currentLifecycles().find(lifecycle => lifecycle.capabilit
   rerunKernel.dispose()
 }
 
+// P3 High 1: no-lifecycle P3 drivers must not retain live features after TTL
+// expiry, failed refresh, unsupported detect, or dispose.
+{
+  let behavior: 'ok' | 'fail' | 'unsupported' = 'ok'
+  const noLifecycleDriver = {
+    id: 'p3-no-lifecycle',
+    upstreamFamily: 'test',
+    capability: 'test.p3-no-lifecycle',
+    mountEffectClass: 'read-only' as const,
+    detect: () => behavior === 'unsupported'
+      ? { state: 'unsupported' as const, reason: 'driver now unsupported' }
+      : { state: 'supported' as const, evidence: [{ kind: 'service' as const, id: 'p3' }] },
+    verifyLive: async () => {
+      if (behavior === 'fail') throw new Error('p3 live probe failed')
+      return [{
+        capability: 'p3#Feature',
+        coordinate: { apiVersion: 'p3', kind: 'Feature' },
+        state: 'staged' as const,
+        detection: {
+          state: 'supported' as const,
+          evidence: [{ kind: 'probe' as const, id: 'p3-probe' }],
+        },
+      }]
+    },
+  }
+
+  // TTL expiry must demote a previously live no-lifecycle driver.
+  const ttlKernel = new KernelRuntime({
+    context: {},
+    mode: 'new',
+    generationId: 'p3-no-lifecycle-ttl',
+    refreshTtlMs: 10,
+    drivers: [noLifecycleDriver],
+  })
+  await ttlKernel.refresh()
+  checks += 1
+  assert.equal(ttlKernel.currentLifecycles().find(lifecycle => lifecycle.capability === 'p3#Feature')?.state, 'live')
+  await new Promise(resolve => setTimeout(resolve, 25))
+  ttlKernel.detect()
+  checks += 1
+  assert.notEqual(
+    ttlKernel.currentLifecycles().find(lifecycle => lifecycle.capability === 'p3#Feature')?.state,
+    'live',
+    'expired TTL must not leave a no-lifecycle driver live',
+  )
+  ttlKernel.dispose()
+
+  // Failed refresh must demote.
+  const failKernel = new KernelRuntime({
+    context: {},
+    mode: 'new',
+    generationId: 'p3-no-lifecycle-fail',
+    drivers: [noLifecycleDriver],
+  })
+  await failKernel.refresh()
+  checks += 1
+  assert.equal(failKernel.currentLifecycles().find(lifecycle => lifecycle.capability === 'p3#Feature')?.state, 'live')
+  behavior = 'fail'
+  await failKernel.refresh()
+  checks += 1
+  assert.notEqual(
+    failKernel.currentLifecycles().find(lifecycle => lifecycle.capability === 'p3#Feature')?.state,
+    'live',
+    'failed refresh must not keep a no-lifecycle driver live',
+  )
+  failKernel.dispose()
+  behavior = 'ok'
+
+  // Unsupported detect must demote even inside a fresh window.
+  const unsupportedKernel = new KernelRuntime({
+    context: {},
+    mode: 'new',
+    generationId: 'p3-no-lifecycle-unsupported',
+    drivers: [noLifecycleDriver],
+  })
+  await unsupportedKernel.refresh()
+  checks += 1
+  assert.equal(unsupportedKernel.currentLifecycles().find(lifecycle => lifecycle.capability === 'p3#Feature')?.state, 'live')
+  behavior = 'unsupported'
+  unsupportedKernel.detect()
+  checks += 1
+  assert.notEqual(
+    unsupportedKernel.currentLifecycles().find(lifecycle => lifecycle.capability === 'p3#Feature')?.state,
+    'live',
+    'unsupported detect must not leave a no-lifecycle driver live',
+  )
+  unsupportedKernel.dispose()
+
+  // Dispose must clear current lifecycles.
+  const disposeKernel = new KernelRuntime({
+    context: {},
+    mode: 'new',
+    generationId: 'p3-no-lifecycle-dispose',
+    drivers: [noLifecycleDriver],
+  })
+  await disposeKernel.refresh()
+  checks += 1
+  assert.equal(disposeKernel.currentLifecycles().find(lifecycle => lifecycle.capability === 'p3#Feature')?.state, 'live')
+  disposeKernel.dispose()
+  checks += 1
+  assert.equal(disposeKernel.currentLifecycles().length, 0,
+    'disposed Kernel must not retain no-lifecycle driver features')
+}
+
 // M3: DSH_TUI_ADAPTER_SLICES / KernelRuntimeOptions.slices must actually filter
 // kernel slices, not leave the option as a dead parameter.
 {

@@ -182,7 +182,6 @@ const expectedLiveFeatures = Object.freeze([
   'host.themes.register',
   'host.themes.snapshot',
   'host.themes.resolver',
-  'host.toast.show',
   'host.command-trees.register',
   'host.command-trees.children',
 ])
@@ -203,6 +202,7 @@ const expectedDegradedFeatures = Object.freeze([
   'host.status.subscribe',
   'host.shortcuts.dispatch',
   'host.themes.subscribe',
+  'host.toast.show',
   'host.command-trees.descriptions',
 ])
 for (const capability of expectedDegradedFeatures) {

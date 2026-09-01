@@ -474,26 +474,25 @@ async function verifyToastLive(ctx: unknown): Promise<CapabilityLifecycle[]> {
   if (store === undefined) {
     return [degradedFeature('host.toast.show', baseEvidence, 'tuiToast host store')]
   }
-  const evidence: DetectionEvidence[] = [serviceEvidence('tuiToast')]
-  let received = 0
-  let removeProbe: (() => void) | undefined
-  try {
-    // Probe-only sink: the production sink is never replaced or touched.
-    removeProbe = store.addProbeSink(() => {
-      received += 1
-    })
-    const delivered = store.deliverProbe({ text: 'dsh-tui reversible toast probe', timeoutMs: 500 })
-    if (!delivered || received !== 1) {
-      throw new Error('temporary toast was not delivered through a probe-only sink')
-    }
-    evidence.push(probeEvidence('tuiToast.deliverProbe()', 'temporary toast delivered through an independent probe-only sink'))
-    return [liveFeature('host.toast.show', evidence)]
-  } catch (error) {
-    evidence.push(probeEvidence('tuiToast.reversible-live-probe', errorText(error)))
-    return [degradedFeature('host.toast.show', evidence, 'tuiToast.reversible-live-probe')]
-  } finally {
-    removeProbe?.()
-  }
+  const evidence: DetectionEvidence[] = [
+    serviceEvidence('tuiToast'),
+    methodEvidence('tuiToast', 'deliver'),
+  ]
+  // `deliverProbe()` proves only that a probe-only channel works; it does NOT
+  // prove the real production `deliver()` path (channel.notify / UI sink) is
+  // wired and non-disruptively reachable. Without a non-disruptive real
+  // production-delivery probe, `host.toast.show` must remain degraded.
+  evidence.push(probeEvidence(
+    'tuiToast.hasSink()',
+    typeof store.hasSink === 'function' && store.hasSink()
+      ? 'production toast sink is present, but real delivery path is not verified by a non-disruptive probe'
+      : 'production toast sink is absent',
+  ))
+  return [degradedFeature(
+    'host.toast.show',
+    evidence,
+    'host.toast.show.real-production-delivery-not-verified',
+  )]
 }
 
 function createToastPort(store: NonNullable<ReturnType<typeof getHostToastStore>>): HostToastPort {

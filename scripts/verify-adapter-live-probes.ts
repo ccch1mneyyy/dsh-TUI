@@ -412,7 +412,7 @@ async function main(): Promise<void> {
       ['renderers', renderersDriver, ['host.renderers.register', 'host.renderers.render'], []],
       ['themes', themesDriver, ['host.themes.register', 'host.themes.snapshot', 'host.themes.resolver'],
         ['host.themes.subscribe']],
-      ['toast', toastDriver, ['host.toast.show'], []],
+      ['toast', toastDriver, [], ['host.toast.show']],
       ['commandTrees', commandTreesDriver, ['host.command-trees.register', 'host.command-trees.children'],
         ['host.command-trees.descriptions']],
     ]
