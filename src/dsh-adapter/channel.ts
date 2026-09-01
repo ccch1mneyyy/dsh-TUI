@@ -446,6 +446,13 @@ export interface ComposerSubmission {
   readonly images?: readonly ComposerImageRef[]
 }
 
+/** UI-safe projection of one settled DSH registry command. Keeping the
+ * result kind across the adapter boundary lets the composer retain a
+ * rejected image draft instead of treating the error text as success. */
+export type ExternalCommandOutcome =
+  | { readonly kind: 'success'; readonly text: string; readonly consumeDraft: true }
+  | { readonly kind: 'error'; readonly text: string; readonly consumeDraft: boolean }
+
 const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
 const COMPOSER_IMAGE_TOKEN_EXACT = /^\[Image #\d+\]$/u
 
@@ -1082,15 +1089,20 @@ export interface Channel {
   /**
    * Run a plugin-registered slash command against the live agent (DSH
    * `dsh-commands` registry): logs `command/run`/`command/done` and returns
-   * the handler's result text — `''` when the handler succeeded silently,
-   * `undefined` when the registry has no such command (the caller falls
-   * back to sending the line to the model).
+   * the handler's result text. Kept stable for public scene consumers.
    */
   runExternalCommand(
     name: string,
     rawInput: string,
     images?: readonly ComposerImageRef[],
   ): Promise<string | undefined>
+  /** Detailed companion used by draft-owning composers. `undefined` means
+   * the registry no longer has the command, so the draft stays untouched. */
+  runExternalCommandOutcome(
+    name: string,
+    rawInput: string,
+    images?: readonly ComposerImageRef[],
+  ): Promise<ExternalCommandOutcome | undefined>
   /**
    * TUI-side permission preset switch: the official `/permission` command
    * when registered, otherwise the permission-presets service's own write
@@ -1144,9 +1156,12 @@ export interface Channel {
   /** Current composer generation. Async paste continuations capture this
    *  before I/O and must not mutate a different session's draft. */
   stagedImageGeneration(): number
-  /** Validate and persist a pasted image in `generation`, returning an
-   *  opaque capability. The prompt assigns the visible `[Image #N]` label. */
-  stageImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle>
+  /** Validate and persist an image, returning the historical scene-facing
+   * `[Image #N]` token accepted by submit/steer/registry commands. */
+  stageImage(input: StagedImageInput): Promise<string>
+  /** Draft-safe composer companion: bind persistence to one session epoch
+   * and return an opaque capability whose visible label belongs to Prompt. */
+  stageComposerImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle>
   /** Whether a capability is still live in the current composer session. */
   hasStagedImage(stageId: string): boolean
   /** Revoke a capability that was staged for a draft which no longer exists.
@@ -1630,6 +1645,12 @@ export interface ChannelState {
     rawInput: string,
     images?: readonly ComposerImageRef[],
   ): Promise<string | undefined>
+  /** Run a command while retaining its draft-consumption outcome. */
+  runExternalCommandOutcome(
+    name: string,
+    rawInput: string,
+    images?: readonly ComposerImageRef[],
+  ): Promise<ExternalCommandOutcome | undefined>
   /** TUI-side permission preset switch (see the public Channel type). */
   runPermissionPreset(name: string): Promise<boolean>
   /** Open plugin scene mirrored from the scenes runtime (see the public Channel type). */
@@ -1654,7 +1675,8 @@ export interface ChannelState {
   jobControl: JobControl
   subscribe: (listener: () => void) => () => void
   stagedImageGeneration(): number
-  stageImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle>
+  stageImage(input: StagedImageInput): Promise<string>
+  stageComposerImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle>
   hasStagedImage(stageId: string): boolean
   discardStagedImage(stageId: string): void
   stagedImage(stageId: string): TranscriptImage | undefined
@@ -2772,6 +2794,10 @@ export function createChannel(
    *  register its capability in the NEW session. */
   let stagedImageEpoch = 0
   const stagedImages = new Map<string, ChannelImageBlock['attachment']>()
+  /** Compatibility bindings minted by the public scene `stageImage()` API.
+   * New Prompt drafts carry explicit opaque refs instead. */
+  const legacyStagedImageRefs = new Map<string, string>()
+  let legacyStagedImageSequence = 0
   /** UI facades for staged capabilities, one stable object per id so the
    *  component-side decode cache (keyed by object identity) can hit. Keys
    *  mirror `stagedImages` exactly — same insert, evict and clear. */
@@ -2785,11 +2811,83 @@ export function createChannel(
    * drop later, but it must not wedge inputs typed in the new session. */
   let inputChain: Promise<void> = Promise.resolve()
   const clearStagedImages = (): void => {
-    for (const cleanup of [...pendingDecisionCleanups]) cleanup()
+    const decisionCleanups = [...pendingDecisionCleanups]
+    // Revoke capabilities quietly before dismissing decision notices:
+    // dismiss() emits synchronously, so subscribers must never observe the
+    // replacement agent with an OLD session's epoch or image map.
     stagedImageEpoch += 1
     stagedImages.clear()
     stagedImageViews.clear()
+    legacyStagedImageRefs.clear()
+    legacyStagedImageSequence = 0
     inputChain = Promise.resolve()
+    for (const cleanup of decisionCleanups) cleanup()
+  }
+
+  const deleteStagedImage = (stageId: string): void => {
+    stagedImages.delete(stageId)
+    stagedImageViews.delete(stageId)
+    for (const [token, candidate] of legacyStagedImageRefs) {
+      if (candidate === stageId) legacyStagedImageRefs.delete(token)
+    }
+  }
+
+  /** Add scene-era token bindings only when the caller did not supply an
+   * explicit draft capability for that visible token. This keeps old scene
+   * `stageImage() -> submit(token)` code working without letting a raw token
+   * alias a different Prompt draft's image. */
+  const includeLegacyImageRefs = (
+    text: string,
+    images: readonly ComposerImageRef[],
+  ): readonly ComposerImageRef[] => {
+    if (legacyStagedImageRefs.size === 0) return images
+    const merged = images.map(image => ({ ...image }))
+    const claimed = new Set(merged.map(image => image.token))
+    for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+      const token = match[0]
+      if (claimed.has(token)) continue
+      const stageId = legacyStagedImageRefs.get(token)
+      if (stageId === undefined || !stagedImages.has(stageId)) continue
+      merged.push({ token, stageId })
+      claimed.add(token)
+    }
+    return merged
+  }
+
+  const persistComposerImage = async (
+    input: StagedImageInput,
+    generation: number,
+  ): Promise<StagedImageHandle> => {
+    const attachments = mentionAttachments(ctx)
+    if (attachments === undefined) throw new Error('image attachments are unavailable in this profile')
+    if (generation !== stagedImageEpoch) {
+      throw new Error('the session changed while the image was being staged')
+    }
+    if (!attachments.imageLimits.mediaTypes.includes(input.mediaType)) {
+      throw new Error(`${input.mediaType} images are not accepted by this profile`)
+    }
+    if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
+      throw new Error(`image exceeds this profile's per-image size limit`)
+    }
+    const attachment = await attachments.saveImage(input)
+    // A session change (/new, resume, rewind, model switch, background)
+    // cleared the maps while the save was in flight: the durable object is
+    // harmless, but the OLD session's capability must not reach the new one.
+    if (generation !== stagedImageEpoch) {
+      throw new Error('the session changed while the image was being staged')
+    }
+    const stageId = randomUUID()
+    stagedImages.set(stageId, attachment)
+    const view = transcriptImageFromAttachment(attachment, () => ctx.get('attachments'))
+    if (view !== undefined) stagedImageViews.set(stageId, view)
+    // References are content-addressed and durable. This map only connects
+    // editable placeholders to them; the 128 cap is insertion-order FIFO.
+    while (stagedImages.size > 128) {
+      const oldest = stagedImages.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      deleteStagedImage(oldest)
+    }
+    return { stageId }
   }
 
   interface UserTextOrigin {
@@ -2992,7 +3090,7 @@ export function createChannel(
       attachments: mentionAttachments(ctx),
       stagedImages: new Map(stagedImages),
     }
-    const capturedImages = images.map(image => ({ ...image }))
+    const capturedImages = includeLegacyImageRefs(text, images).map(image => ({ ...image }))
     inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin)).catch((error: unknown) => {
       // The chain must survive a failed decision: log, then continue with
       // the next queued submission.
@@ -3115,6 +3213,9 @@ export function createChannel(
     agent = handle.agent
     currentHandle = handle
     bindAgent()
+    // bindAgent is synchronous and quiet; revoke OLD-session capabilities
+    // before refreshCommandList exposes the replacement to subscribers.
+    clearStagedImages()
     refreshCommandList()
     void refreshLoadedContext()
     void refreshSkillCommands()
@@ -3122,11 +3223,6 @@ export function createChannel(
     touchSession(childId)
     state.emit()
     void oldHandle?.dispose().catch(() => {})
-    // The staged-image map is session-scoped (the same contract the
-    // resumeTo/newSession tails enforce): tokens typed against the rewound
-    // conversation must not ride into the fork's next send, and the epoch
-    // bump fences saves still in flight for the old session.
-    clearStagedImages()
     return sourceSessionId
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
@@ -3315,6 +3411,10 @@ export function createChannel(
     data: string
     name?: string
   }
+  type RegistryCommandImageBatch =
+    | { readonly kind: 'legacy' }
+    | { readonly kind: 'ready'; readonly images: readonly RegistryCommandImage[] }
+    | { readonly kind: 'error'; readonly reason: 'runtime' | 'missing' | 'limits'; readonly tokens: readonly string[] }
   /** Legacy command-service execute (rc.7 and older): (agent, line, signal). */
   type CommandExecuteLegacy = (agent: Agent, line: string, signal: AbortSignal) => Promise<CommandExecution | undefined>
   /** rc.8 command-service execute: composer images precede the signal. */
@@ -3336,14 +3436,13 @@ export function createChannel(
       && (service.execute as { length: number }).length >= 4
   }
 
-  /** Run one DSH registry command (`/plan`, …) on the live agent; the text
-   *  of its result, '' when the result is textless, undefined when the
-   *  command is not registered, and the error message when it throws. */
+  /** Run one DSH registry command (`/plan`, …) on the live agent while
+   *  preserving its settled result kind for composer admission. */
   const executeRegistryCommand = async (
     name: string,
     rawInput: string,
     imageRefs: readonly ComposerImageRef[] = [],
-  ): Promise<string | undefined> => {
+  ): Promise<ExternalCommandOutcome | undefined> => {
     if (!commandService) return undefined
     const commandAgent = agent
     const stagedSnapshot = new Map(stagedImages)
@@ -3360,131 +3459,190 @@ export function createChannel(
       ?? (/^[a-z][a-z0-9]*(?:[.-][a-z0-9][a-z0-9-]*)+$/u.test(name)
         ? name
         : `dsh-tui.${name.toLowerCase().replace(/[^a-z0-9-]+/gu, '-').replace(/^-+|-+$/gu, '') || 'command'}`)
-    if (!currentGrantStore().allows(
-      { componentId: 'root' },
-      'commands.invoke',
-      rootScope,
-    )) {
-      ctx.logger.warn('dsh-tui: registry command invocation denied (commands.invoke revoked for "root" in the grants file)')
-      ctx.get('tuiEffectLedger')?.record(
-        {
-          operation: 'bind',
-          resource: { kind: 'permission', id: `root:commands.invoke:${rootScope}` },
-          result: 'failed',
-          errorCode: 'PERMISSION_NOT_GRANTED',
-        },
-        ctx,
-      )
-      return t('command-invoke-denied')
-    }
-    // Per-owner gate (C-041): a command REGISTERED BY A PLUGIN through the
-    // plugin-host row's mediated registerCommand (see command-attribution.js)
-    // is additionally gated on the OWNER's grant, so a denies entry for the
-    // plugin closes the host-mediated invocation of ITS commands.
-    // Unattributed host/direct registrations remain inside the documented
-    // trusted-in-process boundary and have no plugin grant to evaluate.
-    if (owner !== undefined && !currentGrantStore().allows(
-      { componentId: owner.componentId, activationId: owner.activationId },
-      'commands.invoke',
-      owner.commandId,
-    )) {
-      ctx.logger.warn(
-        `dsh-tui: registry command "/${name}" invocation denied — owner Component "${owner.componentId}" lost commands.invoke for "${owner.commandId}"`,
-      )
-      ctx.get('tuiEffectLedger')?.record(
-        {
-          operation: 'bind',
-          resource: { kind: 'permission', id: `${owner.componentId}:commands.invoke:${owner.commandId}` },
-          result: 'failed',
-          errorCode: 'PERMISSION_NOT_GRANTED',
-        },
-        ctx,
-      )
-      return t('command-invoke-denied-owner', { name, owner: owner.componentId })
-    }
     try {
       const signal = new AbortController().signal
       const line = `/${name}${rawInput}`
-      const images = await registryCommandImages(
+      const batch = await registryCommandImages(
         commandService,
         line,
-        imageRefs,
+        includeLegacyImageRefs(line, imageRefs),
         stagedSnapshot,
         signal,
       )
+      if (batch.kind === 'error') {
+        const text = batch.reason === 'runtime'
+          ? t('command-images-runtime-unsupported', { name })
+          : batch.reason === 'limits'
+            ? t('command-images-limit', { name })
+            : t('command-images-missing', { name, paths: batch.tokens.join(' ') })
+        return { kind: 'error', text, consumeDraft: false }
+      }
+      // Image preparation can await storage. Do not authorize definition A
+      // and then execute a newly registered same-name definition B after A
+      // was unloaded while those reads were pending.
+      if (commandService.find(commandAgent, name) !== definition) {
+        return { kind: 'error', text: t('command-changed', { name }), consumeDraft: false }
+      }
       if (agent !== commandAgent) {
         state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
-        return ''
+        return { kind: 'error', text: '', consumeDraft: false }
+      }
+      // Grants are a live per-operation decision. Image reads above may
+      // park, so take the single authoritative snapshot only now — after
+      // preparation/identity guards and immediately before execute.
+      if (!currentGrantStore().allows(
+        { componentId: 'root' },
+        'commands.invoke',
+        rootScope,
+      )) {
+        ctx.logger.warn('dsh-tui: registry command invocation denied (commands.invoke revoked for "root" in the grants file)')
+        ctx.get('tuiEffectLedger')?.record(
+          {
+            operation: 'bind',
+            resource: { kind: 'permission', id: `root:commands.invoke:${rootScope}` },
+            result: 'failed',
+            errorCode: 'PERMISSION_NOT_GRANTED',
+          },
+          ctx,
+        )
+        return { kind: 'error', text: t('command-invoke-denied'), consumeDraft: false }
+      }
+      // A mediated plugin command additionally needs its owner's scoped
+      // grant. Direct host registrations stay in the trusted host boundary.
+      if (owner !== undefined && !currentGrantStore().allows(
+        { componentId: owner.componentId, activationId: owner.activationId },
+        'commands.invoke',
+        owner.commandId,
+      )) {
+        ctx.logger.warn(
+          `dsh-tui: registry command "/${name}" invocation denied — owner Component "${owner.componentId}" lost commands.invoke for "${owner.commandId}"`,
+        )
+        ctx.get('tuiEffectLedger')?.record(
+          {
+            operation: 'bind',
+            resource: { kind: 'permission', id: `${owner.componentId}:commands.invoke:${owner.commandId}` },
+            result: 'failed',
+            errorCode: 'PERMISSION_NOT_GRANTED',
+          },
+          ctx,
+        )
+        return { kind: 'error', text: t('command-invoke-denied-owner', { name, owner: owner.componentId }), consumeDraft: false }
       }
       // rc.8 moved the signal to the 4th parameter and added composer
       // images; older lines (rc.7/rc.6) take (agent, line, signal).
-      const execution = images === undefined
+      const execution = batch.kind === 'legacy'
         ? await (commandService.execute as unknown as CommandExecuteLegacy)(commandAgent, line, signal)
-        : await (commandService.execute as unknown as CommandExecuteWithImages)(commandAgent, line, images.images, signal)
-      if (images !== undefined && images.dropped.length > 0) {
-        // Loud-drop policy mirrors the submit pipeline (mentions-missing):
-        // a referenced image that never reached the command must be visible.
-        state.notify(t('mentions-missing', { paths: images.dropped.join(' ') }), {
-          color: 'warning',
-          timeoutMs: 4000,
-        })
-      }
-      // `undefined` = not registered; a handler error surfaces as its
-      // message so the user sees why the command failed.
-      return execution === undefined ? undefined : execution.result.text ?? ''
+        : await (commandService.execute as unknown as CommandExecuteWithImages)(commandAgent, line, batch.images, signal)
+      // The handler itself may park. Its durable lifecycle belongs to the
+      // old agent, but its toast/consume acknowledgment must never land on a
+      // replacement session after /new, resume, rewind, or model switch.
+      if (agent !== commandAgent) return { kind: 'error', text: '', consumeDraft: false }
+      if (execution === undefined) return undefined
+      return execution.result.kind === 'success'
+        ? { kind: 'success', text: execution.result.text ?? '', consumeDraft: true }
+        : {
+            kind: 'error',
+            text: execution.result.text,
+            // Upstream composers retain image-bearing handler failures so
+            // the user can fix the grammar without rebuilding attachments;
+            // imageless handler errors remain consumed durable outcomes.
+            consumeDraft: batch.kind === 'ready' ? batch.images.length === 0 : true,
+          }
     } catch (error) {
-      return error instanceof Error ? error.message : String(error)
+      return {
+        kind: 'error',
+        text: error instanceof Error ? error.message : String(error),
+        consumeDraft: false,
+      }
     }
   }
 
   /** Encode the staged `@`-mention images the user pasted for THIS command
-   *  line into rc.8's `EncodedImageAttachment` payloads; undefined = the
-   *  installed dsh-commands line predates composer images (rc.7/rc.6), so
-   *  the caller uses the legacy 3-arg invoke. Matches the submit pipeline's
+   *  line into rc.8's `EncodedImageAttachment` payloads; `kind: 'legacy'`
+   *  means the installed dsh-commands line predates composer images
+   *  (rc.7/rc.6), so the caller uses the legacy 3-arg invoke. Matches the
+   *  submit pipeline's
    *  token rule (expandMentions): a staged image attaches only when the
    *  line references its token. The composer preflights `input.images`, but
    *  this adapter still forwards every supplied image: rc.8 owns admission,
    *  so non-UI callers cannot accidentally bypass the registry contract.
-   *  A failing read drops just that image (reported via the returned
-   *  tokens) while the command still runs. */
+   *  Preparation is atomic: limits are checked from durable metadata before
+   *  any read/base64 work, and one missing or unreadable image prevents the
+   *  handler from running with a silently truncated batch. */
   const registryCommandImages = async (
     service: CommandRuntime,
     line: string,
     imageRefs: readonly ComposerImageRef[],
     staged: ReadonlyMap<string, ChannelImageBlock['attachment']>,
     signal: AbortSignal,
-  ): Promise<{ images: RegistryCommandImage[]; dropped: string[] } | undefined> => {
-    if (!commandServiceSupportsImages(service)) return undefined
+  ): Promise<RegistryCommandImageBatch> => {
+    const referenced = [...new Set([...line.matchAll(COMPOSER_IMAGE_TOKEN)].map(match => match[0]))]
+    if (!commandServiceSupportsImages(service)) {
+      return imageRefs.length > 0 || referenced.length > 0
+        ? { kind: 'error', reason: 'runtime', tokens: referenced }
+        : { kind: 'legacy' }
+    }
     const ordered = orderedComposerImages(line, imageRefs, staged)
-    const referenced = [...line.matchAll(COMPOSER_IMAGE_TOKEN)].map(match => match[0])
-    const dropped = [...new Set(referenced.filter(token => !ordered.has(token)))]
-    if (ordered.size === 0) return { images: [], dropped }
+    const missing = referenced.filter(token => !ordered.has(token))
+    if (missing.length > 0) return { kind: 'error', reason: 'missing', tokens: missing }
+    if (ordered.size === 0) return { kind: 'ready', images: [] }
     const store = mentionAttachments(ctx) as
-      | { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> }
+      | (MentionAttachments & { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> })
       | undefined
     if (typeof store?.readImage !== 'function') {
-      return { images: [], dropped: [...new Set([...dropped, ...ordered.keys()])] }
+      return { kind: 'error', reason: 'missing', tokens: [...ordered.keys()] }
     }
-    const images: RegistryCommandImage[] = []
+    const { imageLimits: limits } = store
+    let declaredBytes = 0
+    for (const attachment of ordered.values()) {
+      if (
+        !Number.isSafeInteger(attachment.bytes)
+        || attachment.bytes <= 0
+        || attachment.bytes > limits.maxImageBytes
+        || !limits.mediaTypes.includes(attachment.mediaType)
+      ) {
+        return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
+      }
+      declaredBytes += attachment.bytes
+    }
+    if (
+      ordered.size > limits.maxImagesPerMessage
+      || declaredBytes > limits.maxMessageImageBytes
+    ) {
+      return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
+    }
+    const loaded: Array<{
+      readonly token: string
+      readonly attachment: ChannelImageBlock['attachment']
+      readonly data: Uint8Array
+    }> = []
+    let actualBytes = 0
     for (const [token, attachment] of ordered) {
       try {
         const stored = await store.readImage(attachment, signal)
-        if (stored?.data instanceof Uint8Array && stored.data.byteLength > 0) {
-          images.push({
-            mediaType: attachment.mediaType,
-            data: Buffer.from(stored.data).toString('base64'),
-            name: attachment.name,
-          })
-        } else {
-          dropped.push(token)
+        if (!(stored?.data instanceof Uint8Array) || stored.data.byteLength <= 0) {
+          return { kind: 'error', reason: 'missing', tokens: [token] }
         }
+        actualBytes += stored.data.byteLength
+        if (
+          stored.data.byteLength > limits.maxImageBytes
+          || actualBytes > limits.maxMessageImageBytes
+        ) {
+          return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
+        }
+        loaded.push({ token, attachment, data: stored.data })
       } catch {
-        // One unreadable staged image is dropped — same loud policy as the
-        // submit pipeline's mentions-missing warning (deliverUserText).
-        dropped.push(token)
+        return { kind: 'error', reason: 'missing', tokens: [token] }
       }
     }
-    return { images, dropped }
+    return {
+      kind: 'ready',
+      images: loaded.map(({ attachment, data }) => ({
+        mediaType: attachment.mediaType,
+        data: Buffer.from(data).toString('base64'),
+        name: attachment.name,
+      })),
+    }
   }
 
   // Session-mode folds: last-wins projections over the session log. The
@@ -3896,10 +4054,14 @@ export function createChannel(
         prePlanPermissionIdentity.delete(session)
       }
       try {
-        const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
+        const execution = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
         if (session !== agent.session) return
-        if (text === undefined) {
+        if (execution === undefined) {
           state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+          return
+        }
+        if (execution.kind === 'error') {
+          if (execution.text !== '') state.notify(execution.text, { color: 'error' })
           return
         }
       } finally {
@@ -4127,6 +4289,7 @@ export function createChannel(
     currentHandle = backgroundHandles.get(String(target.id))
     backgroundHandles.delete(String(target.id))
     bindAgent()
+    clearStagedImages()
     refreshCommandList()
     void refreshLoadedContext()
     void refreshSkillCommands()
@@ -4145,7 +4308,6 @@ export function createChannel(
     // and the one the terminal detached from.
     touchAgentViewSession(String(target.id))
     touchAgentViewSession(previousSessionId)
-    clearStagedImages()
     notifySessionSwitched('agent-view', String(target.id), previousSessionId)
     notifyAgentView()
     return { ok: true }
@@ -4285,6 +4447,7 @@ export function createChannel(
     agent = handle.agent
     currentHandle = handle
     bindAgent()
+    clearStagedImages()
     refreshCommandList()
     void refreshLoadedContext()
     void refreshSkillCommands()
@@ -4305,7 +4468,6 @@ export function createChannel(
       touchAgentViewSession(sessionId)
       touchAgentViewSession(previousSessionId)
     }
-    clearStagedImages()
     notifySessionSwitched(kind, sessionId, previousSessionId)
     return { ok: true }
   }
@@ -4611,48 +4773,22 @@ export function createChannel(
     stagedImageGeneration() {
       return stagedImageEpoch
     },
-    async stageImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle> {
-      const attachments = mentionAttachments(ctx)
-      if (attachments === undefined) throw new Error('image attachments are unavailable in this profile')
-      if (generation !== stagedImageEpoch) {
-        throw new Error('the session changed while the image was being staged')
-      }
-      if (!attachments.imageLimits.mediaTypes.includes(input.mediaType)) {
-        throw new Error(`${input.mediaType} images are not accepted by this profile`)
-      }
-      if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
-        throw new Error(`image exceeds this profile's per-image size limit`)
-      }
-      const attachment = await attachments.saveImage(input)
-      // A session change (/new, resume, rewind, model switch, background)
-      // cleared the maps while the save was in flight: the durable object
-      // exists (content-addressed, harmless) but the OLD session's handle
-      // must not surface in the new composer. Throwing keeps every caller
-      // on its existing failure path (path/@ fallback, no token inserted).
-      if (generation !== stagedImageEpoch) {
-        throw new Error('the session changed while the image was being staged')
-      }
-      const stageId = randomUUID()
-      stagedImages.set(stageId, attachment)
-      const view = transcriptImageFromAttachment(attachment, () => ctx.get('attachments'))
-      if (view !== undefined) stagedImageViews.set(stageId, view)
-      // References are content-addressed and durable. This map only connects
-      // editable prompt placeholders to them; the 128 cap evicts in
-      // insertion order (plain FIFO, not an LRU — reads never refresh).
-      while (stagedImages.size > 128) {
-        const oldest = stagedImages.keys().next().value as string | undefined
-        if (oldest === undefined) break
-        stagedImages.delete(oldest)
-        stagedImageViews.delete(oldest)
-      }
-      return { stageId }
+    async stageImage(input: StagedImageInput): Promise<string> {
+      const generation = stagedImageEpoch
+      const { stageId } = await persistComposerImage(input, generation)
+      legacyStagedImageSequence += 1
+      const token = `[Image #${legacyStagedImageSequence}]`
+      legacyStagedImageRefs.set(token, stageId)
+      return token
+    },
+    stageComposerImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle> {
+      return persistComposerImage(input, generation)
     },
     hasStagedImage(stageId: string): boolean {
       return stagedImages.has(stageId)
     },
     discardStagedImage(stageId: string): void {
-      stagedImages.delete(stageId)
-      stagedImageViews.delete(stageId)
+      deleteStagedImage(stageId)
     },
     stagedImage(stageId: string): TranscriptImage | undefined {
       return stagedImageViews.get(stageId)
@@ -4668,6 +4804,14 @@ export function createChannel(
     submit(text, images = []) {
       const trimmed = text.trim()
       if (!trimmed) return
+      const submittedImages = includeLegacyImageRefs(trimmed, images)
+      // Non-UI callers do not pass through PromptInput's admission guard.
+      // Shell routes have no image grammar: reject loudly before spawning
+      // anything rather than silently ignoring the supplied capabilities.
+      if (submittedImages.length > 0 && trimmed.startsWith('!')) {
+        state.notify(t('shell-images-unsupported'), { color: 'warning', timeoutMs: 4000 })
+        return
+      }
       // Claude Code's `!` mode: `!cmd` runs locally and only shows the
       // output; `!!cmd` additionally sends the output to the model as a
       // user message (CC's <bash-stdout> convention).
@@ -4682,7 +4826,7 @@ export function createChannel(
       // The current session is being used — move it to the MRU front
       // (/resume sorts by last-used).
       touchSession(state.agentId)
-      dispatchUserText(trimmed, 'followup', images)
+      dispatchUserText(trimmed, 'followup', submittedImages)
     },
     /** Steer a message into the RUNNING turn (Codex/pi semantics): it is
      *  injected at the next step boundary of the current turn and the agent
@@ -5834,6 +5978,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      clearStagedImages()
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -5843,7 +5988,6 @@ export function createChannel(
       touchSession(sessionId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
-      clearStagedImages()
       notifySessionSwitched('resume', sessionId, previousSessionId)
       return { ok: true }
     },
@@ -6005,6 +6149,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      clearStagedImages()
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -6012,7 +6157,6 @@ export function createChannel(
       // The brand-new session becomes the most recently used.
       touchSession(handle.agent.id)
       void oldHandle?.dispose().catch(() => {})
-      clearStagedImages()
       notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
       return true
     },
@@ -6201,6 +6345,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      clearStagedImages()
       // Model-switch quip rides the fresh tracker (pi parity).
       updateWorkingActivity('model switch', () => activityTracker.onModelSwitch(model))
       refreshCommandList()
@@ -6210,9 +6355,6 @@ export function createChannel(
       touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
-      // Staged image tokens were typed against the pre-switch conversation;
-      // resumeTo/newSession already drop theirs on the swap — same contract.
-      clearStagedImages()
       // Persist the choice so the next boot and `/new` start on it (same
       // contract as /preset and /effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
@@ -7268,6 +7410,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      clearStagedImages()
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -7277,7 +7420,6 @@ export function createChannel(
       // left running and the fresh one the terminal lands on.
       touchAgentViewSession(previousSessionId)
       touchAgentViewSession(String(handle.agent.id))
-      clearStagedImages()
       notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
       notifyAgentView()
       return { ok: true, backgroundedSessionId: previousSessionId }
@@ -7482,6 +7624,9 @@ export function createChannel(
       })
     },
     runExternalCommand(name, rawInput, images = []) {
+      return executeRegistryCommand(name, rawInput, images).then(outcome => outcome?.text)
+    },
+    runExternalCommandOutcome(name, rawInput, images = []) {
       return executeRegistryCommand(name, rawInput, images)
     },
     /** TUI-side permission switch (see the public Channel type). */
@@ -8035,6 +8180,9 @@ export function createChannel(
         const dispose = commandService.register({
           name,
           description,
+          // Deliberately omit `input.images`: skill gestures are text-only.
+          // Capable composers refuse image batches, and rc.8+ command
+          // executors enforce the same contract before this handler runs.
           // The invocation line is re-submitted as a user message (kernel
           // path) or replaced by the injected body (fallback) — recording
           // the raw input here too would duplicate it in the session log.

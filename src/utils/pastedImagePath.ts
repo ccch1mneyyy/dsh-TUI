@@ -47,9 +47,13 @@ export function parsePastedImagePath(text: string): string | null {
   if (quote === "'" || quote === '"') {
     if (trimmed.length < 3 || !trimmed.endsWith(quote)) return null
     const inner = trimmed.slice(1, -1)
-    // A quote of the same kind inside means this was not one quoted token.
-    if (inner.includes(quote)) return null
-    path = quote === '"' ? unescapeBackslashes(inner) : inner
+    if (quote === "'") {
+      // POSIX single quotes are wholly literal and cannot contain one.
+      if (inner.includes(quote)) return null
+      path = inner
+    } else {
+      path = unescapeDoubleQuoted(inner)
+    }
   } else {
     path = unescapeBackslashes(trimmed, { failOnBareWhitespace: true })
   }
@@ -59,6 +63,27 @@ export function parsePastedImagePath(text: string): string | null {
   if (!path.startsWith('/')) return null
   if (imagePathMediaType(path) === undefined) return null
   return path
+}
+
+/** Decode only the two unambiguous escapes inside a shell double-quoted
+ * token. Treating every `\x` as x can silently redirect a pasted path to a
+ * different existing file, so unknown escapes and naked quotes fail closed. */
+function unescapeDoubleQuoted(text: string): string | null {
+  let out = ''
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!
+    if (char === '"') return null
+    if (char !== '\\') {
+      out += char
+      continue
+    }
+    if (index + 1 >= text.length) return null
+    const escaped = text[index + 1]!
+    if (escaped !== '\\' && escaped !== '"') return null
+    out += escaped
+    index += 1
+  }
+  return out
 }
 
 /** Resolve `\x` escapes with one linear scan. With `failOnBareWhitespace`,
@@ -100,6 +125,7 @@ export async function stageClipboardFilePaths<T>(
   paths: readonly string[],
   stage: (path: string) => Promise<T>,
   formatPath: (path: string) => string,
+  maxStaged = Number.POSITIVE_INFINITY,
 ): Promise<{
   readonly parts: readonly StagedClipboardFilePart<T>[]
   readonly staged: readonly T[]
@@ -110,6 +136,11 @@ export async function stageClipboardFilePaths<T>(
   let failure = ''
   for (const path of paths) {
     if (imagePathMediaType(path) === undefined) {
+      parts.push({ kind: 'text', value: formatPath(path) })
+      continue
+    }
+    if (staged.length >= maxStaged) {
+      failure = 'image count exceeds this profile\'s per-message limit'
       parts.push({ kind: 'text', value: formatPath(path) })
       continue
     }

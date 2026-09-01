@@ -5,7 +5,7 @@
  *   1. 会话切换（/new）重置子代理投影——快照清空、行 map 清空，重复 agentId 重建卡片而非孤儿更新；
  *   2. 排队的任务描述不跨会话泄漏到新会话第一张卡；
  *   3. /clear 只清行 map——同会话在途子代理的下一个事件重建卡片，仪表盘继续跟踪；
- *   4. staged image token 是会话作用域——switchModel 后不随旧 token 附图发送；
+ *   4. staged image token 是会话作用域——switchModel 的同步订阅窗口也不能把旧图送入新 agent；
  *   5. resumeTo 的竞争切换守卫——await 期间被 /new 抢先提交时，恢复放弃且不动新会话；
  *   6. `@` 展开期间切换会话——旧输入不得投递到旧/新任一 agent；
  *   7. staged image 按 token 文本顺序附图，重复 token 只附一次；
@@ -169,20 +169,36 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
 
-  const staged = await channel.stageImage(
+  const staged = await channel.stageComposerImage(
     { data: new Uint8Array([1]), mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
   const token = '[Image #1]'
   const refs = [{ token, stageId: staged.stageId }]
-  check('4a. stageImage 签发 opaque capability', typeof staged.stageId === 'string' && staged.stageId !== '', staged.stageId)
+  check('4a. stageComposerImage 签发 opaque capability', typeof staged.stageId === 'string' && staged.stageId !== '', staged.stageId)
   channel.submit(`see ${token}`, refs)
   check('4b. 切换前发送附带图片块', await settled(() => sent.length === 1
     && (sent[0] as Array<{ type: string }>).filter(block => block.type === 'image').length === 1))
+  const generationBeforeSwitch = channel.stagedImageGeneration()
+  let subscriberGeneration = generationBeforeSwitch
+  let subscriberSubmitted = false
+  const unsubscribe = channel.subscribe(() => {
+    if (channel.agentId !== switched.id || subscriberSubmitted) return
+    subscriberSubmitted = true
+    subscriberGeneration = channel.stagedImageGeneration()
+    // Public subscribers run synchronously inside state.emit(). If the old
+    // capability map is cleared after refreshCommandList(), this exact send
+    // leaks the old image into the replacement agent.
+    channel.submit(`subscriber ${token}`, refs)
+  })
   check('4c. switchModel 成功', (await channel.switchModel('p0', 'm1')) === true)
-  channel.submit(`see ${token}`, refs)
-  check('4d. 切换后同 token 不再附图（会话作用域）', await settled(() => sent.length === 2
+  check('4d. 同步订阅者在新 agent 可见时已被唤醒', subscriberSubmitted)
+  check('4e. 订阅者观察新 agent 时图片代际已推进',
+    subscriberGeneration > generationBeforeSwitch,
+    `${generationBeforeSwitch} -> ${subscriberGeneration}`)
+  check('4f. 订阅窗口提交旧 capability 不附图（会话作用域）', await settled(() => sent.length === 2
     && (sent[1] as Array<{ type: string }>).filter(block => block.type === 'image').length === 0))
+  unsubscribe()
 }
 
 // ── 场景 5：resumeTo 竞争切换守卫 ────────────────────────────────────────
@@ -275,11 +291,11 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
 
-  const first = await channel.stageImage(
+  const first = await channel.stageComposerImage(
     { data: new Uint8Array([1]), mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
-  const second = await channel.stageImage(
+  const second = await channel.stageComposerImage(
     { data: new Uint8Array([2]), mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
@@ -324,12 +340,12 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
 
-  await channel.stageImage(
+  await channel.stageComposerImage(
     { data: new Uint8Array([1]), mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
   check('8a. /new 清除旧会话 capability', (await channel.newSession()) === true)
-  const fresh = await channel.stageImage(
+  const fresh = await channel.stageComposerImage(
     { data: new Uint8Array([2]), mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )

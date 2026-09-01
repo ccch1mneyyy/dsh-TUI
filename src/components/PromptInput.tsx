@@ -352,7 +352,11 @@ export interface PromptInputProps {
    * Execute a slash command (built-in or plugin-registered) with its raw
    * argument text; returns false when the input should be sent to the model.
    */
-  onRunCommand(name: string, rawInput: string, images: readonly ComposerImageRef[]): boolean
+  onRunCommand(
+    name: string,
+    rawInput: string,
+    images: readonly ComposerImageRef[],
+  ): boolean | Promise<boolean>
   /** Message-selection mode (Shift+↑): the input ignores keys while active. */
   selectionActive: boolean
   /**
@@ -536,6 +540,18 @@ export function PromptInput({
    * keeps the revision so an async paste lands at the live caret, while any
    * whole-draft replacement revokes the old continuation. */
   const draftRevisionRef = React.useRef(0)
+  /** Unlike draftRevision (whole-draft replacement only), this advances on
+   * every text mutation so an async command can never clear a draft that was
+   * edited away and later changed back to the same bytes. */
+  const inputEditSequenceRef = React.useRef(0)
+  /** One registry command may own a draft at a time. Keeping the draft
+   * visible during admission must not make a second Enter dispatch it twice. */
+  const pendingCommandRef = React.useRef<{
+    readonly token: symbol
+    readonly generation: number
+    readonly revision: number
+    readonly editSequence: number
+  } | null>(null)
   const nextImageNumberRef = React.useRef(1)
   /** Serialize image staging started in one draft so consecutive terminal
    * drops keep input order even when storage settles out of order. A new
@@ -595,6 +611,7 @@ export function PromptInput({
     controllerRef.current = {
       hasText: () => value.length > 0,
       clear: () => {
+        if (valueRef.current !== '') inputEditSequenceRef.current += 1
         valueRef.current = ''
         cursorRef.current = 0
         selectionRef.current = null
@@ -614,7 +631,9 @@ export function PromptInput({
         setCursor(0)
       },
       append: (text: string) => {
-        const next = valueRef.current + text
+        const previous = valueRef.current
+        const next = sanitizeEditableText(previous + text)
+        if (next !== previous) inputEditSequenceRef.current += 1
         valueRef.current = next
         cursorRef.current = next.length
         setValue(next)
@@ -809,6 +828,7 @@ export function PromptInput({
     }
     // The synchronous mirrors are what batch-dispatched events (one stdin
     // read → several keys, no render in between) read on their next turn.
+    if (next !== prev) inputEditSequenceRef.current += 1
     valueRef.current = next
     cursorRef.current = offset
     // Deleting a visible token revokes its capability. Re-typing the same
@@ -910,6 +930,23 @@ export function PromptInput({
     setFileSelected(0)
   }
 
+  const sameImageRefs = (
+    left: readonly ComposerImageRef[],
+    right: readonly ComposerImageRef[],
+  ): boolean => left.length === right.length && left.every((image, index) =>
+    image.token === right[index]?.token && image.stageId === right[index]?.stageId)
+
+  /** `!`/`!!` are host shell routes, not model messages. They have no image
+   * grammar, so reject before history/clear just like a non-image command. */
+  const shellImagesUnsupported = (
+    text: string,
+    images: readonly ComposerImageRef[],
+  ): boolean => {
+    if (images.length === 0 || !text.startsWith('!')) return false
+    channel.notify(t('shell-images-unsupported'), { color: 'warning', timeoutMs: 4000 })
+    return true
+  }
+
   const restoreDraftImages = (entry: PromptHistoryEntry): void => {
     syncImageGeneration()
     // History navigation can return to either side, so detach without
@@ -926,6 +963,7 @@ export function PromptInput({
     const trimmed = text.trim()
     if (!trimmed) return
     const images = imageRefsFor(trimmed)
+    if (shellImagesUnsupported(trimmed, images)) return
     rememberHistory(trimmed, images)
     clearDeliveredDraft()
     channel.submit(trimmed, images)
@@ -961,6 +999,7 @@ export function PromptInput({
     const trimmed = text.trim()
     if (!trimmed) return
     const images = imageRefsFor(trimmed)
+    if (shellImagesUnsupported(trimmed, images)) return
     rememberHistory(trimmed, images)
     clearDeliveredDraft()
     channel.submit(trimmed, images)
@@ -1030,6 +1069,18 @@ export function PromptInput({
     const command = channel.commandList.find(entry => entry.name === parsed.name)
     const known = command !== undefined || isHiddenCommandName(parsed.name)
     if (!known) return false
+    const generation = syncImageGeneration()
+    const revision = draftRevisionRef.current
+    const editSequence = inputEditSequenceRef.current
+    if (
+      pendingCommandRef.current?.generation === generation
+      && pendingCommandRef.current.revision === revision
+      && pendingCommandRef.current.editSequence === editSequence
+    ) {
+      channel.notify(t('command-running'), { color: 'warning', timeoutMs: 2500 })
+      return true
+    }
+    if (pendingCommandRef.current !== null) pendingCommandRef.current = null
     const images = imageRefsFor(text)
     // Commands are an explicit non-model route. Unless their registry
     // descriptor opted into composer images, refuse before dispatch and keep
@@ -1043,12 +1094,44 @@ export function PromptInput({
       })
       return true
     }
+    const lease = captureDraftImageLease()
+    const draftText = valueRef.current
+    const draftImages = imageRefsFor(draftText)
     const handled = onRunCommand(parsed.name, parsed.rawInput, images)
-    if (handled) {
+    if (handled === true) {
       rememberHistory(text.trim(), images)
       clearDeliveredDraft()
+    } else if (handled !== false) {
+      // Registry commands settle asynchronously. Keep the exact draft and
+      // capabilities in place until admission succeeds; a handler/admission
+      // error deliberately leaves them editable. A late success may clear
+      // only the snapshot it actually submitted, never text/images typed
+      // while the command was running or a replacement session's draft.
+      const attempt = { token: Symbol('command-attempt'), generation, revision, editSequence }
+      pendingCommandRef.current = attempt
+      void handled.then((consume) => {
+        if (
+          !consume
+          || !draftImageLeaseIsCurrent(lease)
+          || inputEditSequenceRef.current !== editSequence
+        ) return
+        rememberHistory(text.trim(), images)
+        const currentText = valueRef.current
+        const currentImages = imageRefsFor(currentText)
+        if (currentText === draftText && sameImageRefs(currentImages, draftImages)) {
+          clearDeliveredDraft()
+        }
+      }).catch((error: unknown) => {
+        if (!draftImageLeaseIsCurrent(lease)) return
+        channel.notify(error instanceof Error ? error.message : String(error), {
+          color: 'error',
+          timeoutMs: 5000,
+        })
+      }).finally(() => {
+        if (pendingCommandRef.current?.token === attempt.token) pendingCommandRef.current = null
+      })
     }
-    return handled
+    return handled !== false
   }
 
   /**
@@ -1168,13 +1251,20 @@ export function PromptInput({
     if (!draftImageLeaseIsCurrent(lease)) {
       throw new Error('the draft changed while the image was being staged')
     }
-    const maxImageBytes = channel.stagedImageLimits?.()?.maxImageBytes
-    if (maxImageBytes === undefined) throw new Error('image attachments are unavailable in this profile')
-    const data = await readBoundedRegularFile(path, maxImageBytes)
+    const limits = channel.stagedImageLimits?.()
+    if (limits === undefined) throw new Error('image attachments are unavailable in this profile')
+    // One-image paste operations are serialized, so this is the cumulative
+    // draft count (not merely the current Finder batch). Refuse before the
+    // descriptor read/save and never let the channel's 128-capability cache
+    // become an accidental per-command batch size.
+    if (draftImagesRef.current.size >= limits.maxImagesPerMessage) {
+      throw new Error('image count exceeds this profile\'s per-message limit')
+    }
+    const data = await readBoundedRegularFile(path, limits.maxImageBytes)
     if (!draftImageLeaseIsCurrent(lease)) {
       throw new Error('the draft changed while the image was being staged')
     }
-    return channel.stageImage({
+    return channel.stageComposerImage({
       data,
       // Callers gate on imagePathMediaType; the assertion is unreachable.
       mediaType: imagePathMediaType(path) ?? 'image/png',
@@ -1403,10 +1493,10 @@ export function PromptInput({
       clipboardBusyRef.current = true
       void readClipboard()
         .then(async content => {
-          const temporaryImagePath =
-            content?.kind === 'image' && imagePathMediaType(content.path) !== undefined
-              ? content.path
-              : undefined
+          // Every `kind: image` path is a private temp export owned by this
+          // paste, including TIFF/BMP/SVG formats the attachment profile
+          // cannot stage. Ownership must not depend on format support.
+          const temporaryImagePath = content?.kind === 'image' ? content.path : undefined
           try {
             if (!draftImageLeaseIsCurrent(lease)) return
             if (content === null) {
@@ -1417,10 +1507,14 @@ export function PromptInput({
               channel.notify(t('input-clipboard-unavailable'), { color: 'warning' })
               return
             }
-            if (temporaryImagePath !== undefined) {
+            if (content.kind === 'image') {
+              if (imagePathMediaType(content.path) === undefined) {
+                channel.notify(t('input-image-format-unsupported'), { color: 'warning', timeoutMs: 5000 })
+                return
+              }
               try {
                 await enqueueImageWork(async () => {
-                  const handle = await stageImagePath(temporaryImagePath, lease)
+                  const handle = await stageImagePath(content.path, lease)
                   const token = bindStagedImage(handle, lease)
                   insertClipboardAtCaret(`${token} `)
                   channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
@@ -1442,18 +1536,11 @@ export function PromptInput({
               try {
                 insertedStaged = await enqueueImageWork(async () => {
                   const maxImages = channel.stagedImageLimits?.()?.maxImagesPerMessage ?? 0
-                  let stagedCount = 0
                   const { parts, staged, failure } = await stageClipboardFilePaths(
                     content.paths,
-                    async path => {
-                      if (stagedCount >= maxImages) {
-                        throw new Error(`image count exceeds this profile's per-message limit`)
-                      }
-                      const handle = await stageImagePath(path, lease)
-                      stagedCount += 1
-                      return handle
-                    },
+                    path => stageImagePath(path, lease),
                     filePath => formatClipboardInsert({ kind: 'files', paths: [filePath] }),
+                    Math.max(0, maxImages - draftImagesRef.current.size),
                   )
                   if (!draftImageLeaseIsCurrent(lease)) {
                     discardStagedHandles(staged)

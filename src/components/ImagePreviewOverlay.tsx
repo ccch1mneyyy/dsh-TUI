@@ -7,6 +7,7 @@ import {
   transcriptImageLabel,
 } from './messages/TranscriptImages.js'
 import { t } from '../i18n.js'
+import { cleanRenderText } from '../dsh-adapter/sanitize.js'
 
 /** Below these viewport sizes the card is metadata-only: an image box would
  *  be too small to read and the chrome itself barely fits. */
@@ -54,7 +55,8 @@ export function ImagePreviewOverlay({
     ...(image.mediaType === undefined ? [] : [image.mediaType]),
     `${image.width}×${image.height}px`,
   ].join(' · ')
-  const source = t('image-preview-source', { id: image.id.slice(0, 24) })
+  const safeId = cleanRenderText(image.id, 24) || '…'
+  const source = t('image-preview-source', { id: safeId })
   const [imageWidth, imageHeight] = graphicsFit
     ? fitPreviewCells(image, columns - 12, rows - 9)
     : [0, 0]
