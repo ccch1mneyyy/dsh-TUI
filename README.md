@@ -272,8 +272,10 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
   实现 `tui.dsh/v1alpha1#Channel` 的 open/subscribe/invoke/close 协议包络与
   规范校验；`runChannelReplay` 支持录制 snapshot 数组，也支持把真实 DSH
   `agent.session.events` 形状事件投影为单调 `TuiChannelSnapshot`。该投影定位为
-  **minimal transcript replay**：只覆盖 transcript/status/基础 session 字段，
-  **不声明是完整 RFC 0007 Channel state/conformance**。未知方法按协议失败、
+  **minimal transcript replay**：覆盖 transcript/status/基础 session 字段，
+  并在调用方提供元数据时带入 model/mode/preset/settings/scene/diagnostic/trace/
+  context/pending/usage 等 RFC 相关字段；仍**不声明是完整 RFC 0007 Channel
+  state/conformance**。未知方法按协议失败、
   features 必须显式声明且每个 feature 必须有 state/method 可观察证据、
   重复 features 先拒绝、未知非 ignorable DSH event fail-closed、
   method handler 只能在 replay isolation 内执行、replay provider 不解析

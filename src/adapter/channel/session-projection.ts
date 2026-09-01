@@ -24,6 +24,16 @@ export interface DshSessionProjectionMeta {
   readonly sessionTitle?: string
   readonly homeDir?: string
   readonly pathCaseInsensitive?: boolean
+  /** Optional RFC-adjacent Channel state fields carried through when known. */
+  readonly model?: string
+  readonly mode?: string
+  readonly agentPreset?: string
+  readonly settingsSections?: readonly unknown[]
+  readonly scene?: unknown
+  readonly diagnostic?: unknown
+  readonly trace?: readonly unknown[]
+  readonly context?: unknown
+  readonly pending?: readonly unknown[]
 }
 
 export class DshSessionProjectionError extends Error {
@@ -172,21 +182,37 @@ export function projectDshSessionEventsToSnapshots(
   const snapshots: TuiChannelSnapshot[] = []
   let version = 0
   let status: 'idle' | 'working' = 'idle'
+  let usage: Readonly<Record<string, unknown>> = Object.freeze({})
+  let context = meta.context
+  let pending = meta.pending
+  let diagnostic = meta.diagnostic
+  let trace = meta.trace ?? Object.freeze([])
 
   const push = (): void => {
+    const state: Record<string, unknown> = {
+      status,
+      sessionTitle: meta.sessionTitle ?? 'dsh session',
+      homeDir: meta.homeDir ?? '/',
+      pathCaseInsensitive: meta.pathCaseInsensitive ?? false,
+      transcript: Object.freeze(rows.map(row => Object.freeze({ ...row }))),
+      commandCatalog: Object.freeze([]),
+      ...(Object.keys(usage).length === 0 ? {} : { usage }),
+      ...(meta.model === undefined ? {} : { model: meta.model }),
+      ...(meta.mode === undefined ? {} : { mode: meta.mode }),
+      ...(meta.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset }),
+      ...(meta.settingsSections === undefined ? {} : { settingsSections: Object.freeze([...meta.settingsSections]) }),
+      ...(meta.scene === undefined ? {} : { scene: meta.scene }),
+      ...(context === undefined ? {} : { context }),
+      ...(pending === undefined ? {} : { pending: Object.freeze([...(pending as readonly unknown[])]) }),
+      ...(diagnostic === undefined ? {} : { diagnostic }),
+      ...(trace === undefined ? {} : { trace }),
+    }
     version += 1
     snapshots.push({
       wireRevision: TUI_CHANNEL_WIRE_REVISION,
       channelId: meta.channelId,
       version,
-      state: {
-        status,
-        sessionTitle: meta.sessionTitle ?? 'dsh session',
-        homeDir: meta.homeDir ?? '/',
-        pathCaseInsensitive: meta.pathCaseInsensitive ?? false,
-        transcript: Object.freeze(rows.map(row => Object.freeze({ ...row }))),
-        commandCatalog: Object.freeze([]),
-      },
+      state: Object.freeze(state) as TuiChannelSnapshot['state'],
     })
   }
 
@@ -206,12 +232,17 @@ export function projectDshSessionEventsToSnapshots(
       if (isIgnorable(event)) continue
       throw new DshSessionProjectionError(`unknown non-ignorable DSH session event: ${type}`)
     }
+    const data = (event.data ?? {}) as Record<string, unknown>
     if (type === 'turn/start') status = 'working'
     if (type === 'turn/end' || type === 'session/end-seed') status = 'idle'
+    if (type === 'assistant/message' && data.usage !== null && typeof data.usage === 'object') {
+      usage = Object.freeze({ ...(data.usage as Record<string, unknown>) })
+    }
+    if (type === 'request/context') {
+      context = data
+    }
     const row = projectEvent(event)
     if (row !== undefined) rows.push(row)
-    // Push on every known event so version is monotonic; consumers see the
-    // transcript evolving through the recorded session.
     push()
   }
   return Object.freeze(snapshots)

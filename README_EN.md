@@ -698,7 +698,9 @@ harness:
   `runChannelReplay` accepts recorded snapshot arrays and also projects real
   DSH `agent.session.events`-shaped records into monotonic
   `TuiChannelSnapshot`s. This is explicitly a **minimal transcript replay**:
-  it covers transcript/status/basic session fields and does **not** claim full
+  it covers transcript/status/basic session fields and, when metadata is
+  supplied, carries RFC-adjacent fields such as model/mode/preset/settings/scene/
+  diagnostic/trace/context/pending/usage; it still does **not** claim full
   RFC 0007 Channel state/conformance. Unknown methods fail per protocol,
   features must be explicitly declared and each must have observable
   state/method evidence, duplicate features are rejected first, unknown

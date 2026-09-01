@@ -32,7 +32,7 @@ import {
 import { withReplayIsolation } from '../src/adapter/kernel/replay-isolation.js'
 import { registerTuiChannel } from '../src/adapter/channel/host-registry.js'
 import { verifyChannelLive } from '../src/adapter/upstream/channel-driver.js'
-import { KNOWN_DSH_EVENT_TYPES } from '../src/adapter/channel/session-projection.js'
+import { KNOWN_DSH_EVENT_TYPES, projectDshSessionEventsToSnapshots } from '../src/adapter/channel/session-projection.js'
 import {
   validateTuiChannelSnapshot,
   validateTuiChannelInput,
@@ -334,6 +334,37 @@ assert.equal(dshReport.ok, true, `DSH event replay should be ok: ${JSON.stringif
 assert.ok(dshReport.versions.length >= 5, 'event projection must emit monotonic snapshots')
 assert.ok(dshReport.featureErrors.length === 0 && dshReport.methodErrors.length === 0)
 checks += 1
+
+// L5: optional RFC-adjacent state fields are carried through when provided.
+{
+  const enriched = projectDshSessionEventsToSnapshots([
+    { type: 'turn/start', seq: 1, time: 1, data: {} },
+    { type: 'assistant/message', seq: 2, time: 2, data: { message: { content: [{ type: 'text', text: 'hi' }] }, usage: { input: 1, output: 2 } } },
+  ], {
+    channelId: 'enriched-channel',
+    model: 'deepseek-chat',
+    mode: 'default',
+    agentPreset: 'standard',
+    settingsSections: [{ ns: 'x', title: 'X', fields: [] }],
+    scene: { id: 'scene-1' },
+    diagnostic: { ok: true },
+    trace: [{ type: 'trace', seq: 1 }],
+    context: { segments: { system: 1 } },
+    pending: [{ kind: 'user', text: 'pending' }],
+  })
+  const lastState = enriched.at(-1)?.state as Record<string, unknown>
+  assert.equal(lastState.model, 'deepseek-chat')
+  assert.equal(lastState.mode, 'default')
+  assert.equal(lastState.agentPreset, 'standard')
+  assert.deepEqual(lastState.settingsSections, [{ ns: 'x', title: 'X', fields: [] }])
+  assert.deepEqual(lastState.scene, { id: 'scene-1' })
+  assert.deepEqual(lastState.diagnostic, { ok: true })
+  assert.deepEqual(lastState.trace, [{ type: 'trace', seq: 1 }])
+  assert.deepEqual(lastState.context, { segments: { system: 1 } })
+  assert.deepEqual(lastState.pending, [{ kind: 'user', text: 'pending' }])
+  assert.deepEqual(lastState.usage, { input: 1, output: 2 })
+  checks += 1
+}
 
 // ── size/depth hardening ───────────────────────────────────────────────────
 const deepState: Record<string, unknown> = {}
