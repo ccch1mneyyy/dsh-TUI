@@ -690,17 +690,19 @@ export function Chat({
 
   // Sticky (pinned-to-bottom) scroll state, subscribed imperatively so
   // wheel events don't re-render React — only the header/pill flip.
-  // DEFAULT lane on purpose (useExternalVersion, not useSyncExternalStore):
-  // wheel storms notify at ~16ms cadence and a uSES wakeup would force a
-  // SyncLane render per notify — preempting any in-flight streaming render
-  // and feeding the nested-update counter (the #185 mechanism). The sticky
-  // value is read fresh from the handle during render.
-  const subscribeSticky = React.useCallback(
-    (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
-    [handle],
+  // Deliberately KEPT on useSyncExternalStore despite the SyncLane wakeup
+  // cost: the renderer's at-bottom re-pin flips sticky WITHOUT firing the
+  // scroll subscribers (see ScrollBox's subscribe doc), so only uSES's
+  // every-render getSnapshot check picks that flip up — a pure
+  // notification-driven subscription misses it and the new-message pill
+  // stops reflecting reality (repro-pill). Wheel cadence is an
+  // interaction-rate source (not streaming-rate), the streaming-side
+  // #185 sources are all Default-lane now, and the overflow guard
+  // backstops the residue.
+  const isSticky = React.useSyncExternalStore(
+    cb => (handle ? handle.subscribe(cb) : () => {}),
+    () => (handle ? handle.isSticky() : true),
   )
-  useExternalVersion(subscribeSticky, () => (handle ? handle.isSticky() : true) ? 1 : 0)
-  const isSticky = handle ? handle.isSticky() : true
   const subscribeTooltipInvalidation = React.useCallback(
     (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
     [handle],
