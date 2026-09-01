@@ -142,14 +142,16 @@ function hasMeaningfulEvidenceValue(value: unknown): boolean {
 function featureHasEvidence(
   feature: string,
   snapshots: readonly TuiChannelSnapshot[],
-  methods: Readonly<Record<string, unknown>> | undefined,
+  verifiedMethods: ReadonlySet<string>,
 ): boolean {
   const state = snapshots.at(-1)?.state ?? {}
   const keys = CHANNEL_FEATURE_STATE_EVIDENCE_KEYS[feature] ?? []
   for (const key of keys) {
     if (hasMeaningfulEvidenceValue((state as Record<string, unknown>)[key])) return true
   }
-  return Object.keys(methods ?? {}).some(method => CHANNEL_METHOD_FEATURES[method] === feature)
+  // A declared method handler is NOT evidence by itself: the method must have
+  // been successfully invoked through `invokeMethod` during this replay.
+  return [...verifiedMethods].some(method => CHANNEL_METHOD_FEATURES[method] === feature)
 }
 
 export interface ReplayContractRef {
@@ -399,12 +401,8 @@ export async function runChannelReplay(input: ReplayChannelInput): Promise<Repla
     } catch (error) {
       featureErrors.push(error instanceof Error ? error.message : String(error))
     }
-    for (const feature of features) {
-      if (!featureHasEvidence(feature, snapshots, input.methods)) {
-        featureErrors.push(`Channel feature ${feature} has no observable evidence in state/methods`)
-      }
-    }
 
+    const verifiedMethods = new Set<string>()
     const methodErrors: string[] = []
     for (const [method, feature] of Object.entries(CHANNEL_METHOD_FEATURES)) {
       if (input.methods?.[method] === undefined) continue
@@ -430,9 +428,17 @@ export async function runChannelReplay(input: ReplayChannelInput): Promise<Repla
         try {
           const invoke = await consumer.invoke(opened.channelId, input.invokeMethod, [])
           invokeValueDefined = invoke.valueDefined === true
+          // Only a method that actually executed successfully can back a
+          // method-backed feature claim.
+          verifiedMethods.add(input.invokeMethod)
         } catch (error) {
           methodErrors.push(error instanceof Error ? error.message : String(error))
         }
+      }
+    }
+    for (const feature of features) {
+      if (!featureHasEvidence(feature, snapshots, verifiedMethods)) {
+        featureErrors.push(`Channel feature ${feature} has no observable evidence in state or successfully invoked methods`)
       }
     }
     const closed = await consumer.close(opened.channelId)

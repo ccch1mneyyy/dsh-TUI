@@ -12,7 +12,8 @@
  * RFC 0007 TUI Channel state projection.
  *
  * Unknown event types are fail-closed unless the event marks itself
- * `ignorable: true`, so a newer required DSH event cannot be silently skipped.
+ * top-level `ignorable: true`, so a newer required DSH event cannot be
+ * silently skipped. Prefix-based recognition is deliberately not used.
  */
 
 import { TUI_CHANNEL_WIRE_REVISION } from '../spec/index.js'
@@ -40,32 +41,86 @@ interface ProjectedRow {
 interface SessionEventLike {
   readonly type?: unknown
   readonly data?: unknown
+  readonly ignorable?: unknown
 }
 
-const KNOWN_EVENT_PREFIXES = Object.freeze([
-  'user/',
-  'assistant/',
-  'system/',
-  'tool/',
-  'turn/',
-  'session/',
-  'agent/',
-  'subagent/',
-  'goal/',
-  'approval/',
-  'preset/',
-  'activity/',
-  'mode/',
-  'model/',
-  'provider/',
-  'file/',
-  'workspace/',
-  'skill/',
-  'diagnostic/',
+/**
+ * Explicit DSH session event types this minimal projection recognizes.
+ *
+ * This is NOT a prefix list: `user/unknown-required` is not recognized unless
+ * the exact type is present. Unknown types must be marked top-level
+ * `ignorable: true` to be skipped.
+ */
+const KNOWN_DSH_EVENT_TYPES = new Set<string>([
+  // dsh-session core event map
+  'turn/start',
+  'turn/end',
+  'step/start',
+  'step/end',
+  'user/message',
+  'assistant/chunk',
+  'assistant/message',
+  'tool/call',
+  'tool/result',
+  'todo/write',
+  'request/header',
+  'request/context',
+  'session/end-seed',
+  // Known dsh-tui / ecosystem plugin event types (exact, not prefix-based)
+  'session/created',
+  'session/disposed',
+  'session/flush',
+  'session/title',
+  'session/color',
+  'session/title-llm-request',
+  'session/event',
+  'agent/status',
+  'agent/disposed',
+  'agent/request',
+  'agent/inbox/claimed',
+  'agent/inbox/discarded',
+  'agent-preset/selected',
+  'approval/asked',
+  'approval/decided',
+  'approval/policy',
+  'commands/change',
+  'skills/change',
+  'goal/change',
+  'plan/mode',
+  'sandbox/mode',
+  'permission/preset',
+  'llm/retry',
+  'llm/retry-started',
+  'compaction/start',
+  'compaction/end',
+  'compaction/prune',
+  'compaction/summary',
+  'feedback/record',
+  'schedule/change',
+  'session-invariant',
+  'subagent/start',
+  'subagent/end',
+  'subagent/descriptor',
+  'team/member',
+  'team/message/delivered',
+  'team/message/queued',
+  'team/task',
+  'tool-workflow/agent-start',
+  'tool-workflow/agent-end',
+  'tool-workflow/run-start',
+  'tool-workflow/run-end',
+  'tool/code-dispatch',
+  'tool/code-dispatch-start',
+  'web/deepseek-search-llm-request',
+  'dsh-tui/btw',
+  'dsh-tui/recap',
+  'dsh-working-activity/config',
+  'dsh-working-activity/status',
+  'activity/status',
 ])
 
 function isKnownEventType(type: string): boolean {
-  return KNOWN_EVENT_PREFIXES.some(prefix => type.startsWith(prefix))
+  return KNOWN_DSH_EVENT_TYPES.has(type)
 }
 
 function firstText(value: unknown): string {
@@ -89,15 +144,15 @@ function projectEvent(event: SessionEventLike): ProjectedRow | undefined {
   const data = (event.data ?? {}) as Record<string, unknown>
   const text = firstText(data.message ?? data)
   if (text === '') return undefined
-  if (type.startsWith('user/')) return { kind: 'user', text }
-  if (type.startsWith('assistant/')) return { kind: 'assistant', text }
-  if (type.startsWith('system/')) return { kind: 'system', text }
+  if (type === 'user/message') return { kind: 'user', text }
+  if (type === 'assistant/message') return { kind: 'assistant', text }
   return undefined
 }
 
 function isIgnorable(event: SessionEventLike): boolean {
-  if (event.data === null || typeof event.data !== 'object' || Array.isArray(event.data)) return false
-  return (event.data as Record<string, unknown>).ignorable === true
+  // DSH `SessionEvent` places `ignorable` at the top level of the event,
+  // never inside `data`.
+  return event.ignorable === true
 }
 
 /**
@@ -151,7 +206,7 @@ export function projectDshSessionEventsToSnapshots(
       throw new DshSessionProjectionError(`unknown non-ignorable DSH session event: ${type}`)
     }
     if (type === 'turn/start') status = 'working'
-    if (type === 'turn/end' || type === 'session/end') status = 'idle'
+    if (type === 'turn/end' || type === 'session/end-seed') status = 'idle'
     const row = projectEvent(event)
     if (row !== undefined) rows.push(row)
     // Push on every known event so version is monotonic; consumers see the

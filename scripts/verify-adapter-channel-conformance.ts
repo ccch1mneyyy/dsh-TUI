@@ -182,6 +182,18 @@ assert.equal(realMethodReport.ok, true, `real method replay should pass: ${JSON.
 assert.equal(realMethodReport.invokeValueDefined, true)
 checks += 1
 
+// A declared method handler is not enough: without a successful invokeMethod
+// it must not back a method-only feature claim.
+const methodNotInvokedReport = await runChannelReplay({
+  snapshots: [snapshot1, snapshot2],
+  features: ['commands'],
+  methods: { commandCompletions: async () => ['help'] },
+})
+assert.equal(methodNotInvokedReport.ok, false)
+assert.ok(methodNotInvokedReport.featureErrors.some(error => /no observable evidence/u.test(error)),
+  'method handler without successful invoke must not count as feature evidence')
+checks += 1
+
 // ── round2 feature/evidence/duplicate/unknown-event fail-closed cases ─────
 const noExplicitFeaturesReport = await runChannelReplay({
   snapshots: [snapshot1],
@@ -218,7 +230,7 @@ checks += 1
 await assert.rejects(
   runChannelReplay({
     sessionEvents: [
-      { type: 'totally/unknown-required', data: {} },
+      { type: 'totally/unknown-required', seq: 1, time: 1, data: {} },
     ],
     sessionMeta: { channelId: 'unknown-event' },
     features: ['session-state', 'session-input'],
@@ -228,15 +240,45 @@ await assert.rejects(
 )
 checks += 1
 
+// A known prefix does NOT make an unknown subtype acceptable: it must still be
+// explicitly recognized or top-level ignorable.
+await assert.rejects(
+  runChannelReplay({
+    sessionEvents: [
+      { type: 'user/unknown-required', seq: 1, time: 1, data: {} },
+    ],
+    sessionMeta: { channelId: 'unknown-subtype' },
+    features: ['session-state'],
+  }),
+  /unknown non-ignorable DSH session event/u,
+  'known-prefix unknown subtype must still fail closed',
+)
+checks += 1
+
+// Top-level `ignorable: true` (the real SessionEvent shape) allows skipping.
 const ignorableReport = await runChannelReplay({
   sessionEvents: [
-    { type: 'totally/unknown-but-ignorable', data: { ignorable: true } },
+    { type: 'totally/unknown-but-ignorable', seq: 1, time: 1, ignorable: true, data: {} },
   ],
   sessionMeta: { channelId: 'ignorable-event' },
   features: ['session-state'],
 })
 assert.equal(ignorableReport.ok, true,
-  'unknown ignorable DSH events may be skipped')
+  'unknown top-level ignorable DSH events may be skipped')
+checks += 1
+
+// A data-level `ignorable` is NOT the SessionEvent contract and must fail.
+await assert.rejects(
+  runChannelReplay({
+    sessionEvents: [
+      { type: 'totally/unknown-data-ignorable', seq: 1, time: 1, data: { ignorable: true } },
+    ],
+    sessionMeta: { channelId: 'wrong-ignorable' },
+    features: ['session-state'],
+  }),
+  /unknown non-ignorable DSH session event/u,
+  'data-level ignorable must not bypass the top-level SessionEvent contract',
+)
 checks += 1
 
 // ── real DSH session-event projection (B1) ────────────────────────────────
