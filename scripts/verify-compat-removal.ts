@@ -15,7 +15,7 @@
  * Run via `node --import tsx/esm scripts/verify-compat-removal.ts`.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -60,6 +60,39 @@ function collect(dir: string, out: string[] = []): string[] {
     else if (TEXT_FILE.test(entry)) out.push(path)
   }
   return out
+}
+
+function isLegacyShimPath(path: string): boolean {
+  const normalized = path.replaceAll('\\', '/')
+  return LEGACY_LIB_SHIM_PATHS.some(shim => normalized === join(ROOT, shim).replaceAll('\\', '/'))
+    || normalized.includes('/plugin-spec/')
+    || /\/dsh-adapter\/(?:grants|host-descriptor)(?:\.|$)/u.test(normalized)
+}
+
+function resolveRelativeImport(fromFile: string, specifier: string): string | undefined {
+  if (!specifier.startsWith('.')) return undefined
+  let resolved = resolve(dirname(fromFile), specifier)
+  const candidates = [resolved, `${resolved}.js`, `${resolved}.ts`, `${resolved}.d.ts`, join(resolved, 'index.js'), join(resolved, 'index.ts'), join(resolved, 'index.d.ts')]
+  for (const candidate of candidates) {
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate
+  }
+  return undefined
+}
+
+function visitRelativeImportGraph(file: string, seen: Set<string>, failures: string[]): void {
+  if (seen.has(file)) return
+  seen.add(file)
+  if (isLegacyShimPath(file)) {
+    failures.push(`${relative(ROOT, file)} is reachable from a package export and is a legacy shim`)
+    return
+  }
+  const source = readFileSync(file, 'utf8')
+  const importPattern = /(?:from\s*|import\s*\(\s*|require\s*\(\s*)(['"])([^'"]+)\1/gu
+  for (const match of source.matchAll(importPattern)) {
+    const specifier = match[2]!
+    const resolved = resolveRelativeImport(file, specifier)
+    if (resolved !== undefined) visitRelativeImportGraph(resolved, seen, failures)
+  }
 }
 
 const failures: string[] = []
@@ -150,6 +183,35 @@ if (!existsSync(publicSurfacePath)) {
   }
   if (publicSource.includes('COMPAT(') || REMOVED_ADMISSION_STATE.test(publicSource)) {
     failures.push('public plugin-host surface must not carry COMPAT/admissionCompat markers')
+  }
+}
+
+// 3b. Transitive consumer/export graph: from every package export target and
+// the main/types/bin entries, follow relative imports and make sure no legacy
+// shim is reachable through the graph.
+{
+  const exportTargets: string[] = []
+  for (const target of Object.values(manifest.exports ?? {})) {
+    if (typeof target === 'string') exportTargets.push(target)
+    else if (target !== null && typeof target === 'object') {
+      for (const value of Object.values(target)) {
+        if (typeof value === 'string') exportTargets.push(value)
+      }
+    }
+  }
+  for (const target of [manifest.main, manifest.types]) {
+    if (typeof target === 'string') exportTargets.push(target)
+  }
+  for (const target of Object.values((manifest as { bin?: Record<string, unknown> }).bin ?? {})) {
+    if (typeof target === 'string') exportTargets.push(target)
+  }
+  const seen = new Set<string>()
+  for (const target of exportTargets) {
+    if (typeof target !== 'string') continue
+    const path = join(ROOT, target.replace(/^\.\//u, ''))
+    if (existsSync(path) && statSync(path).isFile()) {
+      visitRelativeImportGraph(path, seen, failures)
+    }
   }
 }
 
