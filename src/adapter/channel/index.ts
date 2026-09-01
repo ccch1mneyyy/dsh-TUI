@@ -16,3 +16,15 @@ export { createChannelActions } from './actions.js'
 export { createChannelPlugins } from './plugins.js'
 export { createChannelTranscript } from './transcript.js'
 export { registerTuiChannel, getRegisteredTuiChannel } from './host-registry.js'
+export {
+  createReplayChannelProvider,
+  createReplayChannelProviderFromSnapshot,
+  REPLAY_CHANNEL_WIRE_REVISION,
+  type ChannelProvider,
+  type ChannelProviderOpenInput,
+  type ReplayChannelSnapshotSource,
+} from './provider.js'
+export {
+  createChannelConsumer,
+  type ChannelConsumer,
+} from './consumer.js'

@@ -24,8 +24,18 @@ import {
   registerStorageLiveProbe,
 } from './host-probe-access.js'
 import { withReplayIsolation } from './replay-isolation.js'
+import {
+  createReplayChannelProvider,
+  createChannelConsumer,
+} from '../channel/index.js'
+import {
+  TUI_CHANNEL_FEATURES,
+  TUI_CHANNEL_WIRE_REVISION,
+} from '../standard/tui-extension.js'
+import type { TuiChannelSnapshot } from '../spec/index.js'
 
 export const REPLAY_SCHEMA_VERSION = 'tui-adapter-replay/v1'
+export const REPLAY_CHANNEL_SCHEMA_VERSION = 'tui-adapter-channel-replay/v1'
 
 export interface ReplayContractRef {
   readonly apiVersion: string
@@ -49,6 +59,34 @@ export interface ReplayInput {
   readonly storage?: boolean
   readonly messages?: boolean
   readonly decisionEvents?: readonly string[]
+  /** P5: optional real DSH Channel snapshot/transcript replay. */
+  readonly channel?: ReplayChannelInput
+}
+
+/** P5 Channel replay input: recorded `tui.dsh/v1alpha1#Channel` snapshots
+ * (a real DSH session projection) and optional transcript/event provenance. */
+export interface ReplayChannelInput {
+  readonly snapshots: readonly TuiChannelSnapshot[]
+  readonly transcript?: readonly unknown[]
+  /** Feature set advertised by this recorded Channel provider. */
+  readonly features?: readonly string[]
+  /** Optional method handlers, for example `commandCompletions` or
+   * `runWorkspaceCommand`, exercised during replay. */
+  readonly methods?: Readonly<Record<string, (args: readonly unknown[]) => unknown | Promise<unknown>>>
+}
+
+export interface ReplayChannelReport {
+  readonly ok: boolean
+  readonly schemaVersion: string
+  readonly channelId: string
+  readonly wireRevision: number
+  readonly versions: readonly number[]
+  readonly features: readonly string[]
+  readonly transcriptCount: number
+  readonly continuityErrors: readonly string[]
+  readonly openVersion: number
+  readonly invokeValueDefined: boolean
+  readonly closed: boolean
 }
 
 export interface ReplayReport {
@@ -64,6 +102,7 @@ export interface ReplayReport {
   readonly lifecycles: readonly CapabilityLifecycle[]
   readonly dropped: readonly string[]
   readonly warnings: readonly string[]
+  readonly channel?: ReplayChannelReport
 }
 
 export class ReplayHarnessError extends Error {
@@ -169,6 +208,65 @@ export function createReplayContext(input: ReplayInput): unknown {
 }
 
 /**
+ * Run a real DSH session snapshot/transcript Channel replay through the
+ * protocol Provider/Consumer pair.
+ *
+ * This path validates the full `tui.dsh/v1alpha1#Channel` envelope:
+ * - `open` returns a validated complete snapshot;
+ * - `subscribe` streams every recorded snapshot (> afterVersion) in order;
+ * - `invoke` accepts JSON arguments, returns a JSON result and always
+ *   includes the latest validated snapshot;
+ * - `close` acknowledges closure;
+ * - monotonic version/wire-revision continuity is checked by the consumer.
+ */
+export async function runChannelReplay(input: ReplayChannelInput): Promise<ReplayChannelReport> {
+  if (input === null || typeof input !== 'object' || !Array.isArray(input.snapshots) || input.snapshots.length === 0) {
+    throw new ReplayHarnessError('channel replay input must contain at least one snapshot')
+  }
+  return await withReplayIsolation(async () => {
+    const provider = createReplayChannelProvider(input)
+    const versions: number[] = []
+    const subscriptionSnapshots: TuiChannelSnapshot[] = []
+    const subscriptionConsumer = createChannelConsumer(provider)
+    const first = input.snapshots[0]!
+    // Subscribe first on an independent consumer so version continuity is
+    // observed over the recorded stream without conflating it with `open`
+    // returning the latest current snapshot.
+    await subscriptionConsumer.subscribe(first.channelId, 0, snapshot => {
+      subscriptionSnapshots.push(snapshot)
+      versions.push(snapshot.version)
+    })
+
+    const consumer = createChannelConsumer(provider)
+    const opened = await consumer.open({})
+    const invoke = await consumer.invoke(opened.channelId, 'replay/probe', [])
+    const closed = await consumer.close(opened.channelId)
+    const continuityErrors = [
+      ...subscriptionConsumer.continuityErrors(),
+      ...consumer.continuityErrors(),
+    ]
+    const features = [...new Set(input.features ?? TUI_CHANNEL_FEATURES)]
+    const ok = continuityErrors.length === 0
+      && opened.wireRevision === TUI_CHANNEL_WIRE_REVISION
+      && opened.channelId === first.channelId
+      && closed.closed === true
+    return Object.freeze({
+      ok,
+      schemaVersion: REPLAY_CHANNEL_SCHEMA_VERSION,
+      channelId: opened.channelId,
+      wireRevision: opened.wireRevision,
+      versions: Object.freeze(versions),
+      features: Object.freeze(features),
+      transcriptCount: input.transcript?.length ?? 0,
+      continuityErrors: Object.freeze(continuityErrors),
+      openVersion: opened.version,
+      invokeValueDefined: invoke.valueDefined === true,
+      closed: closed.closed,
+    })
+  })
+}
+
+/**
  * Run an isolated replay-shadow comparison through the production KernelRuntime
  * and host-descriptor driver.
  *
@@ -207,8 +305,11 @@ export async function runReplayShadow(input: ReplayInput): Promise<ReplayReport>
       const matched = kernelContracts.filter(key => legacySet.has(key))
       const missing = legacyContracts.filter(key => !kernelSet.has(key))
       const extra = kernelContracts.filter(key => !legacySet.has(key))
+      const channel = input.channel === undefined
+        ? undefined
+        : await runChannelReplay(input.channel)
       return Object.freeze({
-        ok: missing.length === 0 && extra.length === 0,
+        ok: missing.length === 0 && extra.length === 0 && (channel?.ok ?? true),
         schemaVersion: REPLAY_SCHEMA_VERSION,
         generationId,
         mode: 'replay-shadow',
@@ -220,6 +321,7 @@ export async function runReplayShadow(input: ReplayInput): Promise<ReplayReport>
         lifecycles: kernel.currentLifecycles(),
         dropped: Object.freeze([...build.dropped]),
         warnings: Object.freeze([...build.warnings]),
+        ...(channel === undefined ? {} : { channel }),
       })
     } finally {
       kernel.dispose()
