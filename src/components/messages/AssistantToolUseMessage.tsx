@@ -12,10 +12,8 @@ import { formatDuration } from '../../cc/format.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
-import { getRevealVersion, revealLinesOf, snapReveal, subscribeReveal } from '../smoothReveal.js'
-
-const NOOP_REVEAL_SUBSCRIBE = (_listener: () => void): (() => void) => () => {}
-const getNoRevealVersion = (): number => 0
+import { revealLinesOf, snapReveal } from '../smoothReveal.js'
+import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 
 type Props = {
   tool: ToolRow
@@ -428,10 +426,10 @@ export function AssistantToolUseMessage({
   // MessageList owns the single production subscription and passes a version
   // prop only to active reveal rows. Standalone consumers keep the fallback
   // subscription so the component contract remains self-contained.
-  React.useSyncExternalStore(
-    revealVersion === undefined ? subscribeReveal : NOOP_REVEAL_SUBSCRIBE,
-    revealVersion === undefined ? getRevealVersion : getNoRevealVersion,
-  )
+  // DefaultLane on purpose (useRevealVersion): a useSyncExternalStore wakeup
+  // forces a SyncLane render per tick, and repeated sync commits ending with
+  // streaming work pending feed React's nested-update counter (error #185).
+  useRevealVersion(revealVersion === undefined)
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText

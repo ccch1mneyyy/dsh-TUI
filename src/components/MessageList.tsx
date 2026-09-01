@@ -22,7 +22,8 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
-import { getRevealVersion, revealLengthOf, revealTextOf, subscribeReveal } from './smoothReveal.js'
+import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
+import { useRevealVersion } from '../hooks/useRevealVersion.js'
 
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
@@ -430,13 +431,17 @@ export function MessageList({
 
   // --- layout virtualization ---------------------------------------------
   const { columns, rows: termRows } = useTerminalSize()
-  // Smooth-reveal wakeups: the scheduler's tick bumps this store, re-running
+  // Smooth-reveal wakeups: the scheduler's tick bumps this hook, re-running
   // MessageList so the revealed `text`/line-count reads below feed fresh
   // values through the same MemoRow-prop pipeline an arriving chunk uses —
   // memo miss → re-render → post-commit height re-measure. Without this
   // subscription a reveal living in child state would change row heights
   // invisibly to the virtualization (stale cached heights → blank bands).
-  React.useSyncExternalStore(subscribeReveal, getRevealVersion)
+  // DefaultLane on purpose (useRevealVersion): a useSyncExternalStore wakeup
+  // would force a SyncLane render per 33ms tick, and each such commit ending
+  // with streaming work still pending feeds React's nested-update counter
+  // until error #185 kills the process (beta.3).
+  useRevealVersion()
   // Measured row heights, remembered after a row unmounts so virtualization
   // can compute total content height. Bounded: row ids grow monotonically
   // and rows are never removed from the transcript (foldRows keeps the
@@ -933,18 +938,32 @@ export function MessageList({
     upId: upTurnIndex === null ? null : timelineTurns[upTurnIndex]!.id,
     downId: downTurnIndex === null ? null : timelineTurns[downTurnIndex]!.id,
   }
-  const lastTimelineReportRef = React.useRef('')
+  const lastTimelineReportRef = React.useRef<TimelineSnapshot | null>(null)
   React.useEffect(() => {
-    // O(1) signature: the memo key pins the turns' geometry identity
-    // (heights/window/base/rows-length) and the three ids pin the
-    // viewport-derived targets. Any top change bumps the geometry key, so
-    // the report still fires exactly when the snapshot content changes —
-    // without rebuilding an O(turns) joined string per commit.
-    const sig = `${timelineMemoRef.current?.key ?? ''}#a${timeline.activeId}#u${timeline.upId}#d${timeline.downId}`
-    if (sig !== lastTimelineReportRef.current) {
-      lastTimelineReportRef.current = sig
-      onTimeline?.(timeline)
-    }
+    // Value-level dedup, not geometry-key-level: the memo key pins to
+    // heightsVersion, which a GROWING streamed row bumps on every commit,
+    // so a key-pinned signature re-reports an identical snapshot every
+    // commit of a long stream. Each report is a setState dispatched into
+    // Chat from this passive effect; it lands as pending residue at commit
+    // end, keeping the commit dirty and feeding React's nested-update
+    // counter (50 consecutive dirty commits → error #185, the beta.3
+    // crash). The O(turns) compare below is integer/string-reference
+    // compares only — cheap next to the joined-string signature the memo
+    // key replaced, and it fires exactly when the snapshot content changes.
+    const prev = lastTimelineReportRef.current
+    if (
+      prev !== null &&
+      prev.activeId === timeline.activeId &&
+      prev.upId === timeline.upId &&
+      prev.downId === timeline.downId &&
+      prev.turns.length === timeline.turns.length &&
+      prev.turns.every((t, i) => {
+        const n = timeline.turns[i]!
+        return t.id === n.id && t.top === n.top && t.folded === n.folded && t.preview === n.preview
+      })
+    ) return
+    lastTimelineReportRef.current = timeline
+    onTimeline?.(timeline)
   })
 
   // Post-commit: measure mounted rows, derive the content-space base from

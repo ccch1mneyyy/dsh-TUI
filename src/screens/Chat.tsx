@@ -98,6 +98,7 @@ import { setClipboard } from '../ink/termio/osc.js'
 import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
+import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
@@ -269,7 +270,14 @@ export function Chat({
 }) {
   const writeRaw = React.useContext(TerminalWriteContext)
   // Re-render whenever the channel mutates; rows/status are read fresh below.
-  React.useSyncExternalStore(channel.subscribe, () => channel.version)
+  // DEFAULT lane on purpose (useExternalVersion): the channel version bumps
+  // at streaming cadence (every ~16ms via emitStream), and a useSyncExternalStore
+  // wakeup would force a SyncLane render per bump — each such sync commit
+  // preempting the in-flight Default render and ending with Default work
+  // still pending feeds React's nested-update counter until error #185 kills
+  // the process (beta.3; the reveal-store half was PR #680, this is the
+  // channel half — the surviving source on Windows timer granularity).
+  useExternalVersion(channel.subscribe, () => channel.version)
   // Re-render on language switches so the whole UI hot-swaps its strings.
   React.useSyncExternalStore(subscribeLang, getLang)
   // The pending ask-user-question (DSH user-interaction seam): the model's
@@ -682,10 +690,17 @@ export function Chat({
 
   // Sticky (pinned-to-bottom) scroll state, subscribed imperatively so
   // wheel events don't re-render React — only the header/pill flip.
-  const isSticky = React.useSyncExternalStore(
-    cb => (handle ? handle.subscribe(cb) : () => {}),
-    () => (handle ? handle.isSticky() : true),
+  // DEFAULT lane on purpose (useExternalVersion, not useSyncExternalStore):
+  // wheel storms notify at ~16ms cadence and a uSES wakeup would force a
+  // SyncLane render per notify — preempting any in-flight streaming render
+  // and feeding the nested-update counter (the #185 mechanism). The sticky
+  // value is read fresh from the handle during render.
+  const subscribeSticky = React.useCallback(
+    (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
+    [handle],
   )
+  useExternalVersion(subscribeSticky, () => (handle ? handle.isSticky() : true) ? 1 : 0)
+  const isSticky = handle ? handle.isSticky() : true
   const subscribeTooltipInvalidation = React.useCallback(
     (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
     [handle],
