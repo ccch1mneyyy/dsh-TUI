@@ -86,35 +86,40 @@ function unescapeBackslashes(
 }
 
 /**
- * Partition a file-manager clipboard offer: image paths stage into composer
- * tokens through `stage`, other or failed paths keep `formatPath`'s plain
- * insert, preserving offer order. `failure` carries the last staging error
- * message ('' when none) so the caller can surface one warning.
+ * Partition a file-manager clipboard offer: image paths resolve to opaque
+ * staged values through `stage`, while other or failed paths keep
+ * `formatPath`'s plain insert, preserving offer order. The caller binds all
+ * staged values to visible tokens only after this batch settles. `failure`
+ * carries the last staging error message ('' when none) for one warning.
  */
-export async function stageClipboardFilePaths(
+export type StagedClipboardFilePart<T> =
+  | { readonly kind: 'staged'; readonly value: T }
+  | { readonly kind: 'text'; readonly value: string }
+
+export async function stageClipboardFilePaths<T>(
   paths: readonly string[],
-  stage: (path: string) => Promise<string>,
+  stage: (path: string) => Promise<T>,
   formatPath: (path: string) => string,
 ): Promise<{
-  readonly parts: readonly string[]
-  readonly staged: readonly string[]
+  readonly parts: readonly StagedClipboardFilePart<T>[]
+  readonly staged: readonly T[]
   readonly failure: string
 }> {
-  const parts: string[] = []
-  const staged: string[] = []
+  const parts: StagedClipboardFilePart<T>[] = []
+  const staged: T[] = []
   let failure = ''
   for (const path of paths) {
     if (imagePathMediaType(path) === undefined) {
-      parts.push(formatPath(path))
+      parts.push({ kind: 'text', value: formatPath(path) })
       continue
     }
     try {
-      const token = await stage(path)
-      parts.push(token)
-      staged.push(token)
+      const value = await stage(path)
+      parts.push({ kind: 'staged', value })
+      staged.push(value)
     } catch (error: unknown) {
       failure = error instanceof Error ? error.message : String(error)
-      parts.push(formatPath(path))
+      parts.push({ kind: 'text', value: formatPath(path) })
     }
   }
   return { parts, staged, failure }

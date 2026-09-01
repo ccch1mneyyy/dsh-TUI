@@ -60,7 +60,9 @@ export function ImagePreviewOverlay({
     : [0, 0]
   const stateLine = state.kind === 'failed'
     ? t('transcript-image-unavailable', { name: label })
-    : t('transcript-image-loading', { name: label })
+    : state.kind === 'ready'
+      ? t('transcript-image-ready', { name: label })
+      : t('transcript-image-loading', { name: label })
 
   return (
     <Box

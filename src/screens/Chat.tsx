@@ -24,7 +24,7 @@ import {
   RECENTS_GROUP_PROVIDER,
 } from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
-import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
+import { sessionCwdMatches, type Channel, type ChatRow, type ComposerImageRef, type EffortOption, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
@@ -1179,7 +1179,11 @@ export function Chat({
     }
   }
 
-  const runCommand = (name: string, rawInput = ''): boolean => {
+  const runCommand = (
+    name: string,
+    rawInput = '',
+    images: readonly ComposerImageRef[] = [],
+  ): boolean => {
     switch (name) {
       case 'activity': {
         // Ported from the pi working-activity extension: bare `/activity`
@@ -2202,7 +2206,7 @@ export function Chat({
         )
         if (external) {
           setHelpOpen(false)
-          void channel.runExternalCommand(name, rawInput).then((text) => {
+          void channel.runExternalCommand(name, rawInput, images).then((text) => {
             if (text !== undefined && text !== '') {
               channel.notify(text)
             } else if (text === undefined) {
@@ -2544,20 +2548,21 @@ export function Chat({
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
     if (plainReturn) lastModalEnterAtRef.current = returnNow
-    // Esc clears a settled mouse selection first (CC precedence), ahead of
-    // every other Esc meaning below (close pickers, interrupt the turn).
-    // hasSelection() is an imperative read — no subscription needed.
-    if (key.escape && hasMouseSelection()) {
-      clearMouseSelection()
-      event.stopImmediatePropagation()
-      return
-    }
     if (overlay.kind === 'image-preview') {
       // Modal like every picker: Esc/Ctrl+C/Enter close, everything else is
       // swallowed (the prompt is inert via promptSelectionActive anyway).
       if (key.escape || (key.ctrl && input === 'c') || plainReturn) {
         dispatchOverlay({ type: 'close' })
       }
+      event.stopImmediatePropagation()
+      return
+    }
+    // Esc clears a settled mouse selection before the ordinary chat meanings
+    // below, but never before a top-level modal. Otherwise a preview opened
+    // over selected transcript text needed two Esc presses to close.
+    // hasSelection() is an imperative read — no subscription needed.
+    if (key.escape && hasMouseSelection()) {
+      clearMouseSelection()
       event.stopImmediatePropagation()
       return
     }
@@ -3095,7 +3100,10 @@ export function Chat({
       // NORMAL, NORMAL = no-op/cancel pending d) and the prompt owns it;
       // interrupting still works via Ctrl+C / Ctrl+Enter.
       if (channel.pending.length > 0) {
-        const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
+        const count = channel.interruptAndDeliver(channel.pending.map(item => ({
+          text: item.text,
+          images: item.images ?? [],
+        })))
         if (count > 0) {
           channel.notify(t('interrupt-delivered', { n: count }), { timeoutMs: 2500 })
         }
@@ -4127,18 +4135,20 @@ export function Chat({
         invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
+      {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后，才能盖住包括
+          状态栏在内的全部普通后绘兄弟。内容由 PromptInput 经 module
+          store 发布（见 PromptEditor.tsx）。图片预览是唯一有意后绘于它
+          的 top modal：这样编辑器状态留在原处，关闭预览即可原样恢复。 */}
+      <PromptEditorLayer />
       {/* 模态图片预览：输入框 [Image #N] 与 transcript 缩略图共用。
-          居中卡片 + 全屏点击捕获（点外部关闭）；Esc 在 Chat 的按键链关闭。 */}
+          居中卡片 + 全屏点击捕获（点外部关闭）；Esc 在 Chat 的按键链关闭。
+          保持根节点最后一个孩子，明确高于展开的 PromptEditorLayer。 */}
       {overlay.kind === 'image-preview' && (
         <ImagePreviewOverlay
           image={overlay.image}
           onClose={() => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
         />
       )}
-      {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后（树序最后），
-          才能盖住包括状态栏在内的全部后绘兄弟。内容由 PromptInput
-          经 module store 发布（见 PromptEditor.tsx）。 */}
-      <PromptEditorLayer />
     </Box>
   )
 }

@@ -15,7 +15,7 @@ process.env.HOME = new URL('../node_modules/.cache/dsh-tui-image-preview-home', 
 process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES = '1'
 
 import assert from 'node:assert/strict'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { PassThrough, Writable } from 'node:stream'
 mkdirSync(process.env.HOME!, { recursive: true })
 import React from 'react'
@@ -55,6 +55,15 @@ function check(name: string, ok: boolean, detail = ''): void {
   }
 }
 
+{
+  const chatSource = readFileSync(new URL('../src/screens/Chat.tsx', import.meta.url), 'utf8')
+  const previewModalGuard = chatSource.indexOf("if (overlay.kind === 'image-preview') {")
+  const mouseSelectionEsc = chatSource.indexOf('if (key.escape && hasMouseSelection())')
+  check('chat: preview modal consumes Esc before transcript mouse selection',
+    previewModalGuard !== -1 && mouseSelectionEsc > previewModalGuard,
+    `preview=${previewModalGuard}, selection=${mouseSelectionEsc}`)
+}
+
 // --- parsePastedImagePath: conservative drop-path recognition --------------
 {
   const home = (await import('node:os')).homedir()
@@ -91,7 +100,8 @@ function check(name: string, ok: boolean, detail = ''): void {
     path => `@${path}`,
   )
   check('files: images become tokens in offer order, others keep the path insert',
-    JSON.stringify(outcome.parts) === JSON.stringify(['[Image #1]', '@/tmp/notes.txt', '@/tmp/broken.png', '[Image #2]']),
+    JSON.stringify(outcome.parts.map(part => part.value))
+      === JSON.stringify(['[Image #1]', '@/tmp/notes.txt', '@/tmp/broken.png', '[Image #2]']),
     JSON.stringify(outcome))
   check('files: staged tokens and the last failure are reported',
     JSON.stringify(outcome.staged) === JSON.stringify(['[Image #1]', '[Image #2]']) && outcome.failure === 'stage refused')
@@ -151,17 +161,20 @@ const png = new Uint8Array(await sharp({
     activity: false,
   })
   const stageOne = (name: string) =>
-    channel.stageImage({ data: new Uint8Array([1, 2, 3, 4]), mediaType: 'image/png', name })
+    channel.stageImage(
+      { data: new Uint8Array([1, 2, 3, 4]), mediaType: 'image/png', name },
+      channel.stagedImageGeneration(),
+    )
 
   check('channel: stagedImageLimits exposes the profile byte limit',
     channel.stagedImageLimits()?.maxImageBytes === 1024 * 1024)
 
-  // Offer-order numbering with a failure in the middle: failures take no
-  // number (sequence bumps only after a successful durable save).
+  // Durable staging returns opaque, non-reusable capabilities; presentation
+  // numbering belongs to PromptInput and a rejected save returns no handle.
   const first = stageOne('a.png')
   await settled(() => pendingSaves.length === 1)
   pendingSaves[0]!.resolve(savedRef(1))
-  assert.equal(await first, '[Image #1]')
+  const firstHandle = await first
   const second = stageOne('broken.png')
   await settled(() => pendingSaves.length === 2)
   pendingSaves[1]!.reject(new Error('admission refused'))
@@ -169,11 +182,11 @@ const png = new Uint8Array(await sharp({
   const third = stageOne('c.png')
   await settled(() => pendingSaves.length === 3)
   pendingSaves[2]!.resolve(savedRef(3))
-  assert.equal(await third, '[Image #2]')
-  check('channel: failures take no number — offer order maps to #1, #2',
-    channel.stagedImage('[Image #1]') !== undefined &&
-    channel.stagedImage('[Image #2]') !== undefined &&
-    channel.stagedImage('[Image #3]') === undefined)
+  const thirdHandle = await third
+  check('channel: successful saves receive distinct live capabilities',
+    firstHandle.stageId !== thirdHandle.stageId &&
+    channel.stagedImage(firstHandle.stageId) !== undefined &&
+    channel.stagedImage(thirdHandle.stageId) !== undefined)
 
   // The session-switch fence: a save resolving AFTER /new must not register
   // its token (or bump the fresh session's sequence).
@@ -184,13 +197,15 @@ const png = new Uint8Array(await sharp({
   pendingSaves[3]!.resolve(savedRef(4))
   await assert.rejects(inFlight, /session changed/u)
   check('channel: a save landing after /new registers nothing',
-    channel.stagedImage('[Image #1]') === undefined &&
-    channel.stagedImage('[Image #3]') === undefined)
+    channel.stagedImage(firstHandle.stageId) === undefined &&
+    channel.stagedImage(thirdHandle.stageId) === undefined)
   const fresh = stageOne('fresh.png')
   await settled(() => pendingSaves.length === 5)
   pendingSaves[4]!.resolve(savedRef(5))
-  check('channel: the fresh session numbers from #1 again',
-    (await fresh) === '[Image #1]' && channel.stagedImage('[Image #1]') !== undefined)
+  const freshHandle = await fresh
+  check('channel: the fresh session capability is live and never reuses an old id',
+    freshHandle.stageId !== firstHandle.stageId &&
+    channel.stagedImage(freshHandle.stageId) !== undefined)
 
   // A stale placeholder in submitted text warns loudly (and still sends).
   channel.submit('please look at [Image #7]')
@@ -220,6 +235,9 @@ function fakeImage(id: string, name: string, fail = false): TranscriptImage {
 
 const COLS = 80
 const ROWS = 30
+// CSI-u: Ctrl+Shift+E (E=69, modifier 6 = ctrl+shift).
+const CTRL_SHIFT_E = '\x1b[69;6u'
+const CTRL_G = '\x07'
 
 class FakeStdout extends Writable {
   columns = COLS
@@ -298,6 +316,25 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   const stdout = new FakeStdout(terminal)
   const app = await render(
     <Box width={COLS} height={ROWS}>
+      <ImagePreviewOverlay image={fakeImage('sha256:ready', 'ready.png')} onClose={() => {}} />
+    </Box>,
+    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  check('overlay: graphics-disabled wide fallback reaches the ready state',
+    await settled(() =>
+      screen.text().includes('[Image · ready.png]') &&
+      !screen.text().includes('[Loading ready.png]')),
+    screen.text())
+  await app.unmount()
+  terminal.dispose()
+}
+{
+  clearTranscriptImageCacheForTests()
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const app = await render(
+    <Box width={COLS} height={ROWS}>
       <ImagePreviewOverlay image={fakeImage('sha256:bad', 'bad.png', true)} onClose={() => {}} />
     </Box>,
     { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
@@ -315,7 +352,7 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
 // --- Chat integration: one shared overlay for composer + transcript --------
 function makeChannel() {
   const staged = new Map<string, TranscriptImage>([
-    ['[Image #1]', fakeImage('sha256:staged', 'staged.png')],
+    ['stage-1', fakeImage('sha256:staged', 'staged.png')],
   ])
   return {
     version: 0,
@@ -342,6 +379,7 @@ function makeChannel() {
     lastUserText: '',
     pending: [],
     commandList: LOCAL_COMMANDS,
+    commandCompletions: () => [],
     notifications: [],
     contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
     subscribe: () => () => {},
@@ -350,7 +388,12 @@ function makeChannel() {
     cancel() {},
     clear() {},
     notify() {},
-    stagedImage: (token: string) => staged.get(token),
+    stagedImageGeneration: () => 0,
+    stageImage: async () => ({ stageId: 'stage-1' }),
+    discardStagedImage() {},
+    hasStagedImage: (stageId: string) => staged.has(stageId),
+    stagedImage: (stageId: string) => staged.get(stageId),
+    stagedImageLimits: () => ({ maxImageBytes: 1024 * 1024, maxImagesPerMessage: 4 }),
     listModels: () => Promise.resolve([]),
     listSessions: () => [],
     setResumeTarget: () => {},
@@ -359,6 +402,8 @@ function makeChannel() {
 
 {
   clearTranscriptImageCacheForTests()
+  const pastedImagePath = `${process.env.HOME}/composer.png`
+  writeFileSync(pastedImagePath, png)
   const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(terminal)
   const stdin = new FakeStdin()
@@ -410,15 +455,80 @@ function makeChannel() {
     readsAfterFirstOpen > 0 && (readCounts.get('sha256:sent') ?? 0) === readsAfterFirstOpen,
     `reads=${readCounts.get('sha256:sent')}`)
 
-  // Composer token → the SAME overlay (channel.stagedImage seam).
+  // A raw history/rewind-looking token has no capability. Leave it in the
+  // draft, then paste a real image: the allocator must skip #1 and bind #2.
   stdin.write('[Image #1]')
-  check('chat: staged token visible in the composer',
+  check('chat: raw token text is visible but inert',
     await settled(() => screen.find('[Image #1]') !== null), screen.text())
-  const token = screen.find('[Image #1]')!
+  const rawToken = screen.find('[Image #1]')!
+  click(rawToken.col + 2, rawToken.row)
+  await sleep(150)
+  check('chat: a raw token without sidecar capability does not open preview',
+    !screen.text().includes(OVERLAY_HINT), screen.text())
+
+  stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
+  check('chat: fresh paste skips the occupied raw number and mints #2',
+    await settled(() => screen.find('[Image #2]') !== null), screen.text())
+  const token = screen.find('[Image #2]')!
   click(token.col + 2, token.row)
   check('chat: composer token click opens the preview with the staged image',
     await settled(() =>
       screen.text().includes(OVERLAY_HINT) && screen.text().includes('staged.png')),
+    screen.text())
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes(OVERLAY_HINT))
+
+  // The expanded editor stays mounted below the shared preview. The preview
+  // must be visible, then one Esc closes ONLY it and reveals the same draft.
+  stdin.write(CTRL_SHIFT_E)
+  check('chat: staged token remains visible in the expanded editor',
+    await settled(() =>
+      screen.text().includes('Draft editor') &&
+      screen.find('[Image #2]') !== null),
+    screen.text())
+  const editorToken = screen.find('[Image #2]')!
+  click(editorToken.col + 2, editorToken.row)
+  check('chat: preview is the top modal above the expanded editor',
+    await settled(() =>
+      screen.text().includes(OVERLAY_HINT) &&
+      screen.text().includes('[Image · staged.png]') &&
+      !screen.text().includes('Draft editor')),
+    screen.text())
+  stdin.write('\x1b')
+  check('chat: Esc closes only the preview and restores the expanded draft',
+    await settled(() =>
+      !screen.text().includes(OVERLAY_HINT) &&
+      screen.text().includes('Draft editor') &&
+      screen.find('[Image #2]') !== null),
+    screen.text())
+  // Collapse the editor so the final outside-click negative case exercises
+  // the ordinary Chat surface rather than the editor's full-screen catcher.
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes('Draft editor'))
+
+  // An external-editor round trip is a new async draft lifecycle, but an
+  // image token the editor preserves must keep its opaque sidecar binding.
+  const savedVisual = process.env.VISUAL
+  const savedEditor = process.env.EDITOR
+  delete process.env.VISUAL
+  process.env.EDITOR = `"${process.execPath}" -e "require('node:fs').appendFileSync(process.argv[1],' edited')"`
+  stdin.write(CTRL_G)
+  check('chat: external editor returns the preserved image token',
+    await settled(() =>
+      screen.text().includes('edited') &&
+      screen.find('[Image #2]') !== null,
+    { timeoutMs: 5000 }),
+    screen.text())
+  if (savedVisual === undefined) delete process.env.VISUAL
+  else process.env.VISUAL = savedVisual
+  if (savedEditor === undefined) delete process.env.EDITOR
+  else process.env.EDITOR = savedEditor
+  const editedToken = screen.find('[Image #2]')!
+  click(editedToken.col + 2, editedToken.row)
+  check('chat: external editor preserves the token capability binding',
+    await settled(() =>
+      screen.text().includes(OVERLAY_HINT) &&
+      screen.text().includes('[Image · staged.png]')),
     screen.text())
   stdin.write('\x1b')
   await settled(() => !screen.text().includes(OVERLAY_HINT))
@@ -430,6 +540,180 @@ function makeChannel() {
     !screen.text().includes(OVERLAY_HINT))
 
   await app.unmount()
+  terminal.dispose()
+}
+
+// --- Prompt async-paste fence: an old continuation cannot edit new draft --
+{
+  const pastedImagePath = `${process.env.HOME}/composer.png`
+  const secondImagePath = `${process.env.HOME}/composer-b.png`
+  const oversizedImagePath = `${process.env.HOME}/oversized.png`
+  const directoryImagePath = `${process.env.HOME}/not-a-file.png`
+  writeFileSync(pastedImagePath, png)
+  writeFileSync(secondImagePath, png)
+  writeFileSync(oversizedImagePath, Buffer.alloc(1024 * 1024 + 1))
+  mkdirSync(directoryImagePath, { recursive: true })
+  const stageResolvers: Array<(handle: { stageId: string }) => void> = []
+  const resolveStage = (handle: { stageId: string }): void => {
+    const resolve = stageResolvers.shift()
+    assert(resolve !== undefined, `no staged-image promise waiting for ${handle.stageId}`)
+    resolve(handle)
+  }
+  let stageCalls = 0
+  let generation = 0
+  const submitted: string[] = []
+  const discarded: string[] = []
+  let localCommandCalls = 0
+  const channel = makeChannel()
+  channel.stagedImageGeneration = () => generation
+  channel.submit = (text: string) => { submitted.push(text) }
+  channel.stageImage = () => new Promise(resolve => {
+    stageCalls += 1
+    stageResolvers.push(resolve)
+  })
+  channel.discardStagedImage = (stageId: string) => { discarded.push(stageId) }
+  channel.hasStagedImage = () => true
+  channel.pushLocal = () => { localCommandCalls += 1 }
+
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const stdin = new FakeStdin()
+  const app = await render(
+    <AlternateScreen>
+      <Chat
+        channel={channel as never}
+        questionStore={new QuestionStore()}
+        onExit={() => {}}
+        fullscreen
+      />
+    </AlternateScreen>,
+    { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await sleep(500)
+
+  stdin.write(`\x1b[200~${oversizedImagePath}\x1b[201~`)
+  check('chat: oversized pasted paths never reach attachment staging',
+    await settled(() => screen.text().includes('oversized.png')) && stageCalls === 0,
+    `calls=${stageCalls}\n${screen.text()}`)
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes('oversized.png'))
+
+  stdin.write(`\x1b[200~${directoryImagePath}\x1b[201~`)
+  check('chat: non-regular pasted paths never reach attachment staging',
+    await settled(() => screen.text().includes('not-a-file.png')) && stageCalls === 0,
+    `calls=${stageCalls}\n${screen.text()}`)
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes('not-a-file.png'))
+
+  // Ordinary typing belongs to the same logical draft, so a delayed paste
+  // follows the live caret instead of being spuriously cancelled.
+  stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
+  check('chat: async paste reached the staging barrier',
+    await settled(() => stageCalls === 1))
+  stdin.write('live draft')
+  resolveStage({ stageId: 'live-draft-stage' })
+  check('chat: ordinary typing preserves the current draft image lease',
+    await settled(() =>
+      screen.text().includes('live draft') &&
+      screen.text().includes('[Image #1]')),
+    screen.text())
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes('live draft'))
+  check('chat: clearing an unsent draft releases its staged capability',
+    discarded.includes('live-draft-stage'), JSON.stringify(discarded))
+
+  stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
+  check('chat: second async paste reached the staging barrier',
+    await settled(() => stageCalls === 2))
+  // Stay in the same session: sending the current logical draft, rather
+  // than a session-generation change, is what must revoke the old paste.
+  stdin.write('old draft')
+  stdin.write('\r')
+  check('chat: submitting a draft advances its image lease',
+    await settled(() => submitted[0] === 'old draft'))
+  stdin.write('fresh draft')
+  resolveStage({ stageId: 'old-draft-stage' })
+  await sleep(150)
+  check('chat: old paste continuation cannot mutate the next same-session draft',
+    screen.text().includes('fresh draft') &&
+    !screen.text().includes('[Image #') &&
+    !screen.text().includes(pastedImagePath),
+    screen.text())
+  check('chat: stale staged capability is reclaimed immediately',
+    discarded.includes('old-draft-stage'), JSON.stringify(discarded))
+
+  // Presentation numbers reset per session, while a stale token retained in
+  // the draft would still reserve its visible number in bindStagedImage.
+  generation += 1
+  stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
+  check('chat: new-session paste reached the staging barrier',
+    await settled(() => stageCalls === 3))
+  resolveStage({ stageId: 'new-session-stage' })
+  check('chat: image presentation numbering restarts in a new session',
+    await settled(() => screen.text().includes('[Image #1]')), screen.text())
+
+  // Every locally-handled slash command defaults to no composer images.
+  // Admission must happen before Chat executes it, preserving both text and
+  // the opaque capability instead of silently clearing the draft.
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes('[Image #1]'))
+  stdin.write('/status ')
+  stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
+  check('chat: command-image paste reached the staging barrier',
+    await settled(() => stageCalls === 4))
+  resolveStage({ stageId: 'command-image-stage' })
+  check('chat: command-image token bound before admission',
+    await settled(() => screen.text().includes('/status') && screen.text().includes('[Image #2]')), screen.text())
+  stdin.write('\r')
+  await sleep(150)
+  check('chat: a local command that does not accept images is not executed',
+    localCommandCalls === 0, String(localCommandCalls))
+  check('chat: refused command preserves its exact image draft',
+    screen.text().includes('/status')
+    && screen.text().includes('[Image #2]')
+    && !discarded.includes('command-image-stage'),
+    screen.text())
+
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes('/status'))
+  check('chat: clearing the refused command releases its capability',
+    discarded.includes('command-image-stage'), JSON.stringify(discarded))
+
+  // Consecutive terminal drops are serialized through save + bind + insert.
+  // The second storage call must not begin before the first visible token is
+  // installed, and typing during the second save must preserve both bindings.
+  generation += 1
+  stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
+  stdin.write(`\x1b[200~${secondImagePath}\x1b[201~`)
+  check('chat: consecutive drops start only the first staged save',
+    await settled(() => stageCalls === 5) && stageResolvers.length === 1,
+    `calls=${stageCalls}, pending=${stageResolvers.length}`)
+  resolveStage({ stageId: 'ordered-stage-a' })
+  check('chat: second drop starts after the first token is visible',
+    await settled(() => stageCalls === 6 && screen.text().includes('[Image #1]')),
+    screen.text())
+  stdin.write('between ')
+  resolveStage({ stageId: 'ordered-stage-b' })
+  check('chat: consecutive drops keep operation order and live typing',
+    await settled(() => {
+      const text = screen.text()
+      return text.indexOf('[Image #1]') !== -1
+        && text.indexOf('[Image #2]') > text.indexOf('[Image #1]')
+        && text.includes('between')
+    }), screen.text())
+
+  stdin.write('\x1b')
+  await settled(() => !screen.text().includes('[Image #1]'))
+
+  stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
+  check('chat: unmount-race paste reached the staging barrier',
+    await settled(() => stageCalls === 7))
+  await app.unmount()
+  resolveStage({ stageId: 'unmounted-draft-stage' })
+  check('chat: unmount revokes and reclaims a late staged capability',
+    await settled(() => discarded.includes('unmounted-draft-stage')),
+    JSON.stringify(discarded))
   terminal.dispose()
 }
 

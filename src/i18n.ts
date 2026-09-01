@@ -463,6 +463,10 @@ const dict = {
   'esc-again-clear': { zh: '再次按 Esc 清空', en: 'Press Esc again to clear' },
   'new-session-started': { zh: '已新建会话', en: 'New session started' },
   'command-not-found': { zh: '/{{name}}：没有这个命令', en: '/{{name}}: no such command' },
+  'command-images-unsupported': {
+    zh: '/{{name}} 不接受图片；草稿已保留',
+    en: '/{{name}} does not accept images; the draft was preserved',
+  },
   'thinking-toggled': { zh: '思考过程：{{state}}', en: 'Thinking display: {{state}}' },
   'thinking-on': { zh: '显示', en: 'shown' },
   'thinking-off': { zh: '隐藏', en: 'hidden' },

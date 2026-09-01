@@ -262,7 +262,7 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   // one particular expression layout: the channel intentionally stores the
   // definition before resolving its owner so the same value is passed to
   // `execute`'s agent-scoped lookup checks.
-  const definitionLookup = channel.indexOf('const definition = commandService.find(agent, name)')
+  const definitionLookup = channel.indexOf('const definition = commandService.find(commandAgent, name)')
   const ownerLookup = channel.indexOf('const owner = commandOwner(ctx, definition)', definitionLookup)
   const checkpoint = definitionLookup
   check1('owner-scoped invoke checkpoint present in channel.ts', checkpoint !== -1)
@@ -292,6 +292,10 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     channel.includes('commandServiceSupportsImages(')
     && channel.includes("installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')")
     && channel.includes('CommandExecuteWithImages'))
+  check1('command discovery mirrors the upstream input.images admission flag',
+    channel.includes('acceptsImages: descriptor.input?.images === true'))
+  check1('registry adapter forwards supplied images for upstream admission',
+    !channel.includes('if (!declaresImages) return { images: [], dropped: [] }'))
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',
     pluginHost.includes('registerCommand(pluginCtx: Context'))
@@ -311,6 +315,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   const ownerEntry = i18n.slice(ownerIdx, ownerIdx + 500)
   check1('owner deny zh translation names the owner', ownerEntry.includes('{{owner}}'))
   check1('owner deny en translation present', /en:\s*'[^']*owner plugin[^']*'/.test(ownerEntry))
+  const imageAdmissionIdx = i18n.indexOf("'command-images-unsupported'")
+  check1("i18n key 'command-images-unsupported' exists", imageAdmissionIdx !== -1)
 }
 
 // ── H. 非破坏签名（不传 identity 照旧可用）──────────────────────────────────

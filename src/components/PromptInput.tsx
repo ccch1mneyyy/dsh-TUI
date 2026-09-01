@@ -1,6 +1,7 @@
 import React from 'react'
 import stripAnsi from 'strip-ansi'
-import { readFile, stat, unlink } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { open, unlink } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
@@ -23,7 +24,12 @@ import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
-import type { Channel } from '../dsh-adapter/channel.js'
+import type {
+  Channel,
+  ComposerImageRef,
+  ComposerSubmission,
+  StagedImageHandle,
+} from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import { isHiddenCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
@@ -38,6 +44,16 @@ import { OverlayAbove } from './OverlayAbove.js'
 import { SuggestionCard, cardContentWidth } from './SuggestionCard.js'
 
 const HISTORY_LIMIT = 50
+
+interface PromptHistoryEntry {
+  readonly text: string
+  readonly images: readonly ComposerImageRef[]
+}
+
+interface DraftImageLease {
+  readonly generation: number
+  readonly revision: number
+}
 
 /**
  * Paste fold (CC-style collapse with a visible preview, no black box):
@@ -71,6 +87,52 @@ function sanitizeEditableText(text: string): string {
     .replace(/\r\n?/gu, '\n')
     .replace(/\t/gu, '        ')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
+}
+
+const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
+
+/** Capabilities referenced by `text`, in first occurrence order. A raw token
+ * restored from disk/history has no sidecar entry and therefore stays inert. */
+export function composerImageRefsForText(
+  text: string,
+  stagedByToken: ReadonlyMap<string, string>,
+): ComposerImageRef[] {
+  const refs: ComposerImageRef[] = []
+  const seen = new Set<string>()
+  for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+    const token = match[0]
+    if (seen.has(token)) continue
+    seen.add(token)
+    const stageId = stagedByToken.get(token)
+    if (stageId !== undefined) refs.push({ token, stageId })
+  }
+  return refs
+}
+
+/** Read one regular file through one descriptor, bounded to `maxBytes + 1`.
+ * The extra byte detects a file that grows after fstat; a short read detects
+ * shrinkage. This avoids stat(path) → readFile(path)'s path-swap TOCTOU and
+ * never allocates from an untrusted size before the profile limit is checked. */
+async function readBoundedRegularFile(path: string, maxBytes: number): Promise<Uint8Array> {
+  // O_NONBLOCK keeps a pasted FIFO/device path from parking the UI before
+  // fstat can reject it; regular-file reads are unchanged.
+  const file = await open(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK)
+  try {
+    const info = await file.stat()
+    if (!info.isFile()) throw new Error(`${basename(path)} is not a regular file`)
+    if (info.size > maxBytes) throw new Error(`image exceeds this profile's per-image size limit`)
+    const data = Buffer.allocUnsafe(info.size + 1)
+    let offset = 0
+    while (offset < data.byteLength) {
+      const { bytesRead } = await file.read(data, offset, data.byteLength - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset !== info.size) throw new Error(`${basename(path)} changed while it was being read`)
+    return data.subarray(0, offset)
+  } finally {
+    await file.close()
+  }
 }
 
 /** Index of the word boundary at or before `cursor` (readline alt+b). */
@@ -290,7 +352,7 @@ export interface PromptInputProps {
    * Execute a slash command (built-in or plugin-registered) with its raw
    * argument text; returns false when the input should be sent to the model.
    */
-  onRunCommand(name: string, rawInput: string): boolean
+  onRunCommand(name: string, rawInput: string, images: readonly ComposerImageRef[]): boolean
   /** Message-selection mode (Shift+↑): the input ignores keys while active. */
   selectionActive: boolean
   /**
@@ -461,6 +523,69 @@ export function PromptInput({
   }, [])
   const valueRef = React.useRef(value)
   const cursorRef = React.useRef(cursor)
+  const history = React.useRef<PromptHistoryEntry[]>([])
+  const historyIndex = React.useRef(-1)
+  const historyDraft = React.useRef<PromptHistoryEntry>({ text: '', images: [] })
+  /** Visible `[Image #N]` labels are presentation only; this sidecar carries
+   * the non-reusable capability for the current draft. History/rewind text
+   * restored without this map can never bind to a later image by accident. */
+  const draftImagesRef = React.useRef(new Map<string, string>())
+  const draftImagesGenerationRef = React.useRef(channel.stagedImageGeneration?.() ?? 0)
+  /** Session generation fences one agent transcript; revision fences one
+   * logical composer draft inside that session. Ordinary typing deliberately
+   * keeps the revision so an async paste lands at the live caret, while any
+   * whole-draft replacement revokes the old continuation. */
+  const draftRevisionRef = React.useRef(0)
+  const nextImageNumberRef = React.useRef(1)
+  /** Serialize image staging started in one draft so consecutive terminal
+   * drops keep input order even when storage settles out of order. A new
+   * logical draft receives a fresh chain and never waits on old-session I/O. */
+  const imageStageChainRef = React.useRef<Promise<void>>(Promise.resolve())
+  const advanceDraftRevision = (): void => {
+    draftRevisionRef.current += 1
+    imageStageChainRef.current = Promise.resolve()
+  }
+  const detachDraftImages = (): void => {
+    advanceDraftRevision()
+    draftImagesRef.current.clear()
+  }
+  const stageIdIsRetained = (stageId: string): boolean =>
+    history.current.some(entry => entry.images.some(image => image.stageId === stageId))
+    || historyDraft.current.images.some(image => image.stageId === stageId)
+    || channel.pending.some(item => item.images?.some(image => image.stageId === stageId) === true)
+  const discardDraftImages = (): void => {
+    advanceDraftRevision()
+    const stageIds = new Set(draftImagesRef.current.values())
+    draftImagesRef.current.clear()
+    for (const stageId of stageIds) {
+      if (!stageIdIsRetained(stageId)) channel.discardStagedImage(stageId)
+    }
+  }
+  const syncImageGeneration = (): number => {
+    const generation = channel.stagedImageGeneration?.() ?? 0
+    if (draftImagesGenerationRef.current !== generation) {
+      // The channel has already cleared every old-generation capability.
+      // Only detach the UI sidecar; calling discard would be redundant.
+      detachDraftImages()
+      draftImagesGenerationRef.current = generation
+      // Presentation numbering is session-local like the old channel-owned
+      // sequence. Any stale token still visible in the retained draft is
+      // skipped by bindStagedImage, so resetting cannot recreate an alias.
+      nextImageNumberRef.current = 1
+    }
+    return generation
+  }
+  const captureDraftImageLease = (): DraftImageLease => ({
+    generation: syncImageGeneration(),
+    revision: draftRevisionRef.current,
+  })
+  const draftImageLeaseIsCurrent = (lease: DraftImageLease): boolean =>
+    syncImageGeneration() === lease.generation
+    && draftRevisionRef.current === lease.revision
+  // Channel emits on every session replacement. Clear the sidecar during
+  // that render while leaving the user's visible draft untouched; any raw
+  // tokens become explicit stale placeholders instead of aliases.
+  syncImageGeneration()
   valueRef.current = value
   cursorRef.current = cursor
   // Publish the live controller (fresh closure over `value` every render).
@@ -473,6 +598,7 @@ export function PromptInput({
         valueRef.current = ''
         cursorRef.current = 0
         selectionRef.current = null
+        discardDraftImages()
         foldBlockRef.current = null
         dragAnchorRef.current = null
         lastClickAtRef.current = 0
@@ -525,15 +651,14 @@ export function PromptInput({
     }
   })
   const [selectedCommand, setSelectedCommand] = React.useState(0)
-  const history = React.useRef<string[]>([])
-  const historyIndex = React.useRef(-1)
-  const historyDraft = React.useRef('')
   // ctrl+r history fill: replace the input when a new fill arrives, then
   // tell the caller to clear it.
   const lastFill = React.useRef<string | null>(null)
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (fillText && fillText !== lastFill.current) {
       lastFill.current = fillText
+      syncImageGeneration()
+      discardDraftImages()
       updateFoldBlock(null)
       setInput(fillText)
       onFillConsumed?.()
@@ -552,6 +677,9 @@ export function PromptInput({
     return () => {
       if (escTimerRef.current) clearTimeout(escTimerRef.current)
       if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current)
+      // An async image read/stage may outlive this component. Revoke its
+      // draft lease so it cannot bind an invisible capability after unmount.
+      discardDraftImages()
     }
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
@@ -683,6 +811,13 @@ export function PromptInput({
     // read → several keys, no render in between) read on their next turn.
     valueRef.current = next
     cursorRef.current = offset
+    // Deleting a visible token revokes its capability. Re-typing the same
+    // label later must stay inert; only a fresh paste may mint a new binding.
+    for (const [token, stageId] of draftImagesRef.current) {
+      if (next.includes(token)) continue
+      draftImagesRef.current.delete(token)
+      if (!stageIdIsRetained(stageId)) channel.discardStagedImage(stageId)
+    }
     // Every real edit drops the selection: its offsets describe the OLD
     // text. Selection-consuming callers (delete/replace) read it first.
     selectionRef.current = null
@@ -750,16 +885,50 @@ export function PromptInput({
     setFileSelected(0)
   }
 
+  const imageRefsFor = (text: string): ComposerImageRef[] => {
+    syncImageGeneration()
+    return composerImageRefsForText(text, draftImagesRef.current)
+  }
+
+  const rememberHistory = (text: string, images: readonly ComposerImageRef[]): void => {
+    history.current.push({
+      text,
+      images: images.map(image => ({ ...image })),
+    })
+    if (history.current.length > HISTORY_LIMIT) history.current.shift()
+    historyIndex.current = -1
+    void appendHistory(text)
+  }
+
+  const clearDeliveredDraft = (): void => {
+    syncImageGeneration()
+    // Delivery captured the opaque refs and history retains them; only the
+    // editable-draft binding is ending here.
+    detachDraftImages()
+    setInput('', 0)
+    setSelectedCommand(0)
+    setFileSelected(0)
+  }
+
+  const restoreDraftImages = (entry: PromptHistoryEntry): void => {
+    syncImageGeneration()
+    // History navigation can return to either side, so detach without
+    // revoking capabilities still owned by a saved entry.
+    detachDraftImages()
+    for (const ref of entry.images) {
+      if (channel.hasStagedImage?.(ref.stageId) === true) {
+        draftImagesRef.current.set(ref.token, ref.stageId)
+      }
+    }
+  }
+
   const submitText = (text: string, notice?: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
-    history.current.push(trimmed)
-    if (history.current.length > HISTORY_LIMIT) history.current.shift()
-    historyIndex.current = -1
-    setInput('', 0)
-    setSelectedCommand(0)
-    void appendHistory(trimmed)
-    channel.submit(trimmed)
+    const images = imageRefsFor(trimmed)
+    rememberHistory(trimmed, images)
+    clearDeliveredDraft()
+    channel.submit(trimmed, images)
     if (notice) {
       channel.notify(notice, { timeoutMs: 2500 })
     } else if (channel.working) {
@@ -777,13 +946,10 @@ export function PromptInput({
   const steerSend = (text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
-    history.current.push(trimmed)
-    if (history.current.length > HISTORY_LIMIT) history.current.shift()
-    historyIndex.current = -1
-    setInput('', 0)
-    setSelectedCommand(0)
-    void appendHistory(trimmed)
-    channel.steer(trimmed)
+    const images = imageRefsFor(trimmed)
+    rememberHistory(trimmed, images)
+    clearDeliveredDraft()
+    channel.steer(trimmed, images)
     channel.notify(t('input-interrupted-next'), { timeoutMs: 2500 })
   }
 
@@ -794,13 +960,10 @@ export function PromptInput({
   const queueSend = (text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
-    history.current.push(trimmed)
-    if (history.current.length > HISTORY_LIMIT) history.current.shift()
-    historyIndex.current = -1
-    setInput('', 0)
-    setSelectedCommand(0)
-    void appendHistory(trimmed)
-    channel.submit(trimmed)
+    const images = imageRefsFor(trimmed)
+    rememberHistory(trimmed, images)
+    clearDeliveredDraft()
+    channel.submit(trimmed, images)
     channel.notify(t('input-queued-after-turn'), { timeoutMs: 2500 })
   }
 
@@ -816,6 +979,10 @@ export function PromptInput({
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
     }
+    restoreDraftImages({
+      text: item.text,
+      images: item.images ?? [],
+    })
     setInput(item.text)
     updateFoldBlock(null)
     setSelectedCommand(0)
@@ -836,15 +1003,15 @@ export function PromptInput({
     // Abort the running turn and deliver: previously queued pending
     // messages first (FIFO), then the current input — all processed
     // immediately once the abort settles.
-    const count = channel.interruptAndDeliver([...channel.pending.map(item => item.text), value])
+    const images = imageRefsFor(trimmed)
+    const queued: ComposerSubmission[] = [
+      ...channel.pending.map(item => ({ text: item.text, images: item.images ?? [] })),
+      { text: value, images },
+    ]
+    const count = channel.interruptAndDeliver(queued)
     if (count === 0) return
-    history.current.push(trimmed)
-    if (history.current.length > HISTORY_LIMIT) history.current.shift()
-    historyIndex.current = -1
-    setInput('', 0)
-    setSelectedCommand(0)
-    setFileSelected(0)
-    void appendHistory(trimmed)
+    rememberHistory(trimmed, images)
+    clearDeliveredDraft()
     channel.notify(t('input-interrupt-immediate'), { timeoutMs: 2500 })
   }
 
@@ -860,17 +1027,26 @@ export function PromptInput({
     if (!text.startsWith('/')) return false
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
-    const known = channel.commandList.some(command => command.name === parsed.name)
-      || isHiddenCommandName(parsed.name)
+    const command = channel.commandList.find(entry => entry.name === parsed.name)
+    const known = command !== undefined || isHiddenCommandName(parsed.name)
     if (!known) return false
-    const handled = onRunCommand(parsed.name, parsed.rawInput)
+    const images = imageRefsFor(text)
+    // Commands are an explicit non-model route. Unless their registry
+    // descriptor opted into composer images, refuse before dispatch and keep
+    // the exact draft/capabilities so the user can edit or send them normally.
+    // Completion-only filesystem skills still fall through to the model.
+    const modelRoutedSkill = command?.skill === true && command.external !== true
+    if (images.length > 0 && !modelRoutedSkill && command?.acceptsImages !== true) {
+      channel.notify(t('command-images-unsupported', { name: parsed.name }), {
+        color: 'warning',
+        timeoutMs: 4000,
+      })
+      return true
+    }
+    const handled = onRunCommand(parsed.name, parsed.rawInput, images)
     if (handled) {
-      history.current.push(text.trim())
-      if (history.current.length > HISTORY_LIMIT) history.current.shift()
-      historyIndex.current = -1
-      setInput('', 0)
-      setSelectedCommand(0)
-      void appendHistory(text.trim())
+      rememberHistory(text.trim(), images)
+      clearDeliveredDraft()
     }
     return handled
   }
@@ -984,24 +1160,67 @@ export function PromptInput({
   }
 
   /** Read one local image file and stage it through the channel, returning
-   *  its `[Image #N]` composer token. Shared by every image paste path:
+   *  an opaque capability. Shared by every image paste path:
    *  clipboard bitmap export, Finder-copied files, and pasted drop paths.
-   *  A Finder/drop path is untrusted input: the profile's byte limit is
-   *  checked against stat() BEFORE the bytes are read, so an oversized
-   *  fake image never gets loaded into memory just to be rejected. */
-  const stageImagePath = async (path: string): Promise<string> => {
-    const info = await stat(path)
-    if (!info.isFile()) throw new Error(`${basename(path)} is not a regular file`)
+   *  A Finder/drop path is untrusted input: one bounded descriptor read
+   *  applies the profile limit before bytes enter the composer. */
+  const stageImagePath = async (path: string, lease: DraftImageLease): Promise<StagedImageHandle> => {
+    if (!draftImageLeaseIsCurrent(lease)) {
+      throw new Error('the draft changed while the image was being staged')
+    }
     const maxImageBytes = channel.stagedImageLimits?.()?.maxImageBytes
-    if (maxImageBytes !== undefined && info.size > maxImageBytes) {
-      throw new Error(`image exceeds this profile's per-image size limit`)
+    if (maxImageBytes === undefined) throw new Error('image attachments are unavailable in this profile')
+    const data = await readBoundedRegularFile(path, maxImageBytes)
+    if (!draftImageLeaseIsCurrent(lease)) {
+      throw new Error('the draft changed while the image was being staged')
     }
     return channel.stageImage({
-      data: new Uint8Array(await readFile(path)),
+      data,
       // Callers gate on imagePathMediaType; the assertion is unreachable.
       mediaType: imagePathMediaType(path) ?? 'image/png',
       name: basename(path),
-    })
+    }, lease.generation)
+  }
+
+  /** Queue one complete image operation (save plus synchronous bind/insert).
+   * Keeping the visible mutation inside the chain makes terminal drop order
+   * independent of attachment-store latency. Rejections settle the chain so
+   * one bad file cannot wedge later drops. */
+  const enqueueImageWork = <T,>(work: () => Promise<T>): Promise<T> => {
+    const queued = imageStageChainRef.current.then(work, work)
+    imageStageChainRef.current = queued.then(() => undefined, () => undefined)
+    return queued
+  }
+
+  const discardStagedHandles = (handles: readonly StagedImageHandle[]): void => {
+    for (const stageId of new Set(handles.map(handle => handle.stageId))) {
+      channel.discardStagedImage(stageId)
+    }
+  }
+
+  /** Assign presentation numbering only after staging succeeds. Existing raw
+   * tokens (including stale history) reserve their number, so a fresh image
+   * can never visually alias one. The counter never goes backwards within
+   * one session generation, which also keeps delete/undo safe. */
+  const bindStagedImage = (handle: StagedImageHandle, lease: DraftImageLease): string => {
+    if (!draftImageLeaseIsCurrent(lease)) {
+      // The save completed, but its initiating draft was already submitted,
+      // replaced, or unmounted. Reclaim this otherwise-unreachable channel
+      // capability instead of waiting for the session FIFO to evict it.
+      channel.discardStagedImage(handle.stageId)
+      throw new Error('the draft changed while the image was being staged')
+    }
+    if (channel.hasStagedImage?.(handle.stageId) !== true) {
+      throw new Error('the draft changed while the image was being staged')
+    }
+    let token = `[Image #${nextImageNumberRef.current}]`
+    while (valueRef.current.includes(token) || draftImagesRef.current.has(token)) {
+      nextImageNumberRef.current += 1
+      token = `[Image #${nextImageNumberRef.current}]`
+    }
+    nextImageNumberRef.current += 1
+    draftImagesRef.current.set(token, handle.stageId)
+    return token
   }
 
   /** Line index of the cursor; -1 when the cursor is at the very end. */
@@ -1138,15 +1357,22 @@ export function PromptInput({
       // an image; any parse/stat/staging failure inserts the text verbatim.
       const droppedPath = parsePastedImagePath(text)
       if (droppedPath !== null) {
+        const lease = captureDraftImageLease()
         if (helpOpen) onToggleHelp()
         setSelectedCommand(0)
         setFileSelected(0)
-        void stageImagePath(droppedPath)
-          .then(token => {
-            insertClipboardAtCaret(`${token} `)
-            channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
-          })
+        void enqueueImageWork(async () => {
+          const handle = await stageImagePath(droppedPath, lease)
+          const token = bindStagedImage(handle, lease)
+          // Bind and insert share this synchronous continuation: setInput's
+          // sidecar pruning can never observe a bound-but-not-visible token.
+          insertClipboardAtCaret(`${token} `)
+          channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+        })
           .catch(() => {
+            if (!draftImageLeaseIsCurrent(lease)) return
+            // A real path/read/stage failure keeps the terminal paste as text.
+            // A revoked lease is handled above and must not edit a newer draft.
             insertClipboardAtCaret(text)
           })
         return
@@ -1167,6 +1393,7 @@ export function PromptInput({
     // an exported temp-file path when the clipboard holds a raw image.
     if (actionMatches('paste', input, key)) {
       if (clipboardBusyRef.current) return
+      const lease = captureDraftImageLease()
       // Match insertAtCaret's overlay/selection dismissal up front: the
       // async continuation below only sets value/cursor, so a paste landing
       // while the help overlay is open would otherwise insert behind it.
@@ -1176,61 +1403,117 @@ export function PromptInput({
       clipboardBusyRef.current = true
       void readClipboard()
         .then(async content => {
-          if (content === null) {
-            channel.notify(t('input-clipboard-empty'), { color: 'warning' })
-            return
-          }
-          if (content.kind === 'unavailable') {
-            channel.notify(t('input-clipboard-unavailable'), { color: 'warning' })
-            return
-          }
-          if (content.kind === 'image' && imagePathMediaType(content.path) !== undefined) {
-            try {
-              const token = await stageImagePath(content.path)
-              await unlink(content.path).catch(() => undefined)
-              insertClipboardAtCaret(`${token} `)
-              channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
-              return
-            } catch (error: unknown) {
-              const message = error instanceof Error ? error.message : String(error)
-              channel.notify(t('input-image-paste-failed', { err: message }), { color: 'warning', timeoutMs: 5000 })
-            }
-          }
-          if (content.kind === 'files') {
-            // Finder/Explorer-copied image FILES stage like clipboard
-            // bitmaps (macOS furl offers exactly one). Other files keep the
-            // quoted/@ path insert, and an image that fails to stage falls
-            // back to its `@` reference — the mention pipeline still
-            // attaches it at submit.
-            const { parts, staged, failure } = await stageClipboardFilePaths(
-              content.paths,
-              stageImagePath,
-              filePath => formatClipboardInsert({ kind: 'files', paths: [filePath] }),
-            )
-            if (failure !== '') {
-              channel.notify(t('input-image-paste-failed', { err: failure }), { color: 'warning', timeoutMs: 5000 })
-            }
-            if (staged.length > 0) {
-              insertClipboardAtCaret(`${parts.join(' ')} `)
-              channel.notify(
-                staged.length === 1
-                  ? t('input-image-pasted', { token: staged[0]! })
-                  : t('input-images-staged', { count: staged.length }),
-                { timeoutMs: 2500 },
-              )
+          const temporaryImagePath =
+            content?.kind === 'image' && imagePathMediaType(content.path) !== undefined
+              ? content.path
+              : undefined
+          try {
+            if (!draftImageLeaseIsCurrent(lease)) return
+            if (content === null) {
+              channel.notify(t('input-clipboard-empty'), { color: 'warning' })
               return
             }
-            // Nothing staged: fall through to the verbatim files insert.
+            if (content.kind === 'unavailable') {
+              channel.notify(t('input-clipboard-unavailable'), { color: 'warning' })
+              return
+            }
+            if (temporaryImagePath !== undefined) {
+              try {
+                await enqueueImageWork(async () => {
+                  const handle = await stageImagePath(temporaryImagePath, lease)
+                  const token = bindStagedImage(handle, lease)
+                  insertClipboardAtCaret(`${token} `)
+                  channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+                })
+              } catch (error: unknown) {
+                if (!draftImageLeaseIsCurrent(lease)) return
+                const message = error instanceof Error ? error.message : String(error)
+                channel.notify(t('input-image-paste-failed', { err: message }), { color: 'warning', timeoutMs: 5000 })
+              }
+              return
+            }
+            if (content.kind === 'files') {
+              // Finder/Explorer-copied image FILES stage like clipboard
+              // bitmaps (macOS furl offers exactly one). Other files keep the
+              // quoted/@ path insert, and an image that fails to stage falls
+              // back to its `@` reference — the mention pipeline still
+              // attaches it at submit.
+              let insertedStaged = false
+              try {
+                insertedStaged = await enqueueImageWork(async () => {
+                  const maxImages = channel.stagedImageLimits?.()?.maxImagesPerMessage ?? 0
+                  let stagedCount = 0
+                  const { parts, staged, failure } = await stageClipboardFilePaths(
+                    content.paths,
+                    async path => {
+                      if (stagedCount >= maxImages) {
+                        throw new Error(`image count exceeds this profile's per-message limit`)
+                      }
+                      const handle = await stageImagePath(path, lease)
+                      stagedCount += 1
+                      return handle
+                    },
+                    filePath => formatClipboardInsert({ kind: 'files', paths: [filePath] }),
+                  )
+                  if (!draftImageLeaseIsCurrent(lease)) {
+                    discardStagedHandles(staged)
+                    return true
+                  }
+                  const boundTokens: string[] = []
+                  try {
+                    const rendered = parts.map(part => {
+                      if (part.kind === 'text') return part.value
+                      const token = bindStagedImage(part.value, lease)
+                      boundTokens.push(token)
+                      return token
+                    })
+                    if (failure !== '') {
+                      channel.notify(t('input-image-paste-failed', { err: failure }), { color: 'warning', timeoutMs: 5000 })
+                    }
+                    if (boundTokens.length === 0) return false
+                    // All bindings and their visible labels enter together;
+                    // typing while an earlier file saves cannot prune one.
+                    insertClipboardAtCaret(`${rendered.join(' ')} `)
+                    channel.notify(
+                      boundTokens.length === 1
+                        ? t('input-image-pasted', { token: boundTokens[0]! })
+                        : t('input-images-staged', { count: boundTokens.length }),
+                      { timeoutMs: 2500 },
+                    )
+                    return true
+                  } catch (error) {
+                    for (const token of boundTokens) draftImagesRef.current.delete(token)
+                    discardStagedHandles(staged)
+                    throw error
+                  }
+                })
+              } catch (error: unknown) {
+                if (!draftImageLeaseIsCurrent(lease)) return
+                const message = error instanceof Error ? error.message : String(error)
+                channel.notify(t('input-image-paste-failed', { err: message }), { color: 'warning', timeoutMs: 5000 })
+              }
+              if (insertedStaged) return
+              // Nothing staged: fall through to the verbatim files insert.
+            }
+            if (!draftImageLeaseIsCurrent(lease)) return
+            // Insert against the LIVE input state: the read above resolved
+            // asynchronously and the user may have typed while waiting.
+            const text = sanitizeEditableText(formatClipboardInsert(content))
+            const { at } = insertClipboardAtCaret(text)
+            // Same fold as bracketed paste — but never inside the expanded
+            // editor (plain text there, see the isPasted branch).
+            if (!expandedRef.current && isBigInput(text)) updateFoldBlock({ start: at, end: at + text.length })
+          } finally {
+            // Clipboard bitmaps are private temp exports owned by this paste,
+            // never durable attachment storage. Clean them on success,
+            // rejection, draft invalidation, and session replacement alike.
+            if (temporaryImagePath !== undefined) {
+              await unlink(temporaryImagePath).catch(() => undefined)
+            }
           }
-          // Insert against the LIVE input state: the read above resolved
-          // asynchronously and the user may have typed while waiting.
-          const text = sanitizeEditableText(formatClipboardInsert(content))
-          const { at } = insertClipboardAtCaret(text)
-          // Same fold as bracketed paste — but never inside the expanded
-          // editor (plain text there, see the isPasted branch).
-          if (!expandedRef.current && isBigInput(text)) updateFoldBlock({ start: at, end: at + text.length })
         })
         .catch(() => {
+          if (!draftImageLeaseIsCurrent(lease)) return
           channel.notify(t('input-clipboard-read-failed'), { color: 'warning' })
         })
         .finally(() => {
@@ -1260,10 +1543,21 @@ export function PromptInput({
     // never kill the process, and the busy flag must always clear or the
     // editor key stays locked forever.
     if (actionMatches('editor', input, key)) {
+      // Opening the editor starts a new async draft lifecycle immediately:
+      // fence an older paste before the terminal handoff, but retain already
+      // bound image capabilities. setInput below prunes only tokens the user
+      // actually removed in the editor.
+      syncImageGeneration()
+      advanceDraftRevision()
+      const editorLease = captureDraftImageLease()
       editorBusyRef.current = true
       void (async () => {
         try {
           const outcome = await editInExternalEditor(value)
+          // Session switches, clears, history restores, and unmount all
+          // revoke this editor round-trip. Never write its old draft into a
+          // newer composer after the terminal handoff returns.
+          if (!draftImageLeaseIsCurrent(editorLease)) return
           if (outcome.kind === 'edited') {
             updateFoldBlock(null)
             setInput(outcome.text)
@@ -1277,6 +1571,7 @@ export function PromptInput({
             })
           }
         } catch {
+          if (!draftImageLeaseIsCurrent(editorLease)) return
           channel.notify(t('input-editor-failed', { name: 'unknown' }), {
             color: 'warning',
           })
@@ -1491,14 +1786,19 @@ export function PromptInput({
       }
       if (history.current.length === 0) return
       if (historyIndex.current < 0) {
-        historyDraft.current = value
+        historyDraft.current = {
+          text: value,
+          images: imageRefsFor(value),
+        }
         historyIndex.current = history.current.length - 1
       } else {
         historyIndex.current = Math.max(0, historyIndex.current - 1)
       }
-      const entry = history.current[historyIndex.current] ?? ''
+      const entry = history.current[historyIndex.current]
+      if (entry === undefined) return
       updateFoldBlock(null)
-      setInput(entry)
+      restoreDraftImages(entry)
+      setInput(entry.text)
       return
     }
     if (key.downArrow) {
@@ -1572,10 +1872,15 @@ export function PromptInput({
       if (historyIndex.current >= history.current.length - 1) {
         historyIndex.current = -1
         updateFoldBlock(null)
-        setInput(historyDraft.current)
+        restoreDraftImages(historyDraft.current)
+        setInput(historyDraft.current.text)
       } else {
         historyIndex.current += 1
-        setInput(history.current[historyIndex.current] ?? '')
+        const entry = history.current[historyIndex.current]
+        if (entry !== undefined) {
+          restoreDraftImages(entry)
+          setInput(entry.text)
+        }
       }
       return
     }
@@ -1927,6 +2232,8 @@ export function PromptInput({
       // A single Esc closes the open command menu first (CC/pi behavior);
       // the double-tap-clear semantics only apply to ordinary input.
       if (overlayOpen) {
+        syncImageGeneration()
+        discardDraftImages()
         setInput('', 0)
         setSelectedCommand(0)
         setFileSelected(0)
@@ -1942,7 +2249,10 @@ export function PromptInput({
       // them right away (Codex's "interrupt and send immediately"): the
       // turn is aborted and each message is re-queued once it settles.
       if (channel.working && channel.pending.length > 0) {
-        const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
+        const count = channel.interruptAndDeliver(channel.pending.map(item => ({
+          text: item.text,
+          images: item.images ?? [],
+        })))
         channel.notify(t('interrupt-delivered', { n: count }), {
           timeoutMs: 2500,
         })
@@ -1960,6 +2270,8 @@ export function PromptInput({
           setFileSelected(0)
           return
         }
+        syncImageGeneration()
+        discardDraftImages()
         setInput('', 0)
         setSelectedCommand(0)
         setFileSelected(0)
@@ -1974,6 +2286,8 @@ export function PromptInput({
         if (value.length === 0) {
           onRewindRequest?.()
         } else {
+          syncImageGeneration()
+          discardDraftImages()
           setInput('', 0)
         }
         return
@@ -2405,11 +2719,13 @@ export function PromptInput({
    *  input's own click-to-cursor mapping, never from screen coordinates. */
   const openStagedImageAt = (offset: number): void => {
     if (onPreviewImage === undefined) return
-    for (const match of valueRef.current.matchAll(/\[Image #\d+\]/gu)) {
+    syncImageGeneration()
+    for (const match of valueRef.current.matchAll(COMPOSER_IMAGE_TOKEN)) {
       const start = match.index ?? 0
       if (start > offset) break
       if (offset < start + match[0].length) {
-        const image = channel.stagedImage(match[0])
+        const stageId = draftImagesRef.current.get(match[0])
+        const image = stageId === undefined ? undefined : channel.stagedImage(stageId)
         if (image === undefined) {
           // Evicted by the FIFO cap or cleared by a session switch: the
           // placeholder text will NOT attach an image on submit.
