@@ -691,7 +691,8 @@ function makeChannel() {
   app.rerender(chatTree())
   check('chat: agent replacement closes a preview even when the id is reused',
     await settled(() => !screen.text().includes(OVERLAY_HINT)
-      && screen.text().includes('RICH-BUDGET-PROBE')),
+      && screen.text().includes('RICH-BUDGET-PROBE')
+      && screen.find('Image · sent.png') !== null),
     screen.text())
 
   const thumbAfterBinding = screen.find('Image · sent.png')!
@@ -700,7 +701,8 @@ function makeChannel() {
   stdin.write('\x1b')
   check('chat: Esc closes the preview',
     await settled(() => !screen.text().includes(OVERLAY_HINT)
-      && screen.text().includes('RICH-BUDGET-PROBE')), screen.text())
+      && screen.text().includes('RICH-BUDGET-PROBE')
+      && screen.find('Image · sent.png') !== null), screen.text())
 
   // Reopen, then a click OUTSIDE the centered card closes it.
   const readsAfterFirstOpen = readCounts.get('sha256:sent') ?? 0
