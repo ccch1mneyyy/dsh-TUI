@@ -50,14 +50,16 @@ function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = fal
   let pendingPlan
   let publishing = false
   let reentrantAppends = 0
+  // CommandRuntime.find() returns the registered immutable definition by
+  // identity; keep this seam faithful so the adapter's rebind guard can
+  // distinguish an actual replacement from an ordinary second lookup.
+  const planCommand = Object.freeze({ name: 'plan', description: 'Toggle plan mode', handler() {} })
   const services = {
     planMode: { get: () => ({ pending: pendingPlan }) },
     commands: {
       list: () => [],
-      find: (_agent, name) => name === 'plan'
-        ? { name: 'plan', description: 'Toggle plan mode', handler() {} }
-        : undefined,
-      execute: async (agent, line, _signal) => {
+      find: (_agent, name) => name === 'plan' ? planCommand : undefined,
+      execute: async (agent, line, _images, _signal) => {
         commands.push(line)
         if (line.startsWith('/plan')) {
           const active = !line.startsWith('/plan off')
@@ -66,7 +68,7 @@ function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = fal
           if (deferredPlan) pendingPlan = active
           else agent.session.append('plan/mode', { active })
           agent.session.append('command/done', { commandId, kind: 'success' })
-          return { result: { text: 'ok' } }
+          return { result: { kind: 'success', text: 'ok' } }
         }
         return undefined
       },
