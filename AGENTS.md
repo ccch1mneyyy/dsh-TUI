@@ -65,7 +65,8 @@ pnpm smoke                      # 通用无头屏幕组装冒烟
 - **终端宽度是显示单元宽度**，不是 JS 字符串长度；考虑 ANSI 转义、组合字符、emoji 与东亚宽字符，用仓库的宽度/切片/换行辅助函数。
 - **双语文档同步**：行为、配置、快捷键与限制在 `README.md` 与 `README_EN.md` 两版同步。插件配置、slash 命令、主题、渲染器、技能发现的跨文件同步清单见 [docs/contributing.md](docs/contributing.md)。
 - **密钥**：交互启动读取 `DEEPSEEK_API_KEY`；诊断只能报告是否已设置，绝不泄露完整值。
-- **Git 安全**：只暂存显式路径，不用 `git add .`/`git add -A`；不运行破坏性清理命令；未经要求不 commit、不打 tag、不 push、不发布。发布由 `v*` tag 驱动且必须与 `package.json` 版本完全一致。
+- **QA 与视觉验证等权**：测试与 QA 享有与生产代码完全相同的优先级，无验证证据绝不宣称完成。涉及 UI、状态栏、问卷面板或终端视觉的改动，必须通过无头屏幕断言（headless xterm/screen）、Canvas 实时工件或截图校验像素，绝不在未经肉眼或断言确认前假设渲染正确。
+- **Git 安全与无 AI 痕迹**：只暂存显式路径，不用 `git add .`/`git add -A`；不运行破坏性清理命令；未经要求不 commit、不打 tag、不 push、不发布；commit message 绝不包含 `Co-authored-by`、AI 签名、模型名称或 AI 元数据。发布由 `v*` tag 驱动且必须与 `package.json` 版本完全一致。
 
 ## 编辑本文件
 

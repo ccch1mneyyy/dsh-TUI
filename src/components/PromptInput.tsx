@@ -23,12 +23,13 @@ import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
 import type { Channel } from '../dsh-adapter/channel.js'
-import { isHiddenCommandName, parseCommandName } from '../commands.js'
+import { commandAtCaret, isHiddenCommandName, parseCommandName, type CommandCompletion } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
+import { STEER_ICON, QUEUE_ICON } from '../cc/figures.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
@@ -436,6 +437,11 @@ export function PromptInput({
   const prevCaretLineRef = React.useRef(-1)
   const [, setExpandedTick] = React.useState(0)
   const prevExpandedRef = React.useRef(false)
+  /** Inline prompt viewport scrolling for long messages. */
+  const inlineScrollRef = React.useRef(0)
+  const inlineFreeScrollRef = React.useRef(false)
+  const prevInlineCaretLineRef = React.useRef(-1)
+  const [, setInlineTick] = React.useState(0)
   /**
    * Feature gate (settings `dsh-tui.expandEditor`, on by default; a mock
    * channel without the field also reads as on). Off hides the ⛶
@@ -484,6 +490,9 @@ export function PromptInput({
         // Chat's idle Ctrl+C clear also withdraws the fullscreen editor —
         // the draft it was editing is gone, the cover must not linger.
         expandedRef.current = false
+        inlineScrollRef.current = 0
+        inlineFreeScrollRef.current = false
+        prevInlineCaretLineRef.current = -1
         setSelection(null)
         setFoldBlock(null)
         setExpanded(false)
@@ -558,6 +567,7 @@ export function PromptInput({
     }
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()
+  const composerCols = Math.max(1, columns - 2)
   React.useEffect(() => {
     // PromptInput self-detects double-clicks because its drag target resets
     // App's global chain. Geometry changed across resize, so the same screen
@@ -582,7 +592,8 @@ export function PromptInput({
   // snapshot's cherry-pick resurrected the old formula.)
   const helpViewportHeight = Math.max(3, Math.min(terminalRows - 7, 15))
 
-  const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
+  const commandAt = commandAtCaret(value, cursor)
+  const suggestions = commandAt ? channel.commandCompletions(commandAt.query) : []
   const overlayOpen =
     suggestions.length > 0 &&
     !expanded &&
@@ -753,6 +764,17 @@ export function PromptInput({
     setFileSelected(0)
   }
 
+  const acceptCommand = (command: CommandCompletion, executeIfRoot = false) => {
+    if (!commandAt) return
+    if (commandAt.start === 0 && executeIfRoot) {
+      if (tryRunCommand(command.commandLine)) return
+    }
+    updateFoldBlock(null)
+    const next = value.slice(0, commandAt.start) + command.replacement + value.slice(commandAt.end)
+    setInput(next, commandAt.start + command.replacement.length)
+    setSelectedCommand(0)
+  }
+
   const submitText = (text: string, notice?: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -899,7 +921,7 @@ export function PromptInput({
     if (overlayOpen) {
       const command = suggestions[selectedCommand]
       if (command) {
-        tryRunCommand(command.commandLine)
+        acceptCommand(command, true)
         return
       }
     }
@@ -996,6 +1018,18 @@ export function PromptInput({
     const before = text.slice(0, cursorOffset)
     const line = before.split('\n').pop() ?? ''
     return line.length
+  }
+  /** Visual line index of the cursor within wrapped text. */
+  const cursorVisualLine = (text: string, cursorOffset: number, width: number) => {
+    const before = text.slice(0, cursorOffset)
+    return wrapToWidth(before, width).length - 1
+  }
+  /** Visual column of the cursor within its visual row. */
+  const cursorVisualColumn = (text: string, cursorOffset: number, width: number) => {
+    const before = text.slice(0, cursorOffset)
+    const rows = wrapToWidth(before, width)
+    const last = rows[rows.length - 1] ?? ''
+    return stringWidth(last)
   }
 
   useInput((input, key, event) => {
@@ -1329,8 +1363,7 @@ export function PromptInput({
     if (key.tab && overlayOpen) {
       const command = suggestions[selectedCommand]
       if (command) {
-        updateFoldBlock(null)
-        setInput(command.replacement)
+        acceptCommand(command, false)
       }
       return
     }
@@ -1380,6 +1413,25 @@ export function PromptInput({
       pullBackLast()
       return
     }
+    if (key.pageUp && !expanded) {
+      const vLines = wrapToWidth(value, inputWidth)
+      if (vLines.length > MAX_VISIBLE_LINES) {
+        inlineFreeScrollRef.current = true
+        inlineScrollRef.current = Math.max(0, inlineScrollRef.current - (MAX_VISIBLE_LINES - 1))
+        setInlineTick(tick => tick + 1)
+        return
+      }
+    }
+    if (key.pageDown && !expanded) {
+      const vLines = wrapToWidth(value, inputWidth)
+      if (vLines.length > MAX_VISIBLE_LINES) {
+        inlineFreeScrollRef.current = true
+        const max = Math.max(0, vLines.length - MAX_VISIBLE_LINES)
+        inlineScrollRef.current = Math.min(max, inlineScrollRef.current + (MAX_VISIBLE_LINES - 1))
+        setInlineTick(tick => tick + 1)
+        return
+      }
+    }
     if (key.upArrow) {
       // A history walk owns the arrows until it returns to the draft: a
       // recalled entry can itself open the @ menu or the slash menu (e.g.
@@ -1411,15 +1463,17 @@ export function PromptInput({
         setInput(value, block.start)
         return
       }
-      const line = cursorLine(value, cursor)
-      if (line > 0) {
-        // Move to the previous line, clamping to its length.
-        const upToLineStart = value.lastIndexOf('\n', cursor - 1)
-        const prevLineStart =
-          upToLineStart === -1 ? 0 : value.lastIndexOf('\n', upToLineStart - 1) + 1
-        const prevLine = value.slice(prevLineStart, upToLineStart)
-        setInput(value, prevLineStart + Math.min(cursorColumn(value, cursor), prevLine.length))
-        return
+      if (!block) {
+        const vLines = wrapToWidth(value, inputWidth)
+        if (vLines.length > 1) {
+          const vLine = cursorVisualLine(value, cursor, inputWidth)
+          if (vLine > 0) {
+            const vCol = cursorVisualColumn(value, cursor, inputWidth)
+            const prevOffset = clickToCursorOffset(value, inputWidth, vLine - 1, vCol)
+            setInput(value, prevOffset)
+            return
+          }
+        }
       }
       if (overlayOpen && historyIndex.current < 0) {
         setSelectedCommand(index =>
@@ -1488,17 +1542,17 @@ export function PromptInput({
         setInput(value, block.end)
         return
       }
-      const line = cursorLine(value, cursor)
-      const lines = value.split('\n')
-      if (line < lines.length - 1) {
-        const nextLineStart = value.indexOf('\n', cursor) + 1
-        const nextLineEnd = value.indexOf('\n', nextLineStart)
-        const nextLine = value.slice(
-          nextLineStart,
-          nextLineEnd === -1 ? value.length : nextLineEnd,
-        )
-        setInput(value, nextLineStart + Math.min(cursorColumn(value, cursor), nextLine.length))
-        return
+      if (!block) {
+        const vLines = wrapToWidth(value, inputWidth)
+        if (vLines.length > 1) {
+          const vLine = cursorVisualLine(value, cursor, inputWidth)
+          if (vLine < vLines.length - 1) {
+            const vCol = cursorVisualColumn(value, cursor, inputWidth)
+            const nextOffset = clickToCursorOffset(value, inputWidth, vLine + 1, vCol)
+            setInput(value, nextOffset)
+            return
+          }
+        }
       }
       if (overlayOpen && historyIndex.current < 0) {
         setSelectedCommand(index =>
@@ -1968,7 +2022,7 @@ export function PromptInput({
   const editorGutterCols = editorNoWidth + 3
   const inputWidth = expanded
     ? Math.max(1, columns - 4 - editorGutterCols)
-    : Math.max(1, columns - 3 - vimBadgeCols - (expandEnabled ? 2 : 0))
+    : Math.max(1, composerCols - 5 - vimBadgeCols - (expandEnabled ? 2 : 0))
   // 展开态无视折叠块：全屏编辑就是为了看全文（foldBlock 状态保留，
   // 收起后折叠显示恢复）。
   const block = expanded ? null : foldBlock
@@ -2017,6 +2071,10 @@ export function PromptInput({
     editorFreeScrollRef.current = false
     prevCaretLineRef.current = caretVisualLine
   }
+  if (!expanded && caretVisualLine !== prevInlineCaretLineRef.current) {
+    inlineFreeScrollRef.current = false
+    prevInlineCaretLineRef.current = caretVisualLine
+  }
   let windowStart: number
   let visibleCount: number
   if (expanded) {
@@ -2033,13 +2091,14 @@ export function PromptInput({
     windowStart = win
     visibleCount = editorMaxRows
   } else {
-    windowStart = Math.max(
-      0,
-      Math.min(
-        caretVisualLine - MAX_VISIBLE_LINES + 1,
-        visualLines.length - MAX_VISIBLE_LINES,
-      ),
-    )
+    let win = inlineScrollRef.current
+    if (!inlineFreeScrollRef.current) {
+      if (caretVisualLine < win) win = caretVisualLine
+      if (caretVisualLine >= win + MAX_VISIBLE_LINES) win = caretVisualLine - MAX_VISIBLE_LINES + 1
+    }
+    win = Math.max(0, Math.min(win, Math.max(0, visualLines.length - MAX_VISIBLE_LINES)))
+    inlineScrollRef.current = win
+    windowStart = win
     visibleCount = MAX_VISIBLE_LINES
   }
   const visibleLines = visualLines.slice(
@@ -2646,35 +2705,45 @@ export function PromptInput({
             />
           </Box>
         )}
-        {!helpOpen && channel.pending.length > 0 && (
-          <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-            {channel.pending.some(item => item.placement === 'steer') && (
-              <Box flexDirection="column">
-                <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
-                {channel.pending
-                  .filter(item => item.placement === 'steer')
-                  .map(item => (
-                    <Text key={item.id} dimColor wrap="truncate">
-                      {'  '}↳ {item.text}
-                    </Text>
+        {!helpOpen && channel.pending.length > 0 && (() => {
+          const steerItems = channel.pending.filter(item => item.placement === 'steer')
+          const followupItems = channel.pending.filter(item => item.placement === 'followup')
+          return (
+            <Box flexDirection="column" paddingLeft={2} paddingBottom={1} gap={0}>
+              {steerItems.length > 0 && (
+                <Box flexDirection="column" marginBottom={followupItems.length > 0 ? 1 : 0}>
+                  <Box flexDirection="row" gap={1}>
+                    <Text color={promptAccent}>{STEER_ICON}</Text>
+                    <Text color="text" bold>{t('input-pending-steer-label')}</Text>
+                  </Box>
+                  {steerItems.map(item => (
+                    <Box key={item.id} flexDirection="row" paddingLeft={1} gap={1}>
+                      <Text dimColor>│</Text>
+                      <Text dimColor wrap="truncate">{item.text}</Text>
+                    </Box>
                   ))}
-              </Box>
-            )}
-            {channel.pending.some(item => item.placement === 'followup') && (
-              <Box flexDirection="column">
-                <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
-                {channel.pending
-                  .filter(item => item.placement === 'followup')
-                  .map(item => (
-                    <Text key={item.id} dimColor wrap="truncate">
-                      {'  '}↳ {item.text}
-                    </Text>
+                </Box>
+              )}
+              {followupItems.length > 0 && (
+                <Box flexDirection="column">
+                  <Box flexDirection="row" gap={1}>
+                    <Text color="inactiveShimmer">{QUEUE_ICON}</Text>
+                    <Text color="text" bold>{t('input-pending-queue-label')}</Text>
+                  </Box>
+                  {followupItems.map(item => (
+                    <Box key={item.id} flexDirection="row" paddingLeft={1} gap={1}>
+                      <Text dimColor>│</Text>
+                      <Text dimColor wrap="truncate">{item.text}</Text>
+                    </Box>
                   ))}
+                </Box>
+              )}
+              <Box flexDirection="row" marginTop={0}>
+                <Text dimColor>{`Alt+↑ ${t('input-pending-actions-hint')}`}</Text>
               </Box>
-            )}
-            <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
-          </Box>
-        )}
+            </Box>
+          )
+        })()}
         {fileOverlayOpen && (
           <FileSuggestions
             files={fileMatches}
@@ -2698,12 +2767,12 @@ export function PromptInput({
             commands={suggestions}
             selectedIndex={selectedCommand}
             columns={columns}
-            query={value}
+            query={commandAt?.query ?? value}
             accent={promptAccent}
-            // 点击行 = 运行该命令（与 Enter 同路径）
+            // 点击行 = 运行/接受该命令
             onPick={(index) => {
               const command = suggestions[index]
-              if (command) tryRunCommand(command.commandLine)
+              if (command) acceptCommand(command, true)
             }}
             // 滚轮 = 移动选中行（与 ↑/↓ 同路径，窗口跟随）
             onWheelStep={(step) => {
@@ -2770,15 +2839,16 @@ export function PromptInput({
           overlay can play on them (sweep → tier name → fade; see
           EffortInputBorder). Idle colour keeps the plan-mode accent the old
           Box border carried. */}
+      <Box paddingX={1}>
       <EffortInputBorder
         effort={channel.reasoningEffort}
         levels={channel.effortLevels}
-        columns={columns}
+        columns={composerCols}
         onLight={isLightThemeActive(themeName)}
         idleColor={promptAccent}
         topRightLabel={topRightLabel}
       >
-        <Box flexDirection="row" alignItems="flex-start" width="100%">
+        <Box flexDirection="row" alignItems="flex-start" width="100%" paddingX={1}>
           <EffortChargeGlyph
             effort={channel.reasoningEffort}
             levels={channel.effortLevels}
@@ -2796,6 +2866,16 @@ export function PromptInput({
             onDragStart={handleDragStart}
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
+            onWheel={(event) => {
+              if (visualLines.length <= MAX_VISIBLE_LINES) return
+              inlineFreeScrollRef.current = true
+              const max = Math.max(0, visualLines.length - MAX_VISIBLE_LINES)
+              inlineScrollRef.current = Math.max(
+                0,
+                Math.min(inlineScrollRef.current + Math.round(event.deltaY), max),
+              )
+              setInlineTick(tick => tick + 1)
+            }}
           >
             {value.length === 0 ? (
               // Solid block caret on a BLANK cell: the terminal paints the
@@ -2818,6 +2898,17 @@ export function PromptInput({
               <Box flexDirection="column">{rendered}</Box>
             )}
           </Box>
+          {!expanded && visualLines.length > MAX_VISIBLE_LINES && (
+            <Box flexShrink={0} paddingRight={1}>
+              <Text dimColor>
+                {windowStart > 0 ? `↑${windowStart}` : ''}
+                {windowStart > 0 && visualLines.length - (windowStart + visibleCount) > 0 ? ' ' : ''}
+                {visualLines.length - (windowStart + visibleCount) > 0
+                  ? `↓${visualLines.length - (windowStart + visibleCount)}`
+                  : ''}
+              </Text>
+            </Box>
+          )}
           {/* ⛶ 全屏草稿编辑入口：点击展开；hover 提亮为输入框强调色。
               inputWidth 已为它预留 2 列（见渲染派生区）；设置关闭时
               整体不渲染（宽度预算同步归还）。 */}
@@ -2846,6 +2937,7 @@ export function PromptInput({
           )}
         </Box>
       </EffortInputBorder>
+      </Box>
       {/* CC agent-view footer: "← N agents" when background sessions are
           waiting on the user, "← for agents" otherwise — the ← affordance's
           discoverability hint. Only rendered when the Chat screen supplies

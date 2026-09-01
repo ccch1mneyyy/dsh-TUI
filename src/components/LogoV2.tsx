@@ -64,11 +64,11 @@ function capitalize(text: string): string {
  * off-screen, clock unsubscribed, zero timers.
  *
  * Layout: the 13-row pixel whale beside a text column of matching height —
- * the `✦ dsh-TUI` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
- * the 5-row block font (brand-blue → ice gradient), the model/effort and
- * cwd in plain text (no brand-color highlight), the startup tip, and below
- * the whale the welcome tagline, centered under the art, in ice
- * blue. Narrow terminals drop the whale and keep the text column.
+ * the `✦ dsh-TUI` wordmark with version (cockpit drops the wordmark so it
+ * does not fight the HUD), the `DEEPSEEK`/`HARNESS` tagline in the 5-row
+ * block font (brand-blue → ice gradient), the model/effort and cwd in plain
+ * text, the startup tip, and below the whale the welcome tagline. Narrow
+ * terminals drop the whale and keep the text column.
  */
 export function LogoV2({
   model,
@@ -78,6 +78,7 @@ export function LogoV2({
   tip,
   whale = true,
   drift,
+  hideRoute = false,
 }: {
   model: string
   effort?: string | undefined
@@ -91,6 +92,8 @@ export function LogoV2({
   /** Test seam: pin/suppress the upstream-drift notice (`null` forces it off;
    * `undefined` — the production default — auto-detects the install). */
   drift?: UpstreamDriftSummary | null
+  /** Drop model/effort — the cockpit HUD already shows the route. */
+  hideRoute?: boolean
 }): React.ReactNode {
   const [step, setStep] = React.useState(skipIntro ? OPENING_SEQUENCE.length : 0)
   const settled = step >= OPENING_SEQUENCE.length
@@ -145,14 +148,20 @@ export function LogoV2({
   const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 60)
 
   return (
-    <Box ref={ref} flexDirection="column" marginTop={1}>
-      <Box flexDirection="row" gap={2} width="100%" alignItems="center">
+    <Box ref={ref} flexDirection="column" marginTop={hideRoute ? 0 : 1}>
+      <Box flexDirection="row" gap={hideRoute ? 1 : 2} width="100%" alignItems="center">
         {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
         <Box flexDirection="column" flexShrink={1}>
-          <Text wrap="truncate-end">
-            {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
-            <Text dimColor>{'  v' + VERSION}</Text>
-          </Text>
+          {hideRoute ? (
+            <Text color="claude" wrap="truncate-end">
+              {'v' + VERSION}
+            </Text>
+          ) : (
+            <Text wrap="truncate-end">
+              {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
+              <Text color="claude">{'  v' + VERSION}</Text>
+            </Text>
+          )}
           {bigDeepSeek.map((row, index) => (
             <Text key={`ds-${index}`} wrap="truncate-end">
               {row}
@@ -163,15 +172,17 @@ export function LogoV2({
               {row}
             </Text>
           ))}
-          <Text wrap="truncate-end">
-            {model}
-            {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
-          </Text>
-          <Text dimColor wrap="truncate-end">
+          {hideRoute ? null : (
+            <Text wrap="truncate-end">
+              <Text bold color="claude">{model}</Text>
+              {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
+            </Text>
+          )}
+          <Text color="inactiveShimmer" wrap="truncate-end">
             {cwd}
           </Text>
           <Text wrap="truncate-end">
-            <Text dimColor>{tr('logo-tip-prefix')}</Text>
+            <Text color="claude">{tr('logo-tip-prefix')}</Text>
             {getLang() === 'zh' ? randomTip.zh : randomTip.en}
             <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
           </Text>
@@ -191,7 +202,7 @@ export function LogoV2({
           )}
         </Box>
       </Box>
-      <Box marginTop={1} paddingLeft={welcomePad}>
+      <Box marginTop={hideRoute ? 0 : 1} paddingLeft={welcomePad}>
         <Text>{sweep(tagline, t, taglineRGB, FLASH, 60)}</Text>
       </Box>
     </Box>

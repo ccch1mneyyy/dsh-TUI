@@ -10,6 +10,7 @@
  * 运行：node --import tsx/esm scripts/verify-askpanel-hide-custom-input.tsx
  */
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'zh'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskUserQuestionPanel }, { settle, settled, sleep, viewportLines }] = await Promise.all([
   import('node:stream'),

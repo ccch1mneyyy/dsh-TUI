@@ -21,6 +21,8 @@ type Props = {
   addMargin: boolean
   /** Ctrl+O verbose: show full args/result instead of previews. */
   verbose: boolean
+  /** Expansion tier: 0 = 1-line preview, 1 = 10 lines, 2 = 50 lines max. */
+  expansionTier?: number
   /** Message-selection mode highlight. */
   isSelected?: boolean
   /** Row expanded on its own (persistent hover-grey background, CC). */
@@ -134,11 +136,19 @@ type BodyLine = {
   readonly revealOnHover?: boolean
 }
 
-/** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
-const TEXT_BODY_MAX_LINES = 3
-/** Diff bodies cap at the upstream chat row's 8 (dsh-client-ui-tool's
- *  CHAT_DIFF_MAX_LINES) — denser information than log output. */
-const DIFF_BODY_MAX_LINES = 8
+/** CC's collapsed text body line budgets for 3-tier expansion:
+ * Tier 0 (collapsed/preview): 1 line
+ * Tier 1 (expanded 10 lines): 10 lines
+ * Tier 2 (expanded 50 lines max): 50 lines
+ */
+const TIER_LINE_BUDGETS = [1, 10, 50] as const
+
+/** Trim a title down to one sentence (stops at first sentence terminator). */
+export function trimToOneSentence(text: string): string {
+  const match = text.match(/^.*?[。！？]|.*?[.!?](?:\s+|$)/)
+  return match ? match[0].trim() : text.trim()
+}
+
 /** Minimum terminal width for the two-pane diff: below this the panes
  *  would squeeze under ~50 columns each and the unified view reads better. */
 const SPLIT_DIFF_MIN_COLS = 110
@@ -245,14 +255,14 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
   }
 }
 
-/** Collapsed bodies fold past the card's line budget; verbose (Ctrl+O) is
- *  always uncapped. Mirrors wrapText's "one extra line is shown directly". */
+/** Collapsed bodies fold past the card's line budget; verbose (Ctrl+O) clamps to tier 2 (50 max) or uncapped.
+ * Line budget follows 3-tier expansion: tier 0 = 1 line, tier 1 = 10 lines, tier 2 = 50 lines max. */
 function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] {
-  if (verbose || lines.length <= max) return lines
-  if (lines.length - max === 1) return lines
+  if (lines.length <= max) return lines
+  if (lines.length - max === 1 && !verbose) return lines
   return [
     ...lines.slice(0, max),
-    { ...dim(`… +${lines.length - max} lines (ctrl+o to expand)`), revealOnHover: true },
+    { ...dim(`… +${lines.length - max} lines (click or ctrl+o to expand)`), revealOnHover: true },
   ]
 }
 
@@ -354,7 +364,8 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
       </>
     )
   }
-  const trimmed = title.trim()
+  const oneSentenceTitle = title !== undefined ? trimToOneSentence(title) : undefined
+  const trimmed = (oneSentenceTitle ?? '').trim()
   if (trimmed === '') {
     return (
       <Box flexShrink={0}>
@@ -411,6 +422,7 @@ export function AssistantToolUseMessage({
   tool,
   addMargin,
   verbose,
+  expansionTier = 0,
   isSelected = false,
   isExpanded = false,
   onClick,
@@ -445,7 +457,8 @@ export function AssistantToolUseMessage({
     : undefined
   // presentResult may omit a title (terminal results carry output, not a
   // command) — then the call view's title stands.
-  const headerTitle = tool.resultView?.title ?? tool.callView?.title
+  const rawHeaderTitle = tool.resultView?.title ?? tool.callView?.title
+  const headerTitle = rawHeaderTitle !== undefined ? trimToOneSentence(rawHeaderTitle) : undefined
   const headerIsTerminal = view?.card === 'terminal'
   // Fold only the terminal header: multi-line command script, folding on,
   // and the card not verbose/expanded (Ctrl+O and row click both land in
@@ -489,7 +502,8 @@ export function AssistantToolUseMessage({
       body = [dim(`Running… (${formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now())))})`)]
     }
   }
-  const cap = view?.card === 'diff' ? DIFF_BODY_MAX_LINES : TEXT_BODY_MAX_LINES
+  const tier = verbose && expansionTier === 0 ? 2 : expansionTier
+  const cap = TIER_LINE_BUDGETS[Math.min(2, Math.max(0, tier))] ?? 1
   const bodySource = body.map(line => line.text).join('\n')
   const argsLanguage = jsonArgsLanguage(displayArgs)
   // The footnote rides OUTSIDE the cap: it is a pointer, not content, and a
@@ -561,7 +575,7 @@ export function AssistantToolUseMessage({
           )}
           {hovered && (
             <Box flexShrink={0}>
-              <Text dimColor>{isExpanded ? '▴' : '▾'}</Text>
+              <Text dimColor>{tier === 2 ? '▴' : '▾'}</Text>
             </Box>
           )}
         </Box>
@@ -573,7 +587,7 @@ export function AssistantToolUseMessage({
             <SplitDiffView
               diffs={view.diffs}
               width={columns - 4}
-              maxRows={DIFF_BODY_MAX_LINES}
+              maxRows={cap}
               verbose={verbose}
               toolBackground={ordinaryToolBackground}
               reveal={revealable ? { key: `${revealKey}:split` } : undefined}

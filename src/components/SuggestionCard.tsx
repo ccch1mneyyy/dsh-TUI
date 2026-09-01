@@ -90,7 +90,7 @@ export function SuggestionCard({
             flexDirection="column"
             flexGrow={1}
             minWidth={0}
-            backgroundColor={onRowPick !== undefined && hoveredRow === index ? 'userMessageBackgroundHover' : undefined}
+            backgroundColor={onRowPick !== undefined && hoveredRow === index ? 'userMessageBackgroundHover' : 'pane'}
           >
             {row}
           </Box>
@@ -100,7 +100,7 @@ export function SuggestionCard({
       {footer ? (
         <Box flexDirection="row" width="100%">
           <Text color={borderColor}>│</Text>
-          <Box flexGrow={1} minWidth={0}>
+          <Box flexGrow={1} minWidth={0} backgroundColor="pane">
             <Text dimColor wrap="truncate-end"> {footer}</Text>
           </Box>
           <Text color={borderColor}>│</Text>

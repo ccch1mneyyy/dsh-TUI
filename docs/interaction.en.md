@@ -313,7 +313,7 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 is **staged**: `↑`/`↓` to move, `Enter` to expand/toggle/edit, `s` saves /
 `d` discards / `Esc` first drops dirty sections, then exits. Fields under the
 dsh-tui namespace are written to the user layer of settings.yaml and take
-**effect immediately** (`lang`, `statusBar.*`, …); namespaces without a
+**effect immediately** (`lang`, `cockpit`, `statusBar.*`, …); namespaces without a
 declared TUI section are listed read-only and need manual edits to
 `~/.dsh/settings.yaml`.
 

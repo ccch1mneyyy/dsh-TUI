@@ -39,7 +39,7 @@ const stdin = new Input()
 const instance = await render(<MessageList
   rows={rows}
   expanded={false}
-  expandedRows={new Set()}
+  expandedRows={new Map()}
   selectedId={null}
   onToggleRow={() => {}}
   streamFoldedRows={new Set()}

@@ -1083,7 +1083,7 @@ function writeLineToScreen(
             char: ' ',
             styleId: character.styleId,
             width: CellWidth.Narrow,
-            hyperlink: undefined,
+            hyperlink: character.hyperlink,
           })
           offsetX++
         }

@@ -8,6 +8,7 @@ import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
 import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { shouldShowStickyHeader } from '../ink/scroll-coordinator.js'
 import * as tuiKit from '../ui.js'
 import { POINTER } from '../cc/figures.js'
 import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
@@ -57,6 +58,7 @@ import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
 import type { BalanceResult } from '../deepseekBalance.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
+import { CockpitHud } from '../components/CockpitHud.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
@@ -87,6 +89,7 @@ import { BtwPanel } from '../components/BtwPanel.js'
 import { RecapPanel } from '../components/RecapPanel.js'
 import { isValidSessionColor, SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 import { TipsPanel } from '../components/TipsPanel.js'
+import { FloatingImageDeck } from '../components/FloatingImageDeck.js'
 import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { JobsPanel } from '../components/JobsPanel.js'
 import { SubagentDetailScene } from '../components/SubagentDetailScene.js'
@@ -364,8 +367,8 @@ export function Chat({
   })
   const [selectionActive, setSelectionActive] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
-  const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<number>>(
-    () => new Set(),
+  const [expandedRows, setExpandedRows] = React.useState<ReadonlyMap<number, number>>(
+    () => new Map(),
   )
   /** 流式 reasoning 行相对 thinkingFold 默认值的用户切换。与
    *  expandedRows 分开：preview 默认三行、full 默认全文，点击在两者间
@@ -631,7 +634,7 @@ export function Chat({
     if (lastAgentIdRef.current === id) return
     lastAgentIdRef.current = id
     setExpanded(false)
-    setExpandedRows(new Set())
+    setExpandedRows(new Map())
     setSelectedId(null)
     setSelectionActive(false)
     setShowAllMessages(false)
@@ -822,9 +825,7 @@ export function Chat({
         : -1
     }
   }, [isSticky, channel.rows])
-  // The pill shows whenever the view is off the bottom (one-click return
-  // home): with unseen rows it counts them, otherwise it is the plain
-  // "return to bottom" affordance (Enter/End/click all land it).
+  // The pill shows whenever the view is off the bottom (back-to-bottom / new messages).
   const showPill = !isSticky
 
   // Idle Ctrl+C: first press arms an exit, second press exits (CC's
@@ -923,7 +924,7 @@ export function Chat({
     ? (TITLE_ANIMATION_FRAMES[titleFrame] ?? '✦')
     : '✦'
   useTerminalTitle(
-    `${titlePrefix} 🐋 ${channel.sessionTitle}`,
+    `${titlePrefix} ✦ ${channel.sessionTitle}`,
   )
 
   const handleWorkspaceResult = (result: TuiWorkspaceCommandResult): void => {
@@ -1366,7 +1367,7 @@ export function Chat({
           // transcript. Reset view-local state, return the ScrollBox to the
           // top, then clear native scrollback and repaint the whale homepage.
           setExpanded(false)
-          setExpandedRows(new Set())
+          setExpandedRows(new Map())
           setStreamViewToggledRows(new Set())
           setSelectedId(null)
           setSelectionActive(false)
@@ -1384,14 +1385,21 @@ export function Chat({
         })
         return true
       }
+      case 'c':
       case 'clear':
         channel.clear()
         // channel.clear() resets row ids to 0; stale expanded/selection
         // state would mis-highlight fresh rows (known-limitation fix).
-        setExpandedRows(new Set())
+        setExpandedRows(new Map())
         setStreamViewToggledRows(new Set())
         setSelectedId(null)
         setSelectionActive(false)
+        handle?.scrollTo(0)
+        setTimeout(() => {
+          handle?.scrollTo(0)
+          const ink = instances.get(process.stdout) ?? instances.values().next().value
+          ink?.clearScrollbackAndRedraw()
+        }, 0)
         return true
       case 'compact':
         channel.compact()
@@ -1936,7 +1944,14 @@ export function Chat({
           onUpdate()
         }
         return true
+      case 'canvas':
+      case 'r':
+      case 'refresh':
       case 'reload': {
+        // Redraw terminal frame and reanchor viewport
+        const ink = instances.get(process.stdout) ?? instances.values().next().value
+        ink?.invalidatePrevFrame()
+        ink?.reanchorViewport()
         // pi-style soft reload: re-read the persisted preference files
         // (~/.dsh-tui/{theme,lang,agent-preset,model,working-activity}.json)
         // and re-apply live, honoring the boot-time precedence (env >
@@ -2373,9 +2388,14 @@ export function Chat({
   // closures each render would defeat every row's memo.
   const toggleRowExpanded = React.useCallback((rowId: number) => {
     setExpandedRows((previous) => {
-      const next = new Set(previous)
-      if (next.has(rowId)) next.delete(rowId)
-      else next.add(rowId)
+      const next = new Map(previous)
+      const currentTier = next.get(rowId) ?? 0
+      const nextTier = (currentTier + 1) % 3
+      if (nextTier === 0) {
+        next.delete(rowId)
+      } else {
+        next.set(rowId, nextTier)
+      }
       return next
     })
   }, [])
@@ -3380,9 +3400,23 @@ export function Chat({
       ? null
       : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
 
+  const isAtBottom = isSticky || (handle ? handle.getScrollTop() >= Math.max(0, handle.getScrollHeight() - handle.getViewportHeight()) : true)
+  const activeTurn = timeline.turns.find(t => t.id === anchorUserRowId)
+  const currentScrollTop = handle ? handle.getScrollTop() : 0
+  const showStickyHeader = shouldShowStickyHeader({
+    isAtBottom,
+    hasAnchorText: anchorUserText !== null,
+    activeTurnTop: activeTurn?.top,
+    scrollTop: currentScrollTop,
+    isFolded: activeTurn?.folded,
+  })
+
   return (
-    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
-      {!isSticky && anchorUserText && (
+    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%" height="100%" backgroundColor="pane" paddingX={1}>
+      {channel.cockpit && !channel.minimal && (
+        <CockpitHud channel={channel} />
+      )}
+      {showStickyHeader && anchorUserText && (
         <StickyPromptHeader
           text={anchorUserText}
           onClick={() => {
@@ -3408,6 +3442,7 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           whale={channel.whale}
+          hideRoute={channel.cockpit && !channel.minimal}
           // Resuming a long session skips the ~3.4s opening animation: it
           // keeps firing low-frequency React commits that compete with the
           // transcript mount batches (and the first wheel events) for the
@@ -3417,6 +3452,14 @@ export function Chat({
           // (see suppressLogoIntroRef).
           skipIntro={suppressLogoIntroRef.current || channel.rows.length > 30}
         />
+        {recap !== null && recap.auto && !recap.expanded && (
+          <AutoRecapRow
+            summary={recap.summary}
+            streaming={!recap.done}
+            onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
+            onDismiss={() => closeRecap()}
+          />
+        )}
         {/* The startup loaded-context panel: before the first message the
             transcript is empty, so the inventory of what this conversation
             will load (system prompt, workspace instructions, skills, tools)
@@ -3446,6 +3489,7 @@ export function Chat({
           foldTerminalCommand={channel.foldTerminalCommand}
           smoothStreaming={channel.smoothStreaming}
           activityFrames={channel.activityFrames}
+          cockpit={channel.cockpitMessageFrame && !channel.minimal}
           showAll={showAllMessages}
           thinkingVisible={thinkingVisible}
           historyPaintEnabled={!fullscreen}
@@ -3541,14 +3585,6 @@ export function Chat({
           collapsed={todoCollapsed}
           onToggle={() => setTodoCollapsed(previous => !previous)}
         />
-        {recap !== null && recap.auto && !recap.expanded && (
-          <AutoRecapRow
-            summary={recap.summary}
-            streaming={!recap.done}
-            onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
-            onDismiss={() => closeRecap()}
-          />
-        )}
         {balance !== null && (
           <BalanceReportRow
             result={balance.result}
@@ -3559,10 +3595,10 @@ export function Chat({
             onDismiss={() => setBalance(null)}
           />
         )}
-        {statusEntries.length > 0 && (
+        {statusEntries.length > 0 && !(channel.statusBar?.pluginChips && !channel.minimal) && (
           // Plugin status contributions (tuiStatus seam): one joined line,
           // truncated by the Text wrap contract — the host owns the layout,
-          // plugins own only their text.
+          // plugins own only their text. Cockpit parks these in the footer.
           <Text dimColor wrap="truncate">
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
@@ -3656,6 +3692,11 @@ export function Chat({
           channel={channel}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
+          statusChips={
+            channel.statusBar?.pluginChips && !channel.minimal
+              ? statusEntries.map(entry => entry.text)
+              : undefined
+          }
           wake={
             wakeBand === undefined
               ? undefined
@@ -3997,6 +4038,12 @@ export function Chat({
       <TooltipLayer
         invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
+      />
+      {/* Floating Image / Screenshot Deck on bottom right */}
+      <FloatingImageDeck
+        rows={channel.rows}
+        terminalColumns={terminalColumns}
+        terminalRows={terminalRows}
       />
       {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后（树序最后），
           才能盖住包括状态栏在内的全部后绘兄弟。内容由 PromptInput

@@ -110,6 +110,7 @@ export function apply(ctx: Context): void {
 
 | 分组 | 键 |
 | --- | --- |
+| 不透明 chrome 衬底 | `pane`（转录区 + 提示 + HUD + 底栏；`background` 仍是徽标填充） |
 | 工具卡衬底（深浅两档） | `toolCardBackground`、`toolCardBackgroundDim` |
 | 工具状态点（按分类） | `toolDotExec`、`toolDotRead`、`toolDotWrite`、`toolDotWeb`、`toolDotTask` |
 | diff 行色 | `diffAdded`、`diffRemoved`、`diffAddedDimmed`、`diffRemovedDimmed`、`diffAddedWord`、`diffRemovedWord` |

@@ -254,7 +254,72 @@ function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string 
     .join(EOL)
 }
 
+/**
+ * Detect pseudo-code or comment/status-only blocks in bash/sh/plaintext fences.
+ * If all non-empty lines are comments (`#`), bullets (`-`, `*`, `•`), or key-value
+ * pairs (`Key: value`), it is rendered as a clean status annotation callout rather
+ * than an unexecuted code block with raw fences.
+ */
+function isPseudoCodeStatusBlock(token: Tokens.Code): boolean {
+  const lang = (token.lang ?? '').toLowerCase().trim()
+  const statusLangs = ['bash', 'sh', 'shell', 'zsh', 'plaintext', 'text', '']
+  if (!statusLangs.includes(lang)) {
+    return false
+  }
+
+  const rawLines = token.text.split(EOL)
+  const nonEmptyLines = rawLines.map(l => l.trim()).filter(l => l.length > 0)
+  if (nonEmptyLines.length === 0) {
+    return false
+  }
+
+  return nonEmptyLines.every(line => {
+    if (line.startsWith('#')) return true
+    if (/^[-*•+]\s+/.test(line)) return true
+    if (/^\[?[\w\s()./-]+\]?:\s*.*/.test(line)) return true
+    return false
+  })
+}
+
+function renderStatusBlock(token: Tokens.Code): string {
+  const theme = getActiveTheme()
+  const gutter = colorize('│', theme.subtle, 'foreground')
+  const rawLines = token.text.split(EOL)
+  // Strip trailing empty lines
+  while (rawLines.length > 0 && rawLines[rawLines.length - 1].trim() === '') {
+    rawLines.pop()
+  }
+
+  const rendered = rawLines.map(line => {
+    const trimmed = line.trim()
+    if (trimmed === '') {
+      return gutter
+    }
+    if (trimmed.startsWith('#')) {
+      const title = trimmed.replace(/^#+\s*/, '')
+      return `${gutter} ${chalk.bold(colorize(title, theme.permission, 'foreground'))}`
+    }
+    const kvMatch = line.match(/^(\s*)([\w\s()./-]+:)(\s*)(.*)$/)
+    if (kvMatch) {
+      const [, indent, key, space, val] = kvMatch
+      return `${gutter} ${indent}${colorize(key, theme.subtle, 'foreground')}${space}${chalk.italic(val)}`
+    }
+    if (/^[-*•+]\s+/.test(trimmed)) {
+      const bulletContent = trimmed.replace(/^[-*•+]\s+/, '')
+      const bulletMarker = colorize('•', theme.permission, 'foreground')
+      return `${gutter} ${bulletMarker} ${chalk.italic(bulletContent)}`
+    }
+    return `${gutter} ${chalk.italic(line)}`
+  })
+
+  return rendered.join(EOL) + EOL
+}
+
 function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
+  if (isPseudoCodeStatusBlock(token)) {
+    return renderStatusBlock(token)
+  }
+
   // Kimi Code style: a muted ```lang opening line (language tag + boundary
   // for unhighlighted blocks) + 2-space indent; no closing fence (syntax
   // colors or the indent already mark the end, it only cost vertical space).
@@ -280,8 +345,9 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   // Strip ALL trailing newlines: trailing blank lines would otherwise leak a
   // stray blank line at the end of the block.
   const body = renderBody().replace(/\n+$/, '')
+  const closeFence = colorize('```', theme.subtle, 'foreground')
   if (body === '') {
-    return `${openFence}${EOL}`
+    return `${openFence}${EOL}${closeFence}${EOL}`
   }
   return (
     openFence +
@@ -289,7 +355,10 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
     body
       .split(EOL)
       .map(line => (line === '' ? line : indent + line))
-      .join(EOL) + EOL
+      .join(EOL) +
+    EOL +
+    closeFence +
+    EOL
   )
 }
 

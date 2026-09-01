@@ -19,6 +19,7 @@ import { ContextBarView } from '../components/ContextBarView.js'
 import { TooltipTarget } from '../components/Tooltip.js'
 import { formatProject } from '../sessions/format.js'
 import { homeDir } from '../utils/paths.js'
+import { GROUP_RULE } from '../cc/figures.js'
 import {
   USED_SEGMENTS,
   renderMiniContextBar,
@@ -99,7 +100,7 @@ function FieldLine({
         <React.Fragment key={part.key}>
           {index > 0 ? <Text dimColor> · </Text> : null}
           <Box
-            flexShrink={1}
+            flexShrink={part.key === 'tps' || part.key === 'goal' || part.key === 'mode' || part.key === 'effort' ? 0 : 1}
             {...(part.id === undefined ? {} : hoverProps(part.id))}
           >
             {part.tooltip === undefined || part.tooltip === '' ? (
@@ -116,11 +117,46 @@ function FieldLine({
   )
 }
 
+function GroupRule(): React.ReactNode {
+  return <Text color="promptBorder">{` ${GROUP_RULE} `}</Text>
+}
+
+function InstrumentLeft({
+  metrics,
+  ctx,
+  hoverProps,
+}: {
+  metrics: readonly FieldPart[]
+  ctx: readonly FieldPart[]
+  hoverProps: (id: HoverTarget) => {
+    onMouseEnter: () => void
+    onMouseLeave: () => void
+  }
+}): React.ReactNode {
+  return (
+    <>
+      <FieldLine parts={metrics} hoverProps={hoverProps} />
+      {metrics.length > 0 && ctx.length > 0 ? <GroupRule /> : null}
+      <FieldLine parts={ctx} hoverProps={hoverProps} />
+    </>
+  )
+}
+
+function StatusChip({ chip }: { chip: ParsedStatusChip }): React.ReactNode {
+  return (
+    <Text>
+      <Text backgroundColor="claude" color="inverseText">{` ${chip.label} `}</Text>
+      {chip.detail !== undefined ? <Text color="subtle"> {chip.detail}</Text> : null}
+    </Text>
+  )
+}
+
 export function StatusLine({
   channel,
   selectionActive = false,
   helpOpen = false,
   wake,
+  statusChips,
 }: {
   channel: Channel
   selectionActive?: boolean
@@ -135,6 +171,8 @@ export function StatusLine({
    * folds the event log.
    */
   wake?: { band: WaveBand; hint?: string; tick: number }
+  /** Plugin `tuiStatus` chips; cockpit parks them in the right instrument group. */
+  statusChips?: readonly string[]
 }) {
   const { columns } = useTerminalSize()
   const [themeName] = useTheme()
@@ -151,6 +189,10 @@ export function StatusLine({
     // footer can never grow decorations regardless of saved preferences.
     ? { ...DEFAULT_STATUS_BAR, compact: true, model: true, cwd: true }
     : normalizeStatusBar(channel.statusBar)
+  // Cockpit HUD already shows model + effort; the footer drops those chips
+  // so the identity row is not repeated. Minimal mode hides the HUD, so
+  // the model chip stays in the trimmed footer.
+  const hideRouteInFooter = channel.cockpit === true && !channel.minimal
   // Provider workspaces expose a remote display path alongside a host alias;
   // only the local target has identical cwd/displayCwd values to fold.
   const displayCwd = channel.displayCwd === channel.cwd
@@ -162,7 +204,7 @@ export function StatusLine({
     : usage.input + usage.cacheRead + usage.cacheWrite
   const contextParts: FieldPart[] = []
 
-  if (statusBar.thinking && channel.reasoningEffort !== undefined) {
+  if (statusBar.thinking && !hideRouteInFooter && channel.reasoningEffort !== undefined) {
     contextParts.push({
       key: 'effort',
       node: <Text color="inactiveShimmer">{channel.reasoningEffort}</Text>,
@@ -229,6 +271,7 @@ export function StatusLine({
       )
   if (statusBar.cache) {
     const cacheRate = formatCacheHitRate(usage)
+      ?? (hideRouteInFooter ? '0.0%' : undefined)
     if (cacheRate !== undefined) {
       contextParts.push({
         key: 'cache',
@@ -243,20 +286,13 @@ export function StatusLine({
   }
 
   let tpsPart: FieldPart | undefined
-  if (statusBar.tps && channel.tps !== undefined) {
-    if (channel.working && channel.tpsSamples.length === 0) {
-      tpsPart = {
-        key: 'tps',
-        id: 'tps',
-        node: (
-          <Text>
-            {renderTpsGauge(channel.tps, channel.tps)}{' '}
-            <Text dimColor>{Math.round(channel.tps)} tps</Text>
-          </Text>
-        ),
-      }
-    } else if (channel.tpsSamples.length > 0) {
-      const peak = Math.max(...channel.tpsSamples.map(sample => sample.tps), channel.tps)
+  if (statusBar.tps) {
+    if (channel.tps !== undefined) {
+      const peak = Math.max(
+        100,
+        ...channel.tpsSamples.map(sample => sample.tps),
+        channel.tps,
+      )
       tpsPart = {
         key: 'tps',
         id: 'tps',
@@ -264,7 +300,10 @@ export function StatusLine({
           <Text>
             {channel.working
               ? renderTpsGauge(channel.tps, peak)
-              : renderTpsSparkline(channel.tpsSamples)}{' '}
+              : channel.tpsSamples.length > 0
+                ? renderTpsSparkline(channel.tpsSamples)
+                : undefined}
+            {channel.working || channel.tpsSamples.length > 0 ? ' ' : ''}
             {speedColor(channel.tps, `${Math.round(channel.tps)}`)} tps
           </Text>
         ),
@@ -273,7 +312,7 @@ export function StatusLine({
       tpsPart = {
         key: 'tps',
         id: 'tps',
-        node: <Text dimColor>{Math.round(channel.tps)} t/s</Text>,
+        node: <Text dimColor>{t('status-tps-idle')}</Text>,
       }
     }
   }
@@ -300,7 +339,7 @@ export function StatusLine({
       }
 
   const leftFields: FieldPart[] = [
-    ...(statusBar.model
+    ...(statusBar.model && !hideRouteInFooter
       ? [{ key: 'model', node: <Text color="inactiveShimmer">{channel.model}</Text> }]
       : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),
@@ -405,17 +444,17 @@ export function StatusLine({
     activity.phase !== 'idle'
   const showTrajectory = statusBar.trajectory && wake !== undefined
 
-  const barWidth = columns - 4
+  const barWidth = columns - 2
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     themeName === 'light'
       ? undefined
-      : { freeFill: '#2E3440', freeText: '#8D95A6' }
+      : { freeFill: '#232834', freeText: '#8D95A6' }
   const barVisible =
     statusBar.contextBar &&
     channel.contextBarEnabled &&
     barWidth >= 14 &&
-    usage !== undefined &&
-    channel.contextWindow !== undefined
+    channel.contextWindow !== undefined &&
+    channel.contextWindow > 0
 
   // The supplemental-row readout for the hovered field: replaces the idle
   // hint (never the activity line) while the pointer dwells on a field.
@@ -427,11 +466,40 @@ export function StatusLine({
       : null
 
   const compactFields = [...leftFields, ...rightFields]
+  const ctxField: FieldPart | undefined = ctxNode === undefined
+    ? undefined
+    : { key: 'context', id: 'ctx', node: ctxNode }
   const fullLeftFields = [
     ...leftFields,
-    ...(ctxNode !== undefined ? [{ key: 'context', id: 'ctx' as const, node: ctxNode }] : []),
+    ...(ctxField !== undefined ? [ctxField] : []),
   ]
-  const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined
+  const pickField = (key: string): FieldPart | undefined => leftFields.find(part => part.key === key)
+  const chipFields: FieldPart[] = (statusChips ?? [])
+    .filter(text => text !== '')
+    .map((text, index) => {
+      const chip = parseStatusChip(text)
+      return {
+        key: `chip:${index}`,
+        tooltip: text,
+        node: <StatusChip chip={chip} />,
+      }
+    })
+  // Cockpit footer: metrics · tokens · tps, then a rule, then ctx; right
+  // group is git · session · plugin chips. Sparse rows stay flush-left so
+  // two fields cannot space-between across the width.
+  const instrument = hideRouteInFooter
+  const instrumentMetrics: FieldPart[] = [
+    pickField('cache'),
+    pickField('tokens'),
+    pickField('tps'),
+    pickField('cost'),
+  ].filter((part): part is FieldPart => part !== undefined)
+  const instrumentCtx: FieldPart[] = ctxField === undefined ? [] : [ctxField]
+  const instrumentRight: FieldPart[] = [...rightFields, ...chipFields]
+  const hasStatusFields =
+    compactFields.length > 0 ||
+    ctxNode !== undefined ||
+    chipFields.length > 0
   // The supplemental row is PERMANENTLY mounted (height pinned to 1)
   // whenever the footer carries hoverable chrome — mounting it from nothing
   // on hover is what made the footer grow mid-gesture and shoved the
@@ -477,7 +545,36 @@ export function StatusLine({
           />
         ) : null}
         {/* Row 2: optional status fields — every field is independently gated. */}
-        {hasStatusFields ? statusBar.compact ? (
+        {hasStatusFields ? instrument ? (
+          instrumentRight.length === 0 ? (
+            <Box flexDirection="row" overflow="hidden">
+              <InstrumentLeft
+                metrics={instrumentMetrics}
+                ctx={instrumentCtx}
+                hoverProps={hoverProps}
+              />
+            </Box>
+          ) : (
+            <Box flexDirection="row" justifyContent="space-between" gap={2}>
+              <Box flexGrow={1} flexShrink={1} flexDirection="row" overflow="hidden">
+                <InstrumentLeft
+                  metrics={instrumentMetrics}
+                  ctx={instrumentCtx}
+                  hoverProps={hoverProps}
+                />
+              </Box>
+              <Box
+                justifyContent="flex-end"
+                flexShrink={2}
+                flexDirection="row"
+                overflow="hidden"
+              >
+                <Text color="promptBorder">{GROUP_RULE} </Text>
+                <FieldLine parts={instrumentRight} hoverProps={hoverProps} />
+              </Box>
+            </Box>
+          )
+        ) : statusBar.compact ? (
           <Box flexDirection="row" justifyContent="space-between" gap={2}>
             <Box flexGrow={1} flexShrink={1} flexDirection="row" overflow="hidden">
               <FieldLine parts={compactFields} hoverProps={hoverProps} />
@@ -690,6 +787,24 @@ function buildHoverDetail(
       )
     default:
       return null
+  }
+}
+
+/** Split a plugin status contribution into a chip label and optional host. */
+export type ParsedStatusChip = { label: string; detail?: string }
+
+export function parseStatusChip(text: string): ParsedStatusChip {
+  const trimmed = text.trim()
+  const urlAt = trimmed.search(/https?:\/\//u)
+  if (urlAt < 0) return { label: trimmed }
+  const label = trimmed.slice(0, urlAt).trim() || 'link'
+  const raw = trimmed.slice(urlAt)
+  try {
+    const url = new URL(raw)
+    const detail = url.port !== '' ? `${url.hostname}:${url.port}` : url.hostname
+    return { label, detail }
+  } catch {
+    return { label, detail: raw }
   }
 }
 

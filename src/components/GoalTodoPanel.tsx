@@ -9,16 +9,16 @@ const MAX_TODOS = 8
 
 const PHASE_LABEL: Record<ChannelGoal['phase'], string> = {
   active: '● active',
-  paused: '⏸ paused',
-  blocked: '⛔ blocked',
+  paused: '❙❙ paused',
+  blocked: '× blocked',
   complete: '✓ complete',
 }
 
 /** Compact phase marker for the status-footer chip. */
 const PHASE_GLYPH: Record<ChannelGoal['phase'], string> = {
   active: '●',
-  paused: '⏸',
-  blocked: '⛔',
+  paused: '❙❙',
+  blocked: '×',
   complete: '✓',
 }
 
@@ -168,7 +168,7 @@ export function GoalTodoPanel({
       {goal !== undefined && (
         <Box flexDirection="column" marginBottom={showTodoSection ? 1 : 0}>
           <Box flexDirection="row" width="100%">
-            <Text color="suggestion">🎯 </Text>
+            <Text color="suggestion">⟡ </Text>
             <Box flexGrow={1} flexShrink={1}>
               <Text bold wrap="truncate">
                 {goal.objective}
@@ -204,8 +204,10 @@ export function GoalTodoPanel({
             onMouseLeave={() => setHeaderHovered(false)}
             backgroundColor={headerHovered ? 'userMessageBackgroundHover' : undefined}
           >
-            <Text dimColor>{collapsed ? '▸' : '▾'} </Text>
-            <Text dimColor>✓ {doneCount}/{allTodos.length}</Text>
+            <Text color="claude">{collapsed ? '▸' : '▾'} </Text>
+            <Text color={doneCount === allTodos.length && allTodos.length > 0 ? 'success' : 'claude'} bold>
+              ✓ {doneCount}/{allTodos.length}
+            </Text>
             {collapsed && preview !== undefined && (
               <Box flexGrow={1} flexShrink={1} marginLeft={1}>
                 {preview.status === 'in_progress' ? (
@@ -243,7 +245,13 @@ export function GoalTodoPanel({
               )}
               {/* Fold affordance under the list — only while expanded; the
                   collapsed line already IS the folded state. */}
-              <Text dimColor>  {t('goal-todo-fold-hint', { mod: modLabel })}</Text>
+              <Box
+                onClick={onToggle}
+                onMouseEnter={() => setHeaderHovered(true)}
+                onMouseLeave={() => setHeaderHovered(false)}
+              >
+                <Text dimColor>  {t('goal-todo-fold-hint', { mod: modLabel })}</Text>
+              </Box>
             </Box>
           )}
         </Box>

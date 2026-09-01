@@ -106,6 +106,14 @@ export interface Config {
    *  Ctrl+Shift+E) expand the draft into a whole-screen editor. On by
    *  default; off removes both entry points. */
   expandEditor?: boolean
+  /** Pin a one-line identity HUD above the transcript (provider, model,
+   *  effort, io). Off by default; when on, the footer omits model and
+   *  thinking. Same key in `/settings`. Not a statusBar field. */
+  cockpit?: boolean
+  /** Transcript message frame: quiet vertical rules instead of bullets,
+   *  muted prompt markers, and quiet settled thinking headers. Off by
+   *  default; enabled in cockpit profile. */
+  cockpitMessageFrame?: boolean
   /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): live
    *  assistant text, expanded thinking, and tool call bodies paint through
    *  a ~30fps reveal instead of jumping per provider burst — bursty or
@@ -143,13 +151,15 @@ export const Config: Schema<Config> = Schema.object({
   fullscreen: Schema.boolean().default(true),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
-  diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
-  thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+  diffLayout: Schema.union(['auto', 'split', 'unified']).default('unified'),
+  thinkingFold: Schema.union(['preview', 'full']).default('full'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   foldTerminalCommand: Schema.boolean().default(false),
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
+  cockpit: Schema.boolean().default(false),
+  cockpitMessageFrame: Schema.boolean().default(false),
   smoothStreaming: Schema.boolean().default(true),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
@@ -159,6 +169,7 @@ export const Config: Schema<Config> = Schema.object({
     contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
     cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
     tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
+    cost: Schema.boolean().default(DEFAULT_STATUS_BAR.cost),
     tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
     gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
     sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
@@ -168,6 +179,7 @@ export const Config: Schema<Config> = Schema.object({
     contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
     activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
     trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
+    pluginChips: Schema.boolean().default(DEFAULT_STATUS_BAR.pluginChips),
     shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
   }).default({ ...DEFAULT_STATUS_BAR }),
   // One optional combo string per customizable action (no defaults: unset

@@ -66,7 +66,7 @@ export function LoadedContextPanel({
         onMouseLeave={() => setHovered(false)}
       >
         <Text bold={open} wrap="truncate">
-          {open ? '▼' : '▶'} <Text dimColor>（Ctrl+P{open ? t('context-panel-collapse') : t('context-panel-expand')}）</Text> {t('context-loaded')} · {summary}
+          <Text color="claude">{open ? '▼' : '▶'}</Text> <Text dimColor>{`(Ctrl+P · ${open ? t('context-panel-collapse') : t('context-panel-expand')})`}</Text> {t('context-loaded')} · {summary}
         </Text>
       </Box>
       {open && (

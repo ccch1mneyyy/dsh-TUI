@@ -72,7 +72,7 @@ export function EffortChargeGlyph({
     return clock.subscribe(() => forceRender(), /* keepAlive */ true)
   }, [charging, clock])
 
-  if (!topActive) return <Text dimColor={working}>❯ </Text>
+  if (!topActive) return <Text color="promptBorder" dimColor={working}>❯ </Text>
   const ramp = accentRamp(isLightThemeActive(themeName))
   if (!charging) {
     // Steady state re-derives on every render (two allocations + one blend

@@ -48,6 +48,8 @@ export interface StatusBarConfig {
   activity: boolean
   /** Mini trajectory wake rendered at the footer's right edge. */
   trajectory: boolean
+  /** Park plugin status contributions as styled chips in the footer. */
+  pluginChips: boolean
   /** Idle `? for shortcuts` reminder; shortcut keys remain available when hidden. */
   shortcutHint: boolean
 }
@@ -71,6 +73,7 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   contextBar: false,
   activity: false,
   trajectory: false,
+  pluginChips: true,
   shortcutHint: false,
 })
 
@@ -102,6 +105,23 @@ export function normalizeStatusBar(value: unknown): StatusBarConfig {
     if (typeof input[key] === 'boolean') normalized[key] = input[key]
   }
   return normalized
+}
+
+/**
+ * Overlay only the boolean keys actually present in a settings user layer
+ * onto a cordis/config base. Schema-filled defaults must not be passed as
+ * `overlay` — they would shadow an explicit profile `statusBar`.
+ */
+export function mergeStatusBar(base: unknown, overlay: unknown): StatusBarConfig {
+  const merged: StatusBarConfig = { ...normalizeStatusBar(base) }
+  if (overlay === null || typeof overlay !== 'object' || Array.isArray(overlay)) {
+    return merged
+  }
+  const input = overlay as Record<string, unknown>
+  for (const key of STATUS_BAR_KEYS) {
+    if (typeof input[key] === 'boolean') merged[key] = input[key]
+  }
+  return merged
 }
 
 function formatTokenCount(value: number): string {

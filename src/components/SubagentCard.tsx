@@ -26,9 +26,9 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   // feedback: hover must never change layout). The hover tint stays.
   const liveLine = running ? subagent.output[subagent.output.length - 1] : undefined
   const minimal = isMinimalMode()
-  const glyph = running ? (minimal ? '·' : '🟡')
-    : subagent.status === 'failed' || subagent.status === 'cancelled' ? (minimal ? '×' : '🔴')
-    : (minimal ? '✓' : '🟢')
+  const glyph = running ? (minimal ? '·' : '⟡')
+    : subagent.status === 'failed' || subagent.status === 'cancelled' ? (minimal ? '×' : '✕')
+    : (minimal ? '✓' : '✓')
   const glyphColor = minimal ? undefined
     : running ? 'warning' as const
     : subagent.status === 'failed' || subagent.status === 'cancelled' ? 'error' as const
@@ -45,11 +45,10 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   >
     <Box flexDirection="row" gap={1}>
       <Text color={glyphColor}>{glyph}</Text>
-      <Text bold color={focused ? 'claude' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
-      <Text>
-        <Text dimColor>{' · '}</Text>
-        <Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
-        <Text dimColor>{` · ${formatDuration(elapsed)} · ${total || '—'} tok · ${subagent.toolCalls.length} tools`}</Text>
+      <Text bold color={focused ? 'claude' : 'claude'}>{`⑂ ${t('subagent-card-prefix')}`}</Text>
+      <Text bold color={focused ? 'claude' : 'text'} wrap="truncate">{subagent.description}</Text>
+      <Text dimColor wrap="truncate">
+        {` · ${subagent.model ?? subagent.provider ?? 'default'} · ${formatDuration(elapsed)} · ${total || '—'} tok · ${subagent.toolCalls.length} tools`}
       </Text>
     </Box>
     {liveLine && <Text dimColor wrap="truncate">{`  │ ${liveLine}`}</Text>}

@@ -162,7 +162,7 @@ const LONG_TEXT = [
 
 const listProps = {
   expanded: false,
-  expandedRows: new Set<number>(),
+  expandedRows: new Map<number, number>(),
   selectedId: null as number | null,
   onToggleRow: (_rowId: number) => {},
   model: 'deepseek-chat',
@@ -303,14 +303,14 @@ console.log('--- C: component contracts ---')
     resultView: { card: 'generic', title: 'Edited', content: [{ type: 'text', text: 'settled-result-marker' }] },
   }
   await withTerminal(
-    () => <AssistantToolUseMessage tool={runningTool} addMargin={false} verbose={false} smoothReveal fresh />,
+    () => <AssistantToolUseMessage tool={runningTool} addMargin={false} verbose={false} expansionTier={1} smoothReveal fresh />,
     async (screen, rerender) => {
       await sleep(60)
       const early = screen()
       check(early.includes('old line 0'), 'C2 running card: body head visible early', early)
-      check(!early.includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', early)
+      check(!early.includes('to expand'), 'C2 running card: capped tail row hidden early in the reveal', early)
       await sleep(2200)
-      check(screen().includes('lines (ctrl+o to expand)'), 'C2 running card: body complete after catch-up')
+      check(screen().includes('to expand'), 'C2 running card: body complete after catch-up')
       // C3: result arriving mid/after reveal snaps complete.
       rerender(<AssistantToolUseMessage tool={doneTool} addMargin={false} verbose={false} smoothReveal fresh />)
       await sleep(80)
@@ -370,7 +370,7 @@ console.log('--- D: long-session reveal subscriber fanout ---')
       await sleep(120)
       check(screen().includes('old line 0'), 'D1 active tool remains visible with many history cards')
       await sleep(2200)
-      check(screen().includes('lines (ctrl+o to expand)'), 'D1 active tool reveal completes without nested store updates')
+      check(screen().includes('to expand'), 'D1 active tool reveal completes without nested store updates')
     },
   )
 }

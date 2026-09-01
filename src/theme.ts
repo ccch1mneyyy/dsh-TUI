@@ -39,6 +39,9 @@ export type Theme = {
   suggestion: string
   remember: string
   background: string
+  /** Opaque chrome fill (transcript + prompt + HUD + footer). Not `background`,
+   *  which is a badge/pill fill. Empty or `#rrggbb00` must not leak wallpaper. */
+  pane: string
   // Semantic colors
   success: string
   error: string
@@ -127,7 +130,7 @@ export type Theme = {
 }
 
 /** The built-in theme names, in display order. */
-export const THEME_NAMES = ['dark', 'dark-ansi', 'light'] as const
+export const THEME_NAMES = ['dark', 'dsh', 'dark-ansi', 'light'] as const
 
 /**
  * The `auto` pseudo-theme: not a palette, but a standing request to follow
@@ -192,7 +195,7 @@ const darkTheme: Theme = {
   permissionShimmer: rgb('#C9D7F2'),
   planMode: rgb('#7FAE99'), // Muted sage green
   ide: rgb('#5E88CC'), // Accent Blue
-  promptBorder: rgb('#55606F'), // Muted blue-gray
+  promptBorder: rgb('#5E88CC'), // Accent Blue — mist signature (tick/chip/border)
   promptBorderShimmer: rgb('#7DA1DE'),
   text: rgb('#E8E6E0'), // Warm off-white (from #F6F3ED)
   inverseText: rgb('#22262E'), // Deep warm charcoal (from #343945)
@@ -202,6 +205,7 @@ const darkTheme: Theme = {
   suggestion: rgb('#ABC2EC'), // Border Blue — focus/selection
   remember: rgb('#ABC2EC'),
   background: rgb('#5E88CC'), // Accent Blue — badge fill
+  pane: rgb('#161B24'), // opaque mist-navy chrome; not the badge `background`
   success: rgb('#82B89D'), // Mist green (from #4E9675)
   error: rgb('#DA8A93'), // Soft rose
   warning: rgb('#D8B270'), // Soft amber
@@ -279,6 +283,109 @@ const darkTheme: Theme = {
 }
 
 /**
+ * Signature DeepSeek Harness (DSH) theme — high-contrast slate & electric blue palette.
+ */
+const dshTheme: Theme = {
+  autoAccept: rgb('#818CF8'), // Electric indigo
+  bashBorder: rgb('#F43F5E'), // Coral rose
+  claude: rgb('#4D6BFE'), // Signature DeepSeek electric blue
+  toolNameMutate: rgb('#FBBF24'), // Crisp warm amber / gold
+  toolNameExec: rgb('#22D3EE'), // Bright modern cyan
+  claudeShimmer: rgb('#93C5FD'), // Vibrant blue shimmer
+  claudeBlue_FOR_SYSTEM_SPINNER: rgb('#4D6BFE'),
+  claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#93C5FD'),
+  permission: rgb('#60A5FA'), // Vibrant blue
+  permissionShimmer: rgb('#93C5FD'),
+  planMode: rgb('#34D399'), // Crisp emerald green
+  ide: rgb('#3B82F6'), // Modern vivid blue
+  promptBorder: rgb('#3B82F6'), // DeepSeek blue border
+  promptBorderShimmer: rgb('#60A5FA'),
+  text: rgb('#F8FAFC'), // High-clarity crisp white (Slate 50)
+  inverseText: rgb('#0F172A'), // Slate 900
+  inactive: rgb('#94A3B8'), // Slate 400
+  inactiveShimmer: rgb('#CBD5E1'), // Slate 300
+  subtle: rgb('#64748B'), // Slate 500
+  suggestion: rgb('#60A5FA'), // DeepSeek focus blue
+  remember: rgb('#818CF8'),
+  background: rgb('#4D6BFE'), // DeepSeek badge fill
+  pane: rgb('#0B0F19'), // Signature DeepSeek obsidian slate pane
+  success: rgb('#34D399'), // Radiant emerald
+  error: rgb('#FB7185'), // Vibrant coral-rose
+  warning: rgb('#FBBF24'), // Crisp amber
+  merged: rgb('#A78BFA'), // Vibrant purple
+  warningShimmer: rgb('#FDE047'),
+  diffAdded: rgb('#064E3B'),
+  diffRemoved: rgb('#881337'),
+  diffAddedDimmed: rgb('#022C22'),
+  diffRemovedDimmed: rgb('#4C0519'),
+  diffAddedWord: rgb('#10B981'),
+  diffRemovedWord: rgb('#F43F5E'),
+  toolCardBackground: rgb('#131B2E'), // Deep navy-slate card surface
+  toolCardBackgroundDim: rgb('#0E1524'), // Sleek midnight substrate
+  toolDotExec: rgb('#22D3EE'), // Neon cyan
+  toolDotRead: rgb('#38BDF8'), // Sky blue
+  toolDotWrite: rgb('#C084FC'), // Electric purple
+  toolDotWeb: rgb('#60A5FA'), // Modern blue
+  toolDotTask: rgb('#FBBF24'), // Vivid amber
+  syntaxKeyword: rgb('#38BDF8'), // Vivid cyan-blue keyword
+  syntaxString: rgb('#34D399'), // Radiant emerald string
+  syntaxComment: rgb('#64748B'), // Clean slate comment
+  syntaxNumber: rgb('#FBBF24'), // Vibrant gold numeric
+  syntaxFunction: rgb('#60A5FA'), // DeepSeek electric function
+  syntaxType: rgb('#C084FC'), // Vibrant violet type
+  syntaxVariable: rgb('#F1F5F9'), // Crisp variable
+  syntaxOperator: rgb('#94A3B8'), // Clean operator
+  syntaxPunctuation: rgb('#64748B'), // Subtle punctuation
+  syntaxConstant: rgb('#FB7185'), // Coral rose constant
+  red_FOR_SUBAGENTS_ONLY: rgb('#FB7185'),
+  blue_FOR_SUBAGENTS_ONLY: rgb('#4D6BFE'),
+  green_FOR_SUBAGENTS_ONLY: rgb('#34D399'),
+  yellow_FOR_SUBAGENTS_ONLY: rgb('#FBBF24'),
+  purple_FOR_SUBAGENTS_ONLY: rgb('#A78BFA'),
+  orange_FOR_SUBAGENTS_ONLY: rgb('#FB923C'),
+  pink_FOR_SUBAGENTS_ONLY: rgb('#F472B6'),
+  cyan_FOR_SUBAGENTS_ONLY: rgb('#22D3EE'),
+  professionalBlue: rgb('#4D6BFE'),
+  chromeYellow: rgb('#FBBF24'),
+  clawd_body: rgb('#4D6BFE'),
+  clawd_background: rgb('#0B0F19'),
+  userMessageBackground: '',
+  userMessageBackgroundHover: rgb('#1E293B'),
+  messageActionsBackground: rgb('#1E293B'),
+  selectionBg: rgb('#1E3A8A'),
+  bashMessageBackgroundColor: rgb('#131B2E'),
+  memoryBackgroundColor: rgb('#131B2E'),
+  rate_limit_fill: rgb('#4D6BFE'),
+  rate_limit_empty: rgb('#334155'),
+  fastMode: rgb('#FB923C'),
+  fastModeShimmer: rgb('#FDBA74'),
+  briefLabelYou: rgb('#F8FAFC'),
+  briefLabelClaude: rgb('#4D6BFE'),
+  rainbow_red: rgb('#F87171'),
+  rainbow_orange: rgb('#FB923C'),
+  rainbow_yellow: rgb('#FBBF24'),
+  rainbow_green: rgb('#34D399'),
+  rainbow_blue: rgb('#4D6BFE'),
+  rainbow_indigo: rgb('#818CF8'),
+  rainbow_violet: rgb('#C084FC'),
+  rainbow_red_shimmer: rgb('#FCA5A5'),
+  rainbow_orange_shimmer: rgb('#FDBA74'),
+  rainbow_yellow_shimmer: rgb('#FDE047'),
+  rainbow_green_shimmer: rgb('#6EE7B7'),
+  rainbow_blue_shimmer: rgb('#93C5FD'),
+  rainbow_indigo_shimmer: rgb('#A5B4FC'),
+  rainbow_violet_shimmer: rgb('#E9D5FF'),
+  subagentBullet: rgb('#4D6BFE'),
+  subagentDescription: rgb('#F8FAFC'),
+  subagentModel: rgb('#94A3B8'),
+  subagentElapsed: rgb('#94A3B8'),
+  subagentToolName: rgb('#38BDF8'),
+  subagentStatusRunning: rgb('#FBBF24'),
+  subagentStatusCompleted: rgb('#34D399'),
+  subagentStatusFailed: rgb('#FB7185'),
+}
+
+/**
  * Gentle Mist Blue light theme — the strict original card. Blue carries
  * brand, focus, interaction, and highlight only; body text stays ink gray
  * on the warm off-white family (background #F6F3ED, surface #EEE5D2,
@@ -307,6 +414,7 @@ const lightTheme: Theme = {
   suggestion: rgb('#3F6CC4'), // Primary Blue — focus/selection
   remember: rgb('#27478C'), // Deep Outline — picker titles
   background: rgb('#3F6CC4'), // Primary Blue — badge fill
+  pane: rgb('#F6F3ED'), // warm card fill — the documented light chrome
   success: rgb('#4E9675'),
   error: rgb('#C65D6B'), // Muted rose-red
   warning: rgb('#C08A3E'), // Muted amber
@@ -415,6 +523,7 @@ const darkAnsiTheme: Theme = {
   suggestion: 'ansi:blueBright',
   remember: 'ansi:blueBright',
   background: 'ansi:cyanBright',
+  pane: 'ansi:black',
   success: 'ansi:greenBright',
   error: 'ansi:redBright',
   warning: 'ansi:yellowBright',
@@ -508,6 +617,8 @@ export function getTheme(themeName: ThemeName): Theme {
     // resolver round-trip there re-enters theme-file parsing recursively.
     case 'dark':
       return darkTheme
+    case 'dsh':
+      return dshTheme
     case 'dark-ansi':
       return darkAnsiTheme
     case AUTO_THEME_NAME:
@@ -547,15 +658,15 @@ let runtimeThemeResolver: ThemeResolver | undefined
  * to the shared light/dark instance, so this covers auto-with-light-terminal
  * that theme-NAME comparisons miss) and off the ink-text luminance for
  * custom and runtime themes (light palettes pair with dark ink). The palette's
- * `background` field is a badge fill, not the terminal background — never a
+ * `background` field is a badge fill, not the chrome pane — never a
  * lightness signal. Colour-pair variants (effort ignition hues) consume this.
  */
 export function isLightThemeActive(themeName: ThemeName): boolean {
   const theme = getTheme(themeName)
   if (theme === lightTheme) return true
-  if (theme === darkTheme || theme === darkAnsiTheme) return false
+  if (theme === darkTheme || theme === dshTheme || theme === darkAnsiTheme) return false
   // 自定义或运行时主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
-  // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。
+  // 调色板的 background 字段是徽标填充色而非 chrome pane，不能作判据。
   const ink = theme.text
   const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(ink)
   if (rgb === null) return false
@@ -630,6 +741,24 @@ let activeThemeName: ThemeName = 'dark'
  */
 export function setActiveThemeName(name: ThemeName): void {
   activeThemeName = name
+}
+
+/** True when a color will emit a visible fill (not empty / `#rrggbb00`). */
+export function isPaintedColor(color: string | undefined): boolean {
+  if (color === undefined || color === '') return false
+  const hex = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|([0-9a-f]{8}))$/i.exec(color)
+  if (hex === null) return true
+  const alpha = hex[1]
+  return alpha === undefined || alpha.slice(6).toLowerCase() !== '00'
+}
+
+/**
+ * Opaque chrome fill for the Chat surface. Falls back to the built-in dark
+ * pane when a user overlay leaves `pane` empty or fully transparent.
+ */
+export function resolvePane(theme: Theme): string {
+  if (isPaintedColor(theme.pane)) return theme.pane
+  return theme === lightTheme ? lightTheme.pane : darkTheme.pane
 }
 
 /**

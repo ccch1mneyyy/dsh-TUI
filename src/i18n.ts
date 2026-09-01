@@ -241,7 +241,7 @@ const dict = {
   },
 
   // ── questions.ts ─────────────────────────────────────────────────────
-  'questionnaire-answered': { zh: '📋 问卷已答 · {{total}} 题', en: '📋 Questionnaire answered · {{total}} questions' },
+  'questionnaire-answered': { zh: '◇ 问卷已答 · {{total}} 题', en: '◇ Questionnaire answered · {{total}} questions' },
 
   // ── utils/loaded-context.ts ─────────────────────────────────────────
   'context-truncated': { zh: '…（已截断）', en: '… (truncated)' },
@@ -478,7 +478,7 @@ const dict = {
   },
 
   // ── components/ActivityLine.tsx ──────────────────────────────────────
-  'activity-ctx-warn': { zh: '⚠ 上下文', en: '⚠ ctx ' },
+  'activity-ctx-warn': { zh: '上下文', en: 'ctx ' },
 
   // ── components/ActivityPicker.tsx ─────────────────────────────────────
   'activity-random-each-preset': { zh: '每次随机一个预设', en: 'random preset each time' },
@@ -913,13 +913,13 @@ const dict = {
   'context-panel-tools': { zh: '工具 · {{n}}', en: 'Tools · {{n}}' },
 
   // ── components/questions/AskUserQuestionPanel.tsx ───────────────────
-  'question-provider-occupied': { zh: '⚠️ 问卷通道已被非宿主组件 {{id}} 占用，模型提问可能被代答（本界面未接入问卷）', en: '⚠️ The questionnaire channel is held by a non-host component ({{id}}); model questions may be answered by it (this UI did not take the seat)' },
-  'question-provider-occupied-unverified': { zh: '⚠️ 问卷通道被一个自报为 {{id}} 的组件占用——身份未经宿主验证，模型提问可能被代答（本界面未接入问卷）', en: '⚠️ The questionnaire channel is held by a component self-reporting as {{id}} — identity not host-verified; model questions may be answered by it (this UI did not take the seat)' },
+  'question-provider-occupied': { zh: '⚠ 问卷通道已被非宿主组件 {{id}} 占用，模型提问可能被代答（本界面未接入问卷）', en: '⚠ The questionnaire channel is held by a non-host component ({{id}}); model questions may be answered by it (this UI did not take the seat)' },
+  'question-provider-occupied-unverified': { zh: '⚠ 问卷通道被一个自报为 {{id}} 的组件占用——身份未经宿主验证，模型提问可能被代答（本界面未接入问卷）', en: '⚠ The questionnaire channel is held by a component self-reporting as {{id}} — identity not host-verified; model questions may be answered by it (this UI did not take the seat)' },
   'question-provider-occupied-unknown': { zh: '身份未知', en: 'identity unknown' },
   'question-select-or-answer': { zh: '至少选择一个选项，或在最后一行输入回答', en: 'Select at least one option, or type an answer on the last line' },
   'question-answer-or-check': { zh: '输入回答或勾选选项后再提交', en: 'Type an answer or check options before submitting' },
   'question-type-answer-first': { zh: '先输入回答内容再提交', en: 'Type your answer before submitting' },
-  'question-header-progress': { zh: ' 📋 提问 · 第 {{position}}/{{total}} 题{{remaining}} ', en: ' 📋 Question {{position}}/{{total}} {{remaining}} ' },
+  'question-header-progress': { zh: ' ◇ 提问 · 第 {{position}}/{{total}} 题{{remaining}} ', en: ' ◇ Question {{position}}/{{total}} {{remaining}} ' },
   'question-remaining-more': { zh: ' · 还剩 {{n}} 题', en: ' · {{n}} left' },
   'question-hint-type': { zh: '输入回答', en: 'Type answer' },
   'question-hint-enter': { zh: 'Enter 提交', en: 'Enter submit' },
@@ -1196,8 +1196,17 @@ const dict = {
   'lang-zh-desc': { zh: '简体中文（默认）', en: 'Simplified Chinese (default)' },
   'lang-en-desc': { zh: 'English（英文）', en: 'English' },
 
+  // ── components/CockpitHud.tsx ────────────────────────────────────────
+  'cockpit-label-prov': { zh: 'prov', en: 'prov' },
+  'cockpit-label-model': { zh: 'model', en: 'model' },
+  'cockpit-label-eff': { zh: 'eff', en: 'eff' },
+  'cockpit-label-mode': { zh: 'mode', en: 'mode' },
+  'cockpit-io-vision': { zh: 'vision', en: 'vision' },
+  'cockpit-io-text': { zh: 'text', en: 'text' },
+
   // ── screens/StatusLine.tsx ───────────────────────────────────────────
   'status-cache-label': { zh: '缓存 ', en: 'cache ' },
+  'status-tps-idle': { zh: '— tps', en: '— tps' },
 
   // ── screens/TrajectoryScene.tsx（issue #80 演进：全屏轨迹场景）──────────
   'traj-title': { zh: '轨迹', en: 'Trajectory' },

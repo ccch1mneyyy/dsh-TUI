@@ -498,6 +498,8 @@ export interface ChatRow {
   /** True when loadOlder() restored this row from the log; restored rows are
    *  exempt from the next fold pass so a restore is not instantly undone. */
   restored?: boolean
+  /** True when unexecuted shell commands were detected in assistant text with no tool call. */
+  unexecutedCommands?: boolean
   /** True on rows created by LIVE event handling (not replay/resume/fold
    *  restore) — the smooth-streaming reveal animates freshly-arrived
    *  content only; replayed history must paint complete. Set once at
@@ -574,6 +576,85 @@ const SUBAGENT_TOOL_NAMES = new Set([
 ])
 function isSubagentToolName(name: string): boolean {
   return SUBAGENT_TOOL_NAMES.has(name.toLowerCase())
+}
+
+/** Known executable shell command names for detecting unexecuted tool commands in markdown code blocks. */
+const UNEXECUTED_COMMAND_NAMES = new Set([
+  'curl', 'wget', 'git', 'npm', 'pnpm', 'yarn', 'bun', 'npx',
+  'bash', 'sh', 'zsh', 'fish', 'python', 'python3', 'node', 'deno',
+  'sed', 'awk', 'cat', 'rm', 'cp', 'mv', 'chmod', 'chown', 'touch',
+  'mkdir', 'rmdir', 'grep', 'rg', 'find', 'ls', 'cd', 'pwd', 'echo', 'printf',
+  'export', 'unset', 'source', 'env', 'tar', 'zip', 'unzip', 'gzip', 'gunzip',
+  'docker', 'podman', 'kubectl', 'systemctl', 'service', 'kill', 'pkill', 'ps',
+  'df', 'du', 'top', 'htop', 'apt', 'apt-get', 'dpkg', 'brew', 'yum', 'dnf', 'pacman',
+  'cargo', 'rustc', 'go', 'make', 'cmake', 'gcc', 'g++', 'clang',
+  'pytest', 'vitest', 'jest', 'mocha', 'tsc', 'pip', 'pip3', 'uv',
+  'ssh', 'scp', 'rsync', 'sudo', 'su', 'nvm', 'which', 'whereis', 'head',
+  'tail', 'less', 'more', 'diff', 'patch', 'ln', 'readlink', 'xargs', 'tee',
+  'wc', 'sort', 'uniq', 'tr', 'cut', 'jq', 'yq', 'dsh', 'dst', 'gh', 'glab',
+])
+
+/**
+ * Diagnostic helper: checks if text (e.g. an assistant response) contains code blocks
+ * (```bash ... ``` or ```sh ... ```) with actual unexecuted shell commands rather than comments/status text.
+ */
+export function detectUnexecutedToolCommands(text: string): boolean {
+  if (typeof text !== 'string' || text.trim() === '') return false
+
+  const blockRegex = /(?:```|~~~)(?:bash|sh|shell|zsh)\b[^\n]*\r?\n([\s\S]*?)(?:```|~~~|$)/gi
+  let match: RegExpExecArray | null
+
+  while ((match = blockRegex.exec(text)) !== null) {
+    const blockContent = match[1]
+    const lines = blockContent.split(/\r?\n/)
+
+    for (const rawLine of lines) {
+      const trimmed = rawLine.trim()
+      if (!trimmed) continue
+      // Skip comments
+      if (trimmed.startsWith('#') || trimmed.startsWith('//')) continue
+      // Skip status key-value pairs e.g. "Memory: 0", "[Status]: ok", "Status: Active"
+      if (/^\[?[\w\s()./-]+\]?:\s*.*/.test(trimmed)) {
+        const firstWordMatch = trimmed.match(/^([A-Za-z0-9_.-]+)/)
+        const firstWord = firstWordMatch ? firstWordMatch[1].toLowerCase() : ''
+        if (!UNEXECUTED_COMMAND_NAMES.has(firstWord)) {
+          continue
+        }
+      }
+      // Skip bullet status lines that don't start with a command
+      if (/^[-*•+]\s+/.test(trimmed)) {
+        const afterBullet = trimmed.replace(/^[-*•+]\s+/, '').trim()
+        if (!afterBullet || afterBullet.startsWith('#') || /^\[?[\w\s()./-]+\]?:\s*.*/.test(afterBullet)) {
+          const firstWordMatch = afterBullet.match(/^([A-Za-z0-9_.-]+)/)
+          const firstWord = firstWordMatch ? firstWordMatch[1].toLowerCase() : ''
+          if (!UNEXECUTED_COMMAND_NAMES.has(firstWord)) {
+            continue
+          }
+        }
+      }
+
+      // Strip leading environment variable assignments e.g. `VAR=1 cmd`
+      let cmdLine = trimmed.replace(/^([A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)+/, '')
+      // Strip leading wrapper prefixes e.g. sudo, nohup, time, exec
+      cmdLine = cmdLine.replace(/^(sudo|nohup|time|env|builtin|command|exec)\s+/i, '').trim()
+
+      // Check if starts with path-like executable (./, ../, /, ~/, scripts/, bin/)
+      if (/^(\.|\.\.|\/|~|[A-Za-z0-9_-]+\/)[^\s]+/.test(cmdLine)) {
+        return true
+      }
+
+      // Check command name
+      const firstWordMatch = cmdLine.match(/^([A-Za-z0-9_.-]+)/)
+      if (firstWordMatch) {
+        const firstWord = firstWordMatch[1].toLowerCase()
+        if (UNEXECUTED_COMMAND_NAMES.has(firstWord)) {
+          return true
+        }
+      }
+    }
+  }
+
+  return false
 }
 
 /** Extract `job_id` from a job_output call's raw args (JSON), or undefined. */
@@ -875,6 +956,16 @@ export interface Channel {
    *  `dsh-tui.expandEditor`; on by default) — gates the ⛶ affordance and
    *  the expandEditor shortcut. */
   readonly expandEditor: boolean
+  /** Pin the identity HUD above the transcript (`dsh-tui.cockpit`; off by
+   *  default). When on, the footer omits model and thinking. */
+  readonly cockpit: boolean
+  /** Transcript message frame: quiet vertical rules instead of bullets,
+   *  muted prompt markers, and quiet settled thinking headers
+   *  (`dsh-tui.cockpitMessageFrame`; off by default). */
+  readonly cockpitMessageFrame: boolean
+  /** Live model input modalities from the llm catalog (`image`/`text`/…);
+   *  `undefined` when the seam is missing or the lookup failed. */
+  readonly inputModalities: readonly string[] | undefined
   /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`; on by
    *  default): live-arriving assistant text, expanded thinking, and tool
    *  call bodies paint through a ~30fps reveal instead of jumping per
@@ -1371,6 +1462,12 @@ export interface ChannelState {
   promptSessionLabel: boolean
   /** Fullscreen draft editor gate (see the public Channel type). */
   expandEditor: boolean
+  /** Identity HUD switch (see the public Channel type). */
+  cockpit: boolean
+  /** Quiet transcript message frame (see the public Channel type). */
+  cockpitMessageFrame: boolean
+  /** Live model input modalities (see the public Channel type). */
+  inputModalities: readonly string[] | undefined
   /** Smooth streaming reveal (see the public Channel type). */
   smoothStreaming: boolean
   /** Status-footer preferences (see the public Channel type). */
@@ -1389,6 +1486,10 @@ export interface ChannelState {
   setPromptSessionLabel(enabled: boolean): void
   /** Apply a fullscreen-editor gate change. */
   setExpandEditor(enabled: boolean): void
+  /** Apply an identity-HUD visibility change. */
+  setCockpit(enabled: boolean): void
+  /** Apply a transcript quiet-frame styling change. */
+  setCockpitMessageFrame(enabled: boolean): void
   /** Apply a smooth-streaming reveal change. */
   setSmoothStreaming(enabled: boolean): void
   /** Apply status-footer preference changes. */
@@ -1727,7 +1828,12 @@ function restoreRowFromEvent(row: ChatRow, event: SessionEvent): void {
     case 'assistant': {
       if (event.type !== 'assistant/message') break
       const text = event.data.message.content.map(block => block.type === 'text' ? block.text : '').join('').trim()
-      if (text) row.text = text
+      if (text) {
+        row.text = text
+        if (detectUnexecutedToolCommands(text)) {
+          row.unexecutedCommands = true
+        }
+      }
       break
     }
     case 'reasoning': {
@@ -1759,8 +1865,8 @@ function toolResultText(event: SessionEvent<'tool/result'>): string {
 /** Phase badge for the harness goal card — mirrors the panel's PhaseBadge. */
 const GOAL_RESULT_BADGE: Record<string, string> = {
   active: '● active',
-  paused: '⏸ paused',
-  blocked: '⛔ blocked',
+  paused: '❙❙ paused',
+  blocked: '× blocked',
   complete: '✓ complete',
 }
 
@@ -1800,9 +1906,9 @@ function harnessToolResultView(
         ? ` · ${goal.roundsStarted}/${goal.maxGoalRounds}`
         : ''
       const activation = typeof record.activation === 'string' ? ` · ${record.activation}` : ''
-      const lines = [`🎯 ${goal.objective}`, `${badge}${rounds}${activation}`]
+      const lines = [`⟡ ${goal.objective}`, `${badge}${rounds}${activation}`]
       const blocked = (goal.blockedReason as { message?: unknown } | undefined)?.message
-      if (typeof blocked === 'string') lines.push(`⛔ ${blocked}`)
+      if (typeof blocked === 'string') lines.push(`× ${blocked}`)
       return { card: 'generic', content: lines.map(line => ({ type: 'text', text: line })) }
     }
   }
@@ -1971,6 +2077,12 @@ export function createChannel(
     /** Fullscreen draft editor entry points; default on (settings
      *  `dsh-tui.expandEditor`). */
     expandEditor?: boolean
+    /** Pin the identity HUD above the transcript; default off (settings
+     *  `dsh-tui.cockpit`). */
+    cockpit?: boolean
+    /** Quiet transcript message frame; default off (settings
+     *  `dsh-tui.cockpitMessageFrame`). */
+    cockpitMessageFrame?: boolean
     /** Smooth streaming reveal; default on (settings
      *  `dsh-tui.smoothStreaming`). */
     smoothStreaming?: boolean
@@ -2736,9 +2848,43 @@ export function createChannel(
             efforts: ReadonlyArray<{ id: string; name: string; description?: string }>
             defaultEffort?: string
           }
+          inputModalities?: readonly string[]
         }>
+        listModels?(provider: string): Promise<readonly { id: string; inputModalities?: readonly string[] }[]>
       }
     | undefined
+
+  /** Catalog modalities: absent key = unknown; present array (even empty) = known. */
+  const readInputModalities = (info: unknown): readonly string[] | undefined => {
+    if (info === null || typeof info !== 'object' || !('inputModalities' in info)) return undefined
+    const raw = (info as { inputModalities: unknown }).inputModalities
+    if (!Array.isArray(raw)) return undefined
+    return raw.filter((item): item is string => typeof item === 'string')
+  }
+
+  const ingestModelInfo = (info: {
+    reasoning?: { efforts: ReadonlyArray<{ id: string }> }
+    inputModalities?: readonly string[]
+  }): void => {
+    state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+    const modalities = readInputModalities(info)
+    if (modalities !== undefined) state.inputModalities = modalities
+  }
+
+  const fillModalitiesFromCatalog = async (): Promise<void> => {
+    if (state.inputModalities !== undefined) return
+    if (llmRuntime === undefined || typeof llmRuntime.listModels !== 'function') return
+    try {
+      const listed = await llmRuntime.listModels(state.provider)
+      const match = listed.find(model => model.id === state.model)
+      const fromCatalog = readInputModalities(match)
+      if (fromCatalog === undefined) return
+      state.inputModalities = fromCatalog
+      state.emit()
+    } catch {
+      // Catalog lookup is best-effort; omit io rather than throw.
+    }
+  }
 
   /** Mutable per-agent model selection (dsh-agent's routing override seam).
    *  `current` stays undefined until the user explicitly cycles effort, so
@@ -2755,7 +2901,8 @@ export function createChannel(
     if (preferredEffort === undefined || llmRuntime === undefined) return
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+      ingestModelInfo(info)
+      await fillModalitiesFromCatalog()
       if (!info.reasoning?.efforts.some(effort => effort.id === preferredEffort)) return
       selection.current = {
         provider: state.provider,
@@ -2781,14 +2928,16 @@ export function createChannel(
     const generation = ++effortLevelsGeneration
     void llmRuntime
       .resolveModelInfo(state.provider, state.model)
-      .then(info => {
+      .then(async info => {
         if (generation !== effortLevelsGeneration) return
-        state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+        ingestModelInfo(info)
+        await fillModalitiesFromCatalog()
+        if (generation !== effortLevelsGeneration) return
         state.emit()
       })
       .catch(() => {
-        // Route metadata resolution is best-effort; a failure keeps the
-        // previous table until the next /effort interaction clears it.
+        if (generation !== effortLevelsGeneration) return
+        state.inputModalities = undefined
       })
   }
 
@@ -2806,7 +2955,8 @@ export function createChannel(
     if (llmRuntime === undefined) return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+      ingestModelInfo(info)
+      await fillModalitiesFromCatalog()
       return {
         efforts: info.reasoning?.efforts ?? [],
         defaultEffort: info.reasoning?.defaultEffort,
@@ -3662,13 +3812,16 @@ export function createChannel(
     configuredPreset: options.configuredPreset,
     configuredActivityFrames: options.configuredActivityFrames,
     configuredLang: options.configuredLang,
-    diffLayout: options.diffLayout ?? 'auto',
-    thinkingFold: options.thinkingFold ?? 'preview',
+    diffLayout: options.diffLayout ?? 'unified',
+    thinkingFold: options.thinkingFold ?? 'full',
     toolBackground: normalizeToolBackground(options.toolBackground),
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
     foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true,
     expandEditor: options.expandEditor !== false,
+    cockpit: options.cockpit === true,
+    cockpitMessageFrame: options.cockpitMessageFrame === true,
+    inputModalities: undefined,
     smoothStreaming: options.smoothStreaming !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
@@ -5043,6 +5196,7 @@ export function createChannel(
       // Route changed: a stale tier table would let top-tier UI fire on the
       // wrong level (or never fire on the real one); clear and re-resolve.
       state.effortLevels = undefined
+      state.inputModalities = undefined
       state.reasoningEffort = undefined
       refreshEffortLevels()
       state.contextSegments = {
@@ -5221,6 +5375,7 @@ export function createChannel(
       // Route changed: a stale tier table would let top-tier UI fire on the
       // wrong level (or never fire on the real one); clear and re-resolve.
       state.effortLevels = undefined
+      state.inputModalities = undefined
       state.reasoningEffort = undefined
       refreshEffortLevels()
       state.contextSegments = {
@@ -5420,6 +5575,7 @@ export function createChannel(
       // Route changed: a stale tier table would let top-tier UI fire on the
       // wrong level (or never fire on the real one); clear and re-resolve.
       state.effortLevels = undefined
+      state.inputModalities = undefined
       state.reasoningEffort = undefined
       refreshEffortLevels()
       state.contextSegments = {
@@ -5548,6 +5704,16 @@ export function createChannel(
     setExpandEditor(enabled) {
       if (enabled === state.expandEditor) return
       state.expandEditor = enabled
+      state.emit()
+    },
+    setCockpit(enabled) {
+      if (enabled === state.cockpit) return
+      state.cockpit = enabled
+      state.emit()
+    },
+    setCockpitMessageFrame(enabled) {
+      if (enabled === state.cockpitMessageFrame) return
+      state.cockpitMessageFrame = enabled
       state.emit()
     },
     setSmoothStreaming(enabled) {
@@ -6735,7 +6901,12 @@ export function createChannel(
       const schemas = runtime?.schemas() ?? []
       const byServer = new Map<string, string[]>()
       for (const schema of schemas) {
-        const match = schema.name.match(/^mcp__([a-z0-9-]+)__(.+)$/)
+        // Mirror dsh-mcp-client's SERVER_NAME_PATTERN (/^[A-Za-z0-9_-]{1,32}$/):
+        // uppercase and underscores are legal server names (e.g. Roblox_Studio),
+        // and /mcp must not silently hide a connected server whose tools are
+        // registered. The lazy quantifier keeps the shortest server prefix when
+        // a public name contains a second `__`.
+        const match = schema.name.match(/^mcp__([A-Za-z0-9_-]{1,32}?)__(.+)$/)
         if (!match) continue
         const list = byServer.get(match[1]) ?? []
         list.push(match[2])
@@ -7216,7 +7387,7 @@ export function createChannel(
     for (const [name, description] of wanted) {
       if (skillCommands.has(name) || skillCommandsRefused.has(name)) continue
       // Another plugin already owns this name (plan/goal/…): leave it alone.
-      if (commandService.find(target, name) !== undefined) continue
+      if (typeof commandService.find === 'function' && commandService.find(target, name) !== undefined) continue
       try {
         const dispose = commandService.register({
           name,
@@ -7393,6 +7564,8 @@ ${output}
   const sealedReasoning: ChatRow[] = []
   /** Wall-clock start of the current reasoning row (durationMs on settle). */
   let reasoningStart = 0
+  /** Track whether tool calls were associated with the active turn. */
+  let turnToolCallCount = 0
   /** Decode-throughput fold for the current turn. DSH defines one step as
    *  one model call plus its tools; summing only first-token → message spans
    *  excludes tool execution and per-request TTFT from generation speed. */
@@ -7405,8 +7578,10 @@ ${output}
     | {
       turn: number
       step: number
+      startTime?: number
       firstTokenTime: number | undefined
       outputChars: number
+      chunkCount?: number
     }
     | undefined
   /** Tool cards by callId, so tool/result can settle the running card. */
@@ -7682,6 +7857,7 @@ ${output}
     handledAssistantChunks.clear()
     assistantRowsByStep.clear()
     lastTextDelta.clear()
+    turnToolCallCount = 0
     replaying = true
     try {
       for (const event of prepareReplayEvents(events)) renderEvent(event)
@@ -7775,8 +7951,10 @@ ${output}
           tpsStep = {
             turn: event.data.turn,
             step: event.data.step,
+            startTime: event.time,
             firstTokenTime: undefined,
             outputChars: 0,
+            chunkCount: 0,
           }
         }
         break
@@ -7815,11 +7993,14 @@ ${output}
         ) {
           step.firstTokenTime ??= event.time
           step.outputChars += tokenDeltaChars(chunk)
+          step.chunkCount = (step.chunkCount ?? 0) + 1
           const elapsedMs = Math.max(0, event.time - step.firstTokenTime)
           if (elapsedMs > 500) {
             const decodeMs = tpsTurnDecodeMs + elapsedMs
             const outputTokens = tpsTurnDecodeTokens + Math.ceil(step.outputChars / 4)
-            state.tps = outputTokens / (decodeMs / 1000)
+            if (decodeMs > 0) {
+              state.tps = outputTokens / (decodeMs / 1000)
+            }
           }
         }
         updateSpinnerMode()
@@ -7877,6 +8058,12 @@ ${output}
           row.time = event.time
           if (text) row.text = text
           row.streaming = false
+          if (text && detectUnexecutedToolCommands(text) && turnToolCallCount === 0) {
+            row.unexecutedCommands = true
+            logForDebugging(
+              `assistant: unexecuted tool command(s) detected without tool calls in turn ${msgTurn ?? ''} step ${msgStep ?? ''}`,
+            )
+          }
           // Live settles keep the smooth-reveal cursor alive (a one-shot
           // non-streaming delivery still paints as a flow); replayed
           // settles must not — the transcript would typewrite on open.
@@ -7945,12 +8132,17 @@ ${output}
             ?? (tpsMessageStep.outputChars > 0
               ? Math.ceil(tpsMessageStep.outputChars / 4)
               : undefined)
-          if (outputTokens !== undefined) {
-            tpsTurnDecodeMs += Math.max(0, event.time - tpsMessageStep.firstTokenTime)
-            tpsTurnDecodeTokens += outputTokens
-            tpsTurnSampled = true
-            if (tpsTurnDecodeMs > 0) {
-              state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
+          if (outputTokens !== undefined && outputTokens > 0) {
+            const streamSpanMs = Math.max(0, event.time - tpsMessageStep.firstTokenTime)
+            // A valid decode sample requires a measurable stream span across time (>= 100ms).
+            // Single-packet batched tool calls arriving < 100ms before message lack stream duration and are excluded.
+            if (streamSpanMs >= 100) {
+              tpsTurnDecodeMs += streamSpanMs
+              tpsTurnDecodeTokens += outputTokens
+              tpsTurnSampled = true
+              if (tpsTurnDecodeMs > 0) {
+                state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
+              }
             }
           }
         }
@@ -7973,6 +8165,7 @@ ${output}
         break
       }
       case 'tool/call': {
+        turnToolCallCount += 1
         // The ask-user-question tool renders as the interactive questionnaire
         // panel (DSH user-interaction seam), not as a tool card: the model is
         // parked waiting for the human, so no running card, no active-tool
@@ -8092,6 +8285,7 @@ ${output}
         state.turnStart = Date.now()
         state.responseChars = 0
         state.spinnerMode = 'requesting'
+        turnToolCallCount = 0
         // Keep the prior turn visible until this turn produces a measurable
         // decode span, while starting a fresh weighted step fold.
         tpsBeforeTurn = state.tps
@@ -8109,7 +8303,7 @@ ${output}
         state.working = false
         state.activeToolCount = 0
         if (tpsTurn !== undefined && tpsTurn === event.data.turn) {
-          if (tpsTurnSampled && tpsTurnDecodeMs > 0) {
+          if (!replaying && tpsTurnSampled && tpsTurnDecodeMs > 0) {
             const turnTps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
             state.tps = turnTps
             state.tpsSamples.push({ tps: turnTps, at: event.time })
@@ -8405,6 +8599,7 @@ ${output}
       selection.current = { provider: state.provider, model: state.model }
     }
     void applyPreferredEffort()
+    refreshEffortLevels()
     refreshMode()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),

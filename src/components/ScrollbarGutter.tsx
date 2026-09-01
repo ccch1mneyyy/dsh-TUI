@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text, NoSelect, type ScrollBoxHandle } from '../ui.js'
 import { RAIL_MIN_TERMINAL_WIDTH, RAIL_WIDTH } from '../ink/timeline-rail.js'
+import { computeThumbGeometry, trackScrollTop } from '../ink/scroll-coordinator.js'
 
 /** Thumb glyph across the 2-col gutter: solid, clearly positional —
  *  deliberately distinct from the timeline's ━━ active tick. */
@@ -67,33 +68,40 @@ export function ScrollbarGutter({
   const viewport = handle.getViewportHeight()
   const content = handle.getScrollHeight()
   const maxScroll = Math.max(0, content - viewport)
-  if (viewport < 2 || content <= viewport || terminalWidth < RAIL_MIN_TERMINAL_WIDTH) return null
+  if (terminalWidth < RAIL_MIN_TERMINAL_WIDTH) return null
 
-  // Thumb: the visible window mapped onto the gutter. Height proportional
-  // to the visible fraction (≥2 rows so it is always grabbable-looking);
-  // top follows scrollTop over the scroll range.
-  const thumbH = Math.max(2, Math.round((viewport * viewport) / content))
-  const trackH = Math.max(1, viewport - thumbH)
-  const thumbTop = Math.round((handle.getScrollTop() / Math.max(1, maxScroll)) * trackH)
-  const thumbBottom = Math.min(viewport, thumbTop + thumbH)
+  const geo = computeThumbGeometry({
+    viewport,
+    content,
+    scrollTop: handle.getScrollTop(),
+    maxScroll,
+  })
+  if (!geo) return null
 
-  // Clicking the track maps the clicked row's position on the track back
-  // to a scrollTop and scrolls that content position to the viewport top.
-  const trackScrollTop = (y: number): number => {
-    if (y <= 0) return 0
-    if (y >= trackH) return maxScroll
-    return Math.round((y / trackH) * maxScroll)
-  }
+  const { thumbH, trackH, thumbTop, thumbBottom } = geo
 
   const rows: React.ReactNode[] = []
   for (let y = 0; y < viewport; y++) {
     const inThumb = y >= thumbTop && y < thumbBottom
+    let glyph = '  '
+    if (inThumb) {
+      if (thumbH === 1 || thumbBottom - thumbTop === 1) {
+        glyph = ' █'
+      } else if (y === thumbTop) {
+        glyph = ' ▄'
+      } else if (y === thumbBottom - 1) {
+        glyph = ' ▀'
+      } else {
+        glyph = ' █'
+      }
+    }
+    const isHoveredThumb = hoverRow !== null && hoverRow >= thumbTop && hoverRow < thumbBottom
     rows.push(
       <Box
         key={y}
         height={1}
         flexShrink={0}
-        onClick={() => handle.scrollTo(trackScrollTop(y))}
+        onClick={() => handle.scrollTo(trackScrollTop(y, trackH, maxScroll))}
         onMouseEnter={() => {
           setHoverRow(y)
           // Resting pointer: chip follows immediately once dwell has
@@ -110,16 +118,8 @@ export function ScrollbarGutter({
           clearChip()
         }}
       >
-        <Text
-          color={
-            inThumb
-              ? hoverRow !== null && hoverRow >= thumbTop && hoverRow < thumbBottom
-                ? 'professionalBlue'
-                : 'inactive'
-              : undefined
-          }
-        >
-          {inThumb ? THUMB : '  '}
+        <Text color={inThumb ? (isHoveredThumb ? 'claude' : 'inactive') : undefined}>
+          {glyph}
         </Text>
       </Box>,
     )
@@ -131,7 +131,7 @@ export function ScrollbarGutter({
   // Fenced with noSelect: it floats over selectable transcript text.
   let hoverChip: React.ReactNode = null
   if (chipRow !== null && maxScroll > 0) {
-    const jumpTop = trackScrollTop(chipRow)
+    const jumpTop = trackScrollTop(chipRow, trackH, maxScroll)
     const pct = Math.round((jumpTop / maxScroll) * 100)
     const line = Math.min(content, jumpTop + 1)
     hoverChip = (

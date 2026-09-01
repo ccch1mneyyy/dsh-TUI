@@ -26,7 +26,7 @@ import { getTheme, AUTO_THEME_NAME, type Theme } from './theme.js'
 import { DATA_DIR } from './utils/paths.js'
 
 /** The base palettes a user theme may overlay. */
-export const THEME_BASE_NAMES = ['light', 'dark', 'dark-ansi'] as const
+export const THEME_BASE_NAMES = ['light', 'dark', 'dsh', 'dark-ansi'] as const
 export type ThemeBase = (typeof THEME_BASE_NAMES)[number]
 
 /** The directory user theme files live in (~/.dsh-tui/themes). */

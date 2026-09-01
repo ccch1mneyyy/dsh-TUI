@@ -127,6 +127,16 @@ async function run() {
   instance.rerender(makeScroller(60))
   check('post-shrink grow frame keeps the mid position', await settled(() => frameLog.at(-1)?.scrollTop === 10 && frameLog.at(-1)?.scrollHeight === 60), JSON.stringify(frameLog.at(-1)))
 
+  // ---- fast downward wheel burst: scrollBy(+100) from mid-scroll (10)
+  // must clamp pending delta strictly to maxScroll (36) without overshooting
+  scrollHandle.scrollBy(100)
+  check('fast downward wheel burst pending delta is capped at remaining distance', scrollHandle.getPendingDelta() <= (36 - 10), `pending: ${scrollHandle.getPendingDelta()}`)
+  check('fast downward wheel burst drains smoothly to exact maxScroll', await settled(() => frameLog.at(-1)?.scrollTop === 36 && scrollHandle.getPendingDelta() === 0), JSON.stringify(frameLog.at(-1)))
+
+  // ---- wheeling past the bottom when already at bottom produces 0 pending delta (no stutter/overshoot)
+  scrollHandle.scrollBy(30)
+  check('scrollBy past the bottom produces 0 pending delta', scrollHandle.getPendingDelta() === 0, `pending: ${scrollHandle.getPendingDelta()}`)
+
   instance.unmount()
   process.exit(failed)
 }

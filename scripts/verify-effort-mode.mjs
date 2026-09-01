@@ -64,6 +64,7 @@ function makeEnv({ withCommands = true, withApproval = true } = {}) {
     ...(withCommands
       ? {
           commands: {
+            find: () => undefined,
             list: () => [],
             find: (_agent, name) => name === 'plan'
               ? { name: 'plan', description: 'Toggle plan mode', handler() {} }

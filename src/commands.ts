@@ -73,6 +73,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Conversation
   { name: 'new', description: 'Start a new conversation' },
   { name: 'clear', description: 'Clear the conversation' },
+  { name: 'c', description: 'Clear the conversation', tag: 'alias of /clear' },
   { name: 'compact', description: 'Compact the conversation history' },
   { name: 'resume', description: 'Resume a previous session' },
   { name: 'rename', description: 'Rename the current session' },
@@ -92,6 +93,9 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'cost', description: 'Show session token usage' },
   { name: 'config', description: 'Show the dsh-tui configuration source' },
   { name: 'reload', description: 'Reload preference files from disk and apply live' },
+  { name: 'r', description: 'Reload preference files from disk and apply live', tag: 'alias of /reload' },
+  { name: 'refresh', description: 'Refresh canvas stage, redraw viewport, and reload live state' },
+  { name: 'canvas', description: 'Refresh canvas stage, redraw viewport, and reload live state', tag: 'alias of /refresh' },
   { name: 'settings', description: 'View and edit plugin settings' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
@@ -288,4 +292,35 @@ function resolveCompletionNode(
 function matchingCompletionToken(candidate: CommandCompletionNode, prefix: string): string | undefined {
   if (candidate.name.toLowerCase().startsWith(prefix)) return candidate.name
   return candidate.aliases?.find(alias => alias.toLowerCase().startsWith(prefix))
+}
+
+/**
+ * Identify the slash-command token at the current caret position, whether at the start
+ * of the line, chained consecutively (e.g. `/cmd1 /cmd2 /cmd3`), or embedded mid-message.
+ */
+export function commandAtCaret(
+  value: string,
+  cursor: number,
+): { start: number; end: number; query: string } | undefined {
+  if (value.includes('\n')) return undefined
+
+  // 1. Check if the token at or before caret starts with '/'
+  let start = cursor
+  while (start > 0 && !/\s/u.test(value[start - 1]!)) start--
+
+  if (value[start] === '/' && (start === 0 || /\s/u.test(value[start - 1]!))) {
+    let end = cursor
+    while (end < value.length && !/\s/u.test(value[end]!)) end++
+    const query = value.slice(start, cursor)
+    if (query.startsWith('/')) {
+      return { start, end, query }
+    }
+  }
+
+  // 2. Subcommand fallback for root command lines (e.g. `/workspace res`)
+  if (value.startsWith('/')) {
+    return { start: 0, end: value.length, query: value.slice(0, cursor) }
+  }
+
+  return undefined
 }

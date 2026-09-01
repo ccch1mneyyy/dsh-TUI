@@ -18,6 +18,12 @@ import { isXtermJs } from './terminal.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
 
+function backgroundFill(width: number, color: Color | undefined): string {
+  if (width <= 0) return ''
+  const spaces = ' '.repeat(width)
+  return color === undefined ? spaces : applyTextStyles(spaces, { backgroundColor: color })
+}
+
 // Matches detectXtermJsWheel() in ScrollKeybindingHandler.tsx — the curve
 // and drain must agree on terminal detection. TERM_PROGRAM check is the sync
 // fallback; isXtermJs() is the authoritative XTVERSION-probe result.
@@ -1003,7 +1009,8 @@ function renderNodeToOutput(
         // content growth, and an idle stream leaves the pill stuck.
         const atBottom =
           sticky ||
-          (scrollTopBeforeFollow >= prevMaxScroll &&
+          (node.pendingScrollDelta === undefined &&
+            scrollTopBeforeFollow >= prevMaxScroll &&
             (grew || scrollTopBeforeFollow >= maxScroll))
         if (atBottom && (node.pendingScrollDelta ?? 0) >= 0 && !shrunk) {
           node.scrollTop = maxScroll
@@ -1067,9 +1074,22 @@ function renderNodeToOutput(
             (pending < 0 && cMin !== undefined && cur < cMin) ||
             (pending > 0 && cMax !== undefined && cur > cMax)
           const eff = pastClamp ? Math.min(4, innerHeight >> 3) : innerHeight
-          cur += isXtermJsHost()
+          const drain = isXtermJsHost()
             ? drainAdaptive(node, pending, eff)
             : drainProportional(node, pending, eff)
+          if (pending > 0 && cur + drain >= maxScroll) {
+            cur = maxScroll
+            node.pendingScrollDelta = undefined
+            if (node.stickyScroll === false) {
+              node.stickyScroll = true
+              node.onStickyRestore?.()
+            }
+          } else if (pending < 0 && cur + drain <= 0) {
+            cur = 0
+            node.pendingScrollDelta = undefined
+          } else {
+            cur += drain
+          }
         } else if (pending === 0) {
           // Opposite scrollBy calls cancelled to zero — clear so we don't
           // schedule an infinite loop of no-op drain frames.
@@ -1312,7 +1332,7 @@ function renderNodeToOutput(
             if (dirtyChildren) {
               const edgeTopLocal = edgeTop - contentY
               const edgeBottomLocal = edgeBottom + 1 - contentY
-              const spaces = ' '.repeat(w)
+              const spaces = backgroundFill(w, boxBackgroundColor)
               // Track cumulative height change of children iterated so far.
               // A clean child's yogaTop is unchanged iff this is zero (no
               // sibling above it grew/shrank/mounted). When zero, the skip
@@ -1405,7 +1425,7 @@ function renderNodeToOutput(
             // pixels sit at (rect.y - delta) — neither edge render nor the
             // overlay's own re-render covers them. Wipe and re-render
             // ScrollBox content so the diff writes correct cells.
-            const spaces = absoluteRectsPrev.length ? ' '.repeat(w) : ''
+            const spaces = absoluteRectsPrev.length ? backgroundFill(w, boxBackgroundColor) : ''
             for (const r of absoluteRectsPrev) {
               if (r.y >= bottom + 1 || r.y + r.height <= top) continue
               const shiftedTop = Math.max(top, Math.floor(r.y) - delta)
@@ -1499,7 +1519,8 @@ function renderNodeToOutput(
         // interior each render, so child blits from prevScreen would restore
         // stale cells (wrong bg if it changed) on top of the fresh fill.
         const ownBackgroundColor = node.style.backgroundColor
-        if (ownBackgroundColor || node.style.opaque) {
+        const effectiveFillColor = ownBackgroundColor ?? (node.style.opaque ? inheritedBackgroundColor : undefined)
+        if (effectiveFillColor !== undefined) {
           const borderLeft = yogaNode.getComputedBorder(LayoutEdge.Left)
           const borderRight = yogaNode.getComputedBorder(LayoutEdge.Right)
           const borderTop = yogaNode.getComputedBorder(LayoutEdge.Top)
@@ -1507,10 +1528,7 @@ function renderNodeToOutput(
           const innerWidth = Math.floor(width) - borderLeft - borderRight
           const innerHeight = Math.floor(height) - borderTop - borderBottom
           if (innerWidth > 0 && innerHeight > 0) {
-            const spaces = ' '.repeat(innerWidth)
-            const fillLine = ownBackgroundColor
-              ? applyTextStyles(spaces, { backgroundColor: ownBackgroundColor })
-              : spaces
+            const fillLine = backgroundFill(innerWidth, effectiveFillColor)
             const fill = Array(innerHeight).fill(fillLine).join('\n')
             output.write(x + borderLeft, y + borderTop, fill)
           }

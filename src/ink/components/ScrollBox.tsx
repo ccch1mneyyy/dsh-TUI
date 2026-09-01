@@ -9,6 +9,7 @@ import { markCommitStart } from '../reconciler.js';
 import { swallowNestedUpdateOverflow } from '../update-overflow-guard.js';
 import type { WheelEvent } from '../events/wheel-event.js';
 import type { Styles } from '../styles.js';
+import { computeWheelDelta } from '../scroll-coordinator.js';
 import Box from './Box.js';
 export type ScrollBoxHandle = {
   scrollTo: (y: number) => void;
@@ -193,10 +194,23 @@ function ScrollBox({
       el.stickyScroll = false;
       // Wheel input cancels any in-flight anchor seek — user override.
       el.scrollAnchor = undefined;
-      // Accumulate in pendingScrollDelta; renderer drains it at a capped
-      // rate so fast flicks show intermediate frames. Pure accumulator:
-      // scroll-up followed by scroll-down naturally cancels.
-      el.pendingScrollDelta = (el.pendingScrollDelta ?? 0) + Math.floor(dy);
+      const viewportH = el.scrollViewportHeight ?? 0;
+      const maxScroll = Math.max(0, (el.scrollHeight ?? 0) - viewportH);
+      const curTop = el.scrollTop ?? 0;
+      const curPending = el.pendingScrollDelta ?? 0;
+      const delta = Math.floor(dy);
+
+      const res = computeWheelDelta({ curTop, curPending, delta, maxScroll, viewportH });
+      if (res.handled) {
+        if (res.setSticky && el.stickyScroll === false) {
+          el.stickyScroll = true;
+          scrollMutated(el);
+        }
+        return;
+      }
+
+      el.stickyScroll = res.setSticky;
+      el.pendingScrollDelta = res.nextPending;
       scrollMutated(el);
     },
     scrollToBottom() {
