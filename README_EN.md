@@ -675,11 +675,14 @@ harness:
   `presentation`, `decisions` → `decisions`), and rejects unknown slice ids
   fail-closed. `toast` is no longer implicitly loaded by `presentation`, and
   `decisions` is no longer implicitly loaded by `messages`.
-- **P4 Channel split**: the live Channel is decomposed into
-  `projection / actions / state / plugins / transcript` Host Port modules and
-  mounted as a `channel` KernelSlice. HostFacade guards each method with the
-  shadow policy, so passive/replay allows read-only projections while denying
-  mutations.
+- **P4 Channel Port/projection layer (honest wording)**: new
+  `projection / actions / state / plugins / transcript` Host Ports and
+  `src/adapter/channel/*` split modules, mounted as a `channel` KernelSlice and
+  consumed by the production driver. The production
+  `src/dsh-adapter/channel.ts` implementation itself is **not yet physically
+  split**; it remains the live Channel implementation source. HostFacade guards
+  each method with the shadow policy, so passive/replay allows read-only
+  projections while denying mutations.
 - **P5 Channel conformance**: a local Channel Provider/Consumer replays real
   DSH session snapshot/transcript data through open/subscribe/invoke/close and
   validates it against `tui.dsh/v1alpha1#Channel`, including monotonic version

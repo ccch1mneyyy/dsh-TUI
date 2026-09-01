@@ -27,6 +27,7 @@ import type { HostDescriptorBuild } from '../standard/descriptor.js'
 import { buildHostDescriptorFromLifecycles } from '../standard/descriptor.js'
 import { createShadowGuardedHostFacade, type HostFacade } from './host-facade.js'
 import type { KernelSlice } from './slices/types.js'
+import { onTuiChannelRegistered } from '../channel/host-registry.js'
 
 export interface KernelRuntimeOptions {
   readonly context: unknown
@@ -106,6 +107,7 @@ export class KernelRuntime {
   private refreshTimer: ReturnType<typeof setInterval> | undefined
   private refreshInFlight: Promise<readonly CapabilityLifecycle[]> | undefined
   private mountPromise: Promise<void> | undefined
+  private unsubscribeChannelListener: (() => void) | undefined
   private disposed = false
 
   constructor(options: KernelRuntimeOptions) {
@@ -134,6 +136,14 @@ export class KernelRuntime {
     this.refreshTtlMs = options.refreshTtlMs ?? 30_000
     this.lifecycles = Object.freeze([])
     this.detect()
+    // The TUI plugin can create/register its live Channel after this Kernel has
+    // already started. Re-run refresh/mount on registration so a late Channel
+    // is picked up without requiring a host restart.
+    this.unsubscribeChannelListener = onTuiChannelRegistered(this.context, () => {
+      if (this.disposed) return
+      void this.refresh().catch(() => undefined)
+      void this.mount().catch(() => undefined)
+    })
   }
 
   /** Synchronous detection: never performs reversible/side-effectful probes.
@@ -257,6 +267,11 @@ export class KernelRuntime {
   }
 
   private async refreshInternal(options: KernelRefreshOptions = {}): Promise<readonly CapabilityLifecycle[]> {
+    if (this.disposed) {
+      this.refreshState = 'skipped'
+      this.refreshError = 'kernel disposed while refresh was in flight'
+      return this.lifecycles
+    }
     const isReplayIsolated = this.mode === 'replay-shadow'
       && options.allowReplay === true
       && isReplayIsolationActive()
@@ -271,8 +286,18 @@ export class KernelRuntime {
       return this.lifecycles
     }
     try {
+      if (this.disposed) {
+        this.refreshState = 'skipped'
+        this.refreshError = 'kernel disposed while refresh was in flight'
+        return this.lifecycles
+      }
       const lifecycles: CapabilityLifecycle[] = []
       for (const driver of this.drivers) {
+        if (this.disposed) {
+          this.refreshState = 'skipped'
+          this.refreshError = 'kernel disposed while refresh was in flight'
+          return this.lifecycles
+        }
         // Mutate-class drivers must never run their live verifier under a
         // shadow/replay mode: their probes write real host state (status,
         // toasts) even when the Kernel runs on an isolated replay context.
@@ -284,12 +309,22 @@ export class KernelRuntime {
         let verified: readonly CapabilityLifecycle[]
         if (driver.verifyLive !== undefined) {
           verified = (await driver.verifyLive(this.context)).map(verifyAndPromote)
+          if (this.disposed) {
+            this.refreshState = 'skipped'
+            this.refreshError = 'kernel disposed while refresh was in flight'
+            return this.lifecycles
+          }
         } else {
           // Keep the sync projection for drivers with no live verifier.
           verified = (driver.lifecycles?.(this.context) ?? []).map(verifyAndPromote)
         }
         this.lastVerifiedLifecycles.set(driver.id, Object.freeze([...verified]))
         lifecycles.push(...verified)
+      }
+      if (this.disposed) {
+        this.refreshState = 'skipped'
+        this.refreshError = 'kernel disposed while refresh was in flight'
+        return this.lifecycles
       }
       this.replaceLifecycles(lifecycles)
       this.refreshState = 'completed'
@@ -514,6 +549,10 @@ export class KernelRuntime {
     if (this.refreshTimer !== undefined) {
       clearInterval(this.refreshTimer)
       this.refreshTimer = undefined
+    }
+    if (this.unsubscribeChannelListener !== undefined) {
+      this.unsubscribeChannelListener()
+      this.unsubscribeChannelListener = undefined
     }
     for (const driver of this.drivers) {
       const mount = this.mountDisposers.get(driver.id)

@@ -255,9 +255,12 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
   常见别名（如 `dialogs` → `presentation`、`decisions` → `decisions`），未知
   slice id 直接拒绝并 fail-closed。`toast` 不再被 `presentation` 隐式加载，
   `decisions` 不再被 `messages` 隐式加载。
-- **P4 Channel 拆分**：live Channel 已拆成 `projection / actions / state /
-  plugins / transcript` 五个 Host Port 模块，并由 `channel` KernelSlice 挂载；
-  `HostFacade` 按方法做 shadow 守卫，passive/replay 下只读投影可用、变更动作被拒。
+- **P4 Channel Port/投影层（诚实表述）**：新增 `projection / actions / state /
+  plugins / transcript` 五个 Host Port 与 `src/adapter/channel/*` 拆分模块，
+  并由 `channel` KernelSlice 挂载到生产 HostFacade；**生产 `src/dsh-adapter/channel.ts`
+  本体尚未物理拆分**，仍由 live Channel 作为实现来源，拆分模块是生产 driver
+  实际消费的 Port/投影层。`HostFacade` 按方法做 shadow 守卫，passive/replay 下
+  只读投影可用、变更动作被拒。
 - **P5 Channel conformance**：新增本地 Channel Provider/Consumer，支持真实
   DSH session snapshot/transcript 的 open/subscribe/invoke/close 回放，并接入
   `tui.dsh/v1alpha1#Channel` 的规范校验与单调版本连续性检查。

@@ -54,7 +54,7 @@ import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
-import { withHostRootCapability } from './host-access.js'
+import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
 import instances from '../ink/instances.js'
@@ -532,7 +532,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Register the live Channel for the adapter Kernel. The Channel driver
   // resolves it lazily from the composition root, so this can be called after
   // the plugin-host Kernel started without requiring a re-mount.
-  registerTuiChannel(ctx, channel)
+  // Normalize to the composition root: the Kernel and its Channel driver
+  // query the registry through the root context, never through this plugin's
+  // child activation context.
+  registerTuiChannel(compositionRoot(ctx), channel)
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped

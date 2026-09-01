@@ -46,9 +46,10 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 ## Adapter-v2 P4-P6（本地分支状态）
 
-- **P4 Channel 拆分**:live Channel 拆为 `projection / actions / state /
-  plugins / transcript` 五个 Host Port;新增 `channel` KernelSlice、上游
-  driver 与 `verify:adapter-channel`。
+- **P4 Channel Port/投影层**:新增 `projection / actions / state /
+  plugins / transcript` 五个 Host Port 与 `src/adapter/channel/*` 拆分模块;
+  生产 `channel.ts` 本体尚未物理拆分,由 live Channel 作为实现来源;
+  新增 `channel` KernelSlice、上游 driver 与 `verify:adapter-channel`。
 - **P5 Channel Provider/Consumer**:支持真实 DSH session snapshot/transcript
   回放 `tui.dsh/v1alpha1#Channel`,并新增
   `verify:adapter-channel-conformance`。

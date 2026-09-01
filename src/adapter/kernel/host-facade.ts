@@ -34,6 +34,7 @@ import {
   effectClassFor,
   type AdapterMode,
 } from './runtime.js'
+import { CHANNEL_PORT_METHOD_CAPABILITIES as CHANNEL_PORT_CAPABILITIES } from '../channel/features.js'
 
 export interface HostFacade {
   readonly descriptor: HostDescriptorPort
@@ -136,41 +137,6 @@ const PORT_METHOD_CAPABILITIES: Readonly<Record<string, Readonly<Record<string, 
   decisions: Object.freeze({
     probe: 'host.decision.probe',
     subscribe: 'host.decision.subscribe',
-  }),
-})
-
-/**
- * Nested shadow-policy capabilities for the Channel Host Port. The Channel is
- * intentionally split into five sub-ports; each leaf method is guarded.
- */
-const CHANNEL_PORT_CAPABILITIES: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
-  projection: Object.freeze({
-    snapshot: 'host.channel.projection.snapshot',
-    subscribe: 'host.channel.projection.subscribe',
-  }),
-  actions: Object.freeze({
-    submit: 'host.channel.actions.submit',
-    steer: 'host.channel.actions.steer',
-    cancel: 'host.channel.actions.cancel',
-    interruptAndDeliver: 'host.channel.actions.interruptAndDeliver',
-    clear: 'host.channel.actions.clear',
-    loadOlder: 'host.channel.transcript.loadOlder',
-    notify: 'host.channel.actions.notify',
-  }),
-  state: Object.freeze({
-    snapshot: 'host.channel.state.snapshot',
-  }),
-  plugins: Object.freeze({
-    runExternalCommand: 'host.channel.plugins.run-external-command',
-    openPluginScene: 'host.channel.plugins.open-scene',
-    closePluginScene: 'host.channel.plugins.close-scene',
-    settingsSections: 'host.channel.plugins.settings-sections',
-    subscribeSettingsSections: 'host.channel.plugins.subscribe-settings-sections',
-  }),
-  transcript: Object.freeze({
-    rows: 'host.channel.transcript.rows',
-    traceEvents: 'host.channel.transcript.trace-events',
-    loadOlder: 'host.channel.transcript.loadOlder',
   }),
 })
 

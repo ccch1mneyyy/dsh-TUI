@@ -5,6 +5,10 @@
  * small host-internal Port: external plugin commands, plugin scenes and
  * settings sections. It never exposes plugin registration or permission
  * evaluation; those stay in Standard/Kernel.
+ *
+ * The internal `CHANNEL_SPLIT_TOKEN` is required so this split builder cannot
+ * be invoked outside the Kernel/driver path and bypass the HostFacade shadow
+ * gate.
  */
 
 import type { Channel } from '../../dsh-adapter/channel.js'
@@ -13,6 +17,7 @@ import type {
   HostChannelPluginsPort,
   HostChannelSettingsSectionProjection,
 } from '../ports/channel.js'
+import { CHANNEL_SPLIT_TOKEN } from './internal-token.js'
 
 function projectSettingsSection(section: TuiSettingsSection): HostChannelSettingsSectionProjection {
   return Object.freeze({
@@ -35,7 +40,10 @@ function projectSettingsSection(section: TuiSettingsSection): HostChannelSetting
 }
 
 /** Build the host-internal plugin-facing surface over one live Channel. */
-export function createChannelPlugins(channel: Channel): HostChannelPluginsPort {
+export function createChannelPlugins(channel: Channel, token: symbol): HostChannelPluginsPort {
+  if (token !== CHANNEL_SPLIT_TOKEN) {
+    throw new Error('dsh-tui: Channel split plugins require the internal host token')
+  }
   return Object.freeze({
     async runExternalCommand(name: string, rawInput: string): Promise<string | undefined> {
       return channel.runExternalCommand(name, rawInput)

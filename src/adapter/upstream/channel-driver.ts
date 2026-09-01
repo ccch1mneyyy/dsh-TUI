@@ -21,29 +21,18 @@ import type { Detection, DetectionEvidence } from './detection.js'
 import type { UpstreamDriver, UpstreamDriverMount } from './driver.js'
 import type { Channel } from '../../dsh-adapter/channel.js'
 import {
+  createChannelActions,
   createChannelPlugins,
+  createChannelTranscript,
   getRegisteredTuiChannel,
   projectChannelRows,
   projectChannelSnapshot,
   projectChannelState,
 } from '../channel/index.js'
+import { CHANNEL_FEATURES } from '../channel/features.js'
+import { CHANNEL_SPLIT_TOKEN } from '../channel/internal-token.js'
 
 const CAPABILITY = 'host.channel'
-
-const CHANNEL_FEATURES = Object.freeze([
-  'host.channel.projection.snapshot',
-  'host.channel.projection.subscribe',
-  'host.channel.state.snapshot',
-  'host.channel.transcript.rows',
-  'host.channel.transcript.trace-events',
-  'host.channel.actions.submit',
-  'host.channel.actions.steer',
-  'host.channel.actions.cancel',
-  'host.channel.actions.clear',
-  'host.channel.plugins.run-external-command',
-  'host.channel.plugins.open-scene',
-  'host.channel.plugins.settings-sections',
-] as const)
 
 function serviceEvidence(id: string): DetectionEvidence {
   return { kind: 'service', id }
@@ -138,17 +127,21 @@ function verifyChannelLiveSync(ctx: unknown): CapabilityLifecycle[] {
       methodEvidence('tuiChannel', 'rows'),
       probeEvidence('channel.transcript.rows()', `read ${rows.length} rendered row(s)`),
     ]))
-    if (typeof channel.traceEvents === 'function') {
-      out.push(liveFeature('host.channel.transcript.trace-events', [
-        serviceEvidence('tuiChannel'),
-        methodEvidence('tuiChannel', 'traceEvents'),
-        probeEvidence('channel.transcript.trace-events()', 'raw DSH session event log is readable'),
-      ]))
-    } else {
-      out.push(degradedFeature('host.channel.transcript.trace-events', base, 'tuiChannel.traceEvents()'))
-    }
   } catch (error) {
     out.push(degradedFeature('host.channel.transcript.rows', base, errorText(error)))
+  }
+  try {
+    const events = channel.traceEvents()
+    if (!Array.isArray(events)) {
+      throw new TypeError('tuiChannel.traceEvents() did not return an array')
+    }
+    out.push(liveFeature('host.channel.transcript.trace-events', [
+      serviceEvidence('tuiChannel'),
+      methodEvidence('tuiChannel', 'traceEvents'),
+      probeEvidence('channel.transcript.trace-events()', `read ${events.length} DSH session event(s)`),
+    ]))
+  } catch (error) {
+    out.push(degradedFeature('host.channel.transcript.trace-events', base, errorText(error)))
   }
   // Subscribe is a real listener on the live Channel; it can be safely
   // registered and disposed by the Kernel wrapper, but the driver does not
@@ -156,15 +149,9 @@ function verifyChannelLiveSync(ctx: unknown): CapabilityLifecycle[] {
   out.push(degradedFeature('host.channel.projection.subscribe', base, 'host.channel.projection.subscribe.live-probe'))
   // Mutations and plugin invocations are not safely auto-reversible on a live
   // TUI; they remain degraded until a dedicated replay channel proves them.
-  for (const feature of [
-    'host.channel.actions.submit',
-    'host.channel.actions.steer',
-    'host.channel.actions.cancel',
-    'host.channel.actions.clear',
-    'host.channel.plugins.run-external-command',
-    'host.channel.plugins.open-scene',
-    'host.channel.plugins.settings-sections',
-  ] as const) {
+  const emitted = new Set(out.map(lifecycle => lifecycle.capability))
+  for (const feature of CHANNEL_FEATURES) {
+    if (emitted.has(feature)) continue
     out.push(degradedFeature(feature, base, `${feature}.live-probe`))
   }
   return out
@@ -198,62 +185,44 @@ function createStatePort(ctx: unknown): HostChannelStatePort {
 }
 
 function createActionsPort(ctx: unknown): HostChannelActionsPort {
+  // All mutable Channel operations are delegated lazily to the split actions
+  // module: mounting without a registered Channel stays a no-op, while any
+  // actual call through the HostFacade shadow gate resolves the Channel and
+  // then executes the split builder.
+  const actions = (): HostChannelActionsPort =>
+    createChannelActions(requireChannel(ctx), CHANNEL_SPLIT_TOKEN)
   return Object.freeze({
-    submit(text) {
-      requireChannel(ctx).submit(text)
-    },
-    steer(text) {
-      requireChannel(ctx).steer(text)
-    },
-    cancel() {
-      requireChannel(ctx).cancel()
-    },
-    interruptAndDeliver(texts) {
-      return requireChannel(ctx).interruptAndDeliver(texts)
-    },
-    clear() {
-      requireChannel(ctx).clear()
-    },
-    loadOlder() {
-      return requireChannel(ctx).loadOlder()
-    },
-    notify(text, options) {
-      return requireChannel(ctx).notify(text, options)
-    },
+    submit: text => actions().submit(text),
+    steer: text => actions().steer(text),
+    cancel: () => actions().cancel(),
+    interruptAndDeliver: texts => actions().interruptAndDeliver(texts),
+    clear: () => actions().clear(),
+    loadOlder: () => actions().loadOlder(),
+    notify: (text, options) => actions().notify(text, options),
   })
 }
 
 function createPluginsPort(ctx: unknown): HostChannelPluginsPort {
+  // Plugin-visible Channel seams are projected lazily through the split
+  // plugins module; same no-op-at-mount contract as the actions port.
+  const plugins = (): HostChannelPluginsPort =>
+    createChannelPlugins(requireChannel(ctx), CHANNEL_SPLIT_TOKEN)
   return Object.freeze({
-    runExternalCommand(name, rawInput) {
-      return requireChannel(ctx).runExternalCommand(name, rawInput)
-    },
-    openPluginScene(id) {
-      return requireChannel(ctx).openPluginScene(id)
-    },
-    closePluginScene() {
-      return requireChannel(ctx).closePluginScene()
-    },
-    settingsSections() {
-      return createChannelPlugins(requireChannel(ctx)).settingsSections()
-    },
-    subscribeSettingsSections(listener) {
-      return requireChannel(ctx).subscribeSettingsSections(listener)
-    },
+    runExternalCommand: (name, rawInput) => plugins().runExternalCommand(name, rawInput),
+    openPluginScene: id => plugins().openPluginScene(id),
+    closePluginScene: () => plugins().closePluginScene(),
+    settingsSections: () => plugins().settingsSections(),
+    subscribeSettingsSections: listener => plugins().subscribeSettingsSections(listener),
   })
 }
 
 function createTranscriptPort(ctx: unknown): HostChannelTranscriptPort {
+  const transcript = (): HostChannelTranscriptPort =>
+    createChannelTranscript(requireChannel(ctx), CHANNEL_SPLIT_TOKEN)
   return Object.freeze({
-    rows() {
-      return projectChannelRows(requireChannel(ctx).rows)
-    },
-    traceEvents() {
-      return requireChannel(ctx).traceEvents()
-    },
-    loadOlder() {
-      return requireChannel(ctx).loadOlder()
-    },
+    rows: () => transcript().rows(),
+    traceEvents: () => transcript().traceEvents(),
+    loadOlder: () => transcript().loadOlder(),
   })
 }
 

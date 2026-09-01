@@ -328,6 +328,46 @@ assert.notEqual(failed.currentLifecycles().find(lifecycle => lifecycle.capabilit
 }
 
 
+// Dispose while an async live refresh is in flight must refuse/stale the
+// in-flight result instead of publishing a live lifecycle after teardown.
+{
+  let resolveVerify: (() => void) | undefined
+  const slowVerify = {
+    id: 'refresh-slow',
+    upstreamFamily: 'test',
+    capability: 'test.refresh-slow',
+    mountEffectClass: 'read-only' as const,
+    detect: () => ({ state: 'unsupported' as const, reason: 'not relevant' }),
+    verifyLive: async () => {
+      await new Promise<void>(resolve => { resolveVerify = resolve })
+      return [{
+        capability: 'test#Capability',
+        coordinate: { apiVersion: 'test', kind: 'Capability' },
+        state: 'live' as const,
+        detection: {
+          state: 'supported' as const,
+          evidence: [{ kind: 'probe' as const, id: 'p' }],
+        },
+      }]
+    },
+  }
+  const disposing = new KernelRuntime({
+    context: {},
+    mode: 'new',
+    generationId: 'kernel-refresh-dispose-battery',
+    drivers: [slowVerify],
+  })
+  const pendingRefresh = disposing.refresh()
+  disposing.dispose()
+  resolveVerify!()
+  await pendingRefresh
+  checks += 1
+  assert.equal(disposing.refreshStatus(), 'skipped',
+    'dispose must cause an in-flight refresh to stop rather than complete')
+  assert.equal(disposing.currentLifecycles().length, 0,
+    'a refresh that completes after dispose must not publish live lifecycles')
+}
+
 // M3: DSH_TUI_ADAPTER_SLICES / KernelRuntimeOptions.slices must actually filter
 // kernel slices, not leave the option as a dead parameter.
 {
