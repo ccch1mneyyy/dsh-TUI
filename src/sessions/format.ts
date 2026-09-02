@@ -186,6 +186,17 @@ export function nextFormatWhenChange(at: number, now: number): number {
 }
 
 /**
+ * Absolute local wall-clock: `2026-09-01 14:30:22`. Companion to
+ * formatWhen's relative phrasing — the precise answer for telling three
+ * similar-looking sessions apart in a hover tooltip.
+ */
+export function formatAbsolute(at: number): string {
+  const date = new Date(at)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+/**
  * Byte size at the precision the number is worth: `812 B`, `142.9 KB`,
  * `4.2 MB`. One decimal from kilobytes up, because the digit distinguishes a
  * short exchange from a long one and a second would not.

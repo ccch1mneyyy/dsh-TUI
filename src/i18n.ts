@@ -559,6 +559,16 @@ const dict = {
   'input-expand-editor-hint-send': { zh: 'Ctrl+Enter 发送', en: 'Ctrl+Enter sends' },
   'input-expand-editor-hint-collapse': { zh: 'Esc 收起', en: 'Esc collapses' },
 
+  // ── messages/AssistantToolUseMessage.tsx（工具卡头部悬停元数据浮层）─────
+  // 头部已完整显示标题/参数时，悬停不再重复可见文本，改弹卡片元数据：
+  // 开始/结束/失败时刻、退出码与信号（这些头部都没有）。时长不入内——
+  // settled 卡的头部 chip（`· 5m30s`）与运行中卡的 body 已显示时长。
+  'tool-tip-started': { zh: '开始 {{time}}', en: 'started {{time}}' },
+  'tool-tip-finished': { zh: '结束 {{time}}', en: 'finished {{time}}' },
+  'tool-tip-failed': { zh: '失败 {{time}}', en: 'failed {{time}}' },
+  'tool-tip-exit': { zh: '退出码 {{code}}', en: 'exit {{code}}' },
+  'tool-tip-signal': { zh: '信号 {{name}}', en: 'signal {{name}}' },
+
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
   'sugg-files-title': { zh: '文件', en: 'files' },

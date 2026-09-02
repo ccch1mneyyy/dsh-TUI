@@ -365,6 +365,15 @@ const GROUPS = {
 // 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
 // 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制。
     ["verify-tooltip", ['node', '--import', 'tsx/esm', 'scripts/verify-tooltip.tsx']],
+// 工具卡头部 hover tooltip 内容门控回归：头部已经完整显示（单行标题 / 未
+// 超出预算的 args）时悬停不再弹「重复可见文本」的浮层，改弹卡片元数据
+// （开始/结束时刻、耗时、运行中时长）；折叠的终端脚本与超出 480 字符预算
+// 的 args 仍弹完整内容（弹层优先真隐藏内容）。
+    ["verify-tool-tooltip-gating", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-tooltip-gating.tsx']],
+// 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
+// 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
+// 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）。
+    ["verify-hover-details", ['node', '--import', 'tsx/esm', 'scripts/verify-hover-details.tsx']],
 // 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
 // Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
 // 自环境变量，不转义即可注入任意命令；解压与替换之间的提取树校验拒绝
