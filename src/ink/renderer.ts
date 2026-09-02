@@ -21,10 +21,10 @@ export type RenderOptions = {
   terminalWidth: number
   terminalRows: number
   altScreen: boolean
-  // True when the previous frame's screen buffer was mutated post-render
-  // (selection overlay), reset to blank (alt-screen enter/resize/SIGCONT),
-  // or reset to 0×0 (forceRedraw). Blitting from such a prevScreen would
-  // copy stale inverted cells, blanks, or nothing. When false, blit is safe.
+  // True when blitting from the previous screen is unsafe: it was mutated
+  // post-render (selection overlay), reset to blank/0×0, or a skipped-output
+  // render consumed the DOM dirty flags without advancing the terminal frame.
+  // Blitting then copies stale cells; false means the baseline is safe.
   prevFrameContaminated: boolean
 }
 
@@ -131,12 +131,11 @@ export default function createRenderer(
     resetScrollHint()
     resetScrollDrainNode()
 
-    // prevFrameContaminated: selection overlay mutated the returned screen
-    // buffer post-render (in ink.tsx), resetFramesForAltScreen() replaced it
-    // with blanks, or forceRedraw() reset it to 0×0. Blit on the NEXT frame
-    // would copy stale inverted cells / blanks / nothing. When clean, blit
-    // restores the O(unchanged) fast path for steady-state frames (spinner
-    // tick, text stream).
+    // prevFrameContaminated: selection overlay mutated the returned screen,
+    // a reset replaced it with blanks/0×0, or a backpressure-skipped render
+    // consumed DOM dirty flags without reaching the terminal. Blit on the
+    // NEXT frame would copy stale cells and lose the current DOM. When clean,
+    // blit restores the O(unchanged) fast path (spinner tick, text stream).
     // Removing an absolute-positioned node poisons prevScreen: it may
     // have painted over non-siblings (e.g. an overlay over a ScrollBox
     // earlier in tree order), so their blits would restore the removed

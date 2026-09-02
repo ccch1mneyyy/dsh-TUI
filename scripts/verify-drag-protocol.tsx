@@ -644,7 +644,11 @@ type AppInternals = {
   }
 }
 type InkInternals = {
-  pendingProbeRequest: { skipMouseReassert?: boolean } | undefined
+  pendingProbeRequest: {
+    skipMouseReassert?: boolean
+    refreshSurface?: boolean
+    bypassRefreshDedupe?: boolean
+  } | undefined
   pendingAltScreenReentry: boolean
   pointerGestureActive: boolean
   protocolCandidateActive: boolean
@@ -847,7 +851,11 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 }
 {
   // I6b: 松手后闩解除——FOCUS_IN 探测恢复盲写（证明闩不是永久禁用探测，
-  // conpty 自愈路径仍然可用）。
+  // conpty 自愈路径仍然可用）。I6 的 focus 已在 release tail 发出一个
+  // refreshSurface 查询；headless 不自动回答，先按测试惯例排空并让其
+  // completion 全帧刷新落定，再测下一次独立 focus。
+  drainQuerier()
+  await sleep(30)
   await sleep(300) // 再次冷却节流，确保本次 focus 必触发
   const mark = stdoutWrites.length
   stdin.write('\x1b[I')

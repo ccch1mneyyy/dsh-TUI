@@ -11,6 +11,7 @@
  */
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'  // force DEC-2026 path (SYNC_OUTPUT_SUPPORTED=true) so the DECSTBM scroll-hint optimization fires
+process.env.DSH_TUI_FORCE_DECSTBM = '1'  // Windows 终端栈默认禁用 DECSTBM；本取证脚本观测该优化路径
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }] = await Promise.all([
   import('node:stream'),

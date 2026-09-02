@@ -177,9 +177,9 @@ type Props = {
 	// fullscreen) re-enters alt-screen + mouse tracking. Idempotent on the
 	// terminal side. Optional so testing.tsx doesn't need to stub it.
 	readonly onStdinResume?: () => void;
-	// Called on DECSET-1004 focus events. Ink probes the alt-screen/mouse
-	// mode state on refocus — the moment a conpty-side mode reset (DPI
-	// change, renderer restart) becomes observable — and self-heals.
+	// Called on DECSET-1004 focus events and on a synthesized refocus when
+	// real user input arrives while focus is still known blurred. Ink probes
+	// the alt-screen/mouse mode state and rebuilds the physical surface.
 	readonly onTerminalFocus?: (focused: boolean) => void;
 	// Receives the declared native-cursor position from useDeclaredCursor
 	// so ink.tsx can park the terminal cursor there after each frame.
@@ -333,6 +333,25 @@ export default class App extends PureComponent<Props, State> {
 					session.startRow,
 				),
 			);
+		}
+	}
+
+	/**
+	 * Settle pointer state owned by the OLD terminal-focus epoch. A release can
+	 * be swallowed while the window is unfocused; retaining that physical latch
+	 * would block every recovery probe forever. Call when a focus epoch ends,
+	 * or before synthetic recovery starts a new one, so a later press can
+	 * establish a fresh latch normally.
+	 */
+	settlePointerGestureForFocusBoundary(): void {
+		this.heldButtons = 0;
+		this.ambiguousHeld = false;
+		this.props.onPointerGestureChange?.(false);
+		this.finishDragSession();
+		const sel = this.props.selection;
+		if (sel.isDragging) {
+			finishSelection(sel);
+			this.props.onSelectionChange();
 		}
 	}
 
@@ -1008,6 +1027,21 @@ function processKeysInBatch(
 			continue;
 		}
 
+		// FOCUS_IN can disappear after a terminal reset drops DECSET 1004. Any
+		// subsequent real user input is equivalent proof that focus returned.
+		// Promote that first key/paste/mouse event to the same batch-tail surface
+		// recovery as an explicit FOCUS_IN. This check must precede the mouse
+		// branch: ParsedMouse used to `continue` before the old key-only failsafe,
+		// leaving mouse-only users on a stale surface indefinitely.
+		const isExplicitFocusSignal =
+			item.kind === "key" &&
+			(item.sequence === FOCUS_IN || item.sequence === FOCUS_OUT);
+		if (!isExplicitFocusSignal && !getTerminalFocused()) {
+			app.settlePointerGestureForFocusBoundary();
+			app.handleTerminalFocus(true);
+			app.pendingFocusProbe = true;
+		}
+
 		// Mouse click/drag events update selection state (fullscreen only).
 		// Terminal sends 1-indexed col/row; convert to 0-indexed for the
 		// screen buffer. Button bit 0x20 = drag (motion while button held).
@@ -1037,37 +1071,22 @@ function processKeysInBatch(
 		}
 		if (sequence === FOCUS_OUT) {
 			app.handleTerminalFocus(false);
-			// Gesture latch: focus loss means no release event is coming for
-			// a held button (released outside the window or swallowed by the
-			// OS) — clear the held-button set so the health probe may write
-			// again.
-			app.heldButtons = 0;
-			app.ambiguousHeld = false;
-			app.props.onPointerGestureChange?.(false);
-			// Drag protocol: focus loss also orphans an in-flight drag
-			// session — settle it with a dragend (if started) like the
-			// selection recovery below.
-			app.finishDragSession();
-			// Defensive: if we lost the release event (mouse released outside
-			// terminal window — some emulators drop it rather than capturing the
-			// pointer), focus-out is the next observable signal that the drag is
-			// over. Without this, drag-to-scroll's timer runs until the scroll
-			// boundary is hit.
-			if (app.props.selection.isDragging) {
-				finishSelection(app.props.selection);
-				app.props.onSelectionChange();
-			}
+			// Ink-side pointer-state reset (hover highlights, tooltip dwell,
+			// multi-click chain, no-interest cache): pointer geometry is stale
+			// once the window loses focus — minimize/alt-tab — and clearing it
+			// NOW (invisible while unfocused) keeps the restore repaint from
+			// resurrecting pre-focus-loss highlights at stale coordinates.
+			app.props.onTerminalFocus?.(false);
+			// A focus boundary terminates the old physical gesture even when
+			// its release was swallowed outside the window. Shared with synthetic
+			// focus recovery so no stale latch can strand later probes.
+			app.settlePointerGestureForFocusBoundary();
 			// Safe boundary: mark the batch for a deferred drain at the batch
 			// tail (not mid-batch — see release's finally).
 			app.pendingReleaseTail = true;
 			const event = new TerminalFocusEvent("terminalblur");
 			app.internal_eventEmitter.emit("terminalblur", event);
 			continue;
-		}
-
-		// Failsafe: if we receive input, the terminal must be focused
-		if (!getTerminalFocused()) {
-			setTerminalFocused(true);
 		}
 
 		// Handle Ctrl+Z (suspend) using parsed key to support both raw (\x1a) and
