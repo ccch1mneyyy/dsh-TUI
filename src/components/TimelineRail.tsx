@@ -286,7 +286,9 @@ export function TimelineRail({
     <NoSelect>
       {/* Raw ink-box (not the themed Box): onWheel is a host-level prop
           (same as ScrollBox's viewport) — wheel over the rail scrolls the
-          transcript, the rail has no scroll of its own. */}
+          transcript, the rail has no scroll of its own. The row above
+          extends past the page margin (Chat), so this gutter naturally
+          lands at the terminal's right edge. */}
       <ink-box
         onWheel={e => {
           if (e.deltaY !== 0) handle.scrollBy(e.deltaY)

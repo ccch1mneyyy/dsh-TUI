@@ -156,7 +156,9 @@ export function ScrollbarGutter({
     <NoSelect>
       {/* Raw ink-box (not the themed Box): onWheel is a host-level prop
           (same as ScrollBox's viewport) — wheel over the gutter scrolls
-          the transcript, the gutter has no scroll of its own. */}
+          the transcript, the gutter has no scroll of its own. The row
+          above extends past the page margin (Chat), so this track
+          naturally lands at the terminal's right edge. */}
       <ink-box
         onWheel={e => {
           if (e.deltaY !== 0) handle.scrollBy(e.deltaY)

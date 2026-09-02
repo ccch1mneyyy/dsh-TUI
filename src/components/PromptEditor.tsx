@@ -1,5 +1,6 @@
 import React from 'react'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTerminalSize } from '../ui.js'
+import { usePageInset } from './PageMargin.js'
 import type { Color } from '../ink/styles.js'
 import type { Theme } from '../theme.js'
 
@@ -50,13 +51,20 @@ function snapshot(): EditorNode {
 export function PromptEditorLayer(): React.ReactNode {
   const node = React.useSyncExternalStore(subscribe, snapshot)
   if (node === null) return null
+  // Full-bleed cover: under PageMargin the Chat root box starts at the
+  // content origin, so the editor must extend into the page margins up to
+  // the terminal edges — the editor is a whole-screen surface, and the
+  // margin strips must be covered rather than letting the transcript
+  // bleed through.
+  const inset = usePageInset()
+  const size = useTerminalSize()
   return (
     <Box
       position="absolute"
-      top={0}
-      left={0}
-      width="100%"
-      height="100%"
+      top={-inset.y}
+      left={-inset.x}
+      width={size.columns + 2 * inset.x}
+      height={size.rows + 2 * inset.y}
       flexDirection="column"
       flexShrink={0}
       overflow="hidden"

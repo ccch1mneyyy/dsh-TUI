@@ -9,6 +9,7 @@ import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
+import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../cc/figures.js'
 import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
@@ -2235,6 +2236,7 @@ export function Chat({
    * every animation tick. The tick only re-colours the cells it already has.
    */
   const { columns: terminalColumns } = useTerminalSize()
+  const pageInsetX = usePageInset().x
   const wakeWidth = miniWakeWidth(terminalColumns)
   const wakeBand = React.useMemo(
         () =>
@@ -3400,7 +3402,14 @@ export function Chat({
           }}
         />
       )}
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} width="100%">
+      {/* Transcript row. Under PageMargin the negative right margin makes
+          the row stretch past the content column to the terminal edge —
+          the gutter (timeline rail / scrollbar) thus lands at the very
+          edge while the transcript TEXT stays inside the page margin
+          (structural chrome convention: dividers and the rail bleed, text
+          and cards keep the content column). No explicit width: cross-axis
+          stretch with the margin yields exactly content+margin. */}
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginRight={-pageInsetX}>
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
         <LogoHeader
           key={logoNonce}

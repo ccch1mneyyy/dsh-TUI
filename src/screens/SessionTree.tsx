@@ -681,7 +681,7 @@ export function SessionTree({
         </Box>
       )}
 
-      {rules.has(2) && (<Box flexShrink={0}><Divider width={columns} /></Box>)}
+      {rules.has(2) && (<Box flexShrink={0}><Divider bleed /></Box>)}
       <Box flexShrink={0}>
         <Text dimColor italic>
           <HintLine text={hint} />

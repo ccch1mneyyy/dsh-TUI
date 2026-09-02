@@ -28,7 +28,7 @@ import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../s
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -52,6 +52,7 @@ import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspac
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
+import { PageMargin } from '../components/PageMargin.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
@@ -530,6 +531,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
     scrollGutter: config.scrollGutter,
+    pageMargin: config.pageMargin,
     foldTerminalCommand: config.foldTerminalCommand,
     promptSessionLabel: config.promptSessionLabel,
     expandEditor: config.expandEditor,
@@ -537,6 +539,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
+  // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
+  // the channel version bump (which re-renders everything below Chat)
+  // cannot drive it. Seed the store from config before the tree mounts;
+  // applyDisplay below mirrors every settings change into it live.
+  applyPageMargin(config.pageMargin)
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
@@ -589,6 +596,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
+        // Preset names AND custom `NxM` specs (the settings field's parse
+        // gate keeps junk out of the user layer; the transform normalizes
+        // whatever survives — cordis.yml junk included).
+        pageMargin: Schema.transform(
+          Schema.string().default('normal'),
+          value => normalizePageMargin(value),
+        ),
         // No default on purpose (same rule as `fullscreen` below): a schema
         // default here would come back from scope.get()/watch() and shadow
         // an explicit cordis.yml `foldTerminalCommand: true` while the
@@ -651,6 +665,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       scrollGutter?: ScrollGutterMode
+      pageMargin?: PageMarginSetting
       foldTerminalCommand?: boolean
       promptSessionLabel?: boolean
       expandEditor?: boolean
@@ -693,6 +708,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
+      // Page margin: the channel carries the mode (tests observe it), the
+      // module store drives the actual inset box above Chat — keep both in
+      // lockstep so a live /settings edit re-lays out immediately.
+      const pageMargin = normalizePageMargin(value.pageMargin ?? config.pageMargin)
+      channel.setPageMargin(pageMargin)
+      applyPageMargin(pageMargin)
       channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
@@ -957,6 +978,25 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
             { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
           ],
+        },
+        {
+          path: ['pageMargin'],
+          label: 'Page margin',
+          descriptions: { zh: '页边距' },
+          hint: 'Inset the whole UI from the terminal edges. Type a preset (none / slim / normal / roomy) or a custom spec `NxM`: N columns per side, M rows top/bottom (e.g. 3x1, max 8x4; a bare `N` keeps rows at 1). Empty resets to the default `normal`. Applies immediately.',
+          hintDescriptions: { zh: '让整个界面相对终端四边内缩。输入预设名（none / slim / normal / roomy）或自定义 `NxM`：左右各 N 列、上下各 M 行（如 3x1，上限 8x4；只填 N 则上下保持 1 行）。清空恢复默认 normal。立即生效。' },
+          kind: 'text',
+          placeholder: 'normal',
+          format(value: unknown): string {
+            return String(value ?? config.pageMargin ?? DEFAULT_PAGE_MARGIN)
+          },
+          parse(text: string) {
+            const draft = text.trim().toLowerCase()
+            if (draft === '') return { kind: 'clear' }
+            if (isPageMarginMode(draft)) return { kind: 'set', value: draft }
+            const spec = parsePageMarginSpec(draft)
+            return spec === undefined ? undefined : { kind: 'set', value: spec }
+          },
         },
         {
           path: ['foldTerminalCommand'],
@@ -1474,9 +1514,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // tracking), which turns on in-app text selection (copy-on-select via
   // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
   // mode leaves the mouse to the terminal emulator's native selection.
+  // PageMargin keeps the whole UI inset from the terminal edges (some
+  // terminals — bare WSL/tmux/SSH — have no own padding, so text touches
+  // the screen border). It must sit INSIDE AlternateScreen: the alt-screen
+  // box sizes itself to the real terminal rows, while PageMargin reports
+  // content-box dimensions to everything below it.
+  const marginChildren = bootedFullscreen
+    ? React.createElement(AlternateScreen, null, React.createElement(PageMargin, null, chat))
+    : React.createElement(PageMargin, null, chat)
   const tree = React.createElement(ThemeProvider, {
     themeHost,
-    children: bootedFullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
+    children: marginChildren,
   })
   instance = await render(tree, { exitOnCtrlC: false })
   const isRecompose = lastBootedFullscreen !== undefined

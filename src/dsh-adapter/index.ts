@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { DEFAULT_STATUS_BAR, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_STATUS_BAR, normalizePageMargin, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 
 export const name = 'dsh-tui'
@@ -93,6 +93,12 @@ export interface Config {
    *  `dsh-tui.scrollGutter`): `timeline` turn rail (default), `scrollbar`
    *  proportional thumb, or `hidden`. */
   scrollGutter?: ScrollGutterMode
+  /** Root page inset (settings `dsh-tui.pageMargin`): a preset name
+   *  (`none` / `slim` / `normal` (default) / `roomy`) or a custom `NxM`
+   *  spec (columns per side × rows top/bottom) that insets the whole UI
+   *  from the terminal edges. Terminals without their own viewport padding
+   *  (bare WSL, tmux, SSH) otherwise hug the screen border. */
+  pageMargin?: PageMarginSetting
   /** Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
    *  `true` collapses a multi-line command title to its first line plus a
    *  `+N lines` hint; Ctrl+O / clicking the card expands it. Default off —
@@ -147,6 +153,13 @@ export const Config: Schema<Config> = Schema.object({
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
+  // Preset names AND custom `NxM` specs must survive validation (a custom
+  // spec is not a fixed union member); junk is normalized to `normal` by
+  // the transform, so every parsed config carries a valid setting.
+  pageMargin: Schema.transform(
+    Schema.string().default('normal'),
+    value => normalizePageMargin(value),
+  ),
   foldTerminalCommand: Schema.boolean().default(false),
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),

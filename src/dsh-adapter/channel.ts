@@ -79,7 +79,7 @@ import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
-import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
 import { BackgroundJobStore, formatJobDuration, type BackgroundJobState, type BackgroundJobStatus, type JobsRuntime } from './jobs.js'
@@ -865,6 +865,12 @@ export interface Channel {
    *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
    *  nothing). */
   readonly scrollGutter: ScrollGutterMode
+  /** Root page inset (settings `dsh-tui.pageMargin`): a preset name
+   *  (`none` / `slim` / `normal` (default) / `roomy`) or a custom `NxM`
+   *  spec (columns per side × rows top/bottom) inset the whole UI from the
+   *  terminal edges — terminals without their own viewport padding (bare
+   *  WSL, tmux, SSH) otherwise hug the screen border. */
+  readonly pageMargin: PageMarginSetting
   /** Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
    *  collapse a multi-line command title to its first line + count hint. */
   readonly foldTerminalCommand: boolean
@@ -1365,6 +1371,8 @@ export interface ChannelState {
   toolBackground: ToolBackground
   /** Transcript gutter mode (see the public Channel type). */
   scrollGutter: ScrollGutterMode
+  /** Root page inset setting (see the public Channel type). */
+  pageMargin: PageMarginSetting
   /** Terminal-card header folding (see the public Channel type). */
   foldTerminalCommand: boolean
   /** Session-name chip on the prompt border (see the public Channel type). */
@@ -1383,6 +1391,8 @@ export interface ChannelState {
   setToolBackground(background: ToolBackground): void
   /** Apply a transcript gutter mode change. */
   setScrollGutter(mode: ScrollGutterMode): void
+  /** Apply a root page-inset setting change (drives the PageMargin box). */
+  setPageMargin(setting: PageMarginSetting): void
   /** Apply a terminal-card header folding change. */
   setFoldTerminalCommand(enabled: boolean): void
   /** Apply a prompt session-name chip change. */
@@ -1962,6 +1972,8 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
     scrollGutter?: ScrollGutterMode
+    /** Root page inset setting; default `normal` (settings `dsh-tui.pageMargin`). */
+    pageMargin?: PageMarginSetting
     /** Terminal-card header folding; default off (settings
      *  `dsh-tui.foldTerminalCommand`). */
     foldTerminalCommand?: boolean
@@ -3666,6 +3678,7 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
+    pageMargin: normalizePageMargin(options.pageMargin),
     foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true,
     expandEditor: options.expandEditor !== false,
@@ -5533,6 +5546,12 @@ export function createChannel(
       const normalized = normalizeScrollGutter(mode)
       if (normalized === state.scrollGutter) return
       state.scrollGutter = normalized
+      state.emit()
+    },
+    setPageMargin(setting) {
+      const normalized = normalizePageMargin(setting)
+      if (normalized === state.pageMargin) return
+      state.pageMargin = normalized
       state.emit()
     },
     setFoldTerminalCommand(enabled) {

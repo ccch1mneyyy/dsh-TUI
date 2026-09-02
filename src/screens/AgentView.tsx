@@ -579,13 +579,13 @@ export function AgentView({
         <Box flexShrink={0}>
           <Text color="remember" bold>{` ${t('agentview-help-title')}`}</Text>
         </Box>
-        <Divider width={columns} />
+        <Divider bleed />
         <Box flexGrow={1} flexShrink={1}>
           {t('agentview-help').split('\n').map((line, index) => (
             <Text key={index} dimColor>{` ${line}`}</Text>
           ))}
         </Box>
-        <Divider width={columns} />
+        <Divider bleed />
         <Box flexShrink={0}>
           <Text dimColor italic><HintLine text={t('agentview-hint-help')} /></Text>
         </Box>
@@ -615,7 +615,7 @@ export function AgentView({
         </Box>
       )}
       {ruleBudget > 0 && (<Box flexShrink={0}>
-        <Divider width={columns} />
+        <Divider bleed />
       </Box>)}
 
       {approvalVisible && (
@@ -729,7 +729,7 @@ export function AgentView({
       )}
 
       {ruleBudget > 1 && (<Box flexShrink={0}>
-        <Divider width={columns} />
+        <Divider bleed />
       </Box>)}
       <Box flexShrink={0}>
         <Text dimColor italic>

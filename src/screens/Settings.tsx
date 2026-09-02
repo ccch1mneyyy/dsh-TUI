@@ -785,7 +785,9 @@ export function Settings({
         ))}
       </ink-box>
       <Box flexGrow={1} />
-      <Divider />
+      {/* Page-level rule: full-bleed to the terminal edges (text above and
+          below keeps the page margin — the divider is structural chrome). */}
+      <Divider bleed />
       <Text color={notice?.tone === 'error' ? 'error' : 'success'}>
         {notice === undefined ? ' ' : `${notice.tone === 'error' ? MULTIPLICATION_X : TICK} ${notice.text}`}
       </Text>
