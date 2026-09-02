@@ -2,7 +2,7 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.1.2-alpha.2) plus older lines kept in backward
+ * current primary (0.1.2-alpha.4) plus older lines kept in backward
  * compatibility across the 0.1.1 and 0.1.0 release families. Every official
  * package this adapter touches is blessed here; anything else must go
  * through upstream channels or the adapter, never the UI.
@@ -16,19 +16,21 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.1.2-alpha.2'
+export const UPSTREAM_VALIDATED_VERSION = '0.1.2-alpha.4'
 
 /**
  * Every upstream prerelease line the adapter has been validated against,
  * oldest first.
  *
- * 0.1.2-alpha.2 = primary; 0.1.1-rc.2 and rc.1 are compatibility lines
- * (install- and type-level compatibility); 0.1.0-rc.8 = previous family
- * (full CI coverage); 0.1.0-rc.7 = full CI coverage as well; 0.1.0-rc.6 =
- * legacy line (install- and type-level compatibility, feature surface may
- * lack later additions — new features must degrade gracefully there).
- * The peer range in package.json is deliberately wider than this list: an
- * install on an older or newer line is allowed but reports drift at boot.
+ * 0.1.2-alpha.4 = primary (Session.snapshotEvents() API, alpha.4 dropped the
+ * `events` getter); 0.1.2-alpha.2 = previous primary; 0.1.1-rc.2 and rc.1 are
+ * compatibility lines (install- and type-level compatibility); 0.1.0-rc.8 =
+ * previous family (full CI coverage); 0.1.0-rc.7 = full CI coverage as well;
+ * 0.1.0-rc.6 = legacy line (install- and type-level compatibility, feature
+ * surface may lack later additions — new features must degrade gracefully
+ * there). The peer range in package.json is deliberately wider than this
+ * list: an install on an older or newer line is allowed but reports drift at
+ * boot.
  */
 export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.1.0-rc.6',
@@ -37,6 +39,7 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.1.1-rc.1',
   '0.1.1-rc.2',
   '0.1.2-alpha.2',
+  '0.1.2-alpha.4',
 ] as const
 
 /**
