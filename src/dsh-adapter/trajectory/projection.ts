@@ -13,7 +13,7 @@
  *
  * ## Incrementality
  *
- * `agent.session.events` is an immutable snapshot whose element objects are
+ * `agent.session.snapshotEvents()` is an immutable snapshot whose element objects are
  * frozen at append and REUSED until the next append. {@link extendTrajectory}
  * exploits exactly that: when the incoming snapshot prefix-extends the one the
  * previous build consumed — proven by *object identity* at the previous last
