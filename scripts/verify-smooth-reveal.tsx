@@ -333,10 +333,20 @@ console.log('--- C: component contracts ---')
   await withTerminal(
     () => <AssistantToolUseMessage tool={runningTool} addMargin={false} verbose={false} smoothReveal fresh />,
     async (screen, rerender) => {
-      await sleep(160)
-      const early = screen()
-      check(early.includes('old line 0'), 'C2 running card: body head visible early', early)
-      check(!early.includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', early)
+      // Mid-reveal must be SAMPLED, not slept past: CI tick cadence can
+      // finish a short body inside one 160ms window, but the FIRST sample
+      // where the head is visible always lands inside the reveal window on
+      // any machine speed (the cursor starts at zero and the first tick
+      // only lands ~50ms after mount).
+      let early: string | null = null
+      const c2Deadline = Date.now() + 3000
+      while (Date.now() < c2Deadline && early === null) {
+        const sample = screen()
+        if (sample.includes('old line 0')) early = sample
+        else await sleep(10)
+      }
+      check(early !== null, 'C2 running card: body head visible early', early ?? 'timeout')
+      check(early !== null && !early.includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', early ?? 'timeout')
       await sleep(CATCHUP_SLEEP_MS)
       check(screen().includes('lines (ctrl+o to expand)'), 'C2 running card: body complete after catch-up')
       // C3: result arriving mid/after reveal snaps complete.
@@ -355,8 +365,17 @@ console.log('--- C: component contracts ---')
           revealGeneration={2}
         />,
       )
-      await sleep(160)
-      check(!screen().includes('lines (ctrl+o to expand)'), 'C4 reused call id reveals in a new generation')
+      // Same sampling discipline as C2: the rerender recreates the cursor
+      // at zero, so the first sample where the new body head is showing
+      // (and the settled marker is gone) is inside the fresh reveal.
+      let midRegen: string | null = null
+      const c4Deadline = Date.now() + 3000
+      while (Date.now() < c4Deadline && midRegen === null) {
+        const sample = screen()
+        if (sample.includes('old line 0') && !sample.includes('settled-result-marker')) midRegen = sample
+        else await sleep(10)
+      }
+      check(midRegen !== null && !midRegen.includes('lines (ctrl+o to expand)'), 'C4 reused call id reveals in a new generation', midRegen ?? 'timeout')
       await sleep(CATCHUP_SLEEP_MS)
       check(screen().includes('lines (ctrl+o to expand)'), 'C4 new-generation tool reveal completes')
     },
