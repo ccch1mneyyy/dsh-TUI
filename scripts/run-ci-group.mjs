@@ -417,6 +417,11 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// 开屏鲸鱼三选一（classic 组合开场/heart/sleep）：帧表完整性（22 帧
+// 含 heart/sleep 新调色）、序列合法性（standard 起止/纯自家行为帧、
+// classic 仍捆绑眨眼+喷水+摆尾）、随机选取 API 覆盖/钳制/每次挂载
+// 独立重掷、LogoV2 渲染冒烟（粉爱心/灰 Z 上屏后落定消失）。
+    ["verify-whale-intro", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-intro.mjs']],
 // 计划退出恢复进入前权限；覆盖延迟切换、会话恢复与未知权限不提权。
     ["verify-plan-exit-restore", ['node', 'scripts/verify-plan-exit-restore.mjs']],
 // 会话切换/清屏卫生：子代理投影（行 map/任务描述队列/仪表盘快照）随
