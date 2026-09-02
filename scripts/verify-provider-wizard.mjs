@@ -1456,5 +1456,39 @@ function oauthStub(behavior = {}) {
     JSON.stringify(pathCalls.mutations))
 }
 
+// 41. disambiguation has no fixed pass cap: a five-row lookalike chain needs
+// FOUR suffix passes (each pass resolves one chain level), and every row must
+// still resolve to its own route afterwards.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['网 (gw-2) (gw-3) (gw-4) (gw-5)'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '链尾' },
+  }, {
+    configured: [
+      { route: 'gw-1', ref: 'G1_API_KEY', shadowed: false, isCatalog: false, displayName: '网', models: ['m1'] },
+      { route: 'gw-2', ref: 'G2_API_KEY', shadowed: false, isCatalog: false, displayName: '网', models: ['m2'] },
+      { route: 'gw-3', ref: 'G3_API_KEY', shadowed: false, isCatalog: false, displayName: '网 (gw-2)', models: ['m3'] },
+      { route: 'gw-4', ref: 'G4_API_KEY', shadowed: false, isCatalog: false, displayName: '网 (gw-2) (gw-3)', models: ['m4'] },
+      { route: 'gw-5', ref: 'G5_API_KEY', shadowed: false, isCatalog: false, displayName: '网 (gw-2) (gw-3) (gw-4)', models: ['m5'] },
+    ],
+  })
+  const outcome = await runProviderWizard(deps)
+  const chainLabels = Object.keys(calls.optionDescriptions['edit-provider'] ?? {})
+  check('41 picker label: five-row chain fully disambiguated (4 passes)',
+    chainLabels.length === 5
+      && chainLabels.includes('网 (gw-1)')
+      && chainLabels.includes('网 (gw-2) (gw-2)')
+      && chainLabels.includes('网 (gw-2) (gw-3) (gw-3)')
+      && chainLabels.includes('网 (gw-2) (gw-3) (gw-4) (gw-4)')
+      && chainLabels.includes('网 (gw-2) (gw-3) (gw-4) (gw-5)'),
+    JSON.stringify(chainLabels))
+  check('41 picker label: chain-tail selection edits the right route',
+    outcome === 'updated'
+      && eq(calls.mutations, [['gw-5', [{ op: 'set', path: ['displayName'], value: '链尾' }]]]),
+    JSON.stringify(calls.mutations))
+}
+
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)
 process.exit(failed === 0 ? 0 : 1)

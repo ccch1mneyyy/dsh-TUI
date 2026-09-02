@@ -1013,7 +1013,7 @@ const dict = {
   'provider-q-route-id-detail': { zh: '小写字母开头，可含数字与连字符，如 my-gateway', en: 'Lowercase letter first, digits and dashes allowed, e.g. my-gateway' },
   'provider-route-id-invalid': { zh: '路由名不合法：须以小写字母开头，仅含小写字母 / 数字 / 连字符', en: 'Invalid route name: must start with a lowercase letter, only lowercase letters / digits / dashes' },
   'provider-q-name': { zh: '给这个服务商起个名字（支持中文）', en: 'Name this provider (Chinese is fine)' },
-  'provider-q-name-detail': { zh: '将作为 /model 里的显示名。纯小写英文名（如 my-gateway）直接用作路由名；含中文 / 大写 / 空格时自动派生一个英文路由名（仅供机器内部使用）', en: 'Shown as the provider name in /model. A lowercase ASCII name (e.g. my-gateway) becomes the route id directly; names with Chinese / capitals / spaces get an auto-derived ASCII route id (internal use only)' },
+  'provider-q-name-detail': { zh: '将作为 /model 里的显示名。符合路由名规则（小写字母开头、仅含小写字母 / 数字 / 连字符，如 my-gateway）的名字直接用作路由名；其余名字自动派生一个英文路由名（仅供机器内部使用）', en: 'Shown as the provider name in /model. A name that is already a valid route id (lowercase letter first, then lowercase letters / digits / dashes, e.g. my-gateway) becomes the route id directly; other names get an auto-derived ASCII route id (internal use only)' },
   'provider-name-required': { zh: '名字不能为空', en: 'Name cannot be empty' },
   'provider-line-name': { zh: '显示名：{{name}}', en: 'Display name: {{name}}' },
   'provider-q-apikey': { zh: '输入 API key', en: 'Enter the API key' },

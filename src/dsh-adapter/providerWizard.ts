@@ -563,12 +563,15 @@ async function runEditWizard(
   // be globally unique (the pick is matched back by label): any collision —
   // two routes sharing a display name, or a display name literally looking
   // like another row's suffixed label — gets a route suffix; routes are
-  // unique, so re-suffixing the still-colliding rows always terminates.
+  // unique, so re-suffixing the still-colliding rows always terminates. Each
+  // pass resolves one level of a lookalike chain, and such a chain is at most
+  // labeled.length rows deep, so that many passes always suffice (the loop
+  // still breaks early once no duplicates remain).
   const labeled = configured.map(provider => ({
     provider,
     label: provider.displayName ?? provider.route,
   }))
-  for (let guard = 0; guard < 3; guard += 1) {
+  for (let guard = 0; guard < labeled.length; guard += 1) {
     const counts = new Map<string, number>()
     for (const row of labeled) counts.set(row.label, (counts.get(row.label) ?? 0) + 1)
     const duplicates = new Set([...counts].flatMap(([label, n]) => n > 1 ? [label] : []))
