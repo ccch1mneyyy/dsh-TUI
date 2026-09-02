@@ -149,7 +149,7 @@ const BASE = {
     check('无名册时旧 preset JSON 保持 code', parsePresetPref(readFileSync(file, 'utf8')) === 'code')
     check('无名册时读取旧 preset 保持 code', readPresetPref(dir) === 'code')
     check('读取本身不做不可逆改写', JSON.parse(readFileSync(file, 'utf8')).preset === 'code')
-    check('alpha 名册解析后迁移为 ptc', migratePresetPref('code', 'ptc', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'ptc')
+    check('0.1.2 名册解析后迁移为 ptc', migratePresetPref('code', 'ptc', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'ptc')
     check('rc 写入 code 仍保存 code', writePresetPref('code', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'code')
     check('自定义 preset id 保持不变', parsePresetPref(JSON.stringify({ preset: 'liangshen' })) === 'liangshen')
   } finally {

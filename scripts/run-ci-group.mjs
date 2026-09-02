@@ -406,6 +406,7 @@ const GROUPS = {
 // abort 并等压缩落定再 fork 快照（后台提交 checkpoint = "压缩失败后换模型
 // 丢上下文"事故根因）；persistence 类失败与通用失败分开提示。
     ["verify-compact-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-compact-switch.tsx']],
+    ["verify-live-session", ['node', '--import', 'tsx/esm', 'scripts/verify-live-session.ts']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
 // ● 前缀、内容为空的行。

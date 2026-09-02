@@ -23,7 +23,7 @@ import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
-import { ensureLegacySessionEventTypes } from './compat/index.js'
+import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
@@ -302,7 +302,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // user-interaction config row does; a bare plugin mount creates it on
   // this context), then expose the model-facing tool before resolving the
   // agent so per-step assembly includes ask_user_question. rc.2's provider
-  // seat is registered below; the alpha line's agent-aware waterfall needs the
+  // seat is registered below; the 0.1.2 line's agent-aware waterfall needs the
   // channel owner and is therefore registered immediately after the channel
   // is created. Optional-service access goes through `ctx.get`, not the
   // inject proxy.
@@ -1264,7 +1264,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // event type), and its internal log-length memo skips appends from any
     // session other than the active ask's, so no agent filtering is needed
     // here. The firehose fires post-commit, after the event entered
-    // session.events, so the recheck sees the settled result.
+    // the live session log, so the recheck sees the settled result.
     ctx.on('session/event', (_session, event) => approvalStore.noteSessionEvent(event))
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
@@ -1672,7 +1672,7 @@ async function resolveAgent(
         agent: resumed.agent,
         handle: resumed,
         agentPreset: composed.agentPreset,
-        route: resumeRoute ?? recordedModelRoute(resumed.agent.session.events),
+        route: resumeRoute ?? recordedModelRoute(snapshotLiveSessionEvents(resumed.agent.session)),
       }
     } catch (error) {
       // A launch-time --resume is an explicit request: silently substituting a
@@ -1782,7 +1782,7 @@ export function isExitResumable(deps: {
   const agent = deps.liveAgent ?? deps.startupAgent
   return (
     deps.pendingCount > 0 ||
-    agent.session.events.some(
+    snapshotLiveSessionEvents(agent.session).some(
       event => event.type === 'user/message' && event.data.source.kind === 'user',
     )
   )

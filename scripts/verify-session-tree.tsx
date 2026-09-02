@@ -183,6 +183,30 @@ function family() {
   )
 }
 {
+  const rootEvents = rootLog().slice(0, 8)
+  const detachedEvents = [
+    ...rootEvents,
+    turnStart(8, 1), userMsg(9, 'unknown-cut-child'), turnEnd(10, 1, { kind: 'completed' }),
+  ]
+  const data = tree.buildSessionTree(
+    [
+      { id: 'R-unknown', createdAt: 1, events: rootEvents, live: false, tailComplete: true },
+      {
+        id: 'F-unknown', createdAt: 2, parentSession: 'R-unknown',
+        events: detachedEvents, live: true, tailComplete: true,
+      },
+    ] as any,
+    'F-unknown',
+  )
+  check(
+    'buildSessionTree: exact cut 缺失时切断无法证明的 parent edge',
+    data.roots.length === 2
+      && data.activePath.has('F-unknown:9')
+      && !data.activePath.has('R-unknown:1'),
+    `roots=${data.roots.length}`,
+  )
+}
+{
   const data = family()
   check('buildSessionTree: 单根（R）', data.roots.length === 1)
   check('buildSessionTree: live 叶在 F1 链尾', data.activeLeafId === 'F1:10', data.activeLeafId ?? '')
@@ -271,6 +295,187 @@ function family() {
     )
     const missing = readSessionEventsFromLog('session-nosuch')
     check('reader: 不存在的日志返回 undefined', missing === undefined)
+
+    // alpha.4 的 list/listSnapshots 只给逻辑 header（isSeeded），精确 cut
+    // 留在 JSONL 物理 header 或 non-file inspect 结果。用真实 channel tree
+    // 锁住两条路径；同 cwd 但不在当前 family 的 U 不能触发 locate/inspect。
+    const { createChannel } = await import('../src/dsh-adapter/channel.js')
+    const { readInheritedCut } = await import('../src/dsh-adapter/sessions/header.js')
+    const coldCwd = '/tmp/dsh-tree-alpha4-cold'
+    const rootEvents: Ev[] = [
+      title(0, 'cold inherited title'),
+      turnStart(1, 0),
+      userMsg(2, 'cold-root-question'),
+      assistantMsg(3, 0, 0, 'cold-root-answer'),
+      turnEnd(4, 0, { kind: 'completed' }),
+      turnStart(5, 1),
+      userMsg(6, 'cold-root-dead-question'),
+      assistantMsg(7, 1, 0, 'cold-root-dead-answer'),
+      turnEnd(8, 1, { kind: 'completed' }),
+    ]
+    const f1Events: Ev[] = [
+      ...rootEvents.slice(0, 5),
+      turnStart(5, 1),
+      userMsg(6, 'f1-cold-question'),
+      assistantMsg(7, 1, 0, 'f1-cold-answer'),
+      turnEnd(8, 1, { kind: 'completed' }),
+    ]
+    const currentEvents: Ev[] = [
+      ...f1Events,
+      turnStart(9, 2),
+      userMsg(10, 'current-question'),
+      assistantMsg(11, 2, 0, 'current-answer'),
+      turnEnd(12, 2, { kind: 'completed' }),
+    ]
+    const logicalHeaders = [
+      { version: 0, id: 'R', createdAt: 1, cwd: coldCwd, isSeeded: false },
+      { version: 0, id: 'F1', createdAt: 2, cwd: coldCwd, isSeeded: true, parentSession: 'R' },
+      { version: 0, id: 'C', createdAt: 3, cwd: coldCwd, isSeeded: true, parentSession: 'F1' },
+      { version: 0, id: 'U', createdAt: 4, cwd: coldCwd, isSeeded: false },
+    ]
+    const writePhysical = (id: string, header: Record<string, unknown>, events: readonly Ev[]): string => {
+      const sessionDir = join(root, 'ws-cold', id)
+      mkdirSync(sessionDir, { recursive: true })
+      const path = join(sessionDir, 'session.jsonl.zstd')
+      const records = [header, ...events]
+      writeFileSync(path, Buffer.concat(records.map(record =>
+        zstdCompressSync(Buffer.from(JSON.stringify(record) + '\n')),
+      )))
+      return path
+    }
+    const paths = new Map([
+      ['R', writePhysical('R', {
+        type: 'session', version: 0, id: 'R', createdAt: 1, cwd: coldCwd,
+      }, rootEvents)],
+      ['F1', writePhysical('F1', {
+        type: 'session', version: 0, id: 'F1', createdAt: 2, cwd: coldCwd,
+        parentSession: 'R', seedLength: 5,
+      }, f1Events)],
+    ])
+    const makeLiveAgent = () => ({
+      id: 'agent-current',
+      status: 'idle',
+      session: {
+        id: 'C',
+        seq: currentEvents.length,
+        header: {
+          version: 0, id: 'C', createdAt: 3, cwd: coldCwd,
+          isSeeded: true, parentSession: 'F1',
+        },
+        inheritedEventCount: 9,
+        snapshotEvents: () => currentEvents,
+        requestHeader: () => undefined,
+        append: () => undefined,
+      },
+      ctx: { on: () => () => {} },
+      followup: () => undefined,
+      steer: () => undefined,
+      inbox: { remove: () => true },
+    })
+    const makeTreeChannel = (persistence: Record<string, unknown>) => {
+      const services: Record<string, unknown> = { sessionPersistence: persistence }
+      const ctx = {
+        on: () => () => {},
+        get: (name: string) => services[name],
+        logger: { warn: () => undefined },
+      }
+      return createChannel(ctx as never, makeLiveAgent() as never, {
+        model: 'model',
+        cwd: coldCwd,
+        provider: 'provider',
+        activity: false,
+      })
+    }
+    const assertColdTree = (name: string, data: Awaited<ReturnType<ReturnType<typeof makeTreeChannel>['buildSessionTree']>>) => {
+      const flat = data === null ? [] : tree.flattenTree(data.roots, data.activeLeafId)
+      const rootQuestionCopies = flat.filter(row => row.node.entry?.text.includes('cold-root-question') === true).length
+      check(
+        `${name}: inherited prefix dedup + exact active anchors`,
+        data !== null
+          && rootQuestionCopies === 1
+          && data.activePath.has('R:2')
+          && data.activePath.has('R:3')
+          && !data.activePath.has('R:6')
+          && data.activePath.has('F1:6')
+          && data.activePath.has('F1:7')
+          && data.activePath.has('C:10')
+          && data.activeLeafId === 'C:11',
+        `copies=${rootQuestionCopies} leaf=${data?.activeLeafId ?? 'null'}`,
+      )
+    }
+
+    const located: string[] = []
+    const fileChannel = makeTreeChannel({
+      list: () => Promise.resolve(logicalHeaders),
+      locate(raw: unknown) {
+        const id = String((raw as { id?: unknown }).id ?? '')
+        located.push(id)
+        const path = paths.get(id)
+        return path === undefined ? { kind: 'jsonl', path: join(root, 'missing', id) } : { kind: 'jsonl', path }
+      },
+    })
+    const fileTree = await fileChannel.buildSessionTree()
+    assertColdTree('cold tree JSONL physical cut', fileTree)
+    check(
+      'cold tree live path keeps inherited session title',
+      fileTree?.sessions.get('C')?.title === 'cold inherited title',
+      fileTree?.sessions.get('C')?.title ?? 'missing',
+    )
+    check('cold tree JSONL does not touch unrelated same-cwd session', !located.includes('U'), located.join(','))
+
+    const inspected: string[] = []
+    const logs = new Map<string, readonly Ev[]>([['R', rootEvents], ['F1', f1Events]])
+    const memoryChannel = makeTreeChannel({
+      list: () => Promise.resolve(logicalHeaders),
+      locate: () => ({ kind: 'memory' }),
+      inspect(id: unknown) {
+        const key = String(id)
+        inspected.push(key)
+        const events = logs.get(key) ?? []
+        return Promise.resolve({
+          events,
+          inheritedEventCount: key === 'F1' ? 5 : 0,
+        })
+      },
+    })
+    const memoryTree = await memoryChannel.buildSessionTree()
+    assertColdTree('cold tree non-file inspect cut', memoryTree)
+    check(
+      'cold tree non-file inspect keeps inherited session title',
+      memoryTree?.sessions.get('F1')?.title === 'cold inherited title',
+      memoryTree?.sessions.get('F1')?.title ?? 'missing',
+    )
+    check('cold tree inspect does not touch unrelated same-cwd session', !inspected.includes('U'), inspected.join(','))
+
+    const unknownMiddleChannel = makeTreeChannel({
+      list: () => Promise.resolve(logicalHeaders),
+      locate: () => ({ kind: 'memory' }),
+      inspect(id: unknown) {
+        const key = String(id)
+        if (key === 'R') return Promise.resolve({ events: rootEvents, inheritedEventCount: 0 })
+        throw new Error('middle log unavailable')
+      },
+    })
+    const unknownMiddleTree = await unknownMiddleChannel.buildSessionTree()
+    const unknownMiddleFlat = unknownMiddleTree === null
+      ? []
+      : tree.flattenTree(unknownMiddleTree.roots, unknownMiddleTree.activeLeafId)
+    check(
+      'cold tree unknown-cut unreadable middle cannot hide child prefix',
+      unknownMiddleTree !== null
+        && unknownMiddleTree.roots.length === 2
+        && unknownMiddleTree.sessions.get('F1')?.unreadable === true
+        && unknownMiddleTree.activePath.has('C:2')
+        && unknownMiddleFlat.some(row => row.node.id === 'C:2'),
+      `roots=${unknownMiddleTree?.roots.length ?? 0} active=${unknownMiddleTree?.activePath.has('C:2') ?? false}`,
+    )
+    check(
+      'cold tree rejects invalid inherited cuts',
+      readInheritedCut({ seedLength: -1 }) === undefined
+        && readInheritedCut({ seedLength: 0.5 }) === undefined
+        && readInheritedCut({ seedLength: -0 }) === undefined
+        && readInheritedCut({ inheritedEventCount: Number.MAX_SAFE_INTEGER + 1 }) === undefined,
+    )
   } finally {
     delete process.env.DSH_TUI_SESSION_ROOT
     rmSync(root, { recursive: true, force: true })

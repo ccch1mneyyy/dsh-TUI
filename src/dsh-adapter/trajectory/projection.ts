@@ -13,8 +13,8 @@
  *
  * ## Incrementality
  *
- * `agent.session.events` is an immutable snapshot whose element objects are
- * frozen at append and REUSED until the next append. {@link extendTrajectory}
+ * The adapter supplies an immutable live-session snapshot whose element
+ * objects are frozen at append and REUSED until the next append. {@link extendTrajectory}
  * exploits exactly that: when the incoming snapshot prefix-extends the one the
  * previous build consumed — proven by *object identity* at the previous last
  * index, never by `seq` arithmetic, which a fork can rewind — only the new
@@ -33,7 +33,7 @@
  * Storage-level chunk packing (`text-chunks`, `reasoning-chunks`,
  * `tool-call-chunks`) is a durable *encoding*, not an event vocabulary: the
  * persistence reader expands those rows back into `assistant/chunk` events
- * before they reach `Session.events`, so this fold only ever sees the
+ * before they reach the logical Session log, so this fold only ever sees the
  * expanded form.
  */
 
