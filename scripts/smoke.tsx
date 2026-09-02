@@ -425,10 +425,13 @@ class FakeStdin extends PassThrough {
   }
 }
 
+/** Stable empty agent-view snapshot: useSyncExternalStore loops when
+ *  getSnapshot returns a fresh reference per call. */
+const EMPTY_AGENT_VIEW_ROWS = []
+
 const channel = {
   version: 0,
-  rows: [
-    { id: 0, kind: 'user', text: 'hello' },
+  rows: [    { id: 0, kind: 'user', text: 'hello' },
     { id: 1, kind: 'assistant', text: '**hi** from markdown with a list:\n- one\n- two\n\n| A | B |\n| --- | --- |\n| 1 | x |', time: Date.parse('2026-01-02T03:04:05Z') },
     {
       id: 2,
@@ -461,6 +464,11 @@ const channel = {
   mode: { id: 'default', plan: false },
   modeIndex: 0,
   cycleMode() {},
+  // Agent-view seams (the Chat screen subscribes on mount; the prompt
+  // footer's "← N agents" hint reads the rows).
+  agentViewRows: () => EMPTY_AGENT_VIEW_ROWS,
+  subscribeAgentView: () => () => {},
+  backgroundCurrent: () => Promise.resolve(false),
   turnStart: 0,
   lastUserText: 'hello',
   pending: [],

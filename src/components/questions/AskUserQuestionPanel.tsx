@@ -39,6 +39,10 @@ export type AskUserQuestionPanelProps = {
      *  (local wizards, e.g. /provider). Ignored when there are no options —
      *  a text-only question would otherwise be unanswerable. */
     readonly hideCustomInput?: boolean
+    /** Pre-checked option labels (multi-select) / default-focused option
+     *  (single-select) shown on first display, before any saved draft — e.g.
+     *  the models already enabled on a provider being edited. */
+    readonly defaultSelected?: readonly string[]
     /** Presentation intent tag (rc.6): 'plan-review' switches to the
      *  decision-card layout; an intent never changes the protocol. */
     readonly intent?: { readonly kind: 'plan-review'; readonly approve: string }
@@ -97,7 +101,12 @@ export function AskUserQuestionPanel({
   const { rows: terminalRows } = useTerminalSize()
   /** Rows: the real options plus the inline input row at the tail. */
   const rowCount = options.length + (hideCustomInput ? 0 : 1)
-  const initialSelected = initialDraft?.selected ?? []
+  // A saved draft wins over the wizard's default selection (returning to a
+  // question must restore exactly what the user last had, including an
+  // explicit empty answer); the defaults only apply on first display.
+  const initialSelected = initialDraft !== undefined
+    ? initialDraft.selected
+    : question.defaultSelected ?? []
   const initialCustom = initialDraft?.custom ?? ''
   const selectedIndices = options
     .map((option, index) => initialSelected.includes(option.label) ? index : -1)

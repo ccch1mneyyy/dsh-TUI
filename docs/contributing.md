@@ -16,6 +16,10 @@
   标签，按未经审阅处理。
 - **提交 PR**：base 指向 `main`。保持改动聚焦——一个 PR 只做一个逻辑改动，
   标题用中文或中英对照，描述写清动机、改动点与验证方式。
+  **改动代码的 PR 必须关联 issue**：描述里写一行 `Closes #<issue 号>`，或用
+  侧边栏 Development 关联。CI 的 `issue-link` 组会检查，没有关联即判失败。
+  纯文档改动不需要（与编译、回归同一条分流）；维护者的 release、回滚、CI
+  急修等确实无 issue 可关联的场合，打 `no-issue-needed` 标签豁免。
 - **请求 review 前先跑验证矩阵**：CI 运行的就是下面这些命令。
 - 新功能应附带或扩展一个聚焦的回归脚本。
 
@@ -198,6 +202,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 鼠标指针事件管线（滚轮坐标/修饰位、点击/hover 派发、越界 clamp、指针态重置） | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover 事件性能（兴趣边界完整、无兴趣矩形快路径、帧边界/多 root 失效） | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | 输入框鼠标选区编辑（拖选/Shift+click/双击选词/删除替换/Esc 分层/Ctrl+C 复制、CJK 宽字符与 fold 侧钳制） | `node --import tsx/esm scripts/verify-input-selection.tsx` |
+| 退出漏斗终端清理（finishExit：闩锁→stdout 队列 barrier→同步写 DISABLE/清理块→raw 态 settle→finally 恢复 cooked） | `node --import tsx/esm scripts/verify-exit-mouse-disable-order.tsx`、`node --import tsx/esm scripts/verify-exit-mouse-residue.tsx`、`node --import tsx/esm scripts/verify-exit-mouse-cleanup.tsx` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭
@@ -290,7 +295,11 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
   诊断。用 opt-in 的 stderr/调试路径（如 `DSH_TUI_DEBUG`）或既有
   `DSH_TUI_RENDER_LOG` 帧捕获。
 - 在成功、错误、中断与收尾时都保持 raw 模式、光标、alt-screen、同步输出、
-  鼠标、焦点与终端查询的清理。
+  鼠标、焦点与终端查询的清理。raw 模式的物理恢复（`setRawMode(false)`）
+  只归退出漏斗的 conclude 阶段（`finishExit` → `concludeShutdown`）：
+  error boundary 与 Ctrl+C 路径不得自行释放；React 错误解卷若在闩锁前
+  已释放，`beginShutdown` 会重新获取（仅 tty 本地模式，不重发启用序列），
+  保证 settle 窗在 raw 态度过（#522）。
 - 避免渲染期无界集合或每 token/每帧分配。流式会话长命，本仓库对先前的 OOM
   与滚动性能失败有明确回归。
 - 布局改动不得让 transcript 内容挤掉输入行与状态行。改动相关路径时演练

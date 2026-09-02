@@ -21,7 +21,8 @@ import { i18nDict, type I18nText } from '../src/i18n.js'
 //   logo-drift-*  src/components/LogoV2.tsx        tOr(`logo-drift-${kind}`)
 //   tree-filter-* src/screens/SessionTree.tsx      t(`tree-filter-${filter}`)
 //   tree-kind-*   src/screens/SessionTree.tsx      t(`tree-kind-${entry.kind}`)
-const DYNAMIC_PREFIXES = ['cmd-desc-', 'traj-sort-', 'traj-proj-', 'logo-drift-', 'tree-filter-', 'tree-kind-']
+//   preset-name-* / preset-desc-*   src/dsh-adapter/channel.ts   tOr(`preset-name-${preset.id}`) — built-in preset display text
+const DYNAMIC_PREFIXES = ['cmd-desc-', 'traj-sort-', 'traj-proj-', 'logo-drift-', 'tree-filter-', 'tree-kind-', 'preset-name-', 'preset-desc-']
 
 let failures = 0
 function fail(msg: string) {

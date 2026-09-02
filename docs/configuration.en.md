@@ -90,6 +90,10 @@ Usage rules:
 
 - `/preset` opens the picker.
 - `/preset <id>` selects directly; `/preset status` reports the current state.
+- Picker names and descriptions come verbatim from each preset's `preset.yml`
+  (written in Chinese). Under the `en` UI language (`/lang en`), the built-in
+  presets (`standard` / `minimal` / `code` / `cordis` / `liangshen`) show
+  localized English names and descriptions; custom presets are shown as-is.
 - A blank session can switch in place. Once a conversation has started, the
   official blank-only rule stores the choice as the new default for `/new` or
   the next launch.
@@ -186,10 +190,33 @@ the transition for older launchers.
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
 Do not attach it to a public issue without reviewing and redacting it.
 
-## `/provider`: add a model provider at runtime
+## `/provider`: manage model providers at runtime
 
-`/provider` opens an interactive wizard that adds a model provider without a
-restart:
+`/provider` opens an interactive wizard that manages model providers without a
+restart. The first step picks an action:
+
+- **Add a new provider**: built-in catalog or custom API endpoint (below).
+- **Edit an existing provider**: pick one of the routes your **user settings
+  layer** carries (providers inherited from the composition base cannot be
+  removed from the user layer, so they stay out of the edit/delete menu),
+  then edit through a menu. Built-in routes offer **Edit API Key**, **Edit
+  model list**, and **Delete this provider**; custom endpoints additionally
+  get **Edit Base URL** and **Edit wire protocol** (a built-in route stays
+  built-in even when its profile carries an explicit `api` override). Any
+  edit patches only the picked field in place and exits immediately — no
+  further confirmation; every other profile field (including keys the TUI
+  does not model, like `headers`, `timeoutMs`, `retryPolicy`) never enters
+  the write and survives untouched. "Edit model list" pre-checks the models
+  you already enabled, and the stored entries of kept models are preserved
+  verbatim too. "Delete this provider" is the one exception: it asks for
+  confirmation, then removes the profile and the API key — an
+  environment-provided key, or one shared with another provider, is kept
+  (only the configuration is deleted); if the profile was removed but the
+  key cleanup failed, the wizard says so and points you at the store
+  (the provider itself is gone).
+
+The **add** branch offers the following sources (the third appears only while
+the bundled dsh-auth plugin is mounted):
 
 - **Built-in provider**: pick a catalog route (openai, anthropic, deepseek, …)
   from `llm.listConfigurableProviders()`; only the API key is required. The
@@ -199,22 +226,33 @@ restart:
   protocol (`openai-completions` / `openai-responses` / `anthropic-messages`).
   The wizard probes the endpoint with the draft credential and offers the
   advertised models for selection (manual id entry as fallback).
+- **Subscription sign-in (OAuth)**: this option appears only while the bundled
+  dsh-auth plugin is mounted. Pick a subscription account (ChatGPT / Claude /
+  Grok, …) from the list and sign in through the browser / device-code flow —
+  **no API key**. Every account carries a masked status line (signed in, with
+  the token expiry, or expired); an already-signed-in account offers **Sign in
+  again** (switch accounts or refresh the credential) and **Sign out** (remove
+  the locally stored OAuth credential). Credential storage and route
+  registration belong to dsh-auth; `/auth status|login|logout` shares the same
+  source. Without the plugin the option is absent and the wizard behaves
+  exactly as before; with the plugin mounted but no OAuth-capable provider,
+  the wizard says so.
 
-What gets written (on a profile start, where dsh-base provides the
+What gets written/removed (on a profile start, where dsh-base provides the
 settings/credentials services):
 
 | Artifact | Location |
 | --- | --- |
-| Provider profile | `llm-pi-ai.providers.<route>` in `~/.dsh/settings.yaml`; the route registers on write |
+| Provider profile | `llm-pi-ai.providers.<route>` in `~/.dsh/settings.yaml`; the route registers on write and unregisters on delete |
 | API key | `~/.dsh/.credentials.yaml` (mode 0600), referenced as `<ROUTE>_API_KEY` |
 
 Key answers render as `••••••` in the transcript; when the process environment
 already provides the same-named variable, the write is skipped and the value
-resolves from the environment at request time. The configuration is shared
-with the dsh web UI's Models settings page (same settings section). A bare
-`dsh --config cordis.yml` start lacks these services and `/provider` reports
-itself unavailable. After adding, run `/model` to switch to the new route's
-models.
+resolves from the environment at request time (deletion never touches it). The
+configuration is shared with the dsh web UI's Models settings page (same
+settings section). A bare `dsh --config cordis.yml` start lacks these services
+and `/provider` reports itself unavailable. After adding or editing, run
+`/model` to switch to the route's models.
 
 ## Composition constraints
 

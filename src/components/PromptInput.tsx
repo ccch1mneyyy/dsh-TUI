@@ -268,6 +268,13 @@ export interface PromptController {
   hasText(): boolean
   clear(): void
   /**
+   * Append `text` at the end of the input (external injection channel; see
+   * dsh-adapter/inject-channel.ts). Unlike `fillText`, which replaces the
+   * whole value, this accumulates — matching OpenCode's `tui.prompt.append`
+   * so repeated editor sends build one prompt. Returns the resulting value.
+   */
+  append(text: string): string
+  /**
    * Copy the active mouse selection to the system clipboard (OSC 52 + the
    * native fallback) and KEEP the selection for further editing. Returns
    * true when a selection existed and consumed the key; Chat's Ctrl+C
@@ -278,8 +285,7 @@ export interface PromptController {
   toggleVim(): boolean
   /** True while vim mode is on (either submode). Esc belongs to vim then —
    *  Chat's working-turn Esc interrupt must yield in BOTH submodes. */
-  vimActive(): boolean
-}
+  vimActive(): boolean}
 
 export interface PromptInputProps {
   channel: Channel
@@ -302,6 +308,17 @@ export interface PromptInputProps {
   onFillConsumed?(): void
   /** Double-tap Esc with an empty input: open the rewind picker (CC rewind). */
   onRewindRequest?(): void
+  /**
+   * CC agent-view parity: ← on an EMPTY prompt backgrounds this session and
+   * opens the agent view (with text, ← moves the caret as usual).
+   */
+  onBackgroundRequest?(): void
+  /**
+   * Background sessions waiting on the user (agent view "needs input" rows
+   * excluding this session); the prompt footer shows the CC-style
+   * "← N agents" hint when provided (hidden when undefined).
+   */
+  backgroundAgentsNeedingInput?: number
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
 }
@@ -346,6 +363,8 @@ export function PromptInput({
   fillText,
   onFillConsumed,
   onRewindRequest,
+  onBackgroundRequest,
+  backgroundAgentsNeedingInput,
   controllerRef,
 }: PromptInputProps) {
   const [themeName] = useTheme()
@@ -471,6 +490,14 @@ export function PromptInput({
         setValue('')
         setCursor(0)
       },
+      append: (text: string) => {
+        const next = valueRef.current + text
+        valueRef.current = next
+        cursorRef.current = next.length
+        setValue(next)
+        setCursor(next.length)
+        return next
+      },
       consumeSelectionCopy: () => {
         const sel = selectionRef.current
         if (!sel) return false
@@ -495,8 +522,7 @@ export function PromptInput({
         vimUndoRef.current = []
         return next
       },
-      vimActive: () => vimEnabledRef.current,
-    }
+      vimActive: () => vimEnabledRef.current,    }
     return () => {
       controllerRef.current = null
     }
@@ -735,7 +761,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.submit(trimmed)
     if (notice) {
       channel.notify(notice, { timeoutMs: 2500 })
@@ -759,7 +785,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.steer(trimmed)
     channel.notify(t('input-interrupted-next'), { timeoutMs: 2500 })
   }
@@ -776,7 +802,7 @@ export function PromptInput({
     historyIndex.current = -1
     setInput('', 0)
     setSelectedCommand(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.submit(trimmed)
     channel.notify(t('input-queued-after-turn'), { timeoutMs: 2500 })
   }
@@ -821,7 +847,7 @@ export function PromptInput({
     setInput('', 0)
     setSelectedCommand(0)
     setFileSelected(0)
-    appendHistory(trimmed)
+    void appendHistory(trimmed)
     channel.notify(t('input-interrupt-immediate'), { timeoutMs: 2500 })
   }
 
@@ -846,7 +872,7 @@ export function PromptInput({
       historyIndex.current = -1
       setInput('', 0)
       setSelectedCommand(0)
-      appendHistory(text.trim())
+      void appendHistory(text.trim())
     }
     return handled
   }
@@ -1353,7 +1379,11 @@ export function PromptInput({
       return
     }
     if (key.upArrow) {
-      if (fileOverlayOpen) {
+      // A history walk owns the arrows until it returns to the draft: a
+      // recalled entry can itself open the @ menu or the slash menu (e.g.
+      // `/model`), and letting the overlay navigate here strands the stashed
+      // draft — Down would cycle menu rows instead of walking back.
+      if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
           index <= 0 ? fileMatches.length - 1 : index - 1,
         )
@@ -1389,7 +1419,7 @@ export function PromptInput({
         setInput(value, prevLineStart + Math.min(cursorColumn(value, cursor), prevLine.length))
         return
       }
-      if (overlayOpen) {
+      if (overlayOpen && historyIndex.current < 0) {
         setSelectedCommand(index =>
           index <= 0 ? suggestions.length - 1 : index - 1,
         )
@@ -1408,7 +1438,8 @@ export function PromptInput({
       return
     }
     if (key.downArrow) {
-      if (fileOverlayOpen) {
+      // Same history-walk ownership as ↑ above.
+      if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
           index >= fileMatches.length - 1 ? 0 : index + 1,
         )
@@ -1467,7 +1498,7 @@ export function PromptInput({
         setInput(value, nextLineStart + Math.min(cursorColumn(value, cursor), nextLine.length))
         return
       }
-      if (overlayOpen) {
+      if (overlayOpen && historyIndex.current < 0) {
         setSelectedCommand(index =>
           index >= suggestions.length - 1 ? 0 : index + 1,
         )
@@ -1499,6 +1530,14 @@ export function PromptInput({
       return
     }
     if (key.leftArrow) {
+      // CC agent-view parity: ← on an EMPTY prompt backgrounds this session
+      // and opens the agent view; with text it moves the caret as usual.
+      // (The command/file overlays both imply non-empty text, so no extra
+      // gate beyond the help menu is needed.)
+      if (value.length === 0 && !helpOpen) {
+        onBackgroundRequest?.()
+        return
+      }
       // Grapheme-step: skip the whole cluster (surrogate pair, ZWJ emoji,
       // combining mark) so the caret never sits inside one. With a
       // selection, collapse to its start edge instead.
@@ -2805,6 +2844,19 @@ export function PromptInput({
           )}
         </Box>
       </EffortInputBorder>
+      {/* CC agent-view footer: "← N agents" when background sessions are
+          waiting on the user, "← for agents" otherwise — the ← affordance's
+          discoverability hint. Only rendered when the Chat screen supplies
+          the count. */}
+      {backgroundAgentsNeedingInput !== undefined && (
+        <Box flexDirection="row" justifyContent="flex-end" paddingRight={2}>
+          <Text dimColor>
+            {backgroundAgentsNeedingInput > 0
+              ? t('input-background-hint-count', { n: backgroundAgentsNeedingInput })
+              : t('input-background-hint-idle')}
+          </Text>
+        </Box>
+      )}
     </Box>
   )
 }

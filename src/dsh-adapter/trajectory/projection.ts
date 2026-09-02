@@ -76,6 +76,13 @@ export interface StepTiming {
 export interface TrajBuild {
   /** The snapshot this build consumed; identity-compared on the next append. */
   readonly source: readonly RawTrajEvent[]
+  /**
+   * Monotonic content revision: bumps by one per consumed event (including
+   * events that only CLOSE or mutate existing nodes in place — the node
+   * array identity and length do not change then, so consumers must key
+   * their memos on this, not on `nodes`).
+   */
+  readonly revision: number
   /** The ledger, in log order, after burst folding. */
   readonly nodes: TrajNode[]
   /** Per-step timing keyed `${turn}:${step}`, for the hotspot aggregate. */
@@ -721,7 +728,7 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
 /** An empty build, used as the identity element and for empty sessions. */
 export function emptyTrajectory(): TrajBuild {
   const state = newState()
-  return { source: [], nodes: [], timing: new Map(), counts: state.counts, state }
+  return { source: [], revision: 0, nodes: [], timing: new Map(), counts: state.counts, state }
 }
 
 /**
@@ -750,14 +757,50 @@ export function extendTrajectory(
       consume(state, nodes, timing, raw[index]!)
     }
     syncRowCount(state, nodes)
-    return { source: raw, nodes, timing, counts: state.counts, state }
+    return { source: raw, nodes, timing, counts: state.counts, state, revision: previous.revision + (raw.length - previous.source.length) }
   }
   const nodes: TrajNode[] = []
   const timing = new Map<string, StepTiming>()
   const state = newState()
   for (const event of raw) consume(state, nodes, timing, event)
   syncRowCount(state, nodes)
-  return { source: raw, nodes, timing, counts: state.counts, state }
+  return { source: raw, nodes, timing, counts: state.counts, state, revision: raw.length }
+}
+
+/**
+ * Incrementally fold a batch of NEW events into a previous build WITHOUT
+ * re-reading the session snapshot — the caller (the channel's event
+ * observer) already holds the appended events, so the O(n) snapshot getter
+ * stays off the token-rate hot path.
+ *
+ * No prefix-identity check: the caller guarantees `appended` continues the
+ * log the build consumed. `source` keeps the last known snapshot reference
+ * (stale by design — nothing re-validates against it on this path; a full
+ * rebuild via {@link extendTrajectory} after a session swap starts from
+ * `emptyTrajectory`).
+ *
+ * Chunk-only batches (pure timing updates) reuse the shared fold state
+ * without cloning the bracket maps — the token-rate path pays O(1).
+ */
+export function extendTrajectoryEvents(
+  previous: TrajBuild,
+  appended: readonly SessionEvent[],
+): TrajBuild {
+  if (appended.length === 0) return previous
+  const nodes = previous.nodes
+  const timing = previous.timing
+  const pureTiming = appended.every(event => (event as { type: string }).type === 'assistant/chunk')
+  const state = pureTiming ? previous.state : cloneState(previous.state)
+  for (const event of appended) consume(state, nodes, timing, event)
+  syncRowCount(state, nodes)
+  return {
+    source: previous.source,
+    nodes,
+    timing,
+    counts: state.counts,
+    state,
+    revision: previous.revision + appended.length,
+  }
 }
 
 /**

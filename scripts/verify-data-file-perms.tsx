@@ -17,7 +17,7 @@
  *
  * 运行：node --import tsx/esm scripts/verify-data-file-perms.tsx
  */
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -47,7 +47,7 @@ try {
   const { logMouseDebug } = await import('../src/utils/debug.js')
   const { writeIndex } = await import('../src/dsh-adapter/sessions/store.js')
 
-  appendHistory('secret user input / sk-test-123')
+  await appendHistory('secret user input / sk-test-123')
   logMouseDebug('mouse arrive', { x: 1 })
   writeIndex(new Map([['s1', {
     derived: {
@@ -63,6 +63,10 @@ try {
   const indexFile = join(dataDir, 'session-index.json')
 
   check('history.jsonl written', readFileSync(historyFile, 'utf8').includes('secret user input'))
+  // 原子替换（复审修复）：写后同目录不得残留 .tmp 中间文件。
+  check('atomic history write leaves no .tmp residue',
+    !readdirSync(dataDir).some(name => name.endsWith('.tmp')),
+    readdirSync(dataDir).join(','))
   check('mouse-debug.log written', readFileSync(mouseLog, 'utf8').includes('mouse arrive'))
   check('history round-trips after perms change', loadHistory().at(0)?.text === 'secret user input / sk-test-123')
   check('session-index.json written', readFileSync(indexFile, 'utf8').includes('secret title'))

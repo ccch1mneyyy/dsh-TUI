@@ -83,6 +83,9 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'export', description: 'Export the conversation to a markdown file' },
   { name: 'btw', description: 'Ask a quick side question without interrupting the conversation' },
   { name: 'trace', description: 'Show the session event trace timeline' },
+  { name: 'agentview', description: 'Open the agent view (all sessions)' },
+  { name: 'bg', description: 'Background this session and open agent view' },
+  { name: 'background', description: 'Background this session and open agent view', tag: 'alias of /bg' },
   // Session / environment
   { name: 'context', description: 'Show loaded context details' },
   { name: 'status', description: 'Show session status' },
@@ -94,6 +97,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
+  { name: 'jobs', description: 'Show background jobs of this session' },
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
   { name: 'preset', description: 'Switch the agent preset (including Liangshen mode)' },
@@ -106,7 +110,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'tokens', description: 'Show session token usage' },
   // Account / policy
   { name: 'balance', description: 'Show DeepSeek account balance' },
-  { name: 'provider', description: 'Add an LLM provider (catalog or custom API endpoint)' },
+  { name: 'provider', description: 'Add, edit or delete an LLM provider (catalog or custom API endpoint)' },
   { name: 'login', description: 'Show API credential status' },
   { name: 'logout', description: 'Clear the API credential' },
   { name: 'add-dir', description: 'Show the filesystem policy scope' },

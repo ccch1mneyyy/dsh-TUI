@@ -3,10 +3,17 @@ import React, { createContext, useEffect, useState } from 'react';
 import { FRAME_INTERVAL_MS } from '../constants.js';
 import { noteFrameCause } from '../geometry-trace.js';
 import { useTerminalFocus } from '../hooks/use-terminal-focus.js';
+import { callWithUpdateOverflowGuard, registerOverflowQuench } from '../update-overflow-guard.js';
 export type Clock = {
   subscribe: (onChange: () => void, keepAlive: boolean) => () => void;
   now: () => number;
   setTickInterval: (ms: number) => void;
+  /**
+   * Pause the clock for `ms` (circuit-breaker quench, see
+   * update-overflow-guard). Animations freeze for the window; no data is
+   * lost — consumers re-read fresh values on the next tick after resume.
+   */
+  suspend: (ms: number) => void;
 };
 export function createClock(tickIntervalMs: number): Clock {
   const subscribers = new Map<() => void, boolean>();
@@ -20,7 +27,9 @@ export function createClock(tickIntervalMs: number): Clock {
     tickTime = Date.now() - startTime;
     noteFrameCause('animation');
     for (const onChange of subscribers.keys()) {
-      onChange();
+      // #185 self-heal: a thrown overflow resets React's nested-update
+      // counter, so absorbing it here drops at most one animation frame.
+      callWithUpdateOverflowGuard('clock.tick', onChange);
     }
   }
   function updateInterval(): void {
@@ -39,7 +48,19 @@ export function createClock(tickIntervalMs: number): Clock {
       interval = null;
     }
   }
-  return {
+  function suspendFor(ms: number): void {
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+    // Resume after the backoff window. unref: a paused clock must never
+    // hold the process open by itself.
+    const resume = setTimeout(() => {
+      updateInterval();
+    }, ms);
+    resume.unref?.();
+  }
+  const clock: Clock = {
     subscribe(onChange, keepAlive) {
       subscribers.set(onChange, keepAlive);
       updateInterval();
@@ -65,8 +86,14 @@ export function createClock(tickIntervalMs: number): Clock {
       if (ms === currentTickIntervalMs) return;
       currentTickIntervalMs = ms;
       updateInterval();
-    }
+    },
+    suspend: suspendFor
   };
+  // Circuit-breaker quench: a sustained #185 oscillation at this tick
+  // pauses the shared clock instead of being absorbed forever (which would
+  // leave the process alive but burning CPU on the oscillation's commits).
+  registerOverflowQuench('clock.tick', ms => clock.suspend(ms));
+  return clock;
 }
 export const ClockContext = createContext<Clock | null>(null);
 const BLURRED_TICK_INTERVAL_MS = FRAME_INTERVAL_MS * 2;

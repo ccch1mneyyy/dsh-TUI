@@ -42,6 +42,13 @@ export interface ApprovalSnapshot {
    * land.
    */
   readonly external?: true
+  /**
+   * The asking agent's session id — `String(channel.agentId)` for the
+   * attached session, something else for a background session's ask (the
+   * agent view parks those too, so unattended sessions surface as
+   * "needs input" instead of hanging on a fail-closed answer).
+   */
+  readonly agentId: string
 }
 
 /**
@@ -54,6 +61,7 @@ interface PendingSnapshot {
   reason?: string
   command?: string
   external?: true
+  agentId: string
 }
 
 /** One queued or active approval ask. */
@@ -203,6 +211,41 @@ export class ApprovalStore {
     return this.snapshotCache
   }
 
+  /**
+   * Session ids of every agent with a parked ask (active plus queued) — the
+   * agent view's "needs input" signal. Deduplicated, in park order.
+   * @returns One id per asking agent, or an empty array when none waits.
+   */
+  pendingAgentIds(): readonly string[] {
+    const ids: string[] = []
+    const seen = new Set<string>()
+    for (const ask of [...(this.active === undefined ? [] : [this.active]), ...this.queue]) {
+      const id = ask.snapshot.agentId
+      if (seen.has(id)) continue
+      seen.add(id)
+      ids.push(id)
+    }
+    return ids
+  }
+
+  /**
+   * The first parked ask's detail for one agent — the agent view's row
+   * summary while it needs input (the question it is blocked on).
+   * @param agentId - The asking session's id.
+   * @returns The ask's reason / gated command / tool name, or undefined
+   *   when the agent has no parked ask.
+   */
+  pendingAgentDetail(
+    agentId: string,
+  ): Pick<ApprovalSnapshot, 'toolName'> & Partial<Pick<ApprovalSnapshot, 'reason' | 'command'>> | undefined {
+    for (const ask of [...(this.active === undefined ? [] : [this.active]), ...this.queue]) {
+      if (ask.snapshot.agentId !== agentId) continue
+      const { toolName, reason, command } = ask.snapshot
+      return { toolName, ...(reason === undefined ? {} : { reason }), ...(command === undefined ? {} : { command }) }
+    }
+    return undefined
+  }
+
   private emit(): void {
     for (const listener of this.listeners) listener()
   }
@@ -306,7 +349,9 @@ export class ApprovalStore {
 
   /**
    * Answerer entry point — called by the `approval/request` waterfall
-   * listener when the ask concerns the agent this TUI owns.
+   * listener for every ask in this process: the attached session's and any
+   * background session's alike, so an unattended session surfaces as
+   * "needs input" instead of failing closed with nobody to answer it.
    * @param req - The approval request (agent, tool, callId, reason, signal).
    * @returns A promise settling with the user's decision, or `'cancelled'`
    *   when the ask is withdrawn or the plugin tears down.
@@ -331,6 +376,7 @@ export class ApprovalStore {
         key: String(++this.seq),
         request: req,
         snapshot: {
+          agentId: String(req.agent.id),
           toolName: req.toolName,
           ...(req.reason !== undefined ? { reason: req.reason } : {}),
           ...(command !== undefined ? { command } : {}),

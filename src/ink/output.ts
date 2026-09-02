@@ -1071,14 +1071,17 @@ function writeLineToScreen(
     if (codePoint !== undefined && codePoint <= 0x1f) {
       // Not recordable: tab expansion is x-relative, ESC handling varies.
       runAlive = false
-      // Tab (0x09): expand to spaces to reach next tab stop
+      // Tab (0x09): expand to spaces at the tab's OWN style, not stylePool.none.
+      // An unstyled space drops the background and is skipped by the diff's
+      // empty-cell optimization, so a tab inside a bg region (code blocks) shows
+      // the terminal default bg — the black indentation of issue #606.
       if (codePoint === 0x09) {
         const tabWidth = 8
         const spacesToNextStop = tabWidth - (offsetX % tabWidth)
         for (let i = 0; i < spacesToNextStop && offsetX < screenWidth; i++) {
           setCellAt(screen, offsetX, y, {
             char: ' ',
-            styleId: stylePool.none,
+            styleId: character.styleId,
             width: CellWidth.Narrow,
             hyperlink: undefined,
           })

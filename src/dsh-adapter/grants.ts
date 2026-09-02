@@ -1,7 +1,7 @@
 /** Live, scoped plugin grant evaluation. */
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, watch as watchFile } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { PermissionRegistry } from '../plugin-spec/types.js'
 import { normalizePermissionScope, permissionScopeCovers } from '../plugin-spec/permission-scope.js'
 import { loadSpecData } from '../plugin-spec/registry.js'
@@ -198,12 +198,16 @@ export function readGrantStore(dir: string = DATA_DIR, registry?: PermissionRegi
       table: missing
         ? { grants: new Map(), denies: new Map(), corrupt: false }
         : parseTable(text),
-      signature: text,
+      // The existence bit is part of the signature: a missing file and an
+      // existing empty file both read as '' but are different states.
+      signature: `${missing ? 'M' : 'E'}:${text}`,
     }
   }
   const listeners = new Set<() => void>()
   let watching = false
   let watchTimer: ReturnType<typeof setInterval> | undefined
+  let watcher: ReturnType<typeof watchFile> | undefined
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined
   let signature = readCurrent().signature
   const changed = (): void => {
     const next = readCurrent().signature
@@ -218,23 +222,74 @@ export function readGrantStore(dir: string = DATA_DIR, registry?: PermissionRegi
       }
     }
   }
+  // Debounced file-change notification: fs.watch can fire several events per
+  // write (rename+change on atomic replace), so coalesce them into one read.
+  const scheduleCheck = (): void => {
+    if (debounceTimer !== undefined) return
+    debounceTimer = setTimeout(() => {
+      debounceTimer = undefined
+      changed()
+    }, 50)
+  }
+  const startWatching = (): void => {
+    // Prefer fs.watch on the PARENT DIRECTORY, not the file itself: the
+    // common atomic-replace write (temp file + rename) swaps the inode the
+    // file watcher holds, after which the old watcher goes silent. A
+    // directory watcher sees the rename/create/delete and the debounce
+    // re-reads the (possibly new) file. A poll fallback covers filesystems
+    // and edge cases where the watcher cannot be established. Both stop
+    // when the last listener unsubscribes; the fallback deliberately polls
+    // at a low frequency — the synchronous per-operation read remains the
+    // authorization source of truth, so this loop only needs to release
+    // grant-owned subscriptions promptly after a revocation, not keep them
+    // perfectly current.
+    let watchingFailed = false
+    try {
+      watcher = watchFile(dirname(file), { persistent: false }, () => scheduleCheck())
+      watcher.on('error', () => {
+        watchingFailed = true
+        watcher?.close()
+        watcher = undefined
+        if (listeners.size > 0 && watchTimer === undefined) {
+          watchTimer = setInterval(changed, 2000)
+          watchTimer.unref?.()
+        }
+      })
+      // fs.watch on some platforms silently misses events (or refuses to
+      // watch a not-yet-existing directory); a first error already re-arms
+      // the fallback above, and the watcher stays authoritative while
+      // healthy.
+    } catch {
+      watchingFailed = true
+      watcher = undefined
+    }
+    if (watchingFailed && watchTimer === undefined) {
+      watchTimer = setInterval(changed, 2000)
+      watchTimer.unref?.()
+    }
+  }
   const onChange = (listener: () => void): (() => void) => {
     listeners.add(listener)
     if (!watching) {
       watching = true
-      // A small unref'ed poll is deterministic across filesystems and
-      // timestamp granularities. The synchronous read on every operation
-      // remains the authorization source of truth; this loop only releases
-      // grant-owned subscriptions promptly after a revocation.
-      watchTimer = setInterval(changed, 50)
-      watchTimer.unref?.()
+      startWatching()
     }
     return () => {
       listeners.delete(listener)
       if (watching && listeners.size === 0) {
         watching = false
-        if (watchTimer !== undefined) clearInterval(watchTimer)
-        watchTimer = undefined
+        if (debounceTimer !== undefined) {
+          clearTimeout(debounceTimer)
+          debounceTimer = undefined
+        }
+        if (watchTimer !== undefined) {
+          clearInterval(watchTimer)
+          watchTimer = undefined
+        }
+        if (watcher !== undefined) {
+          watcher.close()
+          watcher = undefined
+        }
       }
     }
   }

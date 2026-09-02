@@ -19,6 +19,12 @@ development contract for humans and coding agents working on `@deepseek-harness-
 - **Open a pull request** against `main`. Keep changes focused: one logical
   change per PR, with a Chinese or bilingual title and a description that
   covers motivation, what changed, and how it was verified.
+  **A pull request that changes code must link an issue**: add a `Closes #<issue>`
+  line to the description, or link it through the Development sidebar. The
+  `issue-link` CI group checks this and fails without a link. Docs-only changes
+  are exempt (same routing as the build and regression groups); for a maintainer
+  release, revert, or CI hotfix that genuinely has no issue to link, apply the
+  `no-issue-needed` label.
 - **Run the verification matrix** below before requesting a review; CI runs
   the same commands.
 - New features should include or extend a focused regression script.
@@ -257,6 +263,7 @@ change, also run the closest focused script:
 | Mouse pointer event pipeline (wheel coords/modifier bits, click/hover dispatch, out-of-bounds clamping, pointer-state reset) | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
+| Exit-funnel terminal cleanup (finishExit: latch → stdout queue barrier → synchronous DISABLE/cleanup writes → raw-mode settle → cooked restore in finally) | `node --import tsx/esm scripts/verify-exit-mouse-disable-order.tsx`, `node --import tsx/esm scripts/verify-exit-mouse-residue.tsx`, `node --import tsx/esm scripts/verify-exit-mouse-cleanup.tsx` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
@@ -377,6 +384,12 @@ the required credentials.
   such as `DSH_TUI_DEBUG`, or the existing `DSH_TUI_RENDER_LOG` frame capture.
 - Preserve raw-mode, cursor, alternate-screen, synchronized-output, mouse,
   focus, and terminal-query cleanup on success, error, interrupt, and teardown.
+  The physical raw-mode restore (`setRawMode(false)`) belongs solely to the
+  exit funnel's conclude phase (`finishExit` → `concludeShutdown`): the
+  error-boundary and Ctrl+C paths must never release it themselves; when
+  React's error unwinding already released it before the latch,
+  `beginShutdown` re-acquires raw mode (tty-local only — no mode-enable
+  sequences are re-emitted) so the settle window is still spent raw (#522).
 - Avoid render-time unbounded collections or per-token/per-frame allocations.
   Streaming sessions are long lived, and this repository has explicit
   regressions for prior OOM and scroll-performance failures.

@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.10.0-beta.1",
+  "version": "0.10.0-beta.4",
   "description": "Claude Code style interactive TUI front door for DeepSeek Harness agents, built on the ported Ink core.",
   "keywords": [
     "dsh",
@@ -126,7 +126,8 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:runtime-themes && npm run verify:packaged-presets && npm run verify:history-search && npm run verify:initial-prompt && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:wheel-selection && npm run verify:liangshen-instruction-hint && npm run verify:liangshen-plan-persona && npm run verify:plan-prompt-command && npm run verify:plan-review-exit && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:runtime-themes && npm run verify:packaged-presets && npm run verify:history-search && npm run verify:initial-prompt && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:inject-channel && npm run verify:wheel-selection && npm run verify:win32-protocol && npm run verify:selection-resize && npm run verify:liangshen-instruction-hint && npm run verify:liangshen-plan-persona && npm run verify:plan-prompt-command && npm run verify:plan-review-exit && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
+    "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
@@ -168,7 +169,9 @@
     "sync:profile": "node scripts/sync-profile.mjs",
     "sync:profile:check": "node scripts/sync-profile.mjs --check",
     "bundle:installer": "node scripts/make-installer-bundle.mjs",
-    "bundle:standalone": "node scripts/make-standalone-bundle.mjs"
+    "bundle:standalone": "node scripts/make-standalone-bundle.mjs",
+    "verify:win32-protocol": "node --import tsx/esm scripts/verify-win32-protocol.ts",
+    "verify:selection-resize": "node --import tsx/esm scripts/verify-selection-viewport-resize.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -322,7 +325,7 @@
     "stack-utils": "^2.0.0",
     "strip-ansi": "^7.0.0",
     "supports-hyperlinks": "^3.0.0",
-    "type-fest": "^4.0.0",
+    "type-fest": "^5.8.0",
     "usehooks-ts": "^3.1.0",
     "wrap-ansi": "^10.0.1"
   },
@@ -385,7 +388,7 @@
     "@deepseek-ai/dsh-workspace": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/lodash-es": "^4.17.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.4.0",
     "@types/react": "^19.0.0",
     "@types/react-reconciler": "^0.33.0",
     "@types/semver": "^7.0.0",

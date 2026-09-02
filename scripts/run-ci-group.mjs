@@ -33,12 +33,25 @@ const GROUPS = {
     ["verify-askpanel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-layout.tsx']],
     ["repro-toolcards", ['node', '--import', 'tsx/esm', 'scripts/repro-toolcards.tsx']],
     ["repro-diff-split", ['node', '--import', 'tsx/esm', 'scripts/repro-diff-split.tsx']],
+// 代码块 tab 缩进背景回归（issue #606）：tab 展开须继承单元格样式，否则
+// 无背景的空格被 diff 跳过，在 tmux/Windows Terminal 深色底下显示为黑块。
+    ["verify-code-block-tab-background", ['node', '--import', 'tsx/esm', 'scripts/verify-code-block-tab-background.tsx']],
 // 思考块流式视图回归：preview 固定三行且点击切全文/再点收回，full
 // 默认值反向但仍不进入 0 行正文；增量 Markdown 与整段渲染的块间距
 // 一致（真实段落空行保留，代码块后不凭空多一行）。
     ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
     ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
     ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
+// 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
+// （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
+// 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
+// （thinking ticker 跟随已到达文本而展开体吃切片、工具卡行级揭示、
+// result 落定即全显）。
+    ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
+// 根级页边距（PageMargin）契约：无内缩终端（裸 WSL/tmux/SSH）下文字贴边。
+// 左右 2 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
+// 补偿，对照组保证无 PageMargin 时既有「全宽」契约不变。
+    ["verify-page-margin", ['node', '--import', 'tsx/esm', 'scripts/verify-page-margin.tsx']],
 // 滚动/pill/内联模式回归：新消息 pill 计数递减、Ctrl+C 交互、
 // 内联 scrollback 第三方终端适配。曾因 mock channel 缺新字段而
 // 静默冻结（render 期 TypeError 被 ink 吞掉），不在 CI 里烂了
@@ -76,6 +89,10 @@ const GROUPS = {
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
     ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx'], { NODE_ENV: 'production' }],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
+// Windows Terminal 全屏拖选+滚轮回归：长 User 气泡的 selection overlay
+// 会污染上一帧；污染帧不得进入 DECSTBM/shiftRows 硬件滚动，否则带背景
+// 的旧像素被物理搬移后偶发重复/错位。A/B 同轨迹断言终态画面一致。
+    ["repro-user-drag-wheel-render", ['node', '--import', 'tsx/esm', 'scripts/repro-user-drag-wheel-render.tsx']],
     ["verify-shrink", ['node', 'scripts/verify-shrink.mjs']],
 // 高于视口的收缩必须记 anchoredPad：终端 scrollback 不随内容收缩，
 // 高度差公式会少算 1 行 → 上移在视口顶被钳制 → 整帧相对写入链低一行
@@ -109,6 +126,25 @@ const GROUPS = {
 // 恢复历史会话落点回归：/resume 后最新消息末行必须可见且可达
 // （scrollToBottom 补画完成后的锚定终态），不再落屏外。
     ["repro-resume-position", ['node', '--import', 'tsx/esm', 'scripts/repro-resume-position.tsx']],
+// rowsGeneration 缓存身份回归（#713 整合审 blocker 1-3）：/clear 复用
+// row id（同一 live 数组、同长度、同 streaming bits、不同 generation）
+// 后——MessageList 可见行缓存渲染新行；failureHint 不钉在新行上；
+// lastUserRowId 重跟新 transcript 且 auto recap 在新 generation 的首条
+// user 消息即退场。
+    ["verify-rows-generation", ['node', '--import', 'tsx/esm', 'scripts/verify-rows-generation.tsx']],
+// formatWhen 边界确定性回归（#713 整合审 blocker 6）：now→minutes、
+// 分钟内、分钟→小时、小时→天、day 7→绝对日期的精确翻转时刻（嵌套
+// round 语义、oracle 二分），绝对日期后 Infinity（零 wake）。
+    ["verify-format-when-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-format-when-boundary.ts']],
+// GoalTodoPanel elapsed 基线回归（#713 整合审 blocker 5）：active 推进、
+// paused 冻结零 timer、resume 以已提交 transition 重定基线（标签从 ~0s
+// 重新计）、新 goal id 换新基线——transition 只落在 commit 后的 effect。
+    ["verify-goal-todo-baseline", ['node', '--import', 'tsx/esm', 'scripts/verify-goal-todo-baseline.tsx']],
+// 静态 UI 零空闲唤醒回归（#713）：Chat idle / JobsPanel settled /
+// GoalTodo paused / AgentView 静态列表在静默窗口零 frame，对应活跃态
+// 有 frame；trajectory seam 渲染零 getter 调用（含 mount 时）。
+    ["verify-idle-wakeups", ['node', '--import', 'tsx/esm', 'scripts/verify-idle-wakeups.tsx']],
+    ["verify-trajectory-cache", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-cache.tsx']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
@@ -122,6 +158,11 @@ const GROUPS = {
 // Uc 优先、代理对与 keyup 交错、Rc 重复展开、conhost 拆散粘贴重组、
 // Alt+numpad 两轮合成。
     ["verify-win32-input", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-input.tsx']],
+// win32 协议重组回归：conhost 把 SGR/X10 鼠标报告与终端回复（DA1 等）
+// 合成成逐字符 CSI Vk;Sc;Uc;Kd;Cs;Rc 记录时，必须跨块重组回完整协议
+// 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
+// Escape/未知 CSI/物理键不受影响。
+    ["verify-win32-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-protocol.ts']],
 // 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
     ["verify-teardown-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-teardown-exit.tsx']],
 // 退出 resume marker 回归（issue #42）：仅有实际消息或 pending 操作时保留 marker。
@@ -140,6 +181,28 @@ const GROUPS = {
 // 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
 // 吞掉，不再落入 shell。
     ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
+// 退出回显窗口回归（#522 的 SSH 慢链路门）：DISABLE_MOUSE 同步写在 raw
+// mode 仍持有时落盘，settle 窗也在 raw 态度过（cooked 恢复只在最后的
+// concludeShutdown）；写前 stdout 队列 barrier 排空预排队帧/ENABLE；
+// 写入失败（fd 与 stream 都抛）仍必进 conclude/handoff/done。
+    ["verify-exit-mouse-disable-order", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-disable-order.tsx']],
+// finishExit runtime 选择回归（#701 整合审）：显式传入的 render handle 优先
+// 于 instances map——map/process.stdout 指向 B 时 finishExit(...,A) 只
+// begin/conclude A、清理字节只落 A 的流，B 零 latch 零清理；无 handle 时
+// map 兜底仍可用。
+    ["verify-exit-runtime-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-runtime-selection.tsx']],
+// #711（手势/协议闩锁）× #701（两相 shutdown）交叉回归：Case A 手势
+// active 时退出零 probe/ENABLE/DECRQM 且 DISABLE→EXIT_ALT 保序；Case B
+// 分片 SGR candidate active 时退出不等待补全、shutdown 后输入 drain-only；
+// Case C pendingAltScreenReentry/pendingProbe 被 beginShutdown 永久取消；
+// Case D 正常手势的 release→batch-tail→probe 恢复不被 shutdown gate 破坏；
+// 各 Case 均断言 teardown 后 stdin readable listener === 0。
+    ["verify-exit-gesture-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-gesture-protocol.tsx']],
+// #713（stdout 背压）× #701（shutdown 漏斗）交叉回归（整合审 §8）：饱和
+// stdout + drain listener/fallback 在挂时执行 finishExit——shutdown 窗口
+// 内 emit drain 不得触发普通 frame；DISABLE→EXIT_ALT 保序；结束后
+// drain listener 与 fallback timer 均为 0、stdin readable 为 0。
+    ["verify-exit-backpressure", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-backpressure.tsx']],
 // 组件级拖拽协议回归：无修饰左键 press 捕获 drag target，首动 dragstart、
 // 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
 // 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
@@ -189,6 +252,10 @@ const GROUPS = {
 // 转录拉进不可选取区。真实 Chat 树 + SGR 拖选注入，静息/上滚阅读+
 // 流式并发/流式结束后三场景断言 OSC 52 携带完整选中文本。
     ["repro-drag-select-streaming", ['node', '--import', 'tsx/esm', 'scripts/repro-drag-select-streaming.tsx']],
+// grants 文件 watcher 回归（#713）：目录 watcher 事件驱动通知（原子
+// rename/delete-recreate 均覆盖）、退订即停、父目录不存在时经 2s 轮询
+// fallback 拾取新建（真 fallback 路径——目录本身不存在时 fs.watch 才失败）。
+    ["verify-grants-watch", ['node', '--import', 'tsx/esm', 'scripts/verify-grants-watch.ts']],
   ],
   'session-workspace': [
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
@@ -341,10 +408,26 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// 计划退出恢复进入前权限；覆盖延迟切换、会话恢复与未知权限不提权。
+    ["verify-plan-exit-restore", ['node', 'scripts/verify-plan-exit-restore.mjs']],
 // 会话切换/清屏卫生：子代理投影（行 map/任务描述队列/仪表盘快照）随
 // 切换重置、/clear 后在途子代理卡可回现、staged image token 会话作用域
 // （switchModel 不泄漏）、resumeTo 竞争切换守卫、recap 预算从新到旧收容。
     ["verify-session-reset-hygiene", ['node', '--import', 'tsx/esm', 'scripts/verify-session-reset-hygiene.tsx']],
+// Agent View 回归：派生辅助（折叠/摘要/状态映射/标题回退）、无头整屏
+// 组装、按键驱动（派发/预览/帮助/退出）、停止→删除武装的安全语义
+// （Enter 取消、焦点漂移不得改向、窗口过期自动解除）。
+    ["verify-agent-view", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view.mjs']],
+// 后台任务（ctx.jobs）UI 投影：BackgroundJobStore 单元（注册/转换/消失
+// 合成 killed/输出镜像有界）、channel 集成（建卡、job_output 镜像、落定
+// toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
+// 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
+    ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
+// #185 自愈守卫：React nested-update overflow（Minified error #185）抛出时
+// reconciler 已清零计数器，守卫在 clock.tick / reveal.tick / scrollbox.notify /
+// channel.emit(+emitStream) / selection.notify 等高频 enqueue 热点吸收该类
+// 错误——丢一拍而非进程死亡；单元（分类/透传/限流）+ 热点集成 + 渲染零干扰。
+    ["verify-update-overflow-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-update-overflow-guard.tsx']],
 // /tree 与 /fork 回归：sessionTree 纯模型（条目提取、回退/分叉边界、
 // 家族拼接、扁平化/过滤、整轮丢弃预警）、compat 预算读取器
 // （全量/截断/继承前缀跳过）、SessionTree 屏幕无头组装
@@ -407,6 +490,11 @@ const GROUPS = {
 // Box），嵌套在更窄容器里（transcript 旁 2 列 timeline rail 排水沟）
 // 不再按整终端宽度换行到第二行——「Conversation compacted」窄窗劈裂。
     ["verify-divider-width", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-width.tsx']],
+// Divider 测量循环回归（React #185 启动即崩）：横线宽度会反馈进 Box 的
+// 实际授予宽度，内容定宽上下文（或同模式测量的兄弟元素）里测量值漂移
+// 不收敛，每 commit 一次 setState 撞 reconciler 50 层嵌套更新上限直接
+// 崩进程。钉住测量协商逐代有界 + resize 后重新开协商。
+    ["verify-divider-stability", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-stability.tsx']],
 // thinking spinner 残影回归（issue #72）：text-default emoji（✳）
 // 量宽 2 实画 1 致 spinner 行每帧错位，thinking 残影堆积不消失。
     ["repro-thinking", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking.tsx']],

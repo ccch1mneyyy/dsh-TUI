@@ -14,6 +14,7 @@ import {
 import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
 import { isReservedCredentialRef } from './credentialRefGuard.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
+import { swallowNestedUpdateOverflow } from '../ink/update-overflow-guard.js'
 import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 import { fetchBalance, type BalanceResult } from '../deepseekBalance.js'
 import { isPeakHour } from '../deepseekPricing.js'
@@ -27,7 +28,7 @@ import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
 import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isHiddenCommandName, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
-import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../sessionHistory.js'
+import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
 import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
 import {
   buildSessionTree,
@@ -50,12 +51,22 @@ import {
   type SessionSource,
   type SessionSummary,
 } from './sessions/index.js'
+import {
+  AGENT_VIEW_STATUS_ORDER,
+  agentViewHasTurns,
+  agentViewLivePreview,
+  agentViewStatusOf,
+  foldAgentViewEvents,
+  oneLine,
+  sessionTitleFallback,
+  type AgentViewFold,
+} from './agent-view.js'
 import { writeActivityFrames } from '../activityPrefs.js'
 import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
-import type { OAuthProviderStatus, OAuthSetupHost, ProviderSetupHost } from './providerWizard.js'
+import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from './providerWizard.js'
 import { migratePresetPref, readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf, serviceForAgent } from './presets.js'
 import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from './preset-resolution.js'
@@ -64,17 +75,19 @@ import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
-import { getLang, LANGS, t } from '../i18n.js'
+import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
-import { normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
+import { BackgroundJobStore, formatJobDuration, type BackgroundJobState, type BackgroundJobStatus, type JobsRuntime } from './jobs.js'
 import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 import type { TrackerConfig } from 'dsh-working-activity/status'
 import { featureOn } from 'dsh-working-activity/config'
+import { emptyTrajectory, extendTrajectory, extendTrajectoryEvents, type TrajBuild } from './trajectory/index.js'
 import { setMinimalMode } from '../minimalMode.js'
 import { readActivityConfig } from '../activityPrefs.js'
 import { attachSessionToWorkspace } from './workspace.js'
@@ -427,6 +440,15 @@ export interface SubagentControl {
   interrupt(agentId: string): boolean
 }
 
+/**
+ * Background-job row control (`/jobs` panel): cancellation with the same
+ * authority the owning agent itself would use (`job_kill`). Returns false
+ * when the jobs service is absent or the job is unknown/foreign.
+ */
+export interface JobControl {
+  kill(id: string): boolean
+}
+
 export interface SubagentRow {
   agentId: string
   runId?: string
@@ -446,6 +468,19 @@ export interface SubagentRow {
   error?: string
 }
 
+/** One background job as a live transcript card (see `kind: 'job'`). */
+export interface JobRow {
+  id: string
+  kind: string
+  label: string
+  status: BackgroundJobStatus
+  detail?: string
+  startedAt: number
+  finishedAt?: number
+  /** Mirrored `job_output` tail feeding the card's three-line waterfall. */
+  outputLines: readonly string[]
+}
+
 /**
  * One rendered transcript row. The DSH session log is the source of truth:
  * rows are derived from `session/event` records (and the initial
@@ -453,7 +488,7 @@ export interface SubagentRow {
  */
 export interface ChatRow {
   id: number
-  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent'
+  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent' | 'job'
   /** Extra label for non-human user rows (e.g. `steering`). */
   label?: string
   /** Actual execution location for `!command` rows. */
@@ -465,6 +500,8 @@ export interface ChatRow {
   tool?: ToolRow
   /** Present on `subagent` rows; the subagent state snapshot. */
   subagent?: SubagentRow
+  /** Present on `job` rows; the background-job state snapshot. */
+  job?: JobRow
   /** Event wall-clock time (transcript-mode metadata, assistant rows). */
   time?: number
   /** Present on `reasoning` rows once settled: thinking wall-clock duration. */
@@ -479,6 +516,11 @@ export interface ChatRow {
   /** True when loadOlder() restored this row from the log; restored rows are
    *  exempt from the next fold pass so a restore is not instantly undone. */
   restored?: boolean
+  /** True on rows created by LIVE event handling (not replay/resume/fold
+   *  restore) — the smooth-streaming reveal animates freshly-arrived
+   *  content only; replayed history must paint complete. Set once at
+   *  creation; never mutated afterwards. */
+  fresh?: boolean
 }
 
 /**
@@ -552,6 +594,38 @@ function isSubagentToolName(name: string): boolean {
   return SUBAGENT_TOOL_NAMES.has(name.toLowerCase())
 }
 
+/** Extract `job_id` from a job_output call's raw args (JSON), or undefined. */
+function parseJobOutputId(argsFull: string | undefined): string | undefined {
+  if (argsFull === undefined || argsFull === '') return undefined
+  try {
+    const args = JSON.parse(argsFull) as { job_id?: unknown }
+    return typeof args.job_id === 'string' && args.job_id !== '' ? args.job_id : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Extract the command that launched a background job from its tool args
+ *  (`command` for the shell tools, `text` for terminal_send). The registry
+ *  label is the friendly description; the command is the actual invocation. */
+function toolCommandOf(argsFull: string | undefined): string | undefined {
+  if (argsFull === undefined || argsFull === '') return undefined
+  try {
+    const args = JSON.parse(argsFull) as { command?: unknown; text?: unknown }
+    const candidate = typeof args.command === 'string' && args.command !== ''
+      ? args.command
+      : typeof args.text === 'string' && args.text !== ''
+        ? args.text
+        : undefined
+    return candidate
+  } catch {
+    return undefined
+  }
+}
+
+/** The ack a shell tool returns for `run_in_background: true`. */
+const BACKGROUND_START_ACK = /^started background job (\S+)/
+
 /**
  * Durable same-session goal projection surfaced on the channel (see
  * {@link Channel['goal']}). Mirrors the goal domain's `GoalSnapshot` +
@@ -577,6 +651,55 @@ export type ResumeResult =
   | { readonly ok: false; readonly reason: 'unavailable' }
   | { readonly ok: false; readonly reason: 'cancelled' }
   | { readonly ok: false; readonly reason: 'failed'; readonly error: string }
+
+/**
+ * One session's state in the agent view (CC's `claude agents` screen).
+ * States mirror Claude Code's vocabulary:
+ * `working` — a turn is running; `needs-input` — an approval request is
+ * parked for this agent; `idle` — live and waiting for the next prompt;
+ * `completed` — a live agent whose last turn ended (task finished, waiting);
+ * `failed` — the last turn ended with an error; `stopped` — the session's
+ * process is gone (persisted only).
+ */
+export type AgentViewStatus =
+  | 'working'
+  | 'needs-input'
+  | 'idle'
+  | 'completed'
+  | 'failed'
+  | 'stopped'
+
+/** One row in the agent view list. */
+export interface AgentViewRow {
+  /** Session id — the attach/dispatch target. */
+  readonly id: string
+  /** Display title (session title, or a fallback from the prompt/cwd). */
+  readonly title: string
+  /** Absolute working directory the session runs in. */
+  readonly cwd: string
+  /** One-line activity summary derived from the session's recent output. */
+  readonly summary: string
+  readonly status: AgentViewStatus
+  /** True when an agent for this session is alive in THIS process (✻ vs ∙). */
+  readonly live: boolean
+  /** True when this is the session the TUI terminal is attached to. */
+  readonly current: boolean
+  /** Unix epoch milliseconds when the session was created. */
+  readonly createdAt: number
+  /** Unix epoch milliseconds of the session's latest activity. */
+  readonly updatedAt: number
+}
+
+/** The observable outcome of dispatching a new background session. */
+export type AgentViewDispatchResult =
+  | { readonly ok: true; readonly sessionId: string }
+  | { readonly ok: false; readonly reason: 'unavailable' }
+  | { readonly ok: false; readonly reason: 'failed'; readonly error: string }
+
+/** The observable outcome of backgrounding the attached session. */
+export type BackgroundResult =
+  | { readonly ok: true; readonly backgroundedSessionId: string }
+  | { readonly ok: false }
 
 /** Secret-free credential metadata for configuration and status surfaces. */
 export interface CredentialStatus {
@@ -760,6 +883,12 @@ export interface Channel {
    *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
    *  nothing). */
   readonly scrollGutter: ScrollGutterMode
+  /** Root page inset (settings `dsh-tui.pageMargin`): a preset name
+   *  (`none` / `slim` / `normal` (default) / `roomy`) or a custom `NxM`
+   *  spec (columns per side × rows top/bottom) inset the whole UI from the
+   *  terminal edges — terminals without their own viewport padding (bare
+   *  WSL, tmux, SSH) otherwise hug the screen border. */
+  readonly pageMargin: PageMarginSetting
   /** Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
    *  collapse a multi-line command title to its first line + count hint. */
   readonly foldTerminalCommand: boolean
@@ -770,6 +899,11 @@ export interface Channel {
    *  `dsh-tui.expandEditor`; on by default) — gates the ⛶ affordance and
    *  the expandEditor shortcut. */
   readonly expandEditor: boolean
+  /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`; on by
+   *  default): live-arriving assistant text, expanded thinking, and tool
+   *  call bodies paint through a ~30fps reveal instead of jumping per
+   *  provider burst. */
+  readonly smoothStreaming: boolean
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
@@ -860,6 +994,15 @@ export interface Channel {
   readonly subagents: readonly SubagentState[]
   /** Native control operations; unavailable providers safely return false. */
   readonly subagentControl: SubagentControl
+  /**
+   * Background jobs of the current session (`run_in_background` tool work),
+   * live-tracked from the harness job registry. Empty when the composition
+   * has no jobs service. Drives the `/jobs` panel, transcript job cards and
+   * the status-line chip.
+   */
+  readonly backgroundJobs: readonly BackgroundJobState[]
+  /** Cancellation of a background job with the owning agent's authority. */
+  readonly jobControl: JobControl
   subscribe: (listener: () => void) => () => void
   /** Validate and persist a pasted image, returning its prompt placeholder. */
   stageImage(input: StagedImageInput): Promise<string>
@@ -999,6 +1142,11 @@ export interface Channel {
   listModels(): Promise<readonly LlmModelInfo[]>
   /** Provider display identities for the same routes (picker group labels). */
   listProviders(): Promise<readonly LlmProviderInfo[]>
+  /** Drop the `/model <provider/id>` completion cache so the next `/model `
+   *  refetch reflects a provider-catalog change (`/provider` add/edit/delete,
+   *  OAuth sign-in/out) — the same consistency the picker's per-open refetch
+   *  already provides. */
+  invalidateModelCompletion(): void
   /** The live agent's full skill catalog for `/skills` (issue #204) — name,
    *  description, invocation flags and source bucket. Undefined on a failed
    *  or incomplete registry read (the picker shows an error); empty only
@@ -1082,6 +1230,48 @@ export interface Channel {
    *  the service is absent). */
   listSubagents(): Promise<string[]>
   /**
+   * The agent view (CC's `claude agents`) row snapshot: every live agent in
+   * this process plus every persisted session that no live agent owns,
+   * ordered needs-input/working first, then most recently active. Reading it
+   * is cheap; subscribe for changes.
+   */
+  agentViewRows(): readonly AgentViewRow[]
+  /** Change feed for {@link agentViewRows}: fired on agent lifecycle/status
+   *  changes and — throttled — on session events of background agents. */
+  subscribeAgentView(listener: () => void): () => void
+  /**
+   * Dispatch a new background session (`agent view` input): creates an agent
+   * in this process, delivers the prompt as a user message, and keeps the
+   * TUI attached to its current session. The new session keeps running until
+   * it finishes its turn or is stopped — it lives only while this process
+   * does.
+   */
+  dispatchBackgroundAgent(prompt: string): Promise<AgentViewDispatchResult>
+  /** Stop a background session (Ctrl+X): abort its turn and dispose its
+   *  agent; the persisted log survives for resume. False for the attached
+   *  session or one this TUI does not own. */
+  stopBackgroundAgent(sessionId: string): Promise<boolean>
+  /**
+   * Attach the TUI terminal to a session (`agent view` Enter/→): a live
+   * agent is adopted in place (its handle becomes the channel's), a
+   * persisted one resumes through the persistence seam. The previously
+   * attached agent is NOT disposed — it keeps running as a background
+   * session unless it was already idle with no history.
+   */
+  attachToAgent(sessionId: string): Promise<ResumeResult>
+  /** Trailing exchanges of any session — the live agent's in-memory log when
+   *  it is alive in this process, the persisted artifact otherwise. */
+  peekAgentSession(sessionId: string): Promise<readonly PreviewEntry[]>
+  /** `/bg` — background the attached session: swap the TUI to a fresh agent
+   *  while the current one keeps running. The agent view lists it as a
+   *  background session; `backgroundedSessionId` is the move's return target
+   *  (CC's "Esc returns to that conversation"). */
+  backgroundCurrent(): Promise<BackgroundResult>
+  /** Send a follow-up user message to a session from the agent view's peek
+   *  panel. Live sessions receive it directly; a session no live agent owns
+   *  cannot take a reply (false + a notify to attach instead). */
+  replyToAgent(sessionId: string, text: string): Promise<boolean>
+  /**
    * Dispose the host-registry entries this channel registered (skill slash
    * commands).
    *
@@ -1101,6 +1291,23 @@ export interface Channel {
    * time; agent swaps (/resume /rewind /new) are reflected immediately.
    */
   traceEvents(): readonly SessionEvent[]
+  /**
+   * The session trajectory projection, folded incrementally by the channel
+   * as session events arrive — never on the render path. The returned build
+   * is stable between event batches (screens may read it during render);
+   * agent swaps (/resume /rewind /new) rebuild it from the new session's
+   * log. Headless/stub channels that do not provide the seam fall back to
+   * the same module-level empty build.
+   */
+  trajectory(): TrajBuild
+  /**
+   * Counter bumped exactly when an existing transcript row's `streaming`
+   * flag flips in place (turn settle, revive). MessageList keys its filter
+   * cache on it; new rows bump `rows.length` instead.
+   */
+  rowsStreamingVersion: number
+  /** Transcript generation (see the ChannelState field). */
+  rowsGeneration: number
 }
 
 /** @internal */
@@ -1203,6 +1410,22 @@ export interface ChannelState {
   tpsSamples: { tps: number; at: number }[]
   /** Latest working-activity snapshot (see the public Channel type). */
   workingActivity: ActivityStatus | undefined
+  /** Incremental trajectory projection (see the public Channel type). */
+  trajectory: () => TrajBuild
+  /**
+   * Counter bumped exactly when an existing row's `streaming` flag flips in
+   * place (turn settle, revive) — the transcript list's filter cache keys on
+   * it so settles invalidate without an O(rows) scan per render.
+   */
+  rowsStreamingVersion: number
+  /**
+   * Transcript generation: bumped whenever the transcript is cleared and
+   * row ids restart at 0 (clear, session swap, loadOlder prepend, rewind,
+   * new, workspace/model switch). MessageList keys its height/painted/
+   * signature caches on it so a fresh transcript never reuses a previous
+   * one's per-id state.
+   */
+  rowsGeneration: number
   /** Working-activity indicator preset (see the public Channel type). */
   activityFrames: string | undefined
   /** Raw cordis.yml pins `/reload` must respect (see the public Channel type). */
@@ -1219,12 +1442,16 @@ export interface ChannelState {
   toolBackground: ToolBackground
   /** Transcript gutter mode (see the public Channel type). */
   scrollGutter: ScrollGutterMode
+  /** Root page inset setting (see the public Channel type). */
+  pageMargin: PageMarginSetting
   /** Terminal-card header folding (see the public Channel type). */
   foldTerminalCommand: boolean
   /** Session-name chip on the prompt border (see the public Channel type). */
   promptSessionLabel: boolean
   /** Fullscreen draft editor gate (see the public Channel type). */
   expandEditor: boolean
+  /** Smooth streaming reveal (see the public Channel type). */
+  smoothStreaming: boolean
   /** Status-footer preferences (see the public Channel type). */
   statusBar: StatusBarConfig
   /** Apply a diff-layout change (see the public Channel type). */
@@ -1235,12 +1462,16 @@ export interface ChannelState {
   setToolBackground(background: ToolBackground): void
   /** Apply a transcript gutter mode change. */
   setScrollGutter(mode: ScrollGutterMode): void
+  /** Apply a root page-inset setting change (drives the PageMargin box). */
+  setPageMargin(setting: PageMarginSetting): void
   /** Apply a terminal-card header folding change. */
   setFoldTerminalCommand(enabled: boolean): void
   /** Apply a prompt session-name chip change. */
   setPromptSessionLabel(enabled: boolean): void
   /** Apply a fullscreen-editor gate change. */
   setExpandEditor(enabled: boolean): void
+  /** Apply a smooth-streaming reveal change. */
+  setSmoothStreaming(enabled: boolean): void
   /** Apply status-footer preference changes. */
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
@@ -1297,6 +1528,9 @@ export interface ChannelState {
   /** Active subagents roster (see the public Channel type). */
   subagents: readonly SubagentState[]
   subagentControl: SubagentControl
+  /** Background jobs of the current session (see the public Channel type). */
+  backgroundJobs: readonly BackgroundJobState[]
+  jobControl: JobControl
   subscribe: (listener: () => void) => () => void
   stageImage(input: StagedImageInput): Promise<string>
   /** @internal event bump (the public `notify(text)` posts a notification). */
@@ -1365,6 +1599,8 @@ export interface ChannelState {
   listModels(): Promise<readonly LlmModelInfo[]>
   /** Provider display identities (see the public Channel type). */
   listProviders(): Promise<readonly LlmProviderInfo[]>
+  /** Drop the `/model` completion cache (see the public Channel type). */
+  invalidateModelCompletion(): void
   /** The live agent's skill catalog for `/skills` (see the public Channel type). */
   listSkills(): Promise<readonly SkillInfo[] | undefined>
   /** Safe credential metadata for `/login` (see the public Channel type). */
@@ -1409,6 +1645,32 @@ export interface ChannelState {
   pluginsInfo(args: string): string[]
   /** Subagent rows (CC's /agents). */
   listSubagents(): Promise<string[]>
+  /** See {@link Channel.agentViewRows}. */
+  agentViewRows(): readonly AgentViewRow[]
+  /** See {@link Channel.subscribeAgentView}. */
+  subscribeAgentView(listener: () => void): () => void
+  /** See {@link Channel.dispatchBackgroundAgent}. */
+  dispatchBackgroundAgent(prompt: string): Promise<AgentViewDispatchResult>
+  /** See {@link Channel.stopBackgroundAgent}. */
+  stopBackgroundAgent(sessionId: string): Promise<boolean>
+  /** See {@link Channel.attachToAgent}. */
+  attachToAgent(sessionId: string): Promise<ResumeResult>
+  /** See {@link Channel.peekAgentSession}. */
+  peekAgentSession(sessionId: string): Promise<readonly PreviewEntry[]>
+  /** See {@link Channel.backgroundCurrent}. */
+  backgroundCurrent(): Promise<BackgroundResult>
+  /** See {@link Channel.replyToAgent}. */
+  replyToAgent(sessionId: string, text: string): Promise<boolean>
+  /**
+   * Bind the plugin's approval store (post-construction): row derivation
+   * reads its parked ask ids for the "needs input" state, and its emits
+   * re-publish as agent-view changes.
+   */
+  bindApprovalStore(store: {
+    pendingAgentIds(): readonly string[]
+    pendingAgentDetail(agentId: string): { toolName: string; reason?: string; command?: string } | undefined
+    subscribe(listener: () => void): () => void
+  }): void
   /** See {@link Channel.releaseContributions}. */
   releaseContributions(): void
   /** Live session event log (see the public Channel type, `/trace`). */
@@ -1738,6 +2000,18 @@ async function waitForTurnEnd(
 }
 
 /**
+ * Read the persistence backend's full session list (empty without one) —
+ * the agent view's "stopped" rows come from this snapshot.
+ * @param ctx - The channel's context.
+ * @returns Classified summaries, most recently active first.
+ */
+async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSummary[]> {
+  const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
+  if (!persistence) return []
+  return listSummaries(persistence)
+}
+
+/**
  * Create the live channel state for one agent session: replay the durable
  * transcript, subscribe to the agent's events, and expose every TUI action.
  * @internal
@@ -1775,6 +2049,8 @@ export function createChannel(
     toolBackground?: ToolBackground
     /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
     scrollGutter?: ScrollGutterMode
+    /** Root page inset setting; default `normal` (settings `dsh-tui.pageMargin`). */
+    pageMargin?: PageMarginSetting
     /** Terminal-card header folding; default off (settings
      *  `dsh-tui.foldTerminalCommand`). */
     foldTerminalCommand?: boolean
@@ -1784,6 +2060,9 @@ export function createChannel(
     /** Fullscreen draft editor entry points; default on (settings
      *  `dsh-tui.expandEditor`). */
     expandEditor?: boolean
+    /** Smooth streaming reveal; default on (settings
+     *  `dsh-tui.smoothStreaming`). */
+    smoothStreaming?: boolean
     /** Status-footer field visibility and compactness. */
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
@@ -1820,6 +2099,84 @@ export function createChannel(
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
   const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
+
+  // ── agent view (CC's `claude agents`) internal state ──────────────────────
+  // Handles of background sessions this channel dispatched or backgrounded.
+  // The agents themselves live in the host registry (ctx.agents) and die with
+  // this process's tree; the handles are what stopping one needs to dispose.
+  const backgroundHandles = new Map<string, AgentHandle>()
+  // The plugin's approval store, bound post-construction (bindApprovalStore):
+  // row derivation reads the agent ids it has parked requests for, and its
+  // emit re-publishes as an agent-view change so "needs input" appears live.
+  let approvalStore: {
+    pendingAgentIds(): readonly string[]
+    pendingAgentDetail(agentId: string): { toolName: string; reason?: string; command?: string } | undefined
+    subscribe(listener: () => void): () => void
+  } | undefined
+  const agentViewListeners = new Set<() => void>()
+  // The row snapshot is a cached array rebuilt on the next read after a
+  // notify — useSyncExternalStore demands a stable reference between changes.
+  let agentViewRowsCache: readonly AgentViewRow[] | undefined
+  const notifyAgentView = (): void => {
+    agentViewRowsCache = undefined
+    for (const listener of agentViewListeners) listener()
+  }
+  // Background-agent activity (status flips, session events) refreshes the
+  // rows at most every 300 ms — token-level streaming must not rebuild the
+  // snapshot per token.
+  let agentViewRefreshTimer: NodeJS.Timeout | undefined
+  const scheduleAgentViewRefresh = (): void => {
+    if (agentViewRefreshTimer !== undefined) return
+    agentViewRefreshTimer = setTimeout(() => {
+      agentViewRefreshTimer = undefined
+      notifyAgentView()
+    }, 300)
+  }
+  // Persisted sessions without a live agent, cached so the synchronous row
+  // snapshot can merge them; refreshed by listSessions() and attachToAgent.
+  let persistedRowsCache: readonly SessionSummary[] = []
+  void listSessionsSnapshot(ctx).then((rows) => {
+    persistedRowsCache = rows
+    notifyAgentView()
+  })
+  // Incremental fold cache per live agent: re-folded only over events
+  // appended since the last call, so agentViewRows() stays cheap during
+  // token-level streaming (a fresh frozen events array per append).
+  const agentViewFolds = new Map<string, { events: readonly SessionEvent[]; fold: AgentViewFold }>()
+  const foldOf = (liveAgent: Agent): AgentViewFold => {
+    const events = liveAgent.session.events
+    const cached = agentViewFolds.get(String(liveAgent.id))
+    const base: AgentViewFold = {
+      hasTurns: false,
+      firstPrompt: '',
+      summary: '',
+      summaryKind: 'none',
+      title: '',
+      updatedAt: liveAgent.session.header.createdAt,
+      lastTurnFailed: false,
+    }
+    if (cached === undefined) {
+      const fold = foldAgentViewEvents(events, 0, base)
+      agentViewFolds.set(String(liveAgent.id), { events, fold })
+      return fold
+    }
+    if (cached.events === events) return cached.fold
+    const fold = foldAgentViewEvents(events, cached.events.length, cached.fold)
+    agentViewFolds.set(String(liveAgent.id), { events, fold })
+    return fold
+  }
+  const dropFold = (sessionId: string): void => {
+    agentViewFolds.delete(sessionId)
+  }
+  // One process-lifetime set of agent-lifecycle listeners (the TUI and the
+  // channel share the process): any agent's status/creation/disposal moves
+  // rows in the view, not only the attached session's.
+  ctx.on('agent/status', () => scheduleAgentViewRefresh())
+  ctx.on('agent/created', () => notifyAgentView())
+  ctx.on('agent/disposed', ({ agent: subject }: { agent: { id?: unknown } }) => {
+    dropFold(String(subject.id ?? ''))
+    notifyAgentView()
+  })
   const subagentControl: SubagentControl = {
     interrupt(agentId) {
       const child = subagentStore.get(agentId)
@@ -1859,7 +2216,128 @@ export function createChannel(
   // Task tool descriptions, queued in call order; each subagent/start consumes
   // the oldest one so the card shows the user-visible task label.
   const pendingTaskDescriptions: string[] = []
-  
+  // Background-job tracking (`ctx.jobs`, optional service): the registry's
+  // host-level listeners see every owner's commits; the channel re-reads the
+  // CURRENT agent's visible set after each one and projects it into
+  // transcript rows (kind 'job'), the /jobs panel, the status-line chip and
+  // completion toasts. The registry read stays untouched — output is
+  // mirrored from the agent's own job_output results (see onOutputSeen).
+  const jobRowsByJobId = new Map<string, ChatRow>()
+  const syncJobRows = (): void => {
+    state.backgroundJobs = jobStore.snapshot()
+    for (const job of state.backgroundJobs) {
+      let row = jobRowsByJobId.get(job.id)
+      if (!row) {
+        // New job: card joins the transcript tail, like the subagent cards.
+        row = {
+          id: nextRowId++,
+          kind: 'job',
+          text: job.label,
+          job: undefined,
+        }
+        jobRowsByJobId.set(job.id, row)
+        state.rows.push(row)
+      }
+      row.job = {
+        id: job.id,
+        kind: job.kind,
+        label: job.label,
+        status: job.status,
+        ...(job.detail === undefined ? {} : { detail: job.detail }),
+        startedAt: job.startedAt,
+        ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
+        outputLines: job.outputLines,
+      }
+      row.text = job.label
+    }
+  }
+  const jobStore = new BackgroundJobStore({
+    onSettled(job) {
+      state.notify(
+        t(
+          job.status === 'completed'
+            ? 'jobs-toast-completed'
+            : job.status === 'failed'
+              ? 'jobs-toast-failed'
+              : 'jobs-toast-killed',
+          {
+            id: job.id,
+            label: job.label,
+            duration: formatJobDuration(job),
+            detail: job.detail ?? '',
+          },
+        ),
+        {
+          color: job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'warning',
+          timeoutMs: 6000,
+        },
+      )
+    },
+    onChanged() {
+      syncJobRows()
+      state.emit()
+    },
+  })
+  /** Live reference to the registry while the jobs service is mounted;
+   *  cleared again when the service goes away (inject fiber cleanup). */
+  let jobsRuntime: JobsRuntime | undefined
+  const jobControl: JobControl = {
+    kill(id) {
+      const jobs = jobsRuntime
+      if (!jobs?.kill) return false
+      const job = jobStore.get(id)
+      try {
+        jobs.kill(id, agent, 'dsh-tui /jobs panel')
+      } catch {
+        return false
+      }
+      // kill() marks the job reported, which SUPPRESSES the harness
+      // completion notice — without this steer the model only learns about
+      // the user's kill lazily, from its next job_list/job_output read.
+      // Steer only for a job that was actually live; the steering row
+      // doubles as the transcript record of the action.
+      if (job !== undefined && (job.status === 'running' || job.status === 'stopping')) {
+        state.steer(t('jobs-steer-killed', { id, label: job.label }))
+      }
+      return true
+    },
+  }
+  // The jobs registry is optional: compositions without it load the UI
+  // unchanged (feature silently off). inject() handles any load order when
+  // the context offers it; stub/embedded contexts without the inject
+  // lifecycle fall back to a direct lookup — the same degradation posture
+  // as `(ctx as any).subagents` above.
+  const attachJobs = (jobs: JobsRuntime | undefined, onDetach?: (dispose: () => void) => void): void => {
+    if (jobs === undefined) return
+    jobsRuntime = jobs
+    const refresh = (): void => {
+      try {
+        jobStore.replace(jobs.list(agent))
+      } catch {
+        // Owner no longer live / service disposing: keep the last view.
+      }
+    }
+    const disposers = [
+      typeof jobs.onJobsChanged === 'function' ? jobs.onJobsChanged(refresh) : undefined,
+      typeof jobs.onJobDone === 'function' ? jobs.onJobDone(refresh) : undefined,
+    ]
+    refresh()
+    onDetach?.(() => {
+      jobsRuntime = undefined
+      for (const dispose of disposers) dispose?.()
+    })
+  }
+  if (typeof (ctx as { inject?: unknown }).inject === 'function') {
+    ctx.inject(['jobs'], jobsCtx => {
+      attachJobs(
+        (jobsCtx as { jobs?: JobsRuntime }).jobs,
+        dispose => jobsCtx.effect(() => dispose),
+      )
+    })
+  } else {
+    attachJobs((ctx as { get?: (name: string) => unknown }).get?.('jobs') as JobsRuntime | undefined)
+  }
+
   /**
    * Sync subagentStore state into ChatRows (insert/update in state.rows).
    * Called whenever subagent state changes (spawned/completed/failed/output).
@@ -2005,6 +2483,14 @@ export function createChannel(
     pendingTaskDescriptions.length = 0
     subagentStore.reset()
     state.subagents = []
+  }
+  /** Full job reset for a session swap: the row map and store are scoped to
+   *  the OLD agent's session. Runs BEFORE the swap disposes the old agent,
+   *  so the teardown cancellation those jobs receive finds an empty store —
+   *  no "killed" toast storm for work the swap itself took down. */
+  const resetJobProjection = (): void => {
+    jobRowsByJobId.clear()
+    jobStore.reset()
   }
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
@@ -2203,7 +2689,7 @@ export function createChannel(
    * its own prompt event). The first answering plugin may veto the switch;
    * the reason is toasted here so the fallback string stays host-localized.
    */
-  const sessionSwitchVetoed = async (kind: 'new' | 'resume', targetSessionId?: string): Promise<boolean> => {
+  const sessionSwitchVetoed = async (kind: 'new' | 'resume' | 'agent-view', targetSessionId?: string): Promise<boolean> => {
     // D-6 stale detection captures the AGENT REFERENCE (session ids are
     // reusable — ABA): a slow decision must not let an older /resume roll
     // over a newer session the user already switched to mid-await.
@@ -2229,7 +2715,7 @@ export function createChannel(
   /** Fire-and-forget `tui/session-switched` (parallel): per-session plugin
    *  state rebinds here. Listener failures are logged, never propagated —
    *  the switch itself already succeeded. */
-  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind' | 'fork', sessionId: string, previousSessionId: string): void => {
+  const notifySessionSwitched = (kind: 'new' | 'resume' | 'rewind' | 'fork' | 'agent-view' | 'background', sessionId: string, previousSessionId: string): void => {
       try {
         void dispatchTuiNotification(ctx, 'tui/session-switched', { kind, sessionId, previousSessionId, cwd: state.cwd }).catch((error: unknown) => {
           ctx.logger.warn('dsh-tui: tui/session-switched listener failed: %o', error)
@@ -2265,8 +2751,10 @@ export function createChannel(
     lastReasoningRow = undefined
     toolCards.clear()
     nextRowId = 0
+    state.rowsGeneration += 1
     state.rows.length = 0
     resetSubagentProjection()
+    resetJobProjection()
     // Goal/todo/title are session-scoped; the replay re-derives them for
     // the session being entered (or leaves them empty).
     state.todos = []
@@ -2794,19 +3282,50 @@ export function createChannel(
     state.mode = sessionModes[state.modeIndex]!
   }
 
-  /** Apply one configured mode: each declared atom switches independently
-   *  (plan via the registry `/plan` command; sandbox/approval via their
-   *  durable session-log override events). A failing plan toggle aborts the
-   *  whole switch so the session never lands in a half-applied mode. */
-  const applyMode = async (spec: SessionModeSpec): Promise<void> => {
-    if (spec.plan !== undefined && foldPlanActive(agent.session.events) !== spec.plan) {
-      const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
-      if (text === undefined) {
-        // The active preset registers no /plan.
-        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
-        return
+  // Session.append rejects observer reentry; restore after publication unwinds.
+  const pendingPlanExitRestores = new Map<object, SessionModeSpec>()
+  const prePlanModes = new WeakMap<object, SessionModeSpec>()
+  // An in-turn /plan off commits at pre-step, after the command has returned.
+  const explicitPlanExits = new WeakSet<object>()
+
+  const modePermissions = (events: readonly SessionEvent[]): SessionModeSpec => {
+    const sandbox = foldSandboxMode(events)
+    const approval = foldApprovalPolicy(events)
+    return {
+      id: 'restore',
+      ...(sandbox === 'read-only' || sandbox === 'workspace-write' || sandbox === 'danger-full-access'
+        ? { sandbox } : {}),
+      ...(approval === 'ask' || approval === 'never' ? { approval } : {}),
+    }
+  }
+
+  /** Recover a resumed plan's snapshot before /plan ran, not before its
+   *  deferred plan/mode event. Unknown historical atoms stay untouched. */
+  const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefined => {
+    let active = false
+    let start = -1
+    let command: { index: number; id: unknown } | undefined
+    for (let index = 0; index < log.length - 1; index += 1) {
+      const event = log[index]!
+      const type = (event as { type: string }).type
+      const data = event.data as unknown as Record<string, unknown>
+      if (!active && type === 'command/run' && data.name === 'plan' && typeof data.args === 'string') {
+        if (data.args.trim() === 'off') command = undefined
+        else command ??= { index, id: data.commandId }
+      }
+      if (type === 'command/done' && data.commandId === command?.id && data.kind !== 'success') {
+        command = undefined
+      }
+      if (type === 'plan/mode') {
+        if (data.active === true && !active) start = command?.index ?? index
+        active = data.active === true
+        command = undefined
       }
     }
+    return active && start >= 0 ? modePermissions(log.slice(0, start)) : undefined
+  }
+
+  const applyModeAtoms = (spec: SessionModeSpec): void => {
     // The durable sandbox override is one session event (dsh-sandbox-policy's
     // own write path); the session/event arm picks it up immediately.
     if (spec.sandbox !== undefined && foldSandboxMode(agent.session.events) !== spec.sandbox) {
@@ -2827,22 +3346,73 @@ export function createChannel(
       const approval = ctx.get('approval') as
         | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
         | undefined
-      if (approval) {
-        approval.setPolicy(agent, spec.approval)
-        // dsh-user-approval.setPolicy is a deliberate no-op when the target
-        // already equals the configured default, so no `approval/policy`
-        // event lands. Mode derivation reads the log only, so without the
-        // explicit event a mode whose approval atom equals that default
-        // (the built-in plan mode's `ask`) can never match and Shift+Tab
-        // gets stuck re-applying the same mode. Log the explicit override
-        // only if the service still left the fold short of the target policy.
-        if (foldApprovalPolicy(agent.session.events) !== spec.approval) {
-          agent.session.append('approval/policy', { policy: spec.approval })
-        }
-      } else {
-        agent.session.append('approval/policy', { policy: spec.approval })
+      approval?.setPolicy(agent, spec.approval)
+      // dsh-user-approval.setPolicy is a deliberate no-op when the target
+      // already equals the configured default, so no `approval/policy`
+      // event lands. Mode derivation reads the log only, so without the
+      // explicit event a mode whose approval atom equals that default
+      // (the built-in plan mode's `ask`) can never match and Shift+Tab
+      // gets stuck re-applying the same mode. Log the explicit override
+      // only if the service still left the fold short of the target policy.
+      if (foldApprovalPolicy(agent.session.events) !== spec.approval) {
+        ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+          'approval/policy',
+          { policy: spec.approval },
+        )
       }
     }
+  }
+
+  /** Apply the configured atoms; an explicit exit owns its target mode. */
+  const applyMode = async (spec: SessionModeSpec): Promise<void> => {
+    const session = agent.session
+    pendingPlanExitRestores.delete(session)
+    const planMode = ctx.get('planMode') as
+      | { get?(a: Agent): { active: boolean; pending?: boolean } }
+      | undefined
+    const planActive = foldPlanActive(session.events)
+    // Reconcile a stale explicit-exit marker before acting. The marker only
+    // legitimately survives while a deferred exit awaits its plan/mode:false
+    // (foldPlanActive && pending === false). If plan is still logged active
+    // with no pending intent, that awaited event was abandoned (e.g. an
+    // aborted pre-step) — drop the orphan so it cannot suppress a later restore
+    // such as an approved exit_plan_mode.
+    if (planActive && planMode?.get?.(agent).pending === undefined) {
+      explicitPlanExits.delete(session)
+    }
+    if (spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan) {
+      if (commandService?.find(agent, 'plan') === undefined) {
+        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+        return
+      }
+      if (spec.plan && !planActive && !prePlanModes.has(session)) {
+        const previous = modePermissions(session.events)
+        const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: SessionModeSpec['sandbox'] } | undefined
+        const approval = ctx.get('approval') as { effectivePolicy?(session: Agent['session']): SessionModeSpec['approval'] } | undefined
+        const base = previous.sandbox === undefined && previous.approval === undefined ? sessionModes[0] : undefined
+        previous.sandbox ??= sandbox?.defaultMode ?? base?.sandbox
+        previous.approval ??= approval?.effectivePolicy?.(session) ?? base?.approval
+        prePlanModes.set(session, previous)
+        // Persist missing defaults before /plan, so resume can recover them.
+        applyModeAtoms(previous)
+      }
+      if (!spec.plan) explicitPlanExits.add(session)
+      try {
+        const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
+        if (session !== agent.session) return
+        if (text === undefined) {
+          state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+          return
+        }
+      } finally {
+        if (session === agent.session) {
+          const pending = planMode?.get?.(agent).pending
+          if (!foldPlanActive(session.events) || pending !== false) explicitPlanExits.delete(session)
+          if (!foldPlanActive(session.events) && pending !== true) prePlanModes.delete(session)
+        }
+      }
+    }
+    applyModeAtoms(spec)
     refreshMode()
     state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
     state.emit()
@@ -2879,10 +3449,16 @@ export function createChannel(
   const modelNodeCache = {
     nodes: undefined as readonly CommandCompletionNode[] | undefined,
     load: undefined as Promise<void> | undefined,
+    // Monotonic load generation. dropModelNodeCache bumps it so a warm that
+    // was already in flight when the cache was dropped cannot publish its
+    // stale catalog on resolve — only the newest load may write nodes.
+    generation: 0,
   }
   const warmModelNodes = (): void => {
     if (modelNodeCache.load !== undefined) return
+    const generation = modelNodeCache.generation
     modelNodeCache.load = state.listModels().then((list) => {
+      if (generation !== modelNodeCache.generation) return
       modelNodeCache.nodes = list.map((model) => ({
         name: `${model.provider}/${model.id}`,
         description: model.name,
@@ -2892,6 +3468,7 @@ export function createChannel(
       }))
       state.emit()
     }).catch(() => {
+      if (generation !== modelNodeCache.generation) return
       // listModels already swallows per-provider failures; this only fires
       // when the llm service shape itself is missing — settle on an empty
       // menu rather than retrying on every keystroke.
@@ -2899,15 +3476,38 @@ export function createChannel(
     })
   }
 
+  /** Drop the `/model <provider/id>` completion cache so the next `/model `
+   *  keystroke refetches a fresh catalog. Model switches (the [current] tag
+   *  re-resolves against the new route) and every `/provider` catalog change
+   *  (add / edit / delete / OAuth sign-in-out) invalidate it, so completion
+   *  always matches what the picker would list. */
+  const dropModelNodeCache = (): void => {
+    modelNodeCache.generation += 1
+    modelNodeCache.nodes = undefined
+    modelNodeCache.load = undefined
+  }
+
   // `/preset <id>` completion: same warm-cache pattern as models. The
   // current/default tags resolve at children() time (sync state reads), so
-  // no cache invalidation is needed on switch.
+  // no cache invalidation is needed on switch. The localized display text,
+  // however, resolves at listPresets() call time — a mid-session /lang
+  // switch invalidates lazily here (lang-keyed warm) so completion hints
+  // never serve the previous language.
   const presetOptionCache = {
+    lang: undefined as Lang | undefined,
     list: undefined as readonly PresetOption[] | undefined,
     load: undefined as Promise<void> | undefined,
   }
+  /** Warm the `/preset <id>` completion roster once per UI language; a
+   *  language change since the last warm drops the stale localized copy. */
   const warmPresetOptions = (): void => {
+    const lang = getLang()
+    if (presetOptionCache.lang !== undefined && presetOptionCache.lang !== lang) {
+      presetOptionCache.list = undefined
+      presetOptionCache.load = undefined
+    }
     if (presetOptionCache.load !== undefined) return
+    presetOptionCache.lang = lang
     presetOptionCache.load = state.listPresets().then((list) => {
       presetOptionCache.list = list
       state.emit()
@@ -3011,6 +3611,259 @@ export function createChannel(
   }
 
   let agentBindingGeneration = 0
+
+  /**
+   * Adopt a live agent in this process — the agent view's attach path for a
+   * background session. The target is already composed (preset, route,
+   * tools), so no persistence resolution runs; the projection resets and
+   * replays the target's in-memory log. The previously attached agent is
+   * NOT disposed when it still has something to run or say: it keeps living
+   * as a background session (backgroundHandles), and an empty one is freed.
+   */
+  const adoptLiveAgent = async (target: Agent): Promise<ResumeResult> => {
+    const previousHandle = currentHandle
+    const previousSessionId = String(agent.session.id)
+    // Same reset shape as resumeTo (no history replay sources differ — the
+    // target's own events are replayed below).
+    streaming = undefined
+    reasoning = undefined
+    sealedReasoning.length = 0
+    lastReasoningRow = undefined
+    toolCards.clear()
+    nextRowId = 0
+    state.rowsGeneration += 1
+    state.rows.length = 0
+    state.todos = []
+    state.pending = []
+    state.goal = undefined
+    state.sessionTitle = ''
+    state.sessionColor = ''
+    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+    state.responseChars = 0
+    state.activeToolCount = 0
+    state.lastUserText = ''
+    state.working = false
+    state.cancelPending = false
+    state.spinnerMode = 'requesting'
+    state.status = target.status
+    state.agentId = target.id
+    state.cwd = target.session.header.cwd ?? state.cwd
+    state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
+    refreshGitBranch()
+    state.agentPreset = runningPresetOf(target.session)
+    const adoptedRoute = recordedModelRoute(target.session.events)
+    if (adoptedRoute !== undefined) {
+      state.provider = adoptedRoute.provider
+      state.model = adoptedRoute.model
+    }
+    state.tps = undefined
+    state.tpsSamples = []
+    state.lastUsage = undefined
+    state.workingActivity = undefined
+    state.loadedContext = undefined
+    state.contextWindow = undefined
+    state.effortLevels = undefined
+    state.reasoningEffort = undefined
+    refreshEffortLevels()
+    state.contextSegments = {
+      system: 0,
+      prompt: 0,
+      assistant: 0,
+      thinking: 0,
+      tools: 0,
+    }
+    replayEvents(target.session.events)
+    settleStreaming()
+    state.working = target.status === 'running'
+    agent = target
+    // The dispatch kept this agent's handle for stopping; adoption takes
+    // ownership of it (the agent stays registered either way).
+    currentHandle = backgroundHandles.get(String(target.id))
+    backgroundHandles.delete(String(target.id))
+    bindAgent()
+    refreshCommandList()
+    void refreshLoadedContext()
+    void refreshSkillCommands()
+    writeResumeTarget(String(target.id))
+    touchSession(target.id)
+    state.emit()
+    const keepPrevious =
+      previousHandle !== undefined
+      && previousHandle.agent !== target
+      && (previousHandle.agent.status === 'running' || agentViewHasTurns(previousHandle.agent.session.events))
+    if (previousHandle !== undefined && previousHandle.agent !== target) {
+      if (keepPrevious) backgroundHandles.set(previousSessionId, previousHandle)
+      else void previousHandle.dispose().catch(() => {})
+    }
+    // Both sessions are now part of the view's working set: the adopted one
+    // and the one the terminal detached from.
+    touchAgentViewSession(String(target.id))
+    touchAgentViewSession(previousSessionId)
+    clearStagedImages()
+    notifySessionSwitched('agent-view', String(target.id), previousSessionId)
+    notifyAgentView()
+    return { ok: true }
+  }
+
+  /**
+   * Resume a persisted session — the shared core of `/resume` and the agent
+   * view's attach path for a session no live agent owns. `keepCurrent`
+   * moves the previously attached agent into the background instead of
+   * disposing it (the agent view never kills what it is not told to stop).
+   */
+  const resumeInto = async (
+    sessionId: string,
+    kind: 'resume' | 'agent-view',
+    keepCurrent: boolean,
+  ): Promise<ResumeResult> => {
+    const agents = ctx.get('agents') as
+      | {
+        resume(options: {
+          resumeSessionId: SessionId
+          agentOptions?: { provider?: string; model?: string }
+          setup?: CreateAgentOptions['setup']
+        }): Promise<AgentHandle>
+      }
+      | undefined
+    if (!agents) {
+      state.notify(t('resume-unavailable'), { color: 'error' })
+      return { ok: false, reason: 'unavailable' }
+    }
+    // Compat boundary: register vouched-for legacy event types (e.g.
+    // activity/status from pre-#143 logs) in every reachable dsh-session
+    // copy before ANY strict read path (preset lookup below, then the
+    // harness seed validation) loads the target — the plugin's #119
+    // registration never ran in processes where it is unmounted (issue
+    // #153). In-process only: the shared log is never rewritten.
+    ensureLegacySessionEventTypes()
+    // The target session's own preset (from its persisted log) — never the
+    // current preference: a resume re-enters the composition its history
+    // was produced under. Same rule for the route: only an explicit
+    // cordis.yml provider/model overrides the route the target's own
+    // request/header records (issue #30) — and only as a COMPLETE pair
+    // (issue #67): a provider-only pin must not merge with the recorded
+    // model half into a route no adapter recognizes.
+    const resumeComposed = await composePreset(
+      ctx,
+      await resolvePersistedPreset(ctx, SessionId(sessionId)),
+    )
+    const resumeRoute = explicitModelRoute({
+      provider: options.configuredProvider,
+      model: options.configuredModel,
+    })
+    // The recorded route feeds back into agentOptions too — not just the
+    // status line below: a provider-only cordis.yml pin (issue #67) leaves
+    // agentOptions.model undefined on resume, which breaks the `{{model}}`
+    // persona variable for the resumed agent's own assembly AND for every
+    // subagent it spawns (dsh-subagent's resolveChildAgentOptions inherits
+    // `parent.options.model`).
+    const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
+    let handle: AgentHandle
+    try {
+      handle = await agents.resume({
+        resumeSessionId: SessionId(sessionId),
+        agentOptions: {
+          provider: resumeRoute?.provider ?? recordedRoute?.provider,
+          model: resumeRoute?.model ?? recordedRoute?.model,
+        },
+        ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      state.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+      return { ok: false, reason: 'failed', error: message }
+    }
+    try {
+      // Adopting this persisted conversation; this also repairs sessions
+      // created by TUI versions that predate the workspace ownership ledger.
+      await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
+    } catch (error) {
+      state.notify(
+        t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
+        { color: 'warning', timeoutMs: 8000 },
+      )
+    }
+    // Replay the persisted history into a fresh transcript (same reset as
+    // rewindTo, plus the context window which the replay re-derives).
+    streaming = undefined
+    reasoning = undefined
+    sealedReasoning.length = 0
+    lastReasoningRow = undefined
+    toolCards.clear()
+    nextRowId = 0
+    state.rowsGeneration += 1
+    state.rows.length = 0
+    state.todos = []
+    state.pending = []
+    state.goal = undefined
+    state.sessionTitle = ''
+    state.sessionColor = ''
+    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+    state.responseChars = 0
+    state.activeToolCount = 0
+    state.lastUserText = ''
+    state.working = false
+    state.cancelPending = false
+    state.spinnerMode = 'requesting'
+    state.status = handle.agent.status
+    state.agentId = handle.agent.id
+    state.cwd = handle.agent.session.header.cwd ?? state.cwd
+    state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
+    refreshGitBranch()
+    state.agentPreset = resumeComposed.agentPreset
+    const resumedRoute = resumeRoute ?? recordedModelRoute(handle.agent.session.events)
+    if (resumedRoute !== undefined) {
+      state.provider = resumedRoute.provider
+      state.model = resumedRoute.model
+    }
+    state.tps = undefined
+    state.tpsSamples = []
+    state.lastUsage = undefined
+    state.workingActivity = undefined
+    state.loadedContext = undefined
+    state.contextWindow = undefined
+    state.effortLevels = undefined
+    state.reasoningEffort = undefined
+    refreshEffortLevels()
+    state.contextSegments = {
+      system: 0,
+      prompt: 0,
+      assistant: 0,
+      thinking: 0,
+      tools: 0,
+    }
+    replayEvents(handle.agent.session.events)
+    settleStreaming()
+    state.working = handle.agent.status === 'running'
+    const oldHandle = currentHandle
+    const previousSessionId = String(agent.session.id)
+    agent = handle.agent
+    currentHandle = handle
+    bindAgent()
+    refreshCommandList()
+    void refreshLoadedContext()
+    void refreshSkillCommands()
+    writeResumeTarget(sessionId)
+    touchSession(sessionId)
+    state.emit()
+    const keepPrevious =
+      keepCurrent
+      && oldHandle !== undefined
+      && (oldHandle.agent.status === 'running' || agentViewHasTurns(oldHandle.agent.session.events))
+    if (oldHandle !== undefined) {
+      if (keepPrevious) backgroundHandles.set(previousSessionId, oldHandle)
+      else void oldHandle.dispose().catch(() => {})
+    }
+    // Attaching FROM the agent view makes both sides view sessions; the
+    // plain /resume path keeps its history out of the view's ledger.
+    if (kind === 'agent-view') {
+      touchAgentViewSession(sessionId)
+      touchAgentViewSession(previousSessionId)
+    }
+    clearStagedImages()
+    notifySessionSwitched(kind, sessionId, previousSessionId)
+    return { ok: true }
+  }
   const state: ChannelState = {
     effortLevels: undefined,
     version: 0,
@@ -3054,6 +3907,9 @@ export function createChannel(
     mode: sessionModes[0]!,
     modeIndex: 0,
     workingActivity: undefined,
+    trajectory: () => trajectoryBuild,
+    rowsStreamingVersion: 0,
+    rowsGeneration: 0,
     activityFrames: options.activityFrames,
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
@@ -3064,9 +3920,11 @@ export function createChannel(
     thinkingFold: options.thinkingFold ?? 'preview',
     toolBackground: normalizeToolBackground(options.toolBackground),
     scrollGutter: normalizeScrollGutter(options.scrollGutter),
+    pageMargin: normalizePageMargin(options.pageMargin),
     foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true,
     expandEditor: options.expandEditor !== false,
+    smoothStreaming: options.smoothStreaming !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,
@@ -3247,6 +4105,8 @@ export function createChannel(
     },
     subagents: [],
     subagentControl,
+    backgroundJobs: [],
+    jobControl,
     subscribe(listener) {
       listeners.add(listener)
       return () => {
@@ -3256,7 +4116,16 @@ export function createChannel(
     emit() {
       foldRows(state.rows, MAX_ROWS, foldCursor)
       state.version += 1
-      for (const listener of listeners) listener()
+      // #185 self-heal: a forceStoreRerender enqueue can surface React's
+      // nested-update overflow here; React resets the counter on throw, so
+      // absorb it and let the next wakeup render with a clean slate.
+      for (const listener of listeners) {
+        try {
+          listener()
+        } catch (error) {
+          if (!swallowNestedUpdateOverflow(error, 'channel.emit')) throw error
+        }
+      }
     },
     // Frame-aligned notification for streaming deltas. LLM chunks arrive at
     // 100-300 events/s (one per token); waking React synchronously per event
@@ -3274,7 +4143,15 @@ export function createChannel(
         // the listeners wake so React reads fully projected rows.
         flushSubagentStream()
         foldRows(state.rows, MAX_ROWS, foldCursor)
-        for (const listener of listeners) listener()
+        // Same #185 self-heal as emit(): this timer is the busiest enqueue
+        // site during streaming, so the overflow most often surfaces here.
+        for (const listener of listeners) {
+          try {
+            listener()
+          } catch (error) {
+            if (!swallowNestedUpdateOverflow(error, 'channel.emitStream')) throw error
+          }
+        }
       }, 16)
       // Never hold the process open for a pending UI wakeup.
       timer.unref()
@@ -4371,8 +5248,10 @@ export function createChannel(
       lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
+      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
+      resetJobProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4563,8 +5442,10 @@ export function createChannel(
       assistantRowsByStep.clear()
       lastTextDelta.clear()
       nextRowId = 0
+      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
+      resetJobProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4758,8 +5639,10 @@ export function createChannel(
       lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
+      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
+      resetJobProjection()
       // Goal/todo/title are session-scoped; the replay re-derives them for
       // the session being entered (or leaves them empty).
       state.todos = []
@@ -4786,8 +5669,7 @@ export function createChannel(
       // /model completion cache: the [current] tag was resolved at fetch
       // time — drop the cache so the next `/model ` refetches for the new
       // route.
-      modelNodeCache.nodes = undefined
-      modelNodeCache.load = undefined
+      dropModelNodeCache()
       state.tps = undefined
       state.tpsSamples = []
       state.lastUsage = undefined
@@ -4844,6 +5726,7 @@ export function createChannel(
     clear() {
       state.rows.length = 0
       nextRowId = 0
+      state.rowsGeneration += 1
       streaming = undefined
       reasoning = undefined
       toolCards.clear()
@@ -4852,6 +5735,9 @@ export function createChannel(
       // of feeding a row object no transcript holds (the store keeps live
       // tracking for the dashboard — same session, still running).
       dropSubagentRows()
+      // Live jobs keep running across the wipe too (same session): clear the
+      // row map so their next commit re-creates the card as a fresh row.
+      jobRowsByJobId.clear()
       state.activeToolCount = 0
       state.responseChars = 0
       state.rows.push({
@@ -4911,6 +5797,12 @@ export function createChannel(
       state.scrollGutter = normalized
       state.emit()
     },
+    setPageMargin(setting) {
+      const normalized = normalizePageMargin(setting)
+      if (normalized === state.pageMargin) return
+      state.pageMargin = normalized
+      state.emit()
+    },
     setFoldTerminalCommand(enabled) {
       if (enabled === state.foldTerminalCommand) return
       state.foldTerminalCommand = enabled
@@ -4924,6 +5816,11 @@ export function createChannel(
     setExpandEditor(enabled) {
       if (enabled === state.expandEditor) return
       state.expandEditor = enabled
+      state.emit()
+    },
+    setSmoothStreaming(enabled) {
+      if (enabled === state.smoothStreaming) return
+      state.smoothStreaming = enabled
       state.emit()
     },
     setStatusBar(config) {
@@ -4976,15 +5873,30 @@ export function createChannel(
       if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
       return permissionPresetSnapshotFromService(service, agent.session.events)
     },
+    /** Localized roster projection for the /preset picker — resolves
+     *  built-in display text through the dictionary under `en`; the
+     *  Channel.listPresets contract comment carries the full doc. */
     async listPresets() {
       const presets = rosterOf(ctx)
       if (presets === undefined) return []
+      // The roster copies `name`/`description` verbatim from each preset.yml,
+      // and the stock yml files are written in Chinese — the /preset picker
+      // showed them under `en` too. Built-in ids have dictionary surfaces
+      // (preset-name-* / preset-desc-*); under `en` they win via tOr, while
+      // unknown (user-authored) ids fall through to the roster text. Under
+      // `zh` the roster text is kept as-is so a user-edited or upstream-
+      // reworded preset.yml is never shadowed by a stale dictionary copy.
+      const localized = getLang() === 'en'
       try {
         const list = await presets.list()
         return list.map(preset => ({
           id: preset.id,
-          ...(preset.name === undefined ? {} : { name: preset.name }),
-          ...(preset.description === undefined ? {} : { description: preset.description }),
+          ...(preset.name === undefined
+            ? {}
+            : { name: localized ? tOr(`preset-name-${preset.id}`, preset.name) : preset.name }),
+          ...(preset.description === undefined
+            ? {}
+            : { description: localized ? tOr(`preset-desc-${preset.id}`, preset.description) : preset.description }),
           ...(preset.broken === undefined ? {} : { broken: preset.broken }),
           isDefault: preset.id === presets.defaultId,
         }))
@@ -5089,6 +6001,11 @@ export function createChannel(
         | { listProviders(): readonly { id: string; name: string }[] }
         | undefined
       return Promise.resolve(llm === undefined ? [] : llm.listProviders().map(info => ({ ...info })))
+    },
+    invalidateModelCompletion() {
+      // `/provider` changed the catalog (add/edit/delete/OAuth): the next
+      // `/model <provider/id>` keystroke must not serve the stale snapshot.
+      dropModelNodeCache()
     },
     async listSkills() {
       // snapshot() over list(): only a COMPLETE observation is authoritative
@@ -5233,11 +6150,14 @@ export function createChannel(
         | undefined
       const settings = ctx.get('settings') as
         | {
-          describe(): readonly { ns: string; revision: number }[]
+          describe(): readonly { ns: string; revision: number; user?: unknown }[]
           get(ns: string): unknown
           mutate(
             ns: string,
-            ops: readonly { op: 'set'; path: readonly string[]; value: unknown }[],
+            ops: readonly (
+              | { op: 'set'; path: readonly string[]; value: unknown }
+              | { op: 'unset'; path: readonly string[] }
+            )[],
             expectedRevision?: number,
           ): Promise<void>
         }
@@ -5264,6 +6184,17 @@ export function createChannel(
       // optional: mounting the plugin lights up the wizard's OAuth branch,
       // and without it the wizard is exactly what it was before.
       const oauthApi = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
+      // Real catalog membership on this mount: routes the adapter knows from
+      // its installed catalog (`declared !== true`). A stored profile naming
+      // such a route is an activation/override of the catalog route — even
+      // when it carries an explicit `api` field — while routes the adapter
+      // only knows because a profile names them are custom. Classifying by
+      // anything less (a profile-shape guess) misroutes the edit semantics.
+      const catalogMembers = (): Set<string> => new Set(
+        llm.listConfigurableProviders()
+          .filter(entry => entry.settingsNs === 'llm-pi-ai' && entry.declared !== true)
+          .map(entry => entry.provider),
+      )
       return {
         ...(oauthApi === undefined ? {} : { oauth: oauthApi }),
         listCatalogProviders() {
@@ -5280,11 +6211,91 @@ export function createChannel(
             | undefined
           return section?.providers !== undefined && route in section.providers
         },
+        listRefUsers(ref, exceptRoute) {
+          // The RESOLVED merge (settings.get), not the user layer: a base
+          // provider or composition-base route naming this ref is invisible
+          // to listConfiguredProviders() but still consumes the credential.
+          const section = settings.get('llm-pi-ai') as
+            | { providers?: Record<string, unknown> }
+            | undefined
+          const providers = section?.providers
+          if (providers === undefined || typeof providers !== 'object' || providers === null) return []
+          return Object.entries(providers).flatMap(([route, profile]) => {
+            if (route === exceptRoute) return []
+            if (typeof profile !== 'object' || profile === null) return []
+            const stored = profile as Record<string, unknown>
+            return stored.apiKeyEnv === ref ? [route] : []
+          })
+        },
+        listConfiguredProviders() {
+          // The editable/deletable set is the USER layer only: `describe()`'s
+          // `user` is the raw user section — the same source the /settings
+          // screen treats as overrides. `settings.get()` is the resolved
+          // merge; listing a route inherited from a composition base would
+          // promise a delete that cannot land (the unset only clears the
+          // user layer, so the base value re-inherits) while the credential
+          // is really gone. When the running base exposes no `user` layer,
+          // fall back to the resolved section: such builds (the official
+          // dsh-base) carry zero base routes anyway, so the layers coincide.
+          const descriptor = settings.describe().find(row => row.ns === 'llm-pi-ai')
+          // Only an absent `user` (older base) falls back; a present-but-empty
+          // user layer legitimately exposes nothing to edit.
+          const section = (descriptor?.user !== undefined
+            ? descriptor.user
+            : settings.get('llm-pi-ai')) as
+            | { providers?: Record<string, unknown> }
+            | undefined
+          const providers = section?.providers
+          if (providers === undefined || typeof providers !== 'object' || providers === null) return []
+          const catalog = catalogMembers()
+          return Object.entries(providers).flatMap(([route, profile]) => {
+            // The settings section is user-editable, so a `providers.<route>`
+            // entry may be null or a scalar; skip anything that is not a plain
+            // object instead of dereferencing it and throwing (which would
+            // block the edit/delete menu for every route).
+            if (typeof profile !== 'object' || profile === null) return []
+            const stored = profile as Record<string, unknown>
+            const ref = typeof stored.apiKeyEnv === 'string' ? stored.apiKeyEnv : ''
+            const baseURL = typeof stored.baseURL === 'string' && stored.baseURL !== ''
+              ? stored.baseURL
+              : undefined
+            const api = typeof stored.api === 'string' && stored.api !== ''
+              ? stored.api
+              : undefined
+            // Keep the raw model entries: a model-list re-selection must
+            // rewrite kept ids with their stored objects, so per-model fields
+            // this wizard never learned about survive the edit.
+            const modelEntries = Array.isArray(stored.models)
+              ? stored.models.filter(
+                (model): model is Record<string, unknown> =>
+                  typeof model === 'object' && model !== null,
+              )
+              : undefined
+            const models = modelEntries?.flatMap(
+              entry => typeof entry.id === 'string' ? [entry.id] : [],
+            )
+            return [{
+              route,
+              ref,
+              isCatalog: catalog.has(route),
+              shadowed: ref !== '' && process.env[ref] !== undefined,
+              ...(baseURL !== undefined ? { baseURL } : {}),
+              ...(api !== undefined ? { api } : {}),
+              ...(models !== undefined ? { models } : {}),
+              ...(modelEntries !== undefined && modelEntries.length > 0
+                ? { modelEntries }
+                : {}),
+            }]
+          })
+        },
         discoverModels(request) {
           return llm.discoverModels('llm-pi-ai', request)
         },
         envShadows(ref) {
           return process.env[ref] !== undefined
+        },
+        envValue(ref) {
+          return process.env[ref]
         },
         async readCredential(ref) {
           const resolved = await credentials.resolve(ref)
@@ -5304,6 +6315,34 @@ export function createChannel(
             // One retry on a stale-revision conflict (a concurrent write
             // landed between describe and mutate); anything else propagates
             // so the wizard can report and roll back the credential.
+            const code = (error as { code?: unknown })?.code
+            if (code !== 'SETTINGS_CONFLICT') throw error
+            await settings.mutate('llm-pi-ai', ops, revision())
+          }
+        },
+        async mutateProfile(route, ops) {
+          // Route-relative path patch: only the addressed fields inside
+          // `providers.<route>` enter the write, so stored fields the TUI
+          // does not model never pass through here and cannot be dropped.
+          const full: readonly ProfilePathOp[] = ops.map(op => op.op === 'set'
+            ? { op: 'set', path: ['providers', route, ...op.path], value: op.value }
+            : { op: 'unset', path: ['providers', route, ...op.path] })
+          try {
+            await settings.mutate('llm-pi-ai', full, revision())
+          } catch (error) {
+            // Same stale-revision retry as writeProfile.
+            const code = (error as { code?: unknown })?.code
+            if (code !== 'SETTINGS_CONFLICT') throw error
+            await settings.mutate('llm-pi-ai', full, revision())
+          }
+        },
+        async removeProfile(route) {
+          const ops = [{ op: 'unset' as const, path: ['providers', route] }]
+          try {
+            await settings.mutate('llm-pi-ai', ops, revision())
+          } catch (error) {
+            // Same stale-revision retry as writeProfile: the wizard reports
+            // any real failure so the credential deletion can be skipped.
             const code = (error as { code?: unknown })?.code
             if (code !== 'SETTINGS_CONFLICT') throw error
             await settings.mutate('llm-pi-ai', ops, revision())
@@ -5384,15 +6423,361 @@ export function createChannel(
       // surface shows — this project only, conversations only, sub-agent runs
       // folded away — is a view decision, and keeping it out of here is what
       // lets the browser toggle those views without re-reading a single log.
-      const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
-      if (!persistence) return []
-      return listSummaries(persistence)
+      const rows = await listSessionsSnapshot(ctx)
+      persistedRowsCache = rows
+      notifyAgentView()
+      return rows
     },
     async previewSession(sessionId) {
       const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
       if (!persistence) return []
       const path = await locateSession(persistence, sessionId)
       return path === undefined ? [] : previewSession(path, PREVIEW_ENTRIES)
+    },
+    // ── agent view (CC's `claude agents`) ───────────────────────────────────
+    bindApprovalStore(store) {
+      approvalStore = store
+      ctx.effect(() => store.subscribe(notifyAgentView))
+      notifyAgentView()
+    },
+    agentViewRows() {
+      // Cached snapshot (see notifyAgentView): the array identity is stable
+      // between changes, which useSyncExternalStore requires.
+      if (agentViewRowsCache !== undefined) return agentViewRowsCache
+      const agentsService = ctx.get('agents') as
+        | { list(): readonly Agent[] }
+        | undefined
+      const pendingIds = new Set(approvalStore?.pendingAgentIds() ?? [])
+      const live: AgentViewRow[] = []
+      if (agentsService !== undefined) {
+        // Minimal test fixtures mount an agents service without enumeration
+        // (create-only); an empty roster is the honest projection there.
+        const roster = typeof agentsService.list === 'function' ? agentsService.list() : []
+        for (const liveAgent of roster) {
+          // Subagent children are not agent-view rows (CC parity): they
+          // belong to their parent's conversation.
+          if (liveAgent.session.header.origin === 'subagent') continue
+          const fold = foldOf(liveAgent)
+          const id = String(liveAgent.id)
+          const isCurrent = id === String(agent.session.id)
+          // A session that never held a conversation is not a row (the
+          // session browser's rule): the fresh terminal session a `/bg`
+          // creates stays visible only while it IS the attached one.
+          if (!fold.hasTurns && !isCurrent) continue
+          const needsInput = pendingIds.has(id)
+          const status = agentViewStatusOf(liveAgent.status, fold, needsInput)
+          // CC parity: a blocked row's summary is the question it is
+          // waiting on (the parked approval's reason/gated command).
+          const ask = needsInput ? approvalStore?.pendingAgentDetail(id) : undefined
+          // A prompt-kind summary is the session's own prompt echoed back —
+          // the name column already says it, so the row stays clean.
+          const summary = ask !== undefined
+            ? oneLine(ask.reason ?? ask.command ?? ask.toolName ?? '')
+            : fold.summaryKind === 'prompt' ? '' : fold.summary
+          live.push({
+            id,
+            title: fold.title.length > 0 ? fold.title : sessionTitleFallback(fold, liveAgent.session.header.cwd),
+            cwd: liveAgent.session.header.cwd ?? state.cwd,
+            summary,
+            status,
+            live: true,
+            current: isCurrent,
+            createdAt: liveAgent.session.header.createdAt,
+            updatedAt: fold.updatedAt,
+          })
+        }
+      }
+      const liveIds = new Set(live.map(row => row.id))
+      // Stopped rows come from the shared persistence store, which also
+      // holds sessions other front doors (web, other profiles) created and
+      // the ordinary /resume history. The agent-view ledger is the exact
+      // ownership record: only sessions this TUI dispatched, backgrounded,
+      // or attached to FROM the view appear here (CC `claude agents`
+      // semantics — background sessions, not the whole history).
+      const agentViewSessions = readAgentViewSessions()
+      const persisted: AgentViewRow[] = persistedRowsCache
+        .filter(summary =>
+          !liveIds.has(summary.id)
+          && summary.kind.kind !== 'subagent'
+          && agentViewSessions[summary.id] !== undefined
+          // Never list a session that holds no conversation (the session
+          // browser's rule): a `/bg` fresh session the user never typed
+          // into is not an agent-view row once it stops.
+          && summary.hasPrompt)
+        .map(summary => ({
+          id: summary.id,
+          title: summary.title.text,
+          cwd: summary.cwd,
+          summary: summary.label === undefined ? '' : oneLine(summary.label),
+          status: 'stopped',
+          live: false,
+          current: false,
+          createdAt: summary.createdAt,
+          updatedAt: summary.updatedAt,
+        }))
+      const rows = [...live, ...persisted]
+      const rank = (row: AgentViewRow): number => {
+        const index = AGENT_VIEW_STATUS_ORDER.indexOf(row.status)
+        return index < 0 ? AGENT_VIEW_STATUS_ORDER.length : index
+      }
+      rows.sort((left, right) =>
+        rank(left) - rank(right)
+        || right.updatedAt - left.updatedAt
+        || right.createdAt - left.createdAt
+        || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+      agentViewRowsCache = rows
+      return rows
+    },
+    subscribeAgentView(listener) {
+      agentViewListeners.add(listener)
+      return () => {
+        agentViewListeners.delete(listener)
+      }
+    },
+    async dispatchBackgroundAgent(prompt) {
+      const text = prompt.trim()
+      if (text.length === 0) {
+        return { ok: false, reason: 'failed', error: t('agentview-empty-prompt') }
+      }
+      const agentsService = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!agentsService) {
+        state.notify(t('agentview-dispatch-unavailable'), { color: 'error' })
+        return { ok: false, reason: 'unavailable' }
+      }
+      const sessionId = SessionId(randomUUID())
+      // Same composition as /new: the caller's default preset + model route.
+      // Every failure path below must return a result (never reject): the
+      // screen shows the error, and a silent rejection would look like a
+      // "missing" session.
+      let handle: AgentHandle
+      try {
+        const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+        const resolved = resolveModelRoute(
+          { provider: options.configuredProvider, model: options.configuredModel },
+          readModelPref(),
+          { provider: options.provider, model: options.model },
+        )
+        const llm = ctx.get('llm') as
+          | { listModels(provider: string): Promise<readonly { id: string }[]> }
+          | undefined
+        const { route } = await validateModelRoute(llm, resolved, {
+          provider: options.provider,
+          model: options.model,
+        })
+        handle = await agentsService.create({
+          sessionId,
+          meta: {
+            cwd: state.cwd,
+            ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
+          },
+          agentOptions: route,
+          ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false, reason: 'failed', error: message }
+      }
+      backgroundHandles.set(String(sessionId), handle)
+      // Record ownership BEFORE delivery: even a delivery failure must not
+      // silently drop the session from the view.
+      touchAgentViewSession(String(sessionId))
+      touchSession(sessionId)
+      try {
+        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
+      } catch {
+        // The workspace ledger is optional bookkeeping; the session runs
+        // without it and the next resume repairs the entry.
+      }
+      // Deliver the prompt as a user message; the agent loop picks it up and
+      // the session keeps running unattended until its turn ends. A failure
+      // here must be loud — a silent rejection would leave an empty row and
+      // a "missing" session with no explanation.
+      try {
+        handle.agent.followup(createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'user' },
+        }))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false, reason: 'failed', error: message }
+      }
+      notifyAgentView()
+      return { ok: true, sessionId: String(sessionId) }
+    },
+    async stopBackgroundAgent(sessionId) {
+      // The attached session cannot be stopped from the view: the channel
+      // drives it, and disposing it out from under the UI would strand the
+      // terminal on a dead agent.
+      if (sessionId === String(agent.session.id)) return false
+      const handle = backgroundHandles.get(sessionId)
+      if (handle === undefined) return false
+      backgroundHandles.delete(sessionId)
+      try {
+        handle.agent.cancel({ kind: 'user' })
+        await handle.dispose()
+      } catch (error) {
+        logForDebugging(`agent view: stop of "${sessionId}" failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      dropFold(sessionId)
+      void listSessionsSnapshot(ctx).then((rows) => {
+        persistedRowsCache = rows
+      })
+      notifyAgentView()
+      return true
+    },
+    async attachToAgent(sessionId) {
+      if (sessionId === String(agent.session.id)) return { ok: true }
+      const agentsService = ctx.get('agents') as
+        | { get(id: SessionId): Agent | undefined }
+        | undefined
+      const liveTarget = agentsService?.get(SessionId(sessionId))
+      if (liveTarget !== undefined) {
+        if (await sessionSwitchVetoed('agent-view', sessionId)) return { ok: false, reason: 'cancelled' }
+        return adoptLiveAgent(liveTarget)
+      }
+      // Not alive in this process: resume it through the persistence seam,
+      // keeping the current agent running in the background.
+      if (await sessionSwitchVetoed('agent-view', sessionId)) return { ok: false, reason: 'cancelled' }
+      return resumeInto(sessionId, 'agent-view', true)
+    },
+    async peekAgentSession(sessionId) {
+      const live = (ctx.get('agents') as { get(id: SessionId): Agent | undefined } | undefined)?.get(SessionId(sessionId))
+      if (live !== undefined) return agentViewLivePreview(live.session.events, PREVIEW_ENTRIES)
+      const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
+      if (!persistence) return []
+      const path = await locateSession(persistence, sessionId)
+      return path === undefined ? [] : previewSession(path, PREVIEW_ENTRIES)
+    },
+    async replyToAgent(sessionId, text) {
+      const trimmed = text.trim()
+      if (trimmed.length === 0) {
+        state.notify(t('agentview-reply-empty'), { color: 'warning' })
+        return false
+      }
+      const live = (ctx.get('agents') as { get(id: SessionId): Agent | undefined } | undefined)?.get(SessionId(sessionId))
+      if (live === undefined) {
+        // A stopped session takes a reply only through a restarted agent:
+        // attach into it and send from the conversation instead.
+        state.notify(t('agentview-reply-stopped'), { color: 'warning' })
+        return false
+      }
+      live.followup(createUserMessage({
+        content: [{ type: 'text', text: trimmed }],
+        source: { kind: 'user' },
+      }))
+      notifyAgentView()
+      return true
+    },
+    async backgroundCurrent() {
+      // `/bg` — the attached session moves to the background (it keeps
+      // running in this process) and the terminal lands on a fresh one.
+      const agentsService = ctx.get('agents') as
+        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
+        | undefined
+      if (!agentsService) {
+        state.notify(t('agentview-dispatch-unavailable'), { color: 'error' })
+        return { ok: false }
+      }
+      const sessionId = SessionId(randomUUID())
+      const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+      const resolved = resolveModelRoute(
+        { provider: options.configuredProvider, model: options.configuredModel },
+        readModelPref(),
+        { provider: options.provider, model: options.model },
+      )
+      const llm = ctx.get('llm') as
+        | { listModels(provider: string): Promise<readonly { id: string }[]> }
+        | undefined
+      const { route } = await validateModelRoute(llm, resolved, {
+        provider: options.provider,
+        model: options.model,
+      })
+      let handle: AgentHandle
+      try {
+        handle = await agentsService.create({
+          sessionId,
+          meta: {
+            cwd: state.cwd,
+            ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
+          },
+          agentOptions: route,
+          ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        state.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false }
+      }
+      try {
+        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
+      } catch {
+        // Optional ledger, same as dispatch.
+      }
+      const previousHandle = currentHandle
+      const previousSessionId = String(agent.session.id)
+      // CC parity: even an EMPTY session is backgrounded (it shows as a
+      // "send a prompt to start" row; Esc in the view returns to it), so the
+      // handle is always kept for stopping/adopting — never disposed here.
+      if (previousHandle !== undefined) backgroundHandles.set(previousSessionId, previousHandle)
+      // Fresh-session reset shape (mirrors /new; nothing to replay).
+      streaming = undefined
+      reasoning = undefined
+      sealedReasoning.length = 0
+      lastReasoningRow = undefined
+      toolCards.clear()
+      nextRowId = 0
+      state.rowsGeneration += 1
+      state.rows.length = 0
+      state.todos = []
+      state.pending = []
+      state.goal = undefined
+      state.sessionTitle = ''
+      state.sessionColor = ''
+      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+      state.responseChars = 0
+      state.activeToolCount = 0
+      state.lastUserText = ''
+      state.working = false
+      state.cancelPending = false
+      state.spinnerMode = 'requesting'
+      state.status = handle.agent.status
+      state.agentId = handle.agent.id
+      state.tps = undefined
+      state.tpsSamples = []
+      state.lastUsage = undefined
+      state.workingActivity = undefined
+      state.loadedContext = undefined
+      state.contextWindow = undefined
+      state.effortLevels = undefined
+      state.reasoningEffort = undefined
+      refreshEffortLevels()
+      state.contextSegments = {
+        system: 0,
+        prompt: 0,
+        assistant: 0,
+        thinking: 0,
+        tools: 0,
+      }
+      agent = handle.agent
+      currentHandle = handle
+      bindAgent()
+      refreshCommandList()
+      void refreshLoadedContext()
+      void refreshSkillCommands()
+      clearResumeTarget()
+      touchSession(handle.agent.id)
+      // Both sides of a backgrounding belong to the agent view: the session
+      // left running and the fresh one the terminal lands on.
+      touchAgentViewSession(previousSessionId)
+      touchAgentViewSession(String(handle.agent.id))
+      clearStagedImages()
+      notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
+      notifyAgentView()
+      return { ok: true, backgroundedSessionId: previousSessionId }
     },
     setResumeTarget(sessionId) {
       writeResumeTarget(sessionId)
@@ -5464,6 +6849,7 @@ export function createChannel(
       if (sessionId === agent.session.id) return false
       if (deleteSessionLog(sessionId) !== 'deleted') return false
       forgetSession(sessionId)
+      forgetAgentViewSession(sessionId)
       // A resume marker naming the deleted session would make the next
       // `dsh-tui --resume` launch target a log that no longer exists.
       if (readResumeTarget() === sessionId) clearResumeTarget()
@@ -6049,6 +7435,23 @@ export function createChannel(
   const skillCommandsRefused = new Set<string>()
   /** Pending re-read after an incomplete catalog observation. */
   let skillCommandsRetry: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Bounded retry ladder for `complete:false` observations: a provider still
+   * warming its watcher re-reads a few times with exponential backoff, then
+   * gives up and keeps the last-good command set until the next
+   * `skills/change` (the provider's own invalidation) or an explicit
+   * refresh. Without the cap a provider that NEVER completes keeps an
+   * 800ms retry loop alive forever, re-snapshotting the catalog each time.
+   */
+  let skillRetryAttempts = 0
+  let skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
+  const MAX_SKILL_RETRY_ATTEMPTS = 3
+  /**
+   * Refresh generation: bumped by releaseContributions (and rebinds) so an
+   * in-flight snapshot resolving afterwards is recognized as stale and
+   * never re-registers commands against a released channel.
+   */
+  let skillCommandSeq = 0
 
   /**
    * Publish every user-invocable skill as a slash command (issue #86).
@@ -6071,6 +7474,10 @@ export function createChannel(
   const refreshSkillCommands = async (): Promise<void> => {
     if (commandService === undefined) return
     const target = agent
+    // Generation snapshot: only release/rebind bump skillCommandSeq, so
+    // concurrent refreshes share one generation and all land (last write
+    // wins); a released/rebound channel invalidates every in-flight read.
+    const token = skillCommandSeq
     const registry = skillRegistryFor(target)
     if (registry === undefined) return
     let observation
@@ -6080,15 +7487,48 @@ export function createChannel(
       ctx.logger.warn('skill commands: catalog read failed: %o', error)
       return
     }
-    if (target !== agent) return
+    if (token !== skillCommandSeq || target !== agent) return
     // A provider still warming its watcher reports an incomplete observation;
-    // re-read once so a cold start cannot leave the menu permanently short.
-    if (!observation.complete && skillCommandsRetry === undefined) {
-      skillCommandsRetry = setTimeout(() => {
-        skillCommandsRetry = undefined
-        void refreshSkillCommands()
-      }, SKILL_COMMAND_RETRY_MS)
+    // re-read a bounded number of times with exponential backoff so a cold
+    // start cannot leave the menu permanently short, while a provider that
+    // NEVER completes stops retrying (the next skills/change re-enters and
+    // the last-good command set stays in place). The partial observation
+    // still reconciles below — registering the visible subset is idempotent
+    // (same names/descriptions dispose nothing) and keeps a warm start as
+    // complete as the provider can make it.
+    if (!observation.complete) {
+      // Incomplete (provider failure/rescan mid-flight): NOT authoritative —
+      // neither the menu merge (refreshCommandList) nor the command registry
+      // may reconcile against it. In particular the registry must KEEP every
+      // currently registered handler: refreshCommandList only restores the
+      // last-good MENU entries, not disposed command handlers, so disposing
+      // here would leave the menu pointing at handlers that no longer exist.
+      if (skillCommandsRetry === undefined && skillRetryAttempts < MAX_SKILL_RETRY_ATTEMPTS) {
+        skillRetryAttempts += 1
+        skillCommandsRetry = setTimeout(() => {
+          skillCommandsRetry = undefined
+          void refreshSkillCommands()
+        }, skillRetryDelayMs)
+        skillCommandsRetry.unref?.()
+        skillRetryDelayMs *= 2
+        ctx.logger.warn(
+          `skill command merge: incomplete catalog observation (%d/%d attempts), retrying in %dms`,
+          skillRetryAttempts,
+          MAX_SKILL_RETRY_ATTEMPTS,
+          skillRetryDelayMs / 2,
+        )
+      } else {
+        ctx.logger.warn(
+          'skill command merge: incomplete catalog observation, retries exhausted — keeping last-good skills until skills/change',
+        )
+      }
+      return
     }
+    // Complete observation: the catalog is authoritative, so reset the
+    // retry ladder (a later transient failure starts back at the base
+    // delay with a fresh attempt budget).
+    skillRetryAttempts = 0
+    skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
     const wanted = new Map<string, string>(
       observation.skills
         .filter(skill => isUserInvocable(skill))
@@ -6192,6 +7632,9 @@ export function createChannel(
   })
   /** See {@link Channel.releaseContributions}. */
   const releaseSkillCommands = (): void => {
+    // Invalidate any in-flight refresh (its token no longer matches), then
+    // cancel the retry ladder and dispose the registered handlers.
+    skillCommandSeq += 1
     if (skillCommandsRetry !== undefined) clearTimeout(skillCommandsRetry)
     skillCommandsRetry = undefined
     for (const entry of skillCommands.values()) entry.dispose()
@@ -6203,6 +7646,17 @@ export function createChannel(
   void refreshSkillCommands()
 
   let nextRowId = 0
+
+  /**
+   * Bump the rows-streaming version: the transcript list keys its filter
+   * cache on this counter, which changes ONLY when an existing row's
+   * `streaming` flag flips in place (turn settle, revive). New rows change
+   * rows.length instead, so they need no bump. Declared before
+   * renderEvent/replayEvents — the boot replay settles rows and calls this.
+   */
+  const markStreamingChanged = (): void => {
+    state.rowsStreamingVersion += 1
+  }
   /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH
  *  execution seam for local `!` commands and the git status breadcrumb. The
  *  service registers under `ctx.shell` (ShellExecutor; dsh-bash-local and
@@ -6403,10 +7857,11 @@ ${output}
       : [...state.rows].reverse().find(row => row.kind === 'assistant' && row.seq === seq)
     if (existing !== undefined) {
       existing.streaming = true
+      markStreamingChanged()
       streaming = existing
       return existing
     }
-    streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
+    streaming = { id: nextRowId, kind: 'assistant', text: '', streaming: true, fresh: true, ...seq !== undefined ? { seq } : {} }
     nextRowId += 1
     state.rows.push(streaming)
     return streaming
@@ -6431,6 +7886,7 @@ ${output}
       ) {
         reasoning = lastReasoningRow.row
         reasoning.streaming = true
+        markStreamingChanged()
         const sealedIdx = sealedReasoning.indexOf(reasoning)
         if (sealedIdx !== -1) sealedReasoning.splice(sealedIdx, 1)
         reasoningStart = Date.now() - (reasoning.durationMs ?? 0)
@@ -6464,12 +7920,14 @@ ${output}
     const duration = Math.max(0, Date.now() - reasoningStart)
     reasoning.durationMs = duration
     reasoning.streaming = false
+    markStreamingChanged()
     sealedReasoning.push(reasoning)
     reasoning = undefined
     logForDebugging(`thinking: folded at ${where} (${duration}ms)`)
   }
 
   const settleStreaming = (): void => {
+    const flipped = streaming !== undefined || sealedReasoning.length > 0 || reasoning !== undefined
     if (streaming !== undefined) streaming.streaming = false
     streaming = undefined
     const folded = sealedReasoning.length + (reasoning !== undefined ? 1 : 0)
@@ -6480,6 +7938,7 @@ ${output}
       reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
     }
     reasoning = undefined
+    if (flipped) markStreamingChanged()
     if (folded > 0) logForDebugging(`thinking: folded ${folded} reasoning row(s) at turn settle`)
   }
 
@@ -6688,7 +8147,13 @@ ${output}
             const row = assistantRowsByStep.get(key) ?? ensureStreaming(event.seq)
             assistantRowsByStep.set(key, row)
             streaming = row
-            row.streaming = true
+            // Revive of a previously sealed row (reconnect replay): the
+            // in-place streaming flip is invisible to rows identity/length,
+            // so the transcript list's filter cache must hear about it.
+            if (row.streaming !== true) {
+              row.streaming = true
+              markStreamingChanged()
+            }
             const before = row.text.length
             appendTextDelta(row, chunk.text)
             state.responseChars += Math.max(0, row.text.length - before)
@@ -6770,6 +8235,11 @@ ${output}
           row.time = event.time
           if (text) row.text = text
           row.streaming = false
+          markStreamingChanged()
+          // Live settles keep the smooth-reveal cursor alive (a one-shot
+          // non-streaming delivery still paints as a flow); replayed
+          // settles must not — the transcript would typewrite on open.
+          if (!replaying && text) row.fresh = true
         }
         streaming = undefined
         if (reasoning !== undefined) {
@@ -6781,7 +8251,10 @@ ${output}
           // (/settings opt-in) keeps the block expanded until turn settle
           // — settleStreaming folds the sealed rows then.
           reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
-          if (state.thinkingFold === 'preview') reasoning.streaming = false
+          if (state.thinkingFold === 'preview') {
+            reasoning.streaming = false
+            markStreamingChanged()
+          }
           sealedReasoning.push(reasoning)
           logForDebugging(`thinking: step sealed (${reasoning.durationMs}ms), expanded until turn/end`)
         }
@@ -6892,6 +8365,9 @@ ${output}
           kind: 'tool',
           text: '',
           seq: event.seq,
+          // Smooth-reveal participation flag: live cards animate their body
+          // in; replayed cards (resume/rewind) paint complete.
+          fresh: !replaying,
           tool: {
             callId: event.data.callId,
             name: event.data.name,
@@ -6934,6 +8410,22 @@ ${output}
             // pairs the args: live cards are never folded, so it is intact.
             card.tool.resultView = presentResultView(card.tool.name, card.tool.argsFull ?? '', event.data)
             state.contextSegments.tools += estimateTokens(result)
+            // A job_output result doubles as the job card's output feed:
+            // the registry's read() is consuming and reserved for the
+            // owning agent, so the UI mirrors the tail that already streams
+            // through the transcript instead of polling the job itself.
+            if (card.tool.name === 'job_output' && result !== '') {
+              const id = parseJobOutputId(card.tool.argsFull)
+              if (id !== undefined) jobStore.onOutputSeen(id, result, event.time ?? Date.now())
+            }
+            // A `started background job <id>` ack pairs the job with its
+            // tool call: capture the FULL command from the args (the
+            // registry label is the friendly description) for the panel.
+            const startAck = BACKGROUND_START_ACK.exec(result)
+            if (startAck !== null) {
+              const command = toolCommandOf(card.tool.argsFull)
+              if (command !== undefined) jobStore.onStarted(startAck[1], command)
+            }
           }
           state.activeToolCount = Math.max(0, state.activeToolCount - 1)
           // The card is settled: no later event looks it up by callId, so
@@ -7173,11 +8665,74 @@ ${output}
     return new ActivityTracker(prefs.config, Date.now, prefs.customActions)
   })()
   let activityTickTimer: NodeJS.Timeout | undefined
+  /**
+   * Wall-clock since the done line last changed. The done summary keeps a
+   * short-lived completed-tool fragment (~3s, upstream DONE_FRAGMENT_MS),
+   * so the tick retires only once the line has been STABLE for a grace
+   * window — then it stops until a live phase returns (updateWorkingActivity
+   * re-arms it). An idle conversation therefore holds no 500ms wakeup.
+   */
+  const ACTIVITY_DONE_STABLE_MS = 4000
+  let activityDoneStableSince: number | undefined
 
   const stopActivityTick = (): void => {
     if (activityTickTimer === undefined) return
     clearInterval(activityTickTimer)
     activityTickTimer = undefined
+  }
+
+  /**
+   * Create the 500ms activity tick if it is not running. `activity: false`
+   * never creates it (the projection is not read then). Live phases
+   * (waiting/thinking/tool) emit every tick so turnElapsedMs stays current;
+   * settled phases emit only when the line actually changes.
+   */
+  const ensureActivityTick = (): void => {
+    if (options.activity === false || activityTickTimer !== undefined) return
+    activityTickTimer = setInterval(() => {
+      const previous = state.workingActivity
+      const rendered = updateWorkingActivity('activity tick')
+      if (rendered === undefined) {
+        // Projection unavailable (render/projection error — updateWorkingActivity
+        // swallowed and reported it, or the activity sidecar was switched off).
+        // Retire the tick instead of spinning forever: every 500ms wake would
+        // re-throw inside the tracker for zero UI value. A later REAL activity
+        // event (turn start, phase change, tool start) goes through
+        // updateWorkingActivity again, whose live-phase branch re-arms this
+        // tick — so recovery costs nothing.
+        stopActivityTick()
+        return
+      }
+      if (rendered.phase === 'done') {
+        // Retire once the done line has been stable past the fragment
+        // window — no more React updates, timer or tracker work needed.
+        if (previous !== undefined && previous.line === rendered.line) {
+          activityDoneStableSince ??= Date.now()
+          if (Date.now() - activityDoneStableSince >= ACTIVITY_DONE_STABLE_MS) {
+            stopActivityTick()
+            return
+          }
+        } else {
+          activityDoneStableSince = undefined
+        }
+      } else {
+        activityDoneStableSince = undefined
+      }
+      // Live phases deliberately wake at 500 ms even when the formatted line
+      // has not crossed its next whole-second boundary: turnElapsedMs remains
+      // a current state value, while line changes cover phrase rotation and
+      // the short-lived completed-tool summary.
+      if (
+        rendered.phase === 'waiting' ||
+        rendered.phase === 'thinking' ||
+        rendered.phase === 'tool' ||
+        previous?.phase !== rendered.phase ||
+        previous.line !== rendered.line
+      ) {
+        state.emit()
+      }
+    }, 500)
+    activityTickTimer.unref()
   }
 
   /** Render the current tracker into the TUI-only projection. */
@@ -7202,7 +8757,18 @@ ${output}
   ): ActivityStatus | undefined => {
     try {
       update?.()
-      return renderWorkingActivity()
+      const rendered = renderWorkingActivity()
+      // Live phases need the 500ms tick to keep turnElapsedMs/phrase
+      // rotation current — (re)arm it whenever an event or status change
+      // brings the tracker back to a live phase (a done/idle phase lets
+      // the tick retire itself, see maybeRetireActivityTick).
+      if (
+        rendered !== undefined &&
+        (rendered.phase === 'waiting' || rendered.phase === 'thinking' || rendered.phase === 'tool')
+      ) {
+        ensureActivityTick()
+      }
+      return rendered
     } catch (error: unknown) {
       if (!activityFailureReported) {
         activityFailureReported = true
@@ -7232,11 +8798,45 @@ ${output}
     updateSpinnerMode()
   }
 
+  // ── trajectory projection (channel-owned, event-driven) ───────────────────
+  // The session trajectory is folded HERE — at event time — so Chat renders
+  // never touch the session event getter (hosts without a snapshot cache pay
+  // an O(n) copy per render otherwise). The fold is incremental: identical
+  // prefix (object identity at the previous last index) → tail-only consume;
+  // anything else (session swap, rewind fork, /new) rebuilds from scratch.
+  // bindAgent resets the build explicitly so a swap can never extend a stale
+  // projection.
+  let trajectoryBuild: TrajBuild = emptyTrajectory()
+  /**
+   * Fold ONE newly observed main-session event into the trajectory build —
+   * incrementally, from the event the observer already holds. The session
+   * getter (`agent.session.events`) is O(n) on hosts that rebuild a frozen
+   * snapshot per append, so it must stay off the token-rate path: a full
+   * fold happens only in bindAgent (once per agent swap, where O(n) is
+   * the correct cost).
+   */
+  const foldTrajectoryEvent = (event: SessionEvent): void => {
+    trajectoryBuild = extendTrajectoryEvents(trajectoryBuild, [event])
+  }
+
   const bindAgent = (): void => {
     agentBindingGeneration += 1
     state.agentBindingGeneration = agentBindingGeneration
     for (const dispose of agentSubscriptions) dispose()
     stopActivityTick()
+    // A new agent starts with a fresh skill-retry budget (an old ladder's
+    // attempt counter must not shorten the new agent's retries). In-flight
+    // refreshes from the previous agent are already stale via the
+    // `target !== agent` check — the refresh generation is NOT bumped here
+    // because the boot-time refresh resolves AFTER this first bindAgent.
+    skillRetryAttempts = 0
+    skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
+    // The trajectory build belongs to ONE bound agent's session log. A
+    // replacement (rewind/resume/new/workspace/model-switch) must never
+    // extend the previous session's projection — reset and fold the new
+    // session's full log once here (O(n) once per swap, never per event).
+    trajectoryBuild = emptyTrajectory()
+    trajectoryBuild = extendTrajectory(trajectoryBuild, agent.session.events)
     // Cancel state and deferred interrupt delivery belong to one bound agent.
     // A replacement must neither inherit the old latch nor receive its queued
     // microtask after the session identity changes.
@@ -7245,26 +8845,8 @@ ${output}
     const prefs = activityPrefsSnapshot()
     activityTracker = new ActivityTracker(prefs.config, Date.now, prefs.customActions)
     activityFailureReported = false
+    activityDoneStableSince = undefined
     updateWorkingActivity('agent bind', () => activityTracker.onAgentStatus(agent.status))
-    activityTickTimer = setInterval(() => {
-      const previous = state.workingActivity
-      const rendered = updateWorkingActivity('activity tick')
-      if (rendered === undefined) return
-      // Live phases deliberately wake at 500 ms even when the formatted line
-      // has not crossed its next whole-second boundary: turnElapsedMs remains
-      // a current state value, while line changes cover phrase rotation and
-      // the short-lived completed-tool summary.
-      if (
-        rendered.phase === 'waiting' ||
-        rendered.phase === 'thinking' ||
-        rendered.phase === 'tool' ||
-        previous?.phase !== rendered.phase ||
-        previous.line !== rendered.line
-      ) {
-        state.emit()
-      }
-    }, 500)
-    activityTickTimer.unref()
     // Re-couple the channel-owned model selection to the new agent's
     // assembly/request waterfalls, then re-apply the persisted effort when
     // this agent's route offers it (dsh-agent installModelSelection).
@@ -7354,6 +8936,12 @@ ${output}
         }
         // Otherwise handle the bound main-agent session.
         if (!isMainSession) return
+        if (session !== agent.session) {
+          // A background (agent view) session is active: refresh the rows
+          // so its summary/status follows the live output, throttled.
+          scheduleAgentViewRefresh()
+          return
+        }
         // Observation broker (C-042): maps user/message + assistant/message
         // into grant-gated envelopes; every other event type is a no-op, and
         // publish never throws into this arm.
@@ -7375,32 +8963,59 @@ ${output}
         if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
           refreshMode()
         }
-        // Plan mode owns the truth the injected prompt describes. When plan
-        // mode turns off (exit_plan_mode approval, /plan off, Shift+Tab), the
-        // `/planPrompt` switch must not stay stale-on: clear its durable
-        // event so status and a later bare `/planPrompt` agree with reality.
-        if (
-          eventType === 'plan/mode' &&
-          (event.data as unknown as { active?: boolean }).active !== true &&
-          foldPlanPromptEnabled(session.events) &&
-          !pendingPlanPromptClears.has(session)
-        ) {
-          pendingPlanPromptClears.add(session)
-          queueMicrotask(() => {
-            pendingPlanPromptClears.delete(session)
-            // Re-check after the publishing append has unwound: a queued
-            // `/planPrompt` back-on in the same tick must not be cleared.
-            if (foldPlanActive(session.events) || !foldPlanPromptEnabled(session.events)) return
-            try {
-              session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active: false })
-            } catch (error) {
-              ctx.logger.warn(
-                `dsh-tui: failed to clear the /planPrompt switch: ${error instanceof Error ? error.message : String(error)}`,
-              )
+        if (eventType === 'plan/mode') {
+          const planEventActive = (event.data as unknown as { active?: boolean }).active
+          // Plan mode owns the truth the injected prompt describes. When plan
+          // mode turns off (exit_plan_mode approval, /plan off, Shift+Tab), the
+          // `/planPrompt` switch must not stay stale-on: clear its durable
+          // event so status and a later bare `/planPrompt` agree with reality.
+          if (
+            planEventActive !== true &&
+            foldPlanPromptEnabled(session.events) &&
+            !pendingPlanPromptClears.has(session)
+          ) {
+            pendingPlanPromptClears.add(session)
+            queueMicrotask(() => {
+              pendingPlanPromptClears.delete(session)
+              // Re-check after the publishing append has unwound: a queued
+              // `/planPrompt` back-on in the same tick must not be cleared.
+              if (foldPlanActive(session.events) || !foldPlanPromptEnabled(session.events)) return
+              try {
+                session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active: false })
+              } catch (error) {
+                ctx.logger.warn(
+                  `dsh-tui: failed to clear the /planPrompt switch: ${error instanceof Error ? error.message : String(error)}`,
+                )
+              }
+            })
+          }
+          if (planEventActive === false) {
+            const target = prePlanModes.get(session) ?? prePlanModeSpec(session.events)
+            prePlanModes.delete(session)
+            if (!explicitPlanExits.delete(session) && target !== undefined) {
+              const queued = pendingPlanExitRestores.has(session)
+              pendingPlanExitRestores.set(session, target)
+              if (!queued) queueMicrotask(() => {
+                const restore = pendingPlanExitRestores.get(session)
+                pendingPlanExitRestores.delete(session)
+                // Rebinding, reentry, or an explicit switch supersedes this restore.
+                if (restore === undefined || session !== agent.session || foldPlanActive(session.events)) return
+                applyMode(restore).catch(error => {
+                  ctx.logger.warn(
+                    `dsh-tui: plan-exit mode restore failed: ${error instanceof Error ? error.message : String(error)}`,
+                  )
+                })
+              })
             }
-          })
+          }
         }
         renderEvent(event)
+        // Fold the trajectory incrementally here — at EVENT time, not render
+        // time: Chat renders must never touch the session getter, and the
+        // token-rate path must not re-read the O(n) session snapshot. The
+        // observer already holds the event, so the fold consumes it directly
+        // (chunks are pure timing updates, O(1) with no state copy).
+        foldTrajectoryEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
         // path; every other event keeps synchronous notification.
         if (event.type === 'assistant/chunk') state.emitStream()

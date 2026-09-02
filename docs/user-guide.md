@@ -231,6 +231,7 @@ dsh-tui
 | `/doctor` | 无 | 环境自检 |
 | `/init` | 无 | 在工作目录创建 `AGENTS.md`（created / exists / failed 三态提示） |
 | `/agents` | 无 | 本会话子代理列表 |
+| `/jobs` | 无 | 本会话后台任务面板（`run_in_background` 启动的命令）：状态/运行时长/退出码实时跟踪，`↑/↓` 选择、`k` 停止选中任务；转录流内嵌任务卡（有输出时显示最多三行瀑布、无输出时仅头行，点击进面板），状态栏有运行数角标，任务落定弹 toast。输出来自 agent `job_output` 读取的镜像，非实时 tail |
 | `/settings` | 无 | 打开插件设置编辑器（命名空间读取/编辑） |
 | `/help` | 无 | 快捷键 + 命令帮助菜单（`?` 同款） |
 
@@ -253,7 +254,7 @@ dsh-tui
 
 | 命令 | 参数 | 作用 |
 |---|---|---|
-| `/provider` | 无 | 交互式添加模型提供方向导（持久化 profile + key） |
+| `/provider` | 无 | 交互式管理模型提供方向导（添加 / 编辑 / 删除；捆绑 dsh-auth 挂载时添加分支多出**订阅 OAuth 登录**——ChatGPT / Claude / Grok 免 API key 登录 / 登出；编辑单项只原地修补该字段、其余配置原样保留；持久化 profile，API key 非环境变量来源时才写入密钥库） |
 | `/login` | 无 | 凭证状态（来源、存储可写性、base URL） |
 | `/logout` | 无 | 登出说明（env 来源需删环境变量并重启） |
 | `/permission` | 无 / `<preset>` / `status` | 查看当前权限预设与策略说明；无参时打开由 DSH `permissionPresets` registry 提供的选择器，参数通过官方命令切换。服务缺失时使用 legacy 三项名册，挂载但损坏时 unavailable；外部命令未注册时沿用默认命令/model dispatch |
@@ -380,7 +381,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 - `/workspace`：`resume` / `rename <名>` / `open <路径|file:// URI>`（打开并新建会话）；
   `dsh-tui <路径>` 启动器同样接受工作区目标。相对路径由当前工作区插件解析。
 - `/doctor` 自检：Node/平台、API key、模型路由、cwd、上下文窗口、会话存储、插件宿主。
-- `/provider` 交互向导添加模型提供方（密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`）。
+- `/provider` 交互向导管理模型提供方（添加 / 编辑 / 删除；捆绑 dsh-auth 挂载时添加分支提供**订阅账号登录（OAuth）**——选择 ChatGPT / Claude / Grok 等订阅账号走浏览器 / 设备码流程登录，免 API key，已登录可重新登录或登出，与 `/auth status|login|logout` 同源，未挂载时无此选项；编辑菜单可选 API Key、模型列表或删除该 provider，自定义端点额外提供 Base URL 与 wire protocol——这两项仅自定义端点可编辑；任一编辑项只原地修补所选字段，profile 其余配置原样保留；仅用户配置层写入的 provider 可编辑/删除；非环境变量来源的密钥写入 `~/.dsh/.credentials.yaml` 0600，界面只显示 `••••••`；环境变量提供的密钥既不写入也不删除，与其他 provider 共用的密钥在删除时也保留）。
 - `/init` 创建 AGENTS.md；`/agents` 子代理列表；`/login` `/logout` 凭证管理；
   `/permission` `/add-dir` 权限说明；`/hooks` `/vim` `/connect` 为占位（DSH 无对应机制，给明确说明）。
 
@@ -425,7 +426,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**编辑是暂存制**：`s` 保存 / `d` 放弃 / `Esc` 丢弃脏区退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 20 个字段：
+dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 21 个字段：
 
 | 字段 | 说明 |
 |---|---|
@@ -433,6 +434,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 20 �
 | whale | 开屏头部像素鲸鱼娘（默认开） |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
+| smoothStreaming | 流式平滑输出（默认开）：实时回复/展开思考/工具卡正文按 ~30fps 匀速揭示，突发送达不再跳变，一次性到达的非流式回复也平滑打出；回放/历史始终完整直出 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 

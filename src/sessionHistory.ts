@@ -22,6 +22,14 @@ const DIR = DATA_DIR
 const RESUME_FILE = join(DIR, 'resume.txt')
 const LEGACY_RESUME_FILE = join(LEGACY_DATA_DIR, 'resume.txt')
 const LAST_USED_FILE = join(DIR, 'last-used.json')
+/**
+ * The agent view's OWN ledger: session-id → epoch-ms of the moments this TUI
+ * dispatched, backgrounded, or attached to a session FROM the agent view.
+ * Unlike last-used.json (every /resume touch), this is the "background
+ * session" record CC's `claude agents` shows — ordinary history never lands
+ * here, so the view lists only sessions it actually manages.
+ */
+const AGENT_VIEW_SESSIONS_FILE = join(DIR, 'agent-view-sessions.json')
 
 function ensureDir(): void {
   mkdirSync(DIR, { recursive: true })
@@ -150,5 +158,61 @@ export function forgetSession(sessionId: string): void {
     writeFileSync(LAST_USED_FILE, JSON.stringify(lastUsed))
   } catch {
     // Best effort — a stale entry only skews sort order.
+  }
+}
+
+/**
+ * The agent-view ledger (see {@link AGENT_VIEW_SESSIONS_FILE}): session-id →
+ * epoch-ms. Best effort — an unreadable file yields {}.
+ * @returns The parsed map.
+ */
+export function readAgentViewSessions(): Readonly<Record<string, number>> {
+  try {
+    const parsed = JSON.parse(readFileSync(AGENT_VIEW_SESSIONS_FILE, 'utf8')) as unknown
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+    const record = parsed as Record<string, unknown>
+    const result: Record<string, number> = {}
+    for (const [id, value] of Object.entries(record)) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        result[id] = value
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Record a session as agent-view-managed (dispatched, backgrounded, or
+ * attached from the view). Best effort — never throws.
+ * @param sessionId - Session id to record.
+ */
+export function touchAgentViewSession(sessionId: string): void {
+  try {
+    ensureDir()
+    const sessions = { ...readAgentViewSessions(), [sessionId]: Date.now() }
+    writeFileSync(AGENT_VIEW_SESSIONS_FILE, JSON.stringify(sessions))
+  } catch {
+    // Best effort — the ledger is a display filter, not state.
+  }
+}
+
+/**
+ * Drop a session from the agent-view ledger (its log was deleted). Best
+ * effort — never throws.
+ * @param sessionId - Session id to forget.
+ */
+export function forgetAgentViewSession(sessionId: string): void {
+  try {
+    const sessions: Record<string, number> = { ...readAgentViewSessions() }
+    if (!(sessionId in sessions)) return
+    delete sessions[sessionId]
+    ensureDir()
+    writeFileSync(AGENT_VIEW_SESSIONS_FILE, JSON.stringify(sessions))
+  } catch {
+    // Best effort — a stale entry only lists one extra stopped row.
   }
 }

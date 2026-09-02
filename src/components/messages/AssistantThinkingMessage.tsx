@@ -24,6 +24,11 @@ const PREVIEW_ROWS = 3
 
 type Props = {
   thinking: string
+  /** The FULL un-revealed text (reasoning rows under smooth streaming):
+   *  `thinking` carries the revealed slice the expanded body paints, while
+   *  the live preview ticker must follow the newest ARRIVED content — never
+   *  a lagging reveal. Falls back to `thinking`. */
+  textFull?: string
   /** Adds the top margin between messages (CC: addMargin). */
   addMargin: boolean
   /** Show the full text (Ctrl+O, per-row expansion, or live click toggle). */
@@ -54,6 +59,7 @@ type Props = {
  */
 export function AssistantThinkingMessage({
   thinking,
+  textFull,
   addMargin,
   verbose,
   streaming = false,
@@ -63,6 +69,11 @@ export function AssistantThinkingMessage({
   onClick,
 }: Props): React.ReactNode {
   if (!thinking) return null
+
+  // The preview ticker tracks the newest ARRIVED line (smooth streaming must
+  // not lag it behind the reveal); the expanded body below paints `thinking`
+  // — the revealed slice under smooth streaming, the full text otherwise.
+  const tickerText = textFull ?? thinking
 
   // Spinner frame (80ms cadence, only while the reasoning is still
   // streaming — same pattern as BtwPanel's answering spinner).
@@ -112,7 +123,7 @@ export function AssistantThinkingMessage({
     // from the start (leading ellipsis) so the newest tokens — which grow
     // at the line's end — stay visible while the line is longer than the
     // width.
-    const lines = thinking.split('\n')
+    const lines = tickerText.split('\n')
     const visible = lines.slice(-PREVIEW_ROWS)
     const clipped = lines.length > visible.length
     // Pad with single spaces — an empty-string Text renders with zero

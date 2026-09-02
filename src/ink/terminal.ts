@@ -471,15 +471,18 @@ export function serializeDiff(
  * @param terminal - the terminal to write to.
  * @param diff - the frame diff patches to render.
  * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
+ * @returns `false` when the underlying stream reported backpressure
+ *   (`stdout.write()` returned false) — callers gate scroll-drain and
+ *   backlog handling on this.
  */
 export function writeDiffToTerminal(
   terminal: Terminal,
   diff: Diff,
   skipSyncMarkers = false,
-): void {
+): boolean {
   const buffer = serializeDiff(terminal, diff, skipSyncMarkers)
   if (buffer === '') {
-    return
+    return true
   }
-  terminal.stdout.write(buffer)
+  return terminal.stdout.write(buffer)
 }

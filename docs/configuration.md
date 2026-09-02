@@ -86,6 +86,9 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 
 - `/preset` 打开选择器。
 - `/preset <id>` 直接选择；`/preset status` 查看当前状态。
+- 选择器显示的名称与描述取自各 preset 的 `preset.yml`（中文）。界面语言为
+  `en`（`/lang en`）时，内置 preset（`standard` / `minimal` / `code` / `cordis` /
+  `liangshen`）显示本地化的英文名称与描述；自定义 preset 原样显示。
 - 空白会话可以原地切换。已经产生对话的会话遵循官方 blank-only 规则，选择只会
   保存为新默认值，在 `/new` 或下一次启动时生效。
 - 默认值保存在 `~/.dsh-tui/agent-preset.json`。
@@ -170,9 +173,25 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 `DSH_TUI_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
 公开 issue，除非已经检查并脱敏。
 
-## `/provider`：运行时添加模型提供方
+## `/provider`：运行时管理模型提供方
 
-`/provider` 打开交互向导，无需重启即可添加模型提供方：
+`/provider` 打开交互向导，无需重启即可管理模型提供方。向导第一步选择动作：
+
+- **添加新 provider**：内置目录或自定义 API 端点（见下）。
+- **编辑已有 provider**：从**用户配置层**已写入的路由中选择（组合 base
+  继承来的 provider 无法从用户层删除，不进入编辑/删除菜单），进入编辑菜单
+  ——内置 provider 可选 **编辑 API Key**、**编辑模型列表**、**删除该
+  provider**；自定义端点额外提供 **编辑 Base URL** 与 **编辑 wire
+  protocol**（内置路由即使 profile 显式写了 `api` 覆盖，仍按内置对待）。任一
+  编辑项改完只原地修补所选项那一个字段并立即退出，无需再确认——profile 其余
+  字段（含 `headers`、`timeoutMs`、`retryPolicy` 等 TUI 未建模的键）完全不
+  进写入，原样保留；「编辑模型列表」会自动勾选当前已启用的模型，勾选项的
+  模型条目同样原样保留。唯一例外是「删除该 provider」，需先确认，确认后
+  移除 profile 与 API key——环境变量来源的密钥、以及与其他 provider 共用的
+  密钥引用会保留、只删配置；若 profile 已删而密钥清理失败，会明确提示
+  手动处理（provider 本身已删除生效）。
+
+**添加**分支支持以下来源（第三种按挂载条件出现）：
 
 - **内置 provider**：从 `llm.listConfigurableProviders()` 列出的 catalog
   路由（openai、anthropic、deepseek 等）中选择，只需输入 API key；baseURL
@@ -180,18 +199,27 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 - **自定义 API 端点**：输入路由名、API key、baseURL 与协议
   （`openai-completions` / `openai-responses` / `anthropic-messages`），
   向导会用草稿凭据探测端点公布的模型供勾选（探测失败则手输模型 id）。
+- **订阅账号登录（OAuth）**：仅当捆绑的 dsh-auth 插件挂载时多出该选项——从
+  向导列出的订阅账号（ChatGPT / Claude / Grok 等）中选择一个，走浏览器授权 /
+  设备码流程用官方订阅登录，**无需 API key**；列表中每个账号都带遮蔽的登录态
+  标注（已登录显示令牌到期时间，过期会注明），已登录的账号可选**重新登录**
+  （换账号或刷新凭据）或**登出**（删除本地保存的 OAuth 凭据）。凭据存储与路由
+  注册由 dsh-auth 拥有，`/auth status|login|logout` 与此分支同源。未挂载
+  dsh-auth 时选项不出现，向导与之前完全一致；挂载了插件但没有可 OAuth 登录的
+  provider 时会给出提示。
 
-写入产物（profile 启动时，dsh-base 提供 settings/credentials 服务）：
+写入/删除产物（profile 启动时，dsh-base 提供 settings/credentials 服务）：
 
 | 产物 | 位置 |
 | --- | --- |
-| provider profile | `~/.dsh/settings.yaml` 的 `llm-pi-ai.providers.<路由名>`，写入即注册路由 |
+| provider profile | `~/.dsh/settings.yaml` 的 `llm-pi-ai.providers.<路由名>`，写入即注册路由，删除即注销 |
 | API key | `~/.dsh/.credentials.yaml`（0600），引用名为 `<路由名大写>_API_KEY` |
 
 密钥答案在会话记录中只显示 `••••••`；若进程环境已有同名变量，则跳过写入、
-运行时直接从环境解析。配置与 dsh web 端的 Models 设置页互通（同一 settings
-section）。裸 `dsh --config cordis.yml` 启动没有这些服务，`/provider` 会提示
-不可用。添加完成后运行 `/model` 即可切换到新路由的模型。
+运行时直接从环境解析，删除时也不会触碰环境变量。配置与 dsh web 端的 Models
+设置页互通（同一 settings section）。裸 `dsh --config cordis.yml` 启动没有
+这些服务，`/provider` 会提示不可用。添加/编辑完成后运行 `/model` 即可切换
+到新路由的模型。
 
 ## 组合约束
 

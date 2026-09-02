@@ -6,6 +6,7 @@ import type { DOMElement } from '../dom.js';
 import { markDirty, scheduleRenderFrom } from '../dom.js';
 import { noteFrameCause } from '../geometry-trace.js';
 import { markCommitStart } from '../reconciler.js';
+import { swallowNestedUpdateOverflow } from '../update-overflow-guard.js';
 import type { WheelEvent } from '../events/wheel-event.js';
 import type { Styles } from '../styles.js';
 import Box from './Box.js';
@@ -104,7 +105,15 @@ function ScrollBox({
   // clearing, subscriber notify) instead of duplicating its logic.
   const handleRef = useRef<ScrollBoxHandle | null>(null);
   const notify = () => {
-    for (const l of listenersRef.current) l();
+    // #185 self-heal: scroll subscribers drive React state (setScrollTick);
+    // a thrown overflow here resets React's nested counter — absorb it.
+    for (const l of listenersRef.current) {
+      try {
+        l();
+      } catch (error) {
+        if (!swallowNestedUpdateOverflow(error, 'scrollbox.notify')) throw error;
+      }
+    }
   };
   // Input-edge intent coalescing (Qwen Code's 16ms wheel merge, Crush's
   // pre-queue filter): subscribers drive React state (MessageList's mount

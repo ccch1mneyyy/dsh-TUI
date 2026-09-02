@@ -25,7 +25,7 @@ const [
   { render, AlternateScreen },
   { Chat },
   { setLang },
-  { settle, screenHas, findText, viewportLines },
+  { settle, settled, screenHas, findText, viewportLines },
   { stringWidth },
 ] = await Promise.all([
   import('node:stream'),
@@ -311,8 +311,11 @@ channel.autoRecapOnOpen = true
 channel.agentId = 'probe-5'
 channel.emit()
 await settle(() => channel.recapCallCount === 5)
-await settle(() => screenHas(term, '回顾：'))
-check('重新开启后切会话恢复灰行', screenHas(term, 'AUTO_RECAP_SUMMARY'))
+// 直接 settle 到摘要落屏，不能 settle 到「回顾：」就立即断言摘要：灰行在
+// recap 在途时先画占位行「回顾：正在总结最近活动…」（同样含此前缀），摘要
+// 经 promise.then 另行落屏——两帧之间该断言是竞态（channel 订阅唤醒从
+// uSES 同步渲染改为 DefaultLane 排期后，占位帧在 CI 上真实出现）。
+check('重新开启后切会话恢复灰行', await settled(() => screenHas(term, 'AUTO_RECAP_SUMMARY')))
 stdin.write('继续')
 await settle(() => screenHas(term, '继续'))
 stdin.write('\r')
