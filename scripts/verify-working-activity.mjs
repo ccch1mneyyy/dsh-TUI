@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { settled } from './lib/term-test.mjs'
+import { settled, sleep } from './lib/term-test.mjs'
 
 const testHome = mkdtempSync(join(tmpdir(), 'dsh-tui-activity-home-'))
 process.env.HOME = testHome
@@ -196,6 +196,131 @@ sessionEvent()(agent.session, {
   data: { turn: 'minimal-turn', step: 'step-1', chunk: { type: 'text-delta', text: 'hi' } },
 })
 assert.match(minimalChannel.workingActivity.line, /思考中|Thinking/)
+
+// ── the 500ms tick retires once the turn is done and the line is stable ───
+{
+  const opts = {
+    model: 'test-model', provider: 'test-provider', cwd: testHome, activity: true,
+  }
+  const fresh = makeAgent('agent-3', 'session-3')
+  const tickChannel = createChannel(ctx, fresh, opts)
+  let emits = 0
+  const unsubscribe = tickChannel.subscribe(() => { emits += 1 })
+  // LIVE phase first: start a turn and keep it live (thinking). The 500ms
+  // timer must ACTUALLY fire while the turn is open — recording the emit
+  // baseline only after turn/end would prove nothing (a predicate already
+  // satisfied by the done phase cannot evidence a live tick).
+  handlers.get('agent/status')({ agent: fresh, status: 'running' })
+  handlers.get('session/event')(fresh.session, {
+    type: 'turn/start', seq: 0, time: Date.now(), data: { turn: 'tick-turn' },
+  })
+  handlers.get('session/event')(fresh.session, {
+    type: 'assistant/chunk', seq: 1, time: Date.now(),
+    data: { turn: 'tick-turn', step: 'step-1', chunk: { type: 'text-delta', text: 'hi' } },
+  })
+  assert.equal(tickChannel.workingActivity?.phase, 'thinking')
+  const emitsAtLive = emits
+  const liveElapsedBefore = tickChannel.workingActivity.turnElapsedMs
+  assert.ok(
+    await settled(() => emits > emitsAtLive && tickChannel.workingActivity.turnElapsedMs >= liveElapsedBefore + 450),
+    'live phase holds a real timer-driven 500ms emit (elapsed advances while the turn is open)',
+  )
+  // Only NOW end the turn.
+  handlers.get('session/event')(fresh.session, {
+    type: 'turn/end', seq: 2, time: Date.now(),
+    data: { turn: 'tick-turn', reason: { kind: 'completed' } },
+  })
+  handlers.get('agent/status')({ agent: fresh, status: 'idle' })
+  assert.equal(tickChannel.workingActivity?.phase, 'done')
+  // The done summary carries a short-lived fragment; after it stabilizes
+  // (~3s window + 4s grace) the tick must stop: no further emits.
+  await sleep(5500)
+  const emitsAfterIdle = emits
+  await sleep(2000)
+  assert.equal(emits, emitsAfterIdle, 'no activity emits while the done line is stable')
+
+  // ── failure injection: projection unavailable retires the tick ──────────
+  // The tick's `rendered === undefined` funnel is the SAME one a throwing
+  // tracker.render() lands in (updateWorkingActivity catches and returns
+  // undefined); the options.activity flip reaches it deterministically.
+  // A live turn arms the tick; flipping the sidecar off must retire it on
+  // the NEXT tick (≤ ~600ms) instead of spinning forever, and a later REAL
+  // activity event must be able to re-arm it.
+  handlers.get('agent/status')({ agent: fresh, status: 'running' })
+  handlers.get('session/event')(fresh.session, {
+    type: 'turn/start', seq: 3, time: Date.now(), data: { turn: 'tick-turn-2' },
+  })
+  handlers.get('session/event')(fresh.session, {
+    type: 'assistant/chunk', seq: 4, time: Date.now(),
+    data: { turn: 'tick-turn-2', step: 'step-1', chunk: { type: 'text-delta', text: 'hi' } },
+  })
+  assert.equal(tickChannel.workingActivity?.phase, 'thinking')
+  const emitsLive2 = emits
+  const live2Elapsed = tickChannel.workingActivity.turnElapsedMs
+  assert.ok(
+    await settled(() => emits > emitsLive2 && tickChannel.workingActivity.turnElapsedMs >= live2Elapsed + 450),
+    'tick re-armed for the new live turn (timer-driven elapsed advance)',
+  )
+  // Poison the projection: every updateWorkingActivity now yields undefined.
+  opts.activity = false
+  const emitsAtPoison = emits
+  await sleep(1600)
+  const emitsAfterPoison = emits
+  await sleep(1200)
+  assert.equal(emits, emitsAfterPoison, 'tick retired after projection became unavailable (no 500ms wake loop)')
+  assert.ok(
+    emitsAfterPoison - emitsAtPoison <= 2,
+    `at most the in-flight tick fired once more (delta=${emitsAfterPoison - emitsAtPoison})`,
+  )
+  // Recovery: a REAL activity event re-arms the tick once the projection is
+  // available again.
+  opts.activity = true
+  handlers.get('session/event')(fresh.session, {
+    type: 'assistant/chunk', seq: 5, time: Date.now(),
+    data: { turn: 'tick-turn-2', step: 'step-2', chunk: { type: 'text-delta', text: 'again' } },
+  })
+  const recoveredElapsed = tickChannel.workingActivity?.turnElapsedMs ?? 0
+  assert.ok(
+    await settled(() => (tickChannel.workingActivity?.turnElapsedMs ?? 0) >= recoveredElapsed + 450),
+    'a later real activity event re-arms the tick',
+  )
+  unsubscribe()
+}
+
+// ── streaming revive bumps rowsStreamingVersion (P2-7) ────────────────────
+// A reconnect replay that revives a previously sealed assistant row flips
+// `streaming` IN PLACE — invisible to rows identity/length, so the
+// transcript filter cache must hear about it via the version counter.
+{
+  const fresh = makeAgent('agent-4', 'session-4')
+  const reviveChannel = createChannel(ctx, fresh, {
+    model: 'test-model', provider: 'test-provider', cwd: testHome, activity: false,
+  })
+  const before = reviveChannel.rowsStreamingVersion
+  // Stream a step, then seal it with an assistant/message.
+  handlers.get('session/event')(fresh.session, {
+    type: 'turn/start', seq: 0, time: Date.now(), data: { turn: 1, step: 1 },
+  })
+  handlers.get('session/event')(fresh.session, {
+    type: 'assistant/chunk', seq: 1, time: Date.now(),
+    data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'hello' } },
+  })
+  handlers.get('session/event')(fresh.session, {
+    type: 'assistant/message', seq: 2, time: Date.now(),
+    data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'hello' }] } },
+  })
+  assert.ok(reviveChannel.rowsStreamingVersion > before, 'settle bumps rowsStreamingVersion')
+  const settledVersion = reviveChannel.rowsStreamingVersion
+  // A reconnect replay of the same step's chunk revives the sealed row.
+  handlers.get('session/event')(fresh.session, {
+    type: 'assistant/chunk', seq: 3, time: Date.now(),
+    data: { turn: 1, step: 1, chunk: { type: 'text-delta', text: 'hello' } },
+  })
+  assert.ok(
+    reviveChannel.rowsStreamingVersion > settledVersion,
+    'revive of a sealed row bumps rowsStreamingVersion',
+  )
+}
 
 for (const dispose of effects.reverse()) dispose()
 rmSync(testHome, { recursive: true, force: true })

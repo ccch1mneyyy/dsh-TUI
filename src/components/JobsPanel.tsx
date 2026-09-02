@@ -123,8 +123,14 @@ export function JobsPanel({ jobs, onClose, onKill }: JobsPanelProps): React.Reac
   const [focusIndex, setFocusIndex] = React.useState(0)
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows } = useTerminalSize()
-  // 1s tick keeps live durations counting while the panel is open.
-  const [clockRef] = useAnimationFrame(1000)
+  // 1s tick keeps live durations counting while the panel is open — but only
+  // while a live job exists to count: an empty or all-settled panel is a
+  // static render and must not hold a clock subscription.
+  const liveCount = jobs.reduce(
+    (count, job) => count + (job.status === 'running' || job.status === 'stopping' ? 1 : 0),
+    0,
+  )
+  const [clockRef] = useAnimationFrame(liveCount > 0 ? 1000 : null)
 
   const focus = Math.min(focusIndex, Math.max(0, jobs.length - 1))
 

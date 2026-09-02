@@ -1,9 +1,14 @@
 /**
  * Pixel-whale animation frames for the startup splash, converted from
- * the hand-drawn Excel art in `whale_frames.zip` (25x40 cells, palette
- * alphabet shared with Whale.tsx: D outline, B body, L belly, W mouth,
- * `.` transparent). `OPENING_SEQUENCE` plays once at startup: blink,
- * water-spout bloom, tail wag, then the header settles static.
+ * the hand-drawn Excel art (the `dsh-ui-whale` frame set, 25x40 cells,
+ * palette alphabet shared with Whale.tsx: D outline, B body, L belly,
+ * W mouth, H heart, Z sleep-Z, `.` transparent). All 22 source frames
+ * are here; `OPENING_SEQUENCES` packs them into three startup intros —
+ * the classic blink + spout + tail-wag combo, the heart pass, and the
+ * sleep-Z float — of which one is rolled every time the logo header
+ * mounts (see `pickOpeningSequence`): randomly at startup, and again on
+ * every `/deepseek` easter-egg replay. The header then settles static
+ * on the standard pose.
  */
 
 /** One animation frame: 25 sprite rows of 40 palette characters. */
@@ -13,7 +18,7 @@ export interface WhaleFrame {
   readonly rows: readonly string[]
 }
 
-/** The 13 hand-drawn frames. */
+/** The 22 hand-drawn frames (all poses from the source art, incl. heart and sleep). */
 export const WHALE_FRAMES: readonly WhaleFrame[] = [
   {
     name: 'standard',
@@ -405,9 +410,279 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
       '........................................',
     ],
   },
+  {
+    name: 'tail4',
+    rows: [
+      '........................................',
+      '........................................',
+      '........................................',
+      '........................................',
+      '................................D.......',
+      '...............................DBD......',
+      '..............................DBBD......',
+      '.......DDDDDDDDD..............DBBD......',
+      '......DBBBBBBBBBDD...........DBBBD......',
+      '.....DBBBBBBBBBBBBDD.........DBBBD....D.',
+      '....DBBBBBBBBBBBBBBBDD.......DBBBBDDDDBD',
+      '...DDBBBBBBBBBBBBBBBBBD.....DBBBBBBBBBBD',
+      '...DBBBBBBBBBBBBBBBBBBBDDDDDBBBBBBBBBBD.',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBBBBBBBBD..',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBBBBDDDD...',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBBBBD.......',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBBBBD........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBBBD.........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBDDD..........',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
+  {
+    name: 'heart1',
+    rows: [
+      '........................................',
+      '........................................',
+      '........................D...............',
+      '...H.H.................DBD.......D......',
+      '...HHH.................DBBD.....DBD.....',
+      '....H..................DBBBD..DDBBD.....',
+      '.......................DBBBBDDBBBBD.....',
+      '.......DDDDDDDDD........DBBBBBBBBD......',
+      '......DBBBBBBBBBDD.......DBBBBBBBD......',
+      '.....DBBBBBBBBBBBBDD.....DBBBBBDD.......',
+      '....DBBBBBBBBBBBBBBBDD....DBBBD.........',
+      '...DDBBBBBBBBBBBBBBBBBD..DBBBBD.........',
+      '...DBBBBBBBBBBBBBBBBBBBDDBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBD..........',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBD..........',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBD...........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBD...........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBD............',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
+  {
+    name: 'heart2',
+    rows: [
+      '........................................',
+      '........................................',
+      '...H.H..................D...............',
+      '..HHHHH................DBD.......D......',
+      '..HHHHH................DBBD.....DBD.....',
+      '...HHH.................DBBBD..DDBBD.....',
+      '....H..................DBBBBDDBBBBD.....',
+      '.......DDDDDDDDD........DBBBBBBBBD......',
+      '......DBBBBBBBBBDD.......DBBBBBBBD......',
+      '.....DBBBBBBBBBBBBDD.....DBBBBBDD.......',
+      '....DBBBBBBBBBBBBBBBDD....DBBBD.........',
+      '...DDBBBBBBBBBBBBBBBBBD..DBBBBD.........',
+      '...DBBBBBBBBBBBBBBBBBBBDDBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBD..........',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBD..........',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBD...........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBD...........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBD............',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
+  {
+    name: 'heart3',
+    rows: [
+      '........................................',
+      '..HH.HH.................................',
+      '.HHHHHHH................D...............',
+      '.HHHHHHH...............DBD.......D......',
+      '..HHHHH................DBBD.....DBD.....',
+      '...HHH.................DBBBD..DDBBD.....',
+      '....H..................DBBBBDDBBBBD.....',
+      '.......DDDDDDDDD........DBBBBBBBBD......',
+      '......DBBBBBBBBBDD.......DBBBBBBBD......',
+      '.....DBBBBBBBBBBBBDD.....DBBBBBDD.......',
+      '....DBBBBBBBBBBBBBBBDD....DBBBD.........',
+      '...DDBBBBBBBBBBBBBBBBBD..DBBBBD.........',
+      '...DBBBBBBBBBBBBBBBBBBBDDBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBD..........',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBD..........',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBD...........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBD...........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBD............',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
+  {
+    name: 'sleep1',
+    rows: [
+      '...................ZZZZ.................',
+      '........................................',
+      '..............ZZZZ......D...............',
+      '................Z......DBD.......D......',
+      '...............Z.......DBBD.....DBD.....',
+      '..............ZZZZ.....DBBBD..DDBBD.....',
+      '.......................DBBBBDDBBBBD.....',
+      '.......DDDDDDDDD........DBBBBBBBBD......',
+      '......DBBBBBBBBBDD.......DBBBBBBBD......',
+      '.....DBBBBBBBBBBBBDD.....DBBBBBDD.......',
+      '....DBBBBBBBBBBBBBBBDD....DBBBD.........',
+      '...DDBBBBBBBBBBBBBBBBBD..DBBBBD.........',
+      '...DBBBBBBBBBBBBBBBBBBBDDBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBD..........',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBD..........',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBD...........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBD...........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBD............',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
+  {
+    name: 'sleep2',
+    rows: [
+      '........................................',
+      '...............ZZZZ.....................',
+      '.................Z......D...............',
+      '................Z......DBD.......D......',
+      '...............ZZZZ....DBBD.....DBD.....',
+      '.......................DBBBD..DDBBD.....',
+      '..........ZZZZ.........DBBBBDDBBBBD.....',
+      '.......DDDDDDDDD........DBBBBBBBBD......',
+      '......DBBBBBBBBBDD.......DBBBBBBBD......',
+      '.....DBBBBBBBBBBBBDD.....DBBBBBDD.......',
+      '....DBBBBBBBBBBBBBBBDD....DBBBD.........',
+      '...DDBBBBBBBBBBBBBBBBBD..DBBBBD.........',
+      '...DBBBBBBBBBBBBBBBBBBBDDBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBD..........',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBD..........',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBD...........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBD...........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBD............',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
+  {
+    name: 'sleep3',
+    rows: [
+      '................ZZZZ....................',
+      '..................Z.....................',
+      '.................Z......D...............',
+      '................ZZZZ...DBD.......D......',
+      '.......................DBBD.....DBD.....',
+      '...........ZZZZ........DBBBD..DDBBD.....',
+      '.............Z.........DBBBBDDBBBBD.....',
+      '.......DDDDDDDDD........DBBBBBBBBD......',
+      '......DBBBBBBBBBDD.......DBBBBBBBD......',
+      '.....DBBBBBBBBBBBBDD.....DBBBBBDD.......',
+      '....DBBBBBBBBBBBBBBBDD....DBBBD.........',
+      '...DDBBBBBBBBBBBBBBBBBD..DBBBBD.........',
+      '...DBBBBBBBBBBBBBBBBBBBDDBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBD..........',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBD..........',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBD...........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBD...........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBD............',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
+  {
+    name: 'sleep4',
+    rows: [
+      '...................Z....................',
+      '..................Z.....................',
+      '.................ZZZZ...D...............',
+      '.......................DBD.......D......',
+      '............ZZZZ.......DBBD.....DBD.....',
+      '..............Z........DBBBD..DDBBD.....',
+      '.............Z.........DBBBBDDBBBBD.....',
+      '.......DDDDDDDDD........DBBBBBBBBD......',
+      '......DBBBBBBBBBDD.......DBBBBBBBD......',
+      '.....DBBBBBBBBBBBBDD.....DBBBBBDD.......',
+      '....DBBBBBBBBBBBBBBBDD....DBBBD.........',
+      '...DDBBBBBBBBBBBBBBBBBD..DBBBBD.........',
+      '...DBBBBBBBBBBBBBBBBBBBDDBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBD..........',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBD..........',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBD...........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBD...........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBD............',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
+  {
+    name: 'sleep5',
+    rows: [
+      '...................Z....................',
+      '..................ZZZZ..................',
+      '........................D...............',
+      '.............ZZZZ......DBD.......D......',
+      '...............Z.......DBBD.....DBD.....',
+      '..............Z........DBBBD..DDBBD.....',
+      '.............ZZZZ......DBBBBDDBBBBD.....',
+      '.......DDDDDDDDD........DBBBBBBBBD......',
+      '......DBBBBBBBBBDD.......DBBBBBBBD......',
+      '.....DBBBBBBBBBBBBDD.....DBBBBBDD.......',
+      '....DBBBBBBBBBBBBBBBDD....DBBBD.........',
+      '...DDBBBBBBBBBBBBBBBBBD..DBBBBD.........',
+      '...DBBBBBBBBBBBBBBBBBBBDDBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBBD.........',
+      '...DBBBDBBBBBBDBBBBBBBBBBBBBBD..........',
+      '...DBBBBBBBBBBBBBBBBBBBBBBBBBD..........',
+      '...DBBBBWWWWWWWBBBBBBBBDBBBBD...........',
+      '...DDBWWWWWWWWWWWWBBBBBBDBBBD...........',
+      '....DLLWWWWWWWWWWWWDBBBBDDBD............',
+      '.....DLLLWWWWWWWWWWDBBBBBDD.............',
+      '......DDLLLWWWWWWLLLDBBBBBDD............',
+      '........DLLLLLLLLLLLDDBBBBBBD...........',
+      '.........DDDDDDDDDDD..DDDDDDD...........',
+      '........................................',
+      '........................................',
+    ],
+  },
 ]
 
-/** One step of the opening animation: frame index + dwell time. */
+/** One step of an opening animation: frame index + dwell time. */
 export interface OpeningStep {
   /** Index into WHALE_FRAMES. */
   readonly frame: number
@@ -415,22 +690,105 @@ export interface OpeningStep {
   readonly ms: number
 }
 
-/** Startup sequence (~3.4s), ending on the standard pose. */
-export const OPENING_SEQUENCE: readonly OpeningStep[] = [
-  { frame: 0, ms: 400 }, // standard
-  { frame: 1, ms: 250 }, // blink
-  { frame: 0, ms: 300 }, // standard
-  { frame: 4, ms: 150 }, // spout1
-  { frame: 5, ms: 150 }, // spout2
-  { frame: 6, ms: 150 }, // spout3
-  { frame: 7, ms: 150 }, // spout4
-  { frame: 8, ms: 150 }, // spout5
-  { frame: 9, ms: 150 }, // spout6
-  { frame: 0, ms: 250 }, // standard
-  { frame: 10, ms: 170 }, // tail1
-  { frame: 11, ms: 170 }, // tail2
-  { frame: 12, ms: 260 }, // tail3
-  { frame: 11, ms: 170 }, // tail2
-  { frame: 10, ms: 170 }, // tail1
-  { frame: 0, ms: 300 }, // standard
-]
+/** Named indices into WHALE_FRAMES (the order matches the source art). */
+const F = {
+  standard: 0,
+  blink: 1,
+  fin1: 2,
+  fin2: 3,
+  spout1: 4,
+  spout2: 5,
+  spout3: 6,
+  spout4: 7,
+  spout5: 8,
+  spout6: 9,
+  tail1: 10,
+  tail2: 11,
+  tail3: 12,
+  tail4: 13,
+  heart1: 14,
+  heart2: 15,
+  heart3: 16,
+  sleep1: 17,
+  sleep2: 18,
+  sleep3: 19,
+  sleep4: 20,
+  sleep5: 21,
+} as const
+
+/**
+ * The three intro animations; each one ends back on the standard pose.
+ * The base actions (blink, fin, tail, spout) stay bundled in the classic
+ * opener as they were — only the behaviors the TUI never had (heart,
+ * sleep) get their own standalone intro.
+ */
+export type WhaleIntroId = 'classic' | 'heart' | 'sleep'
+
+/** All intro ids, in a stable order (drives the random pick). */
+export const WHALE_INTRO_IDS: readonly WhaleIntroId[] = ['classic', 'heart', 'sleep']
+
+/**
+ * One startup intro per behavior, mirroring the source plugin's cadence:
+ * classic = the shipped opener (blink → one-way water-spout bloom → full
+ * 1→2→3→4→3→2→1 tail wag); heart = a pink heart growing small→large in
+ * the top-left corner; sleep = gray Z's rising above the blowhole, then
+ * settling back to rest.
+ */
+export const OPENING_SEQUENCES: Record<WhaleIntroId, readonly OpeningStep[]> = {
+  classic: [
+    { frame: F.standard, ms: 400 },
+    { frame: F.blink, ms: 250 },
+    { frame: F.standard, ms: 300 },
+    { frame: F.spout1, ms: 150 },
+    { frame: F.spout2, ms: 150 },
+    { frame: F.spout3, ms: 150 },
+    { frame: F.spout4, ms: 150 },
+    { frame: F.spout5, ms: 150 },
+    { frame: F.spout6, ms: 150 },
+    { frame: F.standard, ms: 250 },
+    { frame: F.tail1, ms: 150 },
+    { frame: F.tail2, ms: 150 },
+    { frame: F.tail3, ms: 150 },
+    { frame: F.tail4, ms: 180 },
+    { frame: F.tail3, ms: 150 },
+    { frame: F.tail2, ms: 150 },
+    { frame: F.tail1, ms: 150 },
+    { frame: F.standard, ms: 300 },
+  ],
+  heart: [
+    { frame: F.standard, ms: 400 },
+    { frame: F.heart1, ms: 350 },
+    { frame: F.heart2, ms: 350 },
+    { frame: F.heart3, ms: 450 },
+    { frame: F.heart2, ms: 350 },
+    { frame: F.heart1, ms: 350 },
+    { frame: F.standard, ms: 500 },
+  ],
+  sleep: [
+    { frame: F.standard, ms: 400 },
+    { frame: F.sleep1, ms: 250 },
+    { frame: F.sleep2, ms: 250 },
+    { frame: F.sleep3, ms: 250 },
+    { frame: F.sleep4, ms: 250 },
+    { frame: F.sleep5, ms: 300 },
+    { frame: F.sleep4, ms: 250 },
+    { frame: F.sleep3, ms: 250 },
+    { frame: F.sleep2, ms: 250 },
+    { frame: F.sleep1, ms: 250 },
+    { frame: F.standard, ms: 400 },
+  ],
+}
+
+/**
+ * Roll one intro id uniformly at random. Called once per logo header
+ * mount — the startup splash and every `/deepseek` replay each roll
+ * independently. `random` is a test seam (0-based, values in [0, 1)).
+ */
+export function pickOpeningSequence(
+  random: () => number = Math.random,
+): { id: WhaleIntroId; sequence: readonly OpeningStep[] } {
+  const roll = random()
+  const index = Math.min(WHALE_INTRO_IDS.length - 1, Math.max(0, Math.floor(roll * WHALE_INTRO_IDS.length)))
+  const id = WHALE_INTRO_IDS[index] ?? 'classic'
+  return { id, sequence: OPENING_SEQUENCES[id] }
+}

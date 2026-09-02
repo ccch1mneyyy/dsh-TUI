@@ -127,6 +127,8 @@ export type LayoutNode = {
   setMeasureFunc(fn: LayoutMeasureFunc): void
   unsetMeasureFunc(): void
   markDirty(): void
+  /** Whether this node or its subtree needs re-layout (clean-tree fast path). */
+  isDirty(): boolean
 
   // Layout reading (post-layout)
   getComputedLeft(): number

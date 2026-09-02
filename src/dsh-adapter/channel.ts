@@ -87,6 +87,7 @@ import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 import type { TrackerConfig } from 'dsh-working-activity/status'
 import { featureOn } from 'dsh-working-activity/config'
+import { emptyTrajectory, extendTrajectory, extendTrajectoryEvents, type TrajBuild } from './trajectory/index.js'
 import { setMinimalMode } from '../minimalMode.js'
 import { readActivityConfig } from '../activityPrefs.js'
 import { attachSessionToWorkspace } from './workspace.js'
@@ -1253,6 +1254,23 @@ export interface Channel {
    * time; agent swaps (/resume /rewind /new) are reflected immediately.
    */
   traceEvents(): readonly SessionEvent[]
+  /**
+   * The session trajectory projection, folded incrementally by the channel
+   * as session events arrive — never on the render path. The returned build
+   * is stable between event batches (screens may read it during render);
+   * agent swaps (/resume /rewind /new) rebuild it from the new session's
+   * log. Headless/stub channels that do not provide the seam fall back to
+   * the same module-level empty build.
+   */
+  trajectory(): TrajBuild
+  /**
+   * Counter bumped exactly when an existing transcript row's `streaming`
+   * flag flips in place (turn settle, revive). MessageList keys its filter
+   * cache on it; new rows bump `rows.length` instead.
+   */
+  rowsStreamingVersion: number
+  /** Transcript generation (see the ChannelState field). */
+  rowsGeneration: number
 }
 
 /** @internal */
@@ -1355,6 +1373,22 @@ export interface ChannelState {
   tpsSamples: { tps: number; at: number }[]
   /** Latest working-activity snapshot (see the public Channel type). */
   workingActivity: ActivityStatus | undefined
+  /** Incremental trajectory projection (see the public Channel type). */
+  trajectory: () => TrajBuild
+  /**
+   * Counter bumped exactly when an existing row's `streaming` flag flips in
+   * place (turn settle, revive) — the transcript list's filter cache keys on
+   * it so settles invalidate without an O(rows) scan per render.
+   */
+  rowsStreamingVersion: number
+  /**
+   * Transcript generation: bumped whenever the transcript is cleared and
+   * row ids restart at 0 (clear, session swap, loadOlder prepend, rewind,
+   * new, workspace/model switch). MessageList keys its height/painted/
+   * signature caches on it so a fresh transcript never reuses a previous
+   * one's per-id state.
+   */
+  rowsGeneration: number
   /** Working-activity indicator preset (see the public Channel type). */
   activityFrames: string | undefined
   /** Raw cordis.yml pins `/reload` must respect (see the public Channel type). */
@@ -2666,6 +2700,7 @@ export function createChannel(
     lastReasoningRow = undefined
     toolCards.clear()
     nextRowId = 0
+    state.rowsGeneration += 1
     state.rows.length = 0
     resetSubagentProjection()
     resetJobProjection()
@@ -3394,6 +3429,7 @@ export function createChannel(
     lastReasoningRow = undefined
     toolCards.clear()
     nextRowId = 0
+    state.rowsGeneration += 1
     state.rows.length = 0
     state.todos = []
     state.pending = []
@@ -3553,6 +3589,7 @@ export function createChannel(
     lastReasoningRow = undefined
     toolCards.clear()
     nextRowId = 0
+    state.rowsGeneration += 1
     state.rows.length = 0
     state.todos = []
     state.pending = []
@@ -3668,6 +3705,9 @@ export function createChannel(
     mode: sessionModes[0]!,
     modeIndex: 0,
     workingActivity: undefined,
+    trajectory: () => trajectoryBuild,
+    rowsStreamingVersion: 0,
+    rowsGeneration: 0,
     activityFrames: options.activityFrames,
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
@@ -5006,6 +5046,7 @@ export function createChannel(
       lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
+      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
       resetJobProjection()
@@ -5199,6 +5240,7 @@ export function createChannel(
       assistantRowsByStep.clear()
       lastTextDelta.clear()
       nextRowId = 0
+      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
       resetJobProjection()
@@ -5395,6 +5437,7 @@ export function createChannel(
       lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
+      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
       resetJobProjection()
@@ -5478,6 +5521,7 @@ export function createChannel(
     clear() {
       state.rows.length = 0
       nextRowId = 0
+      state.rowsGeneration += 1
       streaming = undefined
       reasoning = undefined
       toolCards.clear()
@@ -6481,6 +6525,7 @@ export function createChannel(
       lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
+      state.rowsGeneration += 1
       state.rows.length = 0
       state.todos = []
       state.pending = []
@@ -7179,6 +7224,23 @@ export function createChannel(
   const skillCommandsRefused = new Set<string>()
   /** Pending re-read after an incomplete catalog observation. */
   let skillCommandsRetry: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Bounded retry ladder for `complete:false` observations: a provider still
+   * warming its watcher re-reads a few times with exponential backoff, then
+   * gives up and keeps the last-good command set until the next
+   * `skills/change` (the provider's own invalidation) or an explicit
+   * refresh. Without the cap a provider that NEVER completes keeps an
+   * 800ms retry loop alive forever, re-snapshotting the catalog each time.
+   */
+  let skillRetryAttempts = 0
+  let skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
+  const MAX_SKILL_RETRY_ATTEMPTS = 3
+  /**
+   * Refresh generation: bumped by releaseContributions (and rebinds) so an
+   * in-flight snapshot resolving afterwards is recognized as stale and
+   * never re-registers commands against a released channel.
+   */
+  let skillCommandSeq = 0
 
   /**
    * Publish every user-invocable skill as a slash command (issue #86).
@@ -7201,6 +7263,10 @@ export function createChannel(
   const refreshSkillCommands = async (): Promise<void> => {
     if (commandService === undefined) return
     const target = agent
+    // Generation snapshot: only release/rebind bump skillCommandSeq, so
+    // concurrent refreshes share one generation and all land (last write
+    // wins); a released/rebound channel invalidates every in-flight read.
+    const token = skillCommandSeq
     const registry = skillRegistryFor(target)
     if (registry === undefined) return
     let observation
@@ -7210,15 +7276,48 @@ export function createChannel(
       ctx.logger.warn('skill commands: catalog read failed: %o', error)
       return
     }
-    if (target !== agent) return
+    if (token !== skillCommandSeq || target !== agent) return
     // A provider still warming its watcher reports an incomplete observation;
-    // re-read once so a cold start cannot leave the menu permanently short.
-    if (!observation.complete && skillCommandsRetry === undefined) {
-      skillCommandsRetry = setTimeout(() => {
-        skillCommandsRetry = undefined
-        void refreshSkillCommands()
-      }, SKILL_COMMAND_RETRY_MS)
+    // re-read a bounded number of times with exponential backoff so a cold
+    // start cannot leave the menu permanently short, while a provider that
+    // NEVER completes stops retrying (the next skills/change re-enters and
+    // the last-good command set stays in place). The partial observation
+    // still reconciles below — registering the visible subset is idempotent
+    // (same names/descriptions dispose nothing) and keeps a warm start as
+    // complete as the provider can make it.
+    if (!observation.complete) {
+      // Incomplete (provider failure/rescan mid-flight): NOT authoritative —
+      // neither the menu merge (refreshCommandList) nor the command registry
+      // may reconcile against it. In particular the registry must KEEP every
+      // currently registered handler: refreshCommandList only restores the
+      // last-good MENU entries, not disposed command handlers, so disposing
+      // here would leave the menu pointing at handlers that no longer exist.
+      if (skillCommandsRetry === undefined && skillRetryAttempts < MAX_SKILL_RETRY_ATTEMPTS) {
+        skillRetryAttempts += 1
+        skillCommandsRetry = setTimeout(() => {
+          skillCommandsRetry = undefined
+          void refreshSkillCommands()
+        }, skillRetryDelayMs)
+        skillCommandsRetry.unref?.()
+        skillRetryDelayMs *= 2
+        ctx.logger.warn(
+          `skill command merge: incomplete catalog observation (%d/%d attempts), retrying in %dms`,
+          skillRetryAttempts,
+          MAX_SKILL_RETRY_ATTEMPTS,
+          skillRetryDelayMs / 2,
+        )
+      } else {
+        ctx.logger.warn(
+          'skill command merge: incomplete catalog observation, retries exhausted — keeping last-good skills until skills/change',
+        )
+      }
+      return
     }
+    // Complete observation: the catalog is authoritative, so reset the
+    // retry ladder (a later transient failure starts back at the base
+    // delay with a fresh attempt budget).
+    skillRetryAttempts = 0
+    skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
     const wanted = new Map<string, string>(
       observation.skills
         .filter(skill => isUserInvocable(skill))
@@ -7322,6 +7421,9 @@ export function createChannel(
   })
   /** See {@link Channel.releaseContributions}. */
   const releaseSkillCommands = (): void => {
+    // Invalidate any in-flight refresh (its token no longer matches), then
+    // cancel the retry ladder and dispose the registered handlers.
+    skillCommandSeq += 1
     if (skillCommandsRetry !== undefined) clearTimeout(skillCommandsRetry)
     skillCommandsRetry = undefined
     for (const entry of skillCommands.values()) entry.dispose()
@@ -7333,6 +7435,17 @@ export function createChannel(
   void refreshSkillCommands()
 
   let nextRowId = 0
+
+  /**
+   * Bump the rows-streaming version: the transcript list keys its filter
+   * cache on this counter, which changes ONLY when an existing row's
+   * `streaming` flag flips in place (turn settle, revive). New rows change
+   * rows.length instead, so they need no bump. Declared before
+   * renderEvent/replayEvents — the boot replay settles rows and calls this.
+   */
+  const markStreamingChanged = (): void => {
+    state.rowsStreamingVersion += 1
+  }
   /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH
  *  execution seam for local `!` commands and the git status breadcrumb. The
  *  service registers under `ctx.shell` (ShellExecutor; dsh-bash-local and
@@ -7533,6 +7646,7 @@ ${output}
       : [...state.rows].reverse().find(row => row.kind === 'assistant' && row.seq === seq)
     if (existing !== undefined) {
       existing.streaming = true
+      markStreamingChanged()
       streaming = existing
       return existing
     }
@@ -7561,6 +7675,7 @@ ${output}
       ) {
         reasoning = lastReasoningRow.row
         reasoning.streaming = true
+        markStreamingChanged()
         const sealedIdx = sealedReasoning.indexOf(reasoning)
         if (sealedIdx !== -1) sealedReasoning.splice(sealedIdx, 1)
         reasoningStart = Date.now() - (reasoning.durationMs ?? 0)
@@ -7594,12 +7709,14 @@ ${output}
     const duration = Math.max(0, Date.now() - reasoningStart)
     reasoning.durationMs = duration
     reasoning.streaming = false
+    markStreamingChanged()
     sealedReasoning.push(reasoning)
     reasoning = undefined
     logForDebugging(`thinking: folded at ${where} (${duration}ms)`)
   }
 
   const settleStreaming = (): void => {
+    const flipped = streaming !== undefined || sealedReasoning.length > 0 || reasoning !== undefined
     if (streaming !== undefined) streaming.streaming = false
     streaming = undefined
     const folded = sealedReasoning.length + (reasoning !== undefined ? 1 : 0)
@@ -7610,6 +7727,7 @@ ${output}
       reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
     }
     reasoning = undefined
+    if (flipped) markStreamingChanged()
     if (folded > 0) logForDebugging(`thinking: folded ${folded} reasoning row(s) at turn settle`)
   }
 
@@ -7818,7 +7936,13 @@ ${output}
             const row = assistantRowsByStep.get(key) ?? ensureStreaming(event.seq)
             assistantRowsByStep.set(key, row)
             streaming = row
-            row.streaming = true
+            // Revive of a previously sealed row (reconnect replay): the
+            // in-place streaming flip is invisible to rows identity/length,
+            // so the transcript list's filter cache must hear about it.
+            if (row.streaming !== true) {
+              row.streaming = true
+              markStreamingChanged()
+            }
             const before = row.text.length
             appendTextDelta(row, chunk.text)
             state.responseChars += Math.max(0, row.text.length - before)
@@ -7900,6 +8024,7 @@ ${output}
           row.time = event.time
           if (text) row.text = text
           row.streaming = false
+          markStreamingChanged()
           // Live settles keep the smooth-reveal cursor alive (a one-shot
           // non-streaming delivery still paints as a flow); replayed
           // settles must not — the transcript would typewrite on open.
@@ -7915,7 +8040,10 @@ ${output}
           // (/settings opt-in) keeps the block expanded until turn settle
           // — settleStreaming folds the sealed rows then.
           reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
-          if (state.thinkingFold === 'preview') reasoning.streaming = false
+          if (state.thinkingFold === 'preview') {
+            reasoning.streaming = false
+            markStreamingChanged()
+          }
           sealedReasoning.push(reasoning)
           logForDebugging(`thinking: step sealed (${reasoning.durationMs}ms), expanded until turn/end`)
         }
@@ -8315,11 +8443,74 @@ ${output}
     return new ActivityTracker(prefs.config, Date.now, prefs.customActions)
   })()
   let activityTickTimer: NodeJS.Timeout | undefined
+  /**
+   * Wall-clock since the done line last changed. The done summary keeps a
+   * short-lived completed-tool fragment (~3s, upstream DONE_FRAGMENT_MS),
+   * so the tick retires only once the line has been STABLE for a grace
+   * window — then it stops until a live phase returns (updateWorkingActivity
+   * re-arms it). An idle conversation therefore holds no 500ms wakeup.
+   */
+  const ACTIVITY_DONE_STABLE_MS = 4000
+  let activityDoneStableSince: number | undefined
 
   const stopActivityTick = (): void => {
     if (activityTickTimer === undefined) return
     clearInterval(activityTickTimer)
     activityTickTimer = undefined
+  }
+
+  /**
+   * Create the 500ms activity tick if it is not running. `activity: false`
+   * never creates it (the projection is not read then). Live phases
+   * (waiting/thinking/tool) emit every tick so turnElapsedMs stays current;
+   * settled phases emit only when the line actually changes.
+   */
+  const ensureActivityTick = (): void => {
+    if (options.activity === false || activityTickTimer !== undefined) return
+    activityTickTimer = setInterval(() => {
+      const previous = state.workingActivity
+      const rendered = updateWorkingActivity('activity tick')
+      if (rendered === undefined) {
+        // Projection unavailable (render/projection error — updateWorkingActivity
+        // swallowed and reported it, or the activity sidecar was switched off).
+        // Retire the tick instead of spinning forever: every 500ms wake would
+        // re-throw inside the tracker for zero UI value. A later REAL activity
+        // event (turn start, phase change, tool start) goes through
+        // updateWorkingActivity again, whose live-phase branch re-arms this
+        // tick — so recovery costs nothing.
+        stopActivityTick()
+        return
+      }
+      if (rendered.phase === 'done') {
+        // Retire once the done line has been stable past the fragment
+        // window — no more React updates, timer or tracker work needed.
+        if (previous !== undefined && previous.line === rendered.line) {
+          activityDoneStableSince ??= Date.now()
+          if (Date.now() - activityDoneStableSince >= ACTIVITY_DONE_STABLE_MS) {
+            stopActivityTick()
+            return
+          }
+        } else {
+          activityDoneStableSince = undefined
+        }
+      } else {
+        activityDoneStableSince = undefined
+      }
+      // Live phases deliberately wake at 500 ms even when the formatted line
+      // has not crossed its next whole-second boundary: turnElapsedMs remains
+      // a current state value, while line changes cover phrase rotation and
+      // the short-lived completed-tool summary.
+      if (
+        rendered.phase === 'waiting' ||
+        rendered.phase === 'thinking' ||
+        rendered.phase === 'tool' ||
+        previous?.phase !== rendered.phase ||
+        previous.line !== rendered.line
+      ) {
+        state.emit()
+      }
+    }, 500)
+    activityTickTimer.unref()
   }
 
   /** Render the current tracker into the TUI-only projection. */
@@ -8344,7 +8535,18 @@ ${output}
   ): ActivityStatus | undefined => {
     try {
       update?.()
-      return renderWorkingActivity()
+      const rendered = renderWorkingActivity()
+      // Live phases need the 500ms tick to keep turnElapsedMs/phrase
+      // rotation current — (re)arm it whenever an event or status change
+      // brings the tracker back to a live phase (a done/idle phase lets
+      // the tick retire itself, see maybeRetireActivityTick).
+      if (
+        rendered !== undefined &&
+        (rendered.phase === 'waiting' || rendered.phase === 'thinking' || rendered.phase === 'tool')
+      ) {
+        ensureActivityTick()
+      }
+      return rendered
     } catch (error: unknown) {
       if (!activityFailureReported) {
         activityFailureReported = true
@@ -8374,11 +8576,45 @@ ${output}
     updateSpinnerMode()
   }
 
+  // ── trajectory projection (channel-owned, event-driven) ───────────────────
+  // The session trajectory is folded HERE — at event time — so Chat renders
+  // never touch the session event getter (hosts without a snapshot cache pay
+  // an O(n) copy per render otherwise). The fold is incremental: identical
+  // prefix (object identity at the previous last index) → tail-only consume;
+  // anything else (session swap, rewind fork, /new) rebuilds from scratch.
+  // bindAgent resets the build explicitly so a swap can never extend a stale
+  // projection.
+  let trajectoryBuild: TrajBuild = emptyTrajectory()
+  /**
+   * Fold ONE newly observed main-session event into the trajectory build —
+   * incrementally, from the event the observer already holds. The session
+   * getter (`agent.session.events`) is O(n) on hosts that rebuild a frozen
+   * snapshot per append, so it must stay off the token-rate path: a full
+   * fold happens only in bindAgent (once per agent swap, where O(n) is
+   * the correct cost).
+   */
+  const foldTrajectoryEvent = (event: SessionEvent): void => {
+    trajectoryBuild = extendTrajectoryEvents(trajectoryBuild, [event])
+  }
+
   const bindAgent = (): void => {
     agentBindingGeneration += 1
     state.agentBindingGeneration = agentBindingGeneration
     for (const dispose of agentSubscriptions) dispose()
     stopActivityTick()
+    // A new agent starts with a fresh skill-retry budget (an old ladder's
+    // attempt counter must not shorten the new agent's retries). In-flight
+    // refreshes from the previous agent are already stale via the
+    // `target !== agent` check — the refresh generation is NOT bumped here
+    // because the boot-time refresh resolves AFTER this first bindAgent.
+    skillRetryAttempts = 0
+    skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
+    // The trajectory build belongs to ONE bound agent's session log. A
+    // replacement (rewind/resume/new/workspace/model-switch) must never
+    // extend the previous session's projection — reset and fold the new
+    // session's full log once here (O(n) once per swap, never per event).
+    trajectoryBuild = emptyTrajectory()
+    trajectoryBuild = extendTrajectory(trajectoryBuild, agent.session.events)
     // Cancel state and deferred interrupt delivery belong to one bound agent.
     // A replacement must neither inherit the old latch nor receive its queued
     // microtask after the session identity changes.
@@ -8387,26 +8623,8 @@ ${output}
     const prefs = activityPrefsSnapshot()
     activityTracker = new ActivityTracker(prefs.config, Date.now, prefs.customActions)
     activityFailureReported = false
+    activityDoneStableSince = undefined
     updateWorkingActivity('agent bind', () => activityTracker.onAgentStatus(agent.status))
-    activityTickTimer = setInterval(() => {
-      const previous = state.workingActivity
-      const rendered = updateWorkingActivity('activity tick')
-      if (rendered === undefined) return
-      // Live phases deliberately wake at 500 ms even when the formatted line
-      // has not crossed its next whole-second boundary: turnElapsedMs remains
-      // a current state value, while line changes cover phrase rotation and
-      // the short-lived completed-tool summary.
-      if (
-        rendered.phase === 'waiting' ||
-        rendered.phase === 'thinking' ||
-        rendered.phase === 'tool' ||
-        previous?.phase !== rendered.phase ||
-        previous.line !== rendered.line
-      ) {
-        state.emit()
-      }
-    }, 500)
-    activityTickTimer.unref()
     // Re-couple the channel-owned model selection to the new agent's
     // assembly/request waterfalls, then re-apply the persisted effort when
     // this agent's route offers it (dsh-agent installModelSelection).
@@ -8543,6 +8761,12 @@ ${output}
           }
         }
         renderEvent(event)
+        // Fold the trajectory incrementally here — at EVENT time, not render
+        // time: Chat renders must never touch the session getter, and the
+        // token-rate path must not re-read the O(n) session snapshot. The
+        // observer already holds the event, so the fold consumes it directly
+        // (chunks are pure timing updates, O(1) with no state copy).
+        foldTrajectoryEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
         // path; every other event keeps synchronous notification.
         if (event.type === 'assistant/chunk') state.emitStream()

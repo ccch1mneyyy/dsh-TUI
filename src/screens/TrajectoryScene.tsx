@@ -106,15 +106,17 @@ export function TrajectoryScene({
   const { rows: filtered, indexes } = React.useMemo(
     () => applyQuery(nodes, query),
     // `nodes` is mutated in place by the incremental fold, so its length is
-    // the honest dependency — the array identity never changes.
+    // NOT an honest dependency alone — an in-place close (tool/result,
+    // step/end) changes status/duration without touching length. The
+    // build's monotonic revision covers every consumed event.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [nodes, nodes.length, query],
+    [nodes, nodes.length, build.revision, query],
   )
 
   const agg = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps
     () => aggregate(build, sort),
-    [build, nodes.length, sort],
+    [build, nodes.length, build.revision, sort],
   )
 
   // ── arrival + alert detection ────────────────────────────────────────────
@@ -147,7 +149,7 @@ export function TrajectoryScene({
   const band = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps
     () => projectWave(nodes, bandWidth, projection),
-    [nodes, nodes.length, bandWidth, projection],
+    [nodes, nodes.length, build.revision, bandWidth, projection],
   )
   const matchColumns = React.useMemo(() => {
     if (query.empty) return undefined

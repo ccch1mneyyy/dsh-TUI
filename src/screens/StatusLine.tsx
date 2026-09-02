@@ -55,6 +55,8 @@ type HoverTarget =
   | 'cost'
   | 'goal'
   | 'jobs'
+  | 'model'
+  | 'git'
   | 'sessionId'
   | 'cwd'
   | 'title'
@@ -301,7 +303,7 @@ export function StatusLine({
 
   const leftFields: FieldPart[] = [
     ...(statusBar.model
-      ? [{ key: 'model', node: <Text color="inactiveShimmer">{channel.model}</Text> }]
+      ? [{ key: 'model', id: 'model' as const, node: <Text color="inactiveShimmer">{channel.model}</Text> }]
       : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),
     ...(jobsPart !== undefined ? [jobsPart] : []),
@@ -352,6 +354,7 @@ export function StatusLine({
       ? [
           {
             key: 'git',
+            id: 'git' as const,
             node: <Text color="professionalBlue">{channel.gitBranch}</Text>,
           },
         ]
@@ -667,6 +670,24 @@ function buildHoverDetail(
           {dim('jobs ')}
           {shown.map(job => `${job.id} ${job.label} (${formatJobDuration(job)})`).join(' · ')}
           {rest > 0 ? ` · +${rest}` : ''}
+        </Text>
+      )
+    }
+    case 'model': {
+      return (
+        <Text wrap="truncate">
+          {dim('model ')}{channel.model} · {dim('provider ')}{channel.provider}
+          {channel.contextWindow !== undefined
+            ? <> · {dim('ctx ')}{formatTokens(channel.contextWindow)}</>
+            : null}
+        </Text>
+      )
+    }
+    case 'git': {
+      if (channel.gitBranch === undefined) return null
+      return (
+        <Text wrap="truncate">
+          {dim('git ')}{channel.gitBranch}
         </Text>
       )
     }

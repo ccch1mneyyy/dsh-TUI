@@ -7,7 +7,7 @@ import { SessionPreview } from '../components/sessions/SessionPreview.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { isMod, isPlainReturn } from '../utils/modifiers.js'
-import { formatProject, formatWhen, spreadRow, tailWidth, truncateWidth } from '../sessions/format.js'
+import { formatProject, formatWhen, nextFormatWhenChange, spreadRow, tailWidth, truncateWidth } from '../sessions/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { t } from '../i18n.js'
 import type { Channel } from '../dsh-adapter/channel.js'
@@ -68,6 +68,9 @@ function statusLabel(status: AgentViewStatus): string {
     case 'stopped': return t('agentview-state-stopped')
   }
 }
+
+/** Safety cap for the bucket-boundary wake (see the clock effect). */
+const DAY_MS = 24 * 60 * 60 * 1000
 
 /** A thrown value's message, for a notification that has to say something. */
 function message(error: unknown): string {
@@ -233,16 +236,38 @@ export function AgentView({
   const stopArmRef = React.useRef<{ id: string; deadline: number } | null>(null)
 
   // One clock per render pass: every relative time on screen must agree.
+  // Scheduled at the NEXT true label boundary (nextFormatWhenChange shares
+  // formatWhen's exact nested-rounding semantics) instead of a fixed 1s
+  // interval — a static list wakes at most once per bucket. Rows already in
+  // the absolute-date regime never wake again: that label depends on `at`
+  // alone, so the function returns Infinity and no timer is armed. The wake
+  // re-arms itself: `now` is in the deps, so the effect recomputes the next
+  // boundary after every tick (and on every rows change).
   React.useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [])
+    if (agentRows.length === 0) return
+    const nowMs = Date.now()
+    let boundaryAt = Infinity
+    for (const row of agentRows) {
+      const next = nextFormatWhenChange(row.updatedAt, nowMs)
+      if (next < boundaryAt) boundaryAt = next
+    }
+    if (!Number.isFinite(boundaryAt)) return
+    // nextFormatWhenChange returns an ABSOLUTE timestamp; setTimeout wants a
+    // relative delay. Cap the target at one day so an anomalous value can
+    // never stall the clock entirely.
+    const target = Math.min(boundaryAt, nowMs + DAY_MS)
+    const delay = Math.max(0, target - nowMs)
+    const timer = setTimeout(() => setNow(Date.now()), delay)
+    return () => clearTimeout(timer)
+  }, [agentRows, now])
 
   // CC parity: working rows animate their glyph (the `·✢*✶✻✽` cycle). The
   // shared clock only runs while at least one row is working and pauses
-  // otherwise, so an idle view costs no extra ticks.
+  // otherwise, so an idle view costs no extra ticks. The ref is attached to
+  // the list container so the viewport gate pauses the clock when the list
+  // is out of view (peek panel covering, narrow split).
   const workingCount = agentRows.filter(row => row.status === 'working').length
-  const [, spinnerTime] = useAnimationFrame(workingCount > 0 ? 120 : null)
+  const [spinnerViewportRef, spinnerTime] = useAnimationFrame(workingCount > 0 ? 120 : null)
   const spinnerFrame = Math.floor(spinnerTime / 120)
 
   // The delete arm expires after its window without an explicit keystroke;
@@ -630,7 +655,7 @@ export function AgentView({
 
       <Box flexGrow={1} flexShrink={1}>
         {!soloPreview && (
-          <Box flexDirection="column" width={listWidth} height={listHeight} flexShrink={0}>
+          <Box ref={spinnerViewportRef} flexDirection="column" width={listWidth} height={listHeight} flexShrink={0}>
             {agentRows.length === 0 && (
               <Text dimColor italic>{` ${truncateWidth(t('agentview-none'), listWidth - 2)}`}</Text>
             )}

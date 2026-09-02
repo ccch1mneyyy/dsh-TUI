@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { writeSync } from 'node:fs'
 import React from 'react'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
@@ -1586,6 +1587,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     funnel.markTeardown()
     channel.releaseContributions()
     instance?.unmount()
+    // Safety net for the crash-then-teardown race: an app-driven unmount
+    // DEFERS the cooked-mode restore to finishExit, but markTeardown makes
+    // the funnel swallow that exit — without this, raw mode would leak on
+    // the live process. Idempotent (shutdownPhase guard); a plain teardown
+    // already concluded inside unmount().
+    try {
+      instance?.concludeShutdown?.()
+    } catch {
+      ctx.logger.debug('dsh-tui: teardown conclude failed; terminal may be left raw')
+    }
   })
 
   // The TUI is the front door: when the user unmounts it (Ctrl+C), dispose
@@ -1785,6 +1796,19 @@ export function isExitResumable(deps: {
 type InkShutdownState = {
   detachForShutdown?: () => void
   /**
+   * Phase 1 of the shutdown split: latch isUnmounted and stop every output
+   * producer while raw mode is STILL held, so the exit sequence below is
+   * consumed by the remote terminal during the raw-mode settle window
+   * instead of being echoed as caret garbage after cooked returns (#522).
+   */
+  beginShutdown?: () => void
+  /**
+   * Phase 2 of the shutdown split: restore cooked mode and drain stdin.
+   * finishExit runs it from a finally, so even a failed exit write cannot
+   * skip the raw-mode restore.
+   */
+  concludeShutdown?: () => void
+  /**
    * Full stdin detach for the /update child handoff (issues #284/#307):
    * removes the readable/data listeners and pauses the pump so the
    * lingering parent stops racing the restarted TUI for keypresses.
@@ -1792,9 +1816,52 @@ type InkShutdownState = {
   detachStdinForHandoff?: () => void
   /** Drain pending stdin bytes; the exit funnel re-drains after cleanup. */
   drainStdin?: () => void
+  /**
+   * The stream this runtime renders to. The barrier and every exit write
+   * must target THIS object — not whatever process.stdout points at during
+   * shutdown: the instances-map lookup missed precisely because the host
+   * replaced process.stdout, so writing the cleanup to the CURRENT
+   * process.stdout would leave the runtime's own stream (its queued frames,
+   * its mouse state) unhandled (stdout identity drift, #522).
+   */
+  stdout?: NodeJS.WriteStream
+  /**
+   * True after Ink.unmount wrote the terminal cleanup block itself (React
+   * error-boundary / signal-exit path); finishExit then skips re-writing
+   * the mode resets and only parks the cursor and prints the notice.
+   */
+  hasWrittenExitCleanup?: boolean
   frontFrame?: { cursor?: { x: number; y: number } }
   displayCursor?: { x: number; y: number } | null
 }
+
+/**
+ * In-flight guard for finishExit: the exit funnel serializes USER exits, but
+ * finishExit is exported and process-level — concurrent callers (racing exit
+ * actions, embedder helpers) must not re-run the cleanup/handoff. A second
+ * call while one is running simply awaits the first; its done() is
+ * deliberately NOT invoked — the process-level exit action belongs to the
+ * exit that actually ran the terminal cleanup.
+ *
+ * INVARIANT (process-owning runtime uniqueness): dsh-tui creates exactly ONE
+ * process-owning TUI runtime per process — plugin apply() renders a single
+ * Ink root (the single `render(tree)` call), and /restart + /update hand the
+ * terminal to CHILD processes rather than mounting a second in-process
+ * runtime. Under that invariant this module-global guard is sound: any two
+ * concurrent finishExit calls necessarily target the same (or an already
+ * dead) runtime, so exactly-once terminal cleanup and exactly-one final
+ * process action is the required semantics — a /exit vs error-boundary vs
+ * /restart vs /update race must never double-run terminal cleanup nor fire
+ * two process actions. If that invariant ever changes (multiple independent
+ * Ink roots in one process), this guard must move per-runtime: the terminal
+ * cleanup serialization keyed by the runtime (or its stdout), with only the
+ * process-level exit action arbiter staying global.
+ *
+ * Regression: scripts/verify-shutdown-fallback.tsx exercises the concurrent
+ * calls; scripts/verify-exit-runtime-selection.tsx additionally proves a
+ * map-vs-handle drift cannot latch the wrong runtime.
+ */
+let activeFinishExit: Promise<void> | undefined
 
 /**
  * Finish terminal I/O before handing control to a process-level exit action.
@@ -1808,23 +1875,51 @@ export async function finishExit(
   stderrNotice: string | undefined,
   done: () => void,
 ): Promise<void> {
+  if (activeFinishExit !== undefined) {
+    ctx.logger.debug('dsh-tui: exit already in flight; awaiting it instead of re-running terminal cleanup')
+    return activeFinishExit
+  }
+  const run = finishExitOnce(ctx, instance, fullscreen, notice, stderrNotice, done)
+  activeFinishExit = run
   try {
-    // Resolve the Ink runtime twice: the instances map is keyed by stdout
-    // identity, so a replaced/overridden stdout misses it; the render()
-    // handle is the caller's own instance and always matches (issue #522 —
-    // a missed lookup skipped detachForShutdown, leaving the stdin pump,
-    // TTY handlers and querier alive so the self-heal probe re-wrote
-    // ENABLE_MOUSE_TRACKING after DISABLE_MOUSE_TRACKING had been sent).
+    await run
+  } finally {
+    if (activeFinishExit === run) activeFinishExit = undefined
+  }
+}
+
+async function finishExitOnce(
+  ctx: Context,
+  instance: Awaited<ReturnType<typeof render>> | undefined,
+  fullscreen: boolean,
+  notice: string | undefined,
+  stderrNotice: string | undefined,
+  done: () => void,
+): Promise<void> {
+  let runtime: InkShutdownState | undefined
+  try {
+    // Resolve the Ink runtime. HANDLE-FIRST: the explicitly passed render
+    // handle is the runtime THIS exit call actually corresponds to — when it
+    // is a valid Ink runtime (exposes any shutdown hook), it wins. The
+    // instances map is only a fallback for callers without a handle. The
+    // previous map-first order could clean up the WRONG runtime in
+    // multi-instance / custom-stdout / process.stdout-identity-drift setups:
+    // finishExit(..., instanceA) with instances.get(process.stdout) === B
+    // latched B (begin/conclude + cleanup bytes on B's stream) while A —
+    // the runtime actually exiting — kept its pump, TTY handlers and mouse
+    // state (issue #522's residue through a second door).
     const fromMap = readInkShutdownState(instances.get(process.stdout))
     const fromHandle = instance === undefined ? undefined : readInkShutdownState(instance)
-    // A handle that exposes neither detach hook is not an Ink runtime we can
-    // latch (e.g. the fake render handles in shutdown regressions) — treat it
-    // as a lookup miss so the full-unmount fallback below can still run.
-    const runtime = fromMap ?? (
-      fromHandle?.detachForShutdown === undefined && fromHandle?.detachStdinForHandoff === undefined
-        ? undefined
-        : fromHandle
-    )
+    // A handle that exposes no shutdown hook at all is not an Ink runtime we
+    // can latch (e.g. the fake render handles in shutdown regressions) —
+    // treat it as a lookup miss so the full-unmount fallback below can run.
+    const handleIsRuntime =
+      fromHandle !== undefined && (
+        fromHandle.detachForShutdown !== undefined ||
+        fromHandle.beginShutdown !== undefined ||
+        fromHandle.detachStdinForHandoff !== undefined
+      )
+    runtime = handleIsRuntime ? fromHandle : fromMap
     if (runtime === undefined) {
       ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
       if (instance !== undefined) {
@@ -1840,64 +1935,302 @@ export async function finishExit(
           ctx.logger.debug('dsh-tui: Ink shutdown unmount fallback failed; continuing with generic terminal cleanup')
         }
       }
-    } else if (fromMap === undefined) {
-      ctx.logger.debug('dsh-tui: Ink runtime resolved from the render handle (instances map missed); detaching')
+    } else if (!handleIsRuntime) {
+      ctx.logger.debug('dsh-tui: Ink runtime resolved from the instances map (no usable render handle); detaching')
     }
     const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
+    // Every byte below targets the runtime's OWN stream. The instances map
+    // is keyed by stdout identity, so a missed lookup means the host
+    // replaced process.stdout after render — writing the cleanup to the
+    // CURRENT process.stdout would latch one stream's runtime while the
+    // bytes land on another (stdout identity drift, #522). Only the
+    // runtime-less fallback keeps the historical process.stdout target.
+    const target = runtime?.stdout ?? process.stdout
 
+    // Phase 1 latch, taken while raw mode is STILL HELD: stop every output
+    // producer (render, alt-screen health probe, mode re-assert) so nothing
+    // can re-write ENABLE_MOUSE_TRACKING or queue a frame while the disable
+    // bytes below are in flight. Raw mode must survive until the settle
+    // window below has elapsed: writeSync only proves the bytes reached the
+    // kernel tty buffer, not that the remote terminal consumed them — on a
+    // slow/stalled link (ssh is #522's environment) the terminal keeps
+    // sending SGR mouse reports for a while, and only raw mode keeps the
+    // kernel line discipline from echoing them as caret-notation
+    // `^[[<35;130;47M` garbage over the frozen UI. Compat: pre-split
+    // runtimes expose only the composite detachForShutdown, which already
+    // latches first (its cooked restore then happens here, same as before).
+    const latch = runtime?.beginShutdown ?? runtime?.detachForShutdown
     try {
-      runtime?.detachForShutdown?.()
-      // The /update continuation spawns children that inherit this stdin;
-      // strip the readable pump so the parent cannot swallow their input
-      // (issues #284/#307). Harmless on plain exits — the process exits
-      // right after this cleanup anyway.
-      runtime?.detachStdinForHandoff?.()
+      latch?.call(runtime)
     } catch {
-      ctx.logger.debug('dsh-tui: Ink shutdown detach failed; continuing with generic terminal cleanup')
+      ctx.logger.debug('dsh-tui: Ink shutdown latch failed; continuing with generic terminal cleanup')
     }
-    const cleanup = [
-      fullscreen ? EXIT_ALT_SCREEN : '',
-      cursor,
-      DISABLE_MOUSE_TRACKING,
-      DISABLE_MODIFY_OTHER_KEYS,
-      DISABLE_KITTY_KEYBOARD,
-      DISABLE_WIN32_INPUT_MODE,
-      DFE,
-      DBP,
-      SHOW_CURSOR,
-      CLEAR_ITERM2_PROGRESS,
-      supportsTabStatus() ? wrapForMultiplexer(CLEAR_TAB_STATUS) : '',
-    ].join('')
+    // Queue barrier between the latch and the exit writes: queued Ink frames
+    // or a last-moment ENABLE_MOUSE_TRACKING can still sit in Node's
+    // user-space buffer, and a direct-fd writeSync would overtake them —
+    // landing ENABLE after DISABLE (mouse tracking back on at the shell) or
+    // a frame after EXIT_ALT_SCREEN (garbage on the main screen). Everything
+    // after the latch is gated by isUnmounted, so nothing new queues. On
+    // timeout the queue is still draining (stalled link): the writer then
+    // stays in ORDERED stream mode — late bytes land BEFORE the exit
+    // sequence, never interleaved after it.
+    const queueDrained = await flushExitWriteBarrier(target)
+    if (!queueDrained) {
+      ctx.logger.debug('dsh-tui: stdout queue still draining after 1s; exit sequence switches to ordered queued writes')
+    }
+    const writer = createExitWriter(target, queueDrained)
     const suffix = notice === undefined ? '' : `${notice}\n`
-    await writeStream(process.stdout, `${cleanup}\r\n${suffix}`)
-    // Re-drain AFTER the cleanup sequences have landed (#507): terminal
-    // replies and mouse packets already in flight when the exit started
-    // keep arriving while cleanup is being written — the detach-time drain
-    // cannot see them. Unconsumed at process exit they land in the shell's
-    // input queue (DECRPM/DA1/XTVERSION garbage pasted into the prompt).
-    // 150ms settle covers reply RTT on slow links (ssh/ghostty is #522's
-    // environment; 50ms proved too tight there) while staying well inside
-    // the exit window the user already waits through.
+    if (runtime?.hasWrittenExitCleanup === true) {
+      // React error-boundary / signal-exit path: Ink.unmount already wrote
+      // the mode resets (with raw mode still held — the cooked restore is
+      // deferred to the concludeShutdown in this funnel's finally).
+      // Re-writing DISABLE_MOUSE_TRACKING / EXIT_ALT_SCREEN here would
+      // double-reset the terminal; only the cursor park and notice remain.
+      writer.write(`${cursor}\r\n${suffix}`)
+    } else {
+      writer.write(DISABLE_MOUSE_TRACKING)
+      const cleanup = [
+        fullscreen ? EXIT_ALT_SCREEN : '',
+        cursor,
+        DISABLE_MODIFY_OTHER_KEYS,
+        DISABLE_KITTY_KEYBOARD,
+        DISABLE_WIN32_INPUT_MODE,
+        DFE,
+        DBP,
+        SHOW_CURSOR,
+        CLEAR_ITERM2_PROGRESS,
+        supportsTabStatus() ? wrapForMultiplexer(CLEAR_TAB_STATUS) : '',
+      ].join('')
+      writer.write(`${cleanup}\r\n${suffix}`)
+    }
+    // Ordered completion wait: queued writes must be acknowledged before
+    // the settle window (and before process.exit after done()), otherwise
+    // the disable bytes can still be truncated from Node's user-space
+    // buffer (#522 through a different door). A false result means the
+    // stream is wedged — the bytes remain queued IN ORDER, so the worst
+    // case is truncation at process exit, never an ENABLE-after-DISABLE
+    // scramble.
+    await writer.flush()
+    // Settle window spent in RAW mode (#507 + #522): terminal replies and
+    // mouse packets already in flight when the exit started keep arriving
+    // while cleanup is being written — the latch-time drain cannot see
+    // them. Held raw, the bytes sit in the tty input buffer unread instead
+    // of being echoed by the kernel; the drain below then empties the
+    // buffer so nothing leaks into the shell's input queue (DECRPM/DA1/
+    // XTVERSION garbage pasted into the prompt). 150ms covers reply RTT on
+    // slow links (ssh/ghostty is #522's environment; 50ms proved too tight
+    // there) while staying well inside the exit window the user already
+    // waits through.
     await new Promise<void>(resolve => setTimeout(resolve, 150))
     runtime?.drainStdin?.()
+  } catch {
+    ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
+  } finally {
+    // Phase 2, unconditionally: only NOW restore cooked+echo (the remote
+    // terminal has had the full settle window to consume the disable
+    // bytes). Each release is isolated: concludeShutdown can throw on a
+    // revoked tty (its handleSetRawMode writes) and must NOT skip the
+    // stdin handoff — the /update child would otherwise race the lingering
+    // readable pump (issues #284/#307; harmless on plain exits).
+    try {
+      runtime?.concludeShutdown?.()
+    } catch {
+      ctx.logger.debug('dsh-tui: Ink shutdown conclude failed; continuing with generic terminal cleanup')
+    }
+    try {
+      runtime?.detachStdinForHandoff?.()
+    } catch {
+      ctx.logger.debug('dsh-tui: Ink stdin handoff detach failed; continuing with process shutdown')
+    }
     if (stderrNotice !== undefined) {
       await writeStream(process.stderr, `\n${stderrNotice}\n`)
     }
-  } catch {
-    ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
   }
   done()
+}
+
+/**
+ * Exit-write barrier: flush whatever Node's user-space queue still holds
+ * (queued Ink frames, a re-asserted ENABLE_MOUSE_TRACKING) BEFORE the
+ * direct-fd writeSync calls of the exit sequence. writeSync overtakes any
+ * queued bytes — without the barrier, a pre-queued ENABLE would land after
+ * DISABLE (mouse tracking back on at the shell) and a queued frame after
+ * EXIT_ALT_SCREEN (garbage painted on the main screen). `write('', cb)` is
+ * NOT usable as the barrier — the empty chunk's callback fires out of
+ * order — so poll writableLength on a short interval (writableLength covers
+ * both queued AND in-flight chunks: Node decrements it only when the
+ * chunk's _write callback fires). Returns whether the queue drained: on
+ * timeout (stalled link) the caller must NOT fall through to direct-fd
+ * writes — createExitWriter then stays in ordered stream mode instead. The
+ * poll timer is REF'd on purpose: the barrier is an intentional bounded
+ * wait inside the exit window (exactly like the 150ms settle) — unref'd,
+ * it would let the process exit from under finishExit the moment the queue
+ * drains and the loop has nothing else to keep it alive.
+ */
+function flushExitWriteBarrier(stdout: NodeJS.WriteStream): Promise<boolean> {
+  if (typeof stdout.writableLength !== 'number' || stdout.writableLength === 0) {
+    return Promise.resolve(true)
+  }
+  return new Promise(resolve => {
+    const started = Date.now()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (drained: boolean): void => {
+      if (timer !== undefined) clearTimeout(timer)
+      resolve(drained)
+    }
+    const poll = (): void => {
+      if (stdout.writableLength === 0) {
+        finish(true)
+        return
+      }
+      if (Date.now() - started >= 1000) {
+        finish(false)
+        return
+      }
+      timer = setTimeout(poll, 5)
+    }
+    poll()
+  })
+}
+
+/**
+ * Spin bed for the EAGAIN retry below: Atomics.wait blocks the main thread
+ * for ~10ms per retry — acceptable inside the exit window, and the only
+ * synchronous sleep available here.
+ */
+const exitWriteRetryBed = new Int32Array(new SharedArrayBuffer(4))
+
+/**
+ * Ordered writer for the exit sequence. Two disciplines, never mixed:
+ *
+ * - FAST PATH (fd known, queue drained by the barrier): writeSync straight
+ *   to the stream's own fd (never a hard-coded 1, issue #522), looping on
+ *   short writes and retrying EINTR / bounded EAGAIN. Bytes reach the
+ *   kernel tty buffer before process.exit instead of sitting in Node's
+ *   user-space buffer where exit would truncate them.
+ * - ORDERED PATH (no fd, barrier timed out, or any sync write failed /
+ *   short-wrote): plain stream.write, which queues BEHIND whatever is
+ *   still in flight — a pre-queued ENABLE lands before DISABLE, a late
+ *   frame before EXIT_ALT_SCREEN. STICKY: once any byte goes through the
+ *   queue, every later write queues too, because a direct-fd write would
+ *   overtake the queued remainder and scramble the sequence. flush() then
+ *   waits (bounded 1s) for the last chunk's callback — write callbacks
+ *   fire in order, so it acknowledges everything queued before it. On a
+ *   wedged stream the bytes stay queued IN ORDER: worst case is ordered
+ *   truncation at process exit, never interleaving.
+ *
+ * Residual: a blocking fd with a full kernel buffer (wedged pty) can still
+ * park writeSync — no synchronous API can bound the syscall itself. The
+ * barrier makes it vanishingly unlikely: the link demonstrably moved just
+ * before. NEVER THROWS either way: finishExit's finally must reach the
+ * cooked-mode restore even when the terminal is already gone (revoked tty,
+ * closed fd, EIO).
+ */
+function createExitWriter(
+  stdout: NodeJS.WriteStream,
+  queueDrained: boolean,
+): { write: (text: string) => void; flush: () => Promise<boolean> } {
+  const stdoutWithFd = stdout as NodeJS.WriteStream & { fd?: number | null }
+  const fd = queueDrained && typeof stdoutWithFd.fd === 'number' ? stdoutWithFd.fd : undefined
+  let streamMode = fd === undefined
+  let completion: Promise<void> | undefined
+
+  const queueWrite = (chunk: string | Uint8Array): void => {
+    // Never rejects, never throws — finishExit's finally must run even when
+    // the stream is destroyed underneath us.
+    completion = new Promise<void>(resolve => {
+      try {
+        stdout.write(chunk, () => resolve())
+      } catch {
+        resolve()
+      }
+    })
+  }
+
+  const write = (text: string): void => {
+    if (text === '') return
+    if (streamMode) {
+      queueWrite(text)
+      return
+    }
+    const bytes = Buffer.from(text)
+    let offset = 0
+    let eagainBudget = 3
+    let eintrBudget = 3
+    while (offset < bytes.length) {
+      let written = 0
+      try {
+        // eslint-disable-next-line custom-rules/no-sync-fs -- process exiting; async writes would be dropped
+        written = writeSync(fd as number, bytes, offset, bytes.length - offset, null)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        // Interrupted syscall: retry immediately, on its own budget.
+        if (code === 'EINTR' && eintrBudget > 0) {
+          eintrBudget -= 1
+          continue
+        }
+        // Non-blocking fd, full kernel buffer (stalled link): bounded spin.
+        if ((code === 'EAGAIN' || code === 'EWOULDBLOCK') && eagainBudget > 0) {
+          eagainBudget -= 1
+          Atomics.wait(exitWriteRetryBed, 0, 0, 10)
+          continue
+        }
+        break
+      }
+      if (written <= 0) {
+        // Zero progress on a live fd: same treatment as EAGAIN, bounded.
+        if (eagainBudget > 0) {
+          eagainBudget -= 1
+          Atomics.wait(exitWriteRetryBed, 0, 0, 10)
+          continue
+        }
+        break
+      }
+      offset += written
+    }
+    if (offset >= bytes.length) return
+    // Partial/failed sync write: queue ONLY the remainder and stay in
+    // stream mode for the rest of the sequence.
+    streamMode = true
+    queueWrite(bytes.subarray(offset))
+  }
+
+  const flush = (): Promise<boolean> => {
+    if (completion === undefined) return Promise.resolve(true)
+    const pending = completion
+    return new Promise(resolve => {
+      const timer = setTimeout(() => resolve(false), 1000)
+      void pending.then(() => {
+        clearTimeout(timer)
+        resolve(true)
+      })
+    })
+  }
+
+  return { write, flush }
 }
 
 function readInkShutdownState(value: unknown): InkShutdownState | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const candidate = value as Record<string, unknown>
   if (candidate.detachForShutdown !== undefined && typeof candidate.detachForShutdown !== 'function') return undefined
+  if (candidate.beginShutdown !== undefined && typeof candidate.beginShutdown !== 'function') return undefined
+  if (candidate.concludeShutdown !== undefined && typeof candidate.concludeShutdown !== 'function') return undefined
   if (candidate.detachStdinForHandoff !== undefined && typeof candidate.detachStdinForHandoff !== 'function') return undefined
   if (candidate.drainStdin !== undefined && typeof candidate.drainStdin !== 'function') return undefined
+  if (candidate.stdout !== undefined && !isWritableLike(candidate.stdout)) return undefined
+  if (candidate.hasWrittenExitCleanup !== undefined && typeof candidate.hasWrittenExitCleanup !== 'boolean') return undefined
   if (candidate.frontFrame !== undefined && !isFrameState(candidate.frontFrame)) return undefined
   if (candidate.displayCursor !== undefined && candidate.displayCursor !== null && !isCursorState(candidate.displayCursor)) return undefined
   return value as InkShutdownState
+}
+
+function isWritableLike(value: unknown): value is NodeJS.WriteStream {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as Record<string, unknown>).write === 'function'
+  )
 }
 
 function isFrameState(value: unknown): value is { cursor?: { x: number; y: number } } {

@@ -139,6 +139,64 @@ export function formatWhen(at: number, now: number): string {
 }
 
 /**
+ * The next wall-clock instant at which {@link formatWhen} would return a
+ * DIFFERENT string for `at` — computed with `formatWhen` itself as the
+ * oracle, so the two can never drift apart (the nested rounding
+ * `seconds → minutes → hours → days` makes the true boundaries anything but
+ * the naive half-minute/half-hour marks: the minute label flips at
+ * `seconds = 60k+30` where seconds itself is `round(ageMs/1000)`, the
+ * minute→hour cut lands at 59m30s, and day 7 gives way to the date form at
+ * ~7.47 days).
+ *
+ * The label is a nondecreasing step function of age — every derived integer
+ * is nondecreasing in age and no bucket's string ever repeats — so a binary
+ * search over age space finds the exact flip (boundaries sit at
+ * `(2k+1)×500ms` offsets, integer-ms convergent). The horizon only needs to
+ * exceed the last finite boundary (the day-7 → date cutover); the one label
+ * stable past it is the absolute date form, which depends on `at` alone and
+ * therefore NEVER changes again — we return `Infinity` so callers schedule
+ * no wake at all (the whole point of the idle-wakeup elimination).
+ *
+ * @param at - Epoch ms of the moment being described (same as formatWhen).
+ * @param now - Epoch ms of the present.
+ * @returns Epoch ms of the next label change strictly after `now`, or
+ *   `Infinity` in the absolute-date regime (no future change).
+ */
+export function nextFormatWhenChange(at: number, now: number): number {
+  const current = formatWhen(at, now)
+  // A label stable across the horizon is the date form (the only one whose
+  // inputs do not move with now) — no wake needed, ever.
+  const HORIZON_MS = 8 * 24 * 60 * 60 * 1000
+  if (formatWhen(at, now + HORIZON_MS) === current) return Infinity
+  // Binary search the first instant with a different label. Monotonicity:
+  // age ↗ ⇒ seconds ↗ ⇒ minutes/hours/days ↗ ⇒ bucket or number moves
+  // forward, never back — so "label differs" is a monotone predicate over
+  // age and bisection converges to the exact boundary ms.
+  let lo = now
+  let hi = now + HORIZON_MS
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (formatWhen(at, mid) === current) {
+      lo = mid
+    } else {
+      hi = mid
+    }
+  }
+  return hi
+}
+
+/**
+ * Absolute local wall-clock: `2026-09-01 14:30:22`. Companion to
+ * formatWhen's relative phrasing — the precise answer for telling three
+ * similar-looking sessions apart in a hover tooltip.
+ */
+export function formatAbsolute(at: number): string {
+  const date = new Date(at)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+/**
  * Byte size at the precision the number is worth: `812 B`, `142.9 KB`,
  * `4.2 MB`. One decimal from kilobytes up, because the digit distinguishes a
  * short exchange from a long one and a second would not.

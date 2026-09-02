@@ -13,7 +13,7 @@ import { renderBigText } from './bigfont.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
-import { OPENING_SEQUENCE } from './whaleFrames.js'
+import { OPENING_SEQUENCES, pickOpeningSequence, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
 
 /**
  * Header badge version, read from the installed package.json so the display
@@ -57,11 +57,14 @@ function capitalize(text: string): string {
 }
 
 /**
- * The header splash: one layout, two phases. The **opening** (~3.4s, once)
- * plays the hand-drawn whale animation (blink → water-spout bloom → tail
- * wag) and runs the shimmer sweeps; the **settled** header is the same
- * tree frozen at t=0 — whale on the standard pose, sweep highlights parked
- * off-screen, clock unsubscribed, zero timers.
+ * The header splash: one layout, two phases. The **opening** (~1.7–3.5s,
+ * once) plays one of three whale intros — the classic blink + spout +
+ * tail-wag combo, the heart pass, or the sleep-Z float — rolled on every
+ * mount (see `pickOpeningSequence`): randomly at startup, and again
+ * randomly on each `/deepseek` easter-egg replay — and runs the shimmer
+ * sweeps; the **settled** header is the same tree frozen at t=0 — whale
+ * on the standard pose, sweep highlights parked off-screen, clock
+ * unsubscribed, zero timers.
  *
  * Layout: the 13-row pixel whale beside a text column of matching height —
  * the `✦ dsh-TUI` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
@@ -75,6 +78,7 @@ export function LogoV2({
   effort,
   cwd,
   skipIntro = false,
+  intro,
   tip,
   whale = true,
   drift,
@@ -84,6 +88,8 @@ export function LogoV2({
   cwd: string
   /** Test seam: mount straight into the settled header (probes skip the intro). */
   skipIntro?: boolean
+  /** Test seam: pin the intro animation instead of rolling one at startup. */
+  intro?: WhaleIntroId
   /** Test seam: pin the startup tip line (probes need a deterministic tip). */
   tip?: Tip
   /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
@@ -92,24 +98,28 @@ export function LogoV2({
    * `undefined` — the production default — auto-detects the install). */
   drift?: UpstreamDriftSummary | null
 }): React.ReactNode {
-  const [step, setStep] = React.useState(skipIntro ? OPENING_SEQUENCE.length : 0)
-  const settled = step >= OPENING_SEQUENCE.length
+  // One intro per logo mount: the production path rolls (startup splash
+  // and each /deepseek replay roll independently), the `intro` seam pins
+  // a specific animation for probes.
+  const [sequence] = React.useState<readonly OpeningStep[]>(() => OPENING_SEQUENCES[intro ?? pickOpeningSequence().id])
+  const [step, setStep] = React.useState(skipIntro ? sequence.length : 0)
+  const settled = step >= sequence.length
 
   // Opening clock: drives the shimmer sweep and big-text highlight only
   // while the intro plays; `null` afterwards unsubscribes so the settled
   // header never repaints. 60ms frames keep the sweep lively.
   const [ref, time] = useAnimationFrame(settled ? null : 60)
 
-  // Frame chain: dwell per OPENING_SEQUENCE entry, then settle for good.
+  // Frame chain: dwell per sequence entry, then settle for good.
   React.useEffect(() => {
     if (settled) return
     const timer = setTimeout(() => {
       setStep(s => s + 1)
-    }, OPENING_SEQUENCE[step].ms)
+    }, sequence[step].ms)
     return () => {
       clearTimeout(timer)
     }
-  }, [step, settled])
+  }, [step, settled, sequence])
 
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
@@ -120,7 +130,7 @@ export function LogoV2({
   const taglineRGB = parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE
 
   const showWhale = whale && columns >= WHALE_MIN_COLUMNS
-  const frameIndex = settled ? STANDARD_FRAME_INDEX : OPENING_SEQUENCE[step].frame
+  const frameIndex = settled ? STANDARD_FRAME_INDEX : sequence[step].frame
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
