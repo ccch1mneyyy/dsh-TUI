@@ -8,9 +8,16 @@ export const TERMINAL_IMAGE_MAX_FRAME_BYTES = 16 * 1024 * 1024
 export const TERMINAL_IMAGE_MAX_CELLS = 512
 export const TERMINAL_IMAGE_MAX_PLACEMENTS = 64
 
-/** Immutable decoded image data accepted by the host image primitive. */
+/**
+ * Immutable decoded image data accepted by the host image primitive.
+ *
+ * The renderer deliberately keys uploads by buffer identity instead of
+ * hashing every frame. Callers must not mutate or refill `data` after passing
+ * it to `<Image>`; changed pixels require a new `Uint8Array` (and therefore a
+ * new source snapshot).
+ */
 export interface TerminalImageSource {
-  /** Row-major sRGB pixels, four bytes per pixel in RGBA order. */
+  /** Immutable row-major sRGB pixels, four bytes per pixel in RGBA order. */
   readonly data: Uint8Array
   readonly width: number
   readonly height: number

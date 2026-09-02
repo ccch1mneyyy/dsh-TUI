@@ -67,6 +67,21 @@ assert.doesNotMatch(
 )
 assert.ok(chunks.slice(1).every(match => !match[1]!.includes('f=32')))
 
+const guardedPixels = new Uint8Array([9, 1, 2, 3, 4, 9])
+const subarrayTransmission = transmitKittyRgba(102, {
+  data: guardedPixels.subarray(1, 5),
+  width: 1,
+  height: 1,
+})
+const subarrayPayload = [
+  ...subarrayTransmission.matchAll(/\x1b_G[^;]+;([^\x1b]*)\x1b\\/gu),
+].map(match => match[1]!).join('')
+assert.deepEqual(
+  Buffer.from(subarrayPayload, 'base64'),
+  Buffer.from([1, 2, 3, 4]),
+  'zero-copy encoding must stay within the Uint8Array view boundaries',
+)
+
 const node = createNode('ink-image')
 const manager = new KittyGraphicsManager({ firstImageId: 101 })
 const placement = {
@@ -98,15 +113,39 @@ assert.equal(manager.reconcile([placement]), '', 'stable frame must emit no grap
 const moved = manager.reconcile([{ ...placement, x: 4 }])
 assert.doesNotMatch(moved, /\x1b_Ga=[tT],/u)
 assert.match(moved, /a=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1/u)
+const replacementData = source.data.slice()
+replacementData[0] ^= 0xff
+const replacementPlacement = {
+  ...placement,
+  x: 4,
+  source: { ...source, data: replacementData },
+}
+const replaced = manager.reconcile([replacementPlacement])
+assert.match(
+  replaced,
+  /a=t,t=d,f=32/u,
+  'same-size changed pixels in a new immutable buffer must upload again',
+)
+const replacementImageId = /a=t,t=d,f=32,[^;]*i=(\d+)/u.exec(replaced)?.[1]
+assert.ok(replacementImageId, 'replacement upload must carry an image id')
+assert.match(
+  replaced,
+  new RegExp(`a=p,i=${replacementImageId},p=1,c=6,r=3,z=-2147483648,C=1`, 'u'),
+)
+assert.equal(
+  manager.reconcile([replacementPlacement]),
+  '',
+  'reusing the same immutable pixel snapshot must not upload again',
+)
 manager.invalidateAll()
-const invalidated = manager.reconcile([placement])
+const invalidated = manager.reconcile([replacementPlacement])
 assert.match(invalidated, /a=t,t=d,f=32/u)
 assert.equal([...invalidated.matchAll(/\x1b_Ga=p,/gu)].length, 1)
 assert.match(
   invalidated,
-  /a=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1/u,
+  new RegExp(`a=p,i=${replacementImageId},p=1,c=6,r=3,z=-2147483648,C=1`, 'u'),
 )
-assert.match(manager.reconcile([]), /a=d,d=I,i=101/u)
+assert.match(manager.reconcile([]), new RegExp(`a=d,d=I,i=${replacementImageId}`, 'u'))
 
 const query = kittyGraphics(31)
 assert.equal(query.request, '\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\')

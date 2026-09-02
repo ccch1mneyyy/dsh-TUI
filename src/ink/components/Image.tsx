@@ -7,7 +7,10 @@ import {
 import Text from './Text.js'
 
 export interface ImageProps {
-  /** Decoded immutable RGBA pixels. Invalid/oversized sources use fallback. */
+  /**
+   * Decoded immutable RGBA snapshot. Allocate a new buffer when pixels change;
+   * invalid or oversized sources use the fallback.
+   */
   readonly source?: TerminalImageSource
   /** Width reserved in terminal columns. */
   readonly width: number

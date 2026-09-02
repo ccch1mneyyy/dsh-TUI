@@ -153,7 +153,11 @@ export function transmitKittyRgba(
   imageId: number,
   source: TerminalImageSource,
 ): string {
-  const encoded = Buffer.from(source.data).toString('base64')
+  const encoded = Buffer.from(
+    source.data.buffer,
+    source.data.byteOffset,
+    source.data.byteLength,
+  ).toString('base64')
   const chunks: string[] = []
   for (let offset = 0; offset < encoded.length; offset += BASE64_CHUNK_CELLS) {
     chunks.push(encoded.slice(offset, offset + BASE64_CHUNK_CELLS))
