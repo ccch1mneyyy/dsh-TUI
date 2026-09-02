@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
-const EXPECTED_ALPHA_VERSION = '0.1.2-alpha.2'
+const EXPECTED_ALPHA_VERSION = '0.1.2-alpha.4'
 const tuiRoot = resolve(import.meta.dirname, '..')
 const sourceRoot = resolve(process.env.DSH_HARNESS_SOURCE_ROOT ?? join(tuiRoot, '../deepseek-harness'))
 const sourceManifestPath = join(sourceRoot, 'package.json')

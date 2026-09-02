@@ -1259,7 +1259,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // event type), and its internal log-length memo skips appends from any
     // session other than the active ask's, so no agent filtering is needed
     // here. The firehose fires post-commit, after the event entered
-    // session.events, so the recheck sees the settled result.
+    // session.snapshotEvents(), so the recheck sees the settled result.
     ctx.on('session/event', (_session, event) => approvalStore.noteSessionEvent(event))
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
@@ -1677,7 +1677,7 @@ async function resolveAgent(
         agent: resumed.agent,
         handle: resumed,
         agentPreset: composed.agentPreset,
-        route: resumeRoute ?? recordedModelRoute(resumed.agent.session.events),
+        route: resumeRoute ?? recordedModelRoute(resumed.agent.session.snapshotEvents()),
       }
     } catch (error) {
       // A launch-time --resume is an explicit request: silently substituting a
@@ -1787,7 +1787,7 @@ export function isExitResumable(deps: {
   const agent = deps.liveAgent ?? deps.startupAgent
   return (
     deps.pendingCount > 0 ||
-    agent.session.events.some(
+    agent.session.snapshotEvents().some(
       event => event.type === 'user/message' && event.data.source.kind === 'user',
     )
   )

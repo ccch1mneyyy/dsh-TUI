@@ -51,23 +51,23 @@ interface AgentRegistryLike {
 }
 
 function latestPosition(agent: Agent): { turn: number; step: number } | undefined {
-  for (let index = agent.session.events.length - 1; index >= 0; index -= 1) {
-    const event = agent.session.events[index]
+  for (let index = agent.session.snapshotEvents().length - 1; index >= 0; index -= 1) {
+    const event = agent.session.snapshotEvents()[index]
     if (event?.type === 'step/start') return event.data
   }
   return undefined
 }
 
 function latestRequestHeaderReason(agent: Agent): string | undefined {
-  for (let index = agent.session.events.length - 1; index >= 0; index -= 1) {
-    const event = agent.session.events[index]
+  for (let index = agent.session.snapshotEvents().length - 1; index >= 0; index -= 1) {
+    const event = agent.session.snapshotEvents()[index]
     if (event?.type === 'request/header') return event.data.reason
   }
   return undefined
 }
 
 function turnCompleted(agent: Agent, turn: number): boolean {
-  return agent.session.events.some(event => event.type === 'turn/end' && event.data.turn === turn)
+  return agent.session.snapshotEvents().some(event => event.type === 'turn/end' && event.data.turn === turn)
 }
 
 function captureRequest(

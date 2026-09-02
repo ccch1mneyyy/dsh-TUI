@@ -106,14 +106,14 @@ export async function resolvePersistedPreset(ctx: Context, sessionId: SessionId)
  * `agent-preset/selected` wins over the header). Used for fork-style creates
  * (rewind/model switch) and for reading an already-live agent's composition.
  *
- * @param session - The live session (`header` + `events`).
+ * @param session - The live session (`header` + `snapshotEvents()`).
  * @returns The running preset id, or undefined when the log records none.
  */
 export function runningPresetOf(session: {
   header: { agentPreset?: string }
-  events: readonly { type: string; data: unknown }[]
+  snapshotEvents(): readonly { type: string; data: unknown }[]
 }): string | undefined {
-  return resolveRecordedPreset(session)
+  return resolveRecordedPreset({ header: session.header, events: session.snapshotEvents() })
 }
 
 /**
