@@ -8588,7 +8588,7 @@ ${output}
   /**
    * Fold ONE newly observed main-session event into the trajectory build —
    * incrementally, from the event the observer already holds. The session
-   * getter (`agent.session.events`) is O(n) on hosts that rebuild a frozen
+   * getter (`agent.session.snapshotEvents()`) is O(n) on hosts that rebuild a frozen
    * snapshot per append, so it must stay off the token-rate path: a full
    * fold happens only in bindAgent (once per agent swap, where O(n) is
    * the correct cost).
@@ -8614,7 +8614,7 @@ ${output}
     // extend the previous session's projection — reset and fold the new
     // session's full log once here (O(n) once per swap, never per event).
     trajectoryBuild = emptyTrajectory()
-    trajectoryBuild = extendTrajectory(trajectoryBuild, agent.session.events)
+    trajectoryBuild = extendTrajectory(trajectoryBuild, agent.session.snapshotEvents())
     // Cancel state and deferred interrupt delivery belong to one bound agent.
     // A replacement must neither inherit the old latch nor receive its queued
     // microtask after the session identity changes.
