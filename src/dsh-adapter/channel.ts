@@ -882,10 +882,11 @@ export interface Channel {
    *  `dsh-tui.expandEditor`; on by default) — gates the ⛶ affordance and
    *  the expandEditor shortcut. */
   readonly expandEditor: boolean
-  /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`; on by
-   *  default): live-arriving assistant text, expanded thinking, and tool
-   *  call bodies paint through a ~30fps reveal instead of jumping per
-   *  provider burst. */
+  /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`; off by
+   *  default — the reveal's own frame cadence measurably multiplies layout
+   *  work on long streamed turns): live-arriving assistant text, expanded
+   *  thinking, and tool call bodies paint through a ~20fps reveal instead
+   *  of jumping per provider burst. */
   readonly smoothStreaming: boolean
   /** Live status-footer visibility and compactness preferences. */
   readonly statusBar: Readonly<StatusBarConfig>
@@ -3722,7 +3723,7 @@ export function createChannel(
     foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true,
     expandEditor: options.expandEditor !== false,
-    smoothStreaming: options.smoothStreaming !== false,
+    smoothStreaming: options.smoothStreaming === true,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
     minimal: options.minimal === true,

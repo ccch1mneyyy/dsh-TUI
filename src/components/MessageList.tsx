@@ -23,7 +23,7 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
-import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
+import { getRevealVersion, hasActiveReveal, revealLengthOf, revealTextOf, splitRevealKey, toolRevealKey } from './smoothReveal.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
 
 /**
@@ -73,29 +73,84 @@ const NOOP_TOGGLE_STREAM_VIEW = (_rowId: number): void => {}
 // until it catches up — settling mid-reveal must not snap (that is the
 // "non-streaming delivery becomes a smooth flow" contract).
 
-function assistantRevealText(row: ChatRow, enabled: boolean): string {
-  const stripped = stripNarration(row.text)
-  return revealTextOf(`a${row.id}`, stripped, {
-    enabled,
-    active: row.streaming === true || row.fresh === true,
-  })
+function textRevealKey(kind: 'a' | 'r', rowId: number, rowsGeneration: number | undefined): string {
+  // Row ids restart from zero on /clear, rewind, and session swaps. Production
+  // channels pass rowsGeneration so an old completed/active cursor can never
+  // suppress or partially seed a fresh row with the same id. Legacy embedders
+  // without the seam retain their historical id-only namespace.
+  return rowsGeneration === undefined
+    ? `${kind}${rowId}`
+    : `${kind}${rowsGeneration}:${rowId}`
 }
 
-function reasoningRevealText(row: ChatRow, enabled: boolean): string {
-  return revealTextOf(`r${row.id}`, row.text, { enabled, active: row.streaming === true })
+/**
+ * Per-row reveal-read cache: the narration-stripped text and cursor key for
+ * the row's CURRENT text length. Every MessageList render reads these twice
+ * (layout signature + row mapping) for every visible row, and at the reveal
+ * cadence that is dozens of reads per second — recomputing stripNarration
+ * (an O(text) scan) and re-allocating the key template per read was pure
+ * waste on long sessions. Keyed by row id with an identity
+ * (`textRef`) + generation validity check — see the comment inside for why
+ * length-only validity is unsafe (channel settle replaces row.text without
+ * bumping the generation).
+ */
+type RevealRead = { textRef: string; gen: number | undefined; aKey: string; rKey: string; stripped: string }
+type RevealReadCache = Map<number, RevealRead>
+
+function revealReadFor(
+  row: ChatRow,
+  rowsGeneration: number | undefined,
+  cache: RevealReadCache,
+): RevealRead {
+  let entry = cache.get(row.id)
+  // Identity check, not length: channel settle REPLACES row.text wholesale
+  // (`row.text = text`) WITHOUT bumping rowsGeneration, so a same-length
+  // replacement must still miss — a length-only validity key would keep
+  // serving the OLD stripped text (stale row content) until the next
+  // length change. Strings are immutable (reference equality implies
+  // content equality) and every mutation path (chunk append, settle
+  // replace) allocates a new string, so this is exact AND cheaper than a
+  // length read. `gen` is defense-in-depth: the wholesale clear on
+  // generation change (in the render body below) already covers it, but a
+  // future reset-path refactor that misses a cache must degrade to a
+  // rebuild, never to stale content.
+  if (entry === undefined || entry.textRef !== row.text || entry.gen !== rowsGeneration) {
+    entry = {
+      textRef: row.text,
+      gen: rowsGeneration,
+      aKey: row.kind === 'assistant' ? textRevealKey('a', row.id, rowsGeneration) : '',
+      rKey: row.kind === 'reasoning' ? textRevealKey('r', row.id, rowsGeneration) : '',
+      stripped: row.kind === 'assistant' ? stripNarration(row.text) : row.text,
+    }
+    if (cache.size >= 5000) {
+      const oldest = cache.keys().next().value
+      if (oldest !== undefined) cache.delete(oldest)
+    }
+    cache.set(row.id, entry)
+  }
+  return entry
 }
 
 /** Display length only (layout signature; no slice allocation). */
-function revealDisplayLen(row: ChatRow, enabled: boolean): number {
+function revealDisplayLen(
+  row: ChatRow,
+  enabled: boolean,
+  rowsGeneration: number | undefined,
+  cache: RevealReadCache,
+): number {
   if (row.kind === 'assistant') {
-    const stripped = stripNarration(row.text)
-    return revealLengthOf(`a${row.id}`, stripped, {
+    const read = revealReadFor(row, rowsGeneration, cache)
+    return revealLengthOf(read.aKey, read.stripped, {
       enabled,
       active: row.streaming === true || row.fresh === true,
     })
   }
   if (row.kind === 'reasoning') {
-    return revealLengthOf(`r${row.id}`, row.text, { enabled, active: row.streaming === true })
+    const read = revealReadFor(row, rowsGeneration, cache)
+    return revealLengthOf(read.rKey, row.text, {
+      enabled,
+      active: row.streaming === true,
+    })
   }
   return row.text.length
 }
@@ -135,6 +190,7 @@ function signatureParts(
   failureHintRowId: number | null | undefined,
   failureHint: string | undefined,
   displayTextLen: number,
+  smoothRevealEnabled: boolean,
 ): Array<string | number | boolean> {
   signatureScratch.length = 0
   // Universal height inputs: width reflows every row; kind switches height
@@ -164,6 +220,9 @@ function signatureParts(
         // diffLayout changes the body's — without it, a /settings toggle
         // leaves already-mounted tool cards at their stale cached height.
         foldTerminalCommand,
+        // Inline mode retires reveal as soon as a later transcript row exists:
+        // native scrollback cannot rewrite a partially revealed earlier card.
+        smoothRevealEnabled,
         tool?.status ?? '',
         tool?.resultText?.length ?? 0,
         tool?.resultFull?.length ?? 0,
@@ -588,9 +647,27 @@ export function MessageList({
   // every scroll tick) allocates nothing. A joined string per row per
   // render was O(rows) garbage per tick (3200-row session ⇒ several MB/s
   // into minor GC; the GC share of the scroll profile).
+  // Native inline scrollback is immutable. Smooth reveal may therefore run
+  // only on the transcript tail there: when a later row appears, reading the
+  // old row with enabled=false snaps its cursor before that same commit can
+  // push the row out of the writable viewport. Alt-screen has no native
+  // scrollback and can keep revealing any mounted row normally.
+  const inlineRevealTailId = historyPaintEnabled ? visibleRows.at(-1)?.id : undefined
+  const smoothRevealForRow = (row: ChatRow): boolean =>
+    smoothStreaming && (!historyPaintEnabled || row.id === inlineRevealTailId)
   const sigRef = React.useRef(new Map<number, Array<string | number | boolean>>())
+  /** Per-row reveal-read cache (see revealReadFor) + scratch bit vector of
+   *  rows whose reveal cursor is still advancing — the virtualization remount
+   *  guards below skip those rows exactly like streaming rows. */
+  const revealReadRef = React.useRef<RevealReadCache>(new Map())
+  const revealBitsRef = React.useRef<Uint8Array>(new Uint8Array(0))
+  if (revealBitsRef.current.length < visibleRows.length) {
+    revealBitsRef.current = new Uint8Array(visibleRows.length)
+  }
+  const revealBits = revealBitsRef.current
   {
     const sigs = sigRef.current
+    const reads = revealReadRef.current
     for (let i = 0; i < visibleRows.length; i++) {
       const row = visibleRows[i]!
       // Per-kind signature: only the inputs that row's OWN renderer consumes.
@@ -599,6 +676,7 @@ export function MessageList({
       // reasoning height at once, remounting the widened window over rows
       // whose rendering never changed (Yoga spike + measure churn for
       // nothing). Base parts cover the universal height inputs.
+      const rowSmoothReveal = smoothRevealForRow(row)
       const parts = signatureParts(
         row,
         columns,
@@ -612,8 +690,14 @@ export function MessageList({
         model,
         failureHintRowId,
         failureHint,
-        revealDisplayLen(row, smoothStreaming),
+        revealDisplayLen(row, rowSmoothReveal, rowsGeneration, reads),
+        rowSmoothReveal,
       )
+      revealBits[i] = rowSmoothReveal &&
+        ((row.kind === 'assistant' && hasActiveReveal(revealReadFor(row, rowsGeneration, reads).aKey)) ||
+          (row.kind === 'reasoning' && hasActiveReveal(revealReadFor(row, rowsGeneration, reads).rKey)))
+        ? 1
+        : 0
       const cachedParts = sigs.get(row.id)
       let same = false
       if (cachedParts !== undefined && cachedParts.length === parts.length) {
@@ -794,8 +878,12 @@ export function MessageList({
     // user reading history (measured: 3s of streaming while scrolled up
     // burned 2.5s of yoga and +84MB heap). Its height is in flux anyway;
     // the final settle invalidates once more and remounts exactly once.
+    // Guard 2b: rows still REVEALING (cursor active, fresh-settled rows
+    // included) get the same skip — the reveal invalidates the signature
+    // every tick for the same in-flux-height reason, and the remount-per-
+    // tick re-lex was the smooth-streaming long-task stall.
     for (let i = 0; i < start; i++) {
-      if (visibleRows[i]!.streaming === true) continue
+      if (visibleRows[i]!.streaming === true || revealBits[i] === 1) continue
       const rowId = visibleRows[i]!.id
       if (!heightsRef.current.has(rowId) && paintedOnceRef.current.has(rowId)) {
         start = i
@@ -824,12 +912,12 @@ export function MessageList({
   // for the rationale and both guards): rows BELOW the window whose height
   // was just invalidated remount to re-measure, so bottomPad keeps real
   // geometry while the user reads scrolled-up content and the tail streams.
-  // Runs for non-sticky views; sticky mounts the tail anyway. Streaming
-  // rows are skipped — THIS loop is the measured hot path of the
-  // read-while-streaming stall (the streaming tail row sits below the
+  // Runs for non-sticky views; sticky mounts the tail anyway. Streaming and
+  // still-revealing rows are skipped — THIS loop is the measured hot path of
+  // the read-while-streaming stall (the streaming tail row sits below the
   // window and invalidated per chunk).
   for (let i = end; i < visibleRows.length; i++) {
-    if (visibleRows[i]!.streaming === true) continue
+    if (visibleRows[i]!.streaming === true || revealBits[i] === 1) continue
     const rowId = visibleRows[i]!.id
     if (!heightsRef.current.has(rowId) && paintedOnceRef.current.has(rowId)) end = i + 1
   }
@@ -930,6 +1018,7 @@ export function MessageList({
     heightsRef.current.clear()
     heightsVersionRef.current++
     sigRef.current.clear()
+    revealReadRef.current.clear()
     paintedOnceRef.current = new Set()
     paintedBaseRef.current = undefined
     baseRef.current = null
@@ -1175,27 +1264,50 @@ export function MessageList({
           const tool = row.tool
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
           const job = row.kind === 'job' ? row.job : undefined
-          const revealVersion = smoothStreaming && row.kind === 'tool' && row.fresh === true &&
-            row.tool?.status === 'running' && row.tool.resultView === undefined
-            ? getRevealVersion()
-            : 0
+          const rowSmoothReveal = smoothRevealForRow(row)
+          // Gate the per-tick version on the card's OWN cursor: the global
+          // reveal version advances whenever ANY row reveals, and feeding it
+          // to every running fresh card re-rendered all of them at the tick
+          // cadence (parallel tool calls: the long-task fan-out stall). The
+          // card's first render creates its cursor itself, so 0 here never
+          // blocks creation — it only keeps finished/idle cards memoized.
+          let revealVersion = 0
+          if (
+            rowSmoothReveal && row.kind === 'tool' && row.fresh === true &&
+            row.tool?.status === 'running' && row.tool.resultView === undefined &&
+            tool?.callId !== undefined
+          ) {
+            const cardKey = toolRevealKey(rowsGeneration, tool.callId)
+            if (hasActiveReveal(cardKey) || hasActiveReveal(splitRevealKey(cardKey))) {
+              revealVersion = getRevealVersion()
+            }
+          }
           // Smooth reveal feeds the SAME flattened text prop a chunk feeds,
           // and keeps the streaming layout alive until the reveal catches up
           // (settling mid-reveal must not snap — a one-shot non-streaming
-          // delivery still paints as a flow).
+          // delivery still paints as a flow). The stripped text and cursor
+          // key come from the per-row cache (revealReadFor) — the same
+          // instance the signature loop read, so the reveal's append-basis
+          // compare stays reference-equal between the two reads.
           let displayText = row.text
           let displayStreaming = row.streaming === true
-          if (row.kind === 'assistant' && smoothStreaming) {
-            const stripped = stripNarration(row.text)
-            displayText = revealTextOf(`a${row.id}`, stripped, {
-              enabled: true,
-              active: displayStreaming || row.fresh === true,
-            })
-            displayStreaming = displayStreaming || displayText.length !== stripped.length
-          } else if (row.kind === 'assistant') {
-            displayText = stripNarration(row.text)
+          if (row.kind === 'assistant') {
+            const read = revealReadFor(row, rowsGeneration, revealReadRef.current)
+            if (smoothStreaming) {
+              displayText = revealTextOf(read.aKey, read.stripped, {
+                enabled: rowSmoothReveal,
+                active: displayStreaming || row.fresh === true,
+              })
+              displayStreaming = displayStreaming || displayText.length !== read.stripped.length
+            } else {
+              displayText = read.stripped
+            }
           } else if (row.kind === 'reasoning' && smoothStreaming) {
-            displayText = revealTextOf(`r${row.id}`, row.text, { enabled: true, active: displayStreaming })
+            const read = revealReadFor(row, rowsGeneration, revealReadRef.current)
+            displayText = revealTextOf(read.rKey, row.text, {
+              enabled: rowSmoothReveal,
+              active: displayStreaming,
+            })
           }
           return (
             <MemoRow
@@ -1217,9 +1329,10 @@ export function MessageList({
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
-              smoothStreaming={smoothStreaming}
+              smoothStreaming={rowSmoothReveal}
               fresh={row.fresh === true}
               revealVersion={revealVersion}
+              revealGeneration={rowsGeneration}
               activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
@@ -1286,6 +1399,8 @@ type MemoRowProps = {
   fresh: boolean
   /** Version tick for active tool reveal; 0 keeps settled rows memoized. */
   revealVersion: number
+  /** Transcript generation namespace for reveal cursor keys. */
+  revealGeneration: number | undefined
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
@@ -1362,6 +1477,7 @@ function TranscriptRow({
   smoothStreaming,
   fresh,
   revealVersion,
+  revealGeneration,
   thinkingFold,
   toolBackground,
   foldTerminalCommand,
@@ -1535,6 +1651,8 @@ function TranscriptRow({
             toolBackground={toolBackground}
             smoothReveal={smoothStreaming}
             fresh={fresh}
+            revealVersion={revealVersion}
+            revealGeneration={revealGeneration}
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}

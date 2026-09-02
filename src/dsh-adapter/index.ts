@@ -114,8 +114,11 @@ export interface Config {
   expandEditor?: boolean
   /** Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): live
    *  assistant text, expanded thinking, and tool call bodies paint through
-   *  a ~30fps reveal instead of jumping per provider burst — bursty or
-   *  one-shot deliveries read as an even flow. On by default. */
+   *  a ~20fps reveal instead of jumping per provider burst — bursty or
+   *  one-shot deliveries read as an even flow. Off by default: the reveal
+   *  drives frames at its own cadence and measurably multiplies layout work
+   *  on long streamed turns (the long-task lag report); opt in for the
+   *  typewriter feel. */
   smoothStreaming?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
@@ -163,7 +166,7 @@ export const Config: Schema<Config> = Schema.object({
   foldTerminalCommand: Schema.boolean().default(false),
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
-  smoothStreaming: Schema.boolean().default(true),
+  smoothStreaming: Schema.boolean().default(false),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
