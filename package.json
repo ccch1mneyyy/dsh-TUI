@@ -34,7 +34,9 @@
   },
   "type": "module",
   "imports": {
-    "#dsh-ecosystem-spec/tui-channel": "./dsh-ecosystem-spec/protocols/tui-channel.js"
+    "#dsh-ecosystem-spec/tui-channel": "./dsh-ecosystem-spec/protocols/tui-channel.js",
+    "#dsh-ecosystem-spec/profile-definitions": "./dsh-ecosystem-spec/protocols/profile-definitions.js",
+    "#dsh-ecosystem-spec/tui-contributions": "./dsh-ecosystem-spec/protocols/tui-contributions.js"
   },
   "bin": {
     "dsh-tui": "./bin/dsh-tui.js",
@@ -83,10 +85,6 @@
       "types": "./lib/types/api.d.ts",
       "import": "./lib/types/api.js"
     },
-    "./test-utils": {
-      "types": "./lib/types/test-utils.d.ts",
-      "import": "./lib/types/test-utils.js"
-    },
     "./jsx-runtime": {
       "types": "./lib/types/jsx-runtime.d.ts",
       "import": "./lib/types/jsx-runtime.js"
@@ -126,8 +124,7 @@
     "prompt:debug": "node scripts/read-prompt-debug.mjs",
     "tui": "node --import tsx/esm scripts/run.ts",
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
-    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:runtime-themes && npm run verify:packaged-presets && npm run verify:history-search && npm run verify:initial-prompt && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:inject-channel && npm run verify:wheel-selection && npm run verify:win32-protocol && npm run verify:selection-resize && npm run verify:liangshen-instruction-hint && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility",
-    "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",
+    "verify:build": "npm run verify:boundary && npm run verify:contract && npm run verify:herdr && npm run verify:manifest-deps && npm run verify:patch-surface && npm run verify:web-coexistence && npm run verify:plugin-spec && npm run verify:plugin-grants && npm run verify:plugin-storage && npm run verify:plugin-messages && npm run verify:plugin-ledger && npm run verify:plugin-commands && npm run verify:plugin-negotiation && npm run verify:plugin-lifecycle && npm run verify:runtime-themes && npm run verify:packaged-presets && npm run verify:history-search && npm run verify:initial-prompt && npm run verify:minimal-preset-tools && npm run verify:liangshen-bootstrap && npm run verify:inject-channel && npm run verify:wheel-selection && npm run verify:win32-protocol && npm run verify:selection-resize && npm run verify:liangshen-instruction-hint && npm run verify:pointer-events && npm run verify:chat-overlay && npm run verify:i18n && npm run verify:approval-visibility && npm run verify:adapter-skeleton && npm run verify:adapter-ports && npm run verify:adapter-effect-class && npm run verify:adapter-shadow && npm run verify:adapter-descriptor && npm run verify:adapter-upstream-driver && npm run verify:adapter-kernel-runtime && npm run verify:adapter-live-probes && npm run verify:adapter-slices && npm run verify:adapter-channel && npm run verify:adapter-channel-conformance && npm run verify:adapter-detection && npm run verify:adapter-replay-harness && npm run verify:protocol-single-source && npm run verify:compat-removal && npm run verify:package",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
@@ -167,8 +164,24 @@
     "sync:profile:check": "node scripts/sync-profile.mjs --check",
     "bundle:installer": "node scripts/make-installer-bundle.mjs",
     "bundle:standalone": "node scripts/make-standalone-bundle.mjs",
+    "verify:adapter-skeleton": "node --import tsx/esm scripts/verify-adapter-skeleton.ts",
+    "verify:adapter-ports": "node --import tsx/esm scripts/verify-adapter-ports.ts",
+    "verify:adapter-effect-class": "node --import tsx/esm scripts/verify-adapter-effect-class.ts",
+    "verify:adapter-shadow": "node --import tsx/esm scripts/verify-adapter-shadow.ts",
+    "verify:adapter-descriptor": "node --import tsx/esm scripts/verify-adapter-descriptor.ts",
+    "verify:protocol-single-source": "node --import tsx/esm scripts/verify-protocol-single-source.ts",
+    "verify:compat-removal": "node --import tsx/esm scripts/verify-compat-removal.ts",
+    "verify:adapter-upstream-driver": "node --import tsx/esm scripts/verify-adapter-upstream-driver.ts",
+    "verify:adapter-kernel-runtime": "node --import tsx/esm scripts/verify-adapter-kernel-runtime.ts",
+    "verify:adapter-live-probes": "node --import tsx/esm scripts/verify-adapter-live-probes.ts",
+    "verify:adapter-replay-harness": "node --import tsx/esm scripts/verify-adapter-replay-harness.ts",
+    "verify:adapter-detection": "node --import tsx/esm scripts/verify-adapter-detection.ts",
+    "verify:adapter-slices": "node --import tsx/esm scripts/verify-adapter-slices.ts",
+    "verify:adapter-channel": "node --import tsx/esm scripts/verify-adapter-channel.ts",
+    "verify:adapter-channel-conformance": "node --import tsx/esm scripts/verify-adapter-channel-conformance.ts",
     "verify:win32-protocol": "node --import tsx/esm scripts/verify-win32-protocol.ts",
-    "verify:selection-resize": "node --import tsx/esm scripts/verify-selection-viewport-resize.ts"
+    "verify:selection-resize": "node --import tsx/esm scripts/verify-selection-viewport-resize.ts",
+    "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

@@ -22,6 +22,11 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
 import { activationContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 /** Option of a select dialog. `id` is what the promise resolves with. */
 export interface TuiDialogSelectOption {
@@ -286,6 +291,7 @@ export class TuiDialogRuntime extends Service {
     // compatibility.
     const store = new TuiDialogStore()
     hostDialogStores.set(this, store)
+    hostDialogRuntimes.set(this, adapterRuntimeFor(ctx))
     ctx.effect(() => () => store.settleAll())
   }
 
@@ -315,6 +321,7 @@ export class TuiDialogRuntime extends Service {
   select(request: TuiDialogSelectRequest): Promise<string | undefined>
   select(owner: Context, request: TuiDialogSelectRequest): Promise<string | undefined>
   select(ownerOrRequest: Context | TuiDialogSelectRequest, explicitRequest?: TuiDialogSelectRequest): Promise<string | undefined> {
+    assertCapabilityShadowPolicy('host.dialogs.select', dialogRuntimeFor(this).mode, dialogRuntimeFor(this).slices)
     try {
       const owner = this.callContext(ownerOrRequest)
       const request = (explicitRequest ?? ownerOrRequest) as TuiDialogSelectRequest
@@ -356,6 +363,7 @@ export class TuiDialogRuntime extends Service {
   confirm(request: TuiDialogConfirmRequest): Promise<boolean>
   confirm(owner: Context, request: TuiDialogConfirmRequest): Promise<boolean>
   confirm(ownerOrRequest: Context | TuiDialogConfirmRequest, explicitRequest?: TuiDialogConfirmRequest): Promise<boolean> {
+    assertCapabilityShadowPolicy('host.dialogs.confirm', dialogRuntimeFor(this).mode, dialogRuntimeFor(this).slices)
     try {
       const owner = this.callContext(ownerOrRequest)
       const request = (explicitRequest ?? ownerOrRequest) as TuiDialogConfirmRequest
@@ -392,6 +400,7 @@ export class TuiDialogRuntime extends Service {
   input(request: TuiDialogInputRequest): Promise<string | undefined>
   input(owner: Context, request: TuiDialogInputRequest): Promise<string | undefined>
   input(ownerOrRequest: Context | TuiDialogInputRequest, explicitRequest?: TuiDialogInputRequest): Promise<string | undefined> {
+    assertCapabilityShadowPolicy('host.dialogs.input', dialogRuntimeFor(this).mode, dialogRuntimeFor(this).slices)
     try {
       const owner = this.callContext(ownerOrRequest)
       const request = (explicitRequest ?? ownerOrRequest) as TuiDialogInputRequest
@@ -424,6 +433,13 @@ export class TuiDialogRuntime extends Service {
  * public surface is select/confirm/input.
  */
 const hostDialogStores = new WeakMap<TuiDialogRuntime, TuiDialogStore>()
+const hostDialogRuntimes = new WeakMap<TuiDialogRuntime, AdapterRuntimeOptions>()
+
+function dialogRuntimeFor(runtime: TuiDialogRuntime): AdapterRuntimeOptions {
+  const state = hostDialogRuntimes.get(concreteService(runtime))
+  if (state === undefined) throw new Error('tuiDialogs host runtime is unavailable')
+  return state
+}
 
 function dialogStoreFor(runtime: TuiDialogRuntime): TuiDialogStore {
   const store = hostDialogStores.get(concreteService(runtime))

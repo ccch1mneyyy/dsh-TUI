@@ -30,6 +30,7 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-plugin-commands-home-'))
 process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
+process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context } = await import('@deepseek-ai/cordis')
 const { default: CommandRuntime } = await import('@deepseek-ai/dsh-commands')
@@ -40,12 +41,12 @@ const {
   mapCommandError,
   withCommandErrorMapping,
 } = await import('../src/dsh-adapter/command-errors.js')
-const { parseGrantStore } = await import('../src/dsh-adapter/grants.js')
+const { parseGrantStore } = await import('../src/adapter/standard/grants.js')
 const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
 const { TuiSceneRuntime } = await import('../src/dsh-adapter/scenes.js')
 const { TuiRendererRuntime } = await import('../src/dsh-adapter/renderers.js')
-const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -176,6 +177,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   attrCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
   await sleep(50)
   const host = attrCtx.get('tuiPluginHost')
+  check1('command live probe is not exposed on the plugin-visible host service',
+    typeof (host as { probeCommandReversible?: unknown } | undefined)?.probeCommandReversible === 'undefined')
   const commands = attrCtx.get('commands')
   const globalAgent = {}
   const resolved = (agent: object, name: string) => commands?.find(agent as never, name)

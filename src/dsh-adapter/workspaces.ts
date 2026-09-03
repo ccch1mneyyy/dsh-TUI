@@ -9,6 +9,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { basename, isAbsolute, resolve } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 export type TuiWorkspaceKind = 'local' | 'provider'
 
@@ -147,22 +152,32 @@ export class TuiWorkspaceRuntime extends Service {
       providerOwners: new Map(),
       providerWaiters: new Set(),
       host: undefined,
+      runtime: adapterRuntimeFor(ctx),
     }
     state.host = Object.freeze({
       list: (currentCwd: string, signal?: AbortSignal) => listWorkspaces(runtime, currentCwd, signal, undefined),
       resolve: (reference: string, currentCwd?: string, signal?: AbortSignal) =>
         resolveWorkspace(runtime, reference, currentCwd ?? process.cwd(), signal, undefined),
       describe: (cwd: string) => describeWorkspace(runtime, cwd, undefined),
-      commandShell: (cwd: string) => commandShellFor(runtime, cwd, undefined),
-      rename: (cwd: string, title: string) => renameWorkspace(runtime, cwd, title, undefined),
+      commandShell: (cwd: string) => {
+        assertCapabilityShadowPolicy('host.workspaces.commandShell', state.runtime.mode, state.runtime.slices)
+        return commandShellFor(runtime, cwd, undefined)
+      },
+      rename: (cwd: string, title: string) => {
+        assertCapabilityShadowPolicy('host.workspaces.rename', state.runtime.mode, state.runtime.slices)
+        return renameWorkspace(runtime, cwd, title, undefined)
+      },
       commands: () => workspaceCommands(runtime, undefined),
-      runCommand: (name: string, input: string, cwd: string, signal?: AbortSignal) =>
-        runWorkspaceCommand(runtime, name, input, cwd, signal, undefined),
+      runCommand: (name: string, input: string, cwd: string, signal?: AbortSignal) => {
+        assertCapabilityShadowPolicy('host.workspaces.runCommand', state.runtime.mode, state.runtime.slices)
+        return runWorkspaceCommand(runtime, name, input, cwd, signal, undefined)
+      },
     })
     workspaceStates.set(this, state)
   }
 
   register(provider: TuiWorkspaceProvider): () => void {
+    assertCapabilityShadowPolicy('host.workspaces.register', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiWorkspaces.register', this)
     const state = workspaceStateFor(this)
     state.providers.add(provider)
@@ -183,37 +198,44 @@ export class TuiWorkspaceRuntime extends Service {
   }
 
   async list(currentCwd: string, signal?: AbortSignal): Promise<readonly TuiWorkspaceTarget[]> {
+    assertCapabilityShadowPolicy('host.workspaces.list', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.list')
     return listWorkspaces(this, currentCwd, signal, owner)
   }
 
   /** Resolve a URI, briefly allowing concurrently mounted providers to register. */
   async resolve(reference: string, currentCwd = process.cwd(), signal?: AbortSignal): Promise<TuiWorkspaceTarget | undefined> {
+    assertCapabilityShadowPolicy('host.workspaces.resolve', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.resolve')
     return resolveWorkspace(this, reference, currentCwd, signal, owner)
   }
 
   describe(cwd: string): TuiWorkspaceTarget {
+    assertCapabilityShadowPolicy('host.workspaces.describe', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.describe')
     return describeWorkspace(this, cwd, owner)
   }
 
   async commandShell(cwd: string): Promise<TuiCommandShell | undefined> {
+    assertCapabilityShadowPolicy('host.workspaces.commandShell', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.commandShell')
     return commandShellFor(this, cwd, owner)
   }
 
   async rename(cwd: string, title: string): Promise<TuiWorkspaceTarget> {
+    assertCapabilityShadowPolicy('host.workspaces.rename', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.rename')
     return renameWorkspace(this, cwd, title, owner)
   }
 
   commands(): readonly Pick<TuiWorkspaceCommand, 'name' | 'aliases' | 'description'>[] {
+    assertCapabilityShadowPolicy('host.workspaces.commands', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.commands')
     return workspaceCommands(this, owner)
   }
 
   async runCommand(name: string, input: string, cwd: string, signal?: AbortSignal): Promise<TuiWorkspaceCommandResult | undefined> {
+    assertCapabilityShadowPolicy('host.workspaces.runCommand', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.runCommand')
     return runWorkspaceCommand(this, name, input, cwd, signal, owner)
   }
@@ -227,6 +249,7 @@ export class TuiWorkspaceRuntime extends Service {
 }
 
 interface WorkspaceState {
+  readonly runtime: AdapterRuntimeOptions
   readonly hostContext: Context
   readonly providers: Set<TuiWorkspaceProvider>
   readonly providerOwners: Map<TuiWorkspaceProvider, object>

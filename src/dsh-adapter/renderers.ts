@@ -26,6 +26,11 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { KNOWN_SESSION_EVENT_TYPES } from '@deepseek-ai/dsh-session'
 import { cleanRenderText } from './sanitize.js'
 import { bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 /** What a renderer returns: an optional title row plus body lines. */
 export interface TuiEntryRenderResult {
@@ -40,6 +45,7 @@ export type TuiEntryRenderer = (payload: unknown) => TuiEntryRenderResult | unde
 /** Host-only transcript projection path. Plugins can register a renderer but
  * cannot invoke an arbitrary registered renderer on demand. */
 export interface TuiRendererHost {
+  register(type: string, renderer: TuiEntryRenderer): () => void
   render(type: string, payload: unknown): TuiEntryRenderResult | undefined
 }
 
@@ -80,8 +86,28 @@ export class TuiRendererRuntime extends Service {
       failedTypes: new Set(),
       host: undefined,
       logger: ctx.logger,
+      runtime: adapterRuntimeFor(ctx),
     }
-    const host: TuiRendererHost = Object.freeze({ render: (type, payload) => renderEntry(runtime, type, payload) })
+    const host: TuiRendererHost = Object.freeze({
+      register: (type, renderer) => {
+        const state = rendererStateFor(runtime)
+        let normalized: string
+        try {
+          normalized = String(type ?? '').trim().toLowerCase()
+        } catch {
+          return () => {}
+        }
+        if (!TYPE_PATTERN.test(normalized) || typeof renderer !== 'function' || state.renderers.has(normalized)) {
+          return () => {}
+        }
+        state.renderers.set(normalized, renderer)
+        return () => {
+          if (state.renderers.get(normalized) !== renderer) return
+          state.renderers.delete(normalized)
+        }
+      },
+      render: (type, payload) => renderEntry(runtime, type, payload),
+    })
     state.host = host
     hostRenderers.set(runtime, state)
   }
@@ -94,6 +120,7 @@ export class TuiRendererRuntime extends Service {
    * pluginId — omitting it records `undeclared` (C-060).
    */
   register(type: string, renderer: TuiEntryRenderer, identity?: Context): () => void {
+    assertCapabilityShadowPolicy('host.renderers.register', rendererStateFor(this).runtime.mode, rendererStateFor(this).runtime.slices)
     let caller: Context
     try {
       caller = requirePluginCaller(this.ctx, 'tuiRenderers.register', this)
@@ -159,6 +186,7 @@ export class TuiRendererRuntime extends Service {
 
 /** Host-only renderer dispatcher; not included in the package export map. */
 interface RendererState {
+  readonly runtime: AdapterRuntimeOptions
   readonly renderers: Map<string, TuiEntryRenderer>
   readonly failedTypes: Set<string>
   host: TuiRendererHost | undefined

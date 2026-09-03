@@ -29,19 +29,48 @@ process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
 
 const { pluginsInfoLines, PLUGINS_MATRIX_MAX_ROWS } = await import('../src/dsh-adapter/plugins-info.js')
-const { readGrantStore } = await import('../src/dsh-adapter/grants.js')
-const { buildHostDescriptor } = await import('../src/dsh-adapter/host-descriptor.js')
+const { readGrantStore } = await import('../src/adapter/standard/grants.js')
+const { buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS } = await import('../src/adapter/standard/descriptor.js')
+const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
+const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 const { PLUGIN_STORAGE_DIR } = await import('../src/dsh-adapter/plugin-storage.js')
 const { EFFECT_LEDGER_FILE } = await import('../src/dsh-adapter/effect-ledger.js')
 const { parseManifest } = await import('@dsh-std/manifest')
-const { loadSpecData } = await import('../src/plugin-spec/registry.js')
-const { createContractIndex, validatePlugin } = await import('../src/plugin-spec/validate.js')
-const { negotiate } = await import('../src/plugin-spec/negotiate.js')
+const { loadSpecData } = await import('../src/adapter/standard/registry.js')
+const { createContractIndex, validatePlugin } = await import('../src/adapter/standard/validate.js')
+const { negotiate } = await import('../src/adapter/standard/negotiate.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = (name: string) => join(root, 'dsh-ecosystem-spec', 'conformance', 'fixtures', name)
 const cleanup: string[] = [fakeHome]
+
+function liveHostDescriptor(generationId: string) {
+  const lifecycles = HOST_SUPPORTED_CONTRACTS.map(contract => {
+    const key = `${contract.apiVersion}#${contract.kind}`
+    const lifecycle = verifyAndPromote(lifecycleFromDetection(
+      key,
+      {
+        state: 'supported',
+        evidence: [
+          { kind: 'service', id: key },
+          { kind: 'method', id: contract.kind === 'DecisionEvents' ? 'tuiPluginHost.subscribeDecision' : `${key}.verified` },
+          {
+            kind: 'probe',
+            id: contract.kind === 'Command' ? 'commands.execute(undefined)' : `${key}.probe`,
+            detail: 'read-only production probe succeeded',
+          },
+        ],
+      },
+      contract,
+    ))
+    if (contract.kind === 'DecisionEvents') {
+      return { ...lifecycle, liveFeatures: Object.freeze([...TUI_DECISION_EVENT_NAMES].sort()) }
+    }
+    return lifecycle
+  })
+  return buildHostDescriptorFromLifecycles(lifecycles, { generationId })
+}
 
 let checks = 0
 const failures: string[] = []
@@ -75,7 +104,7 @@ const ledgerRecords = [
 writeFileSync(EFFECT_LEDGER_FILE, ledgerRecords.map(r => JSON.stringify(r)).join('\n') + '\n{corrupt line\n')
 
 const grants = readGrantStore()
-const host = buildHostDescriptor({ generationId: 'negotiation-battery' })
+const host = liveHostDescriptor('negotiation-battery')
 const overview = () => pluginsInfoLines('', { grants, host })
 
 // ── A. banner 固定首行 ────────────────────────────────────────────────────
@@ -231,7 +260,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
     license: 'MIT',
     source: { repository: 'https://example.com/guard', revision: 'abc123' },
   }))
-  const decisionBuild = buildHostDescriptor({ generationId: 'decision-battery' })
+  const decisionBuild = liveHostDescriptor('decision-battery')
   const ungranted = extensionCheck(tuiPlugin, grants, decisionBuild)
   check1('extension manifest reaches negotiation (no schema/semantic failure)',
     !ungranted.some(line => line.includes('schema 校验失败') || line.includes('语义校验失败')), ungranted.join(' | '))

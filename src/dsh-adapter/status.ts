@@ -12,6 +12,11 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
 import { activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 /** One rendered contribution. */
 export interface TuiStatusEntry {
@@ -91,6 +96,7 @@ export class TuiStatusStore {
   }
 
   subscribe(listener: () => void): () => void {
+    if (typeof listener !== 'function') return () => {}
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
@@ -98,7 +104,15 @@ export class TuiStatusStore {
   }
 
   private emit(): void {
-    for (const listener of this.listeners) listener()
+    for (const listener of [...this.listeners]) {
+      try {
+        listener()
+      } catch (error) {
+        // One throwing plugin listener must not break status updates for the
+        // other activations or leave the store partially emitted.
+        console.error('dsh-tui: tuiStatus listener failed', error)
+      }
+    }
   }
 }
 
@@ -119,7 +133,7 @@ export class TuiStatusRuntime extends Service {
     compositionRoot(ctx)
     // Keep host state out of the traceable service object. A WeakMap also
     // works with Cordis's caller-bound method proxy (unlike `#private`).
-    const state: StatusState = { store: new TuiStatusStore(), nextToken: 1 }
+    const state: StatusState = { store: new TuiStatusStore(), nextToken: 1, runtime: adapterRuntimeFor(ctx) }
     hostStatusStores.set(this, state)
     ctx.effect(() => () => state.store.clear())
   }
@@ -145,6 +159,7 @@ export class TuiStatusRuntime extends Service {
    * guess (C-060 honest identity).
    */
   set(key: string, text: string | number | boolean | undefined, identity?: Context): () => void {
+    assertCapabilityShadowPolicy('host.status.set', statusStateFor(this).runtime.mode, statusStateFor(this).runtime.slices)
     const noop = (): void => {}
     let caller: Context
     try {
@@ -232,12 +247,35 @@ export class TuiStatusRuntime extends Service {
     bindCallerEffect(caller, dispose)
     return dispose
   }
+
+  /**
+   * Subscribe to status-line changes. Kept on the plugin-visible service so
+   * the shadow-policy gate covers this subscription effect too.
+   */
+  subscribe(listener: () => void): () => void {
+    assertCapabilityShadowPolicy('host.status.subscribe', statusStateFor(this).runtime.mode, statusStateFor(this).runtime.slices)
+    const caller = requirePluginCaller(this.ctx, 'tuiStatus.subscribe', this)
+    const owner = activationFiber(caller)
+    if (owner === undefined) return () => {}
+    if (typeof listener !== 'function') return () => {}
+    const wrapped = () => {
+      try {
+        listener()
+      } catch (error) {
+        caller.logger.warn(`dsh-tui: tuiStatus listener failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const dispose = statusStateFor(this).store.subscribe(wrapped)
+    bindCallerEffect(caller, dispose)
+    return dispose
+  }
 }
 
 /** Host-only status store accessor; not part of the package export map. */
 interface StatusState {
   readonly store: TuiStatusStore
   nextToken: number
+  readonly runtime: AdapterRuntimeOptions
 }
 
 const hostStatusStores = new WeakMap<TuiStatusRuntime, StatusState>()

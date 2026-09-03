@@ -15,6 +15,11 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
 import { activationFiber, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 /** Sanitized toast request after runtime validation, ready for the host sink. */
 export interface TuiToastDelivery {
@@ -50,9 +55,39 @@ const COLORS = new Set(['success', 'warning', 'error'])
  * deliveries before/after a sink exists are dropped (returned as false). */
 export class TuiToastStore {
   private sink: TuiToastSink | undefined
+  private readonly probeSinks = new Set<TuiToastSink>()
 
   setSink(sink: TuiToastSink | undefined): void {
     this.sink = sink
+  }
+
+  /** Whether a real production sink (the host's channel.notify bridge) is
+   * present. Used by the toast live probe to distinguish “host store exists”
+   * from “real production delivery path is actually wired”. */
+  hasSink(): boolean {
+    return this.sink !== undefined
+  }
+
+  /** Host-only probe sink registration. Probe sinks are independent of the
+   * production sink, so a live probe never replaces or swallows production
+   * toast delivery. */
+  addProbeSink(sink: TuiToastSink): () => void {
+    this.probeSinks.add(sink)
+    return () => {
+      this.probeSinks.delete(sink)
+    }
+  }
+
+  /** Deliver only to host-only probe sinks, leaving the production sink
+   * completely untouched. Returns true when at least one probe sink received
+   * the delivery. */
+  deliverProbe(delivery: TuiToastDelivery): boolean {
+    let delivered = false
+    for (const sink of this.probeSinks) {
+      sink(delivery)
+      delivered = true
+    }
+    return delivered
   }
 
   deliver(delivery: TuiToastDelivery): boolean {
@@ -69,6 +104,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 interface ToastState {
+  readonly runtime: AdapterRuntimeOptions
   readonly store: TuiToastStore
   /** Per-activation delivery timestamps inside the sliding window. */
   readonly windows: Map<object, number[]>
@@ -87,7 +123,7 @@ export class TuiToastRuntime extends Service {
   constructor(ctx: Context) {
     super(ctx, 'tuiToast')
     compositionRoot(ctx)
-    const state: ToastState = { store: new TuiToastStore(), windows: new Map(), warned: new Set() }
+    const state: ToastState = { store: new TuiToastStore(), windows: new Map(), warned: new Set(), runtime: adapterRuntimeFor(ctx) }
     hostToastStores.set(this, state)
   }
 
@@ -103,6 +139,7 @@ export class TuiToastRuntime extends Service {
    * minute; the first drop logs a sticky warning per activation).
    */
   show(text: string | number | boolean, options: TuiToastOptions = {}): boolean {
+    assertCapabilityShadowPolicy('host.toast.show', toastStateFor(this).runtime.mode, toastStateFor(this).runtime.slices)
     let caller: Context
     try {
       caller = requirePluginCaller(this.ctx, 'tuiToast.show', this)

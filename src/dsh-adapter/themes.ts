@@ -19,6 +19,11 @@ import {
 } from './host-access.js'
 import { isThemeBase, isThemeKey, isValidThemeColor } from '../customTheme.js'
 import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import {
   AUTO_THEME_NAME,
   getTheme,
   registerRuntimeThemeResolver,
@@ -47,6 +52,7 @@ export interface TuiThemeRegistration {
 
 /** Host-only read surface for runtime themes. */
 export interface TuiThemeHost {
+  register(descriptor: TuiThemeDescriptor): () => void
   getSnapshot(): readonly TuiThemeRegistration[]
   resolve(name: string): Theme | undefined
   subscribe(listener: () => void): () => void
@@ -83,6 +89,7 @@ interface RuntimeThemeEntry extends TuiThemeRegistration {
 }
 
 interface ThemeState {
+  readonly runtime: AdapterRuntimeOptions
   readonly hostContext: Context
   readonly entries: Map<string, RuntimeThemeEntry>
   readonly listeners: Set<() => void>
@@ -175,6 +182,11 @@ function emit(state: ThemeState): void {
 }
 
 function resolveRuntimeTheme(runtime: TuiThemeRuntime, name: string): Theme | undefined {
+  try {
+    assertCapabilityShadowPolicy('host.themes.resolver', themeStateFor(runtime).runtime.mode, themeStateFor(runtime).runtime.slices)
+  } catch {
+    return undefined
+  }
   let normalized: string | undefined
   try {
     normalized = normalizeRuntimeName(name)
@@ -230,9 +242,32 @@ export class TuiThemeRuntime extends Service {
       host: undefined,
       resolverCleanup: undefined,
       disposed: false,
+      runtime: adapterRuntimeFor(ctx),
     }
     hostThemes.set(this, state)
+    const hostThemeOwner = Object.freeze({ kind: 'host-theme-owner' })
     state.host = Object.freeze({
+      register: (descriptor: TuiThemeDescriptor) => {
+        const state = themeStateFor(runtime)
+        if (state.disposed) return NOOP
+        const validated = validateDescriptor(descriptor)
+        if (validated === undefined || state.entries.has(validated.name) || state.entries.size >= MAX_RUNTIME_THEMES) {
+          return NOOP
+        }
+        const entry: RuntimeThemeEntry = Object.freeze({
+          ...validated,
+          owner: hostThemeOwner,
+          theme: Object.freeze({ ...getTheme(validated.base), ...validated.colors }),
+        })
+        state.entries.set(entry.name, entry)
+        emit(state)
+        return () => {
+          const current = state.entries.get(entry.name)
+          if (current !== entry || current.owner !== hostThemeOwner) return
+          state.entries.delete(entry.name)
+          emit(state)
+        }
+      },
       getSnapshot: () => themeStateFor(runtime).snapshot,
       resolve: (name: string) => resolveRuntimeTheme(runtime, name),
       subscribe: (listener: () => void) => subscribeRuntimeTheme(runtime, listener),
@@ -261,6 +296,7 @@ export class TuiThemeRuntime extends Service {
    * the caller's Cordis activation and disappear with that activation.
    */
   register(descriptor: TuiThemeDescriptor, identity?: Context): () => void {
+    assertCapabilityShadowPolicy('host.themes.register', themeStateFor(this).runtime.mode, themeStateFor(this).runtime.slices)
     try {
       const caller = requirePluginCaller(this.ctx, 'tuiThemes.register', this)
       const state = themeStateFor(this)

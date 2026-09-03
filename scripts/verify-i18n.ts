@@ -11,7 +11,7 @@
  * 运行：node --import tsx/esm scripts/verify-i18n.ts
  */
 import { execSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { i18nDict, type I18nText } from '../src/i18n.js'
 
 // 运行时拼接的 key 前缀（新增拼接家族时在此登记，并附拼接点）：
@@ -72,7 +72,12 @@ const files = execSync('git ls-files src scripts', { encoding: 'utf8' })
   .filter(f => /\.(ts|tsx|mjs|cjs|js)$/.test(f))
   .filter(f => f !== 'src/i18n.ts' && f !== 'scripts/verify-i18n.ts')
 let corpus = ''
-for (const f of files) corpus += readFileSync(f, 'utf8')
+for (const f of files) {
+  // Worktrees may have deleted tracked files before a later commit; a missing
+  // source file cannot contribute dead-key corpus and should not fail this gate.
+  if (!existsSync(f)) continue
+  corpus += readFileSync(f, 'utf8')
+}
 for (const key of Object.keys(i18nDict)) {
   if (DYNAMIC_PREFIXES.some(p => key.startsWith(p))) continue
   if (!corpus.includes(`'${key}'`) && !corpus.includes(`"${key}"`) && !corpus.includes(`\`${key}\``)) {

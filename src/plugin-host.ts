@@ -1,12 +1,13 @@
-// Public plugin-host shim. Keep the Cordis-backed implementation behind the
-// adapter boundary: plugin authors receive protocol types and mediated service
-// contracts, while loader-only admission, host ingress, mutable stores and
-// attribution registries remain adapter-internal. Type-only runtime exports
-// still load the adapter declarations so Context augmentation is available.
+// P6 canonical public plugin-host surface.
+//
+// Keep the Cordis-backed implementation behind the adapter boundary: plugin
+// authors receive protocol types and mediated service contracts, while
+// loader-only admission, host ingress, mutable stores and attribution
+// registries remain adapter-internal. Type-only runtime exports still load
+// the adapter declarations so Context augmentation is available.
 export { name, apply } from './dsh-adapter/plugin-host.js'
-export type { TuiPluginHost } from './dsh-adapter/plugin-host.js'
-export type { GrantPrincipal, GrantStore } from './dsh-adapter/grants.js'
-export type { HostContract, HostDescriptor, ContractCoordinate, ContractRef, NegotiationDecision, PermissionEntry, PermissionRegistry } from './plugin-spec/types.js'
+export type { TuiPluginHost, HostGrantFacade } from './dsh-adapter/plugin-host.js'
+export type { HostContract, HostDescriptor, ContractCoordinate, ContractRef, NegotiationDecision, PermissionEntry, PermissionRegistry } from './adapter/standard/types.js'
 export type { TuiPluginStorage, PluginStorageErrorCode, TuiPluginStorageRuntime } from './dsh-adapter/plugin-storage.js'
 export { PluginStorageError, STORAGE_KEY_MAX_LENGTH, STORAGE_MAX_BYTES, STORAGE_MAX_KEYS } from './dsh-adapter/plugin-storage.js'
 
@@ -54,5 +55,4 @@ export {
   TUI_EXTENSION_API_VERSION,
   TUI_DECISION_EVENT_NAMES,
   TUI_EXTENSION_PERMISSION_NAMES,
-  createAdmissionCatalog,
-} from './plugin-spec/tui-extension.js'
+} from './adapter/standard/tui-extension.js'

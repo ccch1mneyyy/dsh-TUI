@@ -9,11 +9,13 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
+import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { logForDebugging } from '../utils/debug.js'
-import { QuestionStore } from './questions.js'
+import { QuestionStore, bindQuestionStore } from './questions.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
-import { ApprovalStore } from './approvals.js'
+import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
@@ -50,7 +52,8 @@ import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
-import { withHostRootCapability } from './host-access.js'
+import { notifyViaChannelFacade, submitViaChannelFacade } from './channel-facade-actions.js'
+import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
 import instances from '../ink/instances.js'
@@ -318,7 +321,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
     return filterMinimalPresetTools(assembled, presetId)
   })
-  const questionStore = new QuestionStore()
+  const questionStore = new QuestionStore(adapterRuntimeFor(ctx))
+  bindQuestionStore(ctx, questionStore)
   // One store, one teardown effect on both API lines. The compatibility
   // adapter binds either registration to this Cordis fiber; this separate
   // effect rejects asks still parked in the UI during teardown.
@@ -539,6 +543,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
+  // Register the live Channel for the adapter Kernel. The Channel driver
+  // resolves it lazily from the composition root, so this can be called after
+  // the plugin-host Kernel started without requiring a re-mount.
+  // Normalize to the composition root: the Kernel and its Channel driver
+  // query the registry through the root context, never through this plugin's
+  // child activation context.
+  const unregisterTuiChannel = registerTuiChannel(compositionRoot(ctx), channel)
+  ctx.effect(() => () => { unregisterTuiChannel() })
+  const pluginHost = ctx.get('tuiPluginHost')
+  const adapterRuntime = adapterRuntimeFor(ctx)
   // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
   // the channel version bump (which re-renders everything below Chat)
   // cannot drive it. Seed the store from config before the tree mounts;
@@ -548,9 +562,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
   // by the runtime itself — same soft-degrade contract as the other seams.
+  // T1 partial migration: when the production Kernel facade has a Channel
+  // Port, route through the shadow-guarded `HostFacade.channel.actions`.
   const toastStore = getHostToastStore(ctx.get('tuiToast') as TuiToastRuntime | undefined)
   toastStore?.setSink(delivery => {
-    channel.notify(delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
+    notifyViaChannelFacade(pluginHost, channel, adapterRuntime, delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
   })
   if (questionAnswererRegistration.kind === 'waterfall') {
     // Ownership follows the mutable channel; registration cleanup belongs to
@@ -763,14 +779,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       unset: () => settingsCtx.settings.mutate(tuiSettingsNs, [{ op: 'unset', path: ['fullscreen'] }]),
     })
     if (fullscreenMigration === 'unset') {
-      channel.notify(t('settings-fullscreen-migrated'), { color: 'warning' })
+      notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('settings-fullscreen-migrated'), { color: 'warning' })
     }
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
     scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
-        channel.notify(t('settings-fullscreen-restart'), { color: 'warning' })
+        notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('settings-fullscreen-restart'), { color: 'warning' })
       }
     })
     resolveSettingsReady?.()
@@ -884,7 +900,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   {
     const settingsSections = getHostSettingsSections(
       ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-    ) ?? getLocalSettingsSectionsHost()
+    ) ?? getLocalSettingsSectionsHost(ctx)
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
       title: 'dsh-tui',
@@ -1253,7 +1269,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // failing closed. One ask is shown at a time, whichever agent asked.
   // Guarded on the service being mounted — a bare composition without the
   // dsh-base approval row has nothing to answer into.
-  const approvalStore = new ApprovalStore()
+  const approvalStore = new ApprovalStore(adapterRuntimeFor(ctx))
+  bindApprovalStore(ctx, approvalStore)
   if (ctx.get('approval') !== undefined) {
     ctx.on('approval/request', (req, next) =>
       approvalStore.park(req).catch(() => next()))
@@ -1288,14 +1305,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
   const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
   const initialPrompt = initialPromptFromCmdlineArgs(cmdlineArgs)
-  if (initialPrompt) channel.submit(initialPrompt)
+  if (initialPrompt) submitViaChannelFacade(pluginHost, channel, adapterRuntime, initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
-  notifyStderr = (text, options) => channel.notify(text, options)
+  notifyStderr = (text, options) => notifyViaChannelFacade(pluginHost, channel, adapterRuntime, text, options)
   // The question-seat alert was raised before the channel existed; flush it
   // now so it lands as an in-UI notice, not only in the log file.
   if (questionSeatNotice !== undefined) {
-    channel.notify(questionSeatNotice, { color: 'error' })
+    notifyViaChannelFacade(pluginHost, channel, adapterRuntime, questionSeatNotice, { color: 'error' })
     questionSeatNotice = undefined
   }
   for (const [text, options] of stderrBacklog.splice(0)) {
@@ -1456,7 +1473,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       if (exited || restartRequested) return
       restartRequested = true
       logRestartEvent('command: /restart accepted')
-      channel.notify(t('restart-starting'))
+      notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('restart-starting'))
       handleExit()
     },
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -1470,11 +1487,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       void resolveTuiUpdateTarget().then((target) => {
         if (exited || updateRequested) return
         if (target.kind === 'latest') {
-          channel.notify(t('update-already-latest', { current: target.current }), { color: 'warning' })
+          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-already-latest', { current: target.current }), { color: 'warning' })
           return
         }
         if (target.kind === 'unknown') {
-          channel.notify(t('update-check-failed'))
+          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-check-failed'))
         } else {
           // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
           // an older global launcher patch (no service row) that is a
@@ -1482,21 +1499,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
           // pinning /update onto that range must be refused, not installed.
           if (isBootDeadlockTarget(target.latest)) {
-            channel.notify(t('update-refused-deadlock', {
+            notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-refused-deadlock', {
               latest: target.latest,
               authoritative: target.authoritative ?? target.latest,
             }), { color: 'warning' })
             return
           }
           if (target.authoritative !== undefined) {
-            channel.notify(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+            notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
           }
           updateTargetVersion = target.latest
         }
         if (isStandaloneRuntime()) {
-          channel.notify(t('update-standalone-starting'))
+          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-standalone-starting'))
         } else {
-          channel.notify(t('update-starting'))
+          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-starting'))
         }
         updateRequested = true
         handleExit()
@@ -1573,7 +1590,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const suffix = update.isStandalone && update.checksumUrl === undefined
       ? ` ${t('update-standalone-no-checksum')}`
       : ''
-    channel.notify(
+    notifyViaChannelFacade(
+      pluginHost,
+      channel,
+      adapterRuntime,
       `${t(key, { current: update.current, latest: update.latest })}${suffix}`,
       { color: 'warning', timeoutMs: 12000 },
     )

@@ -13,6 +13,12 @@
  */
 
 import { t } from '../i18n.js'
+import { compositionRoot } from './host-access.js'
+import {
+  assertCapabilityShadowPolicy,
+  defaultAdapterRuntime,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
 import {
   UserQuestionError,
   type AskUserQuestionAnswer,
@@ -80,6 +86,20 @@ export interface QuestionSummary {
   readonly lines: readonly string[]
 }
 
+const questionStores = new WeakMap<object, QuestionStore>()
+
+/** Host-only registration used by the TUI plugin bootstrap. */
+export function bindQuestionStore(ctx: Parameters<typeof compositionRoot>[0], store: QuestionStore): void {
+  const root = compositionRoot(ctx) as object
+  questionStores.set(root, store)
+}
+
+/** Host-only lookup used by the presentation Port bridge. */
+export function getQuestionStore(ctx: Parameters<typeof compositionRoot>[0]): QuestionStore | undefined {
+  const root = compositionRoot(ctx) as object
+  return questionStores.get(root)
+}
+
 const ASK_ABORTED = 'ASK_ABORTED'
 /**
  * User-initiated cancel (Esc / Ctrl+C in the panel). dsh-plan-mode keys on
@@ -138,6 +158,11 @@ function buildSummary(pending: PendingQuestion): QuestionSummary {
  * re-renders and answers via {@link QuestionStore.answerCurrent}.
  */
 export class QuestionStore {
+  private readonly runtime: AdapterRuntimeOptions
+
+  constructor(runtime: AdapterRuntimeOptions = defaultAdapterRuntime()) {
+    this.runtime = runtime
+  }
   private readonly queue: PendingQuestion[] = []
   private active: PendingQuestion | undefined
   private readonly listeners = new Set<() => void>()
@@ -221,6 +246,7 @@ export class QuestionStore {
    */
   ask(request: AskUserQuestionRequest,
       options?: { redact?: boolean }): Promise<AskUserQuestionAnswer> {
+    assertCapabilityShadowPolicy('host.presentation.ask', this.runtime.mode, this.runtime.slices)
     return new Promise<AskUserQuestionAnswer>((resolve, reject) => {
       const pending: PendingQuestion = {
         request,

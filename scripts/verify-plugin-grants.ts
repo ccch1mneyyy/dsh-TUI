@@ -26,18 +26,22 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-plugin-grants-home-'))
 process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
+process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context } = await import('@deepseek-ai/cordis')
-const { parseGrantStore, readGrantStore, EXTENSION_GRANTS_FILE } = await import('../src/dsh-adapter/grants.js')
-const { installDecisionGuard, DECISION_EVENT_PERMISSIONS } = await import('../src/dsh-adapter/decision-guard.js')
+const { parseGrantStore, readGrantStore, EXTENSION_GRANTS_FILE } = await import('../src/adapter/standard/grants.js')
+const { getHostGrantStore } = await import('../src/dsh-adapter/host-grants.js')
+const { installDecisionGuard, markDecisionDispatchTopology, unmarkDecisionDispatchTopology, DECISION_EVENT_PERMISSIONS } = await import('../src/dsh-adapter/decision-guard.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
-const { buildHostDescriptor, HOST_SUPPORTED_CONTRACTS, readOwnPackageVersion } = await import('../src/dsh-adapter/host-descriptor.js')
-const { loadSpecData, digestFile, verifyRegistry, verifyContractProfiles } = await import('../src/plugin-spec/registry.js')
-const { createContractIndex, validateHost } = await import('../src/plugin-spec/validate.js')
-const { check } = await import('../src/plugin-spec/schema-check.js')
-const { negotiate } = await import('../src/plugin-spec/negotiate.js')
+const { buildHostDescriptor, buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS, readOwnPackageVersion } = await import('../src/adapter/standard/descriptor.js')
+const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
+const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
+const { loadSpecData, digestFile, verifyRegistry, verifyContractProfiles } = await import('../src/adapter/standard/registry.js')
+const { createContractIndex, validateHost } = await import('../src/adapter/standard/validate.js')
+const { check } = await import('../src/adapter/standard/schema-check.js')
+const { negotiate } = await import('../src/adapter/standard/negotiate.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, COMMAND_COORDINATE, STORAGE_COORDINATE, DECISION_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const specDir = join(root, 'dsh-ecosystem-spec')
@@ -49,6 +53,38 @@ if (!data) {
 const index = createContractIndex(data.registry, data.permissions)
 const REGISTRY_PERMISSIONS = data.permissions.permissions.map(p => p.name)
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+/** Test helper: construct an explicit all-supported live descriptor (the old
+ * no-lifecycles fallback was removed from production). */
+function liveHostDescriptor(generationId: string, dir?: string) {
+  const lifecycles = HOST_SUPPORTED_CONTRACTS.map(contract => {
+    const key = `${contract.apiVersion}#${contract.kind}`
+    const lifecycle = verifyAndPromote(lifecycleFromDetection(
+      key,
+      {
+        state: 'supported',
+        evidence: [
+          { kind: 'service', id: key },
+          { kind: 'method', id: contract.kind === 'DecisionEvents' ? 'tuiPluginHost.subscribeDecision' : `${key}.verified` },
+          {
+            kind: 'probe',
+            id: contract.kind === 'Command' ? 'commands.execute(undefined)' : `${key}.probe`,
+            detail: 'read-only production probe succeeded',
+          },
+        ],
+      },
+      contract,
+    ))
+    if (contract.kind === 'DecisionEvents') {
+      return { ...lifecycle, liveFeatures: Object.freeze([...TUI_DECISION_EVENT_NAMES].sort()) }
+    }
+    return lifecycle
+  })
+  return buildHostDescriptorFromLifecycles(lifecycles, {
+    generationId,
+    ...(dir === undefined ? {} : { specDir: dir }),
+  })
+}
 const scoped = (name: string, scope: string, activationId?: string) => ({
   name,
   scope,
@@ -249,6 +285,17 @@ check1('decision permission map is immutable',
   }
   guardCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
   await sleep(50)
+  // This battery exercises DecisionEvents directly without composing a full
+  // channel. Mark the real dispatch topology explicitly so admission sees the
+  // same topology a live channel would provide.
+  markDecisionDispatchTopology(guardCtx)
+  const topologyDescriptor = guardCtx.get('tuiPluginHost')?.hostDescriptor()
+  const topologyDecision = topologyDescriptor?.contracts.find(contract => contract.kind === 'DecisionEvents')
+  check1('real dispatch topology publishes DecisionEvents feature set',
+    topologyDecision !== undefined
+    && JSON.stringify((topologyDecision.spec as { features?: readonly string[] } | undefined)?.features ?? [])
+      === JSON.stringify([...TUI_DECISION_EVENT_NAMES].sort()),
+    JSON.stringify(topologyDescriptor?.contracts.map(contract => contract.kind)))
   const admitted = await mountAdmitted(guardCtx, 'cordis-export-name', testManifest({
     id: 'com.example.guard',
     requires: [DECISION_COORDINATE],
@@ -281,6 +328,14 @@ check1('decision permission map is immutable',
   await sleep(250)
   check1('revocation actively removes the decision handler', release?.() === false)
   await Promise.resolve(admitted.fiber.dispose())
+  // Lifecycle cleanup: after the channel/dispatch topology is unmarked, the
+  // same composition's public Host Descriptor must stop publishing
+  // DecisionEvents.
+  unmarkDecisionDispatchTopology(guardCtx)
+  const afterUnload = guardCtx.get('tuiPluginHost')?.hostDescriptor()
+  check1('unmarking DecisionEvents topology removes it from the public Host Descriptor',
+    afterUnload !== undefined && !afterUnload.contracts.some(contract => contract.kind === 'DecisionEvents'),
+    JSON.stringify(afterUnload?.contracts.map(contract => contract.kind)))
 }
 
 // ── C. plugin-host row ────────────────────────────────────────────────────
@@ -298,11 +353,13 @@ check1('decision permission map is immutable',
     check1('generationId matches the descriptor schema pattern', /^[A-Za-z0-9._:-]+$/.test(service.generationId))
     check1('generationId stable within the activation', service.generationId === service.generationId)
     check1('selfCheck clean on vendored data', service.selfCheck().length === 0, service.selfCheck().join(' | '))
+    const rawGrants = getHostGrantStore(service)
+    check1('internal raw grant store is available to host-only code', rawGrants !== undefined)
     check1('grants store is callable', typeof service.grants.allows === 'function')
     // 隔离 HOME 里无 grants 文件 → registry 默认（invoke allow / intercept deny）。
     check1('service grants: registry defaults from empty HOME',
-      service.grants.allows(principal('root'), 'commands.invoke', 'root.command')
-      && !service.grants.allows(principal('root'), 'session.input.intercept', 'tui/input'))
+      rawGrants!.allows(principal('root'), 'commands.invoke', 'root.command')
+      && !rawGrants!.allows(principal('root'), 'session.input.intercept', 'tui/input'))
 
     const descriptor = service.hostDescriptor()
     let descriptorError = ''
@@ -315,23 +372,41 @@ check1('decision permission map is immutable',
     check1('service descriptor passes vendored schema + validateHost', descriptorError === '', descriptorError)
     check1('descriptor generationId is the runtime generation', descriptor.runtime.generationId === service.generationId)
     check1('descriptor cached (same object)', service.hostDescriptor() === descriptor)
-    // P2-8：这个 bare ctx 没有 commands 服务——descriptor 必须剔除 Command
-    //（C-010 只宣告运行中真实提供的能力），并如实 warn 一次。
+    // P2 new-mode live-probe honesty: this full host row has no commands
+    // service and no channel/dispatch topology, but the storage and message
+    // observer reversible probes have completed successfully. Therefore
+    // Command and DecisionEvents must be excluded while the genuinely probed
+    // LocalStorage / MessageObserver contracts are published.
     check1('Command excluded when the commands service is not mounted',
-      !descriptor.contracts.some(contract => contract.kind === 'Command')
-      && descriptor.contracts.length === HOST_SUPPORTED_CONTRACTS.length - 1,
+      !descriptor.contracts.some(contract => contract.kind === 'Command'),
       JSON.stringify(descriptor.contracts.map(contract => contract.kind)))
-    check1('Command exclusion warns exactly that',
-      hostWarnings.length === 1 && hostWarnings[0]!.includes('commands service is not mounted'), hostWarnings.join(' | '))
+    check1('DecisionEvents excluded without a real channel/dispatch topology',
+      !descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'),
+      JSON.stringify(descriptor.contracts.map(contract => contract.kind)))
+    check1('new-mode host publishes only probed storage/message contracts when commands/channel are absent',
+      descriptor.contracts.some(contract => contract.kind === 'LocalStorage')
+      && descriptor.contracts.some(contract => contract.kind === 'MessageObserver')
+      && !descriptor.contracts.some(contract => contract.kind === 'Command')
+      && !descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'),
+      JSON.stringify(descriptor.contracts.map(contract => contract.kind)))
+    check1('Command exclusion warns about the missing upstream service',
+      hostWarnings.some(warning => warning.includes('commands service is not mounted')), hostWarnings.join(' | '))
   }
 
-  // P2-8 正例：commands 服务在首次 build 前挂载 → Command 正常宣告、零 warn。
-  //（生产路径：descriptor 懒构建，/plugins 首查时 channel 早已装好 commands。）
+  // P2-8 topology: commands service mounted before first build should not
+  // over-claim full Command support when only a catalog/list probe exists.
+  // The descriptor must stay honest and keep Command non-live.
   {
     const { Service } = await import('@deepseek-ai/cordis')
     class FakeCommands extends Service {
       constructor(ctx: InstanceType<typeof Context>) {
         super(ctx, 'commands')
+      }
+      register() {
+        return () => undefined
+      }
+      list() {
+        return []
       }
     }
     const withCommands = new Context()
@@ -343,9 +418,12 @@ check1('decision permission map is immutable',
     withCommands.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
     await sleep(50)
     const descriptor = withCommands.get('tuiPluginHost')?.hostDescriptor()
-    check1('Command advertised when the commands service is mounted',
-      descriptor?.contracts.some(contract => contract.kind === 'Command') === true)
-    check1('no boot warnings with commands mounted', withCommandsWarnings.length === 0, withCommandsWarnings.join(' | '))
+    check1('Command not advertised as full support without execution probe',
+      descriptor?.contracts.some(contract => contract.kind === 'Command') === false,
+      JSON.stringify(descriptor?.contracts.map(contract => contract.kind)))
+    check1('mounted commands still emits honest non-live warning',
+      withCommandsWarnings.some(warning => warning.includes('publishable real capability probe')
+        || warning.includes('degraded capability')), withCommandsWarnings.join(' | '))
   }
 
   // Partial embed: mounting only the host anchor does not magically provide
@@ -357,11 +435,92 @@ check1('decision permission map is immutable',
     partialCtx.plugin(pluginHostRow.TuiPluginHostRuntime)
     await sleep(30)
     const descriptor = partialCtx.get('tuiPluginHost')?.hostDescriptor()
-    check1('partial host excludes unmounted storage and observer contracts',
+    check1('partial host excludes unmounted storage, observer, and guard-only DecisionEvents contracts',
       descriptor !== undefined
       && !descriptor.contracts.some(contract => contract.kind === 'LocalStorage')
       && !descriptor.contracts.some(contract => contract.kind === 'MessageObserver')
-      && descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'))
+      && !descriptor.contracts.some(contract => contract.kind === 'DecisionEvents')
+      && descriptor.contracts.length === 0)
+  }
+
+  // Admission must use the same mounted topology as the public
+  // descriptor: a required Command plugin is rejected when the commands
+  // service is not mounted, and a required LocalStorage plugin is rejected
+  // when tuiPluginStorage is not mounted.
+  {
+    const admissionCtx = new Context()
+    admissionCtx.logger.warn = () => undefined
+    admissionCtx.plugin(pluginHostRow.TuiPluginHostRuntime)
+    await sleep(30)
+    const expectAdmissionRejection = async (
+      ctx: InstanceType<typeof Context>,
+      name: string,
+      manifestSource: string,
+    ): Promise<Error | undefined> => {
+      let admissionError: Error | undefined
+      const fiber = ctx.plugin({
+        name,
+        apply: (candidate: InstanceType<typeof Context>) => {
+          const host = candidate.get('tuiPluginHost')
+          const admission = pluginHostRow.getHostAdmissionForTest(host)
+          if (admission === undefined) {
+            admissionError = new Error('test admission accessor unavailable')
+            return
+          }
+          try {
+            admission.admit(candidate, manifestSource, {
+              source: `test:${name}/dsh-plugin.json`,
+              activationId: 'rejection-act',
+            })
+          } catch (error) {
+            admissionError = error instanceof Error ? error : new Error(String(error))
+          }
+        },
+      }) as unknown as { dispose(): unknown }
+      await sleep(30)
+      try {
+        await Promise.resolve(fiber.dispose())
+      } catch {
+        // Cleanup is best-effort in a rejection battery.
+      }
+      return admissionError
+    }
+    const commandError = await expectAdmissionRejection(
+      admissionCtx,
+      'required-command-plugin',
+      testManifest({
+        id: 'required-command-plugin',
+        requires: [COMMAND_COORDINATE],
+      }),
+    )
+    check1('required Command is rejected when commands service is not mounted',
+      commandError !== undefined && commandError.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE')
+      && commandError.message.includes('commands.dsh/v1alpha1#Command'),
+      commandError?.message ?? 'no error')
+    const storageError = await expectAdmissionRejection(
+      admissionCtx,
+      'required-storage-plugin',
+      testManifest({
+        id: 'required-storage-plugin',
+        requires: [STORAGE_COORDINATE],
+      }),
+    )
+    check1('required LocalStorage is rejected when tuiPluginStorage is not mounted',
+      storageError !== undefined && storageError.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE')
+      && storageError.message.includes('storage.dsh/v1alpha1#LocalStorage'),
+      storageError?.message ?? 'no error')
+    const decisionError = await expectAdmissionRejection(
+      admissionCtx,
+      'required-decision-plugin',
+      testManifest({
+        id: 'required-decision-plugin',
+        requires: [DECISION_COORDINATE],
+      }),
+    )
+    check1('required DecisionEvents is rejected when no real dispatch topology exists',
+      decisionError !== undefined && decisionError.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE')
+      && decisionError.message.includes('tui.dsh/v1alpha1#DecisionEvents'),
+      decisionError?.message ?? 'no error')
   }
 
   // A lazy descriptor must also follow services that appear or disappear
@@ -371,6 +530,12 @@ check1('decision permission map is immutable',
     class DynamicCommands extends Service {
       constructor(ctx: InstanceType<typeof Context>) {
         super(ctx, 'commands')
+      }
+      register() {
+        return () => undefined
+      }
+      list() {
+        return []
       }
     }
     const dynamicCtx = new Context()
@@ -382,7 +547,8 @@ check1('decision permission map is immutable',
     await sleep(30)
     const withCommands = dynamicHost?.hostDescriptor()
     check1('descriptor rebuilds when commands mounts after the first read',
-      withCommands !== withoutCommands && withCommands?.contracts.some(contract => contract.kind === 'Command') === true)
+      withCommands !== withoutCommands
+      && withCommands?.contracts.some(contract => contract.kind === 'Command') === false)
     await Promise.resolve(commandsFiber.dispose())
     await sleep(30)
     const afterUnmount = dynamicHost?.hostDescriptor()
@@ -403,7 +569,7 @@ check1('decision permission map is immutable',
 
 // ── D. buildHostDescriptor 纯函数 ─────────────────────────────────────────
 {
-  const build = buildHostDescriptor({ generationId: 'test-gen-1' })
+  const build = liveHostDescriptor('test-gen-1')
   check1('default build drops nothing', build.dropped.length === 0, build.dropped.join(' | '))
   check1('default build warns nothing', build.warnings.length === 0, build.warnings.join(' | '))
   const d = build.descriptor
@@ -446,7 +612,7 @@ check1('decision permission map is immutable',
   cpSync(specDir, join(tamperedRoot, 'dsh-ecosystem-spec'), { recursive: true })
   const target = join(tamperedRoot, 'dsh-ecosystem-spec', 'registry', 'contracts', 'decision-events-v1alpha1.json')
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
-  const tampered = buildHostDescriptor({ generationId: 'test-gen-2', specDir: join(tamperedRoot, 'dsh-ecosystem-spec') })
+  const tampered = liveHostDescriptor('test-gen-2', join(tamperedRoot, 'dsh-ecosystem-spec'))
   check1('tampered private definition dropped',
     tampered.dropped.includes('tui.dsh/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
   check1('tamper warning names the profileHash drift', tampered.warnings.some(w => w.includes('profile hash drifted')))
@@ -462,7 +628,7 @@ check1('decision permission map is immutable',
   check1('all-dropped descriptor still schema-valid', tamperedError === '', tamperedError)
 
   // D3. 数据目录缺失 → 降级为空面 + warn，不抛。
-  const missing = buildHostDescriptor({ generationId: 'test-gen-3', specDir: join(tamperedRoot, 'no-such-dir') })
+  const missing = liveHostDescriptor('test-gen-3', join(tamperedRoot, 'no-such-dir'))
   check1('missing spec data degrades to empty surface', missing.descriptor.contracts.length === 0)
   check1('missing spec data warns', missing.warnings.some(w => w.includes('unavailable')))
 
@@ -483,7 +649,7 @@ check1('decision permission map is immutable',
     JSON.stringify({ profileVersion: 'tui-admission/0.15', std: {}, imports: null, definitions: [], facetApiVersions: [] }))
   check1('structurally malformed registry loads as unavailable',
     loadSpecData(join(malformedRoot, 'dsh-ecosystem-spec')) === undefined)
-  const malformedBuild = buildHostDescriptor({ generationId: 'test-gen-4', specDir: join(malformedRoot, 'dsh-ecosystem-spec') })
+  const malformedBuild = liveHostDescriptor('test-gen-4', join(malformedRoot, 'dsh-ecosystem-spec'))
   check1('malformed data degrades the descriptor to an empty surface (no throw)',
     malformedBuild.descriptor.contracts.length === 0 && malformedBuild.warnings.length > 0)
   // verify* 对手工构造的坏数据也只回违规字符串。

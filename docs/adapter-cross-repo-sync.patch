@@ -1,0 +1,25 @@
+diff --git a/adapters/dsh-tui-v0.15.md b/adapters/dsh-tui-v0.15.md
+index 92a90a1..b131fdf 100644
+--- a/adapters/dsh-tui-v0.15.md
++++ b/adapters/dsh-tui-v0.15.md
+@@ -3,7 +3,7 @@
+ **Status:** Current
+ **Spec version:** community-v0.15 + tui-admission/0.15（`registry/registry-0.15.json`）
+ **Host:** dsh-TUI 0.9.x（`@deepseek-harness-tui/dsh-tui`）/ Cordis 4.x profile；上游 `@deepseek-ai/*` 主校验线 `0.1.2-alpha.1`（兼容 `0.1.0-rc.6/7/8`、`0.1.1-rc.1/2`）
+-**仓库:** https://github.com/ccch1mneyyy/dsh-TUI（`src/dsh-adapter/`、`src/plugin-spec/`）
++**仓库:** https://github.com/ccch1mneyyy/dsh-TUI（`src/dsh-adapter/`、`src/adapter/standard/`）
+ 
+ ## 定位
+ 
+diff --git a/docs/plugin-admission-and-development.md b/docs/plugin-admission-and-development.md
+index 0a1e1a3..f2aa9c0 100644
+--- a/docs/plugin-admission-and-development.md
++++ b/docs/plugin-admission-and-development.md
+@@ -129,6 +129,6 @@ v0.15。要点：
+ - `dsh-ecosystem-spec/` — 通过 submodule 固定 admission profile 的只读 registry / schema /
+   conformance fixtures；`npm run verify:plugin-spec` 检查 profile hash 与
+   fixtures 漂移。
+-- `src/plugin-spec/` — 校验/协商纯库：官方 parser 负责 manifest 形状，
++- `src/adapter/standard/` — 校验/协商纯库：官方 parser 负责 manifest 形状，
+   `validatePlugin`/`validateHost` 负责 profile 语义，五态 `negotiate` 使用
+   同一 `ProtocolCatalog`。

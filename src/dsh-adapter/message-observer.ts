@@ -53,12 +53,19 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import { validateMessageEvent } from '@dsh-std/messages'
-import { check } from '../plugin-spec/schema-check.js'
+import { validateMessageEvent } from '../adapter/standard/protocols.js'
+import { check } from '../adapter/standard/schema-check.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { cleanScalarText } from './sanitize.js'
 import { activationContext, assertCallerContext, bindCallerEffect, compositionRoot, concreteService } from './host-access.js'
-import { readGrantStore, type GrantStore } from './grants.js'
+import { registerMessageLiveProbe } from '../adapter/kernel/host-probe-access.js'
+import { readGrantStore, type GrantStore } from '../adapter/standard/grants.js'
 import type { TuiEffectLedgerRuntime } from './effect-ledger.js'
+import { getHostGrantStore } from './host-grants.js'
 import {
   declaresObserverScope,
   declaresPermission,
@@ -70,7 +77,7 @@ import {
   normalizePermissionScope,
   scopeCovers,
   SESSION_SCOPE_MAX_CHARS,
-} from '../plugin-spec/permission-scope.js'
+} from '../adapter/standard/permission-scope.js'
 
 /** Envelope content block (MCP ContentBlock text/image subset). */
 export type MessagesObserveContentBlock =
@@ -203,6 +210,9 @@ interface Subscription {
   chain: Promise<unknown>
   pendingCallbacks: number
   closed: boolean
+  /** True for the host-internal reversible probe subscription; skips
+   *  caller-grant delivery checks and observability records. */
+  probe?: boolean
   stopGrantWatch?: () => void
 }
 
@@ -237,7 +247,11 @@ export class TuiMessageObserverRuntime extends Service {
       grants?: GrantStore
       ledger?: TuiEffectLedgerRuntime
       validateEnvelope?: (value: unknown) => void
-      /** @deprecated compatibility alias; prefer validateEnvelope. */
+      /**
+       * @deprecated Use `validateEnvelope` instead.
+       * Compatibility alias retained as a long-term face for existing
+       * embedders/tests. OWNER: dsh-tui adapter. UNTIL: no scheduled removal.
+       */
       envelopeSchema?: Record<string, unknown>
     } = {},
   ) {
@@ -245,12 +259,13 @@ export class TuiMessageObserverRuntime extends Service {
     const state: ObserverState = {
 hostContext: compositionRoot(ctx),
       grantsOption: options.grants,
-      fallbackGrants: readGrantStore(),
+      fallbackGrants: readGrantStore(undefined, undefined, adapterRuntimeFor(ctx)),
       ledgerOption: options.ledger,
       subscriptions: new Set(),
       validateEnvelope: validateMessageEvent,
       validatorUnavailable: false,
       validatorWarned: false,
+      runtime: adapterRuntimeFor(ctx),
       buildChain: Promise.resolve(),
     }
     const runtime = this
@@ -277,6 +292,7 @@ hostContext: compositionRoot(ctx),
         : (value: unknown) => check(value, schema, schema)
     }
     observerStates.set(this, state)
+    registerMessageLiveProbe(this, () => this.#runReversibleProbe())
   }
 
   /** Grants: the plugin-host row's store when mounted, else a private read.
@@ -285,13 +301,125 @@ hostContext: compositionRoot(ctx),
    *  would silently stick to the fallback. */
   private grants(): GrantStore {
     const state = observerStateFor(this)
-    return state.grantsOption ?? state.hostContext.get('tuiPluginHost')?.grants ?? state.fallbackGrants
+    return state.grantsOption ?? getHostGrantStore(state.hostContext.get('tuiPluginHost')) ?? state.fallbackGrants
   }
 
   /** Optional observability; a bare mount (tests) simply records nothing. */
   private ledger(): TuiEffectLedgerRuntime | undefined {
     const state = observerStateFor(this)
     return state.ledgerOption ?? state.hostContext.get('tuiEffectLedger')
+  }
+
+  /**
+   * Host-internal read-only diagnostic probe. It validates the mounted broker
+   * without creating a subscription and without publishing anything.
+   */
+  probeDiagnostic(): { service: 'tuiMessageObserver'; ok: true; subscriptions: number } {
+    assertCapabilityShadowPolicy('host.messages.probe', observerStateFor(this).runtime.mode, observerStateFor(this).runtime.slices)
+    const state = observerStateFor(this)
+    return Object.freeze({
+      service: 'tuiMessageObserver',
+      ok: true,
+      subscriptions: state.subscriptions.size,
+    })
+  }
+
+  /**
+   * Host-internal reversible live probe.
+   *
+   * This exercises the real production subscription path and delivery
+   * topology: it registers one temporary subscription through the same
+   * internal registration code used by `subscribe()`, publishes one synthetic
+   * user message through the PROBE-ONLY channel, verifies the listener
+   * receives an envelope, then unregisters it and verifies the subscription
+   * count returns to the original value. Real plugin subscriptions are never
+   * matched by the probe-only publication.
+   *
+   * Side-effect boundary: the temporary subscription is removed before this
+   * method returns and no real plugin state is touched. In passive/replay
+   * shadow the capability guard denies this before any operation.
+   *
+   * This is an ECMAScript private method. It is reachable only through the
+   * host-only probe accessor registered in the constructor.
+   */
+  async #runReversibleProbe(): Promise<{
+    service: 'tuiMessageObserver'
+    ok: true
+    before: number
+    during: number
+    after: number
+    delivered: number
+  }> {
+    assertCapabilityShadowPolicy('host.messages.liveProbe', observerStateFor(this).runtime.mode, observerStateFor(this).runtime.slices)
+    const state = observerStateFor(this)
+    const before = state.subscriptions.size
+    const identity: VerifiedComponentIdentity = {
+      componentId: '__dsh_tui_live_probe__',
+      activationId: '__dsh_tui_live_probe__',
+      version: '0.0.0',
+      facet: 'host',
+      manifest: { id: '__dsh_tui_live_probe__' } as never,
+      projection: { id: '__dsh_tui_live_probe__' } as never,
+    }
+    const self = concreteService(this) as TuiMessageObserverRuntime
+    const received: MessagesObserveEnvelope[] = []
+    const release = self.#registerSubscription(
+      state.hostContext,
+      identity,
+      '__dsh_tui_live_probe__',
+      'session:__dsh_tui_live_probe__',
+      envelope => { received.push(envelope) },
+      { enforceGrants: false, recordLedger: false, bindLifecycle: false },
+    )
+    try {
+      const during = state.subscriptions.size
+      if (during !== before + 1) {
+        throw new Error(`temporary subscription did not enter the broker (${before} -> ${during})`)
+      }
+      self.#publishGuarded(
+        { id: '__dsh_tui_live_probe__' },
+        {
+          type: 'user/message',
+          seq: 1,
+          data: {
+            id: 'probe-message',
+            role: 'user',
+            content: [{ type: 'text', text: 'live probe' }],
+            source: { kind: 'user' },
+          },
+        },
+        true,
+      )
+      await state.buildChain
+      // The broker-wide build chain only waits for the envelope to be queued
+      // to each subscription's serial delivery chain. Wait for the temporary
+      // probe subscription's own chain so deferred/delayed listeners have
+      // actually run before asserting delivery.
+      const probeSubscription = [...state.subscriptions].find(subscription => subscription.probe === true)
+      if (probeSubscription !== undefined) await probeSubscription.chain
+      if (received.length !== 1 || received[0]?.payload.kind !== 'message.received') {
+        throw new Error(`temporary subscription did not receive one delivered envelope (got ${received.length})`)
+      }
+      release()
+      const after = state.subscriptions.size
+      if (after !== before) {
+        throw new Error(`temporary subscription leaked (${before} -> ${during} -> ${after})`)
+      }
+      return Object.freeze({
+        service: 'tuiMessageObserver',
+        ok: true,
+        before,
+        during,
+        after,
+        delivered: received.length,
+      })
+    } finally {
+      release()
+      // Defensive: a probe failure must never leave a broker entry behind.
+      for (const subscription of [...state.subscriptions]) {
+        if (subscription.probe) state.subscriptions.delete(subscription)
+      }
+    }
   }
 
   /**
@@ -305,6 +433,7 @@ hostContext: compositionRoot(ctx),
    * unloads.
    */
   subscribe(pluginCtx: Context, listener: MessagesObserveListener, options: { scope: string }): () => void {
+    assertCapabilityShadowPolicy('host.messages.subscribe', observerStateFor(this).runtime.mode, observerStateFor(this).runtime.slices)
     const caller = activationContext(pluginCtx)
     if (caller === undefined) throw new Error('dsh-tui: messages.observe.subscribe requires a live activation context')
     assertCallerContext(this.ctx, caller, 'messages.observe.subscribe', this)
@@ -325,61 +454,96 @@ hostContext: compositionRoot(ctx),
       )
       return () => false
     }
+    const self = concreteService(this) as TuiMessageObserverRuntime
+    return self.#registerSubscription(
+      caller,
+      identity,
+      plugin,
+      scope,
+      listener,
+      { enforceGrants: true, recordLedger: true, bindLifecycle: true },
+    )
+  }
+
+  /**
+   * Shared production subscription registration used by the public
+   * `subscribe()` surface and the reversible live probe. When
+   * `enforceGrants` is true, the full static-declaration and live-grant
+   * checks run exactly as in the public path; the probe sets it to false for
+   * an internal temporary identity and marks the subscription as `probe` so
+   * delivery can bypass the caller grant re-check.
+   */
+  #registerSubscription(
+    ownerContext: Context,
+    identity: VerifiedComponentIdentity,
+    plugin: string,
+    scope: string,
+    listener: MessagesObserveListener,
+    options: { readonly enforceGrants: boolean; readonly recordLedger: boolean; readonly bindLifecycle: boolean },
+  ): () => boolean {
     if (typeof listener !== 'function'
-      || !declaresObserverScope(identity, scope)
-      || !declaresPermission(identity, 'messages.observe.read', scope)
-      || !this.grants().allows(
-        { componentId: identity.componentId, activationId: identity.activationId },
-        'messages.observe.read',
-        scope,
-      )) {
+      || (options.enforceGrants
+        && (!declaresObserverScope(identity, scope)
+          || !declaresPermission(identity, 'messages.observe.read', scope)
+          || !this.grants().allows(
+            { componentId: identity.componentId, activationId: identity.activationId },
+            'messages.observe.read',
+            scope,
+          )))) {
       observerStateFor(this).hostContext.logger.warn(
         `dsh-tui: messages.observe subscription from Component "${plugin}" denied — ` +
         'the scope is not statically declared or the current grant does not cover it; the listener was NOT registered',
       )
-      this.ledger()?.record(
-        {
-          operation: 'bind',
-          resource: { kind: 'permission', id: 'messages.observe.read' },
-          result: 'failed',
-          errorCode: 'PERMISSION_NOT_GRANTED',
-        },
-        caller,
-      )
+      if (options.recordLedger) {
+        this.ledger()?.record(
+          {
+            operation: 'bind',
+            resource: { kind: 'permission', id: 'messages.observe.read' },
+            result: 'failed',
+            errorCode: 'PERMISSION_NOT_GRANTED',
+          },
+          ownerContext,
+        )
+      }
       return () => false
     }
     const subscription: Subscription = {
       plugin,
       identity,
-      ownerContext: caller,
+      ownerContext,
       scope,
       listener,
       chain: Promise.resolve(),
       pendingCallbacks: 0,
       closed: false,
+      ...(options.enforceGrants ? {} : { probe: true }),
     }
     observerStateFor(this).subscriptions.add(subscription)
-    this.ledger()?.record(
-      { operation: 'bind', resource: { kind: 'subscription', id: plugin }, result: 'applied' },
-      caller,
-    )
+    if (options.recordLedger) {
+      this.ledger()?.record(
+        { operation: 'bind', resource: { kind: 'subscription', id: plugin }, result: 'applied' },
+        ownerContext,
+      )
+    }
     const release = (): boolean => {
       if (subscription.closed) return false
       this.drop(subscription)
       return true
     }
-    subscription.stopGrantWatch = this.grants().onChange?.(() => {
-      if (!this.grants().allows(
-        { componentId: identity.componentId, activationId: identity.activationId },
-        'messages.observe.read',
-        scope,
-      )) release()
-    })
-    bindCallerEffect(caller, release)
+    if (options.enforceGrants) {
+      subscription.stopGrantWatch = this.grants().onChange?.(() => {
+        if (!this.grants().allows(
+          { componentId: identity.componentId, activationId: identity.activationId },
+          'messages.observe.read',
+          scope,
+        )) release()
+      })
+    }
+    if (options.bindLifecycle) bindCallerEffect(ownerContext, release)
     return release
   }
 
-  #publishGuarded(session: unknown, event: unknown): void {
+  #publishGuarded(session: unknown, event: unknown, probeOnly = false): void {
     const state = observerStateFor(this)
     if (state.subscriptions.size === 0) return
     const record = event as { type?: unknown; seq?: unknown; data?: unknown }
@@ -413,7 +577,9 @@ hostContext: compositionRoot(ctx),
     // C-042 isolation: match subscriptions BEFORE building anything — a
     // subscription for another scope must never see this scope's content.
     const matched = [...state.subscriptions].filter(subscription =>
-      !subscription.closed && observerScopeCovers(subscription.scope, scope))
+      !subscription.closed
+      && (probeOnly ? subscription.probe === true : subscription.probe !== true)
+      && observerScopeCovers(subscription.scope, scope))
     if (matched.length === 0) return
 
     // Builds serialize broker-wide so delivery order stays the publish
@@ -479,8 +645,10 @@ hostContext: compositionRoot(ctx),
       for (const subscription of matched) {
         if (subscription.closed) continue
         // Deliver-time grant re-check: a revoked grant RELEASES the
-        // subscription (contract cleanup rule), with one warning.
-        if (!this.grants().allows(
+        // subscription (contract cleanup rule), with one warning. Internal
+        // probe subscriptions bypass this re-check because they are synthetic
+        // and never represent a real caller grant.
+        if (!subscription.probe && !this.grants().allows(
           { componentId: subscription.identity.componentId, activationId: subscription.identity.activationId },
           'messages.observe.read',
           scope,
@@ -505,7 +673,7 @@ hostContext: compositionRoot(ctx),
           // time. A grant may be revoked while an earlier callback is still
           // running; queued envelopes must then be skipped rather than
           // delivered from the stale pre-revocation snapshot.
-          if (!this.grants().allows(
+          if (!subscription.probe && !this.grants().allows(
             { componentId: subscription.identity.componentId, activationId: subscription.identity.activationId },
             'messages.observe.read',
             scope,
@@ -551,10 +719,12 @@ hostContext: compositionRoot(ctx),
     subscription.stopGrantWatch?.()
     subscription.stopGrantWatch = undefined
     observerStateFor(this).subscriptions.delete(subscription)
-    this.ledger()?.record(
-      { operation: 'release', resource: { kind: 'subscription', id: subscription.plugin }, result: 'applied' },
-      subscription.ownerContext,
-    )
+    if (!subscription.probe) {
+      this.ledger()?.record(
+        { operation: 'release', resource: { kind: 'subscription', id: subscription.plugin }, result: 'applied' },
+        subscription.ownerContext,
+      )
+    }
   }
 
   /** Join the text blocks of a session message's content (text-only view). */
@@ -689,6 +859,7 @@ interface ObserverState {
   readonly grantsOption: GrantStore | undefined
   readonly fallbackGrants: GrantStore
   readonly ledgerOption: TuiEffectLedgerRuntime | undefined
+  readonly runtime: AdapterRuntimeOptions
   readonly subscriptions: Set<Subscription>
   validateEnvelope: (value: unknown) => void
   validatorUnavailable: boolean

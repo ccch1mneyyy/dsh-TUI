@@ -99,9 +99,16 @@ import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
 import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
 import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
-import { installDecisionGuard } from './decision-guard.js'
+import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
 import { commandOwner } from './command-attribution.js'
-import { readGrantStore } from './grants.js'
+import { readGrantStore } from '../adapter/standard/grants.js'
+import { getHostGrantStore } from './host-grants.js'
+import { getHostFacade } from './plugin-host.js'
+import { collectAdapterDiagnostics } from '../adapter/kernel/diagnostics.js'
+import {
+  assertCapabilityShadowPolicy,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
 import { installedMeetsVersion } from './contract.js'
 import { pluginsInfoLines } from './plugins-info.js'
@@ -2021,6 +2028,7 @@ export function createChannel(
 ): ChannelState {
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
+  const adapterRuntime = adapterRuntimeFor(ctx)
   const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
 
   // ── agent view (CC's `claude agents`) internal state ──────────────────────
@@ -2127,10 +2135,15 @@ export function createChannel(
   // Keep a private fallback for bare embedders, but resolve the host-owned
   // store on every operation so a plugin-host row mounted later (or a custom
   // live GrantStore) is not shadowed by an early snapshot.
-  const fallbackGrantStore = readGrantStore()
+  const fallbackGrantStore = readGrantStore(undefined, undefined, adapterRuntime)
   const currentGrantStore = (): ReturnType<typeof readGrantStore> =>
-    ctx.get('tuiPluginHost')?.grants ?? fallbackGrantStore
+    getHostGrantStore(ctx.get('tuiPluginHost')) ?? fallbackGrantStore
   installDecisionGuard(ctx, currentGrantStore())
+  // The channel is the real DecisionEvents dispatch path. Record that
+  // topology so the live driver can distinguish "guard installed" (not a
+  // live feature) from "events can actually be dispatched here". The
+  // returned disposer is owned by this channel's Cordis lifecycle below.
+  const unmarkDecisionTopology = markDecisionDispatchTopology(ctx)
   // Subagent activity tracking: collects agent/subagent/*, session/event for
   // subagents, and exposes live snapshots for the UI.
   const subagentStore = new SubagentActivityStore()
@@ -2339,7 +2352,7 @@ export function createChannel(
   // load in real compositions); the TUI's own section registers there.
   const settingsSectionsRuntime = getHostSettingsSections(
     ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-  ) ?? getLocalSettingsSectionsHost()
+  ) ?? getLocalSettingsSectionsHost(ctx)
   // Custom-entry text renderers (optional service, dsh-tui-extensions row):
   // absent the row, unknown plugin event types stay invisible in the
   // transcript, exactly as before the seam existed.
@@ -2924,6 +2937,7 @@ export function createChannel(
    *  of its result, '' when the result is textless, undefined when the
    *  command is not registered, and the error message when it throws. */
   const executeRegistryCommand = async (name: string, rawInput: string): Promise<string | undefined> => {
+    assertCapabilityShadowPolicy('host.commands.invoke', adapterRuntime.mode, adapterRuntime.slices)
     if (!commandService) return undefined
     // Resolve the exact definition that execute() will select for this agent.
     // Same names may exist in distinct agent scopes, so a name-only lookup can
@@ -6893,12 +6907,27 @@ export function createChannel(
       lines.push(t('doctor-plugin-registry', {
         state: violations === undefined ? t('doctor-plugin-host-missing') : violations.length === 0 ? '✓' : `✗ ${violations.length}`,
       }))
+      // P2 kernel consumer: /doctor reads the read-only HostFacade backed by
+      // the KernelRuntime's unified lifecycle evidence. The same facade is the
+      // host-internal diagnostic bridge; live probes are reflected here when
+      // they have completed.
+      const facade = getHostFacade(pluginHost)
+      if (facade === undefined) {
+        lines.push('Adapter kernel (P2): HostFacade unavailable')
+      } else {
+        const snapshot = facade.descriptor.snapshot()
+        const permissions = getHostGrantStore(pluginHost)?.knownPermissions() ?? []
+        const adapterDiagnostics = collectAdapterDiagnostics(adapterRuntime, snapshot, permissions)
+        lines.push(
+          `Adapter kernel (P2): mode=${adapterDiagnostics.runtime.mode} · contracts=${adapterDiagnostics.descriptor.contracts.length} · permissions=${adapterDiagnostics.permissions.length}`,
+        )
+      }
       return lines
     },
     pluginsInfo(args: string) {
       const host = ctx.get('tuiPluginHost')
       return pluginsInfoLines(args, {
-        grants: host?.grants ?? currentGrantStore(),
+        grants: getHostGrantStore(host) ?? currentGrantStore(),
         host: host?.describe(),
       })
     },
@@ -8621,11 +8650,15 @@ ${output}
   })
   bindAgent()
   // Cordis owns the Channel lifetime. Rebinding handles the common case;
-  // this effect closes the final timer when the Channel's context unloads.
+  // this effect closes the final timer and releases the DecisionEvents
+  // dispatch-topology marker when the Channel's context unloads.
   const effect = (ctx as Context & {
     effect?: (setup: () => () => void, label?: string) => void
   }).effect
-  effect?.call(ctx, () => () => { stopActivityTick() }, 'dsh-tui activity timer')
+  effect?.call(ctx, () => () => {
+    stopActivityTick()
+    unmarkDecisionTopology()
+  }, 'dsh-tui channel lifecycle')
   // Statusline breadcrumb: current git branch of the session cwd (best-effort).
   // Re-run when an agent swap adopts a different persisted cwd (/resume,
   // issue #96) so the breadcrumb never shows the previous workspace's branch.

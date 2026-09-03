@@ -39,10 +39,17 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { DATA_DIR } from '../utils/paths.js'
-import { loadSpecData } from '../plugin-spec/registry.js'
-import { check } from '../plugin-spec/schema-check.js'
+import { loadSpecData } from '../adapter/standard/registry.js'
+import { check } from '../adapter/standard/schema-check.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { componentIdentityOf } from './component-identity.js'
 import { compositionRoot, concreteService } from './host-access.js'
+import { createKernelLedger, type KernelLedger, type KernelLedgerRecord } from '../adapter/kernel/ledger.js'
+import type { HostOwnerRef } from '../adapter/ports/owner.js'
 
 /** Default ledger file (JSONL, one record per line). */
 export const EFFECT_LEDGER_FILE = join(DATA_DIR, 'effect-ledger.jsonl')
@@ -112,12 +119,24 @@ export class TuiEffectLedgerRuntime extends Service {
       nextActivation: 1,
       sequence: 0,
       schemaWarned: false,
+      runtime: adapterRuntimeFor(ctx),
       ledgerSchema: undefined,
+      kernelLedger: undefined as unknown as KernelLedger,
     }
     // `'ledgerSchema' in options` lets a caller force-undefined (fail-closed
     // test seam), same contract as the message observer's envelopeSchema.
     state.ledgerSchema = 'ledgerSchema' in options ? options.ledgerSchema : loadSpecData()?.schemas.ledger
     state.sequence = resumeSequence(file)
+    // Route every public ledger write through the unified Kernel ledger
+    // channel. The kernel ledger performs shadow-policy enforcement and
+    // owner derivation; this class only serializes the normalized record to
+    // the existing JSONL file.
+    state.kernelLedger = createKernelLedger(
+      record => this.appendKernelRecord(record, state),
+      state.runtime.mode,
+      context => this.resolveKernelOwner(context, state),
+      state.runtime.slices,
+    )
     ledgerStates.set(this, state)
   }
 
@@ -127,25 +146,35 @@ export class TuiEffectLedgerRuntime extends Service {
    * parameter); omitting it records `undeclared`, never a guess.
    */
   record(entry: LedgerEntry, identity?: Context): void {
-    let state: LedgerState | undefined
+    const state = ledgerStateFor(this)
+    // The Kernel ledger is the single owner-deriving write channel. It
+    // asserts shadow policy and calls back with a kernel-resolved owner.
     try {
-      state = ledgerStateFor(this)
+      state.kernelLedger.record(entry, identity)
+    } catch {
+      // Ledger writes are explicitly best-effort and must not affect the seam.
+    }
+  }
+
+  /** Append one kernel-resolved record to the JSONL file. */
+  private appendKernelRecord(kernelRecord: KernelLedgerRecord, state: LedgerState): void {
+    try {
       if (state.ledgerSchema === undefined) {
         if (!state.schemaWarned) {
           state.schemaWarned = true
-          state.hostContext.logger.warn('dsh-tui: effect ledger schema unavailable — suppressing all ledger writes (fail-closed)')
+          state.hostContext.logger.warn('dsh-tui: effect ledger schema unavailable - suppressing all ledger writes (fail-closed)')
         }
         return
       }
-      const fiber = this.fiberOf(identity)
-      const verified = identity === undefined ? undefined : componentIdentityOf(identity)
-      const pluginId = this.pluginIdOf(identity, fiber, verified?.componentId)
+      const { entry, owner } = kernelRecord
+      const pluginId = cleanField(owner.componentId, 128, 'undeclared')
+      const activationInstance = cleanField(owner.activationId ?? pluginId, 128, pluginId)
       const record = {
         ledgerVersion: '0.15',
         sequence: state.sequence,
         timestamp: new Date().toISOString(),
         pluginId,
-        activationInstance: verified?.activationId ?? this.activationOf(fiber, pluginId),
+        activationInstance,
         runtimeGenerationId: this.generation(),
         operation: entry.operation,
         resource: {
@@ -168,9 +197,6 @@ export class TuiEffectLedgerRuntime extends Service {
           : {}),
         ...(entry.valueDigest !== undefined ? { valueDigest: entry.valueDigest } : {}),
       }
-      // Fail-closed self-check: a record that does not satisfy the vendored
-      // schema is DROPPED, not written (the schema's additionalProperties:
-      // false is the structural secret ban).
       try {
         check(record, state.ledgerSchema, state.ledgerSchema)
       } catch (error) {
@@ -183,8 +209,31 @@ export class TuiEffectLedgerRuntime extends Service {
       appendFileSync(state.file, `${JSON.stringify(record)}\n`, { mode: 0o600 })
       state.sequence += 1
     } catch (error) {
-      ;(state?.hostContext ?? this.ctx).logger.warn('dsh-tui: effect ledger write failed')
+      state.hostContext.logger.warn('dsh-tui: effect ledger write failed')
     }
+  }
+
+  /** Kernel-ledger owner resolver: verified activation identity wins; host /
+   * undeclared fallbacks are explicit and never borrowed from fiber names. */
+  private resolveKernelOwner(identity: unknown, state: LedgerState): HostOwnerRef {
+    if (!Context.is(identity)) {
+      return { componentId: 'undeclared', activationId: 'undeclared' }
+    }
+    const verified = componentIdentityOf(identity)
+    if (verified !== undefined) {
+      return { componentId: verified.componentId, activationId: verified.activationId }
+    }
+    const fiber = this.fiberOf(identity)
+    let name = ''
+    try {
+      name = typeof identity.fiber?.name === 'string' ? identity.fiber.name : ''
+    } catch {
+      name = ''
+    }
+    if (fiber === undefined || name === '' || name === 'root') {
+      return { componentId: 'host', activationId: 'host' }
+    }
+    return { componentId: 'undeclared', activationId: this.activationOf(fiber, 'undeclared') }
   }
 
   /** Runtime generation (C-050): options override, else the plugin-host
@@ -247,6 +296,8 @@ interface LedgerState {
   readonly hostContext: Context
   readonly file: string
   readonly optionsGenerationId: string | undefined
+  readonly runtime: AdapterRuntimeOptions
+  kernelLedger: KernelLedger
   generationId: string | undefined
   ledgerSchema: Record<string, unknown> | undefined
   readonly activations: WeakMap<object, string>

@@ -39,7 +39,7 @@ const [
   { TuiStatusStore, TuiStatusRuntime, getHostStatusStore },
   { TuiShortcutRuntime, getHostShortcuts, parseShortcutCombo, matchShortcut },
   { TuiRendererRuntime, getHostRenderers },
-  { parseExtensionGrants },
+  { parseExtensionGrants, markDecisionDispatchTopology },
   { dispatchTuiDecision, normalizeCancelDecision },
   { stringWidth },
   { KNOWN_SESSION_EVENT_TYPES },
@@ -61,7 +61,7 @@ const [
   import('@deepseek-ai/dsh-session'),
   import('./lib/term-test.mjs'),
 ])
-const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 
@@ -575,6 +575,9 @@ const plugin = pluginCtx
   }))
   guardCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
   await settle(() => guardCtx.get('tuiPluginHost') !== undefined)
+  // This battery dispatches DecisionEvents directly without a full channel;
+  // mark the real dispatch topology so admission sees a live-like channel.
+  markDecisionDispatchTopology(guardCtx)
   const admitted = await mountAdmitted(guardCtx, 'my-guard-export', testManifest({
     id: 'my-guard',
     requires: [DECISION_COORDINATE],

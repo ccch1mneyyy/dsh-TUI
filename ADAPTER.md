@@ -44,6 +44,29 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
 web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用;
 当相邻 `deepseek-harness` 源码存在时还会额外校验其 base + web patch。
 
+## Adapter-v2 P4-P6（本地分支状态）
+
+- **P4 Channel Port/投影层**:新增 `projection / actions / state /
+  plugins / transcript` 五个 Host Port 与 `src/adapter/channel/*` 拆分模块;
+  生产 `channel.ts` 本体尚未物理拆分,由 live Channel 作为实现来源;
+  T1 核心迁移:plugin.ts 通知/初始提交已优先走 HostFacade.channel.actions,
+  非 shadow 下未 mount 才回退原生,passive/replay shadow 禁止回退/丢弃;
+  其余 UI/Channel 动作仍大部分直接调用原生 Channel,未完整迁移;
+  新增 `channel` KernelSlice、上游 driver 与 `verify:adapter-channel`。
+- **P5 Channel Provider/Consumer**:实现 `tui.dsh/v1alpha1#Channel`
+  协议包络与校验;`runChannelReplay` 支持录制 snapshots 与真实 DSH
+  sessionEvents 的 **minimal transcript replay**(不宣称完整 RFC state);
+  未知 method 失败、features 必须显式声明且有证据、重复 features 先拒、
+  未知非 ignorable event fail-closed、method handler 仅在 replay isolation 内执行,
+  replay provider 不解析 selector(显式 unsupported);生产 driver 已真正跑
+  open/subscribe/invoke/close;新增 `verify:adapter-channel-conformance`。
+- **P6 compat 清理**:删除 `src/plugin-spec/*`、`src/dsh-adapter/{grants,
+  host-descriptor}.ts` shim;彻底移除 `admissionCompat` 与
+  `mountedAdmissionCoordinates`;`src/plugin-host.ts` 保留为规范化公开面;
+  `verify:compat-removal` 扫描 `src/`/`scripts/`/`bin/`/生成 `lib/` 与
+  package export 图,`verify:package` 拒绝 tarball 旧 shim;长期兼容别名已标注。
+- 所有 adapter 门禁已并入 `npm run verify:build`。
+
 ## 升级流程
 
 1. `pnpm add` 各 `@deepseek-ai/*` 到新预发布版本

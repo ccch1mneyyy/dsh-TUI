@@ -56,4 +56,3 @@ if (failures.length > 0) {
 }
 
 process.stdout.write('code-block tab background regression passed\n')
-

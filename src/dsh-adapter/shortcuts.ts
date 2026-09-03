@@ -26,6 +26,11 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
 import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import {
   canonicalCombo,
   comboMatchesStrict,
   fixedReservedCombos,
@@ -52,6 +57,8 @@ export type { ParsedCombo }
  * Cordis service object, so one plugin cannot synthesize an input event to
  * invoke another plugin's shortcut handler. */
 export interface TuiShortcutHost {
+  register(combo: string, options: TuiShortcutOptions): () => void
+  list(): readonly { combo: string; description: string }[]
   dispatch(input: string, key: TuiShortcutKey): boolean
   setErrorHandler(handler: (combo: string, error: unknown) => void): () => void
 }
@@ -96,8 +103,47 @@ export class TuiShortcutRuntime extends Service {
       onError: undefined,
       host: undefined,
       logger: ctx.logger,
+      runtime: adapterRuntimeFor(ctx),
     }
     const host: TuiShortcutHost = Object.freeze({
+      register: (combo, options) => {
+        const shortcutState = shortcutStateFor(runtime)
+        let parsed: ParsedCombo | undefined
+        try {
+          parsed = parseShortcutCombo(combo)
+        } catch {
+          return () => {}
+        }
+        if (parsed === undefined) return () => {}
+        const key = canonicalCombo(parsed)
+        const shiftlessKey = canonicalCombo({ ...parsed, shift: false })
+        const actionReserved = reservedActionCombos()
+        if (FIXED_RESERVED_CANONICAL.has(key) || FIXED_RESERVED_CANONICAL.has(shiftlessKey)
+          || actionReserved.has(key) || actionReserved.has(shiftlessKey)
+          || shortcutState.shortcuts.has(key)) {
+          return () => {}
+        }
+        let description: string
+        let handler: (() => void | Promise<void>) | undefined
+        try {
+          description = cleanScalarText(options?.description, 120)
+          handler = options?.handler
+        } catch {
+          return () => {}
+        }
+        if (typeof handler !== 'function' || description === '') return () => {}
+        const entry: RegisteredShortcut = { combo: parsed, description, handler }
+        shortcutState.shortcuts.set(key, entry)
+        return () => {
+          if (shortcutState.shortcuts.get(key) !== entry) return
+          shortcutState.shortcuts.delete(key)
+          shortcutState.owners.delete(key)
+        }
+      },
+      list: () => [...shortcutStateFor(runtime).shortcuts.entries()].map(([, entry]) => ({
+        combo: entry.combo.raw,
+        description: entry.description,
+      })),
       dispatch: (input, key) => dispatchShortcut(runtime, input, key),
       setErrorHandler: (handler) => {
         state.onError = handler
@@ -124,6 +170,7 @@ export class TuiShortcutRuntime extends Service {
    * effect ledger's pluginId — omitting it records `undeclared` (C-060).
    */
   register(combo: string, options: TuiShortcutOptions, identity?: Context): () => void {
+    assertCapabilityShadowPolicy('host.shortcuts.register', shortcutStateFor(this).runtime.mode, shortcutStateFor(this).runtime.slices)
     let caller: Context
     try {
       caller = requirePluginCaller(this.ctx, 'tuiShortcuts.register', this)
@@ -215,6 +262,7 @@ export class TuiShortcutRuntime extends Service {
 
   /** Registered combos with descriptions (diagnostics / future /help). */
   list(): readonly { combo: string; description: string }[] {
+    assertCapabilityShadowPolicy('host.shortcuts.list', shortcutStateFor(this).runtime.mode, shortcutStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiShortcuts.list', this)
     const owner = activationFiber(caller)
     if (owner === undefined) return []
@@ -228,6 +276,7 @@ export class TuiShortcutRuntime extends Service {
 /** Host-only dispatch accessor; this module is not exposed through package
  * exports, while the Cordis capability remains register/list only. */
 interface ShortcutState {
+  readonly runtime: AdapterRuntimeOptions
   readonly shortcuts: Map<string, RegisteredShortcut>
   readonly owners: Map<string, object>
   onError: ((combo: string, error: unknown) => void) | undefined
@@ -244,6 +293,11 @@ function shortcutStateFor(runtime: TuiShortcutRuntime): ShortcutState {
 }
 
 function dispatchShortcut(runtime: TuiShortcutRuntime, input: string, key: TuiShortcutKey): boolean {
+  try {
+    assertCapabilityShadowPolicy('host.shortcuts.dispatch', shortcutStateFor(runtime).runtime.mode, shortcutStateFor(runtime).runtime.slices)
+  } catch {
+    return false
+  }
   const state = shortcutStateFor(runtime)
   for (const entry of state.shortcuts.values()) {
     if (!matchShortcut(entry.combo, input, key)) continue

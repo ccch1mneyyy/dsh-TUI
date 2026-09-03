@@ -14,6 +14,12 @@
  * no allow-always or feedback channel in the protocol.
  */
 
+import { compositionRoot } from './host-access.js'
+import {
+  assertCapabilityShadowPolicy,
+  defaultAdapterRuntime,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
@@ -76,6 +82,20 @@ interface PendingApproval {
   snapshot: PendingSnapshot
   resolve: (outcome: ApprovalOutcome) => void
   onAbort: () => void
+}
+
+const approvalStores = new WeakMap<object, ApprovalStore>()
+
+/** Host-only registration used by the TUI plugin bootstrap. */
+export function bindApprovalStore(ctx: Parameters<typeof compositionRoot>[0], store: ApprovalStore): void {
+  const root = compositionRoot(ctx) as object
+  approvalStores.set(root, store)
+}
+
+/** Host-only lookup used by the presentation Port bridge. */
+export function getApprovalStore(ctx: Parameters<typeof compositionRoot>[0]): ApprovalStore | undefined {
+  const root = compositionRoot(ctx) as object
+  return approvalStores.get(root)
 }
 
 const COMMAND_CLIP = 500
@@ -153,6 +173,11 @@ function consumedKey(agentId: unknown, callId: unknown): string {
  * {@link ApprovalStore.decide}.
  */
 export class ApprovalStore {
+  private readonly runtime: AdapterRuntimeOptions
+
+  constructor(runtime: AdapterRuntimeOptions = defaultAdapterRuntime()) {
+    this.runtime = runtime
+  }
   private readonly queue: PendingApproval[] = []
   private active: PendingApproval | undefined
   private readonly listeners = new Set<() => void>()
@@ -341,9 +366,11 @@ export class ApprovalStore {
    */
   private isCallIdInFlight(req: ApprovalRequest): boolean {
     if (req.callId === undefined) return false
+    const agentKey = String(req.agent.id)
     const key = String(req.callId)
     const occupies = (pending: PendingApproval): boolean =>
-      pending.request.callId !== undefined && String(pending.request.callId) === key
+      String(pending.request.agent.id) === agentKey
+      && pending.request.callId !== undefined && String(pending.request.callId) === key
     return (this.active !== undefined && occupies(this.active)) || this.queue.some(occupies)
   }
 
@@ -357,6 +384,7 @@ export class ApprovalStore {
    *   when the ask is withdrawn or the plugin tears down.
    */
   park(req: ApprovalRequest): Promise<ApprovalOutcome> {
+    assertCapabilityShadowPolicy('host.presentation.approve', this.runtime.mode, this.runtime.slices)
     return new Promise<ApprovalOutcome>(resolve => {
       const command = commandOf(req)
       // Source badge: park() is reached through the approval/request
@@ -369,7 +397,7 @@ export class ApprovalStore {
       // (attacker-first: a forged ask parked before the genuine one looks
       // clean on its own — see markCallIdAmbiguous), so the panel can warn.
       const duplicate = this.isCallIdInFlight(req)
-      if (duplicate) this.markCallIdAmbiguous(req.callId)
+      if (duplicate) this.markCallIdAmbiguous(req.agent.id, req.callId)
       const external = !isLiveToolApproval(req) || duplicate
         || (req.callId !== undefined && this.consumedCallIds.has(consumedKey(req.agent.id, req.callId)))
       const pending: PendingApproval = {
@@ -481,12 +509,15 @@ export class ApprovalStore {
    * monotonic and never erased. Deliberately badges instead of cancelling:
    * cancelling both would hand the attacker a force-cancel primitive
    * against genuine approvals.
+   * @param agentId - The agent domain owning the duplicated call id.
    * @param callId - The duplicated call id (non-undefined by construction).
    */
-  private markCallIdAmbiguous(callId: unknown): void {
+  private markCallIdAmbiguous(agentId: unknown, callId: unknown): void {
+    const agentKey = String(agentId)
     const key = String(callId)
     const same = (pending: PendingApproval): boolean =>
-      pending.request.callId !== undefined && String(pending.request.callId) === key
+      String(pending.request.agent.id) === agentKey
+      && pending.request.callId !== undefined && String(pending.request.callId) === key
     let flipped = false
     if (this.active !== undefined && same(this.active) && this.active.snapshot.external !== true) {
       this.active.snapshot.external = true

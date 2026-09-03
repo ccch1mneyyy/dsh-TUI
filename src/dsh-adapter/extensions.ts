@@ -38,12 +38,13 @@ import TuiRendererRuntime from './renderers.js'
 import TuiToastRuntime from './toast.js'
 import TuiThemeRuntime from './themes.js'
 import { installDecisionGuard } from './decision-guard.js'
-import { readGrantStore } from './grants.js'
+import { readGrantStore } from '../adapter/standard/grants.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 export const name = 'dsh-tui-extensions'
 
 export function apply(ctx: Context): void {
-  installDecisionGuard(ctx, readGrantStore())
+  installDecisionGuard(ctx, readGrantStore(undefined, undefined, adapterRuntimeFor(ctx)))
   ctx.plugin(TuiDialogRuntime)
   ctx.plugin(TuiStatusRuntime)
   ctx.plugin(TuiShortcutRuntime)
