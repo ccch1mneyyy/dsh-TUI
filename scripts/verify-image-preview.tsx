@@ -1039,6 +1039,45 @@ function makeChannel() {
   terminal.dispose()
 }
 
+// --- Prompt local command: a stale placeholder warns before the line is dropped
+{
+  const notices: string[] = []
+  const channel = {
+    ...makeChannel(),
+    notify(text: string) { notices.push(text) },
+    stagedImage: () => undefined,
+  }
+  let localRuns = 0
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const stdin = new FakeStdin()
+  const app = await render(
+    <PromptInput
+      channel={channel as never}
+      helpOpen={false}
+      onToggleHelp={() => {}}
+      onRunCommand={(name) => {
+        if (name !== 'help') return false
+        localRuns += 1
+        return true
+      }}
+      selectionActive={false}
+    />,
+    { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  stdin.write('/help [Image #9]')
+  await settled(() => screen.text().includes('/help [Image #9]'))
+  stdin.write('\r')
+  check('prompt: a local command with an unstaged token warns and still runs',
+    await settled(() => localRuns === 1 && notices.some(text => text.includes('[Image #9]'))),
+    JSON.stringify({ localRuns, notices }))
+  check('prompt: the consumed local command line is cleared',
+    await settled(() => !screen.text().includes('/help [Image #9]')), screen.text())
+  await app.unmount()
+  terminal.dispose()
+}
+
 // --- Prompt async-paste fence: an old continuation cannot edit new draft --
 {
   const pastedImagePath = `${process.env.HOME}/composer.png`

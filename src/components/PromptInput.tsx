@@ -919,6 +919,27 @@ export function PromptInput({
     return composerImageRefsForText(text, draftImagesRef.current)
   }
 
+  /**
+   * Warn once when the text carries an `[Image #N]` placeholder that will
+   * not attach an image: unbound in this draft (history, rewind, typed) or
+   * bound to a staging the channel has since dropped. Channel routes
+   * (submit, steer, registry commands) warn on their own; this covers the
+   * lines the screen consumes locally, where the text is otherwise dropped
+   * without a word.
+   */
+  const warnStaleImageTokens = (text: string, images: readonly ComposerImageRef[]): void => {
+    const live = new Set(
+      images
+        .filter(image => channel.stagedImage(image.stageId) !== undefined)
+        .map(image => image.token),
+    )
+    for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+      if (live.has(match[0])) continue
+      channel.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
+      return
+    }
+  }
+
   const rememberHistory = (text: string, images: readonly ComposerImageRef[]): void => {
     history.current.push({
       text,
@@ -1108,6 +1129,8 @@ export function PromptInput({
     const draftImages = imageRefsFor(draftText)
     const handled = onRunCommand(parsed.name, parsed.rawInput, images)
     if (handled === true) {
+      // A local command consumed the line inside the screen.
+      warnStaleImageTokens(text, images)
       rememberHistory(text.trim(), images)
       clearDeliveredDraft()
     } else if (handled !== false) {
