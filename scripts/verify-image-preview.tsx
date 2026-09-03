@@ -608,24 +608,6 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   await app.unmount()
   terminal.dispose()
 }
-{
-  clearTranscriptImageCacheForTests()
-  const id = 'sha256:\x1b[31mBAD\x07'
-  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
-  const stdout = new FakeStdout(terminal)
-  const app = await render(
-    <Box width={COLS} height={ROWS}>
-      <ImagePreviewOverlay image={fakeImage(id, 'safe.png')} onClose={() => {}} />
-    </Box>,
-    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
-  )
-  const screen = screenOf(terminal, ROWS)
-  check('overlay: untrusted attachment ids render control-free text',
-    await settled(() => screen.text().includes('source sha256:BAD')),
-    screen.text())
-  await app.unmount()
-  terminal.dispose()
-}
 
 // Background galleries must stop decoding/placing graphics while the modal
 // owns the renderer's global byte + placement budget, then recover normally.

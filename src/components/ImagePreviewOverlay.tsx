@@ -9,7 +9,6 @@ import {
   transcriptImageLabel,
 } from './messages/TranscriptImages.js'
 import { t } from '../i18n.js'
-import { cleanRenderText } from '../dsh-adapter/sanitize.js'
 
 /** Below these viewport sizes the card is metadata-only: an image box would
  *  be too small to read and the chrome itself barely fits. */
@@ -17,12 +16,14 @@ const MIN_GRAPHICS_COLUMNS = 40
 const MIN_GRAPHICS_ROWS = 12
 /** The card is a floating layer, not a screen: it may take at most this share
  *  of its region's width and height, so the conversation stays visible
- *  around it. Card chrome outside the image box: 2 border rows + label +
- *  meta + 2 margins + hint = 7 rows; 2 border cols + 2×2 padding = 6 cols. */
+ *  around it. Card chrome outside the image box: 2 border rows + 1 margin +
+ *  name + meta + hint = 6 rows; 2 border cols + 2×2 padding = 6 cols. */
 const PREVIEW_MAX_WIDTH_RATIO = 0.7
 const PREVIEW_MAX_HEIGHT_RATIO = 0.8
-const CARD_CHROME_ROWS = 7
+const CARD_CHROME_ROWS = 6
 const CARD_CHROME_COLS = 6
+/** Metadata-only card (no image box): 2 border rows + name + meta + hint. */
+const CAPTION_ONLY_ROWS = 5
 /** Narrowest card: room for the metadata line and the close hint. */
 const MIN_CARD_COLUMNS = 40
 
@@ -103,13 +104,15 @@ export function ImagePreviewOverlay({
     return () => { live = false }
   }, [image, graphicsFit])
 
+  // Caption under the image: file name on one line, media type and pixel
+  // size on the next (two lines so narrow cards keep both). The attachment
+  // id is a content hash from the host attachment store, not a path — the
+  // original path never enters the durable event — so it is not shown.
   const label = transcriptImageLabel(image)
   const meta = [
     ...(image.mediaType === undefined ? [] : [image.mediaType]),
     `${image.width}×${image.height}px`,
   ].join(' · ')
-  const safeId = cleanRenderText(image.id, 24) || '…'
-  const source = t('image-preview-source', { id: safeId })
   const [imageWidth, imageHeight] = graphicsFit
     ? fitPreviewCells(
       image,
@@ -134,7 +137,7 @@ export function ImagePreviewOverlay({
     : MIN_CARD_COLUMNS))
   const cardRows = Math.max(1, Math.min(rows, graphicsFit
     ? imageHeight + CARD_CHROME_ROWS
-    : CARD_CHROME_ROWS - 2))
+    : CAPTION_ONLY_ROWS))
   const cardLeft = Math.max(0, Math.floor((columns - cardColumns) / 2))
   const cardTop = Math.max(0, Math.floor((rows - cardRows) / 2))
 
@@ -182,10 +185,8 @@ export function ImagePreviewOverlay({
         paddingY={0}
         onClick={swallow}
       >
-        <Text bold wrap="truncate">{label}</Text>
-        <Text dimColor wrap="truncate">{meta} · {source}</Text>
         {graphicsFit ? (
-          <Box marginTop={1} justifyContent="center">
+          <Box justifyContent="center">
             <Image
               source={state.kind === 'ready' ? state.source : undefined}
               width={imageWidth}
@@ -204,6 +205,12 @@ export function ImagePreviewOverlay({
           </Box>
         ) : null}
         <Box marginTop={graphicsFit ? 1 : 0} justifyContent="center">
+          <Text bold wrap="truncate">{label}</Text>
+        </Box>
+        <Box justifyContent="center">
+          <Text dimColor wrap="truncate">{meta}</Text>
+        </Box>
+        <Box justifyContent="center">
           <Text dimColor wrap="truncate">{t('image-preview-close-hint')}</Text>
         </Box>
       </Box>
