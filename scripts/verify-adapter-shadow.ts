@@ -712,9 +712,9 @@ try {
   assert.throws(() => storage.open(passiveRoot), /shadow policy denies/)
   const ledger = passiveRoot.get('tuiEffectLedger')
   assert.ok(ledger !== undefined)
-  assert.throws(
+  assert.doesNotThrow(
     () => ledger.record({ operation: 'create', resource: { kind: 'test', id: 'x' }, result: 'applied' }),
-    /shadow policy denies/,
+    'ledger writes remain best-effort when shadow policy denies them',
   )
   const admission = getHostAdmission(host)
   assert.ok(admission !== undefined)

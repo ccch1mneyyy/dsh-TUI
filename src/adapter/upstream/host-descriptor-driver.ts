@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context } from '../../dsh-adapter/types.js'
 import { KERNEL_HOST_SUPPORTED_CONTRACTS, KERNEL_TUI_DECISION_EVENT_NAMES } from '../kernel/contract-catalog.js'
 import type { ContractCoordinate } from '../kernel/driver-types.js'
 import type { CapabilityLifecycle } from '../kernel/lifecycle.js'

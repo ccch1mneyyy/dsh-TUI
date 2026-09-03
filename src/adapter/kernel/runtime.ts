@@ -342,7 +342,9 @@ export function assertCapabilityShadowPolicy(
 /** Convenience for legacy adapter service methods: parse the process runtime
  * once per call and assert the capability's shadow policy. This keeps
  * migration-era service entry points on the same unified effect matrix. */
+let defaultRuntimeSnapshot: AdapterRuntimeOptions | undefined
+
 export function assertAdapterCapability(capability: string): void {
-  const runtime = parseAdapterRuntime()
-  assertCapabilityShadowPolicy(capability, runtime.mode, runtime.slices)
+  defaultRuntimeSnapshot ??= parseAdapterRuntime()
+  assertCapabilityShadowPolicy(capability, defaultRuntimeSnapshot.mode, defaultRuntimeSnapshot.slices)
 }

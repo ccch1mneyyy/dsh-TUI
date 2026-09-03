@@ -87,7 +87,7 @@ function visitRelativeImportGraph(file: string, seen: Set<string>, failures: str
     return
   }
   const source = readFileSync(file, 'utf8')
-  const importPattern = /(?:from\s*|import\s*\(\s*|require\s*\(\s*)(['"])([^'"]+)\1/gu
+  const importPattern = /(?:from\s*|import\s+|import\s*\(\s*|require\s*\(\s*)(['"])([^'"]+)\1/gu
   for (const match of source.matchAll(importPattern)) {
     const specifier = match[2]!
     const resolved = resolveRelativeImport(file, specifier)

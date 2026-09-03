@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context } from '../../dsh-adapter/types.js'
 import type { HostSettingsPort } from '../ports/settings.js'
 import type { CapabilityLifecycle } from '../kernel/lifecycle.js'
 import { lifecycleFromDetection } from '../kernel/lifecycle.js'

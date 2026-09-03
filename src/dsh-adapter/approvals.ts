@@ -367,9 +367,11 @@ export class ApprovalStore {
    */
   private isCallIdInFlight(req: ApprovalRequest): boolean {
     if (req.callId === undefined) return false
+    const agentKey = String(req.agent.id)
     const key = String(req.callId)
     const occupies = (pending: PendingApproval): boolean =>
-      pending.request.callId !== undefined && String(pending.request.callId) === key
+      String(pending.request.agent.id) === agentKey
+      && pending.request.callId !== undefined && String(pending.request.callId) === key
     return (this.active !== undefined && occupies(this.active)) || this.queue.some(occupies)
   }
 
@@ -396,7 +398,7 @@ export class ApprovalStore {
       // (attacker-first: a forged ask parked before the genuine one looks
       // clean on its own — see markCallIdAmbiguous), so the panel can warn.
       const duplicate = this.isCallIdInFlight(req)
-      if (duplicate) this.markCallIdAmbiguous(req.callId)
+      if (duplicate) this.markCallIdAmbiguous(req.agent.id, req.callId)
       const external = !isLiveToolApproval(req) || duplicate
         || (req.callId !== undefined && this.consumedCallIds.has(consumedKey(req.agent.id, req.callId)))
       const pending: PendingApproval = {
@@ -508,12 +510,15 @@ export class ApprovalStore {
    * monotonic and never erased. Deliberately badges instead of cancelling:
    * cancelling both would hand the attacker a force-cancel primitive
    * against genuine approvals.
+   * @param agentId - The agent domain owning the duplicated call id.
    * @param callId - The duplicated call id (non-undefined by construction).
    */
-  private markCallIdAmbiguous(callId: unknown): void {
+  private markCallIdAmbiguous(agentId: unknown, callId: unknown): void {
+    const agentKey = String(agentId)
     const key = String(callId)
     const same = (pending: PendingApproval): boolean =>
-      pending.request.callId !== undefined && String(pending.request.callId) === key
+      String(pending.request.agent.id) === agentKey
+      && pending.request.callId !== undefined && String(pending.request.callId) === key
     let flipped = false
     if (this.active !== undefined && same(this.active) && this.active.snapshot.external !== true) {
       this.active.snapshot.external = true

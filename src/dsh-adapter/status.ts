@@ -531,7 +531,15 @@ export class TuiStatusRuntime extends Service {
     const caller = requirePluginCaller(this.ctx, 'tuiStatus.subscribe', this)
     const owner = activationFiber(caller)
     if (owner === undefined) return () => {}
-    const dispose = statusStateFor(this).store.subscribe(listener)
+    if (typeof listener !== 'function') return () => {}
+    const wrapped = () => {
+      try {
+        listener()
+      } catch (error) {
+        caller.logger.warn(`dsh-tui: tuiStatus listener failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const dispose = statusStateFor(this).store.subscribe(wrapped)
     bindCallerEffect(caller, dispose)
     return dispose
   }

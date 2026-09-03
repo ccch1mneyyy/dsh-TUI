@@ -252,6 +252,7 @@ export class TuiThemeRuntime extends Service {
     state.host = Object.freeze({
       register: (descriptor: TuiThemeDescriptor) => {
         const state = themeStateFor(runtime)
+        if (state.disposed) return NOOP
         const validated = validateDescriptor(descriptor)
         if (validated === undefined || state.entries.has(validated.name) || state.entries.size >= MAX_RUNTIME_THEMES) {
           return NOOP

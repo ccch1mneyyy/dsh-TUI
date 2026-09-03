@@ -9,7 +9,7 @@
  * driver never fabricates a live subscribe probe.
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context } from '../../dsh-adapter/types.js'
 import type { HostDecisionsPort } from '../ports/decisions.js'
 import type { CapabilityLifecycle } from '../kernel/lifecycle.js'
 import { lifecycleFromDetection } from '../kernel/lifecycle.js'

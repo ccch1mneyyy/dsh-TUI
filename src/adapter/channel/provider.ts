@@ -180,6 +180,7 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
         || (input.sessionId !== undefined && input.sessionId !== '')) {
         throw new Error('REPLAY_PROVIDER_UNSUPPORTED_SELECTOR: replay provider does not resolve workspace/sessionId selectors')
       }
+      closed = false
       return latest()
     },
     async subscribe(

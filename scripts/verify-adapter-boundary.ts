@@ -1,8 +1,9 @@
 /**
  * Enforce the adapter boundary: official `@deepseek-ai/*` imports are only
  * allowed inside src/dsh-adapter/ or src/adapter/upstream/. UI layers (screens/, components/, ink/,
- * hooks/, utils/, terminal-utils/, types/) talk to upstream exclusively through the
- * adapter tree, so an upstream rc bump breaks one module, not the UI.
+ * hooks/, utils/, terminal-utils/, types/, and portable adapter modules) talk to upstream
+ * exclusively through the adapter tree, so an upstream rc bump breaks
+ * one module, not the UI.
  *
  * Run via `node --import tsx/esm scripts/verify-adapter-boundary.ts`.
  */
@@ -11,7 +12,6 @@ import { join, relative, resolve } from 'node:path'
 
 const SRC = resolve(import.meta.dirname, '..', 'src')
 const ADAPTER = join(SRC, 'dsh-adapter')
-const ADAPTER_V2_UPSTREAM = join(SRC, 'adapter', 'upstream')
 // Match real module specifiers, not prose: import/export … from, bare
 // side-effect imports, dynamic import(), require(), import.meta.resolve().
 // Plain text (comments, docs) mentioning the scope is NOT a violation.
@@ -39,11 +39,10 @@ collectSourceFiles(SRC, files)
 for (const file of files) {
   // relative() prefixes every path outside ADAPTER with '..'.
   const insideAdapter = !relative(ADAPTER, file).startsWith('..')
-  const insideAdapterV2Upstream = !relative(ADAPTER_V2_UPSTREAM, file).startsWith('..')
-  if (insideAdapter || insideAdapterV2Upstream) continue
+  if (insideAdapter) continue
   const content = readFileSync(file, 'utf8')
   if (OFFICIAL_SPECIFIER.test(content)) {
-    violations.push(`${relative(SRC, file)} imports @deepseek-ai/* outside src/dsh-adapter/ and src/adapter/upstream/`)
+    violations.push(`${relative(SRC, file)} imports @deepseek-ai/* outside src/dsh-adapter/`)
   }
 }
 

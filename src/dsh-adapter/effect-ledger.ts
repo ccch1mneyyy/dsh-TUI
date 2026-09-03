@@ -149,7 +149,11 @@ export class TuiEffectLedgerRuntime extends Service {
     const state = ledgerStateFor(this)
     // The Kernel ledger is the single owner-deriving write channel. It
     // asserts shadow policy and calls back with a kernel-resolved owner.
-    state.kernelLedger.record(entry, identity)
+    try {
+      state.kernelLedger.record(entry, identity)
+    } catch {
+      // Ledger writes are explicitly best-effort and must not affect the seam.
+    }
   }
 
   /** Append one kernel-resolved record to the JSONL file. */

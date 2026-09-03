@@ -11,7 +11,7 @@
  * approve are intentionally staged and fail closed.
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context } from '../../dsh-adapter/types.js'
 import type {
   HostPresentationPort,
   HostDialogRequest,

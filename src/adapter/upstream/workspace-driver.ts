@@ -13,7 +13,7 @@
  * because they cannot be safely auto-reversed on a real host.
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context } from '../../dsh-adapter/types.js'
 import type { HostWorkspacePort, HostWorkspaceTarget } from '../ports/workspace.js'
 import type { CapabilityLifecycle } from '../kernel/lifecycle.js'
 import { lifecycleFromDetection } from '../kernel/lifecycle.js'

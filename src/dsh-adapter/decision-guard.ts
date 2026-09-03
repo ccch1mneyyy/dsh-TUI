@@ -427,7 +427,12 @@ export function markDecisionDispatchTopology(
     counts.set(event, (counts.get(event) ?? 0) + 1)
     added.push(event)
   }
-  return () => unmarkDecisionDispatchTopology(ctx, added)
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    unmarkDecisionDispatchTopology(ctx, added)
+  }
 }
 
 /**

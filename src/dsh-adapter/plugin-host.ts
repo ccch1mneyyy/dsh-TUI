@@ -299,7 +299,7 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
     const state = hostStateFor(this)
     const host = state.hostContext
     const kernel = state.kernelRuntime
-    if (kernel !== undefined) {
+    if (kernel !== undefined && state.kernelStarted && kernel.isRefreshCompleted()) {
       // Always refresh the sync topology first; the Kernel preserves already
       // live capabilities as long as their critical method evidence remains,
       // so this does not regress a completed live refresh back to staged while
