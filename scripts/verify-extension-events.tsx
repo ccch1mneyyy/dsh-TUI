@@ -790,6 +790,11 @@ await sleep(800)
 // picked text's return to the draft, and tui/session-switched must not wait
 // for it either (a hung listener would otherwise park both forever) ───────
 {
+  // 9c leaves /new's empty session live. The seed slice rejects a boundary
+  // that is not in the live log (real fork does too), so rewind from the
+  // origin session, whose log holds seq 4.
+  const back = await channel.resumeTo('s-a1')
+  check('rewind-done decoupled setup: /resume to the origin session succeeded', back.ok === true)
   let release: (value: string) => void = () => {}
   const gate = new Promise<string>(resolve => { release = resolve })
   let doneStarted = false
