@@ -23,6 +23,7 @@ const [
 ])
 
 let checks = 0
+/** Assert one regression case by running its predicate; collect and report. */
 function check(name, test) {
   try {
     test()

@@ -33,8 +33,9 @@ const FLUTTER_PASS: readonly number[] = [
 const BLINK_PASS: readonly number[] = [WHALE_FRAME_INDEX.blink]
 
 /** Heart pass (click): ONE-WAY 1-2-3, then the pass ends — the source
- * plugin's no-reverse special case. */
-const HEART_PASS: readonly number[] = [
+ * plugin's no-reverse special case. Shared with LogoV2 so the rendered peak
+ * and the planner never diverge. */
+export const HEART_PASS: readonly number[] = [
   WHALE_FRAME_INDEX.heart1, WHALE_FRAME_INDEX.heart2, WHALE_FRAME_INDEX.heart3,
 ]
 

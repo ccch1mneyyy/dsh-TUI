@@ -16,11 +16,11 @@ import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { OPENING_SEQUENCES, pickOpeningSequence, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
 import {
   HEART_HOLD_MS,
+  HEART_PASS,
   initialWhaleIdleState,
   nextWhaleIdleStep,
   type WhaleIdleState,
 } from './whaleIdle.js'
-import { WHALE_FRAME_INDEX } from './whaleFrames.js'
 
 /**
  * Header badge version, read from the installed package.json so the display
@@ -57,11 +57,6 @@ const FULL_WHALE_WIDTH = 40
  * centered under the art too.
  */
 const WHALE_CENTER = 18.5
-
-/** Heart pass frames (click feedback): heart1 → heart2 → heart3, one-way. */
-const HEART_FRAMES: readonly number[] = [
-  WHALE_FRAME_INDEX.heart1, WHALE_FRAME_INDEX.heart2, WHALE_FRAME_INDEX.heart3,
-]
 
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
@@ -151,7 +146,7 @@ export function LogoV2({
   React.useEffect(() => {
     if (heartSeq < 0) return
     const timer = setTimeout(() => {
-      setHeartSeq(s => (s >= HEART_FRAMES.length - 1 ? -1 : s + 1))
+      setHeartSeq(s => (s >= HEART_PASS.length - 1 ? -1 : s + 1))
     }, HEART_HOLD_MS)
     return () => {
       clearTimeout(timer)
@@ -200,7 +195,7 @@ export function LogoV2({
   const frameIndex = !settled
     ? sequence[step].frame
     : heartSeq >= 0
-      ? (HEART_FRAMES[heartSeq] ?? STANDARD_FRAME_INDEX)
+      ? (HEART_PASS[heartSeq] ?? STANDARD_FRAME_INDEX)
       : (idleFrame ?? STANDARD_FRAME_INDEX)
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.

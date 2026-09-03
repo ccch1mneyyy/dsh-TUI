@@ -683,6 +683,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const applyWhale = (value: { whale?: boolean }): void => {
       channel.setWhale(value.whale ?? true)
     }
+    /** Apply the idle-whale-behavior setting: live-toggle the channel flag. */
     const applyWhaleIdle = (value: { whaleIdle?: boolean }): void => {
       channel.setWhaleIdle(value.whaleIdle ?? false)
     }
