@@ -6,7 +6,9 @@
  * draft according to the current state.
  *
  * Run with plain node against the compiled lib: `node scripts/verify-queue.mjs`
+ * (assertions check Chinese notices; DSH_TUI_LANG defaults to zh here).
  */
+import './lib/default-lang-zh.mjs'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render } from '../lib/types/ui.js'

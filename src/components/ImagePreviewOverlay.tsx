@@ -15,6 +15,14 @@ import { cleanRenderText } from '../dsh-adapter/sanitize.js'
  *  be too small to read and the chrome itself barely fits. */
 const MIN_GRAPHICS_COLUMNS = 40
 const MIN_GRAPHICS_ROWS = 12
+/** The card is a floating layer, not a screen: it may take at most this share
+ *  of its region's width and height, so the conversation stays visible
+ *  around it. Card chrome outside the image box: 2 border rows + label +
+ *  meta + 2 margins + hint = 7 rows; 2 border cols + 2×2 padding = 6 cols. */
+const PREVIEW_MAX_WIDTH_RATIO = 0.7
+const PREVIEW_MAX_HEIGHT_RATIO = 0.8
+const CARD_CHROME_ROWS = 7
+const CARD_CHROME_COLS = 6
 
 /**
  * The shared modal image preview: one centered card over a click-catcher
@@ -83,7 +91,11 @@ export function ImagePreviewOverlay({
   const safeId = cleanRenderText(image.id, 24) || '…'
   const source = t('image-preview-source', { id: safeId })
   const [imageWidth, imageHeight] = graphicsFit
-    ? fitPreviewCells(image, columns - 12, rows - 9)
+    ? fitPreviewCells(
+      image,
+      Math.min(columns - 12, Math.floor(columns * PREVIEW_MAX_WIDTH_RATIO) - CARD_CHROME_COLS),
+      Math.min(rows - 9, Math.floor(rows * PREVIEW_MAX_HEIGHT_RATIO) - CARD_CHROME_ROWS),
+    )
     : [0, 0]
   const stateLine = state.kind === 'failed'
     ? t('transcript-image-unavailable', { name: label })
