@@ -127,6 +127,10 @@ function drive(input, steps, start = 0) {
     const first = nextWhaleIdleStep(startState, { working: false, heart: true }, 0)
     const mid = nextWhaleIdleStep(first.state, { working: false, heart: false }, 5)
     const rearmed = nextWhaleIdleStep(mid.state, { working: false, heart: true }, 10)
+    // Assert the intermediate frame really is the LARGE heart (mid-pass) before
+    // the re-click, so this proves a genuinely mid-animation restart and not a
+    // restart from the first frame.
+    assert.equal(mid.frameIndex, F.heart2, 'the re-click happens while the large heart shows')
     assert.equal(rearmed.frameIndex, F.heart1, 're-click restarts from the small heart')
   })
   check('heart over sleep does not wake the whale', () => {
