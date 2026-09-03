@@ -105,7 +105,18 @@ const lines = () => {
 }
 const bodyLines = (ls: string[]) => ls.filter(l => l.includes('推理第')).length
 const headerRow = (ls: string[]) => ls.findIndex(l => l.includes('Thinking') || l.includes('思考'))
+// 点击后的重绘在高负载（CI、并行回归）下可能晚于任何固定等待：按结果轮询，
+// 超时才判失败。
+const waitFor = async (pred: () => boolean, ms = 3000): Promise<boolean> => {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    if (pred()) return true
+    await sleep(25)
+  }
+  return pred()
+}
 
+await waitFor(() => headerRow(lines()) >= 0 && bodyLines(lines()) === 3)
 let ls = lines()
 const headerIdx = headerRow(ls)
 check('流式思考头行可见', headerIdx >= 0, headerIdx >= 0 ? `行${headerIdx}` : '未找到')
@@ -115,17 +126,17 @@ check('预览跟随最新三行', ls.some(line => line.includes('推理第11行'
 // 点击头行 → 展开全文。
 stdin.write(`\x1b[<0;6;${headerIdx + 1}M`)
 stdin.write(`\x1b[<0;6;${headerIdx + 1}m`)
-await sleep(400)
+await waitFor(() => bodyLines(lines()) >= 10)
 ls = lines()
 check('点击后展开完整正文', bodyLines(ls) >= 10, `body=${bodyLines(ls)}`)
 
-// 再点同一行 → 收回三行预览。等过 500ms 多击窗：同格快连两次会被判
+// 再点同一行 → 收回三行预览。先等过 500ms 多击窗：同格快连两次会被判
 // 双击选词，这是既有语义——快速连点归选区，不归折叠。
-await sleep(300)
+await sleep(600)
 const headerIdx2 = headerRow(ls)
 stdin.write(`\x1b[<0;6;${headerIdx2 + 1}M`)
 stdin.write(`\x1b[<0;6;${headerIdx2 + 1}m`)
-await sleep(400)
+await waitFor(() => bodyLines(lines()) === 3)
 ls = lines()
 check('再点收回三行预览', bodyLines(ls) === 3, `body=${bodyLines(ls)}`)
 check('收起后不会隐藏全部正文', bodyLines(ls) > 0, `body=${bodyLines(ls)}`)
@@ -134,15 +145,15 @@ check('收起后不会隐藏全部正文', bodyLines(ls) > 0, `body=${bodyLines(
 channel.thinkingFold = 'full'
 channel.version += 1
 for (const listener of listeners) listener()
-await sleep(400)
+await waitFor(() => bodyLines(lines()) >= 10)
 ls = lines()
 check('full 设置默认展开全文', bodyLines(ls) >= 10, `body=${bodyLines(ls)}`)
 
-await sleep(200)
+await sleep(600)
 const fullHeaderIdx = headerRow(ls)
 stdin.write(`\x1b[<0;6;${fullHeaderIdx + 1}M`)
 stdin.write(`\x1b[<0;6;${fullHeaderIdx + 1}m`)
-await sleep(400)
+await waitFor(() => bodyLines(lines()) === 3)
 ls = lines()
 check('full 设置点击后收为三行预览', bodyLines(ls) === 3, `body=${bodyLines(ls)}`)
 
