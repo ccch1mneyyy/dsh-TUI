@@ -2059,6 +2059,15 @@ export default class Ink {
    * frame; the effect fires before any mouse input so the fallback is
    * unobservable in practice.
    */
+  /**
+   * The colour a backdrop shade (`<Box backdrop="dim">`) fades explicit
+   * colours toward — the terminal background from OSC 11, or black/white
+   * by theme lightness when unknown. See StylePool.setShadeTarget.
+   */
+  setShadeTarget(rgb: { r: number; g: number; b: number } | null): void {
+    this.stylePool.setShadeTarget(rgb);
+  }
+
   setSelectionBgColor(color: string): void {
     // Wrap a NUL marker, then split on it to extract the open/close SGR.
     // colorize returns the input unchanged if the color string is bad —

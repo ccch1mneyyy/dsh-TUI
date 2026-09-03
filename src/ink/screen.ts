@@ -125,6 +125,62 @@ const DIM_CODE: AnsiCode = {
 }
 const INTENSITY_END = '\x1b[22m'
 
+/** An sRGB triple, 0–255 per channel. */
+export type Rgb = { readonly r: number; readonly g: number; readonly b: number }
+
+/** How far a shaded explicit colour moves toward the shade target. */
+const SHADE_BLEND = 0.5
+
+/** The xterm 256-colour palette entry `n` as RGB (16–231 cube, 232–255
+ *  greys, 0–15 the conventional defaults). */
+function ansi256ToRgb(n: number): Rgb {
+  if (n >= 232) {
+    const v = 8 + (n - 232) * 10
+    return { r: v, g: v, b: v }
+  }
+  if (n >= 16) {
+    const i = n - 16
+    const levels = [0, 95, 135, 175, 215, 255] as const
+    return {
+      r: levels[Math.floor(i / 36) % 6]!,
+      g: levels[Math.floor(i / 6) % 6]!,
+      b: levels[i % 6]!,
+    }
+  }
+  const basic: readonly Rgb[] = [
+    { r: 0, g: 0, b: 0 }, { r: 205, g: 0, b: 0 }, { r: 0, g: 205, b: 0 }, { r: 205, g: 205, b: 0 },
+    { r: 0, g: 0, b: 238 }, { r: 205, g: 0, b: 205 }, { r: 0, g: 205, b: 205 }, { r: 229, g: 229, b: 229 },
+    { r: 127, g: 127, b: 127 }, { r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 }, { r: 255, g: 255, b: 0 },
+    { r: 92, g: 92, b: 255 }, { r: 255, g: 0, b: 255 }, { r: 0, g: 255, b: 255 }, { r: 255, g: 255, b: 255 },
+  ]
+  return basic[Math.max(0, Math.min(15, n))]!
+}
+
+/** A truecolor (`38;2` / `48;2`) or 256-colour (`38;5` / `48;5`) SGR as a
+ *  plane + RGB; null for anything else (basic ANSI colours included — the
+ *  terminal's palette for those is unknown, so they take the faint path). */
+function parseSgrColor(code: string): { plane: 'fg' | 'bg'; rgb: Rgb } | null {
+  const match = /^\x1b\[(38|48);(2|5);(\d+)(?:;(\d+);(\d+))?m$/u.exec(code)
+  if (match === null) return null
+  const plane = match[1] === '38' ? 'fg' : 'bg'
+  if (match[2] === '5') return { plane, rgb: ansi256ToRgb(Number(match[3])) }
+  if (match[4] === undefined || match[5] === undefined) return null
+  return { plane, rgb: { r: Number(match[3]), g: Number(match[4]), b: Number(match[5]) } }
+}
+
+function sgrColor(plane: 'fg' | 'bg', rgb: Rgb): AnsiCode {
+  return {
+    type: 'ansi',
+    code: `\x1b[${plane === 'fg' ? 38 : 48};2;${rgb.r};${rgb.g};${rgb.b}m`,
+    endCode: plane === 'fg' ? '\x1b[39m' : '\x1b[49m',
+  }
+}
+
+function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
+  const channel = (a: number, b: number): number => Math.round(a + (b - a) * amount)
+  return { r: channel(from.r, to.r), g: channel(from.g, to.g), b: channel(from.b, to.b) }
+}
+
 /**
  * The SGR codes that move a cell from style `from` to style `to`.
  * `diffAnsiCodes` undoes a dropped intensity code with SGR 22, which
@@ -305,21 +361,57 @@ export class StylePool {
   }
 
   /**
-   * Backdrop shade: the base style plus faint (SGR 2). Idempotent — a
-   * style that already carries faint (a `dimColor` text, or a cell shaded
-   * last frame and blitted back from prevScreen) maps to itself, so
-   * re-shading a region never stacks.
+   * The colour a backdrop shade fades explicit colours toward: the
+   * terminal's background (OSC 11), or black/white by the active theme's
+   * lightness when it is unknown. Null keeps every colour and shades with
+   * faint alone. Changing it drops the shade caches.
+   * @param rgb - the shade target, or null.
+   */
+  private shadeTarget: Rgb | null = null
+  setShadeTarget(rgb: Rgb | null): void {
+    const current = this.shadeTarget
+    if (current === rgb || (current !== null && rgb !== null
+      && current.r === rgb.r && current.g === rgb.g && current.b === rgb.b)) return
+    this.shadeTarget = rgb
+    this.dimCache.clear()
+    this.shadedIds.clear()
+  }
+
+  /**
+   * Backdrop shade. Explicit truecolor / 256-colour foregrounds AND
+   * backgrounds move halfway toward the shade target, so a half-block
+   * pixel (`▀` with the upper pixel in the fg and the lower in the bg)
+   * fades as one pixel pair instead of losing only its upper half; a cell
+   * with no such foreground gets faint (SGR 2) so the terminal blends its
+   * default text colour toward its own background. Idempotent — a style
+   * this pool already produced as a shade (a cell shaded last frame and
+   * blitted back from prevScreen) or one that already carries faint maps to
+   * itself, so re-shading a region never stacks.
    * @param baseId - the cell's current style ID.
-   * @returns the shaded style ID (`baseId` when already faint).
+   * @returns the shaded style ID (`baseId` when nothing changes).
    */
   private dimCache = new Map<number, number>()
+  private shadedIds = new Set<number>()
   withDim(baseId: number): number {
+    if (this.shadedIds.has(baseId)) return baseId
     let id = this.dimCache.get(baseId)
     if (id === undefined) {
       const baseCodes = this.get(baseId)
-      id = baseCodes.some(c => c.code === DIM_CODE.code)
-        ? baseId
-        : this.intern([...baseCodes, DIM_CODE])
+      const target = this.shadeTarget
+      const codes: AnsiCode[] = []
+      let fgBlended = false
+      for (const code of baseCodes) {
+        const parsed = target === null ? null : parseSgrColor(code.code)
+        if (parsed === null || target === null) {
+          codes.push(code)
+          continue
+        }
+        codes.push(sgrColor(parsed.plane, mixRgb(parsed.rgb, target, SHADE_BLEND)))
+        if (parsed.plane === 'fg') fgBlended = true
+      }
+      if (!fgBlended && !baseCodes.some(c => c.code === DIM_CODE.code)) codes.push(DIM_CODE)
+      id = this.intern(codes)
+      this.shadedIds.add(id)
       this.dimCache.set(baseId, id)
     }
     return id
@@ -1866,12 +1958,13 @@ export function markNoSelectRegion(
 }
 
 /**
- * Shade a region: every glyph cell already painted there gets the faint
- * attribute (StylePool.withDim). Space cells are skipped — faint has no
- * visible effect on them, and restyling them would only make the diff
- * rewrite blank runs — and spacer tails have no style of their own. The
- * mapping is idempotent per style, so blitted cells that were shaded last
- * frame stay as they are. Damage covers the region so the diff scans it.
+ * Shade a region: every painted cell there gets its shaded style
+ * (StylePool.withDim). A space with no visible style is skipped — nothing
+ * to fade, and restyling it would only make the diff rewrite blank runs —
+ * but a space carrying a background (a solid pixel, a card fill) is shaded
+ * like a glyph; spacer tails have no style of their own. The mapping is
+ * idempotent per style, so blitted cells that were shaded last frame stay
+ * as they are. Damage covers the region so the diff scans it.
  * @param screen - the screen being composed.
  * @param styles - the pool the screen's style IDs belong to.
  * @param x - the region's left column.
@@ -1897,11 +1990,12 @@ export function shadeRegion(
   for (let row = startY; row < maxY; row++) {
     for (let col = startX; col < maxX; col++) {
       const ci = (row * stride + col) << 1
-      if (cells[ci] === EMPTY_CHAR_INDEX) continue
       const word1 = cells[ci + 1]!
+      const styleId = word1 >>> STYLE_SHIFT
+      // Bit 0 of a style ID: visible on a space (background, inverse, …).
+      if (cells[ci] === EMPTY_CHAR_INDEX && (styleId & 1) === 0) continue
       const cellWidth = word1 & WIDTH_MASK
       if (cellWidth === CellWidth.SpacerTail) continue
-      const styleId = word1 >>> STYLE_SHIFT
       const shaded = styles.withDim(styleId)
       if (shaded === styleId) continue
       const hid = (word1 >>> HYPERLINK_SHIFT) & HYPERLINK_MASK
