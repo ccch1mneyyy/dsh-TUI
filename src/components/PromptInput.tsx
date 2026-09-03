@@ -423,8 +423,8 @@ export interface PromptInputProps {
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
   /**
-   * The staged image the caret is on — at a token's start or its end — or
-   * undefined once it leaves; reported whenever that changes (`'caret'`),
+   * The staged image the caret is on — at a token's start, where the whole
+   * token inverts — or undefined once it leaves; reported whenever that changes (`'caret'`),
    * and again on every click on a token (`'click'`, even when unchanged) so
    * the caller can re-show a preview the user dismissed. `title` is the
    * token without brackets (`Image #2`). Reported as undefined while the
@@ -859,16 +859,16 @@ export function PromptInput({
   }
 
   /**
-   * The staged image the caret is on: a token whose start or end is the
-   * caret (start wins when two tokens touch). Undefined for a raw or stale
-   * token.
+   * The staged image the caret is on: the token whose start is the caret —
+   * exactly when the whole token is the caret cluster and inverts. The
+   * caret sitting just after a token is not "on" it (the token is plain
+   * there), so no preview. Undefined for a raw or stale token.
    */
   const caretImageAt = (
     text: string,
     offset: number,
   ): { image: TranscriptImage; title: string } | undefined => {
-    const spans = boundImageSpans(text)
-    const span = spans.find(s => s.start === offset) ?? spans.find(s => s.end === offset)
+    const span = boundImageSpans(text).find(s => s.start === offset)
     if (span === undefined) return undefined
     const stageId = draftImagesRef.current.get(span.token)
     const image = stageId === undefined ? undefined : channel.stagedImage(stageId)
