@@ -11,6 +11,8 @@ export interface TranscriptImage {
   readonly name?: string
   /** Verified media type, when the durable reference carries one. */
   readonly mediaType?: string
+  /** Stored byte size, when the durable reference carries one. */
+  readonly bytes?: number
   read(): Promise<Uint8Array>
 }
 
@@ -65,6 +67,7 @@ export function transcriptImageFromAttachment(
     height: attachment.height,
     ...(attachment.name === undefined ? {} : { name: attachment.name }),
     mediaType: attachment.mediaType,
+    ...(positiveInteger(attachment.bytes) ? { bytes: attachment.bytes } : {}),
     async read() {
       const reader = resolveAttachments() as AttachmentReader | undefined
       if (typeof reader?.readImage !== 'function') {

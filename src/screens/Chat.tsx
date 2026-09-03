@@ -796,8 +796,11 @@ export function Chat({
 
   /** Shared open path for the modal image preview: composer `[Image #N]`
    *  tokens and transcript thumbnails both land here. */
-  const openImagePreview = React.useCallback((image: TranscriptImage): void => {
-    dispatchOverlay({ type: 'open', overlay: { kind: 'image-preview', image } })
+  const openImagePreview = React.useCallback((image: TranscriptImage, title?: string): void => {
+    dispatchOverlay({
+      type: 'open',
+      overlay: { kind: 'image-preview', image, ...(title === undefined ? {} : { title }) },
+    })
   }, [])
   // Agent-binding generation is monotonic across every agent replacement
   // and bumps before the replacement emit, closing the ABA hole where a
@@ -3538,6 +3541,7 @@ export function Chat({
     ? (
       <ImagePreviewOverlay
         image={overlay.image}
+        title={overlay.title}
         onClose={() => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
         region={imagePreviewRegion}
       />
