@@ -235,10 +235,18 @@ for (const [name, service] of malformed) {
   const { channel, commands, warnings } = makeEnv(service, [
     { id: 'read', permission: 'read-only' },
     { id: 'invalid', permission: 'auto extra' },
+    { id: 'auto', permission: 'auto' },
   ])
   await channel.cycleMode()
-  check('unsafe configured identity does not invoke permission', commands.length === 0, JSON.stringify(commands))
-  check('unsafe configured identity warns before command dispatch', warnings.some(message => message.includes('not a safe command token')), JSON.stringify(warnings))
+  check('unsafe configured identity is skipped and later mode remains reachable', commands.join(',') === '/permission auto', JSON.stringify(commands))
+  check('unsafe configured identity warns before command dispatch', warnings.some(message => message.includes('unsafe permission identity')), JSON.stringify(warnings))
+}
+{
+  const { channel, warnings } = makeEnv(42, [
+    { id: 'invalid', permission: 'auto extra' },
+  ])
+  check('all-invalid configured roster falls back to the default mode', channel.mode.id === 'default', channel.mode.id)
+  check('all-invalid configured roster emits a warning', warnings.some(message => message.includes('unsafe permission identity')), JSON.stringify(warnings))
 }
 
 if (failures > 0) {

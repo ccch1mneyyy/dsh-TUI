@@ -78,7 +78,7 @@ import { extractMentions } from '../utils/mentions.js'
 import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
-import { modeDisplayName, resolveSessionModes, stablePermissionRosterOrder, type SessionModeSpec } from '../sessionModes.js'
+import { DEFAULT_SESSION_MODES, modeDisplayName, resolveSessionModes, stablePermissionRosterOrder, type SessionModeSpec } from '../sessionModes.js'
 import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
@@ -2392,10 +2392,24 @@ export function createChannel(
   const rendererRuntime = getHostRenderers(ctx.get('tuiRenderers') as TuiRendererRuntime | undefined)
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
-  const { modes: configuredSessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
+  const { modes: resolvedConfiguredSessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
+  const invalidConfiguredPermissionIds = resolvedConfiguredSessionModes
+    .filter(spec => spec.permission !== undefined && !isCommandCompletionToken(spec.permission))
+    .map(spec => spec.id)
+  const filteredConfiguredSessionModes = resolvedConfiguredSessionModes.filter(
+    spec => spec.permission === undefined || isCommandCompletionToken(spec.permission),
+  )
+  const configuredSessionModes = filteredConfiguredSessionModes.length > 0
+    ? filteredConfiguredSessionModes
+    : DEFAULT_SESSION_MODES
   if (droppedModeIds.length > 0) {
     ctx.logger.warn(
       `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval/permission atom; dropped from the Shift+Tab cycle`,
+    )
+  }
+  if (invalidConfiguredPermissionIds.length > 0) {
+    ctx.logger.warn(
+      `dsh-tui: session modes ${invalidConfiguredPermissionIds.map(id => `"${id}"`).join(', ')} declare an unsafe permission identity; dropped from the Shift+Tab cycle`,
     )
   }
   const conflictingModeIds = (options.modes ?? [])
