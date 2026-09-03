@@ -98,7 +98,6 @@ const dict = {
   'transcript-image-message': { zh: '{{count}} 张图片', en: { one: '{{count}} image', other: '{{count}} images' } },
   'input-image-token-stale': { zh: '{{token}} 已失效，发送时不会附带图片', en: '{{token}} is no longer staged; no image will attach' },
   'input-images-staged': { zh: '已附加 {{count}} 张图片', en: { one: 'Attached {{count}} image', other: 'Attached {{count}} images' } },
-  'image-preview-close-hint': { zh: 'Esc 或点击外部关闭', en: 'Esc or click outside to close' },
   'send-failed': { zh: '发送失败 · {{err}}', en: 'Send failed · {{err}}' },
   'export-user-section': { zh: '## 用户', en: '## User' },
   'export-thinking-section': { zh: '## 思考', en: '## Thinking' },

@@ -494,8 +494,7 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   check('overlay: narrow terminal renders the metadata card',
     await settled(() =>
       screen.text().includes('narrow.png') &&
-      screen.text().includes('16×8px') &&
-      screen.text().includes('Esc or click outside')),
+      screen.text().includes('— PNG · 16×8')),
     screen.text())
   check('overlay: narrow terminal reserves no graphics box',
     !screen.text().includes('[Loading'))
@@ -538,7 +537,7 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
     await settled(() => screen.text().includes('Cannot preview bad.png')),
     screen.text())
   check('overlay: header metadata still renders on failure',
-    screen.text().includes('image/png · 16×8px'))
+    screen.text().includes('— PNG · 16×8'))
   await app.unmount()
   terminal.dispose()
 }
@@ -546,15 +545,17 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   clearTranscriptImageCacheForTests()
   const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(terminal)
-  const big = { ...fakeImage('sha256:big', 'big.png'), width: 4000, height: 3000 }
+  const big = { ...fakeImage('sha256:big', 'big.png'), width: 4000, height: 3000, bytes: 19456 }
   const app = await render(
     <Box width={COLS} height={ROWS}>
-      <ImagePreviewOverlay image={big} onClose={() => {}} />
+      <ImagePreviewOverlay image={big} title="Image #7" onClose={() => {}} />
     </Box>,
     { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
   )
   const screen = screenOf(terminal, ROWS)
-  await settled(() => screen.text().includes('Esc or click outside to close'))
+  await settled(() => screen.text().includes(' — PNG · '))
+  check('overlay: the border title reads token — format · size · bytes · name',
+    screen.text().includes('Image #7 — PNG · 4000×3000 · 19.0 KB · big.png'), screen.text())
   const lines = screen.text().split('\n')
   const top = lines.findIndex(line => line.includes('╭'))
   const bottom = lines.findIndex(line => line.includes('╰'))
@@ -729,7 +730,7 @@ function makeChannel() {
     stdin.write(`\x1b[<0;${col + 1};${row + 1}M`)
     stdin.write(`\x1b[<0;${col + 1};${row + 1}m`)
   }
-  const OVERLAY_HINT = 'Esc or click outside to close'
+  const OVERLAY_HINT = ' — PNG · '
 
   // Transcript thumbnail (text fallback body) → the shared overlay.
   check('chat: transcript thumbnail fallback renders',
@@ -821,7 +822,7 @@ function makeChannel() {
   click(token.col + 2, token.row)
   check('chat: composer token click opens the preview with the staged image',
     await settled(() =>
-      screen.text().includes(OVERLAY_HINT) && screen.text().includes('staged.png')),
+      screen.text().includes('Image #2 — PNG · 16×8 · staged.png')),
     screen.text())
   stdin.write('\x1b')
   await settled(() => !screen.text().includes(OVERLAY_HINT))

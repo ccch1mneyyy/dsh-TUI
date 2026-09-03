@@ -384,7 +384,7 @@ export interface PromptInputProps {
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
   /** Click on a staged `[Image #N]` token: open the shared preview overlay. */
-  onPreviewImage?(image: TranscriptImage): void
+  onPreviewImage?(image: TranscriptImage, title?: string): void
 }
 
 /**
@@ -2850,7 +2850,8 @@ export function PromptInput({
           // placeholder text will NOT attach an image on submit.
           channel.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
         } else {
-          onPreviewImage(image)
+          // `[Image #2]` → `Image #2`: the card's title leads with the token.
+          onPreviewImage(image, match[0].slice(1, -1))
         }
         return
       }

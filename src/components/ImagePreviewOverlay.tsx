@@ -1,6 +1,8 @@
 import React from 'react'
 import { Box, Image, Text, useTerminalSize } from '../ui.js'
 import measureElement from '../ink/measure-element.js'
+import { stringWidth } from '../ink/stringWidth.js'
+import { truncateToWidth } from '../ink/truncateToWidth.js'
 import type { DOMElement } from '../ink/dom.js'
 import type { TerminalImageSource } from '../ink/terminal-image.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
@@ -8,6 +10,7 @@ import {
   loadTranscriptImageFull,
   transcriptImageLabel,
 } from './messages/TranscriptImages.js'
+import { formatBytes } from '../sessions/format.js'
 import { t } from '../i18n.js'
 
 /** Below these viewport sizes the card is metadata-only: an image box would
@@ -16,15 +19,16 @@ const MIN_GRAPHICS_COLUMNS = 40
 const MIN_GRAPHICS_ROWS = 12
 /** The card is a floating layer, not a screen: it may take at most this share
  *  of its region's width and height, so the conversation stays visible
- *  around it. Card chrome outside the image box: 2 border rows + 1 margin +
- *  name + meta + hint = 6 rows; 2 border cols + 2×2 padding = 6 cols. */
+ *  around it. Card chrome outside the image box: title row + bottom border
+ *  + 1 padding row above and below = 4 rows; 2 border cols + 2×2 padding
+ *  = 6 cols. */
 const PREVIEW_MAX_WIDTH_RATIO = 0.7
 const PREVIEW_MAX_HEIGHT_RATIO = 0.8
-const CARD_CHROME_ROWS = 6
+const CARD_CHROME_ROWS = 4
 const CARD_CHROME_COLS = 6
-/** Metadata-only card (no image box): 2 border rows + name + meta + hint. */
-const CAPTION_ONLY_ROWS = 5
-/** Narrowest card: room for the metadata line and the close hint. */
+/** Metadata-only card (no image box): title row + one body row + bottom border. */
+const CAPTION_ONLY_ROWS = 3
+/** Narrowest card: room for a readable title. */
 const MIN_CARD_COLUMNS = 40
 
 /**
@@ -36,16 +40,21 @@ const MIN_CARD_COLUMNS = 40
  * at the root and cover the whole screen. The card is sized from the
  * region the caller reports (the transcript viewport), refined by the
  * catcher's measured cell box on later commits; it renders on the layer's
- * first frame. The catcher click closes
- * (click-outside), the card swallows its own clicks; Esc handling belongs
- * to Chat's key chain. The layer only paints themed cells — terminal
- * graphics stay inside the host `Image` primitive, which keeps its own
- * capability fallback.
+ * first frame.
+ *
+ * The card's title sits in its top border, centered: `Image #N — PNG ·
+ * 361×379 · 19.0 KB · name.png`. Nothing else surrounds the image; Esc and
+ * a click outside close (Chat's key chain and the catcher). Catcher and
+ * card are sibling absolute nodes — see the comment at the card for why the
+ * card is not the catcher's child. The layer only paints themed cells —
+ * terminal graphics stay inside the host `Image` primitive, which keeps its
+ * own capability fallback.
  */
 export function ImagePreviewOverlay({
   image,
   onClose,
   region,
+  title,
 }: {
   readonly image: TranscriptImage
   readonly onClose: () => void
@@ -57,6 +66,9 @@ export function ImagePreviewOverlay({
    * the next commit.
    */
   readonly region?: { readonly columns: number; readonly rows: number }
+  /** Leading title text, e.g. the composer token `Image #2`. Defaults to
+   *  the generic image label. */
+  readonly title?: string
 }): React.ReactNode {
   // The card must exist on the layer's FIRST frame. A frame with an empty
   // catcher followed by a frame with the card marks the catcher dirty, and
@@ -104,15 +116,26 @@ export function ImagePreviewOverlay({
     return () => { live = false }
   }, [image, graphicsFit])
 
-  // Caption under the image: file name on one line, media type and pixel
-  // size on the next (two lines so narrow cards keep both). The attachment
-  // id is a content hash from the host attachment store, not a path — the
-  // original path never enters the durable event — so it is not shown.
+  // Title: `Image #N — PNG · 361×379 · 19.0 KB · name.png`. The attachment
+  // id is a content hash from the host attachment store, not a path (the
+  // original path never enters the durable event), so it is not shown.
   const label = transcriptImageLabel(image)
-  const meta = [
-    ...(image.mediaType === undefined ? [] : [image.mediaType]),
-    `${image.width}×${image.height}px`,
-  ].join(' · ')
+  const format = image.mediaType === undefined
+    ? undefined
+    : image.mediaType.replace(/^image\//u, '').replace(/\+xml$/u, '').toUpperCase()
+  const details = [
+    format,
+    `${image.width}×${image.height}`,
+    formatBytes(image.bytes),
+    image.name === undefined ? undefined : label,
+  ].filter((part): part is string => part !== undefined && part !== '')
+  const fullTitle = `${title ?? t('transcript-image')} — ${details.join(' · ')}`
+  const stateLine = state.kind === 'failed'
+    ? t('transcript-image-unavailable', { name: label })
+    : state.kind === 'ready'
+      ? t('transcript-image-ready', { name: label })
+      : t('transcript-image-loading', { name: label })
+
   const [imageWidth, imageHeight] = graphicsFit
     ? fitPreviewCells(
       image,
@@ -120,11 +143,6 @@ export function ImagePreviewOverlay({
       Math.min(rows - 9, Math.floor(rows * PREVIEW_MAX_HEIGHT_RATIO) - CARD_CHROME_ROWS),
     )
     : [0, 0]
-  const stateLine = state.kind === 'failed'
-    ? t('transcript-image-unavailable', { name: label })
-    : state.kind === 'ready'
-      ? t('transcript-image-ready', { name: label })
-      : t('transcript-image-loading', { name: label })
 
   // The card is positioned by hand, as an absolute SIBLING of the catcher
   // rather than its child. Any update inside the card (image decoded, size
@@ -140,6 +158,7 @@ export function ImagePreviewOverlay({
     : CAPTION_ONLY_ROWS))
   const cardLeft = Math.max(0, Math.floor((columns - cardColumns) / 2))
   const cardTop = Math.max(0, Math.floor((rows - cardRows) / 2))
+  const titleRow = borderTitleRow(fullTitle, cardColumns)
 
   // Stable click handler: a new function identity each render would count
   // as a prop change and dirty the catcher.
@@ -177,16 +196,23 @@ export function ImagePreviewOverlay({
         flexDirection="column"
         flexShrink={0}
         overflow="hidden"
-        borderStyle="round"
-        borderColor="suggestion"
         backgroundColor="toolCardBackground"
         opaque
-        paddingX={2}
-        paddingY={0}
         onClick={swallow}
       >
-        {graphicsFit ? (
-          <Box justifyContent="center">
+        {/* Top border drawn by hand so the title can sit centered inside it. */}
+        <Text color="suggestion" wrap="truncate">{titleRow}</Text>
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          borderStyle="round"
+          borderColor="suggestion"
+          borderTop={false}
+          paddingX={2}
+          alignItems="center"
+          justifyContent="center"
+        >
+          {graphicsFit ? (
             <Image
               source={state.kind === 'ready' ? state.source : undefined}
               width={imageWidth}
@@ -202,20 +228,31 @@ export function ImagePreviewOverlay({
                 <Text dimColor wrap="truncate">[{stateLine}]</Text>
               </Box>
             </Image>
-          </Box>
-        ) : null}
-        <Box marginTop={graphicsFit ? 1 : 0} justifyContent="center">
-          <Text bold wrap="truncate">{label}</Text>
-        </Box>
-        <Box justifyContent="center">
-          <Text dimColor wrap="truncate">{meta}</Text>
-        </Box>
-        <Box justifyContent="center">
-          <Text dimColor wrap="truncate">{t('image-preview-close-hint')}</Text>
+          ) : (
+            <Text dimColor wrap="truncate">{label}</Text>
+          )}
         </Box>
       </Box>
     </>
   )
+}
+
+/**
+ * `╭─── title ───╮` sized to the card width. The title is truncated by
+ * display width (CJK names are wide); one dash always remains on each side
+ * of the corners so the row still reads as a border.
+ */
+function borderTitleRow(title: string, cardColumns: number): string {
+  const inner = Math.max(0, cardColumns - 2)
+  const maxTitle = Math.max(0, inner - 4)
+  let text = title
+  if (stringWidth(text) > maxTitle) {
+    text = maxTitle <= 1 ? '' : `${truncateToWidth(text, maxTitle - 1)}…`
+  }
+  const labelled = text === '' ? '' : ` ${text} `
+  const fill = Math.max(0, inner - stringWidth(labelled))
+  const left = Math.floor(fill / 2)
+  return `╭${'─'.repeat(left)}${labelled}${'─'.repeat(fill - left)}╮`
 }
 
 /** Aspect-preserving cell box for the preview, assuming the conventional

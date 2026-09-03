@@ -93,7 +93,7 @@ export type ChatOverlay =
    * the composer or a transcript thumbnail. Renders as its own centered
    * layer (not inside `<OverlayAbove>`); Esc / click-outside closes.
    */
-  | { kind: 'image-preview'; image: TranscriptImage }
+  | { kind: 'image-preview'; image: TranscriptImage; title?: string }
 
 export const NO_OVERLAY: ChatOverlay = { kind: 'none' }
 
