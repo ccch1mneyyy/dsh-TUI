@@ -53,7 +53,7 @@ import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
-import { PromptEditorLayer } from '../components/PromptEditor.js'
+import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -331,6 +331,7 @@ export function Chat({
   useExternalVersion(channel.subscribe, () => channel.version)
   // Re-render on language switches so the whole UI hot-swaps its strings.
   React.useSyncExternalStore(subscribeLang, getLang)
+  const promptEditorOpen = usePromptEditorOpen()
   // The pending ask-user-question (DSH user-interaction seam): the model's
   // `ask_user_question` tool parks here until the panel is answered.
   const questionSnapshot = React.useSyncExternalStore(
@@ -3521,6 +3522,21 @@ export function Chat({
       ? null
       : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
 
+  // Modal image preview, shared by the composer's [Image #N] tokens and the
+  // transcript thumbnails. It normally lives INSIDE the transcript row, so
+  // the card centers over the conversation and the sticky header, prompt
+  // and status rows stay visible. While the fullscreen draft editor is open
+  // it moves to the root, after PromptEditorLayer, so it still paints above
+  // the editor (the editor state stays put; closing the preview restores it).
+  const imagePreviewNode = overlay.kind === 'image-preview' && imagePreviewOwned
+    ? (
+      <ImagePreviewOverlay
+        image={overlay.image}
+        onClose={() => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
+      />
+    )
+    : null
+
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
       {!isSticky && anchorUserText && (
@@ -3638,6 +3654,7 @@ export function Chat({
             />
           )
         })()}
+        {!promptEditorOpen && imagePreviewNode}
       </Box>
       {/* Bottom chrome (pill, spinners, dialogs, prompt, statusline): never
           let flex shrink squeeze these fixed-height rows — the ScrollBox
@@ -4184,15 +4201,10 @@ export function Chat({
           store 发布（见 PromptEditor.tsx）。图片预览是唯一有意后绘于它
           的 top modal：这样编辑器状态留在原处，关闭预览即可原样恢复。 */}
       <PromptEditorLayer />
-      {/* 模态图片预览：输入框 [Image #N] 与 transcript 缩略图共用。
-          居中卡片 + 全屏点击捕获（点外部关闭）；Esc 在 Chat 的按键链关闭。
-          保持根节点最后一个孩子，明确高于展开的 PromptEditorLayer。 */}
-      {overlay.kind === 'image-preview' && imagePreviewOwned && (
-        <ImagePreviewOverlay
-          image={overlay.image}
-          onClose={() => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
-        />
-      )}
+      {/* 模态图片预览的全屏位：只在全屏草稿编辑器展开时用（编辑器盖住了
+          transcript 行，预览必须作为根的最后一个孩子才压得过它）；平时
+          预览挂在上面的 transcript 行内，见 imagePreviewNode。 */}
+      {promptEditorOpen && imagePreviewNode}
     </Box>
   )
 }

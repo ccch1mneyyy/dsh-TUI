@@ -1,5 +1,7 @@
 import React from 'react'
 import { Box, Image, Text, useTerminalSize } from '../ui.js'
+import measureElement from '../ink/measure-element.js'
+import type { DOMElement } from '../ink/dom.js'
 import type { TerminalImageSource } from '../ink/terminal-image.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import {
@@ -15,12 +17,18 @@ const MIN_GRAPHICS_COLUMNS = 40
 const MIN_GRAPHICS_ROWS = 12
 
 /**
- * The shared modal image preview: one centered card over a full-screen
- * click-catcher, used by both the composer's staged `[Image #N]` tokens and
- * the transcript thumbnails. The catcher click closes (click-outside), the
- * card swallows its own clicks; Esc handling belongs to Chat's key chain.
- * The layer only paints themed cells — terminal graphics stay inside the
- * host `Image` primitive, which keeps its own capability fallback.
+ * The shared modal image preview: one centered card over a click-catcher
+ * that fills its parent, used by both the composer's staged `[Image #N]`
+ * tokens and the transcript thumbnails. Chat mounts it inside the
+ * transcript row, so the prompt, status rows and sticky header stay visible
+ * and untouched; only while the fullscreen draft editor is open does it sit
+ * at the root and cover the whole screen. The card is sized from the
+ * catcher's measured cell box (one layout pass; the card renders on the
+ * next frame), never from the raw terminal size. The catcher click closes
+ * (click-outside), the card swallows its own clicks; Esc handling belongs
+ * to Chat's key chain. The layer only paints themed cells — terminal
+ * graphics stay inside the host `Image` primitive, which keeps its own
+ * capability fallback.
  */
 export function ImagePreviewOverlay({
   image,
@@ -29,7 +37,24 @@ export function ImagePreviewOverlay({
   readonly image: TranscriptImage
   readonly onClose: () => void
 }): React.ReactNode {
-  const { columns, rows } = useTerminalSize()
+  // Re-measure on every commit: the transcript row also changes height when
+  // bottom-chrome rows (spinner, pill, panels) come and go, not only on
+  // terminal resize. setState with an equal box is a no-op, so this settles.
+  useTerminalSize()
+  const catcherRef = React.useRef<DOMElement | null>(null)
+  const [bounds, setBounds] = React.useState<{ columns: number; rows: number } | null>(null)
+  React.useLayoutEffect(() => {
+    const node = catcherRef.current
+    if (!node) return
+    const { width, height } = measureElement(node)
+    if (width <= 0 || height <= 0) return
+    setBounds(previous =>
+      previous !== null && previous.columns === width && previous.rows === height
+        ? previous
+        : { columns: width, rows: height })
+  })
+  const columns = bounds?.columns ?? 0
+  const rows = bounds?.rows ?? 0
   const graphicsFit = columns >= MIN_GRAPHICS_COLUMNS && rows >= MIN_GRAPHICS_ROWS
   const [state, setState] = React.useState<
     | { readonly kind: 'loading' }
@@ -40,7 +65,7 @@ export function ImagePreviewOverlay({
   React.useEffect(() => {
     // The metadata-only narrow card never draws pixels — decoding for it
     // would only fill the full-tier cache with bytes nobody paints.
-    if (!graphicsFit) return
+    if (bounds === null || !graphicsFit) return
     let live = true
     setState({ kind: 'loading' })
     void loadTranscriptImageFull(image).then(
@@ -48,7 +73,7 @@ export function ImagePreviewOverlay({
       () => { if (live) setState({ kind: 'failed' }) },
     )
     return () => { live = false }
-  }, [image, graphicsFit])
+  }, [image, graphicsFit, bounds === null])
 
   const label = transcriptImageLabel(image)
   const meta = [
@@ -68,6 +93,7 @@ export function ImagePreviewOverlay({
 
   return (
     <Box
+      ref={catcherRef}
       position="absolute"
       top={0}
       left={0}
@@ -84,6 +110,7 @@ export function ImagePreviewOverlay({
         onClose()
       }}
     >
+      {bounds === null ? null : (
       <Box
         flexDirection="column"
         borderStyle="round"
@@ -121,6 +148,7 @@ export function ImagePreviewOverlay({
           <Text dimColor>{t('image-preview-close-hint')}</Text>
         </Box>
       </Box>
+      )}
     </Box>
   )
 }
