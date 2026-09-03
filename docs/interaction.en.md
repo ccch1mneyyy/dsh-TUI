@@ -155,7 +155,8 @@ anything ambiguous stays verbatim text. In fullscreen, clicking a staged
 `[Image #N]` token or a transcript thumbnail opens one shared centered preview
 (Esc or a click outside the card closes it; narrow terminals get a
 metadata-only card), and a stale `[Image #N]` placeholder (evicted past 128
-staged images or cleared by a session switch) warns on both click and submit.
+staged images or cleared by a session switch) warns on click, on submit, and when
+it appears as a slash-command argument.
 After submission, user images are re-projected from durable session events into
 the transcript. Assistant messages and tool results use the same preview path
 whenever their content contains image blocks. Fullscreen sessions with a
