@@ -694,6 +694,17 @@ function makeChannel() {
     screen.text())
   check('chat: preview temporarily unmounts rich status graphics consumers',
     !screen.text().includes('RICH-BUDGET-PROBE'), screen.text())
+  {
+    // The preview is confined to the transcript row: the prompt row (its
+    // expand glyph) stays on screen, and the card ends above it.
+    const hint = screen.find(OVERLAY_HINT)
+    const promptGlyph = screen.find('⛶')
+    check('chat: the preview leaves the prompt row visible',
+      promptGlyph !== null, screen.text())
+    check('chat: the preview card sits above the prompt row',
+      hint !== null && promptGlyph !== null && hint.row < promptGlyph.row,
+      JSON.stringify({ hint, promptGlyph }))
+  }
 
   // Keep the same public id but replace the agent binding (the ABA case from
   // /new -> resume). The old preview disappears in the replacement render,
