@@ -52,7 +52,9 @@ the interface, and removing it leaves no core modifications behind.
   with a same-size text fallback when graphics are unavailable. In fullscreen,
   clicking a staged `[Image #N]` token or a transcript thumbnail opens one
   shared preview centered over the transcript, leaving the prompt visible (Esc
-  or click outside closes), and Finder-copied
+  or click outside closes); its title reads `Image #N — format · size · bytes ·
+  file name` and images staged in this session show their source path on the
+  card's bottom row. Finder-copied
   image files paste straight into the attachment store as `[Image #N]`.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch; **clicking the whale pops a heart pass** any time, and with

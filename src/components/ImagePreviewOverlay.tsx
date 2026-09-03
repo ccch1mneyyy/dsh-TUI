@@ -11,17 +11,19 @@ import {
   transcriptImageLabel,
 } from './messages/TranscriptImages.js'
 import { formatBytes } from '../sessions/format.js'
+import { truncateMiddle } from '../utils/truncateMiddle.js'
 import { t } from '../i18n.js'
 
 /** Below these viewport sizes the card is metadata-only: an image box would
  *  be too small to read and the chrome itself barely fits. */
 const MIN_GRAPHICS_COLUMNS = 40
 const MIN_GRAPHICS_ROWS = 12
-/** The card is a floating layer, not a screen: it may take at most this share
- *  of its region's width and height, so the conversation stays visible
- *  around it. Card chrome outside the image box: title row + bottom border
- *  + 1 padding row above and below = 4 rows; 2 border cols + 2×2 padding
- *  = 6 cols. */
+/** The card is a floating layer, not a screen: its IMAGE may take at most
+ *  this share of its region's width and height, so the conversation stays
+ *  visible around it. The card itself may be wider than the image when the
+ *  title needs the room. Card chrome outside the image box: title row +
+ *  bottom border + 1 padding row above and below = 4 rows; 2 border cols +
+ *  2×2 padding = 6 cols. */
 const PREVIEW_MAX_WIDTH_RATIO = 0.7
 const PREVIEW_MAX_HEIGHT_RATIO = 0.8
 const CARD_CHROME_ROWS = 4
@@ -30,6 +32,9 @@ const CARD_CHROME_COLS = 6
 const CAPTION_ONLY_ROWS = 3
 /** Narrowest card: room for a readable title. */
 const MIN_CARD_COLUMNS = 40
+/** A file name shortened below this many cells reads as noise; the title
+ *  drops it instead (the path row still names the file when known). */
+const MIN_TITLE_NAME_COLUMNS = 8
 
 /**
  * The shared modal image preview: one centered card over a click-catcher
@@ -43,12 +48,17 @@ const MIN_CARD_COLUMNS = 40
  * first frame.
  *
  * The card's title sits in its top border, centered: `Image #N — PNG ·
- * 361×379 · 19.0 KB · name.png`. Nothing else surrounds the image; Esc and
- * a click outside close (Chat's key chain and the catcher). Catcher and
- * card are sibling absolute nodes — see the comment at the card for why the
- * card is not the catcher's child. The layer only paints themed cells —
- * terminal graphics stay inside the host `Image` primitive, which keeps its
- * own capability fallback.
+ * 361×379 · 19.0 KB · name.png`. The card is at least as wide as its
+ * title, so a small image never squeezes the file name; when even the
+ * region is too narrow, the name is shortened in its middle first and
+ * dropped from the title last. Images staged from a file or the clipboard
+ * in this process show their source path on the card's bottom row, head
+ * and tail kept and the middle elided. Nothing else surrounds the image;
+ * Esc and a click outside close (Chat's key chain and the catcher).
+ * Catcher and card are sibling absolute nodes — see the comment at the
+ * card for why the card is not the catcher's child. The layer only paints
+ * themed cells — terminal graphics stay inside the host `Image` primitive,
+ * which keeps its own capability fallback.
  */
 export function ImagePreviewOverlay({
   image,
@@ -116,9 +126,10 @@ export function ImagePreviewOverlay({
     return () => { live = false }
   }, [image, graphicsFit])
 
-  // Title: `Image #N — PNG · 361×379 · 19.0 KB · name.png`. The attachment
-  // id is a content hash from the host attachment store, not a path (the
-  // original path never enters the durable event), so it is not shown.
+  // Title: `Image #N — PNG · 361×379 · 19.0 KB · name.png`, fitted to the
+  // widest card the region allows. The attachment id is a content hash from
+  // the host attachment store, not a path, so it is not shown; the source
+  // path, when this process staged the image, gets its own row.
   const label = transcriptImageLabel(image)
   const format = image.mediaType === undefined
     ? undefined
@@ -127,9 +138,14 @@ export function ImagePreviewOverlay({
     format,
     `${image.width}×${image.height}`,
     formatBytes(image.bytes),
-    image.name === undefined ? undefined : label,
   ].filter((part): part is string => part !== undefined && part !== '')
-  const fullTitle = `${title ?? t('transcript-image')} — ${details.join(' · ')}`
+  const maxCardColumns = Math.max(1, columns)
+  const fullTitle = fitTitle(
+    title ?? t('transcript-image'),
+    details,
+    image.name,
+    Math.max(0, maxCardColumns - CARD_CHROME_COLS),
+  )
   const stateLine = state.kind === 'failed'
     ? t('transcript-image-unavailable', { name: label })
     : state.kind === 'ready'
@@ -150,12 +166,23 @@ export function ImagePreviewOverlay({
   // absolute node's whole rect before repainting it: a transparent parent
   // spanning the transcript row would wipe the conversation underneath.
   // The catcher has no children and stable props, so it never repaints.
-  const cardColumns = Math.max(1, Math.min(columns, graphicsFit
-    ? Math.max(imageWidth + CARD_CHROME_COLS, MIN_CARD_COLUMNS)
-    : MIN_CARD_COLUMNS))
-  const cardRows = Math.max(1, Math.min(rows, graphicsFit
+  // Width: the image plus chrome, never narrower than the title needs.
+  const cardColumns = Math.max(1, Math.min(maxCardColumns, Math.max(
+    graphicsFit ? imageWidth + CARD_CHROME_COLS : 0,
+    stringWidth(fullTitle) + CARD_CHROME_COLS,
+    MIN_CARD_COLUMNS,
+  )))
+  const pathLabel = t('image-preview-path-label')
+  const pathRow = image.path === undefined
+    ? undefined
+    : `${pathLabel}: ${truncateMiddle(
+      image.path,
+      Math.max(1, cardColumns - CARD_CHROME_COLS - stringWidth(pathLabel) - 2),
+    )}`
+  const pathRows = pathRow === undefined ? 0 : 1
+  const cardRows = Math.max(1, Math.min(rows, (graphicsFit
     ? imageHeight + CARD_CHROME_ROWS
-    : CAPTION_ONLY_ROWS))
+    : CAPTION_ONLY_ROWS) + pathRows))
   const cardLeft = Math.max(0, Math.floor((columns - cardColumns) / 2))
   const cardTop = Math.max(0, Math.floor((rows - cardRows) / 2))
   const titleRow = borderTitleRow(fullTitle, cardColumns)
@@ -209,27 +236,30 @@ export function ImagePreviewOverlay({
           borderColor="suggestion"
           borderTop={false}
           paddingX={2}
-          alignItems="center"
-          justifyContent="center"
         >
-          {graphicsFit ? (
-            <Image
-              source={state.kind === 'ready' ? state.source : undefined}
-              width={imageWidth}
-              height={imageHeight}
-              alt={label}
-            >
-              <Box
+          <Box flexGrow={1} alignItems="center" justifyContent="center">
+            {graphicsFit ? (
+              <Image
+                source={state.kind === 'ready' ? state.source : undefined}
                 width={imageWidth}
                 height={imageHeight}
-                alignItems="center"
-                justifyContent="center"
+                alt={label}
               >
-                <Text dimColor wrap="truncate">[{stateLine}]</Text>
-              </Box>
-            </Image>
-          ) : (
-            <Text dimColor wrap="truncate">{label}</Text>
+                <Box
+                  width={imageWidth}
+                  height={imageHeight}
+                  alignItems="center"
+                  justifyContent="center"
+                >
+                  <Text dimColor wrap="truncate">[{stateLine}]</Text>
+                </Box>
+              </Image>
+            ) : (
+              <Text dimColor wrap="truncate">{label}</Text>
+            )}
+          </Box>
+          {pathRow === undefined ? null : (
+            <Text dimColor wrap="truncate">{pathRow}</Text>
           )}
         </Box>
       </Box>
@@ -238,17 +268,40 @@ export function ImagePreviewOverlay({
 }
 
 /**
- * `╭─── title ───╮` sized to the card width. The title is truncated by
- * display width (CJK names are wide); one dash always remains on each side
- * of the corners so the row still reads as a border.
+ * `lead — a · b · c · name` fitted to `maxWidth` cells. The name yields
+ * first: shortened in its middle (stem start and extension survive), then
+ * dropped when fewer than {@link MIN_TITLE_NAME_COLUMNS} cells remain for
+ * it. Only after that is the rest cut from the end.
+ */
+function fitTitle(
+  lead: string,
+  details: readonly string[],
+  name: string | undefined,
+  maxWidth: number,
+): string {
+  const base = details.length === 0 ? lead : `${lead} — ${details.join(' · ')}`
+  if (name === undefined || name === '') return truncateEnd(base, maxWidth)
+  const prefix = details.length === 0 ? `${lead} — ` : `${base} · `
+  const full = prefix + name
+  if (stringWidth(full) <= maxWidth) return full
+  const room = maxWidth - stringWidth(prefix)
+  if (room >= MIN_TITLE_NAME_COLUMNS) return prefix + truncateMiddle(name, room)
+  return truncateEnd(base, maxWidth)
+}
+
+function truncateEnd(text: string, maxWidth: number): string {
+  if (stringWidth(text) <= maxWidth) return text
+  return maxWidth <= 1 ? '' : `${truncateToWidth(text, maxWidth - 1)}…`
+}
+
+/**
+ * `╭─── title ───╮` sized to the card width. The title is already fitted
+ * by {@link fitTitle}; this only guards the degenerate case and keeps one
+ * dash on each side of the corners so the row still reads as a border.
  */
 function borderTitleRow(title: string, cardColumns: number): string {
   const inner = Math.max(0, cardColumns - 2)
-  const maxTitle = Math.max(0, inner - 4)
-  let text = title
-  if (stringWidth(text) > maxTitle) {
-    text = maxTitle <= 1 ? '' : `${truncateToWidth(text, maxTitle - 1)}…`
-  }
+  const text = truncateEnd(title, Math.max(0, inner - 4))
   const labelled = text === '' ? '' : ` ${text} `
   const fill = Math.max(0, inner - stringWidth(labelled))
   const left = Math.floor(fill / 2)

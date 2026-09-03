@@ -153,10 +153,16 @@ forwards a drop as pasted text (Ghostty sends a shell-escaped path through the
 PTY), the paste stages only when it is exactly one existing local image path —
 anything ambiguous stays verbatim text. In fullscreen, clicking a staged
 `[Image #N]` token or a transcript thumbnail opens one shared preview centered
-over the transcript area, taking at most about 70% of its width and 80% of its
-height; the surrounding conversation, the prompt, status rows and sticky header stay visible
+over the transcript area; the image takes at most about 70% of its width and 80% of its
+height, and the surrounding conversation, the prompt, status rows and sticky header stay visible
 (Esc or a click outside the card closes it; narrow terminals get a
-metadata-only card), and a stale `[Image #N]` placeholder (evicted past 128
+metadata-only card). The card's title sits centered in its top border as
+`Image #N — format · width×height · size · file name`; the card is at least as
+wide as the title, so a small image never squeezes the file name, and a title
+wider than the transcript area shortens the file name in its middle first.
+Images staged from a file or the clipboard in this session show their source
+path on the card's bottom row (`Path: …`, head and tail kept, middle elided);
+images restored from the session log have none. A stale `[Image #N]` placeholder (evicted past 128
 staged images or cleared by a session switch) warns on click, on submit, and when
 it appears as a slash-command argument.
 After submission, user images are re-projected from durable session events into

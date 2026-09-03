@@ -92,6 +92,7 @@ const dict = {
   'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: { one: 'Attached {{count}} file reference', other: 'Attached {{count}} file references' } },
   'mentions-missing': { zh: '未找到引用: {{paths}}', en: 'References not found: {{paths}}' },
   'transcript-image': { zh: '图片', en: 'Image' },
+  'image-preview-path-label': { zh: '路径', en: 'Path' },
   'transcript-image-loading': { zh: '正在加载 {{name}}', en: 'Loading {{name}}' },
   'transcript-image-ready': { zh: '图片 · {{name}}', en: 'Image · {{name}}' },
   'transcript-image-unavailable': { zh: '无法预览 {{name}}', en: 'Cannot preview {{name}}' },

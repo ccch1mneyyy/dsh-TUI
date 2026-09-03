@@ -41,6 +41,7 @@ const [
   { TuiStatusStore },
   { LOCAL_COMMANDS },
   { createChannel },
+  { transcriptImagesOf },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
@@ -53,6 +54,7 @@ const [
   import('../src/dsh-adapter/status.js'),
   import('../src/commands.js'),
   import('../src/dsh-adapter/channel.js'),
+  import('../src/dsh-adapter/transcript-images.js'),
 ])
 
 let failures = 0
@@ -147,6 +149,7 @@ const png = new Uint8Array(await sharp({
 {
   type Deferred = { resolve: (value: unknown) => void; reject: (error: Error) => void }
   const pendingSaves: Deferred[] = []
+  const savedInputs: unknown[] = []
   let commandDefinition = {
     name: 'probe',
     description: 'Probe image admission',
@@ -174,8 +177,10 @@ const png = new Uint8Array(await sharp({
       maxMessageImageBytes: 4 * 1024 * 1024,
       mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
     },
-    saveImage: () =>
-      new Promise((resolve, reject) => { pendingSaves.push({ resolve, reject }) }),
+    saveImage: (input: unknown) => {
+      savedInputs.push(input)
+      return new Promise((resolve, reject) => { pendingSaves.push({ resolve, reject }) })
+    },
     readImage: async (ref: { bytes: number; name?: string }) => {
       imageReads += 1
       if (readBarrier !== undefined) await readBarrier
@@ -226,9 +231,14 @@ const png = new Uint8Array(await sharp({
     provider: 'fixture-provider',
     activity: false,
   })
-  const stageOne = (name: string) =>
+  const stageOne = (name: string, path?: string) =>
     channel.stageComposerImage(
-      { data: new Uint8Array([1, 2, 3, 4]), mediaType: 'image/png', name },
+      {
+        data: new Uint8Array([1, 2, 3, 4]),
+        mediaType: 'image/png',
+        name,
+        ...(path === undefined ? {} : { path }),
+      },
       channel.stagedImageGeneration(),
     )
 
@@ -237,10 +247,23 @@ const png = new Uint8Array(await sharp({
 
   // Durable staging returns opaque, non-reusable capabilities; presentation
   // numbering belongs to PromptInput and a rejected save returns no handle.
-  const first = stageOne('a.png')
+  const first = stageOne('a.png', '/tmp/pasted/a.png')
   await settled(() => pendingSaves.length === 1)
   pendingSaves[0]!.resolve(savedRef(1))
   const firstHandle = await first
+  // The source path is TUI-side display metadata: the preview card shows
+  // it, the transcript projection of the same attachment shows it, and the
+  // attachment store never sees it.
+  check('channel: a staged image keeps its source path for the preview card',
+    channel.stagedImage(firstHandle.stageId)?.path === '/tmp/pasted/a.png')
+  check('channel: the transcript projection of that attachment carries the same path',
+    transcriptImagesOf(
+      [{ type: 'image', attachment: savedRef(1) }] as never,
+      () => attachments,
+    )[0]?.path === '/tmp/pasted/a.png')
+  check('channel: the attachment store never receives the path',
+    savedInputs.length === 1 && !('path' in (savedInputs[0] as object)),
+    JSON.stringify(Object.keys(savedInputs[0] as object)))
   const second = stageOne('broken.png')
   await settled(() => pendingSaves.length === 2)
   pendingSaves[1]!.reject(new Error('admission refused'))
@@ -253,6 +276,8 @@ const png = new Uint8Array(await sharp({
     firstHandle.stageId !== thirdHandle.stageId &&
     channel.stagedImage(firstHandle.stageId) !== undefined &&
     channel.stagedImage(thirdHandle.stageId) !== undefined)
+  check('channel: an image staged without a path has none',
+    channel.stagedImage(thirdHandle.stageId)?.path === undefined)
 
   // The session-switch fence: a save resolving AFTER /new must not register
   // its token (or bump the fresh session's sequence).
@@ -566,6 +591,66 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
       && (right - left + 1) <= Math.floor(COLS * 0.7)
       && (bottom - top + 1) <= Math.floor(ROWS * 0.8),
     JSON.stringify({ top, bottom, left, right, COLS, ROWS }))
+  await app.unmount()
+  terminal.dispose()
+}
+{
+  // A small image with a long file name and a source path: the card widens
+  // to the title (the image never squeezes the name) and the path takes the
+  // bottom row with its head and tail kept.
+  clearTranscriptImageCacheForTests()
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const longName = 'screenshot-2026-09-03-at-12.34.56.png'
+  const longPath = `/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/dsh-tui-paste-Ab12Cd/${longName}`
+  const small = { ...fakeImage('sha256:small', longName), bytes: 2048, path: longPath }
+  const app = await render(
+    <Box width={COLS} height={ROWS}>
+      <ImagePreviewOverlay image={small} title="Image #3" onClose={() => {}} />
+    </Box>,
+    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await settled(() => screen.text().includes('Path: '))
+  const lines = screen.text().split('\n')
+  const top = lines.find(line => line.includes('╭'))
+  check('overlay: a small image never squeezes the title — the card widens to fit it',
+    top !== undefined && top.includes(`Image #3 — PNG · 16×8 · 2.0 KB · ${longName} ─`), top ?? '')
+  const pathIndex = lines.findIndex(line => line.includes('Path: '))
+  const pathLine = lines[pathIndex] ?? ''
+  const bottom = lines.findIndex(line => line.includes('╰'))
+  const imageIndex = lines.findIndex(line => line.includes(`[Image · `))
+  check('overlay: the source path sits on the card\'s bottom row, below the image',
+    pathIndex !== -1 && imageIndex !== -1 && imageIndex < pathIndex && pathIndex === bottom - 1,
+    JSON.stringify({ pathIndex, imageIndex, bottom }))
+  check('overlay: a long path keeps its head and tail and elides the middle',
+    pathLine.includes('Path: /var/folders/zz/') && pathLine.includes('…')
+      && pathLine.includes('12.34.56.png') && !pathLine.includes('dsh-tui-paste'),
+    pathLine)
+  await app.unmount()
+  terminal.dispose()
+}
+{
+  // A title wider than the whole region: the file name is shortened in its
+  // middle (extension kept) and the card stays inside the region.
+  clearTranscriptImageCacheForTests()
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const hugeName = `${'x'.repeat(110)}.png`
+  const huge = { ...fakeImage('sha256:huge', hugeName), bytes: 2048 }
+  const app = await render(
+    <Box width={COLS} height={ROWS}>
+      <ImagePreviewOverlay image={huge} title="Image #4" onClose={() => {}} />
+    </Box>,
+    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await settled(() => screen.text().includes(' — PNG · '))
+  const top = screen.text().split('\n').find(line => line.includes('╭')) ?? ''
+  check('overlay: an over-wide title shortens the file name in its middle and keeps the extension',
+    top.includes('Image #4 — PNG · 16×8 · 2.0 KB · xxxx') && top.includes('…') && top.includes('.png ')
+      && top.indexOf('╮') !== -1 && top.indexOf('╮') < COLS,
+    top)
   await app.unmount()
   terminal.dispose()
 }
