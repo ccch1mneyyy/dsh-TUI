@@ -200,12 +200,6 @@ export class KittyGraphicsManager {
     }
   }
 
-  /** Forget terminal-side state after leaving the buffer that owned it. */
-  reset(): void {
-    this.images.clear()
-    this.placements.clear()
-  }
-
   /** Delete every image owned by this renderer and forget their ids. */
   deleteAll(): string {
     const output = [...this.images.values()]

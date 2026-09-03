@@ -29,10 +29,11 @@ export const DEFAULT_TERMINAL_CELL_SIZE: TerminalCellSize = Object.freeze({
 /**
  * Immutable decoded image data accepted by the host image primitive.
  *
- * The renderer deliberately keys uploads by buffer identity instead of
- * hashing every frame. Callers must not mutate or refill `data` after passing
- * it to `<Image>`; changed pixels require a new `Uint8Array` (and therefore a
- * new source snapshot).
+ * The renderer hashes `data` once per buffer and caches the digest by buffer
+ * identity, so an in-place rewrite of the same buffer is never detected.
+ * Callers must not mutate or refill `data` after passing it to `<Image>`;
+ * changed pixels require a new `Uint8Array` (and therefore a new source
+ * snapshot).
  */
 export interface TerminalImageSource {
   /** Immutable row-major sRGB pixels, four bytes per pixel in RGBA order. */
